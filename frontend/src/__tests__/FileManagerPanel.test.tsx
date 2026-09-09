@@ -177,6 +177,25 @@ function makeTransfer(
   };
 }
 
+// FileList 测量自己容器的实际宽度来给缩进封顶,而不是接一个 panelWidth prop(面板宽度状态
+// 归 FileManagerPanel 所有,不属于这个切片改动的文件);setup.ts 把 getBoundingClientRect
+// 全局钉死成固定尺寸,这里临时改写返回值来模拟一个更窄/更宽的面板。
+function mockMeasuredPanelWidth(px: number) {
+  return vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: px,
+    bottom: 4000,
+    width: px,
+    height: 4000,
+    toJSON() {
+      return this;
+    },
+  } as DOMRect);
+}
+
 function createDragDataTransfer(): DataTransfer {
   const data = new Map<string, string>();
   return {
@@ -1556,6 +1575,220 @@ describe("FileManagerPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "sftp.menu.copyFilePath" }));
 
       await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("/srv/app/conf.d/default.conf"));
+    });
+  });
+
+  describe("collapsed chains, indentation cap and extended drag targets", () => {
+    function segmentOf(text: string): HTMLElement {
+      return screen.getByText(text).closest("[data-sftp-entry-path]") as HTMLElement;
+    }
+
+    it("renders a file-less single-child directory chain as one row with independently expandable segments", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+        "/srv/app/a/b": [fileEntry("note.txt")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      // "a" and "b" render as one merged row, each independently addressable.
+      expect(screen.getByText("a").closest("[data-sftp-entry-row]")).toBe(
+        screen.getByText("b").closest("[data-sftp-entry-row]")
+      );
+      expect(SFTPListDir).not.toHaveBeenCalledWith("s1", "/srv/app/a/b");
+
+      fireEvent.click(expandToggle("/srv/app/a/b"));
+      await screen.findByText("note.txt");
+      expect(rowOf("note.txt").dataset.sftpDepth).toBe("1");
+
+      // collapsing the first segment breaks the merge and hides everything below it.
+      fireEvent.click(expandToggle("/srv/app/a"));
+      expect(screen.queryByText("b")).toBeNull();
+      expect(screen.queryByText("note.txt")).toBeNull();
+      expect(screen.getByText("a")).toBeInTheDocument();
+    });
+
+    it("navigates to the exact segment that was double-clicked inside a collapsed chain", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      fireEvent.doubleClick(screen.getByText("a"));
+
+      await waitFor(() => expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app/a"));
+    });
+
+    it("caps indentation growth once depth exceeds the panel's width budget", async () => {
+      const depthCount = 12;
+      const listings: Record<string, sftp_svc.FileEntry[]> = {};
+      let path = "/srv/app";
+      for (let i = 0; i < depthCount; i += 1) {
+        // each level also holds a file so the chain never collapses; indentation must
+        // still be observable across 12 distinct rows rather than one merged row.
+        listings[path] = [dirEntry(`d${i}`), fileEntry(`f${i}.txt`)];
+        path = `${path}/d${i}`;
+      }
+      listings[path] = [fileEntry("leaf.txt")];
+      mockDirListings(listings);
+
+      const widthSpy = mockMeasuredPanelWidth(200);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+        await screen.findByText("d0");
+
+        let dirPath = "/srv/app/d0";
+        for (let i = 0; i < depthCount; i += 1) {
+          fireEvent.click(expandToggle(dirPath));
+          const nextLabel = i + 1 < depthCount ? `d${i + 1}` : "leaf.txt";
+          await screen.findByText(nextLabel);
+          dirPath = `${dirPath}/d${i + 1}`;
+        }
+
+        const shallowPadding = parseFloat(rowOf("d1").style.paddingLeft);
+        const deepPadding = parseFloat(rowOf("leaf.txt").style.paddingLeft);
+        // 12 levels at the fixed 12px step would add >130px; capped growth must land far below that.
+        expect(deepPadding - shallowPadding).toBeLessThan(60);
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("keeps a long file name readable by eliding its middle instead of its end", async () => {
+      const longName = "extremely-descriptive-nginx-configuration-file-name-for-testing.conf";
+      vi.mocked(SFTPListDir).mockResolvedValue([{ name: longName, isDir: false, size: 1, modTime: 0 }]);
+
+      const widthSpy = mockMeasuredPanelWidth(160);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+        await waitFor(() => {
+          const rows = document.querySelectorAll("[data-sftp-entry-row]");
+          expect(rows.length).toBeGreaterThan(0);
+        });
+
+        // the ".." parent-directory row renders first when currentPath !== "/"; the file is last.
+        const rows = document.querySelectorAll("[data-sftp-entry-row]");
+        const row = rows[rows.length - 1] as HTMLElement;
+        const rendered = row.textContent ?? "";
+        expect(rendered).not.toContain(longName);
+        expect(rendered).toContain("…");
+        expect(rendered.startsWith(longName.slice(0, 3))).toBe(true);
+        expect(rendered.includes(longName.slice(-2))).toBe(true);
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("highlights and moves a drop onto a deeply nested expanded directory", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("x"), fileEntry("item.log")],
+        // "y" also holds a file so "x"/"y" stay two distinct rows instead of one merged chain.
+        "/srv/app/x": [dirEntry("y"), fileEntry("readme.txt")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("item.log");
+      fireEvent.click(expandToggle("/srv/app/x"));
+      await screen.findByText("y");
+
+      const fileRow = screen.getByText("item.log").closest("[data-sftp-entry-row]")!;
+      const deepRow = screen.getByText("y").closest("[data-sftp-entry-row]")!;
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(deepRow, { dataTransfer });
+      expect(deepRow.className).toContain("bg-primary/10");
+      fireEvent.drop(deepRow, { dataTransfer });
+
+      await waitFor(() => {
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/item.log", "/srv/app/x/y/item.log");
+      });
+    });
+
+    it("moves a drop onto a specific segment of a collapsed chain rather than the deepest one", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a"), fileEntry("item.log")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("item.log");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      const fileRow = screen.getByText("item.log").closest("[data-sftp-entry-row]")!;
+      const segmentA = segmentOf("a");
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(segmentA, { dataTransfer });
+      fireEvent.drop(segmentA, { dataTransfer });
+
+      await waitFor(() => {
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/item.log", "/srv/app/a/item.log");
+      });
+    });
+
+    it("rejects dropping a directory onto itself or its own ancestor", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      const bRow = screen.getByText("b").closest("[data-sftp-entry-row]")!;
+      const segmentA = segmentOf("a");
+
+      // dropping "b" onto itself
+      let dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(bRow, { dataTransfer });
+      fireEvent.dragOver(bRow, { dataTransfer });
+      expect(bRow.className).not.toContain("bg-primary/10");
+      fireEvent.drop(bRow, { dataTransfer });
+
+      // dropping "b" onto its own ancestor "a"
+      dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(bRow, { dataTransfer });
+      fireEvent.dragOver(segmentA, { dataTransfer });
+      expect(segmentA.className).not.toContain("bg-primary/10");
+      fireEvent.drop(segmentA, { dataTransfer });
+
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+
+    it("does not treat a file row as a valid drop target", async () => {
+      mockDirListings({
+        "/srv/app": [fileEntry("a.log"), fileEntry("b.log")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a.log");
+      await screen.findByText("b.log");
+
+      const sourceRow = screen.getByText("a.log").closest("[data-sftp-entry-row]")!;
+      const fileTargetRow = screen.getByText("b.log").closest("[data-sftp-entry-row]")!;
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(sourceRow, { dataTransfer });
+      fireEvent.dragOver(fileTargetRow, { dataTransfer });
+      expect(fileTargetRow.className).not.toContain("bg-primary/10");
+      fireEvent.drop(fileTargetRow, { dataTransfer });
+
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(SFTPRename).not.toHaveBeenCalled();
     });
   });
 });

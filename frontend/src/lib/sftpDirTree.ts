@@ -35,8 +35,24 @@ export interface SftpTreeEntryRow extends SftpTreeRow {
   state: "entry";
 }
 
-export function isSftpTreeEntryRow(row: SftpTreeRow): row is SftpTreeEntryRow {
+export function isSftpTreeEntryRow<T extends SftpTreeRow>(
+  row: T
+): row is T & { entry: sftp_svc.FileEntry; state: "entry" } {
   return row.state === "entry" && row.entry !== null;
+}
+
+/** 折叠链上的一段：自己的绝对路径、名字与展开/加载态，供该段独立展开或换根。 */
+export interface SftpTreeChainSegment {
+  path: string;
+  name: string;
+  entry: sftp_svc.FileEntry;
+  expanded: boolean;
+  loading: boolean;
+}
+
+export interface SftpTreeDisplayRow extends SftpTreeRow {
+  /** 折叠出的单子目录链(长度 >= 2)时携带每一段;否则为 null,渲染与普通行一致。 */
+  chain: SftpTreeChainSegment[] | null;
 }
 
 /** 展开态按绝对路径记忆并跨换根保留，因此需要上限；超出后淘汰最久未展开的条目。 */
@@ -106,4 +122,66 @@ export function flattenSftpTree(
 
   walk(rootPath, 0, new Set([rootPath]));
   return rows;
+}
+
+/**
+ * 把无文件的单子目录链折叠成一行:depth-N 父行的唯一直接子行若是目录且不带任何兄弟
+ * (包括加载中/空/失败占位行),就并入父行的 chain,链继续沿同样规则往下试探,直到碰到
+ * 0/多个直接子行、子行是文件、或子行本身未展开(没有可供合并的下一行)为止。链上除最后
+ * 一段外必然都已展开(否则 flattenSftpTree 根本不会产出它们的子行)。合并后的行以链末段
+ * 的 path/name/entry/expanded/loading 呈现,depth 取链首段的原始 depth;末段自己的子行
+ * (若有)在输出里整体上提一级,与链被压成一行的深度对齐。
+ */
+export function collapseSingleChildChains(rows: SftpTreeRow[]): SftpTreeDisplayRow[] {
+  const out: SftpTreeDisplayRow[] = [];
+
+  const directChildIndices = (idx: number): number[] => {
+    const parentDepth = rows[idx].depth;
+    const children: number[] = [];
+    let j = idx + 1;
+    while (j < rows.length && rows[j].depth > parentDepth) {
+      if (rows[j].depth === parentDepth + 1) children.push(j);
+      j++;
+    }
+    return children;
+  };
+
+  const toSegment = (idx: number): SftpTreeChainSegment => {
+    const row = rows[idx];
+    // isSoleDirLink() 只把满足链条件的行送进这里,entry 必然非空。
+    return {
+      path: row.path,
+      name: row.name,
+      entry: row.entry as sftp_svc.FileEntry,
+      expanded: row.expanded,
+      loading: row.loading,
+    };
+  };
+
+  const isSoleDirChild = (children: number[]): boolean =>
+    children.length === 1 && rows[children[0]].state === "entry" && !!rows[children[0]].entry?.isDir;
+
+  const processSiblings = (indices: number[], outDepth: number) => {
+    for (const idx of indices) processChain(idx, outDepth);
+  };
+
+  const processChain = (startIdx: number, outDepth: number) => {
+    const chainIdxs = [startIdx];
+    let children = directChildIndices(startIdx);
+    while (isSoleDirChild(children)) {
+      chainIdxs.push(children[0]);
+      children = directChildIndices(children[0]);
+    }
+    const lastRow = rows[chainIdxs[chainIdxs.length - 1]];
+    out.push({
+      ...lastRow,
+      depth: outDepth,
+      chain: chainIdxs.length > 1 ? chainIdxs.map(toSegment) : null,
+    });
+    processSiblings(children, outDepth + 1);
+  };
+
+  const topLevel = rows.map((_, idx) => idx).filter((idx) => rows[idx].depth === 0);
+  processSiblings(topLevel, 0);
+  return out;
 }

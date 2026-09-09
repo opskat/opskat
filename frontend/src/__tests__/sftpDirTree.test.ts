@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { sftp_svc } from "../../wailsjs/go/models";
-import { addExpandedPath, flattenSftpTree, SFTP_EXPANDED_PATH_LIMIT, type SftpTreeNode } from "../lib/sftpDirTree";
+import {
+  addExpandedPath,
+  collapseSingleChildChains,
+  flattenSftpTree,
+  SFTP_EXPANDED_PATH_LIMIT,
+  type SftpTreeNode,
+} from "../lib/sftpDirTree";
 
 function entry(name: string, isDir = false): sftp_svc.FileEntry {
   return { name, isDir, size: 1, modTime: 0 } as sftp_svc.FileEntry;
@@ -111,6 +117,82 @@ describe("flattenSftpTree", () => {
     };
 
     expect(flattenSftpTree(tree, new Set(), "/srv")).toHaveLength(1);
+  });
+});
+
+describe("collapseSingleChildChains", () => {
+  it("merges a file-less single-child directory chain into one row carrying every segment", () => {
+    const tree = {
+      "/root": node([entry("a", true)]),
+      "/root/a": node([entry("b", true)]),
+      "/root/a/b": node([entry("c", true)]),
+      "/root/a/b/c": node([entry("d", true), entry("file.txt")]),
+    };
+    const expanded = new Set(["/root/a", "/root/a/b", "/root/a/b/c"]);
+
+    const rows = collapseSingleChildChains(flattenSftpTree(tree, expanded, "/root"));
+
+    expect(rows).toHaveLength(3); // merged chain row + c's two children
+    const [chainRow, dirChild, fileChild] = rows;
+    expect(chainRow.depth).toBe(0);
+    expect(chainRow.path).toBe("/root/a/b/c");
+    expect(chainRow.chain?.map((seg) => seg.path)).toEqual(["/root/a", "/root/a/b", "/root/a/b/c"]);
+    expect(chainRow.chain?.map((seg) => seg.name)).toEqual(["a", "b", "c"]);
+    // c's own children render one level below the merged row, not at their original depth 3.
+    expect(dirChild).toMatchObject({ path: "/root/a/b/c/d", depth: 1, chain: null });
+    expect(fileChild).toMatchObject({ path: "/root/a/b/c/file.txt", depth: 1, chain: null });
+  });
+
+  it("does not merge a directory that holds more than one entry", () => {
+    const tree = {
+      "/root": node([entry("a", true)]),
+      "/root/a": node([entry("b", true), entry("note.txt")]),
+    };
+    const expanded = new Set(["/root/a"]);
+
+    const rows = collapseSingleChildChains(flattenSftpTree(tree, expanded, "/root"));
+
+    expect(rows.map((row) => [row.path, row.depth, row.chain])).toEqual([
+      ["/root/a", 0, null],
+      ["/root/a/b", 1, null],
+      ["/root/a/note.txt", 1, null],
+    ]);
+  });
+
+  it("does not merge when the sole child is a file rather than a directory", () => {
+    const tree = {
+      "/root": node([entry("a", true)]),
+      "/root/a": node([entry("only.txt")]),
+    };
+    const expanded = new Set(["/root/a"]);
+
+    const rows = collapseSingleChildChains(flattenSftpTree(tree, expanded, "/root"));
+
+    expect(rows.map((row) => row.chain)).toEqual([null, null]);
+  });
+
+  it("stops the chain at a directory that is not itself expanded", () => {
+    const tree = {
+      "/root": node([entry("a", true)]),
+      "/root/a": node([entry("b", true)]),
+    };
+    const expanded = new Set(["/root/a"]); // "b" exists but was never expanded
+
+    const rows = collapseSingleChildChains(flattenSftpTree(tree, expanded, "/root"));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].chain?.map((seg) => seg.path)).toEqual(["/root/a", "/root/a/b"]);
+  });
+
+  it("leaves an ordinary multi-child directory as a plain row", () => {
+    const tree = { "/root": node([entry("a", true), entry("readme.md")]) };
+
+    const rows = collapseSingleChildChains(flattenSftpTree(tree, new Set(), "/root"));
+
+    expect(rows.map((row) => [row.path, row.chain])).toEqual([
+      ["/root/a", null],
+      ["/root/readme.md", null],
+    ]);
   });
 });
 

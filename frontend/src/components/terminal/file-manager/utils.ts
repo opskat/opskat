@@ -54,8 +54,31 @@ export function canMovePathToDirectory(sourcePath: string, targetDirPath: string
   const target = normalizeRemotePath("/", targetDirPath);
   if (!source || source === "/" || !target) return false;
   if (source === target) return false;
-  if (getParentPath(source) === target) return false;
+  // target 是 source 自身所在目录或更高的祖先目录 —— 含直接父目录(已在这)在内一律拒绝。
+  if (source.startsWith(`${target}/`)) return false;
+  // target 落在 source 自己的子树里 —— 不能把目录挪进它自己的后代。
   return !target.startsWith(`${source}/`);
+}
+
+/** 树未达到面板宽度预算前每级的固定缩进增量;超预算后每级只增加极小量,靠竖直参考线表达层级。 */
+export const TREE_INDENT_STEP_PX = 12;
+export const TREE_INDENT_COMPACT_STEP_PX = 2;
+export const TREE_ROW_PADDING_PX = 8;
+/** 面板宽度里为图标、文件名与右侧大小/日期列预留的最小空间;超过这部分才允许缩进增长。 */
+export const TREE_MIN_CONTENT_PX = 160;
+
+/**
+ * 按面板当前宽度计算某深度的左侧缩进(像素)。未超预算前是 depth * TREE_INDENT_STEP_PX 的
+ * 固定增长;超过预算后每级只加 TREE_INDENT_COMPACT_STEP_PX,保证任何宽度下文件名都优先于
+ * 缩进获得空间,不引入横向滚动。深度越深、面板越窄,封顶生效得越早。
+ */
+export function indentForDepth(depth: number, panelWidth: number): number {
+  if (depth <= 0) return TREE_ROW_PADDING_PX;
+  const budget = Math.max(0, panelWidth - TREE_MIN_CONTENT_PX);
+  const capDepth = Math.floor(budget / TREE_INDENT_STEP_PX);
+  if (depth <= capDepth) return TREE_ROW_PADDING_PX + depth * TREE_INDENT_STEP_PX;
+  const overflowDepth = depth - capDepth;
+  return TREE_ROW_PADDING_PX + capDepth * TREE_INDENT_STEP_PX + overflowDepth * TREE_INDENT_COMPACT_STEP_PX;
 }
 
 export function splitNameForRename(name: string): { stemLength: number } {
