@@ -28,6 +28,7 @@ import {
   type ExternalEditEditor,
   type ExternalEditEditorConfig,
   type ExternalEditSettings,
+  builtInEditorID,
   getExternalEditSettings,
   saveExternalEditSettings,
   selectExternalEditorExecutable,
@@ -126,6 +127,10 @@ export function ExternalEditSection() {
       })
       .catch((error) => toast.error(errMsg(error)));
   }, []);
+
+  // 内置编辑器的名字是应用自己的能力描述而不是第三方产品名，按界面语言展示。
+  const editorLabel = (editor: ExternalEditEditor) =>
+    editor.id === builtInEditorID ? t("externalEdit.settings.builtInEditorName") : editor.name;
 
   const editorOptions = useMemo(
     () => buildEditorOptions(settings?.editors || [], customEditors, defaultEditorId),
@@ -243,11 +248,12 @@ export function ExternalEditSection() {
               <SelectContent>
                 {editorOptions.map((editor) => (
                   <SelectItem key={editor.id} value={editor.id} disabled={!editor.available}>
-                    {editor.name}
+                    {editorLabel(editor)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            <div className="text-xs text-muted-foreground">{t("externalEdit.settings.builtInEditorHint")}</div>
           </div>
 
           <div className="grid gap-1.5">

@@ -6,11 +6,16 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"go.uber.org/zap"
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 func (s *Service) Open(ctx context.Context, req OpenRequest) (*Session, error) {
@@ -83,7 +88,7 @@ func (s *Service) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		reusable.RemotePath = req.RemotePath
 		reusable.RemoteRealPath = remoteRealPath
 		reusable.RecordState = recordStateActive
-		reusable.SaveMode = saveModeAutoLive
+		reusable.SaveMode = saveModeForEditor(editor.ID)
 		reusable.PendingReview = false
 		reusable.Hidden = false
 		reusable.LastError = nil
@@ -102,7 +107,7 @@ func (s *Service) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		session := cloneSession(reusable)
 		s.mu.Unlock()
 
-		if err := s.launch.Launch(editor.Path, append(cloneArgs(editor.Args), reusable.LocalPath)); err != nil {
+		if err := s.launchEditorProcess(editor.ID, editor.Path, editor.Args, reusable.LocalPath); err != nil {
 			s.writeAudit(session, "external_edit_open", false, req, nil, err)
 			return nil, fmt.Errorf("启动外部编辑器失败: %w", err)
 		}
@@ -170,7 +175,7 @@ func (s *Service) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		LastLocalSHA256: baseHash,
 		State:           sessionStateClean,
 		RecordState:     recordStateActive,
-		SaveMode:        saveModeAutoLive,
+		SaveMode:        saveModeForEditor(editor.ID),
 		PendingReview:   false,
 		CreatedAt:       nowUnix,
 		UpdatedAt:       nowUnix,
@@ -196,7 +201,7 @@ func (s *Service) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 	}
 	s.mu.Unlock()
 
-	if err := s.launch.Launch(editor.Path, append(cloneArgs(editor.Args), localPath)); err != nil {
+	if err := s.launchEditorProcess(editor.ID, editor.Path, editor.Args, localPath); err != nil {
 		s.cleanupSessionAfterLaunchFailure(session.ID)
 		s.writeAudit(session, "external_edit_open", false, req, nil, err)
 		return nil, fmt.Errorf("启动外部编辑器失败: %w", err)
@@ -206,6 +211,180 @@ func (s *Service) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 	s.writeAudit(cloned, "external_edit_open", true, req, nil, nil)
 	s.emit(Event{Type: eventSessionOpened, Session: cloned})
 	return cloned, nil
+}
+
+// saveModeForEditor 决定会话的写回时机：内置编辑器只在用户显式保存时改写本地副本，
+// 外部编辑器沿用“编辑器落盘即写回”的自动模式。
+func saveModeForEditor(editorID string) string {
+	if editorID == builtInEditorID {
+		return saveModeManualExplicit
+	}
+	return saveModeAutoLive
+}
+
+// launchEditorProcess 只为真实外部编辑器拉起进程：
+// 内置编辑器没有可执行文件，它的会话由应用内的编辑器承载，必须跳过 Launch。
+func (s *Service) launchEditorProcess(editorID, editorPath string, editorArgs []string, localPath string) error {
+	if editorID == builtInEditorID {
+		return nil
+	}
+	return s.launch.Launch(editorPath, append(cloneArgs(editorArgs), localPath))
+}
+
+// ReadSessionText 按会话记录的编码把本地副本解码成文本，供应用内编辑器承载同一个会话。
+func (s *Service) ReadSessionText(sessionID string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("sessionId 不能为空")
+	}
+	var text string
+	err := s.withDocumentRunner(sessionID, func() error {
+		var readErr error
+		text, readErr = s.readSessionTextInternal(sessionID)
+		return readErr
+	})
+	return text, err
+}
+
+func (s *Service) readSessionTextInternal(sessionID string) (string, error) {
+	session := s.getSession(sessionID)
+	if session == nil {
+		return "", fmt.Errorf("外部编辑会话不存在")
+	}
+	data, err := readLocalEditableFile(session.LocalPath, s.maxReadFileSizeBytes())
+	if err != nil {
+		return "", fmt.Errorf("读取本地副本失败: %w", err)
+	}
+	if !isLikelyText(session.RemotePath, data) {
+		return "", fmt.Errorf("本地副本已不是可编辑文本文件")
+	}
+	return decodeSessionText(session, data)
+}
+
+// SaveSessionText 是内置编辑器的显式保存入口：先把文本按会话编码写回本地副本，
+// 再交给既有的保存路径完成远端漂移检测、审计与回写，因此不存在绕开冲突检测的写入通道。
+func (s *Service) SaveSessionText(ctx context.Context, req SaveSessionTextRequest) (*SaveResult, error) {
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("sessionId 不能为空")
+	}
+	var result *SaveResult
+	err := s.withDocumentRunner(sessionID, func() error {
+		var saveErr error
+		result, saveErr = s.saveSessionTextInternal(ctx, sessionID, req.Text)
+		return saveErr
+	})
+	return result, err
+}
+
+func (s *Service) saveSessionTextInternal(ctx context.Context, sessionID, text string) (*SaveResult, error) {
+	session := s.getSession(sessionID)
+	if session == nil {
+		return nil, fmt.Errorf("外部编辑会话不存在")
+	}
+	if err := s.guardMutableSession(session); err != nil {
+		return nil, err
+	}
+
+	data, err := encodeSessionText(session, text)
+	if err != nil {
+		return nil, s.recordSessionTextError(sessionID, "validate_session_text", err)
+	}
+	if !isLikelyText(session.RemotePath, data) {
+		return nil, s.recordSessionTextError(sessionID, "validate_session_text", fmt.Errorf("当前内容不是可编辑文本文件"))
+	}
+	// 与外部编辑器落盘后的保存一致：本地副本必须仍能按原始编码/BOM 回环，才允许进入写回链路。
+	if err := validateRoundTrip(session, data); err != nil {
+		return nil, s.recordSessionTextError(sessionID, "validate_round_trip", err)
+	}
+
+	if err := os.WriteFile(session.LocalPath, data, 0o600); err != nil {
+		return nil, s.recordSessionTextError(sessionID, "write_local_copy", fmt.Errorf("写入本地副本失败: %w", err))
+	}
+	localHash := hashBytes(data)
+	if localHash != sessionBaseHash(session) {
+		s.markSessionState(sessionID, sessionStateDirty, true, localHash)
+	}
+	return s.saveInternal(ctx, sessionID, "", false)
+}
+
+func (s *Service) recordSessionTextError(sessionID, step string, err error) error {
+	failed := s.recordError(sessionID, step, err)
+	if failed != nil {
+		s.emit(Event{Type: eventSessionChanged, Session: failed})
+	}
+	return err
+}
+
+// 内置编辑器在 UTF-8 文本层面编辑，而本地副本必须保持远端原始编码与 BOM，
+// 因此读写两侧各做一次转换；可接受的编码集合与 detectTextEncoding 完全一致。
+func decodeSessionText(session *Session, data []byte) (string, error) {
+	encodingName := strings.TrimSpace(session.OriginalEncoding)
+	if encodingName == "" {
+		return "", fmt.Errorf("当前会话缺少原始编码信息，请重新打开远程文件后再同步")
+	}
+	_, _, body := splitTextBOM(data)
+	if encodingName == textEncodingUTF8 {
+		if !utf8.Valid(body) {
+			return "", fmt.Errorf("本地副本不是有效的 UTF-8 文本")
+		}
+		return string(body), nil
+	}
+	textEncoding, err := sessionTextEncoding(encodingName)
+	if err != nil {
+		return "", err
+	}
+	decoded, _, err := transform.Bytes(textEncoding.NewDecoder(), body)
+	if err != nil {
+		return "", fmt.Errorf("按原始编码 %s 解码本地副本失败: %w", describeEncoding(encodingName), err)
+	}
+	return string(decoded), nil
+}
+
+func encodeSessionText(session *Session, text string) ([]byte, error) {
+	encodingName := strings.TrimSpace(session.OriginalEncoding)
+	if encodingName == "" {
+		return nil, fmt.Errorf("当前会话缺少原始编码信息，请重新打开远程文件后再同步")
+	}
+	body := []byte(text)
+	if encodingName != textEncodingUTF8 {
+		textEncoding, err := sessionTextEncoding(encodingName)
+		if err != nil {
+			return nil, err
+		}
+		encoded, _, err := transform.Bytes(textEncoding.NewEncoder(), body)
+		if err != nil {
+			return nil, fmt.Errorf("按原始编码 %s 保存失败: %w", describeEncoding(encodingName), err)
+		}
+		body = encoded
+	}
+	return append(textBOMBytes(session.OriginalBOM), body...), nil
+}
+
+func sessionTextEncoding(encodingName string) (encoding.Encoding, error) {
+	switch encodingName {
+	case textEncodingUTF16LE:
+		return unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM), nil
+	case textEncodingUTF16BE:
+		return unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM), nil
+	case textEncodingGB18030:
+		return simplifiedchinese.GB18030, nil
+	default:
+		return nil, fmt.Errorf("未知原始编码: %s", encodingName)
+	}
+}
+
+func textBOMBytes(bom string) []byte {
+	switch bom {
+	case textEncodingUTF8:
+		return []byte{0xef, 0xbb, 0xbf}
+	case textEncodingUTF16LE:
+		return []byte{0xff, 0xfe}
+	case textEncodingUTF16BE:
+		return []byte{0xfe, 0xff}
+	default:
+		return nil
+	}
 }
 
 func (s *Service) Save(ctx context.Context, sessionID string) (*SaveResult, error) {

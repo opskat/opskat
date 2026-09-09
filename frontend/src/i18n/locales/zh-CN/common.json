@@ -1600,6 +1600,8 @@
       "title": "外部编辑器",
       "desc": "配置默认外部编辑器、本地工作区和自定义编辑器。",
       "defaultEditor": "默认外部编辑器",
+      "builtInEditorName": "内置编辑器",
+      "builtInEditorHint": "内置编辑器始终可用，可设为默认；它只在你按 ⌘S / Ctrl+S 显式保存时写回远端，外部编辑器则是本地副本落盘即写回。",
       "workspaceRoot": "临时工作区",
       "cleanupRetentionDays": "副本清理保留天数",
       "cleanupRetentionDaysHint": "默认 7 天，允许 1-365 天；用于清理非活动副本和 backup 历史副本。",

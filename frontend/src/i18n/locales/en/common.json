@@ -1600,6 +1600,8 @@
       "title": "External Editors",
       "desc": "Configure the default editor, local workspace, and custom editor entries.",
       "defaultEditor": "Default Editor",
+      "builtInEditorName": "Built-in Editor",
+      "builtInEditorHint": "The built-in editor is always available and can be set as the default. It writes back to the remote only when you save explicitly with ⌘S / Ctrl+S, while external editors write back as soon as the local copy is saved to disk.",
       "workspaceRoot": "Workspace Root",
       "cleanupRetentionDays": "Cleanup Retention Days",
       "cleanupRetentionDaysHint": "Defaults to 7 days, range 1-365. Used to clean up non-active drafts and backup history copies.",

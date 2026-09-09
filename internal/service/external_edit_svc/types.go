@@ -52,6 +52,9 @@ const (
 
 	saveModeAutoLive      = "auto_live"
 	saveModeManualRestore = "manual_restored"
+	// saveModeManualExplicit 是内置编辑器的保存模式：本地副本只在用户显式保存时改写，
+	// watcher 因此不会为它调度自动写回，中间态不会到达远端。
+	saveModeManualExplicit = "manual_explicit"
 )
 
 const (
@@ -79,6 +82,10 @@ const (
 	maxMaxReadFileSizeMB              = 1024
 	bytesPerMB                  int64 = 1024 * 1024
 )
+
+// builtInEditorID 是应用内置编辑器在编辑器列表里的固定 ID：
+// 它没有可执行文件路径、恒为可用，命中它时不拉起外部进程，会话由应用内的编辑器承载。
+const builtInEditorID = "builtin"
 
 const externalEditReconnectHint = "请在同一资产中重新打开该远程文件后再继续同步"
 
@@ -140,6 +147,13 @@ type OpenRequest struct {
 	SessionID  string `json:"sessionId"`
 	RemotePath string `json:"remotePath"`
 	EditorID   string `json:"editorId,omitempty"`
+}
+
+// SaveSessionTextRequest 是内置编辑器的显式保存入参：文本由编辑器提供，
+// 仍走既有保存路径完成编码校验、远端漂移检测与回写。
+type SaveSessionTextRequest struct {
+	SessionID string `json:"sessionId"`
+	Text      string `json:"text"`
 }
 
 type textEncodingSnapshot struct {
