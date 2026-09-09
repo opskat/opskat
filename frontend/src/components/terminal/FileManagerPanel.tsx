@@ -287,15 +287,19 @@ export function FileManagerPanel({
   }, [currentPath, directoryFollowMode, isOpen, loadDir, sessionSync?.cwd, sessionSync?.cwdKnown]);
 
   // 这里的 pending 对话框会 portal 到 body,不受编辑器 tab 覆盖住面板的影响,弹错了就是
-  // 一次盖住真正呈现界面的模态劫持。两种情况下这次冲突不该由面板弹出来:
-  //   - 它归属一个开着的内置编辑器 tab: 那个 tab 自己就是冲突界面(顶部横幅 + 合并/差异/
-  //     重读/覆盖),面板弹的是另一套动作;
+  // 一次盖住真正呈现界面的模态劫持。只有这次冲突确实会在本面板的 pendingItems 里成为一条,
+  // 才由本面板弹;否则弹出来的是一个空对话框。不该弹的三种情况:
   //   - 它根本没带会话: 会话在保存在途时被移除时 markSessionState 返回 nil
   //     (session.go:797-804,markRemoteMissingConflict 即如此),pendingItems 按 session
-  //     建项,于是弹出来的是一个空对话框 —— 发起这次保存的界面已经拿着 SaveResult 自己呈现了。
+  //     建项,没有会话就没有条目 —— 发起这次保存的界面已经拿着 SaveResult 自己呈现了;
+  //   - 它属于别的资产: pendingConflict 是全局的一份,而每个终端 tab 都常驻一个文件面板
+  //     (MainPanel.tsx 只隐藏不卸载),pendingItems 又按 assetId 过滤,不挡就是每开一个终端
+  //     tab 就多弹一个空对话框;
+  //   - 它归属一个开着的内置编辑器 tab: 那个 tab 自己就是冲突界面(顶部横幅 + 合并/差异/
+  //     重读/覆盖),面板弹的是另一套动作。
   const conflictOwningSession = safePendingConflict?.session;
   const conflictPresentedByPanel = useTabStore((s) =>
-    conflictOwningSession
+    conflictOwningSession && conflictOwningSession.assetId === assetId
       ? findEditorTabId(s.tabs, conflictOwningSession.assetId, conflictOwningSession.remotePath) === null
       : false
   );

@@ -1343,6 +1343,35 @@ describe("FileManagerPanel", () => {
     expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
   });
 
+  // 每个终端 tab 都常驻一个文件面板（MainPanel.tsx 用 visibility 隐藏而非卸载），而
+  // pendingConflict 是全局的一份：别的资产的冲突同样不该让这个面板弹对话框 —— pendingItems
+  // 按 assetId 过滤，弹出来还是一个空对话框盖住真正在处理这次冲突的那个面板。
+  it("does not open the pending dialog for a conflict that belongs to another asset", async () => {
+    const conflict = makeExternalEditSession({
+      id: "other-asset-conflict",
+      assetId: 202,
+      assetName: "asset-202",
+      documentKey: "202:/srv/app/other.txt",
+      remotePath: "/srv/app/other.txt",
+      remoteRealPath: "/srv/app/other.txt",
+      state: "conflict",
+      recordState: "conflict",
+    });
+    useExternalEditStore.setState({
+      sessions: {},
+      pendingConflict: {
+        status: "conflict_remote_changed",
+        session: conflict,
+        conflict: { documentKey: conflict.documentKey, primaryDraftSessionId: conflict.id },
+      },
+    });
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    expect(await screen.findByTestId("sftp-status-bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
+  });
+
   it("shows runtime non-conflict pending in the same three-action matrix", async () => {
     const user = userEvent.setup();
     const pending = makeExternalEditSession({
