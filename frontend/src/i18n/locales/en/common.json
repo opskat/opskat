@@ -1850,7 +1850,8 @@
     "tree": {
       "expand": "Expand",
       "collapse": "Collapse",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "dropHint": "Move {{count}} item(s) into {{target}}"
     },
     "refresh": "Refresh",
     "newFolder": "New Folder",

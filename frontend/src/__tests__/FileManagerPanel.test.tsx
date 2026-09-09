@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useRef } from "react";
 import { FileManagerPanel } from "../components/terminal/FileManagerPanel";
@@ -15,7 +15,11 @@ import {
 } from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../wailsjs/go/models";
-import { OpenExternalEdit, PrepareExternalEditMerge } from "../../wailsjs/go/external_edit/ExternalEdit";
+import {
+  OpenExternalEdit,
+  PrepareExternalEditMerge,
+  SaveExternalEditSessionText,
+} from "../../wailsjs/go/external_edit/ExternalEdit";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -1114,6 +1118,31 @@ describe("FileManagerPanel", () => {
     expect(useTabStore.getState().tabs).toHaveLength(1);
   });
 
+  it("leaves a built-in editor conflict to the editor tab instead of taking over with the pending dialog", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    const session = makeExternalEditSession({ id: "edit-1", editorId: builtInEditorID });
+    vi.mocked(OpenExternalEdit).mockResolvedValue(session as never);
+    vi.mocked(SaveExternalEditSessionText).mockResolvedValue({
+      status: "conflict_remote_changed",
+      message: "远程文件已变更",
+      session: { ...session, state: "conflict" },
+      conflict: { documentKey: session.documentKey, primaryDraftSessionId: session.id },
+    } as never);
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+    await user.dblClick(await screen.findByText("demo.txt"));
+    await waitFor(() => expect(useTabStore.getState().tabs).toHaveLength(1));
+
+    await act(async () => {
+      await useExternalEditStore.getState().saveSessionText("edit-1", "changed");
+    });
+
+    // the editor tab owns this conflict; the panel must not portal a modal over it.
+    expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
+  });
+
   it("still launches an external editor from the context menu while the built-in one is default", async () => {
     const user = userEvent.setup();
     getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
@@ -1911,6 +1940,32 @@ describe("FileManagerPanel", () => {
       await waitFor(() => {
         expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/item.log", "/srv/app/a/item.log");
       });
+    });
+
+    it("describes the move the drop will perform on the segment it landed on", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a"), fileEntry("item.log")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("item.log");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      const fileRow = screen.getByText("item.log").closest("[data-sftp-entry-row]") as HTMLElement;
+      const segmentA = segmentOf("a");
+      const segmentB = segmentOf("b");
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(segmentA, { dataTransfer });
+
+      // the description sits on the segment that was actually hit, not on the deepest one.
+      expect(within(segmentA).getByTestId("sftp-drop-hint")).toBeInTheDocument();
+      expect(within(segmentB).queryByTestId("sftp-drop-hint")).toBeNull();
+
+      fireEvent.dragEnd(fileRow, { dataTransfer });
+      expect(screen.queryByTestId("sftp-drop-hint")).toBeNull();
     });
 
     it("rejects dropping a directory onto itself or its own ancestor", async () => {

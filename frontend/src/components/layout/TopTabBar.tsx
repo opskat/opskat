@@ -218,12 +218,14 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
       }
 
       case "editor": {
-        // 标题只有文件名，完整远程路径放在 title 里，避免同名文件的 tab 无法区分。
+        // 标题只有文件名，资产与完整远程路径放在 title 里：
+        // 同一路径在两个资产上打开时，光靠文件名和路径都分不出是哪一台。
+        const editorMeta = tab.meta as EditorTabMeta;
         return (
           <TabItem
             {...commonProps}
             label={tab.label}
-            title={(tab.meta as EditorTabMeta).remotePath}
+            title={`${editorMeta.assetName} · ${editorMeta.remotePath}`}
             extra={
               unsavedTabIds.includes(tab.id) ? (
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" data-testid="tab-unsaved-marker" />

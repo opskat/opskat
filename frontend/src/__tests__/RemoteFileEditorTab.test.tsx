@@ -285,7 +285,12 @@ describe("RemoteFileEditorTab", () => {
 
     render(<TopTabBar />);
 
-    expect(await screen.findByText("nginx.conf")).toBeVisible();
+    const label = await screen.findByText("nginx.conf");
+    expect(label).toBeVisible();
+    // 同名文件可能来自不同资产：tab 上必须同时看得出资产与完整远程路径。
+    const item = label.closest("[title]") as HTMLElement;
+    expect(item.title).toContain("prod-web-1");
+    expect(item.title).toContain("/etc/nginx/nginx.conf");
   });
 
   it("marks an editor tab with unsaved changes in the top tab bar", () => {
@@ -548,6 +553,33 @@ describe("RemoteFileEditorTab", () => {
     expect(saveSessionTextMock).not.toHaveBeenCalled();
     expect(useTabStore.getState().tabs).toHaveLength(0);
     expect(useTabStore.getState().unsavedTabIds).not.toContain("editor-sess-1");
+  });
+
+  it("keeps an unsaved editor tab out of the bulk close actions and asks about it instead", () => {
+    const pageTab: Tab = { id: "page-1", type: "page", label: "settings", meta: { type: "page", pageId: "settings" } };
+    const cases = [
+      { bulkClose: "closeOtherTabs", tabs: [editorTab(), pageTab] },
+      { bulkClose: "closeLeftTabs", tabs: [editorTab(), pageTab] },
+      { bulkClose: "closeRightTabs", tabs: [pageTab, editorTab()] },
+    ] as const;
+
+    for (const { bulkClose, tabs } of cases) {
+      useTabStore.setState({
+        tabs: [...tabs],
+        activeTabId: "page-1",
+        unsavedTabIds: ["editor-sess-1"],
+        pendingCloseTabId: null,
+      });
+      act(() => useTabStore.getState()[bulkClose]("page-1"));
+
+      const state = useTabStore.getState();
+      expect(
+        state.tabs.map((tab) => tab.id),
+        bulkClose
+      ).toContain("editor-sess-1");
+      expect(state.unsavedTabIds, bulkClose).toContain("editor-sess-1");
+      expect(state.pendingCloseTabId, bulkClose).toBe("editor-sess-1");
+    }
   });
 
   it("re-reads the remote on restore and opens in conflict state when the baseline moved", async () => {

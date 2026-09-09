@@ -15,6 +15,7 @@ import {
   formatBytes,
   formatDate,
   getParentPath,
+  getPathBaseName,
   indentForDepth,
   splitNameForRename,
   TREE_INDENT_STEP_PX,
@@ -259,7 +260,16 @@ export function FileList({
     startY: number;
   } | null>(null);
   const suppressNextClickRef = useRef(false);
-  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  // 落点连同"会搬多少个条目"一起存:高亮之外还要在落点上说清这一放会执行什么。
+  const [dropTarget, setDropTargetState] = useState<{ path: string; count: number } | null>(null);
+  // dragover 每帧都在触发:落点没变就必须交回同一个对象,否则每一帧都换 prop 标识,
+  // 把整目录所有行的 memo 全部打掉(和上面 selected 那一处同一个坑)。
+  const setDropTarget = useCallback((next: { path: string; count: number } | null) => {
+    setDropTargetState((prev) => {
+      if (!prev || !next) return prev === next ? prev : next;
+      return prev.path === next.path && prev.count === next.count ? prev : next;
+    });
+  }, []);
   const slowClickRef = useRef<{ path: string; time: number; timer: number | null }>({ path: "", time: 0, timer: null });
 
   const entryPathsRef = useRef(entryPaths);
@@ -347,21 +357,22 @@ export function FileList({
     [getDragPaths]
   );
 
-  const getPointerDropTargetPath = useCallback((clientX: number, clientY: number, sourcePaths: string[]) => {
+  const getPointerDropTarget = useCallback((clientX: number, clientY: number, sourcePaths: string[]) => {
     const target = document.elementFromPoint(clientX, clientY);
     // 只认 dir + path 这对标记,不要求 entry-row:折叠链里每一段都单独携带它们,
     // 这样悬停在链的某一段上也能精确命中那一段,而不是永远退回外层行代表的最深一段。
     const hit = target?.closest<HTMLElement>('[data-sftp-entry-dir="true"][data-sftp-entry-path]');
     const targetPath = hit?.dataset.sftpEntryPath;
     if (!targetPath) return null;
-    return sourcePaths.some((path) => canMovePathToDirectory(path, targetPath)) ? targetPath : null;
+    const movable = sourcePaths.filter((path) => canMovePathToDirectory(path, targetPath));
+    return movable.length ? { path: targetPath, count: movable.length } : null;
   }, []);
 
   const clearDragState = useCallback(() => {
     draggedPathsRef.current = [];
     pointerDragRef.current = null;
-    setDropTargetPath(null);
-  }, []);
+    setDropTarget(null);
+  }, [setDropTarget]);
 
   const beginPointerDrag = useCallback((path: string, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return;
@@ -394,18 +405,16 @@ export function FileList({
         setSelected(drag.sourcePaths);
       }
       event.preventDefault();
-      setDropTargetPath(getPointerDropTargetPath(event.clientX, event.clientY, drag.sourcePaths));
+      setDropTarget(getPointerDropTarget(event.clientX, event.clientY, drag.sourcePaths));
     },
-    [getPointerDropTargetPath, setSelected]
+    [getPointerDropTarget, setDropTarget, setSelected]
   );
 
   const endPointerDrag = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       const drag = pointerDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      const targetPath = drag.dragging
-        ? getPointerDropTargetPath(event.clientX, event.clientY, drag.sourcePaths)
-        : null;
+      const target = drag.dragging ? getPointerDropTarget(event.clientX, event.clientY, drag.sourcePaths) : null;
       clearDragState();
       try {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -415,12 +424,12 @@ export function FileList({
       if (!drag.dragging) return;
       event.preventDefault();
       event.stopPropagation();
-      if (targetPath) stableMoveEntries(drag.sourcePaths, targetPath);
+      if (target) stableMoveEntries(drag.sourcePaths, target.path);
       window.setTimeout(() => {
         suppressNextClickRef.current = false;
       }, 0);
     },
-    [clearDragState, getPointerDropTargetPath, stableMoveEntries]
+    [clearDragState, getPointerDropTarget, stableMoveEntries]
   );
 
   // 所有行共用同一个 handlers 对象:每行 26 个 prop 时,5000 行全部改选中(shift 全选)
@@ -445,7 +454,7 @@ export function FileList({
       draggedPathsRef,
       suppressNextClickRef,
       getMovableDragPaths,
-      setDropTargetPath,
+      setDropTarget,
       clearDragState,
       beginPointerDrag,
       updatePointerDrag,
@@ -459,6 +468,7 @@ export function FileList({
       getMovableDragPaths,
       maybeStartSlowRename,
       selectEntry,
+      setDropTarget,
       setSelected,
       stableCanExternalEdit,
       stableExternalOpen,
@@ -513,12 +523,18 @@ export function FileList({
                 data-sftp-entry-path={getParentPath(currentPath)}
                 className={cn(
                   "flex items-center gap-1.5 px-2 py-1 cursor-pointer hover:bg-muted/50",
-                  dropTargetPath === getParentPath(currentPath) && "bg-primary/10 ring-1 ring-primary/30"
+                  dropTarget?.path === getParentPath(currentPath) && "bg-primary/10 ring-1 ring-primary/30"
                 )}
                 onDoubleClick={onGoUp}
               >
                 <Folder className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">..</span>
+                {dropTarget?.path === getParentPath(currentPath) && (
+                  <DropHint
+                    count={dropTarget.count}
+                    target={getPathBaseName(getParentPath(currentPath)) || getParentPath(currentPath)}
+                  />
+                )}
               </div>
             )}
             {renderRows.map(({ row, index }) =>
@@ -530,7 +546,7 @@ export function FileList({
                   isSelected={selectedSet.has(row.path)}
                   isCut={clipboardCutPaths.has(row.path)}
                   isRenaming={renamePath === row.path}
-                  dropTargetPath={dropTargetPath}
+                  dropTarget={dropTarget}
                   panelWidth={panelWidth}
                   h={rowHandlers}
                 />
@@ -547,6 +563,19 @@ export function FileList({
         )}
       </div>
     </ScrollArea>
+  );
+}
+
+/**
+ * 落点上的动作说明:高亮只说"放这里",还要说清这一放会执行什么 —— 搬几个条目、搬去哪个目录。
+ * 折叠链上它跟着被命中的那一段走,因此链里也能看出目标是哪一级。
+ */
+function DropHint({ count, target }: { count: number; target: string }) {
+  const { t } = useTranslation();
+  return (
+    <span className="shrink-0 text-[10px] text-primary" data-testid="sftp-drop-hint">
+      {t("sftp.tree.dropHint", { count, target })}
+    </span>
   );
 }
 
@@ -583,7 +612,7 @@ interface FileRowHandlers {
   draggedPathsRef: React.RefObject<string[]>;
   suppressNextClickRef: React.RefObject<boolean>;
   getMovableDragPaths: (event: React.DragEvent, targetDirPath: string) => string[];
-  setDropTargetPath: (path: string | null) => void;
+  setDropTarget: (target: { path: string; count: number } | null) => void;
   clearDragState: () => void;
   beginPointerDrag: (path: string, event: React.PointerEvent<HTMLElement>) => void;
   updatePointerDrag: (event: React.PointerEvent<HTMLElement>) => void;
@@ -596,7 +625,7 @@ interface FileRowProps {
   isSelected: boolean;
   isCut: boolean;
   isRenaming: boolean;
-  dropTargetPath: string | null;
+  dropTarget: { path: string; count: number } | null;
   panelWidth: number;
   h: FileRowHandlers;
 }
@@ -610,7 +639,7 @@ const FileRow = memo(function FileRow({
   isSelected,
   isCut,
   isRenaming,
-  dropTargetPath,
+  dropTarget,
   panelWidth,
   h,
 }: FileRowProps) {
@@ -618,7 +647,7 @@ const FileRow = memo(function FileRow({
   const fullPath = row.path;
   // 折叠链上的每一段各自是一个可展开/换根的落点;普通行退化为长度 1 的数组,渲染路径不变。
   const segments = segmentsOf(row);
-  const isDropTarget = dropTargetPath !== null && segments.some((segment) => segment.path === dropTargetPath);
+  const isDropTarget = !!dropTarget && segments.some((segment) => segment.path === dropTarget.path);
   const compactGuide = isCompactDepth(row.depth, panelWidth);
   return (
     <div
@@ -654,15 +683,16 @@ const FileRow = memo(function FileRow({
       onDragEnd={h.clearDragState}
       onDragOver={(e) => {
         const targetPath = resolveDropTargetPath(e.target);
-        if (!targetPath || !h.getMovableDragPaths(e, targetPath).length) return;
+        const movable = targetPath ? h.getMovableDragPaths(e, targetPath) : [];
+        if (!targetPath || !movable.length) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        h.setDropTargetPath(targetPath);
+        h.setDropTarget({ path: targetPath, count: movable.length });
       }}
       onDragLeave={(e) => {
         const nextTarget = e.relatedTarget;
         if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) return;
-        if (isDropTarget) h.setDropTargetPath(null);
+        if (isDropTarget) h.setDropTarget(null);
       }}
       onDrop={(e) => {
         const targetPath = resolveDropTargetPath(e.target);
@@ -721,7 +751,7 @@ const FileRow = memo(function FileRow({
               // 单段行的高亮走外层整行(见上面 className);多段链上每一段各自的落点单独高亮,
               // 含最后一段 —— 否则拖到链最深的目录时反而看不出命中了哪。
               segments.length > 1 &&
-                dropTargetPath === segment.path &&
+                dropTarget?.path === segment.path &&
                 "bg-primary/10 ring-1 ring-primary/30 rounded-sm"
             )}
           >
@@ -780,6 +810,7 @@ const FileRow = memo(function FileRow({
                 {middleEllipsisName(segment.name, row.depth, panelWidth)}
               </span>
             )}
+            {dropTarget?.path === segment.path && <DropHint count={dropTarget.count} target={segment.name} />}
             {!isLast && <span className="text-muted-foreground/60 shrink-0">/</span>}
           </span>
         );

@@ -276,56 +276,56 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
   },
 
   closeOtherTabs: (id) => {
-    const { tabs } = get();
-    const closingTabs = tabs.filter((t) => t.id !== id);
-    for (const tab of closingTabs) {
-      for (const hook of closeHooks) hook(tab);
-    }
-    set((s) => ({ tabs: tabs.filter((t) => t.id === id), activeTabId: id, ...forgetClosedTabs(s, closingTabs) }));
+    const state = get();
+    set(
+      bulkCloseTabs(
+        state,
+        state.tabs.filter((t) => t.id !== id),
+        id
+      )
+    );
   },
 
   closeLeftTabs: (id) => {
-    const { tabs, activeTabId } = get();
-    const idx = tabs.findIndex((t) => t.id === id);
+    const state = get();
+    const idx = state.tabs.findIndex((t) => t.id === id);
     if (idx <= 0) return;
-    const closingTabs = tabs.slice(0, idx);
-    for (const tab of closingTabs) {
-      for (const hook of closeHooks) hook(tab);
-    }
-    const newTabs = tabs.slice(idx);
-    const activeStillOpen = newTabs.some((t) => t.id === activeTabId);
-    set((s) => ({
-      tabs: newTabs,
-      activeTabId: activeStillOpen ? activeTabId : id,
-      ...forgetClosedTabs(s, closingTabs),
-    }));
+    set(bulkCloseTabs(state, state.tabs.slice(0, idx), id));
   },
 
   closeRightTabs: (id) => {
-    const { tabs, activeTabId } = get();
-    const idx = tabs.findIndex((t) => t.id === id);
-    if (idx === -1 || idx >= tabs.length - 1) return;
-    const closingTabs = tabs.slice(idx + 1);
-    for (const tab of closingTabs) {
-      for (const hook of closeHooks) hook(tab);
-    }
-    const newTabs = tabs.slice(0, idx + 1);
-    const activeStillOpen = newTabs.some((t) => t.id === activeTabId);
-    set((s) => ({
-      tabs: newTabs,
-      activeTabId: activeStillOpen ? activeTabId : id,
-      ...forgetClosedTabs(s, closingTabs),
-    }));
+    const state = get();
+    const idx = state.tabs.findIndex((t) => t.id === id);
+    if (idx === -1 || idx >= state.tabs.length - 1) return;
+    set(bulkCloseTabs(state, state.tabs.slice(idx + 1), id));
   },
 }));
 
-// 批量关闭不走 closeTab，未保存标记与待确认关闭必须在这里一并丢弃，否则会留下指向已消失 tab 的记录。
-function forgetClosedTabs(state: TabStoreState, closed: Tab[]) {
-  const closedIds = new Set(closed.map((tab) => tab.id));
+/**
+ * 批量关闭「其它 / 左侧 / 右侧」的共同实现。有未保存改动的 tab 一律留下：
+ * 「关闭前必须确认」对批量入口同样成立，否则关一次右侧就把编辑器里没写回的改动
+ * 连同确认一起吞掉。留下的第一个直接进入待确认关闭，由承载它的界面接管保存 / 不保存 / 取消；
+ * 真正关掉的那些才在这里丢掉未保存标记与待确认记录，不留下指向已消失 tab 的引用。
+ */
+function bulkCloseTabs(state: TabStoreState, candidates: Tab[], fallbackActiveId: string) {
+  const unsaved = new Set(state.unsavedTabIds);
+  const closing = candidates.filter((tab) => !unsaved.has(tab.id));
+  const kept = candidates.filter((tab) => unsaved.has(tab.id));
+  for (const tab of closing) {
+    for (const hook of closeHooks) hook(tab);
+  }
+  const closedIds = new Set(closing.map((tab) => tab.id));
+  const tabs = state.tabs.filter((tab) => !closedIds.has(tab.id));
+  const activeStillOpen = tabs.some((tab) => tab.id === state.activeTabId);
   return {
+    tabs,
+    activeTabId: kept.length ? kept[0].id : activeStillOpen ? state.activeTabId : fallbackActiveId,
     unsavedTabIds: state.unsavedTabIds.filter((id) => !closedIds.has(id)),
-    pendingCloseTabId:
-      state.pendingCloseTabId && closedIds.has(state.pendingCloseTabId) ? null : state.pendingCloseTabId,
+    pendingCloseTabId: kept.length
+      ? kept[0].id
+      : state.pendingCloseTabId && closedIds.has(state.pendingCloseTabId)
+        ? null
+        : state.pendingCloseTabId,
   };
 }
 

@@ -32,7 +32,7 @@ import {
   useExternalEditStore,
 } from "@/stores/externalEditStore";
 import { useSFTPStore } from "@/stores/sftpStore";
-import { openRemoteFileEditorTab, openSettingsTab } from "@/stores/tabStore";
+import { findEditorTabId, openRemoteFileEditorTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { ExternalEditCompareWorkbench } from "./external-edit/CompareWorkbench";
 import { ExternalEditMergeWorkbench } from "./external-edit/MergeWorkbench";
 import { ExternalEditPendingDialog, type ExternalEditPendingItem } from "./external-edit/PendingDialog";
@@ -286,11 +286,20 @@ export function FileManagerPanel({
     void loadDir(sessionSync.cwd);
   }, [currentPath, directoryFollowMode, isOpen, loadDir, sessionSync?.cwd, sessionSync?.cwdKnown]);
 
+  // 内置编辑器 tab 自己就是这个会话的冲突界面(顶部横幅 + 合并/差异/重读/覆盖):
+  // 这里的 pending 对话框会 portal 到 body,不受编辑器 tab 覆盖住面板的影响,弹出来就是
+  // 一次带着另一套动作的模态劫持。承载它的 tab 还开着时,冲突留给那个 tab 呈现。
+  const conflictOwnedByEditorTab = useTabStore((s) =>
+    safePendingConflict
+      ? findEditorTabId(s.tabs, safePendingConflict.session.assetId, safePendingConflict.session.remotePath) !== null
+      : false
+  );
+
   // safePendingConflict 变化(含首次挂载)时弹出 pending 对话框:渲染期对比上次值,替代 effect 里的同步 setState
   const [prevPendingConflict, setPrevPendingConflict] = useState<typeof safePendingConflict | undefined>(undefined);
   if (safePendingConflict !== prevPendingConflict) {
     setPrevPendingConflict(safePendingConflict);
-    if (safePendingConflict) {
+    if (safePendingConflict && !conflictOwnedByEditorTab) {
       setPendingDialogOpen(true);
     }
   }
