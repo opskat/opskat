@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MainPanel } from "@/components/layout/MainPanel";
+import { TopTabBar } from "@/components/layout/TopTabBar";
 import { RemoteFileEditorTab } from "@/components/terminal/editor/RemoteFileEditorTab";
 import { useAssetStore } from "@/stores/assetStore";
 import { useLayoutStore } from "@/stores/layoutStore";
@@ -114,6 +115,17 @@ describe("RemoteFileEditorTab", () => {
     expect(restored.useTabStore.getState().tabs).toEqual([
       expect.objectContaining({ type: "editor", label: "nginx.conf", meta: editorMeta() }),
     ]);
+  });
+
+  it("shows the editor tab in the top tab bar", async () => {
+    useTabStore.setState({
+      tabs: [{ id: "editor-sess-1", type: "editor", label: "nginx.conf", meta: editorMeta() }],
+      activeTabId: "editor-sess-1",
+    });
+
+    render(<TopTabBar />);
+
+    expect(await screen.findByText("nginx.conf")).toBeVisible();
   });
 
   it("renders the restored editor tab full width without a file panel", async () => {

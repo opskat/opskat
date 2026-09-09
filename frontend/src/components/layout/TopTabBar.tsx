@@ -2,7 +2,7 @@ import { createContext, use, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { useTabDragAndDrop } from "@/hooks/useTabDragAndDrop";
-import { useTabStore, type Tab } from "@/stores/tabStore";
+import { useTabStore, type EditorTabMeta, type Tab } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import {
   cn,
@@ -214,6 +214,11 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
 
       case "info": {
         return <TabItem {...commonProps} label={tab.label} />;
+      }
+
+      case "editor": {
+        // 标题只有文件名，完整远程路径放在 title 里，避免同名文件的 tab 无法区分。
+        return <TabItem {...commonProps} label={tab.label} title={(tab.meta as EditorTabMeta).remotePath} />;
       }
 
       default:
