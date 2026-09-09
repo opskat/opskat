@@ -115,7 +115,7 @@ func (s *Service) resolveDocumentTransport(session *Session) (*documentTransport
 
 	candidates := s.documentCandidateSessionIDs(session)
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditReconnectHint)
+		return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditUnreachableHint)
 	}
 
 	var firstMatch *documentTransport
@@ -152,7 +152,7 @@ func (s *Service) resolveDocumentTransport(session *Session) (*documentTransport
 	if reachableDifferentDocument {
 		return nil, fmt.Errorf("当前文件位置已变化，无法确认仍是同一份远程文件；%s", externalEditReconnectHint)
 	}
-	return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditReconnectHint)
+	return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditUnreachableHint)
 }
 
 func (s *Service) validateOverwriteTransport(session *Session, info *sftp_svc.RemoteFileInfo) error {

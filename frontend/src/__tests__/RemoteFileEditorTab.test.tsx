@@ -513,9 +513,11 @@ describe("RemoteFileEditorTab", () => {
     expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
     expect(screen.queryByText(/远程文件不存在/)).not.toBeInTheDocument();
 
-    saveSessionTextMock.mockRejectedValueOnce(new Error("当前远程文件已不可访问；请重新连接该资产后重试"));
+    saveSessionTextMock.mockRejectedValueOnce(
+      new Error("当前远程文件已不可访问；请先重新连接该资产的终端会话后再继续同步")
+    );
     await pressSave();
-    expect(await screen.findByText(/请重新连接该资产后重试/)).toBeInTheDocument();
+    expect(await screen.findByText(/请先重新连接该资产的终端会话/)).toBeInTheDocument();
     expect(screen.queryByText(/permission denied/)).not.toBeInTheDocument();
 
     expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");
@@ -677,6 +679,30 @@ describe("RemoteFileEditorTab", () => {
     expect(screen.queryByTestId("remote-file-editor-error")).not.toBeInTheDocument();
   });
 
+  // 「正在重新读取远端…」只能在真的在重读时出现：保存 / 合并 / 比对同样会把 store 的
+  // savingSessionId 指到本会话，拿它当在途标记会让未确认横幅谎报，还会锁死手动重读按钮。
+  it("does not claim a re-read is running while a save is in flight", async () => {
+    let releaseSave: (result: { status: string }) => void = () => {};
+    saveSessionTextMock.mockImplementation(
+      () =>
+        new Promise<{ status: string }>((resolve) => {
+          releaseSave = resolve;
+        })
+    );
+    await renderRestoredEditor();
+    typeInEditor("changed\n");
+
+    fireEvent.click(screen.getByTestId("remote-file-editor-save"));
+    await waitFor(() => expect(useExternalEditStore.getState().savingSessionId).toBe("sess-1"));
+
+    const banner = screen.getByTestId("remote-file-editor-unconfirmed");
+    expect(banner).toHaveTextContent("externalEdit.builtIn.unconfirmedWaiting");
+    expect(banner).not.toHaveTextContent("externalEdit.builtIn.unconfirmedChecking");
+    expect(screen.getByText("externalEdit.actions.refresh").closest("button")).toBeEnabled();
+
+    await act(async () => releaseSave({ status: "saved" }));
+  });
+
   it("re-reads on demand from the unconfirmed state", async () => {
     refreshSessionMock.mockResolvedValue(makeSession({ state: "clean" }));
     await renderRestoredEditor();
@@ -706,12 +732,14 @@ describe("RemoteFileEditorTab", () => {
     expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");
     expect(refreshSessionMock).toHaveBeenCalledTimes(1);
 
-    refreshSessionMock.mockRejectedValueOnce(new Error("当前远程文件已不可访问；请重新连接该资产后重试"));
+    refreshSessionMock.mockRejectedValueOnce(
+      new Error("当前远程文件已不可访问；请先重新连接该资产的终端会话后再继续同步")
+    );
     await act(async () => {
       fireEvent.click(screen.getByText("externalEdit.actions.refresh"));
     });
 
-    expect(await screen.findByText(/请重新连接该资产后重试/)).toBeInTheDocument();
+    expect(await screen.findByText(/请先重新连接该资产的终端会话/)).toBeInTheDocument();
     expect(screen.queryByText(/当前文件位置已变化/)).not.toBeInTheDocument();
     expect(screen.getByTestId("remote-file-editor-unconfirmed")).toBeInTheDocument();
     expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");

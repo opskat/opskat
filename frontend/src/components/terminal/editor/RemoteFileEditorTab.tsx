@@ -131,6 +131,9 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   // 第二次就直接跳过重读，结果是请求发了、冲突却永远显示不出来。存 promise 让重跑复用同一次
   // 请求：只问远端一次，且哪一次 effect 活到最后都能拿到结论。
   const recheckPromiseRef = useRef<Promise<ExternalEditSession> | null>(null);
+  // 重读是否在途要自己记：store 的 savingSessionId 同样会被保存 / 比对 / 合并指到本会话，
+  // 借用它会让未确认横幅在保存期间谎报「正在重新读取远端」，并且锁死手动重读按钮。
+  const [rechecking, setRechecking] = useState(false);
   const editorRef = useRef<{ editor: MonacoNS.editor.IStandaloneCodeEditor; monaco: typeof MonacoNS } | null>(null);
   const decorationsRef = useRef<MonacoNS.editor.IEditorDecorationsCollection | null>(null);
   const [mountVersion, setMountVersion] = useState(0);
@@ -170,6 +173,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const recheckRemote = useCallback(
     async (isCancelled: () => boolean) => {
       const pending = (recheckPromiseRef.current ??= refreshSession(meta.sessionId));
+      setRechecking(true);
       try {
         const session = await pending;
         if (isCancelled()) return;
@@ -182,6 +186,8 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
         // 失败不是结论：远端状态仍然未确认（等下一个可用会话或用户手动重读），
         // 失败原因按后端给出的分类原样呈现，本地改动一行不动。
         setOutcome({ key: loadKey, state: { kind: "failed", message: errorMessage(error) } });
+      } finally {
+        setRechecking(false);
       }
     },
     [loadKey, meta.sessionId, refreshSession]
@@ -358,8 +364,6 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   }, [forceCloseTab, tabId]);
 
   const saving = saveState.kind === "saving";
-  // 重读期间 store 会把 savingSessionId 指到本会话上：拿它当在途标记，不再另立一个。
-  const rechecking = remoteUnconfirmed && savingSessionId === meta.sessionId;
   const ownsCompare = compareResult?.primaryDraftSessionId === meta.sessionId;
   const ownsMerge = mergeResult?.primaryDraftSessionId === meta.sessionId;
 

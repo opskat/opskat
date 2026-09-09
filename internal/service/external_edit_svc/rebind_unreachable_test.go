@@ -19,6 +19,10 @@ func TestRefreshUnreachableCandidateReportsUnreachableNotPathIdentity(t *testing
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "当前远程文件已不可访问")
 	require.NotContains(t, err.Error(), "当前文件位置已变化")
+	// 决策 13：两类失败的出路不同 —— 不可达要重连该资产，不是同一份文件才要重新打开文件。
+	// 出路说明若还是「重新打开该远程文件」，分类就没有走到用户面前。
+	require.Contains(t, err.Error(), externalEditUnreachableHint)
+	require.NotContains(t, err.Error(), externalEditReconnectHint)
 }
 
 // 远端确实被换成另一份文件（同路径、不同真实路径）时仍必须报路径身份失败。
@@ -31,6 +35,7 @@ func TestRefreshDifferentRemoteDocumentStillReportsPathIdentity(t *testing.T) {
 	_, err := h.svc.Refresh(session.ID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "当前文件位置已变化")
+	require.Contains(t, err.Error(), externalEditReconnectHint)
 }
 
 // 一个候选不可达、另一个可达但已是另一份文件时，可达候选的结论仍要抛出——

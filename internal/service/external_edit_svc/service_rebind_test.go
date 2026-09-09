@@ -499,7 +499,8 @@ func TestExternalEditSaveBlocksWhenOnlyCandidateUnreachable(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "当前远程文件已不可访问")
 	assert.NotContains(t, err.Error(), "当前文件位置已变化")
-	assert.Contains(t, err.Error(), externalEditReconnectHint)
+	// 决策 5：绑不上任何可用会话时要求用户重连该资产，而不是让他重新打开文件。
+	assert.Contains(t, err.Error(), externalEditUnreachableHint)
 	assert.Equal(t, "external_edit_document_transport_blocked", h.audit.lastTool())
 }
 
