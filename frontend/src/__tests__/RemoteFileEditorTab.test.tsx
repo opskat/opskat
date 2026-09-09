@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type * as MonacoNS from "monaco-editor";
@@ -590,10 +591,39 @@ describe("RemoteFileEditorTab", () => {
       restoredTabIds: ["editor-sess-1"],
     });
 
-    render(<RemoteFileEditorTab meta={editorMeta()} />);
+    render(
+      <StrictMode>
+        <RemoteFileEditorTab meta={editorMeta()} />
+      </StrictMode>
+    );
 
     await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-1"));
     expect(await screen.findByTestId("remote-file-editor-conflict")).toBeInTheDocument();
+    expect(refreshSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  // 真机复现（2026-09-09 运行时验证）：恢复时的重读被会话身份校验拒绝，
+  // 审计里留下了 external_edit_refresh 失败，编辑器上却什么都没出现 —— 用户以为已同步。
+  it("surfaces a failed restore re-read instead of presenting the stale draft as clean", async () => {
+    refreshSessionMock.mockRejectedValue(
+      new Error("当前文件位置已变化，无法确认仍是同一份远程文件；请在同一资产中重新打开该远程文件后再继续同步")
+    );
+    useTabStore.setState({
+      tabs: [editorTab()],
+      activeTabId: "editor-sess-1",
+      restoredTabIds: ["editor-sess-1"],
+    });
+
+    render(
+      <StrictMode>
+        <RemoteFileEditorTab meta={editorMeta()} />
+      </StrictMode>
+    );
+
+    await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-1"));
+    expect(await screen.findByText(/当前文件位置已变化/)).toBeInTheDocument();
+    // 一次恢复只该问远端一次：StrictMode 的二次挂载不能变成第二次重读。
+    expect(refreshSessionMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not re-read the remote for a freshly opened editor tab", async () => {

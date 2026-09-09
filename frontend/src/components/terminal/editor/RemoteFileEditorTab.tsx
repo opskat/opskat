@@ -17,7 +17,11 @@ import {
 } from "@opskat/ui";
 import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
 import { buildTextDiffBlocks, type TextDiffBlock } from "@/lib/textDiffBlocks";
-import { readExternalEditSessionText, type ExternalEditSaveResult } from "@/lib/externalEditApi";
+import {
+  readExternalEditSessionText,
+  type ExternalEditSaveResult,
+  type ExternalEditSession,
+} from "@/lib/externalEditApi";
 import { useExternalEditStore } from "@/stores/externalEditStore";
 import { findEditorTabId, useTabStore, type EditorTabMeta } from "@/stores/tabStore";
 import { ExternalEditCompareWorkbench } from "../external-edit/CompareWorkbench";
@@ -111,6 +115,11 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
 
   // 重启恢复出来的 tab 必须重新比对远端基线：静默拿旧内容继续编辑就是在准备一次覆盖。
   const recheckRemoteRef = useRef(useTabStore.getState().restoredTabIds.includes(tabId ?? ""));
+  // 重读的 promise 存在 ref 里，而不是「进 effect 就把 recheckRemoteRef 置否」：effect 被重跑时
+  // （StrictMode 的二次挂载就是）第一次的 await 会被 cancelled 丢弃，若那时标记已经消费掉，
+  // 第二次就直接跳过重读，结果是请求发了、冲突却永远显示不出来。存 promise 让重跑复用同一次
+  // 请求：只问远端一次，且哪一次 effect 活到最后都能拿到结论。
+  const recheckPromiseRef = useRef<Promise<ExternalEditSession> | null>(null);
   const editorRef = useRef<{ editor: MonacoNS.editor.IStandaloneCodeEditor; monaco: typeof MonacoNS } | null>(null);
   const decorationsRef = useRef<MonacoNS.editor.IEditorDecorationsCollection | null>(null);
   const [mountVersion, setMountVersion] = useState(0);
@@ -124,10 +133,11 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
     let cancelled = false;
     const load = async () => {
       if (recheckRemoteRef.current) {
-        recheckRemoteRef.current = false;
+        recheckPromiseRef.current ??= refreshSession(meta.sessionId);
         try {
-          const session = await refreshSession(meta.sessionId);
+          const session = await recheckPromiseRef.current;
           if (cancelled) return;
+          recheckRemoteRef.current = false;
           if (session.state === "conflict") {
             setOutcome({ key: loadKey, state: { kind: "conflict" } });
           } else if (session.state === "remote_missing") {
@@ -135,6 +145,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           }
         } catch (error) {
           if (cancelled) return;
+          recheckRemoteRef.current = false;
           setOutcome({ key: loadKey, state: { kind: "failed", message: errorMessage(error) } });
         }
       }
