@@ -75,6 +75,41 @@ func TestOpenWithBuiltInEditorSkipsLaunchAndUsesExplicitSaveMode(t *testing.T) {
 	assert.Equal(t, saveModeManualExplicit, session.SaveMode)
 }
 
+func TestReopenBuiltInEditorAfterRemoteChangeSkipsLaunch(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+	openBuiltInSession(t, h, "/etc/nginx/nginx.conf", []byte("worker_processes 1;\n"))
+	recorder := recordLaunches(h)
+	// 重开一份远端已被改动的文件会走 rebuildDocumentSessionFromRemote 重建会话。
+	h.remote.SetFile("ssh-a", "/etc/nginx/nginx.conf", []byte("worker_processes 8;\n"), "/etc/nginx/nginx.conf")
+
+	rebuilt, err := h.svc.Open(context.Background(), OpenRequest{
+		AssetID:    101,
+		SessionID:  "ssh-a",
+		RemotePath: "/etc/nginx/nginx.conf",
+		EditorID:   builtInEditorID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, rebuilt)
+	assert.Empty(t, recorder.Calls())
+	assert.Equal(t, saveModeManualExplicit, rebuilt.SaveMode)
+}
+
+func TestRereadBuiltInEditorSessionSkipsLaunch(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+	session := openBuiltInSession(t, h, "/etc/nginx/nginx.conf", []byte("worker_processes 1;\n"))
+	recorder := recordLaunches(h)
+	h.remote.SetFile("ssh-a", "/etc/nginx/nginx.conf", []byte("worker_processes 8;\n"), "/etc/nginx/nginx.conf")
+
+	result, err := h.svc.Resolve(context.Background(), session.ID, resolutionReread)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Session)
+	assert.Empty(t, recorder.Calls())
+	assert.Equal(t, saveModeManualExplicit, result.Session.SaveMode)
+}
+
 func TestOpenWithExternalEditorStillLaunchesProcess(t *testing.T) {
 	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
 	recorder := recordLaunches(h)

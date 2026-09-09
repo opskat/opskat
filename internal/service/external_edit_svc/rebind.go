@@ -393,7 +393,7 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 		current.Dirty = false
 		current.State = sessionStateClean
 		current.RecordState = recordStateActive
-		current.SaveMode = saveModeAutoLive
+		current.SaveMode = saveModeForEditor(editor.ID)
 		current.Hidden = false
 		current.Expired = false
 		current.LastError = nil
@@ -428,7 +428,7 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 			LastLocalSHA256: baseHash,
 			State:           sessionStateClean,
 			RecordState:     recordStateActive,
-			SaveMode:        saveModeAutoLive,
+			SaveMode:        saveModeForEditor(editor.ID),
 			CreatedAt:       nowUnix,
 			UpdatedAt:       nowUnix,
 			LastLaunchedAt:  nowUnix,
@@ -449,7 +449,7 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 	cloned := cloneSession(session)
 	s.mu.Unlock()
 
-	if err := s.launch.Launch(editor.Path, append(cloneArgs(editor.Args), localPath)); err != nil {
+	if err := s.launchEditorProcess(editor.ID, editor.Path, editor.Args, localPath); err != nil {
 		if source == nil {
 			s.cleanupSessionAfterLaunchFailure(session.ID)
 		}
