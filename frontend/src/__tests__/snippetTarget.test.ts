@@ -55,6 +55,27 @@ describe("resolveSnippetTarget", () => {
     expect(res).toEqual({ kind: "active", asset: a });
   });
 
+  it("shell snippet + active local terminal tab whose asset is known → active", () => {
+    const a = asset(8, "local");
+    const res = resolveSnippetTarget({
+      snippet: snippet("shell"),
+      activeTab: terminalTab(8),
+      assetsById: new Map([[8, a]]),
+      categories: CATEGORIES,
+    });
+    expect(res).toEqual({ kind: "active", asset: a });
+  });
+
+  it("shell snippet + unsupported terminal asset → pick", () => {
+    const res = resolveSnippetTarget({
+      snippet: snippet("shell"),
+      activeTab: terminalTab(10),
+      assetsById: new Map([[10, asset(10, "serial")]]),
+      categories: CATEGORIES,
+    });
+    expect(res).toEqual({ kind: "pick" });
+  });
+
   it("sql snippet + active database query tab whose asset is known → active", () => {
     const a = asset(9, "database");
     const res = resolveSnippetTarget({

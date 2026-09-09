@@ -7,11 +7,16 @@ const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   openQueryTab: vi.fn(),
   writeSSH: vi.fn(),
+  writeLocal: vi.fn(),
   terminalState: { tabData: {} as Record<string, unknown> },
   tabState: { tabs: [] as unknown[] },
 }));
 
 vi.mock("../stores/terminalStore", () => ({
+  TRANSPORTS: {
+    ssh: { write: mocks.writeSSH },
+    local: { write: mocks.writeLocal },
+  },
   useTerminalStore: { getState: () => ({ ...mocks.terminalState, connect: mocks.connect }) },
 }));
 
@@ -22,8 +27,6 @@ vi.mock("../stores/tabStore", () => ({
 vi.mock("../stores/queryStore", () => ({
   useQueryStore: { getState: () => ({ openQueryTab: mocks.openQueryTab }) },
 }));
-
-vi.mock("../../wailsjs/go/ssh/SSH", () => ({ WriteSSH: mocks.writeSSH }));
 
 type Cat = { id: string; assetType: string };
 
@@ -65,7 +68,10 @@ describe("runSnippetOnAsset", () => {
   it("writes into an existing connected SSH pane without opening another connection", async () => {
     mocks.tabState.tabs = [{ id: "session-7", type: "terminal", meta: { assetId: 7 } }];
     mocks.terminalState.tabData = {
-      "session-7": { activePaneId: "pane-1", panes: { "pane-1": { connected: true } } },
+      "session-7": {
+        activePaneId: "pane-1",
+        panes: { "pane-1": { connected: true, transport: "ssh" } },
+      },
     };
 
     await runSnippetOnAsset(asset("ssh"), "echo hello");
@@ -81,6 +87,31 @@ describe("runSnippetOnAsset", () => {
 
     expect(mocks.connect).toHaveBeenCalledWith(target, "", false, { initialInput: "uptime" });
     expect(mocks.writeSSH).not.toHaveBeenCalled();
+  });
+
+  it("writes into an existing connected local pane through its transport", async () => {
+    mocks.tabState.tabs = [{ id: "local-session-7", type: "terminal", meta: { assetId: 7 } }];
+    mocks.terminalState.tabData = {
+      "local-session-7": {
+        activePaneId: "local-pane-1",
+        panes: { "local-pane-1": { connected: true, transport: "local" } },
+      },
+    };
+
+    await runSnippetOnAsset(asset("local"), "Get-Process");
+
+    expect(mocks.writeLocal).toHaveBeenCalledWith("local-pane-1", btoa("Get-Process"));
+    expect(mocks.writeSSH).not.toHaveBeenCalled();
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("opens a new local terminal with initial input when no connected pane exists", async () => {
+    const target = asset("local");
+
+    await runSnippetOnAsset(target, "Get-Service");
+
+    expect(mocks.connect).toHaveBeenCalledWith(target, "", false, { initialInput: "Get-Service" });
+    expect(mocks.writeLocal).not.toHaveBeenCalled();
   });
 
   it("opens database snippets as initial SQL", async () => {

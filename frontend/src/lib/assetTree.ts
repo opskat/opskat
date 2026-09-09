@@ -83,8 +83,10 @@ export function collectLeafIds(node: TreeNode): number[] {
 }
 
 export interface UseAssetTreeOptions {
-  /** Filter assets by type (e.g. "ssh"). */
+  /** Filter assets by one type (e.g. "ssh"). */
   filterType?: string;
+  /** Filter assets by any of these types. An empty list matches no assets. */
+  filterTypes?: readonly string[];
   /** Asset IDs to exclude (e.g. exclude self for jump host selection). */
   excludeIds?: Iterable<number>;
   /** Only include assets with Status === 1. */
@@ -94,12 +96,14 @@ export interface UseAssetTreeOptions {
 /** Shared asset filtering for tree/picker UIs. Keep status/type/exclude semantics in one place. */
 export function filterAssetTreeAssets(
   assets: asset_entity.Asset[],
-  { filterType, excludeIds, activeOnly }: UseAssetTreeOptions = {}
+  { filterType, filterTypes, excludeIds, activeOnly }: UseAssetTreeOptions = {}
 ): asset_entity.Asset[] {
   const exclude = excludeIds ? new Set(excludeIds) : undefined;
+  const typeSet = filterTypes ? new Set(filterTypes) : undefined;
   return assets.filter((asset) => {
     if (activeOnly && asset.Status !== 1) return false;
     if (filterType && asset.Type !== filterType) return false;
+    if (typeSet && !typeSet.has(asset.Type)) return false;
     if (exclude?.has(asset.ID)) return false;
     return true;
   });
@@ -110,12 +114,17 @@ export function filterAssetTreeAssets(
  * applies common filters, and returns a TreeNode[] with per-entity icons resolved.
  * Use this in any new asset picker so icon/filter behaviour stays consistent.
  */
-export function useAssetTree({ filterType, excludeIds, activeOnly }: UseAssetTreeOptions = {}): TreeNode[] {
+export function useAssetTree({
+  filterType,
+  filterTypes,
+  excludeIds,
+  activeOnly,
+}: UseAssetTreeOptions = {}): TreeNode[] {
   const { assets, groups } = useAssetStore();
 
   return useMemo(
-    () => buildAssetTree(assets, groups, { filterType, excludeIds, activeOnly }),
-    [assets, groups, filterType, excludeIds, activeOnly]
+    () => buildAssetTree(assets, groups, { filterType, filterTypes, excludeIds, activeOnly }),
+    [assets, groups, filterType, filterTypes, excludeIds, activeOnly]
   );
 }
 

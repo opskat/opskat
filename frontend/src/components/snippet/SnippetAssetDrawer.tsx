@@ -11,6 +11,7 @@ import { snippet_entity } from "../../../wailsjs/go/models";
 import { GetSnippetLastAssets } from "../../../wailsjs/go/extension/Extension";
 import { SetSnippetLastAssets, RecordSnippetUse } from "../../../wailsjs/go/extension/Extension";
 import { runSnippetOnAsset } from "./snippetRun";
+import { getSnippetRunnerAssetTypes } from "@/lib/snippetRunners";
 
 interface SnippetAssetDrawerProps {
   snippet: snippet_entity.Snippet;
@@ -24,11 +25,11 @@ export function SnippetAssetDrawer({ snippet, onClose }: SnippetAssetDrawerProps
   const allAssets = useAssetStore((s) => s.assets);
 
   const category = useMemo(() => categories.find((c) => c.id === snippet.Category), [categories, snippet.Category]);
-  const assetType = category?.assetType ?? "";
+  const assetTypes = useMemo(() => getSnippetRunnerAssetTypes(category?.assetType ?? ""), [category?.assetType]);
 
   const matchingAssetIds = useMemo(
-    () => new Set(filterAssetTreeAssets(allAssets, { filterType: assetType, activeOnly: true }).map((a) => a.ID)),
-    [allAssets, assetType]
+    () => new Set(filterAssetTreeAssets(allAssets, { filterTypes: assetTypes, activeOnly: true }).map((a) => a.ID)),
+    [allAssets, assetTypes]
   );
 
   const [selected, setSelected] = useState<number[]>([]);
@@ -91,7 +92,7 @@ export function SnippetAssetDrawer({ snippet, onClose }: SnippetAssetDrawerProps
         <AssetMultiSelect
           values={selected}
           onValuesChange={setSelected}
-          filterType={assetType}
+          filterTypes={assetTypes}
           searchPlaceholder={t("snippet.runDrawer.searchPlaceholder")}
           emptyText={t("snippet.runDrawer.noAssets")}
           className="flex-1 mt-2"
