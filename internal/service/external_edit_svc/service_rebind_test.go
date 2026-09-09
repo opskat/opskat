@@ -486,7 +486,9 @@ func TestExternalEditSaveRebindsWhenSessionMissingErrorHasNoSpace(t *testing.T) 
 	assert.Equal(t, "external_edit_save", h.audit.lastTool())
 }
 
-func TestExternalEditSaveBlocksWhenNoCandidate(t *testing.T) {
+// 唯一的候选会话是已失效的原会话：保存必须被拦下，
+// 且报「会话不可达」而不是「文件位置已变化」——后者会让用户去重新打开文件而不是重连。
+func TestExternalEditSaveBlocksWhenOnlyCandidateUnreachable(t *testing.T) {
 	h := newRebindHarness(t, func(int64) []string { return nil })
 	session := h.openSession(t, "ssh-old", "/srv/app/demo.txt", "/srv/app/demo.txt", []byte("hello\n"))
 
@@ -495,7 +497,8 @@ func TestExternalEditSaveBlocksWhenNoCandidate(t *testing.T) {
 
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "当前文件位置已变化")
+	assert.Contains(t, err.Error(), "当前远程文件已不可访问")
+	assert.NotContains(t, err.Error(), "当前文件位置已变化")
 	assert.Contains(t, err.Error(), externalEditReconnectHint)
 	assert.Equal(t, "external_edit_document_transport_blocked", h.audit.lastTool())
 }
