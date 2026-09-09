@@ -1824,6 +1824,11 @@
     "empty": "空目录",
     "loadError": "加载失败",
     "retry": "重试",
+    "tree": {
+      "expand": "展开",
+      "collapse": "收起",
+      "loading": "加载中…"
+    },
     "refresh": "刷新",
     "newFolder": "新建文件夹",
     "openFolder": "打开",

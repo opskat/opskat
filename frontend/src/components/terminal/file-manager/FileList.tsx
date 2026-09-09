@@ -1,17 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { File, Folder, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder, Loader2 } from "lucide-react";
 import { Button, cn, Input, ScrollArea } from "@opskat/ui";
 import { sftp_svc } from "../../../../wailsjs/go/models";
-import {
-  canMovePathToDirectory,
-  formatBytes,
-  formatDate,
-  getEntryPath,
-  getParentPath,
-  splitNameForRename,
-  sortEntries,
-} from "./utils";
+import { isSftpTreeEntryRow, type SftpTreeEntryRow, type SftpTreeRow } from "@/lib/sftpDirTree";
+import { canMovePathToDirectory, formatBytes, formatDate, getParentPath, splitNameForRename } from "./utils";
+
+/** 每级缩进的固定像素;宽度封顶与参考线属于后续切片。 */
+const INDENT_PX = 12;
+const ROW_PADDING_PX = 8;
+
+function indentStyle(depth: number) {
+  return { paddingLeft: ROW_PADDING_PX + depth * INDENT_PX };
+}
 
 interface RenameInputProps {
   initialName: string;
@@ -51,18 +52,20 @@ interface FileListProps {
   canExternalEdit?: (entry: sftp_svc.FileEntry) => boolean;
   clipboardCutPaths: Set<string>;
   currentPath: string;
-  entries: sftp_svc.FileEntry[];
   error: string | null;
   loading: boolean;
   onExternalOpen?: (path: string) => void;
   onGoUp: () => void;
   onMoveEntriesToDirectory: (sourcePaths: string[], targetDirPath: string) => void;
   onNavigate: (path: string) => void;
-  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null) => void;
+  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null, entryPath: string | null) => void;
   onRenameCancel: () => void;
   onRenameCommit: (oldPath: string, nextName: string) => void;
   onRetry: () => void;
+  onRetryExpand: (dirPath: string) => void;
+  onToggleExpand: (dirPath: string) => void;
   renamePath: string | null;
+  rows: SftpTreeRow[];
   selected: string[];
   setSelected: (next: string[] | ((prev: string[]) => string[])) => void;
 }
@@ -71,7 +74,6 @@ export function FileList({
   canExternalEdit,
   clipboardCutPaths,
   currentPath,
-  entries,
   error,
   loading,
   onExternalOpen,
@@ -82,16 +84,27 @@ export function FileList({
   onRenameCancel,
   onRenameCommit,
   onRetry,
+  onRetryExpand,
+  onToggleExpand,
   renamePath,
+  rows,
   selected,
   setSelected,
 }: FileListProps) {
   const { t } = useTranslation();
-  const sortedEntries = useMemo(() => sortEntries(entries), [entries]);
-  const entryPaths = useMemo(
-    () => sortedEntries.map((entry) => getEntryPath(currentPath, entry)),
-    [currentPath, sortedEntries]
-  );
+  // 条目行才参与选择与区间选择;加载中 / 空 / 失败三种占位行只负责呈现子层状态。
+  const entryRows = useMemo(() => rows.filter(isSftpTreeEntryRow), [rows]);
+  const entryPaths = useMemo(() => entryRows.map((row) => row.path), [entryRows]);
+  // 区间选择的下标按「可见条目行」计数,占位行不占位置。
+  const renderRows = useMemo(() => {
+    const items: { row: SftpTreeRow; index: number }[] = [];
+    let entryIndex = 0;
+    for (const row of rows) {
+      items.push({ row, index: isSftpTreeEntryRow(row) ? entryIndex : -1 });
+      if (isSftpTreeEntryRow(row)) entryIndex += 1;
+    }
+    return items;
+  }, [rows]);
   // 父组件 FileManagerPanel 把 onNavigate / onOpenContextMenu / onRenameCancel 等
   // 写成内联箭头函数,而 selected 也住在父组件 —— 选中一变父组件就重渲,这些 prop
   // 全部换标识。若把它们直接传给行,行的 memo 一次都不会命中(实测反而更慢,因为白
@@ -104,6 +117,8 @@ export function FileList({
     onMoveEntriesToDirectory,
     onRenameCancel,
     onRenameCommit,
+    onRetryExpand,
+    onToggleExpand,
     renamePath,
   });
   useEffect(() => {
@@ -115,6 +130,8 @@ export function FileList({
       onMoveEntriesToDirectory,
       onRenameCancel,
       onRenameCommit,
+      onRetryExpand,
+      onToggleExpand,
       renamePath,
     };
   }, [
@@ -125,6 +142,8 @@ export function FileList({
     onMoveEntriesToDirectory,
     onRenameCancel,
     onRenameCommit,
+    onRetryExpand,
+    onToggleExpand,
     renamePath,
   ]);
 
@@ -135,9 +154,12 @@ export function FileList({
   const stableExternalOpen = useCallback((path: string) => cbRef.current.onExternalOpen?.(path), []);
   const stableNavigate = useCallback((path: string) => cbRef.current.onNavigate(path), []);
   const stableOpenContextMenu = useCallback(
-    (x: number, y: number, entry: sftp_svc.FileEntry | null) => cbRef.current.onOpenContextMenu(x, y, entry),
+    (x: number, y: number, entry: sftp_svc.FileEntry | null, entryPath: string | null) =>
+      cbRef.current.onOpenContextMenu(x, y, entry, entryPath),
     []
   );
+  const stableToggleExpand = useCallback((dirPath: string) => cbRef.current.onToggleExpand(dirPath), []);
+  const stableRetryExpand = useCallback((dirPath: string) => cbRef.current.onRetryExpand(dirPath), []);
   const stableMoveEntries = useCallback(
     (sourcePaths: string[], targetDirPath: string) =>
       cbRef.current.onMoveEntriesToDirectory(sourcePaths, targetDirPath),
@@ -208,7 +230,7 @@ export function FileList({
       ) {
         prev.path = "";
         prev.time = 0;
-        stableOpenContextMenu(-1, -1, null); // closes any pending menu in parent no-op path
+        stableOpenContextMenu(-1, -1, null, null); // closes any pending menu in parent no-op path
         window.dispatchEvent(new CustomEvent("sftp:rename-request", { detail: { path } }));
         return;
       }
@@ -339,6 +361,9 @@ export function FileList({
       onOpenContextMenu: stableOpenContextMenu,
       onMoveEntriesToDirectory: stableMoveEntries,
       onRenameCancel: stableRenameCancel,
+      onToggleExpand: stableToggleExpand,
+      collapseLabel: t("sftp.tree.collapse"),
+      expandLabel: t("sftp.tree.expand"),
       commitRename,
       selectEntry,
       maybeStartSlowRename,
@@ -368,6 +393,8 @@ export function FileList({
       stableNavigate,
       stableOpenContextMenu,
       stableRenameCancel,
+      stableToggleExpand,
+      t,
       updatePointerDrag,
     ]
   );
@@ -381,7 +408,7 @@ export function FileList({
       onContextMenu={(e) => {
         if (isEntryTarget(e.target)) return;
         e.preventDefault();
-        onOpenContextMenu(e.clientX, e.clientY, null);
+        onOpenContextMenu(e.clientX, e.clientY, null, null);
       }}
     >
       <div className="text-xs select-none min-h-full">
@@ -399,7 +426,7 @@ export function FileList({
             </Button>
           </div>
         )}
-        {!loading && !error && entries.length === 0 && (
+        {!loading && !error && rows.length === 0 && (
           <div className="flex items-center justify-center py-8">
             <span className="text-muted-foreground">{t("sftp.empty")}</span>
           </div>
@@ -421,22 +448,22 @@ export function FileList({
                 <span className="flex-1 truncate">..</span>
               </div>
             )}
-            {sortedEntries.map((entry, index) => {
-              const fullPath = getEntryPath(currentPath, entry);
-              return (
+            {renderRows.map(({ row, index }) =>
+              isSftpTreeEntryRow(row) ? (
                 <FileRow
-                  key={entry.name}
-                  entry={entry}
-                  fullPath={fullPath}
+                  key={`entry:${row.path}`}
+                  row={row}
                   index={index}
-                  isSelected={selectedSet.has(fullPath)}
-                  isCut={clipboardCutPaths.has(fullPath)}
-                  isRenaming={renamePath === fullPath}
-                  isDropTarget={dropTargetPath === fullPath}
+                  isSelected={selectedSet.has(row.path)}
+                  isCut={clipboardCutPaths.has(row.path)}
+                  isRenaming={renamePath === row.path}
+                  isDropTarget={dropTargetPath === row.path}
                   h={rowHandlers}
                 />
-              );
-            })}
+              ) : (
+                <TreeStatusRow key={`${row.state}:${row.path}`} row={row} onRetry={stableRetryExpand} />
+              )
+            )}
           </>
         )}
       </div>
@@ -448,9 +475,12 @@ interface FileRowHandlers {
   canExternalEdit: (entry: sftp_svc.FileEntry) => boolean;
   onExternalOpen: (path: string) => void;
   onNavigate: (path: string) => void;
-  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null) => void;
+  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null, entryPath: string | null) => void;
   onMoveEntriesToDirectory: (sourcePaths: string[], targetDirPath: string) => void;
   onRenameCancel: () => void;
+  onToggleExpand: (dirPath: string) => void;
+  collapseLabel: string;
+  expandLabel: string;
   commitRename: (nextName: string) => void;
   selectEntry: (path: string, index: number, event: React.MouseEvent) => void;
   maybeStartSlowRename: (path: string, index: number, eventTime: number) => void;
@@ -467,8 +497,7 @@ interface FileRowHandlers {
 }
 
 interface FileRowProps {
-  entry: sftp_svc.FileEntry;
-  fullPath: string;
+  row: SftpTreeEntryRow;
   index: number;
   isSelected: boolean;
   isCut: boolean;
@@ -480,29 +509,23 @@ interface FileRowProps {
 // 单行 memo 化:选中态是列表级 state,不 memo 的话点一行会把整个目录的行全部重渲。
 // 5000 个文件的目录实测单击一次 631ms、shift 全选 1.6s(见 PR 说明)。所有需要
 // "当前选中集合"的回调都通过 ref 读,保证 props 在选中变化时保持同一标识。
-const FileRow = memo(function FileRow({
-  entry,
-  fullPath,
-  index,
-  isSelected,
-  isCut,
-  isRenaming,
-  isDropTarget,
-  h,
-}: FileRowProps) {
+const FileRow = memo(function FileRow({ row, index, isSelected, isCut, isRenaming, isDropTarget, h }: FileRowProps) {
+  const entry = row.entry;
+  const fullPath = row.path;
   return (
     <div
       data-sftp-entry-row="true"
       data-sftp-entry-dir={entry.isDir ? "true" : "false"}
       data-sftp-entry-path={fullPath}
+      data-sftp-depth={row.depth}
       draggable={false}
+      style={{ ...indentStyle(row.depth), contentVisibility: "auto", containIntrinsicSize: "auto 28px" }}
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 cursor-pointer transition-colors rounded-sm",
+        "flex items-center gap-1.5 pr-2 py-1 cursor-pointer transition-colors rounded-sm",
         isSelected ? "bg-primary/15 text-primary" : "hover:bg-muted/50",
         isCut && "opacity-45",
         isDropTarget && "bg-primary/10 ring-1 ring-primary/30"
       )}
-      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 28px" }}
       onDragStart={(e) => {
         if (isRenaming) {
           e.preventDefault();
@@ -568,9 +591,34 @@ const FileRow = memo(function FileRow({
         e.preventDefault();
         e.stopPropagation();
         if (!h.selectedRef.current.includes(fullPath)) h.setSelected([fullPath]);
-        h.onOpenContextMenu(e.clientX, e.clientY, entry);
+        h.onOpenContextMenu(e.clientX, e.clientY, entry, fullPath);
       }}
     >
+      {entry.isDir ? (
+        <button
+          type="button"
+          aria-label={row.expanded ? h.collapseLabel : h.expandLabel}
+          data-testid={`sftp-expand-${fullPath}`}
+          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            h.onToggleExpand(fullPath);
+          }}
+        >
+          {row.loading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : row.expanded ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </button>
+      ) : (
+        <span className="w-3.5 shrink-0" />
+      )}
       {entry.isDir ? (
         <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />
       ) : (
@@ -586,3 +634,40 @@ const FileRow = memo(function FileRow({
     </div>
   );
 });
+
+interface TreeStatusRowProps {
+  row: SftpTreeRow;
+  onRetry: (dirPath: string) => void;
+}
+
+/** 展开目录的子层状态行:把「加载中 / 空目录 / 加载失败」摆在该目录下方,彼此可区分。 */
+function TreeStatusRow({ row, onRetry }: TreeStatusRowProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-sftp-depth={row.depth}
+      style={indentStyle(row.depth)}
+      className="flex items-center gap-1.5 pr-2 py-1 text-muted-foreground"
+    >
+      <span className="w-3.5 shrink-0" />
+      {row.state === "loading" && (
+        <>
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+          <span className="truncate">{t("sftp.tree.loading")}</span>
+        </>
+      )}
+      {row.state === "empty" && <span className="truncate">{t("sftp.empty")}</span>}
+      {row.state === "error" && (
+        <>
+          <span className="text-destructive shrink-0">{t("sftp.loadError")}</span>
+          <span className="min-w-0 flex-1 truncate text-[10px]" title={row.message ?? undefined}>
+            {row.message}
+          </span>
+          <Button variant="outline" size="xs" className="shrink-0" onClick={() => onRetry(row.path)}>
+            {t("sftp.retry")}
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}

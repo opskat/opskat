@@ -44,7 +44,6 @@ import { useTerminalDirectorySync } from "./file-manager/useTerminalDirectorySyn
 import {
   canMovePathToDirectory,
   formatBytes,
-  getEntryPath,
   getParentPath,
   getPathBaseName,
   HANDLE_PX,
@@ -107,16 +106,19 @@ export function FileManagerPanel({
   const {
     currentPath,
     currentPathRef,
-    entries,
     error,
     loading,
     loadDir,
     pathInput,
+    refreshTree,
+    retryExpand,
+    rows,
     selected,
     setError,
     setPathInput,
     setSelected,
     storedPath,
+    toggleExpand,
   } = useFileManagerDirectory(tabId, sessionId);
 
   const {
@@ -130,6 +132,8 @@ export function FileManagerPanel({
   } = useTerminalDirectorySync({ currentPathRef, loadDir, sessionId, tabId });
 
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  // 右键命中行的绝对路径:树里同名条目可能分布在不同层,不能再由 currentPath 拼回去。
+  const ctxEntryPathRef = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [renamePath, setRenamePath] = useState<string | null>(null);
   const [permissionTarget, setPermissionTarget] = useState<PermissionTarget | null>(null);
@@ -209,11 +213,12 @@ export function FileManagerPanel({
     }
     return items.filter((item) => !isExternalEditClipboardResidueSession(item.session));
   }, [assetId, attentionItems, safePendingConflict]);
+  // 树上任意可见行都可能被选中/右键,因此按行建索引,而不只是根这一层。
   const entryByPath = useMemo(() => {
     const map = new Map<string, sftp_svc.FileEntry>();
-    for (const entry of entries) map.set(getEntryPath(currentPath, entry), entry);
+    for (const row of rows) if (row.entry) map.set(row.path, row.entry);
     return map;
-  }, [currentPath, entries]);
+  }, [rows]);
   const selectedEntries = useMemo(
     () => selected.map((path) => entryByPath.get(path)).filter(Boolean) as sftp_svc.FileEntry[],
     [entryByPath, selected]
@@ -276,7 +281,7 @@ export function FileManagerPanel({
   ).length;
   const prevDoneCount = useRef(0);
   useEffect(() => {
-    if (doneUploadCount > prevDoneCount.current) void loadDir(currentPathRef.current);
+    if (doneUploadCount > prevDoneCount.current) void refreshTree();
     prevDoneCount.current = doneUploadCount;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doneUploadCount]);
@@ -290,7 +295,6 @@ export function FileManagerPanel({
     return () => window.removeEventListener("sftp:rename-request", handler);
   }, []);
 
-  const getFullPath = useCallback((entry: sftp_svc.FileEntry) => getEntryPath(currentPath, entry), [currentPath]);
   const selectedItems = useCallback(() => {
     const paths = selected.length ? selected : [];
     return paths
@@ -341,11 +345,11 @@ export function FileManagerPanel({
         })
       );
       if (clipboard.mode === "cut") setGlobalClipboard(null);
-      await loadDir(currentPathRef.current);
+      await refreshTree();
     } catch (e) {
       toast.error(String(e));
     }
-  }, [clipboard, currentPathRef, loadDir, sessionId]);
+  }, [clipboard, currentPathRef, refreshTree, sessionId]);
 
   const goUp = useCallback(() => {
     if (currentPath === "/") return;
@@ -377,13 +381,13 @@ export function FileManagerPanel({
     if (!deleteTarget) return;
     try {
       for (const item of deleteTarget.paths) await SFTPDelete(sessionId, item.path, item.isDir);
-      await loadDir(currentPathRef.current);
+      await refreshTree();
     } catch (e) {
       setError(String(e));
     } finally {
       setDeleteTarget(null);
     }
-  }, [currentPathRef, deleteTarget, loadDir, sessionId, setError]);
+  }, [deleteTarget, refreshTree, sessionId, setError]);
 
   const canExternalEdit = useCallback((entry: sftp_svc.FileEntry) => !entry.isDir, []);
 
@@ -514,12 +518,12 @@ export function FileManagerPanel({
       try {
         await SFTPRename(sessionId, oldPath, joinRemotePath(getParentPath(oldPath), nextName));
         setRenamePath(null);
-        await loadDir(currentPathRef.current);
+        await refreshTree();
       } catch (e) {
         toast.error(String(e));
       }
     },
-    [currentPathRef, entryByPath, loadDir, sessionId]
+    [entryByPath, refreshTree, sessionId]
   );
 
   const moveEntriesToDirectory = useCallback(
@@ -544,12 +548,12 @@ export function FileManagerPanel({
           await SFTPRename(sessionId, move.from, move.to);
         }
         setSelected([]);
-        await loadDir(currentPathRef.current);
+        await refreshTree();
       } catch (e) {
         toast.error(String(e));
       }
     },
-    [currentPathRef, entryByPath, loadDir, sessionId, setSelected]
+    [entryByPath, refreshTree, sessionId, setSelected]
   );
 
   const openPermission = useCallback(
@@ -572,26 +576,26 @@ export function FileManagerPanel({
     (action: string) => {
       if (!ctxMenu) return;
       const entry = ctxMenu.entry;
-      const targetPath = entry ? getFullPath(entry) : selected[0];
+      const targetPath = entry ? ctxEntryPathRef.current : selected[0];
       const multiPaths = selected.length > 1 ? selected : targetPath ? [targetPath] : [];
       setCtxMenu(null);
       switch (action) {
         case "open":
-          if (entry?.isDir) void navigateToPath(getFullPath(entry));
+          if (entry?.isDir && targetPath) void navigateToPath(targetPath);
           break;
         case "openTerminal":
-          if (entry?.isDir) void syncTerminalToPath(getFullPath(entry));
+          if (entry?.isDir && targetPath) void syncTerminalToPath(targetPath);
           break;
         case "download":
-          if (entry) startDownload(transferTarget, getFullPath(entry));
+          if (entry && targetPath) startDownload(transferTarget, targetPath);
           break;
         case "externalEdit":
-          if (entry) {
-            void handleOpenExternalEdit(getFullPath(entry));
+          if (entry && targetPath) {
+            void handleOpenExternalEdit(targetPath);
           }
           break;
         case "downloadDir":
-          if (entry) startDownloadDir(transferTarget, getFullPath(entry));
+          if (entry && targetPath) startDownloadDir(transferTarget, targetPath);
           break;
         case "downloadSelected":
           selectedItems().forEach((item) =>
@@ -654,7 +658,7 @@ export function FileManagerPanel({
           });
           break;
         case "refresh":
-          void loadDir(currentPathRef.current);
+          void refreshTree();
           break;
       }
     },
@@ -666,12 +670,11 @@ export function FileManagerPanel({
       copyOrCut,
       entryByPath,
       handleOpenExternalEdit,
-      getFullPath,
-      loadDir,
       navigateToPath,
       openPermission,
       openProperties,
       paste,
+      refreshTree,
       selected,
       selectedItems,
       startDownload,
@@ -691,7 +694,7 @@ export function FileManagerPanel({
       if (nameDialog === "file") await SFTPCreateFile(sessionId, path);
       if (nameDialog === "folder") await SFTPMkdir(sessionId, path);
       setNameDialog(null);
-      await loadDir(currentPathRef.current);
+      await refreshTree();
     } catch (e) {
       toast.error(String(e));
     }
@@ -773,7 +776,7 @@ export function FileManagerPanel({
               onGoUp={goUp}
               onPathInputChange={setPathInput}
               onPathSubmit={(nextPath) => void navigateToPath(nextPath)}
-              onRefresh={() => void loadDir(currentPathRef.current)}
+              onRefresh={() => void refreshTree()}
               onSyncPanelFromTerminal={() => void handleSyncPanelFromTerminal()}
               onSyncTerminalToPath={() => void handleSyncTerminalToCurrentPath()}
               paneConnected={paneConnected}
@@ -804,15 +807,15 @@ export function FileManagerPanel({
               canExternalEdit={canExternalEdit}
               clipboardCutPaths={clipboardCutPaths}
               currentPath={currentPath}
-              entries={entries}
               error={error}
               loading={loading}
               onExternalOpen={handleOpenExternalEdit}
               onGoUp={goUp}
               onMoveEntriesToDirectory={moveEntriesToDirectory}
               onNavigate={(path) => void navigateToPath(path)}
-              onOpenContextMenu={(x, y, entry) => {
+              onOpenContextMenu={(x, y, entry, entryPath) => {
                 if (x < 0 || y < 0) return;
+                ctxEntryPathRef.current = entryPath;
                 if (!entry) {
                   setSelected([]);
                   setCtxMenu({ x, y, entry: null, selectedEntries: [] });
@@ -831,8 +834,11 @@ export function FileManagerPanel({
               }}
               onRenameCancel={() => setRenamePath(null)}
               onRenameCommit={commitRename}
-              onRetry={() => void loadDir(currentPathRef.current)}
+              onRetry={() => void refreshTree()}
+              onRetryExpand={retryExpand}
+              onToggleExpand={toggleExpand}
               renamePath={renamePath}
+              rows={rows}
               selected={selected}
               setSelected={setSelected}
             />
@@ -969,7 +975,7 @@ export function FileManagerPanel({
         sessionId={sessionId}
         target={permissionTarget}
         onClose={() => setPermissionTarget(null)}
-        onSaved={() => void loadDir(currentPathRef.current)}
+        onSaved={() => void refreshTree()}
       />
       <PropertiesDialog sessionId={sessionId} target={propertiesTarget} onClose={() => setPropertiesTarget(null)} />
     </>

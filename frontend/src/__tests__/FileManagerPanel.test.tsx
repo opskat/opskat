@@ -8,6 +8,7 @@ import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { useExternalEditStore } from "../stores/externalEditStore";
 import { type ExternalEditMergePrepareResult, type ExternalEditSession } from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
+import { sftp_svc } from "../../wailsjs/go/models";
 import { OpenExternalEdit, PrepareExternalEditMerge } from "../../wailsjs/go/external_edit/ExternalEdit";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
@@ -194,6 +195,44 @@ function createDragDataTransfer(): DataTransfer {
     }),
     setDragImage: vi.fn(),
   } as unknown as DataTransfer;
+}
+
+type DirListing = sftp_svc.FileEntry[] | Promise<sftp_svc.FileEntry[]>;
+
+function dirEntry(name: string): sftp_svc.FileEntry {
+  return { name, isDir: true, size: 0, modTime: 0 } as sftp_svc.FileEntry;
+}
+
+function fileEntry(name: string): sftp_svc.FileEntry {
+  return { name, isDir: false, size: 12, modTime: 0 } as sftp_svc.FileEntry;
+}
+
+/** 每个目录一份返回值；用数组包住多份表示按调用次序依次取用，用尽后重复最后一份。 */
+function mockDirListings(listings: Record<string, DirListing | DirListing[]>) {
+  const calls: Record<string, number> = {};
+  vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
+    const listing = listings[path];
+    if (listing === undefined) return Promise.resolve([]);
+    if (Array.isArray(listing) && listing.some((item) => Array.isArray(item) || item instanceof Promise)) {
+      const sequence = listing as DirListing[];
+      const index = Math.min(calls[path] ?? 0, sequence.length - 1);
+      calls[path] = (calls[path] ?? 0) + 1;
+      return Promise.resolve(sequence[index]);
+    }
+    return Promise.resolve(listing as sftp_svc.FileEntry[]);
+  });
+}
+
+function listDirCalls(path: string) {
+  return vi.mocked(SFTPListDir).mock.calls.filter((call) => call[1] === path);
+}
+
+function rowOf(text: string): HTMLElement {
+  return screen.getByText(text).closest("[data-sftp-entry-row]") as HTMLElement;
+}
+
+function expandToggle(path: string): HTMLElement {
+  return screen.getByTestId(`sftp-expand-${path}`);
 }
 
 describe("FileManagerPanel", () => {
@@ -1325,5 +1364,198 @@ describe("FileManagerPanel", () => {
     } finally {
       elementFromPoint.mockRestore();
     }
+  });
+  describe("directory tree", () => {
+    it("expands a directory in place without changing the current path", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), fileEntry("app.log")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app/conf.d");
+      await screen.findByText("default.conf");
+      expect(rowOf("conf.d").dataset.sftpDepth).toBe("0");
+      expect(rowOf("default.conf").dataset.sftpDepth).toBe("1");
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app");
+      expect(screen.getByTestId("sftp-path-input")).toHaveValue("/srv/app");
+    });
+
+    it("shows a loading placeholder for a child layer that is still being fetched", async () => {
+      let resolveChild: (entries: sftp_svc.FileEntry[]) => void = () => {};
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": new Promise<sftp_svc.FileEntry[]>((resolve) => {
+          resolveChild = resolve;
+        }),
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      expect(await screen.findByText("sftp.tree.loading")).toBeInTheDocument();
+      resolveChild([fileEntry("default.conf")]);
+      await screen.findByText("default.conf");
+      expect(screen.queryByText("sftp.tree.loading")).toBeNull();
+    });
+
+    it("marks an expanded but empty child layer as an empty directory", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), fileEntry("app.log")],
+        "/srv/app/conf.d": [],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      const placeholder = await screen.findByText("sftp.empty");
+      expect(placeholder.closest("[data-sftp-depth]")?.getAttribute("data-sftp-depth")).toBe("1");
+      expect(screen.getByText("app.log")).toBeInTheDocument();
+    });
+
+    it("reports a denied child layer with its reason and retries it in place", async () => {
+      vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
+        if (path !== "/srv/app/conf.d") return Promise.resolve([dirEntry("conf.d"), dirEntry("logs")]);
+        return listDirCalls(path).length === 1
+          ? Promise.reject(new Error("permission denied"))
+          : Promise.resolve([fileEntry("default.conf")]);
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
+      expect(screen.getByText("logs")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "sftp.retry" }));
+
+      await screen.findByText("default.conf");
+      expect(screen.queryByText(/permission denied/)).toBeNull();
+    });
+
+    it("re-renders a remembered layer from cache while refreshing it in the background", async () => {
+      let resolveSecond: (entries: sftp_svc.FileEntry[]) => void = () => {};
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": [
+          [fileEntry("default.conf")],
+          new Promise<sftp_svc.FileEntry[]>((resolve) => {
+            resolveSecond = resolve;
+          }),
+        ],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      expect(screen.queryByText("default.conf")).toBeNull();
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      // 后台刷新还在飞行中：缓存条目必须立刻可见，而不是退回加载中占位。
+      expect(screen.getByText("default.conf")).toBeInTheDocument();
+      expect(screen.queryByText("sftp.tree.loading")).toBeNull();
+      expect(listDirCalls("/srv/app/conf.d")).toHaveLength(2);
+
+      resolveSecond([fileEntry("renamed.conf")]);
+      await screen.findByText("renamed.conf");
+      expect(screen.queryByText("default.conf")).toBeNull();
+    });
+
+    it("invalidates every expanded layer when the panel is refreshed", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": [[fileEntry("old.conf")], [fileEntry("new.conf")]],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("old.conf");
+
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+
+      await screen.findByText("new.conf");
+      expect(screen.queryByText("old.conf")).toBeNull();
+      expect(listDirCalls("/srv/app")).toHaveLength(2);
+    });
+
+    it("keeps the expanded layers remembered by absolute path across a re-root", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), dirEntry("logs")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+        "/srv/app/logs": [fileEntry("access.log")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.doubleClick(rowOf("logs"));
+      await screen.findByText("access.log");
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app/logs");
+      expect(screen.queryByText("default.conf")).toBeNull();
+
+      fireEvent.click(screen.getByTitle("sftp.parentDir"));
+
+      expect(await screen.findByText("default.conf")).toBeInTheDocument();
+      expect(rowOf("default.conf").dataset.sftpDepth).toBe("1");
+    });
+
+    it("re-requests a remembered layer whose cache was dropped while another root was in view", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), dirEntry("logs")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+        "/srv/app/logs": [fileEntry("access.log")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.doubleClick(rowOf("logs"));
+      await screen.findByText("access.log");
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+      await screen.findByText("access.log");
+
+      fireEvent.click(screen.getByTitle("sftp.parentDir"));
+
+      expect(await screen.findByText("default.conf")).toBeInTheDocument();
+      expect(screen.queryByText("sftp.tree.loading")).toBeNull();
+    });
+
+    it("acts on the absolute path of a row that lives in an expanded child layer", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.contextMenu(screen.getByText("default.conf"), { clientX: 24, clientY: 24 });
+      await screen.findByRole("button", { name: "sftp.menu.copyFilePath" });
+      await new Promise((resolve) => window.setTimeout(resolve, 175));
+      fireEvent.click(screen.getByRole("button", { name: "sftp.menu.copyFilePath" }));
+
+      await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("/srv/app/conf.d/default.conf"));
+    });
   });
 });

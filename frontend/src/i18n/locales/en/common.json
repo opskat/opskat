@@ -1824,6 +1824,11 @@
     "empty": "Empty directory",
     "loadError": "Failed to load",
     "retry": "Retry",
+    "tree": {
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "loading": "Loading…"
+    },
     "refresh": "Refresh",
     "newFolder": "New Folder",
     "openFolder": "Open",
