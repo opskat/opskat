@@ -5,8 +5,10 @@ import { useAssetTree } from "@/lib/assetTree";
 interface AssetMultiSelectProps {
   values: number[];
   onValuesChange: (values: number[]) => void;
-  /** Filter assets by type (e.g., "ssh"). Default: all types */
+  /** Filter assets by one type (e.g. "ssh"). Default: all types */
   filterType?: string;
+  /** Filter assets by any of these types. */
+  filterTypes?: readonly string[];
   /** Only include assets with Status === 1 (default: true) */
   activeOnly?: boolean;
   searchPlaceholder?: string;
@@ -23,13 +25,14 @@ export function AssetMultiSelect({
   values,
   onValuesChange,
   filterType,
+  filterTypes,
   activeOnly = true,
   searchPlaceholder,
   emptyText,
   className,
 }: AssetMultiSelectProps) {
   const { t } = useTranslation();
-  const tree = useAssetTree({ filterType, activeOnly });
+  const tree = useAssetTree({ filterType, filterTypes, activeOnly });
 
   return (
     <TreeCheckList
