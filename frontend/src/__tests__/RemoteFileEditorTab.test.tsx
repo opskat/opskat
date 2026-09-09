@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type * as MonacoNS from "monaco-editor";
+import { TooltipProvider } from "@opskat/ui";
 import { MainPanel } from "@/components/layout/MainPanel";
+import { SideTabList } from "@/components/layout/SideTabList";
 import { TopTabBar } from "@/components/layout/TopTabBar";
 import { RemoteFileEditorTab } from "@/components/terminal/editor/RemoteFileEditorTab";
 import { useAssetStore } from "@/stores/assetStore";
@@ -284,6 +286,33 @@ describe("RemoteFileEditorTab", () => {
     render(<TopTabBar />);
 
     expect(await screen.findByText("nginx.conf")).toBeVisible();
+  });
+
+  it("marks an editor tab with unsaved changes in the top tab bar", () => {
+    useTabStore.setState({ tabs: [editorTab()], activeTabId: "editor-sess-1" });
+
+    render(<TopTabBar />);
+    expect(screen.queryByTestId("tab-unsaved-marker")).not.toBeInTheDocument();
+
+    act(() => useTabStore.getState().setTabUnsaved("editor-sess-1", true));
+
+    expect(screen.getByTestId("tab-unsaved-marker")).toBeInTheDocument();
+  });
+
+  it("marks an editor tab with unsaved changes in the side tab list", () => {
+    useLayoutStore.setState({ tabBarLayout: "left", leftPanelWidth: 220, filterOpen: false });
+    useTabStore.setState({ tabs: [editorTab()], activeTabId: "editor-sess-1" });
+
+    render(
+      <TooltipProvider>
+        <SideTabList />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("tab-unsaved-marker")).not.toBeInTheDocument();
+
+    act(() => useTabStore.getState().setTabUnsaved("editor-sess-1", true));
+
+    expect(screen.getByTestId("tab-unsaved-marker")).toBeInTheDocument();
   });
 
   it("renders the restored editor tab full width without a file panel", async () => {

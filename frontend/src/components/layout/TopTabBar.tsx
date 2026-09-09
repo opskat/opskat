@@ -152,6 +152,7 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
   const closeTab = useTabStore((s) => s.closeTab);
   const reorderTab = useTabStore((s) => s.reorderTab);
   const moveTabTo = useTabStore((s) => s.moveTabTo);
+  const unsavedTabIds = useTabStore((s) => s.unsavedTabIds);
 
   const tabData = useTerminalStore((s) => s.tabData);
 
@@ -218,7 +219,18 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
 
       case "editor": {
         // 标题只有文件名，完整远程路径放在 title 里，避免同名文件的 tab 无法区分。
-        return <TabItem {...commonProps} label={tab.label} title={(tab.meta as EditorTabMeta).remotePath} />;
+        return (
+          <TabItem
+            {...commonProps}
+            label={tab.label}
+            title={(tab.meta as EditorTabMeta).remotePath}
+            extra={
+              unsavedTabIds.includes(tab.id) ? (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" data-testid="tab-unsaved-marker" />
+              ) : undefined
+            }
+          />
+        );
       }
 
       default:
