@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { QueryResultTable } from "@/components/query/QueryResultTable";
 import { CELL_DISPLAY_MAX_CHARS, cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
+import { formatModKey } from "@/stores/shortcutStore";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -449,7 +450,8 @@ describe("QueryResultTable — cell context actions", () => {
       })
       .filter(Boolean);
 
-    const copyIndex = labels.indexOf("query.copyValue");
+    // The copy item carries its key hint, so match its label by prefix.
+    const copyIndex = labels.findIndex((label) => label?.startsWith("query.copyValue"));
     expect(labels[copyIndex + 1]).toBe("query.copyAs");
   });
 
@@ -989,6 +991,117 @@ describe("QueryResultTable — row selection", () => {
 
     expect(cornerCell().style.width).toBe("80px");
     expect(gutter(0).style.width).toBe("80px");
+  });
+});
+
+describe("QueryResultTable — keyboard copy", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+    { id: 3, name: "carol" },
+  ];
+
+  beforeEach(() => {
+    cleanup();
+    window.getSelection()?.removeAllRanges();
+  });
+
+  const gridContainer = () => document.querySelector(".query-table-scroll") as HTMLElement;
+  const cell = (key: string) => document.querySelector(`[data-cell-key="${key}"]`) as HTMLElement;
+  const gutter = (origIdx: number) => document.querySelector(`[data-row-header-key="${origIdx}"]`) as HTMLElement;
+  // The grid binds the platform copy key itself, not a registry binding.
+  const copyKey = { key: "c", code: "KeyC", ctrlKey: true, metaKey: true };
+
+  function renderGrid(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} showRowNumber {...props} />);
+  }
+
+  it("copies the focused cell value", async () => {
+    renderGrid();
+    fireEvent.click(cell("0:name"));
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("alice");
+    // The confirmation lands after the clipboard write resolves.
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+  });
+
+  it("copies every selected row across the visible columns in display order", () => {
+    renderGrid();
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("1\talice\n3\tcarol");
+  });
+
+  it("copies every visible row across the selected columns", () => {
+    renderGrid();
+    fireEvent.click(screen.getByText("name"));
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("alice\nbob\ncarol");
+  });
+
+  it("writes exactly the TSV the context menu writes for the same selection", async () => {
+    renderGrid({ editable: true });
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+    fireEvent.click(screen.getByText("query.copyValue"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const menuText = writeText.mock.calls[0][0] as string;
+    writeText.mockReset();
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(menuText).toBe("1\talice\n3\tcarol");
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(menuText));
+  });
+
+  it("leaves Ctrl/Cmd+C to the browser while page text is selected", () => {
+    renderGrid();
+    fireEvent.click(cell("0:name"));
+    const range = document.createRange();
+    range.selectNodeContents(cell("0:name"));
+    const selection = window.getSelection()!;
+    selection.addRange(range);
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("leaves Ctrl/Cmd+C to the open cell editor", () => {
+    renderGrid({ editable: true });
+    fireEvent.click(cell("0:name"));
+    fireEvent.keyDown(gridContainer(), { key: "F2" });
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("copies nothing when there is no selection", () => {
+    renderGrid();
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("shows the copy key binding next to the context menu copy item", () => {
+    renderGrid();
+
+    fireEvent.contextMenu(cell("0:name"), { clientX: 20, clientY: 40 });
+
+    const item = screen.getByText("query.copyValue").closest("button")!;
+    expect(within(item).getByText(formatModKey("KeyC"))).toBeInTheDocument();
   });
 });
 
