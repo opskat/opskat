@@ -80,7 +80,7 @@ const { codeEditorController } = vi.hoisted(() => ({
     commands: new Map<number, () => void>(),
     cursorHandlers: new Map<string, (event: { position: { lineNumber: number; column: number } }) => void>(),
     decorations: [] as Array<{ range: { startLineNumber: number; endLineNumber: number } }>,
-    options: undefined as Record<string, unknown> | undefined,
+    modelOptions: undefined as Record<string, unknown> | undefined,
   },
 }));
 
@@ -90,16 +90,13 @@ vi.mock("@/components/CodeEditor", () => ({
     testId,
     onChange,
     onMount,
-    options,
   }: {
     value?: string;
     testId?: string;
     onChange?: (next: string) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
-    options?: Record<string, unknown>;
   }) => {
     const key = testId || "unknown";
-    codeEditorController.options = options;
     codeEditorController.changers.set(key, (next) => onChange?.(next));
     codeEditorController.mounts.set(key, () => {
       const collection = {
@@ -110,7 +107,15 @@ vi.mock("@/components/CodeEditor", () => ({
           codeEditorController.decorations = [];
         }),
       };
+      // tabSize / insertSpaces 是 model 的选项：Monaco 默认 detectIndentation:true 会用自己的猜测
+      // 覆盖 editor options 里的同名字段，所以这里记录的是真正落到 model 上的那一份。
+      const model = {
+        updateOptions: vi.fn((next: Record<string, unknown>) => {
+          codeEditorController.modelOptions = { ...codeEditorController.modelOptions, ...next };
+        }),
+      };
       const editor = {
+        getModel: vi.fn(() => model),
         addCommand: vi.fn((keybinding: number, handler: () => void) => {
           codeEditorController.commands.set(keybinding, handler);
         }),
@@ -234,7 +239,7 @@ describe("RemoteFileEditorTab", () => {
     codeEditorController.commands.clear();
     codeEditorController.cursorHandlers.clear();
     codeEditorController.decorations = [];
-    codeEditorController.options = undefined;
+    codeEditorController.modelOptions = undefined;
     getSettingsMock.mockReset();
     openExternalEditMock.mockReset();
     localStorage.clear();
@@ -969,8 +974,40 @@ describe("RemoteFileEditorTab", () => {
 
     expect(saveSessionTextMock).not.toHaveBeenCalled();
     expect(openExternalEditMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("listen 80;");
     expect(useTabStore.getState().unsavedTabIds).not.toContain("editor-sess-1");
+  });
+
+  // 交出去之后这个 tab 还开着，等于同一个会话上又有了两个能各自改、各自写回的编辑器：
+  // 外部编辑器落盘会被 auto_live 直接写回远端并推进基线，之后内置编辑器一按 ⌘S
+  // 就会用一份看不见对方改动的草稿盖过去。
+  it("closes the built-in editor tab once the document has been handed over", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    openExternalEditMock.mockResolvedValue(makeSession({ editorId: "vscode" }));
+    await renderOpenEditor();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    });
+
+    expect(useTabStore.getState().tabs).toEqual([]);
+    expect(screen.queryByTestId("remote-file-editor-content")).not.toBeInTheDocument();
+  });
+
+  it("keeps the tab on the discarded draft when the handoff itself fails", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    openExternalEditMock.mockRejectedValue(new Error("启动外部编辑器失败: exec format error"));
+    await renderOpenEditor();
+    typeInEditor("server {\n  listen 8080;\n}\n");
+
+    fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    await act(async () => {
+      fireEvent.click(await screen.findByText("externalEdit.builtIn.handoffDiscard"));
+    });
+
+    expect(useTabStore.getState().tabs).toHaveLength(1);
+    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("listen 80;");
   });
 
   it("writes the draft back first when the user keeps the unsaved changes", async () => {
@@ -1023,13 +1060,25 @@ describe("RemoteFileEditorTab", () => {
     expect(within(bar).queryAllByRole("button")).toEqual([]);
   });
 
+  // Monaco 的 detectIndentation 默认开着，会拿它自己猜出来的缩进覆盖 editor options 里的
+  // tabSize / insertSpaces：状态栏显示的那个探测值必须真的落到这个编辑器的 model 上。
   it("keeps Monaco on the indentation the file already uses", async () => {
     readSessionTextMock.mockResolvedValue("server {\n\tlisten 80;\n}\n");
     await renderOpenEditor();
 
-    expect(codeEditorController.options).toMatchObject({ insertSpaces: false });
+    expect(codeEditorController.modelOptions).toMatchObject({ insertSpaces: false, tabSize: 4 });
     expect(screen.getByTestId("remote-file-editor-status-bar")).toHaveTextContent(
       "externalEdit.builtIn.status.indentTab"
+    );
+  });
+
+  it("keeps Monaco on the space width the file already uses", async () => {
+    readSessionTextMock.mockResolvedValue("server {\n    listen 80;\n}\n");
+    await renderOpenEditor();
+
+    expect(codeEditorController.modelOptions).toMatchObject({ insertSpaces: true, tabSize: 4 });
+    expect(screen.getByTestId("remote-file-editor-status-bar")).toHaveTextContent(
+      'externalEdit.builtIn.status.indentSpaces:{"size":4}'
     );
   });
 

@@ -443,10 +443,15 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
         remotePath: meta.remotePath,
         editorId: target.editorId,
       });
+      // 交出去就是交出去：后端按 documentKey 复用的是同一个会话，只是把它切到外部编辑器的
+      // 落盘即写回。这个 tab 再留着，同一份文档上就又有了两个各自改、各自写回的编辑器 ——
+      // 外部编辑器一落盘会直接推进远端与基线，之后这里按 ⌘S 就会拿一份看不见对方改动的草稿盖过去。
+      // 此刻已经没有未保存改动：保存或放弃刚刚做过。
+      if (tabId) forceCloseTab(tabId);
     } catch (error) {
       toast.error(errorMessage(error));
     }
-  }, [meta.assetId, meta.remotePath, sessionRecord?.sessionId, t]);
+  }, [forceCloseTab, meta.assetId, meta.remotePath, sessionRecord?.sessionId, t, tabId]);
 
   // 交出去之前必须先处理未保存的改动：草稿留在这里，外部编辑器打开的是本地副本，
   // 就这样交出去等于让两个编辑器各持一份不同的内容。
@@ -494,11 +499,16 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const language = languageOf(meta.remotePath);
   // 缩进与换行符按读入时的内容判定：编辑过程中的击键不该让状态栏与 Monaco 的缩进跳来跳去。
   const indent = useMemo(() => detectIndentStyle(current?.baseline ?? ""), [current?.baseline]);
-  const editorOptions = useMemo(
-    () => ({ insertSpaces: indent.kind === "space", tabSize: indent.width }),
-    [indent.kind, indent.width]
-  );
   const lineEnding = current?.baseline.includes("\r\n") ? "CRLF" : "LF";
+
+  // tabSize / insertSpaces 归 model 管：从 editor options 传进去会被 Monaco 默认开着的
+  // detectIndentation 用它自己的猜测覆盖，而 standalone 的 editor options 又是全局配置，
+  // 会把这一个文件的缩进带给应用里其它 Monaco 实例。只更新本编辑器自己的 model。
+  useEffect(() => {
+    editorRef.current?.editor
+      .getModel()
+      ?.updateOptions({ insertSpaces: indent.kind === "space", tabSize: indent.width });
+  }, [indent.kind, indent.width, mountVersion]);
 
   return (
     <div className="flex h-full flex-col bg-background" data-testid="remote-file-editor">
@@ -651,7 +661,6 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
             language={language}
             onChange={handleChange}
             onMount={handleMount}
-            options={editorOptions}
             testId="remote-file-editor-content"
             value={current.text}
           />
