@@ -149,6 +149,15 @@ export function parseDelimitedText(text: string, delimiter: Delimiter = detectDe
   return { headers, rows: rows.slice(1) };
 }
 
+/**
+ * Parses clipboard-style tab-separated text into rows of cells. Unlike
+ * {@link parseDelimitedText} there is no header row and no delimiter detection: a pasted
+ * table has no trustworthy first row, and a value containing commas must stay one cell.
+ */
+export function parseTabSeparatedRows(text: string): string[][] {
+  return parseDelimitedRows(text, "\t");
+}
+
 function normalizeCell(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;

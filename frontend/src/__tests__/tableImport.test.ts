@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { buildImportInsertSql, detectDelimiter, parseDelimitedText, parseImportSourceText } from "@/lib/tableImport";
+import {
+  buildImportInsertSql,
+  detectDelimiter,
+  parseDelimitedText,
+  parseImportSourceText,
+  parseTabSeparatedRows,
+} from "@/lib/tableImport";
+
+describe("parseTabSeparatedRows", () => {
+  it("parses a pasted block without treating the first row as a header", () => {
+    expect(parseTabSeparatedRows("1\tAlice\n2\tBob")).toEqual([
+      ["1", "Alice"],
+      ["2", "Bob"],
+    ]);
+  });
+
+  it("keeps a value containing a comma in one cell", () => {
+    expect(parseTabSeparatedRows("1\tAlice, A.")).toEqual([["1", "Alice, A."]]);
+  });
+
+  it("keeps empty cells and drops a trailing blank line", () => {
+    expect(parseTabSeparatedRows("1\t\t3\n")).toEqual([["1", "", "3"]]);
+  });
+});
 
 describe("table import helpers", () => {
   it("parses quoted CSV cells with commas, quotes, and embedded newlines", () => {

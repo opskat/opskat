@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { formatModKey } from "@/stores/shortcutStore";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
+import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
 
@@ -74,6 +75,10 @@ interface QueryResultTableProps {
   onCellEdit?: (edit: CellEdit) => void;
   onSetCellValue?: (edit: CellEdit) => void;
   onPasteCell?: (edit: CellEdit) => void;
+  // Enables keyboard paste of a tab-separated block. Read-only grids and grids whose host
+  // has no pending-edit staging (SQL results, MongoDB documents) leave the prop out, and
+  // then Ctrl/Cmd+V pastes nothing there.
+  onPasteBlock?: (block: { edits: CellEdit[]; newRowCount: number }) => void;
   onGenerateUuid?: (edit: CellEdit) => void;
   onCopyAs?: (format: CopyAsFormat, ctx: CellActionContext) => void;
   onFilterByCellValue?: (ctx: CellActionContext) => void;
@@ -301,6 +306,7 @@ function QueryResultTableImpl({
   onCellEdit,
   onSetCellValue,
   onPasteCell,
+  onPasteBlock,
   onGenerateUuid,
   onCopyAs,
   onFilterByCellValue,
@@ -883,6 +889,49 @@ function QueryResultTableImpl({
     }
   }, [ctxMenu, pasteCellHandler]);
 
+  // Clipboard block paste: every pasted value becomes a pending edit of the cell it lands
+  // in, from the anchor cell rightwards and downwards. A block that runs past the last
+  // displayed row asks the host for that many unsaved rows, the same state the "add row"
+  // affordance creates. Values past the last visible column are discarded.
+  const pasteClipboardBlock = useCallback(async () => {
+    if (!onPasteBlock || displayColumns.length === 0) return;
+    const anchor = selectedCell
+      ? { rowIdx: selectedCell.origIdx, col: selectedCell.col }
+      : selectedRowIdxs.size > 0
+        ? { rowIdx: sortedIndices.find((rowIdx) => selectedRowIdxs.has(rowIdx)), col: displayColumns[0] }
+        : null;
+    if (!anchor || anchor.rowIdx == null) return;
+    const anchorRowIdx = anchor.rowIdx;
+    const startColIdx = displayColumns.indexOf(anchor.col);
+    if (startColIdx === -1) return;
+
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      // An unreadable clipboard is not an error worth reporting: the user just gets nothing.
+      return;
+    }
+    if (!text.trim()) return;
+
+    const edits: CellEdit[] = [];
+    let lastRowIdx = anchorRowIdx - 1;
+    parseTabSeparatedRows(text).forEach((cells, rowOffset) => {
+      const rowIdx = anchorRowIdx + rowOffset;
+      let wrote = false;
+      cells.forEach((value, colOffset) => {
+        const col = displayColumns[startColIdx + colOffset];
+        if (col == null) return;
+        edits.push({ rowIdx, col, value });
+        wrote = true;
+      });
+      if (wrote) lastRowIdx = rowIdx;
+    });
+    if (edits.length === 0) return;
+
+    onPasteBlock({ edits, newRowCount: Math.max(0, lastRowIdx - rows.length + 1) });
+  }, [onPasteBlock, displayColumns, selectedCell, selectedRowIdxs, sortedIndices, rows.length]);
+
   const handleGenerateUuid = useCallback(() => {
     if (!ctxMenu || ctxMenu.kind !== "cell") return;
     uuidCellHandler?.({ rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: crypto.randomUUID() });
@@ -1249,6 +1298,13 @@ function QueryResultTableImpl({
         return;
       }
 
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (!selectedCell && selectedRowIdxs.size === 0) return;
+        e.preventDefault();
+        void pasteClipboardBlock();
+        return;
+      }
+
       if (!selectedCell) {
         if ((selectedRowIdxs.size > 0 || selectedColumns.size > 0) && e.key === "Escape") {
           e.preventDefault();
@@ -1313,6 +1369,7 @@ function QueryResultTableImpl({
       onSelectedRowsChange,
       selectCell,
       copySelectionToClipboard,
+      pasteClipboardBlock,
     ]
   );
 

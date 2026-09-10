@@ -1105,6 +1105,146 @@ describe("QueryResultTable — keyboard copy", () => {
   });
 });
 
+describe("QueryResultTable — keyboard paste", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+    { id: 3, name: "carol" },
+  ];
+
+  beforeEach(() => {
+    cleanup();
+    window.getSelection()?.removeAllRanges();
+  });
+
+  const gridContainer = () => document.querySelector(".query-table-scroll") as HTMLElement;
+  const cell = (key: string) => document.querySelector(`[data-cell-key="${key}"]`) as HTMLElement;
+  const gutter = (origIdx: number) => document.querySelector(`[data-row-header-key="${origIdx}"]`) as HTMLElement;
+  const pasteKey = { key: "v", code: "KeyV", ctrlKey: true, metaKey: true };
+
+  function renderGrid(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} editable showRowNumber {...props} />);
+  }
+
+  it("pastes a tab-separated block from the focused cell as cell edits", async () => {
+    readText.mockResolvedValue("7\tdave");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("1:id"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() =>
+      expect(onPasteBlock).toHaveBeenCalledWith({
+        edits: [
+          { rowIdx: 1, col: "id", value: "7" },
+          { rowIdx: 1, col: "name", value: "dave" },
+        ],
+        newRowCount: 0,
+      })
+    );
+  });
+
+  it("anchors on the first selected row's first visible column when only rows are selected", async () => {
+    readText.mockResolvedValue("7\tdave");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(gutter(2));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() =>
+      expect(onPasteBlock).toHaveBeenCalledWith({
+        edits: [
+          { rowIdx: 2, col: "id", value: "7" },
+          { rowIdx: 2, col: "name", value: "dave" },
+        ],
+        newRowCount: 0,
+      })
+    );
+  });
+
+  it("appends unsaved rows for a block that runs past the last row", async () => {
+    readText.mockResolvedValue("7\tdave\n8\terin");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("2:id"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() =>
+      expect(onPasteBlock).toHaveBeenCalledWith({
+        edits: [
+          { rowIdx: 2, col: "id", value: "7" },
+          { rowIdx: 2, col: "name", value: "dave" },
+          { rowIdx: 3, col: "id", value: "8" },
+          { rowIdx: 3, col: "name", value: "erin" },
+        ],
+        newRowCount: 1,
+      })
+    );
+  });
+
+  it("discards cells past the last visible column", async () => {
+    readText.mockResolvedValue("dave\toverflow");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("1:name"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() =>
+      expect(onPasteBlock).toHaveBeenCalledWith({
+        edits: [{ rowIdx: 1, col: "name", value: "dave" }],
+        newRowCount: 0,
+      })
+    );
+  });
+
+  it("ignores a clipboard that is empty or only whitespace", async () => {
+    readText.mockResolvedValue("   ");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("1:name"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() => expect(readText).toHaveBeenCalled());
+    expect(onPasteBlock).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unreadable clipboard without reporting an error", async () => {
+    readText.mockRejectedValue(new Error("clipboard denied"));
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("1:name"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() => expect(readText).toHaveBeenCalled());
+    expect(onPasteBlock).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("never reads the clipboard without a cell or row selection", () => {
+    renderGrid({ onPasteBlock: vi.fn() });
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it("never reads the clipboard when the grid does not accept block pastes", () => {
+    renderGrid({ editable: false });
+    fireEvent.click(cell("1:name"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    expect(readText).not.toHaveBeenCalled();
+  });
+});
+
 describe("QueryResultTable — row context menu", () => {
   const columns = ["id", "name"];
   const rows = [
