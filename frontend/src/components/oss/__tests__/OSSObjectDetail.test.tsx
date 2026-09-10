@@ -168,4 +168,25 @@ describe("OSSObjectDetail", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("docs/report.pdf"));
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("oss.detail.copyKeyCopied", expect.anything()));
   });
+
+  it("reports a clipboard write failure without an unhandled rejection", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("clipboard denied"));
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    toastError.mockClear();
+
+    render(
+      <OSSObjectDetail
+        object={obj()}
+        onEnsureThumbnail={vi.fn()}
+        onShare={vi.fn()}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("oss-detail-copy-key"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Error: clipboard denied"));
+  });
 });

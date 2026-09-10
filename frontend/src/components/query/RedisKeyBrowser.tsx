@@ -568,7 +568,9 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         className="flex-1 overflow-y-auto"
         onScroll={handleScroll}
         onKeyDown={(e) => {
-          if (state.selectedKey && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+          const textSelection = window.getSelection();
+          const hasSelectedText = textSelection && !textSelection.isCollapsed && textSelection.toString().length > 0;
+          if (state.selectedKey && !hasSelectedText && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
             e.preventDefault();
             copyKeyName(state.selectedKey);
           }

@@ -199,6 +199,8 @@ describe("OSSObjectList — keyboard copy", () => {
     writeText.mockReset();
     writeText.mockResolvedValue(undefined);
     toastSuccess.mockReset();
+    toastError.mockReset();
+    window.getSelection()?.removeAllRanges();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
@@ -234,6 +236,20 @@ describe("OSSObjectList — keyboard copy", () => {
     fireEvent.keyDown(screen.getByTestId("oss-object-docs/b.txt"), copyKey);
 
     expect(writeText).toHaveBeenCalledWith("docs/b.txt");
+  });
+
+  it("leaves Ctrl/Cmd+C to the browser while object text is selected", () => {
+    render(<OSSObjectList {...base} focusedKey="docs/b.txt" prefixes={[]} objects={objects} />);
+    const label = screen.getByText("b.txt");
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    window.getSelection()!.addRange(range);
+    const event = new KeyboardEvent("keydown", { ...copyKey, bubbles: true, cancelable: true });
+
+    screen.getByTestId("oss-object-docs/b.txt").dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
   });
 
   it("copies the checked objects from a folder row too", () => {

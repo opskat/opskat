@@ -45,6 +45,8 @@ export function OSSObjectList({
   // nothing is checked. Returns false when there is nothing to copy, so the caller leaves
   // the key to the browser.
   const copyKeys = (focusedFallback: string | null): boolean => {
+    const textSelection = window.getSelection();
+    if (textSelection && !textSelection.isCollapsed && textSelection.toString().length > 0) return false;
     const keys =
       selection.size > 0
         ? objects.filter((o) => selection.has(o.key)).map((o) => o.key)

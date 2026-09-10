@@ -22,6 +22,18 @@ describe("parseTabSeparatedRows", () => {
   it("keeps empty cells and drops a trailing blank line", () => {
     expect(parseTabSeparatedRows("1\t\t3\n")).toEqual([["1", "", "3"]]);
   });
+
+  it("preserves all-empty rows inside a pasted block", () => {
+    expect(parseTabSeparatedRows("1\tAlice\n\t\n3\tCarol")).toEqual([
+      ["1", "Alice"],
+      ["", ""],
+      ["3", "Carol"],
+    ]);
+  });
+
+  it("keeps quotes that occur inside an unquoted clipboard value", () => {
+    expect(parseTabSeparatedRows('1\tO"Reilly')).toEqual([["1", 'O"Reilly']]);
+  });
 });
 
 describe("table import helpers", () => {

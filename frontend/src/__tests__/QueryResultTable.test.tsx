@@ -1037,6 +1037,33 @@ describe("QueryResultTable — keyboard copy", () => {
     expect(writeText).toHaveBeenCalledWith("alicia");
   });
 
+  it("copies displayed pending edits from a selected row", () => {
+    renderGrid({ editable: true, edits: new Map([["0:name", "alicia"]]) });
+    fireEvent.click(gutter(0));
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("1\talicia");
+  });
+
+  it("quotes delimiters in selected rows so the clipboard remains valid TSV", () => {
+    renderGrid({ editable: true, edits: new Map([["0:name", "alice\tadmin"]]) });
+    fireEvent.click(gutter(0));
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith('1\t"alice\tadmin"');
+  });
+
+  it("does not normalize date-looking text while quoting selected rows", () => {
+    render(<QueryResultTable columns={["id", "value"]} rows={[{ id: 1, value: "2026/4/3" }]} showRowNumber />);
+    fireEvent.click(gutter(0));
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("1\t2026/4/3");
+  });
+
   it("copies every selected row across the visible columns in display order", () => {
     renderGrid();
     fireEvent.click(gutter(0));
@@ -1247,7 +1274,30 @@ describe("QueryResultTable — keyboard paste", () => {
     expect(onPasteBlock).not.toHaveBeenCalled();
   });
 
-  it("ignores an unreadable clipboard without reporting an error", async () => {
+  it("preserves an all-empty row in the middle of a pasted block", async () => {
+    readText.mockResolvedValue("7\tdave\n\t\n9\tfrank");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("0:id"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() =>
+      expect(onPasteBlock).toHaveBeenCalledWith({
+        edits: [
+          { rowIdx: 0, col: "id", value: "7" },
+          { rowIdx: 0, col: "name", value: "dave" },
+          { rowIdx: 1, col: "id", value: "" },
+          { rowIdx: 1, col: "name", value: "" },
+          { rowIdx: 2, col: "id", value: "9" },
+          { rowIdx: 2, col: "name", value: "frank" },
+        ],
+        newRowCount: 0,
+      })
+    );
+  });
+
+  it("reports an unreadable clipboard without changing cells", async () => {
     readText.mockRejectedValue(new Error("clipboard denied"));
     const onPasteBlock = vi.fn();
     renderGrid({ onPasteBlock });
@@ -1257,7 +1307,7 @@ describe("QueryResultTable — keyboard paste", () => {
 
     await waitFor(() => expect(readText).toHaveBeenCalled());
     expect(onPasteBlock).not.toHaveBeenCalled();
-    expect(toastError).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("Error: clipboard denied");
   });
 
   it("never reads the clipboard without a cell or row selection", () => {

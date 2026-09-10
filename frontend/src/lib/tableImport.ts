@@ -86,6 +86,7 @@ function newlineAt(text: string, i: number, mode: ImportRecordDelimiter): Newlin
 interface ParseDelimitedRowsOptions {
   recordDelimiter?: ImportRecordDelimiter;
   textQualifier?: ImportTextQualifier;
+  preserveEmptyRows?: boolean;
 }
 
 function parseDelimitedRows(
@@ -101,12 +102,14 @@ function parseDelimitedRows(
   let currentRow: string[] = [];
   let current = "";
   let inQuotes = false;
+  let rowStarted = false;
 
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     const next = text[i + 1];
 
-    if (useQualifier && ch === qualifier) {
+    if (useQualifier && ch === qualifier && (inQuotes || current.length === 0)) {
+      rowStarted = true;
       if (inQuotes && next === qualifier) {
         current += qualifier;
         i++;
@@ -117,6 +120,7 @@ function parseDelimitedRows(
     }
 
     if (ch === delimiter && !inQuotes) {
+      rowStarted = true;
       currentRow.push(current);
       current = "";
       continue;
@@ -127,18 +131,20 @@ function parseDelimitedRows(
       if (nl.match) {
         i += nl.len - 1;
         currentRow.push(current);
-        if (currentRow.some((cell) => cell !== "")) rows.push(currentRow);
+        if (options.preserveEmptyRows || currentRow.some((cell) => cell !== "")) rows.push(currentRow);
         currentRow = [];
         current = "";
+        rowStarted = false;
         continue;
       }
     }
 
     current += ch;
+    rowStarted = true;
   }
 
   currentRow.push(current);
-  if (currentRow.some((cell) => cell !== "")) rows.push(currentRow);
+  if (currentRow.some((cell) => cell !== "") || (options.preserveEmptyRows && rowStarted)) rows.push(currentRow);
 
   return rows;
 }
@@ -155,7 +161,7 @@ export function parseDelimitedText(text: string, delimiter: Delimiter = detectDe
  * table has no trustworthy first row, and a value containing commas must stay one cell.
  */
 export function parseTabSeparatedRows(text: string): string[][] {
-  return parseDelimitedRows(text, "\t");
+  return parseDelimitedRows(text, "\t", { preserveEmptyRows: true });
 }
 
 function normalizeCell(value: unknown): string {

@@ -179,6 +179,7 @@ type CopyTarget = { kind: "row" | "column" | "cell"; rowIdx?: number; col?: stri
 function buildCopyText({
   target,
   rows,
+  edits,
   displayColumns,
   sortedIndices,
   selectedRowIdxs,
@@ -186,6 +187,7 @@ function buildCopyText({
 }: {
   target: CopyTarget;
   rows: Record<string, unknown>[];
+  edits?: Map<string, unknown>;
   displayColumns: string[];
   sortedIndices: number[];
   selectedRowIdxs: Set<number>;
@@ -208,15 +210,25 @@ function buildCopyText({
       ? selectedColumnOrder
       : [target.kind === "column" ? (target.col ?? "") : ""];
   const hasColumnSelection = columnCopyColumns.length > 0 && columnCopyColumns[0] !== "";
-  if (target.kind === "row" || (target.kind === "cell" && rowCopyIndices[0] !== -1)) {
-    return rowCopyIndices
-      .map((rowIdx) => displayColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
+  // Export serializers may normalize dates; clipboard copy must preserve displayed text.
+  const copyGrid = (rowIndices: number[], columns: string[]) =>
+    rowIndices
+      .map((rowIdx) =>
+        columns
+          .map((col) => {
+            const key = cellKey(rowIdx, col);
+            const value = edits?.has(key) ? edits.get(key) : rows[rowIdx]?.[col];
+            const text = cellValueToText(value);
+            return /[\t"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+          })
+          .join("\t")
+      )
       .join("\n");
+  if (target.kind === "row" || (target.kind === "cell" && rowCopyIndices[0] !== -1)) {
+    return copyGrid(rowCopyIndices, displayColumns);
   }
   if (target.kind === "column" || (target.kind === "cell" && hasColumnSelection)) {
-    return sortedIndices
-      .map((rowIdx) => columnCopyColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
-      .join("\n");
+    return copyGrid(sortedIndices, columnCopyColumns);
   }
   return cellValueToText(target.value);
 }
@@ -799,6 +811,7 @@ function QueryResultTableImpl({
           value: ctxMenu.kind === "cell" ? ctxMenu.value : undefined,
         },
         rows,
+        edits,
         displayColumns,
         sortedIndices,
         selectedRowIdxs,
@@ -811,7 +824,7 @@ function QueryResultTableImpl({
     } finally {
       setCtxMenu(null);
     }
-  }, [ctxMenu, displayColumns, rows, selectedColumns, selectedRowIdxs, sortedIndices, t]);
+  }, [ctxMenu, displayColumns, edits, rows, selectedColumns, selectedRowIdxs, sortedIndices, t]);
 
   // Keyboard copy mirrors what a right-click on the current selection would copy:
   // rows first, then columns, then the focused cell.
@@ -836,6 +849,7 @@ function QueryResultTableImpl({
       const text = buildCopyText({
         target,
         rows,
+        edits,
         displayColumns,
         sortedIndices,
         selectedRowIdxs,
@@ -911,8 +925,8 @@ function QueryResultTableImpl({
     let text: string;
     try {
       text = await navigator.clipboard.readText();
-    } catch {
-      // An unreadable clipboard is not an error worth reporting: the user just gets nothing.
+    } catch (e) {
+      toast.error(String(e));
       return;
     }
     if (!text.trim()) return;
