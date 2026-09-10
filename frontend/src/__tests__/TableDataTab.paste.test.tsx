@@ -111,6 +111,20 @@ describe("TableDataTab keyboard paste", () => {
     expect(insertCalls()[0]).toContain("(`id`, `name`) VALUES ('9', 'zoe')");
   });
 
+  it("pastes into a newly added row right after its editor is closed", async () => {
+    readText.mockResolvedValue("9\tzoe");
+    await renderLoaded();
+
+    fireEvent.click(screen.getByTitle("query.addRow"));
+    fireEvent.keyDown(document.querySelector('[data-cell-key="2:id"] input') as HTMLInputElement, { key: "Escape" });
+
+    // A real platform key press goes to the focused element, which must be the grid again.
+    fireEvent.keyDown(document.activeElement as HTMLElement, pasteKey);
+
+    await waitFor(() => expect(cell("2:id")).toHaveTextContent("9"));
+    expect(cell("2:name")).toHaveTextContent("zoe");
+  });
+
   it("anchors a newly added row at the first visible column", async () => {
     const user = userEvent.setup();
     await renderLoaded();

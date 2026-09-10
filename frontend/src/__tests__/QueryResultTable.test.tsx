@@ -1328,6 +1328,53 @@ describe("QueryResultTable — keyboard paste", () => {
   });
 });
 
+describe("QueryResultTable — cell editor focus", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+  ];
+
+  beforeEach(cleanup);
+
+  const gridContainer = () => document.querySelector(".query-table-scroll") as HTMLElement;
+  const cell = (key: string) => document.querySelector(`[data-cell-key="${key}"]`) as HTMLElement;
+  // The grid binds the platform paste key itself, not a registry binding.
+  const pasteKey = { key: "v", code: "KeyV", ctrlKey: true, metaKey: true };
+
+  function renderGrid(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} editable showRowNumber {...props} />);
+  }
+
+  it("returns focus to the grid when the editor is dismissed, so the next key still reaches it", async () => {
+    readText.mockResolvedValue("bob");
+    const onPasteBlock = vi.fn();
+    renderGrid({ onPasteBlock });
+    fireEvent.click(cell("0:name"));
+    fireEvent.doubleClick(cell("0:name"));
+    const input = document.querySelector('[data-cell-key="0:name"] input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    // A real key press is delivered to whatever has focus.
+    expect(document.activeElement).toBe(gridContainer());
+    fireEvent.keyDown(document.activeElement as HTMLElement, pasteKey);
+    await waitFor(() => expect(onPasteBlock).toHaveBeenCalled());
+  });
+
+  it("returns focus to the grid when the editor is committed with Enter", () => {
+    renderGrid();
+    fireEvent.click(cell("0:name"));
+    fireEvent.doubleClick(cell("0:name"));
+    const input = document.querySelector('[data-cell-key="0:name"] input') as HTMLInputElement;
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(document.activeElement).toBe(gridContainer());
+  });
+});
+
 describe("QueryResultTable — row context menu", () => {
   const columns = ["id", "name"];
   const rows = [

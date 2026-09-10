@@ -648,6 +648,22 @@ function QueryResultTableImpl({
     }
   }, [editingCell]);
 
+  // Closing the editor unmounts the input, which drops focus to <body> and silently kills the
+  // grid's keyboard bindings (copy, paste, arrows). Hand focus back to the grid unless the
+  // closing interaction moved it somewhere else on purpose.
+  const editorWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (editingCell) {
+      editorWasOpenRef.current = true;
+      return;
+    }
+    if (!editorWasOpenRef.current) return;
+    editorWasOpenRef.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    containerRef.current?.focus();
+  }, [editingCell]);
+
   // Close context menu on outside click / escape
   useEffect(() => {
     if (!ctxMenu) return;
