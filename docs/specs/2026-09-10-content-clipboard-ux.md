@@ -66,7 +66,7 @@ With an editable grid focused, a cell editor closed and non-empty clipboard text
 
 Each pasted value becomes a pending edit of the corresponding cell, exactly as if it had been typed. A single value pastes into the anchor cell. A paste whose rows or columns run past the end of the current page appends the missing rows as unsaved rows, so pasting a copied row into a newly added blank row fills that row, and pasting several rows adds as many rows as needed. Once editing is complete the user saves through the existing preview/confirm flow; no statement is executed by the paste itself.
 
-Values falling beyond the last visible column are discarded. When the clipboard cannot be read or contains only whitespace, nothing changes and no error is shown. Read-only grids ignore the paste entirely.
+Values falling beyond the last visible column are discarded. A clipboard containing only whitespace changes nothing and shows no error. A clipboard that cannot be read also leaves the staged cells unchanged, but reports the failure — a denied clipboard permission is a real fault, not an empty selection. Read-only grids ignore the paste entirely.
 
 ## List keyboard copy
 
