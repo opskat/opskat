@@ -1314,7 +1314,7 @@
     "terminal.paste": "终端粘贴",
     "terminal.selectAll": "终端全选",
     "terminal.find": "终端搜索",
-    "asset.copyRef": "复制资产引用",
+    "asset.copyRef": "复制资产引用(资产侧栏聚焦时)",
     "page.home": "切换到首页",
     "page.settings": "切换到设置",
     "page.sshkeys": "切换到 SSH 密钥",

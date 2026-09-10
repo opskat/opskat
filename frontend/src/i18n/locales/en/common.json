@@ -1314,7 +1314,7 @@
     "terminal.paste": "Terminal Paste",
     "terminal.selectAll": "Terminal Select All",
     "terminal.find": "Terminal Search",
-    "asset.copyRef": "Copy Asset Reference",
+    "asset.copyRef": "Copy Asset Reference (asset sidebar focused)",
     "page.home": "Switch to Home",
     "page.settings": "Switch to Settings",
     "page.sshkeys": "Switch to SSH Keys",
