@@ -1037,25 +1037,25 @@ describe("QueryResultTable — keyboard copy", () => {
     expect(writeText).toHaveBeenCalledWith("alicia");
   });
 
-  it("copies displayed pending edits from a selected row", () => {
+  it("keeps the existing backing-value serialization for a selected row with pending edits", () => {
     renderGrid({ editable: true, edits: new Map([["0:name", "alicia"]]) });
     fireEvent.click(gutter(0));
 
     fireEvent.keyDown(gridContainer(), copyKey);
 
-    expect(writeText).toHaveBeenCalledWith("1\talicia");
+    expect(writeText).toHaveBeenCalledWith("1\talice");
   });
 
-  it("quotes delimiters in selected rows so the clipboard remains valid TSV", () => {
-    renderGrid({ editable: true, edits: new Map([["0:name", "alice\tadmin"]]) });
+  it("keeps the existing raw delimiter serialization for selected rows", () => {
+    render(<QueryResultTable columns={columns} rows={[{ id: 1, name: "alice\tadmin" }]} showRowNumber />);
     fireEvent.click(gutter(0));
 
     fireEvent.keyDown(gridContainer(), copyKey);
 
-    expect(writeText).toHaveBeenCalledWith('1\t"alice\tadmin"');
+    expect(writeText).toHaveBeenCalledWith("1\talice\tadmin");
   });
 
-  it("does not normalize date-looking text while quoting selected rows", () => {
+  it("does not normalize date-looking text in selected rows", () => {
     render(<QueryResultTable columns={["id", "value"]} rows={[{ id: 1, value: "2026/4/3" }]} showRowNumber />);
     fireEvent.click(gutter(0));
 
@@ -1081,6 +1081,26 @@ describe("QueryResultTable — keyboard copy", () => {
     fireEvent.keyDown(gridContainer(), copyKey);
 
     expect(writeText).toHaveBeenCalledWith("alice\nbob\ncarol");
+  });
+
+  it("keeps delimiter-containing context-menu row copy output unchanged", async () => {
+    render(<QueryResultTable columns={columns} rows={[{ id: 1, name: "alice\tadmin" }]} showRowNumber />);
+    fireEvent.click(gutter(0));
+
+    fireEvent.contextMenu(gutter(0), { clientX: 20, clientY: 40 });
+    fireEvent.click(screen.getByText("query.copyValue"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("1\talice\tadmin"));
+  });
+
+  it("keeps pending edits out of the existing context-menu row copy result", async () => {
+    renderGrid({ editable: true, edits: new Map([["0:name", "alicia"]]) });
+    fireEvent.click(gutter(0));
+
+    fireEvent.contextMenu(gutter(0), { clientX: 20, clientY: 40 });
+    fireEvent.click(screen.getByText("query.copyValue"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("1\talice"));
   });
 
   it("writes exactly the TSV the context menu writes for the same selection", async () => {
@@ -1225,9 +1245,12 @@ describe("QueryResultTable — keyboard paste", () => {
   it("appends after the last displayed row when the grid is sorted", async () => {
     readText.mockResolvedValue("7\tdave\n8\terin");
     const onPasteBlock = vi.fn();
-    renderGrid({ editable: false, onPasteBlock });
+    const { rerender } = render(
+      <QueryResultTable columns={columns} rows={rows} editable={false} showRowNumber onPasteBlock={onPasteBlock} />
+    );
     fireEvent.click(screen.getByTitle("query.columnActions:id"));
     fireEvent.click(screen.getByText("query.sortDesc"));
+    rerender(<QueryResultTable columns={columns} rows={rows} editable showRowNumber onPasteBlock={onPasteBlock} />);
     // Original row 0 is last on screen after sorting id descending.
     fireEvent.click(cell("0:id"));
 
@@ -1318,12 +1341,14 @@ describe("QueryResultTable — keyboard paste", () => {
     expect(readText).not.toHaveBeenCalled();
   });
 
-  it("never reads the clipboard when the grid does not accept block pastes", () => {
+  it("leaves the platform paste event untouched when the grid does not accept block pastes", () => {
     renderGrid({ editable: false });
     fireEvent.click(cell("1:name"));
+    const event = new KeyboardEvent("keydown", { ...pasteKey, bubbles: true, cancelable: true });
 
-    fireEvent.keyDown(gridContainer(), pasteKey);
+    gridContainer().dispatchEvent(event);
 
+    expect(event.defaultPrevented).toBe(false);
     expect(readText).not.toHaveBeenCalled();
   });
 });

@@ -179,7 +179,6 @@ type CopyTarget = { kind: "row" | "column" | "cell"; rowIdx?: number; col?: stri
 function buildCopyText({
   target,
   rows,
-  edits,
   displayColumns,
   sortedIndices,
   selectedRowIdxs,
@@ -187,7 +186,6 @@ function buildCopyText({
 }: {
   target: CopyTarget;
   rows: Record<string, unknown>[];
-  edits?: Map<string, unknown>;
   displayColumns: string[];
   sortedIndices: number[];
   selectedRowIdxs: Set<number>;
@@ -210,20 +208,8 @@ function buildCopyText({
       ? selectedColumnOrder
       : [target.kind === "column" ? (target.col ?? "") : ""];
   const hasColumnSelection = columnCopyColumns.length > 0 && columnCopyColumns[0] !== "";
-  // Export serializers may normalize dates; clipboard copy must preserve displayed text.
   const copyGrid = (rowIndices: number[], columns: string[]) =>
-    rowIndices
-      .map((rowIdx) =>
-        columns
-          .map((col) => {
-            const key = cellKey(rowIdx, col);
-            const value = edits?.has(key) ? edits.get(key) : rows[rowIdx]?.[col];
-            const text = cellValueToText(value);
-            return /[\t"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-          })
-          .join("\t")
-      )
-      .join("\n");
+    rowIndices.map((rowIdx) => columns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t")).join("\n");
   if (target.kind === "row" || (target.kind === "cell" && rowCopyIndices[0] !== -1)) {
     return copyGrid(rowCopyIndices, displayColumns);
   }
@@ -827,7 +813,6 @@ function QueryResultTableImpl({
           value: ctxMenu.kind === "cell" ? ctxMenu.value : undefined,
         },
         rows,
-        edits,
         displayColumns,
         sortedIndices,
         selectedRowIdxs,
@@ -840,7 +825,7 @@ function QueryResultTableImpl({
     } finally {
       setCtxMenu(null);
     }
-  }, [ctxMenu, displayColumns, edits, rows, selectedColumns, selectedRowIdxs, sortedIndices, t]);
+  }, [ctxMenu, displayColumns, rows, selectedColumns, selectedRowIdxs, sortedIndices, t]);
 
   // Keyboard copy mirrors what a right-click on the current selection would copy:
   // rows first, then columns, then the focused cell.
@@ -865,7 +850,6 @@ function QueryResultTableImpl({
       const text = buildCopyText({
         target,
         rows,
-        edits,
         displayColumns,
         sortedIndices,
         selectedRowIdxs,
@@ -1333,7 +1317,7 @@ function QueryResultTableImpl({
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
-        if (!selectedCell && selectedRowIdxs.size === 0) return;
+        if (!editable || !onPasteBlock || (!selectedCell && selectedRowIdxs.size === 0)) return;
         e.preventDefault();
         void pasteClipboardBlock();
         return;
@@ -1399,6 +1383,7 @@ function QueryResultTableImpl({
       sortedIndices,
       displayColumns,
       editable,
+      onPasteBlock,
       onSelectedCellChange,
       onSelectedRowsChange,
       selectCell,

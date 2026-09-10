@@ -87,6 +87,7 @@ interface ParseDelimitedRowsOptions {
   recordDelimiter?: ImportRecordDelimiter;
   textQualifier?: ImportTextQualifier;
   preserveEmptyRows?: boolean;
+  preserveQuotesInUnquotedValues?: boolean;
 }
 
 function parseDelimitedRows(
@@ -108,7 +109,11 @@ function parseDelimitedRows(
     const ch = text[i];
     const next = text[i + 1];
 
-    if (useQualifier && ch === qualifier && (inQuotes || current.length === 0)) {
+    if (
+      useQualifier &&
+      ch === qualifier &&
+      (!options.preserveQuotesInUnquotedValues || inQuotes || current.length === 0)
+    ) {
       rowStarted = true;
       if (inQuotes && next === qualifier) {
         current += qualifier;
@@ -161,7 +166,7 @@ export function parseDelimitedText(text: string, delimiter: Delimiter = detectDe
  * table has no trustworthy first row, and a value containing commas must stay one cell.
  */
 export function parseTabSeparatedRows(text: string): string[][] {
-  return parseDelimitedRows(text, "\t", { preserveEmptyRows: true });
+  return parseDelimitedRows(text, "\t", { preserveEmptyRows: true, preserveQuotesInUnquotedValues: true });
 }
 
 function normalizeCell(value: unknown): string {

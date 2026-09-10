@@ -37,6 +37,13 @@ describe("parseTabSeparatedRows", () => {
 });
 
 describe("table import helpers", () => {
+  it("keeps the existing qualifier handling for file imports", () => {
+    expect(parseDelimitedText('name\nO"Reilly', ",")).toEqual({
+      headers: ["name"],
+      rows: [["OReilly"]],
+    });
+  });
+
   it("parses quoted CSV cells with commas, quotes, and embedded newlines", () => {
     expect(parseDelimitedText('id,name,note\n1,"Alice, A.","line\nbreak"\n2,"say ""hi""",ok', ",")).toEqual({
       headers: ["id", "name", "note"],
