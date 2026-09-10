@@ -64,6 +64,8 @@ This applies to the editable table grid, the SQL result grid and the MongoDB res
 
 With an editable grid focused, a cell editor closed and non-empty clipboard text, `Ctrl/Cmd+V` pastes a table of tab-separated values starting at the focused cell. When only rows are selected, the anchor is the first selected row's first visible column. With no cell and no row selected, nothing is pasted.
 
+Closing a cell editor returns the keyboard focus to the grid, whether it is dismissed with `Esc` or committed with `Enter`, so the keys above keep working without an extra click: adding a row and pasting the copied row straight away fills that row.
+
 Each pasted value becomes a pending edit of the corresponding cell, exactly as if it had been typed. A single value pastes into the anchor cell. A paste whose rows or columns run past the end of the current page appends the missing rows as unsaved rows, so pasting a copied row into a newly added blank row fills that row, and pasting several rows adds as many rows as needed. Once editing is complete the user saves through the existing preview/confirm flow; no statement is executed by the paste itself.
 
 Values falling beyond the last visible column are discarded. A clipboard containing only whitespace changes nothing and shows no error. A clipboard that cannot be read also leaves the staged cells unchanged, but reports the failure — a denied clipboard permission is a real fault, not an empty selection. Read-only grids ignore the paste entirely.
