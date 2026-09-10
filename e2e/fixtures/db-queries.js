@@ -50,6 +50,11 @@ const AUDIT_COLUMNS =
 // Every AI tool call lands one audit_logs row (internal/ai/runner/hooks.go →
 // audit.DefaultAuditWriter). Reading it back independently of the app is what proves
 // "what the user approved is what got recorded as executed".
+//
+// Rows come back in `id` order, and `id` is *insertion* order: the row is written by a
+// fire-and-forget goroutine **after** the tool returns, so two calls made in sequence
+// can land swapped. A spec that has more than one row to look at must select by content
+// (tool_name / command / decision_source) — never by position in this result.
 function findAuditLogs(filter = {}) {
   const where = [];
   const args = [];
