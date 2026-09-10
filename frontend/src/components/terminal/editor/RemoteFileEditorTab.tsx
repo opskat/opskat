@@ -535,7 +535,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
                 disabled={!current || current.failed}
                 onClick={handleCompareDraft}
                 size="icon-xs"
-                variant="outline"
+                variant="ghost"
               >
                 <FileDiff className="h-3.5 w-3.5" />
               </Button>
@@ -550,7 +550,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
                 disabled={handingOff}
                 onClick={handleOpenExternalRequest}
                 size="icon-xs"
-                variant="outline"
+                variant="ghost"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
               </Button>
