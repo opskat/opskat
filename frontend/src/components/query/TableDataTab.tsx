@@ -398,12 +398,13 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   }, []);
 
   const handleAddInlineRow = useCallback(() => {
-    if (columns.length === 0) return;
+    const firstVisibleColumn = visibleColumns.find((column) => columns.includes(column)) ?? columns[0];
+    if (!firstVisibleColumn) return;
     const rowIdx = rows.length + newRows.length;
     setNewRows((prev) => [...prev, {}]);
     setSelectedRowIdx(rowIdx);
-    setFocusCellRequest({ rowIdx, col: columns[0], nonce: Date.now() });
-  }, [columns, newRows.length, rows.length]);
+    setFocusCellRequest({ rowIdx, col: firstVisibleColumn, nonce: Date.now() });
+  }, [columns, newRows.length, rows.length, visibleColumns]);
 
   // A pasted block addresses rows in the grid's own coordinate space, where unsaved rows
   // are appended after the loaded page. Materialise as many as the block reaches, then

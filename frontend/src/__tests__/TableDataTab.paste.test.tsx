@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
@@ -108,6 +109,28 @@ describe("TableDataTab keyboard paste", () => {
 
     await waitFor(() => expect(insertCalls()).toHaveLength(1));
     expect(insertCalls()[0]).toContain("(`id`, `name`) VALUES ('9', 'zoe')");
+  });
+
+  it("anchors a newly added row at the first visible column", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+
+    await user.click(screen.getByTitle("query.displaySettings"));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "id" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByTitle("query.addRow"));
+
+    expect(document.querySelector('[data-cell-key="2:name"] input')).toBeTruthy();
+    fireEvent.keyDown(document.querySelector('[data-cell-key="2:name"] input') as HTMLInputElement, { key: "Escape" });
+    readText.mockResolvedValue("zoe");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(), readText },
+    });
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() => expect(cell("2:name")).toHaveTextContent("zoe"));
   });
 
   it("appends unsaved rows for a block past the last row and inserts them", async () => {

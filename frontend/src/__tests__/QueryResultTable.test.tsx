@@ -1028,6 +1028,15 @@ describe("QueryResultTable — keyboard copy", () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
   });
 
+  it("copies the displayed pending edit from the focused cell", () => {
+    renderGrid({ editable: true, edits: new Map([["0:name", "alicia"]]) });
+    fireEvent.click(cell("0:name"));
+
+    fireEvent.keyDown(gridContainer(), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("alicia");
+  });
+
   it("copies every selected row across the visible columns in display order", () => {
     renderGrid();
     fireEvent.click(gutter(0));
@@ -1178,6 +1187,30 @@ describe("QueryResultTable — keyboard paste", () => {
         edits: [
           { rowIdx: 2, col: "id", value: "7" },
           { rowIdx: 2, col: "name", value: "dave" },
+          { rowIdx: 3, col: "id", value: "8" },
+          { rowIdx: 3, col: "name", value: "erin" },
+        ],
+        newRowCount: 1,
+      })
+    );
+  });
+
+  it("appends after the last displayed row when the grid is sorted", async () => {
+    readText.mockResolvedValue("7\tdave\n8\terin");
+    const onPasteBlock = vi.fn();
+    renderGrid({ editable: false, onPasteBlock });
+    fireEvent.click(screen.getByTitle("query.columnActions:id"));
+    fireEvent.click(screen.getByText("query.sortDesc"));
+    // Original row 0 is last on screen after sorting id descending.
+    fireEvent.click(cell("0:id"));
+
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    await waitFor(() =>
+      expect(onPasteBlock).toHaveBeenCalledWith({
+        edits: [
+          { rowIdx: 0, col: "id", value: "7" },
+          { rowIdx: 0, col: "name", value: "dave" },
           { rowIdx: 3, col: "id", value: "8" },
           { rowIdx: 3, col: "name", value: "erin" },
         ],

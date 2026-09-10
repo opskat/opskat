@@ -826,7 +826,9 @@ function QueryResultTableImpl({
                 kind: "cell",
                 rowIdx: selectedCell.origIdx,
                 col: selectedCell.col,
-                value: rows[selectedCell.origIdx]?.[selectedCell.col],
+                value: edits?.has(cellKey(selectedCell.origIdx, selectedCell.col))
+                  ? edits.get(cellKey(selectedCell.origIdx, selectedCell.col))
+                  : rows[selectedCell.origIdx]?.[selectedCell.col],
               }
             : null;
     if (!target) return;
@@ -844,7 +846,7 @@ function QueryResultTableImpl({
     } catch (e) {
       toast.error(String(e));
     }
-  }, [selectedRowIdxs, selectedColumns, selectedCell, sortedIndices, displayColumns, rows, t]);
+  }, [selectedRowIdxs, selectedColumns, selectedCell, sortedIndices, displayColumns, edits, rows, t]);
 
   const handleCopyFieldName = useCallback(async () => {
     const col = ctxMenu?.kind === "cell" || ctxMenu?.kind === "column" ? ctxMenu.col : null;
@@ -902,8 +904,9 @@ function QueryResultTableImpl({
         : null;
     if (!anchor || anchor.rowIdx == null) return;
     const anchorRowIdx = anchor.rowIdx;
+    const anchorDisplayIdx = sortedIndices.indexOf(anchorRowIdx);
     const startColIdx = displayColumns.indexOf(anchor.col);
-    if (startColIdx === -1) return;
+    if (anchorDisplayIdx === -1 || startColIdx === -1) return;
 
     let text: string;
     try {
@@ -915,9 +918,10 @@ function QueryResultTableImpl({
     if (!text.trim()) return;
 
     const edits: CellEdit[] = [];
-    let lastRowIdx = anchorRowIdx - 1;
+    let newRowCount = 0;
     parseTabSeparatedRows(text).forEach((cells, rowOffset) => {
-      const rowIdx = anchorRowIdx + rowOffset;
+      const targetDisplayIdx = anchorDisplayIdx + rowOffset;
+      const rowIdx = sortedIndices[targetDisplayIdx] ?? rows.length + targetDisplayIdx - sortedIndices.length;
       let wrote = false;
       cells.forEach((value, colOffset) => {
         const col = displayColumns[startColIdx + colOffset];
@@ -925,11 +929,11 @@ function QueryResultTableImpl({
         edits.push({ rowIdx, col, value });
         wrote = true;
       });
-      if (wrote) lastRowIdx = rowIdx;
+      if (wrote && rowIdx >= rows.length) newRowCount = Math.max(newRowCount, rowIdx - rows.length + 1);
     });
     if (edits.length === 0) return;
 
-    onPasteBlock({ edits, newRowCount: Math.max(0, lastRowIdx - rows.length + 1) });
+    onPasteBlock({ edits, newRowCount });
   }, [onPasteBlock, displayColumns, selectedCell, selectedRowIdxs, sortedIndices, rows.length]);
 
   const handleGenerateUuid = useCallback(() => {
