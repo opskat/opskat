@@ -90,6 +90,27 @@ interface ParseDelimitedRowsOptions {
   preserveQuotesInUnquotedValues?: boolean;
 }
 
+function hasDelimitedClosingQualifier(
+  text: string,
+  openingIndex: number,
+  qualifier: string,
+  delimiter: ImportFieldDelimiter,
+  recordDelimiter: ImportRecordDelimiter
+): boolean {
+  for (let i = openingIndex + 1; i < text.length; i++) {
+    if (text[i] !== qualifier) continue;
+    if (text[i + 1] === qualifier) {
+      i++;
+      continue;
+    }
+    const nextIndex = i + 1;
+    return (
+      nextIndex === text.length || text[nextIndex] === delimiter || newlineAt(text, nextIndex, recordDelimiter).match
+    );
+  }
+  return false;
+}
+
 function parseDelimitedRows(
   text: string,
   delimiter: ImportFieldDelimiter = detectDelimiter(text),
@@ -109,11 +130,11 @@ function parseDelimitedRows(
     const ch = text[i];
     const next = text[i + 1];
 
-    if (
-      useQualifier &&
-      ch === qualifier &&
-      (!options.preserveQuotesInUnquotedValues || inQuotes || current.length === 0)
-    ) {
+    const canToggleQualifier =
+      !options.preserveQuotesInUnquotedValues ||
+      inQuotes ||
+      (current.length === 0 && hasDelimitedClosingQualifier(text, i, qualifier, delimiter, recordDelimiter));
+    if (useQualifier && ch === qualifier && canToggleQualifier) {
       rowStarted = true;
       if (inQuotes && next === qualifier) {
         current += qualifier;

@@ -34,6 +34,14 @@ describe("parseTabSeparatedRows", () => {
   it("keeps quotes that occur inside an unquoted clipboard value", () => {
     expect(parseTabSeparatedRows('1\tO"Reilly')).toEqual([["1", 'O"Reilly']]);
   });
+
+  it("keeps an unmatched leading quote in a clipboard value", () => {
+    expect(parseTabSeparatedRows('1\t"draft')).toEqual([["1", '"draft']]);
+  });
+
+  it("still parses complete quoted clipboard fields", () => {
+    expect(parseTabSeparatedRows('1\t"line\nbreak"\t"say ""hi"""')).toEqual([["1", "line\nbreak", 'say "hi"']]);
+  });
 });
 
 describe("table import helpers", () => {
