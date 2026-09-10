@@ -79,10 +79,22 @@ const { codeEditorController } = vi.hoisted(() => ({
     changers: new Map<string, (next: string) => void>(),
     commands: new Map<number, () => void>(),
     cursorHandlers: new Map<string, (event: { position: { lineNumber: number; column: number } }) => void>(),
+    optionHandlers: new Map<string, () => void>(),
     decorations: [] as Array<{ range: { startLineNumber: number; endLineNumber: number } }>,
-    modelOptions: undefined as Record<string, unknown> | undefined,
+    readOnly: false,
+    // Monaco 建 model 时就按文件内容判定过缩进（detectIndentation 默认开着）：这里是它已经生效的结果。
+    detectedIndent: { insertSpaces: true, indentSize: 4, tabSize: 4 },
+    // 任何一次把缩进写回编辑器的调用都要被看见：写 model 会盖掉 Monaco 更准的判定，
+    // 而 standalone 的 editor options 是全局配置，会把这一个文件的缩进带给应用里其它 Monaco 实例。
+    indentWrites: [] as Array<Record<string, unknown>>,
   },
 }));
+
+const INDENT_OPTION_KEYS = ["tabSize", "indentSize", "insertSpaces"];
+
+function recordIndentWrite(next: Record<string, unknown>) {
+  if (INDENT_OPTION_KEYS.some((key) => key in next)) codeEditorController.indentWrites.push(next);
+}
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({
@@ -90,13 +102,19 @@ vi.mock("@/components/CodeEditor", () => ({
     testId,
     onChange,
     onMount,
+    options,
+    readOnly = false,
   }: {
     value?: string;
     testId?: string;
     onChange?: (next: string) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
+    options?: Record<string, unknown>;
+    readOnly?: boolean;
   }) => {
     const key = testId || "unknown";
+    codeEditorController.readOnly = readOnly;
+    if (options) recordIndentWrite(options);
     codeEditorController.changers.set(key, (next) => onChange?.(next));
     codeEditorController.mounts.set(key, () => {
       const collection = {
@@ -107,15 +125,17 @@ vi.mock("@/components/CodeEditor", () => ({
           codeEditorController.decorations = [];
         }),
       };
-      // tabSize / insertSpaces 是 model 的选项：Monaco 默认 detectIndentation:true 会用自己的猜测
-      // 覆盖 editor options 里的同名字段，所以这里记录的是真正落到 model 上的那一份。
       const model = {
-        updateOptions: vi.fn((next: Record<string, unknown>) => {
-          codeEditorController.modelOptions = { ...codeEditorController.modelOptions, ...next };
+        getOptions: vi.fn(() => codeEditorController.detectedIndent),
+        onDidChangeOptions: vi.fn((handler: () => void) => {
+          codeEditorController.optionHandlers.set(key, handler);
+          return { dispose: vi.fn() };
         }),
+        updateOptions: vi.fn(recordIndentWrite),
       };
       const editor = {
         getModel: vi.fn(() => model),
+        updateOptions: vi.fn(recordIndentWrite),
         addCommand: vi.fn((keybinding: number, handler: () => void) => {
           codeEditorController.commands.set(keybinding, handler);
         }),
@@ -161,6 +181,12 @@ function moveCursor(line: number, column: number) {
   act(() =>
     codeEditorController.cursorHandlers.get("remote-file-editor-content")?.({ position: { lineNumber: line, column } })
   );
+}
+
+/** Monaco 在全局 editor 配置变化时会对每个 model 重跑一次 detectIndentation，model 选项因此会中途变。 */
+function redetectIndent(next: { insertSpaces: boolean; indentSize: number; tabSize: number }) {
+  codeEditorController.detectedIndent = next;
+  act(() => codeEditorController.optionHandlers.get("remote-file-editor-content")?.());
 }
 
 function typeInEditor(next: string) {
@@ -238,8 +264,11 @@ describe("RemoteFileEditorTab", () => {
     codeEditorController.changers.clear();
     codeEditorController.commands.clear();
     codeEditorController.cursorHandlers.clear();
+    codeEditorController.optionHandlers.clear();
     codeEditorController.decorations = [];
-    codeEditorController.modelOptions = undefined;
+    codeEditorController.readOnly = false;
+    codeEditorController.detectedIndent = { insertSpaces: true, indentSize: 4, tabSize: 4 };
+    codeEditorController.indentWrites = [];
     getSettingsMock.mockReset();
     openExternalEditMock.mockReset();
     localStorage.clear();
@@ -994,6 +1023,34 @@ describe("RemoteFileEditorTab", () => {
     expect(screen.queryByTestId("remote-file-editor-content")).not.toBeInTheDocument();
   });
 
+  // 拉起外部编辑器要下载本地副本、起进程，是可以等上几秒的一趟 IPC。这期间编辑器若还能敲，
+  // 敲进去的内容会在交接完成关掉 tab 的那一刻被无声丢掉 —— 未保存改动本该先被拦下来处理。
+  it("locks the document while the handoff is in flight", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    let handOver: (session: unknown) => void = () => {};
+    openExternalEditMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          handOver = resolve;
+        })
+    );
+    await renderOpenEditor();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    });
+
+    expect(openExternalEditMock).toHaveBeenCalledTimes(1);
+    expect(codeEditorController.readOnly).toBe(true);
+
+    await act(async () => {
+      handOver(makeSession({ editorId: "vscode" }));
+    });
+
+    expect(useTabStore.getState().tabs).toEqual([]);
+  });
+
   it("keeps the tab on the discarded draft when the handoff itself fails", async () => {
     seedSession();
     getSettingsMock.mockResolvedValue(externalEditorSettings());
@@ -1008,6 +1065,8 @@ describe("RemoteFileEditorTab", () => {
 
     expect(useTabStore.getState().tabs).toHaveLength(1);
     expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("listen 80;");
+    // 交接没成，tab 留下继续用：编辑器必须重新可写。
+    expect(codeEditorController.readOnly).toBe(false);
   });
 
   it("writes the draft back first when the user keeps the unsaved changes", async () => {
@@ -1060,26 +1119,32 @@ describe("RemoteFileEditorTab", () => {
     expect(within(bar).queryAllByRole("button")).toEqual([]);
   });
 
-  // Monaco 的 detectIndentation 默认开着，会拿它自己猜出来的缩进覆盖 editor options 里的
-  // tabSize / insertSpaces：状态栏显示的那个探测值必须真的落到这个编辑器的 model 上。
-  it("keeps Monaco on the indentation the file already uses", async () => {
+  // Monaco 建 model 时已经按文件内容判定过缩进，它的判定专门处理了「一个空格开头的块注释续行」
+  // 这类陷阱。再自己猜一遍反过来盖上去，这份 2 空格的 JS 就会被当成 1 空格缩进。
+  it("shows the indentation Monaco detected instead of guessing one of its own", async () => {
+    codeEditorController.detectedIndent = { insertSpaces: true, indentSize: 2, tabSize: 2 };
+    readSessionTextMock.mockResolvedValue("/**\n * Reload the pool.\n */\nfunction reload() {\n  pool.clear();\n}\n");
+
+    await renderOpenEditor({ remotePath: "/opt/app/reload.js" });
+
+    expect(screen.getByTestId("remote-file-editor-status-bar")).toHaveTextContent(
+      'externalEdit.builtIn.status.indentSpaces:{"size":2}'
+    );
+    // 写回 model 会盖掉更准的判定；写回 editor options 更糟：standalone 的 editor options 是全局配置。
+    expect(codeEditorController.indentWrites).toEqual([]);
+  });
+
+  it("follows the model when Monaco re-detects the indentation", async () => {
+    codeEditorController.detectedIndent = { insertSpaces: false, indentSize: 4, tabSize: 4 };
     readSessionTextMock.mockResolvedValue("server {\n\tlisten 80;\n}\n");
     await renderOpenEditor();
 
-    expect(codeEditorController.modelOptions).toMatchObject({ insertSpaces: false, tabSize: 4 });
-    expect(screen.getByTestId("remote-file-editor-status-bar")).toHaveTextContent(
-      "externalEdit.builtIn.status.indentTab"
-    );
-  });
+    const bar = screen.getByTestId("remote-file-editor-status-bar");
+    expect(bar).toHaveTextContent("externalEdit.builtIn.status.indentTab");
 
-  it("keeps Monaco on the space width the file already uses", async () => {
-    readSessionTextMock.mockResolvedValue("server {\n    listen 80;\n}\n");
-    await renderOpenEditor();
+    redetectIndent({ insertSpaces: true, indentSize: 2, tabSize: 2 });
 
-    expect(codeEditorController.modelOptions).toMatchObject({ insertSpaces: true, tabSize: 4 });
-    expect(screen.getByTestId("remote-file-editor-status-bar")).toHaveTextContent(
-      'externalEdit.builtIn.status.indentSpaces:{"size":4}'
-    );
+    expect(bar).toHaveTextContent('externalEdit.builtIn.status.indentSpaces:{"size":2}');
   });
 
   it("shows the unsaved state and the last write-back time in the status bar", async () => {

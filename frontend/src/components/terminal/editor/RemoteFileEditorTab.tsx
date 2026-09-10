@@ -55,41 +55,6 @@ function fileNameOf(remotePath: string): string {
   return remotePath.split("/").filter(Boolean).at(-1) ?? remotePath;
 }
 
-/** 文件已有的缩进风格。编辑的是生产机上的配置文件：只跟随，不替用户重排（决策 15）。 */
-interface IndentStyle {
-  kind: "tab" | "space";
-  width: number;
-}
-
-// 文件里探测不到任何缩进时沿用编辑器默认值，不替用户猜一个。
-const EDITOR_DEFAULT_INDENT_WIDTH = 2;
-// 制表符按 4 列渲染：这个宽度只影响显示，不会改动文件里的字节。
-const TAB_RENDER_WIDTH = 4;
-
-function detectIndentStyle(text: string): IndentStyle {
-  let tabbed = 0;
-  let spaced = 0;
-  const deltas = new Map<number, number>();
-  let previousWidth = 0;
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    const indent = line.slice(0, line.length - line.trimStart().length);
-    if (indent.includes("\t")) {
-      tabbed += 1;
-      previousWidth = 0;
-      continue;
-    }
-    if (indent.length > 0) spaced += 1;
-    // 取相邻两行缩进的增量而不是绝对宽度：深层嵌套的行同样是一级缩进的整数倍。
-    const delta = indent.length - previousWidth;
-    if (delta > 0) deltas.set(delta, (deltas.get(delta) ?? 0) + 1);
-    previousWidth = indent.length;
-  }
-  if (tabbed > spaced) return { kind: "tab", width: TAB_RENDER_WIDTH };
-  const mostCommon = [...deltas.entries()].sort((left, right) => right[1] - left[1] || left[0] - right[0])[0];
-  return { kind: "space", width: mostCommon ? mostCommon[0] : EDITOR_DEFAULT_INDENT_WIDTH };
-}
-
 /**
  * 保存的结果面：进行中 / 写回时刻 / 三类需要用户看清楚的失败。
  * 冲突、远端缺失、写入或重绑被拒绝各自成一种状态 —— 它们的出路不同，不能折叠成一句「保存失败」。
@@ -185,6 +150,9 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [confirmHandoff, setConfirmHandoff] = useState(false);
+  // 拉起外部编辑器要下载本地副本、起进程，是可以等上几秒的一趟 IPC。这期间还能敲字的话，
+  // 敲进去的内容会在交接完成关掉 tab 的那一刻被无声丢掉：交接开始就锁住这份文档。
+  const [handingOff, setHandingOff] = useState(false);
   const [draftCompare, setDraftCompare] = useState<ExternalEditCompareResult | null>(null);
   // 会话记录带着这次编辑的编码与 SSH 传输：状态栏显示前者，交给外部编辑器时用后者。
   const sessionRecord = useExternalEditStore((s) => s.sessions[meta.sessionId]);
@@ -431,6 +399,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
       toast.error(t("externalEdit.builtIn.openExternalNoSession"));
       return;
     }
+    setHandingOff(true);
     try {
       const target = resolveExternalEditorTarget(await getExternalEditSettings());
       if (!target) {
@@ -446,10 +415,12 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
       // 交出去就是交出去：后端按 documentKey 复用的是同一个会话，只是把它切到外部编辑器的
       // 落盘即写回。这个 tab 再留着，同一份文档上就又有了两个各自改、各自写回的编辑器 ——
       // 外部编辑器一落盘会直接推进远端与基线，之后这里按 ⌘S 就会拿一份看不见对方改动的草稿盖过去。
-      // 此刻已经没有未保存改动：保存或放弃刚刚做过。
+      // 未保存的改动在交接开始前就已经被拦下来处理掉，交接期间编辑器是锁住的。
       if (tabId) forceCloseTab(tabId);
     } catch (error) {
       toast.error(errorMessage(error));
+    } finally {
+      setHandingOff(false);
     }
   }, [forceCloseTab, meta.assetId, meta.remotePath, sessionRecord?.sessionId, t, tabId]);
 
@@ -465,7 +436,11 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
 
   const handleHandoffSave = useCallback(async () => {
     setConfirmHandoff(false);
+    // 写回远端同样是一趟能等上几秒的 IPC，和交接本身连着算一段：中途敲进来的字
+    // 既不会跟着保存，也会在交接完成关掉 tab 时消失。
+    setHandingOff(true);
     if (await handleSave()) await handleOpenExternal();
+    setHandingOff(false);
   }, [handleOpenExternal, handleSave]);
 
   const handleHandoffDiscard = useCallback(async () => {
@@ -497,18 +472,26 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const ownsMerge = mergeResult?.primaryDraftSessionId === meta.sessionId;
 
   const language = languageOf(meta.remotePath);
-  // 缩进与换行符按读入时的内容判定：编辑过程中的击键不该让状态栏与 Monaco 的缩进跳来跳去。
-  const indent = useMemo(() => detectIndentStyle(current?.baseline ?? ""), [current?.baseline]);
+  // 换行符按读入时的内容判定：编辑过程中的击键不该让状态栏跳来跳去。
   const lineEnding = current?.baseline.includes("\r\n") ? "CRLF" : "LF";
 
-  // tabSize / insertSpaces 归 model 管：从 editor options 传进去会被 Monaco 默认开着的
-  // detectIndentation 用它自己的猜测覆盖，而 standalone 的 editor options 又是全局配置，
-  // 会把这一个文件的缩进带给应用里其它 Monaco 实例。只更新本编辑器自己的 model。
+  // 缩进是 model 的选项，且 Monaco 建 model 时已经按文件内容判定过一次（detectIndentation 默认开着）：
+  // 它的判定专门处理了「一个空格开头的块注释续行」「候选宽度只取 2..8」这类陷阱，再写一份猜测反过来
+  // 盖上去只会更差 —— 盖 model 会丢掉更准的结果，盖 editor options 更糟：standalone 的 editor options
+  // 是全局配置，会把这一个文件的缩进带给应用里其它 Monaco 实例。这里只把 model 上已经生效的读出来显示。
+  // 全局 editor 配置一变 Monaco 会对每个 model 重跑一次判定，所以要订阅而不是只在挂载时读一次。
+  const [indent, setIndent] = useState<{ insertSpaces: boolean; size: number } | null>(null);
   useEffect(() => {
-    editorRef.current?.editor
-      .getModel()
-      ?.updateOptions({ insertSpaces: indent.kind === "space", tabSize: indent.width });
-  }, [indent.kind, indent.width, mountVersion]);
+    const model = editorRef.current?.editor.getModel();
+    if (!model) return;
+    const readIndent = () => {
+      const options = model.getOptions();
+      setIndent({ insertSpaces: options.insertSpaces, size: options.indentSize });
+    };
+    readIndent();
+    const subscription = model.onDidChangeOptions(readIndent);
+    return () => subscription.dispose();
+  }, [mountVersion]);
 
   return (
     <div className="flex h-full flex-col bg-background" data-testid="remote-file-editor">
@@ -553,6 +536,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           </Button>
           <Button
             data-testid="remote-file-editor-open-external"
+            disabled={handingOff}
             onClick={handleOpenExternalRequest}
             size="xs"
             variant="outline"
@@ -661,6 +645,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
             language={language}
             onChange={handleChange}
             onMount={handleMount}
+            readOnly={handingOff}
             testId="remote-file-editor-content"
             value={current.text}
           />
@@ -674,11 +659,13 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
         <span>{t("externalEdit.builtIn.status.position", { line: cursor.line, column: cursor.column })}</span>
         {current && !current.failed && (
           <>
-            <span>
-              {indent.kind === "tab"
-                ? t("externalEdit.builtIn.status.indentTab")
-                : t("externalEdit.builtIn.status.indentSpaces", { size: indent.width })}
-            </span>
+            {indent && (
+              <span>
+                {indent.insertSpaces
+                  ? t("externalEdit.builtIn.status.indentSpaces", { size: indent.size })
+                  : t("externalEdit.builtIn.status.indentTab")}
+              </span>
+            )}
             {sessionRecord && <span>{sessionRecord.originalEncoding.toUpperCase()}</span>}
             <span>{lineEnding}</span>
           </>
