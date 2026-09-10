@@ -290,7 +290,11 @@ describe("RemoteFileEditorTab", () => {
   });
 
   it("shows the asset, the full remote path and the decoded session text", async () => {
-    render(<RemoteFileEditorTab meta={editorMeta()} />);
+    render(
+      <TooltipProvider>
+        <RemoteFileEditorTab meta={editorMeta()} />
+      </TooltipProvider>
+    );
 
     expect(await screen.findByTestId("remote-file-editor-content")).toHaveTextContent("listen 80;");
     expect(readSessionTextMock).toHaveBeenCalledWith("sess-1");
@@ -301,7 +305,11 @@ describe("RemoteFileEditorTab", () => {
   it("surfaces a read failure instead of an empty editor", async () => {
     readSessionTextMock.mockRejectedValueOnce(new Error("boom"));
 
-    render(<RemoteFileEditorTab meta={editorMeta()} />);
+    render(
+      <TooltipProvider>
+        <RemoteFileEditorTab meta={editorMeta()} />
+      </TooltipProvider>
+    );
 
     expect(await screen.findByText("externalEdit.builtIn.loadFailed")).toBeInTheDocument();
     expect(screen.queryByTestId("remote-file-editor-content")).not.toBeInTheDocument();
@@ -416,7 +424,11 @@ describe("RemoteFileEditorTab", () => {
       activeTabId: "editor-sess-1",
     });
 
-    render(<MainPanel onEditAsset={vi.fn()} onDeleteAsset={vi.fn()} onConnectAsset={vi.fn()} />);
+    render(
+      <TooltipProvider>
+        <MainPanel onEditAsset={vi.fn()} onDeleteAsset={vi.fn()} onConnectAsset={vi.fn()} />
+      </TooltipProvider>
+    );
 
     expect(await screen.findByTestId("remote-file-editor-content")).toBeVisible();
     await waitFor(() => expect(screen.getByText("/etc/nginx/nginx.conf")).toBeVisible());
@@ -435,7 +447,11 @@ describe("RemoteFileEditorTab", () => {
 
   async function renderOpenEditor(overrides: Partial<EditorTabMeta> = {}) {
     useTabStore.setState({ tabs: [editorTab(overrides)], activeTabId: "editor-sess-1" });
-    render(<EditorHost />);
+    render(
+      <TooltipProvider>
+        <EditorHost />
+      </TooltipProvider>
+    );
     await screen.findByTestId("remote-file-editor-content");
     mountEditors();
   }
@@ -719,9 +735,11 @@ describe("RemoteFileEditorTab", () => {
       restoredTabIds: ["editor-sess-1"],
     });
     render(
-      <StrictMode>
-        <EditorHost />
-      </StrictMode>
+      <TooltipProvider>
+        <StrictMode>
+          <EditorHost />
+        </StrictMode>
+      </TooltipProvider>
     );
     await screen.findByTestId("remote-file-editor-content");
   }
@@ -944,6 +962,18 @@ describe("RemoteFileEditorTab", () => {
     expect(await screen.findByTestId("external-edit-compare-workbench")).toBeInTheDocument();
     expect(screen.getByTestId("diff-modified")).toHaveTextContent("listen 8080;");
     expect(screen.getByTestId("diff-original")).toHaveTextContent("listen 80;");
+  });
+
+  it("renders the strip's diff and external-open actions as icon-only buttons", async () => {
+    await renderOpenEditor();
+
+    for (const testId of ["remote-file-editor-compare", "remote-file-editor-open-external"]) {
+      const button = screen.getByTestId(testId);
+      // 设计稿里这两个是 20px 的纯图标按钮（save 才带文字），文字只能出现在 tooltip 里。
+      expect(button.textContent).toBe("");
+      expect(button.getAttribute("aria-label")).toBeTruthy();
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
   });
 
   function externalEditorSettings() {

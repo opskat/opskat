@@ -15,6 +15,9 @@ import {
   AlertDialogTitle,
   Button,
   ConfirmDialog,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
 } from "@opskat/ui";
 import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
 import { typeIcon, typeIconColor } from "@/lib/objectContentType";
@@ -524,26 +527,36 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             {t("action.save")}
           </Button>
-          <Button
-            data-testid="remote-file-editor-compare"
-            disabled={!current || current.failed}
-            onClick={handleCompareDraft}
-            size="xs"
-            variant="outline"
-          >
-            <FileDiff className="h-3.5 w-3.5" />
-            {t("externalEdit.builtIn.viewDiff")}
-          </Button>
-          <Button
-            data-testid="remote-file-editor-open-external"
-            disabled={handingOff}
-            onClick={handleOpenExternalRequest}
-            size="xs"
-            variant="outline"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            {t("externalEdit.builtIn.openExternal")}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={t("externalEdit.builtIn.viewDiff")}
+                data-testid="remote-file-editor-compare"
+                disabled={!current || current.failed}
+                onClick={handleCompareDraft}
+                size="icon-xs"
+                variant="outline"
+              >
+                <FileDiff className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("externalEdit.builtIn.viewDiff")}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={t("externalEdit.builtIn.openExternal")}
+                data-testid="remote-file-editor-open-external"
+                disabled={handingOff}
+                onClick={handleOpenExternalRequest}
+                size="icon-xs"
+                variant="outline"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("externalEdit.builtIn.openExternal")}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
