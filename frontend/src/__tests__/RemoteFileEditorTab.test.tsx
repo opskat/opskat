@@ -1,6 +1,6 @@
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type * as MonacoNS from "monaco-editor";
 import { TooltipProvider } from "@opskat/ui";
 import { MainPanel } from "@/components/layout/MainPanel";
@@ -20,6 +20,8 @@ const {
   resolveConflictMock,
   compareSessionMock,
   prepareMergeMock,
+  getSettingsMock,
+  openExternalEditMock,
 } = vi.hoisted(() => ({
   readSessionTextMock: vi.fn(),
   saveSessionTextMock: vi.fn(),
@@ -27,6 +29,31 @@ const {
   resolveConflictMock: vi.fn(),
   compareSessionMock: vi.fn(),
   prepareMergeMock: vi.fn(),
+  getSettingsMock: vi.fn(),
+  openExternalEditMock: vi.fn(),
+}));
+
+// setup.ts 的 t 只回 key，会把插值一并吞掉，状态栏的行列 / 缩进就无从断言。
+// 这里把插值参数附在 key 后面：既能断言真实数值，又不必把任何文案抄进测试。
+vi.mock("react-i18next", () => {
+  const t = (key: string, vars?: Record<string, unknown>) => (vars ? `${key}:${JSON.stringify(vars)}` : key);
+  const i18n = { language: "en", changeLanguage: vi.fn() };
+  return {
+    useTranslation: () => ({ t, i18n }),
+    Trans: ({ i18nKey, children }: { i18nKey?: string; children?: ReactNode }) => i18nKey ?? children,
+    initReactI18next: { type: "3rdParty", init: vi.fn() },
+  };
+});
+
+// 差异工作台里的 Monaco DiffEditor 在测试环境里不落文本：把两侧内容原样渲染出来，
+// 才能断言送进工作台的是「当前草稿 vs 远端基线」而不只是弹窗开了。
+vi.mock("@/components/CodeDiffViewer", () => ({
+  CodeDiffViewer: ({ original, modified, testId }: { original?: string; modified?: string; testId?: string }) => (
+    <div data-testid={testId}>
+      <pre data-testid="diff-original">{original}</pre>
+      <pre data-testid="diff-modified">{modified}</pre>
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/externalEditApi", async () => {
@@ -39,6 +66,8 @@ vi.mock("@/lib/externalEditApi", async () => {
     resolveExternalEditConflict: resolveConflictMock,
     compareExternalEditSession: compareSessionMock,
     prepareExternalEditMerge: prepareMergeMock,
+    getExternalEditSettings: getSettingsMock,
+    openExternalEdit: openExternalEditMock,
   };
 });
 
@@ -49,7 +78,9 @@ const { codeEditorController } = vi.hoisted(() => ({
     mounts: new Map<string, () => void>(),
     changers: new Map<string, (next: string) => void>(),
     commands: new Map<number, () => void>(),
+    cursorHandlers: new Map<string, (event: { position: { lineNumber: number; column: number } }) => void>(),
     decorations: [] as Array<{ range: { startLineNumber: number; endLineNumber: number } }>,
+    options: undefined as Record<string, unknown> | undefined,
   },
 }));
 
@@ -59,13 +90,16 @@ vi.mock("@/components/CodeEditor", () => ({
     testId,
     onChange,
     onMount,
+    options,
   }: {
     value?: string;
     testId?: string;
     onChange?: (next: string) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
+    options?: Record<string, unknown>;
   }) => {
     const key = testId || "unknown";
+    codeEditorController.options = options;
     codeEditorController.changers.set(key, (next) => onChange?.(next));
     codeEditorController.mounts.set(key, () => {
       const collection = {
@@ -88,6 +122,13 @@ vi.mock("@/components/CodeEditor", () => ({
         onDidContentSizeChange: vi.fn(() => ({ dispose: vi.fn() })),
         revealLineInCenter: vi.fn(),
         setPosition: vi.fn(),
+        getPosition: vi.fn(() => ({ lineNumber: 1, column: 1 })),
+        onDidChangeCursorPosition: vi.fn(
+          (handler: (event: { position: { lineNumber: number; column: number } }) => void) => {
+            codeEditorController.cursorHandlers.set(key, handler);
+            return { dispose: vi.fn() };
+          }
+        ),
       };
       const monaco = {
         KeyMod: { CtrlCmd: 2048 },
@@ -109,6 +150,12 @@ function mountEditors() {
   act(() => {
     for (const mount of [...codeEditorController.mounts.values()]) mount();
   });
+}
+
+function moveCursor(line: number, column: number) {
+  act(() =>
+    codeEditorController.cursorHandlers.get("remote-file-editor-content")?.({ position: { lineNumber: line, column } })
+  );
 }
 
 function typeInEditor(next: string) {
@@ -185,7 +232,11 @@ describe("RemoteFileEditorTab", () => {
     codeEditorController.mounts.clear();
     codeEditorController.changers.clear();
     codeEditorController.commands.clear();
+    codeEditorController.cursorHandlers.clear();
     codeEditorController.decorations = [];
+    codeEditorController.options = undefined;
+    getSettingsMock.mockReset();
+    openExternalEditMock.mockReset();
     localStorage.clear();
     useTabStore.setState({
       tabs: [],
@@ -344,8 +395,12 @@ describe("RemoteFileEditorTab", () => {
     return meta?.type === "editor" ? <RemoteFileEditorTab meta={meta} /> : null;
   }
 
-  async function renderOpenEditor() {
-    useTabStore.setState({ tabs: [editorTab()], activeTabId: "editor-sess-1" });
+  function seedSession(overrides: Record<string, unknown> = {}) {
+    useExternalEditStore.setState({ sessions: { "sess-1": makeSession(overrides) as never } });
+  }
+
+  async function renderOpenEditor(overrides: Partial<EditorTabMeta> = {}) {
+    useTabStore.setState({ tabs: [editorTab(overrides)], activeTabId: "editor-sess-1" });
     render(<EditorHost />);
     await screen.findByTestId("remote-file-editor-content");
     mountEditors();
@@ -828,5 +883,167 @@ describe("RemoteFileEditorTab", () => {
     await renderOpenEditor();
 
     expect(refreshSessionMock).not.toHaveBeenCalled();
+  });
+
+  // 后端消息是中文的 Go 字符串（本轮不改）：横幅至少要有一句自己的、跟随界面语言的标题，
+  // 否则英文用户在失败横幅上只能看到一句中文。
+  it("titles the failure banner in the interface language beside the backend message", async () => {
+    await renderOpenEditor();
+    typeInEditor("changed\n");
+    saveSessionTextMock.mockRejectedValueOnce(new Error("保存远程文件失败: permission denied"));
+
+    await pressSave();
+
+    const banner = await screen.findByTestId("remote-file-editor-error");
+    expect(banner).toHaveTextContent("externalEdit.builtIn.failedTitle");
+    expect(banner).toHaveTextContent("permission denied");
+  });
+
+  it("sends the draft and the remote baseline into the existing compare workbench without a conflict", async () => {
+    await renderOpenEditor();
+    typeInEditor("server {\n  listen 8080;\n}\n");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("remote-file-editor-compare"));
+    });
+
+    expect(await screen.findByTestId("external-edit-compare-workbench")).toBeInTheDocument();
+    expect(screen.getByTestId("diff-modified")).toHaveTextContent("listen 8080;");
+    expect(screen.getByTestId("diff-original")).toHaveTextContent("listen 80;");
+  });
+
+  function externalEditorSettings() {
+    return {
+      defaultEditorId: "builtin",
+      workspaceRoot: "/tmp",
+      cleanupRetentionDays: 7,
+      maxReadFileSizeMB: 2,
+      customEditors: [],
+      editors: [
+        { id: "builtin", name: "OpsKat", path: "", builtIn: true, available: true, default: true },
+        { id: "vscode", name: "VS Code", path: "/usr/bin/code", builtIn: false, available: true, default: false },
+      ],
+    };
+  }
+
+  it("hands a clean document to an external editor through the same open path as the file panel", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    openExternalEditMock.mockResolvedValue(makeSession({ editorId: "vscode" }));
+    await renderOpenEditor();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    });
+
+    // 默认编辑器就是内置项时必须显式点名外部编辑器，否则后端会把空 editorId 解析回内置项。
+    expect(openExternalEditMock).toHaveBeenCalledWith({
+      assetId: 7,
+      sessionId: "ssh-1",
+      remotePath: "/etc/nginx/nginx.conf",
+      editorId: "vscode",
+    });
+  });
+
+  it("makes the user resolve unsaved changes before handing the document over", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    openExternalEditMock.mockResolvedValue(makeSession({ editorId: "vscode" }));
+    await renderOpenEditor();
+    typeInEditor("server {\n  listen 8080;\n}\n");
+
+    fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+
+    expect(await screen.findByTestId("remote-file-editor-handoff-confirm")).toBeInTheDocument();
+    expect(openExternalEditMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("action.cancel"));
+    await waitFor(() => expect(screen.queryByTestId("remote-file-editor-handoff-confirm")).not.toBeInTheDocument());
+    expect(openExternalEditMock).not.toHaveBeenCalled();
+
+    // 「放弃改动」之后交出去的必须是本地副本已有的内容，两个编辑器不能各持一份草稿。
+    fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    await act(async () => {
+      fireEvent.click(await screen.findByText("externalEdit.builtIn.handoffDiscard"));
+    });
+
+    expect(saveSessionTextMock).not.toHaveBeenCalled();
+    expect(openExternalEditMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("listen 80;");
+    expect(useTabStore.getState().unsavedTabIds).not.toContain("editor-sess-1");
+  });
+
+  it("writes the draft back first when the user keeps the unsaved changes", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    openExternalEditMock.mockResolvedValue(makeSession({ editorId: "vscode" }));
+    saveSessionTextMock.mockResolvedValue({ status: "saved", session: makeSession() });
+    await renderOpenEditor();
+    typeInEditor("server {\n  listen 8080;\n}\n");
+
+    fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    await act(async () => {
+      fireEvent.click(await screen.findByText("externalEdit.builtIn.handoffSave"));
+    });
+
+    expect(saveSessionTextMock).toHaveBeenCalledWith("sess-1", "server {\n  listen 8080;\n}\n");
+    expect(openExternalEditMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hand the document over when the save is refused", async () => {
+    seedSession();
+    getSettingsMock.mockResolvedValue(externalEditorSettings());
+    saveSessionTextMock.mockRejectedValue(new Error("保存远程文件失败: permission denied"));
+    await renderOpenEditor();
+    typeInEditor("changed\n");
+
+    fireEvent.click(screen.getByTestId("remote-file-editor-open-external"));
+    await act(async () => {
+      fireEvent.click(await screen.findByText("externalEdit.builtIn.handoffSave"));
+    });
+
+    expect(openExternalEditMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
+  });
+
+  it("reports position, indentation, encoding, line ending and language, and never offers to reindent", async () => {
+    seedSession({ originalEncoding: "gb18030" });
+    readSessionTextMock.mockResolvedValue("server {\r\n    listen 80;\r\n}\r\n");
+    await renderOpenEditor({ remotePath: "/etc/app/config.yaml" });
+
+    const bar = screen.getByTestId("remote-file-editor-status-bar");
+    expect(bar).toHaveTextContent('externalEdit.builtIn.status.position:{"line":1,"column":1}');
+    moveCursor(14, 24);
+    expect(bar).toHaveTextContent('externalEdit.builtIn.status.position:{"line":14,"column":24}');
+    expect(bar).toHaveTextContent('externalEdit.builtIn.status.indentSpaces:{"size":4}');
+    expect(bar).toHaveTextContent("GB18030");
+    expect(bar).toHaveTextContent("CRLF");
+    expect(bar).toHaveTextContent("yaml");
+    // 决策 15：缩进只显示不可切换 —— 状态栏里没有任何可点击的东西。
+    expect(within(bar).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("keeps Monaco on the indentation the file already uses", async () => {
+    readSessionTextMock.mockResolvedValue("server {\n\tlisten 80;\n}\n");
+    await renderOpenEditor();
+
+    expect(codeEditorController.options).toMatchObject({ insertSpaces: false });
+    expect(screen.getByTestId("remote-file-editor-status-bar")).toHaveTextContent(
+      "externalEdit.builtIn.status.indentTab"
+    );
+  });
+
+  it("shows the unsaved state and the last write-back time in the status bar", async () => {
+    saveSessionTextMock.mockResolvedValue({ status: "saved", session: makeSession() });
+    await renderOpenEditor();
+    typeInEditor("changed\n");
+
+    const bar = screen.getByTestId("remote-file-editor-status-bar");
+    expect(bar).toHaveTextContent("externalEdit.builtIn.unsaved");
+
+    await pressSave();
+
+    expect(bar).toHaveTextContent("externalEdit.builtIn.savedAt");
+    expect(bar).not.toHaveTextContent("externalEdit.builtIn.unsaved");
   });
 });

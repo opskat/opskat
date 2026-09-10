@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { notifySuccess } from "@/lib/notify";
 import {
   applyExternalEditMerge,
+  builtInEditorID,
   compareExternalEditSession,
   continueExternalEditSession,
   type ExternalEditCompareResult,
@@ -9,6 +10,7 @@ import {
   type ExternalEditMergePrepareResult,
   type ExternalEditSaveResult,
   type ExternalEditSession,
+  type ExternalEditSettings,
   listExternalEditSessions,
   prepareExternalEditMerge,
   recoverExternalEditSession,
@@ -86,6 +88,16 @@ interface ExternalEditState {
   openErrorDetail: (sessionId: string) => void;
   dismissErrorDetail: () => void;
   applyEvent: (event: ExternalEditEvent) => void;
+}
+
+/**
+ * 「用外部编辑器打开」要打开的编辑器：默认编辑器就是内置项时必须显式点名一个可用的外部编辑器，
+ * 否则后端会把空 editorId 解析回内置项、又开回应用内的编辑器。挑不到外部编辑器时没有出路（null）。
+ */
+export function resolveExternalEditorTarget(settings: ExternalEditSettings): { editorId?: string } | null {
+  if (settings.defaultEditorId !== builtInEditorID) return {};
+  const external = settings.editors.find((editor) => editor.available && editor.id !== builtInEditorID);
+  return external ? { editorId: external.id } : null;
 }
 
 export function buildExternalEditDocuments(sessions: Record<string, ExternalEditSession>): ExternalEditDocumentView[] {

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, CircleHelp, FileText, Loader2, Save } from "lucide-react";
+import { toast } from "sonner";
+import { AlertTriangle, CircleHelp, ExternalLink, FileDiff, Loader2, Save } from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
 import type { OnMount } from "@monaco-editor/react";
 import {
@@ -16,13 +17,17 @@ import {
   ConfirmDialog,
 } from "@opskat/ui";
 import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
+import { typeIcon, typeIconColor } from "@/lib/objectContentType";
 import { buildTextDiffBlocks, type TextDiffBlock } from "@/lib/textDiffBlocks";
 import {
+  getExternalEditSettings,
+  openExternalEdit,
   readExternalEditSessionText,
+  type ExternalEditCompareResult,
   type ExternalEditSaveResult,
   type ExternalEditSession,
 } from "@/lib/externalEditApi";
-import { useExternalEditStore } from "@/stores/externalEditStore";
+import { resolveExternalEditorTarget, useExternalEditStore } from "@/stores/externalEditStore";
 import { findEditorTabId, useTabStore, type EditorTabMeta } from "@/stores/tabStore";
 import { getTerminalActiveAssetIds, useTerminalStore } from "@/stores/terminalStore";
 import { ExternalEditCompareWorkbench } from "../external-edit/CompareWorkbench";
@@ -44,6 +49,45 @@ function languageOf(remotePath: string): CodeEditorLanguage {
   const name = remotePath.split("/").filter(Boolean).at(-1) ?? "";
   const extension = name.includes(".") ? name.split(".").pop() : "";
   return LANGUAGE_BY_EXTENSION[(extension ?? "").toLowerCase()] ?? "plaintext";
+}
+
+function fileNameOf(remotePath: string): string {
+  return remotePath.split("/").filter(Boolean).at(-1) ?? remotePath;
+}
+
+/** 文件已有的缩进风格。编辑的是生产机上的配置文件：只跟随，不替用户重排（决策 15）。 */
+interface IndentStyle {
+  kind: "tab" | "space";
+  width: number;
+}
+
+// 文件里探测不到任何缩进时沿用编辑器默认值，不替用户猜一个。
+const EDITOR_DEFAULT_INDENT_WIDTH = 2;
+// 制表符按 4 列渲染：这个宽度只影响显示，不会改动文件里的字节。
+const TAB_RENDER_WIDTH = 4;
+
+function detectIndentStyle(text: string): IndentStyle {
+  let tabbed = 0;
+  let spaced = 0;
+  const deltas = new Map<number, number>();
+  let previousWidth = 0;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const indent = line.slice(0, line.length - line.trimStart().length);
+    if (indent.includes("\t")) {
+      tabbed += 1;
+      previousWidth = 0;
+      continue;
+    }
+    if (indent.length > 0) spaced += 1;
+    // 取相邻两行缩进的增量而不是绝对宽度：深层嵌套的行同样是一级缩进的整数倍。
+    const delta = indent.length - previousWidth;
+    if (delta > 0) deltas.set(delta, (deltas.get(delta) ?? 0) + 1);
+    previousWidth = indent.length;
+  }
+  if (tabbed > spaced) return { kind: "tab", width: TAB_RENDER_WIDTH };
+  const mostCommon = [...deltas.entries()].sort((left, right) => right[1] - left[1] || left[0] - right[0])[0];
+  return { kind: "space", width: mostCommon ? mostCommon[0] : EDITOR_DEFAULT_INDENT_WIDTH };
 }
 
 /**
@@ -139,6 +183,11 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const decorationsRef = useRef<MonacoNS.editor.IEditorDecorationsCollection | null>(null);
   const [mountVersion, setMountVersion] = useState(0);
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+  const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const [confirmHandoff, setConfirmHandoff] = useState(false);
+  const [draftCompare, setDraftCompare] = useState<ExternalEditCompareResult | null>(null);
+  // 会话记录带着这次编辑的编码与 SSH 传输：状态栏显示前者，交给外部编辑器时用后者。
+  const sessionRecord = useExternalEditStore((s) => s.sessions[meta.sessionId]);
 
   const current = loaded?.key === loadKey ? loaded : null;
   const saveState: SaveOutcome = outcome.key === loadKey ? outcome.state : { kind: "idle" };
@@ -283,6 +332,11 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });
+    const position = editor.getPosition();
+    if (position) setCursor({ line: position.lineNumber, column: position.column });
+    editor.onDidChangeCursorPosition((event) => {
+      setCursor({ line: event.position.lineNumber, column: event.position.column });
+    });
     setMountVersion((version) => version + 1);
   }, []);
 
@@ -369,37 +423,104 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
     if (tabId) forceCloseTab(tabId);
   }, [forceCloseTab, tabId]);
 
+  // 「用外部编辑器打开」等同于文件面板右键的同名操作：同一条 open 路径、同一条编辑器挑选规则，
+  // SSH 传输取会话记录里当前绑定的那一个（保存 / 重读的重绑会把它更新到可用会话上）。
+  const handleOpenExternal = useCallback(async () => {
+    const transportSessionId = sessionRecord?.sessionId;
+    if (!transportSessionId) {
+      toast.error(t("externalEdit.builtIn.openExternalNoSession"));
+      return;
+    }
+    try {
+      const target = resolveExternalEditorTarget(await getExternalEditSettings());
+      if (!target) {
+        toast.error(t("externalEdit.builtIn.noExternalEditor"));
+        return;
+      }
+      await openExternalEdit({
+        assetId: meta.assetId,
+        sessionId: transportSessionId,
+        remotePath: meta.remotePath,
+        editorId: target.editorId,
+      });
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
+  }, [meta.assetId, meta.remotePath, sessionRecord?.sessionId, t]);
+
+  // 交出去之前必须先处理未保存的改动：草稿留在这里，外部编辑器打开的是本地副本，
+  // 就这样交出去等于让两个编辑器各持一份不同的内容。
+  const handleOpenExternalRequest = useCallback(() => {
+    if (dirty) {
+      setConfirmHandoff(true);
+      return;
+    }
+    void handleOpenExternal();
+  }, [dirty, handleOpenExternal]);
+
+  const handleHandoffSave = useCallback(async () => {
+    setConfirmHandoff(false);
+    if (await handleSave()) await handleOpenExternal();
+  }, [handleOpenExternal, handleSave]);
+
+  const handleHandoffDiscard = useCallback(async () => {
+    setConfirmHandoff(false);
+    setLoaded((state) => (state && state.key === loadKey ? { ...state, text: state.baseline } : state));
+    await handleOpenExternal();
+  }, [handleOpenExternal, loadKey]);
+
+  const fileName = fileNameOf(meta.remotePath);
+
+  // 常规的「我改了什么」：把草稿与读入时的远端基线送进既有的 Compare 工作台。
+  // 后端的 Compare 只为冲突态构造比对结果，冲突横幅上的那颗按钮仍然走它。
+  const handleCompareDraft = useCallback(() => {
+    if (!current || current.failed) return;
+    setDraftCompare({
+      // 工作台只读内容两栏；documentKey 的规范形态只有会话记录里那一个（软链后与远程路径不同）。
+      documentKey: sessionRecord?.documentKey ?? "",
+      primaryDraftSessionId: meta.sessionId,
+      fileName,
+      remotePath: meta.remotePath,
+      localContent: current.text,
+      remoteContent: current.baseline,
+      readOnly: true,
+    });
+  }, [current, fileName, meta.remotePath, meta.sessionId, sessionRecord?.documentKey]);
+
   const saving = saveState.kind === "saving";
   const ownsCompare = compareResult?.primaryDraftSessionId === meta.sessionId;
   const ownsMerge = mergeResult?.primaryDraftSessionId === meta.sessionId;
 
+  const language = languageOf(meta.remotePath);
+  // 缩进与换行符按读入时的内容判定：编辑过程中的击键不该让状态栏与 Monaco 的缩进跳来跳去。
+  const indent = useMemo(() => detectIndentStyle(current?.baseline ?? ""), [current?.baseline]);
+  const editorOptions = useMemo(
+    () => ({ insertSpaces: indent.kind === "space", tabSize: indent.width }),
+    [indent.kind, indent.width]
+  );
+  const lineEnding = current?.baseline.includes("\r\n") ? "CRLF" : "LF";
+
   return (
     <div className="flex h-full flex-col bg-background" data-testid="remote-file-editor">
       <div className="flex items-center gap-2 border-b px-3 py-2 text-xs">
-        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 font-medium text-foreground">{meta.assetName}</span>
+        {createElement(typeIcon("", meta.remotePath), {
+          className: `h-4 w-4 shrink-0 ${typeIconColor("", meta.remotePath)}`,
+        })}
+        <span className="shrink-0 font-medium text-foreground">{fileName}</span>
+        {dirty && (
+          <span
+            aria-label={t("externalEdit.builtIn.unsaved")}
+            className="size-1.5 shrink-0 rounded-full bg-warning"
+            data-testid="remote-file-editor-unsaved"
+            title={t("externalEdit.builtIn.unsaved")}
+          />
+        )}
+        <span className="shrink-0 text-muted-foreground">{meta.assetName}</span>
+        <span className="shrink-0 text-muted-foreground/60">·</span>
         <span className="truncate text-muted-foreground" title={meta.remotePath}>
           {meta.remotePath}
         </span>
-        {dirty && (
-          <span
-            className="shrink-0 rounded bg-warning/15 px-1.5 py-0.5 text-warning"
-            data-testid="remote-file-editor-unsaved"
-          >
-            {t("externalEdit.builtIn.unsaved")}
-          </span>
-        )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          {saving && (
-            <span className="text-muted-foreground" data-testid="remote-file-editor-saving">
-              {t("externalEdit.builtIn.savingRemote")}
-            </span>
-          )}
-          {saveState.kind === "saved" && (
-            <span className="text-muted-foreground" data-testid="remote-file-editor-saved-at">
-              {t("externalEdit.builtIn.savedAt", { time: new Date(saveState.at).toLocaleTimeString() })}
-            </span>
-          )}
           <Button
             data-testid="remote-file-editor-save"
             disabled={saving || !dirty}
@@ -409,6 +530,25 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           >
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             {t("action.save")}
+          </Button>
+          <Button
+            data-testid="remote-file-editor-compare"
+            disabled={!current || current.failed}
+            onClick={handleCompareDraft}
+            size="xs"
+            variant="outline"
+          >
+            <FileDiff className="h-3.5 w-3.5" />
+            {t("externalEdit.builtIn.viewDiff")}
+          </Button>
+          <Button
+            data-testid="remote-file-editor-open-external"
+            onClick={handleOpenExternalRequest}
+            size="xs"
+            variant="outline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t("externalEdit.builtIn.openExternal")}
           </Button>
         </div>
       </div>
@@ -486,7 +626,9 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           data-testid="remote-file-editor-error"
         >
           <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
-          <span className="text-foreground">{saveState.message}</span>
+          {/* 后端消息是中文的 Go 字符串：标题跟随界面语言，英文用户至少不会只看到一句中文。 */}
+          <span className="font-medium text-foreground">{t("externalEdit.builtIn.failedTitle")}</span>
+          <span className="text-muted-foreground">{saveState.message}</span>
           <span className="text-muted-foreground">{t("externalEdit.builtIn.localChangesKept")}</span>
         </div>
       )}
@@ -506,13 +648,47 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           </div>
         ) : (
           <CodeEditor
-            language={languageOf(meta.remotePath)}
+            language={language}
             onChange={handleChange}
             onMount={handleMount}
+            options={editorOptions}
             testId="remote-file-editor-content"
             value={current.text}
           />
         )}
+      </div>
+
+      <div
+        className="flex items-center gap-3 border-t px-3 py-1 text-[11px] text-muted-foreground"
+        data-testid="remote-file-editor-status-bar"
+      >
+        <span>{t("externalEdit.builtIn.status.position", { line: cursor.line, column: cursor.column })}</span>
+        {current && !current.failed && (
+          <>
+            <span>
+              {indent.kind === "tab"
+                ? t("externalEdit.builtIn.status.indentTab")
+                : t("externalEdit.builtIn.status.indentSpaces", { size: indent.width })}
+            </span>
+            {sessionRecord && <span>{sessionRecord.originalEncoding.toUpperCase()}</span>}
+            <span>{lineEnding}</span>
+          </>
+        )}
+        <span>{language === "plaintext" ? t("externalEdit.builtIn.status.plainText") : language}</span>
+        <div className="ml-auto flex items-center gap-2">
+          {dirty && (
+            <span className="flex items-center gap-1 text-warning">
+              <span className="size-1.5 rounded-full bg-warning" />
+              {t("externalEdit.builtIn.unsaved")}
+            </span>
+          )}
+          {saving && <span data-testid="remote-file-editor-saving">{t("externalEdit.builtIn.savingRemote")}</span>}
+          {saveState.kind === "saved" && (
+            <span data-testid="remote-file-editor-saved-at">
+              {t("externalEdit.builtIn.savedAt", { time: new Date(saveState.at).toLocaleTimeString() })}
+            </span>
+          )}
+        </div>
       </div>
 
       <ConfirmDialog
@@ -556,6 +732,37 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog
+        open={confirmHandoff}
+        onOpenChange={(open) => {
+          if (!open) setConfirmHandoff(false);
+        }}
+      >
+        <AlertDialogContent
+          data-testid="remote-file-editor-handoff-confirm"
+          onOverlayClick={() => setConfirmHandoff(false)}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("externalEdit.builtIn.handoffTitle")}</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div>{t("externalEdit.builtIn.handoffDesc")}</div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmHandoff(false)}>{t("action.cancel")}</AlertDialogCancel>
+            <Button onClick={() => void handleHandoffDiscard()} variant="outline">
+              {t("externalEdit.builtIn.handoffDiscard")}
+            </Button>
+            <AlertDialogAction onClick={() => void handleHandoffSave()} variant="default">
+              {t("externalEdit.builtIn.handoffSave")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {draftCompare && (
+        <ExternalEditCompareWorkbench compareResult={draftCompare} onDismiss={() => setDraftCompare(null)} />
+      )}
       {ownsCompare && compareResult && (
         <ExternalEditCompareWorkbench compareResult={compareResult} onDismiss={dismissCompare} />
       )}

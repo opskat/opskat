@@ -29,6 +29,7 @@ import {
 import {
   buildExternalEditAttentionItems,
   isExternalEditClipboardResidueSession,
+  resolveExternalEditorTarget,
   useExternalEditStore,
 } from "@/stores/externalEditStore";
 import { useSFTPStore } from "@/stores/sftpStore";
@@ -481,8 +482,7 @@ export function FileManagerPanel({
     [assetId, sessionId]
   );
 
-  // 「用外部编辑器打开」始终拉起外部编辑器：默认项是内置编辑器时显式指定一个可用的外部编辑器，
-  // 否则后端会把空 editorId 解析回内置项。
+  // 「用外部编辑器打开」始终拉起外部编辑器，编辑器的挑选与内置编辑器 tab 共用同一条规则。
   const handleOpenWithExternalEditor = useCallback(
     async (remotePath: string) => {
       if (!assetId) {
@@ -490,16 +490,12 @@ export function FileManagerPanel({
       }
       const settings = await loadEditorSettings();
       if (!settings) return;
-      if (settings.defaultEditorId !== builtInEditorID) {
-        await handleOpenExternalEdit(remotePath);
-        return;
-      }
-      const external = settings.editors.find((editor) => editor.available && editor.id !== builtInEditorID);
-      if (!external) {
+      const target = resolveExternalEditorTarget(settings);
+      if (!target) {
         setError(t("externalEdit.builtIn.noExternalEditor"));
         return;
       }
-      await handleOpenExternalEdit(remotePath, external.id);
+      await handleOpenExternalEdit(remotePath, target.editorId);
     },
     [assetId, handleOpenExternalEdit, loadEditorSettings, setError, t]
   );
