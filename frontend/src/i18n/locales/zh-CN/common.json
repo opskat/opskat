@@ -1314,7 +1314,7 @@
     "terminal.paste": "终端粘贴",
     "terminal.selectAll": "终端全选",
     "terminal.find": "终端搜索",
-    "asset.copyRef": "复制资产引用",
+    "asset.copyRef": "复制资产引用(资产侧栏聚焦时)",
     "page.home": "切换到首页",
     "page.settings": "切换到设置",
     "page.sshkeys": "切换到 SSH 密钥",
@@ -2868,7 +2868,8 @@
       "type": "类型",
       "etag": "ETag",
       "storageClass": "存储类型",
-      "lastModified": "最后修改"
+      "lastModified": "最后修改",
+      "copyKeyCopied": "已复制键名"
     },
     "share": {
       "title": "生成预签名 URL",
@@ -2890,7 +2891,8 @@
       "warning": "链接将在 {{duration}}后失效 · 任何持有此链接的人都可访问该对象",
       "generateFailed": "生成 URL 失败",
       "copied": "链接已复制"
-    }
+    },
+    "keyCopied": "已复制键名"
   },
   "etcd": {
     "form": {

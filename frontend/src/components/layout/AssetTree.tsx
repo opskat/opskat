@@ -133,6 +133,17 @@ function saveHideEmpty(value: boolean) {
   localStorage.setItem(HIDE_EMPTY_LS_KEY, value ? "true" : "false");
 }
 
+// Controls inside the sidebar keep their own focus and behaviour (the search field keeps
+// native copy). Any other press — an asset row, a group row, empty space — makes the
+// sidebar the focused surface, which is what grants the asset-reference shortcut.
+const SIDEBAR_INTERACTIVE_SELECTOR = "input, textarea, select, button, a[href], [contenteditable]";
+
+function focusSidebarUnlessInteractive(e: React.MouseEvent<HTMLDivElement>) {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest(SIDEBAR_INTERACTIVE_SELECTOR)) return;
+  e.currentTarget.focus({ preventScroll: true });
+}
+
 function afterDragCleanupFrame() {
   return new Promise<void>((resolve) => {
     if (typeof window !== "undefined" && window.requestAnimationFrame) {
@@ -517,7 +528,13 @@ export function AssetTree({
   if (collapsed) return null;
 
   return (
-    <div data-testid="asset-tree" className="flex h-full w-full flex-col border-r border-panel-divider bg-sidebar">
+    <div
+      data-testid="asset-tree"
+      data-asset-sidebar=""
+      tabIndex={-1}
+      onMouseDown={focusSidebarUnlessInteractive}
+      className="flex h-full w-full flex-col border-r border-panel-divider bg-sidebar outline-none"
+    >
       {/* Drag region for frameless window */}
       <div
         className={`${isFullscreen ? "h-0" : "h-8"} w-full shrink-0`}

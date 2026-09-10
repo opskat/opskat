@@ -1,7 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { buildImportInsertSql, detectDelimiter, parseDelimitedText, parseImportSourceText } from "@/lib/tableImport";
+import {
+  buildImportInsertSql,
+  detectDelimiter,
+  parseDelimitedText,
+  parseImportSourceText,
+  parseTabSeparatedRows,
+} from "@/lib/tableImport";
+
+describe("parseTabSeparatedRows", () => {
+  it("parses a pasted block without treating the first row as a header", () => {
+    expect(parseTabSeparatedRows("1\tAlice\n2\tBob")).toEqual([
+      ["1", "Alice"],
+      ["2", "Bob"],
+    ]);
+  });
+
+  it("keeps a value containing a comma in one cell", () => {
+    expect(parseTabSeparatedRows("1\tAlice, A.")).toEqual([["1", "Alice, A."]]);
+  });
+
+  it("keeps empty cells and drops a trailing blank line", () => {
+    expect(parseTabSeparatedRows("1\t\t3\n")).toEqual([["1", "", "3"]]);
+  });
+
+  it("preserves all-empty rows inside a pasted block", () => {
+    expect(parseTabSeparatedRows("1\tAlice\n\t\n3\tCarol")).toEqual([
+      ["1", "Alice"],
+      ["", ""],
+      ["3", "Carol"],
+    ]);
+  });
+
+  it("keeps quotes that occur inside an unquoted clipboard value", () => {
+    expect(parseTabSeparatedRows('1\tO"Reilly')).toEqual([["1", 'O"Reilly']]);
+  });
+
+  it("keeps an unmatched leading quote in a clipboard value", () => {
+    expect(parseTabSeparatedRows('1\t"draft')).toEqual([["1", '"draft']]);
+  });
+
+  it("still parses complete quoted clipboard fields", () => {
+    expect(parseTabSeparatedRows('1\t"line\nbreak"\t"say ""hi"""')).toEqual([["1", "line\nbreak", 'say "hi"']]);
+  });
+});
 
 describe("table import helpers", () => {
+  it("keeps the existing qualifier handling for file imports", () => {
+    expect(parseDelimitedText('name\nO"Reilly', ",")).toEqual({
+      headers: ["name"],
+      rows: [["OReilly"]],
+    });
+  });
+
   it("parses quoted CSV cells with commas, quotes, and embedded newlines", () => {
     expect(parseDelimitedText('id,name,note\n1,"Alice, A.","line\nbreak"\n2,"say ""hi""",ok', ",")).toEqual({
       headers: ["id", "name", "note"],

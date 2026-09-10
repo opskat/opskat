@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useRef } from "react";
 import { FileManagerPanel } from "../components/terminal/FileManagerPanel";
+import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
+import { useAssetStore } from "../stores/assetStore";
+import { isMac } from "../stores/shortcutStore";
 import { useTerminalStore, type TerminalDirectorySyncState } from "../stores/terminalStore";
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { useExternalEditStore } from "../stores/externalEditStore";
@@ -295,6 +298,45 @@ describe("FileManagerPanel", () => {
 
     await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("/srv/app/demo.txt"));
     expect(toastSuccess).toHaveBeenCalledWith("sftp.filePathCopied", { position: "top-center", duration: 1000 });
+  });
+
+  it("keeps Ctrl/Cmd+C for the file manager while an asset is selected", async () => {
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+    useAssetStore.setState({ selectedAssetId: 1 });
+
+    // Mount the app-level shortcut listener: it used to capture Ctrl/Cmd+C globally
+    // and stop propagation, so the file manager's own listener never saw the key.
+    function ShortcutHost() {
+      useKeyboardShortcuts({ onToggleAIPanel: vi.fn(), onToggleSidebar: vi.fn(), onToggleCommandPalette: vi.fn() });
+      return null;
+    }
+
+    render(
+      <>
+        <ShortcutHost />
+        <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />
+      </>
+    );
+
+    fireEvent.click(await screen.findByText("demo.txt"));
+
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyC",
+          key: "c",
+          metaKey: isMac,
+          ctrlKey: !isMac,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    await waitFor(() =>
+      expect(within(screen.getByTestId("sftp-status-bar")).getByText("sftp.clipboardCopy")).toBeInTheDocument()
+    );
+    expect(clipboardWriteText).not.toHaveBeenCalled();
   });
 
   it("syncs the file manager to the active terminal cwd", async () => {

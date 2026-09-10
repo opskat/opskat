@@ -1314,7 +1314,7 @@
     "terminal.paste": "Terminal Paste",
     "terminal.selectAll": "Terminal Select All",
     "terminal.find": "Terminal Search",
-    "asset.copyRef": "Copy Asset Reference",
+    "asset.copyRef": "Copy Asset Reference (asset sidebar focused)",
     "page.home": "Switch to Home",
     "page.settings": "Switch to Settings",
     "page.sshkeys": "Switch to SSH Keys",
@@ -2868,7 +2868,8 @@
       "type": "Type",
       "etag": "ETag",
       "storageClass": "Storage class",
-      "lastModified": "Last modified"
+      "lastModified": "Last modified",
+      "copyKeyCopied": "Object key copied"
     },
     "share": {
       "title": "Generate presigned URL",
@@ -2890,7 +2891,8 @@
       "warning": "This link expires in {{duration}} · anyone with it can access the object",
       "generateFailed": "Failed to generate URL",
       "copied": "Link copied"
-    }
+    },
+    "keyCopied": "Object key copied"
   },
   "etcd": {
     "form": {
