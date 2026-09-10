@@ -101,10 +101,23 @@ function findAIProviderByName(name) {
   );
 }
 
+// What the app actually persisted for one asset: the config JSON it wrote, the
+// policy it attached, and which extension owns the type. Separate from
+// findAssetByName because that one is also `oracle.mjs assets`' table output, which
+// these long JSON blobs would drown.
+function findAssetPersistenceByName(name) {
+  return query((db) =>
+    db
+      .prepare("SELECT id, name, type, config, command_policy, extension_name FROM assets WHERE name = ?")
+      .get(name),
+  );
+}
+
 module.exports = {
   dbPath,
   query,
   findAssetByName,
+  findAssetPersistenceByName,
   listAssets,
   findAuditLogs,
   maxAuditId,

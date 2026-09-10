@@ -15,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_describe_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
@@ -26,6 +27,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/migrations"
+	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago"
 	"github.com/cago-frame/cago/configs"
@@ -161,6 +163,10 @@ func registerRepositories() {
 	ai_provider_repo.RegisterAIProvider(ai_provider_repo.NewAIProvider())
 	extension_data_repo.RegisterExtensionData(extension_data_repo.NewExtensionData())
 	extension_state_repo.RegisterExtensionState(extension_state_repo.NewExtensionState())
+	extension_describe_repo.RegisterExtensionDescribe(extension_describe_repo.NewExtensionDescribe())
+	// Extensions are described by running them; the cache is what keeps listing them
+	// (and resolving their asset types from opsctl) off that path.
+	extension.SetDescribeCache(extensionDescribeCache{})
 	snippet_repo.RegisterSnippet(snippet_repo.NewSnippet())
 }
 

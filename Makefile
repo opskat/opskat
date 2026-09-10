@@ -1,4 +1,4 @@
-.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
+.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli build-ext lint test test-cover test-e2e test-e2e-scratch install-skill
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -25,7 +25,7 @@ dev:
 # 验证沙箱：在隔离数据目录上把真实应用跑起来并保持后台运行，附带一个无头 Chromium。
 # 启动后用 e2e/drive.mjs 操作、e2e/oracle.mjs 读取副作用——一次性验证不再需要写 spec。
 # 端口/数据目录按 checkout 分配，多个 worktree 可同时验证。流程见 docs/VERIFICATION.md。
-# ARGS=--reset 清空沙箱数据，ARGS=--mocks 顺带起协议 mock，ARGS=--headed 显示浏览器。
+# ARGS=--reset 清空沙箱数据，ARGS=--mocks 顺带起协议 mock，ARGS=--extensions 装上仓内扩展并开启扩展系统，ARGS=--headed 显示浏览器。
 dev-sandbox:
 	node e2e/sandbox.mjs up $(ARGS)
 
@@ -76,6 +76,21 @@ build-cli:
 install-cli:
 	go install -ldflags="$(LDFLAGS)" ./cmd/opsctl/
 
+# 构建仓内示例扩展：WASI reactor（go build -buildmode=c-shared），产物连同 manifest /
+# SKILL.md / locales 一起落到 extensions/$(EXT)/dist，那正是应用要装的目录形状。
+# 装进正在运行的应用（沙箱见 docs/VERIFICATION.md）：
+#   make build-ext && opsctl ext dev $(CURDIR)/extensions/$(EXT)/dist
+# 重跑这两条就是热重载——Install 会先卸载旧模块。
+EXT ?= notebook
+build-ext:
+	@rm -rf extensions/$(EXT)/dist
+	@mkdir -p extensions/$(EXT)/dist
+	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o extensions/$(EXT)/dist/main.wasm ./extensions/$(EXT)
+	@cp extensions/$(EXT)/manifest.json extensions/$(EXT)/SKILL.md extensions/$(EXT)/dist/
+	@cp -R extensions/$(EXT)/locales extensions/$(EXT)/dist/
+	@[ -d extensions/$(EXT)/frontend ] && cp -R extensions/$(EXT)/frontend/. extensions/$(EXT)/dist/ || true
+	@echo "Built extensions/$(EXT)/dist — install it with: opsctl ext dev $(CURDIR)/extensions/$(EXT)/dist"
+
 # 代码检查
 lint:
 	golangci-lint run --timeout 10m
@@ -86,7 +101,7 @@ lint-fix:
 
 # 运行测试
 test:
-	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
+	go test ./internal/... ./cmd/opsctl/... ./pkg/...
 
 # E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/references/e2e-harness-guide.md。
 # 一次性装依赖 + 浏览器：cd e2e && pnpm run setup（CI 在独立步骤里装，故这里不重复）。
@@ -101,25 +116,10 @@ test-e2e-scratch:
 
 # 测试覆盖率（生成 HTML 报告并在浏览器打开）
 test-cover:
-	go test -coverprofile=coverage.out ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
+	go test -coverprofile=coverage.out ./internal/... ./cmd/opsctl/... ./pkg/...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "覆盖率报告已生成: coverage.html"
 	@open coverage.html 2>/dev/null || xdg-open coverage.html 2>/dev/null || echo "请手动打开 coverage.html"
-
-# 构建 DevServer UI 前端
-build-devserver-ui:
-	cd frontend/packages/devserver-ui && pnpm build
-	@touch cmd/devserver/embed.go
-
-# 运行扩展 DevServer（需指定 EXT=扩展名，如 make devserver EXT=oss）
-devserver: build-devserver-ui
-ifndef EXT
-	$(error EXT is required. Usage: make devserver EXT=oss)
-endif
-	$(MAKE) -C ../extensions build EXT=$(EXT)
-	go run ./cmd/devserver/ \
-		--ext-dir ../extensions/extensions/$(EXT)/dist \
-		--manifest ../extensions/extensions/$(EXT)/manifest.json
 
 # 安装 Claude Code plugin（创建 symlink，注册 marketplace + plugin）
 install-skill:
@@ -161,6 +161,7 @@ install-skill:
 # 清理构建产物
 clean:
 	rm -rf build/bin frontend/dist internal/embedded/opsctl_bin \
+		extensions/*/dist \
 		coverage.out coverage.html coverage_new.out \
-		opskat opsctl devserver \
+		opskat opsctl \
 		frontend/package.json.md5

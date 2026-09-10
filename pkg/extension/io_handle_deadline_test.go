@@ -17,7 +17,7 @@ func TestIOHandleManagerSetDeadline(t *testing.T) {
 			serverConn, clientConn := net.Pipe()
 			defer func() { _ = serverConn.Close() }()
 			defer func() { _ = clientConn.Close() }()
-			id, err := m.Register(clientConn, clientConn, clientConn, IOMeta{})
+			id, err := m.Register(&IOResource{Reader: clientConn, Writer: clientConn, Closer: clientConn})
 			So(err, ShouldBeNil)
 
 			Convey("SetDeadline with kind=both should succeed", func() {
@@ -69,7 +69,7 @@ func TestIOHandleManagerSetDeadline(t *testing.T) {
 
 		Convey("When registering a plain reader without deadline support", func() {
 			pc := plainNoDeadline{}
-			id, err := m.Register(pc, pc, pc, IOMeta{})
+			id, err := m.Register(&IOResource{Reader: pc, Writer: pc, Closer: pc})
 			So(err, ShouldBeNil)
 
 			Convey("SetDeadline should return deadline-unsupported error", func() {
@@ -99,8 +99,9 @@ func TestDefaultHostProviderSetDeadline(t *testing.T) {
 			accepted <- c
 		}()
 
-		h := NewDefaultHostProvider(DefaultHostConfig{})
-		id, _, err := h.IOOpen(IOOpenParams{Type: "tcp", Addr: ln.Addr().String()})
+		hs := newHostSession(NewDefaultHostProvider(DefaultHostConfig{}))
+		defer hs.CloseAll()
+		id, _, err := hs.Open(IOOpenParams{Type: "tcp", Addr: ln.Addr().String()})
 		So(err, ShouldBeNil)
 		serverConn := <-accepted
 		defer func() { _ = serverConn.Close() }()
@@ -108,24 +109,24 @@ func TestDefaultHostProviderSetDeadline(t *testing.T) {
 		Convey("IOSetDeadline with unixNanos=0 clears any existing deadline", func() {
 			// Arm a past deadline via the host interface.
 			past := time.Now().Add(-1 * time.Second).UnixNano()
-			So(h.IOSetDeadline(id, "read", past), ShouldBeNil)
-			_, readErr := h.IORead(id, 8)
+			So(hs.SetDeadline(id, "read", past), ShouldBeNil)
+			_, readErr := hs.Read(id, 8)
 			So(readErr, ShouldNotBeNil)
 
 			// Clear by passing 0.
-			So(h.IOSetDeadline(id, "read", 0), ShouldBeNil)
+			So(hs.SetDeadline(id, "read", 0), ShouldBeNil)
 			// After clearing, a subsequent read with data available must succeed.
 			_, _ = serverConn.Write([]byte("ok"))
-			data, err := h.IORead(id, 8)
+			data, err := hs.Read(id, 8)
 			So(err, ShouldBeNil)
 			So(string(data), ShouldEqual, "ok")
 		})
 
 		Convey("IOSetDeadline with unknown kind returns error", func() {
-			So(h.IOSetDeadline(id, "bogus", 0), ShouldNotBeNil)
+			So(hs.SetDeadline(id, "bogus", 0), ShouldNotBeNil)
 		})
 
-		So(h.IOClose(id), ShouldBeNil)
+		So(hs.Close(id), ShouldBeNil)
 	})
 }
 

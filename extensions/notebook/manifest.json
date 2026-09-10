@@ -1,0 +1,10 @@
+{
+  "name": "notebook",
+  "version": "0.1.0",
+  "hostABI": "2.0",
+  "backend": {
+    "runtime": "wasm",
+    "binary": "main.wasm"
+  },
+  "capabilities": {}
+}

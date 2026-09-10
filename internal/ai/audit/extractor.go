@@ -65,13 +65,10 @@ func ExtractCommandForAudit(toolName string, args map[string]any) string {
 // 因此在写审计前应该按 permission.CanonicalizeFor(asset.Type) 规范化——与审批弹窗、策略
 // 检查看到的是同一个串。
 //
-// 目前只有 "exec" 注册（extractor_default.go）。ext_exec 的 args 形状恰好也是
-// asset+command（Task 9 把 exec_tool 改名而来），但它的 command 是扩展自己的调用语法
-// （`<extension> <tool> --flag=value`），从来不是资产类型的 exec DSL——runner.
-// resolveAssetForAudit 曾经只看参数形状、不看工具名，把这条命令也喂给
-// permission.CanonicalizeFor(asset.Type)：对 k8s 资产，BuildK8sCommandPlan 不会因为
-// 语法不认识而报错（cmdline.Words 只是分词），而是把整句话当成 kubectl 参数，注入
-// --context/--namespace，写出一条从未执行、也从未被批准过的审计命令。
+// 目前只有 "exec" 注册（extractor_default.go）。asset+command 这个参数形状不是 exec 独
+// 有的，而 resolveAssetForAudit 曾经只看形状、不看工具名：把另一种 DSL 写的命令喂给
+// permission.CanonicalizeFor(asset.Type) 不会报错（cmdline.Words 只是分词），而是照那个
+// 类型的语法重写一遍，写出一条从未执行、也从未被批准过的审计命令。
 //
 // 与 RegisterGroupScopedTool 同一种"注册而不是分支"的解法：resolveAssetForAudit 只查表，
 // 不按工具名 if/switch。

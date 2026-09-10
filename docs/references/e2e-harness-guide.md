@@ -56,7 +56,7 @@ in `main.go` via `resolveBootstrap()` and `initExtensionSystem`):
 | `OPSKAT_DATA_DIR=<tmp>/opskat-e2e-data-<workspaceId>` | DB, config, sockets, logs all under a throwaway dir |
 | `OPSKAT_MASTER_KEY=<fixed test key>` | passphrase for credential KDF; **bypasses the OS keychain** (`ResolveMasterKey` returns the explicit key) |
 | `OPSKAT_E2E=1` | disables the single-instance lock so the e2e app coexists with a running opskat; also skips the startup *online* update check (`startAutoUpdateCheck`) — its result depends on the live release feed, and the `update:available` toast it pops over the composer would fail specs whenever upstream ships a release |
-| `OPSKAT_EXTENSIONS=0` | skips the slow WASM extension init |
+| `OPSKAT_EXTENSIONS=1` | runs the extension system, so the `extension-asset-type` spec has one to drive. The harness builds the in-repo extensions and lays them out under `<data dir>/extensions/` before the app boots (`harness/env.js` → `installExtensions`), and the app's own boot scan loads them. It costs one wasm compile per extension on a background goroutine — nothing blocks on it except the extension spec's first wait |
 
 The bridge runs on a **dedicated port** — never Wails' default 34115 — so it never reuses, or
 collides with, a dev server you (or the sibling `agentre` app) already have open. The exact
@@ -131,14 +131,17 @@ actually dials and `PING`s, then persist), and `ssh-connect` (create an *SSH* as
 handshake — then persist), `ssh-terminal` (approve the first host key, open a real PTY shell,
 send terminal input, and confirm the mock server received it), `sqlite-query` (create a local
 SQLite asset, open the database workspace, execute SQL, and compare the rendered result with
-the target database), and `opsctl-approval` (a non-interactive CLI process asks the desktop
+the target database), `extension-asset-type` (an extension-provided asset type: it reaches the
+same picker as the built-ins, its form / detail card come from the manifest `configSchema`, and
+its `ext:` policy groups attach and persist — driven against the in-repo `notebook` extension,
+§4.2), and `opsctl-approval` (a non-interactive CLI process asks the desktop
 for approval, executes against Redis, and persists an audit row), plus the **AI exec** specs —
 `ai-exec` (the unified `exec` tool:
 approval dialog → real execution → audit row), `ai-exec-crud` (asset CRUD through AI tools),
 `ai-exec-gate` (nothing unexecutable reaches the approval dialog), and `ai-exec-policy`
 (policy allow / deny and grant persistence), all driven by a **scripted model** (§4.1).
 After Playwright exits, `run-e2e.mjs` reaps the orphan `vite` and removes the temp data dir
-(see §7). It also removes `<tmpdir>/opskat-e2e-webserver.log` after a successful run but
+(see §7). It also removes `<tmpdir>/opskat-e2e-<workspaceId>.log` after a successful run but
 preserves that log after a failure.
 
 The mock Redis (`e2e/fixtures/redis-mock.mjs`, pure Node, no deps) is started as a **second
@@ -190,6 +193,29 @@ Two behaviors bite when writing these specs, both by design in the backend:
   built-in read-only allow lists, so a *read* command is auto-allowed with no dialog. Use a
   write command (`SET …`, `put …`) when the spec needs the approval prompt.
 
+### 4.2 Driving an extension-provided asset type
+
+`extension-asset-type` needs a *loaded extension*, so the harness builds one and installs it
+before the app starts — no `make build-ext` step to remember, locally or on CI:
+
+- `harness/env.js` → `installExtensions(dataDir)` cross-compiles each in-repo extension
+  (`GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared`) straight into
+  `<data dir>/extensions/<name>/main.wasm` and copies the rest of the extension directory
+  beside it (everything except the Go sources and any local `dist/`) — the shape an installed
+  extension has on disk, which the app's boot scan picks up. `playwright.config.ts` calls it in
+  the main-runner block, next to the data-dir prep; the sandbox does the same behind
+  `make dev-sandbox ARGS=--extensions`. CI needs nothing extra: it already has the Go toolchain
+  for `wails dev`, and `wasip1` needs no SDK.
+- The extension's face — asset type, `configSchema`, tools, `ext:` policy groups — comes from
+  the guest's `describe()`, not from `manifest.json`, so the wasm really has to run. That also
+  means the type appears in the UI a few seconds *after* the app answers: the spec waits for
+  `asset-type-option-<type>` with a long timeout instead of assuming it is there on load.
+- **Not covered:** an extension *page* (the `/extensions/<name>/<entry>` dynamic ESM import) and
+  extension i18n in the frontend. Under `wails dev` the vite dev server answers every unknown
+  path with `index.html`, so the app's `/extensions/**` asset handler
+  (`internal/app/opsctl/asset_handler.go`) is never reached and both paths get HTML back.
+  Covering them needs that route served in dev *and* a sample extension that ships a page.
+
 **In CI:** the committed suite runs on every PR / push as the `Wails E2E` job (`ubuntu-22.04`)
 in `.github/workflows/ci.yml` — it installs `xvfb` + GTK/WebKit, then runs `xvfb-run -a make
 test-e2e`; on failure it uploads `e2e/playwright-report`, `e2e/test-results`, and the webServer
@@ -204,6 +230,8 @@ Only when the flow is genuinely core (§1). Conventions:
   `nav-<page>` / `nav-settings` (+ `data-active`), `asset-tree`, `add-asset-button`,
   `asset-form-dialog`, `asset-form-name-input`, `asset-form-submit`, `ssh-host-input`,
   `asset-type-picker` / `asset-type-option-<type>`, `redis-host-input` / `redis-port-input`,
+  `asset-context-detail` (the context menu's *Asset Details* tab) and the policy card's
+  `policy-group-add` / `policy-group-option-<id>` / `policy-group-chip-<id>`,
   `asset-test-connection`, the asset right-click items `asset-context-edit` /
   `asset-context-delete`, and the delete confirm button `confirm-delete-asset` (a
   `confirmTestId` prop threaded through the shared `ConfirmDialog`). AI side: `ai-new-chat`,
@@ -250,7 +278,8 @@ rule: drive the real app, then read observable side-effects (UI, DB, logs).
 1. **Start the sandbox.** It returns immediately and is idempotent — a second call reports the
    running session rather than starting a rival app.
    ```bash
-   make dev-sandbox            # ARGS=--reset wipes it first; ARGS=--mocks adds the protocol mocks
+   make dev-sandbox            # ARGS=--reset wipes it first; ARGS=--mocks adds the protocol mocks;
+                               # ARGS=--extensions builds + enables the in-repo extensions
    make dev-sandbox-status     # what's up for this checkout
    make dev-sandbox-down       # stop it (the data dir survives)
    ```
@@ -292,7 +321,7 @@ rule: drive the real app, then read observable side-effects (UI, DB, logs).
    committed suite — only `testDir` points at `./scratch`. That is a *different* run from the
    sandbox: the suite's own port, and a temp data dir the runner **deletes when Playwright exits**, so such a
    spec must capture its evidence during the run. On failure, inspect the preserved
-   `<tmpdir>/opskat-e2e-webserver.log` and the trace/screenshots under `e2e/test-results/`.
+   `<tmpdir>/opskat-e2e-<workspaceId>.log` and the trace/screenshots under `e2e/test-results/`.
 5. **Discard.** Anything under `e2e/scratch/` is gitignored. If the flow turns out to be core
    and worth guarding forever, *promote* it: move it into `e2e/tests/`, harden it, and commit (§5).
 
@@ -461,6 +490,7 @@ These bit us while building the harness; keep them in mind when changing it.
 | `e2e/playwright.scratch.config.ts` | extends base, `testDir: ./scratch` for throwaway specs | yes |
 | `e2e/fixtures/db-queries.js` | the read-only `node:sqlite` statements, shared by specs and `oracle.mjs` | yes |
 | `e2e/fixtures/db.ts` | the DB oracle as specs use it: typed views over `db-queries.js` + `waitForAuditLogs`'s Playwright polling | yes |
+| `extensions/<name>/` | the in-repo extensions the harness builds and installs into a run (`installExtensions`) | yes |
 | `e2e/fixtures/ai.ts` | AI-spec plumbing: model scripting, provider setup via the real bindings, asset seeding, chat gestures, `execOutcome` (§4.1) | yes |
 | `e2e/fixtures/redis-mock.mjs` | minimal pure-Node RESP mock (HELLO→`-ERR` / PING→`+PONG`), started as a 2nd webServer for the `redis-connect` spec | yes |
 | `e2e/fixtures/ssh-mock/main.go` | minimal Go `x/crypto/ssh` server (`NoClientAuth`) that echoes `exec`'d commands, `go run` as a webServer | yes |

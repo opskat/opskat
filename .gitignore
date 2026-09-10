@@ -1,7 +1,6 @@
 build/bin
 node_modules
 frontend/dist
-frontend/packages/devserver-ui/dist/
 
 # Node
 frontend/wailsjs/
@@ -33,7 +32,6 @@ coverage.html
 
 coverage_new.out
 
-/devserver
 .dev-kit/
 .superpowers/
 /docs/superpowers/specs/
@@ -61,3 +59,6 @@ docs/verification/
 # dev-kit 工作文件（plan / artifacts），不提交（无尾斜杠条目同时匹配 .dev-kit symlink）
 .dev-kit/
 .dev-kit
+
+# 仓内示例扩展的构建产物（make build-ext）
+extensions/*/dist/

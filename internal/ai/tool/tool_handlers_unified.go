@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -205,4 +206,17 @@ func helpForTypeName(ctx context.Context, ref string) (string, error) {
 	}
 
 	return fmt.Sprintf("Type %q.\n\n%s", typeName, doc), nil
+}
+
+// ExecOnAsset 是统一 exec 的进程内入口，给桌面端代表 opsctl 执行命令用。
+//
+// 存在的理由是**执行位置**，不是第二条执行路径：扩展的 WASM 运行时只活在桌面进程里，
+// opsctl 进程既没有插件也没有宿主能力，因此扩展资产上的 exec 必须交回桌面端跑。交回来
+// 之后走的仍然是 handleExec 这一条——同样的顺序契约（执行器查找 → 规范化 → precheck →
+// 权限检查 → 执行），同样的审批与 grant。
+func ExecOnAsset(ctx context.Context, assetID int64, command string) (string, error) {
+	return handleExec(ctx, map[string]any{
+		"asset":   strconv.FormatInt(assetID, 10),
+		"command": command,
+	})
 }

@@ -31,7 +31,7 @@ func RegisterAssetKind(assetType, kind string) {
 	assetKindRegistry.kinds[assetType] = kind
 }
 
-// UnregisterAssetKind 注销资产类型的 policyKind(测试用)。
+// UnregisterAssetKind 注销资产类型的 policyKind。由 assettype.Unregister 在扩展卸载时调用。
 func UnregisterAssetKind(assetType string) {
 	assetKindRegistry.Lock()
 	defer assetKindRegistry.Unlock()

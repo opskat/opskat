@@ -42,7 +42,7 @@ Two guards, because they stop different things. The Go one stops a verification 
 
 **Worktrees run concurrently.** Ports, data dir, browser profile, logs and the session file are all keyed by a hash of the checkout path, and the block assignment is recorded in `~/.opskat-verify/workspaces.json`, so two worktrees each get a disjoint set and never see each other. `drive.mjs` and `oracle.mjs` resolve the session for *their own* checkout, so the same command means different things in different worktrees — which is what you want. `node e2e/oracle.mjs where` prints what the current one resolved to.
 
-The sandbox data dir persists across launches; `make dev-sandbox ARGS=--reset` wipes it. `ARGS=--mocks` also starts the in-harness Redis / SSH / OpenAI mocks so Test Connection and the AI stack work with no real infrastructure.
+The sandbox data dir persists across launches; `make dev-sandbox ARGS=--reset` wipes it. `ARGS=--mocks` also starts the in-harness Redis / SSH / OpenAI mocks so Test Connection and the AI stack work with no real infrastructure; `ARGS=--extensions` builds the in-repo extensions into the sandbox and turns the extension system on (off by default — the wasm compile is slow).
 
 ## Workflow
 

@@ -28,7 +28,7 @@ type BatchItem struct {
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
 	Token       string          `json:"token,omitempty"`      // 认证 token
-	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"
+	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"|"ext_dev_install"
 	CheckType   string          `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
 	AssetID     int64           `json:"asset_id,omitempty"`
 	AssetName   string          `json:"asset_name,omitempty"`
@@ -41,6 +41,7 @@ type ApprovalRequest struct {
 	Extension   string          `json:"extension,omitempty"`   // type="ext_tool": extension name
 	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
 	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
+	Path        string          `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
 }
 
 // GrantItem 授权中的单条操作
@@ -64,6 +65,8 @@ type ApprovalResponse struct {
 	EditedItems    []GrantItem `json:"edited_items,omitempty"`    // 用户编辑后的 grant items
 	ToolResult     string      `json:"tool_result,omitempty"`     // type="ext_tool": execution result (JSON)
 	ToolError      string      `json:"tool_error,omitempty"`      // type="ext_tool": execution error message
+	Extension      string      `json:"extension,omitempty"`       // type="ext_dev_install": installed extension name
+	Version        string      `json:"version,omitempty"`         // type="ext_dev_install": installed extension version
 }
 
 // SocketPath returns the approval socket path for the given data directory.

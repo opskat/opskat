@@ -32,6 +32,40 @@ describe("ExtensionConfigForm", () => {
     expect(onChange).toHaveBeenCalledWith({ other: "keep", caCert: "-----BEGIN CERT-----" });
   });
 
+  it("emits an integer property as a number, not a string", () => {
+    // The guest unmarshals this config into its Go struct, so a numeric property that
+    // leaves the form as "5" fails every later tool call with
+    // `cannot unmarshal string into Go struct field ... of type int`.
+    const schema = {
+      type: "object",
+      properties: { maxNotes: { type: "integer", title: "Note limit" } },
+    };
+    const onChange = vi.fn();
+    render(
+      <ExtensionConfigForm
+        extensionName="test"
+        configSchema={schema}
+        value={{ notebook: "keep" }}
+        onChange={onChange}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Note limit"), { target: { value: "5" } });
+    expect(onChange).toHaveBeenCalledWith({ notebook: "keep", maxNotes: 5 });
+  });
+
+  it("emits nothing for an integer property the user left empty", () => {
+    const schema = {
+      type: "object",
+      properties: { maxNotes: { type: "integer", title: "Note limit" } },
+    };
+    const onChange = vi.fn();
+    render(
+      <ExtensionConfigForm extensionName="test" configSchema={schema} value={{ maxNotes: 5 }} onChange={onChange} />
+    );
+    fireEvent.change(screen.getByLabelText("Note limit"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith({ maxNotes: undefined });
+  });
+
   it('renders format="password" as masked input', () => {
     const schema = {
       type: "object",

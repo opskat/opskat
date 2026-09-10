@@ -70,18 +70,4 @@ describe("harness: 组件禁用 palette 类名，只用语义 token（DESIGN.md�
     );
     expect(ids).not.toContain("no-restricted-syntax");
   });
-
-  it("devserver-ui 不在 token 体系内，palette 类名放行，但 React 19 禁令仍生效", async () => {
-    const palette = await ruleIds(
-      "packages/devserver-ui/src/panels/harness-fixture.tsx",
-      `export const C = () => <span className="text-red-500">x</span>;\n`
-    );
-    expect(palette).not.toContain("no-restricted-syntax");
-
-    const react19 = await ruleIds(
-      "packages/devserver-ui/src/panels/harness-fixture.tsx",
-      `import type { MutableRefObject } from "react";\nexport type R = MutableRefObject<number>;\n`
-    );
-    expect(react19).toContain("no-restricted-syntax");
-  });
 });

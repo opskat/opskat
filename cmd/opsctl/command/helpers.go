@@ -6,26 +6,55 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// extractCommand extracts the command string after "--" separator.
-// If no "--" is found, all args are joined as the command.
+// extractCommand rebuilds the one command string from the argv the user's shell has
+// already split. Everything after the first "--" is the command; with no "--" the
+// whole arg list is.
+//
+// A single word *is* that command string and is passed through untouched — it is the
+// documented form for every DSL opsctl forwards to (`-- "SELECT * FROM users"`,
+// `-- 'GET session:abc'`), and quoting it would hand the database a literal
+// `'SELECT * FROM users'`.
+//
+// Two or more words are argv, and joining them with a bare space drops exactly the
+// quoting the shell just removed: `-- grep "foo bar" file` would arrive downstream as
+// four words. Every consumer re-splits this string with a real shell parser — the
+// extension flag DSL and the k8s/etcd/kafka canonicalizers through cmdline.Words, a
+// remote shell for ssh — so the join must be that parser's inverse. cmdline.QuoteIfNeeded
+// is that inverse and is already what cmdline.Command.Render uses; words that need no
+// quoting are still emitted bare, so the common `-- ls -la /var/log` is unchanged.
 func extractCommand(args []string) string {
+	parts := args
 	for i, arg := range args {
 		if arg == "--" {
-			parts := args[i+1:]
-			if len(parts) == 0 {
-				return ""
-			}
-			return strings.Join(parts, " ")
+			parts = args[i+1:]
+			break
 		}
 	}
-	if len(args) > 0 {
-		return strings.Join(args, " ")
+	if len(parts) < 2 {
+		if len(parts) == 0 {
+			return ""
+		}
+		return parts[0]
 	}
-	return ""
+	joined := make([]string, len(parts))
+	for i, part := range parts {
+		// Re-encode only what the join would destroy: the boundary inside a word the
+		// local shell already unquoted. A word without whitespace survives the round
+		// trip as itself, so quoting it would not preserve anything — it would change
+		// meaning, turning `-- ls *.log` (globbed by the remote shell, as ssh(1) does)
+		// into a literal.
+		if strings.ContainsAny(part, " \t\n") {
+			joined[i] = cmdline.QuoteIfNeeded(part)
+			continue
+		}
+		joined[i] = part
+	}
+	return strings.Join(joined, " ")
 }
 
 // extractTypeFlag pulls an optional "--type <value>" (or "--type=<value>") token out of

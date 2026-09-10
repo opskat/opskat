@@ -12,7 +12,6 @@ import {
   Shield,
   BookOpen,
   Trash2,
-  Puzzle,
   FileUp,
 } from "lucide-react";
 import type { ContentBlock } from "@/stores/aiStore";
@@ -32,7 +31,6 @@ const toolIcons: Record<string, typeof Terminal> = {
   put_group: FilePen,
   delete_asset: Trash2,
   delete_group: Trash2,
-  ext_exec: Puzzle,
 };
 
 interface ToolBlockProps {

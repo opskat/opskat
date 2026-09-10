@@ -111,7 +111,7 @@ export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageP
     );
   }
 
-  const page = loaded.manifest.frontend?.pages.find((p) => p.id === pageId);
+  const page = loaded.manifest.frontend?.pages?.find((p) => p.id === pageId);
   if (!page) {
     return (
       <div className="flex items-center justify-center h-full">

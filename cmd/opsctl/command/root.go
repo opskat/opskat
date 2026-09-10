@@ -78,6 +78,11 @@ func Execute() int {
 		return 1
 	}
 
+	// 扩展提供的资产类型：内置类型由 assettype 的 init() 注册，扩展的那份接线在桌面
+	// 进程里随 WASM 加载发生，opsctl 只能自己按缓存的 describe() 再接一次。必须早于
+	// buildHandlerMap —— 工具描述里的类型清单是那时候取的。
+	registerExtensionAssetTypes()
+
 	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
 	ctx = aictx.WithPolicyLang(ctx, resolvePolicyLang(
 		os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")))
@@ -190,7 +195,7 @@ Commands:
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
-  ext       Manage and execute extension tools (list, exec)
+  ext       Manage extensions (list, dev)
   version   Print version information
 
 Note:
@@ -243,7 +248,8 @@ Examples:
   opsctl policy show web-server                   Show effective rules (read-only, no TTY)
   opsctl policy allow web-server -- 'systemctl restart *'   Pre-approve commands (terminal only)
   opsctl list audit --asset web-server --limit 50 Read stored audit rows (read-only)
-  opsctl ext list                                   List installed extensions
-  opsctl ext exec oss list_buckets --args '{}'       Execute extension tool
+  opsctl ext list                                 List installed extensions
+  opsctl ext dev ../extensions/.../dist           Install a local extension build into the running app
+  opsctl exec my-bucket -- list_objects --bucket=logs   Run an extension tool on its asset
 `)
 }

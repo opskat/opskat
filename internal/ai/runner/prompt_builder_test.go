@@ -41,13 +41,6 @@ func TestPromptBuilderBuild(t *testing.T) {
 			So(got, ShouldContainSubstring, "opsctl://asset/")
 		})
 
-		Convey("Extension SKILL.md 被注入", func() {
-			b := NewPromptBuilder("en", AIContext{})
-			b.SetExtensionSkillMDs(map[string]string{"k8s": "k8s skill body"})
-			got := b.Build()
-			So(got, ShouldContainSubstring, "From extension: k8s")
-			So(got, ShouldContainSubstring, "k8s skill body")
-		})
 	})
 }
 
@@ -100,10 +93,10 @@ func TestBuild_SeparatesExecCoveredFromConfigOnlyTypes(t *testing.T) {
 	permission.RegisterExecutor(execType,
 		func(context.Context, *asset_entity.Asset, string, string) (string, error) { return "", nil },
 		"usage doc")
-	t.Cleanup(func() { permission.UnregisterExecutorForTest(execType) })
+	t.Cleanup(func() { permission.UnregisterExecutor(execType) })
 
 	permission.RegisterHelpDoc(docOnlyType, "config-only doc")
-	t.Cleanup(func() { permission.UnregisterExecutorForTest(docOnlyType) })
+	t.Cleanup(func() { permission.UnregisterExecutor(docOnlyType) })
 
 	b := NewPromptBuilder("en", AIContext{})
 	b.SetAssetTypeSkills(map[string]string{

@@ -11,7 +11,14 @@ registerAssetType({
   category: "middleware",
   canConnect: true,
   canConnectInNewTab: false,
-  connectAction: "terminal",
+  // 集群面板是一个 page，不是终端。这条曾经写成 "terminal"，靠 openAsset 里一个
+  // `asset.Type === "k8s"` 硬编码分支把它改道到 page —— 注册表说的和实际发生的不一致。
+  connectAction: "page",
+  pageId: "k8s-cluster",
+  // tab id 保持历史形态 `k8s-<assetID>`（持久化在 localStorage 里），页面 id 是
+  // "k8s-cluster"（MainPanel 按它渲染 K8sClusterPage）。
+  pageTabPrefix: "k8s",
+  pageIcon: "kubernetes",
   DetailInfoCard: K8sDetailInfoCard,
   ConfigSection: K8sConfigSection,
   policy: {

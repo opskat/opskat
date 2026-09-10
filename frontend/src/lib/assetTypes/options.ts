@@ -1,10 +1,7 @@
 // frontend/src/lib/assetTypes/options.ts
 import type { ComponentType } from "react";
-import { Server } from "lucide-react";
-import { getIconComponent } from "@/components/asset/IconPicker";
-import { getBuiltinTypes } from "./index";
-import type { AssetTypeCategory } from "./types";
-import type { ExtManifest } from "@/extension/types";
+import { getAllAssetTypes, useAssetTypes } from "./index";
+import type { AssetTypeCategory, AssetTypeDefinition } from "./types";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
 export type { AssetTypeCategory };
@@ -30,42 +27,32 @@ export interface AssetTypeOption {
   category: AssetTypeCategory;
 }
 
-interface ExtensionEntryLike {
-  manifest: ExtManifest;
-}
-
-/** 内置资产类型选项：从 registry 的 AssetTypeDefinition 派生（单一来源）。 */
-function builtinOptions(): AssetTypeOption[] {
-  return getBuiltinTypes().map((def) => ({
+function toOption(def: AssetTypeDefinition): AssetTypeOption {
+  return {
     value: def.type,
     aliases: def.aliases,
     label: def.label,
     labelIsI18nKey: true,
+    i18nNs: def.labelNs,
     icon: def.icon,
-    group: "builtin",
+    group: def.extensionName ? "extension" : "builtin",
     category: def.category,
-  }));
+  };
 }
 
-export function getAssetTypeOptions(extensions: Record<string, ExtensionEntryLike>): AssetTypeOption[] {
-  const out: AssetTypeOption[] = builtinOptions();
-  for (const entry of Object.values(extensions)) {
-    const m = entry.manifest;
-    if (!m.assetTypes?.length) continue;
-    for (const at of m.assetTypes) {
-      out.push({
-        value: at.type,
-        aliases: [at.type],
-        label: at.i18n?.name ?? at.type,
-        labelIsI18nKey: true,
-        i18nNs: `ext-${m.name}`,
-        icon: m.icon ? getIconComponent(m.icon) : Server,
-        group: "extension",
-        category: "extension",
-      });
-    }
-  }
-  return out;
+/**
+ * 全部资产类型选项，从注册表派生（单一来源）。
+ *
+ * 它曾经额外收一个 extensions 参数，把扩展类型现场拼成 option —— 那是"注册表之外的第二
+ * 份类型清单"。扩展类型现在也在注册表里，参数因此消失了。
+ */
+export function getAssetTypeOptions(): AssetTypeOption[] {
+  return getAllAssetTypes().map(toOption);
+}
+
+/** 响应式版本：注册表增删（扩展启用/禁用）时组件会重渲染。 */
+export function useAssetTypeOptions(): AssetTypeOption[] {
+  return useAssetTypes().map(toOption);
 }
 
 export function matchSelectedTypes(

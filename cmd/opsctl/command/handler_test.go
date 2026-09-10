@@ -125,7 +125,7 @@ func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 	Convey("opsctl 派发表覆盖所有按名字查找的工具", t, func() {
 		handlers := buildHandlerMap()
 		for _, name := range []string{
-			"exec", "help", "ext_exec", "cp",
+			"exec", "help", "cp",
 			"list_credentials", "get_credential",
 			"put_asset", "put_group", "delete_asset", "delete_group",
 		} {
@@ -144,7 +144,7 @@ func TestRefreshesDesktopUI(t *testing.T) {
 		for _, name := range []string{"put_asset", "put_group", "delete_asset", "delete_group"} {
 			So(refreshesDesktopUI(name), ShouldBeTrue)
 		}
-		for _, name := range []string{"exec", "help", "get_asset", "list_assets", "list_groups", "ext_exec"} {
+		for _, name := range []string{"exec", "help", "get_asset", "list_assets", "list_groups"} {
 			So(refreshesDesktopUI(name), ShouldBeFalse)
 		}
 	})

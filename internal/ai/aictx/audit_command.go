@@ -3,8 +3,9 @@ package aictx
 import "context"
 
 // auditCommandKey carries a per-tool-call command-summary slot. Some handlers can only
-// compute the effective, safe command after parsing their manifest/input (ext_exec and
-// batch_exec); the runner installs the slot before dispatch and reads it afterward.
+// compute the effective, safe command after parsing their input (batch_exec, and the
+// desktop side of an opsctl-delegated exec); the runner installs the slot before dispatch
+// and reads it afterward.
 type auditCommandKey struct{}
 
 // WithAuditCommandSlot installs a writable command-summary slot for one tool call.

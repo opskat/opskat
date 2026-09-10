@@ -1,0 +1,24 @@
+{
+  "extension.displayName": "Notebook",
+  "extension.description": "Keep short operational notes next to the asset they belong to",
+
+  "assetType.notebook.name": "Notebook",
+
+  "config.notebook.title": "Notebook name",
+  "config.notebook.placeholder": "team-runbooks",
+  "config.notebook.desc": "Notes are stored under this name. Assets sharing a name share their notes.",
+  "config.maxNotes.title": "Note limit",
+  "config.maxNotes.desc": "Refuse to create more than this many notes. 0 means no limit.",
+
+  "policy.read.name": "Read notes",
+  "policy.read.description": "List and read notes without asking",
+  "policy.write.name": "Write notes",
+  "policy.write.description": "Create and overwrite notes without asking",
+  "policy.noDelete.name": "Never delete notes",
+  "policy.noDelete.description": "Refuse note deletion, whatever else is allowed",
+
+  "tools.note_list.description": "List the notes in this asset's notebook, optionally filtered by key prefix",
+  "tools.note_get.description": "Read one note in full",
+  "tools.note_put.description": "Create a note or overwrite an existing one",
+  "tools.note_delete.description": "Delete one note"
+}

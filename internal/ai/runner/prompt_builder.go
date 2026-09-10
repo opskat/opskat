@@ -27,16 +27,9 @@ type AIContext struct {
 
 // PromptBuilder 动态构建 System Prompt
 type PromptBuilder struct {
-	language          string
-	context           AIContext
-	assetTypeSkills   map[string]string // 内置资产类型 → 一行描述（skills.Description）
-	extensionSkillMDs map[string]string // extName → SKILL.md content
-}
-
-// SetExtensionSkillMDs sets all extension SKILL.md contents to inject.
-// Keys are extension names, values are the raw markdown.
-func (b *PromptBuilder) SetExtensionSkillMDs(mds map[string]string) {
-	b.extensionSkillMDs = mds
+	language        string
+	context         AIContext
+	assetTypeSkills map[string]string // 内置资产类型 → 一行描述（skills.Description）
 }
 
 // SetAssetTypeSkills sets the compact per-built-in-type skill listing to render in the
@@ -100,17 +93,6 @@ func (b *PromptBuilder) Build() string {
 	parts = append(parts, b.buildAssetTypeSkills())
 
 	// 10. Extension tools guide
-	if len(b.extensionSkillMDs) > 0 {
-		names := make([]string, 0, len(b.extensionSkillMDs))
-		for name := range b.extensionSkillMDs {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			parts = append(parts, fmt.Sprintf("## From extension: %s\n%s", name, b.extensionSkillMDs[name]))
-		}
-	}
-
 	return strings.Join(parts, "\n\n")
 }
 

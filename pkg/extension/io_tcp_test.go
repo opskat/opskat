@@ -26,28 +26,29 @@ func TestIOOpenTCP(t *testing.T) {
 			_, _ = c.Write(buf[:n]) // echo server; write failure is irrelevant in test
 		}()
 
-		h := NewDefaultHostProvider(DefaultHostConfig{})
+		hs := newHostSession(NewDefaultHostProvider(DefaultHostConfig{}))
+		defer hs.CloseAll()
 
 		Convey("IOOpen(tcp) should succeed with valid addr", func() {
-			id, _, err := h.IOOpen(IOOpenParams{Type: "tcp", Addr: ln.Addr().String()})
+			id, _, err := hs.Open(IOOpenParams{Type: "tcp", Addr: ln.Addr().String()})
 			So(err, ShouldBeNil)
 			So(id, ShouldBeGreaterThan, uint32(0))
 
 			Convey("Write and Read should round-trip", func() {
-				n, err := h.IOWrite(id, []byte("ping"))
+				n, err := hs.Write(id, []byte("ping"))
 				So(err, ShouldBeNil)
 				So(n, ShouldEqual, 4)
 
-				data, err := h.IORead(id, 16)
+				data, err := hs.Read(id, 16)
 				So(err, ShouldBeNil)
 				So(string(data), ShouldEqual, "ping")
 
-				So(h.IOClose(id), ShouldBeNil)
+				So(hs.Close(id), ShouldBeNil)
 			})
 		})
 
 		Convey("IOOpen(tcp) with invalid addr should fail", func() {
-			_, _, err := h.IOOpen(IOOpenParams{Type: "tcp", Addr: "localhost:1"})
+			_, _, err := hs.Open(IOOpenParams{Type: "tcp", Addr: "localhost:1"})
 			So(err, ShouldNotBeNil)
 		})
 	})
@@ -119,13 +120,14 @@ func TestIOOpenTCPTunnelPath(t *testing.T) {
 		fake := newFakeTunnelDialer(t, tunnelID)
 		defer fake.Close()
 
-		h := NewDefaultHostProvider(DefaultHostConfig{
+		hs := newHostSession(NewDefaultHostProvider(DefaultHostConfig{
 			TunnelDialer:     fake,
 			AssetSSHTunnelID: tunnelID,
-		})
+		}))
+		defer hs.CloseAll()
 
 		Convey("IOOpen(tcp) routes through the tunnel dialer", func() {
-			id, _, err := h.IOOpen(IOOpenParams{
+			id, _, err := hs.Open(IOOpenParams{
 				Type:    "tcp",
 				Addr:    "kafka.internal:9092",
 				Timeout: 1, // 1ms — doc says tunnel path ignores this
@@ -138,7 +140,7 @@ func TestIOOpenTCPTunnelPath(t *testing.T) {
 
 			// Data flows through the returned handle — write on host side,
 			// read on peer side.
-			n, err := h.IOWrite(id, []byte("hello"))
+			n, err := hs.Write(id, []byte("hello"))
 			So(err, ShouldBeNil)
 			So(n, ShouldEqual, 5)
 
@@ -147,7 +149,7 @@ func TestIOOpenTCPTunnelPath(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(string(buf[:rn]), ShouldEqual, "hello")
 
-			So(h.IOClose(id), ShouldBeNil)
+			So(hs.Close(id), ShouldBeNil)
 		})
 	})
 }
