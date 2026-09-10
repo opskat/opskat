@@ -1867,7 +1867,8 @@
       "expand": "Expand",
       "collapse": "Collapse",
       "loading": "Loading…",
-      "dropHint": "Move {{count}} item(s) into {{target}}"
+      "dropHint": "Move {{count}} item(s) into {{target}}",
+      "chainElided": "{{count}} level(s) hidden — click to open {{target}}"
     },
     "refresh": "Refresh",
     "newFolder": "New Folder",

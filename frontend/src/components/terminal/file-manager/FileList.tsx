@@ -11,12 +11,15 @@ import {
   type SftpTreeRow,
 } from "@/lib/sftpDirTree";
 import {
+  AVG_CHAR_PX,
   canMovePathToDirectory,
+  type ChainRenderItem,
   formatBytes,
   formatDate,
   getParentPath,
   getPathBaseName,
   indentForDepth,
+  planChainRender,
   splitNameForRename,
   treeGuideLines,
 } from "./utils";
@@ -52,11 +55,12 @@ function usePanelWidth<T extends HTMLElement>(): [React.RefObject<T | null>, num
 }
 
 /**
- * 日期列的收起阈值:面板被拖到比默认宽度还窄时,名字宽度最稀缺,整个日期列先让位(决策 17)。
- * 阈值不取 TREE_MIN_CONTENT_PX(160):面板宽度本身被 sftpStore 钳在 200 以上,那样的阈值
- * 永远不会成立,收起就成了永不执行的死代码。
+ * 日期列的收起阈值:面板被拖到明显比默认宽度窄时,名字宽度最稀缺,整个日期列先让位(决策 17)。
+ * 取 sftpStore 里 MIN_FILE_MANAGER_WIDTH(200) 与默认宽度(280)之间:等于默认宽度会是刀尖上的
+ * 阈值 —— 默认宽度的面板内实测只有 279px 内容宽,不拖宽就永远没有日期;等于 200 则永远不成立
+ * (面板宽度本身被钳在 200 以上),收起成了永不执行的死代码。
  */
-const DATE_COLUMN_MIN_PANEL_PX = DEFAULT_PANEL_WIDTH_PX;
+const DATE_COLUMN_MIN_PANEL_PX = 240;
 
 /**
  * 每一级祖先在自己的缩进位置上一条竖直参考线,并用一小段横线把本行接到直接父级的那条线上
@@ -113,12 +117,12 @@ function ancestorRowElements(row: HTMLElement): HTMLElement[] {
   return out;
 }
 
-/** 粗略按等宽估算的每字符像素:文件名优先于缩进获得宽度,过长时中段省略而不是砍掉后缀(常是扩展名)。 */
-const AVG_CHAR_PX = 6.5;
 /** 行内除文件名外的固定开销:展开箭头、图标、右侧大小/日期列与内边距。 */
 const ROW_CHROME_PX = 100;
 /** 日期列在开销里固定占的那一份;不画它的行(目录行、窄面板)必须把这份宽度还给名字。 */
 const DATE_COLUMN_PX = 40;
+/** 非折叠链的行只有一段;共用同一个常量,5000 行的目录不为链的渲染计划多分配数组。 */
+const SINGLE_SEGMENT_ITEMS: ChainRenderItem[] = [{ kind: "segment", index: 0 }];
 
 function middleEllipsisName(name: string, depth: number, panelWidth: number, chromePx: number): string {
   const available = panelWidth - indentForDepth(depth, panelWidth) - chromePx;
@@ -550,6 +554,7 @@ export function FileList({
       onToggleExpand: stableToggleExpand,
       collapseLabel: t("sftp.tree.collapse"),
       expandLabel: t("sftp.tree.expand"),
+      chainElidedLabel: (target: string, count: number) => t("sftp.tree.chainElided", { count, target }),
       commitRename,
       selectEntry,
       maybeStartSlowRename,
@@ -714,6 +719,7 @@ interface FileRowHandlers {
   onToggleExpand: (dirPath: string) => void;
   collapseLabel: string;
   expandLabel: string;
+  chainElidedLabel: (target: string, count: number) => string;
   commitRename: (nextName: string) => void;
   selectEntry: (path: string, index: number, event: React.MouseEvent) => void;
   maybeStartSlowRename: (path: string, index: number, eventTime: number) => void;
@@ -763,6 +769,18 @@ const FileRow = memo(function FileRow({
   const isDropTarget = !!dropTarget && segments.some((segment) => segment.path === dropTarget.path);
   const showsDate = !entry.isDir && panelWidth >= DATE_COLUMN_MIN_PANEL_PX;
   const chromePx = showsDate ? ROW_CHROME_PX : ROW_CHROME_PX - DATE_COLUMN_PX;
+  // 长链在窄面板里画不下:按面板宽度决定渲染哪几项(中段折进一个省略号),否则最深段会被画到
+  // 面板右缘之外而点不到 —— 行的 overflow-x 是 visible,超出部分连裁剪都没有。单段行不进这条
+  // 路径,普通目录的每一行不为链多付任何计算。
+  const chainItems =
+    segments.length > 1
+      ? planChainRender(
+          segments.map((segment) => segment.name),
+          row.depth,
+          panelWidth,
+          chromePx
+        ).items
+      : SINGLE_SEGMENT_ITEMS;
   return (
     <div
       data-sftp-entry-row="true"
@@ -859,8 +877,38 @@ const FileRow = memo(function FileRow({
       }}
     >
       <TreeGuides depth={row.depth} panelWidth={panelWidth} />
-      {segments.map((segment, i) => {
-        const isLast = i === segments.length - 1;
+      {chainItems.map((item, i) => {
+        const isLeading = i === 0;
+        if (item.kind === "ellipsis") {
+          const deepestElided = segments[item.index];
+          // 一个省略号顶掉了 N 段,其余项都是段:两者的差就是被省略的级数。
+          const label = h.chainElidedLabel(deepestElided.name, segments.length - chainItems.length + 1);
+          return (
+            <span key={`elided:${deepestElided.path}`} className="flex shrink-0 items-center gap-1">
+              {isLeading && <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />}
+              <button
+                type="button"
+                aria-label={label}
+                title={label}
+                data-testid={`sftp-chain-ellipsis-${deepestElided.path}`}
+                className="flex h-3.5 shrink-0 items-center rounded-sm px-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  // 省略掉的中段仍然可达:换根到其中最深的一段,深度随之归零(决策 2)。
+                  e.preventDefault();
+                  e.stopPropagation();
+                  h.onNavigate(deepestElided.path);
+                }}
+              >
+                …
+              </button>
+              <span className="text-muted-foreground/60 shrink-0">/</span>
+            </span>
+          );
+        }
+        const segment = segments[item.index];
+        const isLast = item.index === segments.length - 1;
         return (
           <span
             key={segment.path}
@@ -901,7 +949,7 @@ const FileRow = memo(function FileRow({
             ) : (
               <span className="w-3.5 shrink-0" />
             )}
-            {i === 0 &&
+            {isLeading &&
               (entry.isDir ? (
                 <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />
               ) : (

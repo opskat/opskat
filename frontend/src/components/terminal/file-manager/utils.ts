@@ -78,6 +78,67 @@ export function indentForDepth(depth: number, panelWidth: number): number {
   return TREE_ROW_PADDING_PX + capDepth * TREE_INDENT_STEP_PX + overflowDepth * TREE_INDENT_COMPACT_STEP_PX;
 }
 
+/** 粗略按等宽估算的每字符像素:名字与折叠链的宽度预算都按它折算,不做逐字测量。 */
+export const AVG_CHAR_PX = 6.5;
+/** 折叠链里一段的展开按钮(14px)加它后面的 gap(4px)。 */
+const CHAIN_TOGGLE_PX = 18;
+/** 段与段之间的 "/" 分隔符连同 gap。 */
+const CHAIN_SEPARATOR_PX = 8;
+/** 链首那一项前面的文件夹图标(14px)加 gap(4px),整行只画一次。 */
+const CHAIN_LEAD_ICON_PX = 18;
+/** 末段名字能被 middleEllipsisName 压到的字符下限(与它的 Math.max(8, …) 一致)。 */
+const CHAIN_LAST_NAME_MIN_CHARS = 8;
+
+/** 折叠链的一个渲染项:某一段本身,或代表被省略中段的省略号(index 是其中最深的一段)。 */
+export type ChainRenderItem = { kind: "segment" | "ellipsis"; index: number };
+
+export interface ChainRenderPlan {
+  /** 按渲染次序的项;省略号最多一个,末段恒为最后一项。 */
+  items: ChainRenderItem[];
+  /** items 的预估总宽,以及行内留给链的可用宽度。 */
+  width: number;
+  available: number;
+}
+
+/**
+ * 按面板当前宽度决定折叠链渲染哪几段:整条链放得下就全画;放不下则保留首段与最深段、中段折进
+ * 一个省略号(长名字的中段省略,同一形状用在链上)。最深段是用户接着往下走的入口,必须永远在行内
+ * 且可点 —— 连首段都放不下时首段也并进省略号。省略号自己带着被省略的最深一段:点它换根过去,
+ * 被省略的目录不会变得无法抵达。宽度只按传入的 panelWidth 折算,不引入第二套测量。
+ * names 至少两段 —— 单段行(普通目录/文件)根本不走链渲染。
+ */
+export function planChainRender(names: string[], depth: number, panelWidth: number, chromePx: number): ChainRenderPlan {
+  const available = Math.max(0, panelWidth - indentForDepth(depth, panelWidth) - chromePx);
+  const last = names.length - 1;
+  const segmentPx = (index: number) =>
+    index === last
+      ? CHAIN_TOGGLE_PX + Math.min(names[index].length, CHAIN_LAST_NAME_MIN_CHARS) * AVG_CHAR_PX
+      : CHAIN_TOGGLE_PX + names[index].length * AVG_CHAR_PX + CHAIN_SEPARATOR_PX;
+  const ellipsisPx = CHAIN_TOGGLE_PX + AVG_CHAR_PX + CHAIN_SEPARATOR_PX;
+  const planOf = (items: ChainRenderItem[]): ChainRenderPlan => ({
+    items,
+    width:
+      CHAIN_LEAD_ICON_PX +
+      items.reduce((sum, item) => sum + (item.kind === "ellipsis" ? ellipsisPx : segmentPx(item.index)), 0),
+    available,
+  });
+
+  const full = planOf(names.map((_, index): ChainRenderItem => ({ kind: "segment", index })));
+  if (full.width <= available) return full;
+  if (names.length > 2) {
+    const elidedMiddle = planOf([
+      { kind: "segment", index: 0 },
+      { kind: "ellipsis", index: last - 1 },
+      { kind: "segment", index: last },
+    ]);
+    if (elidedMiddle.width <= available) return elidedMiddle;
+  }
+  return planOf([
+    { kind: "ellipsis", index: last - 1 },
+    { kind: "segment", index: last },
+  ]);
+}
+
 export interface TreeGuideLine {
   /** 这条线代表的祖先层级(0 = 当前根那一层)。 */
   depth: number;

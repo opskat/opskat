@@ -15,7 +15,7 @@ import {
 } from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../wailsjs/go/models";
-import { formatBytes, formatDate } from "../components/terminal/file-manager/utils";
+import { formatBytes, formatDate, planChainRender } from "../components/terminal/file-manager/utils";
 import {
   OpenExternalEdit,
   PrepareExternalEditMerge,
@@ -1908,6 +1908,63 @@ describe("FileManagerPanel", () => {
       await waitFor(() => expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app/a"));
     });
 
+    it("plans an overflowing collapsed chain so the deepest segment stays inside the row width", () => {
+      // 真机实测:面板内容宽 279px、深度 1 的六段链把最深段的展开按钮画到面板右缘之外 23px,
+      // 而行的 overflow-x 是 visible —— 它既不被裁掉也点不到。首段与最深段必须都留下,中段折进
+      // 一个省略号,省略号自己代表被省略的最深一段(点它换根过去,链里的目录不会因此无法抵达)。
+      const chain = ["lvl6", "lvl7", "lvl8", "lvl9", "lvl10", "lvl11"];
+      const plan = planChainRender(chain, 1, 279, 60);
+
+      expect(plan.width).toBeLessThanOrEqual(plan.available);
+      expect(plan.items).toEqual([
+        { kind: "segment", index: 0 },
+        { kind: "ellipsis", index: 4 },
+        { kind: "segment", index: 5 },
+      ]);
+    });
+
+    it("keeps every segment of a collapsed chain that fits the row width", () => {
+      const chain = ["lvl6", "lvl7", "lvl8", "lvl9", "lvl10", "lvl11"];
+      const plan = planChainRender(chain, 1, 1200, 60);
+
+      expect(plan.width).toBeLessThanOrEqual(plan.available);
+      expect(plan.items.map((item) => item.kind)).toEqual(Array(chain.length).fill("segment"));
+    });
+
+    it("elides the middle of an overflowing chain and keeps the deepest segment clickable", async () => {
+      const levels = ["lvl6", "lvl7", "lvl8", "lvl9", "lvl10", "lvl11"];
+      const pathOf = (upTo: number) => `/srv/app/${levels.slice(0, upTo + 1).join("/")}`;
+      const listings: Record<string, sftp_svc.FileEntry[]> = { "/srv/app": [dirEntry("lvl6"), fileEntry("keep.log")] };
+      levels.forEach((_, i) => {
+        listings[pathOf(i)] = i + 1 < levels.length ? [dirEntry(levels[i + 1])] : [fileEntry("deep.conf")];
+      });
+      mockDirListings(listings);
+
+      // 真机实测的面板内容宽度(默认 280 的面板内是 279px)。
+      const widthSpy = mockMeasuredPanelWidth(279);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+        await screen.findByText("lvl6");
+        // 每一步都点当前最深那一段:它是链继续往下走的唯一入口,任何深度下都必须在行内且可点。
+        for (let i = 0; i < levels.length - 1; i += 1) {
+          fireEvent.click(expandToggle(pathOf(i)));
+          await screen.findByText(levels[i + 1]);
+        }
+
+        const chainRow = rowOf("lvl6");
+        expect(within(chainRow).getByTestId(`sftp-expand-${pathOf(0)}`)).toBeInTheDocument();
+        expect(within(chainRow).getByTestId(`sftp-expand-${pathOf(levels.length - 1)}`)).toBeInTheDocument();
+        for (const middle of [1, 2, 3, 4]) {
+          expect(within(chainRow).queryByTestId(`sftp-expand-${pathOf(middle)}`)).toBeNull();
+        }
+        // 省略号自己是入口:点它换根到被省略的最深一段,那些目录不因省略而无法抵达。
+        fireEvent.click(within(chainRow).getByTestId(`sftp-chain-ellipsis-${pathOf(4)}`));
+        await waitFor(() => expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe(pathOf(4)));
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
     it("caps indentation growth once depth exceeds the panel's width budget", async () => {
       const depthCount = 12;
       const listings: Record<string, sftp_svc.FileEntry[]> = {};
@@ -2270,14 +2327,33 @@ describe("FileManagerPanel", () => {
       }
     });
 
+    it("keeps the date column at the panel's default width", async () => {
+      const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
+      mockDirListings({
+        "/srv/app": [{ name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry],
+      });
+      // 默认宽度(sftpStore 的 280)的面板内实测只有 279px 内容宽:阈值踩在默认宽度上,
+      // 用户不拖宽面板就永远看不到日期。
+      const widthSpy = mockMeasuredPanelWidth(279);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+        await screen.findByText("app.log");
+
+        expect(within(rowOf("app.log")).getByText(formatDate(modTime))).toBeInTheDocument();
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
     it("collapses the whole date column while the panel is narrower than the column budget", async () => {
       const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
       mockDirListings({
         "/srv/app": [{ name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry],
       });
-      const widthSpy = mockMeasuredPanelWidth(240);
+      // 被拖到明显比默认宽度窄(阈值 240 以下)的面板才收起整列。
+      const widthSpy = mockMeasuredPanelWidth(210);
       try {
-        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={240} onWidthChange={vi.fn()} />);
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={210} onWidthChange={vi.fn()} />);
         await screen.findByText("app.log");
 
         expect(within(rowOf("app.log")).getByText(formatBytes(2048))).toBeInTheDocument();

@@ -1867,7 +1867,8 @@
       "expand": "展开",
       "collapse": "收起",
       "loading": "加载中…",
-      "dropHint": "移动 {{count}} 项到 {{target}}"
+      "dropHint": "移动 {{count}} 项到 {{target}}",
+      "chainElided": "已省略 {{count}} 级,点击进入 {{target}}"
     },
     "refresh": "刷新",
     "newFolder": "新建文件夹",
