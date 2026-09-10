@@ -1,8 +1,10 @@
 import { createElement } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Checkbox } from "@opskat/ui";
 import { Folder, Download } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
+import { notifyCopied } from "@/lib/notify";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
 import { typeIcon, typeIconColor } from "@/lib/objectContentType";
@@ -39,6 +41,24 @@ export function OSSObjectList({
 }: OSSObjectListProps) {
   const { t } = useTranslation();
 
+  // Ctrl/Cmd+C on the list copies the checked objects, or the row under the cursor when
+  // nothing is checked. Returns false when there is nothing to copy, so the caller leaves
+  // the key to the browser.
+  const copyKeys = (focusedFallback: string | null): boolean => {
+    const keys =
+      selection.size > 0
+        ? objects.filter((o) => selection.has(o.key)).map((o) => o.key)
+        : focusedFallback != null
+          ? [focusedFallback]
+          : [];
+    if (keys.length === 0) return false;
+    void navigator.clipboard
+      .writeText(keys.join("\n"))
+      .then(() => notifyCopied(t("oss.keyCopied")))
+      .catch((e) => toast.error(String(e)));
+    return true;
+  };
+
   return (
     <OSSObjectCollectionFrame
       className="min-h-0 flex-1 overflow-auto"
@@ -71,6 +91,8 @@ export function OSSObjectList({
               onDoubleClick={() => onNavigatePrefix(p)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") onNavigatePrefix(p);
+                // A folder row has no key of its own, but the list's checked objects still copy.
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && copyKeys(null)) e.preventDefault();
               }}
               data-testid={`oss-folder-${p}`}
             >
@@ -98,6 +120,7 @@ export function OSSObjectList({
               onClick={() => onFocusObject?.(o.key)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") onFocusObject?.(o.key);
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && copyKeys(o.key)) e.preventDefault();
               }}
               data-testid={`oss-object-${o.key}`}
             >

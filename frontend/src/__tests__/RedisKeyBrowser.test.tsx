@@ -296,4 +296,36 @@ describe("RedisKeyBrowser", () => {
 
     expect(RedisScanKeys).toHaveBeenCalledWith(expect.objectContaining({ match: "dispatcher", exact: true }));
   });
+
+  it("copies the selected key name with Ctrl/Cmd+C", () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const state = useQueryStore.getState().redisStates["query-10"];
+    useQueryStore.setState({
+      redisStates: { "query-10": { ...state, selectedKey: "common:user:2" } },
+    });
+    render(<RedisKeyBrowser tabId="query-10" />);
+
+    fireEvent.keyDown(screen.getByTestId("redis-key-tree"), { key: "c", ctrlKey: true, metaKey: true });
+
+    expect(writeText).toHaveBeenCalledWith("common:user:2");
+  });
+
+  it("leaves Ctrl/Cmd+C alone when no key is selected", () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<RedisKeyBrowser tabId="query-10" />);
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "c",
+      ctrlKey: true,
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    screen.getByTestId("redis-key-tree").dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
 });

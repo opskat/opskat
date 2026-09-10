@@ -43,7 +43,7 @@ export function OSSObjectDetail({
     [t("oss.detail.lastModified"), object.lastModified ? new Date(object.lastModified * 1000).toLocaleString() : "—"],
   ];
   const copyKey = () =>
-    void navigator.clipboard?.writeText(object.key).then(() => notifyCopied(t("oss.detail.copyKey")));
+    void navigator.clipboard?.writeText(object.key).then(() => notifyCopied(t("oss.detail.copyKeyCopied")));
   const iconButtonClass =
     "cursor-pointer rounded-sm p-0.5 outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring/45";
 

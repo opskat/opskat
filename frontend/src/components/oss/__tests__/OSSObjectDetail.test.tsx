@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { OSSObjectDetail } from "../OSSObjectDetail";
 import type { oss_svc } from "../../../../wailsjs/go/models";
+
+const { toastSuccess, toastError } = vi.hoisted(() => ({ toastSuccess: vi.fn(), toastError: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: toastSuccess, error: toastError } }));
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -142,5 +145,27 @@ describe("OSSObjectDetail", () => {
 
     expect(screen.getByText("docs/report.pdf")).toHaveClass("select-text");
     expect(screen.getByText("STANDARD")).toHaveClass("select-text");
+  });
+
+  it("confirms the copied object key instead of repeating the button label", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    toastSuccess.mockClear();
+
+    render(
+      <OSSObjectDetail
+        object={obj()}
+        onEnsureThumbnail={vi.fn()}
+        onShare={vi.fn()}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("oss-detail-copy-key"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("docs/report.pdf"));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("oss.detail.copyKeyCopied", expect.anything()));
   });
 });
