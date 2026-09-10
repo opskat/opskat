@@ -18,7 +18,7 @@ import {
   getPathBaseName,
   indentForDepth,
   splitNameForRename,
-  TREE_INDENT_STEP_PX,
+  treeGuideLines,
 } from "./utils";
 
 function indentStyle(depth: number, panelWidth: number) {
@@ -51,18 +51,77 @@ function usePanelWidth<T extends HTMLElement>(): [React.RefObject<T | null>, num
   return [ref, width];
 }
 
-/** 缩进达到面板宽度封顶后每级只增加极小量;此时改用竖直参考线表达层级归属。 */
-function isCompactDepth(depth: number, panelWidth: number): boolean {
-  return depth > 0 && indentForDepth(depth, panelWidth) - indentForDepth(depth - 1, panelWidth) < TREE_INDENT_STEP_PX;
+/**
+ * 日期列的收起阈值:面板被拖到比默认宽度还窄时,名字宽度最稀缺,整个日期列先让位(决策 17)。
+ * 阈值不取 TREE_MIN_CONTENT_PX(160):面板宽度本身被 sftpStore 钳在 200 以上,那样的阈值
+ * 永远不会成立,收起就成了永不执行的死代码。
+ */
+const DATE_COLUMN_MIN_PANEL_PX = DEFAULT_PANEL_WIDTH_PX;
+
+/**
+ * 每一级祖先在自己的缩进位置上一条竖直参考线,并用一小段横线把本行接到直接父级的那条线上
+ * (经典树参考线)。绝对定位到祖先的缩进 x —— 行的 paddingLeft 只决定内容起点,画在行元素上
+ * 的 border-l 落在面板边缘,任何深度都表达不了层级归属。祖先链高亮由行上的 data 属性驱动
+ * (见 FileList 的 hover 委托与 lineagePaths),纯 CSS 生效,不为每行引入 React state。
+ */
+function TreeGuides({ depth, panelWidth }: { depth: number; panelWidth: number }) {
+  const lines = treeGuideLines(depth, panelWidth);
+  if (!lines.length) return null;
+  const parentLeft = lines[lines.length - 1].left;
+  const guideTone =
+    "bg-border/70 group-hover/row:bg-primary/50 group-data-[sftp-hover-lineage=true]/row:bg-primary/50 group-data-[sftp-lineage=true]/row:bg-primary/70";
+  return (
+    <>
+      {lines.map((line) => (
+        <span
+          key={line.depth}
+          aria-hidden="true"
+          data-sftp-guide-depth={line.depth}
+          style={{ left: line.left }}
+          className={cn("pointer-events-none absolute inset-y-0 w-px", guideTone)}
+        />
+      ))}
+      <span
+        aria-hidden="true"
+        data-sftp-guide-connector="true"
+        style={{ left: parentLeft, width: indentForDepth(depth, panelWidth) - parentLeft }}
+        className={cn("pointer-events-none absolute top-1/2 h-px", guideTone)}
+      />
+    </>
+  );
+}
+
+/**
+ * 一行的祖先行:展平序是深度优先(父行必在前),因此沿 DOM 往前找 depth 递减的条目行即可。
+ * 折叠链在树里就是一行,按 depth 找因此自动落在链行上,不需要为链特殊处理。
+ */
+function ancestorRowElements(row: HTMLElement): HTMLElement[] {
+  let depth = Number(row.dataset.sftpDepth);
+  if (!Number.isInteger(depth)) return [];
+  const out: HTMLElement[] = [];
+  let node = row.previousElementSibling;
+  while (node && depth > 0) {
+    if (node instanceof HTMLElement && node.dataset.sftpEntryRow && node.dataset.sftpDepth !== undefined) {
+      const nodeDepth = Number(node.dataset.sftpDepth);
+      if (nodeDepth < depth) {
+        out.push(node);
+        depth = nodeDepth;
+      }
+    }
+    node = node.previousElementSibling;
+  }
+  return out;
 }
 
 /** 粗略按等宽估算的每字符像素:文件名优先于缩进获得宽度,过长时中段省略而不是砍掉后缀(常是扩展名)。 */
 const AVG_CHAR_PX = 6.5;
 /** 行内除文件名外的固定开销:展开箭头、图标、右侧大小/日期列与内边距。 */
 const ROW_CHROME_PX = 100;
+/** 日期列在开销里固定占的那一份;不画它的行(目录行、窄面板)必须把这份宽度还给名字。 */
+const DATE_COLUMN_PX = 40;
 
-function middleEllipsisName(name: string, depth: number, panelWidth: number): string {
-  const available = panelWidth - indentForDepth(depth, panelWidth) - ROW_CHROME_PX;
+function middleEllipsisName(name: string, depth: number, panelWidth: number, chromePx: number): string {
+  const available = panelWidth - indentForDepth(depth, panelWidth) - chromePx;
   const maxChars = Math.max(8, Math.floor(available / AVG_CHAR_PX));
   if (name.length <= maxChars) return name;
   const keep = maxChars - 1;
@@ -242,6 +301,51 @@ export function FileList({
   // 命中判断用 Set:以前每行都跑一次 selected.includes(),n 行 × O(选中数) 在
   // 全选(shift 选完整个目录)时退化成 O(n²)。
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  // 选中行 + 它整条祖先链:选中态本来就会让本组件重渲一次(行 memo 逐行比较),顺带算出
+  // 祖先链是 O(可见行) 的一遍走行,不额外引入渲染。栈按 depth 维护 —— 折叠链在 displayRows
+  // 里就是一行,它的 path 是链末段,与子行认到的祖先一致。
+  const lineagePaths = useMemo(() => {
+    const lineage = new Set<string>();
+    if (selectedSet.size === 0) return lineage;
+    const stack: string[] = [];
+    for (const row of displayRows) {
+      if (!isSftpTreeEntryRow(row)) continue;
+      stack.length = row.depth;
+      stack[row.depth] = row.path;
+      if (!selectedSet.has(row.path)) continue;
+      for (let d = row.depth; d >= 0; d -= 1) {
+        // 祖先链一律整条加入,因此撞到已加入的一段就说明更浅的几段也都在里面了。
+        if (lineage.has(stack[d])) break;
+        lineage.add(stack[d]);
+      }
+    }
+    return lineage;
+  }, [displayRows, selectedSet]);
+  // 悬停高亮不走 state:面板实测能挂 5000 行且没有虚拟化,每次移入都重渲一遍列表就是一场
+  // 渲染风暴。这里只在委托到的容器事件里给祖先行打 data 属性,配色交给 CSS。
+  const hoverRowRef = useRef<HTMLElement | null>(null);
+  const hoverLineageRef = useRef<HTMLElement[]>([]);
+  const markHoverLineage = useCallback((row: HTMLElement | null) => {
+    for (const el of hoverLineageRef.current) el.removeAttribute("data-sftp-hover-lineage");
+    hoverLineageRef.current = row ? ancestorRowElements(row) : [];
+    for (const el of hoverLineageRef.current) el.setAttribute("data-sftp-hover-lineage", "true");
+  }, []);
+  const handleRowHover = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      const target = event.target;
+      // 占位行(加载中 / 空目录 / 失败)同样带 depth:悬停它时也该看出它挂在哪个目录下面。
+      const row = target instanceof Element ? target.closest<HTMLElement>("[data-sftp-depth]") : null;
+      if (row === hoverRowRef.current) return;
+      hoverRowRef.current = row;
+      markHoverLineage(row);
+    },
+    [markHoverLineage]
+  );
+  const clearRowHover = useCallback(() => {
+    hoverRowRef.current = null;
+    markHoverLineage(null);
+  }, [markHoverLineage]);
+
   // 事件回调需要"当前选中集合",但不能把它放进依赖 —— 否则每次改选中回调就换标识,
   // 把所有行的 memo 全部打掉(和 QueryResultTable 里 handleCellContextMenu 同一个坑)。
   const selectedRef = useRef(selected);
@@ -494,7 +598,12 @@ export function FileList({
         onOpenContextMenu(e.clientX, e.clientY, null, null);
       }}
     >
-      <div ref={containerRef} className="text-xs select-none min-h-full">
+      <div
+        ref={containerRef}
+        className="text-xs select-none min-h-full"
+        onMouseOver={handleRowHover}
+        onMouseLeave={clearRowHover}
+      >
         {loading && (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -546,6 +655,7 @@ export function FileList({
                   isSelected={selectedSet.has(row.path)}
                   isCut={clipboardCutPaths.has(row.path)}
                   isRenaming={renamePath === row.path}
+                  isLineage={lineagePaths.has(row.path)}
                   dropTarget={dropTarget}
                   panelWidth={panelWidth}
                   h={rowHandlers}
@@ -625,6 +735,8 @@ interface FileRowProps {
   isSelected: boolean;
   isCut: boolean;
   isRenaming: boolean;
+  /** 自己被选中,或它是某个选中行的祖先 —— 参考线与目录行一起高亮,深层也能看出挂在谁下面。 */
+  isLineage: boolean;
   dropTarget: { path: string; count: number } | null;
   panelWidth: number;
   h: FileRowHandlers;
@@ -639,6 +751,7 @@ const FileRow = memo(function FileRow({
   isSelected,
   isCut,
   isRenaming,
+  isLineage,
   dropTarget,
   panelWidth,
   h,
@@ -648,21 +761,28 @@ const FileRow = memo(function FileRow({
   // 折叠链上的每一段各自是一个可展开/换根的落点;普通行退化为长度 1 的数组,渲染路径不变。
   const segments = segmentsOf(row);
   const isDropTarget = !!dropTarget && segments.some((segment) => segment.path === dropTarget.path);
-  const compactGuide = isCompactDepth(row.depth, panelWidth);
+  const showsDate = !entry.isDir && panelWidth >= DATE_COLUMN_MIN_PANEL_PX;
+  const chromePx = showsDate ? ROW_CHROME_PX : ROW_CHROME_PX - DATE_COLUMN_PX;
   return (
     <div
       data-sftp-entry-row="true"
       data-sftp-entry-dir={entry.isDir ? "true" : "false"}
       data-sftp-entry-path={fullPath}
       data-sftp-depth={row.depth}
-      data-sftp-guide={compactGuide || undefined}
+      data-sftp-lineage={isLineage || undefined}
       draggable={false}
-      style={{ ...indentStyle(row.depth, panelWidth), contentVisibility: "auto", containIntrinsicSize: "auto 28px" }}
+      style={{
+        ...indentStyle(row.depth, panelWidth),
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 28px",
+      }}
       className={cn(
-        "flex items-center gap-1.5 pr-2 py-1 cursor-pointer transition-colors rounded-sm",
+        "group/row relative flex items-center gap-1.5 pr-2 py-1 cursor-pointer transition-colors rounded-sm",
         isSelected ? "bg-primary/15 text-primary" : "hover:bg-muted/50",
+        // 悬停祖先链只有 CSS 认得(属性由容器的委托事件就地打上,不经过 React 渲染)。
+        !isSelected && "data-[sftp-hover-lineage=true]:bg-muted/40",
+        !isSelected && isLineage && "bg-muted/40",
         isCut && "opacity-45",
-        compactGuide && "border-l border-border/60",
         // 折叠链的高亮落在具体命中的那一段上(见下方 segments.map);普通行仍是整行高亮。
         segments.length === 1 && isDropTarget && "bg-primary/10 ring-1 ring-primary/30"
       )}
@@ -738,6 +858,7 @@ const FileRow = memo(function FileRow({
         h.onOpenContextMenu(e.clientX, e.clientY, entry, fullPath);
       }}
     >
+      <TreeGuides depth={row.depth} panelWidth={panelWidth} />
       {segments.map((segment, i) => {
         const isLast = i === segments.length - 1;
         return (
@@ -807,7 +928,7 @@ const FileRow = memo(function FileRow({
                       }
                 }
               >
-                {middleEllipsisName(segment.name, row.depth, panelWidth)}
+                {middleEllipsisName(segment.name, row.depth, panelWidth, chromePx)}
               </span>
             )}
             {dropTarget?.path === segment.path && <DropHint count={dropTarget.count} target={segment.name} />}
@@ -815,8 +936,13 @@ const FileRow = memo(function FileRow({
           </span>
         );
       })}
-      {!entry.isDir && <span className="text-muted-foreground shrink-0 text-[10px]">{formatBytes(entry.size)}</span>}
-      <span className="text-muted-foreground shrink-0 text-[10px]">{formatDate(entry.modTime)}</span>
+      {/* 目录行不带大小也不带日期:名字宽度在深层最稀缺,而目录的修改时间对定位最没帮助。 */}
+      {!entry.isDir && (
+        <>
+          <span className="text-muted-foreground shrink-0 text-[10px]">{formatBytes(entry.size)}</span>
+          {showsDate && <span className="text-muted-foreground shrink-0 text-[10px]">{formatDate(entry.modTime)}</span>}
+        </>
+      )}
     </div>
   );
 });
@@ -834,8 +960,9 @@ function TreeStatusRow({ row, panelWidth, onRetry }: TreeStatusRowProps) {
     <div
       data-sftp-depth={row.depth}
       style={indentStyle(row.depth, panelWidth)}
-      className="flex items-center gap-1.5 pr-2 py-1 text-muted-foreground"
+      className="group/row relative flex items-center gap-1.5 pr-2 py-1 text-muted-foreground"
     >
+      <TreeGuides depth={row.depth} panelWidth={panelWidth} />
       <span className="w-3.5 shrink-0" />
       {row.state === "loading" && (
         <>

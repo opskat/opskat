@@ -15,6 +15,7 @@ import {
 } from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../wailsjs/go/models";
+import { formatBytes, formatDate } from "../components/terminal/file-manager/utils";
 import {
   OpenExternalEdit,
   PrepareExternalEditMerge,
@@ -2093,6 +2094,197 @@ describe("FileManagerPanel", () => {
 
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       expect(SFTPRename).not.toHaveBeenCalled();
+    });
+  });
+  describe("tree guides, ancestor lineage and the date column", () => {
+    /** 每层都额外放一个文件,独子链折叠因此不生效 —— 用来观察逐级的参考线与祖先链。 */
+    function nestedListings(levels: number) {
+      const listings: Record<string, sftp_svc.FileEntry[]> = {};
+      let path = "/srv/app";
+      for (let i = 0; i < levels; i += 1) {
+        listings[path] = [dirEntry(`d${i}`), fileEntry(`f${i}.txt`)];
+        path = `${path}/d${i}`;
+      }
+      listings[path] = [fileEntry("leaf.txt")];
+      return listings;
+    }
+
+    async function expandChain(levels: number) {
+      let dirPath = "/srv/app/d0";
+      for (let i = 0; i < levels; i += 1) {
+        fireEvent.click(expandToggle(dirPath));
+        await screen.findByText(i + 1 < levels ? `d${i + 1}` : "leaf.txt");
+        dirPath = `${dirPath}/d${i + 1}`;
+      }
+    }
+
+    const guidesOf = (row: HTMLElement) => Array.from(row.querySelectorAll<HTMLElement>("[data-sftp-guide-depth]"));
+    const leftOf = (el: HTMLElement) => parseFloat(el.style.left);
+    /** 行内容的起点(缩进位置);参考线要落在祖先的这个位置上,而不是面板边缘。 */
+    const contentLeftOf = (row: HTMLElement) => parseFloat(row.style.paddingLeft);
+
+    it("draws one vertical guide at each ancestor's own indent position", async () => {
+      mockDirListings(nestedListings(3));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(3);
+
+      expect(guidesOf(rowOf("d0"))).toHaveLength(0);
+      expect(guidesOf(rowOf("d1"))).toHaveLength(1);
+
+      const guides = guidesOf(rowOf("leaf.txt"));
+      expect(guides.map((guide) => guide.dataset.sftpGuideDepth)).toEqual(["0", "1", "2"]);
+      expect(guides.map(leftOf)).toEqual([
+        contentLeftOf(rowOf("d0")),
+        contentLeftOf(rowOf("d1")),
+        contentLeftOf(rowOf("d2")),
+      ]);
+    });
+
+    it("keeps one guide per ancestor once indentation is capped in a narrow panel", async () => {
+      const levels = 12;
+      mockDirListings(nestedListings(levels));
+      const widthSpy = mockMeasuredPanelWidth(200);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={200} onWidthChange={vi.fn()} />);
+        await screen.findByText("d0");
+        await expandChain(levels);
+
+        const guides = guidesOf(rowOf("leaf.txt"));
+        expect(guides).toHaveLength(levels);
+        // 封顶后每级只差极小量,但每一级祖先仍各有一条线,且都落在那一级自己的缩进位置上。
+        const lefts = guides.map(leftOf);
+        expect(lefts.every((left, i) => i === 0 || left > lefts[i - 1])).toBe(true);
+        expect(lefts[levels - 1]).toBe(contentLeftOf(rowOf(`d${levels - 1}`)));
+        expect(lefts[levels - 2]).toBe(contentLeftOf(rowOf(`d${levels - 2}`)));
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("connects a row to its immediate parent's guide", async () => {
+      mockDirListings(nestedListings(2));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(2);
+
+      const leaf = rowOf("leaf.txt");
+      const connector = leaf.querySelector<HTMLElement>("[data-sftp-guide-connector]") as HTMLElement;
+      expect(connector).not.toBeNull();
+      expect(leftOf(connector)).toBe(contentLeftOf(rowOf("d1")));
+      expect(leftOf(connector) + parseFloat(connector.style.width)).toBe(contentLeftOf(leaf));
+    });
+
+    it("highlights the whole ancestor chain while a deep row is hovered", async () => {
+      mockDirListings(nestedListings(3));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(3);
+
+      fireEvent.mouseOver(rowOf("leaf.txt"));
+      expect(rowOf("d0").dataset.sftpHoverLineage).toBe("true");
+      expect(rowOf("d1").dataset.sftpHoverLineage).toBe("true");
+      expect(rowOf("d2").dataset.sftpHoverLineage).toBe("true");
+      expect(rowOf("f0.txt").dataset.sftpHoverLineage).toBeUndefined();
+      expect(rowOf("f2.txt").dataset.sftpHoverLineage).toBeUndefined();
+
+      fireEvent.mouseOver(rowOf("f0.txt"));
+      expect(rowOf("d0").dataset.sftpHoverLineage).toBeUndefined();
+      expect(rowOf("d1").dataset.sftpHoverLineage).toBeUndefined();
+    });
+
+    it("highlights the ancestor chain of the selected row", async () => {
+      mockDirListings(nestedListings(3));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(3);
+
+      fireEvent.click(rowOf("leaf.txt"));
+      await waitFor(() => expect(rowOf("d2").dataset.sftpLineage).toBe("true"));
+      expect(rowOf("d0").dataset.sftpLineage).toBe("true");
+      expect(rowOf("d1").dataset.sftpLineage).toBe("true");
+      expect(rowOf("f1.txt").dataset.sftpLineage).toBeUndefined();
+
+      fireEvent.click(rowOf("f0.txt"));
+      await waitFor(() => expect(rowOf("d0").dataset.sftpLineage).toBeUndefined());
+      expect(rowOf("d2").dataset.sftpLineage).toBeUndefined();
+    });
+
+    it("keeps guides and lineage coherent when the parent is a collapsed chain", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+        "/srv/app/a/b": [fileEntry("note.txt")],
+      });
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+      fireEvent.click(expandToggle("/srv/app/a/b"));
+      await screen.findByText("note.txt");
+
+      const chainRow = rowOf("a");
+      expect(rowOf("b")).toBe(chainRow);
+      // 折叠链在树里就是一行,它下面的行只挂一级 —— 参考线跟着落在链行自己的缩进位置上。
+      const guides = guidesOf(rowOf("note.txt"));
+      expect(guides).toHaveLength(1);
+      expect(leftOf(guides[0])).toBe(contentLeftOf(chainRow));
+
+      fireEvent.mouseOver(rowOf("note.txt"));
+      expect(chainRow.dataset.sftpHoverLineage).toBe("true");
+
+      fireEvent.click(rowOf("note.txt"));
+      await waitFor(() => expect(chainRow.dataset.sftpLineage).toBe("true"));
+    });
+
+    it("drops the date on directory rows and keeps size plus date on file rows", async () => {
+      const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
+      mockDirListings({
+        "/srv/app": [
+          { name: "logs", isDir: true, size: 0, modTime } as sftp_svc.FileEntry,
+          { name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry,
+        ],
+      });
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("app.log");
+
+      expect(within(rowOf("app.log")).getByText(formatBytes(2048))).toBeInTheDocument();
+      expect(within(rowOf("app.log")).getByText(formatDate(modTime))).toBeInTheDocument();
+      expect(within(rowOf("logs")).queryByText(formatDate(modTime))).toBeNull();
+    });
+
+    it("gives the name the width freed by a missing date column", async () => {
+      const base = "very-long-remote-entry-name-that-must-be-elided-in-a-narrow-panel";
+      mockDirListings({ "/srv/app": [dirEntry(`d-${base}`), fileEntry(`f-${base}`)] });
+      const widthSpy = mockMeasuredPanelWidth(320);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={320} onWidthChange={vi.fn()} />);
+        const dirLabel = (await screen.findByTitle(`d-${base}`)).textContent ?? "";
+        const fileLabel = screen.getByTitle(`f-${base}`).textContent ?? "";
+
+        // 同长度、同深度的两个名字:目录行不画日期,那份宽度必须落到名字上。
+        expect(fileLabel).toContain("…");
+        expect(dirLabel.length).toBeGreaterThan(fileLabel.length);
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("collapses the whole date column while the panel is narrower than the column budget", async () => {
+      const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
+      mockDirListings({
+        "/srv/app": [{ name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry],
+      });
+      const widthSpy = mockMeasuredPanelWidth(240);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={240} onWidthChange={vi.fn()} />);
+        await screen.findByText("app.log");
+
+        expect(within(rowOf("app.log")).getByText(formatBytes(2048))).toBeInTheDocument();
+        expect(within(rowOf("app.log")).queryByText(formatDate(modTime))).toBeNull();
+      } finally {
+        widthSpy.mockRestore();
+      }
     });
   });
 });

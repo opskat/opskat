@@ -78,6 +78,23 @@ export function indentForDepth(depth: number, panelWidth: number): number {
   return TREE_ROW_PADDING_PX + capDepth * TREE_INDENT_STEP_PX + overflowDepth * TREE_INDENT_COMPACT_STEP_PX;
 }
 
+export interface TreeGuideLine {
+  /** 这条线代表的祖先层级(0 = 当前根那一层)。 */
+  depth: number;
+  /** 该祖先的缩进位置(行内左侧偏移像素),与那一层行的内容起点对齐。 */
+  left: number;
+}
+
+/**
+ * depth 行的每一级祖先各一条竖直参考线,位置就是那一级自己的缩进位置。参考线必须按祖先
+ * 的缩进定位(行元素上的 border-l 画的是面板边缘那一条,表达不了任何层级归属)。
+ */
+export function treeGuideLines(depth: number, panelWidth: number): TreeGuideLine[] {
+  const lines: TreeGuideLine[] = [];
+  for (let d = 0; d < depth; d += 1) lines.push({ depth: d, left: indentForDepth(d, panelWidth) });
+  return lines;
+}
+
 export function splitNameForRename(name: string): { stemLength: number } {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return { stemLength: name.length };
