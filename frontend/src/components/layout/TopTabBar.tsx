@@ -2,7 +2,7 @@ import { createContext, use, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { useTabDragAndDrop } from "@/hooks/useTabDragAndDrop";
-import { useTabStore, type Tab } from "@/stores/tabStore";
+import { useTabStore, type EditorTabMeta, type Tab } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import {
   cn,
@@ -152,6 +152,7 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
   const closeTab = useTabStore((s) => s.closeTab);
   const reorderTab = useTabStore((s) => s.reorderTab);
   const moveTabTo = useTabStore((s) => s.moveTabTo);
+  const unsavedTabIds = useTabStore((s) => s.unsavedTabIds);
 
   const tabData = useTerminalStore((s) => s.tabData);
 
@@ -214,6 +215,24 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
 
       case "info": {
         return <TabItem {...commonProps} label={tab.label} />;
+      }
+
+      case "editor": {
+        // 标题只有文件名，资产与完整远程路径放在 title 里：
+        // 同一路径在两个资产上打开时，光靠文件名和路径都分不出是哪一台。
+        const editorMeta = tab.meta as EditorTabMeta;
+        return (
+          <TabItem
+            {...commonProps}
+            label={tab.label}
+            title={`${editorMeta.assetName} · ${editorMeta.remotePath}`}
+            extra={
+              unsavedTabIds.includes(tab.id) ? (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" data-testid="tab-unsaved-marker" />
+              ) : undefined
+            }
+          />
+        );
       }
 
       default:

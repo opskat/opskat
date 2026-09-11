@@ -13,7 +13,13 @@ import {
   ApplyExternalEditMerge,
   RecoverExternalEditSession,
   ContinueExternalEditSession,
+  ReadExternalEditSessionText,
+  SaveExternalEditSessionText,
 } from "../../wailsjs/go/external_edit/ExternalEdit";
+
+// 内置编辑器在后端编辑器列表里的固定 ID（internal/service/external_edit_svc/types.go）：
+// 命中它时后端不拉起外部进程，会话由应用内的编辑器承载并显式保存。
+export const builtInEditorID = "builtin";
 
 export interface ExternalEditEditorConfig {
   id: string;
@@ -191,6 +197,16 @@ export function listExternalEditSessions(): Promise<ExternalEditSession[]> {
 
 export function saveExternalEditSession(sessionId: string): Promise<ExternalEditSaveResult> {
   return SaveExternalEditSession(sessionId) as unknown as Promise<ExternalEditSaveResult>;
+}
+
+// 内置编辑器承载会话时的读写入口：读回按会话编码解码的文本，
+// 保存把编辑器里的文本交给同一条既有保存路径（含远端漂移冲突检测）。
+export function readExternalEditSessionText(sessionId: string): Promise<string> {
+  return ReadExternalEditSessionText(sessionId);
+}
+
+export function saveExternalEditSessionText(sessionId: string, text: string): Promise<ExternalEditSaveResult> {
+  return SaveExternalEditSessionText({ sessionId, text } as never) as unknown as Promise<ExternalEditSaveResult>;
 }
 
 export function refreshExternalEditSession(sessionId: string): Promise<ExternalEditSession> {

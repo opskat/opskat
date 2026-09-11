@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExternalEditSection } from "../components/settings/ExternalEditSection";
 import {
+  builtInEditorID,
   getExternalEditSettings,
   saveExternalEditSettings,
   selectExternalEditorExecutable,
@@ -21,7 +24,9 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("../lib/externalEditApi", () => ({
+// 只替换 IPC 调用，builtInEditorID 等常量沿用真实模块，避免测试自己伪造内置编辑器的 ID。
+vi.mock("../lib/externalEditApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/externalEditApi")>()),
   getExternalEditSettings: vi.fn(),
   saveExternalEditSettings: vi.fn(),
   selectExternalEditorExecutable: vi.fn(),
@@ -77,6 +82,43 @@ describe("ExternalEditSection", () => {
     );
     vi.mocked(selectExternalEditorExecutable).mockResolvedValue("/bin/custom-editor");
     vi.mocked(selectExternalEditWorkspaceRoot).mockResolvedValue("/tmp");
+  });
+
+  it("offers the always-available built-in editor as a default choice and explains its explicit save", async () => {
+    vi.mocked(getExternalEditSettings).mockResolvedValueOnce(
+      makeSettings({
+        editors: [
+          {
+            id: builtInEditorID,
+            name: "Built-in Editor",
+            path: "",
+            args: [],
+            builtIn: true,
+            available: true,
+            default: false,
+          },
+          builtInEditor,
+        ],
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<ExternalEditSection />);
+
+    expect(await screen.findByText("externalEdit.settings.builtInEditorHint")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox"));
+    const option = await screen.findByRole("option", { name: "externalEdit.settings.builtInEditorName" });
+    expect(option).not.toHaveAttribute("aria-disabled", "true");
+
+    await user.click(option);
+    await user.click(screen.getByRole("button", { name: "action.save" }));
+
+    await waitFor(() => {
+      expect(saveExternalEditSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ defaultEditorId: builtInEditorID })
+      );
+    });
   });
 
   it("uses an explicit dialog when editing one custom editor", async () => {
@@ -225,5 +267,18 @@ describe("ExternalEditSection", () => {
         })
       );
     });
+  });
+});
+
+describe("built-in editor id", () => {
+  it("matches the backend editor id", () => {
+    // 后端按这个 ID 决定“不拉起外部进程、走显式保存”，前端按它决定去向与标签；
+    // 两侧是独立来源，任一侧改名都会让内置编辑器在界面上退化成一条普通外部编辑器条目。
+    const goSource = fs.readFileSync(
+      path.resolve(process.cwd(), "../internal/service/external_edit_svc/types.go"),
+      "utf8"
+    );
+    const goValue = /builtInEditorID\s*=\s*"([^"]+)"/.exec(goSource)?.[1];
+    expect(goValue).toBe(builtInEditorID);
   });
 });

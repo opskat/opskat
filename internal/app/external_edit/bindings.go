@@ -91,6 +91,26 @@ func (e *ExternalEdit) SaveExternalEditSession(sessionID string) (*SaveResult, e
 	return svc.Save(e.langCtx(), sessionID)
 }
 
+// ReadExternalEditSessionText 内置编辑器承载会话时的读入口：
+// 大小上限、文本判定与按会话编码解码都由 service 统一裁决。
+func (e *ExternalEdit) ReadExternalEditSessionText(sessionID string) (string, error) {
+	svc, err := e.service()
+	if err != nil {
+		return "", err
+	}
+	return svc.ReadSessionText(sessionID)
+}
+
+// SaveExternalEditSessionText 内置编辑器的显式保存入口：
+// 文本仍走既有保存路径，冲突检测与审计不因入口不同而分叉。
+func (e *ExternalEdit) SaveExternalEditSessionText(req SaveSessionTextRequest) (*SaveResult, error) {
+	svc, err := e.service()
+	if err != nil {
+		return nil, err
+	}
+	return svc.SaveSessionText(e.langCtx(), req)
+}
+
 func (e *ExternalEdit) RefreshExternalEditSession(sessionID string) (*Session, error) {
 	svc, err := e.service()
 	if err != nil {

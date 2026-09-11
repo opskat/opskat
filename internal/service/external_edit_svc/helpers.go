@@ -277,8 +277,10 @@ func buildErrorSnapshot(step string, err error, nowUnix int64) *ErrorSnapshot {
 	suggestion := externalEditReconnectHint
 	if err != nil {
 		switch {
-		case strings.Contains(err.Error(), "当前远程文件已不可访问"),
-			strings.Contains(err.Error(), "无法确认仍是同一份远程文件"),
+		case strings.Contains(err.Error(), "当前远程文件已不可访问"):
+			summary = "该资产暂时没有可用的会话，无法继续同步"
+			suggestion = externalEditUnreachableHint
+		case strings.Contains(err.Error(), "无法确认仍是同一份远程文件"),
 			strings.Contains(err.Error(), "当前副本已过期"):
 			summary = "当前文件暂时无法继续同步"
 			suggestion = externalEditReconnectHint

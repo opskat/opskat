@@ -9,9 +9,21 @@ import { isMac } from "../stores/shortcutStore";
 import { useTerminalStore, type TerminalDirectorySyncState } from "../stores/terminalStore";
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { useExternalEditStore } from "../stores/externalEditStore";
-import { type ExternalEditMergePrepareResult, type ExternalEditSession } from "../lib/externalEditApi";
+import { useTabStore, type EditorTabMeta } from "../stores/tabStore";
+import {
+  builtInEditorID,
+  type ExternalEditMergePrepareResult,
+  type ExternalEditSession,
+  type ExternalEditSettings,
+} from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
-import { OpenExternalEdit, PrepareExternalEditMerge } from "../../wailsjs/go/external_edit/ExternalEdit";
+import { sftp_svc } from "../../wailsjs/go/models";
+import { formatBytes, formatDate, planChainRender } from "../components/terminal/file-manager/utils";
+import {
+  OpenExternalEdit,
+  PrepareExternalEditMerge,
+  SaveExternalEditSessionText,
+} from "../../wailsjs/go/external_edit/ExternalEdit";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -24,8 +36,9 @@ const { codeDiffViewerMock, codeEditorMountMock } = vi.hoisted(() => ({
   codeDiffViewerMock: vi.fn(),
   codeEditorMountMock: vi.fn(),
 }));
-const { prepareExternalEditMergeMock } = vi.hoisted(() => ({
+const { prepareExternalEditMergeMock, getExternalEditSettingsMock } = vi.hoisted(() => ({
   prepareExternalEditMergeMock: vi.fn(),
+  getExternalEditSettingsMock: vi.fn(),
 }));
 
 vi.mock("sonner", () => ({
@@ -40,6 +53,7 @@ vi.mock("../lib/externalEditApi", async () => {
   return {
     ...actual,
     prepareExternalEditMerge: prepareExternalEditMergeMock,
+    getExternalEditSettings: getExternalEditSettingsMock,
   };
 });
 
@@ -162,6 +176,27 @@ function makeExternalEditSession(partial: Partial<ExternalEditSession> & { id: s
   };
 }
 
+function makeExternalEditSettings(defaultEditorId: string): ExternalEditSettings {
+  return {
+    defaultEditorId,
+    workspaceRoot: "/tmp/opskat-sensitive",
+    cleanupRetentionDays: 7,
+    maxReadFileSizeMB: 1,
+    editors: [
+      { id: builtInEditorID, name: "OpsKat", path: "", builtIn: true, available: true, default: false },
+      {
+        id: "system-text",
+        name: "System Text Editor",
+        path: "/opt/sensitive/editor",
+        builtIn: true,
+        available: true,
+        default: false,
+      },
+    ].map((editor) => ({ ...editor, default: editor.id === defaultEditorId })),
+    customEditors: [],
+  };
+}
+
 const realExternalEditPrepareMerge = useExternalEditStore.getState().prepareMerge;
 function makeTransfer(
   partial: Partial<SFTPTransfer> & Pick<SFTPTransfer, "transferId" | "tabId" | "sessionId">
@@ -177,6 +212,25 @@ function makeTransfer(
     status: "active",
     ...partial,
   };
+}
+
+// FileList 测量自己容器的实际宽度来给缩进封顶,而不是接一个 panelWidth prop(面板宽度状态
+// 归 FileManagerPanel 所有,不属于这个切片改动的文件);setup.ts 把 getBoundingClientRect
+// 全局钉死成固定尺寸,这里临时改写返回值来模拟一个更窄/更宽的面板。
+function mockMeasuredPanelWidth(px: number) {
+  return vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: px,
+    bottom: 4000,
+    width: px,
+    height: 4000,
+    toJSON() {
+      return this;
+    },
+  } as DOMRect);
 }
 
 function createDragDataTransfer(): DataTransfer {
@@ -199,6 +253,44 @@ function createDragDataTransfer(): DataTransfer {
   } as unknown as DataTransfer;
 }
 
+type DirListing = sftp_svc.FileEntry[] | Promise<sftp_svc.FileEntry[]>;
+
+function dirEntry(name: string): sftp_svc.FileEntry {
+  return { name, isDir: true, size: 0, modTime: 0 } as sftp_svc.FileEntry;
+}
+
+function fileEntry(name: string): sftp_svc.FileEntry {
+  return { name, isDir: false, size: 12, modTime: 0 } as sftp_svc.FileEntry;
+}
+
+/** 每个目录一份返回值；用数组包住多份表示按调用次序依次取用，用尽后重复最后一份。 */
+function mockDirListings(listings: Record<string, DirListing | DirListing[]>) {
+  const calls: Record<string, number> = {};
+  vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
+    const listing = listings[path];
+    if (listing === undefined) return Promise.resolve([]);
+    if (Array.isArray(listing) && listing.some((item) => Array.isArray(item) || item instanceof Promise)) {
+      const sequence = listing as DirListing[];
+      const index = Math.min(calls[path] ?? 0, sequence.length - 1);
+      calls[path] = (calls[path] ?? 0) + 1;
+      return Promise.resolve(sequence[index]);
+    }
+    return Promise.resolve(listing as sftp_svc.FileEntry[]);
+  });
+}
+
+function listDirCalls(path: string) {
+  return vi.mocked(SFTPListDir).mock.calls.filter((call) => call[1] === path);
+}
+
+function rowOf(text: string): HTMLElement {
+  return screen.getByText(text).closest("[data-sftp-entry-row]") as HTMLElement;
+}
+
+function expandToggle(path: string): HTMLElement {
+  return screen.getByTestId(`sftp-expand-${path}`);
+}
+
 describe("FileManagerPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -210,6 +302,8 @@ describe("FileManagerPanel", () => {
       },
     });
     vi.mocked(PrepareExternalEditMerge).mockResolvedValue(undefined as never);
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings("system-text"));
+    useTabStore.setState({ tabs: [], activeTabId: null });
     useTerminalStore.setState({
       tabData: {
         tab1: {
@@ -1015,6 +1109,175 @@ describe("FileManagerPanel", () => {
     expect(screen.queryByText(/2097152 bytes/)).not.toBeInTheDocument();
   });
 
+  it("opens the built-in editor tab when it is the default editor", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockResolvedValue(
+      makeExternalEditSession({ id: "edit-1", editorId: builtInEditorID }) as never
+    );
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("demo.txt"));
+
+    await waitFor(() => expect(useTabStore.getState().tabs).toHaveLength(1));
+    expect(OpenExternalEdit).toHaveBeenCalledWith({
+      assetId: 101,
+      sessionId: "s1",
+      remotePath: "/srv/app/demo.txt",
+      editorId: builtInEditorID,
+    });
+    const [tab] = useTabStore.getState().tabs;
+    expect(tab.type).toBe("editor");
+    expect(tab.label).toBe("demo.txt");
+    expect(tab.meta).toEqual<EditorTabMeta>({
+      type: "editor",
+      sessionId: "edit-1",
+      assetId: 101,
+      assetName: "asset-101",
+      remotePath: "/srv/app/demo.txt",
+    });
+    expect(useTabStore.getState().activeTabId).toBe(tab.id);
+  });
+
+  it("focuses the existing editor tab instead of opening a second session", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockResolvedValue(
+      makeExternalEditSession({ id: "edit-1", editorId: builtInEditorID }) as never
+    );
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("demo.txt"));
+    await waitFor(() => expect(useTabStore.getState().tabs).toHaveLength(1));
+    useTabStore.setState({ activeTabId: null });
+    await user.dblClick(screen.getByText("demo.txt"));
+
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBe("editor-edit-1"));
+    expect(OpenExternalEdit).toHaveBeenCalledTimes(1);
+    expect(useTabStore.getState().tabs).toHaveLength(1);
+  });
+
+  it("leaves a built-in editor conflict to the editor tab instead of taking over with the pending dialog", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    const session = makeExternalEditSession({ id: "edit-1", editorId: builtInEditorID });
+    vi.mocked(OpenExternalEdit).mockResolvedValue(session as never);
+    vi.mocked(SaveExternalEditSessionText).mockResolvedValue({
+      status: "conflict_remote_changed",
+      message: "远程文件已变更",
+      session: { ...session, state: "conflict" },
+      conflict: { documentKey: session.documentKey, primaryDraftSessionId: session.id },
+    } as never);
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+    await user.dblClick(await screen.findByText("demo.txt"));
+    await waitFor(() => expect(useTabStore.getState().tabs).toHaveLength(1));
+
+    await act(async () => {
+      await useExternalEditStore.getState().saveSessionText("edit-1", "changed");
+    });
+
+    // the editor tab owns this conflict; the panel must not portal a modal over it.
+    expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
+  });
+
+  it("still launches an external editor from the context menu while the built-in one is default", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockResolvedValue(makeExternalEditSession({ id: "edit-1" }) as never);
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    fireEvent.contextMenu(await screen.findByText("demo.txt"), { clientX: 24, clientY: 24 });
+    await screen.findByRole("button", { name: "externalEdit.actions.open" });
+    await new Promise((resolve) => window.setTimeout(resolve, 175));
+    await user.click(screen.getByRole("button", { name: "externalEdit.actions.open" }));
+
+    await waitFor(() =>
+      expect(OpenExternalEdit).toHaveBeenCalledWith({
+        assetId: 101,
+        sessionId: "s1",
+        remotePath: "/srv/app/demo.txt",
+        editorId: "system-text",
+      })
+    );
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("offers settings, download and the external editor when the built-in editor cannot open the file", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockRejectedValueOnce(
+      new Error("读取远程文件失败: 远程文件过大，无法完整读取: /srv/app/secrets.txt (2097152 bytes > 1048576 bytes)")
+    );
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "secrets.txt", isDir: false, size: 2097152, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("secrets.txt"));
+
+    const dialog = await screen.findByTestId("built-in-editor-blocked");
+    expect(within(dialog).getByText("externalEdit.builtIn.oversizeReason")).toBeInTheDocument();
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+    expect(screen.queryByText(/2097152 bytes/)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "externalEdit.builtIn.download" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "externalEdit.builtIn.goToSettings" })).toBeInTheDocument();
+
+    vi.mocked(OpenExternalEdit).mockResolvedValue(makeExternalEditSession({ id: "edit-1" }) as never);
+    await user.click(within(dialog).getByRole("button", { name: "externalEdit.builtIn.openExternal" }));
+
+    await waitFor(() =>
+      expect(OpenExternalEdit).toHaveBeenLastCalledWith({
+        assetId: 101,
+        sessionId: "s1",
+        remotePath: "/srv/app/secrets.txt",
+        editorId: "system-text",
+      })
+    );
+    expect(useTabStore.getState().tabs.some((tab) => tab.type === "editor")).toBe(false);
+  });
+
+  it("names the undecodable reason instead of the raw backend error", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockRejectedValueOnce(new Error("当前文件不是可编辑文本文件"));
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "app.bin", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("app.bin"));
+
+    const dialog = await screen.findByTestId("built-in-editor-blocked");
+    expect(within(dialog).getByText("externalEdit.builtIn.undecodableReason")).toBeInTheDocument();
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("keeps double-click on the external editor path unchanged", async () => {
+    const user = userEvent.setup();
+    vi.mocked(OpenExternalEdit).mockResolvedValue(makeExternalEditSession({ id: "edit-1" }) as never);
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("demo.txt"));
+
+    await waitFor(() =>
+      expect(OpenExternalEdit).toHaveBeenCalledWith({
+        assetId: 101,
+        sessionId: "s1",
+        remotePath: "/srv/app/demo.txt",
+        editorId: undefined,
+      })
+    );
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+  });
+
   it("sanitizes apply merge failures before showing them in the file view", async () => {
     const user = userEvent.setup();
     useExternalEditStore.setState({
@@ -1102,6 +1365,54 @@ describe("FileManagerPanel", () => {
     expect(
       within(pendingDialog).queryByRole("button", { name: "externalEdit.actions.reread" })
     ).not.toBeInTheDocument();
+  });
+
+  // markSessionState 在会话已被移除时返回 nil，SaveResult.Session 因此可能缺席
+  // （session.go:797-804，markRemoteMissingConflict 就会这样返回）。面板拿它去找编辑器 tab
+  // 时不能崩在渲染里；同时 pendingItems 按 session 建项，没有 session 就没有条目，
+  // 弹出来只会是一个空对话框 portal 到 body 上盖住真正在呈现这次失败的界面。
+  it("does not open an empty pending dialog for a conflict result that carries no session", async () => {
+    useExternalEditStore.setState({
+      sessions: {},
+      pendingConflict: {
+        status: "remote_missing",
+        message: "远程文件不存在",
+      },
+    });
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    expect(await screen.findByTestId("sftp-status-bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
+  });
+
+  // 每个终端 tab 都常驻一个文件面板（MainPanel.tsx 用 visibility 隐藏而非卸载），而
+  // pendingConflict 是全局的一份：别的资产的冲突同样不该让这个面板弹对话框 —— pendingItems
+  // 按 assetId 过滤，弹出来还是一个空对话框盖住真正在处理这次冲突的那个面板。
+  it("does not open the pending dialog for a conflict that belongs to another asset", async () => {
+    const conflict = makeExternalEditSession({
+      id: "other-asset-conflict",
+      assetId: 202,
+      assetName: "asset-202",
+      documentKey: "202:/srv/app/other.txt",
+      remotePath: "/srv/app/other.txt",
+      remoteRealPath: "/srv/app/other.txt",
+      state: "conflict",
+      recordState: "conflict",
+    });
+    useExternalEditStore.setState({
+      sessions: {},
+      pendingConflict: {
+        status: "conflict_remote_changed",
+        session: conflict,
+        conflict: { documentKey: conflict.documentKey, primaryDraftSessionId: conflict.id },
+      },
+    });
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    expect(await screen.findByTestId("sftp-status-bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
   });
 
   it("shows runtime non-conflict pending in the same three-action matrix", async () => {
@@ -1367,5 +1678,731 @@ describe("FileManagerPanel", () => {
     } finally {
       elementFromPoint.mockRestore();
     }
+  });
+
+  it("moves a file up one level when it is pointer-dragged onto the .. row", async () => {
+    mockDirListings({ "/srv/app": [fileEntry("app.log")] });
+
+    render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+    await screen.findByText("app.log");
+
+    const fileRow = rowOf("app.log");
+    const parentRow = rowOf("..");
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(parentRow);
+
+    try {
+      fireEvent.pointerDown(fileRow, { button: 0, buttons: 1, clientX: 10, clientY: 10, pointerId: 1 });
+      fireEvent.pointerMove(fileRow, { buttons: 1, clientX: 48, clientY: 48, pointerId: 1 });
+      // 落点在 ".." 上时也要说清这一放会执行什么，和目录行一致。
+      expect(within(parentRow).getByTestId("sftp-drop-hint")).toBeInTheDocument();
+      fireEvent.pointerUp(fileRow, { button: 0, clientX: 48, clientY: 48, pointerId: 1 });
+
+      await waitFor(() => {
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/app.log", "/srv/app.log");
+      });
+    } finally {
+      elementFromPoint.mockRestore();
+    }
+  });
+
+  describe("directory tree", () => {
+    it("expands a directory in place without changing the current path", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), fileEntry("app.log")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app/conf.d");
+      await screen.findByText("default.conf");
+      expect(rowOf("conf.d").dataset.sftpDepth).toBe("0");
+      expect(rowOf("default.conf").dataset.sftpDepth).toBe("1");
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app");
+      expect(screen.getByTestId("sftp-path-input")).toHaveValue("/srv/app");
+    });
+
+    it("shows a loading placeholder for a child layer that is still being fetched", async () => {
+      let resolveChild: (entries: sftp_svc.FileEntry[]) => void = () => {};
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": new Promise<sftp_svc.FileEntry[]>((resolve) => {
+          resolveChild = resolve;
+        }),
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      expect(await screen.findByText("sftp.tree.loading")).toBeInTheDocument();
+      resolveChild([fileEntry("default.conf")]);
+      await screen.findByText("default.conf");
+      expect(screen.queryByText("sftp.tree.loading")).toBeNull();
+    });
+
+    it("marks an expanded but empty child layer as an empty directory", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), fileEntry("app.log")],
+        "/srv/app/conf.d": [],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      const placeholder = await screen.findByText("sftp.empty");
+      expect(placeholder.closest("[data-sftp-depth]")?.getAttribute("data-sftp-depth")).toBe("1");
+      expect(screen.getByText("app.log")).toBeInTheDocument();
+    });
+
+    it("reports a denied child layer with its reason and retries it in place", async () => {
+      vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
+        if (path !== "/srv/app/conf.d") return Promise.resolve([dirEntry("conf.d"), dirEntry("logs")]);
+        return listDirCalls(path).length === 1
+          ? Promise.reject(new Error("permission denied"))
+          : Promise.resolve([fileEntry("default.conf")]);
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+
+      expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
+      expect(screen.getByText("logs")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "sftp.retry" }));
+
+      await screen.findByText("default.conf");
+      expect(screen.queryByText(/permission denied/)).toBeNull();
+    });
+
+    it("re-renders a remembered layer from cache while refreshing it in the background", async () => {
+      let resolveSecond: (entries: sftp_svc.FileEntry[]) => void = () => {};
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": [
+          [fileEntry("default.conf")],
+          new Promise<sftp_svc.FileEntry[]>((resolve) => {
+            resolveSecond = resolve;
+          }),
+        ],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      expect(screen.queryByText("default.conf")).toBeNull();
+
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      // 后台刷新还在飞行中：缓存条目必须立刻可见，而不是退回加载中占位。
+      expect(screen.getByText("default.conf")).toBeInTheDocument();
+      expect(screen.queryByText("sftp.tree.loading")).toBeNull();
+      expect(listDirCalls("/srv/app/conf.d")).toHaveLength(2);
+
+      resolveSecond([fileEntry("renamed.conf")]);
+      await screen.findByText("renamed.conf");
+      expect(screen.queryByText("default.conf")).toBeNull();
+    });
+
+    it("invalidates every expanded layer when the panel is refreshed", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": [[fileEntry("old.conf")], [fileEntry("new.conf")]],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("old.conf");
+
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+
+      await screen.findByText("new.conf");
+      expect(screen.queryByText("old.conf")).toBeNull();
+      expect(listDirCalls("/srv/app")).toHaveLength(2);
+    });
+
+    it("keeps the expanded layers remembered by absolute path across a re-root", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), dirEntry("logs")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+        "/srv/app/logs": [fileEntry("access.log")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.doubleClick(rowOf("logs"));
+      await screen.findByText("access.log");
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app/logs");
+      expect(screen.queryByText("default.conf")).toBeNull();
+
+      fireEvent.click(screen.getByTitle("sftp.parentDir"));
+
+      expect(await screen.findByText("default.conf")).toBeInTheDocument();
+      expect(rowOf("default.conf").dataset.sftpDepth).toBe("1");
+    });
+
+    it("re-requests a remembered layer whose cache was dropped while another root was in view", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d"), dirEntry("logs")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+        "/srv/app/logs": [fileEntry("access.log")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.doubleClick(rowOf("logs"));
+      await screen.findByText("access.log");
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+      await screen.findByText("access.log");
+
+      fireEvent.click(screen.getByTitle("sftp.parentDir"));
+
+      expect(await screen.findByText("default.conf")).toBeInTheDocument();
+      expect(screen.queryByText("sftp.tree.loading")).toBeNull();
+    });
+
+    it("acts on the absolute path of a row that lives in an expanded child layer", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("conf.d")],
+        "/srv/app/conf.d": [fileEntry("default.conf")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("conf.d");
+      fireEvent.click(expandToggle("/srv/app/conf.d"));
+      await screen.findByText("default.conf");
+
+      fireEvent.contextMenu(screen.getByText("default.conf"), { clientX: 24, clientY: 24 });
+      await screen.findByRole("button", { name: "sftp.menu.copyFilePath" });
+      await new Promise((resolve) => window.setTimeout(resolve, 175));
+      fireEvent.click(screen.getByRole("button", { name: "sftp.menu.copyFilePath" }));
+
+      await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith("/srv/app/conf.d/default.conf"));
+    });
+  });
+
+  describe("collapsed chains, indentation cap and extended drag targets", () => {
+    function segmentOf(text: string): HTMLElement {
+      return screen.getByText(text).closest("[data-sftp-entry-path]") as HTMLElement;
+    }
+
+    it("renders a file-less single-child directory chain as one row with independently expandable segments", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+        "/srv/app/a/b": [fileEntry("note.txt")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      // "a" and "b" render as one merged row, each independently addressable.
+      expect(screen.getByText("a").closest("[data-sftp-entry-row]")).toBe(
+        screen.getByText("b").closest("[data-sftp-entry-row]")
+      );
+      expect(SFTPListDir).not.toHaveBeenCalledWith("s1", "/srv/app/a/b");
+
+      fireEvent.click(expandToggle("/srv/app/a/b"));
+      await screen.findByText("note.txt");
+      expect(rowOf("note.txt").dataset.sftpDepth).toBe("1");
+
+      // collapsing the first segment breaks the merge and hides everything below it.
+      fireEvent.click(expandToggle("/srv/app/a"));
+      expect(screen.queryByText("b")).toBeNull();
+      expect(screen.queryByText("note.txt")).toBeNull();
+      expect(screen.getByText("a")).toBeInTheDocument();
+    });
+
+    it("navigates to the exact segment that was double-clicked inside a collapsed chain", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      fireEvent.doubleClick(screen.getByText("a"));
+
+      await waitFor(() => expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/app/a"));
+    });
+
+    it("plans an overflowing collapsed chain so the deepest segment stays inside the row width", () => {
+      // 真机实测:面板内容宽 279px、深度 1 的六段链把最深段的展开按钮画到面板右缘之外 23px,
+      // 而行的 overflow-x 是 visible —— 它既不被裁掉也点不到。首段与最深段必须都留下,中段折进
+      // 一个省略号,省略号自己代表被省略的最深一段(点它换根过去,链里的目录不会因此无法抵达)。
+      const chain = ["lvl6", "lvl7", "lvl8", "lvl9", "lvl10", "lvl11"];
+      const plan = planChainRender(chain, 1, 279, 60);
+
+      expect(plan.width).toBeLessThanOrEqual(plan.available);
+      expect(plan.items).toEqual([
+        { kind: "segment", index: 0 },
+        { kind: "ellipsis", index: 4 },
+        { kind: "segment", index: 5 },
+      ]);
+    });
+
+    it("keeps every segment of a collapsed chain that fits the row width", () => {
+      const chain = ["lvl6", "lvl7", "lvl8", "lvl9", "lvl10", "lvl11"];
+      const plan = planChainRender(chain, 1, 1200, 60);
+
+      expect(plan.width).toBeLessThanOrEqual(plan.available);
+      expect(plan.items.map((item) => item.kind)).toEqual(Array(chain.length).fill("segment"));
+    });
+
+    it("elides the middle of an overflowing chain and keeps the deepest segment clickable", async () => {
+      const levels = ["lvl6", "lvl7", "lvl8", "lvl9", "lvl10", "lvl11"];
+      const pathOf = (upTo: number) => `/srv/app/${levels.slice(0, upTo + 1).join("/")}`;
+      const listings: Record<string, sftp_svc.FileEntry[]> = { "/srv/app": [dirEntry("lvl6"), fileEntry("keep.log")] };
+      levels.forEach((_, i) => {
+        listings[pathOf(i)] = i + 1 < levels.length ? [dirEntry(levels[i + 1])] : [fileEntry("deep.conf")];
+      });
+      mockDirListings(listings);
+
+      // 真机实测的面板内容宽度(默认 280 的面板内是 279px)。
+      const widthSpy = mockMeasuredPanelWidth(279);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+        await screen.findByText("lvl6");
+        // 每一步都点当前最深那一段:它是链继续往下走的唯一入口,任何深度下都必须在行内且可点。
+        for (let i = 0; i < levels.length - 1; i += 1) {
+          fireEvent.click(expandToggle(pathOf(i)));
+          await screen.findByText(levels[i + 1]);
+        }
+
+        const chainRow = rowOf("lvl6");
+        expect(within(chainRow).getByTestId(`sftp-expand-${pathOf(0)}`)).toBeInTheDocument();
+        expect(within(chainRow).getByTestId(`sftp-expand-${pathOf(levels.length - 1)}`)).toBeInTheDocument();
+        for (const middle of [1, 2, 3, 4]) {
+          expect(within(chainRow).queryByTestId(`sftp-expand-${pathOf(middle)}`)).toBeNull();
+        }
+        // 省略号自己是入口:点它换根到被省略的最深一段,那些目录不因省略而无法抵达。
+        fireEvent.click(within(chainRow).getByTestId(`sftp-chain-ellipsis-${pathOf(4)}`));
+        await waitFor(() => expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe(pathOf(4)));
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("caps indentation growth once depth exceeds the panel's width budget", async () => {
+      const depthCount = 12;
+      const listings: Record<string, sftp_svc.FileEntry[]> = {};
+      let path = "/srv/app";
+      for (let i = 0; i < depthCount; i += 1) {
+        // each level also holds a file so the chain never collapses; indentation must
+        // still be observable across 12 distinct rows rather than one merged row.
+        listings[path] = [dirEntry(`d${i}`), fileEntry(`f${i}.txt`)];
+        path = `${path}/d${i}`;
+      }
+      listings[path] = [fileEntry("leaf.txt")];
+      mockDirListings(listings);
+
+      const widthSpy = mockMeasuredPanelWidth(200);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+        await screen.findByText("d0");
+
+        let dirPath = "/srv/app/d0";
+        for (let i = 0; i < depthCount; i += 1) {
+          fireEvent.click(expandToggle(dirPath));
+          const nextLabel = i + 1 < depthCount ? `d${i + 1}` : "leaf.txt";
+          await screen.findByText(nextLabel);
+          dirPath = `${dirPath}/d${i + 1}`;
+        }
+
+        const shallowPadding = parseFloat(rowOf("d1").style.paddingLeft);
+        const deepPadding = parseFloat(rowOf("leaf.txt").style.paddingLeft);
+        // 12 levels at the fixed 12px step would add >130px; capped growth must land far below that.
+        expect(deepPadding - shallowPadding).toBeLessThan(60);
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("keeps a long file name readable by eliding its middle instead of its end", async () => {
+      const longName = "extremely-descriptive-nginx-configuration-file-name-for-testing.conf";
+      vi.mocked(SFTPListDir).mockResolvedValue([{ name: longName, isDir: false, size: 1, modTime: 0 }]);
+
+      const widthSpy = mockMeasuredPanelWidth(160);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+        await waitFor(() => {
+          const rows = document.querySelectorAll("[data-sftp-entry-row]");
+          expect(rows.length).toBeGreaterThan(0);
+        });
+
+        // the ".." parent-directory row renders first when currentPath !== "/"; the file is last.
+        const rows = document.querySelectorAll("[data-sftp-entry-row]");
+        const row = rows[rows.length - 1] as HTMLElement;
+        const rendered = row.textContent ?? "";
+        expect(rendered).not.toContain(longName);
+        expect(rendered).toContain("…");
+        expect(rendered.startsWith(longName.slice(0, 3))).toBe(true);
+        expect(rendered.includes(longName.slice(-2))).toBe(true);
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("highlights and moves a drop onto a deeply nested expanded directory", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("x"), fileEntry("item.log")],
+        // "y" also holds a file so "x"/"y" stay two distinct rows instead of one merged chain.
+        "/srv/app/x": [dirEntry("y"), fileEntry("readme.txt")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("item.log");
+      fireEvent.click(expandToggle("/srv/app/x"));
+      await screen.findByText("y");
+
+      const fileRow = screen.getByText("item.log").closest("[data-sftp-entry-row]")!;
+      const deepRow = screen.getByText("y").closest("[data-sftp-entry-row]")!;
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(deepRow, { dataTransfer });
+      expect(deepRow.className).toContain("bg-primary/10");
+      fireEvent.drop(deepRow, { dataTransfer });
+
+      await waitFor(() => {
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/item.log", "/srv/app/x/y/item.log");
+      });
+    });
+
+    it("moves a drop onto a specific segment of a collapsed chain rather than the deepest one", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a"), fileEntry("item.log")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("item.log");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      const fileRow = screen.getByText("item.log").closest("[data-sftp-entry-row]")!;
+      const segmentA = segmentOf("a");
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(segmentA, { dataTransfer });
+      fireEvent.drop(segmentA, { dataTransfer });
+
+      await waitFor(() => {
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/item.log", "/srv/app/a/item.log");
+      });
+    });
+
+    it("describes the move the drop will perform on the segment it landed on", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a"), fileEntry("item.log")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("item.log");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      const fileRow = screen.getByText("item.log").closest("[data-sftp-entry-row]") as HTMLElement;
+      const segmentA = segmentOf("a");
+      const segmentB = segmentOf("b");
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(segmentA, { dataTransfer });
+
+      // the description sits on the segment that was actually hit, not on the deepest one.
+      expect(within(segmentA).getByTestId("sftp-drop-hint")).toBeInTheDocument();
+      expect(within(segmentB).queryByTestId("sftp-drop-hint")).toBeNull();
+
+      fireEvent.dragEnd(fileRow, { dataTransfer });
+      expect(screen.queryByTestId("sftp-drop-hint")).toBeNull();
+    });
+
+    it("rejects dropping a directory onto itself or onto the directory it already lives in", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+
+      const bRow = screen.getByText("b").closest("[data-sftp-entry-row]")!;
+      const segmentA = segmentOf("a");
+
+      // dropping "b" onto itself
+      let dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(bRow, { dataTransfer });
+      fireEvent.dragOver(bRow, { dataTransfer });
+      expect(bRow.className).not.toContain("bg-primary/10");
+      fireEvent.drop(bRow, { dataTransfer });
+
+      // dropping "b" onto "a", the directory it is already in
+      dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(bRow, { dataTransfer });
+      fireEvent.dragOver(segmentA, { dataTransfer });
+      expect(segmentA.className).not.toContain("bg-primary/10");
+      fireEvent.drop(segmentA, { dataTransfer });
+
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+
+    it("does not treat a file row as a valid drop target", async () => {
+      mockDirListings({
+        "/srv/app": [fileEntry("a.log"), fileEntry("b.log")],
+      });
+
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a.log");
+      await screen.findByText("b.log");
+
+      const sourceRow = screen.getByText("a.log").closest("[data-sftp-entry-row]")!;
+      const fileTargetRow = screen.getByText("b.log").closest("[data-sftp-entry-row]")!;
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(sourceRow, { dataTransfer });
+      fireEvent.dragOver(fileTargetRow, { dataTransfer });
+      expect(fileTargetRow.className).not.toContain("bg-primary/10");
+      fireEvent.drop(fileTargetRow, { dataTransfer });
+
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+  });
+  describe("tree guides, ancestor lineage and the date column", () => {
+    /** 每层都额外放一个文件,独子链折叠因此不生效 —— 用来观察逐级的参考线与祖先链。 */
+    function nestedListings(levels: number) {
+      const listings: Record<string, sftp_svc.FileEntry[]> = {};
+      let path = "/srv/app";
+      for (let i = 0; i < levels; i += 1) {
+        listings[path] = [dirEntry(`d${i}`), fileEntry(`f${i}.txt`)];
+        path = `${path}/d${i}`;
+      }
+      listings[path] = [fileEntry("leaf.txt")];
+      return listings;
+    }
+
+    async function expandChain(levels: number) {
+      let dirPath = "/srv/app/d0";
+      for (let i = 0; i < levels; i += 1) {
+        fireEvent.click(expandToggle(dirPath));
+        await screen.findByText(i + 1 < levels ? `d${i + 1}` : "leaf.txt");
+        dirPath = `${dirPath}/d${i + 1}`;
+      }
+    }
+
+    const guidesOf = (row: HTMLElement) => Array.from(row.querySelectorAll<HTMLElement>("[data-sftp-guide-depth]"));
+    const leftOf = (el: HTMLElement) => parseFloat(el.style.left);
+    /** 行内容的起点(缩进位置);参考线要落在祖先的这个位置上,而不是面板边缘。 */
+    const contentLeftOf = (row: HTMLElement) => parseFloat(row.style.paddingLeft);
+
+    it("draws one vertical guide at each ancestor's own indent position", async () => {
+      mockDirListings(nestedListings(3));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(3);
+
+      expect(guidesOf(rowOf("d0"))).toHaveLength(0);
+      expect(guidesOf(rowOf("d1"))).toHaveLength(1);
+
+      const guides = guidesOf(rowOf("leaf.txt"));
+      expect(guides.map((guide) => guide.dataset.sftpGuideDepth)).toEqual(["0", "1", "2"]);
+      expect(guides.map(leftOf)).toEqual([
+        contentLeftOf(rowOf("d0")),
+        contentLeftOf(rowOf("d1")),
+        contentLeftOf(rowOf("d2")),
+      ]);
+    });
+
+    it("keeps one guide per ancestor once indentation is capped in a narrow panel", async () => {
+      const levels = 12;
+      mockDirListings(nestedListings(levels));
+      const widthSpy = mockMeasuredPanelWidth(200);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={200} onWidthChange={vi.fn()} />);
+        await screen.findByText("d0");
+        await expandChain(levels);
+
+        const guides = guidesOf(rowOf("leaf.txt"));
+        expect(guides).toHaveLength(levels);
+        // 封顶后每级只差极小量,但每一级祖先仍各有一条线,且都落在那一级自己的缩进位置上。
+        const lefts = guides.map(leftOf);
+        expect(lefts.every((left, i) => i === 0 || left > lefts[i - 1])).toBe(true);
+        expect(lefts[levels - 1]).toBe(contentLeftOf(rowOf(`d${levels - 1}`)));
+        expect(lefts[levels - 2]).toBe(contentLeftOf(rowOf(`d${levels - 2}`)));
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("connects a row to its immediate parent's guide", async () => {
+      mockDirListings(nestedListings(2));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(2);
+
+      const leaf = rowOf("leaf.txt");
+      const connector = leaf.querySelector<HTMLElement>("[data-sftp-guide-connector]") as HTMLElement;
+      expect(connector).not.toBeNull();
+      expect(leftOf(connector)).toBe(contentLeftOf(rowOf("d1")));
+      expect(leftOf(connector) + parseFloat(connector.style.width)).toBe(contentLeftOf(leaf));
+    });
+
+    it("highlights the whole ancestor chain while a deep row is hovered", async () => {
+      mockDirListings(nestedListings(3));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(3);
+
+      fireEvent.mouseOver(rowOf("leaf.txt"));
+      expect(rowOf("d0").dataset.sftpHoverLineage).toBe("true");
+      expect(rowOf("d1").dataset.sftpHoverLineage).toBe("true");
+      expect(rowOf("d2").dataset.sftpHoverLineage).toBe("true");
+      expect(rowOf("f0.txt").dataset.sftpHoverLineage).toBeUndefined();
+      expect(rowOf("f2.txt").dataset.sftpHoverLineage).toBeUndefined();
+
+      fireEvent.mouseOver(rowOf("f0.txt"));
+      expect(rowOf("d0").dataset.sftpHoverLineage).toBeUndefined();
+      expect(rowOf("d1").dataset.sftpHoverLineage).toBeUndefined();
+    });
+
+    it("highlights the ancestor chain of the selected row", async () => {
+      mockDirListings(nestedListings(3));
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("d0");
+      await expandChain(3);
+
+      fireEvent.click(rowOf("leaf.txt"));
+      await waitFor(() => expect(rowOf("d2").dataset.sftpLineage).toBe("true"));
+      expect(rowOf("d0").dataset.sftpLineage).toBe("true");
+      expect(rowOf("d1").dataset.sftpLineage).toBe("true");
+      expect(rowOf("f1.txt").dataset.sftpLineage).toBeUndefined();
+
+      fireEvent.click(rowOf("f0.txt"));
+      await waitFor(() => expect(rowOf("d0").dataset.sftpLineage).toBeUndefined());
+      expect(rowOf("d2").dataset.sftpLineage).toBeUndefined();
+    });
+
+    it("keeps guides and lineage coherent when the parent is a collapsed chain", async () => {
+      mockDirListings({
+        "/srv/app": [dirEntry("a")],
+        "/srv/app/a": [dirEntry("b")],
+        "/srv/app/a/b": [fileEntry("note.txt")],
+      });
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a");
+      fireEvent.click(expandToggle("/srv/app/a"));
+      await screen.findByText("b");
+      fireEvent.click(expandToggle("/srv/app/a/b"));
+      await screen.findByText("note.txt");
+
+      const chainRow = rowOf("a");
+      expect(rowOf("b")).toBe(chainRow);
+      // 折叠链在树里就是一行,它下面的行只挂一级 —— 参考线跟着落在链行自己的缩进位置上。
+      const guides = guidesOf(rowOf("note.txt"));
+      expect(guides).toHaveLength(1);
+      expect(leftOf(guides[0])).toBe(contentLeftOf(chainRow));
+
+      fireEvent.mouseOver(rowOf("note.txt"));
+      expect(chainRow.dataset.sftpHoverLineage).toBe("true");
+
+      fireEvent.click(rowOf("note.txt"));
+      await waitFor(() => expect(chainRow.dataset.sftpLineage).toBe("true"));
+    });
+
+    it("drops the date on directory rows and keeps size plus date on file rows", async () => {
+      const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
+      mockDirListings({
+        "/srv/app": [
+          { name: "logs", isDir: true, size: 0, modTime } as sftp_svc.FileEntry,
+          { name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry,
+        ],
+      });
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("app.log");
+
+      expect(within(rowOf("app.log")).getByText(formatBytes(2048))).toBeInTheDocument();
+      expect(within(rowOf("app.log")).getByText(formatDate(modTime))).toBeInTheDocument();
+      expect(within(rowOf("logs")).queryByText(formatDate(modTime))).toBeNull();
+    });
+
+    it("gives the name the width freed by a missing date column", async () => {
+      const base = "very-long-remote-entry-name-that-must-be-elided-in-a-narrow-panel";
+      mockDirListings({ "/srv/app": [dirEntry(`d-${base}`), fileEntry(`f-${base}`)] });
+      const widthSpy = mockMeasuredPanelWidth(320);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={320} onWidthChange={vi.fn()} />);
+        const dirLabel = (await screen.findByTitle(`d-${base}`)).textContent ?? "";
+        const fileLabel = screen.getByTitle(`f-${base}`).textContent ?? "";
+
+        // 同长度、同深度的两个名字:目录行不画日期,那份宽度必须落到名字上。
+        expect(fileLabel).toContain("…");
+        expect(dirLabel.length).toBeGreaterThan(fileLabel.length);
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("keeps the date column at the panel's default width", async () => {
+      const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
+      mockDirListings({
+        "/srv/app": [{ name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry],
+      });
+      // 默认宽度(sftpStore 的 280)的面板内实测只有 279px 内容宽:阈值踩在默认宽度上,
+      // 用户不拖宽面板就永远看不到日期。
+      const widthSpy = mockMeasuredPanelWidth(279);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+        await screen.findByText("app.log");
+
+        expect(within(rowOf("app.log")).getByText(formatDate(modTime))).toBeInTheDocument();
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
+
+    it("collapses the whole date column while the panel is narrower than the column budget", async () => {
+      const modTime = Math.floor(new Date(2026, 2, 4, 10, 0, 0).getTime() / 1000);
+      mockDirListings({
+        "/srv/app": [{ name: "app.log", isDir: false, size: 2048, modTime } as sftp_svc.FileEntry],
+      });
+      // 被拖到明显比默认宽度窄(阈值 240 以下)的面板才收起整列。
+      const widthSpy = mockMeasuredPanelWidth(210);
+      try {
+        render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={210} onWidthChange={vi.fn()} />);
+        await screen.findByText("app.log");
+
+        expect(within(rowOf("app.log")).getByText(formatBytes(2048))).toBeInTheDocument();
+        expect(within(rowOf("app.log")).queryByText(formatDate(modTime))).toBeNull();
+      } finally {
+        widthSpy.mockRestore();
+      }
+    });
   });
 });

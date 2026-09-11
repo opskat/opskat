@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { notifySuccess } from "@/lib/notify";
 import {
   applyExternalEditMerge,
+  builtInEditorID,
   compareExternalEditSession,
   continueExternalEditSession,
   type ExternalEditCompareResult,
@@ -9,12 +10,14 @@ import {
   type ExternalEditMergePrepareResult,
   type ExternalEditSaveResult,
   type ExternalEditSession,
+  type ExternalEditSettings,
   listExternalEditSessions,
   prepareExternalEditMerge,
   recoverExternalEditSession,
   refreshExternalEditSession,
   resolveExternalEditConflict,
   saveExternalEditSession,
+  saveExternalEditSessionText,
 } from "@/lib/externalEditApi";
 
 export interface ExternalEditDocumentView {
@@ -65,6 +68,8 @@ interface ExternalEditState {
   selectedError: ExternalEditSession | null;
   fetchSessions: () => Promise<void>;
   saveSession: (sessionId: string) => Promise<ExternalEditSaveResult>;
+  /** 内置编辑器的显式保存：文本来自编辑器而不是本地副本，其余走同一条含冲突检测的保存路径。 */
+  saveSessionText: (sessionId: string, text: string) => Promise<ExternalEditSaveResult>;
   refreshSession: (sessionId: string) => Promise<ExternalEditSession>;
   compareSession: (sessionId: string) => Promise<ExternalEditCompareResult>;
   prepareMerge: (sessionId: string) => Promise<ExternalEditMergePrepareResult>;
@@ -83,6 +88,16 @@ interface ExternalEditState {
   openErrorDetail: (sessionId: string) => void;
   dismissErrorDetail: () => void;
   applyEvent: (event: ExternalEditEvent) => void;
+}
+
+/**
+ * 「用外部编辑器打开」要打开的编辑器：默认编辑器就是内置项时必须显式点名一个可用的外部编辑器，
+ * 否则后端会把空 editorId 解析回内置项、又开回应用内的编辑器。挑不到外部编辑器时没有出路（null）。
+ */
+export function resolveExternalEditorTarget(settings: ExternalEditSettings): { editorId?: string } | null {
+  if (settings.defaultEditorId !== builtInEditorID) return {};
+  const external = settings.editors.find((editor) => editor.available && editor.id !== builtInEditorID);
+  return external ? { editorId: external.id } : null;
 }
 
 export function buildExternalEditDocuments(sessions: Record<string, ExternalEditSession>): ExternalEditDocumentView[] {
@@ -406,6 +421,20 @@ function compareRemoteMissingResultToSaveResult(result: ExternalEditCompareResul
   };
 }
 
+// 保存类调用（本地副本保存 / 内置编辑器文本保存）对返回结果的处理完全一致：
+// 收下新会话，并且只有需要用户二次决策的冲突才升级成 pendingConflict。
+function applySaveResult(state: ExternalEditState, result: ExternalEditSaveResult) {
+  return {
+    sessions: upsertSession(state, result.session),
+    ...scrubExternalEditRuntimeState(state, result.session),
+    pendingConflict:
+      !isExternalEditClipboardResidueSaveResult(result) &&
+      (result.status === "conflict_remote_changed" || result.status === "remote_missing")
+        ? result
+        : null,
+  };
+}
+
 function sessionToRefreshConflictResult(session: ExternalEditSession): ExternalEditSaveResult {
   const remoteMissing = session.state === "remote_missing";
   return {
@@ -451,15 +480,18 @@ export const useExternalEditStore = create<ExternalEditState>((set) => ({
     set({ savingSessionId: sessionId });
     try {
       const result = await saveExternalEditSession(sessionId);
-      set((state) => ({
-        sessions: upsertSession(state, result.session),
-        ...scrubExternalEditRuntimeState(state, result.session),
-        pendingConflict:
-          !isExternalEditClipboardResidueSaveResult(result) &&
-          (result.status === "conflict_remote_changed" || result.status === "remote_missing")
-            ? result
-            : null,
-      }));
+      set((state) => applySaveResult(state, result));
+      return result;
+    } finally {
+      set({ savingSessionId: null });
+    }
+  },
+
+  saveSessionText: async (sessionId, text) => {
+    set({ savingSessionId: sessionId });
+    try {
+      const result = await saveExternalEditSessionText(sessionId, text);
+      set((state) => applySaveResult(state, result));
       return result;
     } finally {
       set({ savingSessionId: null });

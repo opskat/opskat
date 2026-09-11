@@ -115,19 +115,19 @@ func (s *Service) resolveDocumentTransport(session *Session) (*documentTransport
 
 	candidates := s.documentCandidateSessionIDs(session)
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditReconnectHint)
+		return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditUnreachableHint)
 	}
 
 	var firstMatch *documentTransport
 	var missingMatch *documentTransport
 	reachableDifferentDocument := false
 	for _, candidateID := range candidates {
-		transport, sameDocument, err := s.inspectDocumentTransport(session, candidateID)
+		transport, outcome, err := s.inspectDocumentTransport(session, candidateID)
 		if err != nil {
 			return nil, err
 		}
 		if transport == nil {
-			if !sameDocument {
+			if outcome == documentProbeDifferentDocument {
 				reachableDifferentDocument = true
 			}
 			continue
@@ -152,7 +152,7 @@ func (s *Service) resolveDocumentTransport(session *Session) (*documentTransport
 	if reachableDifferentDocument {
 		return nil, fmt.Errorf("当前文件位置已变化，无法确认仍是同一份远程文件；%s", externalEditReconnectHint)
 	}
-	return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditReconnectHint)
+	return nil, fmt.Errorf("当前远程文件已不可访问；%s", externalEditUnreachableHint)
 }
 
 func (s *Service) validateOverwriteTransport(session *Session, info *sftp_svc.RemoteFileInfo) error {
@@ -200,43 +200,62 @@ func (s *Service) documentCandidateSessionIDs(session *Session) []string {
 	return candidates
 }
 
-func (s *Service) inspectDocumentTransport(session *Session, candidateID string) (*documentTransport, bool, error) {
+// documentProbeOutcome 区分探测单个候选会话时的两类否定结论。二者的出路不同：
+// 不可达要求用户重连该资产，「已不是同一份文件」要求重新打开文件，因此不能合并成一个布尔。
+// 它只在 error 为 nil 时有意义：探测直接失败时结论由 error 自己带，调用方先看 error。
+type documentProbeOutcome int
+
+const (
+	// documentProbeUnreachable：候选会话连不上，拿不到任何关于远端文件的结论。
+	documentProbeUnreachable documentProbeOutcome = iota
+	// documentProbeDifferentDocument：候选会话可达，但该远程路径上已不是同一份文件。
+	documentProbeDifferentDocument
+	// documentProbeSameDocument：候选会话可达且确认仍是同一份文件，transport 非 nil。
+	documentProbeSameDocument
+)
+
+func (s *Service) inspectDocumentTransport(
+	session *Session,
+	candidateID string,
+) (*documentTransport, documentProbeOutcome, error) {
 	if session == nil || candidateID == "" {
-		return nil, false, nil
+		return nil, documentProbeUnreachable, nil
 	}
 
 	info, err := s.remote.Stat(candidateID, session.RemotePath)
 	if err != nil {
 		if isRemoteMissingError(err) {
 			if !canConfirmRemotePathWithoutStat(session) {
-				return nil, false, fmt.Errorf("当前远程文件位置已变化，无法确认是否仍是同一份文件；%s", externalEditReconnectHint)
+				// 与 resolveDocumentTransport / validateOverwriteTransport 用同一句结论：
+				// 分成两句写法只会让 buildErrorSnapshot 的分类漏掉这一条，用户拿到兜底文案。
+				return nil, documentProbeUnreachable, fmt.Errorf("当前文件位置已变化，无法确认仍是同一份远程文件；%s", externalEditReconnectHint)
 			}
 			return &documentTransport{
 				SessionID:     candidateID,
 				RemotePath:    session.RemotePath,
 				CanonicalPath: session.RemoteRealPath,
 				Missing:       true,
-			}, true, nil
+			}, documentProbeSameDocument, nil
 		}
 		if isSSHSessionMissingError(err) {
-			return nil, false, nil
+			return nil, documentProbeUnreachable, nil
 		}
-		return nil, false, fmt.Errorf("验证当前远程文件失败: %w", err)
+		return nil, documentProbeUnreachable, fmt.Errorf("验证当前远程文件失败: %w", err)
 	}
 	if info.IsDir || !info.Regular {
-		return nil, false, fmt.Errorf("当前远程路径已不是常规文件")
+		return nil, documentProbeUnreachable, fmt.Errorf("当前远程路径已不是常规文件")
 	}
 
 	canonicalPath := canonicalRemotePath(info, session.RemotePath)
 	if buildDocumentKey(session.AssetID, canonicalPath) != session.DocumentKey {
-		return nil, false, nil
+		return nil, documentProbeDifferentDocument, nil
 	}
 	return &documentTransport{
 		SessionID:     candidateID,
 		RemotePath:    session.RemotePath,
 		CanonicalPath: canonicalPath,
 		Info:          info,
-	}, true, nil
+	}, documentProbeSameDocument, nil
 }
 
 func (s *Service) bindSessionTransport(sessionID string, transport *documentTransport) (*Session, error) {
@@ -393,7 +412,7 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 		current.Dirty = false
 		current.State = sessionStateClean
 		current.RecordState = recordStateActive
-		current.SaveMode = saveModeAutoLive
+		current.SaveMode = saveModeForEditor(editor.ID)
 		current.Hidden = false
 		current.Expired = false
 		current.LastError = nil
@@ -428,7 +447,7 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 			LastLocalSHA256: baseHash,
 			State:           sessionStateClean,
 			RecordState:     recordStateActive,
-			SaveMode:        saveModeAutoLive,
+			SaveMode:        saveModeForEditor(editor.ID),
 			CreatedAt:       nowUnix,
 			UpdatedAt:       nowUnix,
 			LastLaunchedAt:  nowUnix,
@@ -449,7 +468,7 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 	cloned := cloneSession(session)
 	s.mu.Unlock()
 
-	if err := s.launch.Launch(editor.Path, append(cloneArgs(editor.Args), localPath)); err != nil {
+	if err := s.launchEditorProcess(editor.ID, editor.Path, editor.Args, localPath); err != nil {
 		if source == nil {
 			s.cleanupSessionAfterLaunchFailure(session.ID)
 		}
