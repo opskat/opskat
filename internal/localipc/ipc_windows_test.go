@@ -57,7 +57,9 @@ func TestWindowsDirectoryAliasesAndIsolation(t *testing.T) {
 	require.NoError(t, <-done)
 
 	// Inspect the actual kernel object's DACL, not just a config string.
-	sd, err := windows.GetNamedSecurityInfo(name, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	fd, ok := c.(interface{ Fd() uintptr })
+	require.True(t, ok)
+	sd, err := windows.GetSecurityInfo(windows.Handle(fd.Fd()), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	require.NoError(t, err)
 	sddl := sd.String()
 	require.Contains(t, sddl, sid)

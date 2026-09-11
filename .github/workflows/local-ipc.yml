@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           go mod download github.com/Microsoft/go-winio
-          gofmt -w internal/localipc internal/approval internal/sshpool cmd/opsctl/command/interactive.go
+          gofmt -w internal/localipc internal/approval internal/sshpool cmd/opsctl/command/interactive*.go
           git diff > ipc-generated.patch
       - uses: actions/upload-artifact@v7
         with:
@@ -35,3 +35,28 @@ jobs:
           path: ipc-generated.patch
       - name: Test IPC
         run: go test -race -count=1 -timeout=3m ./internal/localipc ./internal/approval ./internal/sshpool
+      - name: Test CLI approval routing
+        run: go test -count=1 -timeout=5m ./cmd/opsctl/command -run 'TestChooseApproverWithRealIPC|TestRequireApproval|TestChooseApprover|TestIsInteractive'
+      - name: Probe Windows AF_UNIX in isolated directories
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $id = [guid]::NewGuid().ToString('N').Substring(0,8)
+          $plain = Join-Path $env:LOCALAPPDATA "ipc-a-$id"
+          $link = Join-Path $env:LOCALAPPDATA "ipc-j-$id"
+          $other = "D:\ipc-d-$id"
+          $other += 'x' * ($plain.Length - $other.Length)
+          New-Item -ItemType Directory $plain,$other | Out-Null
+          try {
+            New-Item -ItemType Junction -Path $link -Target $other | Out-Null
+            ./scripts/Test-WindowsUnixSocket.ps1 -BindDirectory $plain,$other,$link,$link,$other -ConnectDirectory $plain,$other,$link,$other,$link | Set-Content ipc-probe.jsonl
+            Get-Content ipc-probe.jsonl
+          } finally {
+            if (Test-Path -LiteralPath $link) { Remove-Item -LiteralPath $link -Force }
+            Remove-Item -LiteralPath $plain,$other -Recurse -Force
+          }
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: windows-af-unix-probe
+          path: ipc-probe.jsonl

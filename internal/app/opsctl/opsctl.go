@@ -1,4 +1,4 @@
-// Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 Unix socket 桥（审批 + 资产 + SSH 池代理）。
+// Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 本地 IPC 桥（审批 + 资产 + SSH 池代理）。
 //
 // 只有一个 Wails 绑定方法（RespondOpsctlApproval）；其它都是底层服务。
 package opsctl
@@ -22,7 +22,7 @@ type WindowActivator interface {
 	ActivateWindow()
 }
 
-// ExtToolExecutor 在 opsctl Unix socket 收到 ext_tool 请求时回调到 ai/extension binder。
+// ExtToolExecutor 在 opsctl 本地 IPC 收到 ext_tool 请求时回调到 ai/extension binder。
 // 由 main.go 注入：通常实现是 extension binder 的 service.Bridge().CallTool 包装。
 type ExtToolExecutor interface {
 	ExecuteExtTool(ctx context.Context, extName, tool string, args []byte) ([]byte, error)
@@ -70,14 +70,14 @@ func New(
 	}
 }
 
-// Startup 启动 Unix socket 服务（审批 + SSH 代理）。
+// Startup 启动 本地 IPC 服务（审批 + SSH 代理）。
 func (o *Opsctl) Startup(ctx context.Context) {
 	o.ctx = ctx
 	o.startApprovalServer()
 	o.startSSHPoolServer()
 }
 
-// Cleanup 关闭两个 Unix socket 服务。
+// Cleanup 关闭两个 本地 IPC 服务。
 func (o *Opsctl) Cleanup() {
 	if o.proxyServer != nil {
 		o.proxyServer.Stop()

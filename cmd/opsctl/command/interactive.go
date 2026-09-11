@@ -3,8 +3,8 @@ package command
 import (
 	"os"
 
-	"github.com/opskat/opskat/internal/localipc"
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/localipc"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 )

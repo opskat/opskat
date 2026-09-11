@@ -1,8 +1,8 @@
 package approval
 
 import (
-	"path/filepath"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -41,7 +41,7 @@ func TestIPCApprovalAuthenticationAndDecision(t *testing.T) {
 	other := NewServer(func(ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "test-token")
 	require.Error(t, other.Start(path))
 	server.Stop()
-	_, err := RequestApprovalWithToken(path, "test-token", ApprovalRequest{})
+	_, err = RequestApprovalWithToken(path, "test-token", ApprovalRequest{})
 	require.Error(t, err)
 	// A fresh server can reuse the endpoint after shutdown.
 	require.NoError(t, other.Start(path))
