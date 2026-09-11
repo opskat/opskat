@@ -44,13 +44,6 @@ func CheckPermission(ctx context.Context, assetType string, assetID int64, comma
 // checkCommandPolicyPermission 走 CommandPolicy + grant 的命令策略校验，
 // 适用于所有把"命令文本"作为执行单元的资产类型（目前是 SSH 和串口）。
 func checkCommandPolicyPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
-	// 解析失败或没有可枚举的执行单元（注释/空白等）都退回 aictx.NeedConfirm，
-	// 不能整串匹配，否则 `allow *` 会误放行 parser 失败或仅注释的输入。
-	subCmds, err := policy.ExtractSubCommands(command)
-	if err != nil || len(subCmds) == 0 {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm}
-	}
-
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
 		logger.Default().Warn("get asset for permission check", zap.Int64("assetID", assetID), zap.Error(err))
@@ -62,8 +55,15 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 
 	// 策略检查
 	allPolicies := collectPolicies(ctx, asset, groups)
-	allDenyRules := collectDenyRules(allPolicies)
-	allAllowRules := commandAllowRules(collectAllowRules(allPolicies))
+	allDenyRules := policy.ShellCommandRules(collectDenyRules(allPolicies))
+	allAllowRules := policy.ShellCommandRules(collectAllowRules(allPolicies))
+
+	// 解析失败或没有可枚举的执行单元（纯赋值/注释等）时不能整串匹配规则，
+	// 否则 `ls *` 这类规则会误放行 parser 失败的输入；只按独立 `*` 判定。
+	subCmds, parseErr := policy.ExtractSubCommands(command)
+	if parseErr != nil || len(subCmds) == 0 {
+		return policy.DecideUnenumerableShell(ctx, command, parseErr, allAllowRules, allDenyRules)
+	}
 
 	// deny list
 	for _, cmd := range subCmds {
@@ -105,16 +105,6 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 		}
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm, HintRules: filteredHints}
-}
-
-func commandAllowRules(rules []string) []string {
-	filtered := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		if !strings.HasPrefix(rule, "cp:") {
-			filtered = append(filtered, rule)
-		}
-	}
-	return filtered
 }
 
 // --- Database ---
@@ -238,10 +228,20 @@ func checkEtcdPermission(ctx context.Context, assetID int64, command string) aic
 func checkK8sPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
 	// K8s 也是 shell 类，组通用策略要按 AST 子命令逐条比对，避免整串匹配把
 	// `kubectl get pods && curl evil` 这类组合命令误放行。
-	// 解析失败或子命令为空（注释/空白等）一律 aictx.NeedConfirm，不退回整串。
-	subCmds, err := policy.ExtractSubCommands(command)
-	if err != nil || len(subCmds) == 0 {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	// 解析失败或子命令为空（纯赋值/注释等）时不退回整串：组通用 CmdPolicy 与 K8s 策略
+	// 两层规则合并后只按独立 `*` 判定。
+	subCmds, parseErr := policy.ExtractSubCommands(command)
+	if parseErr != nil || len(subCmds) == 0 {
+		asset := resolveAssetForPolicy(ctx, assetID)
+		k8sPolicy := policy.EffectiveK8sPolicy(ctx, collectK8sPolicies(ctx, asset))
+		allowRules, denyRules := k8sPolicy.AllowList, k8sPolicy.DenyList
+		if asset != nil && asset.GroupID > 0 {
+			groupAllow, groupDeny := policy.GroupGenericCommandRules(ctx, policy.ResolveGroupChain(ctx, asset.GroupID))
+			allowRules = append(allowRules, groupAllow...)
+			denyRules = append(denyRules, groupDeny...)
+		}
+		return policy.DecideUnenumerableShell(ctx, command, parseErr,
+			policy.ShellCommandRules(allowRules), policy.ShellCommandRules(denyRules))
 	}
 
 	groupResult := policy.CheckGroupGenericPolicy(ctx, assetID, subCmds, policy.MatchCommandRule)
