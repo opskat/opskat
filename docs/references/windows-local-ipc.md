@@ -62,7 +62,7 @@ flowchart TD
 
 ## Transport choice and boundaries
 
-`internal/localipc` owns `Listen`, `Dial`, and `DialContext`. All five client
+`internal/localipc` owns `Listen`, `Dial`, and `DialContext`. All client
 connection sites and both listeners use it. Existing `SocketPath` APIs remain
 logical identifiers; on Windows they are not filesystem socket addresses.
 

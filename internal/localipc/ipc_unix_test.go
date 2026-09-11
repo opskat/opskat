@@ -37,7 +37,7 @@ func TestUnixPreservesNonSocketPaths(t *testing.T) {
 	for _, path := range []string{file, link} {
 		_, err := Listen(path)
 		require.Error(t, err)
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // Both paths were created in this test's temporary directory.
 		require.NoError(t, err)
 		require.Equal(t, "keep", string(data))
 	}
