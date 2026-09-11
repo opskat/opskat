@@ -60,7 +60,7 @@ func (o *Opsctl) startApprovalServer() {
 
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-	kind := permission.ApprovalKindForType(req.Type)
+	kind := permission.ApprovalKindFor(req.Type, req.Command)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", req.Type),

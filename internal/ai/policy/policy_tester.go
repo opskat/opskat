@@ -76,6 +76,38 @@ func collectGroupGenericRules(ctx context.Context, groups []*group_entity.Group)
 	return
 }
 
+// GroupGenericCommandRules 返回组链通用策略（CmdPolicy，含引用的权限组）的 allow/deny 规则文本。
+func GroupGenericCommandRules(ctx context.Context, groups []*group_entity.Group) (allow, deny []string) {
+	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
+	return taggedRuleTexts(groupAllow), taggedRuleTexts(groupDeny)
+}
+
+func taggedRuleTexts(rules []taggedRule) []string {
+	texts := make([]string, 0, len(rules))
+	for _, tr := range rules {
+		texts = append(texts, tr.Rule)
+	}
+	return texts
+}
+
+// unenumerableTestOutput 把 DecideUnenumerableShell 的结论转成面板输出，
+// 按命中的规则文本从带标签的规则里回填来源。
+func unenumerableTestOutput(result aictx.CheckResult, tagged ...[]taggedRule) PolicyTestOutput {
+	out := PolicyTestOutput{Decision: result.Decision, MatchedPattern: result.MatchedPattern, Message: result.Message}
+	if result.MatchedPattern == "" {
+		return out
+	}
+	for _, rules := range tagged {
+		for _, tr := range rules {
+			if tr.Rule == result.MatchedPattern {
+				out.MatchedSource = tr.Source
+				return out
+			}
+		}
+	}
+	return out
+}
+
 // checkGenericDeny 用指定的 matcher 检查 deny 规则
 func checkGenericDeny(rules []taggedRule, command string, matchFn MatchFunc) *PolicyTestOutput {
 	for _, tr := range rules {
@@ -107,12 +139,6 @@ func checkGenericAllow(rules []taggedRule, command string, matchFn MatchFunc) *P
 // --- SSH ---
 
 func testSSHPolicy(ctx context.Context, current *asset_entity.CommandPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
-	subCmds, err := ExtractSubCommands(command)
-	if err != nil || len(subCmds) == 0 {
-		// 不能整串 fallback，否则与真实路径不一致
-		return PolicyTestOutput{Decision: aictx.NeedConfirm}
-	}
-
 	var denyRules, allowRules []taggedRule
 
 	// 当前编辑的策略（资产自身）
@@ -143,6 +169,14 @@ func testSSHPolicy(ctx context.Context, current *asset_entity.CommandPolicy, gro
 	allowFlat := make([]string, 0, len(allowRules))
 	for _, r := range allowRules {
 		allowFlat = append(allowFlat, r.Rule)
+	}
+
+	// 与真实路径一致：拆不出子命令时不整串匹配，只按独立 `*` 判定
+	subCmds, err := ExtractSubCommands(command)
+	if err != nil || len(subCmds) == 0 {
+		result := DecideUnenumerableShell(ctx, command, err,
+			ShellCommandRules(allowFlat), ShellCommandRules(taggedRuleTexts(denyRules)))
+		return unenumerableTestOutput(result, denyRules, allowRules)
 	}
 
 	// deny 检查
@@ -427,13 +461,19 @@ func testOSSPolicy(ctx context.Context, current *asset_entity.OSSPolicy, groups 
 // --- K8S ---
 
 func testK8sPolicy(ctx context.Context, current *asset_entity.K8sPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
-	// 与真实 checkK8sPermission 对齐：先按 AST 拆 → 走组通用 CmdPolicy → 再走 K8s 策略。
+	// 与真实 checkK8sPermission 对齐：先按 AST 拆 → 走组通用 CmdPolicy → 再走 K8s 策略；
+	// 拆不出子命令时两层规则合并，只按独立 `*` 判定。
+	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
+	merged := mergeK8sPoliciesForTest(ctx, current, groups)
+
 	subCmds, err := ExtractSubCommands(command)
 	if err != nil || len(subCmds) == 0 {
-		return PolicyTestOutput{Decision: aictx.NeedConfirm}
+		effective := EffectiveK8sPolicy(ctx, merged)
+		result := DecideUnenumerableShell(ctx, command, err,
+			ShellCommandRules(append(taggedRuleTexts(groupAllow), effective.AllowList...)),
+			ShellCommandRules(append(taggedRuleTexts(groupDeny), effective.DenyList...)))
+		return unenumerableTestOutput(result, groupDeny, groupAllow)
 	}
-
-	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
 
 	// 组通用 deny：任一子命令命中即拒
 	for _, sub := range subCmds {
@@ -446,7 +486,6 @@ func testK8sPolicy(ctx context.Context, current *asset_entity.K8sPolicy, groups 
 	// 组通用 allow：每条子命令都命中才算 allow
 	groupAllowDecision := groupGenericAllowAllSubCmds(groupAllow, subCmds, MatchCommandRule)
 
-	merged := mergeK8sPoliciesForTest(ctx, current, groups)
 	result := checkK8sPolicyRules(ctx, EffectiveK8sPolicy(ctx, merged), command)
 	if result.Decision == aictx.Deny {
 		return PolicyTestOutput{

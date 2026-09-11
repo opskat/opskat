@@ -44,13 +44,6 @@ func CheckPermission(ctx context.Context, assetType string, assetID int64, comma
 // checkCommandPolicyPermission 走 CommandPolicy + grant 的命令策略校验，
 // 适用于所有把"命令文本"作为执行单元的资产类型（目前是 SSH 和串口）。
 func checkCommandPolicyPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
-	// 解析失败或没有可枚举的执行单元（注释/空白等）都退回 aictx.NeedConfirm，
-	// 不能整串匹配，否则 `allow *` 会误放行 parser 失败或仅注释的输入。
-	subCmds, err := policy.ExtractSubCommands(command)
-	if err != nil || len(subCmds) == 0 {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm}
-	}
-
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
 		logger.Default().Warn("get asset for permission check", zap.Int64("assetID", assetID), zap.Error(err))
@@ -62,8 +55,15 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 
 	// 策略检查
 	allPolicies := collectPolicies(ctx, asset, groups)
-	allDenyRules := collectDenyRules(allPolicies)
-	allAllowRules := commandAllowRules(collectAllowRules(allPolicies))
+	allDenyRules := policy.ShellCommandRules(collectDenyRules(allPolicies))
+	allAllowRules := policy.ShellCommandRules(collectAllowRules(allPolicies))
+
+	// 解析失败或没有可枚举的执行单元（纯赋值/注释等）时不能整串匹配规则，
+	// 否则 `ls *` 这类规则会误放行 parser 失败的输入；只按独立 `*` 判定。
+	subCmds, parseErr := policy.ExtractSubCommands(command)
+	if parseErr != nil || len(subCmds) == 0 {
+		return policy.DecideUnenumerableShell(ctx, command, parseErr, allAllowRules, allDenyRules)
+	}
 
 	// deny list
 	for _, cmd := range subCmds {
@@ -105,16 +105,6 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 		}
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm, HintRules: filteredHints}
-}
-
-func commandAllowRules(rules []string) []string {
-	filtered := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		if !strings.HasPrefix(rule, "cp:") {
-			filtered = append(filtered, rule)
-		}
-	}
-	return filtered
 }
 
 // --- Database ---
@@ -238,10 +228,20 @@ func checkEtcdPermission(ctx context.Context, assetID int64, command string) aic
 func checkK8sPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
 	// K8s 也是 shell 类，组通用策略要按 AST 子命令逐条比对，避免整串匹配把
 	// `kubectl get pods && curl evil` 这类组合命令误放行。
-	// 解析失败或子命令为空（注释/空白等）一律 aictx.NeedConfirm，不退回整串。
-	subCmds, err := policy.ExtractSubCommands(command)
-	if err != nil || len(subCmds) == 0 {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	// 解析失败或子命令为空（纯赋值/注释等）时不退回整串：组通用 CmdPolicy 与 K8s 策略
+	// 两层规则合并后只按独立 `*` 判定。
+	subCmds, parseErr := policy.ExtractSubCommands(command)
+	if parseErr != nil || len(subCmds) == 0 {
+		asset := resolveAssetForPolicy(ctx, assetID)
+		k8sPolicy := policy.EffectiveK8sPolicy(ctx, collectK8sPolicies(ctx, asset))
+		allowRules, denyRules := k8sPolicy.AllowList, k8sPolicy.DenyList
+		if asset != nil && asset.GroupID > 0 {
+			groupAllow, groupDeny := policy.GroupGenericCommandRules(ctx, policy.ResolveGroupChain(ctx, asset.GroupID))
+			allowRules = append(allowRules, groupAllow...)
+			denyRules = append(denyRules, groupDeny...)
+		}
+		return policy.DecideUnenumerableShell(ctx, command, parseErr,
+			policy.ShellCommandRules(allowRules), policy.ShellCommandRules(denyRules))
 	}
 
 	groupResult := policy.CheckGroupGenericPolicy(ctx, assetID, subCmds, policy.MatchCommandRule)
@@ -747,25 +747,20 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 
 // --- SaveGrantPattern ---
 
-// shellGrantPatterns 是 SSH / K8s 注册的 grant 归一化：按行 + policy.ExtractSubCommands 拆。
+// shellGrantPatterns 是 SSH / K8s 注册的 grant 归一化：整串走 policy.ExtractSubCommands 拆。
 // 复合命令必须按子命令存，否则 `ls /tmp && cat /etc/hosts` 会被存成单条 pattern，
 // 后续 grant 子命令匹配永远命中失败。
-// AST 解析失败时退回原行，让上层依旧能存下 grant；下次匹配同样会解析失败走 aictx.NeedConfirm。
+//
+// 拆法必须与 checkCommandPolicyPermission 一致——整串拆、不按行切：逐行切会把跨行的
+// for/if 切成解析失败的碎片，也会让"第二行解析失败"的命令留下第一行的 pattern。
+// 拆不出子命令（解析失败 / 只有赋值、注释）时交出空列表：这类命令每次检查都拆不出子命令，
+// 任何 pattern 都匹配不上它，落库只会留下一条永远不生效的授权。
 func shellGrantPatterns(command string, _ GrantOrigin) []string {
-	var patterns []string
-	for line := range strings.SplitSeq(command, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		subCmds, _ := policy.ExtractSubCommands(line)
-		if len(subCmds) == 0 {
-			patterns = append(patterns, line)
-		} else {
-			patterns = append(patterns, subCmds...)
-		}
+	subCmds, err := policy.ExtractSubCommands(command)
+	if err != nil {
+		return nil
 	}
-	return patterns
+	return subCmds
 }
 
 // GrantPatternsFunc 把一条审批输入拆成可独立匹配的 grant pattern 列表。

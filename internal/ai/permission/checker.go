@@ -282,8 +282,9 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	if len(detail) > 0 {
 		item.Detail = detail[0]
 	}
-	resp := c.confirmFunc(ctx, ApprovalKindSingle, []ApprovalItem{item})
-	parsed, parseErr := ParseApprovalResponse(ApprovalKindSingle, resp, []ApprovalItem{item})
+	kind := ApprovalKindFor(approvalType, command)
+	resp := c.confirmFunc(ctx, kind, []ApprovalItem{item})
+	parsed, parseErr := ParseApprovalResponse(kind, resp, []ApprovalItem{item})
 	if parseErr != nil || parsed.Decision == ApprovalDeny {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyFmt(ctx, "USER DENIED: The user has denied execution of command: %s. Stop the current task immediately.", "用户拒绝：用户已拒绝执行命令: %s。请立即停止当前任务。", command), DecisionSource: aictx.SourceUserDeny}
 	}
@@ -307,12 +308,10 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// ApprovalSubject）。两者都是策略串形状，混成一种就等于把适配器给出的主体
 		// 当用户 pattern 放行——设计 §4.3 记下的正是这个洞。
 		//
-		// 分支条件是"用户有没有编辑"，**不是**"归一化后是不是空"。两者看起来等价，
-		// 因为 shell 类的 shellGrantPatterns 对任何非空白输入至少给一条 pattern（而
-		// ParseApprovalResponse 已经保证编辑项的 Command 非空白），所以对 SSH/K8s 这两种
-		// 写法逐字节同解。OSS 不然：空列表对它是个正常答案（下面那段注释说的 D20），
-		// 于是"编辑了但用不了"会掉进兜底，把用户的编辑**静默换成系统主体**——用户改这
-		// 一栏通常是想收窄，却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
+		// 分支条件是"用户有没有编辑"，**不是**"归一化后是不是空"：空列表是正常答案
+		// （OSS 的 D20、拆不出子命令的 shell 命令），按"是不是空"分支会让"编辑了但用不了"
+		// 掉进兜底，把用户的编辑**静默换成系统主体**——用户改这一栏通常是想收窄，
+		// 却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
 		var patterns []string
 		if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
@@ -324,8 +323,8 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 归一化交出空列表是一个**答案**，不是失败：OSS 会把"批准了但不该变成常驻授权"
 		// 的串（决策 D20 的目录标记）全部丢掉。此处不能退回 []string{command} —— 那条串
 		// 匹配不上任何策略串，落库只是在授权列表里显示一条用户其实没拿到的授权，
-		// 外加一条同样不真实的 grant_submit 审计行。shell 类到不了这里：
-		// shellGrantPatterns 对任何非空输入至少给出一条 pattern。
+		// 外加一条同样不真实的 grant_submit 审计行。系统主体归一化为空时 ApprovalKindFor
+		// 已经给出一次性审批、到不了 allowAll，走到这里的是用户编辑成用不了的 pattern。
 		if len(patterns) > 0 {
 			for _, cmd := range patterns {
 				SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)

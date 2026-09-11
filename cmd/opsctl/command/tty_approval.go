@@ -117,7 +117,7 @@ func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest
 func runTTYApproval(ctx context.Context, req approval.ApprovalRequest, in io.Reader, out io.Writer) (ApprovalResult, error) {
 	face := ttyApprovalFace(req)
 	patterns := normalizedApprovalSubjects(face, req.Command)
-	kind := permission.ApprovalKindForType(face)
+	kind := permission.ApprovalKindFor(face, req.Command)
 	matched := strings.Join(patterns, ", ")
 
 	log := logger.Ctx(ctx).With(
