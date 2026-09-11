@@ -7,16 +7,17 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
 
-// pipeIdentity resolves directory aliases before deriving a per-user endpoint.
-// On Windows EvalSymlinks also normalizes drive/component case and short names.
-// Resolve the parent, not the .sock entry: that entry need not exist and may be
-// a legacy AF_UNIX reparse point. Never fall back to a global pipe on failure.
+// pipeIdentity resolves the directory through an open handle before deriving a
+// per-user endpoint. The final NT path unifies Junctions, drive aliases and
+// short names without depending on filesystem-specific file ID widths.
+// Never resolve the .sock entry: it may be a legacy AF_UNIX reparse point.
 func pipeIdentity(path string) (name, sid string, err error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -27,9 +28,24 @@ func pipeIdentity(path string) (name, sid string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	dir, err = filepath.EvalSymlinks(dir)
+	f, err := os.Open(dir)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve IPC directory %s: %w", filepath.Dir(path), err)
+		return "", "", fmt.Errorf("open IPC directory %s: %w", dir, err)
+	}
+	defer func() { _ = f.Close() }()
+	// FILE_NAME_NORMALIZED (0) | VOLUME_NAME_NT (2). Resolve the final target,
+	// not the path spelling used to open it; DOS drive mappings may differ.
+	buf := make([]uint16, 256)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), &buf[0], uint32(len(buf)), 2)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve IPC directory %s: %w", dir, err)
+		}
+		if n < uint32(len(buf)) {
+			dir = windows.UTF16ToString(buf[:n])
+			break
+		}
+		buf = make([]uint16, n+1)
 	}
 	identity := sid + "\x00" + dir + "\x00" + filepath.Base(path)
 	return fmt.Sprintf(`\\.\pipe\opskat-%x`, sha256.Sum256([]byte(identity))), sid, nil
