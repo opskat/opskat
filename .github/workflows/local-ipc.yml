@@ -23,5 +23,15 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: Prepare dependency and formatting
+        shell: bash
+        run: |
+          go mod download github.com/Microsoft/go-winio
+          gofmt -w internal/localipc internal/approval internal/sshpool cmd/opsctl/command/interactive.go
+          git diff > ipc-generated.patch
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ipc-generated-${{ matrix.os }}
+          path: ipc-generated.patch
       - name: Test IPC
-        run: go test -race -count=1 -timeout=3m ./internal/approval ./internal/sshpool
+        run: go test -race -count=1 -timeout=3m ./internal/localipc ./internal/approval ./internal/sshpool

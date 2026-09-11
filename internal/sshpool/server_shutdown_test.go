@@ -1,7 +1,7 @@
 package sshpool
 
 import (
-	"net"
+	"github.com/opskat/opskat/internal/localipc"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +10,7 @@ import (
 
 func TestServerStopInterruptsConnectedClient(t *testing.T) {
 	server := NewServer(nil, "")
-	dir, err := os.MkdirTemp("/tmp", "opskat-sshpool-")
+	dir, err := os.MkdirTemp("", "opskat-sshpool-")
 	if err != nil {
 		t.Fatalf("create socket dir: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestServerStopInterruptsConnectedClient(t *testing.T) {
 		t.Fatalf("start server: %v", err)
 	}
 
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := localipc.Dial(socketPath)
 	if err != nil {
 		t.Fatalf("connect client: %v", err)
 	}

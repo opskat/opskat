@@ -1,9 +1,11 @@
 package command
 
 import (
-	"net"
 	"os"
 
+	"github.com/opskat/opskat/internal/localipc"
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/term"
 )
 
@@ -53,8 +55,9 @@ func chooseApprover(interactive bool, dial func() error) approverChoice {
 // dialApprovalSocket 探测 approval.sock 是否可达。变量化是为了 requireApproval 级
 // 测试注入，避免连到真实数据目录下的桌面端审批 socket。
 var dialApprovalSocket = func(path string) error {
-	conn, err := net.Dial("unix", path)
+	conn, err := localipc.Dial(path)
 	if err != nil {
+		logger.Default().Warn("desktop approval IPC unreachable", zap.String("path", path), zap.Error(err))
 		return err
 	}
 	return conn.Close()

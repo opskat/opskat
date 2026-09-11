@@ -2,6 +2,7 @@ package approval
 
 import (
 	"path/filepath"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -10,7 +11,10 @@ import (
 
 // Exercise the real transport and token boundary without assets or credentials.
 func TestIPCApprovalAuthenticationAndDecision(t *testing.T) {
-	path := SocketPath(t.TempDir())
+	dir, err := os.MkdirTemp("", "approval-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := SocketPath(dir)
 	var calls atomic.Int32
 	server := NewServer(func(req ApprovalRequest) ApprovalResponse {
 		calls.Add(1)
@@ -42,6 +46,6 @@ func TestIPCApprovalAuthenticationAndDecision(t *testing.T) {
 	// A fresh server can reuse the endpoint after shutdown.
 	require.NoError(t, other.Start(path))
 	t.Cleanup(other.Stop)
-	_, err = RequestApproval(filepath.Join(t.TempDir(), "absent.sock"), ApprovalRequest{})
+	_, err = RequestApproval(filepath.Join(dir, "absent.sock"), ApprovalRequest{})
 	require.Error(t, err)
 }
