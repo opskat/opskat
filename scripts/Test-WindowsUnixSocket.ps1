@@ -84,7 +84,7 @@ for ($caseIndex = 0; $caseIndex -lt $BindDirectory.Count; $caseIndex++) {
         $stage = 'connect'
         $connectTask = $client.ConnectAsync([Net.Sockets.UnixDomainSocketEndPoint]::new($connectPath))
         if (-not $connectTask.Wait($TimeoutMs)) { throw [TimeoutException]::new('connect deadline exceeded') }
-        $connectTask.GetAwaiter().GetResult()
+        [void]$connectTask.GetAwaiter().GetResult()
         Write-Record $stage 'ok'
         $stage = 'accept'
         if (-not $acceptTask.Wait($TimeoutMs)) { throw [TimeoutException]::new('accept deadline exceeded') }

@@ -45,6 +45,8 @@ jobs:
           try {
             New-Item -ItemType Junction -Path $link -Target $other | Out-Null
             ./scripts/Test-WindowsUnixSocket.ps1 -BindDirectory $plain,$other,$link,$link,$other -ConnectDirectory $plain,$other,$link,$other,$link | Set-Content ipc-probe.jsonl
+            # Enforce JSONL output; PowerShell must not emit Task result objects.
+            Get-Content ipc-probe.jsonl | ForEach-Object { $_ | ConvertFrom-Json -ErrorAction Stop | Out-Null }
             Get-Content ipc-probe.jsonl
           } finally {
             if (Test-Path -LiteralPath $link) { Remove-Item -LiteralPath $link -Force }
