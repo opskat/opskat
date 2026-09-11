@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/localipc"
 	"go.uber.org/zap"
 )
 
@@ -76,7 +76,7 @@ func SocketPath(dataDir string) string {
 // ApprovalHandler processes an approval request and returns a response.
 type ApprovalHandler func(req ApprovalRequest) ApprovalResponse
 
-// Server listens on a Unix socket for approval requests from opsctl.
+// Server listens on a local IPC endpoint for approval requests from opsctl.
 type Server struct {
 	handler   ApprovalHandler
 	listener  net.Listener
@@ -100,38 +100,18 @@ func NewServer(handler ApprovalHandler, authToken string) *Server {
 	}
 }
 
-// Start begins listening on the Unix socket at socketPath.
-// Removes stale socket file if it exists.
+// Start begins listening at the platform-specific endpoint for socketPath.
 func (s *Server) Start(socketPath string) error {
-	// Clean up stale socket
-	if _, err := os.Stat(socketPath); err == nil {
-		// Try to connect - if successful, another instance is running
-		conn, err := net.Dial("unix", socketPath)
-		if err == nil {
-			if err := conn.Close(); err != nil {
-				logger.Default().Warn("close connection check", zap.Error(err))
-			}
-			return fmt.Errorf("another instance is already listening on %s", socketPath)
-		}
-		// Stale socket, remove it
-		if err := os.Remove(socketPath); err != nil {
-			logger.Default().Warn("remove stale socket", zap.String("path", socketPath), zap.Error(err))
-		}
-	}
-
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := localipc.Listen(socketPath)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", socketPath, err)
-	}
-	// 设置 socket 文件权限为 0600（仅所有者可访问）
-	if err := os.Chmod(socketPath, 0600); err != nil {
-		logger.Default().Warn("chmod socket", zap.String("path", socketPath), zap.Error(err))
 	}
 	s.listener = listener
 
 	s.wg.Add(1)
 	go s.acceptLoop()
 
+	logger.Default().Info("approval server listening", zap.Stringer("address", listener.Addr()))
 	return nil
 }
 
@@ -237,16 +217,16 @@ func SendNotification(socketPath, token, resource string) {
 	}
 }
 
-// RequestApprovalWithToken connects to the Unix socket and sends an approval request with auth token.
+// RequestApprovalWithToken connects to the local IPC endpoint and sends an approval request with auth token.
 func RequestApprovalWithToken(socketPath, token string, req ApprovalRequest) (ApprovalResponse, error) {
 	req.Token = token
 	return RequestApproval(socketPath, req)
 }
 
-// RequestApproval connects to the Unix socket and sends an approval request.
+// RequestApproval connects to the local IPC endpoint and sends an approval request.
 // Blocks until a response is received.
 func RequestApproval(socketPath string, req ApprovalRequest) (ApprovalResponse, error) {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := localipc.Dial(socketPath)
 	if err != nil {
 		return ApprovalResponse{}, fmt.Errorf("cannot connect to desktop app (is it running?): %w", err)
 	}

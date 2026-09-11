@@ -8,7 +8,7 @@ The canonical map of how OpsKat is put together: the processes it runs, the back
 
 ## 1. Topology — desktop app and opsctl, no app HTTP API
 
-OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The frontend and backend communicate over **Wails IPC only** — there is no REST/HTTP server for the app's own UI. `opsctl` talks to the running app over two **Unix-domain sockets**, and extensions run as sandboxed **WASM** modules inside the backend.
+OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The frontend and backend communicate over **Wails IPC only** — there is no REST/HTTP server for the app's own UI. `opsctl` talks to the running app over two **local IPC endpoints** (Windows named pipes; Unix-domain sockets on macOS/Linux), and extensions run as sandboxed **WASM** modules inside the backend.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -35,7 +35,7 @@ OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The 
 ```
 
 - **Desktop app** — the Wails process. Owns the DB, credential keys, connection pools, the AI runner, and the WASM extension runtime.
-- **`opsctl` CLI** — a standalone binary (`cmd/opsctl`) for headless/scripted asset operations. It reuses the running app's SSH connections and asks the app for approval over Unix sockets; it degrades to a limited offline mode when the app isn't running. Can be embedded in the app (`internal/embedded`, build tag `embed_opsctl`) and installed to the user's PATH.
+- **`opsctl` CLI** — a standalone binary (`cmd/opsctl`) for headless/scripted asset operations. It reuses the running app's SSH connections and asks the app for approval over local IPC; it degrades to a limited offline mode when the app isn't running. Can be embedded in the app (`internal/embedded`, build tag `embed_opsctl`) and installed to the user's PATH.
 - **Extensions** — WASM modules loaded by `pkg/extension` (wazero runtime). The host exposes a narrow capability surface; the AI calls extension tools through a single dispatcher.
 - **`devserver`** (`cmd/devserver`) is a **dev-only** single-extension harness with its own local HTTP API — not part of the shipped app. See [§7](#7-extensions--wasm-plugins).
 
@@ -123,7 +123,7 @@ For the exact logging obligations on this path, see [DEVELOP.md → Logging for 
 
 ## 8. opsctl & the multi-process flow
 
-`opsctl` performs asset operations headlessly while the desktop app remains the broker for connections and approvals. It shares the same bootstrap (DB, credentials) and talks to the running app over two Unix sockets, both under the data dir and mode-0600, authenticated with a token file written at startup:
+`opsctl` performs asset operations headlessly while the desktop app remains the broker for connections and approvals. It shares the same bootstrap (DB, credentials) and talks to the running app over two local IPC endpoints, authenticated with a token file written at startup. `internal/localipc` maps the logical socket paths to user-restricted named pipes on Windows; macOS/Linux retain Unix sockets under the data dir with mode 0600. See [Windows IPC diagnosis and verification](references/windows-local-ipc.md) for identity, lifecycle, upgrade requirements and the independent AF_UNIX probe:
 
 - **`approval.sock`** (`internal/approval`, server started from `internal/app/opsctl`) — line-delimited JSON request/response. When a command needs confirmation, opsctl sends an `ApprovalRequest` (exec / cp / create / update / delete / batch / ext_tool); the app emits a Wails event, the UI shows the dialog, and the decision (plus any user-edited grant patterns) is returned. Approved **grants** are persisted via `grant_repo` so later matching commands are auto-approved.
 - **`sshpool.sock`** (`internal/sshpool`) — a framed binary proxy. opsctl asks the app to run exec / upload / download / copy over an **already-open** pooled SSH connection instead of dialing (and re-authenticating) itself.
