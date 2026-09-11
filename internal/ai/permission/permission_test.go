@@ -1440,11 +1440,6 @@ func TestNormalizeGrantPatterns(t *testing.T) {
 			So(NormalizeGrantPatterns("exec", "   ", GrantOriginSystem), ShouldBeNil)
 		})
 
-		Convey("AST 解析失败保留原行", func() {
-			patterns := NormalizeGrantPatterns("exec", "echo $(", GrantOriginSystem)
-			So(patterns, ShouldResemble, []string{"echo $("})
-		})
-
 		Convey("asset_entity 类型常量与 approval type 都能识别", func() {
 			// 单元测试不依赖具体常量值；只要传 AssetTypeSSH/K8s 也能走 shell 路径
 			patterns := NormalizeGrantPatterns(asset_entity.AssetTypeSSH, "ls && pwd", GrantOriginSystem)

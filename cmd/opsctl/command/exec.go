@@ -252,8 +252,10 @@ Approval:
   (stdin and stderr both TTYs) prompts here, otherwise the running desktop
   app is asked; with neither available opsctl exits with code 3 and a
   NEEDS AUTHORIZATION marker telling you which 'opsctl policy allow' line
-  to run. Piped stdin (cat file | opsctl exec ...) counts as non-interactive
-  — authorize it beforehand instead.
+  to run. A shell command the policy cannot split into sub-commands (e.g. an
+  unclosed quote) matches no rule: it stops with NEEDS TTY and the parse
+  error instead — fix the command. Piped stdin (cat file | opsctl exec ...)
+  counts as non-interactive — authorize it beforehand instead.
 
 Examples:
   opsctl exec web-server --type ssh -- uptime

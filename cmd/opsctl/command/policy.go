@@ -112,6 +112,13 @@ Options:
                        type (command/query/redis/mongo/kafka/k8s/etcd/oss).
   --group <group>      Target an asset group instead of assets (repeatable).
 
+Patterns:
+  On ssh, serial and k8s targets a standalone '*' is full access: it is the
+  only rule that also allows shell commands the policy cannot split into
+  sub-commands (syntax errors, input without a command). A deny rule cannot
+  be checked against such a command, so '*' allows it only while no deny
+  rule is in effect; with any deny rule present it still needs a human.
+
 Examples:
   opsctl policy show web-01
   opsctl policy show --group production

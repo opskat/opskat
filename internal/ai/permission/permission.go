@@ -747,25 +747,20 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 
 // --- SaveGrantPattern ---
 
-// shellGrantPatterns 是 SSH / K8s 注册的 grant 归一化：按行 + policy.ExtractSubCommands 拆。
+// shellGrantPatterns 是 SSH / K8s 注册的 grant 归一化：整串走 policy.ExtractSubCommands 拆。
 // 复合命令必须按子命令存，否则 `ls /tmp && cat /etc/hosts` 会被存成单条 pattern，
 // 后续 grant 子命令匹配永远命中失败。
-// AST 解析失败时退回原行，让上层依旧能存下 grant；下次匹配同样会解析失败走 aictx.NeedConfirm。
+//
+// 拆法必须与 checkCommandPolicyPermission 一致——整串拆、不按行切：逐行切会把跨行的
+// for/if 切成解析失败的碎片，也会让"第二行解析失败"的命令留下第一行的 pattern。
+// 拆不出子命令（解析失败 / 只有赋值、注释）时交出空列表：这类命令每次检查都拆不出子命令，
+// 任何 pattern 都匹配不上它，落库只会留下一条永远不生效的授权。
 func shellGrantPatterns(command string, _ GrantOrigin) []string {
-	var patterns []string
-	for line := range strings.SplitSeq(command, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		subCmds, _ := policy.ExtractSubCommands(line)
-		if len(subCmds) == 0 {
-			patterns = append(patterns, line)
-		} else {
-			patterns = append(patterns, subCmds...)
-		}
+	subCmds, err := policy.ExtractSubCommands(command)
+	if err != nil {
+		return nil
 	}
-	return patterns
+	return subCmds
 }
 
 // GrantPatternsFunc 把一条审批输入拆成可独立匹配的 grant pattern 列表。

@@ -56,19 +56,22 @@ func TestParseApprovalResponseRejectsEditedScopeMutation(t *testing.T) {
 	require.Equal(t, ApprovalDeny, parsed.Decision)
 }
 
-func TestApprovalKindForType(t *testing.T) {
+func TestApprovalKindFor(t *testing.T) {
 	tests := []struct {
+		name         string
 		approvalType string
+		command      string
 		want         string
 	}{
-		{approvalType: ApprovalTypeDelete, want: ApprovalKindDelete},
-		{approvalType: "ext_tool", want: ApprovalKindExtension},
-		{approvalType: "exec", want: ApprovalKindSingle},
-		{approvalType: "create", want: ApprovalKindOnce},
+		{name: "delete", approvalType: ApprovalTypeDelete, want: ApprovalKindDelete},
+		{name: "ext_tool", approvalType: "ext_tool", want: ApprovalKindExtension},
+		{name: "exec with a matchable command", approvalType: "exec", command: "uptime", want: ApprovalKindSingle},
+		{name: "exec without sub-commands", approvalType: "exec", command: `echo "`, want: ApprovalKindOnce},
+		{name: "unregistered type", approvalType: "create", want: ApprovalKindOnce},
 	}
 	for _, tt := range tests {
-		t.Run(tt.approvalType, func(t *testing.T) {
-			require.Equal(t, tt.want, ApprovalKindForType(tt.approvalType))
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ApprovalKindFor(tt.approvalType, tt.command))
 		})
 	}
 }

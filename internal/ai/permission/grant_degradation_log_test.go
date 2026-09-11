@@ -18,9 +18,12 @@ import (
 // TestHandleConfirm_ZeroPatternWarningOmitsCommandKeepsCorrelation locks the
 // grant-degradation log sink (spec task 6, decision D20): when "always allow"
 // normalizes to zero grant patterns, checker.go's warning must not record the command
-// payload at all while keeping assetID/assetType correlation. The synthetic command
-// hits the zero-pattern branch (unknown OSS verb → no policy strings) while carrying
-// a secret token, so a regression that logs it (raw or redacted) fails here.
+// payload at all while keeping assetID/assetType correlation.
+//
+// A system subject that normalizes to zero patterns only gets a one-shot approval
+// (ApprovalKindFor), so the zero-pattern branch is reached through the user's edit: the
+// requested subject is matchable, the edited pattern is not (unknown OSS verb → no policy
+// strings) and carries a secret token, so a regression that logs it (raw or redacted) fails here.
 func TestHandleConfirm_ZeroPatternWarningOmitsCommandKeepsCorrelation(t *testing.T) {
 	// Capture logger.Default() (logger.Ctx falls back to it when ctx carries no logger).
 	core, logs := observer.New(zap.DebugLevel)
@@ -41,11 +44,13 @@ func TestHandleConfirm_ZeroPatternWarningOmitsCommandKeepsCorrelation(t *testing
 	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
 	secret := "mt-" + "zero-warning-token"
-	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
-		return ApprovalResponse{Decision: "allowAll"}
+	checker := NewCommandPolicyChecker(func(_ context.Context, _ string, items []ApprovalItem) ApprovalResponse {
+		edited := items[0]
+		edited.Command = "object frobnicate mybucket/a --token=" + secret
+		return ApprovalResponse{Decision: "allowAll", EditedItems: []ApprovalItem{edited}}
 	})
 	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-zero"), 1,
-		asset_entity.AssetTypeOSS, "object frobnicate mybucket/a --token="+secret)
+		asset_entity.AssetTypeOSS, "object stat mybucket/report.txt")
 	assert.Equal(t, aictx.Allow, got.Decision, "the operation itself is still approved; only the grant is dropped")
 
 	var warningSeen bool

@@ -209,7 +209,9 @@ Approval:
   opsctl exits with code 3: exec/cp/batch print NEEDS AUTHORIZATION plus a
   ready-to-run 'opsctl policy allow' line; create/update/delete print
   NEEDS TTY because no rule can pre-authorize them — run those yourself in
-  a terminal instead of retrying.
+  a terminal instead of retrying. A shell command the policy cannot split
+  into sub-commands also prints NEEDS TTY, with the parse error: fix the
+  command and run it again.
 
 Global Flags:
   --data-dir <path>     Override the application data directory
