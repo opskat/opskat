@@ -1,0 +1,27 @@
+name: Local IPC
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop/*
+
+permissions:
+  contents: read
+
+jobs:
+  transport:
+    name: Local IPC (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test IPC
+        run: go test -race -count=1 -timeout=3m ./internal/approval ./internal/sshpool
