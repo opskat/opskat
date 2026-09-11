@@ -67,10 +67,11 @@ connection sites and both listeners use it. Existing `SocketPath` APIs remain
 logical identifiers; on Windows they are not filesystem socket addresses.
 
 Windows uses `github.com/Microsoft/go-winio` byte-stream named pipes. Pipe names
-hash the current process user's SID, the opened directory's volume/file identity,
-and the endpoint basename. Thus directory aliases (including Junctions) share an
+hash the current process user's SID, the absolute symlink-resolved directory path,
+and the endpoint basename. Go normalizes drive/component case and short names
+during Windows `EvalSymlinks`; the legacy `.sock` entry is never resolved. Thus directory aliases (including Junctions) share an
 endpoint, separate directories and services do not, and long/non-ASCII paths
-are not passed to AF_UNIX. Directory identity lookup errors are returned; there
+are not passed to AF_UNIX. Directory resolution errors are returned; there
 is no common-name or TCP fallback.
 
 The pipe has a protected DACL allowing only the current user's SID. go-winio

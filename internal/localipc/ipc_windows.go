@@ -13,10 +13,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// pipeIdentity uses the directory's filesystem identity, so Junctions, relative
-// paths, drive-letter casing and short-name aliases resolve to the same pipe.
-// The directory already exists after bootstrap. Never fall back to a global
-// pipe name on a lookup failure: that could connect to a different data set.
+// pipeIdentity resolves directory aliases before deriving a per-user endpoint.
+// On Windows EvalSymlinks also normalizes drive/component case and short names.
+// Resolve the parent, not the .sock entry: that entry need not exist and may be
+// a legacy AF_UNIX reparse point. Never fall back to a global pipe on failure.
 func pipeIdentity(path string) (name, sid string, err error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -27,23 +27,11 @@ func pipeIdentity(path string) (name, sid string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	p, err := windows.UTF16PtrFromString(dir)
+	dir, err = filepath.EvalSymlinks(dir)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("resolve IPC directory %s: %w", filepath.Dir(path), err)
 	}
-	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		return "", "", fmt.Errorf("open IPC directory %s: %w", dir, err)
-	}
-	defer func() { _ = windows.CloseHandle(h) }()
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
-		return "", "", fmt.Errorf("identify IPC directory %s: %w", dir, err)
-	}
-	identity := fmt.Sprintf("%s\x00%08x:%08x:%08x\x00%s", sid,
-		info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow, filepath.Base(path))
+	identity := sid + "\x00" + dir + "\x00" + filepath.Base(path)
 	return fmt.Sprintf(`\\.\pipe\opskat-%x`, sha256.Sum256([]byte(identity))), sid, nil
 }
 

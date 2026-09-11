@@ -23,20 +23,15 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Prepare dependency and formatting
+      - name: Check formatting
         shell: bash
         run: |
-          go mod download github.com/Microsoft/go-winio
-          gofmt -w internal/localipc internal/approval internal/sshpool cmd/opsctl/command/interactive*.go
-          git diff > ipc-generated.patch
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ipc-generated-${{ matrix.os }}
-          path: ipc-generated.patch
+          files=$(gofmt -l internal/localipc internal/approval internal/sshpool cmd/opsctl/command/interactive*.go)
+          if [ -n "$files" ]; then echo "$files"; exit 1; fi
       - name: Test IPC
         run: go test -race -count=1 -timeout=3m ./internal/localipc ./internal/approval ./internal/sshpool
       - name: Test CLI approval routing
-        run: go test -count=1 -timeout=5m ./cmd/opsctl/command -run 'TestChooseApproverWithRealIPC|TestRequireApproval|TestChooseApprover|TestIsInteractive'
+        run: go test -count=1 -timeout=5m ./cmd/opsctl/command -run 'TestChooseApprover|TestRequireApproval|TestIsInteractive'
       - name: Probe Windows AF_UNIX in isolated directories
         if: runner.os == 'Windows'
         shell: pwsh

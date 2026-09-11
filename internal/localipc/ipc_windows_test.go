@@ -61,11 +61,14 @@ func TestWindowsDirectoryAliasesAndIsolation(t *testing.T) {
 	require.True(t, ok)
 	sd, err := windows.GetSecurityInfo(windows.Handle(fd.Fd()), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	require.NoError(t, err)
-	sddl := sd.String()
-	require.Contains(t, sddl, sid)
-	require.Equal(t, 1, strings.Count(sddl, "(A;"), sddl)
-	require.NotContains(t, sddl, ";;;WD)")
-	require.NotContains(t, sddl, ";;;AU)")
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	require.NoError(t, err)
+	require.Equal(t, user.User.Sid.String(), sid)
+	// Compare the actual DACL with one for the independently resolved process
+	// user. Windows can render a local administrator SID as the SDDL alias LA.
+	want, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")")
+	require.NoError(t, err)
+	require.Equal(t, want.String(), sd.String())
 }
 
 func TestWindowsLegacyFileAndLongUnicodeDirectory(t *testing.T) {

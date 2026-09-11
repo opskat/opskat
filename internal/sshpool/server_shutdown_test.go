@@ -1,8 +1,8 @@
 package sshpool
 
 import (
-	"os"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"

@@ -1,8 +1,8 @@
 package approval
 
 import (
-	"os"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
