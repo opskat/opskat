@@ -21,10 +21,13 @@ type Conversation struct {
 	Model        string `gorm:"column:model;type:varchar(100)"`
 	ProviderID   int64  `gorm:"column:provider_id"`
 	SessionData  string `gorm:"column:session_data;type:text"`
-	WorkDir      string `gorm:"column:work_dir;type:varchar(500)"`
-	Status       int    `gorm:"column:status;default:1"`
-	Createtime   int64  `gorm:"column:createtime"`
-	Updatetime   int64  `gorm:"column:updatetime"`
+	// ExternalSessionID 供第三方网关做会话路由的不透明标识（见 OpenCode 的 x-opencode-session）。
+	// 随机生成而非从 ID 派生，对端无从反推用户有多少会话。
+	ExternalSessionID string `gorm:"column:external_session_id;type:varchar(64)"`
+	WorkDir           string `gorm:"column:work_dir;type:varchar(500)"`
+	Status            int    `gorm:"column:status;default:1"`
+	Createtime        int64  `gorm:"column:createtime"`
+	Updatetime        int64  `gorm:"column:updatetime"`
 }
 
 // TableName GORM表名
