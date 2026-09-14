@@ -531,7 +531,11 @@ func (s *Server) handleCopy(conn net.Conn, req ProxyRequest) {
 		writeJSONResponse(conn, false, fmt.Sprintf("create destination file: %v", err))
 		return
 	}
+	dstClosed := false
 	defer func() {
+		if dstClosed {
+			return
+		}
 		if err := dstFile.Close(); err != nil {
 			logger.Default().Warn("close destination file for copy", zap.String("path", req.DstPath), zap.Error(err))
 		}
@@ -539,12 +543,31 @@ func (s *Server) handleCopy(conn net.Conn, req ProxyRequest) {
 
 	writeJSONResponse(conn, true, "")
 
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
+	// 两条腿各自流水线。io.Copy 在这里是陷阱：它选中源的 WriteTo，读腿并发，
+	// 但每次只把一个包交给目的端 Write，写腿仍是一个包一次往返。
+	if _, err := sftpio.Relay(dstFile, srcFile); err != nil {
+		// 并发写中途失败会留下带空洞、长度却看似正常的半成品。
+		if closeErr := dstFile.Close(); closeErr != nil {
+			logger.Default().Warn("close destination file after failed copy", zap.String("path", req.DstPath), zap.Error(closeErr))
+		}
+		dstClosed = true
+		if rmErr := dstSFTP.Remove(req.DstPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			logger.Default().Warn("cleanup partial remote copy", zap.String("path", req.DstPath), zap.Error(rmErr))
+		}
 		if writeErr := WriteFrame(conn, FrameError, []byte(fmt.Sprintf("copy: %v", err))); writeErr != nil {
 			logger.Default().Warn("write error frame for copy", zap.Error(writeErr))
 		}
 		return
 	}
+	// 先关目的文件再报成功：并发写最后一片的错误要到 Close 才浮出来。
+	if err := dstFile.Close(); err != nil {
+		dstClosed = true
+		if writeErr := WriteFrame(conn, FrameError, []byte(fmt.Sprintf("close destination file: %v", err))); writeErr != nil {
+			logger.Default().Warn("write error frame for copy", zap.Error(writeErr))
+		}
+		return
+	}
+	dstClosed = true
 
 	if writeErr := WriteFrame(conn, FrameOK, nil); writeErr != nil {
 		logger.Default().Warn("write ok frame for copy", zap.Error(writeErr))

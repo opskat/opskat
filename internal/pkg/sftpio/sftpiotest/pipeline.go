@@ -160,3 +160,32 @@ func NewClient(t *testing.T, root string, packetType byte) (*sftp.Client, *Conn)
 	})
 	return client, observed
 }
+
+// NewPlainClient 起一个不加延迟、不做观测的客户端。
+// 一次搬运里只有被观测的那条腿该被拖慢：另一条腿也带延迟的话，它会成为瓶颈，
+// 把被测腿喂成"一次一个请求"，串行退化就被掩盖了。
+func NewPlainClient(t *testing.T, root string) *sftp.Client {
+	t.Helper()
+
+	clientConn, serverConn := net.Pipe()
+	server, err := sftp.NewServer(serverConn, sftp.WithServerWorkingDirectory(root))
+	if err != nil {
+		t.Fatalf("new sftp server: %v", err)
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		_ = server.Serve()
+	}()
+
+	client, err := sftp.NewClientPipe(clientConn, clientConn)
+	if err != nil {
+		t.Fatalf("new sftp client: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+		<-served
+	})
+	return client
+}
