@@ -26,9 +26,7 @@ import (
 type ProviderOptions struct {
 	Entity *ai_provider_entity.AIProvider
 	APIKey string
-	// ExtraHeaders 该 Provider 配置的自定义请求头，值里的 {{session}} 尚未展开。
-	ExtraHeaders []ai_provider_entity.ExtraHeader
-	// SessionID 本次对话的外部会话标识，供 {{session}} 展开。
+	// SessionID 本次对话的外部会话标识，供自定义请求头里的 {{session}} 展开。
 	SessionID string
 }
 
@@ -40,7 +38,12 @@ func BuildProvider(opts ProviderOptions) (cagoProvider.Provider, error) {
 	if p == nil {
 		return nil, fmt.Errorf("provider 配置为空")
 	}
-	headers := resolveExtraHeaders(opts.ExtraHeaders, opts.SessionID)
+	// 自定义请求头只有 entity 一个来源，就地解析；再开一个入参等于给同一份数据留两个真相。
+	configured, err := p.GetExtraHeaders()
+	if err != nil {
+		return nil, fmt.Errorf("解析 Provider 自定义请求头失败: %w", err)
+	}
+	headers := resolveExtraHeaders(configured, opts.SessionID)
 	switch p.Type {
 	case "anthropic":
 		return cagoAnthropics.NewProvider(cagoAnthropics.Config{
@@ -104,19 +107,10 @@ type SystemConfig struct {
 func BuildSystem(ctx context.Context, cfg SystemConfig) (*coding.System, error) {
 	prov := cfg.Provider
 	if prov == nil {
-		var extraHeaders []ai_provider_entity.ExtraHeader
-		if cfg.ProviderEntity != nil {
-			parsed, err := cfg.ProviderEntity.GetExtraHeaders()
-			if err != nil {
-				return nil, fmt.Errorf("解析 Provider 自定义请求头失败: %w", err)
-			}
-			extraHeaders = parsed
-		}
 		built, err := BuildProvider(ProviderOptions{
-			Entity:       cfg.ProviderEntity,
-			APIKey:       cfg.APIKey,
-			ExtraHeaders: extraHeaders,
-			SessionID:    cfg.SessionID,
+			Entity:    cfg.ProviderEntity,
+			APIKey:    cfg.APIKey,
+			SessionID: cfg.SessionID,
 		})
 		if err != nil {
 			return nil, err

@@ -10,7 +10,7 @@ func migration202609140001() *gormigrate.Migration {
 		ID: "202609140001",
 		Migrate: func(tx *gorm.DB) error {
 			if !tx.Migrator().HasColumn("ai_providers", "extra_headers") {
-				if err := tx.Exec("ALTER TABLE ai_providers ADD COLUMN extra_headers TEXT").Error; err != nil {
+				if err := tx.Exec("ALTER TABLE ai_providers ADD COLUMN extra_headers TEXT DEFAULT ''").Error; err != nil {
 					return err
 				}
 			}

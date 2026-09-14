@@ -9,8 +9,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 	"github.com/opskat/opskat/internal/service/ai_provider_svc"
 
-	"github.com/cago-frame/cago/pkg/logger"
-	"go.uber.org/zap"
+	"golang.org/x/net/http/httpguts"
 )
 
 // ExtraHeaderInput 前端提交的一条自定义请求头。
@@ -45,6 +44,8 @@ var reservedHeaderNames = map[string]bool{
 
 // normalizeExtraHeaders 校验并规整前端提交的自定义请求头。
 // 名称为空视为用户点了"添加"又改主意，直接丢弃；值不做裁剪，有网关要求带空格的字面量。
+// 名称/值的合法性在这里判：net/http 要到发请求时才拒，那时用户早就把表单关了，
+// 只会看到一条"获取模型列表失败: net/http: invalid header field name"。
 func normalizeExtraHeaders(input []ExtraHeaderInput) ([]ai_provider_entity.ExtraHeader, error) {
 	var out []ai_provider_entity.ExtraHeader
 	seen := make(map[string]bool, len(input))
@@ -52,6 +53,12 @@ func normalizeExtraHeaders(input []ExtraHeaderInput) ([]ai_provider_entity.Extra
 		name := strings.TrimSpace(h.Name)
 		if name == "" {
 			continue
+		}
+		if !httpguts.ValidHeaderFieldName(name) {
+			return nil, fmt.Errorf("请求头名称 %s 不合法", name)
+		}
+		if !httpguts.ValidHeaderFieldValue(h.Value) {
+			return nil, fmt.Errorf("请求头 %s 的值不合法", name)
 		}
 		key := strings.ToLower(name)
 		if reservedHeaderNames[key] {
@@ -82,14 +89,13 @@ type AIProviderInfo struct {
 	ExtraHeaders     []ExtraHeaderInput `json:"extraHeaders"`
 }
 
-func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) AIProviderInfo {
+// toProviderInfo 把 entity 转成前端可见的形态。自定义请求头解析失败直接报错：
+// 展示成"没配过"会诱导用户照着空表单再保存一次，把库里真实存在的配置抹掉。
+func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) (AIProviderInfo, error) {
 	enabled, effort := normalizeProviderReasoningConfig(p.Type, p.ReasoningEnabled, p.ReasoningEffort)
 	stored, err := p.GetExtraHeaders()
 	if err != nil {
-		// 列里是坏数据。界面展示成"没配过"会诱导用户重填一遍还是不生效，
-		// 记一条日志让排查有迹可循。
-		logger.Default().Warn("解析 Provider 自定义请求头失败",
-			zap.Int64("provider_id", p.ID), zap.Error(err))
+		return AIProviderInfo{}, fmt.Errorf("解析 Provider 自定义请求头失败 (id=%d): %w", p.ID, err)
 	}
 	headers := make([]ExtraHeaderInput, 0, len(stored))
 	for _, h := range stored {
@@ -108,7 +114,7 @@ func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) AIProviderI
 		ReasoningEffort:  effort,
 		IsActive:         p.IsActive,
 		ExtraHeaders:     headers,
-	}
+	}, nil
 }
 
 func normalizeProviderReasoningConfig(providerType string, reasoningEnabled bool, reasoningEffort string) (bool, string) {
@@ -146,7 +152,11 @@ func (a *AI) ListAIProviders() ([]AIProviderInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("解密 Provider API Key 失败 (id=%d): %w", p.ID, err)
 		}
-		result = append(result, toProviderInfo(p, decrypted))
+		info, err := toProviderInfo(p, decrypted)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, info)
 	}
 	return result, nil
 }
@@ -164,7 +174,10 @@ func (a *AI) GetActiveAIProvider() (*AIProviderInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("解密 Provider API Key 失败 (id=%d): %w", p.ID, err)
 	}
-	info := toProviderInfo(p, decrypted)
+	info, err := toProviderInfo(p, decrypted)
+	if err != nil {
+		return nil, err
+	}
 	return &info, nil
 }
 
@@ -191,7 +204,10 @@ func (a *AI) CreateAIProvider(in AIProviderInput) (*AIProviderInfo, error) {
 	if err := ai_provider_svc.AIProvider().Create(i18n.Ctx(a.ctx, a.lang.Lang()), p, in.APIKey); err != nil {
 		return nil, fmt.Errorf("创建 Provider 失败: %w", err)
 	}
-	info := toProviderInfo(p, in.APIKey)
+	info, err := toProviderInfo(p, in.APIKey)
+	if err != nil {
+		return nil, err
+	}
 	return &info, nil
 }
 

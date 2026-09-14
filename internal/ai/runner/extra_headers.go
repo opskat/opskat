@@ -2,7 +2,6 @@ package runner
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -34,19 +33,12 @@ func resolveExtraHeaders(headers []ai_provider_entity.ExtraHeader, sessionID str
 // oneOffSessionID 生成一个只用一次的会话标识，供不属于任何会话的请求（拉模型列表）使用。
 // 不复用一个安装级的固定值：那会给第三方网关一个可以跨会话跟踪设备的标识。
 func oneOffSessionID() string {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		// crypto/rand 在支持的平台上不会失败；真失败了也不该让整次拉取崩掉，
-		// 退回一个固定串只影响这一次请求的路由亲和。
-		return "opskat-probe"
-	}
-	return hex.EncodeToString(buf)
+	return rand.Text()
 }
 
 // headerInjectingTransport 给每个出站请求补上自定义头。
 // 只在请求副本上写，不改调用方持有的 *http.Request（RoundTripper 的契约）。
 type headerInjectingTransport struct {
-	base    http.RoundTripper
 	headers map[string]string
 }
 
@@ -55,9 +47,5 @@ func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 	for name, value := range t.headers {
 		clone.Header.Set(name, value)
 	}
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return base.RoundTrip(clone)
+	return http.DefaultTransport.RoundTrip(clone)
 }

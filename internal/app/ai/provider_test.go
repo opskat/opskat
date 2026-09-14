@@ -36,7 +36,8 @@ func TestAIProviderInfoJSONCarriesOriginalAPIKeyAndNoMasked(t *testing.T) {
 		ReasoningEffort:  "medium",
 	}
 	const key = "sk-abc1234567890secretXYZ"
-	info := toProviderInfo(p, key)
+	info, err := toProviderInfo(p, key)
+	require.NoError(t, err)
 
 	if info.APIKey != key {
 		t.Fatalf("APIKey must be the original value, got %q", info.APIKey)
@@ -196,4 +197,29 @@ func TestNormalizeExtraHeaders(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, got)
 	})
+}
+
+func TestNormalizeExtraHeadersRejectsUnsendableHeaders(t *testing.T) {
+	t.Run("名称不是合法 HTTP token 时在保存前拒绝", func(t *testing.T) {
+		_, err := normalizeExtraHeaders([]ExtraHeaderInput{{Name: "X Opencode Session", Value: "v"}})
+		require.Error(t, err, "存下去只会让之后每次对话都死在 net/http: invalid header field name")
+		assert.Contains(t, err.Error(), "X Opencode Session")
+	})
+
+	t.Run("值里有换行时在保存前拒绝", func(t *testing.T) {
+		_, err := normalizeExtraHeaders([]ExtraHeaderInput{{Name: "X-Trace", Value: "a\r\nX-Injected: 1"}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "X-Trace")
+	})
+
+	t.Run("展开占位符后的值仍然合法", func(t *testing.T) {
+		got, err := normalizeExtraHeaders([]ExtraHeaderInput{{Name: "x-opencode-session", Value: "{{session}}"}})
+		require.NoError(t, err)
+		assert.Len(t, got, 1)
+	})
+}
+
+func TestToProviderInfoSurfacesCorruptExtraHeaders(t *testing.T) {
+	_, err := toProviderInfo(&ai_provider_entity.AIProvider{ID: 7, Type: "openai", ExtraHeaders: "{not json"}, "k")
+	require.Error(t, err, "展示成\"没配过\"会诱导用户再保存一次，把库里的配置直接抹掉")
 }

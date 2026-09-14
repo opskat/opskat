@@ -40,15 +40,13 @@ func TestBuildProvider_OpenAISendsExtraHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := BuildProvider(ProviderOptions{
-		Entity: &ai_provider_entity.AIProvider{Type: "openai", APIBase: srv.URL},
-		APIKey: "sk-test",
-		ExtraHeaders: []ai_provider_entity.ExtraHeader{
-			{Name: "x-opencode-session", Value: "{{session}}"},
-			{Name: "X-Trace", Value: "t-9"},
-		},
-		SessionID: "sess-abc",
-	})
+	entity := &ai_provider_entity.AIProvider{Type: "openai", APIBase: srv.URL}
+	require.NoError(t, entity.SetExtraHeaders([]ai_provider_entity.ExtraHeader{
+		{Name: "x-opencode-session", Value: "{{session}}"},
+		{Name: "X-Trace", Value: "t-9"},
+	}))
+
+	p, err := BuildProvider(ProviderOptions{Entity: entity, APIKey: "sk-test", SessionID: "sess-abc"})
 	require.NoError(t, err)
 
 	_, err = p.ChatCompletion(context.Background(), &provider.CompletionRequest{
@@ -85,6 +83,14 @@ func TestBuildProvider_NoExtraHeadersLeavesRequestUntouched(t *testing.T) {
 
 	assert.Empty(t, got.Get("X-Opencode-Session"))
 	assert.Equal(t, "Bearer sk-test", got.Get("Authorization"))
+}
+
+func TestBuildProvider_RejectsCorruptStoredHeaders(t *testing.T) {
+	_, err := BuildProvider(ProviderOptions{
+		Entity: &ai_provider_entity.AIProvider{Type: "openai", ExtraHeaders: "{not json"},
+		APIKey: "sk-test",
+	})
+	require.Error(t, err, "坏数据不能静默当成没配过——那会让配好的网关又开始返回 400")
 }
 
 func TestFetchModels_SendsExtraHeadersWithOneOffSession(t *testing.T) {

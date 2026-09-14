@@ -12,7 +12,7 @@ import (
 // 迁移跑在用户已有的库上，且 gormigrate 的记账表可能因为回滚/手工修库而丢失，
 // 所以同一条迁移必须能重复执行而不报错。
 func TestMigration202609140001_Repeatable(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:migration202609140001?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(`CREATE TABLE ai_providers (id INTEGER PRIMARY KEY, name TEXT)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE conversations (id INTEGER PRIMARY KEY, title TEXT)`).Error)

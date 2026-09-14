@@ -3,7 +3,6 @@ package conversation_svc
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"os"
 	"sync"
 	"time"
@@ -49,11 +48,7 @@ func Conversation() ConversationSvc {
 
 func (s *conversationSvc) Create(ctx context.Context, conv *conversation_entity.Conversation) error {
 	if conv.ExternalSessionID == "" {
-		id, err := newExternalSessionID()
-		if err != nil {
-			return err
-		}
-		conv.ExternalSessionID = id
+		conv.ExternalSessionID = newExternalSessionID()
 	}
 	now := time.Now().Unix()
 	conv.Createtime = now
@@ -86,24 +81,16 @@ func (s *conversationSvc) EnsureExternalSessionID(ctx context.Context, conv *con
 	if conv.ExternalSessionID != "" {
 		return conv.ExternalSessionID, nil
 	}
-	id, err := newExternalSessionID()
-	if err != nil {
-		return "", err
-	}
-	conv.ExternalSessionID = id
+	conv.ExternalSessionID = newExternalSessionID()
 	if err := s.Update(ctx, conv); err != nil {
 		return "", err
 	}
-	return id, nil
+	return conv.ExternalSessionID, nil
 }
 
-// newExternalSessionID 生成 32 个十六进制字符的随机标识。
-func newExternalSessionID() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
+// newExternalSessionID 生成一个随机标识（rand.Text 的 26 个 base32 字符）。
+func newExternalSessionID() string {
+	return rand.Text()
 }
 
 // UpdateProvider 按会话切换 Provider（模型），只改这条会话。
