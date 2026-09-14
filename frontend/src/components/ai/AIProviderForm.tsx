@@ -15,6 +15,8 @@ import {
   ScrollableContainer,
 } from "@opskat/ui";
 import { SecretInput } from "@/components/SecretInput";
+import { ExtraHeadersSection } from "./ExtraHeadersSection";
+import { hasExtraHeaderError } from "./extraHeaders";
 import { Check, ChevronsUpDown, Loader2, RefreshCw } from "lucide-react";
 import { FetchAIModels } from "../../../wailsjs/go/ai/AI";
 import { GetModelDefaults } from "../../../wailsjs/go/ai/AI";
@@ -92,7 +94,8 @@ export function AIProviderForm({
   const [formName, setFormName] = useState(initialValues?.name ?? "");
   const [formType, setFormType] = useState(initialValues?.type ?? externalType ?? "openai");
   const [formApiBase, setFormApiBase] = useState(initialValues?.apiBase ?? "");
-  const [formExtraHeaders] = useState<ExtraHeaderValue[]>(initialValues?.extraHeaders ?? []);
+  const [formExtraHeaders, setFormExtraHeaders] = useState<ExtraHeaderValue[]>(initialValues?.extraHeaders ?? []);
+  const [extraHeadersOpen, setExtraHeadersOpen] = useState(false);
   const [formApiKey, setFormApiKey] = useState(initialValues?.apiKey ?? "");
   const [formModel, setFormModel] = useState(initialValues?.model ?? "");
   const [formMaxOutputTokens, setFormMaxOutputTokens] = useState(initialValues?.maxOutputTokens ?? 0);
@@ -148,7 +151,7 @@ export function AIProviderForm({
           type: formType,
           apiBase: formApiBase || getDefaultApiBase(formType),
           apiKey: formApiKey,
-          extraHeaders: formExtraHeaders,
+          extraHeaders: formExtraHeaders.filter((header) => header.name.trim() !== ""),
         })
       );
       setModelOptions(models || []);
@@ -210,7 +213,7 @@ export function AIProviderForm({
       contextWindow: formContextWindow,
       reasoningEnabled: showReasoningPanel && formReasoningEffort !== "none",
       reasoningEffort: formReasoningEffort,
-      extraHeaders: formExtraHeaders,
+      extraHeaders: formExtraHeaders.filter((header) => header.name.trim() !== ""),
     });
   };
 
@@ -381,9 +384,16 @@ export function AIProviderForm({
         </div>
       )}
 
+      <ExtraHeadersSection
+        headers={formExtraHeaders}
+        open={extraHeadersOpen}
+        onToggle={() => setExtraHeadersOpen(!extraHeadersOpen)}
+        onChange={setFormExtraHeaders}
+      />
+
       <Button
         onClick={handleSubmit}
-        disabled={saving || (!formApiBase.trim() && !formApiKey.trim())}
+        disabled={saving || (!formApiBase.trim() && !formApiKey.trim()) || hasExtraHeaderError(formExtraHeaders)}
         className="w-full"
       >
         {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : submitIcon}
