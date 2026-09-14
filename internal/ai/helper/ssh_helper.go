@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/sftpio"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
 	"github.com/opskat/opskat/internal/sshagent"
@@ -458,18 +459,28 @@ func ctxErrOr(ctx context.Context, err error) error {
 // 重复 Close 不该把已经拆掉的连接再拆一遍。
 type connBoundReadCloser struct {
 	ctx      context.Context
-	reader   io.ReadCloser
+	reader   sftpio.ReadCloser
 	teardown func()
 	once     sync.Once
 	err      error
 }
 
-func newConnBoundReadCloser(ctx context.Context, reader io.ReadCloser, teardown func()) io.ReadCloser {
+func newConnBoundReadCloser(ctx context.Context, reader sftpio.ReadCloser, teardown func()) sftpio.ReadCloser {
 	return &connBoundReadCloser{ctx: ctx, reader: reader, teardown: teardown}
 }
 
 func (c *connBoundReadCloser) Read(p []byte) (int, error) {
 	n, err := c.reader.Read(p)
+	if err != nil {
+		return n, ctxErrOr(c.ctx, err)
+	}
+	return n, nil
+}
+
+// WriteTo 把 io.Copy 的快路径透传给底下的 *sftp.File：它的 WriteTo 会并发发出读请求，
+// 而逐次 Read 每 32KB 就要等一个回包。包装层挡住这个方法，下载就整条退化成串行往返。
+func (c *connBoundReadCloser) WriteTo(w io.Writer) (int64, error) {
+	n, err := c.reader.WriteTo(w)
 	if err != nil {
 		return n, ctxErrOr(c.ctx, err)
 	}
