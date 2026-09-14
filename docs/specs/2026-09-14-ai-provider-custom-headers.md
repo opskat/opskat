@@ -41,7 +41,8 @@
 | 3 | 用户填 `Authorization` / `x-api-key` / `anthropic-version` / `Content-Type` 时**硬拦，不允许保存** | 这些头由 OpsKat 自己写，用户填了只会被静默丢弃，允许保存等于让用户以为生效。Rejected: 只告警但允许覆盖 —— 极易把 API Key 配到失效，排查成本远高于收益 |
 | 4 | 头的值**明文存储**，不走凭证加密通道 | 维护者决策。取舍已知并接受：见「安全与隐私」 |
 | 5 | 不提供网关快捷预设按钮 | 维护者决策：预设一旦开头，就会变成一份需要跟随上游变化维护的网关名单 |
-| 6 | anthropic 兼容路径同步支持 | issue #314 报告人两种兼容模式都试过；只修 openai 一侧等于问题只解决一半。代价是需要先在 `github.com/cago-frame/agents` 的 anthropics provider 上开出请求头入口——当前 `Config` 只有 `BaseURL/APIKey/MaxRetries/CacheTTL`，无 HTTP client 或 header 钩子 |
+| 6 | 拉取模型列表时 `{{session}}` 展开为一次性随机值，而非安装内稳定值 | 拉列表是低频一次性请求，不需要后端亲和或 prompt cache，稳定性换不来实际好处。Rejected: 安装内稳定 —— 仓库没有 settings/kv 存储，要为此新开一套持久化，而且会造出一个第三方网关可以用来跨会话跟踪设备的固定标识 |
+| 7 | anthropic 兼容路径同步支持 | issue #314 报告人两种兼容模式都试过；只修 openai 一侧等于问题只解决一半。代价是需要先在 `github.com/cago-frame/agents` 的 anthropics provider 上开出请求头入口——当前 `Config` 只有 `BaseURL/APIKey/MaxRetries/CacheTTL`，无 HTTP client 或 header 钩子 |
 
 ## 配置与校验
 
@@ -67,8 +68,8 @@ Provider 配置新增一组有序的「自定义请求头」条目，每条是�
 - 展开结果不泄露 OpsKat 的内部标识，第三方网关无法从中反推用户有多少个对话。
 - 会话级 Provider 切换（#246）下，头跟随本次实际使用的 Provider，展开结果仍由对话决定。
 
-拉取模型列表不发生在任何对话里。此时 `{{session}}` 展开为一个与对话无关、但在同一安装内稳定的值，
-使得需要会话头的网关也能成功返回模型列表。
+拉取模型列表不发生在任何对话里，也不需要后端亲和或 prompt cache。此时 `{{session}}` 展开为一个
+一次性随机值：需要会话头的网关照样能返回模型列表，但不同次拉取之间该值不保证相同。
 
 `{{session}}` 之外的内容按字面量发送，不做任何转义或模板求值。
 
