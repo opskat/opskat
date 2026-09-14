@@ -28,6 +28,11 @@ function getDefaultApiBase(providerType: string): string {
 
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface ExtraHeaderValue {
+  name: string;
+  value: string;
+}
+
 export interface AIProviderFormValues {
   name: string;
   type: string;
@@ -38,6 +43,7 @@ export interface AIProviderFormValues {
   contextWindow: number;
   reasoningEnabled: boolean;
   reasoningEffort: ReasoningEffort;
+  extraHeaders: ExtraHeaderValue[];
 }
 
 function supportsOpenAIReasoningModel(model: string): boolean {
@@ -61,6 +67,7 @@ export interface AIProviderFormProps {
     maxOutputTokens: number;
     contextWindow: number;
     reasoningEffort: ReasoningEffort;
+    extraHeaders?: ExtraHeaderValue[];
   };
   /** Locks the provider type (used by wizard where cards handle type selection) */
   providerType?: "openai" | "anthropic";
@@ -85,6 +92,7 @@ export function AIProviderForm({
   const [formName, setFormName] = useState(initialValues?.name ?? "");
   const [formType, setFormType] = useState(initialValues?.type ?? externalType ?? "openai");
   const [formApiBase, setFormApiBase] = useState(initialValues?.apiBase ?? "");
+  const [formExtraHeaders] = useState<ExtraHeaderValue[]>(initialValues?.extraHeaders ?? []);
   const [formApiKey, setFormApiKey] = useState(initialValues?.apiKey ?? "");
   const [formModel, setFormModel] = useState(initialValues?.model ?? "");
   const [formMaxOutputTokens, setFormMaxOutputTokens] = useState(initialValues?.maxOutputTokens ?? 0);
@@ -195,6 +203,7 @@ export function AIProviderForm({
       contextWindow: formContextWindow,
       reasoningEnabled: showReasoningPanel && formReasoningEffort !== "none",
       reasoningEffort: formReasoningEffort,
+      extraHeaders: formExtraHeaders,
     });
   };
 
