@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// startApprovalServer 启动 opsctl 审批 Unix socket 服务
+// startApprovalServer 启动 opsctl 审批 本地 IPC 服务
 func (o *Opsctl) startApprovalServer() {
 	handler := func(req approval.ApprovalRequest) approval.ApprovalResponse {
 		// 数据变更通知：opsctl 通知前端刷新

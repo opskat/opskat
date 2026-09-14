@@ -1,0 +1,32 @@
+name: Local IPC
+
+# Runs the real OS transport on the platforms ci.yml's ubuntu-only Go Test
+# job cannot cover. Linux is already covered there by `go test ./...`.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop/*
+
+permissions:
+  contents: read
+
+jobs:
+  transport:
+    name: Local IPC (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test IPC
+        run: go test -race -count=1 -timeout=3m ./internal/localipc ./internal/approval ./internal/sshpool
+      - name: Test CLI approval routing
+        run: go test -count=1 -timeout=5m ./cmd/opsctl/command -run 'TestChooseApprover|TestRequireApproval|TestIsInteractive'

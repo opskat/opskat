@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/localipc"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +30,7 @@ func NewClientWithToken(sockPath, token string) *Client {
 
 // IsAvailable 检测 proxy socket 是否可连
 func (c *Client) IsAvailable() bool {
-	conn, err := net.Dial("unix", c.sockPath)
+	conn, err := localipc.Dial(c.sockPath)
 	if err != nil {
 		return false
 	}
@@ -236,7 +237,7 @@ func (c *Client) Copy(req ProxyRequest) error {
 
 // handshake 连接 socket 并完成 JSON 握手
 func (c *Client) handshake(req ProxyRequest) (net.Conn, *bufio.Reader, error) {
-	conn, err := net.Dial("unix", c.sockPath)
+	conn, err := localipc.Dial(c.sockPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot connect to desktop app (is it running?): %w", err)
 	}

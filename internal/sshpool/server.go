@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/localipc"
 	"github.com/pkg/sftp"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
@@ -43,7 +43,7 @@ func SocketPath(dataDir string) string {
 	return filepath.Join(dataDir, "sshpool.sock")
 }
 
-// Server SSH 代理 Unix socket 服务端
+// Server SSH 代理本地 IPC 服务端
 type Server struct {
 	pool      *Pool
 	listener  net.Listener
@@ -67,36 +67,18 @@ func NewServer(pool *Pool, authToken string) *Server {
 	}
 }
 
-// Start 开始监听 Unix socket
+// Start 开始监听本地 IPC
 func (s *Server) Start(socketPath string) error {
-	// 清理 stale socket
-	if _, err := os.Stat(socketPath); err == nil {
-		conn, err := net.Dial("unix", socketPath)
-		if err == nil {
-			if closeErr := conn.Close(); closeErr != nil {
-				logger.Default().Warn("close probe connection", zap.String("path", socketPath), zap.Error(closeErr))
-			}
-			return fmt.Errorf("another instance is already listening on %s", socketPath)
-		}
-		if err := os.Remove(socketPath); err != nil {
-			logger.Default().Warn("remove stale socket", zap.String("path", socketPath), zap.Error(err))
-		}
-	}
-
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := localipc.Listen(socketPath)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", socketPath, err)
-	}
-	// 设置 socket 文件权限为 0600（仅所有者可访问）
-	if err := os.Chmod(socketPath, 0600); err != nil {
-		logger.Default().Warn("chmod socket", zap.String("path", socketPath), zap.Error(err))
 	}
 	s.listener = listener
 
 	s.wg.Add(1)
 	go s.acceptLoop()
 
-	logger.Default().Info("server listening", zap.String("path", socketPath))
+	logger.Default().Info("server listening", zap.Stringer("address", listener.Addr()))
 	return nil
 }
 
