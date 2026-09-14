@@ -64,9 +64,12 @@ describe("AIProviderForm apiKey", () => {
     ]);
     renderForm();
     await user.click(screen.getByRole("button", { name: "settings.fetchModels" }));
-    await waitFor(() =>
-      expect(FetchAIModels).toHaveBeenCalledWith("openai", "https://api.openai.com/v1", ORIGINAL_KEY)
-    );
+    await waitFor(() => expect(FetchAIModels).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(FetchAIModels).mock.calls[0][0]).toMatchObject({
+      type: "openai",
+      apiBase: "https://api.openai.com/v1",
+      apiKey: ORIGINAL_KEY,
+    });
   });
 
   it("save 把同一原始 apiKey 传给 onSave", async () => {

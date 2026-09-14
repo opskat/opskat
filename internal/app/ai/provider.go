@@ -259,13 +259,31 @@ type AIModelInfo struct {
 	ContextWindow   int    `json:"contextWindow"`
 }
 
+// FetchAIModelsInput 拉取模型列表的入参。带上自定义请求头：Provider 可能还没保存，
+// 要求会话头的网关连列表都拉不到，用户就卡在"填不完表单"这一步。
+type FetchAIModelsInput struct {
+	Type         string             `json:"type"`
+	APIBase      string             `json:"apiBase"`
+	APIKey       string             `json:"apiKey"`
+	ExtraHeaders []ExtraHeaderInput `json:"extraHeaders"`
+}
+
 // FetchAIModels 从 API 获取可用模型列表
-func (a *AI) FetchAIModels(providerType, apiBase, apiKey string) ([]AIModelInfo, error) {
-	if apiKey == "" {
+func (a *AI) FetchAIModels(in FetchAIModelsInput) ([]AIModelInfo, error) {
+	if in.APIKey == "" {
 		return nil, fmt.Errorf("API Key 不能为空")
 	}
+	headers, err := normalizeExtraHeaders(in.ExtraHeaders)
+	if err != nil {
+		return nil, err
+	}
 
-	models, err := runner.FetchModels(providerType, apiBase, apiKey)
+	models, err := runner.FetchModels(runner.FetchModelsOptions{
+		ProviderType: in.Type,
+		APIBase:      in.APIBase,
+		APIKey:       in.APIKey,
+		ExtraHeaders: headers,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("获取模型列表失败: %w", err)
 	}

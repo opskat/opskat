@@ -143,7 +143,14 @@ export function AIProviderForm({
     }
     setFetchingModels(true);
     try {
-      const models = await FetchAIModels(formType, formApiBase || getDefaultApiBase(formType), formApiKey);
+      const models = await FetchAIModels(
+        ai.FetchAIModelsInput.createFrom({
+          type: formType,
+          apiBase: formApiBase || getDefaultApiBase(formType),
+          apiKey: formApiKey,
+          extraHeaders: formExtraHeaders,
+        })
+      );
       setModelOptions(models || []);
       if (models && models.length > 0) {
         setModelPopoverOpen(true);
@@ -155,7 +162,7 @@ export function AIProviderForm({
     } finally {
       setFetchingModels(false);
     }
-  }, [formApiKey, formType, formApiBase, t]);
+  }, [formApiKey, formType, formApiBase, formExtraHeaders, t]);
 
   const handleSelectModel = useCallback(
     (model: ai.AIModelInfo) => {
