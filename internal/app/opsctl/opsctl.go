@@ -79,23 +79,20 @@ func (o *Opsctl) Cleanup() {
 	}
 }
 
-// ActiveTaskCount returns opsctl operations that have started and would be
-// interrupted by an application shutdown. Idle and half-open connections are
-// deliberately excluded.
+// ActiveTaskCount returns the authenticated approval requests in flight, which
+// an application shutdown would strand. opsctl dials its own connections, so a
+// running remote command is not one of them and never blocks the quit prompt.
 func (o *Opsctl) ActiveTaskCount() int {
-	return len(activeTasks(o))
+	return activeApprovals(o)
 }
 
-// ActiveTasks returns one stable kind per authenticated request without
-// widening the Wails-bound Opsctl method surface.
-func ActiveTasks(o *Opsctl) []string { return activeTasks(o) }
+// ActiveApprovals gives main.go the same count without widening the
+// Wails-bound Opsctl method surface.
+func ActiveApprovals(o *Opsctl) int { return activeApprovals(o) }
 
-func activeTasks(o *Opsctl) []string {
-	tasks := make([]string, 0)
-	if o.approvalServer != nil {
-		for range o.approvalServer.ActiveRequests() {
-			tasks = append(tasks, "approval")
-		}
+func activeApprovals(o *Opsctl) int {
+	if o.approvalServer == nil {
+		return 0
 	}
-	return tasks
+	return o.approvalServer.ActiveRequests()
 }

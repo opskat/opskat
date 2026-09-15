@@ -294,8 +294,8 @@ func main() {
 			for _, convID := range ai.ActiveTasks(aiB) {
 				activities = append(activities, quitapp.Activity{Kind: "ai", Category: "running", RefID: convID})
 			}
-			for _, taskKind := range opsctl.ActiveTasks(opsctlB) {
-				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running", Detail: taskKind})
+			for range opsctl.ActiveApprovals(opsctlB) {
+				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running"})
 			}
 			return quitapp.OnBeforeClose(forceQuit.Load(), activities, quitapp.Prompt{
 				Show: func(activities []quitapp.Activity) bool {
