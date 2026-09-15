@@ -543,6 +543,14 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	// 按会话选定的 Provider 组装本次发送配置（#246：可与全局激活 Provider 不同）。
 	cfg := a.buildSendConfig(ctx, conv)
 	cfg.SystemPrompt = systemPrompt
+	// 自定义请求头里的 {{session}} 展开成这个值。迁移之前建立的会话在这里补生成。
+	sessionID, err := conversation_svc.Conversation().EnsureExternalSessionID(ctx, conv)
+	if err != nil {
+		message, outwardErr := outwardFailure("准备会话标识", err)
+		onEvent(runner.StreamEvent{Type: "error", Error: message})
+		return outwardErr
+	}
+	cfg.SessionID = sessionID
 	sys, err := runner.BuildSystem(chatCtx, cfg)
 	if err != nil {
 		message, outwardErr := outwardFailure("build coding system", err)

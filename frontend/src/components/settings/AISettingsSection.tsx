@@ -560,30 +560,9 @@ export function AISettingsSection() {
     setSaving(true);
     try {
       if (editingProvider) {
-        await UpdateAIProvider(
-          editingProvider.id,
-          values.name,
-          values.type,
-          values.apiBase,
-          values.apiKey,
-          values.model,
-          values.maxOutputTokens,
-          values.contextWindow,
-          values.reasoningEnabled,
-          values.reasoningEffort
-        );
+        await UpdateAIProvider(editingProvider.id, ai.AIProviderInput.createFrom(values));
       } else {
-        const created = await CreateAIProvider(
-          values.name,
-          values.type,
-          values.apiBase,
-          values.apiKey,
-          values.model,
-          values.maxOutputTokens,
-          values.contextWindow,
-          values.reasoningEnabled,
-          values.reasoningEffort
-        );
+        const created = await CreateAIProvider(ai.AIProviderInput.createFrom(values));
         if (providers.length === 0 && created.id) {
           await SetActiveAIProvider(created.id);
         }
@@ -702,6 +681,7 @@ export function AISettingsSection() {
                     contextWindow: editingProvider.contextWindow,
                     reasoningEffort: (editingProvider.reasoningEffort ||
                       (editingProvider.reasoningEnabled ? "medium" : "none")) as ReasoningEffort,
+                    extraHeaders: editingProvider.extraHeaders ?? [],
                   }
                 : undefined
             }

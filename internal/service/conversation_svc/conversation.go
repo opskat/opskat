@@ -2,6 +2,7 @@ package conversation_svc
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type ConversationSvc interface {
 	List(ctx context.Context) ([]*conversation_entity.Conversation, error)
 	Get(ctx context.Context, id int64) (*conversation_entity.Conversation, error)
 	Update(ctx context.Context, conv *conversation_entity.Conversation) error
+	EnsureExternalSessionID(ctx context.Context, conv *conversation_entity.Conversation) (string, error)
 	UpdateTitle(ctx context.Context, id int64, title string) error
 	UpdateProvider(ctx context.Context, id int64, providerID int64, model string) error
 	Delete(ctx context.Context, id int64) error
@@ -45,6 +47,9 @@ func Conversation() ConversationSvc {
 }
 
 func (s *conversationSvc) Create(ctx context.Context, conv *conversation_entity.Conversation) error {
+	if conv.ExternalSessionID == "" {
+		conv.ExternalSessionID = newExternalSessionID()
+	}
 	now := time.Now().Unix()
 	conv.Createtime = now
 	conv.Updatetime = now
@@ -68,6 +73,24 @@ func (s *conversationSvc) Update(ctx context.Context, conv *conversation_entity.
 
 func (s *conversationSvc) UpdateTitle(ctx context.Context, id int64, title string) error {
 	return conversation_repo.Conversation().UpdateTitle(ctx, id, title, time.Now().Unix())
+}
+
+// EnsureExternalSessionID 返回该会话的外部会话标识，迁移之前建立的老会话在这里补生成并落库。
+// 补生成必须写回：否则每次重启都换一个标识，对端的会话亲和与 prompt cache 每次都从头开始。
+func (s *conversationSvc) EnsureExternalSessionID(ctx context.Context, conv *conversation_entity.Conversation) (string, error) {
+	if conv.ExternalSessionID != "" {
+		return conv.ExternalSessionID, nil
+	}
+	conv.ExternalSessionID = newExternalSessionID()
+	if err := s.Update(ctx, conv); err != nil {
+		return "", err
+	}
+	return conv.ExternalSessionID, nil
+}
+
+// newExternalSessionID 生成一个随机标识（rand.Text 的 26 个 base32 字符）。
+func newExternalSessionID() string {
+	return rand.Text()
 }
 
 // UpdateProvider 按会话切换 Provider（模型），只改这条会话。

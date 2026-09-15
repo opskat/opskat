@@ -4,6 +4,7 @@ import { Button } from "@opskat/ui";
 import { useAIStore } from "@/stores/aiStore";
 import { CreateAIProvider } from "../../../wailsjs/go/ai/AI";
 import { SetActiveAIProvider } from "../../../wailsjs/go/ai/AI";
+import { ai } from "../../../wailsjs/go/models";
 import { Bot, Zap, Sparkles, ArrowRight, Settings, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
 import { AIProviderForm, type AIProviderFormValues } from "./AIProviderForm";
@@ -32,17 +33,7 @@ export function AISetupWizard() {
   const handleSave = async (values: AIProviderFormValues) => {
     setSaving(true);
     try {
-      const created = await CreateAIProvider(
-        values.name,
-        values.type,
-        values.apiBase,
-        values.apiKey,
-        values.model,
-        values.maxOutputTokens,
-        values.contextWindow,
-        values.reasoningEnabled,
-        values.reasoningEffort
-      );
+      const created = await CreateAIProvider(ai.AIProviderInput.createFrom(values));
       await SetActiveAIProvider(created.id);
       await useAIStore.getState().checkConfigured();
       await useAIStore.getState().fetchConversations();

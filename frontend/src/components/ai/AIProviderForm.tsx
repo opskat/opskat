@@ -15,6 +15,8 @@ import {
   ScrollableContainer,
 } from "@opskat/ui";
 import { SecretInput } from "@/components/SecretInput";
+import { ExtraHeadersSection } from "./ExtraHeadersSection";
+import { hasExtraHeaderError } from "./extraHeaders";
 import { Check, ChevronsUpDown, Loader2, RefreshCw } from "lucide-react";
 import { FetchAIModels } from "../../../wailsjs/go/ai/AI";
 import { GetModelDefaults } from "../../../wailsjs/go/ai/AI";
@@ -28,6 +30,11 @@ function getDefaultApiBase(providerType: string): string {
 
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface ExtraHeaderValue {
+  name: string;
+  value: string;
+}
+
 export interface AIProviderFormValues {
   name: string;
   type: string;
@@ -38,6 +45,7 @@ export interface AIProviderFormValues {
   contextWindow: number;
   reasoningEnabled: boolean;
   reasoningEffort: ReasoningEffort;
+  extraHeaders: ExtraHeaderValue[];
 }
 
 function supportsOpenAIReasoningModel(model: string): boolean {
@@ -61,6 +69,7 @@ export interface AIProviderFormProps {
     maxOutputTokens: number;
     contextWindow: number;
     reasoningEffort: ReasoningEffort;
+    extraHeaders?: ExtraHeaderValue[];
   };
   /** Locks the provider type (used by wizard where cards handle type selection) */
   providerType?: "openai" | "anthropic";
@@ -85,6 +94,8 @@ export function AIProviderForm({
   const [formName, setFormName] = useState(initialValues?.name ?? "");
   const [formType, setFormType] = useState(initialValues?.type ?? externalType ?? "openai");
   const [formApiBase, setFormApiBase] = useState(initialValues?.apiBase ?? "");
+  const [formExtraHeaders, setFormExtraHeaders] = useState<ExtraHeaderValue[]>(initialValues?.extraHeaders ?? []);
+  const [extraHeadersOpen, setExtraHeadersOpen] = useState(false);
   const [formApiKey, setFormApiKey] = useState(initialValues?.apiKey ?? "");
   const [formModel, setFormModel] = useState(initialValues?.model ?? "");
   const [formMaxOutputTokens, setFormMaxOutputTokens] = useState(initialValues?.maxOutputTokens ?? 0);
@@ -135,7 +146,14 @@ export function AIProviderForm({
     }
     setFetchingModels(true);
     try {
-      const models = await FetchAIModels(formType, formApiBase || getDefaultApiBase(formType), formApiKey);
+      const models = await FetchAIModels(
+        ai.FetchAIModelsInput.createFrom({
+          type: formType,
+          apiBase: formApiBase || getDefaultApiBase(formType),
+          apiKey: formApiKey,
+          extraHeaders: formExtraHeaders.filter((header) => header.name.trim() !== ""),
+        })
+      );
       setModelOptions(models || []);
       if (models && models.length > 0) {
         setModelPopoverOpen(true);
@@ -147,7 +165,7 @@ export function AIProviderForm({
     } finally {
       setFetchingModels(false);
     }
-  }, [formApiKey, formType, formApiBase, t]);
+  }, [formApiKey, formType, formApiBase, formExtraHeaders, t]);
 
   const handleSelectModel = useCallback(
     (model: ai.AIModelInfo) => {
@@ -195,6 +213,7 @@ export function AIProviderForm({
       contextWindow: formContextWindow,
       reasoningEnabled: showReasoningPanel && formReasoningEffort !== "none",
       reasoningEffort: formReasoningEffort,
+      extraHeaders: formExtraHeaders.filter((header) => header.name.trim() !== ""),
     });
   };
 
@@ -365,9 +384,16 @@ export function AIProviderForm({
         </div>
       )}
 
+      <ExtraHeadersSection
+        headers={formExtraHeaders}
+        open={extraHeadersOpen}
+        onToggle={() => setExtraHeadersOpen(!extraHeadersOpen)}
+        onChange={setFormExtraHeaders}
+      />
+
       <Button
         onClick={handleSubmit}
-        disabled={saving || (!formApiBase.trim() && !formApiKey.trim())}
+        disabled={saving || (!formApiBase.trim() && !formApiKey.trim()) || hasExtraHeaderError(formExtraHeaders)}
         className="w-full"
       >
         {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : submitIcon}

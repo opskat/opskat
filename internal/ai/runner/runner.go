@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/cago-frame/agents/agent"
@@ -21,23 +22,42 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 )
 
+// ProviderOptions 构造 cago provider 需要的传输层参数。
+type ProviderOptions struct {
+	Entity *ai_provider_entity.AIProvider
+	APIKey string
+	// SessionID 本次对话的外部会话标识，供自定义请求头里的 {{session}} 展开。
+	SessionID string
+}
+
 // BuildProvider 根据 AIProvider entity + 已解密 API Key 构造 cago provider.Provider。
 // 后续对话全部走 cago provider；model / max_tokens / reasoning 在 request 阶段注入，
-// 这里只负责"传输层"。
-func BuildProvider(p *ai_provider_entity.AIProvider, apiKey string) (cagoProvider.Provider, error) {
+// 这里只负责"传输层"——包括把自定义请求头挂上去。
+func BuildProvider(opts ProviderOptions) (cagoProvider.Provider, error) {
+	p := opts.Entity
 	if p == nil {
 		return nil, fmt.Errorf("provider 配置为空")
 	}
+	// 自定义请求头只有 entity 一个来源，就地解析；再开一个入参等于给同一份数据留两个真相。
+	configured, err := p.GetExtraHeaders()
+	if err != nil {
+		return nil, fmt.Errorf("解析 Provider 自定义请求头失败: %w", err)
+	}
+	headers := resolveExtraHeaders(configured, opts.SessionID)
 	switch p.Type {
 	case "anthropic":
 		return cagoAnthropics.NewProvider(cagoAnthropics.Config{
 			BaseURL: p.APIBase,
-			APIKey:  apiKey,
+			APIKey:  opts.APIKey,
+			Headers: headers,
 		}), nil
 	case "openai", "":
-		cfg := openai.DefaultConfig(apiKey)
+		cfg := openai.DefaultConfig(opts.APIKey)
 		if p.APIBase != "" {
 			cfg.BaseURL = p.APIBase
+		}
+		if len(headers) > 0 {
+			cfg.HTTPClient = &http.Client{Transport: &headerInjectingTransport{headers: headers}}
 		}
 		return cagoOpenAI.NewProvider(cfg), nil
 	default:
@@ -59,11 +79,13 @@ type SystemConfig struct {
 	Provider       cagoProvider.Provider
 	ProviderEntity *ai_provider_entity.AIProvider
 	APIKey         string
-	Cwd            string
-	SystemPrompt   string
-	Model          string
-	Tools          []tool.Tool
-	LocalToolGate  *aitool.LocalToolGate
+	// SessionID 本次对话的外部会话标识，供自定义请求头里的 {{session}} 展开。
+	SessionID     string
+	Cwd           string
+	SystemPrompt  string
+	Model         string
+	Tools         []tool.Tool
+	LocalToolGate *aitool.LocalToolGate
 }
 
 // BuildSystem 拼装 coding.System：
@@ -85,7 +107,11 @@ type SystemConfig struct {
 func BuildSystem(ctx context.Context, cfg SystemConfig) (*coding.System, error) {
 	prov := cfg.Provider
 	if prov == nil {
-		built, err := BuildProvider(cfg.ProviderEntity, cfg.APIKey)
+		built, err := BuildProvider(ProviderOptions{
+			Entity:    cfg.ProviderEntity,
+			APIKey:    cfg.APIKey,
+			SessionID: cfg.SessionID,
+		})
 		if err != nil {
 			return nil, err
 		}
