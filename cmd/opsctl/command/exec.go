@@ -15,7 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/sshpool"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -23,7 +22,7 @@ import (
 const auditOutputLimit = 32768 // 审计日志捕获输出大小限制
 
 // execApprovalFn 是 exec 的审批入口。变量化是为了可测——与 cp.go 的 cpApprovalFn/
-// cpBatchApprovalFn/cpSSHProxyClientFn 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
+// cpBatchApprovalFn 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
 var execApprovalFn = requireApproval
 
 // execSSHStreamFn 是 exec 对 ssh 资产的流式执行入口，同上一套路。测试只需要断言
@@ -133,10 +132,9 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	}, approvalResult.ToCheckResult())
 }
 
-// execSSHStreaming 是 ssh 资产的流式执行体，从旧的 cmdExec 原样搬迁而来：转发 stdin
-// 管道、stdout/stderr 直写本地、透传远端 exit code（proxy 快路径 + helper.ExecWithStdio
-// 回落）。ctx 用于直连回落时的 helper.ExecWithStdio 调用；auditCtx 已注入
-// approvalResult.SessionID，专供审计写入使用。
+// execSSHStreaming 是 ssh 资产的流式执行体：转发 stdin 管道、stdout/stderr 直写
+// 本地、透传远端 exit code，全程走 helper.ExecWithStdio 自行拨号。ctx 用于该调用；
+// auditCtx 已注入 approvalResult.SessionID，专供审计写入使用。
 func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, approvalResult ApprovalResult) int {
 	assetID := asset.ID
 	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, assetID, command)
@@ -155,22 +153,6 @@ func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asse
 	stdoutW := io.MultiWriter(os.Stdout, outBuf)
 	stderrW := io.MultiWriter(os.Stderr, errBuf)
 
-	// 尝试通过 proxy 执行（复用 opskat 连接池）
-	if proxy := getSSHProxyClient(); proxy != nil {
-		exitCode, execErr := proxy.Exec(sshpool.ProxyRequest{
-			AssetID: assetID,
-			Command: command,
-		}, stdin, stdoutW, stderrW)
-		auditResult := buildExecAuditResult(exitCode, outBuf.String(), errBuf.String())
-		writeOpsctlAudit(auditCtx, "exec", argsJSON, auditResult, execErr, approvalResult.ToCheckResult())
-		if execErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", execErr)
-			return 1
-		}
-		return exitCode
-	}
-
-	// Fallback: 直连
 	execErr := helper.ExecWithStdio(ctx, assetID, command, stdin, stdoutW, stderrW)
 
 	// 审计日志

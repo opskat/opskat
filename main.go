@@ -193,7 +193,6 @@ func main() {
 	})
 	poolDialer := &sshadapt.PoolDialer{}
 	pool := sshpool.NewPool(poolDialer, 5*time.Minute)
-	proxyServer := sshpool.NewServer(pool, authToken)
 
 	skillContent := system.SkillContent{
 		SkillMD:               skillplugin.SkillMD,
@@ -218,7 +217,7 @@ func main() {
 	localB := local.New(appCtx, sys, localMgr)
 	vncB := vnc.New(appCtx, vncMgr)
 	aiB := ai.New(appCtx, sys, pool)
-	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
+	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
 	externalEditEmitter := external_edit.NewEventEmitter()
@@ -295,8 +294,8 @@ func main() {
 			for _, convID := range ai.ActiveTasks(aiB) {
 				activities = append(activities, quitapp.Activity{Kind: "ai", Category: "running", RefID: convID})
 			}
-			for _, taskKind := range opsctl.ActiveTasks(opsctlB) {
-				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running", Detail: taskKind})
+			for range opsctl.ActiveApprovals(opsctlB) {
+				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running"})
 			}
 			return quitapp.OnBeforeClose(forceQuit.Load(), activities, quitapp.Prompt{
 				Show: func(activities []quitapp.Activity) bool {

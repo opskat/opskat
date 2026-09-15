@@ -1,4 +1,4 @@
-// Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 本地 IPC 桥（审批 + 资产 + SSH 池代理）。
+// Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 本地 IPC 桥（审批 + 资产）。
 //
 // 只有一个 Wails 绑定方法（RespondOpsctlApproval）；其它都是底层服务。
 package opsctl
@@ -9,7 +9,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/internal/sshpool"
 )
 
 // LangProvider 由 system binder 实现。
@@ -36,7 +35,6 @@ type Opsctl struct {
 	window WindowActivator
 
 	approvalServer *approval.Server
-	proxyServer    *sshpool.Server
 	authToken      string
 	extExecutor    ExtToolExecutor
 
@@ -49,7 +47,7 @@ type pendingOpsctlApproval struct {
 	ch    chan permission.ApprovalResponse
 }
 
-// SetAuthToken main.go 注入 socket 鉴权 token，供 startApprovalServer/startSSHPoolServer 使用。
+// SetAuthToken main.go 注入 socket 鉴权 token，供 startApprovalServer 使用。
 func (o *Opsctl) SetAuthToken(token string) { o.authToken = token }
 
 // SetExtToolExecutor main.go 注入扩展工具执行器。
@@ -60,58 +58,41 @@ func New(
 	appCtx context.Context,
 	lang LangProvider,
 	window WindowActivator,
-	proxySrv *sshpool.Server,
 ) *Opsctl {
 	return &Opsctl{
-		appCtx:      appCtx,
-		lang:        lang,
-		window:      window,
-		proxyServer: proxySrv,
+		appCtx: appCtx,
+		lang:   lang,
+		window: window,
 	}
 }
 
-// Startup 启动 本地 IPC 服务（审批 + SSH 代理）。
+// Startup 启动审批的本地 IPC 服务。
 func (o *Opsctl) Startup(ctx context.Context) {
 	o.ctx = ctx
 	o.startApprovalServer()
-	o.startSSHPoolServer()
 }
 
-// Cleanup 关闭两个 本地 IPC 服务。
+// Cleanup 关闭审批的本地 IPC 服务。
 func (o *Opsctl) Cleanup() {
-	if o.proxyServer != nil {
-		o.proxyServer.Stop()
-	}
 	if o.approvalServer != nil {
 		o.approvalServer.Stop()
 	}
 }
 
-// ActiveTaskCount returns opsctl operations that have started and would be
-// interrupted by an application shutdown. Idle and half-open connections are
-// deliberately excluded.
+// ActiveTaskCount returns the authenticated approval requests in flight, which
+// an application shutdown would strand. opsctl dials its own connections, so a
+// running remote command is not one of them and never blocks the quit prompt.
 func (o *Opsctl) ActiveTaskCount() int {
-	return len(activeTasks(o))
+	return activeApprovals(o)
 }
 
-// ActiveTasks returns one stable kind per authenticated request without
-// widening the Wails-bound Opsctl method surface.
-func ActiveTasks(o *Opsctl) []string { return activeTasks(o) }
+// ActiveApprovals gives main.go the same count without widening the
+// Wails-bound Opsctl method surface.
+func ActiveApprovals(o *Opsctl) int { return activeApprovals(o) }
 
-func activeTasks(o *Opsctl) []string {
-	tasks := make([]string, 0)
-	count := 0
-	if o.proxyServer != nil {
-		count = o.proxyServer.ActiveRequests()
-		for range count {
-			tasks = append(tasks, "operation")
-		}
+func activeApprovals(o *Opsctl) int {
+	if o.approvalServer == nil {
+		return 0
 	}
-	if o.approvalServer != nil {
-		count = o.approvalServer.ActiveRequests()
-		for range count {
-			tasks = append(tasks, "approval")
-		}
-	}
-	return tasks
+	return o.approvalServer.ActiveRequests()
 }

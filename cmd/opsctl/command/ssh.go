@@ -11,7 +11,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/sshagent"
-	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -34,63 +33,7 @@ func cmdSSH(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	// 尝试通过 proxy 连接（复用 opskat 连接池）
-	if proxy := getSSHProxyClient(); proxy != nil {
-		return cmdSSHViaProxy(ctx, proxy, asset.ID)
-	}
-
-	// Fallback: 直连
 	return cmdSSHDirect(ctx, asset.ID)
-}
-
-// cmdSSHViaProxy 通过 opskat 连接池代理建立交互式 SSH。桌面连接池以非交互方式
-// 拨号：Agent 资产需要 MFA 时返回 ssh_agent_mfa_required，此时交互式 opsctl 交接
-// 回直连路径，把结构化挑战呈现到终端（挑战帧约定）；其它错误原样报出。
-func cmdSSHViaProxy(ctx context.Context, proxy *sshpool.Client, assetID int64) int {
-	fd := int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to set raw terminal: %v\n", err)
-		return 1
-	}
-	defer func() {
-		if err := term.Restore(fd, oldState); err != nil {
-			logger.Default().Warn("restore terminal state", zap.Error(err))
-		}
-	}()
-
-	width, height, err := term.GetSize(fd)
-	if err != nil {
-		width, height = 80, 24
-	}
-
-	resizeCh, stopResize := watchTerminalResizeCh(fd)
-	defer stopResize()
-
-	exitCode, err := proxy.InteractiveSSH(sshpool.ProxyRequest{
-		AssetID: assetID,
-		Cols:    width,
-		Rows:    height,
-	}, os.Stdin, os.Stdout, resizeCh)
-	if err != nil {
-		if restoreErr := term.Restore(fd, oldState); restoreErr != nil {
-			logger.Default().Warn("restore terminal state", zap.Error(restoreErr))
-		}
-		// 交互式交接：连接池无法完成交互式 MFA，直连路径负责呈现挑战。
-		if isAgentMFARequired(err) {
-			return cmdSSHDirect(ctx, assetID)
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	return exitCode
-}
-
-// isAgentMFARequired 判断错误是否由"新建连接需要调用方无法提供的交互"引起。桌面
-// 连接池经 JSON 握手回传错误（无法携带类型化错误），故按稳定错误码子串判定；
-// 直接拨号路径的 *sshagent.Error 同样命中。
-func isAgentMFARequired(err error) bool {
-	return err != nil && strings.Contains(err.Error(), sshagent.CodeMFARequired)
 }
 
 // terminalMFACaller 是 opsctl 交互式 SSH 路径的 MFA 挑战适配器（挑战帧约定）：把

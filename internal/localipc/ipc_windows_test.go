@@ -30,7 +30,7 @@ func TestWindowsDirectoryAliasesAndIsolation(t *testing.T) {
 		require.Equal(t, name, got, "directory alias %q -> %q", equivalent, dir)
 		require.Equal(t, sid, gotSID)
 	}
-	for _, distinct := range []string{filepath.Join(dir, "sshpool.sock"), filepath.Join(ipcTestDir(t), "approval.sock")} {
+	for _, distinct := range []string{filepath.Join(dir, "other.sock"), filepath.Join(ipcTestDir(t), "approval.sock")} {
 		got, _, err := pipeIdentity(distinct)
 		require.NoError(t, err)
 		require.NotEqual(t, name, got)

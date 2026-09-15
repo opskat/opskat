@@ -57,7 +57,6 @@ func (sshAdapter) ResolveTransferPath(
 	return resolved, nil
 }
 
-func (sshAdapter) SupportsPooledProxyCopy() bool   { return true }
 func (sshAdapter) SameAssetCopyHint(string) string { return "" }
 
 func init() {
