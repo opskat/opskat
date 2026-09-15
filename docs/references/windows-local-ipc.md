@@ -1,18 +1,18 @@
 # Windows local IPC
 
-`internal/localipc` owns the transport under both desktop↔`opsctl` endpoints:
-Windows named pipes, Unix-domain sockets on macOS/Linux. This reference owns
-that transport's contract and how to diagnose it. The process topology and the
-approval/audit flow those endpoints carry stay in
+`internal/localipc` owns the transport under the desktop↔`opsctl` approval
+endpoint: a Windows named pipe, a Unix-domain socket on macOS/Linux. This
+reference owns that transport's contract and how to diagnose it. The process
+topology and the approval/audit flow that endpoint carries stay in
 [Architecture §8](../ARCHITECTURE.md#8-opsctl--the-multi-process-flow).
 
 ## Why named pipes on Windows
 
-A user hit Winsock **10022 / InvalidArgument** at the **connect** stage on both
-endpoints in their `%LOCALAPPDATA%\opskat` directory, in a normal user context.
-An independent .NET AF_UNIX listener failed the same way in that directory,
-while the same operations succeeded on another drive and through a Junction to
-it. Moving the data directory restored both endpoints.
+A user hit Winsock **10022 / InvalidArgument** at the **connect** stage on the
+local IPC endpoints in their `%LOCALAPPDATA%\opskat` directory, in a normal user
+context. An independent .NET AF_UNIX listener failed the same way in that
+directory, while the same operations succeeded on another drive and through a
+Junction to it. Moving the data directory restored them.
 
 That establishes a directory-dependent AF_UNIX failure and an application
 dependency on it. It does **not** identify the underlying cause — path length,
