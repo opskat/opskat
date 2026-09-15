@@ -15,6 +15,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/sftpio"
 )
 
 // sshAdapter 是 SSH 端点，走 SFTP。
@@ -204,8 +205,17 @@ func writeSFTP(ctx context.Context, client *sftp.Client, p string, r io.Reader) 
 			}
 		}
 	}()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("failed to write remote file: %w", err)
+	if _, writeErr := sftpio.Upload(f, r); writeErr != nil {
+		// 并发写中途失败会在目标文件里留下空洞，长度却看着正常 —— 必须把半成品删掉，
+		// 否则用户拿到的是一个"看起来传完了"的坏文件。这是用 sftpio 的前置条件。
+		if closeErr := f.Close(); closeErr != nil && !IsExpectedCloseErr(closeErr) {
+			logger.Ctx(ctx).Warn("close remote file after failed write", zap.String("path", p), zap.Error(closeErr))
+		}
+		closed = true
+		if rmErr := client.Remove(p); rmErr != nil && !os.IsNotExist(rmErr) {
+			logger.Ctx(ctx).Warn("cleanup partial remote file", zap.String("path", p), zap.Error(rmErr))
+		}
+		return fmt.Errorf("failed to write remote file: %w", writeErr)
 	}
 	if err := f.Close(); err != nil {
 		closed = true

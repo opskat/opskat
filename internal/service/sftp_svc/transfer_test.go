@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/opskat/opskat/internal/pkg/sftpio"
 	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
@@ -330,15 +331,31 @@ func (w *failingWriter) Write(b []byte) (int, error) {
 
 func (w *failingWriter) Close() error { return nil }
 
-func (c *failingCopyClient) Open(p string) (io.ReadCloser, error) {
+// ReadFromWithConcurrency 是并发写原语的 fake：这里不必真并发，但必须把"写到一半失败"
+// 原样表现出来 —— 那正是被验证的清理路径的触发条件。
+func (w *failingWriter) ReadFromWithConcurrency(r io.Reader, _ int) (int64, error) {
+	return io.Copy(writerFunc(w.Write), r)
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
+
+// readCloser 把一个普通 reader 补齐成远端读句柄的形状。
+type readCloser struct{ io.Reader }
+
+func (r readCloser) WriteTo(w io.Writer) (int64, error) { return io.Copy(w, r.Reader) }
+func (readCloser) Close() error                         { return nil }
+
+func (c *failingCopyClient) Open(p string) (sftpio.ReadCloser, error) {
 	body, ok := c.files[p]
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	return io.NopCloser(bytes.NewReader(body)), nil
+	return readCloser{bytes.NewReader(body)}, nil
 }
 
-func (c *failingCopyClient) Create(p string) (io.WriteCloser, error) {
+func (c *failingCopyClient) Create(p string) (sftpio.WriteCloser, error) {
 	c.files[p] = nil
 	return &failingWriter{client: c, path: p, limit: c.failAfter}, nil
 }

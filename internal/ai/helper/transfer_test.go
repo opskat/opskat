@@ -773,16 +773,25 @@ func TestConnBoundReadCloser_ReadReportsCancellation(t *testing.T) {
 	if _, err := rc.Read(make([]byte, 4)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Read after cancel = %v, want context.Canceled", err)
 	}
+	// WriteTo 是下载的快路径，走的是同一条连接，取消后也必须交出 ctx.Err()。
+	if _, err := rc.WriteTo(io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WriteTo after cancel = %v, want context.Canceled", err)
+	}
 }
 
 type errReadCloser struct{ err error }
 
-func (e errReadCloser) Read([]byte) (int, error) { return 0, e.err }
-func (e errReadCloser) Close() error             { return nil }
+func (e errReadCloser) Read([]byte) (int, error)         { return 0, e.err }
+func (e errReadCloser) WriteTo(io.Writer) (int64, error) { return 0, e.err }
+func (e errReadCloser) Close() error                     { return nil }
 
 type countingReadCloser struct {
 	io.Reader
 	closes int
+}
+
+func (c *countingReadCloser) WriteTo(w io.Writer) (int64, error) {
+	return io.Copy(w, c.Reader)
 }
 
 func (c *countingReadCloser) Close() error {

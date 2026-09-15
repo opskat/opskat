@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/localipc"
+	"github.com/opskat/opskat/internal/pkg/sftpio"
 	"github.com/pkg/sftp"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
@@ -382,45 +384,49 @@ func (s *Server) handleUpload(conn net.Conn, reader *bufio.Reader, req ProxyRequ
 
 	remoteFile, err := sftpClient.Create(req.DstPath)
 	if err != nil {
-		if writeErr := WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("create remote file: %v", err))); writeErr != nil {
-			logger.Default().Warn("write file error frame for upload", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-		}
+		writeFileErr(conn, req.AssetID, fmt.Sprintf("create remote file: %v", err))
 		return
 	}
+	closed := false
 	defer func() {
+		if closed {
+			return
+		}
 		if err := remoteFile.Close(); err != nil {
 			logger.Default().Warn("close remote file for upload", zap.Int64("assetID", req.AssetID), zap.String("path", req.DstPath), zap.Error(err))
 		}
 	}()
 
-	// 读取 FileData 帧直到 FileEOF
-	for {
-		frameType, payload, err := ReadFrame(reader)
-		if err != nil {
-			if writeErr := WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("read frame: %v", err))); writeErr != nil {
-				logger.Default().Warn("write file error frame for upload", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-			}
-			return
+	// 整条帧流当成一个 reader 交给并发写流水线：收一帧写一帧的话，每 32KB 都要等一个
+	// SFTP 回包，代理上传会比桌面端的 SFTP 面板慢一个数量级。
+	if _, err := sftpio.Upload(remoteFile, &fileFrameReader{reader: reader}); err != nil {
+		// 并发写中途失败会在远端留下带空洞、长度却看似正常的半成品，必须删掉。
+		if closeErr := remoteFile.Close(); closeErr != nil {
+			logger.Default().Warn("close remote file after failed upload", zap.Int64("assetID", req.AssetID), zap.String("path", req.DstPath), zap.Error(closeErr))
 		}
-		switch frameType {
-		case FrameFileData:
-			if _, err := remoteFile.Write(payload); err != nil {
-				if writeErr := WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("write remote file: %v", err))); writeErr != nil {
-					logger.Default().Warn("write file error frame for upload", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-				}
-				return
-			}
-		case FrameFileEOF:
-			if writeErr := WriteFrame(conn, FrameOK, nil); writeErr != nil {
-				logger.Default().Warn("write ok frame for upload", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-			}
-			return
-		default:
-			if writeErr := WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("unexpected frame type: 0x%02x", frameType))); writeErr != nil {
-				logger.Default().Warn("write file error frame for upload", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-			}
-			return
+		closed = true
+		if rmErr := sftpClient.Remove(req.DstPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			logger.Default().Warn("cleanup partial remote file", zap.Int64("assetID", req.AssetID), zap.String("path", req.DstPath), zap.Error(rmErr))
 		}
+		writeFileErr(conn, req.AssetID, fmt.Sprintf("write remote file: %v", err))
+		return
+	}
+	// 先关文件再报成功：并发写的最后一片错误要到 Close 才浮出来。
+	if err := remoteFile.Close(); err != nil {
+		closed = true
+		writeFileErr(conn, req.AssetID, fmt.Sprintf("close remote file: %v", err))
+		return
+	}
+	closed = true
+	if writeErr := WriteFrame(conn, FrameOK, nil); writeErr != nil {
+		logger.Default().Warn("write ok frame for upload", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
+	}
+}
+
+// writeFileErr 把一次文件操作失败作为 FrameFileErr 回给客户端。
+func writeFileErr(conn net.Conn, assetID int64, msg string) {
+	if err := WriteFrame(conn, FrameFileErr, []byte(msg)); err != nil {
+		logger.Default().Warn("write file error frame", zap.Int64("assetID", assetID), zap.Error(err))
 	}
 }
 
@@ -458,27 +464,14 @@ func (s *Server) handleDownload(conn net.Conn, req ProxyRequest) {
 
 	writeJSONResponse(conn, true, "")
 
-	// 分块读取远程文件发送 FileData 帧
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := remoteFile.Read(buf)
-		if n > 0 {
-			if writeErr := WriteFrame(conn, FrameFileData, buf[:n]); writeErr != nil {
-				return
-			}
-		}
-		if err == io.EOF {
-			if writeErr := WriteFrame(conn, FrameFileEOF, nil); writeErr != nil {
-				logger.Default().Warn("write file eof frame for download", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-			}
-			return
-		}
-		if err != nil {
-			if writeErr := WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("read remote file: %v", err))); writeErr != nil {
-				logger.Default().Warn("write file error frame for download", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
-			}
-			return
-		}
+	// WriteTo 并发发出读请求，读到的块由 fileFrameWriter 变成 FileData 帧。
+	// 逐次 Read 每 32KB 都要等一个回包，代理下载会被链路往返钉死。
+	if _, err := remoteFile.WriteTo(fileFrameWriter{conn: conn}); err != nil {
+		writeFileErr(conn, req.AssetID, fmt.Sprintf("read remote file: %v", err))
+		return
+	}
+	if writeErr := WriteFrame(conn, FrameFileEOF, nil); writeErr != nil {
+		logger.Default().Warn("write file eof frame for download", zap.Int64("assetID", req.AssetID), zap.Error(writeErr))
 	}
 }
 
@@ -538,7 +531,11 @@ func (s *Server) handleCopy(conn net.Conn, req ProxyRequest) {
 		writeJSONResponse(conn, false, fmt.Sprintf("create destination file: %v", err))
 		return
 	}
+	dstClosed := false
 	defer func() {
+		if dstClosed {
+			return
+		}
 		if err := dstFile.Close(); err != nil {
 			logger.Default().Warn("close destination file for copy", zap.String("path", req.DstPath), zap.Error(err))
 		}
@@ -546,12 +543,31 @@ func (s *Server) handleCopy(conn net.Conn, req ProxyRequest) {
 
 	writeJSONResponse(conn, true, "")
 
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
+	// 两条腿各自流水线。io.Copy 在这里是陷阱：它选中源的 WriteTo，读腿并发，
+	// 但每次只把一个包交给目的端 Write，写腿仍是一个包一次往返。
+	if _, err := sftpio.Relay(dstFile, srcFile); err != nil {
+		// 并发写中途失败会留下带空洞、长度却看似正常的半成品。
+		if closeErr := dstFile.Close(); closeErr != nil {
+			logger.Default().Warn("close destination file after failed copy", zap.String("path", req.DstPath), zap.Error(closeErr))
+		}
+		dstClosed = true
+		if rmErr := dstSFTP.Remove(req.DstPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			logger.Default().Warn("cleanup partial remote copy", zap.String("path", req.DstPath), zap.Error(rmErr))
+		}
 		if writeErr := WriteFrame(conn, FrameError, []byte(fmt.Sprintf("copy: %v", err))); writeErr != nil {
 			logger.Default().Warn("write error frame for copy", zap.Error(writeErr))
 		}
 		return
 	}
+	// 先关目的文件再报成功：并发写最后一片的错误要到 Close 才浮出来。
+	if err := dstFile.Close(); err != nil {
+		dstClosed = true
+		if writeErr := WriteFrame(conn, FrameError, []byte(fmt.Sprintf("close destination file: %v", err))); writeErr != nil {
+			logger.Default().Warn("write error frame for copy", zap.Error(writeErr))
+		}
+		return
+	}
+	dstClosed = true
 
 	if writeErr := WriteFrame(conn, FrameOK, nil); writeErr != nil {
 		logger.Default().Warn("write ok frame for copy", zap.Error(writeErr))

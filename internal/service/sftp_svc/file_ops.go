@@ -3,7 +3,6 @@ package sftp_svc
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	pathpkg "path"
 	"regexp"
@@ -14,6 +13,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/cago-frame/cago/pkg/logger"
+
+	"github.com/opskat/opskat/internal/pkg/sftpio"
 )
 
 // ClipboardItem describes a remote path captured by the file-manager clipboard.
@@ -358,11 +359,11 @@ func uniqueRemotePath(client interface {
 }
 
 // remoteCopyClient 是 SFTP 粘贴需要的远端操作集合。
-// 用 io.ReadCloser / io.WriteCloser 而不是具体的 *sftp.File，让失败清理路径能被 fake 驱动；
-// io.Copy 仍会在运行时发现底层 *sftp.File 的 WriterTo/ReaderFrom，不损失吞吐。
+// 用接口而不是具体的 *sftp.File，让失败清理路径能被 fake 驱动；读写两端都要求并发原语
+// （WriteTo / ReadFromWithConcurrency），否则搬运会退化成每 32KB 一次往返。
 type remoteCopyClient interface {
-	Open(string) (io.ReadCloser, error)
-	Create(string) (io.WriteCloser, error)
+	Open(string) (sftpio.ReadCloser, error)
+	Create(string) (sftpio.WriteCloser, error)
 	Chmod(string, os.FileMode) error
 	Stat(string) (os.FileInfo, error)
 	Remove(string) error
@@ -374,8 +375,10 @@ type sftpCopyClient struct {
 	client *sftp.Client
 }
 
-func (c sftpCopyClient) Open(path string) (io.ReadCloser, error)    { return c.client.Open(path) }
-func (c sftpCopyClient) Create(path string) (io.WriteCloser, error) { return c.client.Create(path) }
+func (c sftpCopyClient) Open(path string) (sftpio.ReadCloser, error) { return c.client.Open(path) }
+func (c sftpCopyClient) Create(path string) (sftpio.WriteCloser, error) {
+	return c.client.Create(path)
+}
 func (c sftpCopyClient) Chmod(path string, mode os.FileMode) error  { return c.client.Chmod(path, mode) }
 func (c sftpCopyClient) Stat(path string) (os.FileInfo, error)      { return c.client.Stat(path) }
 func (c sftpCopyClient) Remove(path string) error                   { return c.client.Remove(path) }
@@ -413,7 +416,9 @@ func copyRemoteFile(ctx context.Context, srcClient, dstClient remoteCopyClient, 
 		}
 	}()
 
-	if _, err := io.Copy(dst, src); err != nil {
+	// 不能用 io.Copy：它会选中 src.WriteTo(dst)，读腿并发、写腿却是一个包一次往返。
+	// Relay 两条腿各自流水线。
+	if _, err := sftpio.Relay(dst, src); err != nil {
 		return err
 	}
 	if err := dst.Close(); err != nil {
