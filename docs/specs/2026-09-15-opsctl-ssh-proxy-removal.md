@@ -10,13 +10,13 @@
 
 ## Problem
 
-1. **桌面端退出会掐断在飞的 opsctl 远程操作。** `Server.Stop()` 主动 `conn.Close()` 所有客户端连接，其文档注释明确声明"不等待请求处理协程，以保证应用退出不会被远端命令、文件传输或异常客户端阻塞"（`internal/sshpool/server.go:85`）。opsctl 侧没有重连、没有回落直连、没有续传——一条跑到一半的长命令随 GUI 一起死。*(verified)*
+1. **桌面端退出会掐断在飞的 opsctl 远程操作。** `Server.Stop()` 主动 `conn.Close()` 所有客户端连接，其文档注释明确声明"不等待请求处理协程，以保证应用退出不会被远端命令、文件传输或异常客户端阻塞"（`internal/sshpool/server.go:89`）。opsctl 侧没有重连、没有回落直连、没有续传——一条跑到一半的长命令随 GUI 一起死。*(verified)*
 
-2. **被掐断在 `exec` / `ssh` 上表现为静默成功。** `readOutputFrames` 读到 `io.EOF` 时返回 `(0, nil)`（`internal/sshpool/client.go:299`）。服务端正常结束时一定会先发 `FrameExitCode`（`internal/sshpool/server.go:348`），所以"未收到退出码就 EOF"必然是异常终止，返回 0 在任何情况下都是错的。后果：opsctl 不打印错误、退出码 0，审计记录写成 `{"status":"completed","exit_code":0}`（`cmd/opsctl/command/exec.go:165`）。脚本无法靠退出码察觉命令被截断。`Upload` / `Download` / `Copy` 不受影响，它们的 EOF 会返回 `read frame: EOF` 错误。*(verified)*
+2. **被掐断在 `exec` / `ssh` 上表现为静默成功。** `readOutputFrames` 读到 `io.EOF` 时返回 `(0, nil)`（`internal/sshpool/client.go:299`）。服务端正常结束时一定会先发 `FrameExitCode`（`internal/sshpool/server.go:354`），所以"未收到退出码就 EOF"必然是异常终止，返回 0 在任何情况下都是错的。后果：opsctl 不打印错误、退出码 0，审计记录写成 `{"status":"completed","exit_code":0}`（`cmd/opsctl/command/exec.go:164`）。脚本无法靠退出码察觉命令被截断。`Upload` / `Download` / `Copy` 不受影响，它们的 EOF 会返回 `read frame: EOF` 错误。*(verified)*
 
-3. **退出确认框无法辨认将被中断的是什么。** `activeTasks` 对每个在飞的代理操作只产出字符串 `"operation"`（`internal/app/opsctl/opsctl.go:104`），既无资产名也无命令，用户无从判断该不该确认退出。*(verified)*
+3. **退出确认框无法辨认将被中断的是什么。** `activeTasks` 对每个在飞的代理操作只产出字符串 `"operation"`（`internal/app/opsctl/opsctl.go:105`），既无资产名也无命令，用户无从判断该不该确认退出。*(verified)*
 
-4. **代理路径的能力弱于直连。** 桌面连接池以非交互方式拨号：Agent 资产需要 MFA 时只能回传 `ssh_agent_mfa_required`，opsctl 为此专门维护了一段"交接回直连路径呈现挑战"的逻辑（`cmd/opsctl/command/ssh.go:84`）。代理层在这个场景下是纯粹的绕路。*(verified)*
+4. **代理路径的能力弱于直连。** 桌面连接池以非交互方式拨号：Agent 资产需要 MFA 时只能回传 `ssh_agent_mfa_required`，opsctl 为此专门维护了一段"交接回直连路径呈现挑战"的逻辑（`cmd/opsctl/command/ssh.go:80`）。代理层在这个场景下是纯粹的绕路。*(verified)*
 
 ## Actors and user stories
 
@@ -28,7 +28,7 @@
 
 | # | Decision | Basis and rejected option |
 |---|---|---|
-| 1 | opsctl 的全部远程操作（`exec` / `ssh` / `cp` / `batch`）一律自行拨号，不再经由桌面端 | 两个 dialer 逐字相同，都委托 `credential_resolver.Default().DialAssetSSH`（`internal/app/sshadapt/pool_dialer.go:19`、`internal/ai/helper/ssh_helper.go:574`），直连无能力损失，且在交互式 MFA 上严格更强（Problem 4）。连接复用的收益与命令时长成反比：长命令里一次握手可忽略，却要为此赌上整个 GUI 的生命周期。*(user-decided)* Rejected: 退出时排空（保留性能，但命令仍会被掐断，只是从静默变知情；且 `tail -f` 与交互式会话会让"等待完成"永不结束）；加 `--no-proxy` 开关（改动最小，但"默认值该是什么"这个问题原样保留，不知情的用户依然被掐断） |
+| 1 | opsctl 的全部远程操作（`exec` / `ssh` / `cp` / `batch`）一律自行拨号，不再经由桌面端 | 两个 dialer 逐字相同，都委托 `credential_resolver.Default().DialAssetSSH`（`internal/app/sshadapt/pool_dialer.go:19`、`internal/ai/helper/ssh_helper.go:585`），直连无能力损失，且在交互式 MFA 上严格更强（Problem 4）。连接复用的收益与命令时长成反比：长命令里一次握手可忽略，却要为此赌上整个 GUI 的生命周期。*(user-decided)* Rejected: 退出时排空（保留性能，但命令仍会被掐断，只是从静默变知情；且 `tail -f` 与交互式会话会让"等待完成"永不结束）；加 `--no-proxy` 开关（改动最小，但"默认值该是什么"这个问题原样保留，不知情的用户依然被掐断） |
 | 2 | 整体删除 sshpool 的 IPC 代理层，而非留作死代码或预留开关 | 该层只有 opsctl 一个消费者（`Server`/`Client`/帧协议的引用全部来自 `cmd/opsctl` 与 `internal/app/opsctl`）。AGENTS.md「Defensive Code / No meaningless fallbacks」禁止保留无消费者的通路。附带效果：Problem 2 的缺陷函数随代码一并消失，无需单独修复 *(verified)* Rejected: 保留 `Server` 以备将来——未请求的能力，且留着就要继续维护它的鉴权与关停语义 |
 | 3 | 不为批量场景做握手开销缓解 | 受影响的只剩「shell 脚本中 for 循环连续调用 `opsctl exec`」这一种写法；单进程多命令的场景已由 `opsctl batch` 覆盖，它在进程内自带连接池（`cmd/opsctl/command/root.go:97`）。*(user-decided)* Rejected: 引入常驻守护进程持有连接池——工程量远超本轮，且与「opskat 不从 agentre 移植设计」的既定约束冲突 |
 | 4 | `sshpool.Pool` 及其拨号器保留不动 | 桌面端自身的 SSH 使用（扩展宿主、redis、k8s、rdp 等 binder）直接依赖进程内的 `Pool`，与 opsctl 的 IPC 通路无关 *(verified)* |
@@ -82,7 +82,7 @@
 
 | Seam | What it verifies | Prior art |
 |---|---|---|
-| `cmd/opsctl/command` 的 `exec` / `cp` / `ssh` / `batch` 入口 | 桌面端在线与否不改变所选执行路径与退出码 | `cmd/opsctl/command/cp_approval_test.go:210` 已有的执行路径 stub 机制 |
+| `cmd/opsctl/command` 的 `exec` / `cp` / `ssh` / `batch` 入口 | 桌面端在线与否不改变所选执行路径与退出码 | `cmd/opsctl/command/cp_approval_test.go:211` 已有的执行路径 stub 机制 |
 
 `internal/sshpool` 中仅服务于代理层的测试（帧编解码、文件帧流、代理 IPC、代理关停）随被测代码一并移除。该包现有的测试全部属于代理层，移除后包内不再有测试文件——`Pool` 本身此前就没有单元测试，这一既有缺口不在本轮范围内填补。专跑该包的 CI 步骤相应不再需要列出它。
 
