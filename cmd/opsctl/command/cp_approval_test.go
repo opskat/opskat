@@ -22,7 +22,6 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
-	"github.com/opskat/opskat/internal/sshpool"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -205,12 +204,6 @@ func TestCmdCpRequiresApproval(t *testing.T) {
 	// 恰好有人在 /tmp 下留过同名文件的机器上通过，干净机器上恒红。
 	localPath := writeCpFixture(t, filepath.Join(t.TempDir(), "payload"))
 
-	// 隔离桌面端 SSH proxy 探测：本机开着 opskat 时 cmdCp 会走 proxy 分支，
-	// 下面被 stub 的 handler 一次都不会被调到。
-	origProxyFn := cpSSHProxyClientFn
-	cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-	t.Cleanup(func() { cpSSHProxyClientFn = origProxyFn })
-
 	Convey("cp 被拒时不得发起任何传输", t, func() {
 		registerCpTestAsset(t)
 		mockAudit := &mockAuditWriter{}
@@ -334,9 +327,6 @@ func TestCmdCpMultiSourceApprovalScopes(t *testing.T) {
 
 	Convey("多源 cp 使用与源形态一致的审批范围", t, func() {
 		registerCpTestAsset(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -517,9 +507,6 @@ func TestCmdCpRecursiveApprovesDirectoryScopeWithoutListing(t *testing.T) {
 func TestCmdCpRecursiveRemoteSourceApprovesReadScope(t *testing.T) {
 	Convey("远端递归源审批目录读范围", t, func() {
 		registerCpTestAsset(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -558,9 +545,6 @@ func TestCmdCpRecursiveRemoteSourceApprovesReadScope(t *testing.T) {
 func TestCmdCpMultiSourceBatchItemsCarryDetail(t *testing.T) {
 	Convey("批量审批的每一条 item 都带上这次传输的 from → to", t, func() {
 		registerCpTestAsset(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -604,9 +588,6 @@ func TestCmdCpRecursiveHandlerArgsStayCompact(t *testing.T) {
 	Convey("递归 cp 的 handler 参数只包含端点、标记和审计资产 ID", t, func() {
 		registerCpTestAsset(t)
 		resetCpFakeRemote(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -682,9 +663,6 @@ func TestCmdCpWritesEachTransferProgressToStderr(t *testing.T) {
 func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 	Convey("展开授权被拒时不展开、不传输", t, func() {
 		registerCpTestAsset(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -732,9 +710,6 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 	Convey("展开授权只在真的会枚举时索取", t, func() {
 		registerCpTestAsset(t)
 		resetCpFakeRemote(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -799,58 +774,11 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 	})
 }
 
-// TestCmdCpProxyFastPathOnlyForSSHEndpoints：proxy 复用的是桌面端的 SSH 连接池，对象存储
-// 没有对应能力，所以任一端是对象存储就必须走适配器直连（spec §6.4）。用一个指向不存在
-// socket 的 proxy 客户端把两条路分开：走 proxy 会连不上而失败，走工具则命中 stub。
-func TestCmdCpProxyFastPathOnlyForSSHEndpoints(t *testing.T) {
-	localPath := writeCpFixture(t, filepath.Join(t.TempDir(), "payload.bin"))
-
-	Convey("proxy 快路径只在远端全是 SSH 时启用", t, func() {
-		registerCpTestAsset(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client {
-			return sshpool.NewClient(filepath.Join(t.TempDir(), "absent.sock"))
-		}
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
-		mockAudit := &mockAuditWriter{}
-		origWriter := opsctlAuditWriter
-		opsctlAuditWriter = mockAudit
-		defer func() { opsctlAuditWriter = origWriter }()
-
-		origApproval := cpApprovalFn
-		cpApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
-			return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
-		}
-		defer func() { cpApprovalFn = origApproval }()
-
-		var calls []map[string]any
-		handlers := stubCpHandler(&calls)
-
-		Convey("SSH 端点：仍然走 proxy，不经过 cp 工具", func() {
-			exitCode := cmdCp(context.Background(), handlers, []string{localPath, "1:/srv/payload.bin"}, "")
-
-			So(exitCode, ShouldEqual, 1) // proxy socket 不存在
-			So(calls, ShouldBeEmpty)
-		})
-
-		Convey("对象存储端点：绕开 proxy，交给 cp 工具", func() {
-			exitCode := cmdCp(context.Background(), handlers, []string{localPath, "2:/mybucket/payload.bin"}, "")
-
-			So(exitCode, ShouldEqual, 0)
-			So(calls, ShouldHaveLength, 1)
-			So(calls[0]["dst"], ShouldEqual, "2:/mybucket/payload.bin")
-		})
-	})
-}
-
 // TestCmdCpSameOSSAssetHintsObjectCopy：两端是同一个对象存储资产时数据会绕一圈本地进程，
 // 服务端 copy 的能力在 exec 的 `object copy` 里（D12）。传输照做，但必须说一声。
 func TestCmdCpSameOSSAssetHintsObjectCopy(t *testing.T) {
 	Convey("两端同一个 OSS 资产时提示改用 object copy", t, func() {
 		registerCpTestAsset(t)
-		origProxyFn := cpSSHProxyClientFn
-		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
-		defer func() { cpSSHProxyClientFn = origProxyFn }()
 		mockAudit := &mockAuditWriter{}
 		origWriter := opsctlAuditWriter
 		opsctlAuditWriter = mockAudit
@@ -947,10 +875,8 @@ func TestCmdCpDirectAuditIsSingleAndConsistent(t *testing.T) {
 			originalRepo := audit_repo.Audit()
 			originalWriter := opsctlAuditWriter
 			originalApproval := cpApprovalFn
-			originalProxyClient := cpSSHProxyClientFn
 			audit_repo.RegisterAudit(recordingRepo)
 			opsctlAuditWriter = audit.NewDefaultAuditWriter()
-			cpSSHProxyClientFn = func() *sshpool.Client { return nil }
 			cpApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
 				return ApprovalResult{
 					Decision:       aictx.Allow,
@@ -959,7 +885,6 @@ func TestCmdCpDirectAuditIsSingleAndConsistent(t *testing.T) {
 				}, nil
 			}
 			t.Cleanup(func() {
-				cpSSHProxyClientFn = originalProxyClient
 				cpApprovalFn = originalApproval
 				opsctlAuditWriter = originalWriter
 				audit_repo.RegisterAudit(originalRepo)

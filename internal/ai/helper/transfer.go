@@ -118,13 +118,7 @@ type TransferApprovalPlanner interface {
 
 // TransferCapabilities 让入口询问适配器能力，不按资产类型或协议分支。
 type TransferCapabilities interface {
-	SupportsPooledProxyCopy() bool
 	SameAssetCopyHint(assetName string) string
-}
-
-func SupportsPooledProxyCopy(adapter TransferAdapter) bool {
-	c, ok := adapter.(TransferCapabilities)
-	return ok && c.SupportsPooledProxyCopy()
 }
 
 func SameAssetCopyHint(adapter TransferAdapter, assetName string) string {

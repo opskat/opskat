@@ -15,7 +15,6 @@ func TestRuntimeCommandsUseResolvedDataDir(t *testing.T) {
 		"handler.go",
 		"approval.go",
 		"session.go",
-		"sshproxy.go",
 	}
 
 	for _, name := range files {

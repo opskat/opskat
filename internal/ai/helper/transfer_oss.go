@@ -24,7 +24,6 @@ type ossTransferService interface {
 // ossAdapter 是对象存储端点，路径写成 <asset>:/<bucket>/<key>（spec §6.2）。
 type ossAdapter struct{ svc ossTransferService }
 
-func (ossAdapter) SupportsPooledProxyCopy() bool { return false }
 func (ossAdapter) SameAssetCopyHint(assetName string) string {
 	return fmt.Sprintf("both endpoints are on %s; the object streams through this process. For a server-side copy use: opsctl exec %s -- \"object copy <bucket>/<key> --to=<bucket>/<key>\"", assetName, assetName)
 }

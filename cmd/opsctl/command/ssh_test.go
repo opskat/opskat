@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -86,24 +85,6 @@ func TestTerminalMFACaller_CancelDuringWait(t *testing.T) {
 
 	_, err = c.SubmitChallenge(ctx, sshagent.MFAChallenge{Prompts: []string{"code:"}})
 	assert.True(t, errors.Is(err, context.Canceled), "got %v", err)
-}
-
-// TestIsAgentMFARequired 覆盖代理→直连的交接判定：桌面连接池以非交互方式拨号，
-// Agent 资产需要 MFA 时把稳定错误码 ssh_agent_mfa_required 作为字符串回传（JSON
-// 握手无法携带类型化错误），交互式 opsctl 据此交接回直连以呈现挑战；其它 Agent
-// 错误（如 sign_failed）不触发交接。
-func TestIsAgentMFARequired(t *testing.T) {
-	typed := &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "server requires interaction"}
-	assert.True(t, isAgentMFARequired(typed))
-
-	viaProxy := fmt.Errorf("proxy error: get connection: ssh_agent_mfa_required: the server requires keyboard-interactive")
-	assert.True(t, isAgentMFARequired(viaProxy))
-
-	signFailed := fmt.Errorf("proxy error: get connection: ssh_agent_sign_failed: provider refused to sign")
-	assert.False(t, isAgentMFARequired(signFailed))
-
-	assert.False(t, isAgentMFARequired(nil))
-	assert.False(t, isAgentMFARequired(fmt.Errorf("proxy error: get connection: no such host")))
 }
 
 // TestOnlyInteractiveSSHWiresMFA 防止非交互命令（exec/cp/batch）意外接入交互式

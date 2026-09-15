@@ -21,7 +21,6 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/sshpool"
 	"go.uber.org/zap"
 
 	"golang.org/x/crypto/ssh"
@@ -366,21 +365,6 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
 	errBuf := audit.NewLimitedBuffer(auditOutputLimit)
 
-	if proxy := getSSHProxyClient(); proxy != nil {
-		exitCode, execErr := proxy.Exec(sshpool.ProxyRequest{
-			AssetID: cmd.asset.ID,
-			Command: cmd.command,
-		}, nil, outBuf, errBuf)
-		result.ExitCode = exitCode
-		result.Stdout = outBuf.String()
-		result.Stderr = errBuf.String()
-		if execErr != nil {
-			result.Error = execErr.Error()
-		}
-		return result
-	}
-
-	// Fallback: direct SSH
 	execErr := helper.ExecWithStdio(ctx, cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
 	result.Stdout = outBuf.String()
 	result.Stderr = errBuf.String()
