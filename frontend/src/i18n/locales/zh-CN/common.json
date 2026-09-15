@@ -88,7 +88,6 @@
     "aiTask": "AI 任务 {{number}}",
     "opsctlTask": "opsctl 任务 {{number}}",
     "opsctlApproval": "正在等待桌面端审批",
-    "opsctlOperation": "正在执行远程命令或文件传输",
     "conversationDetail": "会话 {{id}}",
     "kind": {
       "ai": "AI",

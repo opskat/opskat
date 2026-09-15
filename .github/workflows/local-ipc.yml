@@ -27,6 +27,6 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test IPC
-        run: go test -race -count=1 -timeout=3m ./internal/localipc ./internal/approval ./internal/sshpool
+        run: go test -race -count=1 -timeout=3m ./internal/localipc ./internal/approval
       - name: Test CLI approval routing
         run: go test -count=1 -timeout=5m ./cmd/opsctl/command -run 'TestChooseApprover|TestRequireApproval|TestIsInteractive'

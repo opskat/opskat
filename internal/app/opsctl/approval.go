@@ -13,7 +13,6 @@ import (
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
-	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -145,17 +144,6 @@ func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (st
 		return edited[0].Command, permission.GrantOriginUser
 	}
 	return command, permission.GrantOriginSystem
-}
-
-// startSSHPoolServer 启动 SSH 连接池 proxy 服务
-func (o *Opsctl) startSSHPoolServer() {
-	if o.proxyServer == nil {
-		return
-	}
-	sockPath := sshpool.SocketPath(bootstrap.ResolvedDataDir())
-	if err := o.proxyServer.Start(sockPath); err != nil {
-		logger.Ctx(o.ctx).Error("ssh pool server failed to start", zap.String("socket", sockPath), zap.Error(err))
-	}
 }
 
 // handleBatchApproval 处理批量执行审批（exec/sql/redis 混合）

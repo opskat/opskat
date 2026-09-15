@@ -88,7 +88,6 @@
     "aiTask": "AI task {{number}}",
     "opsctlTask": "opsctl task {{number}}",
     "opsctlApproval": "Waiting for desktop approval",
-    "opsctlOperation": "Running a remote command or file transfer",
     "conversationDetail": "Conversation {{id}}",
     "kind": {
       "ai": "AI",

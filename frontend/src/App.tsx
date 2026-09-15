@@ -60,7 +60,7 @@ function App() {
             return {
               ...activity,
               title: t("appQuit.opsctlTask", { number: index + 1 }),
-              detail: t(activity.detail === "approval" ? "appQuit.opsctlApproval" : "appQuit.opsctlOperation"),
+              detail: t("appQuit.opsctlApproval"),
             };
           }
           return activity;
