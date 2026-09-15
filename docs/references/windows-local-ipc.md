@@ -54,10 +54,9 @@ and symlinks are never treated as stale sockets. Failing to set owner-only
 permissions closes the listener and returns an error.
 
 **Both.** Connection establishment is bounded at two seconds; waiting for a
-human approval decision and streaming execution get no new deadline. Failures
-are returned and logged with the wrapped cause, and requests are never replayed
-automatically after a broken connection. Policy/grant/TTY/refusal behavior and
-the SSH client's direct-connection fallback are untouched.
+human approval decision gets no new deadline. Failures are returned and logged
+with the wrapped cause, and requests are never replayed automatically after a
+broken connection. Policy/grant/TTY/refusal behavior is untouched.
 
 **Upgrading Windows requires both binaries at once, then a desktop restart.**
 Old binaries speak AF_UNIX and cannot reach the new pipe; no dual listener or
@@ -70,14 +69,13 @@ data migration is involved.
 The `Local IPC` workflow runs the real OS transport on Windows and macOS, which
 the ubuntu-only `Go Test` job does not cover. It exercises approval
 request/response under valid, missing and invalid tokens, user allow and deny,
-refusal after shutdown, exclusive startup and restart; pool authentication
-before dispatch plus the real client handshake and stdout/stderr/exit framing;
-large bidirectional streams, dial cancellation and blocked-accept shutdown; on
-Windows the Junction/case aliases, service and directory isolation, the
-installed pipe DACL, a long Unicode directory with an untouched legacy endpoint,
-the busy-pipe deadline and rebinding after abrupt process death; on Unix stale
-socket recovery, 0600 permissions and preservation of regular files/symlinks;
-and the CLI approval probe choosing desktop vs structured refusal.
+refusal after shutdown, exclusive startup and restart; large bidirectional
+streams, dial cancellation and blocked-accept shutdown; on Windows the
+Junction/case aliases, service and directory isolation, the installed pipe DACL,
+a long Unicode directory with an untouched legacy endpoint, the busy-pipe
+deadline and rebinding after abrupt process death; on Unix stale socket
+recovery, 0600 permissions and preservation of regular files/symlinks; and the
+CLI approval probe choosing desktop vs structured refusal.
 
 None of that reproduces or disproves the original AppData failure, and none of
 it asserts that a native Wails dialog was clicked or a production audit row

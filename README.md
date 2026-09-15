@@ -142,7 +142,7 @@ https://github.com/user-attachments/assets/035fc0df-230c-456b-87bd-8a4a125feaec
 
 OpsKat ships a standalone CLI tool (`opsctl`), primarily designed for AI coding assistants like **Claude Code**, **Codex**, and **Gemini CLI**. One-click skill installation from the desktop app teaches these AI assistants to use `opsctl` — so they can directly manage servers, check logs, query databases, and troubleshoot production issues.
 
-When the desktop app is running, opsctl reuses its connection pool and approval workflow, with all operations subject to the same policy enforcement and audit logging.
+opsctl opens its own connections, so a running command is unaffected by starting or quitting the desktop app; when it cannot prompt in the terminal itself, approval is handed to the running desktop app. Every operation is subject to the same policy enforcement and audit logging.
 
 You can also use it manually:
 

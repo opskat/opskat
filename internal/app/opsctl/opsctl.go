@@ -1,4 +1,4 @@
-// Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 本地 IPC 桥（审批 + 资产 + SSH 池代理）。
+// Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 本地 IPC 桥（审批 + 资产）。
 //
 // 只有一个 Wails 绑定方法（RespondOpsctlApproval）；其它都是底层服务。
 package opsctl
