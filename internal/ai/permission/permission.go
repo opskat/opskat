@@ -19,8 +19,8 @@ import (
 )
 
 // GrantToolCp 是文件传输授权在 grant_items.tool_name 里的取值，同时也是它的审批类型。
-// 它的 Command 是路径而非命令，匹配走 policy.MatchPathRule，必须与命令面的 grant
-// 彻底隔离——见 grantItemAppliesTo。
+// 它的 Command 是路径而非命令，匹配走 policy.MatchPathRule，与命令面的 grant 隔离
+// （唯一例外：命令面整串 `*` 跨面覆盖 cp）——见 grantItemAppliesTo。
 const (
 	GrantToolCp      = "cp"
 	GrantToolCpRead  = "cp:read"
@@ -823,7 +823,8 @@ func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID
 // 如果 sessionID 对应的 GrantSession 不存在，自动创建（状态: approved）。
 //
 // toolName 取审批类型（"exec" / "redis" / "cp" …），决定这条授权属于哪个工具面：
-// 匹配时按它隔离，命令授权与文件传输授权互不可见（见 grantItemAppliesTo）。
+// 匹配时按它隔离，cp 授权不进命令面；命令面的整串 `*` 是全权信任，跨面覆盖 cp
+// （见 grantItemAppliesTo）。
 func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, assetName, toolName, command string) {
 	if sessionID == "" || command == "" {
 		return
