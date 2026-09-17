@@ -149,9 +149,18 @@ func matchGrantPatterns(ctx context.Context, assetID int64, groups []*group_enti
 // SaveGrantPattern 写死成 "exec"（含 redis/sql 等），严格相等会让它们集体失效。cp 行
 // 只可能由新代码产生，因此这条线是准确的——而它正是必须划的那条：cp 的 pattern 是
 // 路径、匹配走 policy.MatchPathRule，被命令面匹配到就意味着一条 `/opt/*` 授权能放行
-// 任意命令，反过来一条 `*` 命令授权也不该放行任意文件写入。
+// 任意命令，所以 cp 行永远不进命令面。
+//
+// 反方向留一个豁口：命令面的**整串通配 `*`** 跨面覆盖 cp。`*` 语义上就是"这个资产上
+// 全权信任"，用户批了 `*` 之后 cp 还逐条弹框，拦的不是风险是他自己的耐心。非整串的
+// 命令授权（`systemctl *` 一类）仍不进 cp 面——pattern 是命令形状，MatchPathRule 拿
+// 路径去撞它只会误判。放行发生在 MatchPathRule 的 `rule == "*"` 分支，不会带进其他
+// 命令形状的 pattern。
 func grantItemAppliesTo(item *grant_entity.GrantItem, toolName string) bool {
-	return (item.ToolName == GrantToolCp) == (toolName == GrantToolCp)
+	if toolName == GrantToolCp {
+		return item.ToolName == GrantToolCp || item.Command == "*"
+	}
+	return item.ToolName != GrantToolCp
 }
 
 func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, toolName string, matchFn policy.MatchFunc) string {

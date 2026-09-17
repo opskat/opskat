@@ -55,9 +55,17 @@ func TestGrantIsolation(t *testing.T) {
 			So(got, ShouldEqual, "")
 		})
 
-		Convey("命令授权不能放行文件传输", func() {
+		Convey("整串通配 `*` 的命令授权跨面放行文件传输", func() {
 			ctx := withStubGrant(t)
 			SaveGrantPattern(ctx, "sess-cp", 1, "web-01", "exec", "*")
+
+			got := matchGrantPatternsWith(ctx, 1, nil, []string{"/etc/cron.d/backup"}, GrantToolCp, policy.MatchPathRule)
+			So(got, ShouldEqual, "*")
+		})
+
+		Convey("非整串通配的命令授权不能放行文件传输", func() {
+			ctx := withStubGrant(t)
+			SaveGrantPattern(ctx, "sess-cp", 1, "web-01", "exec", "systemctl *")
 
 			got := matchGrantPatternsWith(ctx, 1, nil, []string{"/etc/cron.d/backup"}, GrantToolCp, policy.MatchPathRule)
 			So(got, ShouldEqual, "")
