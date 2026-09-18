@@ -2,8 +2,7 @@ import { useImperativeHandle, useState, type Ref } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StartK8sPodLogs } from "../../wailsjs/go/k8s/K8s";
-import { StopK8sPodLogs } from "../../wailsjs/go/k8s/K8s";
+import { SaveK8sPodLogs, StartK8sPodLogs, StopK8sPodLogs } from "../../wailsjs/go/k8s/K8s";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { K8sLogsPanel } from "@/components/k8s/K8sLogsPanel";
 import type { LogTabState, LogTabStateUpdate } from "@/components/k8s/k8sLogState";
@@ -80,8 +79,6 @@ describe("K8sLogsPanel", () => {
 
     render(<DeploymentLogPanelHarness />);
 
-    await user.click(screen.getByRole("button", { name: /asset\.k8sPodLogsStart/i }));
-
     await waitFor(() => {
       expect(StartK8sPodLogs).toHaveBeenCalledWith(7, "default", "pod-a", "main", 200);
     });
@@ -107,5 +104,23 @@ describe("K8sLogsPanel", () => {
       expect(terminalSpies.write).toHaveBeenCalledTimes(2);
     });
     expect(decodeTerminalWrite(terminalSpies.write.mock.calls[1]![0])).toBe("hello from pod-a\n");
+  });
+
+  it("downloads the full cluster log file instead of the terminal buffer", async () => {
+    const user = userEvent.setup();
+    vi.mocked(StartK8sPodLogs).mockResolvedValue("stream-1" as never);
+    vi.mocked(StopK8sPodLogs).mockResolvedValue(undefined as never);
+    vi.mocked(SaveK8sPodLogs).mockResolvedValue(true as never);
+
+    render(<DeploymentLogPanelHarness />);
+    await waitFor(() => {
+      expect(StartK8sPodLogs).toHaveBeenCalled();
+    });
+
+    await user.click(screen.getByRole("button", { name: "asset.k8sPodLogsDownload" }));
+
+    await waitFor(() => {
+      expect(SaveK8sPodLogs).toHaveBeenCalledWith(7, "default", "pod-a", "main");
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
@@ -71,12 +71,12 @@ function podDetail(name: string, image: string) {
   };
 }
 
-function assetWithID(ID: number) {
+function assetWithID(ID: number, config = '{"namespace":"default"}') {
   return {
     ID,
     Name: "k8s",
     Type: "k8s",
-    Config: '{"namespace":"default"}',
+    Config: config,
   } as asset_entity.Asset;
 }
 
@@ -134,5 +134,70 @@ describe("K8sClusterPage refresh", () => {
     });
     expect(await screen.findByText("example/api:new")).toBeInTheDocument();
     expect(screen.queryByText("example/api:old")).not.toBeInTheDocument();
+  });
+});
+
+describe("K8sClusterPage namespace select", () => {
+  beforeEach(() => {
+    vi.mocked(GetK8sClusterInfo).mockReset();
+    vi.mocked(GetK8sNamespaceResources).mockReset();
+    vi.mocked(GetK8sNamespacePods).mockReset();
+  });
+
+  it("shows one namespace at a time from a dropdown instead of a namespace tree", async () => {
+    const user = userEvent.setup();
+    vi.mocked(GetK8sClusterInfo).mockResolvedValue(
+      JSON.stringify({
+        version: "1.34.1",
+        platform: "linux/amd64",
+        nodes: [],
+        namespaces: [
+          { name: "default", status: "Active" },
+          { name: "kube-system", status: "Active" },
+        ],
+      }) as never
+    );
+    vi.mocked(GetK8sNamespaceResources).mockImplementation(async (_assetID: number, ns: string) =>
+      JSON.stringify({
+        namespace: ns,
+        pods: 1,
+        deployments: 0,
+        services: 0,
+        config_maps: 0,
+        secrets: 0,
+        pvcs: 0,
+        service_accounts: 0,
+      })
+    );
+    vi.mocked(GetK8sNamespacePods).mockImplementation(async (_assetID: number, ns: string) =>
+      JSON.stringify([
+        ns === "kube-system" ? { ...pod("coredns", "Running"), namespace: "kube-system" } : pod("api-old", "Running"),
+      ])
+    );
+
+    render(<K8sClusterPage asset={assetWithID(99003, "{}")} />);
+
+    await waitFor(() => {
+      expect(GetK8sNamespaceResources).toHaveBeenCalledWith(99003, "default");
+    });
+
+    const sidebar = await screen.findByTestId("k8s-cluster-sidebar");
+    const namespaceSelect = await screen.findByTestId("k8s-namespace-select");
+    expect(namespaceSelect).toHaveTextContent("default");
+    expect(within(sidebar).queryByText("kube-system")).not.toBeInTheDocument();
+
+    await user.click(namespaceSelect);
+    await user.click(await screen.findByRole("option", { name: "kube-system" }));
+
+    const podLabels = await screen.findAllByText("asset.k8sPods");
+    await user.click(podLabels[0]!);
+    expect(await screen.findByText("coredns")).toBeInTheDocument();
+    expect(screen.queryByText("api-old")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("k8s-namespace-select"));
+    await user.click(await screen.findByRole("option", { name: "default" }));
+    await user.click((await screen.findAllByText("asset.k8sPods"))[0]!);
+    expect(await screen.findByText("api-old")).toBeInTheDocument();
+    expect(screen.queryByText("coredns")).not.toBeInTheDocument();
   });
 });

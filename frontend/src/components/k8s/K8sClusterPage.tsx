@@ -33,6 +33,11 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@opskat/ui";
 import { InfoItem } from "@/components/asset/detail/InfoItem";
 import { K8sSectionCard } from "./K8sSectionCard";
@@ -44,7 +49,14 @@ import { K8sTagList } from "./K8sTagList";
 import { K8sCodeBlock } from "./K8sCodeBlock";
 import { K8sLogsPanel } from "./K8sLogsPanel";
 import type { LogTabState, LogTabStateUpdate } from "./k8sLogState";
-import { getK8sStatusColor, getContainerStateColor, statusVariantToClass } from "./utils";
+import {
+  formatK8sMemory,
+  formatK8sVersion,
+  getK8sStatusColor,
+  getContainerStateColor,
+  resolveK8sPreferredNamespace,
+  statusVariantToClass,
+} from "./utils";
 import { ResourceSearchInput } from "./cluster/ResourceSearchInput";
 import { RESOURCE_TYPES } from "./cluster/resourceTypes";
 import type {
@@ -70,7 +82,7 @@ interface K8sPageSnapshot {
   innerTabs: InnerTab[];
   activeTabId: InnerTabId;
   expandedNodes: boolean;
-  expandedNamespaces: string[];
+  selectedNamespace: string;
   expandedPods: string[];
   expandedDeployments: string[];
   expandedServices: string[];
@@ -94,7 +106,7 @@ const k8sPageStateCache = new Map<number, K8sPageSnapshot>();
 export function K8sClusterPage({ asset }: Props) {
   const { t } = useTranslation();
   const initialSnapshot = k8sPageStateCache.get(asset.ID);
-  const defaultNamespace = (() => {
+  const configuredNamespace = (() => {
     try {
       const cfg = JSON.parse(asset.Config || "{}") as { namespace?: string };
       return (cfg.namespace || "").trim();
@@ -111,9 +123,7 @@ export function K8sClusterPage({ asset }: Props) {
   );
   const [activeTabId, setActiveTabId] = useState<InnerTabId>(initialSnapshot?.activeTabId || "overview");
   const [expandedNodes, setExpandedNodes] = useState(initialSnapshot?.expandedNodes || false);
-  const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(
-    new Set(initialSnapshot?.expandedNamespaces || [])
-  );
+  const [selectedNamespace, setSelectedNamespace] = useState(initialSnapshot?.selectedNamespace || "");
   const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set(initialSnapshot?.expandedPods || []));
   const [expandedDeployments, setExpandedDeployments] = useState<Set<string>>(
     new Set(initialSnapshot?.expandedDeployments || [])
@@ -187,18 +197,17 @@ export function K8sClusterPage({ asset }: Props) {
         const data = JSON.parse(result) as ClusterInfo;
         setInfo(data);
         if (resetState) {
-          const hasDefaultNamespace = defaultNamespace && data.namespaces.some((ns) => ns.name === defaultNamespace);
-          if (hasDefaultNamespace) {
+          const initialNamespace = resolveK8sPreferredNamespace(configuredNamespace, data.namespaces);
+          setSelectedNamespace(initialNamespace);
+          if (configuredNamespace && data.namespaces.some((ns) => ns.name === configuredNamespace)) {
             setInnerTabs([
               { id: "overview", label: t("asset.k8sClusterOverview") },
-              { id: `ns:${defaultNamespace}`, label: defaultNamespace },
+              { id: `ns:${configuredNamespace}`, label: configuredNamespace },
             ]);
-            setActiveTabId(`ns:${defaultNamespace}`);
-            setExpandedNamespaces(new Set([defaultNamespace]));
+            setActiveTabId(`ns:${configuredNamespace}`);
           } else {
             setInnerTabs([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
             setActiveTabId("overview");
-            setExpandedNamespaces(new Set());
           }
           setExpandedNodes(false);
           setExpandedPods(new Set());
@@ -467,18 +476,15 @@ export function K8sClusterPage({ asset }: Props) {
     [namespaceResources, loadingNamespaces, fetchNamespaceResources, setLoadingNamespaces]
   );
 
-  const toggleNamespace = (ns: string) => {
-    setExpandedNamespaces((prev) => {
-      const next = new Set(prev);
-      if (next.has(ns)) {
-        next.delete(ns);
-      } else {
-        next.add(ns);
-        loadNamespaceResources(ns);
-      }
-      return next;
-    });
+  const selectNamespace = (ns: string) => {
+    setSelectedNamespace(ns);
+    loadNamespaceResources(ns);
   };
+
+  useEffect(() => {
+    if (!selectedNamespace) return;
+    loadNamespaceResources(selectedNamespace);
+  }, [selectedNamespace, loadNamespaceResources]);
 
   const loadPods = (ns: string) => {
     if (namespacePodList[ns] || loadingPods.has(ns)) return;
@@ -1008,7 +1014,7 @@ export function K8sClusterPage({ asset }: Props) {
       innerTabs,
       activeTabId,
       expandedNodes,
-      expandedNamespaces: [...expandedNamespaces],
+      selectedNamespace,
       expandedPods: [...expandedPods],
       expandedDeployments: [...expandedDeployments],
       expandedServices: [...expandedServices],
@@ -1032,7 +1038,7 @@ export function K8sClusterPage({ asset }: Props) {
     innerTabs,
     activeTabId,
     expandedNodes,
-    expandedNamespaces,
+    selectedNamespace,
     expandedPods,
     expandedDeployments,
     expandedServices,
@@ -1183,6 +1189,7 @@ export function K8sClusterPage({ asset }: Props) {
         },
       }));
     }
+    loadPodDetail(ns, podName, true);
     setActiveTabId(id);
   };
 
@@ -1292,12 +1299,13 @@ export function K8sClusterPage({ asset }: Props) {
     <div className="flex h-full w-full">
       <div
         ref={sidebarRef}
+        data-testid="k8s-cluster-sidebar"
         className="shrink-0 border-r border-border bg-sidebar h-full overflow-y-auto"
         style={{ width: sidebarWidth }}
       >
         <div className="p-3 border-b border-border">
           <h2 className="text-sm font-semibold truncate">{asset.Name}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">v{info.version}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{formatK8sVersion(info.version)}</p>
         </div>
 
         <div className="p-2">
@@ -1347,225 +1355,241 @@ export function K8sClusterPage({ asset }: Props) {
               </div>
             ))}
 
-          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs text-muted-foreground/70 mt-1">
-            <Layers className="h-3.5 w-3.5" />
-            {t("asset.k8sNamespaces")}
-            <span className="ml-auto text-[10px]">{info.namespaces.length}</span>
+          <div className="mt-1 mb-1">
+            <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/70">
+              <Layers className="h-3.5 w-3.5" />
+              {t("asset.k8sNamespaces")}
+              <span className="ml-auto text-[10px]">{info.namespaces.length}</span>
+            </div>
+            <Select value={selectedNamespace || undefined} onValueChange={selectNamespace}>
+              <SelectTrigger size="sm" className="w-full min-w-0 text-xs font-mono" data-testid="k8s-namespace-select">
+                <SelectValue placeholder={t("asset.k8sSelectNamespace")} />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {info.namespaces.map((ns) => (
+                  <SelectItem key={ns.name} value={ns.name} className="text-xs font-mono">
+                    {ns.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          {info.namespaces.map((ns) => (
-            <div key={ns.name}>
-              <div
-                className="flex items-center gap-1.5 pl-6 pr-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                onClick={() => toggleNamespace(ns.name)}
-              >
-                <span className="text-[10px] w-3 translate-x-[-2px]">
-                  {expandedNamespaces.has(ns.name) ? "\u25BC" : "\u25B6"}
-                </span>
-                <span className="truncate">{ns.name}</span>
-              </div>
-              {expandedNamespaces.has(ns.name) && (
-                <div className="ml-3">
-                  {loadingNamespaces.has(ns.name) && (
-                    <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      {t("asset.k8sLoadingNamespace")}
-                    </div>
-                  )}
-                  {namespaceErrors[ns.name] && (
-                    <div
-                      className="flex items-start gap-1 pl-8 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                      title={namespaceErrors[ns.name]}
-                      onClick={() => {
-                        const next = { ...namespaceErrors };
-                        delete next[ns.name];
-                        setNamespaceErrors(next);
-                        loadNamespaceResources(ns.name);
-                      }}
-                    >
-                      <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                      <span>{t("asset.k8sNamespaceResourceError")}</span>
-                    </div>
-                  )}
-                  {namespaceResources[ns.name] &&
-                    (() => {
-                      return (
-                        <>
-                          {RESOURCE_TYPES.filter((rt) => (namespaceResources[ns.name][rt.key] as number) > 0).map(
-                            (rt) => {
-                              const count = namespaceResources[ns.name][rt.key] as number;
-                              const isPods = rt.key === "pods";
-                              const isDeployments = rt.key === "deployments";
-                              const isServices = rt.key === "services";
-                              const isConfigMaps = rt.key === "config_maps";
-                              const isSecrets = rt.key === "secrets";
-                              const podsExpanded = expandedPods.has(ns.name);
-                              const deploymentsExpanded = expandedDeployments.has(ns.name);
-                              const servicesExpanded = expandedServices.has(ns.name);
-                              const configMapsExpanded = expandedConfigMaps.has(ns.name);
-                              const secretsExpanded = expandedSecrets.has(ns.name);
-                              if (isDeployments) {
-                                const deployments = namespaceDeploymentList[ns.name];
-                                const deploymentsQuery = (resourceSearch[`deployments:${ns.name}`] || "")
-                                  .trim()
-                                  .toLowerCase();
-                                const visibleDeployments = deploymentsQuery
-                                  ? deployments?.filter((deployment) =>
-                                      deploymentMatchesSearch(deployment, deploymentsQuery)
-                                    )
-                                  : deployments;
-                                const displayCount =
-                                  deploymentsQuery && deployments ? visibleDeployments?.length || 0 : count;
-                                return (
-                                  <div key={rt.key}>
-                                    <div
-                                      className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                      onClick={() => toggleDeployments(ns.name)}
-                                    >
-                                      {deploymentsExpanded ? (
-                                        <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      ) : (
-                                        <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+          {info.namespaces
+            .filter((ns) => ns.name === selectedNamespace)
+            .map((ns) => (
+              <div key={ns.name}>
+                {loadingNamespaces.has(ns.name) && (
+                  <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("asset.k8sLoadingNamespace")}
+                  </div>
+                )}
+                {namespaceErrors[ns.name] && (
+                  <div
+                    className="flex items-start gap-1 pl-8 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                    title={namespaceErrors[ns.name]}
+                    onClick={() => {
+                      const next = { ...namespaceErrors };
+                      delete next[ns.name];
+                      setNamespaceErrors(next);
+                      loadNamespaceResources(ns.name);
+                    }}
+                  >
+                    <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                    <span>{t("asset.k8sNamespaceResourceError")}</span>
+                  </div>
+                )}
+                {namespaceResources[ns.name] &&
+                  (() => {
+                    return (
+                      <>
+                        {RESOURCE_TYPES.filter((rt) => (namespaceResources[ns.name][rt.key] as number) > 0).map(
+                          (rt) => {
+                            const count = namespaceResources[ns.name][rt.key] as number;
+                            const isPods = rt.key === "pods";
+                            const isDeployments = rt.key === "deployments";
+                            const isServices = rt.key === "services";
+                            const isConfigMaps = rt.key === "config_maps";
+                            const isSecrets = rt.key === "secrets";
+                            const podsExpanded = expandedPods.has(ns.name);
+                            const deploymentsExpanded = expandedDeployments.has(ns.name);
+                            const servicesExpanded = expandedServices.has(ns.name);
+                            const configMapsExpanded = expandedConfigMaps.has(ns.name);
+                            const secretsExpanded = expandedSecrets.has(ns.name);
+                            if (isDeployments) {
+                              const deployments = namespaceDeploymentList[ns.name];
+                              const deploymentsQuery = (resourceSearch[`deployments:${ns.name}`] || "")
+                                .trim()
+                                .toLowerCase();
+                              const visibleDeployments = deploymentsQuery
+                                ? deployments?.filter((deployment) =>
+                                    deploymentMatchesSearch(deployment, deploymentsQuery)
+                                  )
+                                : deployments;
+                              const displayCount =
+                                deploymentsQuery && deployments ? visibleDeployments?.length || 0 : count;
+                              return (
+                                <div key={rt.key}>
+                                  <div
+                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    onClick={() => toggleDeployments(ns.name)}
+                                  >
+                                    {deploymentsExpanded ? (
+                                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                    <span className="truncate">{t(rt.labelKey)}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                  </div>
+                                  {deploymentsExpanded && (
+                                    <div className="ml-3">
+                                      <ResourceSearchInput
+                                        value={resourceSearch[`deployments:${ns.name}`] || ""}
+                                        onChange={(v) =>
+                                          setResourceSearch((prev) => ({
+                                            ...prev,
+                                            [`deployments:${ns.name}`]: v,
+                                          }))
+                                        }
+                                        placeholder={t("asset.search")}
+                                      />
+                                      {loadingDeployments.has(ns.name) && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {t("asset.k8sLoadingDeployments")}
+                                        </div>
                                       )}
-                                      <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                                      <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
-                                    </div>
-                                    {deploymentsExpanded && (
-                                      <div className="ml-3">
-                                        <ResourceSearchInput
-                                          value={resourceSearch[`deployments:${ns.name}`] || ""}
-                                          onChange={(v) =>
-                                            setResourceSearch((prev) => ({
-                                              ...prev,
-                                              [`deployments:${ns.name}`]: v,
-                                            }))
-                                          }
-                                          placeholder={t("asset.search")}
-                                        />
-                                        {loadingDeployments.has(ns.name) && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            <Loader2 className="h-3 w-3 animate-spin" />
-                                            {t("asset.k8sLoadingDeployments")}
-                                          </div>
-                                        )}
-                                        {deploymentErrors[ns.name] && (
-                                          <div
-                                            className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                                            title={deploymentErrors[ns.name]}
-                                            onClick={() => {
-                                              const next = { ...deploymentErrors };
-                                              delete next[ns.name];
-                                              setDeploymentErrors(next);
-                                              loadDeployments(ns.name);
-                                            }}
-                                          >
-                                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                            <span>{t("asset.k8sNamespaceResourceError")}</span>
-                                          </div>
-                                        )}
-                                        {visibleDeployments?.length === 0 && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            {t("asset.k8sNoDeployments")}
-                                          </div>
-                                        )}
-                                        {visibleDeployments?.map((deployment) => {
-                                          const deploymentKey = `${ns.name}/${deployment.name}`;
-                                          const deploymentExpanded = expandedDeploymentItems.has(deploymentKey);
-                                          const visiblePods = deploymentsQuery
-                                            ? deployment.pods.filter((pod) => podMatchesSearch(pod, deploymentsQuery))
-                                            : deployment.pods;
-                                          return (
-                                            <div key={deployment.name}>
-                                              <div
-                                                className="flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                                onClick={() => toggleDeploymentItem(ns.name, deployment.name)}
+                                      {deploymentErrors[ns.name] && (
+                                        <div
+                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          title={deploymentErrors[ns.name]}
+                                          onClick={() => {
+                                            const next = { ...deploymentErrors };
+                                            delete next[ns.name];
+                                            setDeploymentErrors(next);
+                                            loadDeployments(ns.name);
+                                          }}
+                                        >
+                                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                          <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                        </div>
+                                      )}
+                                      {visibleDeployments?.length === 0 && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          {t("asset.k8sNoDeployments")}
+                                        </div>
+                                      )}
+                                      {visibleDeployments?.map((deployment) => {
+                                        const deploymentKey = `${ns.name}/${deployment.name}`;
+                                        const deploymentExpanded = expandedDeploymentItems.has(deploymentKey);
+                                        const visiblePods = deploymentsQuery
+                                          ? deployment.pods.filter((pod) => podMatchesSearch(pod, deploymentsQuery))
+                                          : deployment.pods;
+                                        return (
+                                          <div key={deployment.name}>
+                                            <div
+                                              className="flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                              onClick={() => toggleDeploymentItem(ns.name, deployment.name)}
+                                            >
+                                              {deploymentExpanded ? (
+                                                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                              ) : (
+                                                <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                              )}
+                                              <span className="w-1.5 h-1.5 rounded-full bg-info shrink-0" />
+                                              <span className="truncate">{deployment.name}</span>
+                                              <span className="ml-auto text-[10px] text-muted-foreground">
+                                                {deployment.ready}
+                                              </span>
+                                              <button
+                                                className="ml-1 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  const firstPod = deployment.pods[0]?.name || "";
+                                                  const id = `log-deploy:${ns.name}:${deployment.name}` as InnerTabId;
+                                                  const label = `${t("asset.k8sPodLogs")}: ${deployment.name}`;
+                                                  if (!innerTabs.some((t) => t.id === id)) {
+                                                    setInnerTabs((prev) => [...prev, { id, label }]);
+                                                    setLogTabStates((prev) => ({
+                                                      ...prev,
+                                                      [id]: {
+                                                        logStreamID: null,
+                                                        logContainer: "",
+                                                        logTailLines: 200,
+                                                        logError: null,
+                                                        currentPod: firstPod,
+                                                        logBuffers: {},
+                                                      },
+                                                    }));
+                                                  }
+                                                  setActiveTabId(id);
+                                                  if (firstPod) {
+                                                    loadPodDetail(ns.name, firstPod);
+                                                  }
+                                                }}
+                                                title={t("asset.k8sPodLogs")}
                                               >
-                                                {deploymentExpanded ? (
-                                                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                                ) : (
-                                                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                                <ScrollText className="h-3 w-3" />
+                                              </button>
+                                              <button
+                                                className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  toggleAutoRefresh(
+                                                    `deploy:${ns.name}/${deployment.name}`,
+                                                    ns.name,
+                                                    deployment.name
+                                                  );
+                                                }}
+                                                title={t("action.refresh")}
+                                              >
+                                                <RefreshCw
+                                                  className={`h-3 w-3 ${refreshingItems.has(`deploy:${ns.name}/${deployment.name}`) || autoRefreshingItems.has(`deploy:${ns.name}/${deployment.name}`) ? "animate-spin" : ""}`}
+                                                />
+                                              </button>
+                                            </div>
+                                            {deploymentExpanded && (
+                                              <>
+                                                {visiblePods.length === 0 && (
+                                                  <div className="flex items-center gap-1.5 pl-20 pr-2 py-1 text-xs text-muted-foreground">
+                                                    {t("asset.k8sNoPods")}
+                                                  </div>
                                                 )}
-                                                <span className="w-1.5 h-1.5 rounded-full bg-info shrink-0" />
-                                                <span className="truncate">{deployment.name}</span>
-                                                <span className="ml-auto text-[10px] text-muted-foreground">
-                                                  {deployment.ready}
-                                                </span>
-                                                <button
-                                                  className="ml-1 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    const firstPod = deployment.pods[0]?.name || "";
-                                                    const id = `log-deploy:${ns.name}:${deployment.name}` as InnerTabId;
-                                                    const label = `${t("asset.k8sPodLogs")}: ${deployment.name}`;
-                                                    if (!innerTabs.some((t) => t.id === id)) {
-                                                      setInnerTabs((prev) => [...prev, { id, label }]);
-                                                      setLogTabStates((prev) => ({
-                                                        ...prev,
-                                                        [id]: {
-                                                          logStreamID: null,
-                                                          logContainer: "",
-                                                          logTailLines: 200,
-                                                          logError: null,
-                                                          currentPod: firstPod,
-                                                          logBuffers: {},
-                                                        },
-                                                      }));
-                                                    }
-                                                    setActiveTabId(id);
-                                                    if (firstPod) {
-                                                      loadPodDetail(ns.name, firstPod);
-                                                    }
-                                                  }}
-                                                  title={t("asset.k8sPodLogs")}
-                                                >
-                                                  <ScrollText className="h-3 w-3" />
-                                                </button>
-                                                <button
-                                                  className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    toggleAutoRefresh(
-                                                      `deploy:${ns.name}/${deployment.name}`,
-                                                      ns.name,
-                                                      deployment.name
-                                                    );
-                                                  }}
-                                                  title={t("action.refresh")}
-                                                >
-                                                  <RefreshCw
-                                                    className={`h-3 w-3 ${refreshingItems.has(`deploy:${ns.name}/${deployment.name}`) || autoRefreshingItems.has(`deploy:${ns.name}/${deployment.name}`) ? "animate-spin" : ""}`}
-                                                  />
-                                                </button>
-                                              </div>
-                                              {deploymentExpanded && (
-                                                <>
-                                                  {visiblePods.length === 0 && (
-                                                    <div className="flex items-center gap-1.5 pl-20 pr-2 py-1 text-xs text-muted-foreground">
-                                                      {t("asset.k8sNoPods")}
-                                                    </div>
-                                                  )}
-                                                  {visiblePods.map((pod) => (
-                                                    <div
-                                                      key={pod.name}
-                                                      className={`flex items-center gap-1.5 pl-20 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
-                                                        activeTabId === `pod:${ns.name}:${pod.name}`
-                                                          ? "bg-muted font-medium"
-                                                          : "hover:bg-muted/50"
+                                                {visiblePods.map((pod) => (
+                                                  <div
+                                                    key={pod.name}
+                                                    className={`flex items-center gap-1.5 pl-20 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                                      activeTabId === `pod:${ns.name}:${pod.name}`
+                                                        ? "bg-muted font-medium"
+                                                        : "hover:bg-muted/50"
+                                                    }`}
+                                                    onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
+                                                  >
+                                                    <span
+                                                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                        pod.status === "Running"
+                                                          ? "bg-success"
+                                                          : pod.status === "Pending"
+                                                            ? "bg-warning"
+                                                            : "bg-destructive"
                                                       }`}
-                                                      onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
-                                                    >
-                                                      <span
-                                                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                                          pod.status === "Running"
-                                                            ? "bg-success"
-                                                            : pod.status === "Pending"
-                                                              ? "bg-warning"
-                                                              : "bg-destructive"
-                                                        }`}
-                                                      />
-                                                      <span className="truncate">{pod.name}</span>
+                                                    />
+                                                    <span className="truncate">{pod.name}</span>
+                                                    <div className="ml-auto flex shrink-0 items-center gap-0.5">
                                                       <button
-                                                        className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                                        className="inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          openLogTab(ns.name, pod.name, "");
+                                                        }}
+                                                        title={t("asset.k8sPodLogs")}
+                                                      >
+                                                        <ScrollText className="h-3 w-3" />
+                                                      </button>
+                                                      <button
+                                                        className="inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                                         onClick={(e) => {
                                                           e.stopPropagation();
                                                           toggleAutoRefresh(
@@ -1581,99 +1605,111 @@ export function K8sClusterPage({ asset }: Props) {
                                                         />
                                                       </button>
                                                     </div>
-                                                  ))}
-                                                </>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              }
-                              if (isPods) {
-                                const pods = namespacePodList[ns.name];
-                                const podsQuery = (resourceSearch[`pods:${ns.name}`] || "").trim().toLowerCase();
-                                const visiblePods = podsQuery
-                                  ? pods?.filter((pod) => podMatchesSearch(pod, podsQuery))
-                                  : pods;
-                                const displayCount = podsQuery && pods ? visiblePods?.length || 0 : count;
-                                return (
-                                  <div key={rt.key}>
-                                    <div
-                                      className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                      onClick={() => togglePods(ns.name)}
-                                    >
-                                      {podsExpanded ? (
-                                        <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      ) : (
-                                        <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      )}
-                                      <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                                      <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                                  </div>
+                                                ))}
+                                              </>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
                                     </div>
-                                    {podsExpanded && (
-                                      <div className="ml-3">
-                                        <ResourceSearchInput
-                                          value={resourceSearch[`pods:${ns.name}`] || ""}
-                                          onChange={(v) =>
-                                            setResourceSearch((prev) => ({
-                                              ...prev,
-                                              [`pods:${ns.name}`]: v,
-                                            }))
-                                          }
-                                          placeholder={t("asset.search")}
-                                        />
-                                        {loadingPods.has(ns.name) && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            <Loader2 className="h-3 w-3 animate-spin" />
-                                            {t("asset.k8sLoadingPods")}
-                                          </div>
-                                        )}
-                                        {podErrors[ns.name] && (
-                                          <div
-                                            className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                                            title={podErrors[ns.name]}
-                                            onClick={() => {
-                                              const next = { ...podErrors };
-                                              delete next[ns.name];
-                                              setPodErrors(next);
-                                              loadPods(ns.name);
-                                            }}
-                                          >
-                                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                            <span>{t("asset.k8sNamespaceResourceError")}</span>
-                                          </div>
-                                        )}
-                                        {visiblePods?.length === 0 && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            {t("asset.k8sNoPods")}
-                                          </div>
-                                        )}
-                                        {visiblePods?.map((pod) => (
-                                          <div
-                                            key={pod.name}
-                                            className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
-                                              activeTabId === `pod:${ns.name}:${pod.name}`
-                                                ? "bg-muted font-medium"
-                                                : "hover:bg-muted/50"
+                                  )}
+                                </div>
+                              );
+                            }
+                            if (isPods) {
+                              const pods = namespacePodList[ns.name];
+                              const podsQuery = (resourceSearch[`pods:${ns.name}`] || "").trim().toLowerCase();
+                              const visiblePods = podsQuery
+                                ? pods?.filter((pod) => podMatchesSearch(pod, podsQuery))
+                                : pods;
+                              const displayCount = podsQuery && pods ? visiblePods?.length || 0 : count;
+                              return (
+                                <div key={rt.key}>
+                                  <div
+                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    onClick={() => togglePods(ns.name)}
+                                  >
+                                    {podsExpanded ? (
+                                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                    <span className="truncate">{t(rt.labelKey)}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                  </div>
+                                  {podsExpanded && (
+                                    <div className="ml-3">
+                                      <ResourceSearchInput
+                                        value={resourceSearch[`pods:${ns.name}`] || ""}
+                                        onChange={(v) =>
+                                          setResourceSearch((prev) => ({
+                                            ...prev,
+                                            [`pods:${ns.name}`]: v,
+                                          }))
+                                        }
+                                        placeholder={t("asset.search")}
+                                      />
+                                      {loadingPods.has(ns.name) && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {t("asset.k8sLoadingPods")}
+                                        </div>
+                                      )}
+                                      {podErrors[ns.name] && (
+                                        <div
+                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          title={podErrors[ns.name]}
+                                          onClick={() => {
+                                            const next = { ...podErrors };
+                                            delete next[ns.name];
+                                            setPodErrors(next);
+                                            loadPods(ns.name);
+                                          }}
+                                        >
+                                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                          <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                        </div>
+                                      )}
+                                      {visiblePods?.length === 0 && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          {t("asset.k8sNoPods")}
+                                        </div>
+                                      )}
+                                      {visiblePods?.map((pod) => (
+                                        <div
+                                          key={pod.name}
+                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                            activeTabId === `pod:${ns.name}:${pod.name}`
+                                              ? "bg-muted font-medium"
+                                              : "hover:bg-muted/50"
+                                          }`}
+                                          onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
+                                        >
+                                          <span
+                                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                              pod.status === "Running"
+                                                ? "bg-success"
+                                                : pod.status === "Pending"
+                                                  ? "bg-warning"
+                                                  : "bg-destructive"
                                             }`}
-                                            onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
-                                          >
-                                            <span
-                                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                                pod.status === "Running"
-                                                  ? "bg-success"
-                                                  : pod.status === "Pending"
-                                                    ? "bg-warning"
-                                                    : "bg-destructive"
-                                              }`}
-                                            />
-                                            <span className="truncate">{pod.name}</span>
+                                          />
+                                          <span className="truncate">{pod.name}</span>
+                                          <div className="ml-auto flex shrink-0 items-center gap-0.5">
                                             <button
-                                              className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                              className="inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                openLogTab(ns.name, pod.name, "");
+                                              }}
+                                              title={t("asset.k8sPodLogs")}
+                                            >
+                                              <ScrollText className="h-3 w-3" />
+                                            </button>
+                                            <button
+                                              className="inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
                                                 e.stopPropagation();
                                                 toggleAutoRefresh(`pod:${ns.name}/${pod.name}`, ns.name, pod.name);
@@ -1685,309 +1721,306 @@ export function K8sClusterPage({ asset }: Props) {
                                               />
                                             </button>
                                           </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              }
-                              if (isServices) {
-                                const services = namespaceServiceList[ns.name];
-                                const svcQuery = (resourceSearch[`services:${ns.name}`] || "").trim().toLowerCase();
-                                const visibleServices = svcQuery
-                                  ? services?.filter((svc) => serviceMatchesSearch(svc, svcQuery))
-                                  : services;
-                                const displayCount = svcQuery && services ? visibleServices?.length || 0 : count;
-                                return (
-                                  <div key={rt.key}>
-                                    <div
-                                      className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                      onClick={() => toggleServices(ns.name)}
-                                    >
-                                      {servicesExpanded ? (
-                                        <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      ) : (
-                                        <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      )}
-                                      <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                                      <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                        </div>
+                                      ))}
                                     </div>
-                                    {servicesExpanded && (
-                                      <div className="ml-3">
-                                        <ResourceSearchInput
-                                          value={resourceSearch[`services:${ns.name}`] || ""}
-                                          onChange={(v) =>
-                                            setResourceSearch((prev) => ({
-                                              ...prev,
-                                              [`services:${ns.name}`]: v,
-                                            }))
-                                          }
-                                          placeholder={t("asset.search")}
-                                        />
-                                        {loadingServices.has(ns.name) && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            <Loader2 className="h-3 w-3 animate-spin" />
-                                            {t("asset.k8sLoadingServices")}
-                                          </div>
-                                        )}
-                                        {serviceErrors[ns.name] && (
-                                          <div
-                                            className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                                            title={serviceErrors[ns.name]}
-                                            onClick={() => {
-                                              const next = { ...serviceErrors };
-                                              delete next[ns.name];
-                                              setServiceErrors(next);
-                                              loadServices(ns.name);
-                                            }}
-                                          >
-                                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                            <span>{t("asset.k8sNamespaceResourceError")}</span>
-                                          </div>
-                                        )}
-                                        {visibleServices?.length === 0 && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            {t("asset.k8sNoServices")}
-                                          </div>
-                                        )}
-                                        {visibleServices?.map((svc) => (
-                                          <div
-                                            key={svc.name}
-                                            className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
-                                              activeTabId === `svc:${ns.name}:${svc.name}`
-                                                ? "bg-muted font-medium"
-                                                : "hover:bg-muted/50"
-                                            }`}
-                                            onClick={() => openTab(`svc:${ns.name}:${svc.name}`, svc.name)}
-                                          >
-                                            <Container className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                            <span className="truncate">{svc.name}</span>
-                                            <span className="ml-auto text-[10px] text-muted-foreground">
-                                              {svc.type}
-                                            </span>
-                                            <button
-                                              className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                toggleAutoRefresh(`svc:${ns.name}/${svc.name}`, ns.name, svc.name);
-                                              }}
-                                              title={t("action.refresh")}
-                                            >
-                                              <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`svc:${ns.name}/${svc.name}`) || autoRefreshingItems.has(`svc:${ns.name}/${svc.name}`) ? "animate-spin" : ""}`}
-                                              />
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              }
-                              if (isConfigMaps) {
-                                const configmaps = namespaceConfigMapList[ns.name];
-                                const cmQuery = (resourceSearch[`config_maps:${ns.name}`] || "").trim().toLowerCase();
-                                const visibleConfigMaps = cmQuery
-                                  ? configmaps?.filter((cm) => configMapMatchesSearch(cm, cmQuery))
-                                  : configmaps;
-                                const displayCount = cmQuery && configmaps ? visibleConfigMaps?.length || 0 : count;
-                                return (
-                                  <div key={rt.key}>
-                                    <div
-                                      className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                      onClick={() => toggleConfigMaps(ns.name)}
-                                    >
-                                      {configMapsExpanded ? (
-                                        <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      ) : (
-                                        <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      )}
-                                      <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                                      <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
-                                    </div>
-                                    {configMapsExpanded && (
-                                      <div className="ml-3">
-                                        <ResourceSearchInput
-                                          value={resourceSearch[`config_maps:${ns.name}`] || ""}
-                                          onChange={(v) =>
-                                            setResourceSearch((prev) => ({
-                                              ...prev,
-                                              [`config_maps:${ns.name}`]: v,
-                                            }))
-                                          }
-                                          placeholder={t("asset.search")}
-                                        />
-                                        {loadingConfigMaps.has(ns.name) && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            <Loader2 className="h-3 w-3 animate-spin" />
-                                            {t("asset.k8sLoadingConfigMaps")}
-                                          </div>
-                                        )}
-                                        {configMapErrors[ns.name] && (
-                                          <div
-                                            className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                                            title={configMapErrors[ns.name]}
-                                            onClick={() => {
-                                              const next = { ...configMapErrors };
-                                              delete next[ns.name];
-                                              setConfigMapErrors(next);
-                                              loadConfigMaps(ns.name);
-                                            }}
-                                          >
-                                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                            <span>{t("asset.k8sNamespaceResourceError")}</span>
-                                          </div>
-                                        )}
-                                        {visibleConfigMaps?.length === 0 && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            {t("asset.k8sNoConfigMaps")}
-                                          </div>
-                                        )}
-                                        {visibleConfigMaps?.map((cm) => (
-                                          <div
-                                            key={cm.name}
-                                            className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
-                                              activeTabId === `cm:${ns.name}:${cm.name}`
-                                                ? "bg-muted font-medium"
-                                                : "hover:bg-muted/50"
-                                            }`}
-                                            onClick={() => openTab(`cm:${ns.name}:${cm.name}`, cm.name)}
-                                          >
-                                            <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                            <span className="truncate">{cm.name}</span>
-                                            <button
-                                              className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                toggleAutoRefresh(`cm:${ns.name}/${cm.name}`, ns.name, cm.name);
-                                              }}
-                                              title={t("action.refresh")}
-                                            >
-                                              <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`cm:${ns.name}/${cm.name}`) || autoRefreshingItems.has(`cm:${ns.name}/${cm.name}`) ? "animate-spin" : ""}`}
-                                              />
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              }
-                              if (isSecrets) {
-                                const secrets = namespaceSecretList[ns.name];
-                                const secretQuery = (resourceSearch[`secrets:${ns.name}`] || "").trim().toLowerCase();
-                                const visibleSecrets = secretQuery
-                                  ? secrets?.filter((s) => secretMatchesSearch(s, secretQuery))
-                                  : secrets;
-                                const displayCount = secretQuery && secrets ? visibleSecrets?.length || 0 : count;
-                                return (
-                                  <div key={rt.key}>
-                                    <div
-                                      className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                      onClick={() => toggleSecrets(ns.name)}
-                                    >
-                                      {secretsExpanded ? (
-                                        <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      ) : (
-                                        <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                      )}
-                                      <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                                      <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
-                                    </div>
-                                    {secretsExpanded && (
-                                      <div className="ml-3">
-                                        <ResourceSearchInput
-                                          value={resourceSearch[`secrets:${ns.name}`] || ""}
-                                          onChange={(v) =>
-                                            setResourceSearch((prev) => ({
-                                              ...prev,
-                                              [`secrets:${ns.name}`]: v,
-                                            }))
-                                          }
-                                          placeholder={t("asset.search")}
-                                        />
-                                        {loadingSecrets.has(ns.name) && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            <Loader2 className="h-3 w-3 animate-spin" />
-                                            {t("asset.k8sLoadingSecrets")}
-                                          </div>
-                                        )}
-                                        {secretErrors[ns.name] && (
-                                          <div
-                                            className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                                            title={secretErrors[ns.name]}
-                                            onClick={() => {
-                                              const next = { ...secretErrors };
-                                              delete next[ns.name];
-                                              setSecretErrors(next);
-                                              loadSecrets(ns.name);
-                                            }}
-                                          >
-                                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                            <span>{t("asset.k8sNamespaceResourceError")}</span>
-                                          </div>
-                                        )}
-                                        {visibleSecrets?.length === 0 && (
-                                          <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                            {t("asset.k8sNoSecrets")}
-                                          </div>
-                                        )}
-                                        {visibleSecrets?.map((s) => (
-                                          <div
-                                            key={s.name}
-                                            className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
-                                              activeTabId === `secret:${ns.name}:${s.name}`
-                                                ? "bg-muted font-medium"
-                                                : "hover:bg-muted/50"
-                                            }`}
-                                            onClick={() => openTab(`secret:${ns.name}:${s.name}`, s.name)}
-                                          >
-                                            <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                            <span className="truncate">{s.name}</span>
-                                            <span className="ml-auto text-[10px] text-muted-foreground">{s.type}</span>
-                                            <button
-                                              className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                toggleAutoRefresh(`secret:${ns.name}/${s.name}`, ns.name, s.name);
-                                              }}
-                                              title={t("action.refresh")}
-                                            >
-                                              <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`secret:${ns.name}/${s.name}`) || autoRefreshingItems.has(`secret:${ns.name}/${s.name}`) ? "animate-spin" : ""}`}
-                                              />
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              }
-                              return (
-                                <div
-                                  key={rt.key}
-                                  className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                                  onClick={() => openTab(`ns-res:${ns.name}:${rt.key}`, `${rt.key} (${ns.name})`)}
-                                >
-                                  <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                                  <span className="truncate">{t(rt.labelKey)}</span>
-                                  <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                                  )}
                                 </div>
                               );
                             }
-                          )}
-                        </>
-                      );
-                    })()}
-                </div>
-              )}
-            </div>
-          ))}
+                            if (isServices) {
+                              const services = namespaceServiceList[ns.name];
+                              const svcQuery = (resourceSearch[`services:${ns.name}`] || "").trim().toLowerCase();
+                              const visibleServices = svcQuery
+                                ? services?.filter((svc) => serviceMatchesSearch(svc, svcQuery))
+                                : services;
+                              const displayCount = svcQuery && services ? visibleServices?.length || 0 : count;
+                              return (
+                                <div key={rt.key}>
+                                  <div
+                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    onClick={() => toggleServices(ns.name)}
+                                  >
+                                    {servicesExpanded ? (
+                                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                    <span className="truncate">{t(rt.labelKey)}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                  </div>
+                                  {servicesExpanded && (
+                                    <div className="ml-3">
+                                      <ResourceSearchInput
+                                        value={resourceSearch[`services:${ns.name}`] || ""}
+                                        onChange={(v) =>
+                                          setResourceSearch((prev) => ({
+                                            ...prev,
+                                            [`services:${ns.name}`]: v,
+                                          }))
+                                        }
+                                        placeholder={t("asset.search")}
+                                      />
+                                      {loadingServices.has(ns.name) && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {t("asset.k8sLoadingServices")}
+                                        </div>
+                                      )}
+                                      {serviceErrors[ns.name] && (
+                                        <div
+                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          title={serviceErrors[ns.name]}
+                                          onClick={() => {
+                                            const next = { ...serviceErrors };
+                                            delete next[ns.name];
+                                            setServiceErrors(next);
+                                            loadServices(ns.name);
+                                          }}
+                                        >
+                                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                          <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                        </div>
+                                      )}
+                                      {visibleServices?.length === 0 && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          {t("asset.k8sNoServices")}
+                                        </div>
+                                      )}
+                                      {visibleServices?.map((svc) => (
+                                        <div
+                                          key={svc.name}
+                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                            activeTabId === `svc:${ns.name}:${svc.name}`
+                                              ? "bg-muted font-medium"
+                                              : "hover:bg-muted/50"
+                                          }`}
+                                          onClick={() => openTab(`svc:${ns.name}:${svc.name}`, svc.name)}
+                                        >
+                                          <Container className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                          <span className="truncate">{svc.name}</span>
+                                          <span className="ml-auto text-[10px] text-muted-foreground">{svc.type}</span>
+                                          <button
+                                            className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleAutoRefresh(`svc:${ns.name}/${svc.name}`, ns.name, svc.name);
+                                            }}
+                                            title={t("action.refresh")}
+                                          >
+                                            <RefreshCw
+                                              className={`h-3 w-3 ${refreshingItems.has(`svc:${ns.name}/${svc.name}`) || autoRefreshingItems.has(`svc:${ns.name}/${svc.name}`) ? "animate-spin" : ""}`}
+                                            />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            if (isConfigMaps) {
+                              const configmaps = namespaceConfigMapList[ns.name];
+                              const cmQuery = (resourceSearch[`config_maps:${ns.name}`] || "").trim().toLowerCase();
+                              const visibleConfigMaps = cmQuery
+                                ? configmaps?.filter((cm) => configMapMatchesSearch(cm, cmQuery))
+                                : configmaps;
+                              const displayCount = cmQuery && configmaps ? visibleConfigMaps?.length || 0 : count;
+                              return (
+                                <div key={rt.key}>
+                                  <div
+                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    onClick={() => toggleConfigMaps(ns.name)}
+                                  >
+                                    {configMapsExpanded ? (
+                                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                    <span className="truncate">{t(rt.labelKey)}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                  </div>
+                                  {configMapsExpanded && (
+                                    <div className="ml-3">
+                                      <ResourceSearchInput
+                                        value={resourceSearch[`config_maps:${ns.name}`] || ""}
+                                        onChange={(v) =>
+                                          setResourceSearch((prev) => ({
+                                            ...prev,
+                                            [`config_maps:${ns.name}`]: v,
+                                          }))
+                                        }
+                                        placeholder={t("asset.search")}
+                                      />
+                                      {loadingConfigMaps.has(ns.name) && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {t("asset.k8sLoadingConfigMaps")}
+                                        </div>
+                                      )}
+                                      {configMapErrors[ns.name] && (
+                                        <div
+                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          title={configMapErrors[ns.name]}
+                                          onClick={() => {
+                                            const next = { ...configMapErrors };
+                                            delete next[ns.name];
+                                            setConfigMapErrors(next);
+                                            loadConfigMaps(ns.name);
+                                          }}
+                                        >
+                                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                          <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                        </div>
+                                      )}
+                                      {visibleConfigMaps?.length === 0 && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          {t("asset.k8sNoConfigMaps")}
+                                        </div>
+                                      )}
+                                      {visibleConfigMaps?.map((cm) => (
+                                        <div
+                                          key={cm.name}
+                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                            activeTabId === `cm:${ns.name}:${cm.name}`
+                                              ? "bg-muted font-medium"
+                                              : "hover:bg-muted/50"
+                                          }`}
+                                          onClick={() => openTab(`cm:${ns.name}:${cm.name}`, cm.name)}
+                                        >
+                                          <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                          <span className="truncate">{cm.name}</span>
+                                          <button
+                                            className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleAutoRefresh(`cm:${ns.name}/${cm.name}`, ns.name, cm.name);
+                                            }}
+                                            title={t("action.refresh")}
+                                          >
+                                            <RefreshCw
+                                              className={`h-3 w-3 ${refreshingItems.has(`cm:${ns.name}/${cm.name}`) || autoRefreshingItems.has(`cm:${ns.name}/${cm.name}`) ? "animate-spin" : ""}`}
+                                            />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            if (isSecrets) {
+                              const secrets = namespaceSecretList[ns.name];
+                              const secretQuery = (resourceSearch[`secrets:${ns.name}`] || "").trim().toLowerCase();
+                              const visibleSecrets = secretQuery
+                                ? secrets?.filter((s) => secretMatchesSearch(s, secretQuery))
+                                : secrets;
+                              const displayCount = secretQuery && secrets ? visibleSecrets?.length || 0 : count;
+                              return (
+                                <div key={rt.key}>
+                                  <div
+                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    onClick={() => toggleSecrets(ns.name)}
+                                  >
+                                    {secretsExpanded ? (
+                                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                    <span className="truncate">{t(rt.labelKey)}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                  </div>
+                                  {secretsExpanded && (
+                                    <div className="ml-3">
+                                      <ResourceSearchInput
+                                        value={resourceSearch[`secrets:${ns.name}`] || ""}
+                                        onChange={(v) =>
+                                          setResourceSearch((prev) => ({
+                                            ...prev,
+                                            [`secrets:${ns.name}`]: v,
+                                          }))
+                                        }
+                                        placeholder={t("asset.search")}
+                                      />
+                                      {loadingSecrets.has(ns.name) && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {t("asset.k8sLoadingSecrets")}
+                                        </div>
+                                      )}
+                                      {secretErrors[ns.name] && (
+                                        <div
+                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          title={secretErrors[ns.name]}
+                                          onClick={() => {
+                                            const next = { ...secretErrors };
+                                            delete next[ns.name];
+                                            setSecretErrors(next);
+                                            loadSecrets(ns.name);
+                                          }}
+                                        >
+                                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                          <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                        </div>
+                                      )}
+                                      {visibleSecrets?.length === 0 && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          {t("asset.k8sNoSecrets")}
+                                        </div>
+                                      )}
+                                      {visibleSecrets?.map((s) => (
+                                        <div
+                                          key={s.name}
+                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                            activeTabId === `secret:${ns.name}:${s.name}`
+                                              ? "bg-muted font-medium"
+                                              : "hover:bg-muted/50"
+                                          }`}
+                                          onClick={() => openTab(`secret:${ns.name}:${s.name}`, s.name)}
+                                        >
+                                          <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                          <span className="truncate">{s.name}</span>
+                                          <span className="ml-auto text-[10px] text-muted-foreground">{s.type}</span>
+                                          <button
+                                            className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleAutoRefresh(`secret:${ns.name}/${s.name}`, ns.name, s.name);
+                                            }}
+                                            title={t("action.refresh")}
+                                          >
+                                            <RefreshCw
+                                              className={`h-3 w-3 ${refreshingItems.has(`secret:${ns.name}/${s.name}`) || autoRefreshingItems.has(`secret:${ns.name}/${s.name}`) ? "animate-spin" : ""}`}
+                                            />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            return (
+                              <div
+                                key={rt.key}
+                                className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                onClick={() => openTab(`ns-res:${ns.name}:${rt.key}`, `${rt.key} (${ns.name})`)}
+                              >
+                                <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                <span className="truncate">{t(rt.labelKey)}</span>
+                                <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                              </div>
+                            );
+                          }
+                        )}
+                      </>
+                    );
+                  })()}
+              </div>
+            ))}
         </div>
       </div>
 
@@ -2111,7 +2144,7 @@ export function K8sClusterPage({ asset }: Props) {
             <div className="max-w-5xl mx-auto p-4 space-y-4">
               <K8sSectionCard>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                  <InfoItem label={t("asset.k8sVersion")} value={info.version} mono />
+                  <InfoItem label={t("asset.k8sVersion")} value={formatK8sVersion(info.version)} mono />
                   <InfoItem label={t("asset.k8sPlatform")} value={info.platform} mono />
                   <InfoItem label={t("asset.k8sNodes")} value={String(info.nodes.length)} mono />
                 </div>
@@ -2137,7 +2170,7 @@ export function K8sClusterPage({ asset }: Props) {
                         <span>OS: {node.os}</span>
                         <span>Arch: {node.arch}</span>
                         <span>CPU: {node.cpu}</span>
-                        <span>Mem: {node.memory}</span>
+                        <span>Mem: {formatK8sMemory(node.memory)}</span>
                       </div>
                     </div>
                   ))}
@@ -2152,7 +2185,10 @@ export function K8sClusterPage({ asset }: Props) {
                       className={`inline-flex items-center rounded-md border px-3 py-1 text-sm font-mono cursor-pointer hover:bg-muted/50 ${
                         ns.status === "Active" ? "" : "text-muted-foreground border-dashed"
                       }`}
-                      onClick={() => openTab(`ns:${ns.name}`, ns.name)}
+                      onClick={() => {
+                        selectNamespace(ns.name);
+                        openTab(`ns:${ns.name}`, ns.name);
+                      }}
                     >
                       {ns.name}
                     </span>
@@ -2176,9 +2212,9 @@ export function K8sClusterPage({ asset }: Props) {
                   items={[
                     { label: "OS", value: activeNode.os, mono: true },
                     { label: "Architecture", value: activeNode.arch, mono: true },
-                    { label: "Kubernetes", value: `v${activeNode.version}`, mono: true },
+                    { label: "Kubernetes", value: formatK8sVersion(activeNode.version), mono: true },
                     { label: "CPU", value: activeNode.cpu, mono: true },
-                    { label: "Memory", value: activeNode.memory, mono: true },
+                    { label: "Memory", value: formatK8sMemory(activeNode.memory), mono: true },
                     { label: "Roles", value: activeNode.roles.join(", "), mono: true },
                   ]}
                 />
