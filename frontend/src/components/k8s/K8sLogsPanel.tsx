@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Download, Loader2, ScrollText, Search } from "lucide-react";
+import { Download, ExternalLink, Loader2, ScrollText, Search } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { FetchK8sPodLogsTail, SaveK8sPodLogs, StartK8sPodLogs, StopK8sPodLogs } from "../../../wailsjs/go/k8s/K8s";
+import {
+  FetchK8sPodLogsTail,
+  OpenK8sPodLogsBuffer,
+  SaveK8sPodLogs,
+  StartK8sPodLogs,
+  StopK8sPodLogs,
+} from "../../../wailsjs/go/k8s/K8s";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { K8sSectionCard } from "./K8sSectionCard";
 import { K8sLogTerminal, type K8sLogTerminalHandle } from "./K8sLogTerminal";
@@ -55,6 +61,7 @@ export function K8sLogsPanel({
   const { t } = useTranslation();
   const terminalRef = useRef<K8sLogTerminalHandle>(null);
   const [downloading, setDownloading] = useState(false);
+  const [openingExternal, setOpeningExternal] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const myStreamIDRef = useRef<string | null>(null);
   const eventNamesRef = useRef<{ data: string; err: string; end: string } | null>(null);
@@ -212,6 +219,23 @@ export function K8sLogsPanel({
     };
   }, [offEvents]);
 
+  const handleOpenInDefaultApp = async () => {
+    if (openingExternal) return;
+    const logText = terminalRef.current?.getLogText() ?? "";
+    if (!logText.trim()) {
+      toast.warning(t("asset.k8sPodLogsOpenExternalEmpty"));
+      return;
+    }
+    setOpeningExternal(true);
+    try {
+      await OpenK8sPodLogsBuffer(logText, namespace, podName, activeContainer);
+    } catch (e: unknown) {
+      toast.error(`${t("asset.k8sPodLogsOpenExternalError")}: ${String(e)}`);
+    } finally {
+      setOpeningExternal(false);
+    }
+  };
+
   const handleDownloadLogs = async () => {
     if (downloading) return;
     setDownloading(true);
@@ -265,6 +289,18 @@ export function K8sLogsPanel({
               ))}
             </select>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            onClick={handleOpenInDefaultApp}
+            disabled={openingExternal}
+            title={t("asset.k8sPodLogsOpenExternal")}
+          >
+            {openingExternal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+            {t("asset.k8sPodLogsOpenExternal")}
+          </Button>
           <Button
             type="button"
             variant="outline"

@@ -2,7 +2,13 @@ import { useImperativeHandle, useState, type Ref } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FetchK8sPodLogsTail, SaveK8sPodLogs, StartK8sPodLogs, StopK8sPodLogs } from "../../wailsjs/go/k8s/K8s";
+import {
+  FetchK8sPodLogsTail,
+  OpenK8sPodLogsBuffer,
+  SaveK8sPodLogs,
+  StartK8sPodLogs,
+  StopK8sPodLogs,
+} from "../../wailsjs/go/k8s/K8s";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { K8sLogsPanel } from "@/components/k8s/K8sLogsPanel";
 import type { LogTabState, LogTabStateUpdate } from "@/components/k8s/k8sLogState";
@@ -11,6 +17,7 @@ const terminalSpies = vi.hoisted(() => ({
   clear: vi.fn(),
   write: vi.fn(),
   prepend: vi.fn(),
+  getLogText: vi.fn(() => "cached log line\n"),
 }));
 
 const reachTopHandler = vi.hoisted(() => ({ current: undefined as undefined | (() => void) }));
@@ -22,6 +29,7 @@ vi.mock("@/components/k8s/K8sLogTerminal", () => ({
       clear: terminalSpies.clear,
       write: terminalSpies.write,
       prepend: terminalSpies.prepend,
+      getLogText: terminalSpies.getLogText,
     }));
     return <div data-testid="k8s-log-terminal" />;
   },
@@ -196,6 +204,29 @@ describe("K8sLogsPanel", () => {
 
     await waitFor(() => {
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens the terminal buffer with the default app", async () => {
+    const user = userEvent.setup();
+    vi.mocked(StartK8sPodLogs).mockResolvedValue("stream-1" as never);
+    vi.mocked(StopK8sPodLogs).mockResolvedValue(undefined as never);
+    vi.mocked(OpenK8sPodLogsBuffer).mockResolvedValue(undefined as never);
+
+    render(<DeploymentLogPanelHarness />);
+    await waitFor(() => {
+      expect(StartK8sPodLogs).toHaveBeenCalled();
+    });
+
+    await user.click(screen.getByRole("button", { name: "asset.k8sPodLogsOpenExternal" }));
+
+    await waitFor(() => {
+      expect(OpenK8sPodLogsBuffer).toHaveBeenCalledWith(
+        "cached log line\n",
+        "default",
+        "pod-a",
+        "main"
+      );
     });
   });
 

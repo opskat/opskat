@@ -8,11 +8,15 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/desktopopen"
 	k8spkg "github.com/opskat/opskat/internal/pkg/k8s"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
@@ -214,6 +218,25 @@ func (k *K8s) FetchK8sPodLogsTail(assetID int64, namespace, podName, container s
 		return "", fmt.Errorf("read pod log tail: %w", err)
 	}
 	return string(data), nil
+}
+
+// OpenK8sPodLogsBuffer 把终端当前缓存的日志写入临时文件，并用系统默认文本关联程序打开。
+func (k *K8s) OpenK8sPodLogsBuffer(logText string, namespace, podName, container string) error {
+	if strings.TrimSpace(logText) == "" {
+		return fmt.Errorf("log buffer is empty")
+	}
+	dir := filepath.Join(bootstrap.AppDataDir(), "k8s-log-buffers")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create log buffer dir: %w", err)
+	}
+	path := filepath.Join(dir, k8spkg.LogDownloadFilename(namespace, podName, container))
+	if err := os.WriteFile(path, []byte(logText), 0o600); err != nil {
+		return fmt.Errorf("write log buffer file: %w", err)
+	}
+	if err := desktopopen.Open(path); err != nil {
+		return fmt.Errorf("open log with default app: %w", err)
+	}
+	return nil
 }
 
 // SaveK8sPodLogs 把当前容器完整日志文件保存到用户选择的本地路径（不 follow）。
