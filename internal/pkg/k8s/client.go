@@ -711,6 +711,11 @@ func StreamPodLogs(ctx context.Context, kubeconfig, namespace, podName, containe
 	return openPodLogs(ctx, kubeconfig, namespace, podName, container, true, &tailLines, opts...)
 }
 
+// TailPodLogs 拉取日志末尾 tailLines 行（不 follow）。
+func TailPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
+	return openPodLogs(ctx, kubeconfig, namespace, podName, container, false, &tailLines, opts...)
+}
+
 // SnapshotPodLogs 拉取当前容器日志文件全部内容（等价 kubectl logs，不 follow、不 --tail）。
 func SnapshotPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, opts ...ClientOption) (io.ReadCloser, error) {
 	return openPodLogs(ctx, kubeconfig, namespace, podName, container, false, nil, opts...)

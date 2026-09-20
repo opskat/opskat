@@ -994,7 +994,6 @@ export function K8sClusterPage({ asset }: Props) {
       const existing = prev[tabId] || {
         logStreamID: null,
         logContainer: "",
-        logTailLines: 200,
         logError: null,
         logBuffers: {},
       };
@@ -1183,7 +1182,6 @@ export function K8sClusterPage({ asset }: Props) {
         [id]: {
           logStreamID: null,
           logContainer: container,
-          logTailLines: 200,
           logError: null,
           logBuffers: {},
         },
@@ -1517,7 +1515,6 @@ export function K8sClusterPage({ asset }: Props) {
                                                       [id]: {
                                                         logStreamID: null,
                                                         logContainer: "",
-                                                        logTailLines: 200,
                                                         logError: null,
                                                         currentPod: firstPod,
                                                         logBuffers: {},

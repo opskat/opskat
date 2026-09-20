@@ -8,17 +8,18 @@ import { useTerminalThemeStore, toXtermTheme } from "@/stores/terminalThemeStore
 import { builtinThemes, defaultLightTheme, defaultDarkTheme } from "@/data/terminalThemes";
 import { useResolvedTheme } from "@/components/theme-provider";
 import { TerminalSearchBar } from "@/components/terminal/TerminalSearchBar";
-import { getXtermBufferText, k8sLogXtermOptions } from "./k8sLogTerminalText";
+import { getXtermBufferText, k8sLogXtermOptions, prependXtermLogText } from "./k8sLogTerminalText";
 
 export interface K8sLogTerminalHandle {
   write: (data: string | Uint8Array) => void;
+  prepend: (data: string) => Promise<void>;
   clear: () => void;
   getLogText: () => string;
   toggleSearch: () => void;
   openSearch: (query?: string | null) => void;
 }
 
-export function K8sLogTerminal({ ref }: { ref?: Ref<K8sLogTerminalHandle> }) {
+export function K8sLogTerminal({ ref, onReachTop }: { ref?: Ref<K8sLogTerminalHandle>; onReachTop?: () => void }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -44,6 +45,10 @@ export function K8sLogTerminal({ ref }: { ref?: Ref<K8sLogTerminalHandle> }) {
     return theme ? toXtermTheme(theme) : undefined;
   }, [selectedThemeId, customThemes, resolvedTheme]);
 
+  const onReachTopRef = useRef(onReachTop);
+  // eslint-disable-next-line react-hooks/refs
+  onReachTopRef.current = onReachTop;
+
   const openSearch = useCallback((query: string | null = null) => {
     setSearchRequest((req) => ({ query, token: req.token + 1 }));
     setShowSearch(true);
@@ -52,6 +57,11 @@ export function K8sLogTerminal({ ref }: { ref?: Ref<K8sLogTerminalHandle> }) {
   useImperativeHandle(ref, () => ({
     write: (data: string | Uint8Array) => {
       termRef.current?.write(data);
+    },
+    prepend: (data: string) => {
+      const term = termRef.current;
+      if (!term) return Promise.resolve();
+      return prependXtermLogText(term, data);
     },
     clear: () => {
       termRef.current?.clear();
@@ -89,7 +99,24 @@ export function K8sLogTerminal({ ref }: { ref?: Ref<K8sLogTerminalHandle> }) {
     });
     resizeObserver.observe(wrapper);
 
+    let reachTopPending = false;
+    const onScroll = () => {
+      if (!onReachTopRef.current) return;
+      if (term.buffer.active.viewportY > 0) {
+        reachTopPending = false;
+        return;
+      }
+      if (reachTopPending) return;
+      reachTopPending = true;
+      onReachTopRef.current();
+      window.setTimeout(() => {
+        reachTopPending = false;
+      }, 400);
+    };
+    const scrollDisposable = term.onScroll(onScroll);
+
     return () => {
+      scrollDisposable.dispose();
       resizeObserver.disconnect();
       setSearchAddon(null);
       term.dispose();

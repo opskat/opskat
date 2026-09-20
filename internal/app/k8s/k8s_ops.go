@@ -189,6 +189,33 @@ func (k *K8s) StopK8sPodLogs(streamID string) {
 	}
 }
 
+// FetchK8sPodLogsTail 拉取容器日志末尾 tailLines 行（不 follow），用于终端上滑加载更早内容。
+func (k *K8s) FetchK8sPodLogsTail(assetID int64, namespace, podName, container string, tailLines int64) (string, error) {
+	ctx, cancel := context.WithTimeout(k.ctx, 60*time.Second)
+	defer cancel()
+
+	c, err := k.loadK8sCall(ctx, assetID)
+	if err != nil {
+		return "", err
+	}
+
+	reader, err := k8spkg.TailPodLogs(ctx, c.kubeconfig, namespace, podName, container, tailLines, c.opts...)
+	if err != nil {
+		return "", fmt.Errorf("fetch pod log tail: %w", err)
+	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			logger.Ctx(ctx).Warn("close k8s log tail reader", zap.Error(closeErr))
+		}
+	}()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("read pod log tail: %w", err)
+	}
+	return string(data), nil
+}
+
 // SaveK8sPodLogs 把当前容器完整日志文件保存到用户选择的本地路径（不 follow）。
 // 返回 false 表示用户取消了保存对话框。
 func (k *K8s) SaveK8sPodLogs(assetID int64, namespace, podName, container string) (saved bool, err error) {

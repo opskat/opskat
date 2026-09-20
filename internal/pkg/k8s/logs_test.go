@@ -36,6 +36,28 @@ func TestSnapshotPodLogsFetchesEntireCurrentLogFile(t *testing.T) {
 	require.NotContains(t, gotRawQuery, "tailLines=")
 }
 
+func TestTailPodLogsRequestsTailLinesWithoutFollow(t *testing.T) {
+	const body = "line-1\nline-2\nline-3\n"
+	var gotRawQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	reader, err := TailPodLogs(context.Background(), testKubeconfig(srv.URL), "default", "api", "app", 200)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, body, string(got))
+	require.Contains(t, gotRawQuery, "container=app")
+	require.NotContains(t, gotRawQuery, "follow=true")
+	require.Contains(t, gotRawQuery, "tailLines=200")
+}
+
 func TestLogDownloadFilename(t *testing.T) {
 	require.Equal(t, "default-api-server-app.log", LogDownloadFilename("default", "api-server", "app"))
 	require.Equal(t, "kube-system-coredns_abc.log", LogDownloadFilename("kube-system", "coredns/abc", ""))

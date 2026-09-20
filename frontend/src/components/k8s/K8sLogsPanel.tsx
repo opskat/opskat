@@ -4,11 +4,23 @@ import { Download, Loader2, ScrollText, Search } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { SaveK8sPodLogs, StartK8sPodLogs, StopK8sPodLogs } from "../../../wailsjs/go/k8s/K8s";
+import { FetchK8sPodLogsTail, SaveK8sPodLogs, StartK8sPodLogs, StopK8sPodLogs } from "../../../wailsjs/go/k8s/K8s";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { K8sSectionCard } from "./K8sSectionCard";
 import { K8sLogTerminal, type K8sLogTerminalHandle } from "./K8sLogTerminal";
-import { buildLogBufferKey, MAX_LOG_CHUNKS, type LogTabState, type LogTabStateUpdate } from "./k8sLogState";
+import {
+  extractOlderLogLines,
+  K8S_LOG_INITIAL_TAIL_LINES,
+  K8S_LOG_LOAD_MORE_LINES,
+  K8S_LOG_MAX_TAIL_LINES,
+} from "./k8sLogPagination";
+import {
+  buildLogBufferKey,
+  createEmptyLogBuffer,
+  MAX_LOG_CHUNKS,
+  type LogTabState,
+  type LogTabStateUpdate,
+} from "./k8sLogState";
 
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -43,15 +55,26 @@ export function K8sLogsPanel({
   const { t } = useTranslation();
   const terminalRef = useRef<K8sLogTerminalHandle>(null);
   const [downloading, setDownloading] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const myStreamIDRef = useRef<string | null>(null);
   const eventNamesRef = useRef<{ data: string; err: string; end: string } | null>(null);
   const onStateChangeRef = useRef(onStateChange);
   const logBuffersRef = useRef(state.logBuffers);
+  const loadingOlderRef = useRef(false);
   const activeContainer = state.logContainer || containers[0]?.name || "";
   // eslint-disable-next-line react-hooks/refs
   onStateChangeRef.current = onStateChange;
   // eslint-disable-next-line react-hooks/refs
   logBuffersRef.current = state.logBuffers;
+
+  const getBuffer = useCallback(
+    (key: string) => {
+      const existing = logBuffersRef.current?.[key];
+      if (existing) return existing;
+      return createEmptyLogBuffer(activeContainer);
+    },
+    [activeContainer]
+  );
 
   const offEvents = useCallback(() => {
     const names = eventNamesRef.current;
@@ -72,29 +95,26 @@ export function K8sLogsPanel({
   }, [offEvents]);
 
   const start = useCallback(() => {
-    const bufferKey = buildLogBufferKey(podName, activeContainer, state.logTailLines);
-    const cachedChunks = logBuffersRef.current?.[bufferKey]?.chunks || [];
+    const bufferKey = buildLogBufferKey(podName, activeContainer);
+    const buffer = getBuffer(bufferKey);
+    const cachedChunks = buffer.chunks;
     teardownStream();
-    if (cachedChunks.length === 0) {
+    if (cachedChunks.length === 0 && !buffer.olderPrefix) {
       terminalRef.current?.clear();
     }
     onStateChangeRef.current((prev) => {
-      const existing = prev.logBuffers?.[bufferKey];
+      const existing = prev.logBuffers?.[bufferKey] || createEmptyLogBuffer(activeContainer);
       return {
         ...prev,
         logError: null,
         logBuffers: {
           ...(prev.logBuffers || {}),
-          [bufferKey]: existing || {
-            container: activeContainer,
-            tailLines: state.logTailLines,
-            chunks: [],
-          },
+          [bufferKey]: existing,
         },
       };
     });
 
-    StartK8sPodLogs(assetId, namespace, podName, activeContainer, state.logTailLines)
+    StartK8sPodLogs(assetId, namespace, podName, activeContainer, K8S_LOG_INITIAL_TAIL_LINES)
       .then((streamID: string) => {
         myStreamIDRef.current = streamID;
         onStateChangeRef.current({ logStreamID: streamID });
@@ -108,16 +128,15 @@ export function K8sLogsPanel({
           if (myStreamIDRef.current !== streamID) return;
           terminalRef.current?.write(base64ToBytes(data));
           onStateChangeRef.current((prev) => {
-            const existing = prev.logBuffers?.[bufferKey];
-            const chunks = [...(existing?.chunks || []), data];
+            const existing = prev.logBuffers?.[bufferKey] || createEmptyLogBuffer(activeContainer);
+            const chunks = [...existing.chunks, data];
             const nextChunks = chunks.length > MAX_LOG_CHUNKS ? chunks.slice(chunks.length - MAX_LOG_CHUNKS) : chunks;
             return {
               ...prev,
               logBuffers: {
                 ...(prev.logBuffers || {}),
                 [bufferKey]: {
-                  container: activeContainer,
-                  tailLines: state.logTailLines,
+                  ...existing,
                   chunks: nextChunks,
                 },
               },
@@ -141,7 +160,47 @@ export function K8sLogsPanel({
       .catch((e: unknown) => {
         onStateChangeRef.current({ logError: String(e) });
       });
-  }, [activeContainer, assetId, namespace, podName, state.logTailLines, teardownStream, offEvents]);
+  }, [activeContainer, assetId, getBuffer, namespace, podName, teardownStream, offEvents]);
+
+  const loadOlderLogs = useCallback(async () => {
+    if (!activeContainer || loadingOlderRef.current) return;
+    const bufferKey = buildLogBufferKey(podName, activeContainer);
+    const buffer = getBuffer(bufferKey);
+    if (buffer.historyExhausted) return;
+    if (buffer.loadedTailLines >= K8S_LOG_MAX_TAIL_LINES) return;
+
+    const previousTail = buffer.loadedTailLines;
+    const nextTail = Math.min(previousTail + K8S_LOG_LOAD_MORE_LINES, K8S_LOG_MAX_TAIL_LINES);
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const snapshot = await FetchK8sPodLogsTail(assetId, namespace, podName, activeContainer, nextTail);
+      const { older, reachedStart } = extractOlderLogLines(snapshot, previousTail, nextTail);
+      if (older) {
+        await terminalRef.current?.prepend(older);
+      }
+      onStateChangeRef.current((prev) => {
+        const existing = prev.logBuffers?.[bufferKey] || createEmptyLogBuffer(activeContainer);
+        return {
+          ...prev,
+          logBuffers: {
+            ...(prev.logBuffers || {}),
+            [bufferKey]: {
+              ...existing,
+              loadedTailLines: nextTail,
+              olderPrefix: existing.olderPrefix + older,
+              historyExhausted: reachedStart || nextTail >= K8S_LOG_MAX_TAIL_LINES,
+            },
+          },
+        };
+      });
+    } catch (e: unknown) {
+      toast.error(`${t("asset.k8sPodLogsLoadOlderError")}: ${String(e)}`);
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
+  }, [activeContainer, assetId, getBuffer, namespace, podName, t]);
 
   useEffect(() => {
     return () => {
@@ -171,15 +230,19 @@ export function K8sLogsPanel({
   useEffect(() => {
     teardownStream();
     terminalRef.current?.clear();
-    const bufferKey = buildLogBufferKey(podName, activeContainer, state.logTailLines);
-    const chunks = logBuffersRef.current?.[bufferKey]?.chunks || [];
+    const bufferKey = buildLogBufferKey(podName, activeContainer);
+    const buffer = logBuffersRef.current?.[bufferKey];
+    if (buffer?.olderPrefix) {
+      terminalRef.current?.write(buffer.olderPrefix);
+    }
+    const chunks = buffer?.chunks || [];
     for (const chunk of chunks) {
       terminalRef.current?.write(base64ToBytes(chunk));
     }
 
     if (!activeContainer) return;
     start();
-  }, [activeContainer, podName, state.logTailLines, start, teardownStream]);
+  }, [activeContainer, podName, start, teardownStream]);
 
   return (
     <K8sSectionCard className="flex flex-col h-full">
@@ -202,15 +265,6 @@ export function K8sLogsPanel({
               ))}
             </select>
           )}
-          <input
-            type="number"
-            className="h-7 w-16 rounded-md border bg-background px-2 text-xs"
-            value={state.logTailLines}
-            onChange={(e) => onStateChange({ logTailLines: Number(e.target.value) })}
-            min={1}
-            max={10000}
-            title={t("asset.k8sPodLogsTailLines")}
-          />
           <Button
             type="button"
             variant="outline"
@@ -262,7 +316,19 @@ export function K8sLogsPanel({
           {t("asset.k8sPodLogsError")}: {state.logError}
         </div>
       )}
-      <K8sLogTerminal ref={terminalRef} />
+      <div className="relative flex flex-1 min-h-0 flex-col">
+        <K8sLogTerminal ref={terminalRef} onReachTop={loadOlderLogs} />
+        {loadingOlder && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-popover/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm animate-in fade-in-0 slide-in-from-top-1 duration-150"
+          >
+            <Loader2 className="size-3 animate-spin" aria-hidden />
+            {t("asset.k8sPodLogsLoadingOlder")}
+          </div>
+        )}
+      </div>
     </K8sSectionCard>
   );
 }

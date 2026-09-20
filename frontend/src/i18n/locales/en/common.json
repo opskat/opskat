@@ -638,6 +638,8 @@
     "k8sPodLogsDownload": "Download logs",
     "k8sPodLogsDownloaded": "Logs saved",
     "k8sPodLogsDownloadError": "Failed to download logs",
+    "k8sPodLogsLoadOlderError": "Failed to load older logs",
+    "k8sPodLogsLoadingOlder": "Loading older logs...",
     "k8sPodLogsContainer": "Container",
     "k8sPodLogsStreaming": "Streaming logs...",
     "k8sPodLogsStopped": "Log stream stopped",
