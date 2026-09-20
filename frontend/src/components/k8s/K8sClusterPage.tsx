@@ -1339,7 +1339,7 @@ export function K8sClusterPage({ asset }: Props) {
             info.nodes.map((node) => (
               <div
                 key={node.name}
-                className={`flex items-center gap-1.5 pl-8 pr-2 py-1.5 rounded-md text-xs cursor-pointer ml-1 ${
+                className={`flex items-center gap-1.5 pl-5 pr-2 py-1.5 rounded-md text-xs cursor-pointer min-w-0 ${
                   activeTabId === `node:${node.name}` ? "bg-muted font-medium" : "hover:bg-muted/50"
                 }`}
                 onClick={() => openTab(`node:${node.name}`, node.name)}
@@ -1377,14 +1377,14 @@ export function K8sClusterPage({ asset }: Props) {
             .map((ns) => (
               <div key={ns.name}>
                 {loadingNamespaces.has(ns.name) && (
-                  <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5 px-2 pr-2 py-1 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     {t("asset.k8sLoadingNamespace")}
                   </div>
                 )}
                 {namespaceErrors[ns.name] && (
                   <div
-                    className="flex items-start gap-1 pl-8 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                    className="flex items-start gap-1 px-2 pr-2 py-1 text-xs text-destructive cursor-pointer"
                     title={namespaceErrors[ns.name]}
                     onClick={() => {
                       const next = { ...namespaceErrors };
@@ -1429,7 +1429,7 @@ export function K8sClusterPage({ asset }: Props) {
                               return (
                                 <div key={rt.key}>
                                   <div
-                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    className="flex items-center gap-1.5 px-2 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50 min-w-0"
                                     onClick={() => toggleDeployments(ns.name)}
                                   >
                                     {deploymentsExpanded ? (
@@ -1442,7 +1442,7 @@ export function K8sClusterPage({ asset }: Props) {
                                     <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
                                   </div>
                                   {deploymentsExpanded && (
-                                    <div className="ml-3">
+                                    <div className="min-w-0">
                                       <ResourceSearchInput
                                         value={resourceSearch[`deployments:${ns.name}`] || ""}
                                         onChange={(v) =>
@@ -1454,14 +1454,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         placeholder={t("asset.search")}
                                       />
                                       {loadingDeployments.has(ns.name) && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           <Loader2 className="h-3 w-3 animate-spin" />
                                           {t("asset.k8sLoadingDeployments")}
                                         </div>
                                       )}
                                       {deploymentErrors[ns.name] && (
                                         <div
-                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          className="flex items-start gap-1 pl-5 pr-2 py-1 text-xs text-destructive cursor-pointer"
                                           title={deploymentErrors[ns.name]}
                                           onClick={() => {
                                             const next = { ...deploymentErrors };
@@ -1475,7 +1475,7 @@ export function K8sClusterPage({ asset }: Props) {
                                         </div>
                                       )}
                                       {visibleDeployments?.length === 0 && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           {t("asset.k8sNoDeployments")}
                                         </div>
                                       )}
@@ -1488,7 +1488,7 @@ export function K8sClusterPage({ asset }: Props) {
                                         return (
                                           <div key={deployment.name}>
                                             <div
-                                              className="flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                              className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
                                               onClick={() => toggleDeploymentItem(ns.name, deployment.name)}
                                             >
                                               {deploymentExpanded ? (
@@ -1550,14 +1550,14 @@ export function K8sClusterPage({ asset }: Props) {
                                             {deploymentExpanded && (
                                               <>
                                                 {visiblePods.length === 0 && (
-                                                  <div className="flex items-center gap-1.5 pl-20 pr-2 py-1 text-xs text-muted-foreground">
+                                                  <div className="flex items-center gap-1.5 pl-8 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                                     {t("asset.k8sNoPods")}
                                                   </div>
                                                 )}
                                                 {visiblePods.map((pod) => (
                                                   <div
                                                     key={pod.name}
-                                                    className={`flex items-center gap-1.5 pl-20 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                                    className={`flex items-center gap-1.5 pl-8 pr-2 min-w-0 py-1 rounded-md text-xs cursor-pointer ${
                                                       activeTabId === `pod:${ns.name}:${pod.name}`
                                                         ? "bg-muted font-medium"
                                                         : "hover:bg-muted/50"
@@ -1624,7 +1624,7 @@ export function K8sClusterPage({ asset }: Props) {
                               return (
                                 <div key={rt.key}>
                                   <div
-                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    className="flex items-center gap-1.5 px-2 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50 min-w-0"
                                     onClick={() => togglePods(ns.name)}
                                   >
                                     {podsExpanded ? (
@@ -1637,7 +1637,7 @@ export function K8sClusterPage({ asset }: Props) {
                                     <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
                                   </div>
                                   {podsExpanded && (
-                                    <div className="ml-3">
+                                    <div className="min-w-0">
                                       <ResourceSearchInput
                                         value={resourceSearch[`pods:${ns.name}`] || ""}
                                         onChange={(v) =>
@@ -1649,14 +1649,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         placeholder={t("asset.search")}
                                       />
                                       {loadingPods.has(ns.name) && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           <Loader2 className="h-3 w-3 animate-spin" />
                                           {t("asset.k8sLoadingPods")}
                                         </div>
                                       )}
                                       {podErrors[ns.name] && (
                                         <div
-                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          className="flex items-start gap-1 pl-5 pr-2 py-1 text-xs text-destructive cursor-pointer"
                                           title={podErrors[ns.name]}
                                           onClick={() => {
                                             const next = { ...podErrors };
@@ -1670,14 +1670,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         </div>
                                       )}
                                       {visiblePods?.length === 0 && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           {t("asset.k8sNoPods")}
                                         </div>
                                       )}
                                       {visiblePods?.map((pod) => (
                                         <div
                                           key={pod.name}
-                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                          className={`flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 rounded-md text-xs cursor-pointer ${
                                             activeTabId === `pod:${ns.name}:${pod.name}`
                                               ? "bg-muted font-medium"
                                               : "hover:bg-muted/50"
@@ -1735,7 +1735,7 @@ export function K8sClusterPage({ asset }: Props) {
                               return (
                                 <div key={rt.key}>
                                   <div
-                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    className="flex items-center gap-1.5 px-2 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50 min-w-0"
                                     onClick={() => toggleServices(ns.name)}
                                   >
                                     {servicesExpanded ? (
@@ -1748,7 +1748,7 @@ export function K8sClusterPage({ asset }: Props) {
                                     <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
                                   </div>
                                   {servicesExpanded && (
-                                    <div className="ml-3">
+                                    <div className="min-w-0">
                                       <ResourceSearchInput
                                         value={resourceSearch[`services:${ns.name}`] || ""}
                                         onChange={(v) =>
@@ -1760,14 +1760,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         placeholder={t("asset.search")}
                                       />
                                       {loadingServices.has(ns.name) && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           <Loader2 className="h-3 w-3 animate-spin" />
                                           {t("asset.k8sLoadingServices")}
                                         </div>
                                       )}
                                       {serviceErrors[ns.name] && (
                                         <div
-                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          className="flex items-start gap-1 pl-5 pr-2 py-1 text-xs text-destructive cursor-pointer"
                                           title={serviceErrors[ns.name]}
                                           onClick={() => {
                                             const next = { ...serviceErrors };
@@ -1781,14 +1781,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         </div>
                                       )}
                                       {visibleServices?.length === 0 && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           {t("asset.k8sNoServices")}
                                         </div>
                                       )}
                                       {visibleServices?.map((svc) => (
                                         <div
                                           key={svc.name}
-                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                          className={`flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 rounded-md text-xs cursor-pointer ${
                                             activeTabId === `svc:${ns.name}:${svc.name}`
                                               ? "bg-muted font-medium"
                                               : "hover:bg-muted/50"
@@ -1827,7 +1827,7 @@ export function K8sClusterPage({ asset }: Props) {
                               return (
                                 <div key={rt.key}>
                                   <div
-                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    className="flex items-center gap-1.5 px-2 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50 min-w-0"
                                     onClick={() => toggleConfigMaps(ns.name)}
                                   >
                                     {configMapsExpanded ? (
@@ -1840,7 +1840,7 @@ export function K8sClusterPage({ asset }: Props) {
                                     <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
                                   </div>
                                   {configMapsExpanded && (
-                                    <div className="ml-3">
+                                    <div className="min-w-0">
                                       <ResourceSearchInput
                                         value={resourceSearch[`config_maps:${ns.name}`] || ""}
                                         onChange={(v) =>
@@ -1852,14 +1852,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         placeholder={t("asset.search")}
                                       />
                                       {loadingConfigMaps.has(ns.name) && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           <Loader2 className="h-3 w-3 animate-spin" />
                                           {t("asset.k8sLoadingConfigMaps")}
                                         </div>
                                       )}
                                       {configMapErrors[ns.name] && (
                                         <div
-                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          className="flex items-start gap-1 pl-5 pr-2 py-1 text-xs text-destructive cursor-pointer"
                                           title={configMapErrors[ns.name]}
                                           onClick={() => {
                                             const next = { ...configMapErrors };
@@ -1873,14 +1873,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         </div>
                                       )}
                                       {visibleConfigMaps?.length === 0 && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           {t("asset.k8sNoConfigMaps")}
                                         </div>
                                       )}
                                       {visibleConfigMaps?.map((cm) => (
                                         <div
                                           key={cm.name}
-                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                          className={`flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 rounded-md text-xs cursor-pointer ${
                                             activeTabId === `cm:${ns.name}:${cm.name}`
                                               ? "bg-muted font-medium"
                                               : "hover:bg-muted/50"
@@ -1918,7 +1918,7 @@ export function K8sClusterPage({ asset }: Props) {
                               return (
                                 <div key={rt.key}>
                                   <div
-                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    className="flex items-center gap-1.5 px-2 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50 min-w-0"
                                     onClick={() => toggleSecrets(ns.name)}
                                   >
                                     {secretsExpanded ? (
@@ -1931,7 +1931,7 @@ export function K8sClusterPage({ asset }: Props) {
                                     <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
                                   </div>
                                   {secretsExpanded && (
-                                    <div className="ml-3">
+                                    <div className="min-w-0">
                                       <ResourceSearchInput
                                         value={resourceSearch[`secrets:${ns.name}`] || ""}
                                         onChange={(v) =>
@@ -1943,14 +1943,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         placeholder={t("asset.search")}
                                       />
                                       {loadingSecrets.has(ns.name) && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           <Loader2 className="h-3 w-3 animate-spin" />
                                           {t("asset.k8sLoadingSecrets")}
                                         </div>
                                       )}
                                       {secretErrors[ns.name] && (
                                         <div
-                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          className="flex items-start gap-1 pl-5 pr-2 py-1 text-xs text-destructive cursor-pointer"
                                           title={secretErrors[ns.name]}
                                           onClick={() => {
                                             const next = { ...secretErrors };
@@ -1964,14 +1964,14 @@ export function K8sClusterPage({ asset }: Props) {
                                         </div>
                                       )}
                                       {visibleSecrets?.length === 0 && (
-                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                        <div className="flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 text-xs text-muted-foreground">
                                           {t("asset.k8sNoSecrets")}
                                         </div>
                                       )}
                                       {visibleSecrets?.map((s) => (
                                         <div
                                           key={s.name}
-                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                          className={`flex items-center gap-1.5 pl-5 pr-2 min-w-0 py-1 rounded-md text-xs cursor-pointer ${
                                             activeTabId === `secret:${ns.name}:${s.name}`
                                               ? "bg-muted font-medium"
                                               : "hover:bg-muted/50"
@@ -2003,7 +2003,7 @@ export function K8sClusterPage({ asset }: Props) {
                             return (
                               <div
                                 key={rt.key}
-                                className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                className="flex items-center gap-1.5 px-2 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50 min-w-0"
                                 onClick={() => openTab(`ns-res:${ns.name}:${rt.key}`, `${rt.key} (${ns.name})`)}
                               >
                                 <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
