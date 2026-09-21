@@ -1,5 +1,6 @@
 package k8s
 
+// todo
 import (
 	"context"
 	"encoding/base64"
@@ -9,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -680,7 +683,9 @@ func fmtDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd%dh", days, h)
 }
 
-func StreamPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
+var logFilenameUnsafe = regexp.MustCompile(`[^\w.-]+`)
+
+func openPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, follow bool, tailLines *int64, opts ...ClientOption) (io.ReadCloser, error) {
 	streamOpts := append(append([]ClientOption{}, opts...), WithTimeout(0))
 	clientset, err := buildClient(kubeconfig, streamOpts...)
 	if err != nil {
@@ -689,8 +694,10 @@ func StreamPodLogs(ctx context.Context, kubeconfig, namespace, podName, containe
 
 	logOpts := &corev1.PodLogOptions{
 		Container: container,
-		Follow:    true,
-		TailLines: &tailLines,
+		Follow:    follow,
+	}
+	if tailLines != nil {
+		logOpts.TailLines = tailLines
 	}
 
 	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
@@ -699,4 +706,35 @@ func StreamPodLogs(ctx context.Context, kubeconfig, namespace, podName, containe
 		return nil, fmt.Errorf("stream pod logs: %w", err)
 	}
 	return stream, nil
+}
+
+func StreamPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
+	return openPodLogs(ctx, kubeconfig, namespace, podName, container, true, &tailLines, opts...)
+}
+
+// TailPodLogs 拉取日志末尾 tailLines 行（不 follow）。
+func TailPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
+	return openPodLogs(ctx, kubeconfig, namespace, podName, container, false, &tailLines, opts...)
+}
+
+// SnapshotPodLogs 拉取当前容器日志文件全部内容（等价 kubectl logs，不 follow、不 --tail）。
+func SnapshotPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, opts ...ClientOption) (io.ReadCloser, error) {
+	return openPodLogs(ctx, kubeconfig, namespace, podName, container, false, nil, opts...)
+}
+
+func safeLogFilenamePart(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return logFilenameUnsafe.ReplaceAllString(trimmed, "_")
+}
+
+// LogDownloadFilename 生成保存日志时的默认文件名。
+func LogDownloadFilename(namespace, podName, container string) string {
+	name := safeLogFilenamePart(namespace) + "-" + safeLogFilenamePart(podName)
+	if part := safeLogFilenamePart(container); part != "" {
+		name += "-" + part
+	}
+	return name + ".log"
 }
