@@ -12,9 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// mfaCanceledReason 是用户在桌面 MFA 对话框里取消 / 关闭时回给 opsctl 的原因。
-const mfaCanceledReason = "mfa canceled"
-
 // mfaBroker 承接 opsctl 经 approval.sock 发来的 SSH MFA 挑战（type="mfa"）：发
 // opsctl:mfa 事件让前端弹出全局对话框，等前端经 RespondOpsctlMFA / CancelOpsctlMFA
 // 回答。请求方断开（ctx 结束）时发 opsctl:mfa-closed 让前端关掉对应对话框。
@@ -66,7 +63,7 @@ func (b *mfaBroker) challenge(ctx context.Context, req approval.ApprovalRequest)
 	case reply := <-p.ch:
 		if reply.canceled {
 			log.Info("opsctl mfa challenge completed", zap.Bool("answered", false))
-			return approval.ApprovalResponse{Approved: false, Reason: mfaCanceledReason}
+			return approval.ApprovalResponse{Approved: false, Reason: approval.MFACanceledReason}
 		}
 		log.Info("opsctl mfa challenge completed", zap.Bool("answered", true))
 		return approval.ApprovalResponse{Approved: true, MFAAnswers: reply.answers}
@@ -80,16 +77,19 @@ func (b *mfaBroker) challenge(ctx context.Context, req approval.ApprovalRequest)
 
 // respond 是前端提交答案的 IPC 边界：挑战必须仍在等待，且答案数与提示数一致。
 func (b *mfaBroker) respond(id string, answers []string) error {
-	v, ok := b.pending.LoadAndDelete(id)
+	// 先只读校验、再原子取走：校验失败时不能「取出再放回」，否则挑战恰在其间结束
+	// 会把已结束的挑战重新挂回 pending，后续提交被当成成功却无人接收。
+	v, ok := b.pending.Load(id)
 	if !ok {
 		return fmt.Errorf("mfa challenge %s is no longer pending", id)
 	}
-	p := v.(*pendingMFA)
-	if len(answers) != p.prompts {
-		b.pending.Store(id, p)
+	if p := v.(*pendingMFA); len(answers) != p.prompts {
 		return fmt.Errorf("mfa challenge %s expects %d answers, got %d", id, p.prompts, len(answers))
 	}
-	p.ch <- mfaReply{answers: answers}
+	if _, ok := b.pending.LoadAndDelete(id); !ok {
+		return fmt.Errorf("mfa challenge %s is no longer pending", id)
+	}
+	v.(*pendingMFA).ch <- mfaReply{answers: answers}
 	return nil
 }
 

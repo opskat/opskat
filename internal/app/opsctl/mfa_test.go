@@ -97,7 +97,7 @@ func TestMFABroker_CancelIsNotApproved(t *testing.T) {
 	resp := <-done
 	assert.False(t, resp.Approved)
 	assert.Empty(t, resp.MFAAnswers)
-	assert.Equal(t, mfaCanceledReason, resp.Reason)
+	assert.Equal(t, approval.MFACanceledReason, resp.Reason)
 }
 
 func TestMFABroker_RequesterGoneClosesDialog(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
@@ -82,16 +83,17 @@ func desktopMFASender(sockPath, token string) func(context.Context, approval.App
 		if err := dialApprovalSocket(sockPath); err != nil {
 			return approval.ApprovalResponse{}, err
 		}
-		if req.AssetName == "" {
-			if asset, err := asset_repo.Asset().Find(ctx, req.AssetID); err == nil {
-				req.AssetName = asset.Name
-			} else {
-				logger.Default().Warn("resolve asset name for desktop MFA dialog", zap.Int64("assetID", req.AssetID), zap.Error(err))
-			}
+		if asset, err := asset_repo.Asset().Find(ctx, req.AssetID); err == nil {
+			req.AssetName = asset.Name
+		} else {
+			logger.Default().Warn("resolve asset name for desktop MFA dialog", zap.Int64("assetID", req.AssetID), zap.Error(err))
 		}
 		return approval.RequestApprovalWithToken(sockPath, token, req)
 	}
 }
+
+// terminalMFAMu 串行化本进程内的终端 MFA 提示：stdin/stderr 是进程级的单一资源。
+var terminalMFAMu sync.Mutex
 
 type mfaCaller struct {
 	src     mfaSources
@@ -117,6 +119,9 @@ func (c *mfaCaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChalleng
 		// 关闭的回显直接退出进程。
 		sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 		defer stop()
+		// 终端只有一个：batch 里多个资产并发拨号时，挑战逐个呈现、逐个读答案。
+		terminalMFAMu.Lock()
+		defer terminalMFAMu.Unlock()
 		in, out := c.src.terminal()
 		answers, err := (&terminalMFACaller{out: out, in: in}).SubmitChallenge(sigCtx, ch)
 		if errors.Is(err, context.Canceled) {
@@ -135,8 +140,10 @@ func (c *mfaCaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChalleng
 			logger.Default().Warn("desktop MFA unavailable", zap.Int64("assetID", c.assetID), zap.Error(err))
 		case resp.Approved:
 			return resp.MFAAnswers, nil
-		default:
+		case resp.Reason == approval.MFACanceledReason:
 			return nil, &sshagent.Error{Code: sshagent.CodeCancelled, Message: "MFA was canceled in the desktop app"}
+		default:
+			return nil, fmt.Errorf("desktop app refused the MFA request: %s", resp.Reason)
 		}
 	}
 	return nil, &noMFASourceError{typed: &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires MFA but no answer source is available"}}

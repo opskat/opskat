@@ -46,6 +46,10 @@ type ApprovalRequest struct {
 	MFA         *MFAChallenge   `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
 }
 
+// MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的
+// ApprovalResponse.Reason；opsctl 据此区分「人取消了」与其它拒绝原因。
+const MFACanceledReason = "mfa canceled"
+
 // MFAChallenge 是 opsctl 请桌面端代为回答的一轮 SSH keyboard-interactive 挑战，
 // 字段与服务器发来的原样一致（名称 / 说明 / 逐条提示与回显标记）。
 type MFAChallenge struct {
