@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -318,6 +319,11 @@ func emitProgress(cfg *ConnectConfig, step, message string) {
 
 // Dial 仅建立 SSH 连接（不创建 PTY/Session），用于连接池等场景
 func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
+	var mfa *answeredMFA
+	if cfg.MFA != nil {
+		mfa = &answeredMFA{inner: cfg.MFA}
+		cfg.MFA = mfa
+	}
 	sshConfig, err := buildClientConfig(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -326,6 +332,11 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	client, closers, err := m.dial(cfg, sshConfig, addr)
 	if err != nil {
+		if _, typed := sshagent.CodeOf(err); !typed && mfa != nil && mfa.answered.Load() {
+			// 应答方给出的答案之后握手仍失败：服务器拒绝了这次 MFA。以类型化的
+			// 「MFA 验证失败」上报，调用方据此不拿同一个码重试。
+			return nil, nil, fmt.Errorf("%w: %v", &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected the MFA answers"}, err)
+		}
 		return nil, nil, err
 	}
 	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责。调用方先关闭
@@ -862,6 +873,21 @@ type kbiResponders struct {
 	ctx             context.Context
 	onAuthChallenge func(prompts []string, echo []bool) ([]string, error)
 	mfa             sshagent.InteractiveCaller
+}
+
+// answeredMFA 记录应答方是否已在本次握手中给出过答案，用于把随后的认证失败识别为
+// 「服务器拒绝了 MFA 答案」。只记是否作答，不保留答案。
+type answeredMFA struct {
+	inner    sshagent.InteractiveCaller
+	answered atomic.Bool
+}
+
+func (a *answeredMFA) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
+	answers, err := a.inner.SubmitChallenge(ctx, ch)
+	if err == nil {
+		a.answered.Store(true)
+	}
+	return answers, err
 }
 
 // kbiAnswerer 持有一次握手内 keyboard-interactive 的应答状态。认证循环在调用方

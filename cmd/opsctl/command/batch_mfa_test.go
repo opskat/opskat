@@ -23,10 +23,12 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/host_key_repo"
+	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
 
 // otpExecServer 是一台「公钥部分成功后要求单提示 OTP」的 SSH 服务器，能执行 exec
@@ -214,4 +216,32 @@ func TestBatchExec_NoMFASourceEndsBatchWithNeedsMFA(t *testing.T) {
 	firstLine, _, _ := strings.Cut(stderr.String(), "\n")
 	assert.Equal(t, needsMFAMarker, firstLine)
 	assert.Equal(t, int32(1), srv.challenges.Load())
+}
+
+// SSH 隧道上的 MFA 不在本轮范围内（spec Out of scope）：batch 的数据类条目经 SSH 隧道
+// 拨号时不得拿到 MFA 应答方——--mfa-code 只属于 SSH exec 条目，隧道行为保持不变。
+func TestBatchDataItem_TunnelDialGetsNoMFAResponder(t *testing.T) {
+	srv := newOTPExecServer(t, "123456")
+	sshAsset := setupBatchMFAAssets(t, srv)[0]
+
+	var dialErr error
+	handlers := map[string]tool.ToolHandlerFunc{
+		batchAuditTool: func(ctx context.Context, _ map[string]any) (string, error) {
+			client, closers, err := credential_resolver.Default().DialAssetSSH(ctx, sshAsset.ID)
+			dialErr = err
+			if err == nil {
+				_ = client.Close()
+				for _, c := range closers {
+					_ = c.Close()
+				}
+			}
+			return "", err
+		},
+	}
+	ctx, closeBatch := withBatchSSH(withMFACode(context.Background(), "123456"))
+	defer closeBatch()
+	db := &asset_entity.Asset{ID: 999, Name: "mysql", Type: asset_entity.AssetTypeDatabase}
+	executeBatchHandler(ctx, handlers, batchAuditTool, resolvedBatchCmd{asset: db, command: "select 1"}, map[string]any{})
+
+	assert.Error(t, dialErr, "a tunnel dial must not answer MFA with the batch's --mfa-code")
 }

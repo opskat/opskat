@@ -21,7 +21,6 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/sshagent"
 	"go.uber.org/zap"
 
 	"golang.org/x/crypto/ssh"
@@ -379,7 +378,7 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
 	errBuf := audit.NewLimitedBuffer(auditOutputLimit)
 
-	execErr := helper.ExecWithStdio(ctx, cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
+	execErr := helper.ExecWithStdio(withMFA(ctx), cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
 	result.Stdout = outBuf.String()
 	result.Stderr = errBuf.String()
 	if execErr != nil {
@@ -389,7 +388,7 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 		} else {
 			result.ExitCode = -1
 			result.Error = execErr.Error()
-			if code, ok := sshagent.CodeOf(execErr); ok && code == sshagent.CodeMFARequired {
+			if needsMFA(execErr) {
 				result.mfaErr = execErr
 			}
 		}
@@ -639,11 +638,12 @@ Examples:
 `)
 }
 
-// withBatchSSH 为一次 batch 运行准备 SSH 拨号：接上 MFA 应答来源，并让同一资产的
-// exec 条目（含并发条目）共用一条已验证的连接——一次运行对每个资产至多验证一次。
+// withBatchSSH 为一次 batch 运行准备 SSH 拨号：让同一资产的 exec 条目（含并发条目）
+// 共用一条已验证的连接——一次运行对每个资产至多验证一次。MFA 应答来源只在
+// executeBatchExec 接上，数据类条目的 SSH 隧道拨号不在 MFA 应答范围内。
 // 并发上限 maxConcurrency 与 OpenSSH 默认 MaxSessions（10）一致，同一连接上的会话
 // 数不会超出服务器默认限额。
 func withBatchSSH(ctx context.Context) (context.Context, func()) {
 	set := helper.NewSSHClientSet()
-	return helper.WithSSHClientSet(withMFA(ctx), set), set.Close
+	return helper.WithSSHClientSet(ctx, set), set.Close
 }

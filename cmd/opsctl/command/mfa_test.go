@@ -74,8 +74,8 @@ func TestMFACaller_NoSourceIsMFARequired(t *testing.T) {
 
 func TestWriteRemoteFailure_MFARequiredIsStructuredRefusal(t *testing.T) {
 	// ssh 握手把应答方的类型化错误包进 "ssh: handshake failed: %w"。
-	wrapped := fmt.Errorf("SSH连接失败: %w", fmt.Errorf("ssh: handshake failed: %w",
-		&sshagent.Error{Code: sshagent.CodeMFARequired, Message: "no responder"}))
+	_, noSource := mfaSources{}.newCaller(1).SubmitChallenge(context.Background(), otpChallenge)
+	wrapped := fmt.Errorf("SSH连接失败: %w", fmt.Errorf("ssh: handshake failed: %w", noSource))
 
 	var out bytes.Buffer
 	code := writeRemoteFailure(&out, wrapped)
@@ -88,6 +88,14 @@ func TestWriteRemoteFailure_MFARequiredIsStructuredRefusal(t *testing.T) {
 	out.Reset()
 	code = writeRemoteFailure(&out, &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected"})
 	assert.Equal(t, 1, code, "a rejected answer is an ordinary failure, not a request for a code")
+	assert.True(t, strings.HasPrefix(out.String(), "Error: "))
+
+	// 没接 opsctl 应答方的拨号（如数据库 / Redis 经 Agent 资产的 SSH 隧道，不在 MFA 应答
+	// 范围内）同样报 ssh_agent_mfa_required，但 --mfa-code 帮不上它：不能指引调用方去要码。
+	out.Reset()
+	code = writeRemoteFailure(&out, fmt.Errorf("ssh: handshake failed: %w",
+		&sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires keyboard-interactive but no interactive caller is available"}))
+	assert.Equal(t, 1, code, "a dial opsctl cannot answer is not NEEDS MFA")
 	assert.True(t, strings.HasPrefix(out.String(), "Error: "))
 }
 

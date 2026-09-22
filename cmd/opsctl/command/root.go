@@ -229,8 +229,12 @@ SSH MFA:
   answers it with --mfa-code / OPSKAT_MFA_CODE (a single one-prompt challenge,
   once per connection); otherwise it prompts in an interactive terminal, or
   the running desktop app shows the challenge in a dialog. With none of these
-  available it exits with code 3 and prints NEEDS MFA. Each opsctl
-  invocation connects anew; one 'opsctl batch' run verifies each asset once.
+  available it exits with code 3 and prints NEEDS MFA: ask a human for the
+  current code (or compute it with a TOTP tool you were given) and retry with
+  OPSKAT_MFA_CODE. A rejected code fails with an MFA verification error (exit
+  code 1) — do not retry the same code. Each opsctl invocation connects anew,
+  so run several commands on the same MFA asset as one 'opsctl batch', which
+  verifies each asset once.
 
 Run 'opsctl <command> --help' for more information on a specific command.
 

@@ -139,13 +139,27 @@ func (c *mfaCaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChalleng
 			return nil, &sshagent.Error{Code: sshagent.CodeCancelled, Message: "MFA was canceled in the desktop app"}
 		}
 	}
-	return nil, &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires MFA but no answer source is available"}
+	return nil, &noMFASourceError{typed: &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires MFA but no answer source is available"}}
+}
+
+// noMFASourceError 是 opsctl 应答方在「没有参数、不可交互、桌面端也未运行」时给出的
+// 拒绝。仅它映射成 NEEDS MFA：未接应答方的拨号（如数据库经 SSH 隧道）同样报
+// ssh_agent_mfa_required，但 --mfa-code 对它无效，不能指引调用方去要码。
+type noMFASourceError struct{ typed *sshagent.Error }
+
+func (e *noMFASourceError) Error() string { return e.typed.Error() }
+func (e *noMFASourceError) Unwrap() error { return e.typed }
+
+// needsMFA 判断 err 是否是 opsctl 应答方的「无应答来源」拒绝。
+func needsMFA(err error) bool {
+	var e *noMFASourceError
+	return errors.As(err, &e)
 }
 
 // writeRemoteFailure 上报远程操作的错误：需要 MFA 却没有应答来源时是结构化拒绝
 // （stderr 首行 NEEDS MFA、退出码 3），其余错误照旧 "Error: " + 退出码 1。
 func writeRemoteFailure(w io.Writer, err error) int {
-	if code, ok := sshagent.CodeOf(err); ok && code == sshagent.CodeMFARequired {
+	if needsMFA(err) {
 		err = &structuredRefusal{marker: needsMFAMarker, body: "The server requires multi-factor authentication (MFA) and opsctl has no way to answer it here.\n" +
 			"Retry with the code: set " + mfaCodeEnv + "=<code> (preferred; --mfa-code <code> also works but is visible in shell history and process lists),\n" +
 			"or open the OpsKat desktop app, or run the command in an interactive terminal."}

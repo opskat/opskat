@@ -34,7 +34,7 @@ func cmdSSH(ctx context.Context, args []string) int {
 }
 
 // cmdSSHDirect 直连建立交互式 SSH。MFA 挑战在原始流量开始前按 withMFA 的应答来源
-// 顺序完成（--mfa-code → 终端提示 → NEEDS MFA）。
+// 顺序完成（--mfa-code → 终端提示 → 桌面弹窗 → NEEDS MFA）。
 // 拨号阶段用 signal.NotifyContext 让 Ctrl-C 取消 MFA 等待与握手；进入 raw 模式后
 // 恢复默认信号处理，^C 交由远端 shell。
 func cmdSSHDirect(ctx context.Context, assetID int64) int {

@@ -116,6 +116,23 @@ func TestManagerDialMFAResponder(t *testing.T) {
 			convey.So(caller.first().Prompts, convey.ShouldResemble, []string{"OTP: "})
 		})
 
+		convey.Convey("服务器拒绝应答方的答案时报 MFA 验证失败，而不是笼统的认证失败", func() {
+			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
+				PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+					return nil, &ssh.PartialSuccessError{Next: ssh.ServerAuthCallbacks{
+						KeyboardInteractiveCallback: otpChallenge("123456"),
+					}}
+				},
+			})
+			caller := &recordingAgentCaller{answers: []string{"000000"}}
+			err := dialForMFATest(t, srv, ConnectConfig{AuthType: "key", Key: newTestPrivateKeyPEM(t), MFA: caller})
+			convey.So(err, convey.ShouldNotBeNil)
+			code, ok := sshagent.CodeOf(err)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(code, convey.ShouldEqual, sshagent.CodeMFAFailed)
+			convey.So(err.Error(), convey.ShouldNotContainSubstring, "000000")
+		})
+
 		convey.Convey("应答方返回的类型化错误原样保留在拨号错误里", func() {
 			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
 				PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
