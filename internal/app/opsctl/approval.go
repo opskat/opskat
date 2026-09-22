@@ -21,7 +21,7 @@ import (
 
 // startApprovalServer 启动 opsctl 审批 本地 IPC 服务
 func (o *Opsctl) startApprovalServer() {
-	handler := func(req approval.ApprovalRequest) approval.ApprovalResponse {
+	handler := func(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 		// 数据变更通知：opsctl 通知前端刷新
 		if req.Type == "notify" {
 			wailsRuntime.EventsEmit(o.ctx, "data:changed", map[string]any{
@@ -38,6 +38,11 @@ func (o *Opsctl) startApprovalServer() {
 		// 批量执行审批
 		if req.Type == "batch" {
 			return o.handleBatchApproval(req)
+		}
+
+		// SSH MFA 挑战：opsctl 不可交互时请桌面端代答；请求方断开即关闭对话框
+		if req.Type == "mfa" {
+			return o.mfa.challenge(ctx, req)
 		}
 
 		// 扩展工具执行

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/sshagent"
 
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func mfaCode(t *testing.T, err error) string {
 }
 
 func TestMFACaller_CodeAnswersOneSinglePromptRoundPerConnection(t *testing.T) {
-	caller := mfaSources{code: "123456"}.newCaller()
+	caller := mfaSources{code: "123456"}.newCaller(1)
 
 	answers, err := caller.SubmitChallenge(context.Background(), otpChallenge)
 	require.NoError(t, err)
@@ -36,14 +37,14 @@ func TestMFACaller_CodeAnswersOneSinglePromptRoundPerConnection(t *testing.T) {
 	_, err = caller.SubmitChallenge(context.Background(), otpChallenge)
 	assert.Equal(t, sshagent.CodeMFAFailed, mfaCode(t, err), "a second round on the same connection must not reuse the code")
 
-	fresh := mfaSources{code: "123456"}.newCaller()
+	fresh := mfaSources{code: "123456"}.newCaller(1)
 	answers, err = fresh.SubmitChallenge(context.Background(), otpChallenge)
 	require.NoError(t, err, "each new connection may use the code once")
 	assert.Equal(t, []string{"123456"}, answers)
 }
 
 func TestMFACaller_CodeRefusesMultiPromptRound(t *testing.T) {
-	caller := mfaSources{code: "123456", interactive: true}.newCaller()
+	caller := mfaSources{code: "123456", interactive: true}.newCaller(1)
 	_, err := caller.SubmitChallenge(context.Background(), sshagent.MFAChallenge{Prompts: []string{"PIN: ", "OTP: "}, Echo: []bool{false, false}})
 	assert.Equal(t, sshagent.CodeMFAFailed, mfaCode(t, err))
 	assert.Contains(t, err.Error(), "interactive terminal", "the error must name the way to complete this challenge")
@@ -57,7 +58,7 @@ func TestMFACaller_InteractiveReadsFromTerminal(t *testing.T) {
 	_, _ = io.WriteString(w, "987654\n")
 
 	var out bytes.Buffer
-	caller := mfaSources{interactive: true, terminal: func() (*os.File, io.Writer) { return r, &out }}.newCaller()
+	caller := mfaSources{interactive: true, terminal: func() (*os.File, io.Writer) { return r, &out }}.newCaller(1)
 	answers, err := caller.SubmitChallenge(context.Background(), otpChallenge)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"987654"}, answers)
@@ -66,7 +67,7 @@ func TestMFACaller_InteractiveReadsFromTerminal(t *testing.T) {
 }
 
 func TestMFACaller_NoSourceIsMFARequired(t *testing.T) {
-	caller := mfaSources{}.newCaller()
+	caller := mfaSources{}.newCaller(1)
 	_, err := caller.SubmitChallenge(context.Background(), otpChallenge)
 	assert.Equal(t, sshagent.CodeMFARequired, mfaCode(t, err))
 }
@@ -166,4 +167,88 @@ func TestTerminalMFACaller_CancelDuringWait(t *testing.T) {
 
 	_, err = c.SubmitChallenge(ctx, sshagent.MFAChallenge{Prompts: []string{"code:"}})
 	assert.True(t, errors.Is(err, context.Canceled), "got %v", err)
+}
+
+// fakeDesktop 记录发往桌面端的 MFA 请求并按预设回应。
+type fakeDesktop struct {
+	calls []approval.ApprovalRequest
+	resp  approval.ApprovalResponse
+	err   error
+}
+
+func (f *fakeDesktop) send(_ context.Context, req approval.ApprovalRequest) (approval.ApprovalResponse, error) {
+	f.calls = append(f.calls, req)
+	return f.resp, f.err
+}
+
+func TestMFACaller_NonInteractiveAsksDesktop(t *testing.T) {
+	desk := &fakeDesktop{resp: approval.ApprovalResponse{Approved: true, MFAAnswers: []string{"424242"}}}
+	caller := mfaSources{desktop: desk.send}.newCaller(7)
+
+	answers, err := caller.SubmitChallenge(context.Background(), otpChallenge)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"424242"}, answers)
+	require.Len(t, desk.calls, 1)
+	req := desk.calls[0]
+	assert.Equal(t, "mfa", req.Type)
+	assert.Equal(t, int64(7), req.AssetID)
+	assert.Equal(t, &approval.MFAChallenge{Name: "Verification", Instruction: "Enter code", Prompts: []string{"OTP: "}, Echo: []bool{false}}, req.MFA)
+}
+
+func TestMFACaller_DesktopCancelIsCanceled(t *testing.T) {
+	desk := &fakeDesktop{resp: approval.ApprovalResponse{Approved: false, Reason: "mfa canceled"}}
+	_, err := mfaSources{desktop: desk.send}.newCaller(7).SubmitChallenge(context.Background(), otpChallenge)
+	assert.Equal(t, sshagent.CodeCancelled, mfaCode(t, err))
+	var out bytes.Buffer
+	assert.Equal(t, 1, writeRemoteFailure(&out, err), "a cancel is an ordinary failure, not NEEDS MFA")
+}
+
+func TestMFACaller_DesktopUnavailableIsMFARequired(t *testing.T) {
+	desk := &fakeDesktop{err: errors.New("cannot connect to desktop app")}
+	_, err := mfaSources{desktop: desk.send}.newCaller(7).SubmitChallenge(context.Background(), otpChallenge)
+	assert.Equal(t, sshagent.CodeMFARequired, mfaCode(t, err))
+}
+
+func TestMFACaller_TerminalAndCodeComeBeforeDesktop(t *testing.T) {
+	desk := &fakeDesktop{resp: approval.ApprovalResponse{Approved: true, MFAAnswers: []string{"desk"}}}
+
+	answers, err := mfaSources{code: "flag", desktop: desk.send}.newCaller(7).SubmitChallenge(context.Background(), otpChallenge)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"flag"}, answers)
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() { _ = r.Close() }()
+	defer func() { _ = w.Close() }()
+	_, _ = io.WriteString(w, "tty\n")
+	src := mfaSources{interactive: true, terminal: func() (*os.File, io.Writer) { return r, io.Discard }, desktop: desk.send}
+	answers, err = src.newCaller(7).SubmitChallenge(context.Background(), otpChallenge)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tty"}, answers)
+	assert.Empty(t, desk.calls)
+}
+
+// 经真实 approval.sock 往返：桌面端回的答案原样到达应答方。
+func TestDesktopMFAOverRealIPC(t *testing.T) {
+	dir, err := os.MkdirTemp("", "mfa-ipc-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := approval.SocketPath(dir)
+	var got approval.ApprovalRequest
+	server := approval.NewServer(func(_ context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
+		got = req
+		return approval.ApprovalResponse{Approved: true, MFAAnswers: []string{"777777"}}
+	}, "tok")
+	require.NoError(t, server.Start(path))
+	t.Cleanup(server.Stop)
+
+	caller := mfaSources{desktop: desktopMFASender(path, "tok")}.newCaller(9)
+	answers, err := caller.SubmitChallenge(context.Background(), otpChallenge)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"777777"}, answers)
+	assert.Equal(t, int64(9), got.AssetID)
+
+	server.Stop()
+	_, err = caller.SubmitChallenge(context.Background(), otpChallenge)
+	assert.Equal(t, sshagent.CodeMFARequired, mfaCode(t, err), "desktop gone -> NEEDS MFA")
 }

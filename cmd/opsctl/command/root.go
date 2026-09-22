@@ -227,8 +227,9 @@ Global Flags:
 SSH MFA:
   When a new SSH connection hits a keyboard-interactive MFA challenge, opsctl
   answers it with --mfa-code / OPSKAT_MFA_CODE (a single one-prompt challenge,
-  once per connection), otherwise prompts in an interactive terminal. With
-  neither available it exits with code 3 and prints NEEDS MFA. Each opsctl
+  once per connection); otherwise it prompts in an interactive terminal, or
+  the running desktop app shows the challenge in a dialog. With none of these
+  available it exits with code 3 and prints NEEDS MFA. Each opsctl
   invocation connects anew; one 'opsctl batch' run verifies each asset once.
 
 Run 'opsctl <command> --help' for more information on a specific command.

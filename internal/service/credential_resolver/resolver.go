@@ -440,8 +440,8 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		return nil, nil, err
 	}
 	var mfa sshagent.InteractiveCaller
-	if newCaller, ok := ctx.Value(mfaKeyType{}).(func() sshagent.InteractiveCaller); ok {
-		mfa = newCaller()
+	if newCaller, ok := ctx.Value(mfaKeyType{}).(func(assetID int64) sshagent.InteractiveCaller); ok {
+		mfa = newCaller(assetID)
 		if agentCfg != nil {
 			agentCfg.MFA = mfa
 		}
@@ -471,7 +471,7 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 type mfaKeyType struct{}
 
 // WithMFA 让经 ctx 发起的 DialAssetSSH 把 keyboard-interactive 挑战交给应答方（opsctl）。
-// newCaller 每次新建连接调用一次，使应答方可以持有「本连接内」的状态。
-func WithMFA(ctx context.Context, newCaller func() sshagent.InteractiveCaller) context.Context {
+// newCaller 每次新建连接调用一次（传入目标资产），使应答方可以持有「本连接内」的状态。
+func WithMFA(ctx context.Context, newCaller func(assetID int64) sshagent.InteractiveCaller) context.Context {
 	return context.WithValue(ctx, mfaKeyType{}, newCaller)
 }

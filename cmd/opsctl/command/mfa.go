@@ -9,6 +9,9 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/sshagent"
 
@@ -18,8 +21,9 @@ import (
 )
 
 // MFA 应答来源（spec 2026-09-22-opsctl-mfa）：新建 SSH 连接遇到 keyboard-interactive
-// 挑战时依次尝试 --mfa-code / OPSKAT_MFA_CODE → 可交互终端提示 → 结构化拒绝
-// （退出码 3 + NEEDS MFA）。答案只用于当次握手，绝不记录。
+// 挑战时依次尝试 --mfa-code / OPSKAT_MFA_CODE → 可交互终端提示 → 运行中的桌面端
+// 对话框（approval.sock）→ 结构化拒绝（退出码 3 + NEEDS MFA）。与审批人选择同一
+// 顺序。答案只用于当次握手，绝不记录。
 const (
 	needsMFAMarker = "NEEDS MFA"
 	mfaCodeEnv     = "OPSKAT_MFA_CODE"
@@ -44,10 +48,16 @@ func withMFACode(ctx context.Context, code string) context.Context {
 // （stdin 与 stderr 双 TTY）。
 func withMFA(ctx context.Context) context.Context {
 	code, _ := ctx.Value(mfaCodeKeyType{}).(string)
+	dataDir := bootstrap.ResolvedDataDir()
+	token, err := bootstrap.ReadAuthToken(dataDir)
+	if err != nil {
+		logger.Default().Warn("read auth token", zap.Error(err))
+	}
 	src := mfaSources{
 		code:        code,
 		interactive: isInteractive(stdinIsTerminal(), stderrIsTerminal()),
 		terminal:    func() (*os.File, io.Writer) { return os.Stdin, os.Stderr },
+		desktop:     desktopMFASender(approval.SocketPath(dataDir), token),
 	}
 	return credential_resolver.WithMFA(ctx, src.newCaller)
 }
@@ -58,19 +68,41 @@ type mfaSources struct {
 	code        string
 	interactive bool
 	terminal    func() (*os.File, io.Writer)
+	desktop     func(ctx context.Context, req approval.ApprovalRequest) (approval.ApprovalResponse, error)
 }
 
-func (s mfaSources) newCaller() sshagent.InteractiveCaller { return &mfaCaller{src: s} }
+func (s mfaSources) newCaller(assetID int64) sshagent.InteractiveCaller {
+	return &mfaCaller{src: s, assetID: assetID}
+}
+
+// desktopMFASender 经 approval.sock 请运行中的桌面端弹出 MFA 对话框代答。桌面端
+// 不可达、或请求途中退出，都以错误返回，由调用方落到 NEEDS MFA。
+func desktopMFASender(sockPath, token string) func(context.Context, approval.ApprovalRequest) (approval.ApprovalResponse, error) {
+	return func(ctx context.Context, req approval.ApprovalRequest) (approval.ApprovalResponse, error) {
+		if err := dialApprovalSocket(sockPath); err != nil {
+			return approval.ApprovalResponse{}, err
+		}
+		if req.AssetName == "" {
+			if asset, err := asset_repo.Asset().Find(ctx, req.AssetID); err == nil {
+				req.AssetName = asset.Name
+			} else {
+				logger.Default().Warn("resolve asset name for desktop MFA dialog", zap.Int64("assetID", req.AssetID), zap.Error(err))
+			}
+		}
+		return approval.RequestApprovalWithToken(sockPath, token, req)
+	}
+}
 
 type mfaCaller struct {
-	src mfaSources
+	src     mfaSources
+	assetID int64
 	// codeUsed：验证码在本连接内已作答过一轮，不再复用。
 	codeUsed bool
 }
 
 // SubmitChallenge 实现 sshagent.InteractiveCaller。给了验证码时只用它（被拒即失败，
-// 不改走其它来源）；否则可交互走终端；都不行返回 ssh_agent_mfa_required，由命令层
-// 映射成 NEEDS MFA。
+// 不改走其它来源）；否则可交互走终端，不可交互时请运行中的桌面端弹窗；都不行返回
+// ssh_agent_mfa_required，由命令层映射成 NEEDS MFA。
 func (c *mfaCaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
 	if c.src.code != "" {
 		if c.codeUsed || len(ch.Prompts) != 1 {
@@ -91,6 +123,21 @@ func (c *mfaCaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChalleng
 			return nil, &sshagent.Error{Code: sshagent.CodeCancelled, Message: "MFA prompt was canceled"}
 		}
 		return answers, err
+	}
+	if c.src.desktop != nil {
+		resp, err := c.src.desktop(ctx, approval.ApprovalRequest{
+			Type:    "mfa",
+			AssetID: c.assetID,
+			MFA:     &approval.MFAChallenge{Name: ch.Name, Instruction: ch.Instruction, Prompts: ch.Prompts, Echo: ch.Echo},
+		})
+		switch {
+		case err != nil:
+			logger.Default().Warn("desktop MFA unavailable", zap.Int64("assetID", c.assetID), zap.Error(err))
+		case resp.Approved:
+			return resp.MFAAnswers, nil
+		default:
+			return nil, &sshagent.Error{Code: sshagent.CodeCancelled, Message: "MFA was canceled in the desktop app"}
+		}
 	}
 	return nil, &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires MFA but no answer source is available"}
 }

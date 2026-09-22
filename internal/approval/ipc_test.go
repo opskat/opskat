@@ -1,6 +1,7 @@
 package approval
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -16,7 +17,7 @@ func TestIPCApprovalAuthenticationAndDecision(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := SocketPath(dir)
 	var calls atomic.Int32
-	server := NewServer(func(req ApprovalRequest) ApprovalResponse {
+	server := NewServer(func(_ context.Context, req ApprovalRequest) ApprovalResponse {
 		calls.Add(1)
 		return ApprovalResponse{Approved: req.Command == "allow", Reason: req.Command, SessionID: req.SessionID}
 	}, "test-token")
@@ -38,7 +39,7 @@ func TestIPCApprovalAuthenticationAndDecision(t *testing.T) {
 	}
 	require.EqualValues(t, 2, calls.Load())
 
-	other := NewServer(func(ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "test-token")
+	other := NewServer(func(context.Context, ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "test-token")
 	require.Error(t, other.Start(path))
 	server.Stop()
 	_, err = RequestApprovalWithToken(path, "test-token", ApprovalRequest{})

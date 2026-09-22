@@ -1767,6 +1767,10 @@
     "debugModeOff": "Debug 日志已关闭",
     "openLogsDir": "打开日志目录"
   },
+  "opsctlMfa": {
+    "title": "SSH 二次验证",
+    "description": "opsctl 正在连接此资产，服务器要求二次验证（MFA）。验证通过后命令会继续执行。"
+  },
   "opsctlApproval": {
     "title": "CLI 操作审批",
     "description": "opsctl 正在请求批准以下操作：",

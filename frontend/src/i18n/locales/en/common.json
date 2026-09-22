@@ -1767,6 +1767,10 @@
     "debugModeOff": "Debug logging disabled",
     "openLogsDir": "Open Logs Folder"
   },
+  "opsctlMfa": {
+    "title": "SSH verification required",
+    "description": "opsctl is connecting to this asset and the server asks for multi-factor authentication (MFA). The command continues once the server accepts your answer."
+  },
   "opsctlApproval": {
     "title": "CLI Operation Approval",
     "description": "opsctl is requesting approval for the following operation:",

@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -111,6 +112,11 @@ func serveExecConn(conn net.Conn, cfg *ssh.ServerConfig) {
 // 数据库连接，in-memory 库不跨连接共享），为每台 srv 插入一个私钥文件认证 SSH 资产。
 func setupBatchMFAAssets(t *testing.T, srvs ...*otpExecServer) []*asset_entity.Asset {
 	t.Helper()
+	// withMFA 的生产桌面应答方会拨真实数据目录下的 approval.sock；测试绝不能碰到
+	// 正在运行的桌面端，因此一律视为不可达。
+	origDial := dialApprovalSocket
+	dialApprovalSocket = func(string) error { return errors.New("desktop unreachable in tests") }
+	t.Cleanup(func() { dialApprovalSocket = origDial })
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "opskat.db")), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &host_key_entity.HostKey{}))

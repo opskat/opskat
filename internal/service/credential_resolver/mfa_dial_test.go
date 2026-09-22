@@ -92,7 +92,7 @@ func TestDialAssetSSHWithMFA(t *testing.T) {
 			assetID := createKeyFileAsset(t, ctx, host, port)
 
 			caller := &countingMFACaller{answer: "123456"}
-			client, closers, err := Default().DialAssetSSH(WithMFA(ctx, func() sshagent.InteractiveCaller { return caller }), assetID)
+			client, closers, err := Default().DialAssetSSH(WithMFA(ctx, func(int64) sshagent.InteractiveCaller { return caller }), assetID)
 			require.NoError(t, err)
 			_ = client.Close()
 			for _, c := range closers {
@@ -112,7 +112,7 @@ func TestDialAssetSSHWithMFA(t *testing.T) {
 			assetID := createAgentAsset(t, ctx, host, port, src.ID, sshagent.FingerprintSHA256(pub))
 
 			caller := &countingMFACaller{answer: "654321"}
-			client, closers, err := Default().DialAssetSSH(WithMFA(ctx, func() sshagent.InteractiveCaller { return caller }), assetID)
+			client, closers, err := Default().DialAssetSSH(WithMFA(ctx, func(int64) sshagent.InteractiveCaller { return caller }), assetID)
 			require.NoError(t, err)
 			_ = client.Close()
 			for _, c := range closers {
