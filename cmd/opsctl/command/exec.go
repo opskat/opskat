@@ -153,7 +153,7 @@ func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asse
 	stdoutW := io.MultiWriter(os.Stdout, outBuf)
 	stderrW := io.MultiWriter(os.Stderr, errBuf)
 
-	execErr := helper.ExecWithStdio(ctx, assetID, command, stdin, stdoutW, stderrW)
+	execErr := helper.ExecWithStdio(withMFA(ctx), assetID, command, stdin, stdoutW, stderrW)
 
 	// 审计日志
 	exitCode := 0
@@ -174,8 +174,7 @@ func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asse
 		if errors.As(execErr, &exitErr) {
 			return exitErr.ExitStatus()
 		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", execErr)
-		return 1
+		return writeRemoteFailure(os.Stderr, execErr)
 	}
 	return 0
 }

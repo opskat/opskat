@@ -44,6 +44,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		ctx = aictx.WithSessionID(ctx, session)
 	}
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	ctx = withMFA(ctx)
 	ctx, sftpCache, ownsSFTPCache := helper.EnsureSFTPClientCache(ctx)
 	if ownsSFTPCache {
 		defer func() { _ = sftpCache.Close() }()
@@ -55,16 +56,14 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 
 	dst, err := parseCpEndpoint(ctx, rest[len(rest)-1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+		return writeRemoteFailure(os.Stderr, err)
 	}
 	srcs := make([]*cpEndpoint, 0, len(rest)-1)
 	sourcePaths := make([]string, 0, len(rest)-1)
 	for _, raw := range rest[:len(rest)-1] {
 		src, srcErr := parseCpEndpoint(ctx, raw)
 		if srcErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", srcErr)
-			return 1
+			return writeRemoteFailure(os.Stderr, srcErr)
 		}
 		if !src.isRemote() && !dst.isRemote() {
 			fmt.Fprintln(os.Stderr, "Error: at least one path must be remote (<asset>:/<path>)")

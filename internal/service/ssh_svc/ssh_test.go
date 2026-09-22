@@ -1009,43 +1009,43 @@ func TestBuildAuthMethods(t *testing.T) {
 		}
 
 		convey.Convey("authType=password 返回 [password, keyboard-interactive]", func() {
-			ms, err := buildAuthMethods("password", "hunter2", "", "", nil, nil)
+			ms, err := buildAuthMethods("password", "hunter2", "", "", nil, kbiResponders{})
 			assert.NoError(t, err)
 			assert.Equal(t, []string{tPassword, tKBI}, typeNames(ms))
 		})
 
 		convey.Convey("authType=key + inline key 返回 [publickey, keyboard-interactive]（issue #77）", func() {
-			ms, err := buildAuthMethods("key", "", pemKey, "", nil, nil)
+			ms, err := buildAuthMethods("key", "", pemKey, "", nil, kbiResponders{})
 			assert.NoError(t, err)
 			assert.Equal(t, []string{tPubKey, tKBI}, typeNames(ms))
 		})
 
 		convey.Convey("authType=key + 多个 file paths 返回 [publickey...publickey, keyboard-interactive]", func() {
-			ms, err := buildAuthMethods("key", "", "", "", []string{keyPath, keyPath}, nil)
+			ms, err := buildAuthMethods("key", "", "", "", []string{keyPath, keyPath}, kbiResponders{})
 			assert.NoError(t, err)
 			assert.Equal(t, []string{tPubKey, tPubKey, tKBI}, typeNames(ms))
 		})
 
 		convey.Convey("authType=key + inline + file paths 同时存在", func() {
-			ms, err := buildAuthMethods("key", "", pemKey, "", []string{keyPath}, nil)
+			ms, err := buildAuthMethods("key", "", pemKey, "", []string{keyPath}, kbiResponders{})
 			assert.NoError(t, err)
 			assert.Equal(t, []string{tPubKey, tPubKey, tKBI}, typeNames(ms))
 		})
 
 		convey.Convey("authType=key 但未提供任何密钥返回错误", func() {
-			_, err := buildAuthMethods("key", "", "", "", nil, nil)
+			_, err := buildAuthMethods("key", "", "", "", nil, kbiResponders{})
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "需要提供私钥")
 		})
 
 		convey.Convey("authType=keyboard-interactive 仅返回 [keyboard-interactive]", func() {
-			ms, err := buildAuthMethods("keyboard-interactive", "", "", "", nil, nil)
+			ms, err := buildAuthMethods("keyboard-interactive", "", "", "", nil, kbiResponders{})
 			assert.NoError(t, err)
 			assert.Equal(t, []string{tKBI}, typeNames(ms))
 		})
 
 		convey.Convey("未知 authType 返回错误", func() {
-			_, err := buildAuthMethods("magic", "", "", "", nil, nil)
+			_, err := buildAuthMethods("magic", "", "", "", nil, kbiResponders{})
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "不支持的认证方式")
 		})

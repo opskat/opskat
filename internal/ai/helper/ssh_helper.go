@@ -15,8 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/sftpio"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
-	"github.com/opskat/opskat/internal/service/ssh_svc"
-	"github.com/opskat/opskat/internal/sshagent"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -501,55 +499,6 @@ func (c *connBoundReadCloser) Close() error {
 // 调用者必须调用返回的 cleanup 关闭 client 与链路资源。
 func DialSSHClient(ctx context.Context, assetID int64) (*ssh.Client, func(), error) {
 	return DialAssetSSH(ctx, assetID)
-}
-
-// DialSSHClientInteractive 建立到资产的 SSH 连接，并把 Agent 认证需要的结构化
-// MFA 挑战交给 mfa（交互式调用方，如 opsctl ssh）。Agent 认证仍经产品认证工厂
-// （ConnectConfig.Agent → ssh_svc.Dial），来源拨号时解析、传输由握手方拥有，与
-// 桌面交互路径同一接法；非 Agent 资产与 mfa==nil 时与 DialAssetSSH 行为一致。
-// 调用者必须调用返回的 cleanup 关闭 client 与链路资源。
-func DialSSHClientInteractive(ctx context.Context, assetID int64, mfa sshagent.InteractiveCaller) (*ssh.Client, func(), error) {
-	sshCfg, password, key, passphrase, jumpHosts, proxyChain, err := credential_resolver.Default().ResolveSSHConnectConfig(ctx, assetID)
-	if err != nil {
-		return nil, nil, err
-	}
-	agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(sshCfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	if agentCfg != nil {
-		// 交互式调用方接入 MFA 适配器；答案只存在于当前挑战请求，绝不保留。
-		agentCfg.MFA = mfa
-	}
-	cfg := ssh_svc.ConnectConfig{
-		Host:                     sshCfg.Host,
-		Port:                     sshCfg.Port,
-		Username:                 sshCfg.Username,
-		AuthType:                 sshCfg.AuthType,
-		Password:                 password,
-		Key:                      key,
-		KeyPassphrase:            passphrase,
-		PrivateKeys:              sshCfg.PrivateKeys,
-		AssetID:                  assetID,
-		Ctx:                      ctx,
-		Agent:                    agentCfg,
-		Proxy:                    credential_resolver.Default().DecryptProxyPassword(sshCfg.Proxy),
-		JumpHosts:                jumpHosts,
-		ProxyChain:               proxyChain,
-		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
-		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
-	}
-	client, closers, err := ssh_svc.NewManager().Dial(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	cleanup := func() {
-		if err := client.Close(); err != nil && !IsExpectedCloseErr(err) {
-			logger.Default().Warn("close interactive SSH client", zap.Error(err))
-		}
-		closeExtras(closers)
-	}
-	return client, cleanup, nil
 }
 
 // ExecWithStdio 在远程服务器执行命令，直接连接 stdio（支持管道）

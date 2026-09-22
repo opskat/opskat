@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	"strings"
 
 	"github.com/opskat/opskat/internal/ai/helper"
-	"github.com/opskat/opskat/internal/sshagent"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -36,112 +33,18 @@ func cmdSSH(ctx context.Context, args []string) int {
 	return cmdSSHDirect(ctx, asset.ID)
 }
 
-// terminalMFACaller 是 opsctl 交互式 SSH 路径的 MFA 挑战适配器（挑战帧约定）：把
-// 服务器结构化挑战（名称/说明/逐条提示与回显标记）按原样呈现到 out，从终端按
-// 服务器顺序读取答案并返回。非回显提示用 ReadPassword 隐藏输入；答案只存在于当前
-// 请求，返回后立即丢弃。取消（ctx.Done）时不读取并立即返回，不残留等待。
-type terminalMFACaller struct {
-	out io.Writer // 挑战呈现出口（stderr）
-	in  *os.File  // 答案读取入口（stdin）
-}
-
-// SubmitChallenge 实现 sshagent.InteractiveCaller。
-func (c *terminalMFACaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	type answerResult struct {
-		answers []string
-		err     error
-	}
-	resCh := make(chan answerResult, 1)
-	go func() {
-		answers, err := c.presentAndRead(ctx, ch)
-		resCh <- answerResult{answers: answers, err: err}
-	}()
-	select {
-	case res := <-resCh:
-		return res.answers, res.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-// presentAndRead 呈现挑战并逐条读取答案。
-func (c *terminalMFACaller) presentAndRead(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
-	// 挑战呈现是面向终端用户的输出，写入失败不值得中断认证——与包内
-	// fmt.Fprintf(os.Stderr, ...) 同一语义（errcheck 默认豁免 os.Stderr 字面量，
-	// 这里经 io.Writer 字段所以需要显式豁免）。
-	fmt.Fprintln(c.out)                             //nolint:errcheck // 终端呈现尽力而为
-	fmt.Fprintln(c.out, "SSH Agent MFA challenge:") //nolint:errcheck // 终端呈现尽力而为
-	if ch.Name != "" {
-		fmt.Fprintf(c.out, "  name: %s\n", ch.Name) //nolint:errcheck // 终端呈现尽力而为
-	}
-	if ch.Instruction != "" {
-		fmt.Fprintf(c.out, "  instruction: %s\n", ch.Instruction) //nolint:errcheck // 终端呈现尽力而为
-	}
-	answers := make([]string, len(ch.Prompts))
-	for i, prompt := range ch.Prompts {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		echo := true
-		if ch.Echo != nil && i < len(ch.Echo) {
-			echo = ch.Echo[i]
-		}
-		fmt.Fprintf(c.out, "  %s: ", prompt) //nolint:errcheck // 终端呈现尽力而为
-		val, err := readMFAAnswer(c.in, echo)
-		fmt.Fprintln(c.out) //nolint:errcheck // 终端呈现尽力而为
-		if err != nil {
-			return nil, fmt.Errorf("read MFA answer: %w", err)
-		}
-		answers[i] = val
-	}
-	return answers, nil
-}
-
-// readMFAAnswer 从终端读取一行答案；echo=false 时隐藏输入。term.ReadPassword 在
-// 非终端 fd 上会因 ioctl 失败而报错，故先用 IsTerminal 分流：非终端（测试/管道）
-// 直接按字节读行。两条读取路径都按字节进行，避免缓冲器提前吞掉同一轮挑战的后续
-// 答案。
-func readMFAAnswer(in *os.File, echo bool) (string, error) {
-	if !echo && term.IsTerminal(int(in.Fd())) {
-		b, err := term.ReadPassword(int(in.Fd()))
-		return string(b), err
-	}
-	var buf []byte
-	tmp := make([]byte, 1)
-	for {
-		n, err := in.Read(tmp)
-		if n > 0 {
-			if tmp[0] == '\n' {
-				break
-			}
-			buf = append(buf, tmp[0])
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return "", err
-		}
-	}
-	return strings.TrimRight(string(buf), "\r"), nil
-}
-
-// cmdSSHDirect 直连建立交互式 SSH。交互式路径在原始流量开始前，把 Agent MFA 挑战
-// 呈现到终端并读取答案（helper.DialSSHClientInteractive + terminalMFACaller）。
+// cmdSSHDirect 直连建立交互式 SSH。MFA 挑战在原始流量开始前按 withMFA 的应答来源
+// 顺序完成（--mfa-code → 终端提示 → NEEDS MFA）。
 // 拨号阶段用 signal.NotifyContext 让 Ctrl-C 取消 MFA 等待与握手；进入 raw 模式后
 // 恢复默认信号处理，^C 交由远端 shell。
 func cmdSSHDirect(ctx context.Context, assetID int64) int {
 	// 拨号阶段（Agent 列举/签名/MFA 等待/握手）把 SIGINT 转成 ctx 取消，让 Ctrl-C
 	// 能打断 MFA 等待；stop() 在拨号一返回就恢复默认信号处理。
 	dialCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	client, cleanup, err := helper.DialSSHClientInteractive(dialCtx, assetID, &terminalMFACaller{out: os.Stderr, in: os.Stdin})
+	client, cleanup, err := helper.DialAssetSSH(withMFA(dialCtx), assetID)
 	stop()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+		return writeRemoteFailure(os.Stderr, err)
 	}
 	defer cleanup()
 

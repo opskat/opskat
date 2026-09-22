@@ -29,6 +29,7 @@ func Execute() int {
 	globalFlags := flag.NewFlagSet("opsctl", flag.ContinueOnError)
 	dataDir := globalFlags.String("data-dir", "", "Override the application data directory")
 	masterKey := globalFlags.String("master-key", "", "Override the master encryption key (env: OPSKAT_MASTER_KEY)")
+	mfaCodeFlag := globalFlags.String("mfa-code", "", "Answer an SSH MFA one-time-code prompt (env: OPSKAT_MFA_CODE)")
 
 	// Find the first non-flag argument (verb) position
 	verbIdx := 1
@@ -97,6 +98,7 @@ func Execute() int {
 	sshPool := sshpool.NewPool(&helper.AIPoolDialer{}, 5*time.Minute)
 	defer sshPool.Close()
 	ctx = helper.WithSSHPool(ctx, sshPool)
+	ctx = withMFACode(ctx, resolveMFACode(*mfaCodeFlag))
 
 	// Resolve the active session ID from the data dir (machine-wide single session)
 	resolvedSession := resolveSessionID()
@@ -218,6 +220,15 @@ Global Flags:
                         (default: platform-specific, e.g. ~/Library/Application Support/opskat)
   --master-key <key>    Override the master encryption key for credential decryption
                         (env: OPSKAT_MASTER_KEY)
+  --mfa-code <code>     Answer an SSH server's one-time-code MFA prompt
+                        (env: OPSKAT_MFA_CODE, preferred: the flag is visible in
+                        shell history and process lists)
+
+SSH MFA:
+  When a new SSH connection hits a keyboard-interactive MFA challenge, opsctl
+  answers it with --mfa-code / OPSKAT_MFA_CODE (a single one-prompt challenge,
+  once per connection), otherwise prompts in an interactive terminal. With
+  neither available it exits with code 3 and prints NEEDS MFA.
 
 Run 'opsctl <command> --help' for more information on a specific command.
 

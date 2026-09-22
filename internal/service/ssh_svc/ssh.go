@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 	"github.com/opskat/opskat/internal/pkg/sshtuning"
 	"github.com/opskat/opskat/internal/service/sessionid"
+	"github.com/opskat/opskat/internal/sshagent"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -264,6 +265,10 @@ type ConnectConfig struct {
 	OnProgress func(step, message string)
 	// 键盘交互认证回调
 	OnAuthChallenge func(prompts []string, echo []bool) ([]string, error)
+	// MFA 是非 Agent 认证的结构化挑战应答方（opsctl）。设置时 keyboard-interactive
+	// 只在密码方法未被使用时用已保存密码回答首轮，其余轮次一律交给应答方；应答方的
+	// 类型化错误原样终止握手。与 OnAuthChallenge 互斥（桌面终端 tab 用后者）。
+	MFA sshagent.InteractiveCaller
 
 	// 跳板机: 已解析的链式连接配置（从叶子到根）
 	JumpHosts []JumpHostEntry
@@ -804,7 +809,7 @@ func buildJumpHostConfig(cfg ConnectConfig, j JumpHostEntry) (*ssh.ClientConfig,
 			Timeout: sshtuning.Get().DialTimeoutOrDefault(),
 		}, nil
 	}
-	auth, err := buildAuthMethods(j.AuthType, j.Password, j.Key, j.Passphrase, nil, nil)
+	auth, err := buildAuthMethods(j.AuthType, j.Password, j.Key, j.Passphrase, nil, kbiResponders{})
 	if err != nil {
 		return nil, err
 	}
@@ -838,7 +843,8 @@ func buildClientConfig(cfg ConnectConfig) (*ssh.ClientConfig, error) {
 			Timeout: sshtuning.Get().DialTimeoutOrDefault(),
 		}, nil
 	}
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys,
+		kbiResponders{ctx: cfg.Ctx, onAuthChallenge: cfg.OnAuthChallenge, mfa: cfg.MFA})
 	if err != nil {
 		return nil, err
 	}
@@ -850,35 +856,78 @@ func buildClientConfig(cfg ConnectConfig) (*ssh.ClientConfig, error) {
 	}, nil
 }
 
+// kbiResponders 是 keyboard-interactive 挑战的应答来源。OnAuthChallenge（桌面终端
+// tab）与 MFA（opsctl 结构化应答方）互斥；都为空时沿用「已保存密码回答首个提示」。
+type kbiResponders struct {
+	ctx             context.Context
+	onAuthChallenge func(prompts []string, echo []bool) ([]string, error)
+	mfa             sshagent.InteractiveCaller
+}
+
+// kbiAnswerer 持有一次握手内 keyboard-interactive 的应答状态。认证循环在调用方
+// goroutine 上串行驱动它，无需加锁。
+type kbiAnswerer struct {
+	kbiResponders
+	password string
+	// passwordTried：password 方法已被使用过。此时服务器发起的 keyboard-interactive
+	// 只可能是密码之后的第二因子，已保存密码不再用于作答。
+	passwordTried bool
+	// passwordAnswered：已保存密码已回答过一轮，后续轮次交给应答方。
+	passwordAnswered bool
+}
+
+func (a *kbiAnswerer) passwordMethod() ssh.AuthMethod {
+	return ssh.PasswordCallback(func() (string, error) {
+		a.passwordTried = true
+		return a.password, nil
+	})
+}
+
+func (a *kbiAnswerer) passwordAnswers(questions []string) []string {
+	answers := make([]string, len(questions))
+	answers[0] = a.password
+	return answers
+}
+
+func (a *kbiAnswerer) challenge(name, instruction string, questions []string, echos []bool) ([]string, error) {
+	if len(questions) == 0 {
+		return nil, nil
+	}
+	if a.onAuthChallenge != nil {
+		return a.onAuthChallenge(questions, echos)
+	}
+	if a.mfa != nil {
+		if a.password != "" && !a.passwordTried && !a.passwordAnswered {
+			a.passwordAnswered = true
+			return a.passwordAnswers(questions), nil
+		}
+		return a.mfa.SubmitChallenge(a.ctx, sshagent.MFAChallenge{
+			Name: name, Instruction: instruction, Prompts: questions, Echo: echos,
+		})
+	}
+	if a.password != "" {
+		return a.passwordAnswers(questions), nil
+	}
+	return nil, fmt.Errorf("keyboard-interactive 认证需要用户输入")
+}
+
 // buildAuthMethods 构建 SSH 认证方式
 func buildAuthMethods(authType, password, key, keyPassphrase string, privateKeyPaths []string,
-	onAuthChallenge func(prompts []string, echo []bool) ([]string, error)) ([]ssh.AuthMethod, error) {
+	responders kbiResponders) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
+	if responders.ctx == nil {
+		responders.ctx = context.Background()
+	}
+	answerer := &kbiAnswerer{kbiResponders: responders, password: password}
 
 	// keyboard-interactive 认证回调（用于 OTP/动态密码等场景）
 	kbInteractive := func() ssh.AuthMethod {
-		return ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
-			// 如果没有问题，返回空
-			if len(questions) == 0 {
-				return nil, nil
-			}
-			// 如果有回调，使用回调获取用户输入
-			if onAuthChallenge != nil {
-				return onAuthChallenge(questions, echos)
-			}
-			// 没有回调但有密码，尝试用密码回答第一个问题
-			if password != "" {
-				answers := make([]string, len(questions))
-				answers[0] = password
-				return answers, nil
-			}
-			return nil, fmt.Errorf("keyboard-interactive 认证需要用户输入")
-		})
+		return ssh.KeyboardInteractive(answerer.challenge)
 	}
 
 	switch authType {
 	case "password":
-		methods = append(methods, ssh.Password(password))
+		methods = append(methods, answerer.passwordMethod())
 		// 追加 keyboard-interactive 作为 fallback（许多服务器用 keyboard-interactive 替代 password）
 		methods = append(methods, kbInteractive())
 	case "key":
@@ -917,7 +966,7 @@ func buildAuthMethods(authType, password, key, keyPassphrase string, privateKeyP
 }
 
 func BuildAuthMethodsForProxyChain(authType, password, key, keyPassphrase string, privateKeyPaths []string) ([]ssh.AuthMethod, error) {
-	return buildAuthMethods(authType, password, key, keyPassphrase, privateKeyPaths, nil)
+	return buildAuthMethods(authType, password, key, keyPassphrase, privateKeyPaths, kbiResponders{})
 }
 
 // parsePrivateKey 解析私钥，支持 passphrase
