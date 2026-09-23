@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -85,10 +86,14 @@ func (s *Service) RenameKey(ctx context.Context, assetID int64, db int, oldKey, 
 	})
 }
 
-func (s *Service) DeleteKeys(ctx context.Context, assetID int64, db int, keys []string) error {
-	return s.withClient(ctx, assetID, db, func(ctx context.Context, exec redisExecutor) error {
-		return deleteKeys(ctx, exec, keys)
+func (s *Service) DeleteKeys(ctx context.Context, assetID int64, db int, keys []string) (RedisDeleteResult, error) {
+	var out RedisDeleteResult
+	err := s.withClient(ctx, assetID, db, func(ctx context.Context, exec redisExecutor) error {
+		var err error
+		out, err = deleteKeys(ctx, exec, keys)
+		return err
 	})
+	return out, err
 }
 
 func (s *Service) SetStringValue(ctx context.Context, req RedisStringSetRequest) error {
@@ -164,43 +169,67 @@ func (s *Service) StreamDelete(ctx context.Context, assetID int64, db int, key s
 }
 
 func (s *Service) withClient(ctx context.Context, assetID int64, db int, fn func(context.Context, redisExecutor) error) error {
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	target, err := loadRedisTarget(ctx, assetID)
 	if err != nil {
-		return fmt.Errorf("资产不存在: %w", err)
+		return err
 	}
-	if !asset.IsRedis() {
-		return fmt.Errorf("资产不是 Redis 类型")
-	}
-	cfg, err := asset.GetRedisConfig()
-	if err != nil {
-		return fmt.Errorf("获取 Redis 配置失败: %w", err)
+	if err := validateDBForMode(target.cfg.EffectiveMode(), db); err != nil {
+		return err
 	}
 	if db >= 0 {
-		cfg.Database = db
+		target.cfg.Database = db
 	}
-	password, err := credential_resolver.Default().ResolveRedisPassword(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("解析 Redis 凭据失败: %w", err)
-	}
-	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-	cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
-	if err != nil {
-		return fmt.Errorf("解析 Redis 凭据失败: %w", err)
-	}
-	var opCtx context.Context
-	var cancel context.CancelFunc
-	if cfg.CommandTimeoutSeconds > 0 {
-		opCtx, cancel = context.WithTimeout(ctx, time.Duration(cfg.CommandTimeoutSeconds)*time.Second)
-	} else {
-		opCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
-	}
+	opCtx, cancel := target.opContext(ctx)
 	defer cancel()
-	client, closer, err := connpool.DialRedis(opCtx, asset, cfg, password, s.sshPool)
+	client, closer, err := connpool.DialRedis(opCtx, target.asset, target.cfg, target.password, s.sshPool)
 	if err != nil {
 		return fmt.Errorf("连接 Redis 失败: %w", err)
 	}
 	defer closeRedisClient(client, closer)
-	return fn(opCtx, &goRedisExecutor{client: client, history: s.history, assetID: assetID, db: cfg.Database})
+	base := &goRedisExecutor{client: client, history: s.history, assetID: assetID, db: target.cfg.Database}
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		return fn(opCtx, &goRedisClusterExecutor{goRedisExecutor: base, cluster: cluster})
+	}
+	return fn(opCtx, base)
+}
+
+// redisTarget 是解析好凭据（明文）的 Redis 资产连接参数。
+type redisTarget struct {
+	asset    *asset_entity.Asset
+	cfg      *asset_entity.RedisConfig
+	password string
+}
+
+func loadRedisTarget(ctx context.Context, assetID int64) (redisTarget, error) {
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		return redisTarget{}, fmt.Errorf("资产不存在: %w", err)
+	}
+	if !asset.IsRedis() {
+		return redisTarget{}, fmt.Errorf("资产不是 Redis 类型")
+	}
+	cfg, err := asset.GetRedisConfig()
+	if err != nil {
+		return redisTarget{}, fmt.Errorf("获取 Redis 配置失败: %w", err)
+	}
+	password, err := credential_resolver.Default().ResolveRedisPassword(ctx, cfg)
+	if err != nil {
+		return redisTarget{}, fmt.Errorf("解析 Redis 凭据失败: %w", err)
+	}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+	cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
+	if err != nil {
+		return redisTarget{}, fmt.Errorf("解析 Redis 凭据失败: %w", err)
+	}
+	return redisTarget{asset: asset, cfg: cfg, password: password}, nil
+}
+
+// opContext 返回按资产命令超时（默认 30s）限定的操作 context。
+func (t redisTarget) opContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if t.cfg.CommandTimeoutSeconds > 0 {
+		return context.WithTimeout(ctx, time.Duration(t.cfg.CommandTimeoutSeconds)*time.Second)
+	}
+	return context.WithTimeout(ctx, 30*time.Second)
 }
 
 func closeRedisClient(client redis.UniversalClient, closer io.Closer) {
@@ -224,8 +253,15 @@ type goRedisExecutor struct {
 }
 
 func (e *goRedisExecutor) Do(ctx context.Context, args ...any) (any, error) {
+	return e.run(ctx, e.client, args)
+}
+
+// run 用 client（整个连接或集群中的某个节点）执行命令并记入命令历史。
+func (e *goRedisExecutor) run(ctx context.Context, client interface {
+	Do(ctx context.Context, args ...any) *redis.Cmd
+}, args []any) (any, error) {
 	start := time.Now()
-	result, err := e.client.Do(ctx, args...).Result()
+	result, err := client.Do(ctx, args...).Result()
 	if err == redis.Nil {
 		err = nil
 	}
@@ -246,6 +282,9 @@ func (e *goRedisExecutor) Do(ctx context.Context, args ...any) (any, error) {
 }
 
 func listDatabases(ctx context.Context, exec redisExecutor) ([]RedisDatabase, error) {
+	if cluster, ok := exec.(clusterExecutor); ok {
+		return listClusterDatabases(ctx, cluster)
+	}
 	result, err := exec.Do(ctx, "INFO", "keyspace")
 	if err != nil {
 		return nil, fmt.Errorf("load Redis keyspace info: %w", err)
@@ -257,6 +296,9 @@ func scanKeys(ctx context.Context, exec redisExecutor, req RedisScanRequest) (Re
 	req = NormalizeScanOptions(req)
 	if req.Exact && req.Match != "*" {
 		return scanExactKey(ctx, exec, req)
+	}
+	if cluster, ok := exec.(clusterExecutor); ok {
+		return scanClusterKeys(ctx, cluster, req)
 	}
 
 	cursor := req.Cursor
@@ -316,6 +358,21 @@ func parseScanResult(result any) (string, []string, error) {
 }
 
 func getKeyDetail(ctx context.Context, exec redisExecutor, req RedisKeyRequest) (RedisKeyDetail, error) {
+	detail, err := loadKeyDetail(ctx, exec, req)
+	if err != nil {
+		return RedisKeyDetail{}, err
+	}
+	if cluster, ok := exec.(clusterExecutor); ok {
+		slot := keySlot(req.Key)
+		detail.Slot = &slot
+		if detail.Node, err = cluster.MasterForKey(ctx, req.Key); err != nil {
+			return RedisKeyDetail{}, fmt.Errorf("resolve Redis cluster node for key: %w", err)
+		}
+	}
+	return detail, nil
+}
+
+func loadKeyDetail(ctx context.Context, exec redisExecutor, req RedisKeyRequest) (RedisKeyDetail, error) {
 	count := req.Count
 	if count <= 0 {
 		count = defaultRedisValuePageSize

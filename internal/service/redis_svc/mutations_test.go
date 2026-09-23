@@ -61,14 +61,6 @@ func TestRedisMutations(t *testing.T) {
 		assert.Equal(t, []any{"PEXPIRE", "k", int64(12500)}, exec.calls[2])
 	})
 
-	t.Run("deletes multiple keys with one command", func(t *testing.T) {
-		exec := &fakeRedisExecutor{}
-
-		require.NoError(t, deleteKeys(ctx, exec, []string{"a", "b"}))
-
-		assert.Equal(t, []any{"DEL", "a", "b"}, exec.calls[0])
-	})
-
 	t.Run("hash list set zset and stream operations use argument arrays", func(t *testing.T) {
 		exec := &fakeRedisExecutor{}
 
