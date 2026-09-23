@@ -11,11 +11,16 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// parseExecArgs 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--] <command>。
+// parseExecArgs 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [--] <command>。
 // 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
-// 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的）。命令之前的未知
-// 选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
-func parseExecArgs(args []string) (declaredType, command string, err error) {
+// 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的，--scope 同理）。命令之前的
+// 未知选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
+//
+// scope 语义与 AI exec 工具的 scope 参数一致（内部 ai/tool/tools_unified.go 的 schema
+// 描述）：单机/哨兵资产是库号（缺省用资产配置的库），集群资产是无 key 命令必须指定的
+// 节点 host:port。仅对 redis 资产有意义——cmdExec 在解析后用 validateRedisScope 对非
+// redis 资产报错，而不是这里静默忽略或直接执行。
+func parseExecArgs(args []string) (declaredType, scope, command string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -23,7 +28,7 @@ func parseExecArgs(args []string) (declaredType, command string, err error) {
 			command = strings.Join(args[i+1:], " ")
 		case arg == "--type":
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("--type requires a value")
+				return "", "", "", fmt.Errorf("--type requires a value")
 			}
 			declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
@@ -31,17 +36,40 @@ func parseExecArgs(args []string) (declaredType, command string, err error) {
 		case strings.HasPrefix(arg, "--type="):
 			declaredType = strings.TrimPrefix(arg, "--type=")
 			continue
+		case arg == "--scope":
+			if i+1 >= len(args) {
+				return "", "", "", fmt.Errorf("--scope requires a value")
+			}
+			scope = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
+			i++
+			continue
+		case strings.HasPrefix(arg, "--scope="):
+			scope = strings.TrimPrefix(arg, "--scope=")
+			continue
 		case strings.HasPrefix(arg, "-"):
-			return "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
+			return "", "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
 		default:
 			command = strings.Join(args[i:], " ")
 		}
 		break
 	}
 	if command == "" {
-		return "", "", fmt.Errorf("no command given")
+		return "", "", "", fmt.Errorf("no command given")
 	}
-	return declaredType, command, nil
+	return declaredType, scope, command, nil
+}
+
+// validateRedisScope 校验 --scope（opsctl exec）/ batch 条目的 scope 字段只用在 redis
+// 资产上：语义（库号 vs 集群节点 host:port）是 redis 命令路由独有的（helper.
+// ExecRedisOnAsset / RedisNodeRequiredError），对其它资产类型给 scope 静默忽略会让用户
+// 误以为它生效了；报错退出码 1 而不是让 exec/batch 的通用参数解析承担这条资产类型专属
+// 规则——保持共享代码不按类型字符串分支（AGENTS.md OCP），只在这一处调用
+// asset.IsRedis() 这个既有的实体谓词。
+func validateRedisScope(asset *asset_entity.Asset, scope string) error {
+	if scope == "" || asset.IsRedis() {
+		return nil
+	}
+	return fmt.Errorf("--scope is only meaningful for redis assets; asset %q is type=%s", asset.Name, asset.Type)
 }
 
 // parseRemotePath parses numeric assetID:path strings without repository lookup.

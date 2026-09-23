@@ -35,6 +35,12 @@ type batchCommand struct {
 	Asset   string `json:"asset"`
 	Type    string `json:"type,omitempty"` // Optional canonical asset type or protocol alias.
 	Command string `json:"command"`
+	// Scope has the same semantics as opsctl exec's --scope (helpers.go's
+	// validateRedisScope / parseExecArgs doc comment): only meaningful for redis assets.
+	// Only reachable through the JSON input mode — the positional `type:asset:command`
+	// grammar has no slot for a fourth field (spec opsctl 一节: "位置参数形式
+	// redis:<asset>:<command> 不变（无 scope）").
+	Scope string `json:"scope,omitempty"`
 }
 
 // batchResult is the per-command result in the JSON output.
@@ -60,6 +66,9 @@ type resolvedBatchCmd struct {
 	asset   *asset_entity.Asset
 	cmdType string // Optional canonical asset type or protocol alias.
 	command string
+	// scope carries batchCommand.Scope through to execution/audit — same semantics as
+	// opsctl exec's --scope (validateRedisScope), redis-only.
+	scope string
 	// checkCommand is the (possibly canonicalized) form used for policy matching and
 	// approval display — see prepareExecCommand's doc comment. Execution always
 	// uses command (raw), never this field.
@@ -140,7 +149,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		asset, resolveErr := resolveAsset(ctx, cmd.Asset)
 		if resolveErr != nil {
 			results[i].Error = fmt.Sprintf("resolve asset: %v", resolveErr)
-			argsJSON := fmt.Sprintf(`{"asset":%q,"command":%q}`, cmd.Asset, truncateStr(cmd.Command, 200))
+			argsJSON := fmt.Sprintf(`{"asset":%q,"command":%q,"scope":%q}`, cmd.Asset, truncateStr(cmd.Command, 200), cmd.Scope)
 			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", resolveErr, nil)
 			continue
 		}
@@ -149,8 +158,16 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 
 		if assertErr := batchAssertPrefixType(asset, cmdType); assertErr != nil {
 			results[i].Error = assertErr.Error()
-			argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
-			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", assertErr, nil)
+			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", assertErr, nil)
+			continue
+		}
+
+		// scope 只对 redis 资产有意义，语义与 opsctl exec 的 --scope 完全一致
+		// （helpers.go 的 validateRedisScope）；与类型断言同一批无副作用检查，必须排在
+		// Step 3/4（策略检查、审批）之前。
+		if scopeErr := validateRedisScope(asset, cmd.Scope); scopeErr != nil {
+			results[i].Error = scopeErr.Error()
+			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", scopeErr, nil)
 			continue
 		}
 
@@ -166,8 +183,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		checkCommand, prepErr := prepareExecCommand(ctx, asset, cmd.Command)
 		if prepErr != nil {
 			results[i].Error = prepErr.Error()
-			argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
-			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", prepErr, nil)
+			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", prepErr, nil)
 			continue
 		}
 
@@ -175,6 +191,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			asset:        asset,
 			cmdType:      cmdType,
 			command:      cmd.Command,
+			scope:        cmd.Scope,
 			checkCommand: checkCommand,
 		}
 	}
@@ -214,7 +231,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	for _, b := range autoDeny {
 		cmd := resolved[b.idx]
 		results[b.idx].Error = fmt.Sprintf("denied by policy: %s", b.result.Message)
-		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
+		argsJSON := batchArgsJSON(cmd.asset.ID, cmd.command, cmd.scope)
 		denyCtx := withBatchAuditCommand(auditCtx, cmd.checkCommand)
 		writeOpsctlAudit(denyCtx, batchAuditTool, argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
 	}
@@ -236,6 +253,10 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				AssetID:   cmd.asset.ID,
 				AssetName: cmd.asset.Name,
 				Command:   cmd.checkCommand,
+				// Detail 单独带 scope，不掺进 Command：Command 驱动策略匹配与 grant
+				// pattern 落库，掺入节点地址会让同一条命令因 scope 不同匹配不上同一条
+				// 规则——同 exec.go 的 execApprovalDetail。
+				Detail: batchItemScopeDetail(cmd.scope),
 			})
 		}
 
@@ -252,7 +273,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			for _, b := range needConfirm {
 				cmd := resolved[b.idx]
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
-				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
+				argsJSON := batchArgsJSON(cmd.asset.ID, cmd.command, cmd.scope)
 				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
 				deniedCtx := withBatchAuditCommand(auditCtx, cmd.checkCommand)
 				writeOpsctlAudit(deniedCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
@@ -351,11 +372,12 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
+			"scope":   cmd.scope,
 		})
 	}
 
 	// Write audit log with decision from policy pre-check
-	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
+	argsJSON := batchArgsJSON(cmd.asset.ID, cmd.command, cmd.scope)
 	var execErr error
 	if result.Error != "" {
 		execErr = fmt.Errorf("%s", result.Error)
@@ -597,6 +619,26 @@ func newSessionID() string {
 // (cmd.asset.Type), never this field, so nothing is lost by collapsing this.
 const batchAuditTool = "exec"
 
+// batchArgsJSON builds a batch item's audit ArgsJSON once its asset is resolved,
+// including scope (spec opsctl 一节: "审计：exec 审计参数记录 scope") — same shape as
+// opsctl exec's audit args (exec.go), reused across the batch audit call sites (Step 2's
+// three early-failure branches, Step 3's autoDeny, Step 4's denied-approval branch, and
+// executeBatchItem) instead of six near-identical fmt.Sprintf calls quietly drifting.
+func batchArgsJSON(assetID int64, command, scope string) string {
+	return fmt.Sprintf(`{"asset_id":%d,"command":%q,"scope":%q}`, assetID, truncateStr(command, 200), scope)
+}
+
+// batchItemScopeDetail builds the approval.BatchItem.Detail shown in the desktop batch
+// approval dialog: "--scope <value>" when the item carries one, empty otherwise (Detail
+// stays "" for the common case, same as it always has — see approval.BatchItem's doc
+// comment). Mirrors exec.go's execApprovalDetail for the single-command path.
+func batchItemScopeDetail(scope string) string {
+	if scope == "" {
+		return ""
+	}
+	return fmt.Sprintf("--scope %s", scope)
+}
+
 func printBatchUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
   opsctl batch [args...]
@@ -617,8 +659,15 @@ Input Modes:
     echo '{"commands":[
       {"asset":"web-01","type":"ssh","command":"uptime"},
       {"asset":"db-01","type":"database","command":"SELECT 1"},
-      {"asset":"cache","type":"redis","command":"PING"}
+      {"asset":"cache","type":"redis","command":"PING"},
+      {"asset":"cache","type":"redis","command":"GET k","scope":"1"},
+      {"asset":"cache-cluster","type":"redis","command":"DBSIZE","scope":"10.0.0.1:6379"}
     ]}' | opsctl batch
+
+    Optional "scope" field, JSON mode only — same semantics as opsctl exec's --scope
+    (redis db index for standalone/sentinel, cluster node "host:port" for keyless
+    commands). Only meaningful for redis; a non-redis item with scope set fails that
+    one item (exit code non-zero for the item, the rest of the batch still runs).
 
   Positional Args:
     opsctl batch 'web-01:uptime' 'db-01:hostname'
@@ -626,6 +675,7 @@ Input Modes:
 
     Format: 'asset:command' (no assertion) or 'type:asset:command'. When known,
     use the canonical asset type. Compatibility aliases exec/sql/mongo are accepted.
+    No scope in this form — use the JSON input mode for a redis item that needs one.
 
 Output:
   JSON with per-command results:

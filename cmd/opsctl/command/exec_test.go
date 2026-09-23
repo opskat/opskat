@@ -535,3 +535,95 @@ func TestCmdExec_SSHAuditCommandStaysRaw(t *testing.T) {
 		t.Fatalf("ssh audit command = %q, want byte-identical raw command %q", got, command)
 	}
 }
+
+// --scope 只对 redis 资产有意义（spec opsctl 一节）：其它资产类型给出 --scope 必须
+// 在批准弹窗之前失败，退出码 1，而不是静默忽略——静默忽略会让用户以为 scope 生效了。
+func TestCmdExec_ScopeOnNonRedisAssetFailsBeforeApproval(t *testing.T) {
+	env := setupOpsctlExec(t) // web-1 是 ssh
+
+	stderr := captureStderr(t, func() {
+		code := cmdExec(env.ctx, env.handlers, []string{"web-1", "--scope", "6379", "--", "uptime"}, "")
+		if code != 1 {
+			t.Fatalf("exit code = %d, want 1", code)
+		}
+	})
+	if env.approvalCalls != 0 {
+		t.Errorf("approval ran %d times; a non-redis --scope must short-circuit first", env.approvalCalls)
+	}
+	if !strings.Contains(stderr, "--scope") || !strings.Contains(stderr, "redis") {
+		t.Errorf("stderr = %q, want it to explain --scope is redis-only", stderr)
+	}
+}
+
+// --scope 在 redis 资产上原样透传给统一 exec handler，供 handleExec/
+// helper.ExecRedisOnAsset 按模式解释（库号 / 集群节点）。
+func TestCmdExec_ScopePassedToHandler(t *testing.T) {
+	env := setupOpsctlExec(t)
+	env.approvalDecision = "allow"
+
+	var gotArgs map[string]any
+	env.handlers = map[string]tool.ToolHandlerFunc{
+		"exec": func(_ context.Context, args map[string]any) (string, error) {
+			gotArgs = args
+			return `{"ok":true}`, nil
+		},
+	}
+
+	code := cmdExec(env.ctx, env.handlers, []string{"cache-1", "--scope", "2", "--", "GET k"}, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if gotArgs["scope"] != "2" {
+		t.Errorf("handler args[scope] = %v, want %q", gotArgs["scope"], "2")
+	}
+}
+
+// 审批对话框的详情必须显示 --scope（spec 例："opsctl exec cache --scope
+// 10.0.0.1:6379 -- DBSIZE"），让审批人看到命令会发往哪个节点/库；不带 scope 时维持
+// 改造前的原样。
+func TestCmdExec_ApprovalDetailIncludesScope(t *testing.T) {
+	env := setupOpsctlExecAssets(t)
+	var gotDetail, gotCommand string
+	origApproval := execApprovalFn
+	execApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		gotDetail = req.Detail
+		gotCommand = req.Command
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-scope"}, nil
+	}
+	t.Cleanup(func() { execApprovalFn = origApproval })
+
+	code := cmdExec(env.ctx, env.handlers, []string{"cache-1", "--scope", "10.0.0.1:6379", "--", "DBSIZE"}, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	wantDetail := "opsctl exec cache-1 --scope 10.0.0.1:6379 -- DBSIZE"
+	if gotDetail != wantDetail {
+		t.Errorf("approval detail = %q, want %q", gotDetail, wantDetail)
+	}
+	// scope 不能掺进策略匹配用的 Command：否则同一条命令会因节点地址不同匹配不上
+	// 同一条策略/grant 规则。
+	if gotCommand != "DBSIZE" {
+		t.Errorf("approval command = %q, want the scope-free %q", gotCommand, "DBSIZE")
+	}
+}
+
+// 审计参数记录 scope（spec opsctl 一节）：ArgsJSON 里必须能读出这次调用用的 scope，
+// 供审计查询按 scope 追溯命令发往了哪个节点/库。
+func TestCmdExec_AuditArgsIncludeScope(t *testing.T) {
+	env := setupOpsctlExec(t)
+	env.approvalDecision = "allow"
+
+	code := cmdExec(env.ctx, env.handlers, []string{"cache-1", "--scope", "3", "--", "GET k"}, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	var args map[string]any
+	if err := json.Unmarshal([]byte(mock.lastCall().ArgsJSON), &args); err != nil {
+		t.Fatalf("unmarshal ArgsJSON: %v", err)
+	}
+	if args["scope"] != "3" {
+		t.Errorf("audit args[scope] = %v, want %q", args["scope"], "3")
+	}
+}
