@@ -1,6 +1,7 @@
 // Package opsctl 实现 opsctl binder：对 opsctl CLI 暴露的 本地 IPC 桥（审批 + 资产）。
 //
-// 只有一个 Wails 绑定方法（RespondOpsctlApproval）；其它都是底层服务。
+// Wails 绑定方法：RespondOpsctlApproval（审批）、RespondOpsctlMFA / CancelOpsctlMFA
+// （opsctl 转来的 SSH MFA 挑战）；其它都是底层服务。
 package opsctl
 
 import (
@@ -9,6 +10,8 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
+
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // LangProvider 由 system binder 实现。
@@ -39,6 +42,7 @@ type Opsctl struct {
 	extExecutor    ExtToolExecutor
 
 	pendingOpsctlApprovals sync.Map // map[string]pendingOpsctlApproval
+	mfa                    *mfaBroker
 }
 
 type pendingOpsctlApproval struct {
@@ -69,6 +73,13 @@ func New(
 // Startup 启动审批的本地 IPC 服务。
 func (o *Opsctl) Startup(ctx context.Context) {
 	o.ctx = ctx
+	o.mfa = newMFABroker(func(name string, payload map[string]any) {
+		wailsRuntime.EventsEmit(o.ctx, name, payload)
+	}, func() {
+		if o.window != nil {
+			o.window.ActivateWindow()
+		}
+	})
 	o.startApprovalServer()
 }
 

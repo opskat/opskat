@@ -15,8 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/sftpio"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
-	"github.com/opskat/opskat/internal/service/ssh_svc"
-	"github.com/opskat/opskat/internal/sshagent"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -503,69 +501,31 @@ func DialSSHClient(ctx context.Context, assetID int64) (*ssh.Client, func(), err
 	return DialAssetSSH(ctx, assetID)
 }
 
-// DialSSHClientInteractive 建立到资产的 SSH 连接，并把 Agent 认证需要的结构化
-// MFA 挑战交给 mfa（交互式调用方，如 opsctl ssh）。Agent 认证仍经产品认证工厂
-// （ConnectConfig.Agent → ssh_svc.Dial），来源拨号时解析、传输由握手方拥有，与
-// 桌面交互路径同一接法；非 Agent 资产与 mfa==nil 时与 DialAssetSSH 行为一致。
-// 调用者必须调用返回的 cleanup 关闭 client 与链路资源。
-func DialSSHClientInteractive(ctx context.Context, assetID int64, mfa sshagent.InteractiveCaller) (*ssh.Client, func(), error) {
-	sshCfg, password, key, passphrase, jumpHosts, proxyChain, err := credential_resolver.Default().ResolveSSHConnectConfig(ctx, assetID)
-	if err != nil {
-		return nil, nil, err
-	}
-	agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(sshCfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	if agentCfg != nil {
-		// 交互式调用方接入 MFA 适配器；答案只存在于当前挑战请求，绝不保留。
-		agentCfg.MFA = mfa
-	}
-	cfg := ssh_svc.ConnectConfig{
-		Host:                     sshCfg.Host,
-		Port:                     sshCfg.Port,
-		Username:                 sshCfg.Username,
-		AuthType:                 sshCfg.AuthType,
-		Password:                 password,
-		Key:                      key,
-		KeyPassphrase:            passphrase,
-		PrivateKeys:              sshCfg.PrivateKeys,
-		AssetID:                  assetID,
-		Ctx:                      ctx,
-		Agent:                    agentCfg,
-		Proxy:                    credential_resolver.Default().DecryptProxyPassword(sshCfg.Proxy),
-		JumpHosts:                jumpHosts,
-		ProxyChain:               proxyChain,
-		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
-		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
-	}
-	client, closers, err := ssh_svc.NewManager().Dial(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	cleanup := func() {
-		if err := client.Close(); err != nil && !IsExpectedCloseErr(err) {
-			logger.Default().Warn("close interactive SSH client", zap.Error(err))
-		}
-		closeExtras(closers)
-	}
-	return client, cleanup, nil
-}
-
-// ExecWithStdio 在远程服务器执行命令，直接连接 stdio（支持管道）
+// ExecWithStdio 在远程服务器执行命令，直接连接 stdio（支持管道）。ctx 带有
+// SSHClientSet 时复用其中该资产的连接（不关闭），否则一次性拨号。
 func ExecWithStdio(ctx context.Context, assetID int64, command string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if set := getSSHClientSet(ctx); set != nil {
+		client, err := set.client(ctx, assetID)
+		if err != nil {
+			return err
+		}
+		return runWithStdio(client, command, stdin, stdout, stderr)
+	}
 	client, cleanup, err := DialAssetSSH(ctx, assetID)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
+	return runWithStdio(client, command, stdin, stdout, stderr)
+}
 
+func runWithStdio(client *ssh.Client, command string, stdin io.Reader, stdout, stderr io.Writer) error {
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 	defer func() {
-		if err := session.Close(); err != nil {
+		if err := session.Close(); err != nil && !IsExpectedCloseErr(err) {
 			logger.Default().Warn("close ExecWithStdio SSH session", zap.Error(err))
 		}
 	}()
@@ -577,6 +537,65 @@ func ExecWithStdio(ctx context.Context, assetID int64, command string, stdin io.
 	session.Stderr = stderr
 
 	return session.Run(command)
+}
+
+// SSHClientSet 在一次调用（如 opsctl batch）内按资产至多拨号一次：并发请求等待同一次
+// 拨号，拨号失败（含 MFA 未通过 / 取消）被记住，后续请求直接拿到同一错误，不再对
+// 同一资产发起第二次挑战。与 ConnCache 的区别正在于记住失败：一次性验证码不能重试。
+type SSHClientSet struct {
+	mu      sync.Mutex
+	entries map[int64]*sshClientSetEntry
+}
+
+type sshClientSetEntry struct {
+	once    sync.Once
+	client  *ssh.Client
+	cleanup func()
+	err     error
+}
+
+// NewSSHClientSet 创建空集合；调用方负责 Close。
+func NewSSHClientSet() *SSHClientSet {
+	return &SSHClientSet{entries: make(map[int64]*sshClientSetEntry)}
+}
+
+func (s *SSHClientSet) client(ctx context.Context, assetID int64) (*ssh.Client, error) {
+	s.mu.Lock()
+	e, ok := s.entries[assetID]
+	if !ok {
+		e = &sshClientSetEntry{}
+		s.entries[assetID] = e
+	}
+	s.mu.Unlock()
+	e.once.Do(func() {
+		e.client, e.cleanup, e.err = DialAssetSSH(ctx, assetID)
+	})
+	return e.client, e.err
+}
+
+// Close 关闭集合里全部已建立的连接。
+func (s *SSHClientSet) Close() {
+	s.mu.Lock()
+	entries := s.entries
+	s.entries = make(map[int64]*sshClientSetEntry)
+	s.mu.Unlock()
+	for _, e := range entries {
+		if e.cleanup != nil {
+			e.cleanup()
+		}
+	}
+}
+
+type sshClientSetKeyType struct{}
+
+// WithSSHClientSet 把连接集合注入 ctx，供 ExecWithStdio 复用。
+func WithSSHClientSet(ctx context.Context, set *SSHClientSet) context.Context {
+	return context.WithValue(ctx, sshClientSetKeyType{}, set)
+}
+
+func getSSHClientSet(ctx context.Context) *SSHClientSet {
+	set, _ := ctx.Value(sshClientSetKeyType{}).(*SSHClientSet)
+	return set
 }
 
 // AIPoolDialer 实现 sshpool.PoolDialer，委托给 credential_resolver 统一 dial

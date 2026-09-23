@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestChooseApproverWithRealIPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := approval.SocketPath(dir)
-	server := approval.NewServer(func(approval.ApprovalRequest) approval.ApprovalResponse {
+	server := approval.NewServer(func(context.Context, approval.ApprovalRequest) approval.ApprovalResponse {
 		return approval.ApprovalResponse{}
 	}, "test-token")
 	require.NoError(t, server.Start(path))

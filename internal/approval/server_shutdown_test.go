@@ -1,6 +1,7 @@
 package approval
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestServerStopInterruptsConnectedClient(t *testing.T) {
-	server := NewServer(func(ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "")
+	server := NewServer(func(context.Context, ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "")
 	dir, err := os.MkdirTemp("", "opskat-approval-")
 	if err != nil {
 		t.Fatalf("create socket dir: %v", err)

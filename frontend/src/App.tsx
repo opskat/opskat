@@ -16,6 +16,7 @@ import { LeftPanel } from "@/components/layout/LeftPanel";
 import { SideTabList } from "@/components/layout/SideTabList";
 import { PermissionDialog } from "@/components/ai/PermissionDialog";
 import { OpsctlApprovalDialog } from "@/components/approval/OpsctlApprovalDialog";
+import { OpsctlMFADialog } from "@/components/approval/OpsctlMFADialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ActiveTasksQuitDialog, type QuitActivity } from "@/components/ActiveTasksQuitDialog";
 
@@ -531,6 +532,7 @@ function App() {
           </Suspense>
           <PermissionDialog suspended={quitActivities !== null} />
           <OpsctlApprovalDialog suspended={quitActivities !== null} />
+          <OpsctlMFADialog />
           <ActiveTasksQuitDialog
             open={quitActivities !== null}
             activities={quitActivities ?? []}
