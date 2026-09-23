@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
+	"strconv"
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -15,9 +17,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// DialRedis 创建 Redis 连接（直连、SSH 隧道或 SOCKS5 代理,隧道优先）
-// password 为已解析的明文密码，cfg.Proxy.Password 为明文,均由调用方负责解密
-func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string, sshPool *sshpool.Pool) (*redis.Client, io.Closer, error) {
+// DialRedis 按部署模式创建 Redis 客户端(单机 / 集群 / 哨兵),经直连、SSH 隧道、
+// SOCKS5 代理或代理链拨号(代理链 > 隧道 > 代理)。每条节点连接都按 go-redis 请求的
+// 目标地址拨号,先应用 cfg.NodeAddressMap。
+// password 为已解析的明文数据节点密码;cfg.Proxy.Password 与 cfg.SentinelPassword
+// 为明文,均由调用方负责解密。
+func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string, sshPool *sshpool.Pool) (redis.UniversalClient, io.Closer, error) {
+	mode := cfg.EffectiveMode()
+	logFields := []zap.Field{
+		zap.Int64("assetID", asset.ID),
+		zap.String("mode", mode),
+		zap.Strings("addrs", redisSeedAddrs(cfg)),
+		zap.String("masterName", cfg.MasterName),
+	}
 	opts, err := buildRedisOptions(cfg, password)
 	if err != nil {
 		return nil, nil, err
@@ -28,8 +40,9 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 		return nil, nil, err
 	}
 
-	client := redis.NewClient(opts)
+	client := newRedisClient(cfg, opts)
 	if pingErr := client.Ping(ctx).Err(); pingErr != nil {
+		logger.Ctx(ctx).Error("redis connect failed", append(logFields, zap.Error(pingErr))...)
 		if err := client.Close(); err != nil {
 			logger.Default().Warn("close redis client", zap.Error(err))
 		}
@@ -40,6 +53,7 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 		}
 		return nil, nil, fmt.Errorf("redis 连接失败: %w", pingErr)
 	}
+	logger.Ctx(ctx).Info("redis connected", logFields...)
 
 	// 直连时 tunnel 为 *SSHTunnel 的 nil，直接返回会变成 typed-nil 接口，
 	// 调用方 `if closer != nil` 会误判为真并在 Close() 里 nil deref panic。
@@ -49,15 +63,41 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 	return client, tunnel, nil
 }
 
-// configureRedisTransport 按 隧道 > 代理 > 直连 设置 opts.Dialer,返回隧道(可为 nil)。
+// newRedisClient 按部署模式创建客户端,不做网络 I/O。
+func newRedisClient(cfg *asset_entity.RedisConfig, opts *redis.UniversalOptions) redis.UniversalClient {
+	switch cfg.EffectiveMode() {
+	case asset_entity.RedisModeCluster:
+		return redis.NewClusterClient(opts.Cluster())
+	case asset_entity.RedisModeSentinel:
+		return redis.NewFailoverClient(opts.Failover())
+	default:
+		return redis.NewClient(opts.Simple())
+	}
+}
+
+// redisSeedAddrs 返回配置中用于建立连接的地址:单机为 host:port,集群 / 哨兵为 Nodes。
+func redisSeedAddrs(cfg *asset_entity.RedisConfig) []string {
+	if cfg.EffectiveMode() == asset_entity.RedisModeStandalone {
+		return []string{net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))}
+	}
+	return cfg.Nodes
+}
+
+// configureRedisTransport 按 代理链 > 隧道 > 代理 > 直连 设置 opts.Dialer,返回隧道(可为 nil)。
+// 拨号一律使用 go-redis 请求的目标地址(集群发现的节点、哨兵返回的主节点),并先做地址映射;
+// 直连且无映射时保留 go-redis 默认 dialer。
 // go-redis 设置自定义 Dialer 后默认 dialer 的 TLS 逻辑被绕过,因此把 TLSConfig
 // 移入 dialer 内手动包裹并清空 opts.TLSConfig,避免 TLS 静默失效。
-func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
+func configureRedisTransport(opts *redis.UniversalOptions, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
 	var tunnel *SSHTunnel
 	var dial dialContextFunc
 	tunnelID := asset.SSHTunnelID
 	if tunnelID == 0 {
 		tunnelID = cfg.SSHAssetID // backward compat
+	}
+	addrMap := cfg.NodeAddressMap
+	if cfg.EffectiveMode() == asset_entity.RedisModeStandalone {
+		addrMap = nil // 地址映射只属于集群 / 哨兵模式
 	}
 	switch {
 	case cfg.ProxyChain != nil:
@@ -68,23 +108,40 @@ func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg
 		}
 	case tunnelID > 0 && sshPool != nil:
 		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
-		dial = tunnelDialFunc(tunnel)
+		dial = tunnelAddrDialFunc(tunnel)
 	case cfg.Proxy != nil:
 		dial = proxyDialFunc(cfg.Proxy)
-	default:
-		return nil, nil
 	}
-	opts.Dialer = tlsWrappedDialFunc(dial, opts.TLSConfig)
+	if dial == nil { // 直连(含代理链解析为空层)
+		if len(addrMap) == 0 {
+			return nil, nil
+		}
+		dial = directDialFunc()
+	}
+	opts.Dialer = tlsWrappedDialFunc(mappedDialFunc(dial, addrMap), opts.TLSConfig)
 	opts.TLSConfig = nil
 	return tunnel, nil
 }
 
-func buildRedisOptions(cfg *asset_entity.RedisConfig, password string) (*redis.Options, error) {
-	opts := &redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+func buildRedisOptions(cfg *asset_entity.RedisConfig, password string) (*redis.UniversalOptions, error) {
+	opts := &redis.UniversalOptions{
 		Username: cfg.Username,
 		Password: password,
-		DB:       cfg.Database,
+	}
+	switch cfg.EffectiveMode() {
+	case asset_entity.RedisModeStandalone:
+		opts.Addrs = []string{fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)}
+		opts.DB = cfg.Database
+	case asset_entity.RedisModeCluster:
+		opts.Addrs = cfg.Nodes
+	case asset_entity.RedisModeSentinel:
+		opts.Addrs = cfg.Nodes
+		opts.DB = cfg.Database
+		opts.MasterName = cfg.MasterName
+		opts.SentinelUsername = cfg.SentinelUsername
+		opts.SentinelPassword = cfg.SentinelPassword
+	default:
+		return nil, fmt.Errorf("不支持的 Redis 部署模式: %s", cfg.Mode)
 	}
 	if cfg.CommandTimeoutSeconds > 0 {
 		timeout := time.Duration(cfg.CommandTimeoutSeconds) * time.Second

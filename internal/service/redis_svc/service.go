@@ -183,6 +183,10 @@ func (s *Service) withClient(ctx context.Context, assetID int64, db int, fn func
 		return fmt.Errorf("解析 Redis 凭据失败: %w", err)
 	}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+	cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
+	if err != nil {
+		return fmt.Errorf("解析 Redis 凭据失败: %w", err)
+	}
 	var opCtx context.Context
 	var cancel context.CancelFunc
 	if cfg.CommandTimeoutSeconds > 0 {
@@ -199,7 +203,7 @@ func (s *Service) withClient(ctx context.Context, assetID int64, db int, fn func
 	return fn(opCtx, &goRedisExecutor{client: client, history: s.history, assetID: assetID, db: cfg.Database})
 }
 
-func closeRedisClient(client *redis.Client, closer io.Closer) {
+func closeRedisClient(client redis.UniversalClient, closer io.Closer) {
 	if client != nil {
 		if err := client.Close(); err != nil {
 			logger.Default().Warn("close redis client failed", zap.Error(err))
@@ -213,7 +217,7 @@ func closeRedisClient(client *redis.Client, closer io.Closer) {
 }
 
 type goRedisExecutor struct {
-	client  *redis.Client
+	client  redis.UniversalClient
 	history *CommandHistory
 	assetID int64
 	db      int

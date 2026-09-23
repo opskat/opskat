@@ -21,7 +21,7 @@ func TestBuildRedisOptions(t *testing.T) {
 		}, "secret")
 
 		require.NoError(t, err)
-		assert.Equal(t, "redis.internal:6380", opts.Addr)
+		assert.Equal(t, "redis.internal:6380", opts.Simple().Addr)
 		assert.Equal(t, "default", opts.Username)
 		assert.Equal(t, "secret", opts.Password)
 		assert.Equal(t, 2, opts.DB)

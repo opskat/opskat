@@ -34,7 +34,7 @@ type Query struct {
 	pool *sshpool.Pool
 
 	dbPanelCache    *panelConnCache[*sql.DB]
-	redisPanelCache *panelConnCache[*redis.Client]
+	redisPanelCache *panelConnCache[redis.UniversalClient]
 	mongoPanelCache *panelConnCache[*connpool.MongoClientCloser]
 
 	evictCtx context.Context
@@ -54,7 +54,7 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Query {
 func (q *Query) Startup(ctx context.Context) {
 	q.ctx = ctx
 	q.dbPanelCache = newPanelConnCache[*sql.DB]("database", panelConnIdleTTL)
-	q.redisPanelCache = newPanelConnCache[*redis.Client]("redis", panelConnIdleTTL)
+	q.redisPanelCache = newPanelConnCache[redis.UniversalClient]("redis", panelConnIdleTTL)
 	q.mongoPanelCache = newPanelConnCache[*connpool.MongoClientCloser]("mongodb", panelConnIdleTTL)
 	q.evictCtx, q.evictCxl = context.WithCancel(ctx)
 	go q.dbPanelCache.startEvictor(q.evictCtx, panelConnEvictInterval)

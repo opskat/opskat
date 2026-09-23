@@ -56,11 +56,16 @@ func finishPanelDBOperation(opErr error, cleanup func() error) error {
 	return opErr
 }
 
-// getOrDialPanelRedis 从面板缓存取 *redis.Client。
-func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (*redis.Client, error) {
+// getOrDialPanelRedis 从面板缓存取 Redis 客户端。
+func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (redis.UniversalClient, error) {
 	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
-	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (*redis.Client, io.Closer, error) {
+	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (redis.UniversalClient, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+		var err error
+		cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("解析凭据失败: %w", err)
+		}
 		return connpool.DialRedis(ctx, asset, cfg, password, q.pool)
 	})
 	if err != nil {
@@ -137,6 +142,11 @@ func (q *Query) testRedisConnection(ctx context.Context, configJSON string, plai
 
 	testAsset := &asset_entity.Asset{}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+	sentinelPassword, err := credential_resolver.Default().ResolveRedisSentinelPassword(&cfg)
+	if err != nil {
+		return fmt.Errorf("连接失败: %w", err)
+	}
+	cfg.SentinelPassword = sentinelPassword
 	client, tunnel, err := connpool.DialRedis(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err

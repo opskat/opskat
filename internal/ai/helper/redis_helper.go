@@ -23,11 +23,11 @@ import (
 type redisCacheKeyType struct{}
 
 // RedisClientCache 在同一次 AI Send 中复用 Redis 连接
-type RedisClientCache = ConnCache[*redis.Client]
+type RedisClientCache = ConnCache[redis.UniversalClient]
 
 // NewRedisClientCache 创建 Redis 连接缓存
 func NewRedisClientCache() *RedisClientCache {
-	return NewConnCache[*redis.Client]("Redis")
+	return NewConnCache[redis.UniversalClient]("Redis")
 }
 
 // WithRedisCache 将 Redis 缓存注入 context
@@ -84,13 +84,17 @@ func ExecRedisOnAsset(ctx context.Context, asset *asset_entity.Asset, command, s
 	return ExecuteRedis(ctx, client, command)
 }
 
-func getOrDialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig) (*redis.Client, io.Closer, error) {
-	dialFn := func() (*redis.Client, io.Closer, error) {
+func getOrDialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig) (redis.UniversalClient, io.Closer, error) {
+	dialFn := func() (redis.UniversalClient, io.Closer, error) {
 		password, err := credential_resolver.Default().ResolveRedisPassword(ctx, cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
 		}
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+		cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
+		}
 		return connpool.DialRedis(ctx, asset, cfg, password, getSSHPool(ctx))
 	}
 	if cache := getRedisCache(ctx); cache != nil {
@@ -100,7 +104,7 @@ func getOrDialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_e
 }
 
 // ExecuteRedis 执行 Redis 命令并返回 JSON 结果
-func ExecuteRedis(ctx context.Context, client *redis.Client, command string) (string, error) {
+func ExecuteRedis(ctx context.Context, client redis.UniversalClient, command string) (string, error) {
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		return "", fmt.Errorf("redis command is empty")
@@ -128,7 +132,7 @@ func ExecuteRedis(ctx context.Context, client *redis.Client, command string) (st
 }
 
 // ExecuteRedisRaw 使用预拆分的参数执行 Redis 命令（支持含空格的值）
-func ExecuteRedisRaw(ctx context.Context, client *redis.Client, args []string) (string, error) {
+func ExecuteRedisRaw(ctx context.Context, client redis.UniversalClient, args []string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("redis command is empty")
 	}
