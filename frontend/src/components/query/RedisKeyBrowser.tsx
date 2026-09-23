@@ -12,11 +12,13 @@ import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
   Database,
+  Server,
   RefreshCw,
   Loader2,
   Search,
   Key,
   AlertCircle,
+  AlertTriangle,
   Copy,
   Trash2,
   List,
@@ -30,6 +32,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
+import { cn } from "@/lib/utils";
 import { Button, Input, ConfirmDialog, computeContextMenuPosition } from "@opskat/ui";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
@@ -51,50 +54,63 @@ const KEY_ROW_HEIGHT = 28;
 const MAX_TREE_PREFETCH_KEYS = 20_000;
 const EMPTY_REDIS_KEYS: string[] = [];
 
-interface RedisDbSelectorProps {
-  currentDb: number;
-  dbOptions: number[];
-  dbKeyCounts: Record<number, number>;
-  disabled?: boolean;
-  onChange: (db: number) => void;
+interface RedisFooterOption {
+  value: string;
+  label: string;
+  count?: number;
 }
 
-function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange }: RedisDbSelectorProps) {
+interface RedisFooterSelectorProps {
+  value: string;
+  options: RedisFooterOption[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  menuTestId: string;
+  footnote?: string;
+}
+
+/**
+ * Shared footer popover: the standalone/sentinel DB selector and the cluster
+ * scan-range selector are the same interaction (single-select popover with
+ * arrow-key navigation) over different option lists, so they share one
+ * implementation instead of drifting apart.
+ */
+function RedisFooterSelector({ value, options, disabled, onChange, menuTestId, footnote }: RedisFooterSelectorProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const optionRefs = useRef<Record<number, HTMLButtonElement | null>>({});
+  const optionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [open, setOpen] = useState(false);
-  const [activeDb, setActiveDb] = useState(currentDb);
+  const [activeValue, setActiveValue] = useState(value);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
 
-  const currentCount = dbKeyCounts[currentDb];
+  const current = options.find((opt) => opt.value === value);
 
   const updateMenuPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const estimatedHeight = Math.min(dbOptions.length, 10) * 32 + 8;
+    const estimatedHeight = Math.min(options.length, 10) * 32 + 8 + (footnote ? 40 : 0);
     setMenuStyle({
       left: rect.left,
       top: Math.max(8, rect.top - estimatedHeight - 4),
       width: rect.width,
     });
-  }, [dbOptions.length]);
+  }, [options.length, footnote]);
 
   const openMenu = useCallback(() => {
     if (disabled) return;
-    setActiveDb(currentDb);
+    setActiveValue(value);
     updateMenuPosition();
     setOpen(true);
-  }, [currentDb, disabled, updateMenuPosition]);
+  }, [value, disabled, updateMenuPosition]);
 
-  const selectDb = useCallback(
-    (db: number) => {
+  const selectValue = useCallback(
+    (next: string) => {
       setOpen(false);
-      if (db !== currentDb) {
-        onChange(db);
+      if (next !== value) {
+        onChange(next);
       }
     },
-    [currentDb, onChange]
+    [value, onChange]
   );
 
   useEffect(() => {
@@ -115,13 +131,16 @@ function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange
 
   useEffect(() => {
     if (!open) return;
-    optionRefs.current[activeDb]?.scrollIntoView?.({ block: "nearest" });
-  }, [activeDb, open]);
+    optionRefs.current[activeValue]?.scrollIntoView?.({ block: "nearest" });
+  }, [activeValue, open]);
 
   const moveActive = (step: number) => {
-    const index = Math.max(0, dbOptions.indexOf(activeDb));
-    const nextIndex = Math.min(dbOptions.length - 1, Math.max(0, index + step));
-    setActiveDb(dbOptions[nextIndex]);
+    const index = Math.max(
+      0,
+      options.findIndex((opt) => opt.value === activeValue)
+    );
+    const nextIndex = Math.min(options.length - 1, Math.max(0, index + step));
+    setActiveValue(options[nextIndex]?.value ?? activeValue);
   };
 
   return (
@@ -151,7 +170,7 @@ function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange
           } else if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             if (open) {
-              selectDb(activeDb);
+              selectValue(activeValue);
             } else {
               openMenu();
             }
@@ -161,9 +180,9 @@ function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange
         }}
       >
         <span className="min-w-0 truncate">
-          db{currentDb}
-          {currentCount !== undefined && currentCount > 0 ? (
-            <span className="ml-1 text-muted-foreground">({currentCount})</span>
+          {current?.label ?? value}
+          {current?.count !== undefined && current.count > 0 ? (
+            <span className="ml-1 text-muted-foreground">({current.count})</span>
           ) : null}
         </span>
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -173,20 +192,19 @@ function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange
         createPortal(
           <div
             ref={menuRef}
-            data-testid="redis-db-menu"
+            data-testid={menuTestId}
             role="listbox"
             className="z-50 overflow-y-auto rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
             style={{ position: "fixed", maxHeight: "320px", ...menuStyle }}
           >
-            {dbOptions.map((db) => {
-              const count = dbKeyCounts[db];
-              const selected = db === currentDb;
-              const active = db === activeDb;
+            {options.map((opt) => {
+              const selected = opt.value === value;
+              const active = opt.value === activeValue;
               return (
                 <button
-                  key={db}
+                  key={opt.value}
                   ref={(node) => {
-                    optionRefs.current[db] = node;
+                    optionRefs.current[opt.value] = node;
                   }}
                   type="button"
                   role="option"
@@ -198,20 +216,49 @@ function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange
                         ? "bg-accent text-accent-foreground"
                         : "hover:bg-accent hover:text-accent-foreground"
                   }`}
-                  onMouseEnter={() => setActiveDb(db)}
-                  onClick={() => selectDb(db)}
+                  onMouseEnter={() => setActiveValue(opt.value)}
+                  onClick={() => selectValue(opt.value)}
                 >
-                  <span>db{db}</span>
-                  {count !== undefined && count > 0 ? (
-                    <span className={selected ? "text-primary-foreground/80" : "text-muted-foreground"}>{count}</span>
+                  <span className="truncate">{opt.label}</span>
+                  {opt.count !== undefined && opt.count > 0 ? (
+                    <span className={selected ? "text-primary-foreground/80" : "text-muted-foreground"}>
+                      {opt.count}
+                    </span>
                   ) : null}
                 </button>
               );
             })}
+            {footnote ? (
+              <div className="border-t px-2 pb-1 pt-1.5 text-[10px] leading-4 text-muted-foreground">{footnote}</div>
+            ) : null}
           </div>,
           document.body
         )}
     </>
+  );
+}
+
+interface RedisDbSelectorProps {
+  currentDb: number;
+  dbOptions: number[];
+  dbKeyCounts: Record<number, number>;
+  disabled?: boolean;
+  onChange: (db: number) => void;
+}
+
+function RedisDbSelector({ currentDb, dbOptions, dbKeyCounts, disabled, onChange }: RedisDbSelectorProps) {
+  const options = useMemo(
+    () => dbOptions.map((db) => ({ value: String(db), label: `db${db}`, count: dbKeyCounts[db] })),
+    [dbOptions, dbKeyCounts]
+  );
+  return (
+    <RedisFooterSelector
+      value={String(currentDb)}
+      options={options}
+      disabled={disabled}
+      onChange={(v) => onChange(Number(v))}
+      menuTestId="redis-db-menu"
+    />
   );
 }
 
@@ -222,6 +269,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const state = useQueryStore((s) => s.redisStates[tabId]);
   const scanKeys = useQueryStore((s) => s.scanKeys);
   const selectRedisDb = useQueryStore((s) => s.selectRedisDb);
+  const selectRedisScanNode = useQueryStore((s) => s.selectRedisScanNode);
   const selectKey = useQueryStore((s) => s.selectKey);
   const setKeyFilter = useQueryStore((s) => s.setKeyFilter);
   const loadDbKeyCounts = useQueryStore((s) => s.loadDbKeyCounts);
@@ -229,6 +277,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const tab = useTabStore((s) => s.tabs.find((tb) => tb.id === tabId));
   const tabMeta = tab?.meta as QueryTabMeta | undefined;
   const keySeparator = tabMeta?.redisKeySeparator || DEFAULT_REDIS_KEY_SEPARATOR;
+  const isCluster = tabMeta?.redisMode === "cluster";
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // View mode: "list" or "tree". Redis keys are hierarchical in most real datasets,
@@ -463,14 +512,26 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget || !tabMeta || !state) return;
     try {
-      await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [deleteTarget]);
-      removeKey(tabId, deleteTarget);
+      // RedisDeleteKeys resolves even on a cluster partial failure (e.g. CLUSTERDOWN on the
+      // key's slot) — it doesn't reject, so the failure must be read from the result.
+      const result = await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [deleteTarget]);
+      if (result.failed && result.failed.length > 0) {
+        toast.error(
+          t("query.redisDeleteKeysFailed", {
+            count: result.failed.length,
+            keys: result.failed.map((f) => f.key).join(", "),
+          })
+        );
+      }
+      if (result.deleted > 0) {
+        removeKey(tabId, deleteTarget);
+      }
       loadDbKeyCounts(tabId);
     } catch (err) {
       toast.error(String(err));
     }
     setDeleteTarget(null);
-  }, [deleteTarget, tabMeta, state, tabId, removeKey, loadDbKeyCounts]);
+  }, [deleteTarget, tabMeta, state, tabId, removeKey, loadDbKeyCounts, t]);
 
   if (!state) return null;
 
@@ -501,6 +562,17 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         .filter((db) => Number.isInteger(db) && db >= 0),
     ])
   ).sort((a, b) => a - b);
+
+  const scanCoveragePartial = state.totalMasters !== undefined && (state.scannedMasters ?? 0) < state.totalMasters;
+  const unreachableMasters = state.unreachableMasters ?? [];
+  const scanRangeOptions = [
+    { value: "", label: t("query.redisAllMasters"), count: state.dbKeyCounts[0] },
+    ...(state.masterKeyCounts ?? []).map((master) => ({
+      value: master.addr,
+      label: master.addr,
+      count: master.reachable ? master.keys : undefined,
+    })),
+  ];
 
   return (
     <div className="flex h-full flex-col">
@@ -548,9 +620,43 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
       </div>
 
       {/* Key count */}
-      <div className="border-b px-2 py-1 text-xs text-muted-foreground">
-        {t("query.keyCount", { count: visibleKeys.length })}
+      <div className="flex items-center justify-between gap-2 border-b px-2 py-1 text-xs text-muted-foreground">
+        <span>{t("query.keyCount", { count: visibleKeys.length })}</span>
+        {isCluster && state.totalMasters !== undefined ? (
+          <span
+            data-testid="redis-scan-coverage"
+            data-scanned={state.scannedMasters ?? 0}
+            data-total={state.totalMasters}
+            data-partial={scanCoveragePartial ? "true" : "false"}
+            className={cn("shrink-0 font-mono text-[10px]", scanCoveragePartial && "text-warning")}
+          >
+            {t("query.redisScannedMasters", { scanned: state.scannedMasters ?? 0, total: state.totalMasters })}
+          </span>
+        ) : null}
       </div>
+
+      {/* Unreachable masters banner (cluster mode) */}
+      {isCluster && unreachableMasters.length > 0 && (
+        <div
+          data-testid="redis-unreachable-banner"
+          className="space-y-1 border-b border-warning/20 bg-warning/10 px-2 py-2 text-xs text-warning"
+        >
+          {unreachableMasters.map((node) => (
+            <div
+              key={node.addr}
+              data-testid="redis-unreachable-node"
+              data-addr={node.addr}
+              data-slots={node.slots}
+              className="flex items-start gap-2"
+            >
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              <span className="break-all">
+                {t("query.redisUnreachableMaster", { addr: node.addr, slots: node.slots })}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Error message */}
       {state.error && (
@@ -690,16 +796,29 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         )}
       </div>
 
-      {/* DB selector */}
-      <div data-testid="redis-db-footer" className="flex items-center gap-1 border-t px-2 py-1.5">
-        <Database className="size-3.5 shrink-0 text-muted-foreground" />
-        <RedisDbSelector
-          currentDb={state.currentDb}
-          dbOptions={dbOptions}
-          dbKeyCounts={state.dbKeyCounts}
-          onChange={handleDbChange}
-        />
-      </div>
+      {/* DB selector (standalone / sentinel) or scan-range selector (cluster) */}
+      {isCluster ? (
+        <div data-testid="redis-scan-range-footer" className="flex items-center gap-1 border-t px-2 py-1.5">
+          <Server className="size-3.5 shrink-0 text-muted-foreground" />
+          <RedisFooterSelector
+            value={state.scanNode || ""}
+            options={scanRangeOptions}
+            onChange={(node) => selectRedisScanNode(tabId, node)}
+            menuTestId="redis-scan-range-menu"
+            footnote={t("query.redisScanRangeHint")}
+          />
+        </div>
+      ) : (
+        <div data-testid="redis-db-footer" className="flex items-center gap-1 border-t px-2 py-1.5">
+          <Database className="size-3.5 shrink-0 text-muted-foreground" />
+          <RedisDbSelector
+            currentDb={state.currentDb}
+            dbOptions={dbOptions}
+            dbKeyCounts={state.dbKeyCounts}
+            onChange={handleDbChange}
+          />
+        </div>
+      )}
 
       {tabMeta && (
         <RedisCreateKeyDialog
@@ -707,6 +826,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
           open={createDialogOpen}
           assetId={tabMeta.assetId}
           db={state.currentDb}
+          isCluster={isCluster}
           dbOptions={dbOptions}
           onOpenChange={setCreateDialogOpen}
           onCreated={handleCreatedKey}
