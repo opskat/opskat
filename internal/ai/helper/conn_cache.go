@@ -49,13 +49,13 @@ func (c *KeyedConnCache[K, C]) Close() error {
 	c.mu.Unlock()
 	for id, client := range clients {
 		if err := client.Close(); err != nil && !IsExpectedCloseErr(err) {
-			logger.Default().Warn("close cached "+c.name+" connection", zap.Any("key", id), zap.Error(err))
+			logger.Default().Warn("close cached "+c.name+" connection", zap.String("key", fmt.Sprint(id)), zap.Error(err))
 		}
 	}
 	for id, closer := range closers {
 		if closer != nil {
 			if err := closer.Close(); err != nil && !IsExpectedCloseErr(err) {
-				logger.Default().Warn("close "+c.name+" tunnel", zap.Any("key", id), zap.Error(err))
+				logger.Default().Warn("close "+c.name+" tunnel", zap.String("key", fmt.Sprint(id)), zap.Error(err))
 			}
 		}
 	}
@@ -114,12 +114,12 @@ func (c *KeyedConnCache[K, C]) Remove(key K) {
 	c.mu.Unlock()
 	if hasClient {
 		if err := client.Close(); err != nil && !IsExpectedCloseErr(err) {
-			logger.Default().Warn("close "+c.name+" connection", zap.Any("key", key), zap.Error(err))
+			logger.Default().Warn("close "+c.name+" connection", zap.String("key", fmt.Sprint(key)), zap.Error(err))
 		}
 	}
 	if hasCloser && closer != nil {
 		if err := closer.Close(); err != nil && !IsExpectedCloseErr(err) {
-			logger.Default().Warn("close "+c.name+" tunnel", zap.Any("key", key), zap.Error(err))
+			logger.Default().Warn("close "+c.name+" tunnel", zap.String("key", fmt.Sprint(key)), zap.Error(err))
 		}
 	}
 }
