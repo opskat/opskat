@@ -58,15 +58,14 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
 	// 用户不该为一条注定失败的命令点头。
-	declaredType, rest := extractTypeFlag(args[1:])
-	if err := permission.AssertAssetType(asset, declaredType); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	declaredType, command, err := parseExecArgs(args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		printExecUsage()
 		return 1
 	}
-
-	command := extractCommand(rest)
-	if command == "" {
-		printExecUsage()
+	if err := permission.AssertAssetType(asset, declaredType); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
 

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -10,55 +11,37 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// extractCommand extracts the command string after "--" separator.
-// If no "--" is found, all args are joined as the command.
-func extractCommand(args []string) string {
-	for i, arg := range args {
-		if arg == "--" {
-			parts := args[i+1:]
-			if len(parts) == 0 {
-				return ""
+// parseExecArgs 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--] <command>。
+// 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
+// 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的）。命令之前的未知
+// 选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
+func parseExecArgs(args []string) (declaredType, command string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			command = strings.Join(args[i+1:], " ")
+		case arg == "--type":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--type requires a value")
 			}
-			return strings.Join(parts, " ")
+			declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
+			i++
+			continue
+		case strings.HasPrefix(arg, "--type="):
+			declaredType = strings.TrimPrefix(arg, "--type=")
+			continue
+		case strings.HasPrefix(arg, "-"):
+			return "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
+		default:
+			command = strings.Join(args[i:], " ")
 		}
+		break
 	}
-	if len(args) > 0 {
-		return strings.Join(args, " ")
+	if command == "" {
+		return "", "", fmt.Errorf("no command given")
 	}
-	return ""
-}
-
-// extractTypeFlag pulls an optional "--type <value>" (or "--type=<value>") token out of
-// args and returns (declaredType, remaining args). It only recognizes the flag before the
-// "--" command separator — after "--" every token belongs to the command, never to opsctl
-// itself (matching extractCommand's contract that everything past "--" is opaque payload).
-// Absent, it returns ("", args) unchanged so extractCommand keeps working on the same list.
-func extractTypeFlag(args []string) (string, []string) {
-	for i, arg := range args {
-		if arg == "--" {
-			break
-		}
-		if arg == "--type" {
-			valueIdx := i + 1
-			if valueIdx >= len(args) {
-				// "--type" with nothing after it: leave it for extractCommand/validation
-				// to deal with rather than silently swallowing a malformed flag.
-				return "", args
-			}
-			value := args[valueIdx] //nolint:gosec // guarded by the valueIdx >= len(args) check above
-			rest := make([]string, 0, len(args)-2)
-			rest = append(rest, args[:i]...)
-			rest = append(rest, args[valueIdx+1:]...)
-			return value, rest
-		}
-		if value, ok := strings.CutPrefix(arg, "--type="); ok {
-			rest := make([]string, 0, len(args)-1)
-			rest = append(rest, args[:i]...)
-			rest = append(rest, args[i+1:]...)
-			return value, rest
-		}
-	}
-	return "", args
+	return declaredType, command, nil
 }
 
 // parseRemotePath parses numeric assetID:path strings without repository lookup.
@@ -125,4 +108,14 @@ func prepareExecCommand(ctx context.Context, asset *asset_entity.Asset, command 
 func unsupportedExecTypeError(asset *asset_entity.Asset) error {
 	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
 		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
+}
+
+// rejectExtraArgs 报告子命令消费不了的多余参数并返回 true。静默忽略会让写错位置的
+// flag（--delete-assets、--mfa-code 等）悄悄失效。
+func rejectExtraArgs(extra []string) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "Error: unexpected argument(s): %s\n", strings.Join(extra, " "))
+	return true
 }

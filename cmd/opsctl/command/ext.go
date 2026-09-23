@@ -120,16 +120,20 @@ func cmdExtExec(args []string) int {
 
 	// Parse --args flag from remaining args
 	var toolArgs = json.RawMessage("{}")
+	var extra []string
 	for i := 2; i < len(args); i++ {
-		if args[i] == "--args" && i+1 < len(args) {
+		switch {
+		case args[i] == "--args" && i+1 < len(args):
 			toolArgs = json.RawMessage(args[i+1])
-			break
-		}
-		// Support --args='{...}' form
-		if strings.HasPrefix(args[i], "--args=") {
+			i++
+		case strings.HasPrefix(args[i], "--args="):
 			toolArgs = json.RawMessage(strings.TrimPrefix(args[i], "--args="))
-			break
+		default:
+			extra = append(extra, args[i])
 		}
+	}
+	if rejectExtraArgs(extra) {
+		return 1
 	}
 
 	// Validate JSON

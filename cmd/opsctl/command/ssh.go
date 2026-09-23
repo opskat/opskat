@@ -24,6 +24,9 @@ func cmdSSH(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	if rejectExtraArgs(args[1:]) {
+		return 1
+	}
 	asset, err := resolveAsset(ctx, args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

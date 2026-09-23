@@ -919,22 +919,22 @@ func (a *kbiAnswerer) challenge(name, instruction string, questions []string, ec
 	if len(questions) == 0 {
 		return nil, nil
 	}
+	// 已保存密码只答首轮（且 password 方法未用过），后续轮是第二因子，交给应答方
+	// （桌面终端 / opsctl）；没有应答方时如实报需要 MFA，绝不把密码填进 OTP 提示。
+	if a.password != "" && !a.passwordTried && !a.passwordAnswered {
+		a.passwordAnswered = true
+		return a.passwordAnswers(questions), nil
+	}
 	if a.onAuthChallenge != nil {
 		return a.onAuthChallenge(questions, echos)
 	}
 	if a.mfa != nil {
-		if a.password != "" && !a.passwordTried && !a.passwordAnswered {
-			a.passwordAnswered = true
-			return a.passwordAnswers(questions), nil
-		}
 		return a.mfa.SubmitChallenge(a.ctx, sshagent.MFAChallenge{
 			Name: name, Instruction: instruction, Prompts: questions, Echo: echos,
 		})
 	}
-	if a.password != "" {
-		return a.passwordAnswers(questions), nil
-	}
-	return nil, fmt.Errorf("keyboard-interactive 认证需要用户输入")
+	return nil, &sshagent.Error{Code: sshagent.CodeMFARequired,
+		Message: "the server requires keyboard-interactive input but this connection has no interactive responder"}
 }
 
 // buildAuthMethods 构建 SSH 认证方式

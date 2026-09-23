@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ func Execute() int {
 		return 1
 	}
 
-	// Parse global flags before the verb
+	// Global flags may precede the verb; ones written after it are hoisted below.
 	globalFlags := flag.NewFlagSet("opsctl", flag.ContinueOnError)
 	dataDir := globalFlags.String("data-dir", "", "Override the application data directory")
 	masterKey := globalFlags.String("master-key", "", "Override the master encryption key (env: OPSKAT_MASTER_KEY)")
@@ -46,8 +47,6 @@ func Execute() int {
 		return 1
 	}
 
-	*dataDir, *masterKey = applyEnvironmentOverrides(*dataDir, *masterKey)
-
 	remaining := os.Args[verbIdx:]
 	if len(remaining) == 0 {
 		printUsage()
@@ -55,7 +54,15 @@ func Execute() int {
 	}
 
 	verb := remaining[0]
-	args := remaining[1:]
+	hoisted, args, err := hoistGlobalFlags(verb, remaining[1:])
+	if err == nil {
+		err = globalFlags.Parse(hoisted)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	*dataDir, *masterKey = applyEnvironmentOverrides(*dataDir, *masterKey)
 
 	if verb == "version" {
 		v := configs.Version
@@ -215,7 +222,7 @@ Approval:
   into sub-commands also prints NEEDS TTY, with the parse error: fix the
   command and run it again.
 
-Global Flags:
+Global Flags (before or after the command, never after '--'):
   --data-dir <path>     Override the application data directory
                         (default: platform-specific, e.g. ~/Library/Application Support/opskat)
   --master-key <key>    Override the master encryption key for credential decryption
@@ -265,4 +272,57 @@ Examples:
   opsctl ext list                                   List installed extensions
   opsctl ext exec oss list_buckets --args '{}'       Execute extension tool
 `)
+}
+
+// globalFlagNames 是 opsctl 的全局 flag；它们既可写在子命令之前，也可写在子命令之后。
+var globalFlagNames = []string{"data-dir", "master-key", "mfa-code"}
+
+// globalFlagToken 判断 arg 是否是全局 flag（-x / --x / -x=v / --x=v），返回是否自带值。
+func globalFlagToken(arg string) (ok, inline bool) {
+	name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if name == arg {
+		return false, false
+	}
+	name, _, inline = strings.Cut(name, "=")
+	return slices.Contains(globalFlagNames, name), inline
+}
+
+// hoistGlobalFlags 把写在子命令之后的全局 flag 取出来交给全局 FlagSet 解析，其余参数
+// 原样留给子命令。只扫描负载之前的区域："--" 之后永远是负载；exec 无 "--" 时，资产
+// 之后第一个非选项 token 起是远端命令（opsctl exec 86 mysqld --data-dir /x 里的
+// --data-dir 属于 mysqld）。子命令各自解析时会拒绝未知参数，这里不能静默吞掉任何东西。
+func hoistGlobalFlags(verb string, args []string) (globals, rest []string, err error) {
+	assetSeen := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return globals, append(rest, args[i:]...), nil
+		}
+		if ok, inline := globalFlagToken(arg); ok {
+			globals = append(globals, arg)
+			if !inline {
+				if i+1 >= len(args) {
+					return nil, nil, fmt.Errorf("flag needs an argument: %s", arg)
+				}
+				i++
+				globals = append(globals, args[i]) //nolint:gosec // guarded by the i+1 >= len(args) check above
+			}
+			continue
+		}
+		if verb == "exec" {
+			switch {
+			case arg == "--type" && i+1 < len(args):
+				rest = append(rest, arg, args[i+1])
+				i++
+				continue
+			case strings.HasPrefix(arg, "-"):
+			case !assetSeen:
+				assetSeen = true
+			default:
+				return globals, append(rest, args[i:]...), nil
+			}
+		}
+		rest = append(rest, arg)
+	}
+	return globals, rest, nil
 }

@@ -32,6 +32,9 @@ func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		groupID := fs.Int64("group-id", 0, "Filter by group ID (0 = all groups)")
 		fs.Usage = func() { printListAssetsUsage() }
 		_ = fs.Parse(args[1:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
 
 		params := map[string]any{}
 		if *assetType != "" {
@@ -43,6 +46,9 @@ func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return callHandler(ctx, handlers, "list_assets", params)
 
 	case "groups":
+		if rejectExtraArgs(args[1:]) {
+			return 1
+		}
 		return callHandler(ctx, handlers, "list_groups", nil)
 
 	case "credentials":
@@ -50,6 +56,9 @@ func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		credentialType := fs.String("type", "", "Filter by credential type: password, ssh_key, or ssh_agent")
 		fs.Usage = func() { printListCredentialsUsage() }
 		_ = fs.Parse(args[1:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
 		return cmdListCredentials(ctx, handlers, *credentialType)
 
 	case "audit":
@@ -58,6 +67,9 @@ func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		limit := fs.Int("limit", 0, fmt.Sprintf("Maximum rows to show (default %d)", defaultAuditListLimit))
 		fs.Usage = func() { printListAuditUsage() }
 		_ = fs.Parse(args[1:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
 		return cmdListAudit(ctx, *asset, *limit)
 
 	default:
@@ -153,6 +165,9 @@ func cmdGet(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args 
 		return 1
 	}
 
+	if rejectExtraArgs(args[2:]) {
+		return 1
+	}
 	resource := args[0]
 	switch resource {
 	case "asset":

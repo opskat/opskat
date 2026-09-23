@@ -45,6 +45,9 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		sortOrder := fs.Int("sort-order", 0, "Sort order within the parent; lower comes first")
 		fs.Usage = func() { printCreateGroupUsage() }
 		_ = fs.Parse(args[1:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
 
 		if *name == "" {
 			fmt.Fprintln(os.Stderr, "Error: --name is required")
@@ -263,12 +266,6 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 	resource := args[0]
 	switch resource {
 	case "asset":
-		id, err := resolveAssetID(ctx, args[1])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-
 		fs := flag.NewFlagSet("update asset", flag.ExitOnError)
 		name := fs.String("name", "", "New display name")
 		host := fs.String("host", "", "New hostname or IP address")
@@ -279,6 +276,15 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		icon := fs.String("icon", "", "New icon name (e.g. server, kubernetes, docker)")
 		fs.Usage = func() { printUpdateAssetUsage() }
 		_ = fs.Parse(args[2:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
+
+		id, err := resolveAssetID(ctx, args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
 
 		// handlePutAsset resolves the target via assetref.Resolve, which accepts numeric
 		// id strings — so the "asset" key takes the same id already resolved above, just
@@ -341,12 +347,6 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		return callHandler(ctx, handlers, "put_asset", params)
 
 	case "group":
-		id, _, err := resolveGroup(ctx, args[1])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-
 		fs := flag.NewFlagSet("update group", flag.ExitOnError)
 		name := fs.String("name", "", "New display name")
 		parentID := fs.Int64("parent-id", -1, "New parent group ID (-1 = unchanged, 0 = top-level)")
@@ -355,6 +355,15 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		sortOrder := fs.Int("sort-order", -1, "New sort order (-1 = unchanged)")
 		fs.Usage = func() { printUpdateGroupUsage() }
 		_ = fs.Parse(args[2:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
+
+		id, _, err := resolveGroup(ctx, args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
 
 		params := map[string]any{"id": float64(id)}
 		if *name != "" {

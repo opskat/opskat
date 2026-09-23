@@ -54,6 +54,9 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 	resource := args[0]
 	switch resource {
 	case "asset":
+		if rejectExtraArgs(args[2:]) {
+			return 1
+		}
 		ref := args[1]
 		// No side effects yet — resolve before requireApproval ever reaches the
 		// desktop, so a bad reference fails fast instead of bothering the user
@@ -92,6 +95,9 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		deleteAssets := fs.Bool("delete-assets", false, "Delete the assets in this group as well (default: move them to ungrouped)")
 		fs.Usage = func() { printDeleteGroupUsage() }
 		_ = fs.Parse(args[2:])
+		if rejectExtraArgs(fs.Args()) {
+			return 1
+		}
 
 		id, name, err := resolveGroup(ctx, ref)
 		if err != nil {

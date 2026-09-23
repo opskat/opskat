@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/opskat/opskat/internal/sshagent"
@@ -155,4 +156,129 @@ type refusingCaller struct{ err error }
 
 func (r refusingCaller) SubmitChallenge(_ context.Context, _ sshagent.MFAChallenge) ([]string, error) {
 	return nil, r.err
+}
+
+func TestManagerDialAuthChallengeUsesSavedPassword(t *testing.T) {
+	setupAgentFactoryTest(t)
+	convey.Convey("桌面终端经 OnAuthChallenge 作答 keyboard-interactive", t, func() {
+		convey.Convey("只开 keyboard-interactive 的服务器：首轮密码提示用已保存密码，只把后续轮交给用户", func() {
+			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
+				KeyboardInteractiveCallback: func(_ ssh.ConnMetadata, ch ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+					pw, err := ch("", "", []string{"Password: "}, []bool{false})
+					if err != nil {
+						return nil, err
+					}
+					if len(pw) != 1 || pw[0] != "secret" {
+						return nil, fmt.Errorf("bad password")
+					}
+					return otpChallenge("111222")(nil, ch)
+				},
+			})
+			var asked [][]string
+			err := dialForMFATest(t, srv, ConnectConfig{AuthType: "password", Password: "secret",
+				OnAuthChallenge: func(prompts []string, _ []bool) ([]string, error) {
+					asked = append(asked, prompts)
+					return []string{"111222"}, nil
+				}})
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(asked, convey.ShouldResemble, [][]string{{"OTP: "}})
+		})
+
+		convey.Convey("密码方法部分成功后，OTP 轮直接交给用户", func() {
+			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
+				PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
+					if string(pw) != "secret" {
+						return nil, fmt.Errorf("bad password")
+					}
+					return nil, &ssh.PartialSuccessError{Next: ssh.ServerAuthCallbacks{
+						KeyboardInteractiveCallback: otpChallenge("654321"),
+					}}
+				},
+			})
+			var asked [][]string
+			err := dialForMFATest(t, srv, ConnectConfig{AuthType: "password", Password: "secret",
+				OnAuthChallenge: func(prompts []string, _ []bool) ([]string, error) {
+					asked = append(asked, prompts)
+					return []string{"654321"}, nil
+				}})
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(asked, convey.ShouldResemble, [][]string{{"OTP: "}})
+		})
+	})
+}
+
+func TestManagerDialWithoutResponderNeverSendsPasswordToOTP(t *testing.T) {
+	setupAgentFactoryTest(t)
+	convey.Convey("没有应答方的拨号（跳板机/隧道/测试连接）", t, func() {
+		convey.Convey("密码方法部分成功后的 OTP 轮不拿已保存密码作答，报需要 MFA", func() {
+			var otpAnswers []string
+			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
+				PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
+					if string(pw) != "secret" {
+						return nil, fmt.Errorf("bad password")
+					}
+					return nil, &ssh.PartialSuccessError{Next: ssh.ServerAuthCallbacks{
+						KeyboardInteractiveCallback: func(_ ssh.ConnMetadata, ch ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+							answers, err := ch("", "", []string{"OTP: "}, []bool{false})
+							otpAnswers = append(otpAnswers, answers...)
+							if err != nil {
+								return nil, err
+							}
+							return nil, fmt.Errorf("bad otp")
+						},
+					}}
+				},
+			})
+			err := dialForMFATest(t, srv, ConnectConfig{AuthType: "password", Password: "secret"})
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(otpAnswers, convey.ShouldNotContain, "secret")
+			code, ok := sshagent.CodeOf(err)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(code, convey.ShouldEqual, sshagent.CodeMFARequired)
+		})
+
+		convey.Convey("只开 keyboard-interactive：首轮密码后第二轮 OTP 不再重复发送密码", func() {
+			var mu sync.Mutex
+			var sent []string
+			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
+				KeyboardInteractiveCallback: func(_ ssh.ConnMetadata, ch ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+					for _, prompt := range []string{"Password: ", "OTP: "} {
+						answers, err := ch("", "", []string{prompt}, []bool{false})
+						mu.Lock()
+						sent = append(sent, answers...)
+						mu.Unlock()
+						if err != nil {
+							return nil, err
+						}
+					}
+					return nil, fmt.Errorf("bad otp")
+				},
+			})
+			err := dialForMFATest(t, srv, ConnectConfig{AuthType: "password", Password: "secret"})
+			convey.So(err, convey.ShouldNotBeNil)
+			code, ok := sshagent.CodeOf(err)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(code, convey.ShouldEqual, sshagent.CodeMFARequired)
+			mu.Lock()
+			defer mu.Unlock()
+			convey.So(sent, convey.ShouldResemble, []string{"secret"})
+		})
+
+		convey.Convey("只要一轮密码的 keyboard-interactive 服务器照常用已保存密码登录", func() {
+			srv, _ := newControllableSSHServer(t, &ssh.ServerConfig{
+				KeyboardInteractiveCallback: func(_ ssh.ConnMetadata, ch ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+					pw, err := ch("", "", []string{"Password: "}, []bool{false})
+					if err != nil {
+						return nil, err
+					}
+					if len(pw) != 1 || pw[0] != "secret" {
+						return nil, fmt.Errorf("bad password")
+					}
+					return nil, nil
+				},
+			})
+			err := dialForMFATest(t, srv, ConnectConfig{AuthType: "password", Password: "secret"})
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
 }

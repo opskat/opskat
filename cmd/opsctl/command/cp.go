@@ -35,6 +35,15 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		return 1
 	}
 	recursive, rest := extractRecursiveFlag(args)
+	var unknown []string
+	for _, arg := range rest {
+		if strings.HasPrefix(arg, "-") {
+			unknown = append(unknown, arg)
+		}
+	}
+	if rejectExtraArgs(unknown) {
+		return 1
+	}
 	if len(rest) < 2 {
 		printCpUsage()
 		return 1

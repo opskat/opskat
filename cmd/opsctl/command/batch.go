@@ -518,6 +518,9 @@ func parseBatchInput(args []string) ([]batchCommand, error) {
 				return nil, fmt.Errorf("read stdin: %w", readErr)
 			}
 			if len(data) > 0 {
+				if len(args) > 0 {
+					return nil, fmt.Errorf("unexpected argument(s) with JSON on stdin: %s", strings.Join(args, " "))
+				}
 				var input batchInput
 				if err := json.Unmarshal(data, &input); err != nil {
 					return nil, fmt.Errorf("parse JSON input: %w", err)

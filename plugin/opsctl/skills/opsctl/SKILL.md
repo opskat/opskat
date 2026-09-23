@@ -9,6 +9,8 @@ Standalone CLI for asset management and remote operations without the GUI. All m
 
 ## Global Flags
 
+Global flags go before or after the subcommand (`opsctl --mfa-code 123456 exec web -- uptime` and `opsctl exec web --mfa-code 123456 -- uptime` are equivalent), but never after `--` — that part is the remote command.
+
 - `--data-dir <path>` — Override app data directory
 - `--master-key <key>` — Master encryption key (env: `OPSKAT_MASTER_KEY`)
 - `--mfa-code <code>` — One-time code for an SSH server's MFA prompt (env: `OPSKAT_MFA_CODE`, preferred — the flag shows up in shell history and process lists). Answers a single one-prompt challenge, once per new connection
