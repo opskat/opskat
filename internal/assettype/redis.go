@@ -25,10 +25,18 @@ func (h *redisHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	if err != nil || cfg == nil {
 		return nil
 	}
-	return map[string]any{
+	view := map[string]any{
 		"host": cfg.Host, "port": cfg.Port,
 		"username": cfg.Username, "redis_db": cfg.Database,
+		"mode": cfg.EffectiveMode(),
 	}
+	if len(cfg.Nodes) > 0 {
+		view["nodes"] = cfg.Nodes
+	}
+	if cfg.MasterName != "" {
+		view["master_name"] = cfg.MasterName
+	}
+	return view
 }
 
 func (h *redisHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
@@ -48,7 +56,15 @@ func (h *redisHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asse
 }
 
 func (h *redisHandler) ValidateCreateArgs(args map[string]any) error {
-	return validateRemoteServerArgs(args)
+	switch ArgString(args, "mode") {
+	case asset_entity.RedisModeCluster, asset_entity.RedisModeSentinel:
+		if len(ArgStringSlice(args, "nodes")) == 0 {
+			return fmt.Errorf("missing required parameter: nodes")
+		}
+		return nil
+	default:
+		return validateRemoteServerArgs(args)
+	}
 }
 
 func (h *redisHandler) DefaultPolicy() any { return asset_entity.DefaultRedisPolicy() }
@@ -56,12 +72,17 @@ func (h *redisHandler) PolicyKind() string { return policy.PolicyKindRedis }
 
 func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RedisConfig{
-		Host:         ArgString(args, "host"),
-		Port:         ArgInt(args, "port"),
-		Username:     ArgString(args, "username"),
-		CredentialID: ArgInt64(args, "credential_id"),
-		Database:     ArgInt(args, "redis_db"),
-		SSHAssetID:   ArgInt64(args, "ssh_asset_id"),
+		Host:             ArgString(args, "host"),
+		Port:             ArgInt(args, "port"),
+		Username:         ArgString(args, "username"),
+		CredentialID:     ArgInt64(args, "credential_id"),
+		Database:         ArgInt(args, "redis_db"),
+		SSHAssetID:       ArgInt64(args, "ssh_asset_id"),
+		Mode:             ArgString(args, "mode"),
+		Nodes:            ArgStringSlice(args, "nodes"),
+		MasterName:       ArgString(args, "master_name"),
+		SentinelUsername: ArgString(args, "sentinel_username"),
+		NodeAddressMap:   ArgStringMap(args, "node_address_map"),
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
@@ -69,6 +90,13 @@ func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 			return fmt.Errorf("encrypt Redis password: %w", err)
 		}
 		cfg.Password = encrypted
+	}
+	if sentinelPassword := ArgString(args, "sentinel_password"); sentinelPassword != "" {
+		encrypted, err := credential_svc.Default().Encrypt(sentinelPassword)
+		if err != nil {
+			return fmt.Errorf("encrypt Redis sentinel password: %w", err)
+		}
+		cfg.SentinelPassword = encrypted
 	}
 	return a.SetRedisConfig(cfg)
 }
@@ -104,6 +132,28 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 		}
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
+	}
+	if v := ArgString(args, "mode"); v != "" {
+		cfg.Mode = v
+	}
+	if v := ArgStringSlice(args, "nodes"); len(v) > 0 {
+		cfg.Nodes = v
+	}
+	if v := ArgString(args, "master_name"); v != "" {
+		cfg.MasterName = v
+	}
+	if v := ArgString(args, "sentinel_username"); v != "" {
+		cfg.SentinelUsername = v
+	}
+	if v := ArgStringMap(args, "node_address_map"); len(v) > 0 {
+		cfg.NodeAddressMap = v
+	}
+	if sentinelPassword := ArgString(args, "sentinel_password"); sentinelPassword != "" {
+		encrypted, err := credential_svc.Default().Encrypt(sentinelPassword)
+		if err != nil {
+			return fmt.Errorf("encrypt Redis sentinel password: %w", err)
+		}
+		cfg.SentinelPassword = encrypted
 	}
 	return a.SetRedisConfig(cfg)
 }

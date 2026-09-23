@@ -215,3 +215,24 @@ func TestArgStringSliceRejectsNonStringItems(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, ArgStringSlice(map[string]any{"x": "a,b"}, "x"))
 	assert.Equal(t, []string{"a"}, ArgStringSlice(map[string]any{"x": []any{" a ", " "}}, "x"))
 }
+
+// TestArgStringMapRejectsNonStringValues 钉住 ArgStringMap 的严格契约（node_address_map
+// 等对象型参数）：map[string]string 与 map[string]any（且每个 value 都是 string）按原样
+// 保留；map[string]any 含任一非 string value（数字/布尔/嵌套 map/slice）整体拒绝返回 nil，
+// 绝不用 fmt.Sprintf 把 value 字符串化——那会让藏了嵌套 secret 的映射值混过校验；缺失/nil/
+// 非对象类型/空对象一律返回 nil。
+func TestArgStringMapRejectsNonStringValues(t *testing.T) {
+	assert.Equal(t,
+		map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"},
+		ArgStringMap(map[string]any{"x": map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"}}, "x"))
+	assert.Equal(t,
+		map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"},
+		ArgStringMap(map[string]any{"x": map[string]any{"10.0.0.1:6379": "127.0.0.1:16379"}}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{"x": map[string]any{"10.0.0.1:6379": map[string]any{"password": "s"}}}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{"x": map[string]any{"10.0.0.1:6379": 42}}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{"x": map[string]any{"10.0.0.1:6379": true}}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{"x": 42}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{"x": nil}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{}, "x"))
+	assert.Nil(t, ArgStringMap(map[string]any{"x": map[string]any{}}, "x"))
+}

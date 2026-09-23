@@ -154,8 +154,14 @@ func bindDatabaseCredential(args map[string]any, binding CredentialBinding) (map
 
 func (*redisHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"host", "port", "username", "password", "credential_id", "redis_db", "ssh_asset_id"},
-		[]string{"host", "port", "username", "redis_db", "ssh_asset_id"},
+		[]string{
+			"host", "port", "username", "password", "credential_id", "redis_db", "ssh_asset_id",
+			"mode", "nodes", "master_name", "sentinel_username", "sentinel_password", "node_address_map",
+		},
+		[]string{
+			"host", "port", "username", "redis_db", "ssh_asset_id",
+			"mode", "nodes", "master_name", "sentinel_username", "node_address_map",
+		},
 		normalizeDefaultPort(6379),
 	)
 }

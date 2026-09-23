@@ -337,12 +337,24 @@ func decryptAssetPasswords(assets []*asset_entity.Asset, crypto CredentialCrypto
 			if err != nil {
 				continue
 			}
+			changed := false
 			if cfg.Password != "" {
 				plain, err := crypto.Decrypt(cfg.Password)
 				if err != nil {
 					return fmt.Errorf("解密资产 %s Redis 密码失败: %w", a.Name, err)
 				}
 				cfg.Password = plain
+				changed = true
+			}
+			if cfg.SentinelPassword != "" {
+				plain, err := crypto.Decrypt(cfg.SentinelPassword)
+				if err != nil {
+					return fmt.Errorf("解密资产 %s Redis 哨兵密码失败: %w", a.Name, err)
+				}
+				cfg.SentinelPassword = plain
+				changed = true
+			}
+			if changed {
 				if err := a.SetRedisConfig(cfg); err != nil {
 					return err
 				}
@@ -385,6 +397,7 @@ func stripAssetSecrets(assets []*asset_entity.Asset) {
 				continue
 			}
 			cfg.Password = ""
+			cfg.SentinelPassword = ""
 			if err := a.SetRedisConfig(cfg); err != nil {
 				logger.Default().Warn("strip redis secrets", zap.Error(err))
 			}
