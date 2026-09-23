@@ -73,7 +73,7 @@ Redis 资产新增「部署模式」，取值单机 / 集群 / 哨兵。已有�
 - **key 列表**：默认扫描所有主节点并合并，数量行显示「N 个 Key · 已扫 k/n 主节点」。底栏原库选择器的位置换成「扫描范围」选择：「全部主节点 (总数)」或某一个主节点（各自显示 key 数），只影响列表扫描的范围。分页「加载更多」在各主节点间继续，直到全部扫完。过滤（含精确 key 查询）同样覆盖所有主节点，精确 key 直接按 slot 查询。
 - **部分节点不可达**：扫描跳过不可达的主节点，数量行标为「已扫 k/n 主节点」（警示色），列表上方显示「host:port 不可达，该节点上的 Key（slot 范围）未列出」。对落在不可用 slot 上的 key 进行读写时，原样显示 Redis 返回的错误（如 `CLUSTERDOWN`）。
 - **key 详情**：标题行多一个标签「slot N · 所在主节点」。读写按 slot 自动路由。
-- **写操作**：建 key 对话框不显示库选择。批量删除与按模式删除逐个 key 执行；按模式删除覆盖所有主节点，任何节点失败都报告已删除数量和失败节点。
+- **写操作**：建 key 对话框不显示库选择。批量删除逐个 key 执行（不再一次 `DEL` 多个 key），部分失败时报告已删除数量与失败的 key。
 - **控制台**：带 key 的命令自动路由，多个 key 跨 slot 时原样显示 `CROSSSLOT` 错误。不带 key 的命令发往底栏选中的主节点；底栏为「全部主节点」时报错，提示先在底栏选择一个节点。与节点无关的命令例外（见「命令路由」）。
 - **概览**：摘要卡（集群状态、主 / 从数量、slot 覆盖、Key 总数），`cluster_state` 不是 ok 时，状态与 slot 覆盖用错误色，顶栏显示「cluster_state: fail · X 个 slot 不可用」；「集群节点」表每个主节点下挂其从节点，列出地址、节点 ID 前缀、角色、slot 范围、key 数、内存、ops/s、状态，故障节点整行标红并显示原因；服务器 / 内存 / 运行状态面板和完整 INFO 显示顶栏「INFO 节点」选择器选中的节点（默认第一个主节点），自动刷新保持现有行为。不可达的节点，其 key 数、内存显示为「—」，Key 总数显示为「≥ 已知部分之和」。
 
@@ -119,7 +119,7 @@ Redis 资产新增「部署模式」，取值单机 / 集群 / 哨兵。已有�
 | Seam | What it verifies | Prior art |
 |---|---|---|
 | `connpool` 拨号（Go 单测） | 隧道 / 代理 / 代理链按目标地址拨号；地址映射命中与未命中；单机选项构建不变；三种模式的客户端选项（种子、组名、哨兵认证、TLS） | `internal/connpool/redis_options_test.go` |
-| `redis_svc` 执行器接口（Go 单测，fake 执行器） | 多主节点扫描合并与分页续扫、部分节点不可达时的覆盖标记、逐 key 删除、命令路由规则（含 key / 与节点无关 / 缺节点报错 / SELECT 拒绝） | `internal/service/redis_svc` 现有测试 |
+| `redis_svc` 执行器接口（Go 单测，fake 执行器） | 多主节点扫描合并与分页续扫、部分节点不可达时的覆盖标记、逐 key 删除与部分失败报告、命令路由规则（含 key / 与节点无关 / 缺节点报错 / SELECT 拒绝） | `internal/service/redis_svc` 现有测试 |
 | 资产配置与 handler（Go 单测） | 三种模式的校验与错误定位、`ApplyCreateArgs` / `ApplyUpdateArgs` 新字段、安全视图不含密钥、备份导出 / 导入对哨兵密码的处理 | `internal/assettype`、`backup_svc` 现有测试 |
 | opsctl 命令（Go 单测） | `--scope` 透传与非 Redis 资产报错、batch 条目 `scope`、审批详情含 scope | `cmd/opsctl/command/exec_test.go` |
 | AI helper（Go 单测） | 连接缓存按库区分、集群 scope 语义 | `internal/ai/helper` 现有测试 |
