@@ -232,3 +232,49 @@ type RedisSentinelReplica struct {
 	LagSeconds int64 `json:"lagSeconds"`
 	LagBytes   int64 `json:"lagBytes"`
 }
+
+// RedisProbeResult 是对一份未保存配置的探测结果（Query.RedisProbe 的返回值），供资产表单
+// 「测试连接」与自动识别使用。读不到的信息保持缺省（空字符串 / nil），从不猜测。
+type RedisProbeResult struct {
+	// DetectedMode 为第一个可达的已配置节点 INFO server 中的 redis_mode：
+	// "standalone" | "cluster" | "sentinel"；读不到时为空。
+	DetectedMode string `json:"detectedMode,omitempty"`
+	// ModeMismatch 表示 DetectedMode 非空且与配置的部署模式不同（如单机模式连到了集群节点）。
+	ModeMismatch bool `json:"modeMismatch"`
+	// Cluster 仅集群模式且读到拓扑时存在。
+	Cluster *RedisProbeCluster `json:"cluster,omitempty"`
+	// Sentinel 仅哨兵模式存在。
+	Sentinel *RedisProbeSentinel `json:"sentinel,omitempty"`
+}
+
+// RedisProbeCluster 是集群模式的探测结果。
+type RedisProbeCluster struct {
+	State    string `json:"state"`    // CLUSTER INFO 的 cluster_state，如 "ok" / "fail"；读不到时为空
+	Masters  int    `json:"masters"`  // CLUSTER NODES 中的主节点数
+	Replicas int    `json:"replicas"` // CLUSTER NODES 中的从节点数
+	// UnreachableNodes 为集群宣告的节点地址（CLUSTER NODES 中的 host:port，未经映射）里，
+	// 经配置的隧道 / 代理并应用 node_address_map 后仍连不上的那些，按地址排序。
+	UnreachableNodes []string `json:"unreachableNodes"`
+}
+
+// RedisProbeSentinel 是哨兵模式的探测结果，取自第一个应答的已配置哨兵。
+type RedisProbeSentinel struct {
+	// AuthRequired 表示没有哨兵应答、且至少一个哨兵回复了认证错误（NOAUTH / WRONGPASS）：
+	// 需要填写（或更正）哨兵密码。此时未尝试连接数据节点，测试连接应视为失败。
+	AuthRequired bool `json:"authRequired"`
+	// Groups 为 SENTINEL MASTERS 列出的监控组，按组名排序。
+	Groups []RedisProbeSentinelGroup `json:"groups"`
+	// MasterAddr 为选中组的当前主节点 host:port；选中组 = 配置的 master_name，
+	// 未配置时仅当只有一个组时取该组；无选中组时为空。
+	MasterAddr string `json:"masterAddr"`
+	// OtherSentinels 为选中组的其他哨兵（SENTINEL SENTINELS）中尚未配置的地址：
+	// 既不在 nodes 中，经 node_address_map 映射后也不在 nodes 中。
+	OtherSentinels []string `json:"otherSentinels"`
+}
+
+// RedisProbeSentinelGroup 是哨兵监控的一个组。
+type RedisProbeSentinelGroup struct {
+	Name       string `json:"name"`       // 组名（master_name）
+	MasterAddr string `json:"masterAddr"` // 当前主节点 host:port
+	Replicas   int    `json:"replicas"`   // 从节点数（num-slaves）
+}
