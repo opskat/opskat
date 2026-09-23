@@ -99,7 +99,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
 
     try {
       const args = parseRedisCommandLine(command);
-      const result = await ExecuteRedisArgs(tabMeta.assetId, args, state.currentDb);
+      const result = await ExecuteRedisArgs(tabMeta.assetId, args, String(state.currentDb));
       const parsed: RedisResult = JSON.parse(result);
       setCmdResult(formatResult(parsed));
     } catch (err) {

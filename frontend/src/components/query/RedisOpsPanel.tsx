@@ -145,7 +145,7 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
   const fetchInfo = useCallback(async () => {
     if (!tabMeta) return;
     try {
-      const infoResult = await ExecuteRedis(tabMeta.assetId, "INFO", currentDb);
+      const infoResult = await ExecuteRedis(tabMeta.assetId, "INFO", String(currentDb));
       setInfo(parseRedisInfoResult(infoResult || ""));
     } catch (err) {
       setError(String(err));

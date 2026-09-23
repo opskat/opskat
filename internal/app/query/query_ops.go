@@ -327,8 +327,9 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 	return result, nil
 }
 
-// ExecuteRedis 在指定 Redis 资产上执行命令
-func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, error) {
+// ExecuteRedis 在指定 Redis 资产上执行命令。scope：单机 / 哨兵为库号（空 = 资产默认库），
+// 集群为节点 host:port（不带 key 的命令发往该节点，见 helper.ExecuteRedisRaw）。
+func (q *Query) ExecuteRedis(assetID int64, command string, scope string) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -340,7 +341,9 @@ func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, err
 	if err != nil {
 		return "", fmt.Errorf("获取 Redis 配置失败: %w", err)
 	}
-	cfg.Database = db
+	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
+		return "", err
+	}
 	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
 	if err != nil {
 		return "", fmt.Errorf("解析凭据失败: %w", err)
@@ -354,7 +357,7 @@ func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, err
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
 
-	return helper.ExecuteRedis(ctx, client, command)
+	return helper.ExecuteRedis(ctx, client, command, scope)
 }
 
 // testMongoConnection 测试一份未保存的 MongoDB 配置；经 conntest 注册表由
@@ -496,8 +499,8 @@ func (q *Query) ListMongoCollections(assetID int64, database string) (string, er
 	return string(result), nil
 }
 
-// ExecuteRedisArgs 使用预拆分的参数执行 Redis 命令（支持含空格的值）
-func (q *Query) ExecuteRedisArgs(assetID int64, args []string, db int) (string, error) {
+// ExecuteRedisArgs 使用预拆分的参数执行 Redis 命令（支持含空格的值），scope 语义同 ExecuteRedis。
+func (q *Query) ExecuteRedisArgs(assetID int64, args []string, scope string) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -509,7 +512,9 @@ func (q *Query) ExecuteRedisArgs(assetID int64, args []string, db int) (string, 
 	if err != nil {
 		return "", fmt.Errorf("获取 Redis 配置失败: %w", err)
 	}
-	cfg.Database = db
+	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
+		return "", err
+	}
 	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
 	if err != nil {
 		return "", fmt.Errorf("解析凭据失败: %w", err)
@@ -523,5 +528,5 @@ func (q *Query) ExecuteRedisArgs(assetID int64, args []string, db int) (string, 
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
 
-	return helper.ExecuteRedisRaw(ctx, client, args)
+	return helper.ExecuteRedisRaw(ctx, client, args, scope)
 }

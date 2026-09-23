@@ -155,7 +155,7 @@ describe("RedisKeyDetail", () => {
     fireEvent.keyDown(screen.getByPlaceholderText("query.redisPlaceholder"), { key: "Enter" });
 
     await waitFor(() => {
-      expect(ExecuteRedisArgs).toHaveBeenCalledWith(10, ["SET", "my key", "hello world"], 2);
+      expect(ExecuteRedisArgs).toHaveBeenCalledWith(10, ["SET", "my key", "hello world"], "2");
     });
   });
 });

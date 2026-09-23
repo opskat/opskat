@@ -53,7 +53,7 @@ describe("RedisOpsPanel", () => {
     render(<RedisOpsPanel tabId="query-10" />);
 
     await waitFor(() => {
-      expect(ExecuteRedis).toHaveBeenCalledWith(10, "INFO", 0);
+      expect(ExecuteRedis).toHaveBeenCalledWith(10, "INFO", "0");
     });
     expect(screen.getByText("query.redisServer")).toBeInTheDocument();
     expect(screen.getByText("query.redisVersion:")).toBeInTheDocument();
