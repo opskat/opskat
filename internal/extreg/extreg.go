@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -298,12 +299,17 @@ func execTool(l loaded) permission.ExecFunc {
 }
 
 // policyCheck 是扩展类型的策略判定，形状与内置类型的 check* 函数一致：
-// 类型策略 → grant → NeedConfirm。
+// 类型策略（deny → allow）→ grant → NeedConfirm。
 //
 // 与内置类型的差别只在中间那一步的语言：内置类型把命令文本拿去撞规则模式，扩展则先问
-// guest 的 check_policy 这条调用请求的是哪个 action，再拿 action 去撞 holder 自身那一列
-// 与它引用的权限组里的精确 allow/deny 名单（policy.CheckExtensionPolicy）。两套引擎
-// 不合并，是因为它们判定的根本不是同一种东西。
+// guest 的 check_policy 这条调用按参数分类成哪个 (action, resource)，再拿它去撞 holder
+// 自身那一列与它引用的权限组里的 `<action>[:<resource-glob>]` 规则
+// （policy.CheckExtensionPolicy）。两套引擎不合并，是因为它们判定的根本不是同一种东西。
+//
+// guest 给出的 action 必须属于类型在 describe() 里声明的动作集合（manifest 的
+// policies.actions）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
+// 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
+// 这次调用本身。
 //
 // 返回 NeedConfirm 之后发生什么，则与内置类型完全一致：CheckForAsset 弹审批框，
 // "全部允许"落 grant，下一条同样的命令由这里的 MatchGrant 直接放行。
@@ -315,27 +321,32 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 			// fail-closed 的 NeedConfirm，而不是放行。
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		}
-		action, _, err := l.plugin.CheckPolicy(ctx, toolName, argsJSON)
+		action, resource, err := l.plugin.CheckPolicy(ctx, toolName, argsJSON)
 		if err != nil {
 			logger.Ctx(ctx).Warn("extension policy check failed",
 				zap.String("extension", l.name), zap.String("tool", toolName))
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		}
-		if action != "" {
-			policyType := l.manifest.Policies.Type
-			groups, own := permission.ExtensionPolicyForAsset(ctx, assetID, policyType)
-			if len(groups) == 0 {
-				groups = l.manifest.Policies.Default
-			}
-			result := aipolicy.CheckExtensionPolicy(ctx, aipolicy.ExtensionCheck{
-				PolicyType: policyType,
-				GroupIDs:   groups,
-				Own:        own,
-				Action:     action,
-			})
-			if result.Decision != aictx.NeedConfirm {
-				return result
-			}
+		if !slices.Contains(l.manifest.Policies.Actions, action) {
+			logger.Ctx(ctx).Error("extension policy returned an undeclared action",
+				zap.String("extension", l.name), zap.String("tool", toolName),
+				zap.String("action", action), zap.Int64("assetID", assetID))
+			return aictx.CheckResult{Decision: aictx.NeedConfirm}
+		}
+		policyType := l.manifest.Policies.Type
+		groups, own := permission.ExtensionPolicyForAsset(ctx, assetID, policyType)
+		if len(groups) == 0 {
+			groups = l.manifest.Policies.Default
+		}
+		result := aipolicy.CheckExtensionPolicy(ctx, aipolicy.ExtensionCheck{
+			PolicyType: policyType,
+			GroupIDs:   groups,
+			Own:        own,
+			Action:     action,
+			Resource:   resource,
+		})
+		if result.Decision != aictx.NeedConfirm {
+			return result
 		}
 		if granted, ok := permission.MatchGrant(ctx, assetID, command, assetType); ok {
 			return granted

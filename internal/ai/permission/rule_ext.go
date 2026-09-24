@@ -3,6 +3,7 @@ package permission
 import (
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -11,18 +12,19 @@ import (
 
 // 扩展提供的资产类型的永久规则落点（opsctl policy allow / deny / rm / show）。
 //
-// 落点是**共用的 CommandPolicy 列**，规则形状 `ext:<policyType>:<action>`——不新增
+// 落点是**共用的 CommandPolicy 列**，规则形状 `ext:<policyType>:<action>` 或
+// `ext:<policyType>:<action>:<resource-glob>`——不新增
 // 数据库列、不写 migration，与 cp 面把方向前缀写进同一列（rule_persist.go 的 cpLand）
 // 是同一个做法。policyType 段不能省：一个资产组可以同时挂着多个扩展的资产，而
 // CommandPolicy 只有一列，不带类型段两个扩展的同名动作会串。
 //
-// 与内置类型的两点差别，都来自"扩展的策略语言是动作名"：
+// 与内置类型的两点差别，都来自"扩展的策略语言是动作名 + 资源 glob"：
 //   - 落点校验动作名。扩展声明的动作集是封闭的（manifest 的 policies.actions 由每个
-//     工具的 policyAction 派生），一条写不进这个集合的规则永远匹配不上任何调用——
-//     与其落一条永远不生效的规则，不如在写库前点名可用动作。
-//   - 匹配是动作名全等，不支持 `*` 通配。运行期判定
-//     （policy.CheckExtensionPolicy）本来就是动作名精确包含，落点这边多认一种通配
-//     语法只会让 `policy show` 标出运行期并不存在的遮蔽；要"放行全部"就把动作列全。
+//     工具声明的动作派生），一条写不进这个集合的规则永远匹配不上任何调用——
+//     与其落一条永远不生效的规则，不如在写库前点名可用动作。资源 glob 也在落库前
+//     校验语法。
+//   - 动作段全等、不支持 `*` 通配；只有资源段是 glob（policy.MatchExtensionRule，与
+//     运行期判定同一个函数），要"放行全部动作"就把动作列全。
 //
 // 注册是运行期的：扩展随用户启用/禁用来去，因此重复注册返回错误而不是 panic
 // （与 RegisterDynamicExecutor / RegisterPolicyCheck 一致）。
@@ -33,7 +35,7 @@ func extRulePrefix(policyType string) string {
 }
 
 // RegisterExtensionRuleSink 为一个扩展提供的资产类型注册永久规则落点。
-// actions 是该扩展声明的全部策略动作，落点只接受其中之一。
+// actions 是该扩展声明的全部策略动作，落点只接受以其中之一为动作段的规则。
 func RegisterExtensionRuleSink(canonicalType, policyType string, actions []string) error {
 	if canonicalType == "" || policyType == "" {
 		return fmt.Errorf("permission: invalid extension rule sink registration %q", canonicalType)
@@ -47,7 +49,7 @@ func RegisterExtensionRuleSink(canonicalType, policyType string, actions []strin
 		// 不是宿主的策略列，所以 refShape 只能由这里给出。
 		refShape:  commandShape,
 		land:      extLand(prefix, actions),
-		match:     extActionMatch(prefix),
+		match:     extRuleShadows(prefix),
 		ownFilter: func(rule string) bool { return strings.HasPrefix(rule, prefix) },
 	})
 }
@@ -59,34 +61,53 @@ func UnregisterRuleSink(canonicalType string) {
 	delete(ruleLandings, canonicalType)
 }
 
-// extLand 把一个动作名落成 `ext:<policyType>:<action>`。
+// extLand 把 `<action>` 或 `<action>:<resource-glob>` 落成 `ext:<policyType>:` 前缀的规则。
 func extLand(prefix string, actions []string) func(pattern string) ([]LandedRule, error) {
 	known := slices.Clone(actions)
 	return func(pattern string) ([]LandedRule, error) {
-		action := strings.TrimSpace(pattern)
-		if action == "" {
+		rule := strings.TrimSpace(pattern)
+		if rule == "" {
 			return nil, errors.New("empty pattern")
 		}
+		action, glob, scoped := policy.ExtensionRuleParts(rule)
 		if !slices.Contains(known, action) {
 			return nil, fmt.Errorf(
-				"%q is not a policy action of this extension: extension rules are written per action, not per command (known actions: %s)",
-				pattern, strings.Join(known, ", "))
+				"%q is not a policy action of this extension: extension rules are <action> or <action>:<resource-glob>, not commands (known actions: %s)",
+				action, strings.Join(known, ", "))
 		}
-		return []LandedRule{{Rule: prefix + action}}, nil
+		if scoped {
+			if glob == "" {
+				return nil, fmt.Errorf("%q has an empty resource glob: leave out the ':' to match every resource", pattern)
+			}
+			if _, err := path.Match(glob, ""); err != nil {
+				return nil, fmt.Errorf("%q has an invalid resource glob: %w", pattern, err)
+			}
+		}
+		return []LandedRule{{Rule: prefix + rule}}, nil
 	}
 }
 
-// extActionMatch 判定一条 deny 是否遮蔽一条落点：都还原成动作名后全等。
+// extRuleShadows 判定一条 deny 是否遮蔽一条落点。
 //
 // 两边形态不同是有原因的：holder 自己那一列的规则带命名空间前缀（同一列还住着别的
-// 类型），而权限组里的规则是裸动作名（一个扩展权限组整体就属于这个策略面，
-// policy.CheckExtensionPolicy 也是拿裸动作名比的）。还原掉前缀，两个来源才用同一
-// 把尺子。
-func extActionMatch(prefix string) func(denyRule, rule string) bool {
-	action := func(s string) string {
+// 类型），而权限组里的规则没有（一个扩展权限组整体就属于这个策略面，
+// policy.CheckExtensionPolicy 也是拿去掉前缀的规则比的）。还原掉前缀，两个来源才用
+// 同一把尺子。
+//
+// 遮蔽要求 deny 覆盖落点能匹配的每一个调用：不限资源的落点只被不限资源的 deny 遮蔽；
+// 限资源的落点把它的 glob 当作资源文本交给 deny 匹配——与命令形状拿 deny 模式去撞
+// allow 规则原文是同一个近似。
+func extRuleShadows(prefix string) func(denyRule, rule string) bool {
+	strip := func(s string) string {
 		return strings.TrimPrefix(strings.TrimSpace(s), prefix)
 	}
 	return func(denyRule, rule string) bool {
-		return action(denyRule) == action(rule)
+		deny := strip(denyRule)
+		action, glob, scoped := policy.ExtensionRuleParts(strip(rule))
+		if !scoped {
+			denyAction, _, denyScoped := policy.ExtensionRuleParts(deny)
+			return !denyScoped && denyAction == action
+		}
+		return policy.MatchExtensionRule(deny, action, glob)
 	}
 }

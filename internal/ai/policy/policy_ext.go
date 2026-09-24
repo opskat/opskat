@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"go.uber.org/zap"
 )
 
-// ExtensionPolicyRule represents the allow/deny action lists in an extension policy
+// ExtensionPolicyRule represents the allow/deny rule lists in an extension policy
 // group's Policy JSON — and, with the namespace prefix stripped, a holder's own
 // permanent extension rules, which are stored in the shared CommandPolicy column
-// under the same {allow_list, deny_list} shape.
+// under the same {allow_list, deny_list} shape. Each rule is `<action>` or
+// `<action>:<resource-glob>` (see MatchExtensionRule).
 type ExtensionPolicyRule struct {
 	AllowList []string `json:"allow_list"`
 	DenyList  []string `json:"deny_list"`
@@ -28,12 +30,36 @@ type ExtensionCheck struct {
 	// 得到似是而非的判定。
 	PolicyType string
 	GroupIDs   []string
-	// Own 是 holder 链自身那一列的规则，动作名已还原（去掉 ext:<policyType>: 前缀）。
-	Own    ExtensionPolicyRule
-	Action string
+	// Own 是 holder 链自身那一列的规则，已还原成组里的形态（去掉 ext:<policyType>: 前缀）。
+	Own ExtensionPolicyRule
+	// Action / Resource 是 guest 的 check_policy 按这次调用的参数给出的分类。Action 由
+	// 调用方先对照类型声明的动作集合核过；Resource 是 guest 的任意文本（可空）。
+	Action   string
+	Resource string
 }
 
-// CheckExtensionPolicy 判定一个扩展动作：Deny → Allow → NeedConfirm。
+// ExtensionRuleParts 把一条扩展规则（已去掉 ext:<policyType>: 前缀）拆成动作与资源 glob。
+// 在第一个 ':' 处切开：动作名不含 ':'（describe() 校验），其后整段都是 glob——glob 自己
+// 可以写 ':' 去匹配含 ':' 的资源。scoped 为 false 表示规则不限资源。
+func ExtensionRuleParts(rule string) (action, glob string, scoped bool) {
+	return strings.Cut(rule, ":")
+}
+
+// MatchExtensionRule 判定一条扩展规则是否覆盖一次调用的 (action, resource)：动作名全等，
+// 不带资源的规则匹配该动作的任意资源，带资源的规则用与命令规则相同的 glob 语义
+// （matchGlobPattern / path.Match：'*' 不跨 '/'）匹配整个资源串。
+//
+// 资源永远只作为被匹配的一方整体参与，不会被拆开：guest 无论在资源里写什么 ':'，都
+// 改变不了规则的动作段，也够不到别的策略面的规则（策略面由调用方按前缀 / 组类型选定）。
+func MatchExtensionRule(rule, action, resource string) bool {
+	ruleAction, glob, scoped := ExtensionRuleParts(rule)
+	if ruleAction != action {
+		return false
+	}
+	return !scoped || matchGlobPattern(glob, resource)
+}
+
+// CheckExtensionPolicy 判定一次扩展调用的 (action, resource)：Deny → Allow → NeedConfirm。
 //
 // 两个来源的规则先合流再判，优先序与内置命令类型（permission.checkCommandPolicyPermission）
 // 一致——deny 无条件先判、再 allow，而不是按"holder 比组更近"分层。理由是同一个：
@@ -58,20 +84,33 @@ func CheckExtensionPolicy(ctx context.Context, in ExtensionCheck) aictx.CheckRes
 		deny = append(deny, rule.DenyList...)
 	}
 
-	if slices.Contains(deny, in.Action) {
+	if rule, ok := firstExtensionMatch(deny, in.Action, in.Resource); ok {
+		msg := "action denied by extension policy: " + in.Action
+		if in.Resource != "" {
+			msg += " on " + in.Resource
+		}
 		return aictx.CheckResult{
 			Decision:       aictx.Deny,
 			DecisionSource: aictx.SourcePolicyDeny,
-			Message:        "action denied by extension policy: " + in.Action,
-			MatchedPattern: in.Action,
+			Message:        msg,
+			MatchedPattern: rule,
 		}
 	}
-	if slices.Contains(allow, in.Action) {
+	if rule, ok := firstExtensionMatch(allow, in.Action, in.Resource); ok {
 		return aictx.CheckResult{
 			Decision:       aictx.Allow,
 			DecisionSource: aictx.SourcePolicyAllow,
-			MatchedPattern: in.Action,
+			MatchedPattern: rule,
 		}
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm}
+}
+
+func firstExtensionMatch(rules []string, action, resource string) (string, bool) {
+	for _, rule := range rules {
+		if MatchExtensionRule(rule, action, resource) {
+			return rule, true
+		}
+	}
+	return "", false
 }

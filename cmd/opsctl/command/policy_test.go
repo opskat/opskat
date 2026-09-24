@@ -16,6 +16,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
@@ -574,4 +575,32 @@ func TestParsePolicyWriteFlagsInlineEqualsForm(t *testing.T) {
 	assert.Equal(t, "ssh", declared)
 	assert.Empty(t, groups)
 	assert.Equal(t, []string{"web-01"}, targets)
+}
+
+// 扩展资产的规则是 <action> 或 <action>:<resource-glob>，落成 ext:<policyType>:… 。
+func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
+	require.NoError(t, permission.RegisterExtensionRuleSink("acme-store", "acme", []string{"object.list", "object.delete"}))
+	t.Cleanup(func() { permission.UnregisterRuleSink("acme-store") })
+
+	env := newPolicyTestEnv(t)
+	asset := &asset_entity.Asset{ID: 9, Name: "acme-1", Type: "acme-store"}
+	env.assetRepo.EXPECT().Find(gomock.Any(), int64(9)).Return(asset, nil).AnyTimes()
+	env.assetRepo.EXPECT().List(gomock.Any(), gomock.Any()).Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+	env.assetRepo.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, a *asset_entity.Asset) error {
+		env.updates = append(env.updates, a)
+		return nil
+	}).AnyTimes()
+
+	require.Equal(t, 0, env.run("allow", "acme-1", "--", "object.list:prod-*"), env.stderrBuf.String())
+	env.confirmIn = strings.NewReader("y\n")
+	require.Equal(t, 0, env.run("deny", "acme-1", "--", "object.delete:prod/*"), env.stderrBuf.String())
+
+	p, err := asset.GetCommandPolicy()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ext:acme:object.list:prod-*"}, p.AllowList)
+	assert.Equal(t, []string{"ext:acme:object.delete:prod/*"}, p.DenyList)
+
+	env.stderrBuf.Reset()
+	assert.NotEqual(t, 0, env.run("allow", "acme-1", "--", "object.nuke:prod-*"))
+	assert.Contains(t, env.stderrBuf.String(), "object.list")
 }

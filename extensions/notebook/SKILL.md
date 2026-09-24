@@ -39,7 +39,8 @@ Note keys are paths by convention, not by rule: `runbook/failover` and
 - Reading (`note_list`, `note_get`) is granted to a new notebook asset, so listing
   and reading run without asking.
 - Writing (`note_put`) asks the user unless they have granted the notebook's write
-  group; expect a confirmation prompt the first time.
+  group or allowed writes to that key (a rule can cover only some keys, such as
+  `runbook/*`); expect a confirmation prompt the first time.
 - Deleting (`note_delete`) is refused by a group granted to every new notebook
   asset. If the user wants a note gone, say so and let them revoke that group
   themselves — retrying will not help.

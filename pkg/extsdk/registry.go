@@ -14,6 +14,8 @@ import (
 //
 //	opskat.Tool("list_objects", handler).Policy("list").Doc("tools.list_objects.description")
 //
+// or, when the action depends on the arguments, .PolicyFunc(actions, classify).
+//
 // describe() is generated from these registries, so a declaration cannot drift
 // from the handler that serves it: there is no second list to update. The
 // parameter schema is reflected from the handler's own argument type, which is
@@ -64,6 +66,9 @@ type toolEntry struct {
 	schema   map[string]any
 	invoke   func(ctx *ToolContext) (any, error)
 	resource func(args json.RawMessage) string
+	// actions and classify are set by PolicyFunc, in place of action / resource.
+	actions  []string
+	classify func(args json.RawMessage) (action, resource string, err error)
 }
 
 type assetTypeEntry struct {
@@ -161,9 +166,45 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 }
 
 // Policy declares which policy action this tool requests. The host matches it
-// against the user's permission groups before the tool runs; every tool needs one.
+// against the user's permission groups before the tool runs; every tool needs
+// either this or PolicyFunc.
 func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
+	if r.e.classify != nil {
+		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc; Policy and PolicyFunc are exclusive", r.e.name))
+	}
 	r.e.action = action
+	return r
+}
+
+// PolicyFunc classifies each call from its arguments: fn returns the policy action
+// the call requests and the resource it touches (any string, may be empty). The
+// host matches the pair against rules ext:<PolicyType>:<action>[:<resource-glob>].
+//
+// actions is every action fn can return. It is what describe() declares, so it is
+// the set the user writes rules and permission groups against; the host treats
+// any other action fn returns as a defect and asks the user about the call. Arguments
+// that do not decode into T fail the policy check rather than being classified.
+//
+// It is the general form of Policy + Resource and replaces both on a tool: use it
+// when the action depends on the arguments (one request tool that reads or
+// writes), or to derive action and resource in one place. A tool whose action is
+// fixed may equally keep Policy, plus Resource when it reports a resource.
+func (r *ToolReg[T]) PolicyFunc(actions []string, fn func(args T) (action, resource string)) *ToolReg[T] {
+	if len(actions) == 0 {
+		panic(fmt.Sprintf("opskat: tool %q: PolicyFunc needs the set of actions it can return", r.e.name))
+	}
+	if r.e.action != "" || r.e.resource != nil {
+		panic(fmt.Sprintf("opskat: tool %q already declares Policy/Resource; PolicyFunc replaces both", r.e.name))
+	}
+	r.e.actions = append([]string(nil), actions...)
+	r.e.classify = func(raw json.RawMessage) (string, string, error) {
+		args, err := decodeArgs[T](raw)
+		if err != nil {
+			return "", "", fmt.Errorf("tool %s: %w", r.e.name, err)
+		}
+		action, resource := fn(args)
+		return action, resource, nil
+	}
 	return r
 }
 
@@ -173,8 +214,11 @@ func (r *ToolReg[T]) Doc(description string) *ToolReg[T] {
 	return r
 }
 
-// Resource derives the resource string reported alongside the policy action.
+// Resource derives the resource string reported alongside the fixed policy action.
 func (r *ToolReg[T]) Resource(fn func(args T) string) *ToolReg[T] {
+	if r.e.classify != nil {
+		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc, which returns the resource", r.e.name))
+	}
 	r.e.resource = func(raw json.RawMessage) string {
 		args, err := decodeArgs[T](raw)
 		if err != nil {

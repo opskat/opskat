@@ -25,7 +25,7 @@ func MatchGrant(ctx context.Context, assetID int64, command, approvalType string
 
 // ExtensionPolicyForAsset 收集一个扩展策略面在资产 holder 链（资产 → 组 → 父组）
 // 上的两样东西：引用的权限组 ID，以及 holder 自己那一列里属于这个策略面的永久规则
-// （已还原成裸动作名）。两者一趟走完——每条命令都要问一次，而组链要读库。
+// （已去掉命名空间前缀，还原成 `<action>[:<resource-glob>]`）。两者一趟走完——每条命令都要问一次，而组链要读库。
 //
 // 之所以由本包给出：holder 链的走法（policyHoldersForAsset）与永久规则的落点形状
 // （rule_ext.go 的命名空间前缀）都是本包的知识，而扩展的判定函数住在包外。
@@ -49,19 +49,19 @@ func ExtensionPolicyForAsset(ctx context.Context, assetID int64, policyType stri
 			seen[id] = struct{}{}
 			groups = append(groups, id)
 		}
-		own.AllowList = append(own.AllowList, extActionsOf(prefix, p.AllowList)...)
-		own.DenyList = append(own.DenyList, extActionsOf(prefix, p.DenyList)...)
+		own.AllowList = append(own.AllowList, extRulesOf(prefix, p.AllowList)...)
+		own.DenyList = append(own.DenyList, extRulesOf(prefix, p.DenyList)...)
 	}
 	return groups, own
 }
 
-// extActionsOf 从一列共用的命令规则里挑出属于该策略面的，并去掉命名空间前缀。
-func extActionsOf(prefix string, rules []string) []string {
-	var actions []string
+// extRulesOf 从一列共用的命令规则里挑出属于该策略面的，并去掉命名空间前缀。
+func extRulesOf(prefix string, rules []string) []string {
+	var own []string
 	for _, r := range rules {
-		if action, ok := strings.CutPrefix(r, prefix); ok {
-			actions = append(actions, action)
+		if rule, ok := strings.CutPrefix(r, prefix); ok {
+			own = append(own, rule)
 		}
 	}
-	return actions
+	return own
 }

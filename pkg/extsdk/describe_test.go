@@ -248,3 +248,88 @@ func TestDescribeReportsAuthDeclaration(t *testing.T) {
 		So(byType["plain"], ShouldNotContainKey, "auth")
 	})
 }
+
+type searchArgs struct {
+	Index string `json:"index"`
+	Write bool   `json:"write,omitempty"`
+}
+
+func classifySearch(args searchArgs) (action, resource string) {
+	if args.Write {
+		return "index.write", args.Index
+	}
+	return "index.read", args.Index
+}
+
+func TestPolicyFuncClassifiesEachCall(t *testing.T) {
+	Convey("PolicyFunc answers check_policy from the call's own arguments", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		Tool("request", func(_ *ToolContext, _ searchArgs) (any, error) { return nil, nil }).
+			PolicyFunc([]string{"index.read", "index.write"}, classifySearch)
+
+		check := func(args string) (map[string]string, error) {
+			raw, err := dispatch("check_policy", []byte(`{"tool":"request","args":`+args+`}`))
+			if err != nil {
+				return nil, err
+			}
+			var decision map[string]string
+			So(json.Unmarshal(raw, &decision), ShouldBeNil)
+			return decision, nil
+		}
+
+		Convey("the action and resource come from the arguments", func() {
+			d, err := check(`{"index":"logs-2026"}`)
+			So(err, ShouldBeNil)
+			So(d, ShouldResemble, map[string]string{"action": "index.read", "resource": "logs-2026"})
+			d, err = check(`{"index":"logs-2026","write":true}`)
+			So(err, ShouldBeNil)
+			So(d, ShouldResemble, map[string]string{"action": "index.write", "resource": "logs-2026"})
+		})
+
+		Convey("arguments the tool cannot decode fail the check instead of classifying blind", func() {
+			_, err := check(`{"index":7}`)
+			So(err, ShouldNotBeNil)
+		})
+
+		Convey("describe declares the action set, not a fixed action", func() {
+			tool := decodeDescribe(t)["tools"].([]any)[0].(map[string]any)
+			So(tool["policyActions"], ShouldResemble, []any{"index.read", "index.write"})
+			So(tool, ShouldNotContainKey, "policyAction")
+		})
+
+		Convey("a fixed-action tool still describes and answers exactly as before", func() {
+			Tool("list", func(_ *ToolContext, _ listArgs) (any, error) { return nil, nil }).
+				Policy("list").Resource(func(a listArgs) string { return a.Bucket })
+			raw, err := dispatch("check_policy", []byte(`{"tool":"list","args":{"bucket":"b1"}}`))
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldEqual, `{"action":"list","resource":"b1"}`)
+			for _, rawTool := range decodeDescribe(t)["tools"].([]any) {
+				tool := rawTool.(map[string]any)
+				if tool["name"] == "list" {
+					So(tool["policyAction"], ShouldEqual, "list")
+					So(tool, ShouldNotContainKey, "policyActions")
+				}
+			}
+		})
+	})
+
+	Convey("a PolicyFunc declaration that cannot be honored fails at init", t, func() {
+		resetRegistries()
+		noop := func(_ *ToolContext, _ searchArgs) (any, error) { return nil, nil }
+
+		Convey("no declared actions", func() {
+			So(func() { Tool("a", noop).PolicyFunc(nil, classifySearch) }, ShouldPanic)
+		})
+		Convey("combined with a fixed action", func() {
+			So(func() { Tool("b", noop).Policy("index.read").PolicyFunc([]string{"index.read"}, classifySearch) }, ShouldPanic)
+			So(func() { Tool("c", noop).PolicyFunc([]string{"index.read"}, classifySearch).Policy("index.read") }, ShouldPanic)
+		})
+		Convey("combined with Resource, which PolicyFunc already answers", func() {
+			So(func() {
+				Tool("d", noop).PolicyFunc([]string{"index.read"}, classifySearch).
+					Resource(func(a searchArgs) string { return a.Index })
+			}, ShouldPanic)
+		})
+	})
+}

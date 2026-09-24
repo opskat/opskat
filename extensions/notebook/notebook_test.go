@@ -206,3 +206,27 @@ func TestValidateConfig(t *testing.T) {
 		})
 	})
 }
+
+// check_policy is what the host matches rules against: ext:notebook:<action> or
+// ext:notebook:<action>:<note-key-glob>. The writing tools classify each call by the
+// note it touches, so a user can allow writes under runbook/* and nowhere else.
+func TestNotebookPolicy(t *testing.T) {
+	Convey("each call is classified into its action and the note it touches", t, func() {
+		host := newHost(notebookConfig{Notebook: "team-runbooks"})
+		defer host.Close()
+
+		action, resource, err := host.CheckPolicy("note_put", putArgs{Key: " runbook/failover ", Content: "x"})
+		So(err, ShouldBeNil)
+		So(action, ShouldEqual, "write")
+		So(resource, ShouldEqual, "runbook/failover")
+
+		action, resource, err = host.CheckPolicy("note_delete", deleteArgs{Key: "scratch"})
+		So(err, ShouldBeNil)
+		So(action, ShouldEqual, "delete")
+		So(resource, ShouldEqual, "scratch")
+
+		action, _, err = host.CheckPolicy("note_list", listArgs{})
+		So(err, ShouldBeNil)
+		So(action, ShouldEqual, "read")
+	})
+}

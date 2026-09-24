@@ -438,3 +438,56 @@ func TestParseDescriptorAuth(t *testing.T) {
 		})
 	})
 }
+
+// 一个工具要么声明固定动作（policyAction），要么声明按参数分类时可能给出的动作集合
+// （policyActions，SDK 的 PolicyFunc）。两种声明都并入 policies.actions——宿主拿它核对
+// guest 在 check_policy 里给出的动作。
+func TestParseDescriptorPolicyActionSets(t *testing.T) {
+	Convey("A tool declares the actions its policy classification can produce", t, func() {
+		tool := func(policy string) string {
+			return `"tools":[{"name":"t",` + policy + `,"parameters":{"type":"object","properties":{}}}]`
+		}
+
+		Convey("a classified tool's action set feeds policies.actions alongside fixed actions", func() {
+			m, err := ParseManifest([]byte(`{"name":"x","version":"1.0.0","hostABI":"2.0",` +
+				`"backend":{"runtime":"wasm","binary":"main.wasm"}}`))
+			So(err, ShouldBeNil)
+			d, err := ParseDescriptor(desc(`"tools":[` +
+				`{"name":"search","policyActions":["search","index.read"],"parameters":{"type":"object","properties":{}}},` +
+				`{"name":"list","policyAction":"list","parameters":{"type":"object","properties":{}}}]`))
+			So(err, ShouldBeNil)
+			m.apply(d)
+			So(m.Policies.Actions, ShouldResemble, []string{"index.read", "list", "search"})
+		})
+
+		Convey("a tool declaring both a fixed action and an action set", func() {
+			_, err := ParseDescriptor(desc(tool(`"policyAction":"read","policyActions":["read"]`)))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "policyActions")
+		})
+
+		Convey("an empty entry in the action set", func() {
+			_, err := ParseDescriptor(desc(tool(`"policyActions":["read",""]`)))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "policy action")
+		})
+
+		Convey("a duplicate entry in the action set", func() {
+			_, err := ParseDescriptor(desc(tool(`"policyActions":["read","read"]`)))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "duplicate")
+		})
+
+		// 规则是 ext:<type>:<action>[:<resource-glob>]，动作段在第一个 ':' 处结束；一个
+		// 自带 ':' 的动作名会让 "动作:资源" 与 "动作" 无从区分。
+		Convey("an action name that could be read as action:resource", func() {
+			_, err := ParseDescriptor(desc(tool(`"policyAction":"read:secret"`)))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "read:secret")
+
+			_, err = ParseDescriptor(desc(tool(`"policyActions":["read","write:all"]`)))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "write:all")
+		})
+	})
+}

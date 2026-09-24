@@ -92,6 +92,13 @@ func dispatchPolicy(input []byte) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if entry.classify != nil {
+		action, resource, err := entry.classify(req.Args)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"action": action, "resource": resource})
+	}
 	resource := ""
 	if entry.resource != nil {
 		resource = entry.resource(req.Args)

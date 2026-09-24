@@ -217,21 +217,47 @@ confirmation and the extension's details in Settings warn about it prominently.
 
 ### The policy face
 
-Every tool declares the action it requests through `.Policy(action)`. The host does
-not take that as permission: it matches the action against the permission groups
-granted on the asset, and the answer is one of three.
+Every tool declares the action it requests. A tool whose action is fixed uses
+`.Policy(action)` — optionally with `.Resource(fn)` to report what the call touches.
+A tool whose action depends on its arguments classifies each call with
+`.PolicyFunc(actions, fn)`: `fn(args)` returns the action and a resource (any string,
+possibly empty), and `actions` is every action `fn` can return.
 
-- an action in a granted group's **allow** list runs unattended;
-- an action in a granted group's **deny** list is refused, and a denial beats every
-  allow;
-- anything else **asks the user**, and "always allow" saves a grant.
+```go
+opskat.Tool("note_put", putNote).
+    PolicyFunc([]string{"write"}, func(args putArgs) (string, string) {
+        return "write", strings.TrimSpace(args.Key)
+    })
+```
+
+The host does not take the classification as permission: it matches the action and
+resource against the rules on the asset and the permission groups granted on it, in
+this order — **deny → allow → grant → ask**.
+
+- a matching **deny** rule refuses the call, and a denial beats every allow;
+- a matching **allow** rule runs it unattended;
+- otherwise a grant saved by an earlier "always allow" runs it;
+- anything else **asks the user**.
+
+A rule is `<action>` or `<action>:<resource-glob>`. A rule without a resource covers
+the action on every resource; a glob uses the same `path.Match` semantics as command
+rules (`*` does not cross `/`) and is matched against the whole resource, which may
+itself contain `:` — the rule is split at the first `:` only. Group allow/deny lists
+hold rules in this form; permanent rules on an asset or asset group are written as
+`ext:<PolicyType>:<rule>`, e.g. `opsctl policy allow my-notes -- 'write:runbook/*'`
+lands `ext:notebook:write:runbook/*`. Action names therefore may not contain `:` or
+whitespace.
+
+An action `fn` returns that the extension never declared is a defect, not a
+decision: the host logs an error and asks the user, without consulting rules or grants.
 
 `.Default()` marks a group granted to every new asset of the extension's types.
 Group ids must be namespaced by the extension's policy type — `ext:<PolicyType>:<group>`,
-the same segment the host writes permanent rules under (`ext:<PolicyType>:<action>`).
+the same segment the host writes permanent rules under.
 A policy type belongs to one extension: loading a second extension that claims the same
 policy type, or a group id that is already registered, is refused. The action set itself
-is never declared — the host derives it from the tools.
+is never declared separately — the host derives it from the tools' `.Policy` actions
+and `.PolicyFunc` action sets.
 
 ## SKILL.md and locales
 
@@ -287,7 +313,7 @@ result, err := host.CallTool(asset, "note_put", putArgs{Key: "k", Content: "v"})
 
 `WithMockHTTP`, `WithMockTCP` and `WithActionCancel` stand in for the other host
 capabilities; `CallAction` captures the events an action emits, and `CheckPolicy`
-returns the action a call requests.
+returns the action and resource a call requests.
 
 ## Frontend pages (optional)
 

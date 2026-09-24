@@ -119,6 +119,11 @@ Patterns:
   be checked against such a command, so '*' allows it only while no deny
   rule is in effect; with any deny rule present it still needs a human.
 
+  On an extension asset a pattern is one of the extension's policy actions,
+  optionally narrowed to resources with a glob: '<action>' or
+  '<action>:<resource-glob>' (e.g. 'write:runbook/*'). The rule lands as
+  ext:<policy-type>:<pattern>; a rule without a resource covers them all.
+
 Examples:
   opsctl policy show web-01
   opsctl policy show --group production

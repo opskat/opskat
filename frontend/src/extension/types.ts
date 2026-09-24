@@ -70,13 +70,21 @@ export interface ExtToolDef {
   name: string;
   i18n: { description: string };
   parameters: Record<string, unknown>;
-  /** The policy action this tool requests; declared at the tool's registration in the guest. */
-  policyAction: string;
+  /**
+   * The fixed policy action this tool requests; declared at the tool's registration in
+   * the guest. Absent for a tool that classifies each call (see `policyActions`).
+   */
+  policyAction?: string;
+  /** For a tool that classifies each call from its arguments: every action it can request. */
+  policyActions?: string[];
 }
 
 export interface ExtPolicies {
   type: string;
-  /** Derived by the backend from the tools' policy actions — not declared separately. */
+  /**
+   * Derived by the backend from the tools' policy actions — not declared separately.
+   * A rule is `<action>` or `<action>:<resource-glob>`; the action part is one of these.
+   */
   actions: string[];
   groups: { id: string; i18n: { name: string; description: string }; policy: Record<string, unknown> }[];
   default: string[];

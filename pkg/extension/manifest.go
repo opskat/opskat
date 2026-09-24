@@ -245,11 +245,23 @@ type ToolDef struct {
 	Name       string         `json:"name"`
 	I18n       I18nDesc       `json:"i18n"`
 	Parameters map[string]any `json:"parameters"`
-	// PolicyAction is the action this tool requests; the asset's permission groups
-	// are matched against it. It is declared at the tool's registration in the
-	// guest, which is also what makes the guest's policy answer unable to drift
+	// PolicyAction is the fixed action this tool requests; the asset's permission
+	// groups are matched against it. It is declared at the tool's registration in
+	// the guest, which is also what makes the guest's policy answer unable to drift
 	// from its tool table.
 	PolicyAction string `json:"policyAction,omitempty"`
+	// PolicyActions is, instead of PolicyAction, the set of actions a tool that
+	// classifies each call from its arguments (the SDK's PolicyFunc) may answer
+	// check_policy with. A tool declares exactly one of the two.
+	PolicyActions []string `json:"policyActions,omitempty"`
+}
+
+// Actions is every policy action the tool can request.
+func (t ToolDef) Actions() []string {
+	if t.PolicyAction != "" {
+		return []string{t.PolicyAction}
+	}
+	return t.PolicyActions
 }
 
 type I18nDesc struct {

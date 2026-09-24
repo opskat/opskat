@@ -41,10 +41,13 @@ type descAssetType struct {
 }
 
 type descTool struct {
-	Name         string         `json:"name"`
-	I18n         descToolI18n   `json:"i18n"`
-	Parameters   map[string]any `json:"parameters"`
-	PolicyAction string         `json:"policyAction"`
+	Name       string         `json:"name"`
+	I18n       descToolI18n   `json:"i18n"`
+	Parameters map[string]any `json:"parameters"`
+	// A tool declares either its fixed action or, for PolicyFunc, the set of
+	// actions its classification can return.
+	PolicyAction  string   `json:"policyAction,omitempty"`
+	PolicyActions []string `json:"policyActions,omitempty"`
 }
 
 type descToolI18n struct {
@@ -54,7 +57,8 @@ type descToolI18n struct {
 type descPolicies struct {
 	Type string `json:"type"`
 	// The action set is not on the wire: it is exactly the set of actions the
-	// tools request, and the host derives it from them.
+	// tools can request (fixed or PolicyFunc-declared), and the host derives it
+	// from them.
 	Groups  []descPolicyGroup `json:"groups,omitempty"`
 	Default []string          `json:"default,omitempty"`
 }
@@ -122,10 +126,11 @@ func dispatchDescribe() (json.RawMessage, error) {
 	for _, name := range toolOrder {
 		t := tools[name]
 		d.Tools = append(d.Tools, descTool{
-			Name:         t.name,
-			I18n:         descToolI18n{Description: t.doc},
-			Parameters:   t.schema,
-			PolicyAction: t.action,
+			Name:          t.name,
+			I18n:          descToolI18n{Description: t.doc},
+			Parameters:    t.schema,
+			PolicyAction:  t.action,
+			PolicyActions: t.actions,
 		})
 	}
 

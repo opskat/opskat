@@ -118,3 +118,58 @@ func TestCheckExtensionPolicy(t *testing.T) {
 		})
 	})
 }
+
+// 规则形如 <action> 或 <action>:<resource-glob>（holder 自身那一列的前缀已由调用方还原）。
+func TestCheckExtensionPolicyResourceGlobs(t *testing.T) {
+	Convey("CheckExtensionPolicy matches a rule's resource glob against the call's resource", t, func() {
+		ctx := context.Background()
+		check := func(own ExtensionPolicyRule, action, resource string) aictx.CheckResult {
+			return CheckExtensionPolicy(ctx, ExtensionCheck{PolicyType: "oss", Own: own, Action: action, Resource: resource})
+		}
+
+		Convey("a rule without a resource matches the action on any resource", func() {
+			So(check(ExtensionPolicyRule{AllowList: []string{"read"}}, "read", "bucket/a").Decision, ShouldEqual, aictx.Allow)
+			So(check(ExtensionPolicyRule{AllowList: []string{"read"}}, "read", "").Decision, ShouldEqual, aictx.Allow)
+		})
+
+		Convey("a glob uses the command rules' path.Match semantics", func() {
+			own := ExtensionPolicyRule{AllowList: []string{"read:logs/*"}}
+			So(check(own, "read", "logs/app.log").Decision, ShouldEqual, aictx.Allow)
+			So(check(own, "read", "logs/2026/app.log").Decision, ShouldEqual, aictx.NeedConfirm)
+			So(check(own, "read", "secrets/key").Decision, ShouldEqual, aictx.NeedConfirm)
+			So(check(own, "write", "logs/app.log").Decision, ShouldEqual, aictx.NeedConfirm)
+			So(check(own, "read", "").Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
+		Convey("a matching deny glob beats an allow, and reports the rule that decided", func() {
+			own := ExtensionPolicyRule{AllowList: []string{"read"}, DenyList: []string{"read:secrets/*"}}
+			got := check(own, "read", "secrets/key")
+			So(got.Decision, ShouldEqual, aictx.Deny)
+			So(got.MatchedPattern, ShouldEqual, "read:secrets/*")
+			So(got.Message, ShouldContainSubstring, "secrets/key")
+			So(check(own, "read", "logs/a").Decision, ShouldEqual, aictx.Allow)
+		})
+
+		Convey("the rule splits at the first ':' — everything after it is the glob", func() {
+			So(check(ExtensionPolicyRule{AllowList: []string{"read:a"}}, "read", "a:b").Decision, ShouldEqual, aictx.NeedConfirm)
+			So(check(ExtensionPolicyRule{AllowList: []string{"read:a:*"}}, "read", "a:b").Decision, ShouldEqual, aictx.Allow)
+			So(check(ExtensionPolicyRule{AllowList: []string{"read:a"}}, "read:a", "").Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
+		Convey("policy group rules carry globs too", func() {
+			So(policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
+				BuiltinID:  "ext:oss:logs",
+				Name:       "logs",
+				PolicyType: "oss",
+				Policy:     `{"allow_list":["read:logs/*"],"deny_list":["read:logs/private*"]}`,
+			}), ShouldBeNil)
+			Reset(func() { policy_group_entity.UnregisterExtensionGroups("oss") })
+
+			in := ExtensionCheck{PolicyType: "oss", GroupIDs: []string{"ext:oss:logs"}, Action: "read"}
+			in.Resource = "logs/app"
+			So(CheckExtensionPolicy(ctx, in).Decision, ShouldEqual, aictx.Allow)
+			in.Resource = "logs/private.key"
+			So(CheckExtensionPolicy(ctx, in).Decision, ShouldEqual, aictx.Deny)
+		})
+	})
+}

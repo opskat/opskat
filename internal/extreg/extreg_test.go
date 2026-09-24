@@ -25,6 +25,7 @@ import (
 
 type fakePlugin struct {
 	action    string
+	resource  string
 	policyErr error
 	callErr   error
 	lastTool  string
@@ -57,7 +58,7 @@ func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawM
 }
 
 func (p *fakePlugin) CheckPolicy(_ context.Context, _ string, _ json.RawMessage) (string, string, error) {
-	return p.action, "", p.policyErr
+	return p.action, p.resource, p.policyErr
 }
 
 func testManifest() *extension.Manifest {
@@ -244,9 +245,10 @@ func TestCanonicalizeIsStableAndRejectsBadCommandsBeforeApproval(t *testing.T) {
 // forever. Going through the registered PolicyCheckFunc puts extension calls on the same
 // grant path as every built-in type.
 func TestExtensionToolHonoursAnApprovedGrant(t *testing.T) {
-	// action "" → the extension declines to classify, so the policy layer cannot decide
-	// and the outcome is determined purely by whether a grant matches.
-	registerFake(t, &fakePlugin{})
+	// object.write is declared but neither allowed nor denied by the asset's groups, so
+	// the policy layer cannot decide and the outcome is determined purely by whether a
+	// grant matches.
+	registerFake(t, &fakePlugin{action: "object.write"})
 	ctx := withGrantFixture(t, 1, "acme-store")
 
 	const command = "list_objects --bucket=prod"
