@@ -61,14 +61,16 @@ func registerPolicyGroups(extName string, m *extension.Manifest) error {
 		if err != nil {
 			return fmt.Errorf("extension %q policy group %q: %w", extName, pg.ID, err)
 		}
-		policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
+		if err := policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
 			BuiltinID:     pg.ID,
 			Name:          pg.I18n.Name,
 			Description:   pg.I18n.Description,
 			PolicyType:    m.Policies.Type,
 			Policy:        string(policyJSON),
 			ExtensionName: extName,
-		})
+		}); err != nil {
+			return fmt.Errorf("extension %q: %w", extName, err)
+		}
 	}
 	return nil
 }
@@ -96,6 +98,9 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	if _, exists := registered[info.Name]; exists {
 		return fmt.Errorf("extension %q is already registered", info.Name)
 	}
+	if err := claimPolicyType(info.Name, m.Policies.Type); err != nil {
+		return err
+	}
 
 	var done []string
 	rollback := func() {
@@ -103,6 +108,7 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 			unregisterType(t)
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(info.Name)
+		delete(policyTypeOwner, m.Policies.Type)
 	}
 
 	for _, at := range m.AssetTypes {

@@ -15,18 +15,18 @@ func TestCheckExtensionPolicy(t *testing.T) {
 		ctx := context.Background()
 
 		// Register test extension policy groups
-		policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
+		So(policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
 			BuiltinID:  "ext:oss:readonly",
 			Name:       "OSS Read-Only",
 			PolicyType: "oss",
 			Policy:     `{"allow_list":["list","read"],"deny_list":["delete","admin"]}`,
-		})
-		policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
+		}), ShouldBeNil)
+		So(policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
 			BuiltinID:  "ext:oss:dangerous-deny",
 			Name:       "OSS Dangerous aictx.Deny",
 			PolicyType: "oss",
 			Policy:     `{"deny_list":["delete","admin"]}`,
-		})
+		}), ShouldBeNil)
 
 		Reset(func() {
 			policy_group_entity.UnregisterExtensionGroups("oss")
@@ -105,12 +105,12 @@ func TestCheckExtensionPolicy(t *testing.T) {
 
 		// 一条挂在同一资产上的 command 权限组说的是命令模式，不是动作名。
 		Convey("A policy group of another type is not read as actions", func() {
-			policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
+			So(policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
 				BuiltinID:  "ext:other:wide",
 				Name:       "another face",
 				PolicyType: "other",
 				Policy:     `{"allow_list":["read"]}`,
-			})
+			}), ShouldBeNil)
 			Reset(func() { policy_group_entity.UnregisterExtensionGroups("other") })
 
 			result := check([]string{"ext:other:wide"}, "read")

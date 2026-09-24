@@ -135,7 +135,7 @@ func writeTestExtension(stub *describeCacheStub, dir, name string) {
 			{"type": name, "i18n": map[string]any{"name": name + ".name"},
 				"configSchema": testConfigSchema()},
 		},
-		"policies": map[string]any{"type": "ext:" + name},
+		"policies": map[string]any{"type": name},
 		"tools": []map[string]any{
 			{
 				"name": "test_tool", "policyAction": "read",
@@ -156,7 +156,7 @@ func writeTestExtensionWithSnippets(stub *describeCacheStub, dir, name, assetTyp
 		"assetTypes": []map[string]any{
 			{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
 		},
-		"policies": map[string]any{"type": "ext:" + name},
+		"policies": map[string]any{"type": name},
 		"snippets": map[string]any{
 			"categories": []map[string]any{
 				{"id": catID, "assetType": assetType, "i18n": map[string]any{"name": catID}},

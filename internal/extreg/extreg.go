@@ -55,7 +55,21 @@ type loaded struct {
 var (
 	mu         sync.Mutex
 	registered = make(map[string][]string) // extension name → registered asset types
+	// policyTypeOwner 记录每个策略面（manifest 的 policies.type）归哪个扩展。策略面是
+	// 权限组 ID（ext:<policyType>:<name>）与永久规则（ext:<policyType>:<action>）共同的
+	// 命名空间段，也是 CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，
+	// 一方的组与规则就会被当成另一方的来判。
+	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
+
+// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。调用方持有 mu。
+func claimPolicyType(extName, policyType string) error {
+	if owner, taken := policyTypeOwner[policyType]; taken {
+		return fmt.Errorf("extension %q: policy type %q is already owned by extension %q", extName, policyType, owner)
+	}
+	policyTypeOwner[policyType] = extName
+	return nil
+}
 
 // Register 把 ext 声明的每个资产类型接进宿主注册表。
 func Register(ext *extension.Extension) error {
@@ -74,6 +88,9 @@ func register(l loaded, help, description string) error {
 	if _, exists := registered[l.name]; exists {
 		return fmt.Errorf("extension %q is already registered", l.name)
 	}
+	if err := claimPolicyType(l.name, m.Policies.Type); err != nil {
+		return err
+	}
 
 	var done []string
 	rollback := func() {
@@ -81,6 +98,7 @@ func register(l loaded, help, description string) error {
 			unregisterType(t)
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(l.name)
+		delete(policyTypeOwner, m.Policies.Type)
 	}
 
 	for _, at := range m.AssetTypes {
@@ -114,6 +132,11 @@ func Unregister(name string) {
 		unregisterType(t)
 	}
 	policy_group_entity.UnregisterExtensionGroupsByExtension(name)
+	for policyType, owner := range policyTypeOwner {
+		if owner == name {
+			delete(policyTypeOwner, policyType)
+		}
+	}
 	delete(registered, name)
 	logger.Default().Info("extension unregistered",
 		zap.String("extension", name), zap.Strings("assetTypes", types))

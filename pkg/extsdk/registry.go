@@ -221,7 +221,7 @@ func (r *AssetTypeReg) ProxyChain() *AssetTypeReg {
 type PolicyGroupReg struct{ e *policyGroupEntry }
 
 // PolicyGroup registers a permission group the user can grant on an asset.
-// id must be namespaced as ext:<extension>:<group>.
+// id must be namespaced by the Meta.PolicyType: ext:<PolicyType>:<group>.
 func PolicyGroup(id string) *PolicyGroupReg {
 	entry := &policyGroupEntry{id: id, name: id}
 	policyGroups = append(policyGroups, entry)

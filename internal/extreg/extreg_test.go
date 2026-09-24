@@ -150,6 +150,8 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 	// extension is a hard one-to-one now that exec dispatches through it.
 	other := testManifest()
 	other.Name = "acme-clone"
+	other.Policies.Type = "acme-clone"
+	other.Policies.Groups[0].ID = "ext:acme-clone:readonly"
 	err := register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}},
 		"help", "desc")
 	require.Error(t, err)
