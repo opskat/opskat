@@ -158,6 +158,25 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 			So(cache.stored["fixture-ext"], ShouldEqual, WasmHash(fixtureWasm(t)))
 		})
 
+		// The cache holds one entry per extension name — the running version's. A
+		// new build that is staged and then refused must not have replaced it.
+		Convey("a staged version's fresh descriptor is cached only once it is committed", func() {
+			cache := newFakeDescribeCache([]byte("the running build"), sentinelDescriptor)
+			useDescribeCache(t, cache)
+			mgr := newFixtureManager(t, t.TempDir())
+
+			staged, err := mgr.Stage(ctx, extDir)
+			So(err, ShouldBeNil)
+			So(staged.Manifest().Tools, ShouldNotBeEmpty)
+			staged.Abort(ctx)
+			So(cache.stored, ShouldBeEmpty)
+
+			staged, err = mgr.Stage(ctx, extDir)
+			So(err, ShouldBeNil)
+			So(staged.Commit(ctx), ShouldBeNil)
+			So(cache.stored["fixture-ext"], ShouldEqual, WasmHash(fixtureWasm(t)))
+		})
+
 		Convey("a disabled extension is listed from the cache without running any WASM", func() {
 			cache := newFakeDescribeCache(fixtureWasm(t), sentinelDescriptor)
 			useDescribeCache(t, cache)

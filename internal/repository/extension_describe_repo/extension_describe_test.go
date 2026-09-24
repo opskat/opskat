@@ -52,3 +52,42 @@ func TestDescriptorCacheIsKeyedByExtensionAndRefreshedByHash(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, gone)
 }
+
+// Two loads of the same extension can store its descriptor at the same time. The
+// loser of that race must still land its answer instead of tripping the unique index
+// on name: the cache has exactly one row per extension, whoever writes it.
+func TestSaveOverwritesARowWrittenConcurrentlyForTheSameName(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&extension_describe_entity.ExtensionDescribe{}))
+	db.SetDefault(gdb)
+
+	// Stand in for the concurrent writer: right before this Save inserts, another
+	// Save for the same name has already committed its row.
+	raced := false
+	require.NoError(t, gdb.Callback().Create().Before("gorm:create").Register("test:concurrent_save", func(tx *gorm.DB) {
+		if raced {
+			return
+		}
+		raced = true
+		require.NoError(t, tx.Session(&gorm.Session{NewDB: true}).Exec(
+			"INSERT INTO extension_describe (name, wasm_hash, descriptor) VALUES (?, ?, ?)",
+			"oss", "hash-other", `{}`).Error)
+	}))
+
+	ctx := context.Background()
+	repo := NewExtensionDescribe()
+	require.NoError(t, repo.Save(ctx, &extension_describe_entity.ExtensionDescribe{
+		Name: "oss", WasmHash: "hash-mine", Descriptor: `{"tools":[]}`,
+	}))
+	require.True(t, raced)
+
+	stored, err := repo.Find(ctx, "oss")
+	require.NoError(t, err)
+	require.Equal(t, "hash-mine", stored.WasmHash)
+	require.Equal(t, `{"tools":[]}`, stored.Descriptor)
+
+	var count int64
+	require.NoError(t, gdb.Model(&extension_describe_entity.ExtensionDescribe{}).Count(&count).Error)
+	require.Equal(t, int64(1), count)
+}

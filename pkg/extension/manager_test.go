@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	cagologger "github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -232,8 +233,139 @@ func TestManager(t *testing.T) {
 			So(len(ext.SkillMD), ShouldBeGreaterThan, 4*1024)
 		})
 
+		// A locale file that does not parse used to vanish silently, leaving the
+		// author staring at raw i18n keys with nothing in the logs. It is an
+		// authoring mistake like a broken manifest, so the load fails and says where.
+		Convey("LoadExtension fails when a locale file does not parse", func() {
+			extDir := filepath.Join(dir, "bad-locale")
+			writeMinimalExtension(t, extDir, "bad-locale")
+			So(os.MkdirAll(filepath.Join(extDir, "locales"), 0755), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "locales", "en.json"), []byte(`{"a":"b"}`), 0644), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "locales", "zh-CN.json"), []byte(`{"a":`), 0644), ShouldBeNil)
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "zh-CN.json")
+			So(mgr.GetExtension("bad-locale"), ShouldBeNil)
+		})
+
+		// Listing (no runtime) keeps going, but the broken file is reported at
+		// error level through the project logger rather than dropped silently.
+		Convey("LoadManifestInfo logs a locale file that does not parse", func() {
+			core, logs := observer.New(zap.ErrorLevel)
+			prev := cagologger.Default()
+			cagologger.SetLogger(zap.New(core))
+			defer cagologger.SetLogger(prev)
+
+			extDir := filepath.Join(dir, "bad-locale-info")
+			writeMinimalExtension(t, extDir, "bad-locale-info")
+			So(os.MkdirAll(filepath.Join(extDir, "locales"), 0755), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "locales", "zh-CN.json"), []byte(`{"a":`), 0644), ShouldBeNil)
+
+			_, err := LoadManifestInfo(extDir)
+			So(err, ShouldBeNil)
+			entries := logs.All()
+			So(len(entries), ShouldEqual, 1)
+			So(entries[0].ContextMap()["extension"], ShouldEqual, "bad-locale-info")
+			So(entries[0].ContextMap()["error"], ShouldContainSubstring, "zh-CN.json")
+		})
+
 		Reset(func() {
 			mgr.Close(ctx)
+		})
+	})
+}
+
+// extensionsDirEntries lists what the manager's extensions directory holds besides
+// the compilation cache — staging leftovers would show up here.
+func extensionsDirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read extensions dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Name() == ".cache" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// Installing over an installed extension is how every rebuild during `opsctl ext
+// dev` lands. A new build that does not load must leave the running version exactly
+// where it was: installed, loaded and callable.
+func TestManagerInstall(t *testing.T) {
+	Convey("Manager.Install", t, func() {
+		ctx := context.Background()
+		dir := t.TempDir()
+		logger := zap.NewNop()
+		newHost := func(string) HostProvider {
+			return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
+		}
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
+		mgr := NewManager(dir, newHost, logger)
+		Reset(func() { mgr.Close(ctx) })
+
+		src := t.TempDir()
+		v1 := filepath.Join(src, "v1")
+		writeMinimalExtension(t, v1, "hot")
+		_, err := mgr.Install(ctx, v1)
+		So(err, ShouldBeNil)
+		old := mgr.GetExtension("hot")
+		So(old, ShouldNotBeNil)
+
+		Convey("a new build that fails to load keeps the old version installed and loaded", func() {
+			broken := filepath.Join(src, "broken")
+			writeMinimalExtension(t, broken, "hot")
+			So(os.WriteFile(filepath.Join(broken, "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
+
+			_, err := mgr.Install(ctx, broken)
+			So(err, ShouldNotBeNil)
+
+			So(mgr.GetExtension("hot") == old, ShouldBeTrue)
+			So(old.Plugin.closed.Load(), ShouldBeFalse)
+			onDisk, err := os.ReadFile(filepath.Join(dir, "hot", "main.wasm")) //nolint:gosec // test TempDir
+			So(err, ShouldBeNil)
+			So(onDisk, ShouldResemble, stubWasm)
+			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
+		})
+
+		Convey("a successful upgrade replaces the old version and closes it", func() {
+			v2 := filepath.Join(src, "v2")
+			writeMinimalExtension(t, v2, "hot")
+			manifest, err := os.ReadFile(filepath.Join(v2, "manifest.json")) //nolint:gosec // test TempDir
+			So(err, ShouldBeNil)
+			So(os.WriteFile(filepath.Join(v2, "manifest.json"), //nolint:gosec // test TempDir
+				[]byte(strings.Replace(string(manifest), `"1.0.0"`, `"2.0.0"`, 1)), 0644), ShouldBeNil)
+
+			m, err := mgr.Install(ctx, v2)
+			So(err, ShouldBeNil)
+			So(m.Version, ShouldEqual, "2.0.0")
+
+			cur := mgr.GetExtension("hot")
+			So(cur != old, ShouldBeTrue)
+			So(cur.Manifest.Version, ShouldEqual, "2.0.0")
+			So(cur.Dir, ShouldEqual, filepath.Join(dir, "hot"))
+			So(old.Plugin.closed.Load(), ShouldBeTrue)
+			So(cur.Plugin.closed.Load(), ShouldBeFalse)
+			info, err := LoadManifestInfo(filepath.Join(dir, "hot"))
+			So(err, ShouldBeNil)
+			So(info.Manifest.Version, ShouldEqual, "2.0.0")
+			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
+		})
+
+		Convey("a fresh install that fails to load leaves nothing behind", func() {
+			broken := filepath.Join(src, "fresh")
+			writeMinimalExtension(t, broken, "fresh")
+			So(os.WriteFile(filepath.Join(broken, "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
+
+			_, err := mgr.Install(ctx, broken)
+			So(err, ShouldNotBeNil)
+			So(mgr.GetExtension("fresh"), ShouldBeNil)
+			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
 		})
 	})
 }

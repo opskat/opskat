@@ -73,6 +73,7 @@ var minimalWASM = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 type describeCacheStub struct {
 	mu       sync.Mutex
 	payloads map[string]string
+	deleted  []string
 }
 
 func installDescribeStub(t *testing.T) *describeCacheStub {
@@ -109,6 +110,7 @@ func (s *describeCacheStub) DeleteDescriptor(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.payloads, name)
+	s.deleted = append(s.deleted, name)
 	return nil
 }
 
@@ -207,6 +209,28 @@ func (f *fakeSnippetHook) KnownCategoryIDs() []string {
 	out := append([]string{"shell", "sql", "redis", "mongo", "prompt"}, f.existingExtCatIDs...)
 	f.knownIDs = out
 	return out
+}
+
+// assertOldVersionIntact checks that a failed install left name's running version
+// exactly as it was before the attempt.
+func assertOldVersionIntact(svc *Service, stub *describeCacheStub, dir, name string, old *extension.Extension) {
+	So(svc.Manager().GetExtension(name) == old, ShouldBeTrue)
+	So(svc.Bridge().Get(name) == old, ShouldBeTrue)
+	_, registered := assettype.Get(name)
+	So(registered, ShouldBeTrue)
+	// Still callable: a closed module answers every call with "plugin closed".
+	_, err := old.Plugin.CallTool(context.Background(), "test_tool", json.RawMessage(`{}`), nil)
+	So(err, ShouldNotBeNil)
+	So(err.Error(), ShouldNotContainSubstring, "plugin closed")
+	onDisk, err := os.ReadFile(filepath.Join(dir, name, "main.wasm")) //nolint:gosec // test TempDir
+	So(err, ShouldBeNil)
+	So(onDisk, ShouldResemble, minimalWASM)
+	So(stub.deleted, ShouldNotContain, name)
+	entries, err := os.ReadDir(dir)
+	So(err, ShouldBeNil)
+	for _, e := range entries {
+		So(e.Name() == name || e.Name() == "ext-other" || e.Name() == ".cache", ShouldBeTrue)
+	}
 }
 
 func newTestManager(dir string) *extension.Manager {
@@ -316,6 +340,91 @@ func TestService(t *testing.T) {
 			// Still registered exactly once, and still reachable.
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-upgrade"})
 			So(svc.Manager().GetExtension("ext-upgrade"), ShouldNotBeNil)
+		})
+
+		// `opsctl ext dev` reinstalls on every rebuild, so a broken build is routine.
+		// It must not take the running version down with it: the old module stays
+		// loaded, registered and callable, its files and cached descriptor intact.
+		Convey("Install of a build that fails to load keeps the old version", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-hot")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			So(err, ShouldBeNil)
+			old := svc.Manager().GetExtension("ext-hot")
+
+			So(os.WriteFile(filepath.Join(sourceDir, "ext-hot", "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			So(err, ShouldNotBeNil)
+
+			assertOldVersionIntact(svc, stub, dir, "ext-hot", old)
+		})
+
+		Convey("Install whose registration conflicts keeps the old version", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-hot")
+			writeTestExtension(stub, sourceDir, "ext-other")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+			stateRepo.EXPECT().Find(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("not found")).AnyTimes()
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			So(err, ShouldBeNil)
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-other"))
+			So(err, ShouldBeNil)
+			old := svc.Manager().GetExtension("ext-hot")
+
+			// The new build claims an asset type another extension already owns.
+			stub.put("ext-hot", map[string]any{
+				"i18n": map[string]any{"displayName": "ext-hot", "description": "ext-hot"},
+				"assetTypes": []map[string]any{
+					{"type": "ext-other", "i18n": map[string]any{"name": "clash"}, "configSchema": testConfigSchema()},
+				},
+				"policies": map[string]any{"type": "ext:ext-hot"},
+			})
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			So(err, ShouldNotBeNil)
+
+			assertOldVersionIntact(svc, stub, dir, "ext-hot", old)
+			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-hot", "ext-other"})
+		})
+
+		Convey("Install of a new version replaces the running one", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-hot")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			So(err, ShouldBeNil)
+			old := svc.Manager().GetExtension("ext-hot")
+
+			stub.put("ext-hot", map[string]any{
+				"i18n": map[string]any{"displayName": "ext-hot", "description": "ext-hot"},
+				"assetTypes": []map[string]any{
+					{"type": "ext-hot-v2", "i18n": map[string]any{"name": "v2"}, "configSchema": testConfigSchema()},
+				},
+				"policies": map[string]any{"type": "ext:ext-hot"},
+			})
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			So(err, ShouldBeNil)
+
+			cur := svc.Manager().GetExtension("ext-hot")
+			So(cur != old, ShouldBeTrue)
+			So(svc.Bridge().Get("ext-hot") == cur, ShouldBeTrue)
+			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-hot-v2"})
+			_, stillOld := assettype.Get("ext-hot")
+			So(stillOld, ShouldBeFalse)
+			_, err = old.Plugin.CallTool(ctx, "test_tool", json.RawMessage(`{}`), nil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "plugin closed")
 		})
 
 		Convey("Disable unregisters and unloads", func() {
@@ -465,7 +574,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "already registered")
 
-			// kafka-b should NOT be loaded (rolled back by manager.Uninstall).
+			// kafka-b was only staged, never put in place.
 			So(mgr.GetExtension("kafka-b"), ShouldBeNil)
 			// kafka-a is still there.
 			So(mgr.GetExtension("kafka-a"), ShouldNotBeNil)

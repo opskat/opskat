@@ -152,43 +152,53 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 
 // Install installs an extension from a file/directory path.
 //
-// Flow:
-//  1. manager.Install parses manifest + copies files + loads WASM.
-//  2. unregister the previous registration of this name — installing over an
-//     existing extension is the ordinary upgrade path, and manager.Install
-//     unloads the old module without knowing about the app-wide registries.
-//  3. Cross-extension snippet category id conflict check: if the new manifest declares
-//     a snippets.categories[].id that collides with another currently installed
-//     extension's category, roll back via manager.Uninstall and return an error.
-//  4. snippet hook: RefreshCategories → SyncExtensionSeeds.
-//  5. bridge.Register, notify, persist enabled state.
+// Installing over an existing extension is the ordinary upgrade path (and every
+// rebuild under `opsctl ext dev`), so a failure anywhere must leave the running
+// version exactly as it was — loaded, registered, its files and cached descriptor
+// intact. Hence the new version is staged beside the old one and only swapped in
+// once everything that can refuse it has accepted it:
+//
+//  1. manager.Stage copies + loads + describes the new version in a staging dir.
+//  2. Cross-extension snippet category id conflict check against the staged manifest.
+//  3. Swap the registrations: unregister the old version, register the new one; on
+//     refusal put the old registration back.
+//  4. staged.Commit moves the new version into place and closes the old module.
+//  5. snippet hook: RefreshCategories → SyncExtensionSeeds; persist enabled state.
 func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	manifest, err := s.manager.Install(ctx, sourcePath)
+	staged, err := s.manager.Stage(ctx, sourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
+	manifest := staged.Manifest()
 
-	// manager.Install has already unloaded whatever was running under this name,
-	// so the app-wide registries now point at a module that is gone. Registration
-	// is keyed by name and refuses a name it already holds, so the old entry has
-	// to go before the new one can be registered below.
-	s.unregister(manifest.Name)
-
-	// Cross-extension category id dedup (after install+load, before bridge.Register).
-	// Intra-manifest duplicates are already rejected by manifest.validate().
+	// Cross-extension category id dedup. Intra-manifest duplicates are already
+	// rejected by manifest.validate().
 	if s.snippetHook != nil && len(manifest.Snippets.Categories) > 0 {
 		if conflict := s.findCrossExtensionCategoryConflict(manifest); conflict != "" {
-			// Roll back manager-side state (files + loaded WASM).
-			if rbErr := s.manager.Uninstall(ctx, manifest.Name); rbErr != nil {
-				return nil, fmt.Errorf("cannot install %q: snippet category %q already registered; rollback also failed: %v",
-					manifest.Name, conflict, rbErr)
-			}
+			staged.Abort(ctx)
 			return nil, fmt.Errorf("cannot install %q: snippet category %q is already registered by another extension",
 				manifest.Name, conflict)
 		}
+	}
+
+	// Registration is keyed by name and refuses a name it already holds, so the
+	// running version's entry has to go before the new one can be registered.
+	previous := s.bridge.Get(manifest.Name)
+	if previous != nil {
+		s.unregister(manifest.Name)
+	}
+	if err := s.register(staged.Extension()); err != nil {
+		staged.Abort(ctx)
+		s.restoreRegistration(previous)
+		return nil, err
+	}
+	if err := staged.Commit(ctx); err != nil {
+		s.unregister(manifest.Name)
+		s.restoreRegistration(previous)
+		return nil, fmt.Errorf("install extension: %w", err)
 	}
 
 	// Snippet hook: refresh categories first so SyncExtensionSeeds sees the new ones when
@@ -203,17 +213,21 @@ func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Ma
 		}
 	}
 
-	if ext := s.manager.GetExtension(manifest.Name); ext != nil {
-		if err := s.register(ext); err != nil {
-			if rbErr := s.manager.Uninstall(ctx, manifest.Name); rbErr != nil {
-				return nil, fmt.Errorf("%w; rollback also failed: %v", err, rbErr)
-			}
-			return nil, err
-		}
-	}
 	s.ensureState(ctx, manifest.Name, true)
 	s.notifyReload()
 	return manifest, nil
+}
+
+// restoreRegistration puts back the registration a failed install took down. prev is
+// nil when nothing of that name was registered before.
+func (s *Service) restoreRegistration(prev *extension.Extension) {
+	if prev == nil {
+		return
+	}
+	if err := s.register(prev); err != nil {
+		s.logger.Error("restore extension registration after failed install",
+			zap.String("name", prev.Name), zap.Error(err))
+	}
 }
 
 // findCrossExtensionCategoryConflict scans every installed extension — loaded AND
