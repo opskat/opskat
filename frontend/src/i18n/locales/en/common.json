@@ -2753,7 +2753,9 @@
     "pageSlot": "Slot",
     "noTools": "No tools",
     "noPolicies": "No policy groups",
-    "noPages": "No pages"
+    "noPages": "No pages",
+    "loadError": "Failed to load extensions",
+    "pageDisabled": "Extension \"{{name}}\" is disabled. Re-enable it in Settings → Extensions to use this page."
   },
   "snippet": {
     "title": "Snippets",

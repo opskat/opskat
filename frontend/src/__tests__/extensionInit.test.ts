@@ -4,6 +4,9 @@ import { useExtensionStore } from "../extension/store";
 import { getAssetType } from "@/lib/assetTypes";
 import { ListInstalledExtensions } from "../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
 
 // Mock extension dependencies
 vi.mock("../extension/inject", () => ({ injectExtensionAPI: vi.fn() }));
@@ -31,7 +34,7 @@ function resetStore() {
   for (const name of Object.keys(useExtensionStore.getState().extensions)) {
     useExtensionStore.getState().unregister(name);
   }
-  useExtensionStore.setState({ ready: false, extensions: {} });
+  useExtensionStore.setState({ ready: false, extensions: {}, disabled: {} });
 }
 
 describe("extension store", () => {
@@ -147,6 +150,59 @@ describe("bootstrapExtensions", () => {
     expect(ListInstalledExtensions).toHaveBeenCalledTimes(1);
     // 2 subscriptions: ext:reload + ext:ready
     expect(EventsOn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("refreshExtensions — disabling an extension", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetStore();
+    _resetForTesting();
+  });
+
+  it("unregisters a previously enabled extension once the backend reports it disabled", async () => {
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
+    await _refreshExtensions();
+    expect(getAssetType("oss-ext")).toBeDefined();
+
+    // ListInstalled 仍返回被禁用的扩展（Enabled=false），而不是把它从列表里去掉。
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: false, manifest }] as any);
+    await _refreshExtensions();
+
+    const state = useExtensionStore.getState();
+    expect(state.extensions["oss"]).toBeUndefined();
+    expect(getAssetType("oss-ext")).toBeUndefined();
+    expect(state.disabled["oss"]).toBe(true);
+  });
+
+  it("re-enabling clears the disabled mark and registers the types again", async () => {
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: false, manifest }] as any);
+    await _refreshExtensions();
+    expect(useExtensionStore.getState().disabled["oss"]).toBe(true);
+
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
+    await _refreshExtensions();
+
+    expect(useExtensionStore.getState().disabled["oss"]).toBeUndefined();
+    expect(getAssetType("oss-ext")?.extensionName).toBe("oss");
+  });
+
+  it("an uninstalled extension is neither registered nor marked disabled", async () => {
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: false, manifest }] as any);
+    await _refreshExtensions();
+
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([]);
+    await _refreshExtensions();
+
+    expect(useExtensionStore.getState().disabled["oss"]).toBeUndefined();
+  });
+
+  it("surfaces a failed extension list to the user instead of only logging it", async () => {
+    vi.mocked(ListInstalledExtensions).mockRejectedValue(new Error("IPC boom"));
+
+    await _refreshExtensions();
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("IPC boom"));
   });
 });
 
