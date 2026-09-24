@@ -26,7 +26,7 @@ make install        # Install frontend dependencies
 make dev            # Development mode (hot reload)
 ```
 
-The full command list (build, opsctl CLI, extension devserver, coverage, …) is in [docs/DEVELOP.md → Common Commands](./docs/DEVELOP.md#common-commands).
+The full command list (build, opsctl CLI, extension development, coverage, …) is in [docs/DEVELOP.md → Common Commands](./docs/DEVELOP.md#common-commands).
 
 > ⚠️ Some files are **generated** (e.g. `frontend/wailsjs/`, `mock_*/`, lockfiles) — never hand-edit them. See [docs/DEVELOP.md → Generated / auto-managed files](./docs/DEVELOP.md#️-generated--auto-managed-files).
 

@@ -7,61 +7,21 @@ import (
 )
 
 func TestParseManifest(t *testing.T) {
-	Convey("ParseManifest", t, func() {
+	Convey("ParseManifest reads the security contract and nothing else", t, func() {
 		Convey("should parse a valid manifest", func() {
 			data := []byte(`{
 				"name": "oss",
 				"version": "1.0.0",
-				"icon": "cloud-storage",
 				"minAppVersion": "1.2.0",
-				"hostABI": "1.0",
-				"i18n": {
-					"displayName": "manifest.displayName",
-					"description": "manifest.description"
-				},
+				"hostABI": "2.0",
 				"backend": {
 					"runtime": "wasm",
 					"binary": "main.wasm"
 				},
-				"assetTypes": [{
-					"type": "oss",
-					"i18n": { "name": "assetType.oss.name" },
-					"configSchema": {
-						"type": "object",
-						"properties": {
-							"provider": { "type": "string" }
-						},
-						"required": ["provider"]
-					}
-				}],
-				"tools": [{
-					"name": "list_buckets",
-					"i18n": { "description": "tools.list_buckets.description" },
-					"parameters": {
-						"type": "object",
-						"properties": {
-							"prefix": { "type": "string" }
-						}
-					}
-				}],
-				"policies": {
-					"type": "oss",
-					"actions": ["list", "read", "write", "delete", "admin"],
-					"groups": [{
-						"id": "ext:oss:readonly",
-						"i18n": { "name": "policy.readonly.name", "description": "policy.readonly.description" },
-						"policy": { "allow_list": ["list", "read"], "deny_list": ["delete", "admin"] }
-					}],
-					"default": ["ext:oss:readonly"]
-				},
-				"frontend": {
-					"entry": "frontend/index.js",
-					"styles": "frontend/style.css",
-					"pages": [{
-						"id": "browser",
-						"i18n": { "name": "pages.browser.name" },
-						"component": "BrowserPage"
-					}]
+				"capabilities": {
+					"http": { "allowlist": ["https://oss.example.com/"] },
+					"credentials": "read",
+					"tunnel": true
 				}
 			}`)
 
@@ -70,21 +30,41 @@ func TestParseManifest(t *testing.T) {
 			So(m.Name, ShouldEqual, "oss")
 			So(m.Version, ShouldEqual, "1.0.0")
 			So(m.MinAppVersion, ShouldEqual, "1.2.0")
-			So(m.HostABI, ShouldEqual, "1.0")
+			So(m.HostABI, ShouldEqual, "2.0")
 			So(m.Backend.Runtime, ShouldEqual, "wasm")
 			So(m.Backend.Binary, ShouldEqual, "main.wasm")
-			So(len(m.AssetTypes), ShouldEqual, 1)
-			So(m.AssetTypes[0].Type, ShouldEqual, "oss")
-			So(len(m.Tools), ShouldEqual, 1)
-			So(m.Tools[0].Name, ShouldEqual, "list_buckets")
-			So(m.Policies.Type, ShouldEqual, "oss")
-			So(len(m.Policies.Groups), ShouldEqual, 1)
-			So(m.Policies.Groups[0].ID, ShouldEqual, "ext:oss:readonly")
-			So(m.Policies.Default, ShouldResemble, []string{"ext:oss:readonly"})
-			So(m.Frontend.Entry, ShouldEqual, "frontend/index.js")
-			So(m.Frontend.Styles, ShouldEqual, "frontend/style.css")
-			So(len(m.Frontend.Pages), ShouldEqual, 1)
-			So(m.Frontend.Pages[0].Component, ShouldEqual, "BrowserPage")
+			So(m.Capabilities.HTTP.Allowlist, ShouldResemble, []string{"https://oss.example.com/"})
+			So(m.Capabilities.Credentials, ShouldEqual, CredentialAccessRead)
+			So(m.Capabilities.Tunnel, ShouldBeTrue)
+
+			Convey("and leaves the functional face to describe()", func() {
+				So(m.Tools, ShouldBeEmpty)
+				So(m.AssetTypes, ShouldBeEmpty)
+				So(m.Policies.Type, ShouldBeEmpty)
+			})
+		})
+
+		Convey("should reject a manifest that still declares what moved into describe()", func() {
+			// Silently ignoring the block is what lets a stale declaration keep looking
+			// authoritative; the extension has to be rebuilt, so say so.
+			for _, key := range retiredManifestKeys {
+				data := []byte(`{"name":"x","version":"1.0.0","hostABI":"2.0",` +
+					`"backend":{"runtime":"wasm","binary":"main.wasm"},"` + key + `":{}}`)
+				_, err := ParseManifest(data)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, key)
+				So(err.Error(), ShouldContainSubstring, "describe()")
+			}
+		})
+
+		Convey("should reject an extension built against the 1.x ABI at parse time", func() {
+			// A 1.x module exports neither opskat_call nor describe(); refusing it here
+			// names the fix instead of surfacing a missing export on first use.
+			data := []byte(`{"name":"x","version":"1.0.0","hostABI":"1.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`)
+			_, err := ParseManifest(data)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "hostABI")
+			So(err.Error(), ShouldContainSubstring, "2.0")
 		})
 
 		Convey("should reject manifest missing required fields", func() {
@@ -95,7 +75,7 @@ func TestParseManifest(t *testing.T) {
 		})
 
 		Convey("should reject invalid minAppVersion", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "minAppVersion": "invalid", "hostABI":"1.0"}`)
+			data := []byte(`{"name": "x", "version": "1.0.0", "minAppVersion": "invalid", "hostABI":"2.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "minAppVersion")
@@ -116,347 +96,42 @@ func TestParseManifest(t *testing.T) {
 		})
 
 		Convey("should reject manifest with invalid name characters", func() {
-			data := []byte(`{"name": "../../etc/passwd", "version": "1.0.0", "hostABI":"1.0"}`)
+			data := []byte(`{"name": "../../etc/passwd", "version": "1.0.0", "hostABI":"2.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "name must match")
 		})
 
 		Convey("should reject manifest with uppercase name", func() {
-			data := []byte(`{"name": "MyExt", "version": "1.0.0", "hostABI":"1.0"}`)
+			data := []byte(`{"name": "MyExt", "version": "1.0.0", "hostABI":"2.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "name must match")
 		})
 
 		Convey("should accept valid name characters", func() {
-			data := []byte(`{"name": "my-ext_1", "version": "1.0.0", "hostABI":"1.0"}`)
+			data := []byte(`{"name": "my-ext_1", "version": "1.0.0", "hostABI":"2.0", "backend":{"runtime":"wasm","binary":"main.wasm"}}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldBeNil)
 		})
 
-		Convey("should parse page slot field", func() {
-			data := []byte(`{
-				"name": "oss",
-				"version": "1.0.0",
-				"hostABI": "1.0",
-				"frontend": {
-					"pages": [{
-						"id": "connect",
-						"slot": "asset.connect",
-						"i18n": { "name": "pages.connect.name" },
-						"component": "ConnectPage"
-					}]
-				}
-			}`)
-			m, err := ParseManifest(data)
-			So(err, ShouldBeNil)
-			So(len(m.Frontend.Pages), ShouldEqual, 1)
-			So(m.Frontend.Pages[0].Slot, ShouldEqual, "asset.connect")
-		})
-
-		Convey("should reject policy group without ext: prefix", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "minAppVersion": "1.0.0",
-				"hostABI": "1.0",
-				"backend": {"runtime": "wasm", "binary": "main.wasm"},
-				"policies": {
-					"type": "x", "actions": ["read"],
-					"groups": [{"id": "nope:bad", "i18n": {"name": "n", "description": "d"}, "policy": {"allow_list": ["read"]}}]
-				}
-			}`)
+		Convey("should reject a manifest that names no wasm binary", func() {
+			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "2.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "ext:")
+			So(err.Error(), ShouldContainSubstring, "backend.binary")
 		})
 
 		Convey("should reject invalid credentials capability", func() {
 			data := []byte(`{
 				"name": "x", "version": "1.0.0",
-				"hostABI": "1.0",
+				"hostABI": "2.0",
+				"backend": {"runtime": "wasm", "binary": "main.wasm"},
 				"capabilities": { "credentials": "write" }
 			}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "credentials")
-		})
-
-		Convey("should accept manifest without snippets block", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0"
-			}`)
-			m, err := ParseManifest(data)
-			So(err, ShouldBeNil)
-			So(len(m.Snippets.Categories), ShouldEqual, 0)
-			So(len(m.Snippets.Seed), ShouldEqual, 0)
-		})
-
-		Convey("should accept valid snippets block", func() {
-			data := []byte(`{
-				"name": "kafka-ext", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "kafka", "i18n": {"name": "Kafka"}}],
-				"snippets": {
-					"categories": [{"id": "kafka", "assetType": "kafka", "i18n": {"name": "category.kafka"}}],
-					"seed": [
-						{"key": "list-topics", "name": "List topics", "category": "kafka",
-						 "content": "kafka-topics --list",
-						 "tags": ["kafka", "list"]},
-						{"key": "ls", "name": "ls", "category": "shell", "content": "ls -al"}
-					]
-				}
-			}`)
-			m, err := ParseManifest(data)
-			So(err, ShouldBeNil)
-			So(len(m.Snippets.Categories), ShouldEqual, 1)
-			So(m.Snippets.Categories[0].ID, ShouldEqual, "kafka")
-			So(len(m.Snippets.Seed), ShouldEqual, 2)
-		})
-
-		Convey("should reject snippet category id collision with builtin", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "ssh", "i18n": {"name": "n"}}],
-				"snippets": {
-					"categories": [{"id": "shell", "assetType": "ssh", "i18n": {"name": "n"}}]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "builtin")
-		})
-
-		Convey("should reject duplicate snippet category id within manifest", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "kafka", "i18n": {"name": "n"}}],
-				"snippets": {
-					"categories": [
-						{"id": "kafka", "assetType": "kafka", "i18n": {"name": "n"}},
-						{"id": "kafka", "assetType": "kafka", "i18n": {"name": "n2"}}
-					]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "duplicate")
-		})
-
-		Convey("should reject snippet category with invalid id format", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "kafka", "i18n": {"name": "n"}}],
-				"snippets": {
-					"categories": [{"id": "Kafka_1", "assetType": "kafka", "i18n": {"name": "n"}}]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "must match")
-		})
-
-		Convey("should reject snippet category with empty assetType", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"snippets": {
-					"categories": [{"id": "kafka", "assetType": "", "i18n": {"name": "n"}}]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "assetType")
-		})
-
-		Convey("should reject snippet category whose assetType is not declared", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "kafka", "i18n": {"name": "n"}}],
-				"snippets": {
-					"categories": [{"id": "missing", "assetType": "other", "i18n": {"name": "n"}}]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "assetTypes")
-		})
-
-		Convey("should reject seed snippet referencing unknown category", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "kafka", "i18n": {"name": "n"}}],
-				"snippets": {
-					"categories": [{"id": "kafka", "assetType": "kafka", "i18n": {"name": "n"}}],
-					"seed": [
-						{"key": "x", "name": "x", "category": "nope", "content": "echo"}
-					]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "neither builtin nor declared")
-		})
-
-		Convey("should reject duplicate seed snippet keys", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"snippets": {
-					"seed": [
-						{"key": "k1", "name": "a", "category": "shell", "content": "x"},
-						{"key": "k1", "name": "b", "category": "shell", "content": "y"}
-					]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "duplicate")
-		})
-
-		Convey("should reject seed snippet with invalid key format", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"snippets": {
-					"seed": [{"key": "BadKey!", "name": "a", "category": "shell", "content": "x"}]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "must match")
-		})
-
-		Convey("should reject seed snippet with empty content", func() {
-			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0",
-				"snippets": {
-					"seed": [{"key": "k1", "name": "a", "category": "shell", "content": "   "}]
-				}
-			}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "content")
-		})
-	})
-}
-
-func TestParseManifest_ToolsValidation(t *testing.T) {
-	base := `{"name":"x","version":"1.0.0","hostABI":"1.0"`
-
-	Convey("ParseManifest tools[].parameters validation", t, func() {
-		Convey("should accept a manifest without any tools", func() {
-			_, err := ParseManifest([]byte(base + `}`))
-			So(err, ShouldBeNil)
-		})
-
-		Convey("should reject a tool missing parameters", func() {
-			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t"}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "parameters")
-		})
-
-		Convey("should reject parameters whose type is not object", func() {
-			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"array"}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "parameters.type")
-		})
-
-		Convey("should reject a property missing type", func() {
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"k":{"description":"no type"}}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "k")
-		})
-
-		Convey("should reject a dangling required entry", func() {
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{},"required":["ghost"]}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "ghost")
-		})
-
-		Convey("should reject a duplicate tool name", func() {
-			one := `{"name":"t","parameters":{"type":"object","properties":{}}}`
-			_, err := ParseManifest([]byte(base + `,"tools":[` + one + `,` + one + `]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "duplicate")
-		})
-
-		Convey("should accept the shapes used by the real oss manifest", func() {
-			// 覆盖 oss 用到的三种类型：string / integer / array<string>，含空 properties。
-			ok := base + `,"tools":[
-				{"name":"list_buckets","parameters":{"type":"object","properties":{}}},
-				{"name":"list_objects","parameters":{"type":"object","properties":{"maxKeys":{"type":"integer"}}}},
-				{"name":"delete_objects","parameters":{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"]}}
-			]}`
-			_, err := ParseManifest([]byte(ok))
-			So(err, ShouldBeNil)
-		})
-
-		Convey("should reject a tool without a name, naming its index", func() {
-			_, err := ParseManifest([]byte(base + `,"tools":[{"parameters":{"type":"object","properties":{}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "tools[0].name")
-		})
-
-		Convey("should reject parameters.type=object when properties is absent", func() {
-			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"object"}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, `tools["t"]`)
-			So(err.Error(), ShouldContainSubstring, "properties")
-		})
-
-		Convey("should reject parameters.type=object when properties is not an object", func() {
-			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"object","properties":"nope"}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, `tools["t"]`)
-			So(err.Error(), ShouldContainSubstring, "properties")
-		})
-
-		Convey("should reject a property whose value itself is not an object", func() {
-			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"object","properties":{"k":"x"}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "properties.k")
-			So(err.Error(), ShouldContainSubstring, "must be an object")
-		})
-
-		Convey("should reject a genuinely unsupported property type", func() {
-			// "object" is deliberately unsupported: nested structures go through ext_exec's
-			// --json escape hatch instead of inventing a nested flag syntax.
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"nested":{"type":"object"}}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "properties.nested")
-			So(err.Error(), ShouldContainSubstring, `unsupported type "object"`)
-		})
-
-		Convey("should reject an array property without items", func() {
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"tags":{"type":"array"}}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "properties.tags")
-			So(err.Error(), ShouldContainSubstring, "without items")
-		})
-
-		Convey("should reject an array property with a non-string item type", func() {
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"tags":{"type":"array","items":{"type":"integer"}}}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "properties.tags")
-			So(err.Error(), ShouldContainSubstring, "array<integer>")
-		})
-
-		Convey("should reject required when it is not an array", func() {
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":"key"}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "parameters.required")
-			So(err.Error(), ShouldContainSubstring, "must be an array")
-		})
-
-		Convey("should not claim items is missing when items is present but malformed", func() {
-			_, err := ParseManifest([]byte(base +
-				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"tags":{"type":"array","items":"string"}}}}]}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "properties.tags.items")
-			So(err.Error(), ShouldContainSubstring, "must be an object")
-			So(err.Error(), ShouldNotContainSubstring, "without items")
 		})
 	})
 }

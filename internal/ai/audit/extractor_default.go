@@ -15,10 +15,9 @@ func init() {
 	RegisterExtractor("exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	// "exec"'s args["command"] is the target asset type's own exec DSL, so
 	// runner.resolveAssetForAudit's canonicalize step (k8s --context/--namespace
-	// injection, etcd/mongo/kafka DSL round-trip) is meaningful for it. ext_exec below
-	// shares the same asset+command argument shape but speaks a different DSL (an
-	// extension's own invocation syntax) and must not register here — see
-	// canonicalizingTools' doc comment in extractor.go.
+	// injection, etcd/mongo/kafka DSL round-trip, an extension's flag DSL) is
+	// meaningful for it. Registration stays an allow-list rather than a
+	// `toolName == "exec"` branch — see canonicalizingTools' doc in extractor.go.
 	RegisterCanonicalizingTool("exec")
 	// cp 是传输面的唯一工具名，两个入口（AI 工具与 opsctl cp）用同一个 src/dst 参数形状。
 	// upload_file / download_file 的两条 RegisterToolAlias 随工具一起退役：别名存在的唯一
@@ -33,7 +32,6 @@ func init() {
 		}
 		return "grant: " + v
 	})
-	RegisterExtractor("ext_exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	RegisterExtractor("delete_asset", func(a map[string]any) string {
 		return "delete asset " + aictx.ArgString(a, "asset")
 	})

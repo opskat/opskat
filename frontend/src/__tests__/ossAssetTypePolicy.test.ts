@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { getBuiltinTypes } from "@/lib/assetTypes";
+import { getAssetType } from "@/lib/assetTypes";
 
 function goSource(relative: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
@@ -21,7 +21,7 @@ function goOSSPolicyFieldNames(): string[] {
 }
 
 function ossPolicyDef() {
-  return getBuiltinTypes().find((def) => def.type === "oss")?.policy;
+  return getAssetType("oss")?.policy;
 }
 
 describe("oss asset type policy definition", () => {

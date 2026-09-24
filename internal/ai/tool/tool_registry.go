@@ -58,7 +58,6 @@ func AllToolDefs() []ToolDef {
 		{"delete_group", handleDeleteGroup},
 		{"cp", handleCp},
 		{"request_permission", handleRequestGrant},
-		{"ext_exec", handleExecTool},
 		{"exec", handleExec},
 		{"help", handleHelp},
 	}

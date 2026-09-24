@@ -20,43 +20,44 @@ func TestDefaultHostProvider(t *testing.T) {
 		host := NewDefaultHostProvider(DefaultHostConfig{
 			Logger: logger,
 		})
-		defer host.CloseAll()
+		hs := newHostSession(host)
+		defer hs.CloseAll()
 
 		Convey("IOOpen file read", func() {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "test.txt")
 			So(os.WriteFile(path, []byte("content"), 0644), ShouldBeNil)
 
-			id, meta, err := host.IOOpen(IOOpenParams{Type: "file", Path: path, Mode: "read"})
+			id, meta, err := hs.Open(IOOpenParams{Type: "file", Path: path, Mode: "read"})
 			So(err, ShouldBeNil)
 			So(id, ShouldBeGreaterThan, 0)
 			So(meta.Size, ShouldEqual, 7)
 
-			data, err := host.IORead(id, 100)
+			data, err := hs.Read(id, 100)
 			So(err, ShouldBeNil)
 			So(string(data), ShouldEqual, "content")
 
-			So(host.IOClose(id), ShouldBeNil)
+			So(hs.Close(id), ShouldBeNil)
 		})
 
 		Convey("IOOpen file write", func() {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "out.txt")
 
-			id, _, err := host.IOOpen(IOOpenParams{Type: "file", Path: path, Mode: "write"})
+			id, _, err := hs.Open(IOOpenParams{Type: "file", Path: path, Mode: "write"})
 			So(err, ShouldBeNil)
 
-			n, err := host.IOWrite(id, []byte("output"))
+			n, err := hs.Write(id, []byte("output"))
 			So(err, ShouldBeNil)
 			So(n, ShouldEqual, 6)
 
-			So(host.IOClose(id), ShouldBeNil)
+			So(hs.Close(id), ShouldBeNil)
 			data, _ := os.ReadFile(path) //nolint:gosec // test file with known path
 			So(string(data), ShouldEqual, "output")
 		})
 
 		Convey("IOOpen unknown type returns error", func() {
-			_, _, err := host.IOOpen(IOOpenParams{Type: "unknown"})
+			_, _, err := hs.Open(IOOpenParams{Type: "unknown"})
 			So(err, ShouldNotBeNil)
 		})
 
@@ -83,9 +84,10 @@ func TestDefaultHostProvider_IOReadEOF(t *testing.T) {
 
 		logger, _ := zap.NewDevelopment()
 		host := NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
-		defer host.CloseAll()
+		hs := newHostSession(host)
+		defer hs.CloseAll()
 
-		id, _, err := host.IOOpen(IOOpenParams{
+		id, _, err := hs.Open(IOOpenParams{
 			Type:         "http",
 			Method:       "GET",
 			URL:          srv.URL,
@@ -93,14 +95,14 @@ func TestDefaultHostProvider_IOReadEOF(t *testing.T) {
 		})
 		So(err, ShouldBeNil)
 
-		meta, err := host.IOFlush(id)
+		meta, err := hs.Flush(id)
 		So(err, ShouldBeNil)
 		So(meta.Status, ShouldEqual, 403)
 
 		// Read entire response body through IORead
 		var body []byte
 		for {
-			data, err := host.IORead(id, 4096)
+			data, err := hs.Read(id, 4096)
 			if len(data) > 0 {
 				body = append(body, data...)
 			}
@@ -112,6 +114,6 @@ func TestDefaultHostProvider_IOReadEOF(t *testing.T) {
 
 		So(string(body), ShouldContainSubstring, "AccessDenied")
 
-		So(host.IOClose(id), ShouldBeNil)
+		So(hs.Close(id), ShouldBeNil)
 	})
 }

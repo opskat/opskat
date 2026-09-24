@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/ai/cmdline"
 )
 
 func TestHoistGlobalFlags(t *testing.T) {
@@ -86,6 +88,37 @@ func TestParseExecArgs(t *testing.T) {
 	t.Run("--type 缺值报错", func(t *testing.T) {
 		_, _, err := parseExecArgs([]string{"--type"})
 		require.ErrorContains(t, err, "--type")
+	})
+	t.Run("本地 shell 吃掉的词边界在下游重新切分后仍在", func(t *testing.T) {
+		// 下游（扩展 flag DSL、k8s/etcd/kafka canonicalizer、ssh 远端 shell）都会用真正
+		// 的 shell 解析器重新切分这个串；裸空格拼接会让带空格的值变成两个词。
+		for _, argv := range [][]string{
+			{"grep", "foo bar", "file"},
+			{"note_put", "--content=restart via systemctl"},
+		} {
+			_, cmd, err := parseExecArgs(append([]string{"--"}, argv...))
+			require.NoError(t, err)
+			words, err := cmdline.Words(cmd)
+			require.NoError(t, err)
+			require.Equal(t, argv, words)
+		}
+	})
+	t.Run("不含空白的词原样保留，glob 仍交给远端 shell", func(t *testing.T) {
+		_, cmd, err := parseExecArgs([]string{"--", "ls", "*.log"})
+		require.NoError(t, err)
+		require.Equal(t, "ls *.log", cmd)
+		_, cmd, err = parseExecArgs([]string{"--", "grep", "foo bar", "*.log"})
+		require.NoError(t, err)
+		require.Equal(t, "grep 'foo bar' *.log", cmd)
+	})
+	t.Run("单个词就是命令串本身，不加引号", func(t *testing.T) {
+		// `opsctl exec prod-db -- "SELECT * FROM t"` 是所有 DSL 的文档用法。
+		_, cmd, err := parseExecArgs([]string{"--", "SELECT * FROM users"})
+		require.NoError(t, err)
+		require.Equal(t, "SELECT * FROM users", cmd)
+		_, cmd, err = parseExecArgs([]string{"ls | wc -l"})
+		require.NoError(t, err)
+		require.Equal(t, "ls | wc -l", cmd)
 	})
 	t.Run("没有命令时报错", func(t *testing.T) {
 		_, _, err := parseExecArgs([]string{"--"})

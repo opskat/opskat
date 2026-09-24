@@ -115,14 +115,12 @@ func resolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 // already saw, so the audit row doesn't show the model's raw string while the approval
 // showed the effective one.
 //
-// The audit.RegisterCanonicalizingTool gate matters because args["asset"]+args["command"]
-// is not unique to "exec": ext_exec shares the exact same argument shape but its command
-// is an extension's own invocation syntax, never the target asset type's exec DSL.
-// Running a k8s asset's CanonicalizeFunc on an ext_exec command doesn't error (it just
-// tokenizes the string as if it were kubectl args) — it silently rewrites the audit row
-// into a command that was never approved nor executed. Gating by an allow-list (not a
-// toolName == "exec" branch here) follows the same "register, don't switch" pattern as
-// audit.RegisterGroupScopedTool.
+// The audit.RegisterCanonicalizingTool gate is an allow-list rather than a
+// `toolName == "exec"` branch here, following the same "register, don't switch" pattern
+// as audit.RegisterGroupScopedTool: args["asset"]+args["command"] is a shape any future
+// tool could adopt, and running the asset type's CanonicalizeFunc over a command written
+// in some other DSL doesn't error — it just tokenizes it as if it were that DSL and
+// silently rewrites the audit row into a command that was never approved nor executed.
 //
 // Best-effort throughout: any resolution failure (missing/ambiguous/unknown asset,
 // no canonicalize hook, canonicalize error) just leaves the corresponding return

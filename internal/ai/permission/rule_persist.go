@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -88,6 +89,15 @@ type ruleLanding struct {
 	// refPolicyType 是引用组按哪张权限组表解析（k8s 的 K8sPolicy 列按 command 表
 	// 解析，与 collectK8sPolicies 用 ResolveCommandGroups 一致）。
 	refPolicyType string
+	// refShape 是解码引用权限组 Policy JSON 用的形状，注册时一次解析。内置类型的
+	// refPolicyType 就是宿主的一张策略列，因此它等于 ruleShapes[refPolicyType]；
+	// 扩展的权限组 kind 是 manifest 自己声明的策略面名（不是宿主的列），所以由注册
+	// 方直接给出。nil 表示该落点不读引用组。
+	refShape *shapeLanding
+	// ownFilter 非空时，只有它认下的规则算这个类型的"holder 自身规则"。共用一列的
+	// 类型才需要它：扩展全都落在 CommandPolicy 上，不过滤的话 A 扩展的 show 会把 B
+	// 扩展（和 ssh）的规则列成自己的。
+	ownFilter func(rule string) bool
 	// land 把一条已归一化的 pattern 变成落库的规则。
 	land func(pattern string) ([]LandedRule, error)
 	// match 判定该形状的一条 deny 是否遮蔽一条 allow 落点（deny 无条件先判，
@@ -98,6 +108,12 @@ type ruleLanding struct {
 	// 置 nil 避免同一列读两遍。
 	generic func(denyRule, rule string) bool
 }
+
+// landingMu 保护 ruleLandings。内置类型在 init() 里一次写完，扩展提供的类型则在用户
+// 启用/禁用扩展时增删，与 opsctl policy / AI 会话上正在跑的读取并发（与
+// type_registry.go 的 registryMu 同一理由）。shapeCanonicals 只由 init 期的
+// registerRuleSink 写，运行期落点不参与认领，因此不在锁的范围里。
+var landingMu sync.RWMutex
 
 var ruleLandings = make(map[string]*ruleLanding)
 
@@ -110,19 +126,34 @@ var shapeCanonicals = make(map[*shapeLanding]string)
 // grantPatterns 并列（type_registry.go 的 init 里一起注册）。重复注册 panic——注册
 // 冲突是启动期编程错误。
 func registerRuleSink(canonical string, landing *ruleLanding) {
-	if _, exists := ruleLandings[canonical]; exists {
-		panic(fmt.Sprintf("permission: duplicate rule sink registration %q", canonical))
-	}
-	if landing.shape == nil || landing.land == nil || landing.match == nil {
-		panic(fmt.Sprintf("permission: invalid rule sink registration %q", canonical))
-	}
+	// 内置类型引用的权限组 kind 就是宿主的一张策略列，解析一次存起来。
+	landing.refShape = ruleShapes[landing.refPolicyType]
 	if _, ok := shapeCanonicals[landing.shape]; !ok {
 		shapeCanonicals[landing.shape] = canonical
 	}
+	if err := addRuleSink(canonical, landing); err != nil {
+		panic(err.Error())
+	}
+}
+
+// addRuleSink 是 init 期与运行期共用的写入：重复/非法注册报错，由调用方决定是 panic
+// （内置类型的编程错误）还是拒绝加载（用户启用的扩展）。
+func addRuleSink(canonical string, landing *ruleLanding) error {
+	if landing.shape == nil || landing.land == nil || landing.match == nil {
+		return fmt.Errorf("permission: invalid rule sink registration %q", canonical)
+	}
+	landingMu.Lock()
+	defer landingMu.Unlock()
+	if _, exists := ruleLandings[canonical]; exists {
+		return fmt.Errorf("permission: duplicate rule sink registration %q", canonical)
+	}
 	ruleLandings[canonical] = landing
+	return nil
 }
 
 func ruleLandingFor(canonicalType string) (*ruleLanding, bool) {
+	landingMu.RLock()
+	defer landingMu.RUnlock()
 	landing, ok := ruleLandings[canonicalType]
 	return landing, ok
 }
@@ -151,7 +182,21 @@ func HolderOwnTypeRules(holder policyent.Holder, canonicalType string) (allow, d
 		return nil, nil, fmt.Errorf("no permanent rule support for type %q", canonicalType)
 	}
 	allow, deny, _, err = landing.shape.ownSides(holder)
-	return allow, deny, err
+	return landing.ownRules(allow), landing.ownRules(deny), err
+}
+
+// ownRules 过滤出属于这个落点的 holder 自身规则（见 ruleLanding.ownFilter）。
+func (l *ruleLanding) ownRules(rules []string) []string {
+	if l.ownFilter == nil {
+		return rules
+	}
+	kept := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if l.ownFilter(r) {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // RemoveTypeRule 从 holder 自身那一列移除一条精确匹配的规则；不存在时报错。
@@ -644,10 +689,10 @@ func collectRules(ctx context.Context, origins []ruleHolderOrigin, canonicalType
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range allow {
+		for _, r := range landing.ownRules(allow) {
 			view.Allow = append(view.Allow, sourcedRule(o, r, false))
 		}
-		for _, r := range deny {
+		for _, r := range landing.ownRules(deny) {
 			view.Deny = append(view.Deny, sourcedRule(o, r, false))
 		}
 		collectPolicyGroupRules(ctx, landing, refs, view, seenGroups)
@@ -676,7 +721,8 @@ func sourcedRule(o ruleHolderOrigin, rule string, generic bool) SourcedRule {
 	return SourcedRule{Rule: rule, Kind: o.kind, HolderID: o.id, HolderName: o.name, Generic: generic}
 }
 
-// genericRuleLanding 是组通用层读引用组用的落点（command 表），init 里注册后填充。
+// genericRuleLanding 是组通用层读引用组用的落点（command 表），shape / refShape 都在
+// init 里 commandShape 注册之后填充。
 var genericRuleLanding = &ruleLanding{
 	refPolicyType: policyKindCommand,
 }
@@ -698,8 +744,8 @@ func collectPolicyGroupRules(ctx context.Context, landing *ruleLanding, refs []s
 	if len(refs) == 0 {
 		return
 	}
-	shape, ok := ruleShapes[landing.refPolicyType]
-	if !ok {
+	shape := landing.refShape
+	if shape == nil {
 		return
 	}
 	for _, id := range refs {

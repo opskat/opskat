@@ -20,7 +20,7 @@
 // Conventions and rationale: docs/references/e2e-harness-guide.md
 const { execFileSync, spawn } = require("node:child_process");
 const { createHash } = require("node:crypto");
-const { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } = require("node:fs");
+const { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } = require("node:fs");
 const { homedir, tmpdir } = require("node:os");
 const { join } = require("node:path");
 
@@ -238,6 +238,43 @@ function loadDotEnv() {
   return true;
 }
 
+// The in-repo extensions a verification run installs before the app boots.
+//
+// `notebook` is the reference extension (extensions/notebook): an asset type with a
+// configSchema, tools and policy groups — i.e. everything the extension-facing UI
+// renders. Anything driving that UI needs it present, so the harness ships it rather
+// than each spec arranging its own install.
+const HARNESS_EXTENSIONS = ["notebook"];
+
+// Builds each extension's wasm guest and lays the result out in the run's data dir,
+// exactly as an installed extension looks on disk (`<dataDir>/extensions/<name>/`) —
+// the app scans that directory at boot, so nothing else has to run.
+//
+// Building here rather than in a CI step or a Makefile recipe keeps `pnpm test` the
+// single entry point on every platform: CI already has the Go toolchain (it runs
+// `wails dev`), and `GOOS=wasip1` needs no extra SDK. The go build cache makes the
+// repeat cost negligible.
+//
+// The copy rule mirrors `make build-ext`: ship the whole extension directory except
+// the Go sources it was built from and any previous local build output.
+function installExtensions(dataDir, names = HARNESS_EXTENSIONS) {
+  for (const name of names) {
+    const source = join(repoRoot, "extensions", name);
+    const target = join(dataDir, "extensions", name);
+    mkdirSync(target, { recursive: true });
+    execFileSync("go", ["build", "-buildmode=c-shared", "-o", join(target, "main.wasm"), `./extensions/${name}`], {
+      cwd: repoRoot,
+      env: { ...process.env, GOOS: "wasip1", GOARCH: "wasm" },
+      stdio: "inherit",
+    });
+    cpSync(source, target, {
+      recursive: true,
+      filter: (path) => !path.endsWith(".go") && !path.startsWith(join(source, "dist")),
+    });
+  }
+  return names;
+}
+
 // Starts the browser host (see harness/browser-host.mjs) detached, so the caller can
 // exit while the browser keeps running, and returns its pid for `sandbox.mjs down`.
 //
@@ -345,6 +382,7 @@ module.exports = {
   sessionFile,
   webserverLogPath,
   prepareFrontendDist,
+  installExtensions,
   loadDotEnv,
   spawnBrowserHost,
   waitForCdp,

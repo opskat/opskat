@@ -2,9 +2,8 @@ import { useState, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Search, ChevronDown } from "lucide-react";
 import { cn, Popover, PopoverContent, PopoverTrigger, Input, Button } from "@opskat/ui";
-import { useExtensionStore } from "@/extension";
 import {
-  getAssetTypeOptions,
+  useAssetTypeOptions,
   buildAssetTypeGroups,
   filterAssetTypeOptions,
   resolveAssetTypeLabel,
@@ -19,11 +18,10 @@ interface AssetTypePickerProps {
 
 export function AssetTypePicker({ value, onChange, disabled }: AssetTypePickerProps) {
   const { t } = useTranslation();
-  const extensions = useExtensionStore((s) => s.extensions);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const options = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
+  const options = useAssetTypeOptions();
   const resolveLabel = useCallback((o: AssetTypeOption) => resolveAssetTypeLabel(o, t), [t]);
 
   const selected = options.find((o) => o.value === value);

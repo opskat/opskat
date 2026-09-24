@@ -3,6 +3,7 @@ package policy_group_entity
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -520,6 +521,12 @@ func isBuiltinKind(kind string) bool {
 	return ok
 }
 
+// IsBuiltinPolicyType 报告 kind 是否为内置策略类型（command / query / redis …）。
+// 扩展的策略面不能与之同名：权限组按 PolicyType 归类，同名会让两边互判对方的组。
+func IsBuiltinPolicyType(kind string) bool {
+	return isBuiltinKind(kind)
+}
+
 // FindBuiltin 按 ID 查找内置权限组
 func FindBuiltin(id string) *PolicyGroup {
 	return builtinMap[id]
@@ -543,10 +550,19 @@ func IsExtensionID(id string) bool {
 }
 
 // RegisterExtensionGroup registers an extension-provided policy group.
-func RegisterExtensionGroup(pg *PolicyGroup) {
+//
+// An ID that is already registered is refused rather than overwritten: the table is
+// shared by every loaded extension, and an overwrite would both replace the owner's
+// rules with the newcomer's and, on the newcomer's unregister, delete the owner's
+// group out from under it.
+func RegisterExtensionGroup(pg *PolicyGroup) error {
 	extensionGroupMu.Lock()
 	defer extensionGroupMu.Unlock()
+	if existing, ok := extensionGroupMap[pg.BuiltinID]; ok {
+		return fmt.Errorf("policy group %q is already registered by extension %q", pg.BuiltinID, existing.ExtensionName)
+	}
 	extensionGroupMap[pg.BuiltinID] = pg
+	return nil
 }
 
 // FindExtensionGroup looks up an extension policy group by ID.

@@ -19,10 +19,12 @@ func TestIOHandleManager(t *testing.T) {
 			path := filepath.Join(dir, "test.txt")
 			So(os.WriteFile(path, []byte("hello world"), 0644), ShouldBeNil)
 
-			h, meta, err := mgr.OpenFile(path, "read")
+			res, err := OpenFileResource(path, "read")
+			So(err, ShouldBeNil)
+			So(res.Meta.Size, ShouldEqual, 11)
+			h, err := mgr.Register(res)
 			So(err, ShouldBeNil)
 			So(h, ShouldBeGreaterThan, 0)
-			So(meta.Size, ShouldEqual, 11)
 
 			buf := make([]byte, 5)
 			n, err := mgr.Read(h, buf)
@@ -43,7 +45,9 @@ func TestIOHandleManager(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "out.txt")
 
-			h, _, err := mgr.OpenFile(path, "write")
+			res, err := OpenFileResource(path, "write")
+			So(err, ShouldBeNil)
+			h, err := mgr.Register(res)
 			So(err, ShouldBeNil)
 
 			n, err := mgr.Write(h, []byte("written"))
@@ -66,10 +70,13 @@ func TestIOHandleManager(t *testing.T) {
 			path := filepath.Join(dir, "a.txt")
 			So(os.WriteFile(path, []byte("a"), 0644), ShouldBeNil)
 
-			h, _, _ := mgr.OpenFile(path, "read")
+			res, err := OpenFileResource(path, "read")
+			So(err, ShouldBeNil)
+			h, err := mgr.Register(res)
+			So(err, ShouldBeNil)
 			mgr.CloseAll()
 
-			_, err := mgr.Read(h, make([]byte, 1))
+			_, err = mgr.Read(h, make([]byte, 1))
 			So(err, ShouldNotBeNil)
 		})
 	})

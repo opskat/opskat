@@ -42,8 +42,6 @@ github.com/bytedance/sonic v1.12.5/go.mod h1:B8Gt/XvtZ3Fqj+iSKMypzymZxw/FVwgIGKz
 github.com/bytedance/sonic/loader v0.1.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
 github.com/bytedance/sonic/loader v0.2.1 h1:1GgorWTqf12TA8mma4DDSbaQigE2wOgQo7iCjjJv3+E=
 github.com/bytedance/sonic/loader v0.2.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
-github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1 h1:BN/vCxcxLnaU+Er1+yQgHm0f4GrubCE0K9rKkuXvhvY=
-github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1/go.mod h1:s72XmeaSoa3ysdqSTc4qliGqLHH6iBBGW6b8bFi0QRk=
 github.com/cago-frame/agents v0.0.0-20260914054912-3794c3930948 h1:kLqWQEKKDNzhKaaZ0nJk9XwX7hVO9PpzIAE8NdhVwcA=
 github.com/cago-frame/agents v0.0.0-20260914054912-3794c3930948/go.mod h1:s72XmeaSoa3ysdqSTc4qliGqLHH6iBBGW6b8bFi0QRk=
 github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729 h1:HtiDxeq5rPdJaRQI7XzJbly1WPCeLKaEa9txs2SKnFM=
@@ -61,8 +59,6 @@ github.com/cloudwego/iasm v0.2.0/go.mod h1:8rXZaNYT2n95jn+zTI1sDr+IgcD2GVs0nlbbQ
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
 github.com/cockroachdb/datadriven v1.0.2 h1:H9MtNqVoVhvd9nCBwOyDjUEdZCREqbIdCJD93PBm/jA=
 github.com/cockroachdb/datadriven v1.0.2/go.mod h1:a9RdTaap04u637JoCzcUoIcDmvwSUtcUFtT/C3kJlTU=
-github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9g=
-github.com/coder/websocket v1.8.14/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/coreos/go-semver v0.3.1 h1:yi21YpKnrx1gt5R+la8n5WgS0kCrsPp33dmEyHReZr4=
 github.com/coreos/go-semver v0.3.1/go.mod h1:irMmmIw/7yzSRPWryHsK7EYSg09caPQL03VsM8rvUec=
 github.com/coreos/go-systemd/v22 v22.5.0 h1:RrqgGjYQKalulkV8NGVIfkXQf6YYmOyiJKk8iXXhfZs=

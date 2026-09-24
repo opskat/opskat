@@ -220,7 +220,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 		mgr := NewIOHandleManager()
 		defer mgr.CloseAll()
 
-		Convey("OpenHTTP and Flush round-trip", func() {
+		Convey("OpenHTTPResource and Flush round-trip", func() {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
@@ -228,14 +228,16 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			id, meta, err := mgr.OpenHTTP(IOOpenParams{
+			res, err := OpenHTTPResource(IOOpenParams{
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
 			}, nil)
 			So(err, ShouldBeNil)
+			So(res.Meta.Status, ShouldEqual, 0) // no status yet before flush
+			id, err := mgr.Register(res)
+			So(err, ShouldBeNil)
 			So(id, ShouldBeGreaterThan, 0)
-			So(meta.Status, ShouldEqual, 0) // no status yet before flush
 
 			flushed, err := mgr.Flush(id)
 			So(err, ShouldBeNil)
@@ -253,7 +255,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 		Convey("Flush on non-HTTP handle returns error", func() {
 			// Register a plain handle (non-HTTP)
 			r := strings.NewReader("hello")
-			id, regErr := mgr.Register(r, nil, io.NopCloser(r), IOMeta{})
+			id, regErr := mgr.Register(&IOResource{Reader: r, Closer: io.NopCloser(r)})
 			So(regErr, ShouldBeNil)
 
 			_, err := mgr.Flush(id)

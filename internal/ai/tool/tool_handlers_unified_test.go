@@ -289,7 +289,7 @@ func TestHandleHelp_UnknownTypeListsHelpTypesNotExecTypes(t *testing.T) {
 	const undocumentedType = "test-truly-undocumented-type"
 
 	permission.RegisterHelpDoc(docOnlyType, "fake doc-only body")
-	t.Cleanup(func() { permission.UnregisterExecutorForTest(docOnlyType) })
+	t.Cleanup(func() { permission.UnregisterExecutor(docOnlyType) })
 
 	m.EXPECT().FindByName(gomock.Any(), "9").Return(nil, nil)
 	m.EXPECT().Find(gomock.Any(), int64(9)).Return(
@@ -462,7 +462,7 @@ func TestHandleExec_ExecutorReceivesRawCommand(t *testing.T) {
 			// the permission check.
 			return "CANONICAL(" + command + ")", nil
 		})
-	t.Cleanup(func() { permission.UnregisterExecutorForTest(fakeType) })
+	t.Cleanup(func() { permission.UnregisterExecutor(fakeType) })
 
 	asset := &asset_entity.Asset{ID: 42, Name: "fake-asset", Type: fakeType}
 	m.EXPECT().FindByName(gomock.Any(), "42").Return(nil, nil).AnyTimes()

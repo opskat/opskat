@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
@@ -8,12 +8,9 @@ import { markdownComponents, markdownUrlTransform } from "@/components/MarkdownL
 import { Button, Separator, ConfirmDialog, Tooltip, TooltipContent, TooltipTrigger } from "@opskat/ui";
 import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
-import { useExtensionStore } from "@/extension";
-import { getAssetType, isBuiltinType } from "@/lib/assetTypes";
+import { useAssetTypeDef } from "@/lib/assetTypes";
 import { AssetIcon } from "@/components/asset/AssetIcon";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
-import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/InfoItem";
-import { DISABLED_VALUE, ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "@/components/asset/detail/utils";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { GetDefaultPolicy } from "../../../wailsjs/go/system/System";
 
@@ -31,63 +28,56 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
 
-  const [policyFields, setPolicyFields] = useState<Record<string, string[]>>({});
-  const [policyGroups, setPolicyGroups] = useState<string[]>([]);
+  // 订阅注册表：扩展加载完成时它的资产类型才注册进来，这里要跟着重渲染。
+  // 定义还没到位期间只是少一张类型卡，不是全屏 loading——通用信息照常可读。
+  const def = useAssetTypeDef(asset.Type);
 
-  // 资产切换 / 策略变化时回填本地编辑态：渲染期对比上次值，替代 effect 里的级联 setState。
-  const [prevSync, setPrevSync] = useState<{ id?: number; cmdPolicy?: string; type?: string }>({});
-  if (asset.ID !== prevSync.id || asset.CmdPolicy !== prevSync.cmdPolicy || asset.Type !== prevSync.type) {
-    setPrevSync({ id: asset.ID, cmdPolicy: asset.CmdPolicy, type: asset.Type });
-    try {
-      const parsed = JSON.parse(asset.CmdPolicy || "{}");
-      setPolicyGroups(parsed.groups || []);
-      const def = getAssetType(asset.Type);
-      if (def?.policy) {
-        const fields: Record<string, string[]> = {};
-        for (const f of def.policy.fields) {
-          fields[f.key] = parsed[f.key] || [];
-        }
-        setPolicyFields(fields);
-      } else if (!isBuiltinType(asset.Type)) {
-        // Extension types fallback
-        setPolicyFields({
-          allow_list: parsed.allow_list || [],
-          deny_list: parsed.deny_list || [],
-        });
-      }
-    } catch {
-      setPolicyFields({});
-      setPolicyGroups([]);
+  // 策略编辑态从 asset.CmdPolicy + 类型定义**派生**，不在资产切换时拷一份进 state：
+  // 扩展类型可能晚于详情页注册，拷贝会停在定义缺席时的 {}，之后一改规则就把已有 allow/deny 存没了。
+  // draft 只承载"已提交保存、store 还没刷新回来"的乐观值，以它基于的 CmdPolicy 为键，
+  // 资产切换或保存结果回流（CmdPolicy 变了）后自动失效。
+  const [draft, setDraft] = useState<{
+    assetId: number;
+    base: string;
+    fields: Record<string, string[]>;
+    groups: string[];
+  } | null>(null);
+  const stored = useMemo(() => parseCmdPolicy(asset.CmdPolicy), [asset.CmdPolicy]);
+  const activeDraft = draft && draft.assetId === asset.ID && draft.base === asset.CmdPolicy ? draft : null;
+  const policyGroups = activeDraft ? activeDraft.groups : stored.groups;
+  const policyFields = useMemo(() => {
+    if (activeDraft) return activeDraft.fields;
+    const fields: Record<string, string[]> = {};
+    for (const f of def?.policy?.fields ?? []) {
+      fields[f.key] = stored.lists[f.key] || [];
     }
-  }
+    return fields;
+  }, [activeDraft, def, stored]);
 
-  const savePolicy = async (policyObj: Record<string, unknown>, groups?: string[]) => {
+  const savePolicy = async (fields: Record<string, string[]>, groups: string[]) => {
+    setDraft({ assetId: asset.ID, base: asset.CmdPolicy, fields, groups });
     // Remove empty arrays (except groups which is managed separately)
     const cleaned: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(policyObj)) {
-      if (Array.isArray(v) && v.length > 0) cleaned[k] = v;
+    for (const [k, v] of Object.entries(fields)) {
+      if (v.length > 0) cleaned[k] = v;
     }
-    const grps = groups ?? policyGroups;
-    if (grps.length > 0) cleaned.groups = grps;
+    if (groups.length > 0) cleaned.groups = groups;
     const cmdPolicy = Object.keys(cleaned).length > 0 ? JSON.stringify(cleaned) : "";
     const updated = new asset_entity.Asset({ ...asset, CmdPolicy: cmdPolicy });
     setSavingPolicy(true);
     try {
       await updateAsset(updated);
     } catch (e) {
+      // 没存上就丢掉乐观值，回到库里的真实策略
+      setDraft(null);
       toast.error(String(e));
     } finally {
       setSavingPolicy(false);
     }
   };
 
-  const handleSavePolicyFields = async (updatedFields: Record<string, string[]>, groups?: string[]) => {
-    await savePolicy(updatedFields, groups);
-  };
-
   const handleGroupsChange = (newGroups: string[]) => {
-    setPolicyGroups(newGroups);
-    handleSavePolicyFields(policyFields, newGroups);
+    savePolicy(policyFields, newGroups);
   };
 
   const handleResetPolicy = async () => {
@@ -95,36 +85,15 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       const defaultJSON = await GetDefaultPolicy(asset.Type);
       const parsed = JSON.parse(defaultJSON);
       const groups = parsed.groups || [];
-      setPolicyGroups(groups);
-      const def = getAssetType(asset.Type);
       const fields: Record<string, string[]> = {};
-      if (def?.policy) {
-        for (const f of def.policy.fields) {
-          fields[f.key] = parsed[f.key] || [];
-        }
+      for (const f of def?.policy?.fields ?? []) {
+        fields[f.key] = parsed[f.key] || [];
       }
-      setPolicyFields(fields);
       await savePolicy(fields, groups);
     } catch (e) {
       toast.error(String(e));
     }
   };
-
-  // Extension asset info — subscribe to ready so we re-render when extensions load
-  const extensionReady = useExtensionStore((s) => s.ready);
-  const extInfo = extensionReady ? useExtensionStore.getState().getExtensionForAssetType(asset.Type) : undefined;
-  const extAssetTypeDef = extInfo?.manifest.assetTypes?.find((at) => at.type === asset.Type);
-  const hasConnectPage = !!extInfo?.manifest.frontend?.pages.find((p) => p.slot === "asset.connect");
-  const isExtensionType = !isBuiltinType(asset.Type);
-
-  // Show loading while extensions are initializing for extension asset types
-  if (isExtensionType && !extensionReady) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
 
   const sshTunnelName = (id?: number) => {
     if (!id) return null;
@@ -144,7 +113,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           </div>
         </div>
         <div className="flex gap-1.5">
-          {(getAssetType(asset.Type)?.canConnect || hasConnectPage) && (
+          {def?.canConnect && (
             <Button size="sm" className="h-8 gap-1.5" onClick={onConnect} disabled={isConnecting}>
               {isConnecting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -188,82 +157,33 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
         onConfirm={onDelete}
       />
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
-        {/* Builtin type Detail Info Card */}
-        {(() => {
-          const def = getAssetType(asset.Type);
-          if (!def) return null;
-          const Card = def.DetailInfoCard;
-          return <Card asset={asset} sshTunnelName={sshTunnelName} />;
-        })()}
+        {/* 类型详情卡：内置类型手写，扩展类型由它的 configSchema 生成（同一个槽位） */}
+        {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} />}
 
-        {/* Extension Config Info */}
-        {extAssetTypeDef?.configSchema &&
-          (() => {
-            const schema = extAssetTypeDef.configSchema as {
-              propertyOrder?: string[];
-              properties?: Record<string, { title?: string; format?: string; type?: string }>;
-            };
-            const props = schema.properties ?? {};
-            const order = schema.propertyOrder;
-            const keys = order ? order.filter((k) => k in props) : Object.keys(props);
-            const parsed = parseDetailConfig<Record<string, unknown>>(asset.Config) ?? {};
-            return (
-              <DetailSection title={extInfo?.manifest.i18n.displayName || asset.Type}>
-                <DetailGrid>
-                  {keys.map((key) => {
-                    const prop = props[key];
-                    if (!prop) return null;
-                    const val = parsed[key];
-                    if (val === undefined || val === null || val === "") return null;
-                    return (
-                      <InfoItem
-                        key={key}
-                        label={prop.title || key}
-                        value={
-                          prop.format === "password"
-                            ? MASKED_SECRET
-                            : prop.type === "boolean"
-                              ? val
-                                ? ENABLED_VALUE
-                                : DISABLED_VALUE
-                              : String(val)
-                        }
-                        mono={prop.type !== "boolean"}
-                      />
-                    );
-                  })}
-                </DetailGrid>
-              </DetailSection>
-            );
-          })()}
-
-        {/* Builtin type Policy Card */}
+        {/* 策略卡：内置类型与扩展类型走同一段渲染，差别只在定义里 */}
         {(() => {
-          const def = getAssetType(asset.Type);
-          if (!def?.policy) return null;
-          const pol = def.policy;
+          const pol = def?.policy;
+          if (!pol) return null;
+          const tr = (key: string) => (pol.ns ? t(key, { ns: pol.ns, defaultValue: asset.Type }) : t(key));
           return (
             <CommandPolicyCard
-              title={t(pol.titleKey)}
+              title={tr(pol.titleKey)}
               policyType={pol.policyType}
               lists={pol.fields.map((f) => ({
                 key: f.key,
                 label: t(f.labelKey),
                 items: policyFields[f.key] || [],
                 onAdd: (vals: string[]) => {
-                  const next = { ...policyFields, [f.key]: [...(policyFields[f.key] || []), ...vals] };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
+                  savePolicy({ ...policyFields, [f.key]: [...(policyFields[f.key] || []), ...vals] }, policyGroups);
                 },
                 onRemove: (i: number) => {
-                  const next = {
-                    ...policyFields,
-                    [f.key]: (policyFields[f.key] || []).filter((_, idx) => idx !== i),
-                  };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
+                  savePolicy(
+                    { ...policyFields, [f.key]: (policyFields[f.key] || []).filter((_, idx) => idx !== i) },
+                    policyGroups
+                  );
                 },
-                placeholder: t(f.placeholderKey),
+                // 占位符二选一：内置类型给 i18n key，扩展给 manifest 列出的 action 名。
+                placeholder: f.placeholder ?? (f.placeholderKey ? t(f.placeholderKey) : ""),
                 variant: f.variant,
               }))}
               buildPolicyJSON={() =>
@@ -272,7 +192,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                   ...(policyGroups.length > 0 ? { groups: policyGroups } : {}),
                 })
               }
-              hint={t(pol.hintKey)}
+              hint={pol.hintKey ? t(pol.hintKey) : undefined}
               saving={savingPolicy}
               assetID={asset.ID}
               onReset={handleResetPolicy}
@@ -281,67 +201,6 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
             />
           );
         })()}
-
-        {/* Extension Policy */}
-        {extInfo?.manifest.policies && isExtensionType && (
-          <CommandPolicyCard
-            title={extInfo.manifest.i18n.displayName || asset.Type}
-            policyType={extInfo.manifest.policies.type}
-            lists={[
-              {
-                key: "allow_list",
-                label: t("asset.cmdPolicyAllowList"),
-                items: policyFields["allow_list"] || [],
-                onAdd: (vals: string[]) => {
-                  const next = { ...policyFields, allow_list: [...(policyFields["allow_list"] || []), ...vals] };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                onRemove: (i) => {
-                  const next = {
-                    ...policyFields,
-                    allow_list: (policyFields["allow_list"] || []).filter((_, idx) => idx !== i),
-                  };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                placeholder: extInfo.manifest.policies.actions.join(", "),
-                variant: "allow",
-              },
-              {
-                key: "deny_list",
-                label: t("asset.cmdPolicyDenyList"),
-                items: policyFields["deny_list"] || [],
-                onAdd: (vals: string[]) => {
-                  const next = { ...policyFields, deny_list: [...(policyFields["deny_list"] || []), ...vals] };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                onRemove: (i) => {
-                  const next = {
-                    ...policyFields,
-                    deny_list: (policyFields["deny_list"] || []).filter((_, idx) => idx !== i),
-                  };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                placeholder: extInfo.manifest.policies.actions.join(", "),
-                variant: "deny",
-              },
-            ]}
-            buildPolicyJSON={() =>
-              JSON.stringify({
-                ...Object.fromEntries(Object.entries(policyFields).filter(([, v]) => v.length > 0)),
-                ...(policyGroups.length > 0 ? { groups: policyGroups } : {}),
-              })
-            }
-            saving={savingPolicy}
-            assetID={asset.ID}
-            onReset={handleResetPolicy}
-            referencedGroups={policyGroups}
-            onGroupsChange={handleGroupsChange}
-          />
-        )}
 
         {asset.Description && (
           <>
@@ -364,4 +223,13 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       </div>
     </div>
   );
+}
+
+function parseCmdPolicy(cmdPolicy: string): { groups: string[]; lists: Record<string, string[]> } {
+  try {
+    const { groups, ...lists } = JSON.parse(cmdPolicy || "{}");
+    return { groups: groups || [], lists };
+  } catch {
+    return { groups: [], lists: {} };
+  }
 }

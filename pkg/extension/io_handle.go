@@ -4,6 +4,7 @@ package extension
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -21,17 +22,29 @@ type IOMeta struct {
 	Headers     map[string]string `json:"headers,omitempty"`
 }
 
+// IOResource is an opened stream a HostProvider hands back to the runtime.
+//
+// A provider decides *what* to open (a sandboxed file, an HTTP request, a
+// tunneled TCP conn); the runtime decides *who* may see it, by registering the
+// resource in the handle table of the invocation that asked for it. Keeping the
+// table out of the provider is what makes concurrent calls into one plugin
+// isolated from each other.
+type IOResource struct {
+	Reader io.Reader
+	Writer io.Writer
+	Closer io.Closer
+	Meta   IOMeta
+
+	http *httpHandle // set by OpenHTTPResource; enables Flush
+}
+
 // maxIOHandles is the upper bound on handle IDs. We use half the uint32 range
 // to stay safely below the WASM ABI uint32 boundary and allow overflow detection.
 const maxIOHandles = (1 << 31) - 1
 
 type ioEntry struct {
-	id     uint32 // stored for defense-in-depth reuse detection in get()
-	reader io.Reader
-	writer io.Writer
-	closer io.Closer
-	meta   IOMeta
-	http   *httpHandle // non-nil for HTTP handles
+	id  uint32 // stored for defense-in-depth reuse detection in get()
+	res *IOResource
 }
 
 // Adapter types to bridge httpHandle to io.Reader/Writer/Closer.
@@ -47,7 +60,56 @@ type httpCloseAdapter struct{ h *httpHandle }
 
 func (a *httpCloseAdapter) Close() error { return a.h.Close() }
 
-// IOHandleManager manages IO handles for a single WASM invocation.
+// OpenFileResource opens a file for reading or writing.
+// The caller is responsible for having checked the path against the manifest.
+func OpenFileResource(path, mode string) (*IOResource, error) {
+	switch mode {
+	case "read":
+		f, err := os.Open(path) //nolint:gosec // path provided by extension runtime within sandbox
+		if err != nil {
+			return nil, fmt.Errorf("open file for read: %w", err)
+		}
+		info, err := f.Stat()
+		if err != nil {
+			if closeErr := f.Close(); closeErr != nil {
+				logger.Default().Warn("close file after stat error", zap.Error(closeErr))
+			}
+			return nil, fmt.Errorf("stat file: %w", err)
+		}
+		return &IOResource{Reader: f, Closer: f, Meta: IOMeta{Size: info.Size()}}, nil
+	case "write":
+		f, err := os.Create(path) //nolint:gosec // path provided by extension runtime within sandbox
+		if err != nil {
+			return nil, fmt.Errorf("open file for write: %w", err)
+		}
+		return &IOResource{Writer: f, Closer: f}, nil
+	default:
+		return nil, fmt.Errorf("unknown file mode: %q", mode)
+	}
+}
+
+// OpenHTTPResource prepares an HTTP request. dial may be nil for a direct connection.
+func OpenHTTPResource(params IOOpenParams, dial DialFunc) (*IOResource, error) {
+	h, err := newHTTPHandle(params, dial)
+	if err != nil {
+		return nil, err
+	}
+	return &IOResource{
+		Reader: &httpReadAdapter{h: h},
+		Writer: &httpWriteAdapter{h: h},
+		Closer: &httpCloseAdapter{h: h},
+		http:   h,
+	}, nil
+}
+
+// NewConnResource wraps an established network connection as an IO resource.
+func NewConnResource(conn net.Conn) *IOResource {
+	return &IOResource{Reader: conn, Writer: conn, Closer: conn}
+}
+
+// IOHandleManager is the handle table of a single WASM invocation. Handle IDs
+// are only meaningful within the invocation that opened them, and everything
+// still open is closed when that invocation ends.
 type IOHandleManager struct {
 	mu      sync.Mutex
 	handles map[uint32]*ioEntry
@@ -62,60 +124,21 @@ func NewIOHandleManager() *IOHandleManager {
 	return m
 }
 
-func (m *IOHandleManager) OpenFile(path string, mode string) (uint32, IOMeta, error) {
-	var entry ioEntry
-	switch mode {
-	case "read":
-		f, err := os.Open(path) //nolint:gosec // path provided by extension runtime within sandbox
-		if err != nil {
-			return 0, IOMeta{}, fmt.Errorf("open file for read: %w", err)
-		}
-		info, err := f.Stat()
-		if err != nil {
-			if closeErr := f.Close(); closeErr != nil {
-				logger.Default().Warn("close file after stat error", zap.Error(closeErr))
-			}
-			return 0, IOMeta{}, fmt.Errorf("stat file: %w", err)
-		}
-		entry = ioEntry{reader: f, closer: f, meta: IOMeta{Size: info.Size()}}
-	case "write":
-		f, err := os.Create(path) //nolint:gosec // path provided by extension runtime within sandbox
-		if err != nil {
-			return 0, IOMeta{}, fmt.Errorf("open file for write: %w", err)
-		}
-		entry = ioEntry{writer: f, closer: f}
-	default:
-		return 0, IOMeta{}, fmt.Errorf("unknown file mode: %q", mode)
-	}
-
+// Register adds an opened resource to the table and returns its handle ID.
+func (m *IOHandleManager) Register(res *IOResource) (uint32, error) {
 	id := m.nextID.Add(1) - 1
 	if id >= maxIOHandles {
 		// Handle IDs are uint32 values passed over the WASM ABI boundary; cap at half
 		// the uint32 range to detect exhaustion before wrapping would cause aliasing.
-		if entry.closer != nil {
-			if closeErr := entry.closer.Close(); closeErr != nil {
-				logger.Default().Warn("close entry after handle exhaustion", zap.Error(closeErr))
+		if res.Closer != nil {
+			if closeErr := res.Closer.Close(); closeErr != nil {
+				logger.Default().Warn("close resource after handle exhaustion", zap.Error(closeErr))
 			}
 		}
-		return 0, IOMeta{}, fmt.Errorf("handle ID exhausted")
-	}
-	entry.id = id
-	m.mu.Lock()
-	m.handles[id] = &entry
-	m.mu.Unlock()
-	return id, entry.meta, nil
-}
-
-// Register adds an externally-created handle entry and returns its ID.
-// Returns 0 and does not register if handle IDs are exhausted.
-func (m *IOHandleManager) Register(r io.Reader, w io.Writer, c io.Closer, meta IOMeta) (uint32, error) {
-	id := m.nextID.Add(1) - 1
-	if id >= maxIOHandles {
-		// Handle IDs passed over WASM ABI are uint32; cap at half range to prevent aliasing.
 		return 0, fmt.Errorf("handle ID exhausted")
 	}
 	m.mu.Lock()
-	m.handles[id] = &ioEntry{id: id, reader: r, writer: w, closer: c, meta: meta}
+	m.handles[id] = &ioEntry{id: id, res: res}
 	m.mu.Unlock()
 	return id, nil
 }
@@ -125,10 +148,10 @@ func (m *IOHandleManager) Read(id uint32, buf []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if e.reader == nil {
+	if e.res.Reader == nil {
 		return 0, fmt.Errorf("handle %d is not readable", id)
 	}
-	return e.reader.Read(buf)
+	return e.res.Reader.Read(buf)
 }
 
 func (m *IOHandleManager) Write(id uint32, data []byte) (int, error) {
@@ -136,10 +159,10 @@ func (m *IOHandleManager) Write(id uint32, data []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if e.writer == nil {
+	if e.res.Writer == nil {
 		return 0, fmt.Errorf("handle %d is not writable", id)
 	}
-	return e.writer.Write(data)
+	return e.res.Writer.Write(data)
 }
 
 func (m *IOHandleManager) GetMeta(id uint32) (IOMeta, error) {
@@ -147,7 +170,7 @@ func (m *IOHandleManager) GetMeta(id uint32) (IOMeta, error) {
 	if err != nil {
 		return IOMeta{}, err
 	}
-	return e.meta, nil
+	return e.res.Meta, nil
 }
 
 func (m *IOHandleManager) Close(id uint32) error {
@@ -160,8 +183,8 @@ func (m *IOHandleManager) Close(id uint32) error {
 	if !ok {
 		return fmt.Errorf("handle %d not found", id)
 	}
-	if e.closer != nil {
-		return e.closer.Close()
+	if e.res.Closer != nil {
+		return e.res.Closer.Close()
 	}
 	return nil
 }
@@ -172,42 +195,19 @@ func (m *IOHandleManager) CloseAll() {
 	m.handles = make(map[uint32]*ioEntry)
 	m.mu.Unlock()
 	for _, e := range handles {
-		if e.closer != nil {
-			if err := e.closer.Close(); err != nil {
+		if e.res.Closer != nil {
+			if err := e.res.Closer.Close(); err != nil {
 				logger.Default().Warn("close IO handle", zap.Error(err))
 			}
 		}
 	}
 }
 
-// OpenHTTP creates an HTTP handle, wraps it with adapters, and stores it.
-func (m *IOHandleManager) OpenHTTP(params IOOpenParams, dial DialFunc) (uint32, IOMeta, error) {
-	h, err := newHTTPHandle(params, dial)
-	if err != nil {
-		return 0, IOMeta{}, err
-	}
-
-	id := m.nextID.Add(1) - 1
-	if id >= maxIOHandles {
-		// Handle IDs passed over WASM ABI are uint32; cap at half range to prevent aliasing.
-		if closeErr := h.Close(); closeErr != nil {
-			logger.Default().Warn("close http handle after exhaustion", zap.Error(closeErr))
-		}
-		return 0, IOMeta{}, fmt.Errorf("handle ID exhausted")
-	}
-
-	entry := &ioEntry{
-		id:     id,
-		reader: &httpReadAdapter{h: h},
-		writer: &httpWriteAdapter{h: h},
-		closer: &httpCloseAdapter{h: h},
-		http:   h,
-	}
-
+// Len reports how many handles are currently open.
+func (m *IOHandleManager) Len() int {
 	m.mu.Lock()
-	m.handles[id] = entry
-	m.mu.Unlock()
-	return id, entry.meta, nil
+	defer m.mu.Unlock()
+	return len(m.handles)
 }
 
 // Flush flushes the HTTP handle (sends the request and waits for response).
@@ -216,10 +216,10 @@ func (m *IOHandleManager) Flush(id uint32) (*IOMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	if e.http == nil {
+	if e.res.http == nil {
 		return nil, fmt.Errorf("handle %d is not an HTTP handle", id)
 	}
-	return e.http.Flush()
+	return e.res.http.Flush()
 }
 
 func (m *IOHandleManager) get(id uint32) (*ioEntry, error) {
@@ -249,9 +249,9 @@ func (m *IOHandleManager) SetDeadline(id uint32, kind string, t time.Time) error
 	if err != nil {
 		return err
 	}
-	d, ok := e.reader.(deadliner)
+	d, ok := e.res.Reader.(deadliner)
 	if !ok {
-		d, ok = e.closer.(deadliner)
+		d, ok = e.res.Closer.(deadliner)
 	}
 	if !ok {
 		return fmt.Errorf("handle %d does not support deadlines", id)

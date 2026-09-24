@@ -8,7 +8,7 @@ This file is the single source of guidance for AI coding agents (Claude Code at 
 
 OpsKat — AI-first desktop app for managing remote infrastructure: terminals and remote desktops, databases, object storage, Redis, MongoDB, Kafka, Kubernetes, etcd, and more. **Wails v2** (Go 1.26 + React 19), IPC only — no HTTP API. Module: `github.com/opskat/opskat`.
 
-Extension source lives in the sibling repo `../extensions/`. For the architecture layering, subsystems, data, and frontend structure, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Extension examples live in this repo under [`extensions/`](extensions/README.md), sharing the module, the SDK (`pkg/extsdk`) and the test run with the host. For the architecture layering, subsystems, data, and frontend structure, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## High Cohesion, Low Coupling / SOLID
 

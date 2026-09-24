@@ -382,6 +382,8 @@
     "cancelTest": "取消",
     "testCancelled": "测试已取消",
     "formDescription": "配置资产连接信息、认证方式和高级选项。",
+    "extConfigLoading": "正在读取已保存的配置…",
+    "extConfigDecryptFailed": "无法解密已保存的配置，已禁止保存以免覆盖已存的密钥。",
     "formMissingName": "请填写资产名称。",
     "formMissingHost": "请填写主机地址。",
     "formMissingMongoUri": "请填写 MongoDB 连接 URI。",
@@ -1774,6 +1776,7 @@
   "opsctlApproval": {
     "title": "CLI 操作审批",
     "description": "opsctl 正在请求批准以下操作：",
+    "extDevInstallDescription": "opsctl ext dev 请求从以下目录安装并启用一个未打包的扩展，它将获得清单里声明的全部能力：",
     "allow": "允许",
     "deny": "拒绝",
     "typeExec": "执行命令",
@@ -2753,7 +2756,9 @@
     "pageSlot": "插槽",
     "noTools": "无工具",
     "noPolicies": "无策略组",
-    "noPages": "无页面"
+    "noPages": "无页面",
+    "loadError": "加载扩展列表失败",
+    "pageDisabled": "扩展 \"{{name}}\" 已禁用，在 设置 → 扩展 中重新启用后可继续使用此页面"
   },
   "snippet": {
     "title": "代码片段",

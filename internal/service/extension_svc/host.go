@@ -10,6 +10,7 @@ import (
 
 // HostAssetConfig is the narrow asset view exposed to the extension host.
 type HostAssetConfig struct {
+	Name   string
 	Type   string
 	Config string
 }
@@ -20,7 +21,7 @@ func (s *Service) GetHostAssetConfig(ctx context.Context, assetID int64) (*HostA
 	if err != nil {
 		return nil, fmt.Errorf("find extension host asset %d: %w", assetID, err)
 	}
-	return &HostAssetConfig{Type: asset.Type, Config: asset.Config}, nil
+	return &HostAssetConfig{Name: asset.Name, Type: asset.Type, Config: asset.Config}, nil
 }
 
 // GetHostKV reads extension-scoped host data. A missing key is represented as a nil value.

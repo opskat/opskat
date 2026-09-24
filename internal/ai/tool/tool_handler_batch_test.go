@@ -51,7 +51,7 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	origCanon, hadCanon := permission.CanonicalizeFor(assetType)
 	origPrecheck, hadPrecheck := permission.PrecheckFor(assetType)
 
-	permission.UnregisterExecutorForTest(assetType)
+	permission.UnregisterExecutor(assetType)
 	if hadCanon {
 		permission.RegisterExecutor(assetType, fake, origHelp, origCanon)
 	} else {
@@ -62,7 +62,7 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	}
 
 	t.Cleanup(func() {
-		permission.UnregisterExecutorForTest(assetType)
+		permission.UnregisterExecutor(assetType)
 		if !hadExec {
 			return
 		}

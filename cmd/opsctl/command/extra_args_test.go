@@ -30,7 +30,8 @@ func TestSubcommandsRejectExtraArgs(t *testing.T) {
 		{"update asset", func() int { return cmdUpdate(ctx, nil, []string{"asset", "web", "--name", "n", "extra"}, "") }},
 		{"update group", func() int { return cmdUpdate(ctx, nil, []string{"group", "g", "--name", "n", "extra"}, "") }},
 		{"cp", func() int { return cmdCp(ctx, nil, []string{"--bogus", "86:/a", "./b"}, "") }},
-		{"ext exec", func() int { return cmdExtExec([]string{"ext", "tool", "--bogus"}) }},
+		{"ext list", func() int { return cmdExt([]string{"list", "extra"}) }},
+		{"ext dev", func() int { return cmdExt([]string{"dev", "./ext", "--bogus"}) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

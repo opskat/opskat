@@ -83,6 +83,7 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
         {selectedGroups.map((g) => (
           <span
             key={g.id}
+            data-testid={`policy-group-chip-${g.id}`}
             className="inline-flex items-center gap-1 rounded-md border border-info/30 bg-info/15 px-2 py-0.5 text-[11px] text-info"
           >
             {g.extensionName ? <Puzzle className="h-2.5 w-2.5" /> : g.builtin && <Lock className="h-2.5 w-2.5" />}
@@ -95,7 +96,12 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
 
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="sm" className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground">
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="policy-group-add"
+              className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground"
+            >
               <Plus className="h-3 w-3" />
             </Button>
           </PopoverTrigger>
@@ -107,6 +113,7 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
                 {availableGroups.map((g) => (
                   <button
                     key={g.id}
+                    data-testid={`policy-group-option-${g.id}`}
                     className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent"
                     onClick={() => {
                       handleAdd(g.id);

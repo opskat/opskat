@@ -1,0 +1,24 @@
+{
+  "extension.displayName": "笔记本",
+  "extension.description": "把简短的运维笔记存放在它所属的资产旁边",
+
+  "assetType.notebook.name": "笔记本",
+
+  "config.notebook.title": "笔记本名称",
+  "config.notebook.placeholder": "team-runbooks",
+  "config.notebook.desc": "笔记按此名称存放，同名的资产共用同一批笔记。",
+  "config.maxNotes.title": "笔记数量上限",
+  "config.maxNotes.desc": "超过该数量后拒绝新建笔记，0 表示不限。",
+
+  "policy.read.name": "读取笔记",
+  "policy.read.description": "无需确认即可列出和查看笔记",
+  "policy.write.name": "写入笔记",
+  "policy.write.description": "无需确认即可新建和覆盖笔记",
+  "policy.noDelete.name": "禁止删除笔记",
+  "policy.noDelete.description": "无论其它权限如何，一律拒绝删除笔记",
+
+  "tools.note_list.description": "列出该资产笔记本中的笔记，可按 key 前缀过滤",
+  "tools.note_get.description": "查看单条笔记的完整内容",
+  "tools.note_put.description": "新建笔记，或覆盖已有笔记",
+  "tools.note_delete.description": "删除单条笔记"
+}

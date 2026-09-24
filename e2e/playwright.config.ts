@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { rmSync, mkdirSync } from "node:fs";
 import {
   SUITE_MASTER_KEY,
+  installExtensions,
   loadDotEnv,
   mockServers,
   ports,
@@ -25,12 +26,21 @@ if (process.env.TEST_WORKER_INDEX === undefined) {
   rmSync(dataDir, { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });
   prepareFrontendDist();
+  // The reference extension is laid into the fresh data dir before the app boots, so
+  // the app's own boot-time scan is what loads it — the same path a user's install
+  // ends on. Building it is part of the harness (see harness/env.js), so no separate
+  // `make build-ext` step has to be arranged locally or on CI.
+  installExtensions(dataDir);
 }
 
 process.env.OPSKAT_DATA_DIR = dataDir;
 process.env.OPSKAT_MASTER_KEY = SUITE_MASTER_KEY;
 process.env.OPSKAT_E2E = "1";
-process.env.OPSKAT_EXTENSIONS = "0";
+// The extension system runs for the whole suite: the extension specs need it, and the
+// app has one webServer, so it cannot be a per-spec choice. It costs one wasm compile
+// on a background goroutine at boot — it never blocks startup, and no other spec waits
+// on it.
+process.env.OPSKAT_EXTENSIONS = "1";
 
 // Real verification targets (E2E_SSH_*, …) reach specs through process.env exactly
 // like OPSKAT_DATA_DIR. Convention & usage: docs/references/e2e-harness-guide.md §6.
@@ -93,7 +103,7 @@ export default defineConfig({
         OPSKAT_DATA_DIR: dataDir,
         OPSKAT_MASTER_KEY: SUITE_MASTER_KEY,
         OPSKAT_E2E: "1",
-        OPSKAT_EXTENSIONS: "0",
+        OPSKAT_EXTENSIONS: "1",
       },
     },
   ],

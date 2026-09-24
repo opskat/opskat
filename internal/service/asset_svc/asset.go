@@ -72,7 +72,7 @@ func (s *assetSvc) AgentReferencingAssets(ctx context.Context, sourceID int64) (
 }
 
 func (s *assetSvc) Create(ctx context.Context, asset *asset_entity.Asset) error {
-	if err := asset.Validate(); err != nil {
+	if err := validate(ctx, asset); err != nil {
 		return err
 	}
 	now := time.Now().Unix()
@@ -104,11 +104,20 @@ func (s *assetSvc) Update(ctx context.Context, asset *asset_entity.Asset) error 
 // UpdateWithinTransaction persists an update without invalidating connections before
 // an outer transaction commits. Callers must invoke Invalidate after successful commit.
 func (s *assetSvc) UpdateWithinTransaction(ctx context.Context, asset *asset_entity.Asset) error {
-	if err := asset.Validate(); err != nil {
+	if err := validate(ctx, asset); err != nil {
 		return err
 	}
 	asset.Updatetime = time.Now().Unix()
 	return asset_repo.Asset().Update(ctx, asset)
+}
+
+// validate 是资产写入前的唯一校验点：桌面表单、put_asset 与 opsctl create 都经这里落库。
+// 内置类型的规则在 Validate 里；扩展类型的规则由扩展运行期注册（ValidateRegisteredConfig）。
+func validate(ctx context.Context, asset *asset_entity.Asset) error {
+	if err := asset.Validate(); err != nil {
+		return err
+	}
+	return asset_entity.ValidateRegisteredConfig(ctx, asset)
 }
 
 // Invalidate drops cached connections after a successful asset update commit.
