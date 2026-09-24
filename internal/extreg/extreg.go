@@ -152,7 +152,7 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 	if err := assettype.RegisterExtensionType(extensionTypeSpec(l.name, m, at)); err != nil {
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
-	if err := permission.RegisterPolicyCheck(at.Type, policyCheck(l, at.Type)); err != nil {
+	if err := permission.RegisterPolicyCheck(at.Type, policyCheck(l, at.Type), classifyForApproval(l)); err != nil {
 		assettype.Unregister(at.Type)
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
@@ -315,22 +315,8 @@ func execTool(l loaded) permission.ExecFunc {
 // "全部允许"落 grant，下一条同样的命令由这里的 MatchGrant 直接放行。
 func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 	return func(ctx context.Context, assetID int64, command string) aictx.CheckResult {
-		toolName, argsJSON, err := parseCommand(l.manifest, command)
-		if err != nil {
-			// 到不了这里：canonicalize 已经用同一个解析器跑过一遍。真发生了就是
-			// fail-closed 的 NeedConfirm，而不是放行。
-			return aictx.CheckResult{Decision: aictx.NeedConfirm}
-		}
-		action, resource, err := l.plugin.CheckPolicy(ctx, toolName, argsJSON)
-		if err != nil {
-			logger.Ctx(ctx).Warn("extension policy check failed",
-				zap.String("extension", l.name), zap.String("tool", toolName))
-			return aictx.CheckResult{Decision: aictx.NeedConfirm}
-		}
-		if !slices.Contains(l.manifest.Policies.Actions, action) {
-			logger.Ctx(ctx).Error("extension policy returned an undeclared action",
-				zap.String("extension", l.name), zap.String("tool", toolName),
-				zap.String("action", action), zap.Int64("assetID", assetID))
+		action, resource, _, _, ok := classifyCommand(ctx, l, command)
+		if !ok {
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		}
 		policyType := l.manifest.Policies.Type
@@ -348,9 +334,58 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 		if result.Decision != aictx.NeedConfirm {
 			return result
 		}
-		if granted, ok := permission.MatchGrant(ctx, assetID, command, assetType); ok {
+		// Matched by classification (action, resource), not by re-parsing command:
+		// two calls that spell the same request differently — different flag order,
+		// an equivalent literal — must hit the same grant (spec 参数级策略 › 审批展示).
+		if granted, ok := permission.MatchExtensionGrant(ctx, assetID, assetType, policyType, action, resource); ok {
 			return granted
 		}
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+}
+
+// classifyCommand parses a command and runs the guest's check_policy classification,
+// validating the action against the type's declared set (manifest.Policies.Actions).
+// It is the single place policyCheck and classifyForApproval both call, so "undeclared
+// action never classifies" can't drift between the check path and the approval/grant
+// path — both must see the same failure the same way.
+func classifyCommand(ctx context.Context, l loaded, command string) (action, resource, toolName string, argsJSON json.RawMessage, ok bool) {
+	toolName, argsJSON, err := parseCommand(l.manifest, command)
+	if err != nil {
+		// 到不了这里：canonicalize 已经用同一个解析器跑过一遍。真发生了就是
+		// fail-closed 的"分类失败"，而不是放行或落 grant。
+		return "", "", "", nil, false
+	}
+	action, resource, err = l.plugin.CheckPolicy(ctx, toolName, argsJSON)
+	if err != nil {
+		logger.Ctx(ctx).Warn("extension policy check failed",
+			zap.String("extension", l.name), zap.String("tool", toolName))
+		return "", "", "", nil, false
+	}
+	if !slices.Contains(l.manifest.Policies.Actions, action) {
+		logger.Ctx(ctx).Error("extension policy returned an undeclared action",
+			zap.String("extension", l.name), zap.String("tool", toolName), zap.String("action", action))
+		return "", "", "", nil, false
+	}
+	return action, resource, toolName, argsJSON, true
+}
+
+// classifyForApproval adapts classifyCommand to permission.ClassifyFunc: it is the
+// grant-pattern producer HandleConfirm calls to show an approval item's Action/
+// Resource/Detail and to build the "always allow" grant key (spec 参数级策略 ›
+// 审批展示 — grant persisted as ext:<type>:<action>:<resource>).
+func classifyForApproval(l loaded) permission.ClassifyFunc {
+	return func(ctx context.Context, command string) (permission.ExtensionClassification, bool) {
+		action, resource, toolName, argsJSON, ok := classifyCommand(ctx, l, command)
+		if !ok {
+			return permission.ExtensionClassification{}, false
+		}
+		return permission.ExtensionClassification{
+			PolicyType: l.manifest.Policies.Type,
+			Action:     action,
+			Resource:   resource,
+			Tool:       toolName,
+			Args:       argsJSON,
+		}, true
 	}
 }

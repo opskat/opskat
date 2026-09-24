@@ -147,6 +147,40 @@ describe("ApprovalBlock", () => {
     expect(screen.getByTestId("ai-approval-allow")).toBeInTheDocument();
   });
 
+  it("扩展审批（kind=single 带 action/resource）显示动作、资源，请求详情可折叠", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [
+        {
+          type: "acme-store",
+          asset_id: 1,
+          asset_name: "s3-prod",
+          command: "list_objects --bucket=prod",
+          action: "object.write",
+          resource: "prod-bucket",
+          detail: '{\n  "tool": "list_objects",\n  "args": {\n    "bucket": "prod"\n  }\n}',
+        },
+      ],
+    });
+
+    expect(screen.getByText("object.write")).toBeInTheDocument();
+    expect(screen.getByText("prod-bucket")).toBeInTheDocument();
+    // 请求详情走既有的 <details> 折叠机制，摘要用专门的文案，不是传输/删除的文案。
+    const summary = screen.getByText("ai.approvalRequestDetail");
+    expect(summary.closest("details")).not.toBeNull();
+    expect(screen.getByText(/"tool": "list_objects"/)).toBeInTheDocument();
+  });
+
+  it("普通命令（无 action/resource）不显示动作/资源行", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "exec", asset_id: 1, asset_name: "web-1", command: "ls -la" }],
+    });
+
+    expect(screen.queryByText("ai.approvalActionLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("ai.approvalResourceLabel")).not.toBeInTheDocument();
+  });
+
   it("oss 审批项有自己的徽章图标，不回落到通用的终端图标", () => {
     renderApproval({
       approvalKind: "single",

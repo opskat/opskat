@@ -38,6 +38,9 @@ interface ApprovalItemData {
   group_name?: string;
   command: string;
   detail?: string;
+  // 仅扩展类型（后端 ClassifyFunc 注册）填充：check_policy 分类出的 (action, resource)。
+  action?: string;
+  resource?: string;
 }
 
 interface SingleApprovalEvent {
@@ -48,6 +51,8 @@ interface SingleApprovalEvent {
   asset_name: string;
   command?: string;
   detail?: string;
+  action?: string;
+  resource?: string;
   session_id: string;
 }
 
@@ -164,6 +169,8 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               asset_name: data.asset_name,
               command,
               detail,
+              action: data.action,
+              resource: data.resource,
             },
           ],
           sessionID: data.session_id,
@@ -264,6 +271,23 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           </>
         )}
       </div>
+      {/* 扩展类型才有 action：check_policy 的分类，展示在命令上方，让"批准"批的是一个
+          可读的动作 + 资源，而不只是一串不透明的 exec 文本（spec 参数级策略 › 审批展示），
+          与 ApprovalBlock.tsx 同一套呈现。 */}
+      {item.action && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          <span>
+            <span className="font-medium text-foreground">{t("ai.approvalActionLabel")}</span>
+            <span className="select-text">{item.action}</span>
+          </span>
+          {item.resource && (
+            <span>
+              <span className="font-medium text-foreground">{t("ai.approvalResourceLabel")}</span>
+              <span className="select-text">{item.resource}</span>
+            </span>
+          )}
+        </div>
+      )}
       {cur.editable ? (
         <Textarea
           value={editState[cur.id]?.[i] ?? item.command}
@@ -281,9 +305,19 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           <code className="select-text text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
         </div>
       )}
-      {item.detail && (
-        <div className="select-text text-xs text-muted-foreground font-mono whitespace-pre-wrap">{item.detail}</div>
-      )}
+      {item.detail &&
+        (item.action ? (
+          // 扩展请求的 detail 是格式化后的工具 + 参数 JSON，可能很长——按既有的
+          // <details> 折叠机制展示（与 ApprovalBlock.tsx 同一套），而不是常驻铺开。
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none">{t("ai.approvalRequestDetail")}</summary>
+            <pre className="select-text mt-1 max-h-48 overflow-auto rounded bg-muted p-2 font-mono whitespace-pre-wrap break-all">
+              {item.detail}
+            </pre>
+          </details>
+        ) : (
+          <div className="select-text text-xs text-muted-foreground font-mono whitespace-pre-wrap">{item.detail}</div>
+        ))}
     </div>
   );
 

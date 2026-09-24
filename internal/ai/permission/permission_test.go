@@ -1469,3 +1469,39 @@ func TestCheckPermission_K8sGroupGenericBypass(t *testing.T) {
 		So(result.Decision, ShouldNotEqual, aictx.Allow)
 	})
 }
+
+// TestExtGrantMatch unit-tests extGrantKey/extGrantMatch directly (the extreg
+// integration tests only exercise them through a real fakePlugin classification):
+// policyType and action must match exactly, resource is matched whole with the same
+// glob semantics a permanent extension rule uses, and a colon inside a resource can't
+// be used to smuggle a match into a different action/resource segment.
+func TestExtGrantMatch(t *testing.T) {
+	Convey("extGrantMatch 按 policyType+action 精确、resource 走与永久规则一致的 glob 语义", t, func() {
+		Convey("policyType、action、resource 全等 → 命中", func() {
+			So(extGrantMatch(extGrantKey("acme", "object.write", "prod-bucket"),
+				extGrantKey("acme", "object.write", "prod-bucket")), ShouldBeTrue)
+		})
+		Convey("resource 不同 → 不命中", func() {
+			So(extGrantMatch(extGrantKey("acme", "object.write", "prod-bucket"),
+				extGrantKey("acme", "object.write", "staging-bucket")), ShouldBeFalse)
+		})
+		Convey("action 不同 → 不命中，即便 policyType/resource 相同", func() {
+			So(extGrantMatch(extGrantKey("acme", "object.write", "prod-bucket"),
+				extGrantKey("acme", "object.delete", "prod-bucket")), ShouldBeFalse)
+		})
+		Convey("policyType 不同 → 不命中，即便 action/resource 相同", func() {
+			So(extGrantMatch(extGrantKey("other", "object.write", "prod-bucket"),
+				extGrantKey("acme", "object.write", "prod-bucket")), ShouldBeFalse)
+		})
+		Convey("手写的 resource glob 与永久规则同一套语义", func() {
+			So(extGrantMatch(extGrantKey("acme", "object.write", "prod-*"),
+				extGrantKey("acme", "object.write", "prod-bucket")), ShouldBeTrue)
+		})
+		Convey("resource 整体参与匹配：含 ':' 的资源不能越权到另一个动作/资源段", func() {
+			So(extGrantMatch(extGrantKey("acme", "object.write", "a"),
+				extGrantKey("acme", "object.write", "a:b")), ShouldBeFalse)
+			So(extGrantMatch(extGrantKey("acme", "object.write", "a:b"),
+				extGrantKey("acme", "object.write", "a:b")), ShouldBeTrue)
+		})
+	})
+}

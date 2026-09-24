@@ -854,3 +854,49 @@ func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, asse
 		logger.Default().Error("save grant pattern", zap.Error(err))
 	}
 }
+
+// --- 扩展 grant（按分类而非命令串匹配） ---
+
+// extGrantKey formats an extension "always allow" grant the same way a permanent
+// extension rule is written (rule_ext.go's extRulePrefix): ext:<policyType>:<action>:
+// <resource>. Reusing the rule's own shape means a grant, a group rule and a holder's
+// own permanent rule all speak one namespace — a persisted grant reads back as a valid
+// rule verbatim (context note: "<type> 段是扩展的 policies.type，与规则同一命名空间").
+func extGrantKey(policyType, action, resource string) string {
+	return policy.ExtRulePrefix + policyType + ":" + action + ":" + resource
+}
+
+// splitExtGrantKey splits an extGrantKey-shaped string into its policyType and the
+// "<action>[:<resource>]" tail policy.ExtensionRuleParts / MatchExtensionRule expect.
+func splitExtGrantKey(key string) (policyType, tail string, ok bool) {
+	rest, ok := strings.CutPrefix(key, policy.ExtRulePrefix)
+	if !ok {
+		return "", "", false
+	}
+	policyType, tail, ok = strings.Cut(rest, ":")
+	return policyType, tail, ok
+}
+
+// extGrantMatch is the policy.MatchFunc for extension grants: both rule and command
+// are extGrantKey-shaped keys (MatchExtensionGrant builds the command side from the
+// current call's live classification, never from command text). The policyType
+// segment must match exactly; the remaining "<action>[:<resource-glob>]" tail is
+// matched with the same semantics a permanent extension rule uses
+// (policy.MatchExtensionRule) — action exact, resource glob — so a "remember" pattern
+// a user hand-edited to add a '*' still behaves like a rule would.
+func extGrantMatch(rule, command string) bool {
+	ruleType, ruleTail, ok := splitExtGrantKey(rule)
+	if !ok {
+		return false
+	}
+	cmdType, cmdTail, ok := splitExtGrantKey(command)
+	if !ok || ruleType != cmdType {
+		return false
+	}
+	// cmdTail is always an exact "<action>:<resource>" (extGrantKey always emits the
+	// ':' + resource segment, even when resource is ""), so scoped is never false here
+	// and resource — which may itself contain ':' — comes back whole (spec: "resource
+	// 匹配整体，含 ':' 不可越权").
+	action, resource, _ := policy.ExtensionRuleParts(cmdTail)
+	return policy.MatchExtensionRule(ruleTail, action, resource)
+}

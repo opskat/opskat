@@ -14,6 +14,12 @@ type ApprovalItem struct {
 	GroupName string `json:"group_name,omitempty"`
 	Command   string `json:"command"`
 	Detail    string `json:"detail,omitempty"`
+	// Action / Resource are set only for extension types registered with a
+	// ClassifyFunc (type_registry.go): the check_policy classification of Command,
+	// shown next to it so approving means approving a legible (action, resource)
+	// pair rather than only an opaque exec string (spec 参数级策略 › 审批展示).
+	Action   string `json:"action,omitempty"`
+	Resource string `json:"resource,omitempty"`
 }
 
 // ApprovalResponse 统一审批响应

@@ -108,6 +108,35 @@ describe("OpsctlApprovalDialog", () => {
     expect(screen.getByText("target: web-1")).toHaveClass("select-text");
   });
 
+  it("扩展审批（带 action/resource）显示动作、资源，请求详情可折叠", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, {
+      type: "acme-store",
+      command: "list_objects --bucket=prod",
+      action: "object.write",
+      resource: "prod-bucket",
+      detail: '{\n  "tool": "list_objects"\n}',
+    });
+
+    expect(screen.getByText("object.write")).toBeInTheDocument();
+    expect(screen.getByText("prod-bucket")).toBeInTheDocument();
+    const summary = screen.getByText("ai.approvalRequestDetail");
+    expect(summary.closest("details")).not.toBeNull();
+  });
+
+  it("普通命令（无 action/resource）不显示动作/资源行，详情不折叠", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, { command: "uname -a", detail: "target: web-1" });
+
+    expect(screen.queryByText("ai.approvalActionLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("ai.approvalResourceLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("ai.approvalRequestDetail")).not.toBeInTheDocument();
+  });
+
   it("未修改 remember pattern 时不伪造 edited_items，保留后端的系统主体收窄", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);

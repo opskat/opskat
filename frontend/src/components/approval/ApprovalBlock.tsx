@@ -168,6 +168,22 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     </>
                   )}
                 </div>
+                {/* 扩展类型才有 action：check_policy 的分类，展示在命令上方，让"批准"批的是
+                    一个可读的动作 + 资源，而不只是一串不透明的 exec 文本（spec 参数级策略 › 审批展示）。 */}
+                {item.action && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+                    <span className="text-muted-foreground">
+                      <span className="font-medium text-warning">{t("ai.approvalActionLabel")}</span>
+                      <span className="select-text">{item.action}</span>
+                    </span>
+                    {item.resource && (
+                      <span className="text-muted-foreground">
+                        <span className="font-medium text-warning">{t("ai.approvalResourceLabel")}</span>
+                        <span className="select-text">{item.resource}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
                 {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}
@@ -189,12 +205,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   (kind === "delete" ? (
                     // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
                     <div className="text-[10px] text-muted-foreground/80">
-                      <div className="select-none">{t(detailSummaryKey(item.type))}</div>
+                      <div className="select-none">{t(detailSummaryKey(item))}</div>
                       <DetailPre text={item.detail} />
                     </div>
                   ) : (
                     <details className="text-[10px] text-muted-foreground/80">
-                      <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
+                      <summary className="cursor-pointer select-none">{t(detailSummaryKey(item))}</summary>
                       <DetailPre text={item.detail} />
                     </details>
                   ))}
@@ -332,9 +348,15 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   );
 });
 
-// detail 的展开标题按审批类型取：本地写入看内容、本地编辑看改动、删除看不可撤销影响、文件传输看方向。
-function detailSummaryKey(type: string): string {
-  switch (type) {
+// detail 的展开标题按审批项取：扩展类型（有 action）看请求详情、本地写入看内容、
+// 本地编辑看改动、删除看不可撤销影响，其余（cp）看传输方向。action 判据放在最前面——
+// 扩展的 item.type 是任意的动态资产类型字符串，不在下面这张固定表里，落进 default
+// 会显示"查看传输详情"这种文不对题的文案。
+function detailSummaryKey(item: { type: string; action?: string }): string {
+  if (item.action) {
+    return "ai.approvalRequestDetail";
+  }
+  switch (item.type) {
     case "local_write":
       return "ai.approvalLocalToolContentPreview";
     case "local_edit":

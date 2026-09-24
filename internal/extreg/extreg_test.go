@@ -248,7 +248,7 @@ func TestExtensionToolHonoursAnApprovedGrant(t *testing.T) {
 	// object.write is declared but neither allowed nor denied by the asset's groups, so
 	// the policy layer cannot decide and the outcome is determined purely by whether a
 	// grant matches.
-	registerFake(t, &fakePlugin{action: "object.write"})
+	registerFake(t, &fakePlugin{action: "object.write", resource: "prod-bucket"})
 	ctx := withGrantFixture(t, 1, "acme-store")
 
 	const command = "list_objects --bucket=prod"
@@ -256,16 +256,107 @@ func TestExtensionToolHonoursAnApprovedGrant(t *testing.T) {
 	got := permission.CheckPermission(ctx, "acme-store", 1, command)
 	require.Equal(t, aictx.NeedConfirm, got.Decision, "without a grant the user must be asked")
 
-	permission.SaveGrantPattern(ctx, "sess-ext", 1, "acme-1", "acme-store", "list_objects --bucket=prod")
+	permission.SaveGrantPattern(ctx, "sess-ext", 1, "acme-1", "acme-store", "ext:acme:object.write:prod-bucket")
 
 	got = permission.CheckPermission(ctx, "acme-store", 1, command)
 	assert.Equal(t, aictx.Allow, got.Decision, "an approved grant must skip the prompt on the next identical call")
 	assert.Equal(t, aictx.SourceGrantAllow, got.DecisionSource)
 }
 
+// allowAllChecker returns a CommandPolicyChecker whose confirmFunc always answers
+// "allowAll" — the shortest way to drive the real HandleConfirm persistence path
+// instead of pre-seeding a grant with SaveGrantPattern.
+func allowAllChecker() *permission.CommandPolicyChecker {
+	return permission.NewCommandPolicyChecker(func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+		return permission.ApprovalResponse{Decision: "allowAll"}
+	})
+}
+
+// TestExtensionAllowAllPersistsClassificationGrant is task 7's core regression lock:
+// "always allow" must persist ext:<type>:<action>:<resource> — the check_policy
+// classification — not the raw command text, and a later call whose command text
+// differs but classifies the same must still hit it (guest ignores flag spelling/order
+// here, which is exactly the point: matching never re-reads the command string).
+func TestExtensionAllowAllPersistsClassificationGrant(t *testing.T) {
+	registerFake(t, &fakePlugin{action: "object.write", resource: "prod-bucket"})
+	ctx := withGrantFixture(t, 1, "acme-store")
+	checker := allowAllChecker()
+
+	first := checker.CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod")
+	require.Equal(t, aictx.Allow, first.Decision)
+	require.Equal(t, aictx.SourceUserAllow, first.DecisionSource)
+
+	repo := grant_repo.Grant()
+	items, err := repo.ListApprovedItems(ctx, "sess-ext")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "ext:acme:object.write:prod-bucket", items[0].Command,
+		"the persisted grant must be the ext:<type>:<action>:<resource> classification")
+
+	// A later call with different argument spelling classifies identically (the fake
+	// plugin ignores args), so it must hit the grant without re-prompting.
+	second := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod --maxKeys=10")
+	assert.Equal(t, aictx.Allow, second.Decision)
+	assert.Equal(t, aictx.SourceGrantAllow, second.DecisionSource)
+}
+
+// TestExtensionGrantDoesNotCoverADifferentResource locks the other half of
+// classification matching: a grant for one resource must not silently widen to cover
+// a different one just because the action and asset are the same.
+func TestExtensionGrantDoesNotCoverADifferentResource(t *testing.T) {
+	plugin := &fakePlugin{action: "object.write", resource: "prod-bucket"}
+	registerFake(t, plugin)
+	ctx := withGrantFixture(t, 1, "acme-store")
+	checker := allowAllChecker()
+
+	require.Equal(t, aictx.Allow, checker.CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)
+
+	plugin.resource = "staging-bucket"
+	got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
+	assert.Equal(t, aictx.NeedConfirm, got.Decision, "a grant for one resource must not cover another")
+}
+
+// TestExtensionUndeclaredActionNeverGrants is the safety property behind the
+// undeclared-action fail-closed rule (extreg.classifyCommand): even though "always
+// allow" is still honored for the one call in front of the user, it must never leave
+// behind a grant nothing could legitimately match on a second, silent call.
+func TestExtensionUndeclaredActionNeverGrants(t *testing.T) {
+	registerFake(t, &fakePlugin{action: "object.rename"}) // not in Policies.Actions
+	ctx := withGrantFixture(t, 1, "acme-store")
+	checker := allowAllChecker()
+
+	result := checker.CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod")
+	assert.Equal(t, aictx.Allow, result.Decision, "the in-flight call is still honored once")
+
+	repo := grant_repo.Grant()
+	items, err := repo.ListApprovedItems(ctx, "sess-ext")
+	require.NoError(t, err)
+	assert.Empty(t, items, "an undeclared action must never produce a persisted grant")
+
+	got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
+	assert.Equal(t, aictx.NeedConfirm, got.Decision, "no phantom grant must silently allow the next call")
+}
+
+// TestExtensionPolicyDenyBeatsAnExistingGrant covers a deny rule added after a grant
+// already exists for the same classification (e.g. the group's policy changed): deny
+// must still win, matching the decision order (deny → allow → grant → confirm) every
+// other permission type already follows.
+func TestExtensionPolicyDenyBeatsAnExistingGrant(t *testing.T) {
+	registerFake(t, &fakePlugin{action: "object.delete", resource: "prod-bucket"})
+	ctx := withGrantFixture(t, 1, "acme-store")
+
+	permission.SaveGrantPattern(ctx, "sess-ext", 1, "acme-1", "acme-store", "ext:acme:object.delete:prod-bucket")
+
+	got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
+	assert.Equal(t, aictx.Deny, got.Decision, "policy deny must win even when a grant matches the same classification")
+}
+
 // TestExtensionApprovalSupportsAlwaysAllow locks the other half of the same defect: the
 // approval dialog for an extension command must offer "always allow", which the old
-// ApprovalKindExtension explicitly refused.
+// ApprovalKindExtension explicitly refused. NormalizeGrantPatterns' whole-command
+// fallback below is what a type with no ClassifyFunc gets; HandleConfirm's real
+// AllowAll path for a classify-registered type (every extension type, in practice)
+// bypasses it in favor of extGrantKey — see TestExtensionAllowAllPersistsClassificationGrant.
 func TestExtensionApprovalSupportsAlwaysAllow(t *testing.T) {
 	registerFake(t, &fakePlugin{})
 

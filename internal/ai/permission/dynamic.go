@@ -23,6 +23,21 @@ func MatchGrant(ctx context.Context, assetID int64, command, approvalType string
 	return *result, true
 }
 
+// MatchExtensionGrant is MatchGrant's counterpart for classify-registered extension
+// types: it builds the current call's grant key from its live (policyType, action,
+// resource) classification — never from the raw command text — so a later call that
+// spells the same request differently (different flag order, an equivalent literal)
+// still hits the grant, and a grant for one resource never covers another. See
+// extGrantMatch for how a stored pattern is compared against it.
+func MatchExtensionGrant(ctx context.Context, assetID int64, approvalType, policyType, action, resource string) (aictx.CheckResult, bool) {
+	key := extGrantKey(policyType, action, resource)
+	result := matchGrantForAssetWith(ctx, assetID, key, approvalType, extGrantMatch)
+	if result == nil {
+		return aictx.CheckResult{}, false
+	}
+	return *result, true
+}
+
 // ExtensionPolicyForAsset 收集一个扩展策略面在资产 holder 链（资产 → 组 → 父组）
 // 上的两样东西：引用的权限组 ID，以及 holder 自己那一列里属于这个策略面的永久规则
 // （已去掉命名空间前缀，还原成 `<action>[:<resource-glob>]`）。两者一趟走完——每条命令都要问一次，而组链要读库。

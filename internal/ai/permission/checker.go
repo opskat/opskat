@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -282,11 +283,26 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	// 不是静默变成 "exec"（type_registry.go 的 ApprovalTypeFor doc comment 有论证）。
 	approvalType := ApprovalTypeFor(assetType)
 
+	// classify is non-nil only for extension types (RegisterPolicyCheck); every
+	// built-in type falls through with classified=false and an approval item that
+	// looks exactly as it did before this classification existed.
+	classify, isExtension := classifyFor(assetType)
+	var classification ExtensionClassification
+	var classified bool
+	if isExtension {
+		classification, classified = classify(ctx, command)
+	}
+
 	item := ApprovalItem{
 		Type:      approvalType,
 		AssetID:   assetID,
 		AssetName: assetName,
 		Command:   command,
+	}
+	if classified {
+		item.Action = classification.Action
+		item.Resource = classification.Resource
+		item.Detail = formatExtensionRequestDetail(classification)
 	}
 	if len(detail) > 0 {
 		item.Detail = detail[0]
@@ -322,7 +338,15 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 掉进兜底，把用户的编辑**静默换成系统主体**——用户改这一栏通常是想收窄，
 		// 却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
 		var patterns []string
-		if len(parsed.EditedItems) > 0 {
+		if isExtension {
+			// Extension "always allow" never falls back to NormalizeGrantPatterns'
+			// whole-command-string default: the grant is the check_policy
+			// classification (extGrantKey), not the command text, so a later call
+			// spelling the same request differently still matches (spec 参数级策略 ›
+			// 审批展示) and matching stays keyed on (action, resource) — see
+			// extGrantMatch / MatchExtensionGrant.
+			patterns = extensionGrantPatterns(ctx, classify, parsed.EditedItems, classification, classified)
+		} else if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
 				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
 			}
@@ -356,6 +380,52 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	default:
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "invalid approval response, execution denied", "审批响应无效，拒绝执行"), DecisionSource: aictx.SourceUserDeny}
 	}
+}
+
+// extensionGrantPatterns builds the "always allow" grant patterns for a
+// classify-registered extension type. Each pattern is extGrantKey(classification) —
+// never the raw command text — so matching a later call stays keyed on (action,
+// resource) (see extGrantMatch / MatchExtensionGrant).
+//
+// Edited items are reclassified from their (possibly hand-edited) command text: the
+// user may have only changed an argument value, which changes the resource the guest
+// reports. An item whose command no longer classifies (parse error, or an action the
+// type never declared) contributes nothing — same "empty is an answer, not a failure"
+// rule the generic NormalizeGrantPatterns path already follows — rather than a
+// phantom, ungrantable pattern.
+func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited []ApprovalItem, classification ExtensionClassification, classified bool) []string {
+	if len(edited) > 0 {
+		var patterns []string
+		for _, item := range edited {
+			cls, ok := classify(ctx, item.Command)
+			if !ok {
+				continue
+			}
+			patterns = append(patterns, extGrantKey(cls.PolicyType, cls.Action, cls.Resource))
+		}
+		return patterns
+	}
+	if !classified {
+		return nil
+	}
+	return []string{extGrantKey(classification.PolicyType, classification.Action, classification.Resource)}
+}
+
+// formatExtensionRequestDetail renders an extension classification's underlying guest
+// call as the collapsible "request" the approval dialog shows next to Action/Resource
+// (spec 参数级策略 › 审批展示: "格式化后的请求（工具名 + 参数，长 JSON 可折叠）"). It reuses
+// ApprovalItem.Detail — the same field cp/delete already render inside a <details> —
+// rather than adding a second display channel.
+func formatExtensionRequestDetail(c ExtensionClassification) string {
+	payload := struct {
+		Tool string          `json:"tool"`
+		Args json.RawMessage `json:"args,omitempty"`
+	}{Tool: c.Tool, Args: c.Args}
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // --- 策略收集 ---
