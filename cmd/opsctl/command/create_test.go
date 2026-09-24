@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -1020,6 +1021,72 @@ func TestCreateAssetRedisApprovalDetailIncludesNodeAddressMapWithoutInjectedPort
 			assert.Equal(t, tt.expectedMap, approvalConfig["node_address_map"])
 			_, hasPort := approvalConfig["port"]
 			assert.False(t, hasPort, "cluster/sentinel approval config must not carry an injected port:6379")
+		})
+	}
+}
+
+// TestCmdCreateAssetWarnsOnPlaintextSentinelPassword verifies that create asset
+// --config with a write-only field like sentinel_password prints the plaintext-exposure
+// warning, just like update does. The warning should be printed once even when both
+// --password and an inline secret are given.
+func TestCmdCreateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		args          []string
+		wantWarning   string
+		shouldNotWarn bool
+	}{
+		{
+			name:        "--config with sentinel_password",
+			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--config", `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"s3cret"}`},
+			wantWarning: "plaintext supplied in argv",
+		},
+		{
+			name:          "--config without secrets",
+			args:          []string{"--type", "redis", "--name", "rc-standalone", "--config", `{"host":"localhost","port":6379}`},
+			shouldNotWarn: true,
+		},
+		{
+			name:        "--config-file with sentinel_password should warn about config file, not argv",
+			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--config-file", "/tmp/sentinel.json"},
+			wantWarning: "plaintext config files",
+		},
+		{
+			name:        "both --password and --config with sentinel_password should warn once",
+			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--password", "nodepass", "--config", `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"sentpass"}`},
+			wantWarning: "plaintext supplied in argv",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+			requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				return ApprovalResult{Decision: aictx.Deny}, errors.New("denied")
+			}
+			notifyAssetChanged = func() {}
+
+			var stdout, stderr bytes.Buffer
+			readFile := func(path string) ([]byte, error) {
+				if path == "/tmp/sentinel.json" {
+					return []byte(`{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"s3cret"}`), nil
+				}
+				return nil, errors.New("file not found")
+			}
+			code := createAsset(context.Background(), tc.args, "sess-create",
+				commandIO{stdout: &stdout, stderr: &stderr, readFile: readFile})
+			assert.Equal(t, 1, code, "create should fail due to approval denial")
+			if tc.shouldNotWarn {
+				assert.NotContains(t, stderr.String(), "plaintext", "should not warn about plaintext")
+				assert.NotContains(t, stderr.String(), "Warning")
+			} else {
+				assert.Contains(t, stderr.String(), tc.wantWarning, "should warn about plaintext in argv or config file")
+				// Verify warning appears exactly once
+				warningCount := strings.Count(stderr.String(), "Warning:")
+				assert.Equal(t, 1, warningCount, "warning should appear exactly once")
+			}
 		})
 	}
 }

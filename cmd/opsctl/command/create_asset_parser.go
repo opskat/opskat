@@ -119,19 +119,31 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		return nil, fmt.Errorf("credential and plaintext secret sources are mutually exclusive")
 	}
 
+	warnedArgv := false
 	if visited["password"] {
 		if err := warnArgvPlaintext(deps.stderr); err != nil {
 			return nil, err
 		}
+		warnedArgv = true
 	}
-	if configSource == "--config" && secretInConfig != "" {
-		if err := warnArgvPlaintext(deps.stderr); err != nil {
-			return nil, err
+	if configSource == "--config" {
+		hasSecret := secretInConfig != ""
+		hasWriteOnly := WriteOnlyFieldPresent(*assetType, config)
+		if hasSecret || hasWriteOnly {
+			if !warnedArgv {
+				if err := warnArgvPlaintext(deps.stderr); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
-	if configSource == "--config-file" && secretInConfig != "" {
-		if err := warnConfigFilePlaintext(deps.stderr); err != nil {
-			return nil, err
+	if configSource == "--config-file" {
+		hasSecret := secretInConfig != ""
+		hasWriteOnly := WriteOnlyFieldPresent(*assetType, config)
+		if hasSecret || hasWriteOnly {
+			if err := warnConfigFilePlaintext(deps.stderr); err != nil {
+				return nil, err
+			}
 		}
 	}
 

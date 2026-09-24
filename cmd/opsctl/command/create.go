@@ -325,7 +325,7 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 			return 1
 		}
 	}
-	if writeOnlyFieldPresent(asset.Type, config) {
+	if WriteOnlyFieldPresent(asset.Type, config) {
 		switch configSource {
 		case "--config":
 			if err := warnArgvPlaintext(streams.stderr); err != nil {
@@ -405,10 +405,10 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 	return 0
 }
 
-// writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
+// WriteOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
 // AutomationContract 声明——接受（ConfigFields）但不进审批（ApprovalFields）的字段，
 // 如 password / credential_id / Redis 的 sentinel_password。
-func writeOnlyFieldPresent(assetType string, config map[string]any) bool {
+func WriteOnlyFieldPresent(assetType string, config map[string]any) bool {
 	handler, ok := assettype.Get(assetType)
 	if !ok {
 		return false
