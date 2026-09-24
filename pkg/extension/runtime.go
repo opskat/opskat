@@ -198,6 +198,13 @@ type AssetRef struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	Type string `json:"type"`
+	// AdHoc, when set, means this call is not scoped to ID's row in the
+	// database — a "test connection" call, always ad-hoc (see
+	// AdHocAssetConfig) — and every host function that would otherwise read
+	// the asset's config, endpoints or dial path from storage reads them
+	// from here instead. It never crosses the WASM boundary (json:"-"): the
+	// guest sees only id/name/type, exactly as for a saved asset.
+	AdHoc *AdHocAssetConfig `json:"-"`
 }
 
 // callEnvelope is the input of execute_tool and execute_action: what to run, its
@@ -231,6 +238,37 @@ func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMes
 			toolName, len(out), p.opts.maxResultBytes)
 	}
 	return out, nil
+}
+
+// testConnectionEnvelope is the input of test_connection: the asset type to
+// test (an extension may register several) and its guest-visible config.
+type testConnectionEnvelope struct {
+	AssetType string          `json:"assetType"`
+	Config    json.RawMessage `json:"config"`
+}
+
+// TestConnection runs assetType's describe()-declared test-connection
+// handler against adhoc — the asset form's submitted values, never a row read
+// from the database (see AdHocAssetConfig): a new asset has no row yet, and a
+// saved one being tested must use its unsaved edits, not what is on disk.
+//
+// It shares CallTool's instance pool and call framing (host IO the handler
+// opens is gated and dialed exactly like a tool's, scoped to adhoc instead of
+// a stored asset) but is dispatched to "test_connection", not "execute_tool",
+// and — unlike every tool call — never goes through policy: testing a
+// connection is not an operation on the asset (see docs/specs 测试连接).
+func (p *Plugin) TestConnection(ctx context.Context, assetType string, adhoc *AdHocAssetConfig) error {
+	input, err := json.Marshal(testConnectionEnvelope{AssetType: assetType, Config: adhoc.Config})
+	if err != nil {
+		return fmt.Errorf("marshal test_connection input: %w", err)
+	}
+	// Name carries assetType rather than a real asset name: there may be no
+	// saved asset at all, and every error/log site that reads AssetRef.Name
+	// (e.g. DefaultHostProvider.resolveAuth's failure message) still needs
+	// something to identify the call by.
+	ref := &AssetRef{Name: assetType, Type: assetType, AdHoc: adhoc}
+	_, err = p.call(ctx, newInvocation(p.nextInvocationID(), nil).scopedTo(ref), "test_connection", input, p.opts.toolTimeout)
+	return err
 }
 
 // toolTimeout is the deadline for one call of toolName: its own declaration from

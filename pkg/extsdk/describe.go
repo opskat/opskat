@@ -33,11 +33,12 @@ type descName struct {
 }
 
 type descAssetType struct {
-	Type         string         `json:"type"`
-	I18n         descName       `json:"i18n"`
-	ConfigSchema map[string]any `json:"configSchema"`
-	Connection   *Connection    `json:"connection,omitempty"`
-	Auth         *Auth          `json:"auth,omitempty"`
+	Type           string         `json:"type"`
+	I18n           descName       `json:"i18n"`
+	ConfigSchema   map[string]any `json:"configSchema"`
+	Connection     *Connection    `json:"connection,omitempty"`
+	Auth           *Auth          `json:"auth,omitempty"`
+	TestConnection bool           `json:"testConnection,omitempty"`
 }
 
 type descTool struct {
@@ -116,11 +117,12 @@ func dispatchDescribe() (json.RawMessage, error) {
 
 	for _, at := range assetTypes {
 		d.AssetTypes = append(d.AssetTypes, descAssetType{
-			Type:         at.typ,
-			I18n:         descName{Name: at.name},
-			ConfigSchema: at.schema,
-			Connection:   at.connection,
-			Auth:         at.auth,
+			Type:           at.typ,
+			I18n:           descName{Name: at.name},
+			ConfigSchema:   at.schema,
+			Connection:     at.connection,
+			Auth:           at.auth,
+			TestConnection: at.testConnection != nil,
 		})
 	}
 

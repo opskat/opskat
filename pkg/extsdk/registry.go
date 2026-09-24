@@ -80,6 +80,13 @@ type assetTypeEntry struct {
 	schema     map[string]any
 	connection *Connection
 	auth       *Auth
+	// testConnection runs the asset form's "Test connection" handler against a
+	// decoded config; nil means the type declares none, and describe() reports
+	// that so the host never shows the button. Stored as a raw-JSON-in closure
+	// (like a tool's invoke) rather than the typed func the caller wrote so the
+	// entry stays usable from untyped dispatch code (handler.go), the same
+	// reason toolEntry.invoke exists.
+	testConnection func(configJSON json.RawMessage) error
 }
 
 type policyGroupEntry struct {
@@ -249,8 +256,11 @@ func (r *ToolReg[T]) Resource(fn func(args T) string) *ToolReg[T] {
 	return r
 }
 
-// AssetTypeReg is the registration handle returned by AssetType.
-type AssetTypeReg struct{ e *assetTypeEntry }
+// AssetTypeReg is the registration handle returned by AssetType. C is the
+// type's config struct — carried on the handle (not just at AssetType's call
+// site) so TestConnection can decode a call's config into the same struct
+// its schema was reflected from, instead of asking the caller to redeclare it.
+type AssetTypeReg[C any] struct{ e *assetTypeEntry }
 
 // AssetType registers an asset type whose configuration form is reflected from C.
 //
@@ -259,7 +269,7 @@ type AssetTypeReg struct{ e *assetTypeEntry }
 // a URL or host:port the extension may connect to when it declares the
 // network.assetEndpoint capability, `enum:"a,b"` renders a select. A field
 // without `,omitempty` is required.
-func AssetType[C any](typ string) *AssetTypeReg {
+func AssetType[C any](typ string) *AssetTypeReg[C] {
 	if typ == "" {
 		panic("opskat: asset type is required")
 	}
@@ -269,11 +279,11 @@ func AssetType[C any](typ string) *AssetTypeReg {
 		schema: reflectSchema(reflect.TypeFor[C](), fmt.Sprintf("asset type %q config", typ), schemaModeConfig),
 	}
 	assetTypes = append(assetTypes, entry)
-	return &AssetTypeReg{e: entry}
+	return &AssetTypeReg[C]{e: entry}
 }
 
 // Name sets the asset type's display name (an i18n key).
-func (r *AssetTypeReg) Name(name string) *AssetTypeReg {
+func (r *AssetTypeReg[C]) Name(name string) *AssetTypeReg[C] {
 	r.e.name = name
 	return r
 }
@@ -296,7 +306,7 @@ type Connection struct {
 }
 
 // Connection declares the host-owned connection settings the asset type supports.
-func (r *AssetTypeReg) Connection(c Connection) *AssetTypeReg {
+func (r *AssetTypeReg[C]) Connection(c Connection) *AssetTypeReg[C] {
 	r.e.connection = &c
 	return r
 }
@@ -334,8 +344,30 @@ type AuthBinding struct {
 }
 
 // Auth declares the credentials the host injects into requests to the asset's endpoint.
-func (r *AssetTypeReg) Auth(a Auth) *AssetTypeReg {
+func (r *AssetTypeReg[C]) Auth(a Auth) *AssetTypeReg[C] {
 	r.e.auth = &a
+	return r
+}
+
+// TestConnection declares the handler behind the asset form's "Test
+// connection" button: describe() reports it, so the host shows the button
+// only when this is called, and calls back into fn with the submitted config
+// decoded into C — the same struct AssetType reflected the form from.
+//
+// fn reaches the endpoint the same way a tool does (Dial, an *http.Client
+// built on NewHTTPTransport, …), scoped by the host to the same
+// network.assetEndpoint / connection settings a real call would use, except
+// resolved from the form's current values rather than a saved asset: the
+// values under test are exactly the ones the caller is about to save, or
+// never will. A nil error means the connection succeeded.
+func (r *AssetTypeReg[C]) TestConnection(fn func(cfg C) error) *AssetTypeReg[C] {
+	r.e.testConnection = func(configJSON json.RawMessage) error {
+		cfg, err := decodeArgs[C](configJSON)
+		if err != nil {
+			return fmt.Errorf("test connection: %w", err)
+		}
+		return fn(cfg)
+	}
 	return r
 }
 

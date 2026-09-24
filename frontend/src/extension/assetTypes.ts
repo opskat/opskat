@@ -20,7 +20,9 @@ export function registerExtensionAssetTypes(name: string, manifest: ExtManifest)
   unregisterExtensionAssetTypes(name);
   const types: string[] = [];
   for (const at of manifest.assetTypes ?? []) {
-    registerAssetType(buildDefinition(name, manifest, at.type, at.i18n?.name, at.configSchema, at.connection));
+    registerAssetType(
+      buildDefinition(name, manifest, at.type, at.i18n?.name, at.configSchema, at.connection, !!at.testConnection)
+    );
     types.push(at.type);
   }
   if (types.length > 0) registeredTypes.set(name, types);
@@ -39,7 +41,8 @@ function buildDefinition(
   type: string,
   labelKey: string | undefined,
   rawSchema: Record<string, unknown> | undefined,
-  connection: ExtConnection | undefined
+  connection: ExtConnection | undefined,
+  testConnection: boolean
 ): AssetTypeDefinition {
   const ns = `ext-${extensionName}`;
   const schema = rawSchema as ExtensionConfigSchema | undefined;
@@ -73,12 +76,12 @@ function buildDefinition(
       extensionName,
       assetType: type,
       schema,
-      hasBackend: !!manifest.backend,
       connection,
+      testConnection,
     }),
-    // 扩展资产的连通性由扩展自己的 action 验证（ExtensionConfigForm 里的测试按钮），
-    // 不走宿主的 TestAssetConnection。
-    testable: false,
+    // "测试连接"按钮只在 describe() 声明了处理器时出现；表单走与内置类型一样的
+    // TestAssetConnection 通用路径（ExtensionConfigSection 的 buildTestConfig）。
+    testable: testConnection,
     policy: buildPolicy(manifest, ns),
   };
 }

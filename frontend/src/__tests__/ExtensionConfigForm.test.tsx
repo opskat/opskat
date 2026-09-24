@@ -10,7 +10,7 @@ describe("ExtensionConfigForm", () => {
         caCert: { type: "string", format: "textarea", title: "CA Certificate" },
       },
     };
-    render(<ExtensionConfigForm extensionName="test" configSchema={schema} value={{}} onChange={() => {}} />);
+    render(<ExtensionConfigForm configSchema={schema} value={{}} onChange={() => {}} />);
     const el = screen.getByLabelText("CA Certificate");
     expect(el.tagName.toLowerCase()).toBe("textarea");
   });
@@ -23,9 +23,7 @@ describe("ExtensionConfigForm", () => {
       },
     };
     const onChange = vi.fn();
-    render(
-      <ExtensionConfigForm extensionName="test" configSchema={schema} value={{ other: "keep" }} onChange={onChange} />
-    );
+    render(<ExtensionConfigForm configSchema={schema} value={{ other: "keep" }} onChange={onChange} />);
     const el = screen.getByLabelText("CA Certificate") as HTMLTextAreaElement;
     fireEvent.change(el, { target: { value: "-----BEGIN CERT-----" } });
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -41,14 +39,7 @@ describe("ExtensionConfigForm", () => {
       properties: { maxNotes: { type: "integer", title: "Note limit" } },
     };
     const onChange = vi.fn();
-    render(
-      <ExtensionConfigForm
-        extensionName="test"
-        configSchema={schema}
-        value={{ notebook: "keep" }}
-        onChange={onChange}
-      />
-    );
+    render(<ExtensionConfigForm configSchema={schema} value={{ notebook: "keep" }} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Note limit"), { target: { value: "5" } });
     expect(onChange).toHaveBeenCalledWith({ notebook: "keep", maxNotes: 5 });
   });
@@ -59,9 +50,7 @@ describe("ExtensionConfigForm", () => {
       properties: { maxNotes: { type: "integer", title: "Note limit" } },
     };
     const onChange = vi.fn();
-    render(
-      <ExtensionConfigForm extensionName="test" configSchema={schema} value={{ maxNotes: 5 }} onChange={onChange} />
-    );
+    render(<ExtensionConfigForm configSchema={schema} value={{ maxNotes: 5 }} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Note limit"), { target: { value: "" } });
     expect(onChange).toHaveBeenCalledWith({ maxNotes: undefined });
   });
@@ -73,7 +62,7 @@ describe("ExtensionConfigForm", () => {
         secret: { type: "string", format: "password", title: "Secret" },
       },
     };
-    render(<ExtensionConfigForm extensionName="test" configSchema={schema} value={{}} onChange={() => {}} />);
+    render(<ExtensionConfigForm configSchema={schema} value={{}} onChange={() => {}} />);
     const el = screen.getByLabelText("Secret") as HTMLInputElement;
     expect(el.tagName.toLowerCase()).toBe("input");
     expect(el.type).toBe("password");

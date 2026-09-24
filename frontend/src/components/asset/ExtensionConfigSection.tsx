@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Input, Label, Switch } from "@opskat/ui";
@@ -16,7 +16,7 @@ import {
   type ConnectionFormFields,
 } from "@/components/asset/proxyConfig";
 import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
-import type { AssetFormContext, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { AssetFormContext, AssetTestConfig, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
 import type { ExtConnection } from "@/extension/types";
 import {
@@ -29,9 +29,10 @@ interface Options {
   extensionName: string;
   assetType: string;
   schema?: ExtensionConfigSchema;
-  hasBackend: boolean;
   /** 资产类型在 describe() 声明的宿主连接配置；只渲染、保存声明了的项。 */
   connection?: ExtConnection;
+  /** describe() 声明了测试连接处理器；决定"测试连接"按钮是否出现。 */
+  testConnection?: boolean;
 }
 
 interface TLSFormState {
@@ -139,6 +140,10 @@ export function makeExtensionConfigSection(opts: Options) {
 
   function ExtensionConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
     const { t } = useTranslation();
+    // 已存资产解密回填时的密码字段快照，供"测试连接"判断哪些字段用户没碰过——那些字段
+    // 从测试请求里整体去掉，让宿主用已存密文补齐，而不是把解密明文再走一遍 IPC。新建
+    // 资产没有已存值，起始为空对象：任何非空输入都当作"用户填的"，原样送出。
+    const initialSecretsRef = useRef<Record<string, string>>({});
     const { state, setState, patch } = useConfigSection<ExtensionFormState>({
       ref,
       editAsset,
@@ -158,7 +163,9 @@ export function makeExtensionConfigSection(opts: Options) {
         const chainError = proxyChainEnabled ? proxyChainValidationKey(s.proxyChain.proxyChainLayers) : "";
         const canSave = s.status === "ready" && !missingTunnel && !chainError;
         return {
-          canTest: false,
+          // 表单是否有效可测，与是否有效可存是同一件事；按钮本身是否出现另由
+          // sectionDef.testable（describe() 是否声明了处理器）决定。
+          canTest: !!opts.testConnection && canSave,
           canSave,
           saveDisabledReason: missingTunnel ? "asset.formMissingSSHTunnel" : chainError || STATUS_REASON[s.status],
         };
@@ -190,7 +197,48 @@ export function makeExtensionConfigSection(opts: Options) {
           sshTunnelId: s.tunnel ? s.sshTunnelId : 0,
         };
       },
+      buildTest: opts.testConnection ? buildTestConfig : undefined,
     });
+
+    // 测试连接：表单当前值（含连接区）原样送出；未改动的密码字段整体去掉，宿主拿资产 id
+    // （借道 AssetTestConfig.password——测试连接没有独立密码语义，这个类型专用的分发闭包
+    // 把它当资产 id 解析）用已存密文补齐。新建资产没有资产 id，送空串。
+    function buildTestConfig(s: ExtensionFormState): Promise<AssetTestConfig> {
+      if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
+      const config: Record<string, unknown> = { ...s.config };
+      for (const field of secrets) {
+        const current = String(config[field] ?? "");
+        if (current === (initialSecretsRef.current[field] ?? "")) {
+          delete config[field];
+        }
+      }
+
+      const hostConnection: HostConnectionConfig = {};
+      if (proxyChainEnabled) {
+        const secretsByLayer: Record<string, { password?: string; token?: string }> = {};
+        for (const layer of s.proxyChain.proxyChainLayers) {
+          secretsByLayer[layer.id] = { password: layer.password || undefined, token: layer.token || undefined };
+        }
+        const chainJSON = buildProxyChainJSON(s.proxyChain.proxyChainLayers, secretsByLayer);
+        if (chainJSON) hostConnection.proxyChain = chainJSON;
+      }
+      if (tlsEnabled) {
+        const tls = buildTLS(s.tls);
+        if (tls) hostConnection.tls = tls;
+      }
+      if (sshTunnel && s.tunnel && s.sshTunnelId) {
+        hostConnection.sshTunnelId = s.sshTunnelId;
+      }
+      if (Object.keys(hostConnection).length > 0) {
+        config[HOST_CONNECTION_CONFIG_KEY] = hostConnection;
+      }
+
+      return Promise.resolve({
+        assetType: opts.assetType,
+        configJSON: JSON.stringify(config),
+        password: editAsset?.ID ? String(editAsset.ID) : "",
+      });
+    }
 
     // 编辑态：把密文字段换成后端解密后的值，用户才能看到自己填过什么。解密失败不能退回
     // 资产上的原始配置——密码框里会是密文，保存时再加密一次就把真实密钥毁了。
@@ -202,6 +250,7 @@ export function makeExtensionConfigSection(opts: Options) {
         .then((cfg) => {
           if (cancelled) return;
           const { guestConfig, proxyChain, tls } = splitHostConnection(parseConfig(cfg));
+          initialSecretsRef.current = Object.fromEntries(secrets.map((f) => [f, String(guestConfig[f] ?? "")]));
           setState((s) => ({ ...s, config: guestConfig, status: "ready", proxyChain, tls }));
         })
         .catch((err) => {
@@ -219,11 +268,9 @@ export function makeExtensionConfigSection(opts: Options) {
     return (
       <div className="flex flex-col gap-4">
         <ExtensionConfigForm
-          extensionName={opts.extensionName}
           configSchema={opts.schema}
           value={state.config}
           onChange={(config) => patch({ config, status: "ready" })}
-          hasBackend={opts.hasBackend}
         />
         {sshTunnel && (
           <Field label={t("asset.connectionType")}>

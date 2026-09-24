@@ -81,6 +81,19 @@ test("an extension's asset type reaches the picker and its form is generated fro
   await expect(dialog.locator(`#${CONFIG.optionalField}`)).toHaveAttribute("type", "number");
 });
 
+// notebook's asset type declares no test-connection handler (opskat.AssetType
+// .TestConnection in the guest SDK — see docs/specs 测试连接), so the button the
+// generic AssetForm shows for every *testable* type (SSH, database, …) must not
+// render at all for it; it is not merely disabled.
+test("an extension asset type without a test-connection handler shows no Test connection button", async ({
+  page,
+}) => {
+  await openApp(page);
+  await pickExtensionType(page);
+
+  await expect(page.getByTestId("asset-form-dialog").getByTestId("asset-test-connection")).toHaveCount(0);
+});
+
 test("a saved extension asset persists its schema config and renders the detail card from it", async ({
   page,
 }) => {

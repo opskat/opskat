@@ -219,6 +219,41 @@ request instead of sending it unauthenticated. `credentials: "read"` stays for
 protocols the host cannot authenticate for you (raw TCP handshakes); the install
 confirmation and the extension's details in Settings warn about it prominently.
 
+### Test connection
+
+The asset form's "Test connection" button appears only when the asset type declares
+a handler for it:
+
+```go
+opskat.AssetType[esConfig]("es").TestConnection(func(cfg esConfig) error {
+	h, err := opskat.IOOpen("http", map[string]any{"method": "GET", "url": cfg.Endpoint})
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+	meta, err := h.Flush()
+	if err != nil {
+		return err
+	}
+	if meta.Status >= 400 {
+		return fmt.Errorf("unexpected status %d", meta.Status)
+	}
+	return nil
+})
+```
+
+`fn` receives the form's current values decoded into the same config struct
+`AssetType` reflected the schema from — including for a brand-new, not-yet-saved
+asset — and reaches the endpoint exactly like a tool does (`IOOpen`, `Dial`, an
+`*http.Client` on `NewHTTPTransport`), gated and dialed by `network.assetEndpoint`
+and any declared `Connection` / `Auth` the same way, but resolved from the form's
+submitted connection settings (tunnel, proxy chain, TLS) rather than a saved
+asset's row: what is under test is exactly what the caller is about to save, or
+never will. A nil error means success. Test connection never goes through policy —
+it is not an operation on the asset — and, editing a saved asset, a password field
+the user has not retyped is filled in from the stored value before `fn` runs; the
+plaintext never reaches the frontend to do this.
+
 ### The policy face
 
 Every tool declares the action it requests. A tool whose action is fixed uses

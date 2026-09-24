@@ -44,7 +44,28 @@ func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (Dial
 	if f.direct {
 		return nil, nil, "", nil
 	}
-	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return f.dialFunc(), f.tlsConfig, "fixed", nil
+}
+
+// DialContextForConfig is the ad-hoc counterpart a "test connection" call
+// resolves through (AdHocAssetDialer): same far side, same bookkeeping, minus
+// the fingerprint an ad-hoc call never caches by. assetID -1 marks an ad-hoc
+// call in the recorded sequence — it carries no real asset id.
+func (f *fakeAssetDialer) DialContextForConfig(_ context.Context, _ string, _ *AdHocAssetConfig) (DialContextFunc, *tls.Config, error) {
+	f.mu.Lock()
+	f.assets = append(f.assets, -1)
+	f.mu.Unlock()
+	if f.openErr != nil {
+		return nil, nil, f.openErr
+	}
+	if f.direct {
+		return nil, nil, nil
+	}
+	return f.dialFunc(), f.tlsConfig, nil
+}
+
+func (f *fakeAssetDialer) dialFunc() DialContextFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		f.mu.Lock()
 		f.addrs = append(f.addrs, addr)
 		f.mu.Unlock()
@@ -53,7 +74,6 @@ func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (Dial
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, f.farSide)
 	}
-	return dial, f.tlsConfig, "fixed", nil
 }
 
 // selfSignedCert generates a self-signed cert/key pair valid for 127.0.0.1.

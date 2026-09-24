@@ -34,6 +34,8 @@ export interface ExtAssetType {
   connection?: ExtConnection;
   /** Credentials the host injects into requests to the asset's endpoint; absent means none. */
   auth?: ExtAuth;
+  /** The type registers a test-connection handler; the asset form shows "Test connection" only when true. */
+  testConnection?: boolean;
 }
 
 /**

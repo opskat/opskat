@@ -18,8 +18,26 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/pkg/extension"
 )
+
+// fakeConnTestRegistrar stands in for internal/app/extension's real
+// ConnTestRegistrar (wired from main.go in production): it skips the
+// stored-password merge entirely and dispatches configJSON straight to the
+// plugin, which is all registerType's own tests (and the real-WASM fixture
+// extension's timeout tests) need — main.go, not this package, owns the merge.
+type fakeConnTestRegistrar struct{}
+
+func (fakeConnTestRegistrar) Build(_ string, _ *extension.Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc {
+	return func(ctx context.Context, configJSON, _ string) error {
+		return plugin.TestConnection(ctx, assetType, &extension.AdHocAssetConfig{Config: json.RawMessage(configJSON)})
+	}
+}
+
+func init() {
+	SetConnTestRegistrar(fakeConnTestRegistrar{})
+}
 
 // --- fakes -------------------------------------------------------------------
 
@@ -36,6 +54,16 @@ type fakePlugin struct {
 	validationErrors []extension.ValidationError
 	validateErr      error
 	lastValidated    json.RawMessage
+
+	testConnErr        error
+	lastTestConnType   string
+	lastTestConnConfig *extension.AdHocAssetConfig
+}
+
+func (p *fakePlugin) TestConnection(_ context.Context, assetType string, adhoc *extension.AdHocAssetConfig) error {
+	p.lastTestConnType = assetType
+	p.lastTestConnConfig = adhoc
+	return p.testConnErr
 }
 
 func (p *fakePlugin) ValidateConfig(_ context.Context, config json.RawMessage) ([]extension.ValidationError, error) {
@@ -169,6 +197,51 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 
 	// The refused extension must leave nothing behind.
 	assert.Equal(t, "acme", mustExtensionNameOf(t, "acme-store"))
+}
+
+func TestConnTestRegistration(t *testing.T) {
+	t.Run("no handler declared: conntest has no tester for the type", func(t *testing.T) {
+		registerFake(t, &fakePlugin{})
+		_, ok := conntest.Lookup("acme-store")
+		assert.False(t, ok)
+	})
+
+	t.Run("handler declared: registers a tester that dispatches through the plugin", func(t *testing.T) {
+		m := testManifest()
+		m.AssetTypes[0].TestConnection = true
+		plugin := &fakePlugin{}
+		l := loaded{name: m.Name, manifest: m, plugin: plugin}
+		require.NoError(t, register(l, "help", "desc"))
+		t.Cleanup(func() { Unregister(m.Name) })
+
+		fn, ok := conntest.Lookup("acme-store")
+		require.True(t, ok)
+
+		require.NoError(t, fn(context.Background(), `{"endpoint":"http://x"}`, ""))
+		assert.Equal(t, "acme-store", plugin.lastTestConnType)
+		assert.JSONEq(t, `{"endpoint":"http://x"}`, string(plugin.lastTestConnConfig.Config))
+
+		Unregister(m.Name)
+		_, ok = conntest.Lookup("acme-store")
+		assert.False(t, ok, "unregister must drop the conntest tester too")
+	})
+
+	t.Run("handler declared but no registrar wired: registration fails and leaves nothing behind", func(t *testing.T) {
+		SetConnTestRegistrar(nil)
+		t.Cleanup(func() { SetConnTestRegistrar(fakeConnTestRegistrar{}) })
+
+		m := testManifest()
+		m.AssetTypes[0].TestConnection = true
+		l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
+		err := register(l, "help", "desc")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no registrar is wired")
+
+		_, ok := assettype.Get("acme-store")
+		assert.False(t, ok, "a failed registration must not leave the asset type reachable")
+		_, ok = conntest.Lookup("acme-store")
+		assert.False(t, ok)
+	})
 }
 
 func mustExtensionNameOf(t *testing.T, assetType string) string {

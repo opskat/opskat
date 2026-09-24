@@ -195,6 +195,12 @@ type AssetTypeDef struct {
 	ConfigSchema map[string]any `json:"configSchema"`
 	Connection   *ConnectionDef `json:"connection,omitempty"`
 	Auth         *AuthDef       `json:"auth,omitempty"`
+	// TestConnection reports whether the type registered a test-connection
+	// handler (opskat.AssetTypeReg.TestConnection in the guest SDK). The
+	// asset form shows its "Test connection" button only when this is true;
+	// the host dispatches the call itself (Plugin.TestConnection), never
+	// through policy — testing a connection is not an operation on the asset.
+	TestConnection bool `json:"testConnection,omitempty"`
 }
 
 // ConnectionDef is the subset of the host-owned connection settings an asset

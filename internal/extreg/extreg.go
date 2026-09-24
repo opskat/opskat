@@ -31,6 +31,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -45,7 +46,36 @@ type pluginCaller interface {
 	CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error)
 	CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action, resource string, err error)
 	ValidateConfig(ctx context.Context, config json.RawMessage) ([]extension.ValidationError, error)
+	TestConnectionCaller
 }
+
+// TestConnectionCaller is the one plugin capability a conntest tester needs:
+// run an asset type's describe()-declared test-connection handler. It is its
+// own (exported) interface, not folded silently into pluginCaller, because
+// ConnTestRegistrar — implemented outside this package — needs a type it can
+// name in its own signature; Go only requires the method sets to match.
+type TestConnectionCaller interface {
+	TestConnection(ctx context.Context, assetType string, adhoc *extension.AdHocAssetConfig) error
+}
+
+// ConnTestRegistrar builds the conntest.TestFunc a describe()-declared
+// test-connection handler is registered under. The one implementation
+// (internal/app/extension, wired once from main.go via SetConnTestRegistrar)
+// needs extension_svc and credential_svc to merge the form's unchanged
+// password fields with an edited asset's stored ones — internal/extreg
+// cannot import either without an import cycle (extension_svc already calls
+// extreg.Register), so the capability is injected instead of implemented here.
+type ConnTestRegistrar interface {
+	Build(extName string, manifest *extension.Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc
+}
+
+var connTestRegistrar ConnTestRegistrar
+
+// SetConnTestRegistrar wires the registrar main.go constructs at startup,
+// before any extension loads. Called more than once, the last call wins —
+// there is exactly one desktop process wiring this, same as every other
+// setter-injected seam in main.go.
+func SetConnTestRegistrar(r ConnTestRegistrar) { connTestRegistrar = r }
 
 // loaded 是一个已加载扩展在本包内的最小画像。
 type loaded struct {
@@ -194,6 +224,21 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 	policyent.RegisterDefaultPolicy(at.Type, func() any {
 		return &policyent.CommandPolicy{Groups: defaults}
 	})
+	// 测试连接：仅当 describe() 声明了处理器时才登记，且只在这条(而非
+	// RegisterDescribeOnly)路径——测试连接要跑 WASM，opsctl 进程没有运行时。
+	if at.TestConnection {
+		if connTestRegistrar == nil {
+			assettype.Unregister(at.Type)
+			permission.UnregisterPolicyCheck(at.Type)
+			permission.UnregisterExecutor(at.Type)
+			skills.UnregisterDynamic(at.Type)
+			permission.UnregisterRuleSink(at.Type)
+			asset_entity.UnregisterConfigValidator(at.Type)
+			policyent.UnregisterDefaultPolicy(at.Type)
+			return fmt.Errorf("extension %q: asset type %q declares a test-connection handler but no registrar is wired", l.name, at.Type)
+		}
+		conntest.Register(at.Type, connTestRegistrar.Build(l.name, m, at.Type, l.plugin))
+	}
 	return nil
 }
 
@@ -229,6 +274,8 @@ func unregisterType(assetType string) {
 	skills.UnregisterDynamic(assetType)
 	policyent.UnregisterDefaultPolicy(assetType)
 	asset_entity.UnregisterConfigValidator(assetType)
+	// 无条件调用：未声明测试连接处理器的类型从未在这张表里出现过，Unregister 对它是空操作。
+	conntest.Unregister(assetType)
 }
 
 // skillDescription 是技能清单里的那一行。优先用 SKILL.md frontmatter 的 description，

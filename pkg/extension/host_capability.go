@@ -122,6 +122,17 @@ func (c *capHost) logDenied(ctx context.Context, asset *AssetRef, ioType string,
 	logger.Ctx(ctx).Warn("extension network target denied", fields...)
 }
 
+// readAssetConfig returns asset's guest-visible config: an ad-hoc call's own
+// submitted config (see AdHocAssetConfig — there is no database row to read,
+// or it must not be trusted over the caller's unsaved edits), or else the
+// inner provider's own reader, scoped to assets of this extension.
+func (c *capHost) readAssetConfig(asset *AssetRef) (json.RawMessage, error) {
+	if asset.AdHoc != nil {
+		return asset.AdHoc.Config, nil
+	}
+	return c.GetAssetConfig(asset.ID)
+}
+
 // assetEndpoints reads the endpoints the asset's config names. The config comes
 // from the inner provider — the host's own reader, already scoped to assets of
 // this extension — so the addresses are the ones the user typed, never the
@@ -135,7 +146,7 @@ func (c *capHost) assetEndpoints(asset *AssetRef) (endpointSet, error) {
 	if len(fields) == 0 {
 		return nil, nil
 	}
-	raw, err := c.GetAssetConfig(asset.ID)
+	raw, err := c.readAssetConfig(asset)
 	if err != nil {
 		return nil, fmt.Errorf("read endpoints of asset %q: %w", asset.Name, err)
 	}

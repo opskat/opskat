@@ -90,6 +90,26 @@ func init() {
 				{When: "bearer", Bindings: []opskat.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}}},
 				{When: "signed", Bindings: []opskat.AuthBinding{{In: "query", Name: "token", Value: `{{base64(username, ":", password)}}`}}},
 			},
+		}).
+		// TestConnection reaches the endpoint through the same host IO and
+		// network gate a tool call would, and reports HTTP's own client error —
+		// so the host-side test exercises the real ad-hoc dial/endpoint/auth path
+		// a "test connection" call runs (not a real tool call), rather than a
+		// second handler that just returns nil.
+		TestConnection(func(cfg fixtureConfig) error {
+			h, err := opskat.IOOpen("http", map[string]any{"method": "GET", "url": cfg.Endpoint})
+			if err != nil {
+				return err
+			}
+			defer h.Close()
+			meta, err := h.Flush()
+			if err != nil {
+				return err
+			}
+			if meta.Status >= 400 {
+				return fmt.Errorf("test connection: unexpected status %d", meta.Status)
+			}
+			return nil
 		})
 	opskat.PolicyGroup("ext:fixture:read").Name("Read").Description("Read-only").
 		Allow("read").Default()

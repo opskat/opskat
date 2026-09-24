@@ -23,4 +23,11 @@ export interface HostTLSConfig {
 export interface HostConnectionConfig {
   proxyChain?: ProxyChainJSON;
   tls?: HostTLSConfig;
+  /**
+   * SSH tunnel asset id, ad-hoc "test connection" calls only: a saved asset's
+   * tunnel lives on its own sshTunnelId column, never under this key. A test
+   * call has no such column yet (or unsaved edits to it), so it rides here
+   * for the one call instead.
+   */
+  sshTunnelId?: number;
 }

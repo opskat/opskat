@@ -118,6 +118,14 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 		if err != nil {
 			return nil, err
 		}
+		if asset.AdHoc != nil {
+			// An ad-hoc call (test connection) will never be asked again the same
+			// way — nothing to key a cache entry on that would ever hit — so it
+			// gets a single-use client, exactly as the unscoped path above, but
+			// still carries whatever credentials resolveAuth rendered.
+			client := buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate, params.RedirectGuard)
+			return openHTTPResourceWithClient(params, client, auth)
+		}
 		client, built := h.httpClients.getOrCreate(asset.ID, fingerprint, func() *http.Client {
 			return buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate, params.RedirectGuard)
 		})
@@ -153,7 +161,7 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 	}
 	var selected string
 	if auth.Def.Selector != "" {
-		values, err := h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, []string{auth.Def.Selector})
+		values, err := h.credentialValues(ctx, asset, []string{auth.Def.Selector})
 		if err != nil {
 			return fail(err)
 		}
@@ -165,7 +173,7 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.String("selector", selected))
 		return nil, nil
 	}
-	values, err := h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, group.fields())
+	values, err := h.credentialValues(ctx, asset, group.fields())
 	if err != nil {
 		return fail(err)
 	}
@@ -175,6 +183,43 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 	return &requestAuth{bindings: group.render(values), isEndpoint: auth.IsEndpoint}, nil
 }
 
+// credentialValues resolves the named config fields of asset as strings: from
+// the database for a saved asset, or straight out of an ad-hoc call's own
+// config (already plaintext, or the zero value absent credentials:read — see
+// AdHocAssetConfig) for a test-connection call, which has no database row to
+// decrypt from in the first place.
+func (h *DefaultHostProvider) credentialValues(ctx context.Context, asset *AssetRef, fields []string) (map[string]string, error) {
+	if asset.AdHoc != nil {
+		return adHocFieldValues(asset.AdHoc.Config, fields), nil
+	}
+	return h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, fields)
+}
+
+// adHocFieldValues reads fields out of config as strings, exactly as
+// AssetCredentialValues does for a stored asset, minus the decrypt step: an
+// ad-hoc call's config carries its password fields already resolved (or, for
+// an extension without credentials:read, already zeroed) by the caller that
+// built the AdHocAssetConfig. A field absent from config is omitted, not "".
+func adHocFieldValues(config json.RawMessage, fields []string) map[string]string {
+	values := make(map[string]string, len(fields))
+	var cfg map[string]json.RawMessage
+	if json.Unmarshal(config, &cfg) != nil {
+		return values
+	}
+	for _, field := range fields {
+		raw, ok := cfg[field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			s = string(raw) // a number or bool renders as its JSON text
+		}
+		values[field] = s
+	}
+	return values
+}
+
 // assetDial resolves the connection path and TLS settings of the invocation's
 // asset; a nil dial means a direct dial, a nil tlsConfig means no TLS. A path
 // that cannot be built fails the open — falling back to a direct or unverified
@@ -182,6 +227,19 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 func (h *DefaultHostProvider) assetDial(ctx context.Context, asset *AssetRef) (DialContextFunc, *tls.Config, string, error) {
 	if asset == nil || h.cfg.AssetDialer == nil {
 		return nil, nil, "", nil
+	}
+	if asset.AdHoc != nil {
+		dialer, ok := h.cfg.AssetDialer.(AdHocAssetDialer)
+		if !ok {
+			return nil, nil, "", fmt.Errorf("connection path of asset type %q: host does not support testing an ad-hoc connection", asset.Type)
+		}
+		dial, tlsConfig, err := dialer.DialContextForConfig(ctx, asset.Type, asset.AdHoc)
+		if err != nil {
+			logger.Ctx(ctx).Error("extension ad-hoc connection path failed",
+				zap.String("assetType", asset.Type), zap.Error(err))
+			return nil, nil, "", fmt.Errorf("connection path of asset type %q: %w", asset.Type, err)
+		}
+		return dial, tlsConfig, "", nil
 	}
 	dial, tlsConfig, fingerprint, err := h.cfg.AssetDialer.DialContextFor(ctx, asset.ID)
 	if err != nil {

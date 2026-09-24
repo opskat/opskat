@@ -35,6 +35,7 @@ import (
 	"github.com/opskat/opskat/internal/assetconn"
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -413,6 +414,11 @@ func initExtensionSystem(
 		})
 		return provider
 	}, logger.Default())
+
+	// 测试连接：declare()d 处理器要跑 WASM，只在桌面进程接线（opsctl 走
+	// RegisterDescribeOnly，从不设置这个）。必须在任何扩展加载之前接好——extreg
+	// 加载期一遇到声明了处理器的类型就要拿它建 tester。
+	extreg.SetConnTestRegistrar(extB.NewConnTestRegistrar())
 
 	extSvc := extension_svc.New(
 		mgr,

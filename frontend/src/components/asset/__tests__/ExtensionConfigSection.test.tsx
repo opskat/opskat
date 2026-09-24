@@ -13,7 +13,6 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 const Section = makeExtensionConfigSection({
   extensionName: "demo",
   assetType: "demo-type",
-  hasBackend: false,
   schema: {
     type: "object",
     properties: {
@@ -91,14 +90,12 @@ describe("ExtensionConfigSection connection settings", () => {
   const Tunneled = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
-    hasBackend: false,
     schema,
     connection: { sshTunnel: true },
   });
   const Plain = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
-    hasBackend: false,
     schema,
   });
 
@@ -169,14 +166,12 @@ describe("ExtensionConfigSection proxy chain", () => {
   const Chained = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
-    hasBackend: false,
     schema,
     connection: { proxyChain: true },
   });
   const Plain = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
-    hasBackend: false,
     schema,
   });
 
@@ -276,14 +271,12 @@ describe("ExtensionConfigSection TLS", () => {
   const TLSAware = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
-    hasBackend: false,
     schema,
     connection: { tls: true },
   });
   const Plain = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
-    hasBackend: false,
     schema,
   });
 
@@ -349,5 +342,95 @@ describe("ExtensionConfigSection TLS", () => {
 
     expect(screen.getByRole("switch", { name: "asset.tls" })).toBeChecked();
     expect(screen.getByDisplayValue("es.example.com")).toBeInTheDocument();
+  });
+});
+
+describe("ExtensionConfigSection test connection", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      endpoint: { type: "string", title: "Endpoint" },
+      secret: { type: "string", format: "password", title: "Secret" },
+    },
+  } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("no handler declared: the section never reports canTest, and exposes no buildTestConfig", () => {
+    const NotTestable = makeExtensionConfigSection({ extensionName: "demo", assetType: "demo-type", schema });
+    const onValidity = vi.fn();
+    const ref = createRef<AssetFormHandle>();
+    render(<NotTestable ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={onValidity} />);
+
+    expect(onValidity).toHaveBeenLastCalledWith(expect.objectContaining({ canTest: false }));
+    expect(ref.current!.buildTestConfig).toBeNull();
+  });
+
+  it("handler declared, new asset: canTest follows canSave and the test config carries no asset id", async () => {
+    const Testable = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema,
+      testConnection: true,
+    });
+    const onValidity = vi.fn();
+    const ref = createRef<AssetFormHandle>();
+    render(<Testable ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={onValidity} />);
+
+    expect(onValidity).toHaveBeenLastCalledWith(expect.objectContaining({ canTest: true }));
+    const tc = await ref.current!.buildTestConfig!(ctx);
+    expect(tc.assetType).toBe("demo-type");
+    expect(tc.password).toBe("");
+    expect(JSON.parse(tc.configJSON)).toEqual({});
+  });
+
+  it("handler declared, editing: an untouched password field is dropped, a retyped one is sent, and the asset id rides in password", async () => {
+    const Testable = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema,
+      testConnection: true,
+    });
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(
+      JSON.stringify({ endpoint: "https://x", secret: "stored-plain" })
+    );
+    const ref = createRef<AssetFormHandle>();
+    render(<Testable ref={ref} editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const untouched = await ref.current!.buildTestConfig!(ctx);
+    expect(untouched.password).toBe("3");
+    expect(JSON.parse(untouched.configJSON)).toEqual({ endpoint: "https://x" });
+
+    fireEvent.change(screen.getByDisplayValue("stored-plain"), { target: { value: "new-plain" } });
+    const touched = await ref.current!.buildTestConfig!(ctx);
+    expect(JSON.parse(touched.configJSON)).toEqual({ endpoint: "https://x", secret: "new-plain" });
+  });
+
+  it("connection settings ride the test config as the reserved key, including an ad-hoc SSH tunnel id", async () => {
+    const Testable = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema: { type: "object", properties: { endpoint: { type: "string", title: "Endpoint" } } },
+      connection: { sshTunnel: true },
+      testConnection: true,
+    });
+    const asset = new asset_entity.Asset({
+      ID: 9,
+      Name: "es",
+      Type: "demo-type",
+      Config: JSON.stringify({ endpoint: "http://es.internal:9200" }),
+      sshTunnelId: 7,
+    });
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ endpoint: "http://es.internal:9200" }));
+    const ref = createRef<AssetFormHandle>();
+    render(<Testable ref={ref} editAsset={asset} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const tc = await ref.current!.buildTestConfig!(ctx);
+    const parsed = JSON.parse(tc.configJSON);
+    expect(parsed[HOST_CONNECTION_CONFIG_KEY]).toEqual(expect.objectContaining({ sshTunnelId: 7 }));
   });
 });

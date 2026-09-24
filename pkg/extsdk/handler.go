@@ -18,6 +18,8 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 		return dispatchPolicy(input)
 	case "validate_config":
 		return dispatchConfigValidator(input)
+	case "test_connection":
+		return dispatchTestConnection(input)
 	default:
 		return nil, fmt.Errorf("unknown function: %s", fnName)
 	}
@@ -107,6 +109,35 @@ func dispatchPolicy(input []byte) (json.RawMessage, error) {
 		"action":   entry.action,
 		"resource": resource,
 	})
+}
+
+// testConnectionCall is the shape of test_connection's input: which asset
+// type to test (an extension may register several) and its guest-visible
+// config — the form's submitted values, not a saved asset read back from the
+// host, since there may be no saved asset yet (see AssetTypeReg.TestConnection).
+type testConnectionCall struct {
+	AssetType string          `json:"assetType"`
+	Config    json.RawMessage `json:"config"`
+}
+
+func dispatchTestConnection(input []byte) (json.RawMessage, error) {
+	var req testConnectionCall
+	if err := json.Unmarshal(input, &req); err != nil {
+		return nil, fmt.Errorf("parse test connection request: %w", err)
+	}
+	for _, at := range assetTypes {
+		if at.typ != req.AssetType {
+			continue
+		}
+		if at.testConnection == nil {
+			return nil, fmt.Errorf("asset type %q does not declare a test connection handler", req.AssetType)
+		}
+		if err := at.testConnection(req.Config); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{})
+	}
+	return nil, fmt.Errorf("unknown asset type: %s", req.AssetType)
 }
 
 func dispatchConfigValidator(input []byte) (json.RawMessage, error) {

@@ -301,6 +301,11 @@ type assetDialer struct {
 type hostConnectionConfig struct {
 	ProxyChain *asset_entity.ProxyChainConfig `json:"proxyChain,omitempty"`
 	TLS        *hostTLSConfig                 `json:"tls,omitempty"`
+	// SSHTunnelID is read only for an ad-hoc "test connection" call
+	// (DialContextForConfig): a saved asset's tunnel lives on its own
+	// SSHTunnelID column, never under this key, so this field is always
+	// absent from a stored asset's Config.
+	SSHTunnelID int64 `json:"sshTunnelId,omitempty"`
 }
 
 type hostTLSConfig struct {
@@ -370,39 +375,98 @@ func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extens
 	}
 	fingerprint := connectionFingerprint(tunnelID, chain, tlsSettings)
 
+	dial, tlsConfig, err := resolveDialAndTLS(ctx, asset.Type, chain, tunnelID, tlsSettings,
+		zap.String("extension", d.extName), zap.Int64("assetID", assetID))
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("%w (asset %d)", err, assetID)
+	}
+	return dial, tlsConfig, fingerprint, nil
+}
+
+// DialContextForConfig resolves the dial path and TLS settings for an
+// ad-hoc "test connection" call (extension.AdHocAssetConfig): the asset
+// form's own submitted connection settings, never a row read from the
+// database — a new asset has none yet, and a saved one being tested must
+// honor its unsaved edits rather than what is on disk. Only the items
+// assetType's own declared connection support apply, exactly as
+// DialContextFor enforces for a stored asset; it shares that method's dial
+// and TLS building (resolveDialAndTLS), just fed from adhoc instead of a
+// database row, and never returns a fingerprint — the result is never cached.
+func (d *assetDialer) DialContextForConfig(ctx context.Context, assetType string, adhoc *extension.AdHocAssetConfig) (extension.DialContextFunc, *tls.Config, error) {
+	owner := d.ext.service.Bridge().Get(d.extName)
+	if owner == nil {
+		return nil, nil, fmt.Errorf("extension %q not loaded", d.extName)
+	}
+	def := owner.Manifest.AssetTypeDef(assetType)
+	if def == nil {
+		return nil, nil, fmt.Errorf("extension %q does not register asset type %q", d.extName, assetType)
+	}
+	conn := def.Connection
+	if conn == nil {
+		return nil, nil, nil
+	}
+
+	var chain *asset_entity.ProxyChainConfig
+	if conn.ProxyChain && len(adhoc.ProxyChain) > 0 {
+		if err := json.Unmarshal(adhoc.ProxyChain, &chain); err != nil {
+			return nil, nil, fmt.Errorf("parse proxy chain: %w", err)
+		}
+	}
+	var tunnelID int64
+	if conn.SSHTunnel {
+		tunnelID = adhoc.SSHTunnelID
+	}
+	var tlsSettings *hostTLSConfig
+	if conn.TLS && len(adhoc.TLS) > 0 {
+		if err := json.Unmarshal(adhoc.TLS, &tlsSettings); err != nil {
+			return nil, nil, fmt.Errorf("parse TLS config: %w", err)
+		}
+	}
+
+	dial, tlsConfig, err := resolveDialAndTLS(ctx, assetType, chain, tunnelID, tlsSettings,
+		zap.String("extension", d.extName), zap.String("assetType", assetType))
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w (asset type %s)", err, assetType)
+	}
+	return dial, tlsConfig, nil
+}
+
+// resolveDialAndTLS builds the dial function and TLS config from a resolved
+// proxy chain / SSH tunnel / TLS combination — the connpool work shared by
+// DialContextFor (from a stored asset) and DialContextForConfig (from an
+// ad-hoc test-connection call). ident identifies the call in the log lines
+// (asset id for a stored one, asset type for an ad-hoc one); which fits is
+// the caller's call, not this function's.
+func resolveDialAndTLS(ctx context.Context, assetType string, chain *asset_entity.ProxyChainConfig, tunnelID int64, tlsSettings *hostTLSConfig, ident ...zap.Field) (extension.DialContextFunc, *tls.Config, error) {
 	var dial extension.DialContextFunc
 	if effective := asset_entity.EffectiveProxyChain(chain, tunnelID, nil); effective != nil {
-		dial, err = connpool.ProxyChainDialContext(ctx, effective)
+		d, err := connpool.ProxyChainDialContext(ctx, effective)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("resolve connection path (asset %d): %w", assetID, err)
+			return nil, nil, fmt.Errorf("resolve connection path: %w", err)
 		}
+		dial = d
 		logger.Ctx(ctx).Info("extension asset dials through proxy chain",
-			zap.String("extension", d.extName),
-			zap.Int64("assetID", assetID),
-			zap.Int("hops", len(effective.Layers)),
-		)
+			append(append([]zap.Field{}, ident...), zap.Int("hops", len(effective.Layers)))...)
 	}
 
 	var tlsConfig *tls.Config
-	if conn.TLS && hostCfg != nil && hostCfg.TLS != nil && hostCfg.TLS.Enabled {
-		tlsConfig, err = connpool.BuildTLSConfig(asset.Type, connpool.TLSFields{
-			ServerName: hostCfg.TLS.ServerName,
-			Insecure:   hostCfg.TLS.Insecure,
-			CAFile:     hostCfg.TLS.CAFile,
-			CertFile:   hostCfg.TLS.CertFile,
-			KeyFile:    hostCfg.TLS.KeyFile,
+	if tlsSettings != nil && tlsSettings.Enabled {
+		cfg, err := connpool.BuildTLSConfig(assetType, connpool.TLSFields{
+			ServerName: tlsSettings.ServerName,
+			Insecure:   tlsSettings.Insecure,
+			CAFile:     tlsSettings.CAFile,
+			CertFile:   tlsSettings.CertFile,
+			KeyFile:    tlsSettings.KeyFile,
 		})
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("TLS config (asset %d): %w", assetID, err)
+			return nil, nil, fmt.Errorf("TLS config: %w", err)
 		}
+		tlsConfig = cfg
 		logger.Ctx(ctx).Info("extension asset applies TLS",
-			zap.String("extension", d.extName),
-			zap.Int64("assetID", assetID),
-			zap.Bool("insecure", hostCfg.TLS.Insecure),
-		)
+			append(append([]zap.Field{}, ident...), zap.Bool("insecure", tlsSettings.Insecure))...)
 	}
 
-	return dial, tlsConfig, fingerprint, nil
+	return dial, tlsConfig, nil
 }
 
 // connectionFingerprint identifies the resolved connection settings behind a
