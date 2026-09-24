@@ -41,6 +41,9 @@ type ExtToolExecutor interface {
 // 扩展页"从目录安装"按钮跑的那一个 extension_svc.Install，dev 与 prod 的加载路径
 // 由构造相同，而不是靠两套宿主维持一致。
 type ExtDevInstaller interface {
+	// InstalledExtensionVersion 报告同名扩展是否已安装（启用或停用）及其版本，
+	// 供确认弹窗说明这次安装会不会覆盖它。
+	InstalledExtensionVersion(ctx context.Context, name string) (version string, installed bool)
 	InstallExtensionDir(ctx context.Context, sourceDir string) (name, version string, err error)
 }
 
@@ -55,6 +58,10 @@ type Opsctl struct {
 	authToken       string
 	extExecutor     ExtToolExecutor
 	extDevInstaller ExtDevInstaller
+	// extDevApprove 把一次 ext dev 安装交给用户确认；New 接到 requestSingleApproval
+	// （既有的 opsctl 审批弹窗），测试替换它以免触达 Wails 事件。
+	extDevApprove   func(approval.ApprovalRequest) approval.ApprovalResponse
+	extDevApprovals extDevApprovalMemory
 
 	pendingOpsctlApprovals sync.Map // map[string]pendingOpsctlApproval
 	mfa                    *mfaBroker
@@ -81,11 +88,13 @@ func New(
 	lang LangProvider,
 	window WindowActivator,
 ) *Opsctl {
-	return &Opsctl{
+	o := &Opsctl{
 		appCtx: appCtx,
 		lang:   lang,
 		window: window,
 	}
+	o.extDevApprove = o.requestSingleApproval
+	return o
 }
 
 // Startup 启动审批的本地 IPC 服务。

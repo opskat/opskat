@@ -452,6 +452,10 @@ func (desktopExecExecutor) ExecuteExtTool(ctx context.Context, assetID int64, co
 // "从目录安装"那一条 extension_svc.Install。
 type desktopExtDevInstaller struct{ ext *extension.Extension }
 
+func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
+	return extension.InstalledExtensionVersion(i.ext, name)
+}
+
 func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
 	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
 }

@@ -15,7 +15,19 @@ import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
-import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
+import {
+  ShieldAlert,
+  Terminal,
+  Database,
+  Server,
+  FolderOpen,
+  Globe,
+  Usb,
+  Trash2,
+  Boxes,
+  FileUp,
+  Puzzle,
+} from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
 
 interface ApprovalItemData {
@@ -85,6 +97,7 @@ function TypeBadge({ type }: { type: string }) {
     k8s: Boxes,
     cp: FileUp,
     oss: S3Icon,
+    ext_dev_install: Puzzle,
   };
   const Icon = icons[type] || Terminal;
   return (
@@ -268,7 +281,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           <code className="select-text text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
         </div>
       )}
-      {item.detail && <div className="select-text text-xs text-muted-foreground font-mono">{item.detail}</div>}
+      {item.detail && (
+        <div className="select-text text-xs text-muted-foreground font-mono whitespace-pre-wrap">{item.detail}</div>
+      )}
     </div>
   );
 
@@ -347,7 +362,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                   ? t("opsctlApproval.grantDescription")
                   : current.kind === "batch"
                     ? t("opsctlApproval.batchDescription", { count: current.items.length })
-                    : t("opsctlApproval.description")}
+                    : current.items[0]?.type === "ext_dev_install"
+                      ? t("opsctlApproval.extDevInstallDescription")
+                      : t("opsctlApproval.description")}
               </DialogDescription>
             </DialogHeader>
 

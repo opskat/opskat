@@ -1774,6 +1774,7 @@
   "opsctlApproval": {
     "title": "CLI Operation Approval",
     "description": "opsctl is requesting approval for the following operation:",
+    "extDevInstallDescription": "opsctl ext dev wants to install and enable an unpacked extension from this directory. It will get every capability its manifest declares:",
     "allow": "Allow",
     "deny": "Deny",
     "typeExec": "Execute Command",

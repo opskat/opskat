@@ -321,16 +321,6 @@ func TestExtDevSendsTheResolvedAbsoluteDirectory(t *testing.T) {
 	assert.Equal(t, dir, *sent)
 }
 
-func TestExtDevRefusesInProduction(t *testing.T) {
-	t.Setenv("OPSKAT_ENV", "production")
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
-	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
-
-	assert.Equal(t, 1, cmdExtDev([]string{dir}))
-	assert.Empty(t, *sent, "nothing may be sent once the command refuses")
-}
-
 func TestExtDevRejectsADirectoryWithoutAManifest(t *testing.T) {
 	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
 

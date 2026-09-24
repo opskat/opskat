@@ -253,7 +253,6 @@ Environment toggles for the desktop app:
   with an isolated data directory and required by the hermetic e2e harness.
 - `OPSKAT_EXTENSIONS=0` — start with the extension system disabled (isolate
   extension-related behavior).
-- `OPSKAT_ENV=production` — production mode (e.g. `opsctl ext dev` refuses to run).
 
 The GUI has no `--data-dir` command-line flag; use `OPSKAT_DATA_DIR` instead. Prefer a
 throwaway directory for destructive verification. If you must use the default data

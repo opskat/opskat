@@ -34,7 +34,7 @@ cd frontend && pnpm lint / pnpm lint:fix
 
 # Extensions / plugin
 opsctl ext dev <dir>                     # Install a local extension build into the running app
-                                         # (re-run after each build = reload; refuses if OPSKAT_ENV=production)
+                                         # (app asks to confirm; re-run after each build = reload)
 make install-skill                       # Register opsctl plugin marketplace
 ```
 
