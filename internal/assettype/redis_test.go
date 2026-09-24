@@ -219,6 +219,10 @@ func TestRedisHandler(t *testing.T) {
 				"host": "10.0.0.1", "port": float64(6379), "username": "default",
 			}), convey.ShouldBeNil)
 			convey.So(h.ValidateCreateArgs(map[string]any{"username": "default"}), convey.ShouldNotBeNil)
+			// 单机资产的用法不变：缺主机时仍报出原有的字段名(host/port/username)。
+			err := h.ValidateCreateArgs(map[string]any{"port": float64(6379), "username": "default"})
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "host")
 		})
 
 		convey.Convey("ValidateCreateArgs 在审批前拒绝模式相关错误并指出具体字段(E27)", func() {
@@ -248,6 +252,13 @@ func TestRedisHandler(t *testing.T) {
 				err := h.ValidateCreateArgs(map[string]any{"mode": "weird", "host": "x"})
 				convey.So(err, convey.ShouldNotBeNil)
 				convey.So(err.Error(), convey.ShouldContainSubstring, "mode")
+			})
+			convey.Convey("集群 redis_db 非 0 时指出 opsctl / put_asset 的字段名 redis_db", func() {
+				err := h.ValidateCreateArgs(map[string]any{
+					"mode": "cluster", "nodes": []any{"10.0.0.1:6379"}, "redis_db": float64(3),
+				})
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, "redis_db")
 			})
 		})
 

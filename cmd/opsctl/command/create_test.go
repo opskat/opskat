@@ -729,7 +729,7 @@ func TestCmdUpdateAssetUnknownConfigFieldRejectedBeforeApproval(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 	registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{
-		{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis},
+		{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis, Config: `{"mode":"cluster","nodes":["10.0.0.1:6379"]}`},
 	})
 
 	preserveCreateSeams(t)
@@ -758,7 +758,7 @@ func TestCmdUpdateAssetRedisConfigApprovalAndAuditExcludeSentinelPassword(t *tes
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 	registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{
-		{ID: 9, Name: "rc-sentinel", Type: asset_entity.AssetTypeRedis},
+		{ID: 9, Name: "rc-sentinel", Type: asset_entity.AssetTypeRedis, Config: `{"host":"10.0.0.1","port":6379}`},
 	})
 
 	preserveCreateSeams(t)
@@ -847,6 +847,11 @@ func TestCreateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField(t *testi
 			config:  map[string]any{"mode": "weird", "host": "x"},
 			wantErr: "mode",
 		},
+		{
+			name:    "cluster redis_db must stay 0",
+			config:  map[string]any{"mode": "cluster", "nodes": []any{"10.0.0.1:6379"}, "redis_db": 3},
+			wantErr: "redis_db",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			request, _, err := parseAssetCreateForTest(t, createArgs(t, "redis", tt.config), nil, nil)
@@ -893,6 +898,54 @@ func TestCreateAssetRedisModeErrorsExitOneWithoutInvokingApproval(t *testing.T) 
 		})
 	}
 	assert.Zero(t, approvalCalls, "mode errors must be rejected before desktop approval, not after")
+}
+
+// TestCmdUpdateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField 与 create 同一条规则
+// (spec「校验与桌面表单相同，失败时报出具体字段」)：update 的模式字段错误在审批前报出并指出
+// 字段，审批从不被触达，也不写入。部分更新先叠加到已存储的配置上再校验——例如集群资产只改
+// mode=sentinel 时，集群种子节点不会被当作哨兵节点沿用。requireUpdateApproval 用拒绝而不是
+// 放行：若审批前拒绝回退，断言 approvalCalls 失败，而不是落到没有 AssetRepo.Update 期望的提交。
+func TestCmdUpdateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{name: "sentinel missing master_name", config: `{"mode":"sentinel","nodes":["10.0.0.1:26379"]}`, wantErr: "master_name"},
+		{name: "switching mode does not reuse the other mode's nodes", config: `{"mode":"sentinel","master_name":"mymaster"}`, wantErr: "nodes"},
+		{name: "node_address_map target has no port", config: `{"node_address_map":{"10.0.0.1:6379":"bad-no-port"}}`, wantErr: "node_address_map"},
+		{name: "node without a port", config: `{"nodes":["nohostport"]}`, wantErr: "nodes"},
+		{name: "unknown mode", config: `{"mode":"weird"}`, wantErr: "mode"},
+		{name: "cluster redis_db must stay 0", config: `{"redis_db":3}`, wantErr: "redis_db"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			t.Cleanup(ctrl.Finish)
+			existing := &asset_entity.Asset{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis}
+			require.NoError(t, existing.SetRedisConfig(&asset_entity.RedisConfig{
+				Mode: asset_entity.RedisModeCluster, Nodes: []string{"10.0.0.1:6379"}, Username: "default",
+			}))
+			registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{existing})
+
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+			approvalCalls := 0
+			requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				approvalCalls++
+				return ApprovalResult{}, errors.New("operation denied")
+			}
+			notifyAssetChanged = func() { t.Fatal("rejected update must not notify") }
+
+			var stdout, stderr bytes.Buffer
+			code := updateAsset(context.Background(), []string{"rc-cluster", "--config", tt.config}, "sess-update",
+				commandIO{stdout: &stdout, stderr: &stderr})
+			assert.Equal(t, 1, code, stderr.String())
+			assert.Contains(t, stderr.String(), tt.wantErr)
+			assert.Zero(t, approvalCalls, "mode errors must be rejected before approval, not after")
+		})
+	}
 }
 
 // TestCreateAssetRedisApprovalDetailIncludesNodeAddressMapWithoutInjectedPort 复现 E27 的

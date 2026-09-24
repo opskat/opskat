@@ -164,8 +164,8 @@ func (*redisHandler) AutomationContract() AutomationContract {
 		},
 		normalizeRedisAutomation,
 	)
-	// node_address_map 不含密钥(宣告地址 → 实际地址，都是 host:port),允许它以扁平
-	// map[string]string 的形式出现在审批详情里,好让审批人看到命令会发往哪个节点(spec)。
+	// node_address_map 不含密钥(宣告地址 → 实际地址，都是 host:port)且已在 ApprovalFields
+	// 里,允许它以扁平 map[string]string 的形式出现在审批详情里,审批人能看到将写入的地址映射。
 	contract.FlatMapFields = []string{"node_address_map"}
 	return contract
 }

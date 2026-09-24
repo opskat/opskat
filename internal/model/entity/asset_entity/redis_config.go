@@ -65,7 +65,7 @@ func (c *RedisConfig) ValidateMode() error {
 			return err
 		}
 		if c.Database != 0 {
-			return errors.New("集群模式只有 db0,database 必须为 0")
+			return errors.New("集群模式只有 db0,数据库(database / opsctl 与 put_asset 的 redis_db)必须为 0")
 		}
 	case RedisModeSentinel:
 		if err := validateRedisNodes(c.Nodes, "哨兵节点"); err != nil {

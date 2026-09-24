@@ -628,7 +628,8 @@ Flags (only provided fields are updated, others remain unchanged):
 --config/--config-file is the only way to reach fields with no dedicated flag (e.g. a Redis
 asset's mode/nodes/master_name/sentinel_username/sentinel_password/node_address_map — see
 'opsctl create asset --help'). --host/--port/--username only override matching keys already
-present in --config/--config-file.
+present in --config/--config-file. The change is merged onto the stored config and validated
+before approval; an invalid field is named and nothing is asked or written.
 
 Approval:
   Always requires confirmation — no rule can pre-authorize this. An interactive

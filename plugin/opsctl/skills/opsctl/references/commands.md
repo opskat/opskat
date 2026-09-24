@@ -352,11 +352,13 @@ plaintext secret, whether it arrived via a convenience flag or `--config`.
 - `--group-id <int>` — New group ID (-1 = unchanged, 0 = ungrouped)
 - `--icon <string>` — New icon name (see `opsctl create asset --help` for full list)
 - `--config '<JSON object>'` — Type-owned partial config object; only the fields present are
-  changed, the rest of the stored config is untouched. Validation matches the desktop form and
-  names the specific bad field. This is the only way to reach fields that have no dedicated
-  flag, such as a Redis asset's `mode`/`nodes`/`master_name`/`sentinel_username`/
-  `sentinel_password`/`node_address_map` (see `create asset`'s `--type redis` deployment mode
-  section for the field rules — they are identical for update)
+  changed, the rest of the stored config is untouched. The change is merged onto the stored
+  config and validated like the desktop form before approval — a bad field (e.g. a missing
+  `master_name`, a malformed `node_address_map` line) is named and nothing is asked or written.
+  This is the only way to reach fields that have no dedicated flag, such as a Redis asset's
+  `mode`/`nodes`/`master_name`/`sentinel_username`/`sentinel_password`/`node_address_map`
+  (see `create asset`'s `--type redis` deployment mode section for the field rules — they are
+  identical for update)
 - `--config-file <path>` — File containing that JSON object; mutually exclusive with `--config`
 
 `--host`/`--port`/`--username` only override matching keys already present in `--config`/
