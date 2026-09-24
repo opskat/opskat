@@ -24,7 +24,10 @@ export interface AssetTestConfig {
 
 /** 测试成功的可选实际结果摘要；父壳负责统一成功 toast。 */
 export interface AssetTestResult {
+  /** 冒号外壳「连接成功：{{detail}}」的补全部分（VNC 用）；与 successText 二选一。 */
   successDetail?: string;
+  /** 完整的成功提示文案，跳过壳的冒号外壳，协议自行控制格式（Redis 集群/哨兵用「 · 」分隔）；优先于 successDetail。 */
+  successText?: string;
 }
 
 /** section 可选提供的自定义测试生命周期；cancel 必须幂等且同步启动清理。 */

@@ -81,7 +81,7 @@ describe("RedisConfigSection 部署模式字段显隐 + 必填校验", () => {
 });
 
 describe("RedisConfigSection.startTest (RedisProbe)", () => {
-  it("单机模式测试成功:successDetail 为空(壳只出通用「连接成功」)", async () => {
+  it("单机模式测试成功:successText 为空(壳只出通用「连接成功」)", async () => {
     vi.mocked(RedisProbe).mockResolvedValue({ modeMismatch: false } as never);
     const ref = createRef<AssetFormHandle>();
     const editAsset = new asset_entity.Asset({ Type: "redis", Config: '{"host":"127.0.0.1","port":6379}' });
@@ -89,11 +89,11 @@ describe("RedisConfigSection.startTest (RedisProbe)", () => {
 
     const attempt = ref.current!.startTest!(ctx);
     const result = await attempt.result;
-    expect(result.successDetail).toBeUndefined();
+    expect(result.successText).toBeUndefined();
     expect(RedisProbe).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('"host":"127.0.0.1"'), "", "");
   });
 
-  it("集群模式测试成功:successDetail 走 redisTestClusterDetail key", async () => {
+  it("集群模式测试成功:successText 跳过壳的冒号外壳,走 redisTestClusterDetail key", async () => {
     vi.mocked(RedisProbe).mockResolvedValue({
       modeMismatch: false,
       cluster: { state: "ok", masters: 3, replicas: 3, unreachableNodes: [] },
@@ -106,10 +106,10 @@ describe("RedisConfigSection.startTest (RedisProbe)", () => {
     render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />);
 
     const result = await ref.current!.startTest!(ctx).result;
-    expect(result.successDetail).toBe("asset.redisTestClusterDetail");
+    expect(result.successText).toBe("asset.testConnectionSuccess · asset.redisTestClusterDetail");
   });
 
-  it("哨兵模式测试成功:successDetail 走 redisTestSentinelDetail key", async () => {
+  it("哨兵模式测试成功:successText 跳过壳的冒号外壳,走 redisTestSentinelDetail key", async () => {
     vi.mocked(RedisProbe).mockResolvedValue({
       modeMismatch: false,
       sentinel: { authRequired: false, groups: [], masterAddr: "10.0.0.42:6379", otherSentinels: [] },
@@ -122,7 +122,7 @@ describe("RedisConfigSection.startTest (RedisProbe)", () => {
     render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />);
 
     const result = await ref.current!.startTest!(ctx).result;
-    expect(result.successDetail).toBe("asset.redisTestSentinelDetail");
+    expect(result.successText).toBe("asset.testConnectionSuccess · asset.redisTestSentinelDetail");
   });
 
   it("哨兵需要单独密码:测试失败,errorMessage 给出提示,认证块高亮", async () => {
@@ -279,7 +279,7 @@ describe("RedisConfigSection 自动识别:模式切换 / 哨兵组读取 / 补�
 });
 
 describe("RedisConfigSection 自动识别:规格补全", () => {
-  it("集群测试有不可达节点:successDetail 走「种子节点可连 · N 个节点不可达」", async () => {
+  it("集群测试有不可达节点:successText 走「种子节点可连 · N 个节点不可达」", async () => {
     vi.mocked(RedisProbe).mockResolvedValue({
       modeMismatch: false,
       cluster: { state: "ok", masters: 3, replicas: 3, unreachableNodes: ["172.18.0.11:6379"] },
@@ -292,7 +292,7 @@ describe("RedisConfigSection 自动识别:规格补全", () => {
     render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />);
 
     const result = await ref.current!.startTest!(ctx).result;
-    expect(result.successDetail).toBe("asset.redisTestClusterUnreachableDetail");
+    expect(result.successText).toBe("asset.testConnectionSuccess · asset.redisTestClusterUnreachableDetail");
   });
 
   it("切换到集群模式:当前 host:port 排在已有种子节点之前,并按集群模式继续识别", async () => {

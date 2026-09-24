@@ -243,9 +243,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       const result = await attempt.result;
       if (activeTestRef.current?.token === token) {
         notifySuccess(
-          result.successDetail
-            ? t("asset.testConnectionSuccessDetail", { detail: result.successDetail })
-            : t("asset.testConnectionSuccess")
+          result.successText
+            ? result.successText
+            : result.successDetail
+              ? t("asset.testConnectionSuccessDetail", { detail: result.successDetail })
+              : t("asset.testConnectionSuccess")
         );
       }
     } catch (e) {

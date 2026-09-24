@@ -63,24 +63,28 @@ function buildProbeRequest(state: RedisFormState, cred: UseAssetCredential) {
   return { configJSON, password: cred.value.password, sentinelPassword: state.sentinelPassword };
 }
 
-/** 测试成功行文案:壳统一包成「连接成功：{{detail}}」,这里只提供冒号后的部分,标准模式留空即整句「连接成功」。 */
-function redisTestSuccessDetail(
+/** 测试成功行完整文案:集群/哨兵模式跳过壳的冒号外壳,自行以「 · 」分隔拼出整句(spec:「连接成功 ·
+ *  集群 ok · M 主 R 从」/「连接成功 · 当前主节点 host:port」);标准模式留空,壳出通用整句「连接成功」。
+ *  集群状态标签统一走 redisClusterStateLabel,ok/非 ok 都带「集群」前缀,非 ok 时如实显示原始 state。 */
+function redisTestSuccessText(
   t: Translate,
   mode: RedisFormState["mode"],
   result: redis_svc.RedisProbeResult
 ): string | undefined {
   if (mode === "cluster" && result.cluster) {
-    const state = result.cluster.state === "ok" ? t("asset.redisClusterStateOk") : result.cluster.state;
+    const state = t("asset.redisClusterStateLabel", { state: result.cluster.state });
     const unreachable = result.cluster.unreachableNodes?.length ?? 0;
-    return t(unreachable > 0 ? "asset.redisTestClusterUnreachableDetail" : "asset.redisTestClusterDetail", {
+    const detail = t(unreachable > 0 ? "asset.redisTestClusterUnreachableDetail" : "asset.redisTestClusterDetail", {
       state,
       masters: result.cluster.masters,
       replicas: result.cluster.replicas,
       count: unreachable,
     });
+    return `${t("asset.testConnectionSuccess")} · ${detail}`;
   }
   if (mode === "sentinel" && result.sentinel) {
-    return t("asset.redisTestSentinelDetail", { addr: result.sentinel.masterAddr });
+    const detail = t("asset.redisTestSentinelDetail", { addr: result.sentinel.masterAddr });
+    return `${t("asset.testConnectionSuccess")} · ${detail}`;
   }
   return undefined;
 }
@@ -216,7 +220,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         if (mountedRef.current) flagSentinelAuthRequired();
         throw new RedisSentinelAuthRequiredError();
       }
-      return { successDetail: redisTestSuccessDetail(t, state.mode, result) };
+      return { successText: redisTestSuccessText(t, state.mode, result) };
     };
 
     const resultPromise = run().finally(() => {
