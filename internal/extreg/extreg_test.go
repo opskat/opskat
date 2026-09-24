@@ -31,6 +31,15 @@ type fakePlugin struct {
 	lastArgs  json.RawMessage
 	lastAsset *extension.AssetRef
 	result    string
+
+	validationErrors []extension.ValidationError
+	validateErr      error
+	lastValidated    json.RawMessage
+}
+
+func (p *fakePlugin) ValidateConfig(_ context.Context, config json.RawMessage) ([]extension.ValidationError, error) {
+	p.lastValidated = append(json.RawMessage(nil), config...)
+	return p.validationErrors, p.validateErr
 }
 
 func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error) {

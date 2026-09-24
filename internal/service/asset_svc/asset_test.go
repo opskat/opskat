@@ -13,6 +13,7 @@ import (
 
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
 
@@ -256,4 +257,39 @@ func TestAssetSvc_Update_InvalidatesConnections(t *testing.T) {
 			assert.Empty(t, invalidated)
 		})
 	})
+}
+
+// 扩展资产类型的配置由扩展自己的校验器把关（guest 的 RegisterConfigValidator）。
+// 它必须挡在落库之前：否则一份无效配置被存下来，要到第一次调工具才炸。
+func TestAssetSvc_RunsRegisteredConfigValidator(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+	const extType = "asset-svc-test-ext"
+	var seen []string
+	require.NoError(t, asset_entity.RegisterConfigValidator(extType, func(_ context.Context, a *asset_entity.Asset) error {
+		seen = append(seen, a.Config)
+		if a.Config != `{"notebook":"ok"}` {
+			return errors.New("notebook: must match ^[a-z]+$")
+		}
+		return nil
+	}))
+	t.Cleanup(func() { asset_entity.UnregisterConfigValidator(extType) })
+
+	t.Run("create refuses an invalid config before the write", func(t *testing.T) {
+		err := Asset().Create(ctx, &asset_entity.Asset{Name: "n", Type: extType, Config: `{"notebook":"BAD"}`})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "notebook")
+	})
+
+	t.Run("update refuses an invalid config before the write", func(t *testing.T) {
+		err := Asset().Update(ctx, &asset_entity.Asset{ID: 3, Name: "n", Type: extType, Config: `{"notebook":"BAD"}`})
+		require.Error(t, err)
+	})
+
+	t.Run("a valid config is written", func(t *testing.T) {
+		mockRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		require.NoError(t, Asset().Create(ctx, &asset_entity.Asset{Name: "n", Type: extType, Config: `{"notebook":"ok"}`}))
+	})
+
+	assert.Equal(t, []string{`{"notebook":"BAD"}`, `{"notebook":"BAD"}`, `{"notebook":"ok"}`}, seen,
+		"the validator sees the config exactly as it is stored")
 }

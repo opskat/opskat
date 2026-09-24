@@ -918,7 +918,7 @@ func (a *Asset) Validate() error {
 	case AssetTypeRDP:
 		return a.validateRDP()
 	default:
-		// 扩展资产类型由扩展自行校验
+		// 扩展资产类型的配置由扩展运行期注册的校验器把关（RegisterConfigValidator），asset_svc 写入前调用
 		return nil
 	}
 }
