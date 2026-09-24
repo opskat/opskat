@@ -66,21 +66,10 @@ func ownedAsset(ctx context.Context, svc *extension_svc.Service, extName string,
 	if err != nil {
 		return nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
 	}
-	if assetTypeDef(caller.Manifest, asset.Type) == nil {
+	if caller.Manifest.AssetTypeDef(asset.Type) == nil {
 		return nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
 	}
 	return caller, asset, nil
-}
-
-// assetTypeDef returns the manifest's declaration of assetType, nil when the
-// extension does not register it.
-func assetTypeDef(m *extension.Manifest, assetType string) *extension.AssetTypeDef {
-	for i := range m.AssetTypes {
-		if m.AssetTypes[i].Type == assetType {
-			return &m.AssetTypes[i]
-		}
-	}
-	return nil
 }
 
 // fileDialogOpener implements extension.FileDialogOpener
@@ -183,7 +172,7 @@ func getDecryptedExtConfig(svc *extension_svc.Service, extName string, assetID i
 // decided by ext — the extension the config is being handed to, which
 // ownedAsset has already confirmed registers assetType.
 func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
-	def := assetTypeDef(ext.Manifest, assetType)
+	def := ext.Manifest.AssetTypeDef(assetType)
 	if def == nil || len(def.ConfigSchema) == 0 {
 		return raw, nil
 	}

@@ -10,6 +10,9 @@
     "fs": {
       "read": ["${EXT_DIR}/**"],
       "write": ["${EXT_DIR}/**"]
+    },
+    "network": {
+      "assetEndpoint": true
     }
   }
 }

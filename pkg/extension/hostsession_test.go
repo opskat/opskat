@@ -1,5 +1,7 @@
 package extension
 
+import "context"
+
 // hostSession pairs a HostProvider with one invocation's handle table — exactly
 // what the runtime assembles for a single WASM call. Tests that exercise host
 // IO without a real guest go through it so they observe the same scoping the
@@ -14,7 +16,7 @@ func newHostSession(host HostProvider) *hostSession {
 }
 
 func (s *hostSession) Open(params IOOpenParams) (uint32, IOMeta, error) {
-	res, err := s.host.OpenIO(params)
+	res, err := s.host.OpenIO(context.Background(), nil, params)
 	if err != nil {
 		return 0, IOMeta{}, err
 	}

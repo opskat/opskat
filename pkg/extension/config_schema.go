@@ -5,9 +5,18 @@ import "sort"
 // PasswordFieldsFromSchema extracts property names that have "format": "password"
 // from a JSON Schema configSchema.
 func PasswordFieldsFromSchema(schema map[string]any) []string {
-	if len(schema) == 0 {
-		return nil
-	}
+	return fieldsWithFormat(schema, "password")
+}
+
+// EndpointFieldsFromSchema extracts property names that have "format": "endpoint"
+// from a JSON Schema configSchema: the fields whose value (a URL or host:port) an
+// extension declaring network.assetEndpoint may connect to.
+func EndpointFieldsFromSchema(schema map[string]any) []string {
+	return fieldsWithFormat(schema, "endpoint")
+}
+
+// fieldsWithFormat returns the sorted names of the properties declaring format.
+func fieldsWithFormat(schema map[string]any, format string) []string {
 	props, ok := schema["properties"].(map[string]any)
 	if !ok {
 		return nil
@@ -18,7 +27,7 @@ func PasswordFieldsFromSchema(schema map[string]any) []string {
 		if !ok {
 			continue
 		}
-		if fmt, ok := prop["format"].(string); ok && fmt == "password" {
+		if f, ok := prop["format"].(string); ok && f == format {
 			fields = append(fields, name)
 		}
 	}

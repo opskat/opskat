@@ -2,6 +2,7 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -51,7 +52,7 @@ func NewDefaultHostProvider(cfg DefaultHostConfig) *DefaultHostProvider {
 	return &DefaultHostProvider{cfg: cfg}
 }
 
-func (h *DefaultHostProvider) OpenIO(params IOOpenParams) (*IOResource, error) {
+func (h *DefaultHostProvider) OpenIO(_ context.Context, _ *AssetRef, params IOOpenParams) (*IOResource, error) {
 	switch params.Type {
 	case "file":
 		return OpenFileResource(params.Path, params.Mode)

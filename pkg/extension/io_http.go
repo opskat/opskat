@@ -4,6 +4,7 @@ package extension
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -100,8 +101,19 @@ func newHTTPHandle(params IOOpenParams, dial DialFunc) (*httpHandle, error) {
 
 	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
 
+	client := &http.Client{Transport: transport}
+	if guard := params.RedirectGuard; guard != nil {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			// Keep net/http's own redirect limit; the guard only narrows where to.
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return guard(req.URL)
+		}
+	}
+
 	return &httpHandle{
-		client:  &http.Client{Transport: transport},
+		client:  client,
 		method:  method,
 		url:     params.URL,
 		headers: params.Headers,

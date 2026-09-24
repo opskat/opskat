@@ -143,10 +143,22 @@ type SeedSnippetDef struct {
 // extension's own directory. Extensions must declare every capability they need;
 // the host enforces these at each host_* call site.
 type Capabilities struct {
-	FS          FSCapability   `json:"fs"`
-	HTTP        HTTPCapability `json:"http"`
-	Credentials string         `json:"credentials"` // "" (none) | "read"
-	Tunnel      bool           `json:"tunnel"`      // allow routing HTTP through the asset's SSH tunnel
+	FS          FSCapability      `json:"fs"`
+	HTTP        HTTPCapability    `json:"http"`
+	Credentials string            `json:"credentials"` // "" (none) | "read"
+	Tunnel      bool              `json:"tunnel"`      // allow routing HTTP through the asset's SSH tunnel
+	Network     NetworkCapability `json:"network"`
+}
+
+// NetworkCapability grants network reach that is decided per call rather than by
+// a static list.
+//
+// AssetEndpoint lets a call scoped to an asset reach the addresses the user typed
+// into that asset's format:"endpoint" config fields — private-network addresses
+// included, since the user configured them — over HTTP and TCP. Undeclared, HTTP
+// reach is exactly the static http allowlist and TCP stays ungated.
+type NetworkCapability struct {
+	AssetEndpoint bool `json:"assetEndpoint"`
 }
 
 // FSCapability lists filesystem path patterns an extension may access.
@@ -180,6 +192,17 @@ type AssetTypeDef struct {
 	I18n         I18nName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
 	ProxyChain   bool           `json:"proxyChain,omitempty"` // opt in; false keeps the asset direct
+}
+
+// AssetTypeDef returns the declaration of assetType, nil when the extension does
+// not register it.
+func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {
+	for i := range m.AssetTypes {
+		if m.AssetTypes[i].Type == assetType {
+			return &m.AssetTypes[i]
+		}
+	}
+	return nil
 }
 
 type I18nName struct {

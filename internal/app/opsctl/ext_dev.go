@@ -84,6 +84,7 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		zap.String("installedVersion", installedVersion),
 		zap.String("credentials", manifest.Capabilities.Credentials),
 		zap.Bool("tunnel", manifest.Capabilities.Tunnel),
+		zap.Bool("assetEndpoint", manifest.Capabilities.Network.AssetEndpoint),
 	)
 
 	key := extDevApprovalKey{dir: sourceDir, name: manifest.Name, capabilities: capabilitiesFingerprint(manifest.Capabilities)}
@@ -143,6 +144,9 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, overwr
 	}
 	if c.Tunnel {
 		capLine("tunnel", "true")
+	}
+	if c.Network.AssetEndpoint {
+		capLine("network.assetEndpoint", "true")
 	}
 	if lines == 0 {
 		b.WriteString(" none")

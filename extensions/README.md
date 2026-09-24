@@ -56,7 +56,8 @@ asset config and logging are available without a grant. Declare only what you us
   "fs":   { "read": ["${EXT_DIR}/**"], "write": ["/var/tmp/myext/**"] },
   "http": { "allowlist": ["https://api.example.com/"] },
   "credentials": "read",
-  "tunnel": true
+  "tunnel": true,
+  "network": { "assetEndpoint": true }
 }
 ```
 
@@ -64,7 +65,14 @@ Each one is enforced at the host call it guards: `fs` patterns are absolute path
 prefixes (`${EXT_DIR}` resolves to the installed extension's directory), the `http`
 allowlist is matched as a URL prefix and private/loopback destinations are refused
 unless `tunnel` is also granted, and `credentials: "read"` is what lets
-`ctx.AssetConfig()` return decrypted password fields.
+`ctx.AssetConfig()` return decrypted password fields. `network.assetEndpoint` lets a
+call scoped to an asset reach the addresses in that asset's config fields tagged
+`format:"endpoint"` (a URL or `host:port`) over HTTP and TCP — private addresses
+included, since the user typed them. The target's scheme, host and port must match
+an endpoint field (a bare `host:port` admits http and https); anything else, a
+redirect off the endpoints included, is refused with "not an endpoint of the asset".
+Declaring it also puts TCP under that rule; without it TCP is ungated and HTTP reach
+is the static allowlist alone.
 
 **Everything else is answered by the module itself**, through `describe()`. You never
 write that answer: the SDK derives it from the registration calls, so the host's view

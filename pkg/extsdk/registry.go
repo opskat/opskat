@@ -190,8 +190,10 @@ type AssetTypeReg struct{ e *assetTypeEntry }
 // AssetType registers an asset type whose configuration form is reflected from C.
 //
 // Field tags drive the form: `title` / `placeholder` / `desc` are i18n keys,
-// `format:"password"` marks a secret the host encrypts, `enum:"a,b"` renders a
-// select. A field without `,omitempty` is required.
+// `format:"password"` marks a secret the host encrypts, `format:"endpoint"` marks
+// a URL or host:port the extension may connect to when it declares the
+// network.assetEndpoint capability, `enum:"a,b"` renders a select. A field
+// without `,omitempty` is required.
 func AssetType[C any](typ string) *AssetTypeReg {
 	if typ == "" {
 		panic("opskat: asset type is required")

@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,7 +114,7 @@ type failingWriter struct{}
 func (failingWriter) Write([]byte) (int, error) { return 0, errWriteFailed }
 func (failingWriter) Close() error              { return nil }
 
-func (h *recordedHost) OpenIO(params IOOpenParams) (*IOResource, error) {
+func (h *recordedHost) OpenIO(_ context.Context, _ *AssetRef, params IOOpenParams) (*IOResource, error) {
 	if params.Type != "file" {
 		return nil, fmt.Errorf("recordedHost only opens files, got %q", params.Type)
 	}

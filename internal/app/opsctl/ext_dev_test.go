@@ -263,3 +263,26 @@ func TestHandleExtDevInstallWithoutExtensionSystem(t *testing.T) {
 	require.False(t, resp.Approved)
 	require.Contains(t, resp.Reason, "extension system")
 }
+
+// network.assetEndpoint lets the extension reach private addresses named in asset
+// config, so the user must see it before approving, and turning it on in a rebuild
+// is a new decision.
+func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	o := newDevOpsctl(&recordingDevInstaller{}, approver)
+	dir := devExtensionDir(t, "oss", "")
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.NotContains(t, approver.prompts[0].Detail, "network.assetEndpoint")
+
+	manifest := `{
+  "name": "oss", "version": "1.2.3", "hostABI": "2.0",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"credentials": "", "http": {"allowlist": ["https://api.example.com/"]}, "network": {"assetEndpoint": true}}
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+
+	require.Len(t, approver.prompts, 2, "declaring network.assetEndpoint must prompt again")
+	require.Contains(t, approver.prompts[1].Detail, "network.assetEndpoint: true")
+}

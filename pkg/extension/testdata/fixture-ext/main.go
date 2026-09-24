@@ -52,8 +52,20 @@ type spinArgs struct {
 	MS int `json:"ms" desc:"How long to busy-loop, in milliseconds"`
 }
 
+type urlArgs struct {
+	URL string `json:"url" desc:"URL to GET"`
+}
+
+type addrArgs struct {
+	Addr string `json:"addr" desc:"host:port to dial"`
+}
+
+// fixtureConfig carries two endpoint fields — a URL and a bare host:port — so the
+// host's network.assetEndpoint gate is exercised against both shapes.
 type fixtureConfig struct {
-	Endpoint string `json:"endpoint" title:"Endpoint"`
+	Endpoint string `json:"endpoint" title:"Endpoint" format:"endpoint"`
+	Broker   string `json:"broker,omitempty" title:"Broker" format:"endpoint"`
+	Note     string `json:"note,omitempty" title:"Note"`
 }
 
 func init() {
@@ -150,6 +162,42 @@ func init() {
 			return nil, err
 		}
 		return map[string]any{"config": json.RawMessage(cfg), "asset": ctx.Asset}, nil
+	}).Policy("read")
+
+	// http_get and tcp_echo reach the network through host IO, so a test sees
+	// exactly what the host's network gate lets a guest reach.
+	opskat.Tool("http_get", func(_ *opskat.ToolContext, args urlArgs) (any, error) {
+		h, err := opskat.IOOpen("http", map[string]any{"method": "GET", "url": args.URL})
+		if err != nil {
+			return nil, err
+		}
+		defer h.Close()
+		meta, err := h.Flush()
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(h)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": meta.Status, "body": string(body)}, nil
+	}).Policy("read")
+
+	opskat.Tool("tcp_echo", func(_ *opskat.ToolContext, args addrArgs) (any, error) {
+		conn, err := opskat.Dial("tcp", args.Addr)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
+		if _, err := conn.Write([]byte("ping")); err != nil {
+			return nil, err
+		}
+		buf := make([]byte, 16)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"echo": string(buf[:n])}, nil
 	}).Policy("read")
 
 	opskat.Tool("log", func(_ *opskat.ToolContext, args logArgs) (any, error) {

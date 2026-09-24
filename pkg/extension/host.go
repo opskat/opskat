@@ -1,7 +1,11 @@
 // pkg/extension/host.go
 package extension
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+	"net/url"
+)
 
 // HostProvider defines the capabilities that the host provides to extensions.
 // Main App and DevServer each provide their own implementation.
@@ -10,9 +14,10 @@ import "encoding/json"
 // per-invocation IO handle table and the action cancellation flag, so a provider
 // never has to reason about which concurrent call it is serving.
 type HostProvider interface {
-	// OpenIO opens a stream. The runtime registers the returned resource in the
-	// calling invocation's handle table and closes it when that call ends.
-	OpenIO(params IOOpenParams) (*IOResource, error)
+	// OpenIO opens a stream for the invocation scoped to asset (nil when the call
+	// has none). The runtime registers the returned resource in the calling
+	// invocation's handle table and closes it when that call ends.
+	OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error)
 	// GetAssetConfig returns the config of assetID, which is always the asset
 	// the runtime scoped the current invocation to — never a guest-supplied id.
 	// Implementations must still refuse an asset whose type the extension does
@@ -39,6 +44,11 @@ type IOOpenParams struct {
 	// tcp (new)
 	Addr    string `json:"addr,omitempty"`
 	Timeout int    `json:"timeout,omitempty"` // ms; 0 = default 10s
+
+	// RedirectGuard, when set, vets every redirect target of an http handle; a
+	// non-nil error stops the redirect and fails the request. Only the host sets
+	// it — it never crosses the WASM boundary.
+	RedirectGuard func(target *url.URL) error `json:"-"`
 }
 
 type DialogOptions struct {
