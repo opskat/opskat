@@ -104,9 +104,9 @@ func probeCluster(ctx context.Context, c clusterExecutor) (*RedisProbeCluster, s
 	out := &RedisProbeCluster{UnreachableNodes: []string{}}
 	for _, n := range nodes {
 		switch {
-		case n.isMaster():
+		case n.isCountedMaster():
 			out.Masters++
-		case slices.Contains(n.Flags, "slave"):
+		case n.isCountedReplica():
 			out.Replicas++
 		}
 	}

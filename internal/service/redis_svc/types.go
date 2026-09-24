@@ -163,8 +163,15 @@ type RedisClusterOverview struct {
 	TotalKeys   int64 `json:"totalKeys"`
 	KeysPartial bool  `json:"keysPartial"`
 	// Masters 为所有带 master 标志的节点（按地址排序），各自的从节点挂在 Replicas 下；
-	// 找不到所属主节点的从节点也以 Role="replica" 列在此处。
+	// 找不到所属主节点的从节点也以 Role="replica" 列在此处。含已失去 slot 的故障主节点
+	// （供节点表格展示排障），因此其长度不等于 MasterCount。
 	Masters []RedisClusterNode `json:"masters"`
+	// MasterCount / ReplicaCount 是摘要卡片「主 / 从数量」应使用的计数，与 RedisProbeCluster
+	// 的 Masters / Replicas 用同一条规则（clusterNodeInfo.isCountedMaster /
+	// isCountedReplica）：已失去 slot 且被判定故障的主节点不计入 MasterCount。
+	// 前端不应再用 len(Masters) 或遍历 Replicas 自行推导这两个数。
+	MasterCount  int `json:"masterCount"`
+	ReplicaCount int `json:"replicaCount"`
 	// InfoNode 为本次返回 INFO 的节点（请求为空时取第一个主节点）；Info 为其 INFO 原文，
 	// 该节点不可达时 Info 为空、InfoError 为原因。
 	InfoNode  string `json:"infoNode"`

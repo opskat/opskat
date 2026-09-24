@@ -324,7 +324,10 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
 
   const clusterMasters = clusterOverview?.masters ?? [];
   const selectedInfoNode = infoNode || clusterOverview?.infoNode || "";
-  const clusterReplicaCount = clusterMasters.reduce((sum, m) => sum + (m.replicas?.length ?? 0), 0);
+  // masterCount/replicaCount come from the backend's single counting rule (clusterNodeInfo
+  // .isCountedMaster/isCountedReplica): a master,fail node that lost its slots after a
+  // failover is excluded, unlike clusterMasters.length which still includes it (that array
+  // is for the node table, not the summary count).
   const clusterUnreachableCount = clusterMasters.reduce((sum, m) => {
     const masterUnreachable = m.reachable ? 0 : 1;
     const replicaUnreachable = (m.replicas ?? []).filter((r) => !r.reachable).length;
@@ -416,7 +419,7 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
                 label={t("query.redisClusterMasterReplica")}
                 value={
                   <>
-                    {clusterMasters.length} / {clusterReplicaCount}
+                    {clusterOverview.masterCount} / {clusterOverview.replicaCount}
                     {clusterUnreachableCount > 0 && (
                       <span className="text-warning">
                         {t("query.redisClusterUnreachableSuffix", { count: clusterUnreachableCount })}

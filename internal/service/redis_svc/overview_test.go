@@ -128,6 +128,37 @@ func TestClusterOverview(t *testing.T) {
 	})
 }
 
+// E20：概览摘要的 MasterCount / ReplicaCount 与 probe 用同一条计数规则——已失去 slot 且
+// 被判定故障的前主节点不计入 MasterCount，即便它仍以 Role="master" 出现在 Masters 节点表格里。
+func TestClusterOverviewMasterReplicaCounts(t *testing.T) {
+	up := func(args []any) (any, error) {
+		switch strings.ToUpper(joinArgs(args)) {
+		case "CLUSTER NODES":
+			return failoverClusterNodes, nil
+		case "CLUSTER INFO":
+			return "cluster_state:ok\r\n", nil
+		case "INFO":
+			return nodeInfo(10, 100, 1), nil
+		}
+		return nil, fmt.Errorf("unexpected %v", args)
+	}
+	c := &fakeCluster{
+		shards: []string{failM1, failM2, failM6},
+		nodes: map[string]fakeClusterNode{
+			failM1: up, failM2: up, failM6: up, failR1: up, failR2: up,
+			failM3: downNode,
+		},
+	}
+
+	got, err := clusterOverview(context.Background(), c, "")
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, got.MasterCount, "the fail-flagged master that lost its slots is not counted")
+	assert.Equal(t, 2, got.ReplicaCount)
+	// The node table itself still lists the failed former master, unlike the count.
+	require.Len(t, got.Masters, 4)
+}
+
 func TestSentinelOverview(t *testing.T) {
 	sentinel := &fakeRedisExecutor{results: []any{
 		map[any]any{"name": "mymaster", "ip": "172.20.0.11", "port": "6379", "flags": "master", "quorum": "2",

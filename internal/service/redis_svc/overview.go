@@ -75,6 +75,14 @@ func clusterOverview(ctx context.Context, c clusterExecutor, infoNode string) (R
 
 	infos, infoErrs := onEachNode(ctx, c, nodeAddrs(nodes), "INFO")
 	out := RedisClusterOverview{InfoNode: infoNode}
+	for _, n := range nodes {
+		switch {
+		case n.isCountedMaster():
+			out.MasterCount++
+		case n.isCountedReplica():
+			out.ReplicaCount++
+		}
+	}
 	views := make([]RedisClusterNode, len(nodes))
 	clusterInfoFrom := ""
 	for i, n := range nodes {

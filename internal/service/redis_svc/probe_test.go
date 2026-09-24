@@ -21,6 +21,26 @@ const probeClusterNodes = testClusterNodes +
 	"id6666 10.0.0.6:7006@17006 slave id3333 0 1700 3 connected\n" +
 	"id7777 10.0.0.7:7007@17007 master - 0 1700 4 connected\n"
 
+// failoverClusterNodes 复现 E20：故障转移后 7006 接管了 7003 的 slot（10923-16383），
+// 7003 仍带 master 标志但已无 slot 且被集群判定故障（fail）。真实拓扑是 3 主 2 从；
+// 7003 不应再计入「主」。overview_test.go 复用同一份拓扑文本验证概览摘要走同一规则。
+const (
+	failM1 = "10.0.0.1:7001"
+	failM2 = "10.0.0.2:7002"
+	failM6 = "10.0.0.6:7006"
+	failM3 = "10.0.0.3:7003"
+	failR1 = "10.0.0.4:7004"
+	failR2 = "10.0.0.5:7005"
+)
+
+const failoverClusterNodes = "" +
+	"id1111 10.0.0.1:7001@17001 master - 0 1700 1 connected 0-5460\n" +
+	"id2222 10.0.0.2:7002@17002 master - 0 1700 2 connected 5461-10922\n" +
+	"id6666 10.0.0.6:7006@17006 master - 0 1700 3 connected 10923-16383\n" +
+	"id3333 10.0.0.3:7003@17003 master,fail - 0 1700 3 disconnected\n" +
+	"id4444 10.0.0.4:7004@17004 slave id1111 0 1700 1 connected\n" +
+	"id5555 10.0.0.5:7005@17005 slave id2222 0 1700 2 connected\n"
+
 func TestProbeCluster(t *testing.T) {
 	up := func(args []any) (any, error) {
 		switch strings.ToUpper(joinArgs(args)) {
@@ -92,6 +112,37 @@ func TestProbeClusterReadsStateFromAnsweringNode(t *testing.T) {
 	assert.Equal(t, "cluster", mode)
 	assert.Equal(t, "ok", got.State)
 	assert.Equal(t, []string{m1, m2, r1, r2}, got.UnreachableNodes)
+}
+
+// E20：master,fail 且已无 slot 的前主节点不计入「主」，probe 报告真实的 3 主 2 从。
+func TestProbeClusterExcludesFailedMasterWithoutSlots(t *testing.T) {
+	up := func(args []any) (any, error) {
+		switch strings.ToUpper(joinArgs(args)) {
+		case "CLUSTER NODES":
+			return failoverClusterNodes, nil
+		case "CLUSTER INFO":
+			return "cluster_state:ok\r\n", nil
+		case "INFO SERVER":
+			return "# Server\r\nredis_mode:cluster\r\n", nil
+		case "PING":
+			return "PONG", nil
+		}
+		return nil, fmt.Errorf("unexpected command %v", args)
+	}
+	cluster := &fakeCluster{
+		shards: []string{failM1, failM2, failM6, failR1, failR2},
+		nodes: map[string]fakeClusterNode{
+			failM1: up, failM2: up, failM6: up, failR1: up, failR2: up,
+			failM3: downNode,
+		},
+	}
+
+	got, mode := probeCluster(context.Background(), cluster)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "cluster", mode)
+	assert.Equal(t, 3, got.Masters, "the fail-flagged master that lost its slots is not counted")
+	assert.Equal(t, 2, got.Replicas)
 }
 
 func TestProbeClusterTopologyUnavailable(t *testing.T) {

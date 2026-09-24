@@ -139,6 +139,8 @@ describe("RedisOpsPanel", () => {
         slotsFail: 5461,
         totalKeys: 131,
         keysPartial: true,
+        masterCount: 2,
+        replicaCount: 1,
         infoNode: "10.20.0.11:6379",
         info: "# Server\r\nredis_version:7.2.5\r\n",
         masters: [
@@ -213,6 +215,7 @@ describe("RedisOpsPanel", () => {
       // Summary cards
       const summary = screen.getByTestId("redis-cluster-summary");
       expect(screen.getByTestId("redis-cluster-summary-state")).toHaveTextContent("fail");
+      expect(screen.getByTestId("redis-cluster-summary-topology")).toHaveTextContent("2 / 1");
       expect(summary).toHaveTextContent("10923");
       expect(summary).toHaveTextContent("16384");
       expect(summary).toHaveTextContent("≥");
@@ -236,6 +239,132 @@ describe("RedisOpsPanel", () => {
 
       // Server/memory/runtime panels parsed from overview.info
       expect(screen.getAllByText("7.2.5").length).toBeGreaterThan(0);
+    });
+
+    it("shows the backend's master/replica count, not masters.length, after a failover leaves a failed master without slots", async () => {
+      // E20: after a failover, 10.20.0.13:6379 lost its slots but the node table still lists
+      // it (master,fail, no slots) for troubleshooting. The backend excludes it from
+      // masterCount/replicaCount (redis_svc.clusterNodeInfo.isCountedMaster); the summary
+      // card must read those fields instead of deriving "4 / 2" from masters.length.
+      vi.mocked(RedisClusterOverview).mockResolvedValue(
+        clusterOverview({
+          masterCount: 3,
+          replicaCount: 2,
+          masters: [
+            {
+              id: "a3250d88aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              addr: "10.20.0.11:6379",
+              role: "master",
+              masterId: "",
+              slots: "0-5460",
+              slotCount: 5461,
+              flags: ["master"],
+              linkState: "connected",
+              status: "ok",
+              reachable: true,
+              keys: 62,
+              usedMemory: 2528000,
+              usedMemoryHuman: "2.41M",
+              opsPerSec: 118,
+              replicas: [
+                {
+                  id: "e41766c8bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  addr: "10.20.0.14:6379",
+                  role: "replica",
+                  masterId: "a3250d88aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  slots: "",
+                  slotCount: 0,
+                  flags: ["slave"],
+                  linkState: "connected",
+                  status: "ok",
+                  reachable: true,
+                  keys: 62,
+                  usedMemory: 2495000,
+                  usedMemoryHuman: "2.38M",
+                  opsPerSec: 3,
+                },
+              ],
+            },
+            {
+              id: "b1234d88aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              addr: "10.20.0.12:6379",
+              role: "master",
+              masterId: "",
+              slots: "5461-10922",
+              slotCount: 5462,
+              flags: ["master"],
+              linkState: "connected",
+              status: "ok",
+              reachable: true,
+              keys: 60,
+              usedMemory: 2400000,
+              usedMemoryHuman: "2.29M",
+              opsPerSec: 100,
+              replicas: [
+                {
+                  id: "f22222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  addr: "10.20.0.15:6379",
+                  role: "replica",
+                  masterId: "b1234d88aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  slots: "",
+                  slotCount: 0,
+                  flags: ["slave"],
+                  linkState: "connected",
+                  status: "ok",
+                  reachable: true,
+                  keys: 60,
+                  usedMemory: 2400000,
+                  usedMemoryHuman: "2.29M",
+                  opsPerSec: 4,
+                },
+              ],
+            },
+            {
+              id: "c9999d88aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              addr: "10.20.0.16:6379",
+              role: "master",
+              masterId: "",
+              slots: "10923-16383",
+              slotCount: 5461,
+              flags: ["master"],
+              linkState: "connected",
+              status: "ok",
+              reachable: true,
+              keys: 58,
+              usedMemory: 2300000,
+              usedMemoryHuman: "2.19M",
+              opsPerSec: 90,
+            },
+            {
+              // Lost its slots after the failover; still master-flagged but excluded from
+              // masterCount/replicaCount by the shared Go counting rule.
+              id: "1fda5dd1ccccccccccccccccccccccccccccccccc",
+              addr: "10.20.0.13:6379",
+              role: "master",
+              masterId: "",
+              slots: "",
+              slotCount: 0,
+              flags: ["master", "fail"],
+              linkState: "disconnected",
+              status: "fail",
+              error: "node is not part of the cluster",
+              reachable: false,
+              keys: -1,
+              usedMemory: -1,
+              usedMemoryHuman: "",
+              opsPerSec: -1,
+            },
+          ] as unknown as redis_svc.RedisClusterNode[],
+        })
+      );
+
+      render(<RedisOpsPanel tabId="query-10" />);
+
+      await waitFor(() => {
+        expect(RedisClusterOverview).toHaveBeenCalledWith(10, "");
+      });
+
+      expect(screen.getByTestId("redis-cluster-summary-topology")).toHaveTextContent("3 / 2");
     });
 
     it("does not show the fail banner when cluster_state is ok, and switching the INFO node refetches", async () => {

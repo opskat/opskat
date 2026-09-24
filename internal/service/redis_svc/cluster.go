@@ -54,6 +54,18 @@ type clusterNodeInfo struct {
 
 func (n clusterNodeInfo) isMaster() bool { return slices.Contains(n.Flags, "master") }
 
+// isCountedMaster 是「主 / 从」计数统一使用的规则：一个主节点仍算作主，当它仍持有 slot，
+// 或虽然暂无 slot 但未被集群判定为故障（如刚加入、尚未分配 slot）；已失去全部 slot 且被判定
+// 故障（flags 含 fail）的前主节点不计入——它已不再承担主的职责。故障转移后 probe.go 的
+// probeCluster 与 overview.go 的 clusterOverview 都据此计数，保持后端与前端展示口径一致。
+func (n clusterNodeInfo) isCountedMaster() bool {
+	return n.isMaster() && (len(n.Slots) > 0 || !slices.Contains(n.Flags, "fail"))
+}
+
+// isCountedReplica 是「主 / 从」计数中「从」的规则：CLUSTER NODES 标为 slave 的节点即计入，
+// 无论是否可达或是否找到所属主节点（孤儿从节点也算从，而不是被漏计或误计成主）。
+func (n clusterNodeInfo) isCountedReplica() bool { return slices.Contains(n.Flags, "slave") }
+
 func (n clusterNodeInfo) slotCount() int {
 	total := 0
 	for _, r := range n.Slots {
