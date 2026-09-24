@@ -405,6 +405,12 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 	if err != nil {
 		return approval.ApprovalResponse{ToolError: err.Error()}
 	}
+	// 统一 exec 把拒绝当普通文本结果交回（那是给模型看的，模型据此调整），但对
+	// opsctl 而言命令没有执行——决策槽里的 Deny 是唯一可靠的信号，按错误回传，
+	// 客户端才会与内置类型一样 exit 1 + stderr，而不是把拒绝文本当输出打到 stdout。
+	if decision.Decision != aictx.Allow {
+		return approval.ApprovalResponse{ToolError: result}
+	}
 	return approval.ApprovalResponse{Approved: true, ToolResult: result}
 }
 

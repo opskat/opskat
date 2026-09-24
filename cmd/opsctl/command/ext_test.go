@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -260,6 +261,36 @@ func TestExecViaDesktopPassesTheCommandThroughVerbatim(t *testing.T) {
 	// The desktop side canonicalizes and policy-checks; opsctl must not rewrite the
 	// command on the way there, or approval would show something else than was typed.
 	assert.Equal(t, "list_objects --bucket=logs", gotCommand)
+}
+
+// A policy refusal from the desktop arrives as a tool error; opsctl must report it
+// the way a denied builtin exec does — exit 1, the reason on stderr, nothing on
+// stdout — so a script piping the output cannot mistake the refusal for a result.
+func TestExecViaDesktopPolicyDenialExitsNonZeroOnStderr(t *testing.T) {
+	refusal := "command denied by policy: delete_bucket"
+	orig := delegateExtExecFn
+	delegateExtExecFn = func(int64, string, string, string) (string, error) {
+		return "", errors.New(refusal)
+	}
+	t.Cleanup(func() { delegateExtExecFn = orig })
+
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	origStdout := os.Stdout
+	os.Stdout = outW
+	var code int
+	stderr := captureStderr(t, func() {
+		code = execViaDesktop(&asset_entity.Asset{ID: 7, Name: "my-bucket", Type: "acme-store"},
+			"acme", "delete_bucket --bucket=logs", "sess")
+	})
+	os.Stdout = origStdout
+	require.NoError(t, outW.Close())
+	stdout, err := io.ReadAll(outR)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, refusal)
+	assert.Empty(t, string(stdout))
 }
 
 // --- ext dev -----------------------------------------------------------------
