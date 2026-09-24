@@ -23,48 +23,86 @@ const probeClusterNodes = testClusterNodes +
 
 func TestProbeCluster(t *testing.T) {
 	up := func(args []any) (any, error) {
-		switch strings.ToUpper(fmt.Sprint(args[0])) {
-		case "CLUSTER":
+		switch strings.ToUpper(joinArgs(args)) {
+		case "CLUSTER NODES":
 			return probeClusterNodes, nil
+		case "CLUSTER INFO":
+			return "cluster_state:fail\r\ncluster_slots_assigned:16384\r\n", nil
+		case "INFO SERVER":
+			return "# Server\r\nredis_mode:cluster\r\n", nil
 		case "PING":
 			return "PONG", nil
 		}
 		return nil, fmt.Errorf("unexpected command %v", args)
 	}
 	cluster := &fakeCluster{
-		shards: []string{m1, m2, m3, r1, r2, "10.0.0.6:7006"},
+		// 客户端拓扑（CLUSTER SLOTS）只含持有 slot 的主节点及其在线从节点。
+		shards: []string{m1, m2, m3, r1, r2},
 		nodes: map[string]fakeClusterNode{
 			m1: up, m2: up, m3: up, r1: up,
 			// 应答了错误回复：节点本身可达。
-			r2:              func([]any) (any, error) { return nil, replyErr("NOAUTH Authentication required.") },
+			r2: func([]any) (any, error) { return nil, replyErr("NOAUTH Authentication required.") },
+			// 宕机的从节点、失去 slot 的主节点：只出现在 CLUSTER NODES 中。
 			"10.0.0.6:7006": downNode,
-		},
-		routed: func(args []any) (any, error) {
-			if strings.ToUpper(fmt.Sprint(args[0])) == "CLUSTER" {
-				return "cluster_state:fail\r\ncluster_slots_assigned:16384\r\n", nil
-			}
-			return nil, fmt.Errorf("unexpected routed command %v", args)
+			"10.0.0.7:7007": downNode,
 		},
 	}
 
-	got := probeCluster(context.Background(), cluster)
+	got, mode := probeCluster(context.Background(), cluster)
 
 	require.NotNil(t, got)
+	assert.Equal(t, "cluster", mode)
 	assert.Equal(t, "fail", got.State, "cluster_state is reported as-is")
 	assert.Equal(t, 4, got.Masters)
 	assert.Equal(t, 3, got.Replicas)
-	// 10.0.0.7:7007 不在客户端已知节点中（无 slot），无法判断，不计入。
-	assert.Equal(t, []string{"10.0.0.6:7006"}, got.UnreachableNodes)
+	assert.Equal(t, []string{"10.0.0.6:7006", "10.0.0.7:7007"}, got.UnreachableNodes,
+		"every CLUSTER NODES address is probed, including ones outside the client's slot map")
+	assert.Empty(t, cluster.callsTo("routed:"), "nothing is routed to a random slot's master")
+}
+
+// 集群状态与 redis_mode 只从应答了 PING 的节点读取，不会落到不可达的节点上。
+func TestProbeClusterReadsStateFromAnsweringNode(t *testing.T) {
+	up := func(args []any) (any, error) {
+		switch strings.ToUpper(joinArgs(args)) {
+		case "CLUSTER NODES":
+			return testClusterNodes, nil
+		case "CLUSTER INFO":
+			return "cluster_state:ok\r\n", nil
+		case "INFO SERVER":
+			return "# Server\r\nredis_mode:cluster\r\n", nil
+		case "PING":
+			return "PONG", nil
+		}
+		return nil, fmt.Errorf("unexpected command %v", args)
+	}
+	cluster := &fakeCluster{
+		shards: []string{m1},
+		nodes:  map[string]fakeClusterNode{m1: downNode, m2: downNode, m3: up, r1: downNode, r2: downNode},
+	}
+	cluster.nodes[m1] = func(args []any) (any, error) {
+		if strings.EqualFold(joinArgs(args), "CLUSTER NODES") {
+			return testClusterNodes, nil
+		}
+		return downNode(args)
+	}
+
+	got, mode := probeCluster(context.Background(), cluster)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "cluster", mode)
+	assert.Equal(t, "ok", got.State)
+	assert.Equal(t, []string{m1, m2, r1, r2}, got.UnreachableNodes)
 }
 
 func TestProbeClusterTopologyUnavailable(t *testing.T) {
 	cluster := &fakeCluster{
 		shards: []string{m1},
 		nodes:  map[string]fakeClusterNode{m1: downNode},
-		routed: func([]any) (any, error) { return nil, errors.New("dial tcp: connection refused") },
 	}
 
-	assert.Nil(t, probeCluster(context.Background(), cluster), "nothing is fabricated when the topology can't be read")
+	got, mode := probeCluster(context.Background(), cluster)
+	assert.Nil(t, got, "nothing is fabricated when the topology can't be read")
+	assert.Empty(t, mode)
 }
 
 func TestDetectRedisMode(t *testing.T) {

@@ -18,14 +18,12 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// errUnknownClusterNode 表示地址不属于当前集群客户端已知的节点。
-var errUnknownClusterNode = errors.New("node is not part of the cluster")
-
 // clusterExecutor 是集群模式下的执行能力。Do（继承自 redisExecutor）按命令中 key 的 slot 路由；
 // 其余方法用于按节点操作。生产实现为 goRedisClusterExecutor。
 type clusterExecutor interface {
 	redisExecutor
-	// DoOnNode 在地址为 addr 的节点（主或从）上执行；addr 不是已知节点时返回 errUnknownClusterNode。
+	// DoOnNode 在地址为 addr 的节点（主或从）上执行；addr 取自 CLUSTER NODES，
+	// 不在客户端拓扑中的节点同样经集群传输连接，连不上时返回真实的拨号错误。
 	DoOnNode(ctx context.Context, addr string, args ...any) (any, error)
 	// ShardAddrs 返回客户端已知的全部节点地址（不做网络探测），用于找一个可达节点读取拓扑。
 	ShardAddrs(ctx context.Context) ([]string, error)
@@ -363,7 +361,8 @@ func deleteKeysEach(ctx context.Context, exec redisExecutor, keys []string) Redi
 }
 
 // goRedisClusterExecutor 基于 go-redis ClusterClient 实现 clusterExecutor；
-// Do 由 ClusterClient 按 slot 路由，按节点执行复用集群客户端持有的节点连接。
+// Do 由 ClusterClient 按 slot 路由；按节点执行时复用集群客户端持有的节点连接，
+// 客户端拓扑之外的节点临时连接。
 type goRedisClusterExecutor struct {
 	*goRedisExecutor
 	cluster *redis.ClusterClient
@@ -379,7 +378,13 @@ func (e *goRedisClusterExecutor) DoOnNode(ctx context.Context, addr string, args
 		return nil, err
 	}
 	if node == nil {
-		return nil, fmt.Errorf("%s: %w", addr, errUnknownClusterNode)
+		// 不在客户端拓扑（CLUSTER SLOTS）中的节点（失去 slot 的故障主、宕机的从）：经集群传输临时连接。
+		node = connpool.NewRedisClusterNodeClient(e.cluster, addr)
+		defer func() {
+			if err := node.Close(); err != nil {
+				logger.Ctx(ctx).Warn("close redis cluster node client", zap.String("addr", addr), zap.Error(err))
+			}
+		}()
 	}
 	return e.run(ctx, node, args)
 }

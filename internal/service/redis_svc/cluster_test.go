@@ -1,13 +1,18 @@
 package redis_svc
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +21,7 @@ import (
 type fakeClusterNode func(args []any) (any, error)
 
 // fakeCluster 实现 clusterExecutor：Do 走 routed（按 slot 路由的命令），
-// DoOnNode 按地址分发到 nodes，未知地址返回 errUnknownClusterNode。
+// DoOnNode 按地址分发到 nodes，nodes 之外的地址视为用例错误。
 type fakeCluster struct {
 	mu        sync.Mutex
 	shards    []string
@@ -52,7 +57,7 @@ func (f *fakeCluster) DoOnNode(_ context.Context, addr string, args ...any) (any
 	f.record(addr+":", args)
 	node, ok := f.nodes[addr]
 	if !ok {
-		return nil, errUnknownClusterNode
+		return nil, fmt.Errorf("fake cluster: unexpected node %s", addr)
 	}
 	return node(args)
 }
@@ -361,4 +366,82 @@ func TestValidateDBForMode(t *testing.T) {
 	assert.Error(t, validateDBForMode("cluster", 3))
 	assert.NoError(t, validateDBForMode("standalone", 3))
 	assert.NoError(t, validateDBForMode("sentinel", 3))
+}
+
+// startPongServer 起一个对任何命令都回 +PONG 的 RESP 假节点（HELLO 回错误，客户端退回 RESP2）。
+func startPongServer(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				r := bufio.NewReader(conn)
+				for {
+					header, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(header, "*")))
+					args := make([]string, n)
+					for i := range args {
+						_, _ = r.ReadString('\n')
+						v, _ := r.ReadString('\n')
+						args[i] = strings.TrimSpace(v)
+					}
+					reply := "+PONG\r\n"
+					if len(args) > 0 && strings.EqualFold(args[0], "HELLO") {
+						reply = "-ERR unknown command\r\n"
+					}
+					if _, err := conn.Write([]byte(reply)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// CLUSTER NODES 中存在、但客户端拓扑（CLUSTER SLOTS）不含的节点（失去 slot 的故障主、宕机的从）
+// 也要经集群的传输（拨号器：地址映射 / 隧道 / 代理）连接：可达的照常执行，不可达的返回真实拨号错误。
+func TestGoRedisClusterExecutorDoOnNodeOutsideSlots(t *testing.T) {
+	const liveAnnounced, deadAnnounced = "10.255.0.7:7007", "10.255.0.8:7008"
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	deadLocal := deadLn.Addr().String()
+	require.NoError(t, deadLn.Close())
+	mapped := map[string]string{liveAnnounced: startPongServer(t), deadAnnounced: deadLocal}
+
+	client := redis.NewClusterClient(&redis.ClusterOptions{
+		ClusterSlots: func(context.Context) ([]redis.ClusterSlot, error) {
+			return []redis.ClusterSlot{{Start: 0, End: 16383, Nodes: []redis.ClusterNode{{Addr: "10.255.0.1:7001"}}}}, nil
+		},
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if target, ok := mapped[addr]; ok {
+				addr = target
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+		MaxRetries: -1,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+	exec := &goRedisClusterExecutor{goRedisExecutor: &goRedisExecutor{client: client}, cluster: client}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	got, err := exec.DoOnNode(ctx, liveAnnounced, "PING")
+	require.NoError(t, err)
+	assert.Equal(t, "PONG", got)
+
+	_, err = exec.DoOnNode(ctx, deadAnnounced, "PING")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection refused", "the reason is the real dial error")
 }

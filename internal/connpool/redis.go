@@ -45,7 +45,7 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 	if mode == asset_entity.RedisModeSentinel {
 		client.AddHook(&sentinelMasterWatcher{assetID: asset.ID, masterName: cfg.MasterName})
 	}
-	if pingErr := client.Ping(ctx).Err(); pingErr != nil {
+	if pingErr := checkRedisConnected(ctx, client); pingErr != nil {
 		logger.Ctx(ctx).Error("redis connect failed", append(logFields, zap.Error(pingErr))...)
 		if err := client.Close(); err != nil {
 			logger.Default().Warn("close redis client", zap.Error(err))
@@ -65,6 +65,17 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 		return client, nil, nil
 	}
 	return client, tunnel, nil
+}
+
+// checkRedisConnected 确认客户端可用。集群客户端的 PING 发往随机 slot 的主节点，任一宣告的
+// 主节点不可达就会随机失败；因此集群改为加载拓扑：go-redis 依次向种子请求 CLUSTER SLOTS，
+// 有一个种子应答即成功（认证失败、未开启集群模式等回复错误照常返回）。
+func checkRedisConnected(ctx context.Context, client redis.UniversalClient) error {
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		_, err := RedisClusterNodeAddrs(ctx, cluster, false)
+		return err
+	}
+	return client.Ping(ctx).Err()
 }
 
 // newRedisClient 按部署模式创建客户端,不做网络 I/O。

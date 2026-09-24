@@ -50,3 +50,33 @@ func RedisClusterNode(ctx context.Context, c *redis.ClusterClient, addr string) 
 	}
 	return target, nil
 }
+
+// NewRedisClusterNodeClient 为集群宣告的任意节点地址创建独立客户端（调用方负责 Close），
+// 沿用集群客户端的拨号器（地址映射 / 隧道 / 代理 / TLS）、认证与超时。
+// 用于 CLUSTER NODES 中存在、但不在客户端拓扑（CLUSTER SLOTS）里的节点，如失去 slot 的故障主节点、
+// 宕机的从节点；已知节点应经 RedisClusterNode 复用集群客户端的连接。不做网络 I/O。
+func NewRedisClusterNodeClient(c *redis.ClusterClient, addr string) *redis.Client {
+	opt := c.Options()
+	return redis.NewClient(&redis.Options{
+		Addr:                       addr,
+		ClientName:                 opt.ClientName,
+		Dialer:                     opt.Dialer,
+		OnConnect:                  opt.OnConnect,
+		Protocol:                   opt.Protocol,
+		Username:                   opt.Username,
+		Password:                   opt.Password,
+		CredentialsProvider:        opt.CredentialsProvider,
+		CredentialsProviderContext: opt.CredentialsProviderContext,
+		MaxRetries:                 opt.MaxRetries,
+		MinRetryBackoff:            opt.MinRetryBackoff,
+		MaxRetryBackoff:            opt.MaxRetryBackoff,
+		DialTimeout:                opt.DialTimeout,
+		ReadTimeout:                opt.ReadTimeout,
+		WriteTimeout:               opt.WriteTimeout,
+		ContextTimeoutEnabled:      opt.ContextTimeoutEnabled,
+		DisableIdentity:            opt.DisableIdentity,
+		IdentitySuffix:             opt.IdentitySuffix,
+		TLSConfig:                  opt.TLSConfig,
+		UnstableResp3:              opt.UnstableResp3,
+	})
+}

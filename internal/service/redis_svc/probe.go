@@ -71,8 +71,7 @@ func (s *Service) probe(ctx context.Context, cfg *asset_entity.RedisConfig, pass
 		out.DetectedMode = detectRedisMode(ctx, exec)
 	case asset_entity.RedisModeCluster:
 		cluster := &goRedisClusterExecutor{goRedisExecutor: exec, cluster: client.(*redis.ClusterClient)}
-		out.DetectedMode = detectRedisMode(ctx, cluster)
-		out.Cluster = probeCluster(ctx, cluster)
+		out.Cluster, out.DetectedMode = probeCluster(ctx, cluster)
 	}
 	out.ModeMismatch = modeMismatch(out.DetectedMode, mode)
 	return out, nil
@@ -92,21 +91,17 @@ func detectRedisMode(ctx context.Context, exec redisExecutor) string {
 	return parseInfoFields(fmt.Sprint(info))["redis_mode"]
 }
 
-// probeCluster 读取集群状态、主从数，并经集群客户端（即配置的隧道 / 代理与地址映射）
-// 并发 PING 每个宣告节点，找出连不上的。拓扑读不到时返回 nil。
-// 回复了错误（如 NOAUTH）的节点视为可达；客户端未知的节点（不在 CLUSTER SLOTS 中）无法判断，不计入。
-func probeCluster(ctx context.Context, c clusterExecutor) *RedisProbeCluster {
+// probeCluster 读取集群主从数，并经集群传输（配置的隧道 / 代理与地址映射）并发 PING
+// CLUSTER NODES 中的每个节点（含不在 CLUSTER SLOTS 里的故障主、宕机从），找出连不上的；
+// 回复了错误（如 NOAUTH）的节点视为可达。集群状态与 redis_mode 从第一个应答 PING 的节点读取
+// （不经 slot 路由，免得落到不可达的主节点上）。拓扑读不到时返回 nil。
+func probeCluster(ctx context.Context, c clusterExecutor) (*RedisProbeCluster, string) {
 	nodes, err := clusterTopology(ctx, c)
 	if err != nil {
 		logger.Ctx(ctx).Warn("redis probe: load cluster topology failed", zap.Error(err))
-		return nil
+		return nil, ""
 	}
 	out := &RedisProbeCluster{UnreachableNodes: []string{}}
-	if raw, err := c.Do(ctx, "CLUSTER", "INFO"); err != nil {
-		logger.Ctx(ctx).Warn("redis probe: read CLUSTER INFO failed", zap.Error(err))
-	} else {
-		out.State = parseInfoFields(fmt.Sprint(raw))["cluster_state"]
-	}
 	for _, n := range nodes {
 		switch {
 		case n.isMaster():
@@ -119,14 +114,40 @@ func probeCluster(ctx context.Context, c clusterExecutor) *RedisProbeCluster {
 	pingCtx, cancel := context.WithTimeout(ctx, probeNodeTimeout)
 	defer cancel()
 	_, errs := onEachNode(pingCtx, c, nodeAddrs(nodes), "PING")
+	answered := ""
 	for i, err := range errs {
-		if err == nil || isRedisReply(err) || errors.Is(err, errUnknownClusterNode) {
-			continue
+		switch {
+		case err == nil:
+			if answered == "" {
+				answered = nodes[i].Addr
+			}
+		case isRedisReply(err):
+		default:
+			logUnreachableNode(ctx, nodes[i].Addr, err)
+			out.UnreachableNodes = append(out.UnreachableNodes, nodes[i].Addr)
 		}
-		logUnreachableNode(ctx, nodes[i].Addr, err)
-		out.UnreachableNodes = append(out.UnreachableNodes, nodes[i].Addr)
 	}
-	return out
+	if answered == "" {
+		logger.Ctx(ctx).Warn("redis probe: no cluster node answered PING")
+		return out, ""
+	}
+	node := nodeExecutor{c: c, addr: answered}
+	if raw, err := node.Do(ctx, "CLUSTER", "INFO"); err != nil {
+		logger.Ctx(ctx).Warn("redis probe: read CLUSTER INFO failed", zap.String("addr", answered), zap.Error(err))
+	} else {
+		out.State = parseInfoFields(fmt.Sprint(raw))["cluster_state"]
+	}
+	return out, detectRedisMode(ctx, node)
+}
+
+// nodeExecutor 把集群中的单个节点适配为 redisExecutor。
+type nodeExecutor struct {
+	c    clusterExecutor
+	addr string
+}
+
+func (n nodeExecutor) Do(ctx context.Context, args ...any) (any, error) {
+	return n.c.DoOnNode(ctx, n.addr, args...)
 }
 
 // sentinelDialFunc 连接一个已配置的哨兵；成功时返回执行器与关闭函数。
