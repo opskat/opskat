@@ -18,35 +18,68 @@ import (
 	"go.uber.org/zap"
 )
 
-// assetConfigGetter implements extension.AssetConfigGetter.
+// assetConfigGetter implements extension.AssetConfigGetter for one extension.
+//
+// The asset id it receives is the one the host scoped the call to (the guest
+// cannot name one — see pkg/extension opAssetGetConfig). It still refuses any
+// asset whose type the extension does not register: a tool or action reaching
+// this with a builtin or another extension's asset is a host-side mis-scoping,
+// and serving it would hand that asset's config — credentials included — to an
+// extension that has no claim on it.
 type assetConfigGetter struct {
-	ext *Extension
+	ext     *Extension
+	extName string
 }
 
 func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	asset, err := g.ext.service.GetHostAssetConfig(ctx, assetID)
+	caller, asset, err := ownedAsset(ctx, g.ext.service, g.extName, assetID)
 	if err != nil {
-		return nil, fmt.Errorf("asset %d not found: %w", assetID, err)
+		return nil, err
 	}
 	if asset.Config == "" {
 		return json.RawMessage("{}"), nil
 	}
 
-	bridge := g.ext.service.Bridge()
-	ext := bridge.GetExtensionByAssetType(asset.Type)
-	if ext != nil {
-		zap.L().Info("extension accessed asset config",
-			zap.String("extension", ext.Name),
-			zap.Int64("asset_id", assetID),
-			zap.String("asset_type", asset.Type),
-			zap.Bool("plaintext_allowed", ext.Manifest.CheckCredentialRead() == nil),
-		)
-	}
+	zap.L().Info("extension accessed asset config",
+		zap.String("extension", caller.Name),
+		zap.Int64("asset_id", assetID),
+		zap.String("asset_type", asset.Type),
+		zap.Bool("plaintext_allowed", caller.Manifest.CheckCredentialRead() == nil),
+	)
 
-	raw := json.RawMessage(asset.Config)
-	return decryptConfigPasswordFields(raw, asset.Type, bridge)
+	return decryptConfigPasswordFields(json.RawMessage(asset.Config), asset.Type, caller)
+}
+
+// ownedAsset loads assetID on behalf of extName and confirms the asset's type is
+// one extName itself registers. Every path that hands an asset — or its config —
+// to an extension goes through here, so "which extension may see this asset" is
+// answered once, by the asset's stored type rather than by whoever asked.
+func ownedAsset(ctx context.Context, svc *extension_svc.Service, extName string, assetID int64) (*extension.Extension, *extension_svc.HostAssetConfig, error) {
+	caller := svc.Bridge().Get(extName)
+	if caller == nil {
+		return nil, nil, fmt.Errorf("extension %q not loaded", extName)
+	}
+	asset, err := svc.GetHostAssetConfig(ctx, assetID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
+	}
+	if assetTypeDef(caller.Manifest, asset.Type) == nil {
+		return nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
+	}
+	return caller, asset, nil
+}
+
+// assetTypeDef returns the manifest's declaration of assetType, nil when the
+// extension does not register it.
+func assetTypeDef(m *extension.Manifest, assetType string) *extension.AssetTypeDef {
+	for i := range m.AssetTypes {
+		if m.AssetTypes[i].Type == assetType {
+			return &m.AssetTypes[i]
+		}
+	}
+	return nil
 }
 
 // fileDialogOpener implements extension.FileDialogOpener
@@ -125,45 +158,35 @@ func (h *actionEventHandler) OnActionEvent(invocationID, eventType string, data 
 	return nil
 }
 
-// getDecryptedExtConfig returns the asset config with password fields decrypted.
-func getDecryptedExtConfig(assetID int64, svc *extension_svc.Service, bridge *extension.Bridge) (string, error) {
+// getDecryptedExtConfig returns the config of an asset extName owns, with
+// password fields decrypted per extName's credentials capability.
+func getDecryptedExtConfig(svc *extension_svc.Service, extName string, assetID int64) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	asset, err := svc.GetHostAssetConfig(ctx, assetID)
+	owner, asset, err := ownedAsset(ctx, svc, extName, assetID)
 	if err != nil {
-		return "", fmt.Errorf("asset %d not found: %w", assetID, err)
+		return "", err
 	}
 	if asset.Config == "" {
 		return "{}", nil
 	}
-	raw := json.RawMessage(asset.Config)
-	decrypted, err := decryptConfigPasswordFields(raw, asset.Type, bridge)
+	decrypted, err := decryptConfigPasswordFields(json.RawMessage(asset.Config), asset.Type, owner)
 	if err != nil {
 		return "", err
 	}
 	return string(decrypted), nil
 }
 
-// decryptConfigPasswordFields decrypts fields marked as format:"password" in the configSchema.
-func decryptConfigPasswordFields(raw json.RawMessage, assetType string, bridge *extension.Bridge) (json.RawMessage, error) {
-	if bridge == nil {
+// decryptConfigPasswordFields decrypts the fields assetType's configSchema marks
+// format:"password". Whether the plaintext or an opaque handle comes back is
+// decided by ext — the extension the config is being handed to, which
+// ownedAsset has already confirmed registers assetType.
+func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
+	def := assetTypeDef(ext.Manifest, assetType)
+	if def == nil || len(def.ConfigSchema) == 0 {
 		return raw, nil
 	}
-	ext := bridge.GetExtensionByAssetType(assetType)
-	if ext == nil {
-		return raw, nil
-	}
-	schema := ext.Manifest.AssetTypes[0].ConfigSchema
-	for _, at := range ext.Manifest.AssetTypes {
-		if at.Type == assetType {
-			schema = at.ConfigSchema
-			break
-		}
-	}
-	if len(schema) == 0 {
-		return raw, nil
-	}
-	passwordFields := extension.PasswordFieldsFromSchema(schema)
+	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil
 	}

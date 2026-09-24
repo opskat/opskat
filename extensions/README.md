@@ -64,7 +64,7 @@ Each one is enforced at the host call it guards: `fs` patterns are absolute path
 prefixes (`${EXT_DIR}` resolves to the installed extension's directory), the `http`
 allowlist is matched as a URL prefix and private/loopback destinations are refused
 unless `tunnel` is also granted, and `credentials: "read"` is what lets
-`GetAssetConfig` return decrypted password fields.
+`ctx.AssetConfig()` return decrypted password fields.
 
 **Everything else is answered by the module itself**, through `describe()`. You never
 write that answer: the SDK derives it from the registration calls, so the host's view
@@ -137,7 +137,10 @@ refuses the `describe()` answer. Policy, approval and grant are all keyed on the
 target, so a second asset id supplied in the arguments would reach an asset the user
 never granted — there is no "the flag wins" case to reason about.
 
-`ctx.AssetConfig()` fails when the call is not scoped to an asset. That happens for
+`ctx.AssetConfig()` only ever reads the call's own asset, and only when that asset's
+type is one this extension registers; there is no by-id lookup, so an extension cannot
+read a builtin asset or another extension's. It fails when the call is not scoped to an
+asset. That happens for
 the one caller that legitimately has none: the asset configuration form runs an
 extension **action** (`test_connection`) on a configuration that has not been saved
 yet. An extension page that *does* work on a saved asset passes its `assetId` prop —

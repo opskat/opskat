@@ -13,6 +13,10 @@ type HostProvider interface {
 	// OpenIO opens a stream. The runtime registers the returned resource in the
 	// calling invocation's handle table and closes it when that call ends.
 	OpenIO(params IOOpenParams) (*IOResource, error)
+	// GetAssetConfig returns the config of assetID, which is always the asset
+	// the runtime scoped the current invocation to — never a guest-supplied id.
+	// Implementations must still refuse an asset whose type the extension does
+	// not register.
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
 	FileDialog(dialogType string, opts DialogOptions) (string, error)
 	Log(level, msg string)

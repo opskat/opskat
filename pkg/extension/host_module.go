@@ -179,14 +179,30 @@ func opKVSet(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	return nil, env.host.KVSet(p.Key, p.Value)
 }
 
+// opAssetGetConfig returns the config of the asset the host scoped this call to.
+//
+// It takes no asset id. The asset is named by the host in the call envelope —
+// for a tool it is the exec target the policy was checked against — so letting
+// the guest name one would let any extension read any asset, builtin ones and
+// other extensions' included. A guest that still sends asset_id (an SDK from
+// before this rule) is refused rather than silently served its own asset, so
+// the mismatch surfaces instead of returning the wrong config.
 func opAssetGetConfig(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	var p struct {
-		AssetID int64 `json:"asset_id"`
+		AssetID *int64 `json:"asset_id"`
 	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, err
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
 	}
-	return env.host.GetAssetConfig(p.AssetID)
+	if p.AssetID != nil {
+		return nil, fmt.Errorf("asset.get_config takes no asset_id: it returns the config of the asset this call is scoped to")
+	}
+	if env.inv.asset == nil || env.inv.asset.ID == 0 {
+		return nil, fmt.Errorf("asset.get_config: this call is not scoped to an asset, so it has no config to read")
+	}
+	return env.host.GetAssetConfig(env.inv.asset.ID)
 }
 
 func opFileDialog(env hostCallEnv, params json.RawMessage) ([]byte, error) {

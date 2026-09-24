@@ -30,6 +30,10 @@ type ToolContext struct {
 // AssetConfig returns the configuration of the asset this call runs against,
 // with password fields decrypted when the extension declares
 // capabilities.credentials="read".
+//
+// It is the only way to read an asset config: the host serves the asset it
+// scoped the call to, and only when that asset's type is one this extension
+// registers. There is no by-id lookup — an extension cannot read another asset.
 func (ctx *ToolContext) AssetConfig() (json.RawMessage, error) {
 	return assetConfig(ctx.Asset, "tool "+ctx.Tool)
 }

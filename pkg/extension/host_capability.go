@@ -4,8 +4,9 @@ package extension
 // capHost decorates a HostProvider with per-call capability enforcement.
 //
 // Only OpenIO needs a decision — everything else is already scoped to the
-// extension by construction (KV is namespaced per extension, asset config goes
-// through the credentials capability upstream). Embedding the inner provider
+// extension by construction (KV is namespaced per extension; asset config is
+// only ever the invocation's own asset, and the provider refuses one whose type
+// the extension does not register and applies its credentials capability). Embedding the inner provider
 // keeps this file a single middleware instead of a pass-through for every
 // method the interface happens to have.
 type capHost struct {

@@ -50,8 +50,10 @@ func (e *Extension) NewHostProvider(extName string) interface{} {
 // AssetConfigGetter / FileDialogOpener / KVStore / ActionEventHandler / TunnelDialer 暴露给 main.go
 // 作为 extension.NewDefaultHostProvider 的依赖。
 
-// NewAssetConfigGetter 返回 assetConfigGetter 实例。
-func (e *Extension) NewAssetConfigGetter() *assetConfigGetter { return &assetConfigGetter{ext: e} }
+// NewAssetConfigGetter 为指定扩展返回 assetConfigGetter：只服务该扩展自己注册的资产类型。
+func (e *Extension) NewAssetConfigGetter(extName string) *assetConfigGetter {
+	return &assetConfigGetter{ext: e, extName: extName}
+}
 
 // NewFileDialogOpener 返回 fileDialogOpener 实例。
 func (e *Extension) NewFileDialogOpener() *fileDialogOpener { return &fileDialogOpener{ctx: e.ctx} }

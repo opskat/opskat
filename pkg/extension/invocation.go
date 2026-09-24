@@ -21,10 +21,20 @@ type invocation struct {
 	id     string
 	io     *IOHandleManager
 	cancel *ActionCancellation // nil for calls that are not actions
+	// asset is the asset the host scoped this call to (nil when unscoped). It is
+	// the only asset whose config the guest may read: the id is the host's, never
+	// the guest's.
+	asset *AssetRef
 }
 
 func newInvocation(id string, cancel *ActionCancellation) *invocation {
 	return &invocation{id: id, io: NewIOHandleManager(), cancel: cancel}
+}
+
+// scopedTo records the asset the host scoped this call to.
+func (inv *invocation) scopedTo(asset *AssetRef) *invocation {
+	inv.asset = asset
+	return inv
 }
 
 // close releases everything the guest left open.

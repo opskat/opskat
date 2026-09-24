@@ -172,8 +172,11 @@ func (w *wasmHostCaller) IOSetDeadline(handleID uint32, kind string, unixNanos i
 	return err
 }
 
-func (w *wasmHostCaller) AssetGetConfig(assetID int64) (json.RawMessage, error) {
-	return call("asset.get_config", map[string]any{"asset_id": assetID})
+// AssetGetConfig sends no id: the host answers with the config of the asset it
+// scoped this call to and refuses any id the guest names. assetID is only what
+// TestHost keys its configs by.
+func (w *wasmHostCaller) AssetGetConfig(_ int64) (json.RawMessage, error) {
+	return call("asset.get_config", map[string]any{})
 }
 
 func (w *wasmHostCaller) FileDialog(params []byte) (string, error) {
