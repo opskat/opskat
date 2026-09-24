@@ -281,6 +281,42 @@ describe("RedisConfigSection 自动识别:模式切换 / 哨兵组读取 / 补�
     expect(await screen.findByTestId("redis-complete-sentinels-button")).toBeInTheDocument();
   });
 
+  it("改选另一组且读取失败时,不再显示上一组的补全提示", async () => {
+    const user = userEvent.setup();
+    const groups = [
+      { name: "groupA", masterAddr: "10.20.0.10:6379", replicas: 1 },
+      { name: "groupB", masterAddr: "10.20.0.20:6379", replicas: 2 },
+    ];
+    vi.mocked(RedisProbe).mockImplementation(async (_id, configJSON) => {
+      if (configJSON.includes('"master_name":"groupA"')) throw new Error("dial tcp: connection refused");
+      const groupB = configJSON.includes('"master_name":"groupB"');
+      return {
+        modeMismatch: false,
+        sentinel: {
+          authRequired: false,
+          groups,
+          masterAddr: groupB ? "10.20.0.20:6379" : "",
+          otherSentinels: groupB ? ["10.20.0.33:26379"] : [],
+        },
+      } as never;
+    });
+    render(<RedisConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+    await user.click(screen.getByTestId("redis-mode-sentinel"));
+    await user.type(screen.getByTestId("redis-nodes-textarea"), "10.20.0.31:26379");
+    await user.click(screen.getByTestId("redis-read-sentinel-button"));
+
+    await user.click(await screen.findByText("groupB"));
+    expect(await screen.findByTestId("redis-complete-sentinels-button")).toBeInTheDocument();
+
+    await user.click(screen.getByText("groupA"));
+    await waitFor(() =>
+      expect(vi.mocked(RedisProbe).mock.calls.some(([, cfg]) => cfg.includes('"master_name":"groupA"'))).toBe(true)
+    );
+    await waitFor(() => expect(screen.getByTestId("redis-read-sentinel-button")).toBeEnabled());
+    expect(screen.getByTestId("redis-master-name-input")).toHaveValue("groupA");
+    expect(screen.queryByTestId("redis-complete-sentinels-button")).not.toBeInTheDocument();
+  });
+
   it("生成映射:把未映射的不可达地址填入左侧,右侧留空;已列出的地址不重复追加", async () => {
     const user = userEvent.setup();
     vi.mocked(RedisProbe).mockResolvedValue({

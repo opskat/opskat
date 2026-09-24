@@ -416,7 +416,9 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                       onClick={() => {
                         patchFn({ masterName: g.name });
                         // 选中的组名要重新探测,后端才会针对该组补上 masterAddr/otherSentinels
-                        // (readSentinel 只在收到 masterName 时才为该组计算补全列表)。
+                        // (readSentinel 只在收到 masterName 时才为该组计算补全列表)。上一次探测
+                        // 的补全列表属于别的组,探测进行中或失败时都不能再显示。
+                        setLastProbe(null);
                         void runRecognitionProbe({ ...s, masterName: g.name });
                       }}
                       className={cn(
