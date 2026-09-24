@@ -53,7 +53,7 @@ function buildProbeRequest(state: RedisFormState, cred: UseAssetCredential) {
   const configJSON = buildRedisConfig(
     state,
     resolveTestCredential(cred.value),
-    false,
+    true,
     state.proxyPassword,
     Object.fromEntries(
       state.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
@@ -133,20 +133,10 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
-    buildTest: async (s) => ({
-      assetType: "redis",
-      configJSON: buildRedisConfig(
-        s,
-        resolveTestCredential(cred.value),
-        true,
-        s.proxyPassword,
-        Object.fromEntries(
-          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-        ),
-        resolveTestSentinelPassword(s)
-      ),
-      password: cred.value.password,
-    }),
+    buildTest: async (s) => {
+      const req = buildProbeRequest(s, cred);
+      return { assetType: "redis", configJSON: req.configJSON, password: req.password };
+    },
     deps: [cred.value],
   });
 
@@ -261,13 +251,14 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     [startTest]
   );
 
-  useEffect(
-    () => () => {
+  // StrictMode 开发态会卸载再挂载同一实例:挂载时重置为 true,否则卸载清理后探测结果全被丢弃。
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       activeAttemptRef.current?.cancel();
-    },
-    []
-  );
+    };
+  }, []);
 
   const mismatchBanner = (s: RedisFormState) => {
     if (!lastProbe?.modeMismatch) return null;

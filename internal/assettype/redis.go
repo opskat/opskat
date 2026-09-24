@@ -135,11 +135,14 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
 	}
+	prevMode := cfg.EffectiveMode()
 	if v := ArgString(args, "mode"); v != "" {
 		cfg.Mode = v
 	}
 	if v := ArgStringSlice(args, "nodes"); len(v) > 0 {
 		cfg.Nodes = v
+	} else if cfg.EffectiveMode() != prevMode {
+		cfg.Nodes = nil // 集群种子节点与哨兵节点含义不同，切换模式须重新给出 nodes
 	}
 	if v := ArgString(args, "master_name"); v != "" {
 		cfg.MasterName = v

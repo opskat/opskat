@@ -20,3 +20,12 @@ export function toastRedisDeleteFailures(t: Translate, result: redis_svc.RedisDe
     { description: failed.map((f) => `${f.key}: ${f.error}`).join("\n") }
   );
 }
+
+/**
+ * Whether `key` is gone after a RedisDeleteKeys call: true unless the key is listed as failed.
+ * `deleted` is Redis's DEL count, so a key removed elsewhere after the scan counts 0 without
+ * failing — it is still gone and must leave the list.
+ */
+export function redisKeyDeleted(result: redis_svc.RedisDeleteResult, key: string): boolean {
+  return !(result.failed ?? []).some((f) => f.key === key);
+}

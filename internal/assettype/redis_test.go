@@ -103,6 +103,18 @@ func TestRedisHandler(t *testing.T) {
 			convey.So(h.SafeView(a)["nodes"], convey.ShouldBeNil)
 		})
 
+		convey.Convey("ApplyUpdateArgs 在集群/哨兵之间切换且未给 nodes 时不沿用旧模式的节点", func() {
+			a := &asset_entity.Asset{Name: "cache", Type: "redis", Status: 1}
+			convey.So(a.SetRedisConfig(&asset_entity.RedisConfig{
+				Mode: asset_entity.RedisModeSentinel, Nodes: []string{"10.0.0.1:26379"}, MasterName: "mymaster",
+			}), convey.ShouldBeNil)
+			err := h.ApplyUpdateArgs(context.Background(), a, map[string]any{"mode": "cluster"})
+			convey.So(err, convey.ShouldBeNil)
+			cfg, _ := a.GetRedisConfig()
+			convey.So(cfg.Nodes, convey.ShouldBeEmpty)
+			convey.So(a.Validate(), convey.ShouldNotBeNil)
+		})
+
 		convey.Convey("ApplyCreateArgs 哨兵模式加密 sentinel_password", func() {
 			a := &asset_entity.Asset{Type: "redis"}
 			err := h.ApplyCreateArgs(context.Background(), a, map[string]any{

@@ -245,8 +245,9 @@ Flags:
                   sentinel: a db index, defaulting to the asset's configured
                   db; SELECT is always rejected. Cluster: a node "host:port"
                   the command runs on, required for commands that have no key
-                  to route by (PING/ECHO/TIME/COMMAND/CLUSTER run on any node
-                  when scope is omitted; a keyed command routes by slot and
+                  to route by (PING/ECHO/TIME/COMMAND and CLUSTER INFO/NODES/
+                  SLOTS/SHARDS/KEYSLOT run on any node when scope is
+                  omitted; a keyed command routes by slot and
                   ignores scope). Missing/invalid scope on a cluster command
                   that needs one exits 1 and lists the current master
                   addresses on stderr.

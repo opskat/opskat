@@ -7,9 +7,10 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/opskat/opskat/internal/connpool"
 )
 
 // RedisNodeRequiredError 表示集群模式下一条不带 key 的命令没有指定有效节点：scope 缺省、
@@ -49,17 +50,27 @@ const (
 )
 
 // isNodeIndependentRedisCommand 判断命令结果与执行节点无关（任一节点执行都等价）。
-func isNodeIndependentRedisCommand(name string) bool {
-	switch strings.ToUpper(name) {
-	case "PING", "ECHO", "TIME", "COMMAND", "CLUSTER":
+// CLUSTER 只有读取全局拓扑 / 计算 slot 的子命令与节点无关；其余子命令只作用于收到它的
+// 节点（RESET、FORGET、FAILOVER）或只在 slot 所在节点有数据（COUNTKEYSINSLOT），须指定节点。
+func isNodeIndependentRedisCommand(args []string) bool {
+	switch strings.ToUpper(args[0]) {
+	case "PING", "ECHO", "TIME", "COMMAND":
 		return true
+	case "CLUSTER":
+		if len(args) < 2 {
+			return false
+		}
+		switch strings.ToUpper(args[1]) {
+		case "INFO", "NODES", "SLOTS", "SHARDS", "KEYSLOT":
+			return true
+		}
 	}
 	return false
 }
 
 // execClusterArgs 按集群路由规则执行一条命令：
 //  1. SELECT 一律拒绝（集群只有 db0）；
-//  2. 与节点无关的命令：scope 给了就在该节点执行，否则由任一可用主节点执行；
+//  2. 与节点无关的命令（见 isNodeIndependentRedisCommand）：scope 给了就在该节点执行，否则由任一可用主节点执行；
 //  3. 命令含 key：按 slot 路由，忽略 scope；
 //  4. 其余无 key 命令：必须用 scope 指定集群中的节点，否则返回 *RedisNodeRequiredError。
 //
@@ -70,7 +81,7 @@ func execClusterArgs(ctx context.Context, r redisClusterRouter, args []string, s
 		return "", fmt.Errorf("SELECT is not supported: a Redis cluster has only db0")
 	}
 
-	if isNodeIndependentRedisCommand(name) {
+	if isNodeIndependentRedisCommand(args) {
 		if scope != "" {
 			return execOnScopedNode(ctx, r, args, scope)
 		}
@@ -179,38 +190,17 @@ func (c clusterRouter) DoByKey(ctx context.Context, args []string, keyPos int) (
 }
 
 func (c clusterRouter) Masters(ctx context.Context) ([]string, error) {
-	var mu sync.Mutex
-	var addrs []string
-	err := c.client.ForEachMaster(ctx, func(_ context.Context, node *redis.Client) error {
-		mu.Lock()
-		addrs = append(addrs, node.Options().Addr)
-		mu.Unlock()
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	slices.Sort(addrs)
-	return addrs, nil
+	return connpool.RedisClusterNodeAddrs(ctx, c.client, true)
 }
 
 func (c clusterRouter) DoOnNode(ctx context.Context, addr string, args []string) (any, bool, error) {
-	var mu sync.Mutex
-	var target *redis.Client
-	err := c.client.ForEachShard(ctx, func(_ context.Context, node *redis.Client) error {
-		if node.Options().Addr == addr {
-			mu.Lock()
-			target = node
-			mu.Unlock()
-		}
-		return nil
-	})
+	node, err := connpool.RedisClusterNode(ctx, c.client, addr)
 	if err != nil {
 		return nil, false, err
 	}
-	if target == nil {
+	if node == nil {
 		return nil, false, nil
 	}
-	result, err := target.Do(ctx, toRedisArgs(args)...).Result()
+	result, err := node.Do(ctx, toRedisArgs(args)...).Result()
 	return result, true, err
 }

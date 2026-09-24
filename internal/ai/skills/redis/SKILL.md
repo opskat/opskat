@@ -30,8 +30,10 @@ Each command is routed as follows:
    that owns the key's slot; `scope` is ignored. Multi-key commands whose keys
    hash to different slots fail with Redis's `CROSSSLOT` error — use hash tags
    (`{user:1}:a`, `{user:1}:b`) or run them one key at a time.
-2. `PING`, `ECHO`, `TIME`, `COMMAND …` and `CLUSTER …` run on any reachable node
-   when `scope` is omitted (or on the `scope` node when given).
+2. `PING`, `ECHO`, `TIME`, `COMMAND …` and `CLUSTER INFO|NODES|SLOTS|SHARDS|KEYSLOT`
+   run on any reachable node when `scope` is omitted (or on the `scope` node when
+   given). Other `CLUSTER` subcommands act on one node (`COUNTKEYSINSLOT`,
+   `RESET`, `FORGET`, `FAILOVER`, …) and need `scope` like rule 3.
 3. Every other keyless command (`SCAN`, `KEYS`, `DBSIZE`, `INFO`, `CONFIG GET`,
    `FLUSHDB`, …) only sees one node's data, so it **requires** `scope` set to a
    node, e.g. `scope: "10.0.0.2:7002"`. Without it (or with a db number / unknown

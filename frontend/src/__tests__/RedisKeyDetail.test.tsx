@@ -101,6 +101,19 @@ describe("RedisKeyDetail", () => {
     expect(useQueryStore.getState().redisStates["query-10"].selectedKey).toBe("user:1");
   });
 
+  it("clears the selection when the key no longer exists (DEL returned 0, nothing failed)", async () => {
+    vi.mocked(RedisDeleteKeys).mockResolvedValue({ deleted: 0, failed: [] } as unknown as redis_svc.RedisDeleteResult);
+
+    render(<RedisKeyDetail tabId="query-10" />);
+    fireEvent.click(screen.getByTitle("query.deleteKey"));
+    fireEvent.click(screen.getByRole("button", { name: "action.delete" }));
+
+    await waitFor(() => {
+      expect(useQueryStore.getState().redisStates["query-10"].selectedKey).not.toBe("user:1");
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("highlights JSON string values without wrapping long content out of the detail area", () => {
     useQueryStore.setState((s) => ({
       redisStates: {

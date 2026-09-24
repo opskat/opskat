@@ -251,11 +251,25 @@ func TestExecClusterArgs_NodeIndependentCommandRunsAnywhere(t *testing.T) {
 	}
 }
 
+// CLUSTER 子命令多数与节点相关（COUNTKEYSINSLOT 只在 slot 所在节点有数、RESET/FORGET/FAILOVER
+// 只作用于收到它的节点），不能交给任一主节点执行。
+func TestExecClusterArgs_NodeDependentClusterSubcommandNeedsScope(t *testing.T) {
+	for _, cmd := range [][]string{{"CLUSTER"}, {"CLUSTER", "COUNTKEYSINSLOT", "42"}, {"cluster", "reset"}, {"CLUSTER", "FORGET", "abc"}} {
+		fc := newFakeCluster()
+		_, err := execClusterArgs(context.Background(), fc, cmd, "")
+		var nodeErr *RedisNodeRequiredError
+		require.ErrorAs(t, err, &nodeErr, cmd)
+		assert.Empty(t, fc.calls, "nothing may execute on a random node: %v", cmd)
+	}
+}
+
 func TestExecClusterArgs_NodeIndependentCommandHonoursScope(t *testing.T) {
 	fc := newFakeCluster()
-	out, err := execClusterArgs(context.Background(), fc, []string{"CLUSTER", "MYID"}, "10.0.0.3:7003")
+	out, err := execClusterArgs(context.Background(), fc, []string{"CLUSTER", "NODES"}, "10.0.0.3:7003")
 	require.NoError(t, err)
-	assert.Equal(t, "10.0.0.3:7003", redisResultValue(t, out)["node"])
+	res := redisResultValue(t, out)
+	assert.Equal(t, "10.0.0.3:7003", res["node"])
+	assert.Equal(t, "scope", res["route"])
 }
 
 func TestExecClusterArgs_KeylessCommandNeedsNodeScope(t *testing.T) {

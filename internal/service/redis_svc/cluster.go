@@ -14,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -369,39 +370,18 @@ type goRedisClusterExecutor struct {
 }
 
 func (e *goRedisClusterExecutor) ShardAddrs(ctx context.Context) ([]string, error) {
-	var mu sync.Mutex
-	var addrs []string
-	err := e.cluster.ForEachShard(ctx, func(_ context.Context, node *redis.Client) error {
-		mu.Lock()
-		addrs = append(addrs, node.Options().Addr)
-		mu.Unlock()
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	slices.Sort(addrs)
-	return addrs, nil
+	return connpool.RedisClusterNodeAddrs(ctx, e.cluster, false)
 }
 
 func (e *goRedisClusterExecutor) DoOnNode(ctx context.Context, addr string, args ...any) (any, error) {
-	var mu sync.Mutex
-	var target *redis.Client
-	err := e.cluster.ForEachShard(ctx, func(_ context.Context, node *redis.Client) error {
-		if node.Options().Addr == addr {
-			mu.Lock()
-			target = node
-			mu.Unlock()
-		}
-		return nil
-	})
+	node, err := connpool.RedisClusterNode(ctx, e.cluster, addr)
 	if err != nil {
 		return nil, err
 	}
-	if target == nil {
+	if node == nil {
 		return nil, fmt.Errorf("%s: %w", addr, errUnknownClusterNode)
 	}
-	return e.run(ctx, target, args)
+	return e.run(ctx, node, args)
 }
 
 func (e *goRedisClusterExecutor) MasterForKey(ctx context.Context, key string) (string, error) {

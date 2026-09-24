@@ -326,6 +326,24 @@ describe("RedisKeyBrowser", () => {
     expect(screen.getByText("common:user:1")).toBeInTheDocument();
   });
 
+  it("drops a key that no longer exists (DEL returned 0, nothing failed) from the list", async () => {
+    // The key was removed elsewhere after the scan: DEL counts 0 but reports no failure, so the
+    // stale row must go away instead of lingering until the next rescan.
+    vi.mocked(RedisDeleteKeys).mockResolvedValue({ deleted: 0, failed: [] } as unknown as redis_svc.RedisDeleteResult);
+
+    render(<RedisKeyBrowser tabId="query-10" />);
+    fireEvent.click(screen.getByTitle("query.listView"));
+
+    fireEvent.contextMenu(screen.getByText("common:user:1"));
+    fireEvent.click(screen.getByText("query.deleteKey"));
+    fireEvent.click(screen.getByRole("button", { name: "action.delete" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("common:user:1")).not.toBeInTheDocument();
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("copies the selected key name with Ctrl/Cmd+C", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });

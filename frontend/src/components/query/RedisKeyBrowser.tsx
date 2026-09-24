@@ -45,7 +45,7 @@ import {
 } from "@/lib/redisKeyTree";
 import { RedisDeleteKeys } from "../../../wailsjs/go/redis/Redis";
 import { RedisCreateKeyDialog } from "./RedisCreateKeyDialog";
-import { toastRedisDeleteFailures } from "@/lib/redisDelete";
+import { redisKeyDeleted, toastRedisDeleteFailures } from "@/lib/redisDelete";
 
 interface RedisKeyBrowserProps {
   tabId: string;
@@ -515,7 +515,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     try {
       const result = await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [deleteTarget]);
       toastRedisDeleteFailures(t, result);
-      if (result.deleted > 0) {
+      if (redisKeyDeleted(result, deleteTarget)) {
         removeKey(tabId, deleteTarget);
       }
       loadDbKeyCounts(tabId);

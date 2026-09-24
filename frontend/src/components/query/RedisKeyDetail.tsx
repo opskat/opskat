@@ -12,7 +12,7 @@ import { RedisStringEditor } from "@/components/query/RedisStringEditor";
 import { RedisCollectionTable } from "@/components/query/RedisCollectionTable";
 import { RedisStreamViewer } from "@/components/query/RedisStreamViewer";
 import { parseRedisCommandLine } from "@/lib/redisCommand";
-import { toastRedisDeleteFailures } from "@/lib/redisDelete";
+import { redisKeyDeleted, toastRedisDeleteFailures } from "@/lib/redisDelete";
 
 interface RedisKeyDetailProps {
   tabId: string;
@@ -163,7 +163,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     try {
       const result = await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [state.selectedKey]);
       toastRedisDeleteFailures(t, result);
-      if (result.deleted > 0) {
+      if (redisKeyDeleted(result, state.selectedKey)) {
         removeKey(tabId, state.selectedKey);
       }
       loadDbKeyCounts(tabId);

@@ -152,7 +152,7 @@ real type, never from a flag or verb name.
   - **cluster**: a node `host:port` the command runs on. A command with a
     key routes by slot to its owning master and ignores `--scope` (the
     result notes which node actually ran it); a node-independent command
-    (`PING`, `ECHO`, `TIME`, `COMMAND ...`, `CLUSTER ...`) runs on any node
+    (`PING`, `ECHO`, `TIME`, `COMMAND ...`, `CLUSTER INFO|NODES|SLOTS|SHARDS|KEYSLOT`) runs on any node
     when `--scope` is omitted; every other keyless command **requires**
     `--scope` — a missing or invalid one (not a node of this cluster, or a
     db index) exits 1 and lists the current master addresses on stderr.

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createRef } from "react";
+import { createRef, StrictMode } from "react";
 import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
 import type { AssetFormHandle, AssetFormContext, SectionValidity } from "@/lib/assetTypes/formContract";
 import { asset_entity, redis_svc } from "../../../../wailsjs/go/models";
@@ -186,6 +186,22 @@ describe("RedisConfigSection 自动识别:模式切换 / 哨兵组读取 / 补�
 
     expect(screen.getByTestId("redis-nodes-textarea")).toHaveValue("10.20.0.11:6379");
     expect(screen.getByTestId("redis-mode-cluster")).toHaveAttribute("data-state", "active");
+  });
+
+  it("StrictMode(开发态双挂载)下探测结果仍会显示切换横幅", async () => {
+    vi.mocked(RedisProbe).mockResolvedValue({ modeMismatch: true, detectedMode: "cluster" } as never);
+    const ref = createRef<AssetFormHandle>();
+    const editAsset = new asset_entity.Asset({ Type: "redis", Config: '{"host":"10.20.0.11","port":6379}' });
+    render(
+      <StrictMode>
+        <RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+      </StrictMode>
+    );
+
+    await act(async () => {
+      await ref.current!.startTest!(ctx).result;
+    });
+    expect(await screen.findByTestId("redis-switch-mode-button")).toBeInTheDocument();
   });
 
   it("从哨兵读取:只有一个组且主节点名称为空时自动填入", async () => {
