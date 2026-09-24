@@ -23,6 +23,19 @@ export interface ExtAssetType {
   type: string;
   i18n: { name: string };
   configSchema?: Record<string, unknown>;
+  /** Host-owned connection settings the type supports; absent means none. */
+  connection?: ExtConnection;
+}
+
+/**
+ * The host-owned connection settings an asset type declares in describe(). The host
+ * renders and applies a declared item; the extension never reads it — the SSH tunnel
+ * is the asset's own `sshTunnelId`, outside its config.
+ */
+export interface ExtConnection {
+  sshTunnel?: boolean;
+  proxyChain?: boolean;
+  tls?: boolean;
 }
 
 export interface ExtToolDef {

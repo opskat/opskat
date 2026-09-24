@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -191,7 +192,32 @@ type AssetTypeDef struct {
 	Type         string         `json:"type"`
 	I18n         I18nName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
-	ProxyChain   bool           `json:"proxyChain,omitempty"` // opt in; false keeps the asset direct
+	Connection   *ConnectionDef `json:"connection,omitempty"`
+}
+
+// ConnectionDef is the subset of the host-owned connection settings an asset
+// type supports. The host renders a declared item in the asset form and detail
+// card and applies it when dialing the asset's endpoint; an undeclared item is
+// neither shown nor applied. The extension never reads these settings — the SSH
+// tunnel is the asset's own SSHTunnelID column, outside its config.
+type ConnectionDef struct {
+	SSHTunnel  bool `json:"sshTunnel,omitempty"`
+	ProxyChain bool `json:"proxyChain,omitempty"`
+	TLS        bool `json:"tls,omitempty"`
+}
+
+// UnmarshalJSON refuses an item the host does not own: silently dropping it would
+// load an extension whose author believes a setting is applied when it is not.
+func (c *ConnectionDef) UnmarshalJSON(data []byte) error {
+	type plain ConnectionDef
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var v plain
+	if err := dec.Decode(&v); err != nil {
+		return fmt.Errorf("connection (supported items: sshTunnel, proxyChain, tls): %w", err)
+	}
+	*c = ConnectionDef(v)
+	return nil
 }
 
 // AssetTypeDef returns the declaration of assetType, nil when the extension does

@@ -70,7 +70,7 @@ type assetTypeEntry struct {
 	typ        string
 	name       string
 	schema     map[string]any
-	proxyChain bool
+	connection *Connection
 }
 
 type policyGroupEntry struct {
@@ -213,9 +213,26 @@ func (r *AssetTypeReg) Name(name string) *AssetTypeReg {
 	return r
 }
 
-// ProxyChain opts the asset type into the host's SSH proxy chain.
-func (r *AssetTypeReg) ProxyChain() *AssetTypeReg {
-	r.e.proxyChain = true
+// Connection names the host-owned connection settings the asset type supports.
+//
+// The host owns these settings: it shows a declared item in the asset form and
+// detail card and applies it whenever the extension opens a connection to the
+// asset's endpoint. The extension never reads or handles them — they are not
+// part of the config struct. An item left out is neither shown nor applied.
+type Connection struct {
+	// SSHTunnel routes connections to the endpoint through an SSH asset the user
+	// picks on the asset.
+	SSHTunnel bool `json:"sshTunnel,omitempty"`
+	// ProxyChain routes connections through the asset's proxy chain.
+	ProxyChain bool `json:"proxyChain,omitempty"`
+	// TLS applies the asset's TLS settings (verification, server name, CA,
+	// client certificate) to connections.
+	TLS bool `json:"tls,omitempty"`
+}
+
+// Connection declares the host-owned connection settings the asset type supports.
+func (r *AssetTypeReg) Connection(c Connection) *AssetTypeReg {
+	r.e.connection = &c
 	return r
 }
 

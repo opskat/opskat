@@ -47,7 +47,7 @@ func (e *Extension) NewHostProvider(extName string) interface{} {
 	return nil
 }
 
-// AssetConfigGetter / FileDialogOpener / KVStore / ActionEventHandler / TunnelDialer 暴露给 main.go
+// AssetConfigGetter / FileDialogOpener / KVStore / ActionEventHandler / AssetDialer 暴露给 main.go
 // 作为 extension.NewDefaultHostProvider 的依赖。
 
 // NewAssetConfigGetter 为指定扩展返回 assetConfigGetter：只服务该扩展自己注册的资产类型。
@@ -66,8 +66,10 @@ func (e *Extension) NewActionEventHandler(extName string) *actionEventHandler {
 	return &actionEventHandler{ctx: e.ctx, extName: extName}
 }
 
-// NewTunnelDialer 返回 tunnelDialer 实例。
-func (e *Extension) NewTunnelDialer() *tunnelDialer { return &tunnelDialer{pool: e.pool} }
+// NewAssetDialer 为指定扩展返回 assetDialer：解析该扩展资产声明的连接路径（SSH 隧道）。
+func (e *Extension) NewAssetDialer(extName string) *assetDialer {
+	return &assetDialer{ext: e, extName: extName}
+}
 
 // Startup 异步初始化扩展系统（WASM 编译较慢，单独协程跑）。
 func (e *Extension) Startup(ctx context.Context) {

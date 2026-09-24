@@ -36,7 +36,7 @@ type descAssetType struct {
 	Type         string         `json:"type"`
 	I18n         descName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
-	ProxyChain   bool           `json:"proxyChain,omitempty"`
+	Connection   *Connection    `json:"connection,omitempty"`
 }
 
 type descTool struct {
@@ -113,7 +113,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 			Type:         at.typ,
 			I18n:         descName{Name: at.name},
 			ConfigSchema: at.schema,
-			ProxyChain:   at.proxyChain,
+			Connection:   at.connection,
 		})
 	}
 

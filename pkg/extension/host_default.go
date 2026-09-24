@@ -8,12 +8,21 @@ import (
 	"net"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 )
 
-// TunnelDialer dials a TCP address through an SSH tunnel.
-type TunnelDialer interface {
-	Dial(tunnelAssetID int64, addr string) (net.Conn, error)
+// DialContextFunc opens a network connection, like net.Dialer.DialContext.
+type DialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// AssetDialer resolves the host-owned connection path (SSH tunnel; later proxy
+// chain and TLS) to an asset's endpoint. An implementation is scoped to one
+// extension and refuses an asset whose type that extension does not register.
+type AssetDialer interface {
+	// DialContextFor returns the dial function for assetID's connection
+	// settings, nil when the asset connects directly. An error means the path
+	// cannot be built; it must be returned, never downgraded to a direct dial.
+	DialContextFor(ctx context.Context, assetID int64) (DialContextFunc, error)
 }
 
 // Dependency interfaces for DefaultHostProvider
@@ -35,13 +44,12 @@ type ActionEventHandler interface {
 }
 
 type DefaultHostConfig struct {
-	Logger           *zap.Logger
-	AssetConfigs     AssetConfigGetter
-	FileDialogs      FileDialogOpener
-	KV               KVStore
-	ActionEvents     ActionEventHandler
-	TunnelDialer     TunnelDialer // SSH tunnel dialer (nil = no tunnel support)
-	AssetSSHTunnelID int64        // Current asset's SSH tunnel ID (0 = direct)
+	Logger       *zap.Logger
+	AssetConfigs AssetConfigGetter
+	FileDialogs  FileDialogOpener
+	KV           KVStore
+	ActionEvents ActionEventHandler
+	AssetDialer  AssetDialer // connection path of the invocation's asset (nil = always direct)
 }
 
 type DefaultHostProvider struct {
@@ -52,27 +60,50 @@ func NewDefaultHostProvider(cfg DefaultHostConfig) *DefaultHostProvider {
 	return &DefaultHostProvider{cfg: cfg}
 }
 
-func (h *DefaultHostProvider) OpenIO(_ context.Context, _ *AssetRef, params IOOpenParams) (*IOResource, error) {
+func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error) {
 	switch params.Type {
 	case "file":
 		return OpenFileResource(params.Path, params.Mode)
 	case "http":
-		var dial DialFunc
-		if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
-			tunnelID := h.cfg.AssetSSHTunnelID
-			dial = func(network, addr string) (net.Conn, error) {
-				return h.cfg.TunnelDialer.Dial(tunnelID, addr)
-			}
+		dial, err := h.assetDial(ctx, asset)
+		if err != nil {
+			return nil, err
 		}
-		return OpenHTTPResource(params, dial)
+		var httpDial DialFunc
+		if dial != nil {
+			// The transport has no per-request ctx to hand the dial; the
+			// invocation's ctx bounds the handle's lifetime anyway.
+			httpDial = func(network, addr string) (net.Conn, error) { return dial(ctx, network, addr) }
+		}
+		return OpenHTTPResource(params, httpDial)
 	case "tcp":
-		return h.openTCP(params)
+		dial, err := h.assetDial(ctx, asset)
+		if err != nil {
+			return nil, err
+		}
+		return openTCP(ctx, dial, params)
 	default:
 		return nil, fmt.Errorf("unknown IO type: %q", params.Type)
 	}
 }
 
-func (h *DefaultHostProvider) openTCP(params IOOpenParams) (*IOResource, error) {
+// assetDial resolves the connection path of the invocation's asset; nil means a
+// direct dial. A path that cannot be built fails the open — falling back to a
+// direct dial would silently bypass the tunnel the user configured.
+func (h *DefaultHostProvider) assetDial(ctx context.Context, asset *AssetRef) (DialContextFunc, error) {
+	if asset == nil || h.cfg.AssetDialer == nil {
+		return nil, nil
+	}
+	dial, err := h.cfg.AssetDialer.DialContextFor(ctx, asset.ID)
+	if err != nil {
+		logger.Ctx(ctx).Error("extension asset connection path failed",
+			zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))
+		return nil, fmt.Errorf("connection path of asset %q: %w", asset.Name, err)
+	}
+	return dial, nil
+}
+
+func openTCP(ctx context.Context, dial DialContextFunc, params IOOpenParams) (*IOResource, error) {
 	if params.Addr == "" {
 		return nil, fmt.Errorf("tcp: addr is required")
 	}
@@ -80,18 +111,12 @@ func (h *DefaultHostProvider) openTCP(params IOOpenParams) (*IOResource, error) 
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
-
-	var conn net.Conn
-	var err error
-	if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
-		// NOTE: params.Timeout is not honored on the tunnel path — TunnelDialer.Dial
-		// uses its own default dial timeout. Callers that need tighter control should
-		// set a deadline on the resulting handle via host_io_set_deadline.
-		conn, err = h.cfg.TunnelDialer.Dial(h.cfg.AssetSSHTunnelID, params.Addr)
-	} else {
-		dialer := &net.Dialer{Timeout: timeout}
-		conn, err = dialer.Dial("tcp", params.Addr)
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
 	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := dial(dialCtx, "tcp", params.Addr)
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,10 @@ type HostAssetConfig struct {
 	Name   string
 	Type   string
 	Config string
+	// SSHTunnelID is the SSH asset the user routes this asset's connections
+	// through (0 = direct). It lives on the asset, outside Config, so the
+	// extension never sees it.
+	SSHTunnelID int64
 }
 
 // GetHostAssetConfig returns only the asset fields available to host config handling.
@@ -21,7 +25,7 @@ func (s *Service) GetHostAssetConfig(ctx context.Context, assetID int64) (*HostA
 	if err != nil {
 		return nil, fmt.Errorf("find extension host asset %d: %w", assetID, err)
 	}
-	return &HostAssetConfig{Name: asset.Name, Type: asset.Type, Config: asset.Config}, nil
+	return &HostAssetConfig{Name: asset.Name, Type: asset.Type, Config: asset.Config, SSHTunnelID: asset.SSHTunnelID}, nil
 }
 
 // GetHostKV reads extension-scoped host data. A missing key is represented as a nil value.

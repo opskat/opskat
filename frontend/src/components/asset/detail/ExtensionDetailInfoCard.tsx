@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/InfoItem";
+import { DetailGrid, DetailSection, InfoItem, TunnelInfo } from "@/components/asset/detail/InfoItem";
 import { DISABLED_VALUE, ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "@/components/asset/detail/utils";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
 import type { ExtensionConfigSchema } from "@/extension/configSchema";
+import type { ExtConnection } from "@/extension/types";
 
 interface Options {
   /** 扩展显示名的 i18n key，与它自己的 `ext-<name>` 命名空间一起解析。 */
@@ -10,6 +11,8 @@ interface Options {
   ns: string;
   assetType: string;
   schema?: ExtensionConfigSchema;
+  /** 资产类型声明的宿主连接配置；未声明的项即使资产上有值也不展示（宿主同样不应用）。 */
+  connection?: ExtConnection;
 }
 
 /**
@@ -20,12 +23,13 @@ interface Options {
  * 需要一段只对扩展生效的内联渲染。
  */
 export function makeExtensionDetailInfoCard(opts: Options) {
-  function ExtensionDetailInfoCard({ asset }: DetailInfoCardProps) {
+  function ExtensionDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
     const { t } = useTranslation();
     const props = opts.schema?.properties ?? {};
     const order = opts.schema?.propertyOrder;
     const keys = order ? order.filter((k) => k in props) : Object.keys(props);
-    if (keys.length === 0) return null;
+    const tunnelName = opts.connection?.sshTunnel ? sshTunnelName(asset.sshTunnelId) : "";
+    if (keys.length === 0 && !tunnelName) return null;
 
     const parsed = parseDetailConfig<Record<string, unknown>>(asset.Config) ?? {};
     return (
@@ -53,6 +57,7 @@ export function makeExtensionDetailInfoCard(opts: Options) {
             );
           })}
         </DetailGrid>
+        {tunnelName && <TunnelInfo label={t("asset.sshTunnel")} name={tunnelName} />}
       </DetailSection>
     );
   }

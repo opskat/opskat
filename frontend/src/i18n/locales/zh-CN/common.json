@@ -392,6 +392,7 @@
     "formMissingSerialPort": "请填写串口路径。",
     "formMissingPath": "请填写数据库文件路径。",
     "formMissingSQLiteSSH": "请选择远程 SQLite 文件使用的 SSH 资产。",
+    "formMissingSSHTunnel": "请选择作为隧道的 SSH 资产。",
     "moveUp": "上移",
     "moveDown": "下移",
     "moveTop": "置顶",

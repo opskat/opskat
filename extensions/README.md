@@ -155,6 +155,25 @@ yet. An extension page that *does* work on a saved asset passes its `assetId` pr
 `api.callTool(ext, tool, args, assetId)` / `api.executeAction(ext, action, args,
 onEvent, assetId)` — and the handler reads it from `ctx.Asset` the same way.
 
+### Connection settings belong to the host
+
+Tunnels, proxy chains and TLS are not config fields you define and handle yourself.
+An asset type names the ones it supports, and the host shows them on the asset form
+and detail card and applies them when the extension dials the asset's endpoint:
+
+```go
+opskat.AssetType[esConfig]("es").Connection(opskat.Connection{SSHTunnel: true})
+```
+
+With `SSHTunnel` declared, the form offers the same SSH-asset picker built-in types
+use; the choice is stored on the asset, never in its config, so `ctx.AssetConfig()`
+and the config validator never see it. HTTP and TCP opens scoped to the asset are
+dialed through that tunnel, and an endpoint's hostname is resolved on the far side. If the tunnel
+cannot be reached, the open fails with the host's error; there is no fallback to a
+direct connection. An item left undeclared is neither shown nor applied, and the host
+refuses a `connection` item it does not know. (`ProxyChain` and `TLS` can already be
+declared, but the host does not apply them yet.)
+
 ### The policy face
 
 Every tool declares the action it requests through `.Policy(action)`. The host does

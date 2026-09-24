@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"time"
 
+	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
-	"github.com/opskat/opskat/internal/sshpool"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -224,25 +224,34 @@ func credentialHandleFor(extName, assetType, field, encrypted string) string {
 	return "cred_" + hex.EncodeToString(h[:8])
 }
 
-// tunnelDialer implements extension.TunnelDialer using the SSH pool
-type tunnelDialer struct {
-	pool *sshpool.Pool
+// assetDialer implements extension.AssetDialer for one extension.
+type assetDialer struct {
+	ext     *Extension
+	extName string
 }
 
-func (d *tunnelDialer) Dial(tunnelAssetID int64, addr string) (net.Conn, error) {
-	if d.pool == nil {
-		return nil, fmt.Errorf("SSH pool not initialized")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	client, err := d.pool.Get(ctx, tunnelAssetID)
+// DialContextFor resolves the connection path of an asset the extension owns.
+// Only the settings its asset type declares take effect: an SSH tunnel set on an
+// asset whose type does not declare connection.sshTunnel is ignored. The tunnel
+// is dialed through the same proxy-chain machinery built-in types use.
+func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, error) {
+	owner, asset, err := ownedAsset(ctx, d.ext.service, d.extName, assetID)
 	if err != nil {
-		return nil, fmt.Errorf("get SSH tunnel: %w", err)
+		return nil, err
 	}
-	conn, err := client.Dial("tcp", addr)
+	conn := owner.Manifest.AssetTypeDef(asset.Type).Connection
+	if conn == nil || !conn.SSHTunnel || asset.SSHTunnelID == 0 {
+		return nil, nil
+	}
+	chain := asset_entity.EffectiveProxyChain(nil, asset.SSHTunnelID, nil)
+	dial, err := connpool.ProxyChainDialContext(ctx, chain)
 	if err != nil {
-		d.pool.Release(tunnelAssetID)
-		return nil, fmt.Errorf("dial through tunnel: %w", err)
+		return nil, fmt.Errorf("resolve SSH tunnel (asset %d): %w", asset.SSHTunnelID, err)
 	}
-	return conn, nil
+	logger.Ctx(ctx).Info("extension asset connects through SSH tunnel",
+		zap.String("extension", d.extName),
+		zap.Int64("assetID", assetID),
+		zap.Int64("sshTunnelID", asset.SSHTunnelID),
+	)
+	return dial, nil
 }

@@ -392,6 +392,7 @@
     "formMissingSerialPort": "Enter a serial port path.",
     "formMissingPath": "Please specify the database file path.",
     "formMissingSQLiteSSH": "Select an SSH asset for the remote SQLite file.",
+    "formMissingSSHTunnel": "Select the SSH asset to tunnel through.",
     "moveUp": "Move Up",
     "moveDown": "Move Down",
     "moveTop": "Move to Top",

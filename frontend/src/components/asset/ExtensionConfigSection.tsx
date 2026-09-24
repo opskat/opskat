@@ -2,22 +2,30 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
+import { AssetSelect } from "@/components/asset/AssetSelect";
+import { Field, Segmented } from "@/components/asset/fields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import type { AssetFormContext, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
+import type { ExtConnection } from "@/extension/types";
 
 interface Options {
   extensionName: string;
   assetType: string;
   schema?: ExtensionConfigSchema;
   hasBackend: boolean;
+  /** 资产类型在 describe() 声明的宿主连接配置；只渲染、保存声明了的项。 */
+  connection?: ExtConnection;
 }
 
 interface ExtensionFormState {
   config: Record<string, unknown>;
   /** 编辑态要先拿到后端解密后的配置：资产上存的是密文，拿它回填/保存会把密文再加密一遍。 */
   status: "ready" | "loading" | "error";
+  /** 经 SSH 隧道连接；隧道资产存在资产的 sshTunnelId 列上，不进扩展能读到的 config。 */
+  tunnel: boolean;
+  sshTunnelId: number;
 }
 
 const STATUS_REASON: Record<ExtensionFormState["status"], string> = {
@@ -36,6 +44,7 @@ const STATUS_REASON: Record<ExtensionFormState["status"], string> = {
  */
 export function makeExtensionConfigSection(opts: Options) {
   const secrets = passwordFields(opts.schema);
+  const sshTunnel = !!opts.connection?.sshTunnel;
 
   async function encryptSecrets(config: Record<string, unknown>, ctx: AssetFormContext) {
     const out = { ...config };
@@ -49,18 +58,32 @@ export function makeExtensionConfigSection(opts: Options) {
 
   function ExtensionConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
     const { t } = useTranslation();
-    const { state, setState } = useConfigSection<ExtensionFormState>({
+    const { state, setState, patch } = useConfigSection<ExtensionFormState>({
       ref,
       editAsset,
       onValidityChange,
-      init: (a) => (a?.ID ? { config: {}, status: "loading" } : { config: parseConfig(a?.Config), status: "ready" }),
+      init: (a) => {
+        const sshTunnelId = sshTunnel ? a?.sshTunnelId || 0 : 0;
+        const tunnel = { tunnel: sshTunnelId > 0, sshTunnelId };
+        return a?.ID
+          ? { config: {}, status: "loading", ...tunnel }
+          : { config: parseConfig(a?.Config), status: "ready", ...tunnel };
+      },
       // 必填校验由后端按 configSchema.required 负责；表单侧不复制一份会漂移的规则。
-      validate: (s) => ({ canTest: false, canSave: s.status === "ready", saveDisabledReason: STATUS_REASON[s.status] }),
+      validate: (s) => {
+        const missingTunnel = s.status === "ready" && s.tunnel && s.sshTunnelId === 0;
+        return {
+          canTest: false,
+          canSave: s.status === "ready" && !missingTunnel,
+          saveDisabledReason: missingTunnel ? "asset.formMissingSSHTunnel" : STATUS_REASON[s.status],
+        };
+      },
       build: async (s, buildCtx) => {
         if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
         return {
           configJSON: JSON.stringify(await encryptSecrets(s.config, buildCtx)),
-          sshTunnelId: 0, // 扩展资产的网络路径由扩展自己经宿主接口决定。
+          // 未声明 sshTunnel 的类型不生效：宿主拨号时同样按声明忽略该列。
+          sshTunnelId: s.tunnel ? s.sshTunnelId : 0,
         };
       },
     });
@@ -73,7 +96,7 @@ export function makeExtensionConfigSection(opts: Options) {
       let cancelled = false;
       GetDecryptedExtensionConfig(editID, opts.extensionName)
         .then((cfg) => {
-          if (!cancelled) setState({ config: parseConfig(cfg), status: "ready" });
+          if (!cancelled) setState((s) => ({ ...s, config: parseConfig(cfg), status: "ready" }));
         })
         .catch((err) => {
           if (cancelled) return;
@@ -88,13 +111,37 @@ export function makeExtensionConfigSection(opts: Options) {
     // 未就绪时不渲染表单：原因已经由壳在保存按钮旁显示（saveDisabledReason），失败另有 toast。
     if (!opts.schema?.properties || state.status !== "ready") return null;
     return (
-      <ExtensionConfigForm
-        extensionName={opts.extensionName}
-        configSchema={opts.schema}
-        value={state.config}
-        onChange={(config) => setState({ config, status: "ready" })}
-        hasBackend={opts.hasBackend}
-      />
+      <div className="flex flex-col gap-4">
+        <ExtensionConfigForm
+          extensionName={opts.extensionName}
+          configSchema={opts.schema}
+          value={state.config}
+          onChange={(config) => patch({ config, status: "ready" })}
+          hasBackend={opts.hasBackend}
+        />
+        {sshTunnel && (
+          <Field label={t("asset.connectionType")}>
+            <Segmented
+              value={state.tunnel ? "tunnel" : "direct"}
+              onChange={(v) => patch({ tunnel: v === "tunnel", sshTunnelId: 0 })}
+              aria-label={t("asset.connectionType")}
+              options={[
+                { value: "direct", label: t("asset.connectionDirect") },
+                { value: "tunnel", label: t("asset.sshTunnel") },
+              ]}
+            />
+            {state.tunnel && (
+              <AssetSelect
+                value={state.sshTunnelId}
+                onValueChange={(sshTunnelId) => patch({ sshTunnelId })}
+                filterType="ssh"
+                placeholder={t("asset.jumpHostNone")}
+                testId="extension-ssh-tunnel-select"
+              />
+            )}
+          </Field>
+        )}
+      </div>
     );
   }
   ExtensionConfigSection.displayName = `ExtensionConfigSection(${opts.assetType})`;

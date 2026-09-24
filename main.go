@@ -401,7 +401,7 @@ func initExtensionSystem(
 			FileDialogs:  extB.NewFileDialogOpener(),
 			KV:           extB.NewKVStore(extName),
 			ActionEvents: extB.NewActionEventHandler(extName),
-			TunnelDialer: extB.NewTunnelDialer(),
+			AssetDialer:  extB.NewAssetDialer(extName),
 		})
 	}, logger.Default())
 

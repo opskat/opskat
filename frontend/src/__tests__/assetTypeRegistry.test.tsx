@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, render, screen } from "@testing-library/react";
+import { asset_entity } from "../../wailsjs/go/models";
 import { useAssetTypes, useAssetTypeDef, getAssetType, isKnownAssetType } from "@/lib/assetTypes";
 import { registerExtensionAssetTypes, unregisterExtensionAssetTypes } from "@/extension/assetTypes";
 import type { ExtManifest } from "@/extension/types";
@@ -83,5 +84,22 @@ describe("extension asset type definition", () => {
     registerExtensionAssetTypes("acme", backendOnly);
     const def = getAssetType("acme-store")!;
     expect(def.canConnect).toBe(false);
+  });
+});
+
+describe("extension asset type connection settings", () => {
+  const tunneled = {
+    ...acme,
+    assetTypes: [{ ...acme.assetTypes![0], connection: { sshTunnel: true } }],
+  } as ExtManifest;
+
+  it("the declared SSH tunnel reaches the detail card of the registered type", () => {
+    registerExtensionAssetTypes("acme", tunneled);
+    const Card = getAssetType("acme-store")!.DetailInfoCard;
+    const asset = new asset_entity.Asset({ ID: 1, Type: "acme-store", Config: "{}", sshTunnelId: 9 });
+
+    render(<Card asset={asset} sshTunnelName={(id) => (id === 9 ? "bastion" : "")} />);
+
+    expect(screen.getByText("bastion")).toBeInTheDocument();
   });
 });

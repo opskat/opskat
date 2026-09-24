@@ -72,7 +72,7 @@ func init() {
 		Description: "Minimal extension used by pkg/extension end-to-end tests",
 		PolicyType:  "fixture",
 	})
-	opskat.AssetType[fixtureConfig]("fixture").Name("Fixture")
+	opskat.AssetType[fixtureConfig]("fixture").Name("Fixture").Connection(opskat.Connection{SSHTunnel: true})
 	opskat.PolicyGroup("ext:fixture:read").Name("Read").Description("Read-only").
 		Allow("read").Default()
 

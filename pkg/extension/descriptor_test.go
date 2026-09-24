@@ -323,3 +323,33 @@ func TestParseDescriptorPolicyNamespace(t *testing.T) {
 		})
 	})
 }
+
+// 连接配置区（隧道 / 代理链 / TLS）由宿主拥有，资产类型只声明支持哪几项；
+// 声明里出现宿主不认识的项要在加载时拒绝，而不是默默忽略成"不生效"。
+func TestParseDescriptorConnection(t *testing.T) {
+	Convey("An asset type declares which host-owned connection settings it supports", t, func() {
+		withConnection := func(conn string) []byte {
+			return []byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+				`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}},` +
+				`"connection":` + conn + `}],"policies":{"type":"x"}}`)
+		}
+
+		Convey("a declared subset is kept", func() {
+			d, err := ParseDescriptor(withConnection(`{"sshTunnel":true}`))
+			So(err, ShouldBeNil)
+			So(d.AssetTypes[0].Connection, ShouldResemble, &ConnectionDef{SSHTunnel: true})
+		})
+
+		Convey("no declaration means no connection settings", func() {
+			d, err := ParseDescriptor(desc(""))
+			So(err, ShouldBeNil)
+			So(d.AssetTypes[0].Connection, ShouldBeNil)
+		})
+
+		Convey("an unknown connection item is refused", func() {
+			_, err := ParseDescriptor(withConnection(`{"sshTunnel":true,"vpn":true}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"vpn"`)
+		})
+	})
+}

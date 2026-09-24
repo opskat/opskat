@@ -202,3 +202,20 @@ func TestRegistrationRejectsBrokenDeclarations(t *testing.T) {
 		})
 	})
 }
+
+func TestDescribeReportsConnectionDeclaration(t *testing.T) {
+	Convey("an asset type's host-owned connection settings are reported only when declared", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		AssetType[demoConfig]("tunneled").Connection(Connection{SSHTunnel: true})
+		AssetType[demoConfig]("direct")
+
+		byType := map[string]map[string]any{}
+		for _, raw := range decodeDescribe(t)["assetTypes"].([]any) {
+			at := raw.(map[string]any)
+			byType[at["type"].(string)] = at
+		}
+		So(byType["tunneled"]["connection"], ShouldResemble, map[string]any{"sshTunnel": true})
+		So(byType["direct"], ShouldNotContainKey, "connection")
+	})
+}

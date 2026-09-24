@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createRef } from "react";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { makeExtensionConfigSection } from "@/components/asset/ExtensionConfigSection";
 import type { AssetFormHandle } from "@/lib/assetTypes/formContract";
 import { toast } from "sonner";
@@ -79,5 +79,83 @@ describe("ExtensionConfigSection edit mode", () => {
 
     expect(GetDecryptedExtensionConfig).not.toHaveBeenCalled();
     expect(onValidity).toHaveBeenLastCalledWith(expect.objectContaining({ canSave: true }));
+  });
+});
+
+describe("ExtensionConfigSection connection settings", () => {
+  const schema = {
+    type: "object",
+    properties: { endpoint: { type: "string", title: "Endpoint" } },
+  } as const;
+  const Tunneled = makeExtensionConfigSection({
+    extensionName: "demo",
+    assetType: "demo-type",
+    hasBackend: false,
+    schema,
+    connection: { sshTunnel: true },
+  });
+  const Plain = makeExtensionConfigSection({
+    extensionName: "demo",
+    assetType: "demo-type",
+    hasBackend: false,
+    schema,
+  });
+
+  function tunneledAsset(sshTunnelId: number) {
+    return new asset_entity.Asset({
+      ID: 4,
+      Name: "es",
+      Type: "demo-type",
+      Config: JSON.stringify({ endpoint: "http://es.internal:9200" }),
+      sshTunnelId,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ endpoint: "http://es.internal:9200" }));
+  });
+
+  it("an undeclared tunnel shows no picker and saves no tunnel", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Plain ref={ref} editAsset={tunneledAsset(9)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    expect(screen.queryByRole("radiogroup", { name: "asset.connectionType" })).not.toBeInTheDocument();
+    expect((await ref.current!.buildConfig(ctx)).sshTunnelId).toBe(0);
+  });
+
+  it("a declared tunnel keeps the asset's SSH tunnel and saves it on the asset", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Tunneled ref={ref} editAsset={tunneledAsset(9)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    expect(screen.getByTestId("extension-ssh-tunnel-select")).toBeInTheDocument();
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.sshTunnelId).toBe(9);
+    // 隧道是资产列，不进扩展看得到的配置
+    expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "http://es.internal:9200" });
+  });
+
+  it("switching to direct drops the tunnel", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Tunneled ref={ref} editAsset={tunneledAsset(9)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("radio", { name: "asset.connectionDirect" }));
+
+    expect(screen.queryByTestId("extension-ssh-tunnel-select")).not.toBeInTheDocument();
+    expect((await ref.current!.buildConfig(ctx)).sshTunnelId).toBe(0);
+  });
+
+  it("choosing the tunnel without an SSH asset blocks saving", async () => {
+    const onValidity = vi.fn();
+    render(<Tunneled ctx={{ ...ctx, isEdit: false }} onValidityChange={onValidity} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "asset.sshTunnel" }));
+
+    expect(onValidity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canSave: false, saveDisabledReason: "asset.formMissingSSHTunnel" })
+    );
   });
 });

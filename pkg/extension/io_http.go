@@ -18,26 +18,16 @@ import (
 // dialGuard wraps a DialContext function and rejects connections to private/loopback
 // IPs at dial time. This catches DNS rebinding attacks where a hostname resolves to
 // a private IP after the URL-level allowlist check has already passed.
+//
+// When private targets are allowed there is nothing to deny, so the host is not
+// resolved here: the dial — possibly through the asset's SSH tunnel — resolves it
+// where it will be reached, and a local lookup would fail a hostname only the far
+// side knows.
 func dialGuard(origDial func(ctx context.Context, network, addr string) (net.Conn, error), allowPrivate bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			host = addr
-		}
-		if ip := net.ParseIP(host); ip != nil {
-			if IsPrivateIP(ip) && !allowPrivate {
-				return nil, fmt.Errorf("dial denied: private IP %s", ip)
-			}
-		} else {
-			// Resolve hostname to catch DNS rebinding.
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
+		if !allowPrivate {
+			if err := denyPrivateTarget(ctx, addr); err != nil {
 				return nil, err
-			}
-			for _, ipa := range ips {
-				if IsPrivateIP(ipa.IP) && !allowPrivate {
-					return nil, fmt.Errorf("dial denied: hostname %q resolves to private IP %s", host, ipa.IP)
-				}
 			}
 		}
 		if origDial != nil {
@@ -45,6 +35,31 @@ func dialGuard(origDial func(ctx context.Context, network, addr string) (net.Con
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
+}
+
+// denyPrivateTarget rejects addr when it is, or its hostname resolves to, a
+// private/loopback IP.
+func denyPrivateTarget(ctx context.Context, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if IsPrivateIP(ip) {
+			return fmt.Errorf("dial denied: private IP %s", ip)
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return err
+	}
+	for _, ipa := range ips {
+		if IsPrivateIP(ipa.IP) {
+			return fmt.Errorf("dial denied: hostname %q resolves to private IP %s", host, ipa.IP)
+		}
+	}
+	return nil
 }
 
 type httpPhase int
