@@ -17,6 +17,16 @@ export interface PolicyFieldDef {
   variant: "allow" | "deny" | "warn";
 }
 
+/**
+ * 规则在策略列里的存储形态与策略卡上显示形态之间的互转。卡片读库时逐条 `fromStored`，
+ * 写库时逐条 `toStored`；缺省表示两者相同。扩展类型用它把共用 CommandPolicy 列里的
+ * `ext:<policyType>:<rule>` 显示成 `<rule>`，写回时再补上前缀——与 opsctl / 运行期同一份。
+ */
+export interface PolicyRuleCodec {
+  toStored(rule: string): string;
+  fromStored(stored: string): string;
+}
+
 export interface PolicyDefinition {
   policyType: string;
   titleKey: string;
@@ -27,6 +37,8 @@ export interface PolicyDefinition {
   /** 规则测试框的占位符；只有支持规则测试的类型提供。 */
   testPlaceholderKey?: string;
   fields: PolicyFieldDef[];
+  /** 规则存储形态与显示形态的互转；缺省即原样存取。 */
+  rules?: PolicyRuleCodec;
 }
 
 /** 语义分组（资产类型选择器展示用）。 */

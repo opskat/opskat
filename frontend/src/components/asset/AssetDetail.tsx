@@ -9,6 +9,7 @@ import { Button, Separator, ConfirmDialog, Tooltip, TooltipContent, TooltipTrigg
 import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
 import { useAssetTypeDef } from "@/lib/assetTypes";
+import type { PolicyRuleCodec } from "@/lib/assetTypes/types";
 import { AssetIcon } from "@/components/asset/AssetIcon";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
 import { asset_entity } from "../../../wailsjs/go/models";
@@ -42,6 +43,9 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     fields: Record<string, string[]>;
     groups: string[];
   } | null>(null);
+  // 规则在库里的形态与卡片上的形态由类型定义的 codec 互转（缺省原样）：draft / 显示 / 编辑
+  // 都用显示形态，只在读库与写库这两处边界转换一次。
+  const codec = def?.policy?.rules;
   const stored = useMemo(() => parseCmdPolicy(asset.CmdPolicy), [asset.CmdPolicy]);
   const activeDraft = draft && draft.assetId === asset.ID && draft.base === asset.CmdPolicy ? draft : null;
   const policyGroups = activeDraft ? activeDraft.groups : stored.groups;
@@ -49,17 +53,17 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     if (activeDraft) return activeDraft.fields;
     const fields: Record<string, string[]> = {};
     for (const f of def?.policy?.fields ?? []) {
-      fields[f.key] = stored.lists[f.key] || [];
+      fields[f.key] = fromStoredRules(codec, stored.lists[f.key]);
     }
     return fields;
-  }, [activeDraft, def, stored]);
+  }, [activeDraft, def, codec, stored]);
 
   const savePolicy = async (fields: Record<string, string[]>, groups: string[]) => {
     setDraft({ assetId: asset.ID, base: asset.CmdPolicy, fields, groups });
     // Remove empty arrays (except groups which is managed separately)
     const cleaned: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) {
-      if (v.length > 0) cleaned[k] = v;
+      if (v.length > 0) cleaned[k] = toStoredRules(codec, v);
     }
     if (groups.length > 0) cleaned.groups = groups;
     const cmdPolicy = Object.keys(cleaned).length > 0 ? JSON.stringify(cleaned) : "";
@@ -87,7 +91,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       const groups = parsed.groups || [];
       const fields: Record<string, string[]> = {};
       for (const f of def?.policy?.fields ?? []) {
-        fields[f.key] = parsed[f.key] || [];
+        fields[f.key] = fromStoredRules(codec, parsed[f.key]);
       }
       await savePolicy(fields, groups);
     } catch (e) {
@@ -188,7 +192,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
               }))}
               buildPolicyJSON={() =>
                 JSON.stringify({
-                  ...Object.fromEntries(pol.fields.map((f) => [f.key, policyFields[f.key] || []])),
+                  ...Object.fromEntries(pol.fields.map((f) => [f.key, toStoredRules(codec, policyFields[f.key])])),
                   ...(policyGroups.length > 0 ? { groups: policyGroups } : {}),
                 })
               }
@@ -223,6 +227,16 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       </div>
     </div>
   );
+}
+
+function fromStoredRules(codec: PolicyRuleCodec | undefined, rules: string[] | undefined): string[] {
+  const list = rules || [];
+  return codec ? list.map((r) => codec.fromStored(r)) : list;
+}
+
+function toStoredRules(codec: PolicyRuleCodec | undefined, rules: string[] | undefined): string[] {
+  const list = rules || [];
+  return codec ? list.map((r) => codec.toStored(r)) : list;
 }
 
 function parseCmdPolicy(cmdPolicy: string): { groups: string[]; lists: Record<string, string[]> } {
