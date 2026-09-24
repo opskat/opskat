@@ -9,6 +9,7 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ExtensionDescribeRepo stores the describe() answer of each installed extension.
@@ -48,21 +49,16 @@ func (r *extensionDescribeRepo) Find(ctx context.Context, name string) (*extensi
 	return &row, nil
 }
 
+// Save upserts on name in one statement. A find-then-create would let two loads of
+// the same extension race into the unique index, and the loser's answer would be lost.
 func (r *extensionDescribeRepo) Save(ctx context.Context, row *extension_describe_entity.ExtensionDescribe) error {
 	now := time.Now().Unix()
+	row.Createtime = now
 	row.Updatetime = now
-	existing, err := r.Find(ctx, row.Name)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		row.Createtime = now
-		return db.Ctx(ctx).Create(row).Error
-	}
-	existing.WasmHash = row.WasmHash
-	existing.Descriptor = row.Descriptor
-	existing.Updatetime = now
-	return db.Ctx(ctx).Save(existing).Error
+	return db.Ctx(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"wasm_hash", "descriptor", "updatetime"}),
+	}).Create(row).Error
 }
 
 func (r *extensionDescribeRepo) Delete(ctx context.Context, name string) error {
