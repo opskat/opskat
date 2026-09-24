@@ -32,7 +32,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL + "/test",
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 			So(h, ShouldNotBeNil)
 
@@ -63,7 +63,7 @@ func TestHTTPHandle(t *testing.T) {
 				URL:          srv.URL + "/submit",
 				Headers:      map[string]string{"Content-Type": "application/json"},
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 
 			n, err := h.Write([]byte(`{"key":"value"}`))
@@ -92,7 +92,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "POST",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 
 			meta, err := h.Flush()
@@ -116,7 +116,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 
 			_, err = h.Read(make([]byte, 10))
@@ -139,7 +139,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 
 			// Flush in a goroutine since the server blocks
@@ -171,7 +171,7 @@ func TestHTTPHandle(t *testing.T) {
 				URL:          srv.URL,
 				Headers:      map[string]string{"X-Custom": "test-value"},
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 
 			_, err = h.Flush()
@@ -198,7 +198,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, customDial)
+			}, customDial, nil)
 			So(err, ShouldBeNil)
 
 			meta, err := h.Flush()
@@ -232,7 +232,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			}, nil, nil)
 			So(err, ShouldBeNil)
 			So(res.Meta.Status, ShouldEqual, 0) // no status yet before flush
 			id, err := mgr.Register(res)

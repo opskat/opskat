@@ -108,6 +108,29 @@ func TestAssetConfigGetterScopesToCallingExtension(t *testing.T) {
 	})
 }
 
+func TestAssetConfigGetterStripsHostConnectionConfig(t *testing.T) {
+	Convey("ctx.AssetConfig() never sees the host's reserved connection key", t, func() {
+		e, assets := newHostTestBinder(t)
+		acme := e.NewAssetConfigGetter("acme")
+
+		cfg, err := json.Marshal(map[string]any{
+			"host": "h",
+			extension.HostConnectionConfigKey: map[string]any{
+				"tls": map[string]any{"enabled": true, "caFile": "/etc/ca.pem"},
+			},
+		})
+		So(err, ShouldBeNil)
+		assets.EXPECT().Find(gomock.Any(), int64(6)).Return(&asset_entity.Asset{ID: 6, Type: "acme-store", Config: string(cfg)}, nil)
+
+		raw, err := acme.GetAssetConfig(6)
+		So(err, ShouldBeNil)
+		var parsed map[string]any
+		So(json.Unmarshal(raw, &parsed), ShouldBeNil)
+		So(parsed, ShouldContainKey, "host")
+		So(parsed, ShouldNotContainKey, extension.HostConnectionConfigKey)
+	})
+}
+
 func TestFrontendCallsScopeAssetToExtension(t *testing.T) {
 	Convey("frontend-initiated calls may only name the extension's own assets", t, func() {
 		e, assets := newHostTestBinder(t)

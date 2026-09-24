@@ -162,17 +162,24 @@ An asset type names the ones it supports, and the host shows them on the asset f
 and detail card and applies them when the extension dials the asset's endpoint:
 
 ```go
-opskat.AssetType[esConfig]("es").Connection(opskat.Connection{SSHTunnel: true})
+opskat.AssetType[esConfig]("es").Connection(opskat.Connection{SSHTunnel: true, ProxyChain: true, TLS: true})
 ```
 
 With `SSHTunnel` declared, the form offers the same SSH-asset picker built-in types
 use; the choice is stored on the asset, never in its config, so `ctx.AssetConfig()`
-and the config validator never see it. HTTP and TCP opens scoped to the asset are
-dialed through that tunnel, and an endpoint's hostname is resolved on the far side. If the tunnel
-cannot be reached, the open fails with the host's error; there is no fallback to a
-direct connection. An item left undeclared is neither shown nor applied, and the host
-refuses a `connection` item it does not know. (`ProxyChain` and `TLS` can already be
-declared, but the host does not apply them yet.)
+and the config validator never see it. `ProxyChain` offers the same multi-hop
+SSH/SOCKS5/HTTP-tunnel builder built-in types use, and `TLS` offers the same
+enable / skip-verify / server name / CA / client cert & key fields — both are stored
+in a host-reserved key inside the asset's config JSON, stripped before
+`ctx.AssetConfig()` and the config validator ever see it, for the same reason the
+tunnel choice is kept off the asset: an extension has no legitimate reason to read
+settings it cannot itself apply. HTTP and TCP opens scoped to the asset are dialed
+through the declared tunnel/chain and wrapped in the declared TLS, and an endpoint's
+hostname is resolved on the far side of a tunnel. A cert file that cannot be read, a
+failed TLS handshake, or a chain hop that cannot be reached all fail the open with
+the host's error; there is no fallback to a direct or unverified connection. An item
+left undeclared is neither shown nor applied, and the host refuses a `connection`
+item it does not know.
 
 ### The policy face
 

@@ -310,8 +310,15 @@ func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.Raw
 	return decision.Action, decision.Resource, nil
 }
 
-// ValidateConfig calls validate_config on the extension.
+// ValidateConfig calls validate_config on the extension. config is the asset's
+// config exactly as about to be persisted, which may carry the host's reserved
+// connection-settings key (proxy chain, TLS) — stripped here, before it ever
+// crosses into guest code, the same as ctx.AssetConfig() strips it.
 func (p *Plugin) ValidateConfig(ctx context.Context, config json.RawMessage) ([]ValidationError, error) {
+	config, err := StripHostConnectionConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("strip host connection config: %w", err)
+	}
 	result, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), "validate_config", config, p.opts.toolTimeout)
 	if err != nil {
 		return nil, err

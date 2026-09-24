@@ -2,6 +2,7 @@
 package extension
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -88,9 +89,10 @@ func OpenFileResource(path, mode string) (*IOResource, error) {
 	}
 }
 
-// OpenHTTPResource prepares an HTTP request. dial may be nil for a direct connection.
-func OpenHTTPResource(params IOOpenParams, dial DialFunc) (*IOResource, error) {
-	h, err := newHTTPHandle(params, dial)
+// OpenHTTPResource prepares an HTTP request. dial may be nil for a direct
+// connection; tlsConfig may be nil when the asset does not declare/enable TLS.
+func OpenHTTPResource(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*IOResource, error) {
+	h, err := newHTTPHandle(params, dial, tlsConfig)
 	if err != nil {
 		return nil, err
 	}

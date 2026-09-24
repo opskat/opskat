@@ -4,6 +4,7 @@ package extension
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -88,8 +89,10 @@ type httpHandle struct {
 }
 
 // newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
-// or immediate flushing (GET/HEAD/DELETE/OPTIONS).
-func newHTTPHandle(params IOOpenParams, dial DialFunc) (*httpHandle, error) {
+// or immediate flushing (GET/HEAD/DELETE/OPTIONS). tlsConfig, when set, is the
+// asset's declared TLS settings — net/http performs its own handshake using it
+// for an https:// URL, over the conn dial returns.
+func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*httpHandle, error) {
 	method := strings.ToUpper(params.Method)
 	if method == "" {
 		method = "GET"
@@ -113,6 +116,9 @@ func newHTTPHandle(params IOOpenParams, dial DialFunc) (*httpHandle, error) {
 	}
 	// Always wrap with the dial-time guard to catch DNS rebinding after URL-level checks.
 	transport.DialContext = dialGuard(baseDial, params.AllowPrivate)
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig
+	}
 
 	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
 

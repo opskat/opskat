@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -50,7 +51,14 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 		zap.Bool("plaintext_allowed", caller.Manifest.CheckCredentialRead() == nil),
 	)
 
-	return decryptConfigPasswordFields(json.RawMessage(asset.Config), asset.Type, caller)
+	// The asset's stored config may carry the host's reserved connection-settings
+	// key (proxy chain, TLS) — never part of the type's own configSchema, and
+	// never for the extension to see.
+	stripped, err := extension.StripHostConnectionConfig(json.RawMessage(asset.Config))
+	if err != nil {
+		return nil, fmt.Errorf("strip asset %d host connection config: %w", assetID, err)
+	}
+	return decryptConfigPasswordFields(stripped, asset.Type, caller)
 }
 
 // ownedAsset loads assetID on behalf of extName and confirms the asset's type is
@@ -230,28 +238,109 @@ type assetDialer struct {
 	extName string
 }
 
-// DialContextFor resolves the connection path of an asset the extension owns.
-// Only the settings its asset type declares take effect: an SSH tunnel set on an
-// asset whose type does not declare connection.sshTunnel is ignored. The tunnel
-// is dialed through the same proxy-chain machinery built-in types use.
-func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, error) {
-	owner, asset, err := ownedAsset(ctx, d.ext.service, d.extName, assetID)
-	if err != nil {
-		return nil, err
-	}
-	conn := owner.Manifest.AssetTypeDef(asset.Type).Connection
-	if conn == nil || !conn.SSHTunnel || asset.SSHTunnelID == 0 {
+// hostConnectionConfig is the shape stored under the asset's Config JSON at
+// extension.HostConnectionConfigKey — host-owned settings for the connection
+// items an asset type opts into via connection.proxyChain / connection.tls.
+// The extension never sees this key (stripped in GetAssetConfig above and in
+// Plugin.ValidateConfig); only DialContextFor reads it.
+type hostConnectionConfig struct {
+	ProxyChain *asset_entity.ProxyChainConfig `json:"proxyChain,omitempty"`
+	TLS        *hostTLSConfig                 `json:"tls,omitempty"`
+}
+
+type hostTLSConfig struct {
+	Enabled    bool   `json:"enabled,omitempty"`
+	Insecure   bool   `json:"insecure,omitempty"`
+	ServerName string `json:"serverName,omitempty"`
+	CAFile     string `json:"caFile,omitempty"`
+	CertFile   string `json:"certFile,omitempty"`
+	KeyFile    string `json:"keyFile,omitempty"`
+}
+
+// parseHostConnectionConfig reads the reserved key out of an asset's stored
+// Config JSON. A nil result (no error) means the asset has none configured.
+func parseHostConnectionConfig(configJSON string) (*hostConnectionConfig, error) {
+	if configJSON == "" {
 		return nil, nil
 	}
-	chain := asset_entity.EffectiveProxyChain(nil, asset.SSHTunnelID, nil)
-	dial, err := connpool.ProxyChainDialContext(ctx, chain)
-	if err != nil {
-		return nil, fmt.Errorf("resolve SSH tunnel (asset %d): %w", asset.SSHTunnelID, err)
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(configJSON), &wrapper); err != nil {
+		return nil, fmt.Errorf("parse asset config: %w", err)
 	}
-	logger.Ctx(ctx).Info("extension asset connects through SSH tunnel",
-		zap.String("extension", d.extName),
-		zap.Int64("assetID", assetID),
-		zap.Int64("sshTunnelID", asset.SSHTunnelID),
-	)
-	return dial, nil
+	raw, ok := wrapper[extension.HostConnectionConfigKey]
+	if !ok {
+		return nil, nil
+	}
+	var cfg hostConnectionConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parse host connection config: %w", err)
+	}
+	return &cfg, nil
+}
+
+// DialContextFor resolves the connection path and TLS settings of an asset the
+// extension owns. Only the items its asset type declares take effect: a proxy
+// chain, SSH tunnel or TLS config set on an asset whose type does not declare
+// the matching connection item is ignored. Proxy chain and SSH tunnel dial
+// through the same proxy-chain machinery built-in types use; TLS is built with
+// the same connpool helper, so a bad CA/cert file or a failed handshake fails
+// exactly as it would for a built-in type — never falling back to a direct or
+// unverified connection.
+func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, *tls.Config, error) {
+	owner, asset, err := ownedAsset(ctx, d.ext.service, d.extName, assetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn := owner.Manifest.AssetTypeDef(asset.Type).Connection
+	if conn == nil {
+		return nil, nil, nil
+	}
+
+	hostCfg, err := parseHostConnectionConfig(asset.Config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("asset %d connection config: %w", assetID, err)
+	}
+
+	var chain *asset_entity.ProxyChainConfig
+	if conn.ProxyChain && hostCfg != nil {
+		chain = hostCfg.ProxyChain
+	}
+	var tunnelID int64
+	if conn.SSHTunnel {
+		tunnelID = asset.SSHTunnelID
+	}
+
+	var dial extension.DialContextFunc
+	if effective := asset_entity.EffectiveProxyChain(chain, tunnelID, nil); effective != nil {
+		dial, err = connpool.ProxyChainDialContext(ctx, effective)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve connection path (asset %d): %w", assetID, err)
+		}
+		logger.Ctx(ctx).Info("extension asset dials through proxy chain",
+			zap.String("extension", d.extName),
+			zap.Int64("assetID", assetID),
+			zap.Int("hops", len(effective.Layers)),
+		)
+	}
+
+	var tlsConfig *tls.Config
+	if conn.TLS && hostCfg != nil && hostCfg.TLS != nil && hostCfg.TLS.Enabled {
+		tlsConfig, err = connpool.BuildTLSConfig(asset.Type, connpool.TLSFields{
+			ServerName: hostCfg.TLS.ServerName,
+			Insecure:   hostCfg.TLS.Insecure,
+			CAFile:     hostCfg.TLS.CAFile,
+			CertFile:   hostCfg.TLS.CertFile,
+			KeyFile:    hostCfg.TLS.KeyFile,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("TLS config (asset %d): %w", assetID, err)
+		}
+		logger.Ctx(ctx).Info("extension asset applies TLS",
+			zap.String("extension", d.extName),
+			zap.Int64("assetID", assetID),
+			zap.Bool("insecure", hostCfg.TLS.Insecure),
+		)
+	}
+
+	return dial, tlsConfig, nil
 }

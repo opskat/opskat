@@ -256,6 +256,15 @@ func init() {
 		if cfg.Endpoint == "" {
 			return []opskat.ValidationError{{Field: "endpoint", Message: "endpoint is required"}}
 		}
+		// The host reserves this key for connection settings (proxy chain, TLS)
+		// it owns; it must strip it before this call ever sees the config. If it
+		// shows up here, the host's boundary leaked it to the guest.
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(config, &raw); err == nil {
+			if _, leaked := raw["__opskat_connection"]; leaked {
+				return []opskat.ValidationError{{Field: "", Message: "host connection config leaked to guest"}}
+			}
+		}
 		return nil
 	})
 }

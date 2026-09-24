@@ -164,6 +164,14 @@ func TestPluginCallsFixture(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(errs, ShouldHaveLength, 0)
 		})
+
+		Convey("validate_config never sees the host's reserved connection key", func() {
+			errs, err := p.ValidateConfig(ctx, json.RawMessage(
+				`{"endpoint":"e","`+HostConnectionConfigKey+`":{"tls":{"caFile":"/etc/ca.pem"}}}`,
+			))
+			So(err, ShouldBeNil)
+			So(errs, ShouldHaveLength, 0)
+		})
 	})
 }
 

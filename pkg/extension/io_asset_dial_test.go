@@ -2,41 +2,49 @@ package extension
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-// fakeAssetDialer stands in for the host's connection path (SSH tunnel, later
-// proxy chain / TLS): whatever address the guest asks for, it connects to the
-// server that plays "the far side of the tunnel", and records what it was asked.
+// fakeAssetDialer stands in for the host's connection path (SSH tunnel, proxy
+// chain, TLS): whatever address the guest asks for, it connects to the server
+// that plays "the far side of the tunnel", and records what it was asked.
 type fakeAssetDialer struct {
-	farSide string // address actually connected to
-	openErr error  // DialContextFor fails: the path itself cannot be built
-	dialErr error  // the returned dial fails: the tunnel is up but unreachable
-	direct  bool   // the asset has no connection settings: dial directly
+	farSide   string      // address actually connected to
+	openErr   error       // DialContextFor fails: the path itself cannot be built
+	dialErr   error       // the returned dial fails: the tunnel is up but unreachable
+	direct    bool        // the asset has no connection settings: dial directly
+	tlsConfig *tls.Config // asset's declared TLS settings, nil = none
 
 	mu     sync.Mutex
 	assets []int64
 	addrs  []string
 }
 
-func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (DialContextFunc, error) {
+func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (DialContextFunc, *tls.Config, error) {
 	f.mu.Lock()
 	f.assets = append(f.assets, assetID)
 	f.mu.Unlock()
 	if f.openErr != nil {
-		return nil, f.openErr
+		return nil, nil, f.openErr
 	}
 	if f.direct {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		f.mu.Lock()
 		f.addrs = append(f.addrs, addr)
 		f.mu.Unlock()
@@ -44,7 +52,79 @@ func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (Dial
 			return nil, f.dialErr
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, f.farSide)
-	}, nil
+	}
+	return dial, f.tlsConfig, nil
+}
+
+// selfSignedCert generates a self-signed cert/key pair valid for 127.0.0.1.
+func selfSignedCert(t *testing.T) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"es.internal.invalid"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}, leaf
+}
+
+// tlsHTTPServer starts an HTTPS test server whose self-signed cert covers
+// "es.internal.invalid" — the fixture's endpoint hostname — so http.Transport's
+// own hostname verification (against the request's Host, not the dialed addr)
+// has something real to check.
+func tlsHTTPServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	cert, _ := selfSignedCert(t)
+	srv := httptest.NewUnstartedServer(handler)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// tlsEchoListener starts a self-signed TLS echo server; returns the listener
+// and a cert pool that trusts it.
+func tlsEchoListener(t *testing.T) (net.Listener, *x509.CertPool) {
+	t.Helper()
+	cert, leaf := selfSignedCert(t)
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				buf := make([]byte, 64)
+				n, err := c.Read(buf)
+				if err != nil {
+					return
+				}
+				_, _ = c.Write(buf[:n])
+			}()
+		}
+	}()
+	return ln, pool
 }
 
 func (f *fakeAssetDialer) dialed() ([]int64, []string) {
@@ -162,6 +242,61 @@ func TestAssetConnectionPath(t *testing.T) {
 			_, err = tp.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": broker.Addr().String()}), fixtureAsset)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "administratively prohibited")
+		})
+
+		Convey("TLS: an HTTPS request to the endpoint is verified against the asset's declared CA", func() {
+			tlsServer := tlsHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("through TLS"))
+			}))
+			pool := x509.NewCertPool()
+			pool.AddCert(tlsServer.Certificate())
+
+			const httpsURL = "https://es.internal.invalid:9200"
+			dialer := &fakeAssetDialer{
+				farSide:   tlsServer.Listener.Addr().String(),
+				tlsConfig: &tls.Config{RootCAs: pool},
+			}
+			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": httpsURL})
+
+			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": httpsURL + "/_cluster/health"})
+			So(out["body"], ShouldEqual, "through TLS")
+		})
+
+		Convey("TLS: without the asset's CA, an HTTPS request to the endpoint fails verbatim, no fallback to unverified", func() {
+			tlsServer := tlsHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("through TLS"))
+			}))
+
+			const httpsURL = "https://es.internal.invalid:9200"
+			// Declared TLS with no RootCAs: the server's self-signed cert must not verify.
+			dialer := &fakeAssetDialer{farSide: tlsServer.Listener.Addr().String(), tlsConfig: &tls.Config{}}
+			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": httpsURL})
+
+			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": httpsURL + "/_cluster/health"}), fixtureAsset)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "certificate")
+		})
+
+		Convey("TLS: a TCP connection to the endpoint is wrapped in TLS using the asset's config", func() {
+			ln, pool := tlsEchoListener(t)
+
+			dialer := &fakeAssetDialer{farSide: ln.Addr().String(), tlsConfig: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}}
+			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": brokerAddr})
+
+			out := callToolOn(t, p, fixtureAsset, "tcp_echo", map[string]any{"addr": brokerAddr})
+			So(out["echo"], ShouldEqual, "ping")
+		})
+
+		Convey("TLS: a handshake failure on a TCP connection surfaces verbatim, no fallback to plaintext", func() {
+			ln, _ := tlsEchoListener(t)
+
+			// No RootCAs and an unrelated ServerName: the self-signed cert must not verify.
+			dialer := &fakeAssetDialer{farSide: ln.Addr().String(), tlsConfig: &tls.Config{ServerName: "127.0.0.1"}}
+			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": brokerAddr})
+
+			_, err := p.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": brokerAddr}), fixtureAsset)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "certificate")
 		})
 	})
 }

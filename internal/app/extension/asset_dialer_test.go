@@ -83,14 +83,14 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 
 		Convey("an undeclared tunnel has no effect: the asset dials directly", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(1)).Return(assetOf(1, "plain-store", tunnelID), nil)
-			dial, err := e.NewAssetDialer("plain").DialContextFor(ctx, 1)
+			dial, _, err := e.NewAssetDialer("plain").DialContextFor(ctx, 1)
 			So(err, ShouldBeNil)
 			So(dial, ShouldBeNil)
 		})
 
 		Convey("a declared tunnel the asset leaves unset dials directly", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(2)).Return(assetOf(2, "es-cluster", 0), nil)
-			dial, err := e.NewAssetDialer("es").DialContextFor(ctx, 2)
+			dial, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 2)
 			So(err, ShouldBeNil)
 			So(dial, ShouldBeNil)
 		})
@@ -98,7 +98,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 		Convey("a tunnel asset that cannot be resolved is an error, not a direct dial", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(3)).Return(assetOf(3, "es-cluster", tunnelID), nil)
 			assets.EXPECT().Find(gomock.Any(), tunnelID).Return(nil, errors.New("record not found"))
-			dial, err := e.NewAssetDialer("es").DialContextFor(ctx, 3)
+			dial, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 3)
 			So(dial, ShouldBeNil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "record not found")
@@ -114,7 +114,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), tunnelID).
 				Return(&asset_entity.Asset{ID: tunnelID, Name: "bastion", Type: asset_entity.AssetTypeSSH, Config: string(sshCfg)}, nil)
 
-			dial, err := e.NewAssetDialer("es").DialContextFor(ctx, 4)
+			dial, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 4)
 			So(err, ShouldBeNil)
 			So(dial, ShouldNotBeNil)
 
@@ -128,9 +128,151 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 
 		Convey("another extension's asset is refused", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(5)).Return(assetOf(5, "plain-store", 0), nil)
-			_, err := e.NewAssetDialer("es").DialContextFor(ctx, 5)
+			_, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 5)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "does not belong to extension")
+		})
+	})
+}
+
+func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
+	Convey("an extension asset's proxy chain is applied only when its type declares it", t, func() {
+		ctrl := gomock.NewController(t)
+		assets := mock_asset_repo.NewMockAssetRepo(ctrl)
+		prev := asset_repo.Asset()
+		asset_repo.RegisterAsset(assets)
+		Reset(func() { asset_repo.RegisterAsset(prev) })
+
+		svc := extension_svc.New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{ProxyChain: true}))
+		svc.Bridge().Register(connectionExt("plain", "plain-store", &extension.ConnectionDef{SSHTunnel: true}))
+		e := &Extension{ctx: context.Background(), lang: fixedLang("en")}
+		e.SetService(svc)
+		ctx := context.Background()
+
+		chainConfig := func(proxyHost string, proxyPort int) string {
+			cfg, _ := json.Marshal(map[string]any{
+				"endpoint": "es.internal:9200",
+				extension.HostConnectionConfigKey: map[string]any{
+					"proxyChain": map[string]any{
+						"layers": []map[string]any{
+							{"id": "hop1", "type": "socks5", "enabled": true, "host": proxyHost, "port": proxyPort},
+						},
+					},
+				},
+			})
+			return string(cfg)
+		}
+
+		Convey("a declared chain routes the dial to the proxy hop, never to the target", func() {
+			proxy, proxyHits := countingListener(t)
+			target, targetHits := countingListener(t)
+			host, port, _ := net.SplitHostPort(proxy.Addr().String())
+			portN, _ := strconv.Atoi(port)
+			assets.EXPECT().Find(gomock.Any(), int64(10)).
+				Return(&asset_entity.Asset{ID: 10, Name: "es-cluster", Type: "es-cluster", Config: chainConfig(host, portN)}, nil)
+
+			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 10)
+			So(err, ShouldBeNil)
+			So(dial, ShouldNotBeNil)
+			So(tlsConfig, ShouldBeNil)
+
+			dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			_, err = dial(dialCtx, "tcp", target.Addr().String())
+			So(err, ShouldNotBeNil) // the stand-in proxy hangs up before completing the SOCKS5 handshake
+			So(proxyHits.Load(), ShouldEqual, int32(1))
+			So(targetHits.Load(), ShouldEqual, int32(0))
+		})
+
+		Convey("an undeclared chain has no effect: the asset dials directly", func() {
+			proxy, proxyHits := countingListener(t)
+			host, port, _ := net.SplitHostPort(proxy.Addr().String())
+			portN, _ := strconv.Atoi(port)
+			assets.EXPECT().Find(gomock.Any(), int64(11)).
+				Return(&asset_entity.Asset{ID: 11, Name: "plain-store", Type: "plain-store", Config: chainConfig(host, portN)}, nil)
+
+			dial, tlsConfig, err := e.NewAssetDialer("plain").DialContextFor(ctx, 11)
+			So(err, ShouldBeNil)
+			So(dial, ShouldBeNil)
+			So(tlsConfig, ShouldBeNil)
+			So(proxyHits.Load(), ShouldEqual, int32(0))
+		})
+	})
+}
+
+func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
+	Convey("an extension asset's TLS settings are applied only when its type declares and enables them", t, func() {
+		ctrl := gomock.NewController(t)
+		assets := mock_asset_repo.NewMockAssetRepo(ctrl)
+		prev := asset_repo.Asset()
+		asset_repo.RegisterAsset(assets)
+		Reset(func() { asset_repo.RegisterAsset(prev) })
+
+		svc := extension_svc.New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{TLS: true}))
+		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
+		e := &Extension{ctx: context.Background(), lang: fixedLang("en")}
+		e.SetService(svc)
+		ctx := context.Background()
+
+		tlsConfigJSON := func(tlsSettings map[string]any) string {
+			cfg, _ := json.Marshal(map[string]any{
+				"endpoint": "es.internal:9200",
+				extension.HostConnectionConfigKey: map[string]any{
+					"tls": tlsSettings,
+				},
+			})
+			return string(cfg)
+		}
+
+		Convey("a declared, enabled TLS config is built for the dial", func() {
+			assets.EXPECT().Find(gomock.Any(), int64(20)).Return(&asset_entity.Asset{
+				ID: 20, Name: "es-cluster", Type: "es-cluster",
+				Config: tlsConfigJSON(map[string]any{"enabled": true, "insecure": true, "serverName": "es.example.com"}),
+			}, nil)
+
+			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 20)
+			So(err, ShouldBeNil)
+			So(dial, ShouldBeNil) // no tunnel/chain declared, TLS only
+			So(tlsConfig, ShouldNotBeNil)
+			So(tlsConfig.InsecureSkipVerify, ShouldBeTrue)
+			So(tlsConfig.ServerName, ShouldEqual, "es.example.com")
+		})
+
+		Convey("a declared TLS config left disabled has no effect", func() {
+			assets.EXPECT().Find(gomock.Any(), int64(21)).Return(&asset_entity.Asset{
+				ID: 21, Name: "es-cluster", Type: "es-cluster",
+				Config: tlsConfigJSON(map[string]any{"enabled": false, "insecure": true}),
+			}, nil)
+
+			_, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 21)
+			So(err, ShouldBeNil)
+			So(tlsConfig, ShouldBeNil)
+		})
+
+		Convey("an undeclared TLS setting has no effect even if present in the stored config", func() {
+			assets.EXPECT().Find(gomock.Any(), int64(22)).Return(&asset_entity.Asset{
+				ID: 22, Name: "plain-store", Type: "plain-store",
+				Config: tlsConfigJSON(map[string]any{"enabled": true, "insecure": true}),
+			}, nil)
+
+			_, tlsConfig, err := e.NewAssetDialer("plain").DialContextFor(ctx, 22)
+			So(err, ShouldBeNil)
+			So(tlsConfig, ShouldBeNil)
+		})
+
+		Convey("a TLS CA file that cannot be read fails the dial, with no fallback to unverified", func() {
+			assets.EXPECT().Find(gomock.Any(), int64(23)).Return(&asset_entity.Asset{
+				ID: 23, Name: "es-cluster", Type: "es-cluster",
+				Config: tlsConfigJSON(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}),
+			}, nil)
+
+			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 23)
+			So(dial, ShouldBeNil)
+			So(tlsConfig, ShouldBeNil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "23")
 		})
 	})
 }
