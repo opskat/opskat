@@ -1078,6 +1078,9 @@ func TestCmdCreateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
 			code := createAsset(context.Background(), tc.args, "sess-create",
 				commandIO{stdout: &stdout, stderr: &stderr, readFile: readFile})
 			assert.Equal(t, 1, code, "create should fail due to approval denial")
+			for _, secret := range []string{"s3cret", "sentpass", "nodepass"} {
+				assert.NotContains(t, stderr.String(), secret, "warnings must not echo the plaintext itself")
+			}
 			if tc.shouldNotWarn {
 				assert.NotContains(t, stderr.String(), "plaintext", "should not warn about plaintext")
 				assert.NotContains(t, stderr.String(), "Warning")

@@ -7,6 +7,7 @@ import type { AssetFormHandle, AssetFormContext, SectionValidity } from "@/lib/a
 import { asset_entity, redis_svc } from "../../../../wailsjs/go/models";
 import { CancelTest } from "../../../../wailsjs/go/system/System";
 import { RedisProbe } from "../../../../wailsjs/go/query/Query";
+import { toast } from "sonner";
 
 vi.mock("../../../../wailsjs/go/system/System", () => ({
   ListCredentialsByType: vi.fn().mockResolvedValue([]),
@@ -315,6 +316,101 @@ describe("RedisConfigSection 自动识别:模式切换 / 哨兵组读取 / 补�
     await waitFor(() => expect(screen.getByTestId("redis-read-sentinel-button")).toBeEnabled());
     expect(screen.getByTestId("redis-master-name-input")).toHaveValue("groupA");
     expect(screen.queryByTestId("redis-complete-sentinels-button")).not.toBeInTheDocument();
+  });
+
+  describe("快速改选组 / 关闭时:只采纳最新一次读取", () => {
+    const groups = [
+      { name: "groupA", masterAddr: "10.20.0.10:6379", replicas: 1 },
+      { name: "groupB", masterAddr: "10.20.0.20:6379", replicas: 2 },
+    ];
+    const sentinelResult = (otherSentinels: string[]) =>
+      ({
+        modeMismatch: false,
+        sentinel: { authRequired: false, groups, masterAddr: "", otherSentinels },
+      }) as never;
+    type Pending = { resolve: (v: never) => void; reject: (e: unknown) => void };
+
+    // 不带组名的读取立即返回组列表;带组名的读取挂起,由测试决定完成顺序。
+    function mockDeferredGroupProbes() {
+      const pending: Record<string, Pending> = {};
+      vi.mocked(RedisProbe).mockImplementation((_id, configJSON) => {
+        const group = /"master_name":"(\w+)"/.exec(configJSON)?.[1];
+        if (!group) return Promise.resolve(sentinelResult([]));
+        return new Promise((resolve, reject) => {
+          pending[group] = { resolve, reject };
+        });
+      });
+      return pending;
+    }
+
+    function probeIDFor(group: string): string {
+      const call = vi.mocked(RedisProbe).mock.calls.find(([, cfg]) => cfg.includes(`"master_name":"${group}"`));
+      return call![0];
+    }
+
+    async function openGroups(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByTestId("redis-mode-sentinel"));
+      await user.type(screen.getByTestId("redis-nodes-textarea"), "10.20.0.31:26379");
+      await user.click(screen.getByTestId("redis-read-sentinel-button"));
+      await screen.findByText("groupB");
+    }
+
+    it("先选 B 再选 A,B 的结果晚到时不覆盖 A 的补全列表,且 B 的读取被取消", async () => {
+      const user = userEvent.setup();
+      const pending = mockDeferredGroupProbes();
+      render(<RedisConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+      await openGroups(user);
+
+      await user.click(screen.getByText("groupB"));
+      await user.click(screen.getByText("groupA"));
+      await waitFor(() => expect(pending.groupA).toBeDefined());
+      expect(CancelTest).toHaveBeenCalledWith(probeIDFor("groupB"));
+
+      await act(async () => pending.groupA.resolve(sentinelResult(["10.20.0.40:26379"])));
+      await act(async () => pending.groupB.resolve(sentinelResult(["10.20.0.33:26379"])));
+
+      await user.click(await screen.findByTestId("redis-complete-sentinels-button"));
+      expect(screen.getByTestId("redis-master-name-input")).toHaveValue("groupA");
+      expect(screen.getByTestId("redis-nodes-textarea")).toHaveValue("10.20.0.31:26379\n10.20.0.40:26379");
+    });
+
+    it("被取代的读取先失败:不弹错误,读取按钮保持忙碌直到最新一次完成", async () => {
+      const user = userEvent.setup();
+      const toastError = vi.spyOn(toast, "error").mockImplementation(() => "");
+      const pending = mockDeferredGroupProbes();
+      render(<RedisConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+      await openGroups(user);
+
+      await user.click(screen.getByText("groupB"));
+      await user.click(screen.getByText("groupA"));
+      await waitFor(() => expect(pending.groupA).toBeDefined());
+
+      await act(async () => pending.groupB.reject(new Error("context canceled")));
+      expect(toastError).not.toHaveBeenCalled();
+      expect(screen.getByTestId("redis-read-sentinel-button")).toBeDisabled();
+
+      await act(async () => pending.groupA.resolve(sentinelResult(["10.20.0.40:26379"])));
+      expect(screen.getByTestId("redis-read-sentinel-button")).toBeEnabled();
+      expect(screen.getByTestId("redis-complete-sentinels-button")).toBeInTheDocument();
+      toastError.mockRestore();
+    });
+
+    it("读取进行中卸载:取消后端读取,之后的失败不再弹错误", async () => {
+      const user = userEvent.setup();
+      const toastError = vi.spyOn(toast, "error").mockImplementation(() => "");
+      const pending = mockDeferredGroupProbes();
+      const { unmount } = render(<RedisConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+      await openGroups(user);
+
+      await user.click(screen.getByText("groupB"));
+      await waitFor(() => expect(pending.groupB).toBeDefined());
+      unmount();
+      expect(CancelTest).toHaveBeenCalledWith(probeIDFor("groupB"));
+
+      await act(async () => pending.groupB.reject(new Error("context canceled")));
+      expect(toastError).not.toHaveBeenCalled();
+      toastError.mockRestore();
+    });
   });
 
   it("生成映射:把未映射的不可达地址填入左侧,右侧留空;已列出的地址不重复追加", async () => {

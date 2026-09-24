@@ -99,6 +99,9 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
   const mountedRef = useRef(true);
   const activeAttemptRef = useRef<AssetTestAttempt | null>(null);
   const activeAttemptTokenRef = useRef<symbol | null>(null);
+  // 进行中的识别探测(从哨兵读取 / 改选组 / 失焦 / 切换模式后续识别)。新探测取代旧探测:
+  // 旧的被 CancelTest 中断,且其结果 / 错误 / 忙碌状态都不再生效,避免晚到的旧组结果覆盖新组。
+  const recognitionProbeRef = useRef<{ testID: string } | null>(null);
 
   // 识别结果为面板局部状态,来自最近一次探测(测试连接 / 从哨兵读取 / 补全);不参与序列化。
   const [lastProbe, setLastProbe] = useState<redis_svc.RedisProbeResult | null>(null);
@@ -150,12 +153,16 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
   // 识别探测(从哨兵读取 / 失焦 / 切换识别出的模式后续识别):结果只更新识别状态,不做测试连接判定。
   const runRecognitionProbe = useCallback(
     async (formState: RedisFormState) => {
+      const superseded = recognitionProbeRef.current;
+      const probe = { testID: newRedisTestId() };
+      recognitionProbeRef.current = probe;
+      if (superseded) void CancelTest(superseded.testID);
+      const isCurrent = () => mountedRef.current && recognitionProbeRef.current === probe;
       setReadingSentinel(true);
       try {
-        const testID = newRedisTestId();
         const req = buildProbeRequest(formState, cred);
-        const result = await RedisProbe(testID, req.configJSON, req.password, req.sentinelPassword);
-        if (!mountedRef.current) return;
+        const result = await RedisProbe(probe.testID, req.configJSON, req.password, req.sentinelPassword);
+        if (!isCurrent()) return;
         setLastProbe(result);
         if (result.sentinel?.authRequired) flagSentinelAuthRequired();
         const groups = result.sentinel?.groups ?? [];
@@ -164,9 +171,12 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
           patch({ masterName: groups[0].name });
         }
       } catch (err) {
-        toast.error(String(err));
+        if (isCurrent()) toast.error(String(err));
       } finally {
-        if (mountedRef.current) setReadingSentinel(false);
+        if (isCurrent()) {
+          recognitionProbeRef.current = null;
+          setReadingSentinel(false);
+        }
       }
     },
     [cred, patch, flagSentinelAuthRequired]
@@ -264,6 +274,8 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     return () => {
       mountedRef.current = false;
       activeAttemptRef.current?.cancel();
+      if (recognitionProbeRef.current) void CancelTest(recognitionProbeRef.current.testID);
+      recognitionProbeRef.current = null;
     };
   }, []);
 
