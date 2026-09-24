@@ -397,7 +397,7 @@ func initExtensionSystem(
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
 		return extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
 			Logger:       logger.Default(),
-			AssetConfigs: extB.NewAssetConfigGetter(),
+			AssetConfigs: extB.NewAssetConfigGetter(extName),
 			FileDialogs:  extB.NewFileDialogOpener(),
 			KV:           extB.NewKVStore(extName),
 			ActionEvents: extB.NewActionEventHandler(extName),

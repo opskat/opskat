@@ -31,10 +31,10 @@ func TestTestHost(t *testing.T) {
 			So(out["echo"], ShouldEqual, "hi")
 		})
 
-		Convey("SetAssetConfig and GetAssetConfig", func() {
+		Convey("WithAssetConfig serves ctx.AssetConfig for the call's asset", func() {
 			resetRegistries()
 			Tool("config_test", func(ctx *ToolContext, _ struct{}) (any, error) {
-				cfg, err := GetAssetConfig(1)
+				cfg, err := ctx.AssetConfig()
 				if err != nil {
 					return nil, err
 				}

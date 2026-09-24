@@ -49,7 +49,7 @@ func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID 
 	if invocationID == "" {
 		return "", fmt.Errorf("invocation id is required to run an action")
 	}
-	asset, err := e.assetRef(assetID)
+	asset, err := e.assetRef(extName, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +143,7 @@ func (e *Extension) CallExtensionTool(extName, tool string, argsJSON string, ass
 		args = json.RawMessage("{}")
 	}
 
-	asset, err := e.assetRef(assetID)
+	asset, err := e.assetRef(extName, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -158,23 +158,28 @@ func (e *Extension) CallExtensionTool(extName, tool string, argsJSON string, ass
 // assetRef names the asset a frontend-initiated call runs against. A 0 id is the
 // frontend saying it has none — the asset configuration form runs `test_connection`
 // on a configuration that has not been saved yet — and the guest is told so.
-func (e *Extension) assetRef(assetID int64) (*extension.AssetRef, error) {
+// Any other id must be an asset of a type extName registers: the page belongs to
+// that extension, and letting it name a builtin or another extension's asset would
+// scope the call — and its asset config — to something it has no claim on.
+func (e *Extension) assetRef(extName string, assetID int64) (*extension.AssetRef, error) {
 	if assetID == 0 {
 		return nil, nil
 	}
-	asset, err := e.service.GetHostAssetConfig(i18n.Ctx(e.ctx, e.lang.Lang()), assetID)
+	_, asset, err := ownedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), e.service, extName, assetID)
 	if err != nil {
 		return nil, err
 	}
 	return &extension.AssetRef{ID: assetID, Name: asset.Name, Type: asset.Type}, nil
 }
 
-// GetDecryptedExtensionConfig returns the asset config with password fields decrypted.
+// GetDecryptedExtensionConfig returns the config of an asset extName owns, with
+// password fields decrypted, so that extension's configuration form can show the
+// user what they saved. An asset of a type extName does not register is refused.
 func (e *Extension) GetDecryptedExtensionConfig(assetID int64, extName string) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}
-	return getDecryptedExtConfig(assetID, e.service, e.service.Bridge())
+	return getDecryptedExtConfig(e.service, extName, assetID)
 }
 
 // InstallExtension opens a file dialog and installs an extension from a zip file.

@@ -204,7 +204,7 @@ func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMes
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_tool", err)
 	}
-	return p.call(ctx, newInvocation(p.nextInvocationID(), nil), "execute_tool", input, p.opts.toolTimeout)
+	return p.call(ctx, newInvocation(p.nextInvocationID(), nil).scopedTo(asset), "execute_tool", input, p.opts.toolTimeout)
 }
 
 // CallAction calls execute_action on the extension.
@@ -229,7 +229,7 @@ func (p *Plugin) CallAction(ctx context.Context, invocationID, actionName string
 	}
 	defer p.untrackAction(invocationID)
 
-	return p.call(ctx, newInvocation(invocationID, cancel), "execute_action", input, 0)
+	return p.call(ctx, newInvocation(invocationID, cancel).scopedTo(asset), "execute_action", input, 0)
 }
 
 // CancelAction requests cancellation of the one action running under

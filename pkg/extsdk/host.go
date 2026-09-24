@@ -7,15 +7,6 @@ func Log(level, msg string) {
 	hostLog(level, msg)
 }
 
-// GetAssetConfig retrieves the named asset's configuration JSON.
-// Password fields (format:"password" in configSchema) are decrypted by the host.
-//
-// A tool or action normally wants the asset its own call runs against, which the
-// host already named: use ctx.AssetConfig() instead of carrying an id around.
-func GetAssetConfig(assetID int64) (json.RawMessage, error) {
-	return hostAssetGetConfig(assetID)
-}
-
 // DialogOptions for FileDialog.
 type DialogOptions struct {
 	Title       string   `json:"title"`
