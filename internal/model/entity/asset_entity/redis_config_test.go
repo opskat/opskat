@@ -40,6 +40,12 @@ func TestRedisConfigModeJSONContract(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"host":"h","port":6379}`, string(legacy))
 	assert.Equal(t, RedisModeStandalone, (&RedisConfig{}).EffectiveMode())
+
+	// 集群 / 哨兵不用 host/port:清空后的零值不应出现在存储的 JSON 里(raw 来自上面的哨兵 cfg)。
+	_, hasHost := raw["host"]
+	_, hasPort := raw["port"]
+	assert.False(t, hasHost, "cluster/sentinel stored config must not carry an empty host key")
+	assert.False(t, hasPort, "cluster/sentinel stored config must not carry a zero port key")
 }
 
 func TestValidateRedisModes(t *testing.T) {

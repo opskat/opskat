@@ -34,7 +34,7 @@ func (c *RedisConfig) KeepModeFieldsOnly() {
 		c.NodeAddressMap = nil
 		c.clearSentinelFields()
 	case RedisModeCluster:
-		c.Host, c.Port = "", 0 // database 保留:非 0 时由 validateMode 明确报错,不静默改成 db0
+		c.Host, c.Port = "", 0 // database 保留:非 0 时由 ValidateMode 明确报错,不静默改成 db0
 		c.clearSentinelFields()
 	case RedisModeSentinel:
 		c.Host, c.Port = "", 0
@@ -47,8 +47,10 @@ func (c *RedisConfig) clearSentinelFields() {
 	c.SentinelPassword = ""
 }
 
-// validateMode 按部署模式校验必填项,错误信息指出具体字段与行号。
-func (c *RedisConfig) validateMode() error {
+// ValidateMode 按部署模式校验必填项,错误信息指出具体字段与行号。导出给 opsctl create /
+// AI put_asset 的审批前校验复用(asset.validateRedis 在 commit 时也调它),两处共享同一份
+// 规则,不重复一份校验逻辑。
+func (c *RedisConfig) ValidateMode() error {
 	switch c.EffectiveMode() {
 	case RedisModeStandalone:
 		if c.Host == "" {

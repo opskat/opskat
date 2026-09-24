@@ -56,15 +56,33 @@ func (h *redisHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asse
 	return credential_resolver.Default().ResolvePasswordGeneric(ctx, cfg)
 }
 
+// ValidateCreateArgs 按部署模式做审批前校验:集群/哨兵/未知 mode 复用实体层
+// RedisConfig.ValidateMode(与桌面表单保存时、commit 时 validateRedis 同一份规则),缺
+// master_name、映射行非法、节点缺端口、未知 mode 这些字段级错误在这里就报出，不必等
+// 审批之后的 commit 才发现(E27)。单机模式额外要求 username(ValidateMode 不检查它，
+// 因为 username 是 opsctl/表单创建的约定，不是连接协议本身的必需项)。
 func (h *redisHandler) ValidateCreateArgs(args map[string]any) error {
-	switch ArgString(args, "mode") {
-	case asset_entity.RedisModeCluster, asset_entity.RedisModeSentinel:
-		if len(ArgStringSlice(args, "nodes")) == 0 {
-			return fmt.Errorf("missing required parameter: nodes")
-		}
+	cfg := redisModeConfigFromArgs(args)
+	if err := cfg.ValidateMode(); err != nil {
+		return err
+	}
+	if cfg.EffectiveMode() != asset_entity.RedisModeStandalone {
 		return nil
-	default:
-		return validateRemoteServerArgs(args)
+	}
+	return validateRemoteServerArgs(args)
+}
+
+// redisModeConfigFromArgs 从审批前的原始 create 参数里挑出部署模式校验用到的字段,构造
+// 一个未加密、未落库的 RedisConfig 供 ValidateMode 复用;不写密钥字段。
+func redisModeConfigFromArgs(args map[string]any) *asset_entity.RedisConfig {
+	return &asset_entity.RedisConfig{
+		Host:           ArgString(args, "host"),
+		Port:           ArgInt(args, "port"),
+		Database:       ArgInt(args, "redis_db"),
+		Mode:           ArgString(args, "mode"),
+		Nodes:          ArgStringSlice(args, "nodes"),
+		MasterName:     ArgString(args, "master_name"),
+		NodeAddressMap: ArgStringMap(args, "node_address_map"),
 	}
 }
 

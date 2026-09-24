@@ -83,6 +83,9 @@ func TestRedisHandler(t *testing.T) {
 			convey.So(cfg.Port, convey.ShouldEqual, 0)
 			convey.So(cfg.MasterName, convey.ShouldBeEmpty)
 			convey.So(cfg.Nodes, convey.ShouldResemble, []string{"10.0.0.1:6379"})
+			// 存储的 config 不应带 host/port 空键(E33:曾写入 "host":"","port":0)。
+			convey.So(a.Config, convey.ShouldNotContainSubstring, `"host"`)
+			convey.So(a.Config, convey.ShouldNotContainSubstring, `"port"`)
 		})
 
 		convey.Convey("ApplyUpdateArgs 切回单机时清掉集群字段", func() {
@@ -216,6 +219,36 @@ func TestRedisHandler(t *testing.T) {
 				"host": "10.0.0.1", "port": float64(6379), "username": "default",
 			}), convey.ShouldBeNil)
 			convey.So(h.ValidateCreateArgs(map[string]any{"username": "default"}), convey.ShouldNotBeNil)
+		})
+
+		convey.Convey("ValidateCreateArgs 在审批前拒绝模式相关错误并指出具体字段(E27)", func() {
+			convey.Convey("哨兵模式缺 master_name", func() {
+				err := h.ValidateCreateArgs(map[string]any{
+					"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"},
+				})
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, "master_name")
+			})
+			convey.Convey("node_address_map 映射行非法", func() {
+				err := h.ValidateCreateArgs(map[string]any{
+					"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+					"node_address_map": map[string]any{"10.0.0.1:6379": "bad-no-port"},
+				})
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, "node_address_map")
+			})
+			convey.Convey("节点缺端口", func() {
+				err := h.ValidateCreateArgs(map[string]any{
+					"mode": "cluster", "nodes": []any{"nohostport"},
+				})
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, "nodes")
+			})
+			convey.Convey("未知 mode", func() {
+				err := h.ValidateCreateArgs(map[string]any{"mode": "weird", "host": "x"})
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, "mode")
+			})
 		})
 
 		convey.Convey("集群模式的完整创建通过 validateRedis 校验（走自动化契约）", func() {

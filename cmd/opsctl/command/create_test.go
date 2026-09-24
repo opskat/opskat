@@ -566,3 +566,123 @@ func mapKeys(m map[string]any) []string {
 	}
 	return keys
 }
+
+// TestCreateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField 复现 E27:opsctl
+// help 称「Validation and reference checks run before desktop approval」，但集群/哨兵
+// 模式字段错误此前只在批准后的 commit 里被 validateRedis 发现。用真实的
+// assettype.PrepareCreate（不打桩）证明 Prepare() 本身此时就已经报错，且指出具体字段。
+func TestCreateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		config  map[string]any
+		wantErr string
+	}{
+		{
+			name:    "sentinel missing master_name",
+			config:  map[string]any{"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}},
+			wantErr: "master_name",
+		},
+		{
+			name: "node_address_map target has no port",
+			config: map[string]any{
+				"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+				"node_address_map": map[string]any{"10.0.0.1:6379": "bad-no-port"},
+			},
+			wantErr: "node_address_map",
+		},
+		{
+			name:    "node without a port",
+			config:  map[string]any{"mode": "cluster", "nodes": []any{"nohostport"}},
+			wantErr: "nodes",
+		},
+		{
+			name:    "unknown mode",
+			config:  map[string]any{"mode": "weird", "host": "x"},
+			wantErr: "mode",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request, _, err := parseAssetCreateForTest(t, createArgs(t, "redis", tt.config), nil, nil)
+			require.NoError(t, err)
+			_, err = asset_put_svc.Prepare(context.Background(), asset_put_svc.Request{Asset: request.asset, Config: request.config})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestCreateAssetRedisModeErrorsExitOneWithoutInvokingApproval drives the full createAsset
+// command (real prepareAssetPut) and asserts the desktop approval hook is never reached for
+// any of the four E27 mode error shapes — the bug let all four through to approval/commit.
+// requireCreateApproval denies rather than allows: if the pre-approval reject regresses, this
+// must fail on the approvalCalls assertion below rather than falling through to a real
+// dbutil.WithTransaction commit with no test database configured.
+func TestCreateAssetRedisModeErrorsExitOneWithoutInvokingApproval(t *testing.T) {
+	preserveCreateSeams(t)
+	approvalCalls := 0
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalCalls++
+		return ApprovalResult{}, errors.New("operation denied")
+	}
+	notifyAssetChanged = func() {}
+
+	for _, tt := range []struct {
+		name   string
+		config map[string]any
+	}{
+		{name: "sentinel missing master_name", config: map[string]any{"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}}},
+		{name: "node_address_map target has no port", config: map[string]any{
+			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+			"node_address_map": map[string]any{"10.0.0.1:6379": "bad-no-port"},
+		}},
+		{name: "node without a port", config: map[string]any{"mode": "cluster", "nodes": []any{"nohostport"}}},
+		{name: "unknown mode", config: map[string]any{"mode": "weird", "host": "x"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := createAsset(context.Background(), createArgs(t, "redis", tt.config), "session", commandIO{stdout: &stdout, stderr: &stderr})
+			assert.Equal(t, 1, code, stderr.String())
+			assert.NotEmpty(t, stderr.String())
+		})
+	}
+	assert.Zero(t, approvalCalls, "mode errors must be rejected before desktop approval, not after")
+}
+
+// TestCreateAssetRedisApprovalDetailIncludesNodeAddressMapWithoutInjectedPort 复现 E27 的
+// approvalView 部分:node_address_map 不含密钥却被复合值判定整体丢弃，而 normalizeDefaultPort
+// 对所有模式都注入 port:6379。用真实 Prepare() 验证审批详情的 config 视图。
+func TestCreateAssetRedisApprovalDetailIncludesNodeAddressMapWithoutInjectedPort(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		config      map[string]any
+		expectedMap map[string]string
+	}{
+		{
+			name: "cluster",
+			config: map[string]any{
+				"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+				"node_address_map": map[string]any{"10.0.0.1:6379": "127.0.0.1:16379"},
+			},
+			expectedMap: map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"},
+		},
+		{
+			name: "sentinel",
+			config: map[string]any{
+				"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}, "master_name": "mymaster",
+				"node_address_map": map[string]any{"10.0.0.1:26379": "127.0.0.1:36379"},
+			},
+			expectedMap: map[string]string{"10.0.0.1:26379": "127.0.0.1:36379"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request, _, err := parseAssetCreateForTest(t, createArgs(t, "redis", tt.config), nil, nil)
+			require.NoError(t, err)
+			prepared, err := asset_put_svc.Prepare(context.Background(), asset_put_svc.Request{Asset: request.asset, Config: request.config})
+			require.NoError(t, err)
+			approvalConfig := prepared.SafeApprovalDetail()["config"].(map[string]any)
+			assert.Equal(t, tt.expectedMap, approvalConfig["node_address_map"])
+			_, hasPort := approvalConfig["port"]
+			assert.False(t, hasPort, "cluster/sentinel approval config must not carry an injected port:6379")
+		})
+	}
+}

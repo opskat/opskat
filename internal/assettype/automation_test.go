@@ -521,4 +521,41 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 		require.True(t, ok)
 		assert.Equal(t, []string{"-l", "-f"}, approvalArgs)
 	})
+
+	t.Run("redis node_address_map flat string map kept in approval, no secret inside", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+			"node_address_map": map[string]any{"10.0.0.1:6379": "127.0.0.1:16379"},
+		})
+		require.NoError(t, err)
+		approvalMap, ok := prepared.Approval["node_address_map"].(map[string]string)
+		require.True(t, ok, "flat string->string node_address_map must pass through approval")
+		assert.Equal(t, map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"}, approvalMap)
+	})
+
+	t.Run("redis approval node_address_map with nested composite value is omitted entirely", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+			"node_address_map": map[string]any{"10.0.0.1:6379": map[string]any{"nested": secret}},
+		})
+		require.NoError(t, err)
+		_, hasMap := prepared.Approval["node_address_map"]
+		assert.False(t, hasMap, "node_address_map with a non-string value must not leak into approval")
+	})
+
+	t.Run("redis approval does not inject default port:6379 for cluster/sentinel", func(t *testing.T) {
+		cluster, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+		})
+		require.NoError(t, err)
+		_, hasPort := cluster.Approval["port"]
+		assert.False(t, hasPort, "cluster approval must not carry an injected default port")
+
+		sentinel, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+			"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}, "master_name": "mymaster",
+		})
+		require.NoError(t, err)
+		_, hasPort = sentinel.Approval["port"]
+		assert.False(t, hasPort, "sentinel approval must not carry an injected default port")
+	})
 }

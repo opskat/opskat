@@ -213,8 +213,10 @@ type DatabaseConfig struct {
 
 // RedisConfig Redis类型的特定配置
 type RedisConfig struct {
-	Host                  string            `json:"host"`
-	Port                  int               `json:"port"`
+	// omitempty: 集群/哨兵模式不用 host/port(KeepModeFieldsOnly 清成零值),存储的 config
+	// 不应带上这两个空键;单机模式下 host/port 恒非零,依旧照常写出。
+	Host                  string            `json:"host,omitempty"`
+	Port                  int               `json:"port,omitempty"`
 	Username              string            `json:"username,omitempty"`
 	Password              string            `json:"password,omitempty"`
 	CredentialID          int64             `json:"credential_id,omitempty"`           // 统一凭证 ID（密码）
@@ -1030,7 +1032,7 @@ func (a *Asset) validateRedis() error {
 	if err != nil {
 		return fmt.Errorf("redis配置无效: %w", err)
 	}
-	if err := cfg.validateMode(); err != nil {
+	if err := cfg.ValidateMode(); err != nil {
 		return err
 	}
 	return ValidateProxyChain(EffectiveProxyChain(cfg.ProxyChain, firstNonZero(a.SSHTunnelID, cfg.SSHAssetID), cfg.Proxy))
@@ -1264,7 +1266,7 @@ func (a *Asset) CanConnect() bool {
 		if err != nil {
 			return false
 		}
-		return cfg.validateMode() == nil
+		return cfg.ValidateMode() == nil
 	case AssetTypeMongoDB:
 		cfg, err := a.GetMongoDBConfig()
 		if err != nil {

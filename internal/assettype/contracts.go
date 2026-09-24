@@ -153,7 +153,7 @@ func bindDatabaseCredential(args map[string]any, binding CredentialBinding) (map
 }
 
 func (*redisHandler) AutomationContract() AutomationContract {
-	return passwordAutomationContract(
+	contract := passwordAutomationContract(
 		[]string{
 			"host", "port", "username", "password", "credential_id", "redis_db", "ssh_asset_id",
 			"mode", "nodes", "master_name", "sentinel_username", "sentinel_password", "node_address_map",
@@ -162,8 +162,21 @@ func (*redisHandler) AutomationContract() AutomationContract {
 			"host", "port", "username", "redis_db", "ssh_asset_id",
 			"mode", "nodes", "master_name", "sentinel_username", "node_address_map",
 		},
-		normalizeDefaultPort(6379),
+		normalizeRedisAutomation,
 	)
+	// node_address_map 不含密钥(宣告地址 → 实际地址，都是 host:port),允许它以扁平
+	// map[string]string 的形式出现在审批详情里,好让审批人看到命令会发往哪个节点(spec)。
+	contract.FlatMapFields = []string{"node_address_map"}
+	return contract
+}
+
+// normalizeRedisAutomation 只在单机模式(缺省)下补默认端口 6379:集群/哨兵不用 host/port，
+// 补了会在审批详情与存储的 config 里注入一个假的 port:6379(E27/E33)。
+func normalizeRedisAutomation(args map[string]any) error {
+	if ArgString(args, "mode") != "" && ArgString(args, "mode") != asset_entity.RedisModeStandalone {
+		return nil
+	}
+	return normalizeDefaultPort(6379)(args)
 }
 
 func (*mongodbHandler) AutomationContract() AutomationContract {
