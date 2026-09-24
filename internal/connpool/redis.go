@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -41,6 +42,9 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 	}
 
 	client := newRedisClient(cfg, opts)
+	if mode == asset_entity.RedisModeSentinel {
+		client.AddHook(&sentinelMasterWatcher{assetID: asset.ID, masterName: cfg.MasterName})
+	}
 	if pingErr := client.Ping(ctx).Err(); pingErr != nil {
 		logger.Ctx(ctx).Error("redis connect failed", append(logFields, zap.Error(pingErr))...)
 		if err := client.Close(); err != nil {
@@ -85,7 +89,7 @@ func redisSeedAddrs(cfg *asset_entity.RedisConfig) []string {
 
 // configureRedisTransport 按 代理链 > 隧道 > 代理 > 直连 设置 opts.Dialer,返回隧道(可为 nil)。
 // 拨号一律使用 go-redis 请求的目标地址(集群发现的节点、哨兵返回的主节点),并先做地址映射;
-// 直连且无映射时保留 go-redis 默认 dialer。
+// 直连且无映射时保留 go-redis 默认 dialer(哨兵模式除外:需记录拨号地址以发现主从切换)。
 // go-redis 设置自定义 Dialer 后默认 dialer 的 TLS 逻辑被绕过,因此把 TLSConfig
 // 移入 dialer 内手动包裹并清空 opts.TLSConfig,避免 TLS 静默失效。
 func configureRedisTransport(opts *redis.UniversalOptions, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
@@ -112,13 +116,18 @@ func configureRedisTransport(opts *redis.UniversalOptions, asset *asset_entity.A
 	case cfg.Proxy != nil:
 		dial = proxyDialFunc(cfg.Proxy)
 	}
+	sentinel := cfg.EffectiveMode() == asset_entity.RedisModeSentinel
 	if dial == nil { // 直连(含代理链解析为空层)
-		if len(addrMap) == 0 {
+		if len(addrMap) == 0 && !sentinel {
 			return nil, nil
 		}
 		dial = directDialFunc()
 	}
-	opts.Dialer = tlsWrappedDialFunc(mappedDialFunc(dial, addrMap), opts.TLSConfig)
+	dial = mappedDialFunc(dial, addrMap)
+	if sentinel {
+		dial = recordDialedAddr(dial) // 供 sentinelMasterWatcher 得知数据连接拨往的主节点
+	}
+	opts.Dialer = tlsWrappedDialFunc(dial, opts.TLSConfig)
 	opts.TLSConfig = nil
 	return tunnel, nil
 }
@@ -166,4 +175,60 @@ func buildRedisTLSConfig(cfg *asset_entity.RedisConfig) (*tls.Config, error) {
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,
 	})
+}
+
+// dialedAddrKey 是 sentinelMasterWatcher 放进拨号 ctx 的地址记录槽(*string)。
+type dialedAddrKey struct{}
+
+// recordDialedAddr 把请求拨号的地址(映射前的宣告地址)写入 ctx 中的记录槽。
+// go-redis 的 FailoverClient 在建立数据连接时,于同一 ctx 下先经哨兵解析主节点、再拨往主节点,
+// 因此槽里最后一次写入的就是主节点地址。
+func recordDialedAddr(dial dialContextFunc) dialContextFunc {
+	return func(ctx context.Context, addr string) (net.Conn, error) {
+		if slot, ok := ctx.Value(dialedAddrKey{}).(*string); ok {
+			*slot = addr
+		}
+		return dial(ctx, addr)
+	}
+}
+
+// sentinelMasterWatcher 是哨兵模式客户端的 go-redis hook:记录每条新数据连接拨往的主节点,
+// 地址变化即哨兵报告了新主节点(主从切换),记一条结构化日志(不含密钥)。
+type sentinelMasterWatcher struct {
+	assetID    int64
+	masterName string
+
+	mu     sync.Mutex
+	master string
+}
+
+func (w *sentinelMasterWatcher) DialHook(next redis.DialHook) redis.DialHook {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		var dialed string
+		conn, err := next(context.WithValue(ctx, dialedAddrKey{}, &dialed), network, addr)
+		if err == nil && dialed != "" {
+			w.observe(ctx, dialed)
+		}
+		return conn, err
+	}
+}
+
+func (w *sentinelMasterWatcher) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+
+func (w *sentinelMasterWatcher) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+func (w *sentinelMasterWatcher) observe(ctx context.Context, master string) {
+	w.mu.Lock()
+	prev := w.master
+	w.master = master
+	w.mu.Unlock()
+	if prev != "" && prev != master {
+		logger.Ctx(ctx).Warn("redis sentinel master switched",
+			zap.Int64("assetID", w.assetID),
+			zap.String("masterName", w.masterName),
+			zap.String("from", prev),
+			zap.String("to", master))
+	}
 }

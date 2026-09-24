@@ -261,3 +261,82 @@ describe("RedisConfigSection 自动识别:模式切换 / 哨兵组读取 / 补�
     );
   });
 });
+
+describe("RedisConfigSection 自动识别:规格补全", () => {
+  it("集群测试有不可达节点:successDetail 走「种子节点可连 · N 个节点不可达」", async () => {
+    vi.mocked(RedisProbe).mockResolvedValue({
+      modeMismatch: false,
+      cluster: { state: "ok", masters: 3, replicas: 3, unreachableNodes: ["172.18.0.11:6379"] },
+    } as never);
+    const ref = createRef<AssetFormHandle>();
+    const editAsset = new asset_entity.Asset({
+      Type: "redis",
+      Config: '{"mode":"cluster","nodes":["10.0.0.1:7001"]}',
+    });
+    render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />);
+
+    const result = await ref.current!.startTest!(ctx).result;
+    expect(result.successDetail).toBe("asset.redisTestClusterUnreachableDetail");
+  });
+
+  it("切换到集群模式:当前 host:port 排在已有种子节点之前,并按集群模式继续识别", async () => {
+    const user = userEvent.setup();
+    vi.mocked(RedisProbe)
+      .mockResolvedValueOnce({ modeMismatch: true, detectedMode: "cluster" } as never)
+      .mockResolvedValueOnce({
+        modeMismatch: false,
+        cluster: { state: "ok", masters: 3, replicas: 0, unreachableNodes: ["172.18.0.11:6379"] },
+      } as never);
+    const ref = createRef<AssetFormHandle>();
+    const editAsset = new asset_entity.Asset({ Type: "redis", Config: '{"host":"10.20.0.11","port":6379}' });
+    render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />);
+    await user.click(screen.getByTestId("redis-mode-cluster"));
+    await user.type(screen.getByTestId("redis-nodes-textarea"), "10.20.0.12:6379");
+    await user.click(screen.getByTestId("redis-mode-standalone"));
+
+    await act(async () => {
+      await ref.current!.startTest!(ctx).result;
+    });
+    await user.click(await screen.findByTestId("redis-switch-mode-button"));
+
+    expect(screen.getByTestId("redis-nodes-textarea")).toHaveValue("10.20.0.11:6379\n10.20.0.12:6379");
+    await waitFor(() => expect(RedisProbe).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(RedisProbe).mock.calls[1][1]).toContain('"mode":"cluster"');
+    await user.click(screen.getByTestId("config-tab-advanced"));
+    expect(await screen.findByTestId("redis-generate-mapping-button")).toBeInTheDocument();
+  });
+
+  it("从哨兵读取时哨兵需要认证:提示「哨兵需要单独的密码」并聚焦哨兵密码", async () => {
+    const user = userEvent.setup();
+    vi.mocked(RedisProbe).mockResolvedValue({
+      modeMismatch: false,
+      sentinel: { authRequired: true, groups: [], masterAddr: "", otherSentinels: [] },
+    } as never);
+    render(<RedisConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+    await user.click(screen.getByTestId("redis-mode-sentinel"));
+    await user.type(screen.getByTestId("redis-nodes-textarea"), "10.20.0.31:26379");
+    await user.click(screen.getByTestId("redis-read-sentinel-button"));
+
+    expect(await screen.findByText("asset.redisSentinelAuthRequired")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("redis-sentinel-password-input")).toHaveFocus());
+  });
+
+  it("节点地址映射某一行不是 host:port:禁止保存并指出该行", async () => {
+    const user = userEvent.setup();
+    const onValidity = vi.fn();
+    const editAsset = new asset_entity.Asset({
+      Type: "redis",
+      Config: '{"mode":"cluster","nodes":["10.0.0.1:7001"]}',
+    });
+    render(<RedisConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
+    await user.click(screen.getByTestId("config-tab-advanced"));
+    await user.type(
+      screen.getByTestId("redis-node-address-map-textarea"),
+      "172.18.0.11:6379 = 10.0.0.5:7001\n172.18.0.12 = 10.0.0.6:7002"
+    );
+
+    const v = lastValidity(onValidity);
+    expect(v.canSave).toBe(false);
+    expect(v.saveDisabledReason).toBe("asset.redisMappingLineInvalid");
+  });
+});

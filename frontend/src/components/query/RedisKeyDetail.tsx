@@ -12,6 +12,7 @@ import { RedisStringEditor } from "@/components/query/RedisStringEditor";
 import { RedisCollectionTable } from "@/components/query/RedisCollectionTable";
 import { RedisStreamViewer } from "@/components/query/RedisStreamViewer";
 import { parseRedisCommandLine } from "@/lib/redisCommand";
+import { toastRedisDeleteFailures } from "@/lib/redisDelete";
 
 interface RedisKeyDetailProps {
   tabId: string;
@@ -160,17 +161,8 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     if (!tabMeta || !state?.selectedKey) return;
     setDeleting(true);
     try {
-      // RedisDeleteKeys resolves even on a cluster partial failure (e.g. CLUSTERDOWN on the
-      // key's slot) — it doesn't reject, so the failure must be read from the result.
       const result = await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [state.selectedKey]);
-      if (result.failed && result.failed.length > 0) {
-        toast.error(
-          t("query.redisDeleteKeysFailed", {
-            count: result.failed.length,
-            keys: result.failed.map((f) => f.key).join(", "),
-          })
-        );
-      }
+      toastRedisDeleteFailures(t, result);
       if (result.deleted > 0) {
         removeKey(tabId, state.selectedKey);
       }

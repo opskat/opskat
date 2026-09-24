@@ -286,9 +286,11 @@ omitted): validation and required fields mirror the desktop form.
   monitored master group's name); `sentinel_username` / `sentinel_password` are optional
   sentinel-side auth, encrypted like the data-node `password`; `sentinel_password` is
   write-only — it is never echoed back, `update asset` re-sends it to change it.
-- Any mode — `node_address_map` (object: announced `host:port` → dialable `host:port`)
-  overrides discovered node addresses that are not directly reachable (e.g. behind NAT or
-  an SSH tunnel).
+- `cluster` / `sentinel` — `node_address_map` (object: announced `host:port` → dialable
+  `host:port`) overrides discovered node addresses that are not directly reachable (e.g.
+  behind NAT or an SSH tunnel). Standalone assets have no address map.
+- Only the fields of the chosen `mode` are stored; switching `mode` with `update asset`
+  drops the other modes' fields (e.g. `nodes` when switching back to `standalone`).
 - `opsctl get asset` / `opsctl list assets` show `mode`, `nodes`, and `master_name` for
   cluster/sentinel assets, never `sentinel_password` or any other secret.
 

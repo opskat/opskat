@@ -24,6 +24,29 @@ func (c *RedisConfig) EffectiveMode() string {
 	return c.Mode
 }
 
+// KeepModeFieldsOnly 清掉当前部署模式用不到的字段(与桌面表单保存一致:只写入当前模式的字段),
+// 避免切换模式后残留的其它模式字段被安全视图展示或参与连接。单机模式不写 mode。
+func (c *RedisConfig) KeepModeFieldsOnly() {
+	switch c.EffectiveMode() {
+	case RedisModeStandalone:
+		c.Mode = ""
+		c.Nodes = nil
+		c.NodeAddressMap = nil
+		c.clearSentinelFields()
+	case RedisModeCluster:
+		c.Host, c.Port = "", 0 // database 保留:非 0 时由 validateMode 明确报错,不静默改成 db0
+		c.clearSentinelFields()
+	case RedisModeSentinel:
+		c.Host, c.Port = "", 0
+	}
+}
+
+func (c *RedisConfig) clearSentinelFields() {
+	c.MasterName = ""
+	c.SentinelUsername = ""
+	c.SentinelPassword = ""
+}
+
 // validateMode 按部署模式校验必填项,错误信息指出具体字段与行号。
 func (c *RedisConfig) validateMode() error {
 	switch c.EffectiveMode() {

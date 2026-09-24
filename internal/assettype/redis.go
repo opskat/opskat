@@ -28,13 +28,14 @@ func (h *redisHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	view := map[string]any{
 		"host": cfg.Host, "port": cfg.Port,
 		"username": cfg.Username, "redis_db": cfg.Database,
-		"mode": cfg.EffectiveMode(),
 	}
-	if len(cfg.Nodes) > 0 {
+	// 单机资产的安全视图与引入部署模式前相同；集群 / 哨兵额外显示 mode / nodes / master_name。
+	if mode := cfg.EffectiveMode(); mode != asset_entity.RedisModeStandalone {
+		view["mode"] = mode
 		view["nodes"] = cfg.Nodes
-	}
-	if cfg.MasterName != "" {
-		view["master_name"] = cfg.MasterName
+		if cfg.MasterName != "" {
+			view["master_name"] = cfg.MasterName
+		}
 	}
 	return view
 }
@@ -98,6 +99,7 @@ func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 		}
 		cfg.SentinelPassword = encrypted
 	}
+	cfg.KeepModeFieldsOnly()
 	return a.SetRedisConfig(cfg)
 }
 
@@ -155,5 +157,6 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 		}
 		cfg.SentinelPassword = encrypted
 	}
+	cfg.KeepModeFieldsOnly()
 	return a.SetRedisConfig(cfg)
 }

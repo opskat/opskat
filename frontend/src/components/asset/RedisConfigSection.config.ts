@@ -109,10 +109,18 @@ export interface NodeAddressMapResult {
   error?: NodeAddressMapError;
 }
 
+/** host:port 格式校验(镜像后端 validateRedisHostPort:IPv6 需方括号,端口 1-65535)。 */
+function isRedisHostPort(addr: string): boolean {
+  const m = /^(?:\[([^\]]+)\]|([^:\s[\]]+)):(\d+)$/.exec(addr);
+  if (!m) return false;
+  const port = Number(m[3]);
+  return port > 0 && port <= 65535;
+}
+
 /**
  * 解析「宣告地址 = 实际地址」逐行文本。右侧留空视为尚未填写(不写入 map,非错误),
- * 配合「生成映射」占位行(用户后续手填)。缺少 `=` 或宣告地址重复视为格式错误,
- * 返回首个错误所在行(1 基)供保存前拦截并定位是哪一行。
+ * 配合「生成映射」占位行(用户后续手填)。缺少 `=`、任一侧不是 host:port 或宣告地址重复
+ * 视为格式错误,返回首个错误所在行(1 基)供保存前拦截并定位是哪一行。
  */
 export function parseNodeAddressMap(raw: string): NodeAddressMapResult {
   const map: Record<string, string> = {};
@@ -125,7 +133,9 @@ export function parseNodeAddressMap(raw: string): NodeAddressMapResult {
     if (eq < 0) return { map, error: { line: i + 1, key: "asset.redisMappingLineInvalid" } };
     const announced = line.slice(0, eq).trim();
     const actual = line.slice(eq + 1).trim();
-    if (!announced) return { map, error: { line: i + 1, key: "asset.redisMappingLineInvalid" } };
+    if (!isRedisHostPort(announced) || (actual && !isRedisHostPort(actual))) {
+      return { map, error: { line: i + 1, key: "asset.redisMappingLineInvalid" } };
+    }
     if (seen.has(announced)) return { map, error: { line: i + 1, key: "asset.redisMappingDuplicate" } };
     seen.add(announced);
     if (actual) map[announced] = actual;

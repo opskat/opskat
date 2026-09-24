@@ -93,7 +93,10 @@ describe("RedisKeyDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: "action.delete" }));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("query.redisDeleteKeysFailed");
+      // Redis's own error (e.g. CLUSTERDOWN) must reach the user verbatim, per failed key.
+      expect(toast.error).toHaveBeenCalledWith("query.redisDeleteKeysFailed", {
+        description: "user:1: CLUSTERDOWN",
+      });
     });
     expect(useQueryStore.getState().redisStates["query-10"].selectedKey).toBe("user:1");
   });

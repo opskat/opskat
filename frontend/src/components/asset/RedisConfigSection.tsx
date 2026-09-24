@@ -71,10 +71,12 @@ function redisTestSuccessDetail(
 ): string | undefined {
   if (mode === "cluster" && result.cluster) {
     const state = result.cluster.state === "ok" ? t("asset.redisClusterStateOk") : result.cluster.state;
-    return t("asset.redisTestClusterDetail", {
+    const unreachable = result.cluster.unreachableNodes?.length ?? 0;
+    return t(unreachable > 0 ? "asset.redisTestClusterUnreachableDetail" : "asset.redisTestClusterDetail", {
       state,
       masters: result.cluster.masters,
       replicas: result.cluster.replicas,
+      count: unreachable,
     });
   }
   if (mode === "sentinel" && result.sentinel) {
@@ -96,6 +98,13 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
   const [sentinelGroups, setSentinelGroups] = useState<redis_svc.RedisProbeSentinelGroup[]>([]);
   const [readingSentinel, setReadingSentinel] = useState(false);
   const [sentinelAuthFlash, setSentinelAuthFlash] = useState(false);
+  const sentinelPasswordRef = useRef<HTMLInputElement>(null);
+
+  // 哨兵回复需要认证:提示「哨兵需要单独的密码」并聚焦哨兵认证区的密码框。
+  const flagSentinelAuthRequired = useCallback(() => {
+    setSentinelAuthFlash(true);
+    sentinelPasswordRef.current?.focus();
+  }, []);
 
   const { state, patch } = useConfigSection<RedisFormState>({
     ref: baseHandleRef,
@@ -141,7 +150,8 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     deps: [cred.value],
   });
 
-  const probeAndSetSentinelGroups = useCallback(
+  // 识别探测(从哨兵读取 / 失焦 / 切换识别出的模式后续识别):结果只更新识别状态,不做测试连接判定。
+  const runRecognitionProbe = useCallback(
     async (formState: RedisFormState) => {
       setReadingSentinel(true);
       try {
@@ -150,6 +160,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         const result = await RedisProbe(testID, req.configJSON, req.password, req.sentinelPassword);
         if (!mountedRef.current) return;
         setLastProbe(result);
+        if (result.sentinel?.authRequired) flagSentinelAuthRequired();
         const groups = result.sentinel?.groups ?? [];
         setSentinelGroups(groups);
         if (groups.length === 1 && !formState.masterName.trim()) {
@@ -161,13 +172,13 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         if (mountedRef.current) setReadingSentinel(false);
       }
     },
-    [cred, patch]
+    [cred, patch, flagSentinelAuthRequired]
   );
 
   const readSentinelGroups = useCallback(() => {
     if (parseRedisNodes(state.nodes).length === 0) return;
-    void probeAndSetSentinelGroups(state);
-  }, [state, probeAndSetSentinelGroups]);
+    void runRecognitionProbe(state);
+  }, [state, runRecognitionProbe]);
 
   const completeSentinels = useCallback(() => {
     const current = parseRedisNodes(state.nodes);
@@ -179,12 +190,15 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
   const switchToDetectedMode = useCallback(() => {
     const detected = lastProbe?.detectedMode;
     if (detected !== "cluster" && detected !== "sentinel") return;
+    // 当前 host:port 作为第一个种子节点 / 哨兵节点,之前在该模式下填过的节点保留在其后。
     const seed = state.host && state.port ? `${state.host}:${state.port}` : "";
-    const next: RedisFormState = { ...state, mode: detected, nodes: seed };
-    patch({ mode: detected, nodes: seed });
+    const nodes = [seed, ...parseRedisNodes(state.nodes).filter((n) => n !== seed)].filter(Boolean).join("\n");
+    const next: RedisFormState = { ...state, mode: detected, nodes };
+    patch({ mode: detected, nodes });
     setLastProbe(null);
-    if (detected === "sentinel") void probeAndSetSentinelGroups(next);
-  }, [lastProbe, state, patch, probeAndSetSentinelGroups]);
+    // 按对应模式执行后续识别:集群 → 不可直连的节点;哨兵 → 组名 / 其它哨兵 / 认证。
+    void runRecognitionProbe(next);
+  }, [lastProbe, state, patch, runRecognitionProbe]);
 
   const generateMapping = useCallback(() => {
     const unreachable = lastProbe?.cluster?.unreachableNodes ?? [];
@@ -209,7 +223,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       if (!active) throw new Error("cancelled");
       if (mountedRef.current) setLastProbe(result);
       if (result.sentinel?.authRequired) {
-        if (mountedRef.current) setSentinelAuthFlash(true);
+        if (mountedRef.current) flagSentinelAuthRequired();
         throw new RedisSentinelAuthRequiredError();
       }
       return { successDetail: redisTestSuccessDetail(t, state.mode, result) };
@@ -235,7 +249,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     activeAttemptRef.current = attempt;
     activeAttemptTokenRef.current = token;
     return attempt;
-  }, [state, cred, t]);
+  }, [state, cred, t, flagSentinelAuthRequired]);
 
   useImperativeHandle(
     ref,
@@ -450,6 +464,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                 </Field>
                 <Field label={t("asset.redisSentinelPassword")} className="flex-1">
                   <SecretInput
+                    ref={sentinelPasswordRef}
                     data-testid="redis-sentinel-password-input"
                     value={s.sentinelPassword}
                     onChange={(e) => {
@@ -460,6 +475,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                   />
                 </Field>
               </div>
+              {sentinelAuthFlash && <p className="text-xs text-warning">{t("asset.redisSentinelAuthRequired")}</p>}
             </div>
           ),
         },

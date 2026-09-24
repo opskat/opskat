@@ -68,6 +68,41 @@ func TestRedisHandler(t *testing.T) {
 			convey.So(cfg.NodeAddressMap, convey.ShouldResemble, map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"})
 		})
 
+		convey.Convey("ApplyCreateArgs 只写入当前模式用到的字段", func() {
+			a := &asset_entity.Asset{Type: "redis"}
+			err := h.ApplyCreateArgs(context.Background(), a, map[string]any{
+				"mode":        "cluster",
+				"nodes":       []any{"10.0.0.1:6379"},
+				"host":        "10.0.0.9",
+				"port":        6379,
+				"master_name": "stray",
+			})
+			convey.So(err, convey.ShouldBeNil)
+			cfg, _ := a.GetRedisConfig()
+			convey.So(cfg.Host, convey.ShouldBeEmpty)
+			convey.So(cfg.Port, convey.ShouldEqual, 0)
+			convey.So(cfg.MasterName, convey.ShouldBeEmpty)
+			convey.So(cfg.Nodes, convey.ShouldResemble, []string{"10.0.0.1:6379"})
+		})
+
+		convey.Convey("ApplyUpdateArgs 切回单机时清掉集群字段", func() {
+			a := &asset_entity.Asset{Type: "redis"}
+			_ = a.SetRedisConfig(&asset_entity.RedisConfig{
+				Mode: "cluster", Nodes: []string{"10.0.0.1:6379"},
+				NodeAddressMap: map[string]string{"172.18.0.2:6379": "10.0.0.1:16379"},
+			})
+			err := h.ApplyUpdateArgs(context.Background(), a, map[string]any{
+				"mode": "standalone", "host": "10.0.0.5", "port": 6380,
+			})
+			convey.So(err, convey.ShouldBeNil)
+			cfg, _ := a.GetRedisConfig()
+			convey.So(cfg.EffectiveMode(), convey.ShouldEqual, "standalone")
+			convey.So(cfg.Host, convey.ShouldEqual, "10.0.0.5")
+			convey.So(cfg.Nodes, convey.ShouldBeEmpty)
+			convey.So(cfg.NodeAddressMap, convey.ShouldBeEmpty)
+			convey.So(h.SafeView(a)["nodes"], convey.ShouldBeNil)
+		})
+
 		convey.Convey("ApplyCreateArgs 哨兵模式加密 sentinel_password", func() {
 			a := &asset_entity.Asset{Type: "redis"}
 			err := h.ApplyCreateArgs(context.Background(), a, map[string]any{
@@ -151,7 +186,8 @@ func TestRedisHandler(t *testing.T) {
 				Host: "10.0.0.1", Port: 6379, Username: "default",
 			})
 			view := h.SafeView(a)
-			convey.So(view["mode"], convey.ShouldEqual, "standalone")
+			_, hasMode := view["mode"]
+			convey.So(hasMode, convey.ShouldBeFalse)
 			_, hasNodes := view["nodes"]
 			convey.So(hasNodes, convey.ShouldBeFalse)
 		})

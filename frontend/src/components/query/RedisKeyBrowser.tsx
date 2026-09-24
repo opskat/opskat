@@ -45,6 +45,7 @@ import {
 } from "@/lib/redisKeyTree";
 import { RedisDeleteKeys } from "../../../wailsjs/go/redis/Redis";
 import { RedisCreateKeyDialog } from "./RedisCreateKeyDialog";
+import { toastRedisDeleteFailures } from "@/lib/redisDelete";
 
 interface RedisKeyBrowserProps {
   tabId: string;
@@ -512,17 +513,8 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget || !tabMeta || !state) return;
     try {
-      // RedisDeleteKeys resolves even on a cluster partial failure (e.g. CLUSTERDOWN on the
-      // key's slot) — it doesn't reject, so the failure must be read from the result.
       const result = await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [deleteTarget]);
-      if (result.failed && result.failed.length > 0) {
-        toast.error(
-          t("query.redisDeleteKeysFailed", {
-            count: result.failed.length,
-            keys: result.failed.map((f) => f.key).join(", "),
-          })
-        );
-      }
+      toastRedisDeleteFailures(t, result);
       if (result.deleted > 0) {
         removeKey(tabId, deleteTarget);
       }
