@@ -2768,7 +2768,12 @@
     "noPolicies": "无策略组",
     "noPages": "无页面",
     "loadError": "加载扩展列表失败",
-    "pageDisabled": "扩展 \"{{name}}\" 已禁用，在 设置 → 扩展 中重新启用后可继续使用此页面"
+    "pageDisabled": "扩展 \"{{name}}\" 已禁用，在 设置 → 扩展 中重新启用后可继续使用此页面",
+    "hostUi": {
+      "jsonTreeExpand": "展开",
+      "jsonTreeCollapse": "折叠",
+      "jsonTreeEmpty": "暂无数据"
+    }
   },
   "snippet": {
     "title": "代码片段",

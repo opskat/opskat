@@ -14,9 +14,15 @@
 // "write" policy group is not granted by default); note_delete is refused outright
 // (the "no-delete" group denies it by default) — so this one page's buttons are
 // what e2e drives to cover the approval dialog and the deny-as-error path.
+//
+// It also renders the note list a second time through window.__OPSKAT_EXT__.hostUI
+// (task 11's @opskat/host-ui — this is why manifest.json declares hostABI 2.1
+// instead of 2.0): note_list already returns key/size/updatedAt per note, which is
+// exactly a result-table shape, so this is the "result table for the note list"
+// case the spec calls out rather than a contrived one.
 
 export function NotebookPage({ assetId }) {
-  const { React, api } = window.__OPSKAT_EXT__;
+  const { React, api, hostUI } = window.__OPSKAT_EXT__;
   const { useState, useCallback, useEffect, createElement: h } = React;
 
   const [notes, setNotes] = useState([]);
@@ -111,6 +117,14 @@ export function NotebookPage({ assetId }) {
           )
         )
       )
+    ),
+    h(
+      "div",
+      { "data-testid": "notebook-table", style: { height: 180 } },
+      h(hostUI.QueryResultTable, {
+        columns: ["key", "size", "updatedAt"],
+        rows: notes,
+      })
     )
   );
 }

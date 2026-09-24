@@ -22,10 +22,19 @@ import (
 // answers describe(). A 1.x extension satisfies none of those, so it is refused
 // here — at parse time, where the message can name what to do — rather than
 // failing later with a missing export.
-const HostABIVersion = "2.0"
+//
+// 2.1 additionally exposes @opskat/host-ui to extension pages (a code editor,
+// JSON tree view, and result table injected on window.__OPSKAT_EXT__.hostUI) —
+// a frontend-only addition that changes nothing about the WASM host_call/host_io
+// contract. A 2.0 extension keeps loading and working exactly as before; it just
+// doesn't get hostUI.
+const HostABIVersion = "2.1"
 
-// SupportedHostABIs lists all host ABI versions the runtime accepts.
-var SupportedHostABIs = []string{"2.0"}
+// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 stays
+// listed so extensions built before host-ui keep loading unchanged; only a
+// hostABI newer than everything here (e.g. an extension declaring 2.2 or 3.0)
+// is refused.
+var SupportedHostABIs = []string{"2.0", "2.1"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)

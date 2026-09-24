@@ -288,6 +288,28 @@ func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
 	require.Contains(t, approver.prompts[1].Detail, "network.assetEndpoint: true")
 }
 
+// A dev extension declaring a hostABI newer than this runtime supports (e.g. one
+// built against a future host-ui revision) is refused at the same install gate a
+// stale 1.x extension already is — not installed silently with hostUI missing.
+func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	o := newDevOpsctl(&recordingDevInstaller{}, approver)
+	dir := t.TempDir()
+	manifest := `{
+  "name": "oss", "version": "1.2.3", "hostABI": "2.2",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {}
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+
+	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+
+	require.False(t, resp.Approved)
+	require.Contains(t, resp.Reason, "hostABI")
+	require.Empty(t, approver.prompts, "a rejected manifest must not reach the approval prompt")
+}
+
 // credentials:read hands the extension every stored password of its assets in
 // plaintext, so the approval leads with it instead of listing it among the
 // other capabilities.

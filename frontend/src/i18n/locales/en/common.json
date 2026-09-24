@@ -2768,7 +2768,12 @@
     "noPolicies": "No policy groups",
     "noPages": "No pages",
     "loadError": "Failed to load extensions",
-    "pageDisabled": "Extension \"{{name}}\" is disabled. Re-enable it in Settings → Extensions to use this page."
+    "pageDisabled": "Extension \"{{name}}\" is disabled. Re-enable it in Settings → Extensions to use this page.",
+    "hostUi": {
+      "jsonTreeExpand": "Expand",
+      "jsonTreeCollapse": "Collapse",
+      "jsonTreeEmpty": "No data"
+    }
   },
   "snippet": {
     "title": "Snippets",

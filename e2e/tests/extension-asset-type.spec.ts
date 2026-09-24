@@ -229,6 +229,11 @@ test("a page call needing confirmation shows the opsctl approval dialog; approvi
   await expect(page.getByTestId("notebook-status")).toHaveAttribute("data-kind", "success", { timeout: 15_000 });
   await expect(page.getByTestId(`notebook-note-${key}`)).toBeVisible();
 
+  // The page also renders the note list through window.__OPSKAT_EXT__.hostUI.QueryResultTable
+  // (task 11's @opskat/host-ui, hostABI 2.1) — proving the host's own result-table
+  // component, not a copy, is what the injected module actually hands to the page.
+  await expect(page.getByTestId("notebook-table").getByText(key)).toBeVisible();
+
   const [putRow] = await waitForToolAuditRowCount(name, "note_put", 1);
   expect(putRow).toMatchObject({ source: "extension_page", decision: "allow" });
 

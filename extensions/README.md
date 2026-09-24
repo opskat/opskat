@@ -42,11 +42,17 @@ into `describe()`.
 {
   "name": "notebook",
   "version": "0.1.0",
-  "hostABI": "2.0",
+  "hostABI": "2.1",
   "backend": { "runtime": "wasm", "binary": "main.wasm" },
   "capabilities": {}
 }
 ```
+
+`hostABI` is checked as an exact-set membership, not a minimum: `pkg/extension.SupportedHostABIs`
+currently accepts `2.0` and `2.1`, so an already-built `2.0` extension keeps loading
+unchanged (it just doesn't get `@opskat/host-ui` — see below), while one declaring
+anything not in that set (`2.2`, `3.0`, …) is refused at load with the list of what is
+supported.
 
 `capabilities` defaults to deny-all, and the notebook needs nothing: the host KV, the
 asset config and logging are available without a grant. Declare only what you use:
@@ -359,6 +365,37 @@ returns the action and resource a call requests.
 `opskat.Frontend(...)` declares an ESM entry the app loads from
 `/extensions/<name>/<entry>`, served straight out of the installed extension
 directory. A page slotted as `asset.connect` is what opening the asset shows. The app
-injects `window.__OPSKAT_EXT__` (`React`, `ReactDOM`, `i18n`, `@opskat/ui`, and the
-extension API) before importing the module, so a page uses the host's React rather
-than bundling its own.
+injects `window.__OPSKAT_EXT__` (`React`, `ReactDOM`, `i18n`, `@opskat/ui`,
+`@opskat/host-ui` — see below — and the extension API) before importing the module,
+so a page uses the host's React rather than bundling its own. There is no import map
+for bare specifiers: a plain ESM page (no build step, like `extensions/notebook`)
+reads everything off `window.__OPSKAT_EXT__` directly, e.g.
+`const { React, hostUI } = window.__OPSKAT_EXT__;` — see `extensions/notebook/frontend/page.js`.
+
+### `@opskat/host-ui`
+
+`window.__OPSKAT_EXT__.hostUI` gives a page three ready-made, on-theme components
+instead of bundling its own (design decision in
+[docs/specs/2026-09-24-ext-platform-capabilities.md](../docs/specs/2026-09-24-ext-platform-capabilities.md)):
+
+- `CodeEditor` — Monaco, with a selectable `language` (including `"json"`).
+- `JsonTreeView` — a read-only, expand/collapse JSON tree for `data` of any shape.
+- `QueryResultTable` — a `columns` / `rows` result grid with sorting and copy built in.
+
+They are the *exact same component instances* the host itself renders, so they
+already follow the host's theme (CSS variables flip with `ThemeProvider`, no prop
+needed) and language (the shared `react-i18next` instance) — a page just renders
+them:
+
+```js
+const { React, hostUI } = window.__OPSKAT_EXT__;
+const { createElement: h } = React;
+h(hostUI.QueryResultTable, { columns: ["key", "size"], rows: notes });
+h(hostUI.JsonTreeView, { data: someNote });
+```
+
+`hostUI.version` is bound to `hostABI` (currently `"2.1"`) — it tells a page which
+host-ui revision it's running against. Declare `"hostABI": "2.1"` in your own
+manifest once your page uses `hostUI`: that is the contract you are relying on, and
+it is what keeps a future host free to drop `hostUI` behind a still-higher ABI
+without silently breaking a `2.0` extension that never touched it.
