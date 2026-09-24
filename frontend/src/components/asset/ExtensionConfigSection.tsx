@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
@@ -14,7 +16,15 @@ interface Options {
 
 interface ExtensionFormState {
   config: Record<string, unknown>;
+  /** 编辑态要先拿到后端解密后的配置：资产上存的是密文，拿它回填/保存会把密文再加密一遍。 */
+  status: "ready" | "loading" | "error";
 }
+
+const STATUS_REASON: Record<ExtensionFormState["status"], string> = {
+  ready: "",
+  loading: "asset.extConfigLoading",
+  error: "asset.extConfigDecryptFailed",
+};
 
 /**
  * 扩展资产类型的表单区块，接进注册表的 ConfigSection 槽位。
@@ -38,45 +48,51 @@ export function makeExtensionConfigSection(opts: Options) {
   }
 
   function ExtensionConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
+    const { t } = useTranslation();
     const { state, setState } = useConfigSection<ExtensionFormState>({
       ref,
       editAsset,
       onValidityChange,
-      init: (a) => ({ config: parseConfig(a?.Config) }),
+      init: (a) => (a?.ID ? { config: {}, status: "loading" } : { config: parseConfig(a?.Config), status: "ready" }),
       // 必填校验由后端按 configSchema.required 负责；表单侧不复制一份会漂移的规则。
-      validate: () => ({ canTest: false, canSave: true }),
-      build: async (s, buildCtx) => ({
-        configJSON: JSON.stringify(await encryptSecrets(s.config, buildCtx)),
-        sshTunnelId: 0, // 扩展资产的网络路径由扩展自己经宿主接口决定。
-      }),
+      validate: (s) => ({ canTest: false, canSave: s.status === "ready", saveDisabledReason: STATUS_REASON[s.status] }),
+      build: async (s, buildCtx) => {
+        if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
+        return {
+          configJSON: JSON.stringify(await encryptSecrets(s.config, buildCtx)),
+          sshTunnelId: 0, // 扩展资产的网络路径由扩展自己经宿主接口决定。
+        };
+      },
     });
 
-    // 编辑态：把密文字段换成后端解密后的值，用户才能看到自己填过什么。解密失败时退回
-    // 资产上的原始配置——那正是解密前的样子，比一张空表单诚实。
+    // 编辑态：把密文字段换成后端解密后的值，用户才能看到自己填过什么。解密失败不能退回
+    // 资产上的原始配置——密码框里会是密文，保存时再加密一次就把真实密钥毁了。
     const editID = editAsset?.ID;
-    const rawConfig = editAsset?.Config;
     useEffect(() => {
       if (!editID) return;
       let cancelled = false;
       GetDecryptedExtensionConfig(editID, opts.extensionName)
         .then((cfg) => {
-          if (!cancelled) setState({ config: parseConfig(cfg) });
+          if (!cancelled) setState({ config: parseConfig(cfg), status: "ready" });
         })
-        .catch(() => {
-          if (!cancelled) setState({ config: parseConfig(rawConfig) });
+        .catch((err) => {
+          if (cancelled) return;
+          setState((s) => ({ ...s, status: "error" }));
+          toast.error(`${t("asset.extConfigDecryptFailed")}: ${String(err)}`);
         });
       return () => {
         cancelled = true;
       };
-    }, [editID, rawConfig, setState]);
+    }, [editID, setState, t]);
 
-    if (!opts.schema?.properties) return null;
+    // 未就绪时不渲染表单：原因已经由壳在保存按钮旁显示（saveDisabledReason），失败另有 toast。
+    if (!opts.schema?.properties || state.status !== "ready") return null;
     return (
       <ExtensionConfigForm
         extensionName={opts.extensionName}
         configSchema={opts.schema}
         value={state.config}
-        onChange={(config) => setState({ config })}
+        onChange={(config) => setState({ config, status: "ready" })}
         hasBackend={opts.hasBackend}
       />
     );

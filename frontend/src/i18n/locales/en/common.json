@@ -382,6 +382,8 @@
     "cancelTest": "Cancel",
     "testCancelled": "Test cancelled",
     "formDescription": "Configure asset connection details, authentication, and advanced options.",
+    "extConfigLoading": "Loading saved configuration…",
+    "extConfigDecryptFailed": "Could not decrypt the saved configuration; saving is disabled to avoid overwriting stored secrets.",
     "formMissingName": "Enter an asset name.",
     "formMissingHost": "Enter a host address.",
     "formMissingMongoUri": "Enter a MongoDB connection URI.",

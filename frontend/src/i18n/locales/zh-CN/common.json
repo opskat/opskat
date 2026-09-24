@@ -382,6 +382,8 @@
     "cancelTest": "取消",
     "testCancelled": "测试已取消",
     "formDescription": "配置资产连接信息、认证方式和高级选项。",
+    "extConfigLoading": "正在读取已保存的配置…",
+    "extConfigDecryptFailed": "无法解密已保存的配置，已禁止保存以免覆盖已存的密钥。",
     "formMissingName": "请填写资产名称。",
     "formMissingHost": "请填写主机地址。",
     "formMissingMongoUri": "请填写 MongoDB 连接 URI。",
