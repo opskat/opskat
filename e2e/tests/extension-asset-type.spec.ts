@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openAssetForm } from "../fixtures/assets";
-import { findAssetByName, findAssetPersistenceByName } from "../fixtures/db";
+import { findAssetByName, findAssetPersistenceByName, findAuditLogs, type AuditRow } from "../fixtures/db";
 
 // An extension's asset type is not a special species in the frontend: it registers
 // into the same registry as the built-in types, so the type picker, the form's
@@ -142,4 +142,122 @@ test("the extension's policy card offers its ext: groups and referencing one per
       timeout: 10_000,
     })
     .toEqual([`ext:${EXT}:read`, `ext:${EXT}:no-delete`, `ext:${EXT}:write`]);
+});
+
+// Task 8: a call the notebook page makes against its own asset (via
+// window.__OPSKAT_EXT__.api.callTool in extensions/notebook/frontend/page.js)
+// clears the exact same policy check / in-app approval / grant / audit gate
+// opsctl's delegated exec runs through (internal/app/opsctl's handleExtToolExec →
+// RunPageToolCall), not a direct dial into the plugin. notebook's own policy
+// groups make the three decisions reachable without touching the AI path at all:
+// "read" is granted by default (no dialog), "write" is not (needs the same
+// opsctl:approval dialog opsctl/AI use), "delete" is denied outright by a default
+// group (no dialog, straight to an error).
+async function createNotebookAssetAndOpenPage(page: Page, name: string): Promise<void> {
+  await pickExtensionType(page);
+  await page.getByTestId("asset-form-name-input").fill(name);
+  await page.getByTestId("asset-form-dialog").locator(`#${CONFIG.requiredField}`).fill(name);
+  await page.getByTestId("asset-form-submit").click();
+  await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
+  await expect.poll(() => findAssetByName(name)?.type, { timeout: 10_000 }).toBe(EXT);
+
+  await page.getByTestId("asset-tree").getByText(name, { exact: true }).dblclick();
+  await expect(page.getByTestId("notebook-page")).toBeVisible({ timeout: 15_000 });
+}
+
+// The page also calls note_list on mount and after every note_put/note_delete to
+// refresh its own list — those calls clear the same gate too (as they must: they
+// are asset-scoped calls like any other) and land their own "allow" audit rows.
+// Asserting on a plain row *count* for tool_name "exec" would therefore couple
+// this spec to the page's own refresh behavior rather than to the one call under
+// test, so audit rows are picked out by which tool they ran (the normalized
+// command's leading verb) instead.
+function auditRowsForTool(assetName: string, tool: string): AuditRow[] {
+  return findAuditLogs({ assetName, toolName: "exec" }).filter((row) => row.command.startsWith(tool));
+}
+
+async function waitForToolAuditRowCount(
+  assetName: string,
+  tool: string,
+  count: number,
+  opts: { timeout?: number } = {}
+): Promise<AuditRow[]> {
+  let rows: AuditRow[] = [];
+  await expect
+    .poll(
+      () => {
+        rows = auditRowsForTool(assetName, tool);
+        return rows.length;
+      },
+      { timeout: opts.timeout ?? 15_000 }
+    )
+    .toBe(count);
+  return rows;
+}
+
+test("a page call needing confirmation shows the opsctl approval dialog; approving with 'remember' runs it, audits source extension_page, and the grant is honored on the next call", async ({
+  page,
+}) => {
+  await openApp(page);
+  const name = `e2e-extpage-put-${Date.now()}`;
+  await createNotebookAssetAndOpenPage(page, name);
+
+  const key = "runbook-1";
+  await page.getByTestId("notebook-key-input").fill(key);
+  await page.getByTestId("notebook-content-input").fill("first version");
+  await page.getByTestId("notebook-put-button").click();
+
+  // note_put is not covered by a default policy group, so it lands on NeedConfirm
+  // — the same "opsctl:approval" dialog an opsctl or AI-initiated call would get.
+  await expect(page.getByTestId("opsctl-approval-dialog")).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "记住此操作" }).click();
+  await page.getByRole("button", { name: "批准" }).click();
+
+  await expect(page.getByTestId("notebook-status")).toHaveAttribute("data-kind", "success", { timeout: 15_000 });
+  await expect(page.getByTestId(`notebook-note-${key}`)).toBeVisible();
+
+  const [putRow] = await waitForToolAuditRowCount(name, "note_put", 1);
+  expect(putRow).toMatchObject({ source: "extension_page", decision: "allow" });
+
+  // The "always allow" grant just persisted is keyed by (action, resource) —
+  // ext:notebook:write:runbook-1 — not by session or invocation id, so a second
+  // call writing the same key must clear the gate without a dialog at all.
+  await page.getByTestId("notebook-content-input").fill("second version");
+  await page.getByTestId("notebook-put-button").click();
+  await expect(page.getByTestId("opsctl-approval-dialog")).not.toBeVisible();
+  await expect(page.getByTestId("notebook-status")).toHaveAttribute("data-kind", "success", { timeout: 15_000 });
+
+  const [, secondPutRow] = await waitForToolAuditRowCount(name, "note_put", 2);
+  expect(secondPutRow).toMatchObject({ source: "extension_page", decision: "allow" });
+});
+
+test("a page call denied by a default policy group returns an error to the page, with no dialog, and is audited", async ({
+  page,
+}) => {
+  await openApp(page);
+  const name = `e2e-extpage-deny-${Date.now()}`;
+  await createNotebookAssetAndOpenPage(page, name);
+
+  // A note must exist to have a Delete button to click; note_put still needs one
+  // approval first (the same NeedConfirm path the other test covers).
+  const key = "runbook-2";
+  await page.getByTestId("notebook-key-input").fill(key);
+  await page.getByTestId("notebook-content-input").fill("to be deleted");
+  await page.getByTestId("notebook-put-button").click();
+  await expect(page.getByTestId("opsctl-approval-dialog")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("opsctl-approval-allow").click();
+  await expect(page.getByTestId(`notebook-note-${key}`)).toBeVisible({ timeout: 15_000 });
+
+  // note_delete is refused by the "no-delete" group, which is a default — the
+  // policy decision is Deny, not NeedConfirm, so no approval dialog is possible;
+  // the page must get an error back, and the note must survive.
+  await page.getByTestId(`notebook-delete-${key}`).click();
+  await expect(page.getByTestId("opsctl-approval-dialog")).not.toBeVisible();
+  await expect(page.getByTestId("notebook-status")).toHaveAttribute("data-kind", "error", { timeout: 15_000 });
+  await expect(page.getByTestId(`notebook-note-${key}`)).toBeVisible();
+
+  const [putRow] = await waitForToolAuditRowCount(name, "note_put", 1);
+  expect(putRow).toMatchObject({ source: "extension_page", decision: "allow" });
+  const [deleteRow] = await waitForToolAuditRowCount(name, "note_delete", 1);
+  expect(deleteRow).toMatchObject({ source: "extension_page", decision: "deny" });
 });

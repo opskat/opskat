@@ -428,6 +428,10 @@ func initExtensionSystem(
 	aiB.SetExtensionService(extSvc)
 	opsctlB.SetExtToolExecutor(desktopExecExecutor{})
 	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
+	// A page's own tool calls clear the exact same policy/approval/grant/audit
+	// gate opsctl's delegated exec runs through (opsctlB.RunPageToolCall reuses
+	// handleExtToolExec's gate, tagged with audit source "extension_page").
+	extB.SetPageToolGate(opsctlB)
 
 	// 接入 snippet 分类注册表
 	if svc := snippet_svc.Snippet(); svc != nil {

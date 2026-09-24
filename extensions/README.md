@@ -154,6 +154,10 @@ extension **action** (`test_connection`) on a configuration that has not been sa
 yet. An extension page that *does* work on a saved asset passes its `assetId` prop —
 `api.callTool(ext, tool, args, assetId)` / `api.executeAction(ext, action, args,
 onEvent, assetId)` — and the handler reads it from `ctx.Asset` the same way.
+`api.callTool` against a saved asset clears the exact same policy check / in-app
+approval dialog / grant / audit trail as `opsctl exec` on that asset does — a call
+needing confirmation pops the app's usual approval dialog, and a denial reaches the
+page as a rejected promise, not a result to display.
 
 ### Connection settings belong to the host
 

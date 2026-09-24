@@ -256,11 +256,18 @@ const HARNESS_EXTENSIONS = ["notebook"];
 // repeat cost negligible.
 //
 // The copy rule mirrors `make build-ext`: ship the whole extension directory except
-// the Go sources it was built from and any previous local build output.
+// the Go sources it was built from and any previous local build output — and, like
+// `make build-ext`, flatten a `frontend/` subdirectory's contents into the
+// installed root rather than nesting it. An extension's manifest frontend.entry
+// (declared via opskat.Frontend in the guest's describe(), e.g. "page.js") names a
+// path relative to the installed extension root; a source layout of
+// `extensions/<name>/frontend/page.js` only resolves to that root path if both
+// this harness and `make build-ext` install it the same way.
 function installExtensions(dataDir, names = HARNESS_EXTENSIONS) {
   for (const name of names) {
     const source = join(repoRoot, "extensions", name);
     const target = join(dataDir, "extensions", name);
+    const frontendDir = join(source, "frontend");
     mkdirSync(target, { recursive: true });
     execFileSync("go", ["build", "-buildmode=c-shared", "-o", join(target, "main.wasm"), `./extensions/${name}`], {
       cwd: repoRoot,
@@ -269,8 +276,11 @@ function installExtensions(dataDir, names = HARNESS_EXTENSIONS) {
     });
     cpSync(source, target, {
       recursive: true,
-      filter: (path) => !path.endsWith(".go") && !path.startsWith(join(source, "dist")),
+      filter: (path) => !path.endsWith(".go") && !path.startsWith(join(source, "dist")) && !path.startsWith(frontendDir),
     });
+    if (existsSync(frontendDir)) {
+      cpSync(frontendDir, target, { recursive: true });
+    }
   }
   return names;
 }

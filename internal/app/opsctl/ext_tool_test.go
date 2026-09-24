@@ -11,6 +11,28 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 )
 
+// The gate handleExtToolExec and RunPageToolCall share (gateExtToolCall) builds a
+// context carrying the audit source and returns it explicitly rather than mutating
+// the caller's variable in place — Go contexts are immutable, so a caller that
+// wrote its audit row with its own original ctx instead of the one gateExtToolCall
+// handed back would silently lose the audit source. This test protects that seam
+// for handleExtToolExec's "opsctl" source the same way
+// TestRunPageToolCallWritesAuditWithSourceExtensionPage protects it for
+// RunPageToolCall's "extension_page" source.
+func TestHandleExtToolExecWritesAuditWithSourceOpsctl(t *testing.T) {
+	writer := withFakeAuditWriter(t)
+	executor := &decidingExtExecutor{
+		decision: aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow},
+		output:   `{"objects":1}`,
+	}
+	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
+
+	resp := o.handleExtToolExec(approval.ApprovalRequest{AssetID: 7, Command: "list_objects"})
+
+	require.True(t, resp.Approved)
+	require.Equal(t, "opsctl", aictx.GetAuditSource(writer.ctx))
+}
+
 type extTestLang struct{}
 
 func (extTestLang) Lang() string { return "en" }

@@ -117,14 +117,33 @@ describe("extension action API", () => {
     const api = createExtensionAPI();
 
     await api.callTool("notebook", "note_list", {}, 12);
-    expect(CallExtensionTool).toHaveBeenCalledWith("notebook", "note_list", "{}", 12);
+    expect(CallExtensionTool).toHaveBeenCalledWith("notebook", "note_list", "{}", expect.any(String), 12);
 
     await api.callTool("notebook", "note_list", {});
-    expect(CallExtensionTool).toHaveBeenLastCalledWith("notebook", "note_list", "{}", 0);
+    expect(CallExtensionTool).toHaveBeenLastCalledWith("notebook", "note_list", "{}", expect.any(String), 0);
 
     const run = api.startAction("notebook", "sync", {}, undefined, 12);
     expect(CallExtensionAction).toHaveBeenCalledWith("notebook", "sync", "{}", run.invocationId, 12);
     pendingCalls.get(run.invocationId)?.("{}");
     await run.result;
+  });
+
+  // The gate a scoped call now clears (internal/app/opsctl's RunPageToolCall)
+  // persists an "always allow" grant keyed by this id — it must be a real,
+  // call-unique token, not an empty string or a constant reused across calls
+  // (either of which would make every "always allow" collide into one grant, or
+  // fail the gate's "allowAll requires a grant session" check outright).
+  it("mints a distinct invocation id for each callTool call", async () => {
+    const api = createExtensionAPI();
+
+    await api.callTool("notebook", "note_put", { key: "a" }, 12);
+    await api.callTool("notebook", "note_put", { key: "b" }, 12);
+
+    const [firstCall, secondCall] = (CallExtensionTool as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const firstInvocationId = firstCall[3];
+    const secondInvocationId = secondCall[3];
+    expect(firstInvocationId).toEqual(expect.any(String));
+    expect(firstInvocationId).not.toBe("");
+    expect(firstInvocationId).not.toEqual(secondInvocationId);
   });
 });

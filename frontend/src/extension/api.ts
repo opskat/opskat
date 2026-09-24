@@ -43,8 +43,16 @@ interface ActionEventPayload {
 export function createExtensionAPI(): ExtActionAPI {
   const api: ExtActionAPI = {
     async callTool(extName: string, tool: string, args: unknown, assetId?: number): Promise<unknown> {
+      // A call scoped to an asset now clears the desktop's policy/approval gate
+      // (internal/app/opsctl's RunPageToolCall) instead of dialing the plugin
+      // directly. The invocation id is this call's own correlation token — the
+      // same per-call convention startAction already uses, reused here rather
+      // than inventing a second one — not the identity an "always allow" grant
+      // persists under; the backend derives that from the asset so a grant
+      // outlives the one call that requested it.
+      const invocationId = newInvocationId();
       const argsJSON = JSON.stringify(args ?? {});
-      const result = await CallExtensionTool(extName, tool, argsJSON, assetId ?? 0);
+      const result = await CallExtensionTool(extName, tool, argsJSON, invocationId, assetId ?? 0);
       return parseResult(result);
     },
 

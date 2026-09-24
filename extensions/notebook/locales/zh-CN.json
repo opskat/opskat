@@ -4,6 +4,8 @@
 
   "assetType.notebook.name": "笔记本",
 
+  "page.notebook.title": "笔记",
+
   "config.notebook.title": "笔记本名称",
   "config.notebook.placeholder": "team-runbooks",
   "config.notebook.desc": "笔记按此名称存放，同名的资产共用同一批笔记。",

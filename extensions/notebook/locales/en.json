@@ -4,6 +4,8 @@
 
   "assetType.notebook.name": "Notebook",
 
+  "page.notebook.title": "Notes",
+
   "config.notebook.title": "Notebook name",
   "config.notebook.placeholder": "team-runbooks",
   "config.notebook.desc": "Notes are stored under this name. Assets sharing a name share their notes.",
