@@ -339,7 +339,9 @@ Update an existing asset. Only provided fields change. Requires approval — an
 interactive terminal prompts there, otherwise the running desktop app is asked;
 with neither available opsctl exits with code 3 and a NEEDS TTY marker telling
 you to run the command yourself (like `create`/`delete`, no rule can
-pre-authorize it).
+pre-authorize it). The approval detail and audit log only ever show the safe,
+type-owned projection of the changed fields (name/type/config) — never a
+plaintext secret, whether it arrived via a convenience flag or `--config`.
 
 **Optional flags**:
 - `--name <string>` — New display name
@@ -349,11 +351,23 @@ pre-authorize it).
 - `--description <string>` — New description
 - `--group-id <int>` — New group ID (-1 = unchanged, 0 = ungrouped)
 - `--icon <string>` — New icon name (see `opsctl create asset --help` for full list)
+- `--config '<JSON object>'` — Type-owned partial config object; only the fields present are
+  changed, the rest of the stored config is untouched. Validation matches the desktop form and
+  names the specific bad field. This is the only way to reach fields that have no dedicated
+  flag, such as a Redis asset's `mode`/`nodes`/`master_name`/`sentinel_username`/
+  `sentinel_password`/`node_address_map` (see `create asset`'s `--type redis` deployment mode
+  section for the field rules — they are identical for update)
+- `--config-file <path>` — File containing that JSON object; mutually exclusive with `--config`
+
+`--host`/`--port`/`--username` only override matching keys already present in `--config`/
+`--config-file`; fields the JSON doesn't set are left as they were before the call.
 
 ```bash
 opsctl update asset web-server --name "New Name"
 opsctl update asset 1 --host 192.168.1.100 --port 2222
 opsctl update asset 1 --icon kubernetes
+opsctl update asset cache --config '{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379","10.0.0.3:6379"]}'
+opsctl update asset cache --config '{"sentinel_password":"'"$SENTINEL_PASSWORD"'"}'
 ```
 
 ### `update group <group> [flags]`
