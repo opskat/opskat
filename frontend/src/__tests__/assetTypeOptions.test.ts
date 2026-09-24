@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
 import {
   getAssetTypeOptions,
   matchSelectedTypes,
@@ -6,6 +7,7 @@ import {
   filterAssetTypeOptions,
   getAssetTypeLabel,
   resolveAssetTypeLabel,
+  useAssetTypeOptions,
 } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import { registerExtensionAssetTypes, unregisterExtensionAssetTypes } from "@/extension/assetTypes";
@@ -218,5 +220,19 @@ describe("resolveAssetTypeLabel", () => {
     };
     expect(resolveAssetTypeLabel(ssh, t)).toBe("X(nav.ssh)");
     expect(calls[0]).toEqual(["nav.ssh", undefined]);
+  });
+});
+
+describe("useAssetTypeOptions", () => {
+  it("returns the same array across re-renders until the registry changes", () => {
+    // 下游（资产树的 filteredAssets useMemo）以它为依赖：每次渲染换新数组会让 memo 形同虚设。
+    const { result, rerender } = renderHook(() => useAssetTypeOptions());
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+
+    act(() => install(manifest("memo-ext", [{ type: "memo-ext-type", i18n: { name: "Memo" } }])));
+    expect(result.current).not.toBe(first);
+    expect(result.current.some((o) => o.value === "memo-ext-type")).toBe(true);
   });
 });

@@ -1,4 +1,6 @@
 // frontend/src/extension/init.ts
+import { toast } from "sonner";
+import i18n from "../i18n";
 import { ListInstalledExtensions } from "../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { useExtensionStore } from "./store";
@@ -67,22 +69,27 @@ async function refreshExtensions(): Promise<boolean> {
     const extensions = await ListInstalledExtensions();
     const store = useExtensionStore.getState();
 
-    const newNames = new Set((extensions || []).map((e: { name: string }) => e.name));
-    for (const name of Object.keys(store.extensions)) {
-      if (!newNames.has(name)) {
+    const list = extensions || [];
+    const installed = new Set(list.map((e: { name: string }) => e.name));
+    for (const name of new Set([...Object.keys(store.extensions), ...Object.keys(store.disabled)])) {
+      if (!installed.has(name)) {
         store.unregister(name);
       }
     }
 
-    for (const ext of extensions || []) {
+    // ListInstalled 连禁用的扩展也返回（Enabled=false）：禁用必须等同于"未注册"，
+    // 否则它的资产类型仍可选、页面仍能打开，而后端调用全部失败。
+    for (const ext of list) {
       if (ext.enabled) {
         store.register(ext.name, ext.manifest as ExtManifest);
+      } else {
+        store.markDisabled(ext.name);
       }
     }
 
-    return (extensions || []).length > 0;
+    return list.length > 0;
   } catch (err) {
-    console.error("Failed to load extensions:", err);
+    toast.error(`${i18n.t("extension.loadError")}: ${String(err)}`);
     return false;
   }
 }

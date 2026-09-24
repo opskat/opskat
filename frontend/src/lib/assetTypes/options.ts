@@ -1,5 +1,5 @@
 // frontend/src/lib/assetTypes/options.ts
-import type { ComponentType } from "react";
+import { useMemo, type ComponentType } from "react";
 import { getAllAssetTypes, useAssetTypes } from "./index";
 import type { AssetTypeCategory, AssetTypeDefinition } from "./types";
 import type { asset_entity } from "../../../wailsjs/go/models";
@@ -50,9 +50,11 @@ export function getAssetTypeOptions(): AssetTypeOption[] {
   return getAllAssetTypes().map(toOption);
 }
 
-/** 响应式版本：注册表增删（扩展启用/禁用）时组件会重渲染。 */
+/** 响应式版本：注册表增删（扩展启用/禁用）时组件会重渲染。
+ *  返回值在注册表不变时保持同一引用——下游 useMemo 会拿它做依赖。 */
 export function useAssetTypeOptions(): AssetTypeOption[] {
-  return useAssetTypes().map(toOption);
+  const defs = useAssetTypes();
+  return useMemo(() => defs.map(toOption), [defs]);
 }
 
 export function matchSelectedTypes(

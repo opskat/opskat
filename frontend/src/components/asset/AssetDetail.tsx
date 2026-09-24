@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
@@ -28,58 +28,56 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
 
-  const [policyFields, setPolicyFields] = useState<Record<string, string[]>>({});
-  const [policyGroups, setPolicyGroups] = useState<string[]>([]);
-
   // 订阅注册表：扩展加载完成时它的资产类型才注册进来，这里要跟着重渲染。
   // 定义还没到位期间只是少一张类型卡，不是全屏 loading——通用信息照常可读。
   const def = useAssetTypeDef(asset.Type);
 
-  // 资产切换 / 策略变化时回填本地编辑态：渲染期对比上次值，替代 effect 里的级联 setState。
-  const [prevSync, setPrevSync] = useState<{ id?: number; cmdPolicy?: string; type?: string }>({});
-  if (asset.ID !== prevSync.id || asset.CmdPolicy !== prevSync.cmdPolicy || asset.Type !== prevSync.type) {
-    setPrevSync({ id: asset.ID, cmdPolicy: asset.CmdPolicy, type: asset.Type });
-    try {
-      const parsed = JSON.parse(asset.CmdPolicy || "{}");
-      setPolicyGroups(parsed.groups || []);
-      const fields: Record<string, string[]> = {};
-      for (const f of def?.policy?.fields ?? []) {
-        fields[f.key] = parsed[f.key] || [];
-      }
-      setPolicyFields(fields);
-    } catch {
-      setPolicyFields({});
-      setPolicyGroups([]);
+  // 策略编辑态从 asset.CmdPolicy + 类型定义**派生**，不在资产切换时拷一份进 state：
+  // 扩展类型可能晚于详情页注册，拷贝会停在定义缺席时的 {}，之后一改规则就把已有 allow/deny 存没了。
+  // draft 只承载"已提交保存、store 还没刷新回来"的乐观值，以它基于的 CmdPolicy 为键，
+  // 资产切换或保存结果回流（CmdPolicy 变了）后自动失效。
+  const [draft, setDraft] = useState<{
+    assetId: number;
+    base: string;
+    fields: Record<string, string[]>;
+    groups: string[];
+  } | null>(null);
+  const stored = useMemo(() => parseCmdPolicy(asset.CmdPolicy), [asset.CmdPolicy]);
+  const activeDraft = draft && draft.assetId === asset.ID && draft.base === asset.CmdPolicy ? draft : null;
+  const policyGroups = activeDraft ? activeDraft.groups : stored.groups;
+  const policyFields = useMemo(() => {
+    if (activeDraft) return activeDraft.fields;
+    const fields: Record<string, string[]> = {};
+    for (const f of def?.policy?.fields ?? []) {
+      fields[f.key] = stored.lists[f.key] || [];
     }
-  }
+    return fields;
+  }, [activeDraft, def, stored]);
 
-  const savePolicy = async (policyObj: Record<string, unknown>, groups?: string[]) => {
+  const savePolicy = async (fields: Record<string, string[]>, groups: string[]) => {
+    setDraft({ assetId: asset.ID, base: asset.CmdPolicy, fields, groups });
     // Remove empty arrays (except groups which is managed separately)
     const cleaned: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(policyObj)) {
-      if (Array.isArray(v) && v.length > 0) cleaned[k] = v;
+    for (const [k, v] of Object.entries(fields)) {
+      if (v.length > 0) cleaned[k] = v;
     }
-    const grps = groups ?? policyGroups;
-    if (grps.length > 0) cleaned.groups = grps;
+    if (groups.length > 0) cleaned.groups = groups;
     const cmdPolicy = Object.keys(cleaned).length > 0 ? JSON.stringify(cleaned) : "";
     const updated = new asset_entity.Asset({ ...asset, CmdPolicy: cmdPolicy });
     setSavingPolicy(true);
     try {
       await updateAsset(updated);
     } catch (e) {
+      // 没存上就丢掉乐观值，回到库里的真实策略
+      setDraft(null);
       toast.error(String(e));
     } finally {
       setSavingPolicy(false);
     }
   };
 
-  const handleSavePolicyFields = async (updatedFields: Record<string, string[]>, groups?: string[]) => {
-    await savePolicy(updatedFields, groups);
-  };
-
   const handleGroupsChange = (newGroups: string[]) => {
-    setPolicyGroups(newGroups);
-    handleSavePolicyFields(policyFields, newGroups);
+    savePolicy(policyFields, newGroups);
   };
 
   const handleResetPolicy = async () => {
@@ -87,12 +85,10 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       const defaultJSON = await GetDefaultPolicy(asset.Type);
       const parsed = JSON.parse(defaultJSON);
       const groups = parsed.groups || [];
-      setPolicyGroups(groups);
       const fields: Record<string, string[]> = {};
       for (const f of def?.policy?.fields ?? []) {
         fields[f.key] = parsed[f.key] || [];
       }
-      setPolicyFields(fields);
       await savePolicy(fields, groups);
     } catch (e) {
       toast.error(String(e));
@@ -178,17 +174,13 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                 label: t(f.labelKey),
                 items: policyFields[f.key] || [],
                 onAdd: (vals: string[]) => {
-                  const next = { ...policyFields, [f.key]: [...(policyFields[f.key] || []), ...vals] };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
+                  savePolicy({ ...policyFields, [f.key]: [...(policyFields[f.key] || []), ...vals] }, policyGroups);
                 },
                 onRemove: (i: number) => {
-                  const next = {
-                    ...policyFields,
-                    [f.key]: (policyFields[f.key] || []).filter((_, idx) => idx !== i),
-                  };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
+                  savePolicy(
+                    { ...policyFields, [f.key]: (policyFields[f.key] || []).filter((_, idx) => idx !== i) },
+                    policyGroups
+                  );
                 },
                 // 占位符二选一：内置类型给 i18n key，扩展给 manifest 列出的 action 名。
                 placeholder: f.placeholder ?? (f.placeholderKey ? t(f.placeholderKey) : ""),
@@ -231,4 +223,13 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       </div>
     </div>
   );
+}
+
+function parseCmdPolicy(cmdPolicy: string): { groups: string[]; lists: Record<string, string[]> } {
+  try {
+    const { groups, ...lists } = JSON.parse(cmdPolicy || "{}");
+    return { groups: groups || [], lists };
+  } catch {
+    return { groups: [], lists: {} };
+  }
 }

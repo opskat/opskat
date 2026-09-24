@@ -32,7 +32,7 @@ function DummyComponent({ assetId }: { assetId?: number }) {
 }
 
 function resetStore() {
-  useExtensionStore.setState({ ready: false, extensions: {} });
+  useExtensionStore.setState({ ready: false, extensions: {}, disabled: {} });
 }
 
 describe("ExtensionPage", () => {
@@ -180,5 +180,29 @@ describe("ExtensionPage", () => {
     });
 
     expect(screen.getByText(/not exported by extension/)).toBeInTheDocument();
+  });
+  it("an open page switches to a clear disabled state when its extension gets disabled", async () => {
+    const loaded = {
+      name: "oss",
+      manifest: manifest as any,
+      components: { BrowserPage: DummyComponent },
+    };
+    useExtensionStore.getState().register("oss", manifest as any);
+    useExtensionStore.getState().setLoaded("oss", loaded);
+    useExtensionStore.getState().setReady(true);
+
+    render(<ExtensionPage extensionName="oss" pageId="browser" />);
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(screen.getByTestId("extension-content")).toBeInTheDocument();
+
+    await act(async () => {
+      useExtensionStore.getState().markDisabled("oss");
+    });
+
+    // 不再渲染扩展组件（它的后端调用会失败），也不用等 5s 超时才给出含糊的 "not registered"。
+    expect(screen.queryByTestId("extension-content")).not.toBeInTheDocument();
+    expect(screen.getByText("extension.pageDisabled")).toBeInTheDocument();
   });
 });
