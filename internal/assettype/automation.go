@@ -213,7 +213,7 @@ func approvalView(args map[string]any, fields []string, flatMapFields []string) 
 		// 字段哪怕值恰好是扁平字符串 map(如攻击者构造的 auth_type={"password":secret})，
 		// 也要按下面的标量规则整体省略，不能靠"形状是扁平的"就当作安全。
 		if _, allowed := mapAllowed[field]; allowed {
-			if m, ok := copyFlatStringMap(value); ok {
+			if m := ArgStringMap(args, field); m != nil {
 				out[field] = m
 				continue
 			}
@@ -243,33 +243,6 @@ func copyFlatStringArray(value any) ([]string, bool) {
 				return nil, false
 			}
 			out = append(out, s)
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
-// copyFlatStringMap 把扁平字符串→字符串映射（map[string]string 或 map[string]any 且每个
-// value 都是 string，如 Redis node_address_map）拷贝成新的 map[string]string，同样不与
-// config 共享底层 map，也不放行藏了嵌套值的 value。含任一非字符串 value 就不是扁平字符串
-// 映射，整体拒绝——这类字段本身不含密钥，但复合 value 仍可能夹带 secret。
-func copyFlatStringMap(value any) (map[string]string, bool) {
-	switch m := value.(type) {
-	case map[string]string:
-		out := make(map[string]string, len(m))
-		for k, v := range m {
-			out[k] = v
-		}
-		return out, true
-	case map[string]any:
-		out := make(map[string]string, len(m))
-		for k, v := range m {
-			s, ok := v.(string)
-			if !ok {
-				return nil, false
-			}
-			out[k] = s
 		}
 		return out, true
 	default:

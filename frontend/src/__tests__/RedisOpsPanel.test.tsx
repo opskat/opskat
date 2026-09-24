@@ -347,7 +347,7 @@ describe("RedisOpsPanel", () => {
               flags: ["master", "fail"],
               linkState: "disconnected",
               status: "fail",
-              error: "node is not part of the cluster",
+              error: "dial tcp 10.20.0.13:6379: connect: connection refused",
               reachable: false,
               keys: -1,
               usedMemory: -1,

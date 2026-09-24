@@ -65,14 +65,17 @@ function buildProbeRequest(state: RedisFormState, cred: UseAssetCredential) {
 
 /** 测试成功行完整文案:集群/哨兵模式跳过壳的冒号外壳,自行以「 · 」分隔拼出整句(spec:「连接成功 ·
  *  集群 ok · M 主 R 从」/「连接成功 · 当前主节点 host:port」);标准模式留空,壳出通用整句「连接成功」。
- *  集群状态标签统一走 redisClusterStateLabel,ok/非 ok 都带「集群」前缀,非 ok 时如实显示原始 state。 */
+ *  集群状态标签统一走 redisClusterStateLabel,ok/非 ok 都带「集群」前缀,非 ok 时如实显示原始 state;
+ *  探测没读到 cluster_state(无节点应答 PING 或 CLUSTER INFO 失败)时显示 redisClusterStateUnknown。 */
 function redisTestSuccessText(
   t: Translate,
   mode: RedisFormState["mode"],
   result: redis_svc.RedisProbeResult
 ): string | undefined {
   if (mode === "cluster" && result.cluster) {
-    const state = t("asset.redisClusterStateLabel", { state: result.cluster.state });
+    const state = result.cluster.state
+      ? t("asset.redisClusterStateLabel", { state: result.cluster.state })
+      : t("asset.redisClusterStateUnknown");
     const unreachable = result.cluster.unreachableNodes?.length ?? 0;
     const detail = t(unreachable > 0 ? "asset.redisTestClusterUnreachableDetail" : "asset.redisTestClusterDetail", {
       state,

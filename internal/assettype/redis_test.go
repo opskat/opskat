@@ -262,6 +262,37 @@ func TestRedisHandler(t *testing.T) {
 			})
 		})
 
+		convey.Convey("形状不对的 nodes / node_address_map 在审批前报错,不被静默丢弃", func() {
+			stored := &asset_entity.Asset{Type: "redis"}
+			convey.So(stored.SetRedisConfig(&asset_entity.RedisConfig{
+				Mode: asset_entity.RedisModeCluster, Nodes: []string{"10.0.0.1:6379"},
+			}), convey.ShouldBeNil)
+			for _, tc := range []struct {
+				name  string
+				field string
+				args  map[string]any
+			}{
+				{"映射写成文本", "node_address_map", map[string]any{"node_address_map": "10.0.0.1:6379=127.0.0.1:16379"}},
+				{"映射值不是字符串", "node_address_map", map[string]any{"node_address_map": map[string]any{"10.0.0.1:6379": float64(16379)}}},
+				{"节点含非字符串项", "nodes", map[string]any{"nodes": []any{"10.0.0.2:6379", float64(6379)}}},
+			} {
+				create := map[string]any{"mode": "cluster", "nodes": []any{"10.0.0.1:6379"}}
+				for k, v := range tc.args {
+					create[k] = v
+				}
+				err := h.ValidateCreateArgs(create)
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, tc.field)
+
+				_, err = h.AutomationUpdateContext(stored, tc.args)
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err.Error(), convey.ShouldContainSubstring, tc.field)
+			}
+			// 空对象 / 空列表是「不改」,不是形状错误。
+			_, err := h.AutomationUpdateContext(stored, map[string]any{"node_address_map": map[string]any{}, "nodes": []any{}})
+			convey.So(err, convey.ShouldBeNil)
+		})
+
 		convey.Convey("集群模式的完整创建通过 validateRedis 校验（走自动化契约）", func() {
 			prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
 				"mode": "cluster", "nodes": []any{"10.0.0.1:6379"}, "username": "default",

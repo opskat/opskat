@@ -94,8 +94,7 @@ func preserveCreateSeams(t *testing.T) {
 
 // registerMockAssetRepo swaps in a mock AssetRepo whose List returns assets, restoring the
 // original registration on cleanup. updateAsset resolves its target asset ref through
-// resolveAsset, which for a non-numeric ref goes through AssetRepo.List — the same seam
-// TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges already relied on.
+// resolveAsset, which for a non-numeric ref goes through AssetRepo.List.
 func registerMockAssetRepo(t *testing.T, ctrl *gomock.Controller, assets []*asset_entity.Asset) *mock_asset_repo.MockAssetRepo {
 	t.Helper()
 	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
@@ -747,6 +746,44 @@ func TestCmdUpdateAssetUnknownConfigFieldRejectedBeforeApproval(t *testing.T) {
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "bogus_field")
 	assert.Zero(t, approvalCalls)
+}
+
+// update 的 --config / --config-file 带任一 write-only 字段（含 Redis 的 sentinel_password，
+// 而不只是 password）时，照常给出明文暴露提醒。
+func TestCmdUpdateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"--config", []string{"--config", `{"sentinel_password":"s3cret"}`}, "plaintext supplied in argv"},
+		{"--config-file", []string{"--config-file", "/tmp/update.json"}, "plaintext config files"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			t.Cleanup(ctrl.Finish)
+			registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{{
+				ID: 9, Name: "rc-sentinel", Type: asset_entity.AssetTypeRedis,
+				Config: `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster"}`,
+			}})
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+			requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				return ApprovalResult{Decision: aictx.Deny}, errors.New("denied")
+			}
+			notifyAssetChanged = func() {}
+
+			var stdout, stderr bytes.Buffer
+			code := updateAsset(context.Background(), append([]string{"rc-sentinel"}, tc.args...), "sess-update",
+				commandIO{stdout: &stdout, stderr: &stderr, readFile: func(string) ([]byte, error) {
+					return []byte(`{"sentinel_password":"s3cret"}`), nil
+				}})
+			assert.Equal(t, 1, code)
+			assert.Contains(t, stderr.String(), tc.want)
+		})
+	}
 }
 
 // TestCmdUpdateAssetRedisConfigApprovalAndAuditExcludeSentinelPassword 用真实 Prepare()

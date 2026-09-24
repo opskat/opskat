@@ -71,6 +71,19 @@ describe("RedisConfigSection 测试连接成功行文案(真实 i18n,校验最�
     expect(result.successText).toBe("连接成功 · 集群 fail · 3 主 3 从 · 种子节点可连 · 1 个节点不可达");
   });
 
+  it("集群状态读不到(探测未拿到 cluster_state):显示「集群状态未知」,不留空白状态", async () => {
+    vi.mocked(RedisProbe).mockResolvedValue({
+      modeMismatch: false,
+      cluster: { state: "", masters: 3, replicas: 3, unreachableNodes: [] },
+    } as never);
+    const ref = await renderRedis(
+      new asset_entity.Asset({ Type: "redis", Config: '{"mode":"cluster","nodes":["10.0.0.1:7001"]}' })
+    );
+
+    const result = await ref.current!.startTest!(ctx).result;
+    expect(result.successText).toBe("连接成功 · 集群状态未知 · 3 主 3 从");
+  });
+
   it("哨兵:「连接成功 · 当前主节点 host:port」", async () => {
     vi.mocked(RedisProbe).mockResolvedValue({
       modeMismatch: false,

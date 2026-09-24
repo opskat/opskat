@@ -509,6 +509,7 @@
     "redisNodesRequired": "At least one node is required",
     "redisMasterNameRequired": "Master name is required",
     "redisClusterStateLabel": "cluster {{state}}",
+    "redisClusterStateUnknown": "cluster state unknown",
     "redisTestClusterDetail": "{{state}} · {{masters}} primary / {{replicas}} replica",
     "redisTestClusterUnreachableDetail": "{{state}} · {{masters}} primary / {{replicas}} replica · seed node reachable · {{count}} node(s) unreachable",
     "redisTestSentinelDetail": "current master {{addr}}",

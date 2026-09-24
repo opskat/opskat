@@ -61,6 +61,9 @@ func (h *redisHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asse
 // RedisConfig.ValidateMode(与桌面表单保存时、commit 时 validateRedis 同一份规则),缺
 // master_name、映射行非法、节点缺端口、未知 mode 这些字段级错误在审批前就报出。
 func (h *redisHandler) ValidateCreateArgs(args map[string]any) error {
+	if err := validateRedisArgShapes(args); err != nil {
+		return err
+	}
 	cfg := redisModeConfigFromArgs(args)
 	if cfg.EffectiveMode() == asset_entity.RedisModeStandalone {
 		return validateRemoteServerArgs(args)
@@ -73,6 +76,9 @@ func (h *redisHandler) ValidateCreateArgs(args map[string]any) error {
 // ValidateMode 校验合并结果——与 create 一样在审批前报出具体字段,而不是审批通过后才在
 // commit 的 validateRedis 里失败。args 原样返回。
 func (h *redisHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[string]any) (map[string]any, error) {
+	if err := validateRedisArgShapes(args); err != nil {
+		return nil, err
+	}
 	cfg, err := a.GetRedisConfig()
 	if err != nil {
 		return nil, err
@@ -83,6 +89,30 @@ func (h *redisHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[s
 		return nil, err
 	}
 	return args, nil
+}
+
+// validateRedisArgShapes 拒绝给了但形状不对的 nodes / node_address_map。ArgStringSlice /
+// ArgStringMap 对这类值返回 nil:不先报错的话 create 会少写这个字段、update 会静默不改,
+// 审批详情里也看不到它。空列表 / 空对象按「未提供」处理。
+func validateRedisArgShapes(args map[string]any) error {
+	if v, ok := args["nodes"]; ok && v != nil && ArgStringSlice(args, "nodes") == nil {
+		return fmt.Errorf("nodes must be a list of host:port strings")
+	}
+	if v, ok := args["node_address_map"]; ok && v != nil && ArgStringMap(args, "node_address_map") == nil && !isEmptyObject(v) {
+		return fmt.Errorf("node_address_map must be an object mapping announced host:port to actual host:port strings")
+	}
+	return nil
+}
+
+func isEmptyObject(v any) bool {
+	switch m := v.(type) {
+	case map[string]any:
+		return len(m) == 0
+	case map[string]string:
+		return len(m) == 0
+	default:
+		return false
+	}
 }
 
 // redisModeConfigFromArgs 从审批前的原始 create 参数里挑出集群/哨兵校验用到的字段,构造

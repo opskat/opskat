@@ -509,6 +509,7 @@
     "redisNodesRequired": "请至少填写一个节点",
     "redisMasterNameRequired": "请填写主节点名称",
     "redisClusterStateLabel": "集群 {{state}}",
+    "redisClusterStateUnknown": "集群状态未知",
     "redisTestClusterDetail": "{{state}} · {{masters}} 主 {{replicas}} 从",
     "redisTestClusterUnreachableDetail": "{{state}} · {{masters}} 主 {{replicas}} 从 · 种子节点可连 · {{count}} 个节点不可达",
     "redisTestSentinelDetail": "当前主节点 {{addr}}",

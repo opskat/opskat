@@ -533,14 +533,22 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 		assert.Equal(t, map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"}, approvalMap)
 	})
 
-	t.Run("redis approval node_address_map with nested composite value is omitted entirely", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+	t.Run("redis node_address_map with nested composite value is rejected without echoing it", func(t *testing.T) {
+		_, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
 			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
 			"node_address_map": map[string]any{"10.0.0.1:6379": map[string]any{"nested": secret}},
 		})
-		require.NoError(t, err)
-		_, hasMap := prepared.Approval["node_address_map"]
-		assert.False(t, hasMap, "node_address_map with a non-string value must not leak into approval")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "node_address_map")
+		assert.NotContains(t, err.Error(), secret)
+	})
+
+	t.Run("flat-map approval field with nested composite value is omitted entirely", func(t *testing.T) {
+		view := approvalView(map[string]any{
+			"node_address_map": map[string]any{"10.0.0.1:6379": map[string]any{"nested": secret}},
+		}, []string{"node_address_map"}, []string{"node_address_map"})
+		_, hasMap := view["node_address_map"]
+		assert.False(t, hasMap, "a non-string map value must not leak into approval")
 	})
 
 	t.Run("redis approval does not inject default port:6379 for cluster/sentinel", func(t *testing.T) {
