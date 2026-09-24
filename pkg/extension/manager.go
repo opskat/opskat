@@ -55,11 +55,17 @@ func (mi *ManifestInfo) Translate(lang, key string) string {
 
 // LoadLocales reads all JSON files from the extension's locales/ directory.
 // Language codes are normalized to lowercase for consistent matching (e.g. "zh-CN" → "zh-cn").
-func LoadLocales(dir string) map[string]map[string]string {
+// The directory is optional; a locale file that cannot be read or parsed is an
+// authoring error and is returned naming the file, not skipped — a skipped file
+// only shows up as raw i18n keys in the UI.
+func LoadLocales(dir string) (map[string]map[string]string, error) {
 	localesDir := filepath.Join(dir, "locales")
 	entries, err := os.ReadDir(localesDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read locales dir: %w", err)
 	}
 	result := make(map[string]map[string]string)
 	for _, entry := range entries {
@@ -69,14 +75,28 @@ func LoadLocales(dir string) map[string]map[string]string {
 		lang := strings.ToLower(strings.TrimSuffix(entry.Name(), ".json"))
 		data, err := os.ReadFile(filepath.Join(localesDir, entry.Name())) //nolint:gosec // path constructed from ReadDir within known locales directory
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read locale file locales/%s: %w", entry.Name(), err)
 		}
 		var m map[string]string
-		if json.Unmarshal(data, &m) == nil {
-			result[lang] = m
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, fmt.Errorf("parse locale file locales/%s: %w", entry.Name(), err)
 		}
+		result[lang] = m
 	}
-	return result
+	return result, nil
+}
+
+// localesInfo is LoadLocales for the no-runtime readers, which list extensions
+// rather than run them: a broken locale file is reported at error level and the
+// extension is listed untranslated, mirroring skillMDInfo.
+func localesInfo(dir, extName string) map[string]map[string]string {
+	locales, err := LoadLocales(dir)
+	if err != nil {
+		logger.Default().Error("load extension locales",
+			zap.String("extension", extName), zap.Error(err))
+		return nil
+	}
+	return locales
 }
 
 // Manager handles extension discovery, loading, and lifecycle.
@@ -218,7 +238,7 @@ func newManifestInfo(manifest *Manifest, dir string) *ManifestInfo {
 		Name:             manifest.Name,
 		Dir:              dir,
 		Manifest:         manifest,
-		Locales:          LoadLocales(dir),
+		Locales:          localesInfo(dir, manifest.Name),
 		SkillMD:          skillMD,
 		SkillDescription: skillDescription,
 	}
@@ -337,6 +357,11 @@ func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Ex
 		return nil, pendingDescriptor{}, err
 	}
 
+	locales, err := LoadLocales(srcDir)
+	if err != nil {
+		return nil, pendingDescriptor{}, err
+	}
+
 	host := m.newHost(manifest.Name)
 	host = NewCapabilityHost(host, manifest, extDir) // enforce capabilities declared in manifest
 	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host, m.wasmCache)
@@ -359,7 +384,7 @@ func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Ex
 		Plugin:           plugin,
 		SkillMD:          skillMD,
 		SkillDescription: skillDescription,
-		Locales:          LoadLocales(srcDir),
+		Locales:          locales,
 	}, pending, nil
 }
 

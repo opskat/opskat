@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	cagologger "github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -230,6 +231,43 @@ func TestManager(t *testing.T) {
 			ext := mgr.GetExtension("big-skill")
 			So(ext, ShouldNotBeNil)
 			So(len(ext.SkillMD), ShouldBeGreaterThan, 4*1024)
+		})
+
+		// A locale file that does not parse used to vanish silently, leaving the
+		// author staring at raw i18n keys with nothing in the logs. It is an
+		// authoring mistake like a broken manifest, so the load fails and says where.
+		Convey("LoadExtension fails when a locale file does not parse", func() {
+			extDir := filepath.Join(dir, "bad-locale")
+			writeMinimalExtension(t, extDir, "bad-locale")
+			So(os.MkdirAll(filepath.Join(extDir, "locales"), 0755), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "locales", "en.json"), []byte(`{"a":"b"}`), 0644), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "locales", "zh-CN.json"), []byte(`{"a":`), 0644), ShouldBeNil)
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "zh-CN.json")
+			So(mgr.GetExtension("bad-locale"), ShouldBeNil)
+		})
+
+		// Listing (no runtime) keeps going, but the broken file is reported at
+		// error level through the project logger rather than dropped silently.
+		Convey("LoadManifestInfo logs a locale file that does not parse", func() {
+			core, logs := observer.New(zap.ErrorLevel)
+			prev := cagologger.Default()
+			cagologger.SetLogger(zap.New(core))
+			defer cagologger.SetLogger(prev)
+
+			extDir := filepath.Join(dir, "bad-locale-info")
+			writeMinimalExtension(t, extDir, "bad-locale-info")
+			So(os.MkdirAll(filepath.Join(extDir, "locales"), 0755), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "locales", "zh-CN.json"), []byte(`{"a":`), 0644), ShouldBeNil)
+
+			_, err := LoadManifestInfo(extDir)
+			So(err, ShouldBeNil)
+			entries := logs.All()
+			So(len(entries), ShouldEqual, 1)
+			So(entries[0].ContextMap()["extension"], ShouldEqual, "bad-locale-info")
+			So(entries[0].ContextMap()["error"], ShouldContainSubstring, "zh-CN.json")
 		})
 
 		Reset(func() {
