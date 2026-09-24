@@ -143,3 +143,17 @@ func TestFrontendCallsScopeAssetToExtension(t *testing.T) {
 		})
 	})
 }
+
+func TestAssetConfigDecryptFailureFailsClosed(t *testing.T) {
+	Convey("a password field that does not decrypt is an error, never ciphertext handed to the guest", t, func() {
+		e, assets := newHostTestBinder(t)
+		assets.EXPECT().Find(gomock.Any(), int64(5)).
+			Return(&asset_entity.Asset{ID: 5, Type: "acme-store", Config: `{"host":"h","password":"not-a-ciphertext"}`}, nil)
+
+		raw, err := e.NewAssetConfigGetter("acme").GetAssetConfig(5)
+
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "password")
+		So(raw, ShouldBeNil)
+	})
+}

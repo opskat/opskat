@@ -195,7 +195,7 @@ func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *ext
 
 	var cfg map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return raw, err
+		return nil, fmt.Errorf("parse %s config: %w", assetType, err)
 	}
 
 	for _, field := range passwordFields {
@@ -207,9 +207,12 @@ func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *ext
 		if err := json.Unmarshal(val, &encrypted); err != nil || encrypted == "" {
 			continue
 		}
+		// A field that will not decrypt fails the whole read: passing the stored
+		// value through would hand the guest ciphertext and skip the credentials
+		// decision entirely.
 		decrypted, err := credential_svc.Default().Decrypt(encrypted)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("decrypt password field %q of %s config: %w", field, assetType, err)
 		}
 		if allowPlaintext {
 			b, _ := json.Marshal(decrypted)
