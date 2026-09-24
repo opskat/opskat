@@ -81,6 +81,13 @@ func TestCheckPermission_ShellUnenumerable(t *testing.T) {
 			So(result.MatchedPattern, ShouldEqual, "*")
 		})
 
+		Convey("deny 里只有 ext: 扩展规则不算命令 deny → allow * 仍放行", func() {
+			setPolicy(asset_entity.CommandPolicy{AllowList: []string{"*"}, DenyList: []string{"ext:notebook:delete"}})
+			result := CheckPermission(ctx, "ssh", 1, unparseableShell)
+			So(result.Decision, ShouldEqual, aictx.Allow)
+			So(result.MatchedPattern, ShouldEqual, "*")
+		})
+
 		Convey("没有 allow * + 解析失败 → NeedConfirm，同样带解析失败原因", func() {
 			setPolicy(asset_entity.CommandPolicy{})
 			result := CheckPermission(ctx, "ssh", 1, unparseableShell)
@@ -122,6 +129,17 @@ func TestCheckPermission_ShellUnenumerable(t *testing.T) {
 				}
 			}
 			setGroup(asset_entity.CommandPolicy{})
+
+			// 组的 CommandPolicy 列同时承载扩展资产的永久规则（ext:<policyType>:<action>，
+			// opsctl policy deny --type <扩展类型> 落在组上）。它们是动作名，不是 shell 规则，
+			// 不能让同组 SSH 资产的 allow * 因"存在具体 deny"而退化成 NeedConfirm。
+			Convey("组里的扩展规则 ext:<type>:<action> 不算命令 deny → 资产 allow * 仍放行", func() {
+				setGroup(asset_entity.CommandPolicy{DenyList: []string{"ext:notebook:delete"}})
+				asset.CmdPolicy = mustJSON(asset_entity.CommandPolicy{AllowList: []string{"*"}})
+				result := CheckPermission(ctx, "ssh", 1, unparseableShell)
+				So(result.Decision, ShouldEqual, aictx.Allow)
+				So(result.MatchedPattern, ShouldEqual, "*")
+			})
 
 			Convey("* 来自资产组链", func() {
 				setGroup(asset_entity.CommandPolicy{AllowList: []string{"*"}})

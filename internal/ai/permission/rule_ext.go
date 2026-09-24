@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/opskat/opskat/internal/ai/policy"
 )
 
 // 扩展提供的资产类型的永久规则落点（opsctl policy allow / deny / rm / show）。
@@ -27,7 +29,7 @@ import (
 
 // extRulePrefix 是一个扩展策略面在共用 CommandPolicy 列里的命名空间前缀。
 func extRulePrefix(policyType string) string {
-	return "ext:" + policyType + ":"
+	return policy.ExtRulePrefix + policyType + ":"
 }
 
 // RegisterExtensionRuleSink 为一个扩展提供的资产类型注册永久规则落点。
