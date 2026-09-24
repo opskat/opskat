@@ -11,9 +11,11 @@ import (
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type fixedLang string
@@ -155,5 +157,28 @@ func TestAssetConfigDecryptFailureFailsClosed(t *testing.T) {
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "password")
 		So(raw, ShouldBeNil)
+	})
+}
+
+func TestAssetConfigAccessIsAuditedThroughAppLogger(t *testing.T) {
+	Convey("reading an asset config leaves an audit entry in the app's logger", t, func() {
+		core, logs := observer.New(zap.InfoLevel)
+		old := logger.Default()
+		logger.SetLogger(zap.New(core))
+		t.Cleanup(func() { logger.SetLogger(old) })
+
+		e, assets := newHostTestBinder(t)
+		assets.EXPECT().Find(gomock.Any(), int64(1)).
+			Return(&asset_entity.Asset{ID: 1, Type: "acme-store", Config: encryptedConfig(t, "s3cret")}, nil)
+
+		_, err := e.NewAssetConfigGetter("acme").GetAssetConfig(1)
+		So(err, ShouldBeNil)
+
+		entries := logs.FilterMessage("extension accessed asset config").All()
+		So(entries, ShouldHaveLength, 1)
+		fields := entries[0].ContextMap()
+		So(fields["extension"], ShouldEqual, "acme")
+		So(fields["asset_id"], ShouldEqual, int64(1))
+		So(fields["plaintext_allowed"], ShouldEqual, true)
 	})
 }

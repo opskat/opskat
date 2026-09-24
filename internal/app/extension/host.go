@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/sshpool"
 	"github.com/opskat/opskat/pkg/extension"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 )
@@ -42,7 +43,7 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 		return json.RawMessage("{}"), nil
 	}
 
-	zap.L().Info("extension accessed asset config",
+	logger.Ctx(ctx).Info("extension accessed asset config",
 		zap.String("extension", caller.Name),
 		zap.Int64("asset_id", assetID),
 		zap.String("asset_type", asset.Type),
