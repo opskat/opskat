@@ -8,17 +8,31 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 )
 
-// ShellCommandRules 去掉命令策略列表里的文件传输规则（cp:*、cp:read:<路径>、cp:write:<路径>）。
-// 它们与 shell 规则同存于 CommandPolicy 的 allow/deny 列表，匹配的却是远端路径，
-// 不参与 shell 命令判定——尤其不能让一条 cp deny 被当成"存在具体命令 deny"。
+// CommandPolicy 的 allow/deny 列表不只装 shell 规则，还住着两类别的语言的规则，
+// 各占一个命名空间前缀：
+//   - CpRulePrefix：文件传输规则（cp:*、cp:read:<路径>、cp:write:<路径>），匹配远端路径；
+//   - ExtRulePrefix：扩展资产的永久规则（ext:<policyType>:<action>），匹配扩展动作名。
+//
+// 新增一类同列规则时加进 nonShellRulePrefixes，所有 shell 判定点经 ShellCommandRules 一起生效。
+const (
+	CpRulePrefix  = "cp:"
+	ExtRulePrefix = "ext:"
+)
+
+var nonShellRulePrefixes = []string{CpRulePrefix, ExtRulePrefix}
+
+// IsShellRule 报告一条 CommandPolicy 规则是否是 shell 命令规则（不属于任何非 shell 命名空间）。
+func IsShellRule(rule string) bool {
+	return !slices.ContainsFunc(nonShellRulePrefixes, func(prefix string) bool {
+		return strings.HasPrefix(rule, prefix)
+	})
+}
+
+// ShellCommandRules 只留下命令策略列表里的 shell 规则。非 shell 规则与 shell 规则同存于
+// CommandPolicy 的 allow/deny 列表，却不参与 shell 命令判定——尤其不能让一条 cp / ext deny
+// 被当成"存在具体命令 deny"，把同一 holder 上 SSH 资产的 allow * 降成 NeedConfirm。
 func ShellCommandRules(rules []string) []string {
-	filtered := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		if !strings.HasPrefix(rule, "cp:") {
-			filtered = append(filtered, rule)
-		}
-	}
-	return filtered
+	return slices.DeleteFunc(slices.Clone(rules), func(rule string) bool { return !IsShellRule(rule) })
 }
 
 // DecideUnenumerableShell 判定一条拆不出执行单元的 shell 命令：ExtractSubCommands 返回了

@@ -159,8 +159,11 @@ granted on the asset, and the answer is one of three.
 - anything else **asks the user**, and "always allow" saves a grant.
 
 `.Default()` marks a group granted to every new asset of the extension's types.
-Group ids must be namespaced `ext:<extension>:<group>`. The action set itself is never
-declared — the host derives it from the tools.
+Group ids must be namespaced by the extension's policy type — `ext:<PolicyType>:<group>`,
+the same segment the host writes permanent rules under (`ext:<PolicyType>:<action>`).
+A policy type belongs to one extension: loading a second extension that claims the same
+policy type, or a group id that is already registered, is refused. The action set itself
+is never declared — the host derives it from the tools.
 
 ## SKILL.md and locales
 

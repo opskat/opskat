@@ -91,6 +91,12 @@ func (d *Descriptor) validateAssetScope() error {
 	if d.Policies.Type == "" {
 		return fmt.Errorf("describe(): policies.type is required — it names the policy face the extension's asset types are checked under")
 	}
+	// The policy type is a namespace segment of both the extension's policy group
+	// IDs (ext:<type>:<name>) and its permanent rules (ext:<type>:<action>); a name
+	// that could itself contain ":" would let one face's namespace spell another's.
+	if !nameRe.MatchString(d.Policies.Type) {
+		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policies.Type)
+	}
 	return nil
 }
 
@@ -181,14 +187,28 @@ func (d *Descriptor) validateTools() error {
 	return nil
 }
 
+// validatePolicyGroups keeps an extension's policy groups inside its own policy
+// face's namespace: ext:<policies.type>:<name>.
+//
+// Group IDs share one host-wide table with every other extension's, and the policy
+// type is owned by exactly one loaded extension (internal/extreg refuses a second
+// claimant), so namespacing by it is what makes "this ID is mine" checkable here,
+// before load, instead of surfacing as a collision against whatever else happens
+// to be installed.
 func (d *Descriptor) validatePolicyGroups() error {
+	prefix := "ext:" + d.Policies.Type + ":"
+	seen := make(map[string]struct{}, len(d.Policies.Groups))
 	for _, g := range d.Policies.Groups {
-		if !strings.HasPrefix(g.ID, "ext:") {
-			return fmt.Errorf("describe(): policy group ID must start with ext: (got %q)", g.ID)
+		if !strings.HasPrefix(g.ID, prefix) || len(g.ID) == len(prefix) {
+			return fmt.Errorf("describe(): policy group ID must be %s<name>, namespaced by policies.type (got %q)", prefix, g.ID)
 		}
 		if !policyIDRe.MatchString(g.ID) {
 			return fmt.Errorf("describe(): policy group ID has invalid characters (got %q)", g.ID)
 		}
+		if _, dup := seen[g.ID]; dup {
+			return fmt.Errorf("describe(): duplicate policy group ID %q", g.ID)
+		}
+		seen[g.ID] = struct{}{}
 	}
 	return nil
 }

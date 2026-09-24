@@ -31,6 +31,15 @@ type fakePlugin struct {
 	lastArgs  json.RawMessage
 	lastAsset *extension.AssetRef
 	result    string
+
+	validationErrors []extension.ValidationError
+	validateErr      error
+	lastValidated    json.RawMessage
+}
+
+func (p *fakePlugin) ValidateConfig(_ context.Context, config json.RawMessage) ([]extension.ValidationError, error) {
+	p.lastValidated = append(json.RawMessage(nil), config...)
+	return p.validationErrors, p.validateErr
 }
 
 func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error) {
@@ -150,6 +159,8 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 	// extension is a hard one-to-one now that exec dispatches through it.
 	other := testManifest()
 	other.Name = "acme-clone"
+	other.Policies.Type = "acme-clone"
+	other.Policies.Groups[0].ID = "ext:acme-clone:readonly"
 	err := register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}},
 		"help", "desc")
 	require.Error(t, err)

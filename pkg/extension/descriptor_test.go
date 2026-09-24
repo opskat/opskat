@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -272,6 +273,53 @@ func TestApplyDescriptor(t *testing.T) {
 
 		Convey("the action set is derived from the tools, not declared twice", func() {
 			So(m.Policies.Actions, ShouldResemble, []string{"delete", "list"})
+		})
+	})
+}
+
+// 权限组 ID 按声明者的策略面命名空间化（ext:<policies.type>:<name>），策略面名本身
+// 与资产类型同一套命名规则——组 ID 与规则落点 ext:<policyType>:<action> 都以它为段，
+// 一个不受约束的策略面名会让两者的命名空间失去意义。
+func TestParseDescriptorPolicyNamespace(t *testing.T) {
+	group := func(id string) string {
+		return `{"id":"` + id + `","i18n":{"name":"n","description":"d"},"policy":{"allow_list":["read"]}}`
+	}
+	parse := func(policyType string, groups ...string) error {
+		body := `{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+			`"configSchema":{"type":"object","properties":{"e":{"type":"string"}}}}],` +
+			`"policies":{"type":"` + policyType + `","groups":[` + strings.Join(groups, ",") + `]}}`
+		_, err := ParseDescriptor([]byte(body))
+		return err
+	}
+
+	Convey("policies.type and policy group IDs are namespaced", t, func() {
+		Convey("a group under the extension's own policy type is accepted", func() {
+			So(parse("x", group("ext:x:read"), group("ext:x:write")), ShouldBeNil)
+		})
+
+		Convey("policies.type must be a plain name", func() {
+			for _, bad := range []string{"ext:oss", "X", "a b", "a:b", "-x"} {
+				err := parse(bad)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "policies.type")
+			}
+		})
+
+		Convey("a group in another policy type's namespace is refused", func() {
+			err := parse("x", group("ext:acme:readonly"))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext:x:")
+		})
+
+		Convey("the bare namespace is not a group ID", func() {
+			So(parse("x", group("ext:x")), ShouldNotBeNil)
+			So(parse("x", group("ext:x:")), ShouldNotBeNil)
+		})
+
+		Convey("a duplicate group ID is refused", func() {
+			err := parse("x", group("ext:x:read"), group("ext:x:read"))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "duplicate")
 		})
 	})
 }

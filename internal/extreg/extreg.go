@@ -38,11 +38,12 @@ import (
 const helpLang = "en"
 
 // pluginCaller 是本包用到的 WASM 插件能力子集（*extension.Plugin 满足它）。
-// 收窄到两个方法而不是直接吃 *Plugin，是为了让策略/执行这两条闭包可以在没有 wazero
-// 运行时的情况下被测试驱动——它们承载的是策略与 grant 的行为契约，不是 WASM 加载。
+// 收窄到这几个方法而不是直接吃 *Plugin，是为了让策略/执行/配置校验这几条闭包可以在
+// 没有 wazero 运行时的情况下被测试驱动——它们承载的是行为契约，不是 WASM 加载。
 type pluginCaller interface {
 	CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error)
 	CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action, resource string, err error)
+	ValidateConfig(ctx context.Context, config json.RawMessage) ([]extension.ValidationError, error)
 }
 
 // loaded 是一个已加载扩展在本包内的最小画像。
@@ -55,7 +56,21 @@ type loaded struct {
 var (
 	mu         sync.Mutex
 	registered = make(map[string][]string) // extension name → registered asset types
+	// policyTypeOwner 记录每个策略面（manifest 的 policies.type）归哪个扩展。策略面是
+	// 权限组 ID（ext:<policyType>:<name>）与永久规则（ext:<policyType>:<action>）共同的
+	// 命名空间段，也是 CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，
+	// 一方的组与规则就会被当成另一方的来判。
+	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
+
+// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。调用方持有 mu。
+func claimPolicyType(extName, policyType string) error {
+	if owner, taken := policyTypeOwner[policyType]; taken {
+		return fmt.Errorf("extension %q: policy type %q is already owned by extension %q", extName, policyType, owner)
+	}
+	policyTypeOwner[policyType] = extName
+	return nil
+}
 
 // Register 把 ext 声明的每个资产类型接进宿主注册表。
 func Register(ext *extension.Extension) error {
@@ -74,6 +89,9 @@ func register(l loaded, help, description string) error {
 	if _, exists := registered[l.name]; exists {
 		return fmt.Errorf("extension %q is already registered", l.name)
 	}
+	if err := claimPolicyType(l.name, m.Policies.Type); err != nil {
+		return err
+	}
 
 	var done []string
 	rollback := func() {
@@ -81,6 +99,7 @@ func register(l loaded, help, description string) error {
 			unregisterType(t)
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(l.name)
+		delete(policyTypeOwner, m.Policies.Type)
 	}
 
 	for _, at := range m.AssetTypes {
@@ -114,6 +133,11 @@ func Unregister(name string) {
 		unregisterType(t)
 	}
 	policy_group_entity.UnregisterExtensionGroupsByExtension(name)
+	for policyType, owner := range policyTypeOwner {
+		if owner == name {
+			delete(policyTypeOwner, policyType)
+		}
+	}
 	delete(registered, name)
 	logger.Default().Info("extension unregistered",
 		zap.String("extension", name), zap.Strings("assetTypes", types))
@@ -151,11 +175,46 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 		skills.UnregisterDynamic(at.Type)
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
+	// 配置校验：guest 的 RegisterConfigValidator 挂到资产写入口（asset_svc），桌面表单、
+	// put_asset、opsctl create 落库前都经它。仅描述注册（opsctl 进程）没有 plugin，不注册——
+	// 那边只有 configSchema 的必填/未知字段校验。
+	if err := asset_entity.RegisterConfigValidator(at.Type, validateConfig(l)); err != nil {
+		assettype.Unregister(at.Type)
+		permission.UnregisterPolicyCheck(at.Type)
+		permission.UnregisterExecutor(at.Type)
+		skills.UnregisterDynamic(at.Type)
+		permission.UnregisterRuleSink(at.Type)
+		return fmt.Errorf("extension %q: %w", l.name, err)
+	}
 	defaults := append([]string(nil), m.Policies.Default...)
 	policyent.RegisterDefaultPolicy(at.Type, func() any {
 		return &policyent.CommandPolicy{Groups: defaults}
 	})
 	return nil
+}
+
+// validateConfig 把资产即将落库的配置交给 guest 的 validate_config。guest 看到的正是它的
+// 工具之后经 ctx.AssetConfig() 读回的那份（password 字段为密文），因此"表单一套规则、
+// 工具一套规则"不会分叉。guest 调用失败即拒绝保存：校验没跑成不等于校验通过。
+func validateConfig(l loaded) asset_entity.ConfigValidator {
+	return func(ctx context.Context, a *asset_entity.Asset) error {
+		errs, err := l.plugin.ValidateConfig(ctx, json.RawMessage(a.Config))
+		if err != nil {
+			return fmt.Errorf("extension %q: validate %s config: %w", l.name, a.Type, err)
+		}
+		if len(errs) == 0 {
+			return nil
+		}
+		msgs := make([]string, 0, len(errs))
+		for _, e := range errs {
+			if e.Field == "" {
+				msgs = append(msgs, e.Message)
+				continue
+			}
+			msgs = append(msgs, e.Field+": "+e.Message)
+		}
+		return fmt.Errorf("invalid %s config: %s", a.Type, strings.Join(msgs, "; "))
+	}
 }
 
 func unregisterType(assetType string) {
@@ -165,6 +224,7 @@ func unregisterType(assetType string) {
 	permission.UnregisterRuleSink(assetType)
 	skills.UnregisterDynamic(assetType)
 	policyent.UnregisterDefaultPolicy(assetType)
+	asset_entity.UnregisterConfigValidator(assetType)
 }
 
 // skillDescription 是技能清单里的那一行。优先用 SKILL.md frontmatter 的 description，

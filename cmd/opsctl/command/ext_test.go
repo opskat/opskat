@@ -105,7 +105,7 @@ func writeExtManifest(t *testing.T, stub *describeCacheStub, dir, name, assetTyp
 			"policyAction": "list",
 			"parameters":   map[string]any{"type": "object", "properties": map[string]any{}},
 		}},
-		"policies": map[string]any{"type": "ext:" + name},
+		"policies": map[string]any{"type": name},
 	})
 	require.NoError(t, err)
 	stub.payloads[name] = string(descriptor)
