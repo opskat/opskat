@@ -65,6 +65,9 @@ var (
 
 // claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。调用方持有 mu。
 func claimPolicyType(extName, policyType string) error {
+	if policy_group_entity.IsBuiltinPolicyType(policyType) {
+		return fmt.Errorf("extension %q: policy type %q is a built-in policy type", extName, policyType)
+	}
 	if owner, taken := policyTypeOwner[policyType]; taken {
 		return fmt.Errorf("extension %q: policy type %q is already owned by extension %q", extName, policyType, owner)
 	}

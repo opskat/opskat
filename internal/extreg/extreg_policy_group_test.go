@@ -84,3 +84,19 @@ func TestPolicyTypeIsReleasedOnUnregister(t *testing.T) {
 	require.NoError(t, register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}}, "help", "desc"))
 	Unregister("beta")
 }
+
+// 策略面与内置策略类型同名时，用户自建的该内置类型权限组会被 CheckExtensionPolicy 当成
+// 扩展规则来判（它只按 PolicyType 筛组）。内置类型名因此不能被任何扩展占用。
+func TestRegisterRefusesABuiltinPolicyType(t *testing.T) {
+	for _, builtin := range []string{policy_group_entity.PolicyTypeCommand, policy_group_entity.PolicyTypeOSS} {
+		other := otherManifest(t, "beta", builtin, "beta-store", "ext:"+builtin+":readonly")
+		err := register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}}, "help", "desc")
+		require.Error(t, err, builtin)
+		assert.Contains(t, err.Error(), "built-in")
+		assert.Nil(t, policy_group_entity.FindExtensionGroup("ext:"+builtin+":readonly"))
+
+		err = RegisterDescribeOnly(&extension.ManifestInfo{Name: "beta", Manifest: other})
+		require.Error(t, err, builtin)
+		assert.Contains(t, err.Error(), "built-in")
+	}
+}

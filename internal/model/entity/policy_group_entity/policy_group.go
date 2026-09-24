@@ -521,6 +521,12 @@ func isBuiltinKind(kind string) bool {
 	return ok
 }
 
+// IsBuiltinPolicyType 报告 kind 是否为内置策略类型（command / query / redis …）。
+// 扩展的策略面不能与之同名：权限组按 PolicyType 归类，同名会让两边互判对方的组。
+func IsBuiltinPolicyType(kind string) bool {
+	return isBuiltinKind(kind)
+}
+
 // FindBuiltin 按 ID 查找内置权限组
 func FindBuiltin(id string) *PolicyGroup {
 	return builtinMap[id]
