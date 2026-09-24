@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AssetForm } from "@/components/asset/AssetForm";
@@ -9,6 +9,8 @@ import { startVNCClient, VNCClientError, type VNCNegotiatedSecurity } from "@/li
 import { notifySuccess } from "@/lib/notify";
 import { toast } from "sonner";
 import { EventsOff } from "../../../../wailsjs/runtime/runtime";
+import { registerExtensionAssetTypes, unregisterExtensionAssetTypes } from "@/extension/assetTypes";
+import type { ExtManifest } from "@/extension/types";
 
 const mocks = vi.hoisted(() => ({
   notifySuccess: vi.fn(),
@@ -174,5 +176,65 @@ describe("AssetForm custom test lifecycle", () => {
     );
     expect(ConnectVNCTemporary).not.toHaveBeenCalled();
     expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccess");
+  });
+});
+
+// An extension asset type that declares a test-connection handler (describe()'s
+// AssetTypeDef.TestConnection) gets the button through the very same generic
+// TestAssetConnection path the "serial" case above exercises for a built-in type
+// (task 10, docs/specs 2026-09-24-ext-platform-capabilities.md 测试连接): the form
+// must show the outcome to the user either way, success or failure.
+describe("extension asset type test connection surfaces the outcome in the form", () => {
+  const testableExtManifest = {
+    name: "acme",
+    version: "1.0.0",
+    icon: "cloud",
+    i18n: { displayName: "acme", description: "" },
+    assetTypes: [
+      {
+        type: "acme-store",
+        i18n: { name: "acme" },
+        configSchema: { type: "object", properties: { endpoint: { type: "string" } } },
+        testConnection: true,
+      },
+    ],
+    policies: { type: "ext:acme", actions: [], groups: [], default: [] },
+  } as unknown as ExtManifest;
+
+  const acmeAsset = new asset_entity.Asset({
+    ID: 11,
+    Name: "acme-1",
+    Type: "acme-store",
+    Config: JSON.stringify({ endpoint: "http://x" }),
+  });
+
+  beforeEach(() => registerExtensionAssetTypes("acme", testableExtManifest));
+  afterEach(() => unregisterExtensionAssetTypes("acme"));
+
+  it("a successful test connection notifies the user of success", async () => {
+    vi.mocked(TestAssetConnection).mockResolvedValue(undefined as never);
+
+    render(<AssetForm open editAsset={acmeAsset} onOpenChange={vi.fn()} />);
+    const button = await screen.findByTestId("asset-test-connection");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    await waitFor(() =>
+      expect(TestAssetConnection).toHaveBeenCalledWith(expect.any(String), "acme-store", expect.any(String), "11")
+    );
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccess"));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a failed test connection shows the failure to the user", async () => {
+    vi.mocked(TestAssetConnection).mockRejectedValue(new Error("connection refused"));
+
+    render(<AssetForm open editAsset={acmeAsset} onOpenChange={vi.fn()} />);
+    const button = await screen.findByTestId("asset-test-connection");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("connection refused")));
+    expect(notifySuccess).not.toHaveBeenCalled();
   });
 });
