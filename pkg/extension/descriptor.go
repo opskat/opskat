@@ -97,7 +97,11 @@ func (d *Descriptor) validateAssetScope() error {
 			for _, p := range props {
 				declared[p] = true
 			}
-			if err := at.Auth.validate(declared); err != nil {
+			secrets := make(map[string]bool)
+			for _, p := range PasswordFieldsFromSchema(at.ConfigSchema) {
+				secrets[p] = true
+			}
+			if err := at.Auth.validate(declared, secrets); err != nil {
 				return fmt.Errorf("describe(): assetTypes[%q].%w", at.Type, err)
 			}
 		}

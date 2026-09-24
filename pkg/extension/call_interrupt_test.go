@@ -308,3 +308,57 @@ func TestToolResultSizeLimit(t *testing.T) {
 		})
 	})
 }
+
+// slowRegisterHost holds a stream open by the inner provider back from the
+// runtime until release closes: the window between a connection being made and
+// the guest's handle table learning about it.
+type slowRegisterHost struct {
+	HostProvider
+	opened  chan struct{}
+	release chan struct{}
+}
+
+func (h *slowRegisterHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error) {
+	res, err := h.HostProvider.OpenIO(ctx, asset, params)
+	close(h.opened)
+	<-h.release
+	return res, err
+}
+
+// A cancel can land while the action is still opening its stream. That stream
+// was asked for before the cancel, so it must not survive it: registered after
+// the cancel already closed everything, it would leave the guest blocked on a
+// read nothing will ever close.
+func TestCancelActionWhileItsStreamIsOpening(t *testing.T) {
+	Convey("Given an action whose TCP stream opens while it is canceled", t, func() {
+		ln, _ := stallingTCP(t)
+		manifest := fixtureManifest(t)
+		host := &slowRegisterHost{
+			HostProvider: NewDefaultHostProvider(DefaultHostConfig{
+				AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, map[string]any{"endpoint": ln.Addr().String()})},
+			}),
+			opened:  make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		p := loadDescribedFixture(t, manifest, host, WithMaxInstances(1))
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := p.CallAction(context.Background(), "opening-1", "tcp_echo",
+				mustJSON(t, map[string]any{"addr": ln.Addr().String()}), fixtureAsset)
+			done <- err
+		}()
+		select {
+		case <-host.opened:
+		case <-time.After(callBound):
+			t.Fatal("the action never opened its stream")
+		}
+
+		Convey("the stream is closed on arrival, the action ends and frees its slot", func() {
+			So(p.CancelAction("opening-1"), ShouldBeTrue)
+			close(host.release)
+			So(waitCall(t, done), ShouldNotBeNil)
+			assertSlotFreed(t, p)
+		})
+	})
+}

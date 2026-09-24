@@ -393,6 +393,7 @@
     "formMissingPath": "请填写数据库文件路径。",
     "formMissingSQLiteSSH": "请选择远程 SQLite 文件使用的 SSH 资产。",
     "formMissingSSHTunnel": "请选择作为隧道的 SSH 资产。",
+    "formTunnelWithProxyChain": "SSH 隧道与代理链只能选一个——可以把 SSH 跳板作为代理链中的一层。",
     "moveUp": "上移",
     "moveDown": "下移",
     "moveTop": "置顶",

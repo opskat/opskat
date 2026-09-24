@@ -23,12 +23,9 @@ type LangProvider interface {
 // precisely to avoid, because it skips policy, approval, grant and audit
 // entirely. command is the same `<tool> --flag=value` / `<tool> --json=<...>`
 // exec DSL text the unified exec handler parses for every other caller (AI,
-// opsctl). invocationID is the caller's per-call correlation token (not the
-// grant session — a call on the same asset in this desktop run uses the same
-// session regardless of invocationID, so "always allow" survives past the one
-// call that requested it). Canceling ctx — which CancelExtensionTool does — ends the call.
+// opsctl). Canceling ctx — which CancelExtensionTool does — ends the call.
 type PageToolGate interface {
-	RunPageToolCall(ctx context.Context, invocationID string, assetID int64, command string) (string, error)
+	RunPageToolCall(ctx context.Context, assetID int64, command string) (string, error)
 }
 
 // Extension binder。

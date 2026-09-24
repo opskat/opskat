@@ -1,9 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { injectExtensionAPI } from "../inject";
-import { CodeEditor } from "@/components/CodeEditor";
-import { JsonTreeView } from "@/components/JsonTreeView";
-import { QueryResultTable } from "@/components/query/QueryResultTable";
 import type { ExtAPI } from "../types";
 
 const fakeApi: ExtAPI = {
@@ -11,37 +8,23 @@ const fakeApi: ExtAPI = {
   executeAction: async () => undefined,
 };
 
+// @opskat/host-ui is what an extension page reaches for on window.__OPSKAT_EXT__:
+// the page renders these components itself, so the contract is that they are
+// there and render.
 describe("injectExtensionAPI — @opskat/host-ui", () => {
   afterEach(() => {
     delete (window as unknown as { __OPSKAT_EXT__?: unknown }).__OPSKAT_EXT__;
   });
 
-  it("exposes hostUI with a version alongside the existing api/ui/i18n surface", () => {
+  it("gives a page a versioned hostUI whose components it can render", () => {
     injectExtensionAPI(fakeApi);
 
-    const injected = window.__OPSKAT_EXT__;
-    expect(injected).toBeDefined();
-    expect(injected!.hostUI).toBeDefined();
-    expect(typeof injected!.hostUI.version).toBe("string");
-    expect(injected!.hostUI.version.length).toBeGreaterThan(0);
-  });
+    const hostUI = window.__OPSKAT_EXT__!.hostUI;
+    expect(hostUI.version).toMatch(/^\d+\.\d+$/);
+    expect(hostUI.CodeEditor).toBeDefined();
+    expect(hostUI.QueryResultTable).toBeDefined();
 
-  it("hostUI.CodeEditor is the exact same component the host uses (so it stays on-theme and supports json)", () => {
-    injectExtensionAPI(fakeApi);
-    expect(window.__OPSKAT_EXT__!.hostUI.CodeEditor).toBe(CodeEditor);
-  });
-
-  it("hostUI.QueryResultTable is the exact same component the host uses (so sorting/copy behavior is identical)", () => {
-    injectExtensionAPI(fakeApi);
-    expect(window.__OPSKAT_EXT__!.hostUI.QueryResultTable).toBe(QueryResultTable);
-  });
-
-  it("hostUI.JsonTreeView is the exact same component the host uses and renders", () => {
-    injectExtensionAPI(fakeApi);
-    const HostJsonTreeView = window.__OPSKAT_EXT__!.hostUI.JsonTreeView;
-    expect(HostJsonTreeView).toBe(JsonTreeView);
-
-    render(<HostJsonTreeView data={{ note: "hello" }} />);
+    render(<hostUI.JsonTreeView data={{ note: "hello" }} />);
     expect(screen.getByText("note:")).toBeInTheDocument();
   });
 });

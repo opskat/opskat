@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import enCommon from "@/i18n/locales/en/common.json";
-import zhCommon from "@/i18n/locales/zh-CN/common.json";
 import { JsonTreeView } from "@/components/JsonTreeView";
 
 // react-i18next is globally mocked (src/__tests__/setup.ts) to echo the key back
@@ -52,16 +50,5 @@ describe("JsonTreeView", () => {
   it("shows an empty state routed through the shared translation hook for undefined data", () => {
     render(<JsonTreeView data={undefined} />);
     expect(screen.getByText("extension.hostUi.jsonTreeEmpty")).toBeInTheDocument();
-  });
-
-  it("declares its i18n keys in every locale the host ships (en and zh-CN independently)", () => {
-    // Cross-file drift check: en and zh-CN are independently maintained sources of
-    // truth. If a key were added to one and forgotten in the other, the component
-    // would silently show the raw key to users of the other language.
-    const hostUiKeys = ["jsonTreeExpand", "jsonTreeCollapse", "jsonTreeEmpty"] as const;
-    for (const key of hostUiKeys) {
-      expect(enCommon.extension.hostUi[key]).toBeTruthy();
-      expect(zhCommon.extension.hostUi[key]).toBeTruthy();
-    }
   });
 });

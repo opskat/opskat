@@ -226,11 +226,12 @@ func opIOOpen(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
+	epoch := env.inv.io.Epoch()
 	res, err := env.host.OpenIO(env.ctx, env.inv.asset, p)
 	if err != nil {
 		return nil, err
 	}
-	handle, err := env.inv.io.Register(res)
+	handle, err := env.inv.io.RegisterSince(epoch, res)
 	if err != nil {
 		return nil, err
 	}

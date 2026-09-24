@@ -20,6 +20,7 @@ import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
 import { hasApprovalCommandEdits } from "@/lib/approval";
+import { ApprovalClassification } from "./ApprovalClassification";
 
 interface ApprovalBlockProps {
   block: ContentBlock;
@@ -168,22 +169,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     </>
                   )}
                 </div>
-                {/* 扩展类型才有 action：check_policy 的分类，展示在命令上方，让"批准"批的是
-                    一个可读的动作 + 资源，而不只是一串不透明的 exec 文本（spec 参数级策略 › 审批展示）。 */}
-                {item.action && (
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
-                    <span className="text-muted-foreground">
-                      <span className="font-medium text-warning">{t("ai.approvalActionLabel")}</span>
-                      <span className="select-text">{item.action}</span>
-                    </span>
-                    {item.resource && (
-                      <span className="text-muted-foreground">
-                        <span className="font-medium text-warning">{t("ai.approvalResourceLabel")}</span>
-                        <span className="select-text">{item.resource}</span>
-                      </span>
-                    )}
-                  </div>
-                )}
+                <ApprovalClassification
+                  action={item.action}
+                  resource={item.resource}
+                  className="text-[11px]"
+                  labelClassName="text-warning"
+                />
                 {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}

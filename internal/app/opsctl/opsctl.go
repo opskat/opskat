@@ -67,6 +67,8 @@ type Opsctl struct {
 
 	pendingOpsctlApprovals sync.Map // map[string]pendingOpsctlApproval
 	mfa                    *mfaBroker
+	// emit 把事件推给前端；New 接到 Wails 事件，测试替换它以驱动审批弹窗。
+	emit func(name string, payload map[string]any)
 
 	// pageRunID 是本次桌面端运行的标识，扩展页面的 grant 会话由它与资产共同派生
 	// （pageGrantSessionID）：页面"始终允许"与 AI 会话 / opsctl 会话一样有边界，
@@ -102,15 +104,16 @@ func New(
 		pageRunID: uuid.NewString(),
 	}
 	o.extDevApprove = o.requestSingleApproval
+	o.emit = func(name string, payload map[string]any) {
+		wailsRuntime.EventsEmit(o.ctx, name, payload)
+	}
 	return o
 }
 
 // Startup 启动审批的本地 IPC 服务。
 func (o *Opsctl) Startup(ctx context.Context) {
 	o.ctx = ctx
-	o.mfa = newMFABroker(func(name string, payload map[string]any) {
-		wailsRuntime.EventsEmit(o.ctx, name, payload)
-	}, func() {
+	o.mfa = newMFABroker(o.emit, func() {
 		if o.window != nil {
 			o.window.ActivateWindow()
 		}

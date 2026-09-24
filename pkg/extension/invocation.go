@@ -44,7 +44,8 @@ func (inv *invocation) close() {
 
 // stop cancels an action: it raises the flag the guest polls and fails whatever
 // host IO the guest is blocked in, since a guest waiting on a read that never
-// completes would never get to poll the flag. Handles opened afterwards still
+// completes would never get to poll the flag — a stream still being opened
+// included (see IOHandleManager.RegisterSince). Handles opened afterwards still
 // work, so a guest that notices the stop can clean up (abort an upload) before
 // it returns.
 func (inv *invocation) stop() {

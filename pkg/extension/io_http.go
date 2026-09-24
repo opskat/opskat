@@ -88,15 +88,17 @@ type httpHandle struct {
 	phase   httpPhase
 	hasBody bool         // true for POST/PUT/PATCH
 	auth    *requestAuth // credentials injected into endpoint hops; nil = none
+	// redirectGuard vets where this request may be redirected; nil = anywhere.
+	// Like auth it rides on the request, not the client: a cached client is
+	// shared by later calls, whose guard may differ from the call that built it.
+	redirectGuard func(*url.URL) error
 }
 
 // newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
-// or immediate flushing (GET/HEAD/DELETE/OPTIONS). tlsConfig, when set, is the
-// asset's declared TLS settings — net/http performs its own handshake using it
-// for an https:// URL, over the conn dial returns. The client is single-use:
+// or immediate flushing (GET/HEAD/DELETE/OPTIONS). The client is single-use:
 // for a client reused across many calls to the same asset, see
 // buildCachedHTTPClient / openHTTPResourceWithClient.
-func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*httpHandle, error) {
+func newHTTPHandle(params IOOpenParams, dial DialFunc) (*httpHandle, error) {
 	if params.URL == "" {
 		return nil, fmt.Errorf("URL is required for HTTP handle")
 	}
@@ -110,9 +112,7 @@ func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*
 	if dial != nil {
 		ctxDial = func(_ context.Context, network, addr string) (net.Conn, error) { return dial(network, addr) }
 	}
-	transport := newHTTPTransport(ctxDial, tlsConfig, params.AllowPrivate)
-	client := newHTTPClient(transport, params.RedirectGuard)
-	return newHandleFromClient(params, client, nil)
+	return newHandleFromClient(params, newHTTPClient(newHTTPTransport(ctxDial, nil, params.AllowPrivate)), nil)
 }
 
 // buildCachedHTTPClient builds an *http.Client meant to be reused across many
@@ -120,14 +120,15 @@ func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*
 // newHTTPHandle's client, dial keeps its own per-dial context — supplied by
 // the transport at the time it actually needs a new connection — since the
 // transport may open one long after the call that first built it has
-// returned, to serve a different, later call.
-func buildCachedHTTPClient(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool, redirectGuard func(*url.URL) error) *http.Client {
+// returned, to serve a different, later call. Nothing a call decides — its
+// credentials, where it may be redirected — is built in: each request carries
+// its own (see httpHandle.Flush).
+func buildCachedHTTPClient(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool) *http.Client {
 	var ctxDial func(ctx context.Context, network, addr string) (net.Conn, error)
 	if dial != nil {
 		ctxDial = func(ctx context.Context, network, addr string) (net.Conn, error) { return dial(ctx, network, addr) }
 	}
-	transport := newHTTPTransport(ctxDial, tlsConfig, allowPrivate)
-	return newHTTPClient(transport, redirectGuard)
+	return newHTTPClient(newHTTPTransport(ctxDial, tlsConfig, allowPrivate))
 }
 
 // newHTTPTransport clones the default transport, wires dial through the
@@ -147,26 +148,35 @@ func newHTTPTransport(dial func(ctx context.Context, network, addr string) (net.
 	return transport
 }
 
-// newHTTPClient wraps transport in an *http.Client, enforcing redirectGuard
-// (when set) via CheckRedirect while keeping net/http's own redirect limit.
-// The client itself holds no credentials: authTransport injects only those a
-// request carries on its context.
-func newHTTPClient(transport *http.Transport, redirectGuard func(*url.URL) error) *http.Client {
-	client := &http.Client{Transport: &authTransport{base: transport}}
-	if redirectGuard != nil {
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			// Keep net/http's own redirect limit; the guard only narrows where to.
-			if len(via) >= 10 {
-				return errors.New("stopped after 10 redirects")
-			}
-			return redirectGuard(req.URL)
-		}
+// newHTTPClient wraps transport in an *http.Client. The client itself holds
+// neither credentials nor a redirect policy: authTransport injects only the
+// credentials a request carries on its context, and checkRedirect applies only
+// the guard the request carries there.
+func newHTTPClient(transport *http.Transport) *http.Client {
+	return &http.Client{Transport: &authTransport{base: transport}, CheckRedirect: checkRedirect}
+}
+
+type redirectGuardKey struct{}
+
+func withRedirectGuard(ctx context.Context, guard func(*url.URL) error) context.Context {
+	return context.WithValue(ctx, redirectGuardKey{}, guard)
+}
+
+// checkRedirect keeps net/http's own redirect limit and applies the guard the
+// request carries (net/http hands every redirect hop the first request's
+// context), which only narrows where a redirect may go.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
 	}
-	return client
+	if guard, _ := req.Context().Value(redirectGuardKey{}).(func(*url.URL) error); guard != nil {
+		return guard(req.URL)
+	}
+	return nil
 }
 
 // newHandleFromClient builds the per-call handle state (method, url, headers,
-// its own cancelable context, body buffer) around client, which may be freshly
+// redirect guard, its own cancelable context, body buffer) around client, which may be freshly
 // built (newHTTPHandle) or a cached one shared across calls
 // (openHTTPResourceWithClient).
 func newHandleFromClient(params IOOpenParams, client *http.Client, auth *requestAuth) (*httpHandle, error) {
@@ -192,6 +202,8 @@ func newHandleFromClient(params IOOpenParams, client *http.Client, auth *request
 		phase:   httpPhaseWriting,
 		hasBody: hasBody,
 		auth:    auth,
+
+		redirectGuard: params.RedirectGuard,
 	}, nil
 }
 
@@ -225,6 +237,9 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	reqCtx := h.ctx
 	if h.auth != nil {
 		reqCtx = withRequestAuth(reqCtx, h.auth)
+	}
+	if h.redirectGuard != nil {
+		reqCtx = withRedirectGuard(reqCtx, h.redirectGuard)
 	}
 	var req *http.Request
 	var err error

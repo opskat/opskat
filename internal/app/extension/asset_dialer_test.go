@@ -185,6 +185,19 @@ func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
 			So(targetHits.Load(), ShouldEqual, int32(0))
 		})
 
+		// The shared resolver lets a non-empty chain win over the tunnel column; a
+		// type declaring both would silently skip the SSH hop the user picked.
+		Convey("an asset setting both an SSH tunnel and a proxy chain is refused, not dialed without the tunnel", func() {
+			svc.Bridge().Register(connectionExt("both", "both-store", &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true}))
+			assets.EXPECT().Find(gomock.Any(), int64(12)).
+				Return(&asset_entity.Asset{ID: 12, Name: "both-store", Type: "both-store", Config: chainConfig("127.0.0.1", 1080), SSHTunnelID: 7}, nil)
+
+			dial, _, _, err := e.NewAssetDialer("both").DialContextFor(ctx, 12)
+			So(dial, ShouldBeNil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "SSH tunnel")
+		})
+
 		Convey("an undeclared chain has no effect: the asset dials directly", func() {
 			proxy, proxyHits := countingListener(t)
 			host, port, _ := net.SplitHostPort(proxy.Addr().String())

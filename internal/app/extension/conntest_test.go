@@ -55,7 +55,11 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			So(out["password"], ShouldEqual, "s3cret")
 		})
 
-		Convey("editing, the password field present but empty: also merges the stored value", func() {
+		// The form leaves out only the fields the user did not touch; one it sends
+		// empty is one the user cleared, and saving will clear it. Testing with the
+		// stored secret instead would report on a configuration that is not the one
+		// about to be saved.
+		Convey("editing, the password field cleared: tests with it empty, not the stored value", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(2)).
 				Return(&asset_entity.Asset{ID: 2, Type: "acme-store", Config: encryptedConfig(t, "s3cret")}, nil)
 
@@ -63,7 +67,9 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
-			So(out["password"], ShouldEqual, "s3cret")
+			So(out["password"], ShouldEqual, "")
+			So(json.Unmarshal(adhoc.Credentials, &out), ShouldBeNil)
+			So(out["password"], ShouldEqual, "")
 		})
 
 		Convey("editing, a retyped password is sent as-is, never the stored one", func() {

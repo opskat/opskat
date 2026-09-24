@@ -453,6 +453,13 @@ func TestParseDescriptorAuth(t *testing.T) {
 			refused(`{"selector":"mode","groups":[{"when":"a","bindings":[{"in":"basic","value":"{{username}}:{{password}}"}]}]}`, `"mode"`)
 		})
 
+		// The selector's value picks a group and is plain data the host logs and
+		// compares; a secret has no business choosing one, and reading it as a
+		// selector would put its plaintext into the host's logs.
+		Convey("a selector naming a password field is refused", func() {
+			refused(`{"selector":"password","groups":[{"when":"a","bindings":[{"in":"basic","value":"{{username}}:{{password}}"}]}]}`, `"password"`)
+		})
+
 		Convey("a malformed template is refused", func() {
 			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{password"}]}]}`, "unclosed")
 			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{md5(password)}}"}]}]}`, "md5(password)")

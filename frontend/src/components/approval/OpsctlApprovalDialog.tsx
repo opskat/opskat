@@ -13,6 +13,7 @@ import {
 } from "@opskat/ui";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { S3Icon } from "@/components/asset/brand-icons";
+import { ApprovalClassification } from "./ApprovalClassification";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import {
@@ -271,23 +272,12 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           </>
         )}
       </div>
-      {/* 扩展类型才有 action：check_policy 的分类，展示在命令上方，让"批准"批的是一个
-          可读的动作 + 资源，而不只是一串不透明的 exec 文本（spec 参数级策略 › 审批展示），
-          与 ApprovalBlock.tsx 同一套呈现。 */}
-      {item.action && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <span>
-            <span className="font-medium text-foreground">{t("ai.approvalActionLabel")}</span>
-            <span className="select-text">{item.action}</span>
-          </span>
-          {item.resource && (
-            <span>
-              <span className="font-medium text-foreground">{t("ai.approvalResourceLabel")}</span>
-              <span className="select-text">{item.resource}</span>
-            </span>
-          )}
-        </div>
-      )}
+      <ApprovalClassification
+        action={item.action}
+        resource={item.resource}
+        className="text-xs"
+        labelClassName="text-foreground"
+      />
       {cur.editable ? (
         <Textarea
           value={editState[cur.id]?.[i] ?? item.command}

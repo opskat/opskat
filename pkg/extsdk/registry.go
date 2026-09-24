@@ -320,7 +320,8 @@ func (r *AssetTypeReg[C]) Connection(c Connection) *AssetTypeReg[C] {
 // Selector names the config field whose value picks the active group (a value
 // no group names injects nothing); leave it empty to declare a single,
 // always-active group. The host refuses the extension at load when a template
-// references a field the config does not declare.
+// references a field the config does not declare, or the selector is a
+// format:"password" field.
 type Auth struct {
 	Selector string      `json:"selector,omitempty"`
 	Groups   []AuthGroup `json:"groups"`

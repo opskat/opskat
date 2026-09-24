@@ -69,40 +69,69 @@ func (o *Opsctl) startApprovalServer() {
 	o.approvalServer = srv
 }
 
+// requestSingleApproval 是 opsctl socket 上单条审批的入口：弹窗、等用户作答，"始终允许"
+// 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
+	parsed, reason := o.awaitSingleApproval(permission.ApprovalItem{
+		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
+		Command: req.Command, Detail: req.Detail,
+	}, req.SessionID)
+	switch parsed.Decision {
+	case permission.ApprovalAllow:
+		return approval.ApprovalResponse{Approved: true}
+	case permission.ApprovalAllowAll:
+		if req.SessionID == "" {
+			return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
+		}
+		pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
+		permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
+		// 只回 Approved：ApproveGrant 在 opsctl 协议里是"整个会话已获批"（grant 审批），
+		// CLI 见到它会把会话写成活动会话——单条命令的"始终允许"不是那个意思。
+		return approval.ApprovalResponse{Approved: true}
+	default:
+		return approval.ApprovalResponse{Approved: false, Reason: reason}
+	}
+}
+
+// awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
+// 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串落
+// （requestSingleApproval），扩展工具闸门交给 HandleConfirm 按 (action, resource) 落
+// （extToolConfirm）。拒绝时第二个返回值是原因。
+func (o *Opsctl) awaitSingleApproval(item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-	kind := permission.ApprovalKindFor(req.Type, req.Command)
+	kind := permission.ApprovalKindFor(item.Type, item.Command)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
-		zap.String("approvalType", req.Type),
-		zap.Int64("assetID", req.AssetID),
-		zap.String("sessionID", req.SessionID),
+		zap.String("approvalType", item.Type),
+		zap.Int64("assetID", item.AssetID),
+		zap.String("sessionID", sessionID),
 	)
 	log.Info("opsctl approval started")
+	denied := permission.ParsedApprovalResponse{Decision: permission.ApprovalDeny}
 
 	if o.window != nil {
 		o.window.ActivateWindow()
 	}
 
-	expectedItems := []permission.ApprovalItem{{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
-		Command: req.Command, Detail: req.Detail,
-	}}
-	// 发往 Wails 的 command/detail 即原始主体，展示与执行逐字一致。
-	wailsRuntime.EventsEmit(o.ctx, "opsctl:approval", map[string]any{
-		"confirm_id": confirmID,
-		"kind":       kind,
-		"type":       req.Type,
-		"asset_id":   req.AssetID,
-		"asset_name": req.AssetName,
-		"command":    expectedItems[0].Command,
-		"detail":     expectedItems[0].Detail,
-		"session_id": req.SessionID,
-	})
-
+	expectedItems := []permission.ApprovalItem{item}
 	ch := make(chan permission.ApprovalResponse, 1)
+	// 先登记再发事件：响应一到就要找得到这条待决审批。
 	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: kind, items: expectedItems, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(confirmID)
+	// 发往 Wails 的 command/detail 即原始主体，展示与执行逐字一致；action/resource
+	// 只有扩展类型才有（check_policy 的分类），前端据此在命令上方展示。
+	o.emit("opsctl:approval", map[string]any{
+		"confirm_id": confirmID,
+		"kind":       kind,
+		"type":       item.Type,
+		"asset_id":   item.AssetID,
+		"asset_name": item.AssetName,
+		"command":    item.Command,
+		"detail":     item.Detail,
+		"action":     item.Action,
+		"resource":   item.Resource,
+		"session_id": sessionID,
+	})
 
 	select {
 	case resp := <-ch:
@@ -111,44 +140,20 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 			// Response payload is an IPC input and may contain credential-shaped text.
 			// The scoped logger already carries confirmID/type/asset/session correlation.
 			log.Warn("opsctl approval response invalid", zap.String("kind", kind))
-			return approval.ApprovalResponse{Approved: false, Reason: "invalid approval response"}
+			return denied, "invalid approval response"
 		}
-		switch parsed.Decision {
-		case permission.ApprovalDeny:
-			log.Info("opsctl approval completed", zap.Bool("approved", false), zap.String("decision", resp.Decision))
-			return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
-		case permission.ApprovalAllow:
-			log.Info("opsctl approval completed", zap.Bool("approved", true), zap.String("decision", resp.Decision))
-			return approval.ApprovalResponse{Approved: true}
-		case permission.ApprovalAllowAll:
-			if req.SessionID == "" {
-				return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
-			}
-			pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
-			permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
-			log.Info("opsctl approval completed", zap.Bool("approved", true), zap.String("decision", resp.Decision))
-			// ApproveGrant / EditedItems let gateExtToolCall's confirmFunc tell "allow"
-			// and "allow all" apart: the generic grant just saved above is keyed by
-			// req.Type + raw command text, which extension policy matching
-			// (MatchExtensionGrant) never reads — only gateExtToolCall's caller knows
-			// the checker it installed is HandleConfirm, whose own extension-aware
-			// branch persists the (action, resource) grant that actually gets matched.
-			// Every other caller of requestSingleApproval already ignores these two
-			// fields, so setting them here does not change their behavior.
-			return approval.ApprovalResponse{
-				Approved:     true,
-				ApproveGrant: true,
-				EditedItems:  approvalGrantItemsFrom(parsed.EditedItems),
-			}
-		default:
-			return approval.ApprovalResponse{Approved: false, Reason: "unsupported approval decision"}
+		log.Info("opsctl approval completed",
+			zap.Bool("approved", parsed.Decision != permission.ApprovalDeny), zap.String("decision", resp.Decision))
+		if parsed.Decision == permission.ApprovalDeny {
+			return parsed, "user denied"
 		}
+		return parsed, ""
 	case <-o.ctx.Done():
 		log.Error("opsctl approval failed", zap.Error(o.ctx.Err()))
-		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
+		return denied, "app shutting down"
 	case <-o.appCtx.Done():
 		log.Error("opsctl approval failed", zap.Error(o.appCtx.Err()))
-		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
+		return denied, "app shutting down"
 	}
 }
 
@@ -161,54 +166,12 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 // 单独成函数是因为这条判断**没有编译期守卫**：origin 是必填参数，所以"忘了传"编译不过，
 // 但"传错一个"照样编译通过，而它的后果是安全性的——把 System 写成 User，
 // `opsctl cp 's3-prod:/mybucket/secrets*' ./` 点一次"始终允许"落下的就是一条读遍所有
-// secrets 开头对象的常驻授权。requestSingleApproval 本身跑不进测试（wailsRuntime.EventsEmit
-// 拿到非 wails context 会直接终止进程），所以判断留在函数里就等于没有任何锁。
+// secrets 开头对象的常驻授权。它直接可测，不必经 requestSingleApproval 走一趟弹窗与落库。
 func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (string, permission.GrantOrigin) {
 	if len(edited) > 0 {
 		return edited[0].Command, permission.GrantOriginUser
 	}
 	return command, permission.GrantOriginSystem
-}
-
-// approvalGrantItemsFrom converts a parsed approval's edited items back into the
-// IPC-shaped approval.GrantItem the ApprovalResponse.EditedItems field carries —
-// the inverse of the []approval.GrantItem → []permission.ApprovalItem conversion
-// ParseApprovalResponse does on the way in. gateExtToolCall's confirmFunc needs
-// them in this shape to hand back to HandleConfirm, which re-classifies edited
-// items through the extension's own ClassifyFunc rather than trusting Action/
-// Resource a caller could have forged.
-func approvalGrantItemsFrom(items []permission.ApprovalItem) []approval.GrantItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]approval.GrantItem, 0, len(items))
-	for _, item := range items {
-		out = append(out, approval.GrantItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			GroupID: item.GroupID, GroupName: item.GroupName,
-			Command: item.Command, Detail: item.Detail,
-		})
-	}
-	return out
-}
-
-// convertApprovalGrantItems is approvalGrantItemsFrom's inverse: gateExtToolCall's
-// confirmFunc receives requestSingleApproval's IPC-shaped EditedItems and must hand
-// permission.ApprovalItem back to the checker, which is what HandleConfirm and its
-// own ParseApprovalResponse call expect.
-func convertApprovalGrantItems(items []approval.GrantItem) []permission.ApprovalItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]permission.ApprovalItem, 0, len(items))
-	for _, item := range items {
-		out = append(out, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			GroupID: item.GroupID, GroupName: item.GroupName,
-			Command: item.Command, Detail: item.Detail,
-		})
-	}
-	return out
 }
 
 // handleBatchApproval 处理批量执行审批（exec/sql/redis 混合）
@@ -426,9 +389,9 @@ type extToolGateResult struct {
 // extension's own frontend page (RunPageToolCall) differ only in audit source and
 // grant-session identity — the gate itself does not know which one called.
 //
-// NeedConfirm always surfaces through requestSingleApproval, the desktop's one
-// "opsctl:approval" dialog: a page call gets the identical in-app approval UI an
-// opsctl or AI-initiated call gets, not a second one.
+// NeedConfirm always surfaces through the desktop's one "opsctl:approval" dialog
+// (extToolConfirm): a page call gets the identical in-app approval UI an opsctl
+// call gets, not a second one.
 //
 // It returns the context it built (audit source/session/decision slot all
 // installed on it) alongside the result: a caller's own WriteToolCall must use
@@ -439,30 +402,7 @@ type extToolGateResult struct {
 func (o *Opsctl) gateExtToolCall(ctx context.Context, source, sessionID string, assetID int64, command string) (context.Context, extToolGateResult, error) {
 	ctx = aictx.WithAuditSource(ctx, source)
 	ctx = aictx.WithSessionID(ctx, sessionID)
-	checker := permission.NewCommandPolicyChecker(func(_ context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		item := items[0]
-		resp := o.requestSingleApproval(approval.ApprovalRequest{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			Command: item.Command, Detail: item.Detail, SessionID: sessionID,
-		})
-		if !resp.Approved {
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-		if resp.ApproveGrant {
-			// The user picked "remember" in the dialog. requestSingleApproval already
-			// persisted its own grant for this — a plain req.Type + raw-command-text
-			// pattern, right for the built-in types its *other* callers register, but
-			// never read by extension policy matching (MatchExtensionGrant only ever
-			// looks for `ext:<type>:<action>:<resource>`-shaped patterns). Every asset
-			// type this gate runs against is an extension type (only extension assets
-			// reach ExecuteExtTool/RunPageToolCall), so forwarding "allowAll" here lets
-			// HandleConfirm's own extension-aware branch persist the one grant that
-			// actually gets matched on the next call — the earlier generic one is
-			// harmless, inert leftover, not a competing source of truth.
-			return permission.ApprovalResponse{Decision: "allowAll", EditedItems: convertApprovalGrantItems(resp.EditedItems)}
-		}
-		return permission.ApprovalResponse{Decision: "allow"}
-	})
+	checker := permission.NewCommandPolicyChecker(o.extToolConfirm(sessionID))
 	ctx = permission.WithPolicyChecker(ctx, checker)
 
 	// 审计行由**做出决策的进程**写：策略判定、审批结果与规范化命令都只在这里存在，
@@ -475,6 +415,26 @@ func (o *Opsctl) gateExtToolCall(ctx context.Context, source, sessionID string, 
 
 	result, err := o.extExecutor.ExecuteExtTool(ctx, assetID, command)
 	return ctx, extToolGateResult{output: result, normalizedCommand: normalizedCommand, decision: decision}, err
+}
+
+// extToolConfirm is the confirm step of the extension-tool gate: the item
+// HandleConfirm built — for an extension type it carries the check_policy
+// (action, resource) and the formatted request — goes to the desktop's one
+// "opsctl:approval" dialog, and the user's answer goes back unchanged, edits
+// included. Persisting an "always allow" is HandleConfirm's: it grants the
+// classification, the only shape extension grant matching reads.
+func (o *Opsctl) extToolConfirm(sessionID string) permission.CommandConfirmFunc {
+	return func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		parsed, _ := o.awaitSingleApproval(items[0], sessionID)
+		switch parsed.Decision {
+		case permission.ApprovalAllowAll:
+			return permission.ApprovalResponse{Decision: "allowAll", EditedItems: parsed.EditedItems}
+		case permission.ApprovalAllow:
+			return permission.ApprovalResponse{Decision: "allow"}
+		default:
+			return permission.ApprovalResponse{Decision: "deny"}
+		}
+	}
 }
 
 // handleExtToolExec 处理 opsctl 对扩展资产的委托执行请求。
@@ -518,18 +478,13 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 // source differs, so a page call and an AI/opsctl exec on the same asset show up
 // in the same audit trail shape and honor the same "always allow" grants.
 //
-// invocationID is not the grant session id: it is the frontend's per-call
-// correlation token (CallExtensionAction's convention, mirrored by
-// CallExtensionTool), minted fresh for every call so a *future* call can cancel
-// *this one* in flight — the opposite lifetime a grant session needs. A grant
-// keyed by it would only ever cover the single call that requested it, which
-// fails the very point of "always allow": pageGrantSessionID gives every call
-// against the same asset in this desktop run the same session instead, so
-// "remember" on one call is honored by the next one, not just replayed by itself.
+// The grant session is not per call: pageGrantSessionID gives every call against
+// the same asset in this desktop run the same session, so "remember" on one call
+// is honored by the next one, not just replayed by itself.
 //
 // A Deny (or a NeedConfirm the user rejects) comes back as an error: the page
 // gets a rejection it must handle, not a text result meant for a model to read.
-func (o *Opsctl) RunPageToolCall(ctx context.Context, invocationID string, assetID int64, command string) (string, error) {
+func (o *Opsctl) RunPageToolCall(ctx context.Context, assetID int64, command string) (string, error) {
 	if o.extExecutor == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}

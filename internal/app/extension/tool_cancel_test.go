@@ -51,3 +51,27 @@ func TestPageToolCallCancel(t *testing.T) {
 		})
 	})
 }
+
+// Wails serves every IPC call on its own goroutine, so a page that aborts right
+// after starting a call can have its CancelExtensionTool land before
+// CallExtensionTool registers the call. The page has already been told the call
+// was aborted; the call must not then run anyway (and, gated, pop an approval or
+// write something the page believes it stopped).
+func TestPageToolCallCanceledBeforeItStarts(t *testing.T) {
+	Convey("Given a cancel that arrives before its call begins", t, func() {
+		e := &Extension{ctx: context.Background(), lang: fixedLang("en")}
+		So(e.CancelExtensionTool("inv-early"), ShouldBeNil)
+
+		Convey("the call is refused instead of running", func() {
+			_, _, err := e.toolCalls.begin(context.Background(), "inv-early")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "canceled")
+		})
+
+		Convey("other calls are unaffected", func() {
+			_, end, err := e.toolCalls.begin(context.Background(), "inv-other")
+			So(err, ShouldBeNil)
+			end()
+		})
+	})
+}

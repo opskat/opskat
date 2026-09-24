@@ -4,10 +4,12 @@ package extension
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -232,6 +234,53 @@ func TestDefaultHostProviderHTTPCacheLifecycle(t *testing.T) {
 
 		Convey("an extension name never registered has nothing to discard", func() {
 			So(DiscardHostHTTPCache("never-registered-ext"), ShouldBeFalse)
+		})
+	})
+}
+
+// A cached client outlives the call that built it, so whatever decides where a
+// request may go must come from the call making it — never from the first call
+// that happened to build the client. An asset whose endpoint moved from A to B
+// (the invalidation hook never reached this provider) must not keep following
+// redirects back to A.
+func TestDefaultHostProviderCachedClientUsesEachCallsRedirectGuard(t *testing.T) {
+	Convey("Given an asset's cached client built by a call whose guard admitted the old endpoint", t, func() {
+		oldEndpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("old"))
+		}))
+		t.Cleanup(oldEndpoint.Close)
+		newEndpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, oldEndpoint.URL, http.StatusFound)
+		}))
+		t.Cleanup(newEndpoint.Close)
+
+		onlyTo := func(allowed string) func(*url.URL) error {
+			return func(target *url.URL) error {
+				if "http://"+target.Host == allowed {
+					return nil
+				}
+				return fmt.Errorf("redirect to %s denied", target.Host)
+			}
+		}
+		h := NewDefaultHostProvider(DefaultHostConfig{})
+		asset := &AssetRef{ID: 42, Type: "fixture"}
+		first, err := h.OpenIO(context.Background(), asset, IOOpenParams{
+			Type: "http", Method: "GET", URL: oldEndpoint.URL, AllowPrivate: true, RedirectGuard: onlyTo(oldEndpoint.URL),
+		})
+		So(err, ShouldBeNil)
+		_, err = first.http.Flush()
+		So(err, ShouldBeNil)
+		So(first.Closer.Close(), ShouldBeNil)
+
+		Convey("a later call whose guard admits only the new endpoint refuses the redirect back", func() {
+			second, err := h.OpenIO(context.Background(), asset, IOOpenParams{
+				Type: "http", Method: "GET", URL: newEndpoint.URL, AllowPrivate: true, RedirectGuard: onlyTo(newEndpoint.URL),
+			})
+			So(err, ShouldBeNil)
+			_, err = second.http.Flush()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "denied")
+			So(second.Closer.Close(), ShouldBeNil)
 		})
 	})
 }

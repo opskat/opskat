@@ -97,19 +97,14 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 	case "file":
 		return OpenFileResource(params.Path, params.Mode)
 	case "http":
+		if asset == nil {
+			// Not an asset endpoint: a direct, single-use client — no connection
+			// path to apply and no asset to key a cache on.
+			return OpenHTTPResource(params, nil)
+		}
 		dial, tlsConfig, fingerprint, err := h.assetDial(ctx, asset)
 		if err != nil {
 			return nil, err
-		}
-		if asset == nil {
-			// No asset to key a cache on: build a single-use client exactly as
-			// before. The transport has no per-request ctx to hand the dial; the
-			// invocation's ctx bounds the handle's lifetime anyway.
-			var httpDial DialFunc
-			if dial != nil {
-				httpDial = func(network, addr string) (net.Conn, error) { return dial(ctx, network, addr) }
-			}
-			return OpenHTTPResource(params, httpDial, tlsConfig)
 		}
 		// Credentials are resolved per request and ride on it, never on the
 		// cached client: the client outlives this call and serves the asset's
@@ -123,11 +118,11 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 			// way — nothing to key a cache entry on that would ever hit — so it
 			// gets a single-use client, exactly as the unscoped path above, but
 			// still carries whatever credentials resolveAuth rendered.
-			client := buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate, params.RedirectGuard)
+			client := buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate)
 			return openHTTPResourceWithClient(params, client, auth)
 		}
 		client, built := h.httpClients.getOrCreate(asset.ID, fingerprint, func() *http.Client {
-			return buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate, params.RedirectGuard)
+			return buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate)
 		})
 		if built {
 			logger.Ctx(ctx).Info("extension HTTP client cache miss, built new client",

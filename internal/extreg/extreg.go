@@ -179,6 +179,10 @@ func Unregister(name string) {
 
 func registerType(l loaded, at extension.AssetTypeDef, help, description string) error {
 	m := l.manifest
+	// 测试连接要跑 WASM，只有桌面进程接了 registrar；先查，免得登记到一半再回滚。
+	if at.TestConnection && connTestRegistrar == nil {
+		return fmt.Errorf("extension %q: asset type %q declares a test-connection handler but no registrar is wired", l.name, at.Type)
+	}
 	if err := assettype.RegisterExtensionType(extensionTypeSpec(l.name, m, at)); err != nil {
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
@@ -227,16 +231,6 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 	// 测试连接：仅当 describe() 声明了处理器时才登记，且只在这条(而非
 	// RegisterDescribeOnly)路径——测试连接要跑 WASM，opsctl 进程没有运行时。
 	if at.TestConnection {
-		if connTestRegistrar == nil {
-			assettype.Unregister(at.Type)
-			permission.UnregisterPolicyCheck(at.Type)
-			permission.UnregisterExecutor(at.Type)
-			skills.UnregisterDynamic(at.Type)
-			permission.UnregisterRuleSink(at.Type)
-			asset_entity.UnregisterConfigValidator(at.Type)
-			policyent.UnregisterDefaultPolicy(at.Type)
-			return fmt.Errorf("extension %q: asset type %q declares a test-connection handler but no registrar is wired", l.name, at.Type)
-		}
 		conntest.Register(at.Type, connTestRegistrar.Build(l.name, m, at.Type, l.plugin))
 	}
 	return nil

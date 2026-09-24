@@ -161,13 +161,21 @@ export function makeExtensionConfigSection(opts: Options) {
       validate: (s) => {
         const missingTunnel = s.status === "ready" && s.tunnel && s.sshTunnelId === 0;
         const chainError = proxyChainEnabled ? proxyChainValidationKey(s.proxyChain.proxyChainLayers) : "";
-        const canSave = s.status === "ready" && !missingTunnel && !chainError;
+        // 宿主拨号时非空代理链优先于隧道列（EffectiveProxyChain），两者都设就会静默跳过
+        // 这里选的 SSH 隧道——让用户二选一（SSH 跳板可作为链上一层）。
+        const tunnelWithChain =
+          proxyChainEnabled && s.tunnel && s.sshTunnelId > 0 && !!buildProxyChainJSON(s.proxyChain.proxyChainLayers);
+        const canSave = s.status === "ready" && !missingTunnel && !chainError && !tunnelWithChain;
         return {
           // 表单是否有效可测，与是否有效可存是同一件事；按钮本身是否出现另由
           // sectionDef.testable（describe() 是否声明了处理器）决定。
           canTest: !!opts.testConnection && canSave,
           canSave,
-          saveDisabledReason: missingTunnel ? "asset.formMissingSSHTunnel" : chainError || STATUS_REASON[s.status],
+          saveDisabledReason: missingTunnel
+            ? "asset.formMissingSSHTunnel"
+            : tunnelWithChain
+              ? "asset.formTunnelWithProxyChain"
+              : chainError || STATUS_REASON[s.status],
         };
       },
       build: async (s, buildCtx) => {

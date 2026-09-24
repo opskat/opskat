@@ -186,7 +186,7 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		return "", fmt.Errorf("extension tool gate not initialized")
 	}
 
-	result, err := e.pageGate.RunPageToolCall(ctx, invocationID, assetID, extToolCallCommand(tool, args))
+	result, err := e.pageGate.RunPageToolCall(ctx, assetID, extToolCallCommand(tool, args))
 	if err != nil {
 		return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
 	}
@@ -196,14 +196,15 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 // CancelExtensionTool stops the page tool call running under invocationID: the
 // guest is interrupted, host IO it is blocked in fails, and the call returns an
 // error to the page. A call that has already returned is not an error to cancel
-// — the page cannot know whether its abort raced the result.
+// — the page cannot know whether its abort raced the result — and a cancel that
+// overtakes its call keeps that call from starting (see toolCalls).
 func (e *Extension) CancelExtensionTool(invocationID string) error {
 	if invocationID == "" {
 		return fmt.Errorf("invocation id is required to cancel a tool call")
 	}
 	log := logger.Ctx(e.ctx).With(zap.String("invocationID", invocationID))
 	if !e.toolCalls.cancel(invocationID) {
-		log.Debug("extension tool cancel found nothing running")
+		log.Debug("extension tool cancel found nothing running; held against a late start")
 		return nil
 	}
 	log.Info("extension tool cancel requested")

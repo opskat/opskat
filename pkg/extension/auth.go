@@ -72,8 +72,11 @@ func (a *AuthDef) UnmarshalJSON(data []byte) error {
 var headerNameRe = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
 
 // validate checks the declaration against the fields the asset type's
-// configSchema declares — a template may reference nothing else.
-func (a *AuthDef) validate(fields map[string]bool) error {
+// configSchema declares — a template may reference nothing else — and the
+// subset of them that are secrets (format:"password"), which may be injected
+// but never select a group: the selector's value is compared and logged as
+// plain data.
+func (a *AuthDef) validate(fields, secrets map[string]bool) error {
 	if len(a.Groups) == 0 {
 		return fmt.Errorf("auth.groups must declare at least one group")
 	}
@@ -86,6 +89,8 @@ func (a *AuthDef) validate(fields map[string]bool) error {
 		}
 	} else if !fields[a.Selector] {
 		return fmt.Errorf("auth.selector %q is not a configSchema property", a.Selector)
+	} else if secrets[a.Selector] {
+		return fmt.Errorf("auth.selector %q is a password field; a secret cannot select an auth group", a.Selector)
 	}
 	seen := make(map[string]bool, len(a.Groups))
 	for i, g := range a.Groups {

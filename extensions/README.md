@@ -189,9 +189,11 @@ hostname is resolved on the far side of a tunnel; anything else the same call re
 endpoint, declaring any of them needs `network.assetEndpoint` and a `format:"endpoint"`
 config field — the host refuses the extension at load otherwise. A cert file that cannot be read, a
 failed TLS handshake, or a chain hop that cannot be reached all fail the open with
-the host's error; there is no fallback to a direct or unverified connection. An item
-left undeclared is neither shown nor applied, and the host refuses a `connection`
-item it does not know.
+the host's error; there is no fallback to a direct or unverified connection. With both
+`SSHTunnel` and `ProxyChain` declared, an asset uses one or the other — an SSH jump host
+goes into the chain as a hop — and one that sets both is refused rather than dialed
+without the tunnel. An item left undeclared is neither shown nor applied, and the host
+refuses a `connection` item it does not know.
 
 ### Credentials are injected by the host
 
@@ -219,7 +221,8 @@ opskat.AssetType[esConfig]("es").Auth(opskat.Auth{
 part a config field or a double-quoted literal; a field the config leaves unset renders
 empty. A `Selector` value no group names injects nothing (e.g. `authType: "none"`).
 The host refuses the extension at load when a template references a field the config
-does not declare, or a group cannot be selected unambiguously, and — like
+does not declare, the selector is a `format:"password"` field, or a group cannot be
+selected unambiguously, and — like
 `Connection` — when the manifest lacks `network.assetEndpoint` or the config has no
 `format:"endpoint"` field: requests to any target other than the asset's endpoint get
 no credentials. The injected values never reach the guest — not in the response metadata
@@ -260,8 +263,9 @@ submitted connection settings (tunnel, proxy chain, TLS) rather than a saved
 asset's row: what is under test is exactly what the caller is about to save, or
 never will. A nil error means success. Test connection never goes through policy —
 it is not an operation on the asset — and, editing a saved asset, a password field
-the user has not retyped is filled in from the stored value before `fn` runs; the
-plaintext never reaches the frontend to do this.
+the user has left untouched is filled in from the stored value before `fn` runs (one
+the user cleared is tested empty, as it will be saved); the plaintext never reaches
+the frontend to do this.
 
 ### The policy face
 

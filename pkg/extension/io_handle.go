@@ -2,7 +2,6 @@
 package extension
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -89,10 +88,9 @@ func OpenFileResource(path, mode string) (*IOResource, error) {
 	}
 }
 
-// OpenHTTPResource prepares an HTTP request. dial may be nil for a direct
-// connection; tlsConfig may be nil when the asset does not declare/enable TLS.
-func OpenHTTPResource(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*IOResource, error) {
-	h, err := newHTTPHandle(params, dial, tlsConfig)
+// OpenHTTPResource prepares an HTTP request. dial may be nil for a direct connection.
+func OpenHTTPResource(params IOOpenParams, dial DialFunc) (*IOResource, error) {
+	h, err := newHTTPHandle(params, dial)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +114,9 @@ type IOHandleManager struct {
 	mu      sync.Mutex
 	handles map[uint32]*ioEntry
 	nextID  atomic.Uint32
+	// epoch counts CloseAll calls (under mu), so a stream whose open began before
+	// one can be refused instead of outliving it (see RegisterSince).
+	epoch uint64
 }
 
 func NewIOHandleManager() *IOHandleManager {
@@ -128,21 +129,52 @@ func NewIOHandleManager() *IOHandleManager {
 
 // Register adds an opened resource to the table and returns its handle ID.
 func (m *IOHandleManager) Register(res *IOResource) (uint32, error) {
+	return m.register(res, nil)
+}
+
+// Epoch names the table's current generation; take it before opening a stream
+// and hand it to RegisterSince.
+func (m *IOHandleManager) Epoch() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.epoch
+}
+
+// RegisterSince registers a resource whose open began at epoch. If CloseAll ran
+// in between — the call was interrupted or its action canceled while the stream
+// was being opened — the resource is closed instead: CloseAll could not reach
+// it, and handed to the guest it would outlive the interruption (a read on it
+// blocking with nothing left to close it).
+func (m *IOHandleManager) RegisterSince(epoch uint64, res *IOResource) (uint32, error) {
+	return m.register(res, &epoch)
+}
+
+func (m *IOHandleManager) register(res *IOResource, openedAt *uint64) (uint32, error) {
 	id := m.nextID.Add(1) - 1
 	if id >= maxIOHandles {
 		// Handle IDs are uint32 values passed over the WASM ABI boundary; cap at half
 		// the uint32 range to detect exhaustion before wrapping would cause aliasing.
-		if res.Closer != nil {
-			if closeErr := res.Closer.Close(); closeErr != nil {
-				logger.Default().Warn("close resource after handle exhaustion", zap.Error(closeErr))
-			}
-		}
+		closeRefused(res, "close resource after handle exhaustion")
 		return 0, fmt.Errorf("handle ID exhausted")
 	}
 	m.mu.Lock()
+	if openedAt != nil && *openedAt != m.epoch {
+		m.mu.Unlock()
+		closeRefused(res, "close resource opened across an interruption")
+		return 0, fmt.Errorf("stream opened while the call was being interrupted; it has been closed")
+	}
 	m.handles[id] = &ioEntry{id: id, res: res}
 	m.mu.Unlock()
 	return id, nil
+}
+
+func closeRefused(res *IOResource, msg string) {
+	if res.Closer == nil {
+		return
+	}
+	if err := res.Closer.Close(); err != nil {
+		logger.Default().Warn(msg, zap.Error(err))
+	}
 }
 
 func (m *IOHandleManager) Read(id uint32, buf []byte) (int, error) {
@@ -195,6 +227,7 @@ func (m *IOHandleManager) CloseAll() {
 	m.mu.Lock()
 	handles := m.handles
 	m.handles = make(map[uint32]*ioEntry)
+	m.epoch++
 	m.mu.Unlock()
 	for _, e := range handles {
 		if e.res.Closer != nil {

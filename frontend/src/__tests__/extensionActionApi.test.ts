@@ -134,11 +134,11 @@ describe("extension action API", () => {
     await run.result;
   });
 
-  // The gate a scoped call now clears (internal/app/opsctl's RunPageToolCall)
-  // persists an "always allow" grant keyed by this id — it must be a real,
+  // The invocation id is what CancelExtensionTool names: it must be a real,
   // call-unique token, not an empty string or a constant reused across calls
-  // (either of which would make every "always allow" collide into one grant, or
-  // fail the gate's "allowAll requires a grant session" check outright).
+  // (either of which would let one call's abort stop another, or be refused by
+  // the backend outright). The "always allow" grant session is not derived from
+  // it — the backend keys that on the asset.
   it("mints a distinct invocation id for each callTool call", async () => {
     const api = createExtensionAPI();
 

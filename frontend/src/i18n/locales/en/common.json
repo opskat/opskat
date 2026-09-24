@@ -393,6 +393,7 @@
     "formMissingPath": "Please specify the database file path.",
     "formMissingSQLiteSSH": "Select an SSH asset for the remote SQLite file.",
     "formMissingSSHTunnel": "Select the SSH asset to tunnel through.",
+    "formTunnelWithProxyChain": "Choose either the SSH tunnel or the proxy chain — add the SSH jump host as a hop in the chain.",
     "moveUp": "Move Up",
     "moveDown": "Move Down",
     "moveTop": "Move to Top",

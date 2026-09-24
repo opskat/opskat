@@ -438,6 +438,11 @@ func (d *assetDialer) DialContextForConfig(ctx context.Context, assetType string
 // (asset id for a stored one, asset type for an ad-hoc one); which fits is
 // the caller's call, not this function's.
 func resolveDialAndTLS(ctx context.Context, assetType string, chain *asset_entity.ProxyChainConfig, tunnelID int64, tlsSettings *hostTLSConfig, ident ...zap.Field) (extension.DialContextFunc, *tls.Config, error) {
+	// EffectiveProxyChain lets a non-empty chain win over the tunnel; for a type
+	// declaring both, that would silently dial without the SSH hop the user set.
+	if tunnelID > 0 && chain != nil && len(chain.Layers) > 0 {
+		return nil, nil, fmt.Errorf("resolve connection path: both an SSH tunnel and a proxy chain are set; add the SSH hop to the proxy chain, or clear one of them")
+	}
 	var dial extension.DialContextFunc
 	if effective := asset_entity.EffectiveProxyChain(chain, tunnelID, nil); effective != nil {
 		d, err := connpool.ProxyChainDialContext(ctx, effective)

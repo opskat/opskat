@@ -90,10 +90,11 @@ func (e *Extension) buildAdHocTestConfig(ctx context.Context, extName string, ma
 
 // mergeAndGateTestPasswords fills any password field guestConfig omits with
 // the decrypted value stored on the asset being edited — the form leaves a
-// field the user has not retyped out of the test request instead of
+// field the user has not touched out of the test request instead of
 // round-tripping its plaintext, and this restores it from what is already on
 // disk (assetID==0, a new asset, has nothing stored: an omitted field there
-// simply decodes to the guest's zero value). The merged result is what
+// simply decodes to the guest's zero value). A field sent empty was cleared,
+// and is tested empty, exactly as it will be saved. The merged result is what
 // host-side credential injection reads (credentials); the guest's copy is then
 // gated behind the extension's credentials capability exactly as
 // ctx.AssetConfig() would for a real call: without credentials:read, a guest
@@ -121,8 +122,8 @@ func (e *Extension) mergeAndGateTestPasswords(ctx context.Context, extName, asse
 			}
 		}
 		for _, field := range passwordFields {
-			if hasNonEmptyString(cfg, field) {
-				continue // the user typed a new value: use it, never the stored one
+			if _, sent := cfg[field]; sent {
+				continue // the user typed a new value or cleared it: use it, never the stored one
 			}
 			raw, ok := stored[field]
 			if !ok {
@@ -153,14 +154,4 @@ func (e *Extension) mergeAndGateTestPasswords(ctx context.Context, extName, asse
 		return nil, nil, fmt.Errorf("test connection: marshal config: %w", err)
 	}
 	return guest, credentials, nil
-}
-
-// hasNonEmptyString reports whether cfg[field] decodes to a non-empty string.
-func hasNonEmptyString(cfg map[string]json.RawMessage, field string) bool {
-	raw, ok := cfg[field]
-	if !ok {
-		return false
-	}
-	var s string
-	return json.Unmarshal(raw, &s) == nil && s != ""
 }

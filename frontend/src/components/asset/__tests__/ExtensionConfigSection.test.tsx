@@ -261,6 +261,39 @@ describe("ExtensionConfigSection proxy chain", () => {
     const built = await ref.current!.buildConfig(ctx);
     expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "http://es.internal:9200" });
   });
+
+  // 宿主拨号时非空代理链优先于隧道列：两者都设会静默跳过用户选的 SSH 隧道，只能拦在保存前。
+  it("a type declaring both blocks saving while a tunnel and a chain are both set", async () => {
+    const Both = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema,
+      connection: { sshTunnel: true, proxyChain: true },
+    });
+    const savedLayer = {
+      id: "hop1",
+      name: "Existing Hop",
+      enabled: true,
+      type: "socks5",
+      host: "10.0.0.5",
+      port: 1080,
+    };
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(
+      JSON.stringify({
+        endpoint: "http://es.internal:9200",
+        [HOST_CONNECTION_CONFIG_KEY]: { proxyChain: { layers: [savedLayer] } },
+      })
+    );
+    const asset = chainAsset(savedLayer);
+    asset.sshTunnelId = 9;
+    const onValidity = vi.fn();
+    render(<Both editAsset={asset} ctx={ctx} onValidityChange={onValidity} />);
+    await act(async () => {});
+
+    expect(onValidity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canSave: false, saveDisabledReason: "asset.formTunnelWithProxyChain" })
+    );
+  });
 });
 
 describe("ExtensionConfigSection TLS", () => {

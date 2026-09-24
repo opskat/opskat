@@ -408,10 +408,7 @@ func initExtensionSystem(
 		// The asset's cached HTTP client (kept for keep-alive reuse across calls)
 		// is built from its connection settings; once those change or the asset
 		// is gone, the cache must be dropped instead of reused on the next open.
-		assetconn.RegisterInvalidator(extName, func(_ context.Context, assetID int64) error {
-			provider.InvalidateAssetHTTPClient(assetID)
-			return nil
-		})
+		extension.RegisterHTTPCacheInvalidator(extName, provider)
 		return provider
 	}, logger.Default())
 

@@ -33,7 +33,7 @@ func TestRunPageToolCallTagsAuditSourceExtensionPage(t *testing.T) {
 	executor := &auditSourceCapturingExecutor{}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	result, err := o.RunPageToolCall(context.Background(), "inv-1", 7, "note_list")
+	result, err := o.RunPageToolCall(context.Background(), 7, "note_list")
 
 	require.NoError(t, err)
 	require.Equal(t, `{"ok":true}`, result)
@@ -44,7 +44,7 @@ func TestRunPageToolCallInjectsPolicyChecker(t *testing.T) {
 	executor := &checkingExtExecutor{}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	_, err := o.RunPageToolCall(context.Background(), "inv-2", 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
 
 	require.NoError(t, err)
 	require.True(t, executor.checkerPresent, "a page-initiated call must receive the desktop approval checker")
@@ -61,7 +61,7 @@ func TestRunPageToolCallReportsPolicyDenialAsError(t *testing.T) {
 	}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	result, err := o.RunPageToolCall(context.Background(), "inv-3", 7, "note_delete --json='{\"key\":\"k\"}'")
+	result, err := o.RunPageToolCall(context.Background(), 7, "note_delete --json='{\"key\":\"k\"}'")
 
 	require.Error(t, err)
 	require.Equal(t, refusal, err.Error())
@@ -75,7 +75,7 @@ func TestRunPageToolCallAllowedReturnsResult(t *testing.T) {
 	}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	result, err := o.RunPageToolCall(context.Background(), "inv-4", 7, "note_list")
+	result, err := o.RunPageToolCall(context.Background(), 7, "note_list")
 
 	require.NoError(t, err)
 	require.Equal(t, `{"notes":1}`, result)
@@ -84,38 +84,35 @@ func TestRunPageToolCallAllowedReturnsResult(t *testing.T) {
 func TestRunPageToolCallRequiresInitializedExecutor(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 
-	_, err := o.RunPageToolCall(context.Background(), "inv-5", 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
 
 	require.Error(t, err)
 }
 
 // The grant session a NeedConfirm's "always allow" persists under (and later
-// calls match against, via permission.HandleConfirm / MatchExtensionGrant) must
-// be derived from the asset, not the per-call invocation id: invocationID is
-// minted fresh by the frontend for every call (so a *future* call can cancel
-// *this one*), and a grant keyed by it would only ever be found by the one call
-// that created it — the opposite of what "always allow" means. Two different
-// invocation ids against the same asset must land on the same session; the same
-// invocation id against two different assets must not collide.
-func TestRunPageToolCallSessionIsScopedToTheAssetNotTheInvocation(t *testing.T) {
+// calls match against, via permission.HandleConfirm / MatchExtensionGrant) is
+// derived from the asset: every call against the same asset shares it, so
+// "always allow" covers the next call and not just the one that asked; calls
+// against two different assets must not collide.
+func TestRunPageToolCallSessionIsScopedToTheAsset(t *testing.T) {
 	var firstSession, secondSession, thirdSession string
 	one := &sessionCapturingExecutor{capture: &firstSession}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: one}
-	_, err := o.RunPageToolCall(context.Background(), "invocation-a", 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
 	require.NoError(t, err)
 
 	two := &sessionCapturingExecutor{capture: &secondSession}
 	o.extExecutor = two
-	_, err = o.RunPageToolCall(context.Background(), "invocation-b", 7, "note_list")
+	_, err = o.RunPageToolCall(context.Background(), 7, "note_list")
 	require.NoError(t, err)
 
 	three := &sessionCapturingExecutor{capture: &thirdSession}
 	o.extExecutor = three
-	_, err = o.RunPageToolCall(context.Background(), "invocation-a", 9, "note_list")
+	_, err = o.RunPageToolCall(context.Background(), 9, "note_list")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, firstSession)
-	require.Equal(t, firstSession, secondSession, "same asset, different invocation ids, must share one grant session")
+	require.Equal(t, firstSession, secondSession, "two calls on the same asset must share one grant session")
 	require.NotEqual(t, firstSession, thirdSession, "different assets must not share a grant session")
 }
 
@@ -127,12 +124,12 @@ func TestRunPageToolCallSessionDoesNotOutliveTheDesktopRun(t *testing.T) {
 	var thisRun, nextRun string
 	first := New(context.Background(), extTestLang{}, nil)
 	first.extExecutor = &sessionCapturingExecutor{capture: &thisRun}
-	_, err := first.RunPageToolCall(context.Background(), "invocation-a", 7, "note_list")
+	_, err := first.RunPageToolCall(context.Background(), 7, "note_list")
 	require.NoError(t, err)
 
 	second := New(context.Background(), extTestLang{}, nil)
 	second.extExecutor = &sessionCapturingExecutor{capture: &nextRun}
-	_, err = second.RunPageToolCall(context.Background(), "invocation-a", 7, "note_list")
+	_, err = second.RunPageToolCall(context.Background(), 7, "note_list")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, thisRun)
@@ -183,7 +180,7 @@ func TestRunPageToolCallWritesAuditWithSourceExtensionPage(t *testing.T) {
 	}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	_, err := o.RunPageToolCall(context.Background(), "inv-audit", 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
 
 	require.NoError(t, err)
 	require.Equal(t, "extension_page", aictx.GetAuditSource(writer.ctx),
