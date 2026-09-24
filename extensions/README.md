@@ -154,10 +154,9 @@ never granted — there is no "the flag wins" case to reason about.
 `ctx.AssetConfig()` only ever reads the call's own asset, and only when that asset's
 type is one this extension registers; there is no by-id lookup, so an extension cannot
 read a builtin asset or another extension's. It fails when the call is not scoped to an
-asset. That happens for
-the one caller that legitimately has none: the asset configuration form runs an
-extension **action** (`test_connection`) on a configuration that has not been saved
-yet. An extension page that *does* work on a saved asset passes its `assetId` prop —
+asset. (The asset form's "Test connection" on an unsaved configuration is not such a
+call: it runs the type's declared handler with the submitted config — see
+[Test connection](#test-connection).) An extension page that *does* work on a saved asset passes its `assetId` prop —
 `api.callTool(ext, tool, args, assetId)` / `api.executeAction(ext, action, args,
 onEvent, assetId)` — and the handler reads it from `ctx.Asset` the same way.
 `api.callTool` against a saved asset clears the exact same policy check / in-app
@@ -183,9 +182,12 @@ enable / skip-verify / server name / CA / client cert & key fields — both are 
 in a host-reserved key inside the asset's config JSON, stripped before
 `ctx.AssetConfig()` and the config validator ever see it, for the same reason the
 tunnel choice is kept off the asset: an extension has no legitimate reason to read
-settings it cannot itself apply. HTTP and TCP opens scoped to the asset are dialed
+settings it cannot itself apply. HTTP and TCP opens to the asset's endpoint are dialed
 through the declared tunnel/chain and wrapped in the declared TLS, and an endpoint's
-hostname is resolved on the far side of a tunnel. A cert file that cannot be read, a
+hostname is resolved on the far side of a tunnel; anything else the same call reaches
+(an allowlisted public API) is dialed directly. Since these settings apply only to the
+endpoint, declaring any of them needs `network.assetEndpoint` and a `format:"endpoint"`
+config field — the host refuses the extension at load otherwise. A cert file that cannot be read, a
 failed TLS handshake, or a chain hop that cannot be reached all fail the open with
 the host's error; there is no fallback to a direct or unverified connection. An item
 left undeclared is neither shown nor applied, and the host refuses a `connection`
@@ -217,9 +219,10 @@ opskat.AssetType[esConfig]("es").Auth(opskat.Auth{
 part a config field or a double-quoted literal; a field the config leaves unset renders
 empty. A `Selector` value no group names injects nothing (e.g. `authType: "none"`).
 The host refuses the extension at load when a template references a field the config
-does not declare, or a group cannot be selected unambiguously. It needs
-`network.assetEndpoint`: requests to any target other than the asset's endpoint get no
-credentials. The injected values never reach the guest — not in the response metadata
+does not declare, or a group cannot be selected unambiguously, and — like
+`Connection` — when the manifest lacks `network.assetEndpoint` or the config has no
+`format:"endpoint"` field: requests to any target other than the asset's endpoint get
+no credentials. The injected values never reach the guest — not in the response metadata
 and not in a failed request's error — and a password that cannot be decrypted fails the
 request instead of sending it unauthenticated. `credentials: "read"` stays for
 protocols the host cannot authenticate for you (raw TCP handshakes); the install

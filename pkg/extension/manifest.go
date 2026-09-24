@@ -237,6 +237,31 @@ func (c *ConnectionDef) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// bindsEndpoint reports whether the type declares anything the host applies only
+// on a connection to the asset's endpoint: credential injection or a connection
+// setting.
+func (at AssetTypeDef) bindsEndpoint() bool {
+	c := at.Connection
+	return at.Auth != nil || (c != nil && (c.SSHTunnel || c.ProxyChain || c.TLS))
+}
+
+// validateEndpointBindings refuses an asset type whose auth or connection
+// declaration could never take effect: both apply only to a request to one of the
+// asset's endpoints, and an extension without network.assetEndpoint has none. It
+// runs once describe() is merged in, since the declaration comes from the guest
+// and the capability from manifest.json.
+func (m *Manifest) validateEndpointBindings() error {
+	if m.Capabilities.Network.AssetEndpoint {
+		return nil
+	}
+	for _, at := range m.AssetTypes {
+		if at.bindsEndpoint() {
+			return fmt.Errorf("asset type %q declares auth or connection, which apply only to the asset's endpoint, but the manifest does not declare capabilities.network.assetEndpoint", at.Type)
+		}
+	}
+	return nil
+}
+
 // AssetTypeDef returns the declaration of assetType, nil when the extension does
 // not register it.
 func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {

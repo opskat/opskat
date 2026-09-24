@@ -363,7 +363,7 @@ func TestParseDescriptorConnection(t *testing.T) {
 	Convey("An asset type declares which host-owned connection settings it supports", t, func() {
 		withConnection := func(conn string) []byte {
 			return []byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
-				`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}},` +
+				`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"}}},` +
 				`"connection":` + conn + `}],"policies":{"type":"x"}}`)
 		}
 
@@ -383,6 +383,21 @@ func TestParseDescriptorConnection(t *testing.T) {
 			_, err := ParseDescriptor(withConnection(`{"sshTunnel":true,"vpn":true}`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, `"vpn"`)
+		})
+
+		// Connection settings (and auth) apply only to the asset's endpoint: on a
+		// type with no endpoint field they would show in the form and never apply.
+		Convey("connection or auth on a type with no endpoint field is refused", func() {
+			for _, binding := range []string{
+				`"connection":{"sshTunnel":true}`,
+				`"auth":{"groups":[{"bindings":[{"in":"header","name":"X-Key","value":"{{endpoint}}"}]}]}`,
+			} {
+				_, err := ParseDescriptor([]byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+					`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}},` +
+					binding + `}],"policies":{"type":"x"}}`))
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `format:"endpoint"`)
+			}
 		})
 	})
 }

@@ -73,3 +73,33 @@ func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 		So(hits.Load(), ShouldEqual, int32(0))
 	})
 }
+
+// Test connection runs the asset type's declared auth exactly like a real call:
+// the form's password — freshly typed, or the stored one merged for an unchanged
+// field — must reach host-side injection even though an extension without
+// credentials:read never sees it in its own config.
+func TestTestConnectionKeepsCredentialsForInjectionWithoutCredentialsRead(t *testing.T) {
+	Convey("given an extension without credentials:read", t, func() {
+		e, assets := newHostTestBinder(t)
+		manifest := &extension.Manifest{
+			Name:       "other",
+			AssetTypes: []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}},
+		}
+
+		Convey("a password typed into the new-asset form is kept for injection, withheld from the guest", func() {
+			adhoc, err := e.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)
+			So(err, ShouldBeNil)
+			So(string(adhoc.Config), ShouldNotContainSubstring, "typed")
+			So(string(adhoc.Credentials), ShouldEqual, `{"host":"h","password":"typed"}`)
+		})
+
+		Convey("an unchanged password of the edited asset is kept for injection from storage", func() {
+			assets.EXPECT().Find(gomock.Any(), int64(5)).
+				Return(&asset_entity.Asset{ID: 5, Type: "other-store", Config: encryptedConfig(t, "theirs")}, nil)
+			adhoc, err := e.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 5, `{"host":"h"}`)
+			So(err, ShouldBeNil)
+			So(string(adhoc.Config), ShouldNotContainSubstring, "theirs")
+			So(string(adhoc.Credentials), ShouldEqual, `{"host":"h","password":"theirs"}`)
+		})
+	})
+}

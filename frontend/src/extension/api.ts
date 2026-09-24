@@ -59,8 +59,9 @@ export function createExtensionAPI(): ExtActionAPI {
       // directly. The invocation id is this call's own correlation token — the
       // same per-call convention startAction already uses, reused here rather
       // than inventing a second one — not the identity an "always allow" grant
-      // persists under; the backend derives that from the asset so a grant
-      // outlives the one call that requested it. It is also what cancel names.
+      // persists under; the backend derives that from the asset (for the current
+      // desktop run) so a grant outlives the one call that requested it. It is
+      // also what cancel names.
       const signal = options?.signal;
       signal?.throwIfAborted();
       const invocationId = newInvocationId();

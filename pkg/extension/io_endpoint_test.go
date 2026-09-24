@@ -182,6 +182,26 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			})
 		})
 
+		Convey("an earlier allowlisted request on the same asset does not loosen the endpoint's redirect rule", func() {
+			// Both requests are scoped to the same asset. The allowlisted one is not
+			// an endpoint request, so whatever client serves it must not be the one
+			// the endpoint's later requests reuse.
+			manifest := fixtureManifest(t)
+			manifest.Capabilities.Network.AssetEndpoint = true
+			manifest.Capabilities.HTTP.Allowlist = []string{other.URL + "/"}
+			manifest.Capabilities.Tunnel = true // the allowlisted server is loopback
+			p := loadDescribedFixture(t, manifest, NewDefaultHostProvider(DefaultHostConfig{
+				AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, httpConfig)},
+			}))
+
+			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": other.URL + "/"})
+			So(out["body"], ShouldEqual, "other")
+
+			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/redirect-out"}), fixtureAsset)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")
+		})
+
 		Convey("without network.assetEndpoint, reach is the static allowlist as before", func() {
 			p := newEndpointFixture(t, false, httpConfig)
 			tp := newEndpointFixture(t, false, tcpConfig)

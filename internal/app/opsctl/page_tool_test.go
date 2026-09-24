@@ -119,6 +119,26 @@ func TestRunPageToolCallSessionIsScopedToTheAssetNotTheInvocation(t *testing.T) 
 	require.NotEqual(t, firstSession, thirdSession, "different assets must not share a grant session")
 }
 
+// "Always allow" from a page lasts as long as the desktop run it was given in —
+// the page's counterpart of an AI conversation or an opsctl session — not forever:
+// every other grant session is bounded by its caller's session, and an unbounded
+// per-asset one would be a permanent rule the asset's policy card never shows.
+func TestRunPageToolCallSessionDoesNotOutliveTheDesktopRun(t *testing.T) {
+	var thisRun, nextRun string
+	first := New(context.Background(), extTestLang{}, nil)
+	first.extExecutor = &sessionCapturingExecutor{capture: &thisRun}
+	_, err := first.RunPageToolCall(context.Background(), "invocation-a", 7, "note_list")
+	require.NoError(t, err)
+
+	second := New(context.Background(), extTestLang{}, nil)
+	second.extExecutor = &sessionCapturingExecutor{capture: &nextRun}
+	_, err = second.RunPageToolCall(context.Background(), "invocation-a", 7, "note_list")
+	require.NoError(t, err)
+
+	require.NotEmpty(t, thisRun)
+	require.NotEqual(t, thisRun, nextRun, "a new desktop run must not inherit the previous run's page grants")
+}
+
 type sessionCapturingExecutor struct {
 	capture *string
 }

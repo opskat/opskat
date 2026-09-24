@@ -108,16 +108,37 @@ func TestPluginTestConnection(t *testing.T) {
 			defer srv.Close()
 			p := newTestConnectionFixture(t, nil)
 
+			config := mustJSON(t, map[string]any{
+				"endpoint": srv.URL,
+				"authType": "basic",
+				"username": "admin",
+				"password": "s3cr3t",
+			})
+			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{Config: config, Credentials: config})
+			So(err, ShouldBeNil)
+			So(gotAuth, ShouldNotBeEmpty)
+		})
+
+		Convey("credentials withheld from the guest's config are still injected from the host-only values", func() {
+			// What the desktop builds for an extension without credentials:read:
+			// the guest-visible config carries no password, the host keeps it for
+			// injection.
+			var gotAuth string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			p := newTestConnectionFixture(t, nil)
+
 			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{
-				Config: mustJSON(t, map[string]any{
-					"endpoint": srv.URL,
-					"authType": "basic",
-					"username": "admin",
-					"password": "s3cr3t",
+				Config: mustJSON(t, map[string]any{"endpoint": srv.URL, "authType": "bearer"}),
+				Credentials: mustJSON(t, map[string]any{
+					"endpoint": srv.URL, "authType": "bearer", "password": "s3cr3t",
 				}),
 			})
 			So(err, ShouldBeNil)
-			So(gotAuth, ShouldNotBeEmpty)
+			So(gotAuth, ShouldEqual, "Bearer s3cr3t")
 		})
 	})
 }

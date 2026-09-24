@@ -24,9 +24,9 @@ type LangProvider interface {
 // entirely. command is the same `<tool> --flag=value` / `<tool> --json=<...>`
 // exec DSL text the unified exec handler parses for every other caller (AI,
 // opsctl). invocationID is the caller's per-call correlation token (not the
-// grant session — a call on the same asset always uses the same session
-// regardless of invocationID, so "always allow" survives past the one call that
-// requested it). Canceling ctx — which CancelExtensionTool does — ends the call.
+// grant session — a call on the same asset in this desktop run uses the same
+// session regardless of invocationID, so "always allow" survives past the one
+// call that requested it). Canceling ctx — which CancelExtensionTool does — ends the call.
 type PageToolGate interface {
 	RunPageToolCall(ctx context.Context, invocationID string, assetID int64, command string) (string, error)
 }

@@ -389,6 +389,36 @@ func TestExtensionGrantDoesNotCoverADifferentResource(t *testing.T) {
 	assert.Equal(t, aictx.NeedConfirm, got.Decision, "a grant for one resource must not cover another")
 }
 
+// TestExtensionGrantForAGlobLikeResourceIsExact: "always allow" is for the resource
+// the user was shown, taken literally — a resource that happens to contain glob
+// metacharacters must neither widen the grant to other resources nor fail to match
+// the very call it was granted for.
+func TestExtensionGrantForAGlobLikeResourceIsExact(t *testing.T) {
+	t.Run("a '*' in the resource does not cover other resources", func(t *testing.T) {
+		plugin := &fakePlugin{action: "object.write", resource: "prod-*"}
+		registerFake(t, plugin)
+		ctx := withGrantFixture(t, 1, "acme-store")
+
+		require.Equal(t, aictx.Allow, allowAllChecker().CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)
+
+		assert.Equal(t, aictx.Allow, permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod").Decision,
+			"the granted resource itself must match")
+		plugin.resource = "prod-bucket"
+		assert.Equal(t, aictx.NeedConfirm, permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod").Decision,
+			"a grant for the literal resource prod-* must not cover prod-bucket")
+	})
+
+	t.Run("a '[' in the resource still matches itself", func(t *testing.T) {
+		registerFake(t, &fakePlugin{action: "object.write", resource: "logs[1]"})
+		ctx := withGrantFixture(t, 1, "acme-store")
+
+		require.Equal(t, aictx.Allow, allowAllChecker().CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)
+
+		assert.Equal(t, aictx.Allow, permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod").Decision,
+			"the next identical call must hit the grant instead of prompting again")
+	})
+}
+
 // TestExtensionUndeclaredActionNeverGrants is the safety property behind the
 // undeclared-action fail-closed rule (extreg.classifyCommand): even though "always
 // allow" is still honored for the one call in front of the user, it must never leave

@@ -301,6 +301,9 @@ func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *
 	hash := WasmHash(wasmBytes)
 	if desc := cachedDescriptor(manifest.Name, hash); desc != nil {
 		manifest.apply(desc)
+		if err := manifest.validateEndpointBindings(); err != nil {
+			return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
+		}
 		return pendingDescriptor{}, nil
 	}
 	payload, err := plugin.Describe(ctx)
@@ -312,6 +315,9 @@ func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *
 		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
 	}
 	manifest.apply(desc)
+	if err := manifest.validateEndpointBindings(); err != nil {
+		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
+	}
 	return pendingDescriptor{name: manifest.Name, hash: hash, payload: payload}, nil
 }
 

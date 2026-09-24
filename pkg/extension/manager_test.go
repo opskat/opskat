@@ -369,3 +369,58 @@ func TestManagerInstall(t *testing.T) {
 		})
 	})
 }
+
+// An asset type's auth and connection declarations only ever take effect on a
+// request to one of the asset's endpoints — which exist only for an extension
+// declaring network.assetEndpoint (the type-level half, a format:"endpoint"
+// field, is describe() validation: TestParseDescriptorConnection). Declared
+// without it they would load, be shown in the asset form, and never apply, so
+// the extension is refused at load instead.
+func TestManagerRefusesEndpointBindingsWithoutAnEndpoint(t *testing.T) {
+	const endpointSchema = `{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"token":{"type":"string","format":"password"}}}`
+	const auth = `"auth":{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"Bearer {{token}}"}]}]}`
+	const connection = `"connection":{"sshTunnel":true}`
+	descriptor := func(schema, binding string) string {
+		return `{"i18n":{"displayName":"d","description":"x"},` +
+			`"assetTypes":[{"type":"stub","i18n":{"name":"n"},"configSchema":` + schema + `,` + binding + `}],` +
+			`"policies":{"type":"stub"}}`
+	}
+	load := func(t *testing.T, payload string, assetEndpoint bool) error {
+		t.Helper()
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, payload))
+		dir := t.TempDir()
+		extDir := filepath.Join(dir, "bound")
+		writeMinimalExtension(t, extDir, "bound")
+		if assetEndpoint {
+			manifest := map[string]any{
+				"name": "bound", "version": "1.0.0", "hostABI": HostABIVersion,
+				"backend":      map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+				"capabilities": map[string]any{"network": map[string]any{"assetEndpoint": true}},
+			}
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mgr := NewManager(dir, func(string) HostProvider { return NewDefaultHostProvider(DefaultHostConfig{}) }, zap.NewNop())
+		_, err := mgr.LoadExtension(context.Background(), extDir)
+		return err
+	}
+
+	for _, binding := range []string{auth, connection} {
+		t.Run("without network.assetEndpoint: "+binding[1:5], func(t *testing.T) {
+			err := load(t, descriptor(endpointSchema, binding), false)
+			if err == nil || !strings.Contains(err.Error(), "network.assetEndpoint") {
+				t.Fatalf("load error = %v, want a refusal naming network.assetEndpoint", err)
+			}
+		})
+		t.Run("with both: "+binding[1:5], func(t *testing.T) {
+			if err := load(t, descriptor(endpointSchema, binding), true); err != nil {
+				t.Fatalf("load: %v", err)
+			}
+		})
+	}
+}

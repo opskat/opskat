@@ -209,6 +209,28 @@ func TestAssetConnectionPath(t *testing.T) {
 			So(addrs, ShouldResemble, []string{brokerAddr})
 		})
 
+		Convey("a static-allowlist target outside the endpoints is dialed directly, never through the asset's path", func() {
+			// The asset's connection path (tunnel / proxy chain / TLS) is how the
+			// host reaches the asset's endpoint; an allowlisted public API the same
+			// call also talks to is not the asset, and must not ride its tunnel or
+			// see its TLS client certificate.
+			direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("reached directly"))
+			}))
+			defer direct.Close()
+			dialer := &fakeAssetDialer{farSide: server.Listener.Addr().String()}
+			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": esURL})
+			m.Capabilities.HTTP.Allowlist = []string{direct.URL + "/"}
+			m.Capabilities.Tunnel = true // the allowlisted server is loopback
+
+			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": direct.URL + "/"})
+
+			So(out["body"], ShouldEqual, "reached directly")
+			assets, addrs := dialer.dialed()
+			So(assets, ShouldBeEmpty)
+			So(addrs, ShouldBeEmpty)
+		})
+
 		Convey("an asset without connection settings is dialed directly", func() {
 			dialer := &fakeAssetDialer{direct: true}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})

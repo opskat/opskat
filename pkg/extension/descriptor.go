@@ -89,6 +89,9 @@ func (d *Descriptor) validateAssetScope() error {
 		if len(props) == 0 {
 			return fmt.Errorf("describe(): assetTypes[%q].configSchema must declare properties", at.Type)
 		}
+		if at.bindsEndpoint() && len(EndpointFieldsFromSchema(at.ConfigSchema)) == 0 {
+			return fmt.Errorf(`describe(): assetTypes[%q] declares auth or connection, which apply only to the asset's endpoint, but its configSchema marks no field format:"endpoint"`, at.Type)
+		}
 		if at.Auth != nil {
 			declared := make(map[string]bool, len(props))
 			for _, p := range props {

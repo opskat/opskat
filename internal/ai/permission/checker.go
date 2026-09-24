@@ -341,7 +341,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		if isExtension {
 			// Extension "always allow" never falls back to NormalizeGrantPatterns'
 			// whole-command-string default: the grant is the check_policy
-			// classification (extGrantKey), not the command text, so a later call
+			// classification (extGrantPattern), not the command text, so a later call
 			// spelling the same request differently still matches (spec 参数级策略 ›
 			// 审批展示) and matching stays keyed on (action, resource) — see
 			// extGrantMatch / MatchExtensionGrant.
@@ -383,7 +383,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 }
 
 // extensionGrantPatterns builds the "always allow" grant patterns for a
-// classify-registered extension type. Each pattern is extGrantKey(classification) —
+// classify-registered extension type. Each pattern is extGrantPattern(classification) —
 // never the raw command text — so matching a later call stays keyed on (action,
 // resource) (see extGrantMatch / MatchExtensionGrant).
 //
@@ -401,14 +401,14 @@ func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited [
 			if !ok {
 				continue
 			}
-			patterns = append(patterns, extGrantKey(cls.PolicyType, cls.Action, cls.Resource))
+			patterns = append(patterns, extGrantPattern(cls.PolicyType, cls.Action, cls.Resource))
 		}
 		return patterns
 	}
 	if !classified {
 		return nil
 	}
-	return []string{extGrantKey(classification.PolicyType, classification.Action, classification.Resource)}
+	return []string{extGrantPattern(classification.PolicyType, classification.Action, classification.Resource)}
 }
 
 // formatExtensionRequestDetail renders an extension classification's underlying guest

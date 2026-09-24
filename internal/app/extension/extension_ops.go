@@ -139,8 +139,8 @@ func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 // invocationID is the frontend's per-call correlation token (the same convention
 // CallExtensionAction already uses): CancelExtensionTool takes it to stop this
 // call while it runs. It is not the grant session an "always allow" approval
-// persists under — the gate derives that from the asset instead, so the grant
-// outlives this one call.
+// persists under — the gate derives that from the asset (for the current
+// desktop run) instead, so the grant outlives this one call.
 func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")

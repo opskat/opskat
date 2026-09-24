@@ -46,33 +46,45 @@ func (c *capHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenPara
 			}
 		}
 	case "http":
-		if err := c.gateHTTP(asset, &params); err != nil {
+		endpoint, err := c.gateHTTP(asset, &params)
+		if err != nil {
 			c.logDenied(ctx, asset, params.Type, err)
 			return nil, err
+		}
+		if !endpoint {
+			asset = nil
 		}
 	case "tcp":
 		// Without network.assetEndpoint TCP stays ungated: it is reserved for
 		// first-party extensions (e.g. Kafka) that predate the capability. Do not
 		// treat that path as safe for third-party extensions.
-		if c.manifest.Capabilities.Network.AssetEndpoint {
-			if err := c.gateTCP(asset, params.Addr); err != nil {
-				c.logDenied(ctx, asset, params.Type, err)
-				return nil, err
-			}
+		if !c.manifest.Capabilities.Network.AssetEndpoint {
+			asset = nil
+			break
+		}
+		if err := c.gateTCP(asset, params.Addr); err != nil {
+			c.logDenied(ctx, asset, params.Type, err)
+			return nil, err
 		}
 	}
+	// A network stream reaches the inner provider with the asset only when it
+	// targets one of the asset's endpoints: the asset's connection path (tunnel,
+	// proxy chain, TLS), its cached keep-alive client and its credentials are how
+	// the host talks to that endpoint, and nothing else the same call reaches
+	// (an allowlisted public API, an ungated TCP address) may ride them.
 	return c.HostProvider.OpenIO(ctx, asset, params)
 }
 
 // gateHTTP admits a request that targets one of the asset's endpoints — private
 // addresses included, and redirects held to the same endpoints — or else one the
 // static allowlist admits, with private reach only through a declared tunnel.
-func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) error {
+// endpoint reports which of the two admitted it.
+func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool, err error) {
 	endpointScoped := c.manifest.Capabilities.Network.AssetEndpoint && asset != nil
 	if endpointScoped {
 		eps, err := c.assetEndpoints(asset)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if u, err := url.Parse(params.URL); err == nil && eps.allowURL(u) {
 			params.AllowPrivate = true
@@ -85,18 +97,18 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) error {
 				}
 				return fmt.Errorf("http redirect denied: %s://%s is not an endpoint of the asset %q", target.Scheme, target.Host, asset.Name)
 			}
-			return nil
+			return true, nil
 		}
 	}
 	if err := c.manifest.CheckHTTPURL(params.URL, c.manifest.Capabilities.Tunnel); err != nil {
 		if endpointScoped {
-			return fmt.Errorf("http denied: target is not an endpoint of the asset %q, and %w", asset.Name, err)
+			return false, fmt.Errorf("http denied: target is not an endpoint of the asset %q, and %w", asset.Name, err)
 		}
-		return err
+		return false, err
 	}
 	// Pass tunnel capability to dial-time guard.
 	params.AllowPrivate = c.manifest.Capabilities.Tunnel
-	return nil
+	return false, nil
 }
 
 // gateTCP admits a connection only to one of the asset's endpoints.

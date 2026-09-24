@@ -14,8 +14,11 @@ import (
 // per-invocation IO handle table and the action cancellation flag, so a provider
 // never has to reason about which concurrent call it is serving.
 type HostProvider interface {
-	// OpenIO opens a stream for the invocation scoped to asset (nil when the call
-	// has none). The runtime registers the returned resource in the calling
+	// OpenIO opens a stream. asset is the asset whose endpoint a network stream
+	// targets — nil when the call has no asset, or when the target is not one of
+	// its endpoints (the capability layer decides which, see capHost.OpenIO) — and
+	// only then does the stream take the asset's connection path, cached client
+	// and credentials. The runtime registers the returned resource in the calling
 	// invocation's handle table and closes it when that call ends.
 	OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error)
 	// GetAssetConfig returns the config of assetID, which is always the asset

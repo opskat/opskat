@@ -184,22 +184,21 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 }
 
 // credentialValues resolves the named config fields of asset as strings: from
-// the database for a saved asset, or straight out of an ad-hoc call's own
-// config (already plaintext, or the zero value absent credentials:read — see
-// AdHocAssetConfig) for a test-connection call, which has no database row to
-// decrypt from in the first place.
+// the database for a saved asset, or out of an ad-hoc call's host-only
+// Credentials (already plaintext — see AdHocAssetConfig) for a test-connection
+// call, which has no database row to decrypt from in the first place.
 func (h *DefaultHostProvider) credentialValues(ctx context.Context, asset *AssetRef, fields []string) (map[string]string, error) {
 	if asset.AdHoc != nil {
-		return adHocFieldValues(asset.AdHoc.Config, fields), nil
+		return adHocFieldValues(asset.AdHoc.Credentials, fields), nil
 	}
 	return h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, fields)
 }
 
 // adHocFieldValues reads fields out of config as strings, exactly as
 // AssetCredentialValues does for a stored asset, minus the decrypt step: an
-// ad-hoc call's config carries its password fields already resolved (or, for
-// an extension without credentials:read, already zeroed) by the caller that
-// built the AdHocAssetConfig. A field absent from config is omitted, not "".
+// ad-hoc call's Credentials carry their password fields already resolved to
+// plaintext by the caller that built the AdHocAssetConfig. A field absent from
+// config is omitted, not "".
 func adHocFieldValues(config json.RawMessage, fields []string) map[string]string {
 	values := make(map[string]string, len(fields))
 	var cfg map[string]json.RawMessage

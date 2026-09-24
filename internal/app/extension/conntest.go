@@ -67,14 +67,15 @@ func (e *Extension) buildAdHocTestConfig(ctx context.Context, extName string, ma
 		return nil, fmt.Errorf("test connection: %w", err)
 	}
 
+	credentials := guestConfig
 	if passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema); len(passwordFields) > 0 {
-		guestConfig, err = e.mergeAndGateTestPasswords(ctx, extName, assetType, assetID, manifest, passwordFields, guestConfig)
+		guestConfig, credentials, err = e.mergeAndGateTestPasswords(ctx, extName, assetType, assetID, manifest, passwordFields, guestConfig)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	adhoc := &extension.AdHocAssetConfig{Config: guestConfig}
+	adhoc := &extension.AdHocAssetConfig{Config: guestConfig, Credentials: credentials}
 	if hostCfg != nil {
 		adhoc.SSHTunnelID = hostCfg.SSHTunnelID
 		if hostCfg.ProxyChain != nil {
@@ -92,29 +93,31 @@ func (e *Extension) buildAdHocTestConfig(ctx context.Context, extName string, ma
 // field the user has not retyped out of the test request instead of
 // round-tripping its plaintext, and this restores it from what is already on
 // disk (assetID==0, a new asset, has nothing stored: an omitted field there
-// simply decodes to the guest's zero value). It then gates the result behind
-// the extension's credentials capability exactly as ctx.AssetConfig() would
-// for a real call: without credentials:read, a guest must not receive
-// through a test call the plaintext the normal door withholds — it
-// authenticates via host-injected Auth (describe()'s auth bindings) instead.
-func (e *Extension) mergeAndGateTestPasswords(ctx context.Context, extName, assetType string, assetID int64, manifest *extension.Manifest, passwordFields []string, guestConfig json.RawMessage) (json.RawMessage, error) {
+// simply decodes to the guest's zero value). The merged result is what
+// host-side credential injection reads (credentials); the guest's copy is then
+// gated behind the extension's credentials capability exactly as
+// ctx.AssetConfig() would for a real call: without credentials:read, a guest
+// must not receive through a test call the plaintext the normal door withholds
+// — it authenticates via host-injected Auth (describe()'s auth bindings)
+// instead, which still needs that plaintext.
+func (e *Extension) mergeAndGateTestPasswords(ctx context.Context, extName, assetType string, assetID int64, manifest *extension.Manifest, passwordFields []string, guestConfig json.RawMessage) (guest, credentials json.RawMessage, err error) {
 	var cfg map[string]json.RawMessage
 	if err := json.Unmarshal(guestConfig, &cfg); err != nil {
-		return nil, fmt.Errorf("test connection: parse config: %w", err)
+		return nil, nil, fmt.Errorf("test connection: parse config: %w", err)
 	}
 
 	if assetID > 0 {
 		_, asset, err := ownedAsset(ctx, e.service, extName, assetID)
 		if err != nil {
-			return nil, fmt.Errorf("test connection: %w", err)
+			return nil, nil, fmt.Errorf("test connection: %w", err)
 		}
 		if asset.Type != assetType {
-			return nil, fmt.Errorf("test connection: asset %d is type %q, not %q", assetID, asset.Type, assetType)
+			return nil, nil, fmt.Errorf("test connection: asset %d is type %q, not %q", assetID, asset.Type, assetType)
 		}
 		var stored map[string]json.RawMessage
 		if asset.Config != "" {
 			if err := json.Unmarshal([]byte(asset.Config), &stored); err != nil {
-				return nil, fmt.Errorf("test connection: parse stored config: %w", err)
+				return nil, nil, fmt.Errorf("test connection: parse stored config: %w", err)
 			}
 		}
 		for _, field := range passwordFields {
@@ -131,20 +134,25 @@ func (e *Extension) mergeAndGateTestPasswords(ctx context.Context, extName, asse
 			}
 			decrypted, err := decryptPasswordField(assetType, field, encrypted)
 			if err != nil {
-				return nil, fmt.Errorf("test connection: %w", err)
+				return nil, nil, fmt.Errorf("test connection: %w", err)
 			}
 			b, _ := json.Marshal(decrypted)
 			cfg[field] = b
 		}
 	}
 
+	if credentials, err = json.Marshal(cfg); err != nil {
+		return nil, nil, fmt.Errorf("test connection: marshal config: %w", err)
+	}
 	if manifest.CheckCredentialRead() != nil {
 		for _, field := range passwordFields {
 			delete(cfg, field)
 		}
 	}
-
-	return json.Marshal(cfg)
+	if guest, err = json.Marshal(cfg); err != nil {
+		return nil, nil, fmt.Errorf("test connection: marshal config: %w", err)
+	}
+	return guest, credentials, nil
 }
 
 // hasNonEmptyString reports whether cfg[field] decodes to a non-empty string.

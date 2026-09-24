@@ -866,6 +866,16 @@ func extGrantKey(policyType, action, resource string) string {
 	return policy.ExtRulePrefix + policyType + ":" + action + ":" + resource
 }
 
+// extGrantPattern is the persisted form of an "always allow" for one classified
+// call: extGrantKey with the resource escaped (escapeGlobMeta) so the stored
+// resource segment — matched as a glob, like a permanent rule's — matches exactly
+// the resource the user approved. A resource is arbitrary guest text; unescaped, one
+// containing '*' would widen the grant to other resources and one containing '['
+// would never match the call it was granted for.
+func extGrantPattern(policyType, action, resource string) string {
+	return extGrantKey(policyType, action, escapeGlobMeta(resource))
+}
+
 // splitExtGrantKey splits an extGrantKey-shaped string into its policyType and the
 // "<action>[:<resource>]" tail policy.ExtensionRuleParts / MatchExtensionRule expect.
 func splitExtGrantKey(key string) (policyType, tail string, ok bool) {

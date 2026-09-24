@@ -8,6 +8,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
 
@@ -65,6 +67,11 @@ type Opsctl struct {
 
 	pendingOpsctlApprovals sync.Map // map[string]pendingOpsctlApproval
 	mfa                    *mfaBroker
+
+	// pageRunID 是本次桌面端运行的标识，扩展页面的 grant 会话由它与资产共同派生
+	// （pageGrantSessionID）：页面"始终允许"与 AI 会话 / opsctl 会话一样有边界，
+	// 只在本次运行内有效，而不是永久挂在资产上。
+	pageRunID string
 }
 
 type pendingOpsctlApproval struct {
@@ -89,9 +96,10 @@ func New(
 	window WindowActivator,
 ) *Opsctl {
 	o := &Opsctl{
-		appCtx: appCtx,
-		lang:   lang,
-		window: window,
+		appCtx:    appCtx,
+		lang:      lang,
+		window:    window,
+		pageRunID: uuid.NewString(),
 	}
 	o.extDevApprove = o.requestSingleApproval
 	return o

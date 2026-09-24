@@ -524,8 +524,8 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 // *this one* in flight — the opposite lifetime a grant session needs. A grant
 // keyed by it would only ever cover the single call that requested it, which
 // fails the very point of "always allow": pageGrantSessionID gives every call
-// against the same asset the same session instead, so "remember" on one call is
-// honored by the next one, not just replayed by itself.
+// against the same asset in this desktop run the same session instead, so
+// "remember" on one call is honored by the next one, not just replayed by itself.
 //
 // A Deny (or a NeedConfirm the user rejects) comes back as an error: the page
 // gets a rejection it must handle, not a text result meant for a model to read.
@@ -534,7 +534,7 @@ func (o *Opsctl) RunPageToolCall(ctx context.Context, invocationID string, asset
 		return "", fmt.Errorf("extension system not initialized")
 	}
 
-	gateCtx, gateResult, err := o.gateExtToolCall(ctx, "extension_page", pageGrantSessionID(assetID), assetID, command)
+	gateCtx, gateResult, err := o.gateExtToolCall(ctx, "extension_page", o.pageGrantSessionID(assetID), assetID, command)
 	decision := gateResult.decision
 	extAuditWriter.WriteToolCall(gateCtx, audit.ToolCallInfo{
 		ToolName: "exec",
@@ -556,13 +556,13 @@ func (o *Opsctl) RunPageToolCall(ctx context.Context, invocationID string, asset
 // pageGrantSessionID names the grant session a page call's "always allow" is
 // persisted under and matched against. A page has no session concept of its own
 // the way an AI conversation or an opsctl CLI invocation does, so it is derived
-// from the one thing every call from every page on the same asset shares: the
-// asset itself. Deterministic and asset-scoped rather than minted once, so
-// "always allow" set from one open page (or tab, or a page reopened later) is
-// honored by a call from another — matching what "always allow" says, not "until
-// this browsing session ends".
-func pageGrantSessionID(assetID int64) string {
-	return fmt.Sprintf("ext_page_asset_%d", assetID)
+// from the asset and this desktop run: "always allow" set from one open page (or
+// tab, or a page reopened later) is honored by a call from another in the same
+// run, and — like every other grant session, bounded by its conversation or its
+// opsctl session — does not outlive it as a permanent rule the asset's policy
+// card never shows.
+func (o *Opsctl) pageGrantSessionID(assetID int64) string {
+	return fmt.Sprintf("ext_page_%s_asset_%d", o.pageRunID, assetID)
 }
 
 // extAuditWriter 与 opsctl CLI 侧用的是同一个默认写入器实现，两条路径落同一组列语义。

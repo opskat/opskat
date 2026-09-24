@@ -15,13 +15,18 @@ import (
 // otherwise read these off a stored asset reads them from here instead when
 // a call's AssetRef carries one: endpoint fields (capHost.assetEndpoints),
 // the dial path (AssetDialer via AdHocAssetDialer), and injected credentials
-// (DefaultHostProvider.resolveAuth).
+// (DefaultHostProvider.resolveAuth, from Credentials).
 type AdHocAssetConfig struct {
 	// Config is the guest-visible config: host reserved keys already
-	// stripped, password fields already resolved to plaintext (or, absent
-	// the extension's credentials:read capability, to the zero value) — the
-	// same shape ctx.AssetConfig() would return for a saved asset.
+	// stripped, password fields already resolved to plaintext or, absent the
+	// extension's credentials:read capability, left out.
 	Config json.RawMessage
+	// Credentials is the same config as host-side credential injection reads
+	// it (DefaultHostProvider.resolveAuth): every password field in plaintext,
+	// whatever the extension's credentials capability — the counterpart of
+	// AssetConfigGetter.AssetCredentialValues for a call with no stored row.
+	// It never reaches the guest.
+	Credentials json.RawMessage
 	// SSHTunnelID, ProxyChain, TLS mirror the host-owned connection settings
 	// normally read off a saved asset's own SSHTunnelID column and its
 	// Config's HostConnectionConfigKey. ProxyChain and TLS are nil when the
