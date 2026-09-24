@@ -247,6 +247,40 @@ describe("RedisConfigSection 自动识别:模式切换 / 哨兵组读取 / 补�
     );
   });
 
+  it("多组时选中组名后立即出现补全提示,无需再次点击「从哨兵读取」", async () => {
+    const user = userEvent.setup();
+    const groups = [
+      { name: "groupA", masterAddr: "10.20.0.10:6379", replicas: 1 },
+      { name: "groupB", masterAddr: "10.20.0.20:6379", replicas: 2 },
+    ];
+    vi.mocked(RedisProbe)
+      .mockResolvedValueOnce({
+        modeMismatch: false,
+        sentinel: { authRequired: false, groups, masterAddr: "", otherSentinels: [] },
+      } as never)
+      .mockResolvedValueOnce({
+        modeMismatch: false,
+        sentinel: {
+          authRequired: false,
+          groups,
+          masterAddr: "10.20.0.20:6379",
+          otherSentinels: ["10.20.0.33:26379", "10.20.0.34:26379"],
+        },
+      } as never);
+    render(<RedisConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+    await user.click(screen.getByTestId("redis-mode-sentinel"));
+    await user.type(screen.getByTestId("redis-nodes-textarea"), "10.20.0.31:26379");
+    await user.click(screen.getByTestId("redis-read-sentinel-button"));
+
+    await screen.findByText("groupB");
+    await user.click(screen.getByText("groupB"));
+
+    await waitFor(() => expect(RedisProbe).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(RedisProbe).mock.calls[1][1]).toContain('"master_name":"groupB"');
+    expect(screen.getByTestId("redis-master-name-input")).toHaveValue("groupB");
+    expect(await screen.findByTestId("redis-complete-sentinels-button")).toBeInTheDocument();
+  });
+
   it("生成映射:把未映射的不可达地址填入左侧,右侧留空;已列出的地址不重复追加", async () => {
     const user = userEvent.setup();
     vi.mocked(RedisProbe).mockResolvedValue({

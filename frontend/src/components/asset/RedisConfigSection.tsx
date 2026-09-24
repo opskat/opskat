@@ -413,7 +413,12 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                     <button
                       type="button"
                       key={g.name}
-                      onClick={() => patchFn({ masterName: g.name })}
+                      onClick={() => {
+                        patchFn({ masterName: g.name });
+                        // 选中的组名要重新探测,后端才会针对该组补上 masterAddr/otherSentinels
+                        // (readSentinel 只在收到 masterName 时才为该组计算补全列表)。
+                        void runRecognitionProbe({ ...s, masterName: g.name });
+                      }}
                       className={cn(
                         "flex h-8 w-full items-center justify-between rounded-sm px-2 text-left",
                         g.name === s.masterName ? "bg-accent" : "hover:bg-accent"
