@@ -143,24 +143,7 @@ func newDialFixture(t *testing.T, dialer AssetDialer, config map[string]any) (*P
 		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, config)},
 		AssetDialer:  dialer,
 	})
-	p, err := LoadPlugin(context.Background(), manifest, fixtureWasm(t), NewCapabilityHost(inner, manifest, t.TempDir()), nil)
-	if err != nil {
-		t.Fatalf("load fixture plugin: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := p.Close(context.Background()); err != nil {
-			t.Errorf("close plugin: %v", err)
-		}
-	})
-	payload, err := p.Describe(context.Background())
-	if err != nil {
-		t.Fatalf("describe fixture: %v", err)
-	}
-	desc, err := ParseDescriptor(payload)
-	if err != nil {
-		t.Fatalf("parse fixture descriptor: %v", err)
-	}
-	manifest.apply(desc)
+	p := loadDescribedFixture(t, manifest, inner)
 	return p, manifest
 }
 

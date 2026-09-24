@@ -61,6 +61,53 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 	return decryptConfigPasswordFields(stripped, asset.Type, caller)
 }
 
+// AssetCredentialValues serves host-side credential injection (the asset type's
+// describe() auth bindings): the named fields as strings, password fields
+// decrypted regardless of the extension's credentials capability, since the
+// result is rendered into requests by the host and never handed to the guest.
+// Only the named fields are decrypted — a stored secret the active auth group
+// does not reference cannot fail the request.
+func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error) {
+	caller, asset, err := ownedAsset(ctx, g.ext.service, g.extName, assetID)
+	if err != nil {
+		return nil, err
+	}
+	values := make(map[string]string, len(fields))
+	if asset.Config == "" {
+		return values, nil
+	}
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(asset.Config), &cfg); err != nil {
+		return nil, fmt.Errorf("parse %s config: %w", asset.Type, err)
+	}
+	passwords := map[string]bool{}
+	for _, f := range extension.PasswordFieldsFromSchema(caller.Manifest.AssetTypeDef(asset.Type).ConfigSchema) {
+		passwords[f] = true
+	}
+	for _, field := range fields {
+		raw, ok := cfg[field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			value = string(raw) // a number or bool renders as its JSON text
+		}
+		if passwords[field] && value != "" {
+			if value, err = decryptPasswordField(asset.Type, field, value); err != nil {
+				return nil, err
+			}
+		}
+		values[field] = value
+	}
+	logger.Ctx(ctx).Debug("extension asset credentials resolved for injection",
+		zap.String("extension", caller.Name),
+		zap.Int64("asset_id", assetID),
+		zap.Strings("fields", fields),
+	)
+	return values, nil
+}
+
 // ownedAsset loads assetID on behalf of extName and confirms the asset's type is
 // one extName itself registers. Every path that hands an asset — or its config —
 // to an extension goes through here, so "which extension may see this asset" is
@@ -208,9 +255,9 @@ func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *ext
 		// A field that will not decrypt fails the whole read: passing the stored
 		// value through would hand the guest ciphertext and skip the credentials
 		// decision entirely.
-		decrypted, err := credential_svc.Default().Decrypt(encrypted)
+		decrypted, err := decryptPasswordField(assetType, field, encrypted)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt password field %q of %s config: %w", field, assetType, err)
+			return nil, err
 		}
 		if allowPlaintext {
 			b, _ := json.Marshal(decrypted)
@@ -224,6 +271,14 @@ func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *ext
 		}
 	}
 	return json.Marshal(cfg)
+}
+
+func decryptPasswordField(assetType, field, encrypted string) (string, error) {
+	decrypted, err := credential_svc.Default().Decrypt(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("decrypt password field %q of %s config: %w", field, assetType, err)
+	}
+	return decrypted, nil
 }
 
 // credentialHandleFor creates an opaque handle for a credential field.

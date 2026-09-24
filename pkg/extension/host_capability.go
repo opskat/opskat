@@ -76,6 +76,9 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) error {
 		}
 		if u, err := url.Parse(params.URL); err == nil && eps.allowURL(u) {
 			params.AllowPrivate = true
+			if def := c.manifest.AssetTypeDef(asset.Type); def != nil && def.Auth != nil {
+				params.Auth = &HTTPAuth{Def: def.Auth, IsEndpoint: eps.allowURL}
+			}
 			params.RedirectGuard = func(target *url.URL) error {
 				if eps.allowURL(target) {
 					return nil

@@ -24,12 +24,30 @@ func (a assetConfigs) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	return cfg, nil
 }
 
+// AssetCredentialValues serves the named fields as stored: this fake keeps
+// password fields in plaintext, standing in for the host's decryption.
+func (a assetConfigs) AssetCredentialValues(_ context.Context, assetID int64, fields []string) (map[string]string, error) {
+	raw, err := a.GetAssetConfig(assetID)
+	if err != nil {
+		return nil, err
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(fields))
+	for _, f := range fields {
+		if v, ok := cfg[f].(string); ok {
+			out[f] = v
+		}
+	}
+	return out, nil
+}
+
 var fixtureAsset = &AssetRef{ID: 1, Name: "fixture-1", Type: "fixture"}
 
 // newEndpointFixture loads the fixture extension over a real DefaultHostProvider
-// with capability enforcement, and fills its functional face from describe() the
-// way Manager.LoadExtension does — the endpoint gate reads the asset type's
-// configSchema from there.
+// with capability enforcement.
 func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any) *Plugin {
 	t.Helper()
 	manifest := fixtureManifest(t)
@@ -37,6 +55,15 @@ func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any)
 	inner := NewDefaultHostProvider(DefaultHostConfig{
 		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, config)},
 	})
+	return loadDescribedFixture(t, manifest, inner)
+}
+
+// loadDescribedFixture loads the fixture extension over inner wrapped in
+// capability enforcement, and fills manifest's functional face from describe()
+// the way Manager.LoadExtension does — the endpoint gate and credential
+// injection read the asset type's declaration from there.
+func loadDescribedFixture(t *testing.T, manifest *Manifest, inner HostProvider) *Plugin {
+	t.Helper()
 	p, err := LoadPlugin(context.Background(), manifest, fixtureWasm(t), NewCapabilityHost(inner, manifest, t.TempDir()), nil)
 	if err != nil {
 		t.Fatalf("load fixture plugin: %v", err)

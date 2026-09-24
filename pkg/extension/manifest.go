@@ -193,6 +193,7 @@ type AssetTypeDef struct {
 	I18n         I18nName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
 	Connection   *ConnectionDef `json:"connection,omitempty"`
+	Auth         *AuthDef       `json:"auth,omitempty"`
 }
 
 // ConnectionDef is the subset of the host-owned connection settings an asset

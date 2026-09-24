@@ -34,9 +34,19 @@ type AssetDialer interface {
 	DialContextFor(ctx context.Context, assetID int64) (dial DialContextFunc, tlsConfig *tls.Config, fingerprint string, err error)
 }
 
-// Dependency interfaces for DefaultHostProvider
+// AssetConfigGetter reads the config of the assets an extension owns.
 type AssetConfigGetter interface {
+	// GetAssetConfig returns the config the guest sees through
+	// ctx.AssetConfig(): password fields as plaintext or opaque handles, per the
+	// extension's credentials capability.
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
+	// AssetCredentialValues returns the named config fields of assetID as
+	// strings, format:"password" fields decrypted whatever the extension's
+	// credentials capability — it feeds host-side credential injection
+	// (AuthDef) only, and its result must never reach the guest. A field the
+	// config lacks is absent from the map; a password field that does not
+	// decrypt is an error.
+	AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error)
 }
 
 type FileDialogOpener interface {
@@ -101,6 +111,13 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 			}
 			return OpenHTTPResource(params, httpDial, tlsConfig)
 		}
+		// Credentials are resolved per request and ride on it, never on the
+		// cached client: the client outlives this call and serves the asset's
+		// requests to any target.
+		auth, err := h.resolveAuth(ctx, asset, params.Auth)
+		if err != nil {
+			return nil, err
+		}
 		client, built := h.httpClients.getOrCreate(asset.ID, fingerprint, func() *http.Client {
 			return buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate, params.RedirectGuard)
 		})
@@ -108,7 +125,7 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 			logger.Ctx(ctx).Info("extension HTTP client cache miss, built new client",
 				zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID))
 		}
-		return OpenHTTPResourceWithClient(params, client)
+		return openHTTPResourceWithClient(params, client, auth)
 	case "tcp":
 		dial, tlsConfig, _, err := h.assetDial(ctx, asset)
 		if err != nil {
@@ -118,6 +135,44 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 	default:
 		return nil, fmt.Errorf("unknown IO type: %q", params.Type)
 	}
+}
+
+// resolveAuth renders the asset's active auth group into the credentials to
+// inject; nil when the request carries no auth declaration or no group is
+// selected. Any failure to read or decrypt a referenced field fails the open —
+// sending the request without the credentials the user configured would be a
+// silent downgrade.
+func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, auth *HTTPAuth) (*requestAuth, error) {
+	if auth == nil {
+		return nil, nil
+	}
+	fail := func(err error) (*requestAuth, error) {
+		logger.Ctx(ctx).Error("extension credential injection failed",
+			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.Error(err))
+		return nil, fmt.Errorf("credentials of asset %q: %w", asset.Name, err)
+	}
+	var selected string
+	if auth.Def.Selector != "" {
+		values, err := h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, []string{auth.Def.Selector})
+		if err != nil {
+			return fail(err)
+		}
+		selected = values[auth.Def.Selector]
+	}
+	group := auth.Def.activeGroup(selected)
+	if group == nil {
+		logger.Ctx(ctx).Debug("extension asset selects no auth group",
+			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.String("selector", selected))
+		return nil, nil
+	}
+	values, err := h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, group.fields())
+	if err != nil {
+		return fail(err)
+	}
+	logger.Ctx(ctx).Debug("extension credentials injected for endpoint request",
+		zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID),
+		zap.String("group", group.When), zap.Int("bindings", len(group.Bindings)))
+	return &requestAuth{bindings: group.render(values), isEndpoint: auth.IsEndpoint}, nil
 }
 
 // assetDial resolves the connection path and TLS settings of the invocation's
@@ -332,9 +387,7 @@ func (c *httpClientCache) closeAll() bool {
 // being discarded (invalidated, or superseded by a reinstall/disable), so
 // nothing will read from that pool again.
 func closeIdleHTTPClient(client *http.Client) {
-	if transport, ok := client.Transport.(*http.Transport); ok {
-		transport.CloseIdleConnections()
-	}
+	client.CloseIdleConnections()
 }
 
 // hostHTTPCacheRegistry tracks the live httpClientCache for each loaded

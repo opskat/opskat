@@ -181,6 +181,40 @@ the host's error; there is no fallback to a direct or unverified connection. An 
 left undeclared is neither shown nor applied, and the host refuses a `connection`
 item it does not know.
 
+### Credentials are injected by the host
+
+An HTTP extension does not need to hold its asset's password. The asset type declares
+how a request authenticates, and the host renders that from the asset's config —
+decrypting `format:"password"` fields itself — into every request the extension sends
+to the asset's endpoint (redirect hops that stay on it included):
+
+```go
+opskat.AssetType[esConfig]("es").Auth(opskat.Auth{
+	Selector: "authType", // config field that picks the group; omit for a single group
+	Groups: []opskat.AuthGroup{
+		{When: "basic", Bindings: []opskat.AuthBinding{{In: "basic", Value: "{{username}}:{{password}}"}}},
+		{When: "apiKey", Bindings: []opskat.AuthBinding{
+			{In: "header", Name: "Authorization", Value: `ApiKey {{base64(apiKeyId, ":", apiKey)}}`},
+		}},
+		{When: "token", Bindings: []opskat.AuthBinding{{In: "query", Name: "access_token", Value: "{{token}}"}}},
+	},
+})
+```
+
+`In` is `header` (`Name` is the header), `query` (`Name` is the parameter) or `basic`
+(no `Name`; `Value` renders `user:password` and is sent as `Authorization: Basic …`).
+`Value` is literal text with `{{field}}` and `{{base64(part, …)}}` placeholders, each
+part a config field or a double-quoted literal; a field the config leaves unset renders
+empty. A `Selector` value no group names injects nothing (e.g. `authType: "none"`).
+The host refuses the extension at load when a template references a field the config
+does not declare, or a group cannot be selected unambiguously. It needs
+`network.assetEndpoint`: requests to any target other than the asset's endpoint get no
+credentials. The injected values never reach the guest — not in the response metadata
+and not in a failed request's error — and a password that cannot be decrypted fails the
+request instead of sending it unauthenticated. `credentials: "read"` stays for
+protocols the host cannot authenticate for you (raw TCP handshakes); the install
+confirmation and the extension's details in Settings warn about it prominently.
+
 ### The policy face
 
 Every tool declares the action it requests through `.Policy(action)`. The host does

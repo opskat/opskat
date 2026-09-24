@@ -61,9 +61,14 @@ type addrArgs struct {
 }
 
 // fixtureConfig's endpoint (a URL or host:port) is what the host's
-// network.assetEndpoint gate lets a call scoped to the asset reach.
+// network.assetEndpoint gate lets a call scoped to the asset reach. authType
+// picks which of the declared auth groups the host injects into requests to
+// that endpoint, rendered from username / password.
 type fixtureConfig struct {
 	Endpoint string `json:"endpoint" title:"Endpoint" format:"endpoint"`
+	AuthType string `json:"authType,omitempty" title:"Auth type" enum:"none,basic,bearer,signed"`
+	Username string `json:"username,omitempty" title:"Username"`
+	Password string `json:"password,omitempty" title:"Password" format:"password"`
 }
 
 func init() {
@@ -72,7 +77,15 @@ func init() {
 		Description: "Minimal extension used by pkg/extension end-to-end tests",
 		PolicyType:  "fixture",
 	})
-	opskat.AssetType[fixtureConfig]("fixture").Name("Fixture").Connection(opskat.Connection{SSHTunnel: true})
+	opskat.AssetType[fixtureConfig]("fixture").Name("Fixture").Connection(opskat.Connection{SSHTunnel: true}).
+		Auth(opskat.Auth{
+			Selector: "authType",
+			Groups: []opskat.AuthGroup{
+				{When: "basic", Bindings: []opskat.AuthBinding{{In: "basic", Value: "{{username}}:{{password}}"}}},
+				{When: "bearer", Bindings: []opskat.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}}},
+				{When: "signed", Bindings: []opskat.AuthBinding{{In: "query", Name: "token", Value: `{{base64(username, ":", password)}}`}}},
+			},
+		})
 	opskat.PolicyGroup("ext:fixture:read").Name("Read").Description("Read-only").
 		Allow("read").Default()
 
@@ -178,7 +191,7 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"status": meta.Status, "body": string(body)}, nil
+		return map[string]any{"status": meta.Status, "headers": meta.Headers, "body": string(body)}, nil
 	}).Policy("read")
 
 	opskat.Tool("tcp_echo", func(_ *opskat.ToolContext, args addrArgs) (any, error) {

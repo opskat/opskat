@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -285,4 +286,21 @@ func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
 
 	require.Len(t, approver.prompts, 2, "declaring network.assetEndpoint must prompt again")
 	require.Contains(t, approver.prompts[1].Detail, "network.assetEndpoint: true")
+}
+
+// credentials:read hands the extension every stored password of its assets in
+// plaintext, so the approval leads with it instead of listing it among the
+// other capabilities.
+func TestHandleExtDevInstallLeadsWithCredentialsReadWarning(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	o := newDevOpsctl(&recordingDevInstaller{}, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "read")}).Approved)
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "plain", "")}).Approved)
+
+	require.Len(t, approver.prompts, 2)
+	withRead := strings.SplitN(approver.prompts[0].Detail, "\n", 2)[0]
+	require.Contains(t, withRead, "credentials: read")
+	require.Contains(t, withRead, "plaintext")
+	require.NotContains(t, approver.prompts[1].Detail, "plaintext")
 }

@@ -219,3 +219,32 @@ func TestDescribeReportsConnectionDeclaration(t *testing.T) {
 		So(byType["direct"], ShouldNotContainKey, "connection")
 	})
 }
+
+func TestDescribeReportsAuthDeclaration(t *testing.T) {
+	Convey("an asset type's credential injection is reported only when declared", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		AssetType[demoConfig]("injected").Auth(Auth{
+			Selector: "mode",
+			Groups: []AuthGroup{
+				{When: "basic", Bindings: []AuthBinding{{In: "basic", Value: "{{user}}:{{pass}}"}}},
+				{When: "key", Bindings: []AuthBinding{{In: "header", Name: "Authorization", Value: "ApiKey {{pass}}"}}},
+			},
+		})
+		AssetType[demoConfig]("plain")
+
+		byType := map[string]map[string]any{}
+		for _, raw := range decodeDescribe(t)["assetTypes"].([]any) {
+			at := raw.(map[string]any)
+			byType[at["type"].(string)] = at
+		}
+		So(byType["injected"]["auth"], ShouldResemble, map[string]any{
+			"selector": "mode",
+			"groups": []any{
+				map[string]any{"when": "basic", "bindings": []any{map[string]any{"in": "basic", "value": "{{user}}:{{pass}}"}}},
+				map[string]any{"when": "key", "bindings": []any{map[string]any{"in": "header", "name": "Authorization", "value": "ApiKey {{pass}}"}}},
+			},
+		})
+		So(byType["plain"], ShouldNotContainKey, "auth")
+	})
+}

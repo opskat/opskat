@@ -71,6 +71,7 @@ type assetTypeEntry struct {
 	name       string
 	schema     map[string]any
 	connection *Connection
+	auth       *Auth
 }
 
 type policyGroupEntry struct {
@@ -233,6 +234,44 @@ type Connection struct {
 // Connection declares the host-owned connection settings the asset type supports.
 func (r *AssetTypeReg) Connection(c Connection) *AssetTypeReg {
 	r.e.connection = &c
+	return r
+}
+
+// Auth declares the credentials the host injects into the extension's HTTP
+// requests to the asset's endpoint. The host renders each binding's Value from
+// the asset's config — decrypting format:"password" fields itself — so the
+// guest authenticates without ever holding the plaintext, and without the
+// credentials:read capability. Requests to any other target get nothing.
+//
+// Selector names the config field whose value picks the active group (a value
+// no group names injects nothing); leave it empty to declare a single,
+// always-active group. The host refuses the extension at load when a template
+// references a field the config does not declare.
+type Auth struct {
+	Selector string      `json:"selector,omitempty"`
+	Groups   []AuthGroup `json:"groups"`
+}
+
+// AuthGroup is the set of bindings injected when the selector field equals When.
+type AuthGroup struct {
+	When     string        `json:"when,omitempty"`
+	Bindings []AuthBinding `json:"bindings"`
+}
+
+// AuthBinding injects one value. In is "header" (Name = header name), "query"
+// (Name = parameter name) or "basic" (no Name; Value renders "user:password"
+// and is sent as Authorization: Basic). Value is a template: literal text with
+// {{field}} and {{base64(part, ...)}} placeholders, each part a config field or
+// a double-quoted literal — e.g. `ApiKey {{base64(apiKeyId, ":", apiKey)}}`.
+type AuthBinding struct {
+	In    string `json:"in"`
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value"`
+}
+
+// Auth declares the credentials the host injects into requests to the asset's endpoint.
+func (r *AssetTypeReg) Auth(a Auth) *AssetTypeReg {
+	r.e.auth = &a
 	return r
 }
 

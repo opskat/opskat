@@ -86,7 +86,8 @@ type httpHandle struct {
 	bodyBuf *bytes.Buffer // buffered request body (for POST/PUT/PATCH)
 	resp    *http.Response
 	phase   httpPhase
-	hasBody bool // true for POST/PUT/PATCH
+	hasBody bool         // true for POST/PUT/PATCH
+	auth    *requestAuth // credentials injected into endpoint hops; nil = none
 }
 
 // newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
@@ -94,7 +95,7 @@ type httpHandle struct {
 // asset's declared TLS settings — net/http performs its own handshake using it
 // for an https:// URL, over the conn dial returns. The client is single-use:
 // for a client reused across many calls to the same asset, see
-// buildCachedHTTPClient / OpenHTTPResourceWithClient.
+// buildCachedHTTPClient / openHTTPResourceWithClient.
 func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*httpHandle, error) {
 	if params.URL == "" {
 		return nil, fmt.Errorf("URL is required for HTTP handle")
@@ -111,7 +112,7 @@ func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*
 	}
 	transport := newHTTPTransport(ctxDial, tlsConfig, params.AllowPrivate)
 	client := newHTTPClient(transport, params.RedirectGuard)
-	return newHandleFromClient(params, client)
+	return newHandleFromClient(params, client, nil)
 }
 
 // buildCachedHTTPClient builds an *http.Client meant to be reused across many
@@ -148,8 +149,10 @@ func newHTTPTransport(dial func(ctx context.Context, network, addr string) (net.
 
 // newHTTPClient wraps transport in an *http.Client, enforcing redirectGuard
 // (when set) via CheckRedirect while keeping net/http's own redirect limit.
+// The client itself holds no credentials: authTransport injects only those a
+// request carries on its context.
 func newHTTPClient(transport *http.Transport, redirectGuard func(*url.URL) error) *http.Client {
-	client := &http.Client{Transport: transport}
+	client := &http.Client{Transport: &authTransport{base: transport}}
 	if redirectGuard != nil {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			// Keep net/http's own redirect limit; the guard only narrows where to.
@@ -165,8 +168,8 @@ func newHTTPClient(transport *http.Transport, redirectGuard func(*url.URL) error
 // newHandleFromClient builds the per-call handle state (method, url, headers,
 // its own cancelable context, body buffer) around client, which may be freshly
 // built (newHTTPHandle) or a cached one shared across calls
-// (OpenHTTPResourceWithClient).
-func newHandleFromClient(params IOOpenParams, client *http.Client) (*httpHandle, error) {
+// (openHTTPResourceWithClient).
+func newHandleFromClient(params IOOpenParams, client *http.Client, auth *requestAuth) (*httpHandle, error) {
 	method := strings.ToUpper(params.Method)
 	if method == "" {
 		method = "GET"
@@ -188,6 +191,7 @@ func newHandleFromClient(params IOOpenParams, client *http.Client) (*httpHandle,
 		bodyBuf: &bytes.Buffer{},
 		phase:   httpPhaseWriting,
 		hasBody: hasBody,
+		auth:    auth,
 	}, nil
 }
 
@@ -218,12 +222,16 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 		body = bytes.NewReader(h.bodyBuf.Bytes())
 	}
 
+	reqCtx := h.ctx
+	if h.auth != nil {
+		reqCtx = withRequestAuth(reqCtx, h.auth)
+	}
 	var req *http.Request
 	var err error
 	if body != nil {
-		req, err = http.NewRequestWithContext(h.ctx, h.method, h.url, body)
+		req, err = http.NewRequestWithContext(reqCtx, h.method, h.url, body)
 	} else {
-		req, err = http.NewRequestWithContext(h.ctx, h.method, h.url, nil)
+		req, err = http.NewRequestWithContext(reqCtx, h.method, h.url, nil)
 	}
 	if err != nil {
 		h.mu.Unlock()
@@ -298,12 +306,13 @@ func (h *httpHandle) Close() error {
 	return nil
 }
 
-// OpenHTTPResourceWithClient prepares an HTTP request against a pre-built,
+// openHTTPResourceWithClient prepares an HTTP request against a pre-built,
 // possibly cached client — the keep-alive-reuse counterpart of
 // OpenHTTPResource (io_handle.go), used by DefaultHostProvider.OpenIO once it
-// has resolved (or reused) the asset's client via httpClientCache.
-func OpenHTTPResourceWithClient(params IOOpenParams, client *http.Client) (*IOResource, error) {
-	h, err := newHandleFromClient(params, client)
+// has resolved (or reused) the asset's client via httpClientCache. auth, when
+// set, is injected into the hops that target the asset's endpoint.
+func openHTTPResourceWithClient(params IOOpenParams, client *http.Client, auth *requestAuth) (*IOResource, error) {
+	h, err := newHandleFromClient(params, client, auth)
 	if err != nil {
 		return nil, err
 	}

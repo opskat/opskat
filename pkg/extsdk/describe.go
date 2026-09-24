@@ -37,6 +37,7 @@ type descAssetType struct {
 	I18n         descName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
 	Connection   *Connection    `json:"connection,omitempty"`
+	Auth         *Auth          `json:"auth,omitempty"`
 }
 
 type descTool struct {
@@ -114,6 +115,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 			I18n:         descName{Name: at.name},
 			ConfigSchema: at.schema,
 			Connection:   at.connection,
+			Auth:         at.auth,
 		})
 	}
 

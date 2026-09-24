@@ -94,7 +94,7 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		resp := o.extDevApprove(approval.ApprovalRequest{
 			Type:    extDevApprovalType,
 			Command: sourceDir,
-			Detail:  extDevApprovalDetail(manifest, installedVersion, overwrites),
+			Detail:  extDevApprovalDetail(manifest, installedVersion, overwrites, o.lang.Lang()),
 		})
 		if !resp.Approved {
 			log.Info("extension dev install denied", zap.String("reason", resp.Reason))
@@ -115,8 +115,15 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 }
 
 // extDevApprovalDetail 是弹窗里除来源目录之外的全部内容：用户据此判断要不要放行。
-func extDevApprovalDetail(m *extension.Manifest, installedVersion string, overwrites bool) string {
+// credentials: read 会把扩展资产里保存的每个密码以明文交给它，所以放在第一行醒目提示，
+// 而不是混在能力列表里。
+func extDevApprovalDetail(m *extension.Manifest, installedVersion string, overwrites bool, lang string) string {
 	var b strings.Builder
+	if m.Capabilities.Credentials == extension.CredentialAccessRead {
+		b.WriteString(i18n.Pick(lang,
+			"警告：credentials: read —— 该扩展能以明文读取其资产里保存的全部密码\n",
+			"WARNING: credentials: read — this extension can read every password stored in its assets in plaintext\n"))
+	}
 	fmt.Fprintf(&b, "extension: %s %s\n", m.Name, m.Version)
 	if overwrites {
 		fmt.Fprintf(&b, "overwrites installed: %s %s\n", m.Name, installedVersion)

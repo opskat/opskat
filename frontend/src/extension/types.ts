@@ -13,10 +13,17 @@ export interface ExtManifest {
   minAppVersion?: string;
   i18n: { displayName: string; description: string };
   backend?: { runtime: string; binary: string };
+  capabilities?: ExtCapabilities;
   assetTypes?: ExtAssetType[];
   tools?: ExtToolDef[];
   policies?: ExtPolicies;
   frontend?: ExtFrontend;
+}
+
+/** The capability grants from manifest.json (the subset the frontend reads). */
+export interface ExtCapabilities {
+  /** "read" hands the extension the plaintext of its assets' password fields. */
+  credentials: string;
 }
 
 export interface ExtAssetType {
@@ -25,6 +32,27 @@ export interface ExtAssetType {
   configSchema?: Record<string, unknown>;
   /** Host-owned connection settings the type supports; absent means none. */
   connection?: ExtConnection;
+  /** Credentials the host injects into requests to the asset's endpoint; absent means none. */
+  auth?: ExtAuth;
+}
+
+/**
+ * Credential injection an asset type declares in describe(). The host renders each
+ * binding from the asset's config (decrypting password fields itself) into HTTP
+ * requests to the asset's endpoint; the extension never sees the result.
+ */
+export interface ExtAuth {
+  /** Config field whose value picks the active group; absent means a single group. */
+  selector?: string;
+  groups: { when?: string; bindings: ExtAuthBinding[] }[];
+}
+
+export interface ExtAuthBinding {
+  in: "header" | "query" | "basic";
+  /** Header or query parameter name; absent for basic. */
+  name?: string;
+  /** Template: {{field}} and {{base64(part, ...)}} placeholders over config fields. */
+  value: string;
 }
 
 /**

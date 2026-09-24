@@ -84,8 +84,18 @@ func (d *Descriptor) validateAssetScope() error {
 			return fmt.Errorf("describe(): duplicate asset type %q", at.Type)
 		}
 		seen[at.Type] = struct{}{}
-		if len(ConfigSchemaProperties(at.ConfigSchema)) == 0 {
+		props := ConfigSchemaProperties(at.ConfigSchema)
+		if len(props) == 0 {
 			return fmt.Errorf("describe(): assetTypes[%q].configSchema must declare properties", at.Type)
+		}
+		if at.Auth != nil {
+			declared := make(map[string]bool, len(props))
+			for _, p := range props {
+				declared[p] = true
+			}
+			if err := at.Auth.validate(declared); err != nil {
+				return fmt.Errorf("describe(): assetTypes[%q].%w", at.Type, err)
+			}
 		}
 	}
 	if d.Policies.Type == "" {

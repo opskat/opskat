@@ -353,3 +353,88 @@ func TestParseDescriptorConnection(t *testing.T) {
 		})
 	})
 }
+
+// 凭据注入的 auth 绑定由宿主在请求 endpoint 时渲染；模板只能引用该资产类型自己的
+// configSchema 字段——引用不存在的字段意味着宿主注入的东西永远是空的，必须在加载时拒绝。
+func TestParseDescriptorAuth(t *testing.T) {
+	Convey("An asset type declares auth bindings the host injects into requests to its endpoint", t, func() {
+		withAuth := func(auth string) []byte {
+			return []byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+				`"configSchema":{"type":"object","properties":{` +
+				`"endpoint":{"type":"string","format":"endpoint"},"authType":{"type":"string"},` +
+				`"username":{"type":"string"},"password":{"type":"string","format":"password"}}},` +
+				`"auth":` + auth + `}],"policies":{"type":"x"}}`)
+		}
+		refused := func(auth, want string) {
+			_, err := ParseDescriptor(withAuth(auth))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, want)
+		}
+
+		Convey("groups selected by a config field, over header / query / basic, are kept", func() {
+			d, err := ParseDescriptor(withAuth(`{"selector":"authType","groups":[` +
+				`{"when":"basic","bindings":[{"in":"basic","value":"{{username}}:{{password}}"}]},` +
+				`{"when":"token","bindings":[{"in":"header","name":"Authorization","value":"ApiKey {{base64(username, \":\", password)}}"},` +
+				`{"in":"query","name":"sig","value":"{{ password }}"}]}]}`))
+			So(err, ShouldBeNil)
+			auth := d.AssetTypes[0].Auth
+			So(auth, ShouldNotBeNil)
+			So(auth.Selector, ShouldEqual, "authType")
+			So(auth.Groups, ShouldHaveLength, 2)
+			So(auth.Groups[1].Bindings[0], ShouldResemble, AuthBinding{In: "header", Name: "Authorization", Value: `ApiKey {{base64(username, ":", password)}}`})
+		})
+
+		Convey("a single group needs no selector", func() {
+			d, err := ParseDescriptor(withAuth(`{"groups":[{"bindings":[{"in":"header","name":"X-Token","value":"{{password}}"}]}]}`))
+			So(err, ShouldBeNil)
+			So(d.AssetTypes[0].Auth.Groups, ShouldHaveLength, 1)
+		})
+
+		Convey("no declaration means no injection", func() {
+			d, err := ParseDescriptor(desc(""))
+			So(err, ShouldBeNil)
+			So(d.AssetTypes[0].Auth, ShouldBeNil)
+		})
+
+		Convey("a template referencing a field the configSchema does not declare is refused", func() {
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"Bearer {{token}}"}]}]}`, `"token"`)
+			refused(`{"groups":[{"bindings":[{"in":"basic","value":"{{base64(username, apiKey)}}"}]}]}`, `"apiKey"`)
+		})
+
+		Convey("a selector the configSchema does not declare is refused", func() {
+			refused(`{"selector":"mode","groups":[{"when":"a","bindings":[{"in":"basic","value":"{{username}}:{{password}}"}]}]}`, `"mode"`)
+		})
+
+		Convey("a malformed template is refused", func() {
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{password"}]}]}`, "unclosed")
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{md5(password)}}"}]}]}`, "md5(password)")
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{base64()}}"}]}]}`, "base64")
+		})
+
+		Convey("a location the host does not inject into is refused", func() {
+			refused(`{"groups":[{"bindings":[{"in":"cookie","name":"sid","value":"{{password}}"}]}]}`, `"cookie"`)
+		})
+
+		Convey("header and query bindings need a name, basic takes none", func() {
+			refused(`{"groups":[{"bindings":[{"in":"header","value":"{{password}}"}]}]}`, "name")
+			refused(`{"groups":[{"bindings":[{"in":"query","value":"{{password}}"}]}]}`, "name")
+			refused(`{"groups":[{"bindings":[{"in":"basic","name":"x","value":"{{username}}:{{password}}"}]}]}`, "name")
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"Bad Header","value":"{{password}}"}]}]}`, "Bad Header")
+		})
+
+		Convey("groups must be selectable unambiguously", func() {
+			// several groups without a selector: which one applies is undecidable
+			refused(`{"groups":[{"bindings":[{"in":"basic","value":"{{username}}"}]},{"bindings":[{"in":"basic","value":"{{password}}"}]}]}`, "selector")
+			// with a selector every group names the value that selects it, once
+			refused(`{"selector":"authType","groups":[{"bindings":[{"in":"basic","value":"{{username}}"}]}]}`, "when")
+			refused(`{"selector":"authType","groups":[{"when":"a","bindings":[{"in":"basic","value":"{{username}}"}]},`+
+				`{"when":"a","bindings":[{"in":"basic","value":"{{password}}"}]}]}`, "duplicate")
+			refused(`{"groups":[]}`, "groups")
+			refused(`{"groups":[{"bindings":[]}]}`, "bindings")
+		})
+
+		Convey("an unknown key is refused rather than ignored", func() {
+			refused(`{"groups":[{"bindings":[{"in":"header","header":"Authorization","value":"{{password}}"}]}]}`, `"header"`)
+		})
+	})
+}

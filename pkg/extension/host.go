@@ -49,6 +49,17 @@ type IOOpenParams struct {
 	// non-nil error stops the redirect and fails the request. Only the host sets
 	// it — it never crosses the WASM boundary.
 	RedirectGuard func(target *url.URL) error `json:"-"`
+	// Auth, when set, is the credential injection the asset's type declares,
+	// applied to every hop of an http handle that targets one of the asset's
+	// endpoints. Only the host sets it — it never crosses the WASM boundary.
+	Auth *HTTPAuth `json:"-"`
+}
+
+// HTTPAuth pairs an asset type's auth declaration with the endpoint test that
+// decides which request hops receive it.
+type HTTPAuth struct {
+	Def        *AuthDef
+	IsEndpoint func(target *url.URL) bool
 }
 
 type DialogOptions struct {

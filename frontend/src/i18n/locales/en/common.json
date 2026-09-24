@@ -2751,6 +2751,7 @@
     "enableSuccess": "Extension enabled",
     "disableSuccess": "Extension disabled",
     "detail": "Details",
+    "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
     "tools": "Tools",
     "toolName": "Name",
     "toolDescription": "Description",

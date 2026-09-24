@@ -2751,6 +2751,7 @@
     "enableSuccess": "扩展已启用",
     "disableSuccess": "扩展已禁用",
     "detail": "详情",
+    "credentialsReadWarning": "此扩展可以明文读取其资产中保存的全部密码（credentials: read），请确认你信任它的作者后再使用。",
     "tools": "工具",
     "toolName": "名称",
     "toolDescription": "描述",

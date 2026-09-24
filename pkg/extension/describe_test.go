@@ -81,7 +81,7 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 		Convey("and the asset type, policy face and groups the host registers on", func() {
 			So(manifest.AssetTypes, ShouldHaveLength, 1)
 			So(manifest.AssetTypes[0].Type, ShouldEqual, "fixture")
-			So(ConfigSchemaProperties(manifest.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"endpoint"})
+			So(ConfigSchemaProperties(manifest.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
 			So(manifest.Policies.Type, ShouldEqual, "fixture")
 			So(manifest.Policies.Actions, ShouldResemble, []string{"read", "write"})
 			So(manifest.Policies.Default, ShouldResemble, []string{"ext:fixture:read"})
