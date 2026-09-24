@@ -385,7 +385,7 @@ func TestService(t *testing.T) {
 				"assetTypes": []map[string]any{
 					{"type": "ext-other", "i18n": map[string]any{"name": "clash"}, "configSchema": testConfigSchema()},
 				},
-				"policies": map[string]any{"type": "ext:ext-hot"},
+				"policies": map[string]any{"type": "ext-hot"},
 			})
 			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
 			So(err, ShouldNotBeNil)
@@ -411,7 +411,7 @@ func TestService(t *testing.T) {
 				"assetTypes": []map[string]any{
 					{"type": "ext-hot-v2", "i18n": map[string]any{"name": "v2"}, "configSchema": testConfigSchema()},
 				},
-				"policies": map[string]any{"type": "ext:ext-hot"},
+				"policies": map[string]any{"type": "ext-hot"},
 			})
 			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
 			So(err, ShouldBeNil)
