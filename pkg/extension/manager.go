@@ -119,7 +119,7 @@ func (m *Manager) Scan(ctx context.Context) ([]*Manifest, error) {
 
 	var manifests []*Manifest
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !isExtensionDir(entry) {
 			continue
 		}
 		extDir := filepath.Join(m.dir, entry.Name())
@@ -253,84 +253,114 @@ func (m *Manager) installLock(name string) *sync.Mutex {
 	return mu
 }
 
+// pendingDescriptor is a describe() answer that has not been written to the cache
+// yet. Writing waits until the extension is actually in place: a staged upgrade that
+// is abandoned must not overwrite the entry the running version was described by.
+// A zero value (cache hit) has nothing to write.
+type pendingDescriptor struct {
+	name    string
+	hash    string
+	payload []byte
+}
+
+func (p pendingDescriptor) store() {
+	if p.payload == nil {
+		return
+	}
+	storeDescriptor(p.name, p.hash, p.payload)
+}
+
 // describeInto fills the manifest's functional face from the guest.
 //
 // The guest is asked only when the cache has no answer for this exact wasm binary;
 // a hit skips the call entirely, which is what keeps listing extensions off the
 // WASM path. The answer is validated either way — a cached payload crosses the same
-// boundary as a fresh one.
-func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *Plugin, wasmBytes []byte) error {
+// boundary as a fresh one. A fresh answer is returned for the caller to cache once
+// the extension is committed.
+func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *Plugin, wasmBytes []byte) (pendingDescriptor, error) {
 	hash := WasmHash(wasmBytes)
 	if desc := cachedDescriptor(manifest.Name, hash); desc != nil {
 		manifest.apply(desc)
-		return nil
+		return pendingDescriptor{}, nil
 	}
 	payload, err := plugin.Describe(ctx)
 	if err != nil {
-		return fmt.Errorf("describe extension %q: %w", manifest.Name, err)
+		return pendingDescriptor{}, fmt.Errorf("describe extension %q: %w", manifest.Name, err)
 	}
 	desc, err := ParseDescriptor(payload)
 	if err != nil {
-		return fmt.Errorf("extension %q: %w", manifest.Name, err)
+		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
 	}
 	manifest.apply(desc)
-	storeDescriptor(manifest.Name, hash, payload)
-	return nil
+	return pendingDescriptor{name: manifest.Name, hash: hash, payload: payload}, nil
 }
 
 func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, error) {
-	manifestPath := filepath.Join(dir, "manifest.json")
+	ext, pending, err := m.loadExtension(ctx, dir, dir)
+	if err != nil {
+		return nil, err
+	}
+	pending.store()
+
+	m.mu.Lock()
+	m.extensions[ext.Name] = ext
+	m.mu.Unlock()
+
+	m.logger.Info("loaded extension", zap.String("name", ext.Name), zap.String("version", ext.Manifest.Version))
+	return ext.Manifest, nil
+}
+
+// loadExtension reads, compiles and describes the extension whose files are in
+// srcDir without publishing it anywhere. extDir is where the extension lives once in
+// place — the capability sandbox and Extension.Dir are bound to it, so a version
+// loaded from a staging directory is already correct after it is moved there.
+func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Extension, pendingDescriptor, error) {
+	manifestPath := filepath.Join(srcDir, "manifest.json")
 	data, err := os.ReadFile(manifestPath) //nolint:gosec // extension directories are trusted
 	if err != nil {
-		return nil, fmt.Errorf("read manifest: %w", err)
+		return nil, pendingDescriptor{}, fmt.Errorf("read manifest: %w", err)
 	}
 
 	manifest, err := ParseManifest(data)
 	if err != nil {
-		return nil, err
+		return nil, pendingDescriptor{}, err
 	}
 
-	wasmPath := filepath.Join(dir, manifest.Backend.Binary)
+	wasmPath := filepath.Join(srcDir, manifest.Backend.Binary)
 	wasmBytes, err := os.ReadFile(wasmPath) //nolint:gosec // path constructed from trusted extension directory
 	if err != nil {
-		return nil, fmt.Errorf("read wasm binary: %w", err)
+		return nil, pendingDescriptor{}, fmt.Errorf("read wasm binary: %w", err)
 	}
 
-	skillMD, skillDescription, err := readSkillMD(dir, manifest.Name, m.logger)
+	skillMD, skillDescription, err := readSkillMD(srcDir, manifest.Name, m.logger)
 	if err != nil {
-		return nil, err
+		return nil, pendingDescriptor{}, err
 	}
 
 	host := m.newHost(manifest.Name)
-	host = NewCapabilityHost(host, manifest, dir) // enforce capabilities declared in manifest
+	host = NewCapabilityHost(host, manifest, extDir) // enforce capabilities declared in manifest
 	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host, m.wasmCache)
 	if err != nil {
-		return nil, fmt.Errorf("load plugin: %w", err)
+		return nil, pendingDescriptor{}, fmt.Errorf("load plugin: %w", err)
 	}
 
-	if err := m.describeInto(ctx, manifest, plugin, wasmBytes); err != nil {
+	pending, err := m.describeInto(ctx, manifest, plugin, wasmBytes)
+	if err != nil {
 		if closeErr := plugin.Close(ctx); closeErr != nil {
 			m.logger.Warn("close plugin after describe failure", zap.String("name", manifest.Name), zap.Error(closeErr))
 		}
-		return nil, err
+		return nil, pendingDescriptor{}, err
 	}
 
-	ext := &Extension{
+	return &Extension{
 		Name:             manifest.Name,
-		Dir:              dir,
+		Dir:              extDir,
 		Manifest:         manifest,
 		Plugin:           plugin,
 		SkillMD:          skillMD,
 		SkillDescription: skillDescription,
-		Locales:          LoadLocales(dir),
-	}
-
-	m.mu.Lock()
-	m.extensions[manifest.Name] = ext
-	m.mu.Unlock()
-
-	m.logger.Info("loaded extension", zap.String("name", manifest.Name), zap.String("version", manifest.Version))
-	return manifest, nil
+		Locales:          LoadLocales(srcDir),
+	}, pending, nil
 }
 
 // ManifestInfo holds everything a host can learn about an extension without running
@@ -358,7 +388,7 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 
 	var result []*ManifestInfo
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !isExtensionDir(entry) {
 			continue
 		}
 		extDir := filepath.Join(m.dir, entry.Name())
@@ -384,32 +414,72 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 	return result, nil
 }
 
-// Install installs an extension from a zip file or directory.
-func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, error) {
-	sourceDir := sourcePath
-	var tmpDir string
+// stagingPrefix names the directories Stage builds new versions in. They live inside
+// the extensions directory so the final move is a same-filesystem rename, and the
+// leading dot keeps them out of every scan.
+const stagingPrefix = ".install-"
 
-	// If zip, extract to temp directory
+// isExtensionDir reports whether a directory entry of the extensions directory can
+// hold an installed extension — dot-directories are the compilation cache and
+// install staging areas.
+func isExtensionDir(entry os.DirEntry) bool {
+	return entry.IsDir() && !strings.HasPrefix(entry.Name(), ".")
+}
+
+// StagedInstall is a new version of an extension, loaded and described next to the
+// installed one but not yet in its place. Nothing the running version depends on —
+// its directory, its loaded module, its cached descriptor — has been touched: Commit
+// swaps the new version in, Abort throws it away. Exactly one of them must be called.
+type StagedInstall struct {
+	m        *Manager
+	root     string // staging area; removed by Commit and Abort
+	newDir   string // the new version's files, inside root
+	destDir  string
+	ext      *Extension
+	pending  pendingDescriptor
+	finished bool
+}
+
+// Extension returns the staged version. Its Dir is already the final location.
+func (s *StagedInstall) Extension() *Extension { return s.ext }
+
+// Manifest returns the staged version's manifest, functional face included.
+func (s *StagedInstall) Manifest() *Manifest { return s.ext.Manifest }
+
+// Stage unpacks sourcePath (a directory or a .zip) into a staging area inside the
+// extensions directory and loads it there. On failure the staging area is gone and
+// the installed version, if any, is exactly as it was.
+func (m *Manager) Stage(ctx context.Context, sourcePath string) (*StagedInstall, error) {
+	if err := os.MkdirAll(m.dir, 0755); err != nil {
+		return nil, fmt.Errorf("create extensions dir: %w", err)
+	}
+	root, err := os.MkdirTemp(m.dir, stagingPrefix+"*")
+	if err != nil {
+		return nil, fmt.Errorf("create staging dir: %w", err)
+	}
+	staged, err := m.stageInto(ctx, root, sourcePath)
+	if err != nil {
+		removeStagingDir(root)
+		return nil, err
+	}
+	return staged, nil
+}
+
+func (m *Manager) stageInto(ctx context.Context, root, sourcePath string) (*StagedInstall, error) {
+	newDir := filepath.Join(root, "new")
 	if strings.HasSuffix(strings.ToLower(sourcePath), ".zip") {
-		var err error
-		tmpDir, err = os.MkdirTemp("", "opskat-ext-*")
-		if err != nil {
-			return nil, fmt.Errorf("create temp dir: %w", err)
+		if err := os.MkdirAll(newDir, 0755); err != nil {
+			return nil, fmt.Errorf("create staging dir: %w", err)
 		}
-		defer func() {
-			if err := os.RemoveAll(tmpDir); err != nil {
-				logger.Default().Warn("remove temp dir", zap.String("dir", tmpDir), zap.Error(err))
-			}
-		}()
-		if err := extractZip(sourcePath, tmpDir); err != nil {
+		if err := extractZip(sourcePath, newDir); err != nil {
 			return nil, fmt.Errorf("extract zip: %w", err)
 		}
-		sourceDir = tmpDir
+	} else if err := copyDir(sourcePath, newDir); err != nil {
+		return nil, fmt.Errorf("copy extension: %w", err)
 	}
 
-	// Read and validate manifest
-	manifestPath := filepath.Join(sourceDir, "manifest.json")
-	data, err := os.ReadFile(manifestPath) //nolint:gosec // path constructed from validated source directory
+	// The name decides the final location, so it has to be known before loading.
+	data, err := os.ReadFile(filepath.Join(newDir, "manifest.json")) //nolint:gosec // path inside our own staging dir
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -417,42 +487,100 @@ func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, er
 	if err != nil {
 		return nil, err
 	}
+	destDir := filepath.Join(m.dir, manifest.Name)
 
-	lock := m.installLock(manifest.Name)
+	ext, pending, err := m.loadExtension(ctx, newDir, destDir)
+	if err != nil {
+		return nil, fmt.Errorf("load extension: %w", err)
+	}
+	return &StagedInstall{m: m, root: root, newDir: newDir, destDir: destDir, ext: ext, pending: pending}, nil
+}
+
+// Commit moves the staged version into place and makes it the loaded one; the
+// previous version's module is closed and its files removed. If the move fails the
+// previous version is left in place and still loaded, and the staged one is
+// discarded.
+func (s *StagedInstall) Commit(ctx context.Context) error {
+	if s.finished {
+		return fmt.Errorf("staged install of %q already finished", s.ext.Name)
+	}
+	s.finished = true
+	m := s.m
+	name := s.ext.Name
+	defer removeStagingDir(s.root)
+
+	lock := m.installLock(name)
 	lock.Lock()
 	defer lock.Unlock()
 
-	// Unload existing if already loaded
-	m.mu.RLock()
-	_, exists := m.extensions[manifest.Name]
-	m.mu.RUnlock()
-	if exists {
-		if err := m.Unload(ctx, manifest.Name); err != nil {
-			m.logger.Warn("unload existing extension", zap.String("name", manifest.Name), zap.Error(err))
+	backup := filepath.Join(s.root, "old")
+	hadOld := true
+	if err := os.Rename(s.destDir, backup); err != nil {
+		if !os.IsNotExist(err) {
+			s.closeStaged(ctx)
+			return fmt.Errorf("move installed version aside: %w", err)
+		}
+		hadOld = false
+	}
+	if err := os.Rename(s.newDir, s.destDir); err != nil {
+		if hadOld {
+			if restoreErr := os.Rename(backup, s.destDir); restoreErr != nil {
+				m.logger.Error("restore installed extension after failed swap",
+					zap.String("name", name), zap.Error(restoreErr))
+			}
+		}
+		s.closeStaged(ctx)
+		return fmt.Errorf("move new version into place: %w", err)
+	}
+
+	m.mu.Lock()
+	old := m.extensions[name]
+	m.extensions[name] = s.ext
+	m.mu.Unlock()
+	if old != nil {
+		if err := old.Plugin.Close(ctx); err != nil {
+			m.logger.Warn("close replaced extension plugin", zap.String("name", name), zap.Error(err))
 		}
 	}
+	s.pending.store()
 
-	// Copy to extensions directory
-	destDir := filepath.Join(m.dir, manifest.Name)
-	if err := os.RemoveAll(destDir); err != nil {
-		return nil, fmt.Errorf("remove existing dir: %w", err)
-	}
-	if err := copyDir(sourceDir, destDir); err != nil {
-		return nil, fmt.Errorf("copy extension: %w", err)
-	}
+	m.logger.Info("installed extension", zap.String("name", name), zap.String("version", s.ext.Manifest.Version))
+	return nil
+}
 
-	// Load the extension. The loaded manifest — not the one parsed off the source
-	// directory above — is what callers get back: only that one carries the
-	// functional face describe() supplied.
-	loaded, err := m.LoadExtension(ctx, destDir)
+// Abort discards the staged version. The installed version is untouched.
+func (s *StagedInstall) Abort(ctx context.Context) {
+	if s.finished {
+		return
+	}
+	s.finished = true
+	s.closeStaged(ctx)
+	removeStagingDir(s.root)
+}
+
+func (s *StagedInstall) closeStaged(ctx context.Context) {
+	if err := s.ext.Plugin.Close(ctx); err != nil {
+		s.m.logger.Warn("close staged extension plugin", zap.String("name", s.ext.Name), zap.Error(err))
+	}
+}
+
+func removeStagingDir(root string) {
+	if err := os.RemoveAll(root); err != nil {
+		logger.Default().Warn("remove extension staging dir", zap.String("dir", root), zap.Error(err))
+	}
+}
+
+// Install installs an extension from a zip file or directory, replacing any
+// installed version only once the new one has loaded.
+func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, error) {
+	staged, err := m.Stage(ctx, sourcePath)
 	if err != nil {
-		if removeErr := os.RemoveAll(destDir); removeErr != nil {
-			logger.Default().Warn("remove extension dir after load failure", zap.String("dir", destDir), zap.Error(removeErr))
-		}
-		return nil, fmt.Errorf("load extension: %w", err)
+		return nil, err
 	}
-
-	return loaded, nil
+	if err := staged.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return staged.Manifest(), nil
 }
 
 // Uninstall stops and removes an extension from disk.

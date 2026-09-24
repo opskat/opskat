@@ -237,3 +237,97 @@ func TestManager(t *testing.T) {
 		})
 	})
 }
+
+// extensionsDirEntries lists what the manager's extensions directory holds besides
+// the compilation cache — staging leftovers would show up here.
+func extensionsDirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read extensions dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Name() == ".cache" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// Installing over an installed extension is how every rebuild during `opsctl ext
+// dev` lands. A new build that does not load must leave the running version exactly
+// where it was: installed, loaded and callable.
+func TestManagerInstall(t *testing.T) {
+	Convey("Manager.Install", t, func() {
+		ctx := context.Background()
+		dir := t.TempDir()
+		logger := zap.NewNop()
+		newHost := func(string) HostProvider {
+			return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
+		}
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
+		mgr := NewManager(dir, newHost, logger)
+		Reset(func() { mgr.Close(ctx) })
+
+		src := t.TempDir()
+		v1 := filepath.Join(src, "v1")
+		writeMinimalExtension(t, v1, "hot")
+		_, err := mgr.Install(ctx, v1)
+		So(err, ShouldBeNil)
+		old := mgr.GetExtension("hot")
+		So(old, ShouldNotBeNil)
+
+		Convey("a new build that fails to load keeps the old version installed and loaded", func() {
+			broken := filepath.Join(src, "broken")
+			writeMinimalExtension(t, broken, "hot")
+			So(os.WriteFile(filepath.Join(broken, "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
+
+			_, err := mgr.Install(ctx, broken)
+			So(err, ShouldNotBeNil)
+
+			So(mgr.GetExtension("hot") == old, ShouldBeTrue)
+			So(old.Plugin.closed.Load(), ShouldBeFalse)
+			onDisk, err := os.ReadFile(filepath.Join(dir, "hot", "main.wasm")) //nolint:gosec // test TempDir
+			So(err, ShouldBeNil)
+			So(onDisk, ShouldResemble, stubWasm)
+			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
+		})
+
+		Convey("a successful upgrade replaces the old version and closes it", func() {
+			v2 := filepath.Join(src, "v2")
+			writeMinimalExtension(t, v2, "hot")
+			manifest, err := os.ReadFile(filepath.Join(v2, "manifest.json")) //nolint:gosec // test TempDir
+			So(err, ShouldBeNil)
+			So(os.WriteFile(filepath.Join(v2, "manifest.json"), //nolint:gosec // test TempDir
+				[]byte(strings.Replace(string(manifest), `"1.0.0"`, `"2.0.0"`, 1)), 0644), ShouldBeNil)
+
+			m, err := mgr.Install(ctx, v2)
+			So(err, ShouldBeNil)
+			So(m.Version, ShouldEqual, "2.0.0")
+
+			cur := mgr.GetExtension("hot")
+			So(cur != old, ShouldBeTrue)
+			So(cur.Manifest.Version, ShouldEqual, "2.0.0")
+			So(cur.Dir, ShouldEqual, filepath.Join(dir, "hot"))
+			So(old.Plugin.closed.Load(), ShouldBeTrue)
+			So(cur.Plugin.closed.Load(), ShouldBeFalse)
+			info, err := LoadManifestInfo(filepath.Join(dir, "hot"))
+			So(err, ShouldBeNil)
+			So(info.Manifest.Version, ShouldEqual, "2.0.0")
+			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
+		})
+
+		Convey("a fresh install that fails to load leaves nothing behind", func() {
+			broken := filepath.Join(src, "fresh")
+			writeMinimalExtension(t, broken, "fresh")
+			So(os.WriteFile(filepath.Join(broken, "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
+
+			_, err := mgr.Install(ctx, broken)
+			So(err, ShouldNotBeNil)
+			So(mgr.GetExtension("fresh"), ShouldBeNil)
+			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
+		})
+	})
+}
