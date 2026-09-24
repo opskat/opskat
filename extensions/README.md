@@ -186,7 +186,8 @@ opsctl ext list                                 # name, version, asset types, to
 `opsctl ext dev` hands the directory to the running desktop app, which installs it
 through the same path the "install from directory" button uses — capability
 enforcement, registries and all. **Re-running the two commands after an edit is the
-reload**: the install unloads the old module first. Point `--data-dir` /
+reload**: the new build is loaded and checked beside the old one and swapped in only
+if it loads — a broken build keeps the previous version running. Point `--data-dir` /
 `OPSKAT_DATA_DIR` at the verification sandbox ([docs/VERIFICATION.md](../docs/VERIFICATION.md)).
 The app asks you to confirm each install in its opsctl approval dialog (source
 directory, extension name/version, declared capabilities, whether it replaces an
