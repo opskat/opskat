@@ -438,12 +438,21 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     });
   }, []);
 
+  const copyKeyName = useCallback(
+    (key: string) => {
+      void navigator.clipboard
+        .writeText(key)
+        .then(() => notifyCopied(t("query.copied")))
+        .catch((err) => toast.error(String(err)));
+    },
+    [t]
+  );
+
   const handleCopyKeyName = useCallback(() => {
     if (!ctxMenu) return;
-    navigator.clipboard.writeText(ctxMenu.key);
-    notifyCopied(t("query.copied"));
+    copyKeyName(ctxMenu.key);
     setCtxMenu(null);
-  }, [ctxMenu, t]);
+  }, [ctxMenu, copyKeyName]);
 
   const handleDeleteFromCtx = useCallback(() => {
     if (!ctxMenu) return;
@@ -558,6 +567,14 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         data-counts-incomplete={treeCountsIncomplete ? "true" : "false"}
         className="flex-1 overflow-y-auto"
         onScroll={handleScroll}
+        onKeyDown={(e) => {
+          const textSelection = window.getSelection();
+          const hasSelectedText = textSelection && !textSelection.isCollapsed && textSelection.toString().length > 0;
+          if (state.selectedKey && !hasSelectedText && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+            e.preventDefault();
+            copyKeyName(state.selectedKey);
+          }
+        }}
       >
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
           {renderRows.map((virtualRow) => {

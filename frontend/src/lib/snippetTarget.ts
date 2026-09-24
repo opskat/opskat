@@ -1,4 +1,5 @@
 import type { Tab } from "@/stores/tabStore";
+import { isSnippetRunnerCompatible } from "@/lib/snippetRunners";
 import type { asset_entity, snippet_entity, snippet_svc } from "../../wailsjs/go/models";
 
 type Asset = asset_entity.Asset;
@@ -13,10 +14,9 @@ type Category = snippet_svc.Category;
  */
 export type SnippetTarget = { kind: "active"; asset: Asset } | { kind: "pick" };
 
-/** Asset type implied by the active tab's tool, or null if it targets no asset. */
-function activeTabAsset(tab: Tab): { assetType: string; assetId: number } | null {
-  if (tab.meta.type === "terminal") return { assetType: "ssh", assetId: tab.meta.assetId };
-  if (tab.meta.type === "query") return { assetType: tab.meta.assetType, assetId: tab.meta.assetId };
+/** Asset ID implied by the active tab's tool, or null if it targets no asset. */
+function activeTabAssetId(tab: Tab): number | null {
+  if (tab.meta.type === "terminal" || tab.meta.type === "query") return tab.meta.assetId;
   return null;
 }
 
@@ -37,11 +37,11 @@ export function resolveSnippetTarget(params: {
   const assetType = categories.find((c) => c.id === snippet.Category)?.assetType ?? "";
   if (!assetType || !activeTab) return { kind: "pick" };
 
-  const active = activeTabAsset(activeTab);
-  if (!active || active.assetType !== assetType) return { kind: "pick" };
+  const activeAssetId = activeTabAssetId(activeTab);
+  if (activeAssetId === null) return { kind: "pick" };
 
-  const asset = assetsById.get(active.assetId);
-  if (!asset) return { kind: "pick" };
+  const asset = assetsById.get(activeAssetId);
+  if (!asset || !isSnippetRunnerCompatible(assetType, asset.Type)) return { kind: "pick" };
 
   return { kind: "active", asset };
 }

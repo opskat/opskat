@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,10 +26,11 @@ func Execute() int {
 		return 1
 	}
 
-	// Parse global flags before the verb
+	// Global flags may precede the verb; ones written after it are hoisted below.
 	globalFlags := flag.NewFlagSet("opsctl", flag.ContinueOnError)
 	dataDir := globalFlags.String("data-dir", "", "Override the application data directory")
 	masterKey := globalFlags.String("master-key", "", "Override the master encryption key (env: OPSKAT_MASTER_KEY)")
+	mfaCodeFlag := globalFlags.String("mfa-code", "", "Answer an SSH MFA one-time-code prompt (env: OPSKAT_MFA_CODE)")
 
 	// Find the first non-flag argument (verb) position
 	verbIdx := 1
@@ -45,8 +47,6 @@ func Execute() int {
 		return 1
 	}
 
-	*dataDir, *masterKey = applyEnvironmentOverrides(*dataDir, *masterKey)
-
 	remaining := os.Args[verbIdx:]
 	if len(remaining) == 0 {
 		printUsage()
@@ -54,7 +54,15 @@ func Execute() int {
 	}
 
 	verb := remaining[0]
-	args := remaining[1:]
+	hoisted, args, err := hoistGlobalFlags(verb, remaining[1:])
+	if err == nil {
+		err = globalFlags.Parse(hoisted)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	*dataDir, *masterKey = applyEnvironmentOverrides(*dataDir, *masterKey)
 
 	if verb == "version" {
 		v := configs.Version
@@ -102,6 +110,7 @@ func Execute() int {
 	sshPool := sshpool.NewPool(&helper.AIPoolDialer{}, 5*time.Minute)
 	defer sshPool.Close()
 	ctx = helper.WithSSHPool(ctx, sshPool)
+	ctx = withMFACode(ctx, resolveMFACode(*mfaCodeFlag))
 
 	// Resolve the active session ID from the data dir (machine-wide single session)
 	resolvedSession := resolveSessionID()
@@ -214,13 +223,30 @@ Approval:
   opsctl exits with code 3: exec/cp/batch print NEEDS AUTHORIZATION plus a
   ready-to-run 'opsctl policy allow' line; create/update/delete print
   NEEDS TTY because no rule can pre-authorize them — run those yourself in
-  a terminal instead of retrying.
+  a terminal instead of retrying. A shell command the policy cannot split
+  into sub-commands also prints NEEDS TTY, with the parse error: fix the
+  command and run it again.
 
-Global Flags:
+Global Flags (before or after the command, never after '--'):
   --data-dir <path>     Override the application data directory
                         (default: platform-specific, e.g. ~/Library/Application Support/opskat)
   --master-key <key>    Override the master encryption key for credential decryption
                         (env: OPSKAT_MASTER_KEY)
+  --mfa-code <code>     Answer an SSH server's one-time-code MFA prompt
+                        (env: OPSKAT_MFA_CODE, preferred: the flag is visible in
+                        shell history and process lists)
+
+SSH MFA:
+  When a new SSH connection hits a keyboard-interactive MFA challenge, opsctl
+  answers it with --mfa-code / OPSKAT_MFA_CODE (a single one-prompt challenge,
+  once per connection); otherwise it prompts in an interactive terminal, or
+  the running desktop app shows the challenge in a dialog. With none of these
+  available it exits with code 3 and prints NEEDS MFA: ask a human for the
+  current code (or compute it with a TOTP tool you were given) and retry with
+  OPSKAT_MFA_CODE. A rejected code fails with an MFA verification error (exit
+  code 1) — do not retry the same code. Each opsctl invocation connects anew,
+  so run several commands on the same MFA asset as one 'opsctl batch', which
+  verifies each asset once.
 
 Run 'opsctl <command> --help' for more information on a specific command.
 
@@ -252,4 +278,57 @@ Examples:
   opsctl ext dev ../extensions/.../dist           Install a local extension build into the running app
   opsctl exec my-bucket -- list_objects --bucket=logs   Run an extension tool on its asset
 `)
+}
+
+// globalFlagNames 是 opsctl 的全局 flag；它们既可写在子命令之前，也可写在子命令之后。
+var globalFlagNames = []string{"data-dir", "master-key", "mfa-code"}
+
+// globalFlagToken 判断 arg 是否是全局 flag（-x / --x / -x=v / --x=v），返回是否自带值。
+func globalFlagToken(arg string) (ok, inline bool) {
+	name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if name == arg {
+		return false, false
+	}
+	name, _, inline = strings.Cut(name, "=")
+	return slices.Contains(globalFlagNames, name), inline
+}
+
+// hoistGlobalFlags 把写在子命令之后的全局 flag 取出来交给全局 FlagSet 解析，其余参数
+// 原样留给子命令。只扫描负载之前的区域："--" 之后永远是负载；exec 无 "--" 时，资产
+// 之后第一个非选项 token 起是远端命令（opsctl exec 86 mysqld --data-dir /x 里的
+// --data-dir 属于 mysqld）。子命令各自解析时会拒绝未知参数，这里不能静默吞掉任何东西。
+func hoistGlobalFlags(verb string, args []string) (globals, rest []string, err error) {
+	assetSeen := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return globals, append(rest, args[i:]...), nil
+		}
+		if ok, inline := globalFlagToken(arg); ok {
+			globals = append(globals, arg)
+			if !inline {
+				if i+1 >= len(args) {
+					return nil, nil, fmt.Errorf("flag needs an argument: %s", arg)
+				}
+				i++
+				globals = append(globals, args[i]) //nolint:gosec // guarded by the i+1 >= len(args) check above
+			}
+			continue
+		}
+		if verb == "exec" {
+			switch {
+			case arg == "--type" && i+1 < len(args):
+				rest = append(rest, arg, args[i+1])
+				i++
+				continue
+			case strings.HasPrefix(arg, "-"):
+			case !assetSeen:
+				assetSeen = true
+			default:
+				return globals, append(rest, args[i:]...), nil
+			}
+		}
+		rest = append(rest, arg)
+	}
+	return globals, rest, nil
 }

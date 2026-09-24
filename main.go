@@ -70,6 +70,11 @@ const (
 	defaultWindowHeight = 900
 	minWindowWidth      = 1000
 	minWindowHeight     = 640
+
+	// 退出确认框的前端回执超时：超时说明 webview 已经弹不出对话框，直接放行退出。
+	quitConfirmAckTimeout = 2 * time.Second
+	// 等待前端把活跃 AI 会话落盘完成的超时。
+	aiFlushAckTimeout = 2 * time.Second
 )
 
 // Lifecycle 是 binder 必须实现的生命周期接口（Wails 不会自动调用 bound struct 的 Startup/Cleanup，
@@ -188,7 +193,6 @@ func main() {
 	})
 	poolDialer := &sshadapt.PoolDialer{}
 	pool := sshpool.NewPool(poolDialer, 5*time.Minute)
-	proxyServer := sshpool.NewServer(pool, authToken)
 
 	skillContent := system.SkillContent{
 		SkillMD:               skillplugin.SkillMD,
@@ -213,7 +217,7 @@ func main() {
 	localB := local.New(appCtx, sys, localMgr)
 	vncB := vnc.New(appCtx, vncMgr)
 	aiB := ai.New(appCtx, sys, pool)
-	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
+	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
 	externalEditEmitter := external_edit.NewEventEmitter()
@@ -261,46 +265,59 @@ func main() {
 			// AI provider 之后才能注入 extension service：extension 异步 init 完成后会调用回调
 			initExtensionSystem(wctx, appCtx, dataDir, pool, extB, aiB, opsctlB)
 		},
-		// OnBeforeClose 在窗口真正关闭前触发：emit ai:flush-all 让前端落盘所有活跃会话。
+		// OnBeforeClose 在窗口真正关闭前触发：拦下会丢进度的运行中任务，
+		// 并在放行前 emit ai:flush-all 让前端落盘所有活跃会话。
 		OnBeforeClose: func(wctx context.Context) bool {
 			saveWindowSize(wctx)
-			if forceQuit.Load() {
-				return false
-			}
-			var sessions []quitapp.Session
-			for _, item := range sshMgr.ActiveSessionDetails() {
+			sshSessions := sshMgr.ActiveSessionDetails()
+			localSessions := localMgr.ActiveSessions()
+			serialSessions := serialMgr.ActiveSessions()
+			rdpSessions := rdp.ActiveSessions(rdpB)
+			vncSessions := vncMgr.ActiveSessions()
+			sessions := make([]quitapp.Session, 0, len(sshSessions)+len(localSessions)+len(serialSessions)+len(rdpSessions)+len(vncSessions))
+			for _, item := range sshSessions {
 				sessions = append(sessions, quitapp.Session{Kind: "terminal", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
 			}
-			for _, item := range localMgr.ActiveSessions() {
+			for _, item := range localSessions {
 				sessions = append(sessions, quitapp.Session{Kind: "terminal", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
 			}
-			for _, item := range serialMgr.ActiveSessions() {
+			for _, item := range serialSessions {
 				sessions = append(sessions, quitapp.Session{Kind: "terminal", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
 			}
-			for _, item := range rdp.ActiveSessions(rdpB) {
+			for _, item := range rdpSessions {
 				sessions = append(sessions, quitapp.Session{Kind: "rdp", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
 			}
-			for _, item := range vncMgr.ActiveSessions() {
+			for _, item := range vncSessions {
 				sessions = append(sessions, quitapp.Session{Kind: "vnc", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
 			}
 			activities := quitapp.BuildSessionActivities(wctx, sessions, asset_repo.Asset().Find)
 			for _, convID := range ai.ActiveTasks(aiB) {
 				activities = append(activities, quitapp.Activity{Kind: "ai", Category: "running", RefID: convID})
 			}
-			for _, taskKind := range opsctl.ActiveTasks(opsctlB) {
-				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running", Detail: taskKind})
+			for range opsctl.ActiveApprovals(opsctlB) {
+				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running"})
 			}
-			if len(activities) > 0 {
-				wailsRuntime.EventsEmit(wctx, "app:quit-confirm", map[string]any{"activities": activities})
-				return true
-			}
-			aiB.DrainAIFlushAck()
-			wailsRuntime.EventsEmit(wctx, "ai:flush-all")
-			select {
-			case <-aiB.WaitAIFlushAck():
-			case <-time.After(2 * time.Second):
-			}
-			return false
+			return quitapp.OnBeforeClose(forceQuit.Load(), activities, quitapp.Prompt{
+				Show: func(activities []quitapp.Activity) bool {
+					sys.DrainQuitConfirmShown()
+					wailsRuntime.EventsEmit(wctx, "app:quit-confirm", map[string]any{"activities": activities})
+					select {
+					case <-sys.WaitQuitConfirmShown():
+						return true
+					case <-time.After(quitConfirmAckTimeout):
+						zap.L().Warn("frontend did not acknowledge quit confirm dialog, quitting anyway")
+						return false
+					}
+				},
+				FlushAI: func() {
+					aiB.DrainAIFlushAck()
+					wailsRuntime.EventsEmit(wctx, "ai:flush-all")
+					select {
+					case <-aiB.WaitAIFlushAck():
+					case <-time.After(aiFlushAckTimeout):
+					}
+				},
+			})
 		},
 		OnShutdown: func(_ context.Context) {
 			cancelApp() // 解除所有 wait loop

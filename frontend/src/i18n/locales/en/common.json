@@ -77,17 +77,17 @@
     "deleteConfirmDesc": "Are you sure you want to delete forward config \"{{name}}\"? This cannot be undone."
   },
   "appQuit": {
-    "activityTitle": "Active tasks and sessions remain",
-    "activitySummary": "{{running}} task(s) running and {{connections}} session(s) connected",
+    "activityTitle": "Tasks are still running",
+    "activitySummary": "{{running}} task(s) running, plus {{connections}} connected session(s)",
+    "activitySummaryRunningOnly": "Quitting now interrupts {{running}} running task(s)",
     "runningGroup": "Running · cannot continue after quitting",
     "connectionGroup": "Connected · will be disconnected on quit",
     "runningStatus": "Running",
     "connectedStatus": "Connected",
-    "quitActivities": "Quit and interrupt {{count}} activities",
+    "quitActivities": "Quit and interrupt {{count}} task(s)",
     "aiTask": "AI task {{number}}",
     "opsctlTask": "opsctl task {{number}}",
     "opsctlApproval": "Waiting for desktop approval",
-    "opsctlOperation": "Running a remote command or file transfer",
     "conversationDetail": "Conversation {{id}}",
     "kind": {
       "ai": "AI",
@@ -1001,6 +1001,16 @@
     "openai": "OpenAI Compatible",
     "anthropic": "Anthropic",
     "defaultApiBase": "Default API endpoint will be used",
+    "extraHeaders": "Custom request headers",
+    "optional": "Optional",
+    "extraHeadersEmpty": "No custom headers yet. Some gateways require extra headers and return 400 without them.",
+    "extraHeadersHint": "A value may contain {{session}}, which expands to a stable identifier for the current conversation (same every time within one conversation, different across conversations). Some gateways — OpenCode, for one — require a session header such as x-opencode-session and return 400 without it.",
+    "extraHeaderName": "Header name",
+    "extraHeaderValue": "Header value",
+    "extraHeaderAdd": "Add header",
+    "extraHeaderRemove": "Remove this row",
+    "extraHeaderDuplicate": "Duplicate header name — merge them into one row.",
+    "extraHeaderReserved": "{{name}} is set by OpsKat and cannot be overridden here.",
     "noProviders": "No providers configured. Add one to get started.",
     "maxOutputTokens": "Max Output Tokens",
     "maxOutputTokensHint": "Maximum tokens for model response. 0 = use model default",
@@ -1313,7 +1323,7 @@
     "terminal.paste": "Terminal Paste",
     "terminal.selectAll": "Terminal Select All",
     "terminal.find": "Terminal Search",
-    "asset.copyRef": "Copy Asset Reference",
+    "asset.copyRef": "Copy Asset Reference (asset sidebar focused)",
     "page.home": "Switch to Home",
     "page.settings": "Switch to Settings",
     "page.sshkeys": "Switch to SSH Keys",
@@ -1510,7 +1520,7 @@
       "recreateUnavailableActiveDraft": "A newer active draft already exists. Continue from that draft instead."
     },
     "actions": {
-      "open": "Edit Externally",
+      "open": "Open with external editor",
       "sync": "Save to Remote",
       "refresh": "Refresh Remote State",
       "compare": "Compare",
@@ -1526,6 +1536,43 @@
       "saveMerge": "Save Merged Draft",
       "hideRecord": "Close Record (Keep Local Draft)",
       "deleteLocal": "Delete Record and Local Draft"
+    },
+    "builtIn": {
+      "blockedTitle": "Can't open in the built-in editor",
+      "oversizeReason": "This file is larger than the external-edit read limit, so it can't be read as text.",
+      "undecodableReason": "This file can't be decoded as text with the detected encoding.",
+      "openFailedReason": "Opening failed. Try again later or use another way to open it.",
+      "goToSettings": "Open settings",
+      "download": "Download",
+      "openExternal": "Open with external editor",
+      "noExternalEditor": "No external editor is available. Add one in settings first.",
+      "loadFailed": "Failed to read the file contents",
+      "viewDiff": "View changes",
+      "failedTitle": "The remote operation didn't go through",
+      "handoffTitle": "Deal with the unsaved changes first",
+      "handoffDesc": "This draft stays here — it doesn't travel with the file. Hand it over as is and the two editors end up with different content.",
+      "handoffSave": "Save, then hand over",
+      "handoffDiscard": "Discard the changes and hand over",
+      "openExternalNoSession": "This edit session can't be found any more. Open the remote file again.",
+      "status": {
+        "position": "Ln {{line}}, Col {{column}}",
+        "indentTab": "Tab",
+        "indentSpaces": "{{size}} spaces",
+        "plainText": "Plain text"
+      },
+      "unsaved": "Unsaved",
+      "savingRemote": "Writing back to the remote…",
+      "savedAt": "Written back at {{time}}",
+      "localChangesKept": "Your local changes are kept.",
+      "unconfirmedTitle": "Remote state not confirmed",
+      "unconfirmedWaiting": "No terminal session is connected to this asset yet. The remote will be re-read as soon as one is.",
+      "unconfirmedChecking": "Re-reading the remote…",
+      "overwriteConfirmTitle": "Overwrite the remote file?",
+      "overwriteConfirmDesc": "The remote file changed while you were editing. Overwriting discards the newer remote version and cannot be undone.",
+      "closeUnsavedTitle": "Unsaved changes",
+      "closeUnsavedDesc": "This file has changes that were never written back. If you close without saving, the local copy is still kept under the workspace retention policy and can be resumed from the external edit sessions.",
+      "saveAndClose": "Save and close",
+      "discardAndClose": "Don't save"
     },
     "pending": {
       "entry": "External Edit Pending",
@@ -1599,6 +1646,8 @@
       "title": "External Editors",
       "desc": "Configure the default editor, local workspace, and custom editor entries.",
       "defaultEditor": "Default Editor",
+      "builtInEditorName": "Built-in Editor",
+      "builtInEditorHint": "The built-in editor is always available and can be set as the default. It writes back to the remote only when you save explicitly with ⌘S / Ctrl+S, while external editors write back as soon as the local copy is saved to disk.",
       "workspaceRoot": "Workspace Root",
       "cleanupRetentionDays": "Cleanup Retention Days",
       "cleanupRetentionDaysHint": "Defaults to 7 days, range 1-365. Used to clean up non-active drafts and backup history copies.",
@@ -1718,6 +1767,10 @@
     "debugModeOff": "Debug logging disabled",
     "openLogsDir": "Open Logs Folder"
   },
+  "opsctlMfa": {
+    "title": "SSH verification required",
+    "description": "opsctl is connecting to this asset and the server asks for multi-factor authentication (MFA). The command continues once the server accepts your answer."
+  },
   "opsctlApproval": {
     "title": "CLI Operation Approval",
     "description": "opsctl is requesting approval for the following operation:",
@@ -1823,6 +1876,13 @@
     "empty": "Empty directory",
     "loadError": "Failed to load",
     "retry": "Retry",
+    "tree": {
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "loading": "Loading…",
+      "dropHint": "Move {{count}} item(s) into {{target}}",
+      "chainElided": "{{count}} level(s) hidden — click to open {{target}}"
+    },
     "refresh": "Refresh",
     "newFolder": "New Folder",
     "openFolder": "Open",
@@ -2867,7 +2927,8 @@
       "type": "Type",
       "etag": "ETag",
       "storageClass": "Storage class",
-      "lastModified": "Last modified"
+      "lastModified": "Last modified",
+      "copyKeyCopied": "Object key copied"
     },
     "share": {
       "title": "Generate presigned URL",
@@ -2889,7 +2950,8 @@
       "warning": "This link expires in {{duration}} · anyone with it can access the object",
       "generateFailed": "Failed to generate URL",
       "copied": "Link copied"
-    }
+    },
+    "keyCopied": "Object key copied"
   },
   "etcd": {
     "form": {

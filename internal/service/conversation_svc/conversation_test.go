@@ -339,3 +339,56 @@ func TestConversationSvc_LoadMessages(t *testing.T) {
 		})
 	})
 }
+
+func TestConversationSvc_ExternalSessionID(t *testing.T) {
+	convey.Convey("外部会话标识", t, func() {
+		convey.Convey("创建会话时生成，且两次创建互不相同", func() {
+			ctx, mockRepo := setupTest(t)
+			mockRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+
+			first := &conversation_entity.Conversation{Title: "一", ProviderType: "openai"}
+			second := &conversation_entity.Conversation{Title: "二", ProviderType: "openai"}
+			assert.NoError(t, Conversation().Create(ctx, first))
+			assert.NoError(t, Conversation().Create(ctx, second))
+
+			assert.NotEmpty(t, first.ExternalSessionID)
+			assert.NotEmpty(t, second.ExternalSessionID)
+			assert.NotEqual(t, first.ExternalSessionID, second.ExternalSessionID)
+		})
+
+		convey.Convey("创建时调用方已给定的标识不被覆盖", func() {
+			ctx, mockRepo := setupTest(t)
+			mockRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+			conv := &conversation_entity.Conversation{Title: "一", ExternalSessionID: "preset"}
+			assert.NoError(t, Conversation().Create(ctx, conv))
+			assert.Equal(t, "preset", conv.ExternalSessionID)
+		})
+
+		convey.Convey("迁移前的老会话首次取用时补生成并落库", func() {
+			ctx, mockRepo := setupTest(t)
+			conv := &conversation_entity.Conversation{ID: 7, Title: "老会话"}
+			var persisted string
+			mockRepo.EXPECT().Update(gomock.Any(), conv).DoAndReturn(
+				func(_ context.Context, c *conversation_entity.Conversation) error {
+					persisted = c.ExternalSessionID
+					return nil
+				})
+
+			got, err := Conversation().EnsureExternalSessionID(ctx, conv)
+			assert.NoError(t, err)
+			assert.NotEmpty(t, got)
+			assert.Equal(t, got, conv.ExternalSessionID)
+			assert.Equal(t, got, persisted, "补生成的标识必须落库，否则下次重启又换一个")
+		})
+
+		convey.Convey("已有标识的会话不重新生成也不写库", func() {
+			ctx, _ := setupTest(t)
+			conv := &conversation_entity.Conversation{ID: 7, ExternalSessionID: "stable-1"}
+
+			got, err := Conversation().EnsureExternalSessionID(ctx, conv)
+			assert.NoError(t, err)
+			assert.Equal(t, "stable-1", got)
+		})
+	})
+}

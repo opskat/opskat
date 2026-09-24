@@ -77,17 +77,17 @@
     "deleteConfirmDesc": "确定要删除转发配置 \"{{name}}\" 吗？此操作不可撤销。"
   },
   "appQuit": {
-    "activityTitle": "仍有活动任务和会话",
-    "activitySummary": "{{running}} 个任务正在执行，{{connections}} 个会话保持连接",
+    "activityTitle": "仍有任务正在执行",
+    "activitySummary": "{{running}} 个任务正在执行，另有 {{connections}} 个会话保持连接",
+    "activitySummaryRunningOnly": "{{running}} 个任务正在执行，退出会中断它们",
     "runningGroup": "正在执行 · 退出后无法继续",
     "connectionGroup": "保持连接 · 退出后将断开",
     "runningStatus": "正在执行",
     "connectedStatus": "已连接",
-    "quitActivities": "退出并中断 {{count}} 项活动",
+    "quitActivities": "退出并中断 {{count}} 个任务",
     "aiTask": "AI 任务 {{number}}",
     "opsctlTask": "opsctl 任务 {{number}}",
     "opsctlApproval": "正在等待桌面端审批",
-    "opsctlOperation": "正在执行远程命令或文件传输",
     "conversationDetail": "会话 {{id}}",
     "kind": {
       "ai": "AI",
@@ -1001,6 +1001,16 @@
     "openai": "OpenAI 兼容",
     "anthropic": "Anthropic",
     "defaultApiBase": "将使用默认 API 地址",
+    "extraHeaders": "自定义请求头",
+    "optional": "选填",
+    "extraHeadersEmpty": "还没有自定义请求头。某些网关要求请求带上额外的头，否则会返回 400。",
+    "extraHeadersHint": "值里可以写 {{session}}，发送时展开为当前会话的稳定标识（同一个会话每次都相同，换会话则不同）。部分网关（如 OpenCode）要求 x-opencode-session 这样的会话头，缺了会返回 400。",
+    "extraHeaderName": "请求头名称",
+    "extraHeaderValue": "请求头值",
+    "extraHeaderAdd": "添加请求头",
+    "extraHeaderRemove": "删除这一行",
+    "extraHeaderDuplicate": "这个请求头名称重复了，请合并成一条。",
+    "extraHeaderReserved": "{{name}} 由 OpsKat 设置，不能在这里覆盖。",
     "noProviders": "尚未配置提供商，请添加一个开始使用。",
     "maxOutputTokens": "最大输出 Token 数",
     "maxOutputTokensHint": "模型回复的最大 Token 数，0 表示使用模型默认值",
@@ -1313,7 +1323,7 @@
     "terminal.paste": "终端粘贴",
     "terminal.selectAll": "终端全选",
     "terminal.find": "终端搜索",
-    "asset.copyRef": "复制资产引用",
+    "asset.copyRef": "复制资产引用(资产侧栏聚焦时)",
     "page.home": "切换到首页",
     "page.settings": "切换到设置",
     "page.sshkeys": "切换到 SSH 密钥",
@@ -1510,7 +1520,7 @@
       "recreateUnavailableActiveDraft": "当前已经有更新的活动稿，请改在该稿上继续处理。"
     },
     "actions": {
-      "open": "外部编辑",
+      "open": "用外部编辑器打开",
       "sync": "保存到远程",
       "refresh": "刷新远程状态",
       "compare": "比对差异",
@@ -1526,6 +1536,43 @@
       "saveMerge": "保存合并稿",
       "hideRecord": "关闭记录（保留本地副本）",
       "deleteLocal": "删除记录并删除本地副本"
+    },
+    "builtIn": {
+      "blockedTitle": "无法用内置编辑器打开",
+      "oversizeReason": "文件超过外部编辑的最大读取上限，无法读取为文本。",
+      "undecodableReason": "文件内容无法按已探测到的编码解码为文本。",
+      "openFailedReason": "打开失败，请稍后重试或换一种打开方式。",
+      "goToSettings": "前往设置",
+      "download": "下载到本地",
+      "openExternal": "用外部编辑器打开",
+      "noExternalEditor": "没有可用的外部编辑器，请先在设置里添加。",
+      "loadFailed": "读取文件内容失败",
+      "viewDiff": "查看差异",
+      "failedTitle": "远端操作未完成",
+      "handoffTitle": "先处理未保存的改动",
+      "handoffDesc": "草稿留在这里，不会跟着文件去外部编辑器；就这样交出去，两边会各自持有一份不同的内容。",
+      "handoffSave": "保存后交出",
+      "handoffDiscard": "放弃改动并交出",
+      "openExternalNoSession": "找不到这次编辑的会话记录，请重新打开该远程文件。",
+      "status": {
+        "position": "行 {{line}}, 列 {{column}}",
+        "indentTab": "制表符",
+        "indentSpaces": "{{size}} 空格",
+        "plainText": "纯文本"
+      },
+      "unsaved": "未保存",
+      "savingRemote": "正在写回远端…",
+      "savedAt": "已于 {{time}} 写回远端",
+      "localChangesKept": "本地改动已保留。",
+      "unconfirmedTitle": "远端状态未确认",
+      "unconfirmedWaiting": "该资产还没有已连接的终端会话；连上之后会自动重新读取远端。",
+      "unconfirmedChecking": "正在重新读取远端…",
+      "overwriteConfirmTitle": "用本地内容覆盖远程文件？",
+      "overwriteConfirmDesc": "远程文件在本次编辑期间已经变更。覆盖会丢弃远程上的新版本，且无法撤销。",
+      "closeUnsavedTitle": "有未保存的改动",
+      "closeUnsavedDesc": "这个文件还有没有写回远端的改动。选择「不保存」时本地副本仍会按工作区保留策略留存，可从外部编辑会话列表恢复。",
+      "saveAndClose": "保存并关闭",
+      "discardAndClose": "不保存"
     },
     "pending": {
       "entry": "外部编辑待处理",
@@ -1599,6 +1646,8 @@
       "title": "外部编辑器",
       "desc": "配置默认外部编辑器、本地工作区和自定义编辑器。",
       "defaultEditor": "默认外部编辑器",
+      "builtInEditorName": "内置编辑器",
+      "builtInEditorHint": "内置编辑器始终可用，可设为默认；它只在你按 ⌘S / Ctrl+S 显式保存时写回远端，外部编辑器则是本地副本落盘即写回。",
       "workspaceRoot": "临时工作区",
       "cleanupRetentionDays": "副本清理保留天数",
       "cleanupRetentionDaysHint": "默认 7 天，允许 1-365 天；用于清理非活动副本和 backup 历史副本。",
@@ -1718,6 +1767,10 @@
     "debugModeOff": "Debug 日志已关闭",
     "openLogsDir": "打开日志目录"
   },
+  "opsctlMfa": {
+    "title": "SSH 二次验证",
+    "description": "opsctl 正在连接此资产，服务器要求二次验证（MFA）。验证通过后命令会继续执行。"
+  },
   "opsctlApproval": {
     "title": "CLI 操作审批",
     "description": "opsctl 正在请求批准以下操作：",
@@ -1823,6 +1876,13 @@
     "empty": "空目录",
     "loadError": "加载失败",
     "retry": "重试",
+    "tree": {
+      "expand": "展开",
+      "collapse": "收起",
+      "loading": "加载中…",
+      "dropHint": "移动 {{count}} 项到 {{target}}",
+      "chainElided": "已省略 {{count}} 级,点击进入 {{target}}"
+    },
     "refresh": "刷新",
     "newFolder": "新建文件夹",
     "openFolder": "打开",
@@ -2867,7 +2927,8 @@
       "type": "类型",
       "etag": "ETag",
       "storageClass": "存储类型",
-      "lastModified": "最后修改"
+      "lastModified": "最后修改",
+      "copyKeyCopied": "已复制键名"
     },
     "share": {
       "title": "生成预签名 URL",
@@ -2889,7 +2950,8 @@
       "warning": "链接将在 {{duration}}后失效 · 任何持有此链接的人都可访问该对象",
       "generateFailed": "生成 URL 失败",
       "copied": "链接已复制"
-    }
+    },
+    "keyCopied": "已复制键名"
   },
   "etcd": {
     "form": {

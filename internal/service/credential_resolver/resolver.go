@@ -428,7 +428,8 @@ func (r *Resolver) ResolveSSHConnectConfig(ctx context.Context, assetID int64) (
 
 // DialAssetSSH 一站式解析资产并建立 SSH 连接，自动处理代理密码解密、跳板机链。
 // 除返回的 *ssh.Client 外，调用方还须负责关闭返回的所有额外 closer（跳板机链的
-// 中间连接等）；否则会泄漏连接。失败时返回的 closer 列表为 nil。
+// 中间连接等）；否则会泄漏连接。失败时返回的 closer 列表为 nil。ctx 经 WithMFA 携带
+// 应答方时，keyboard-interactive / Agent MFA 挑战交给它；否则保持非交互。
 func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client, []io.Closer, error) {
 	sshCfg, password, key, passphrase, jumpHosts, proxyChain, err := r.ResolveSSHConnectConfig(ctx, assetID)
 	if err != nil {
@@ -437,6 +438,13 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 	agentCfg, err := r.ResolveAgentAuthConfig(sshCfg)
 	if err != nil {
 		return nil, nil, err
+	}
+	var mfa sshagent.InteractiveCaller
+	if newCaller, ok := ctx.Value(mfaKeyType{}).(func(assetID int64) sshagent.InteractiveCaller); ok {
+		mfa = newCaller(assetID)
+		if agentCfg != nil {
+			agentCfg.MFA = mfa
+		}
 	}
 	cfg := ssh_svc.ConnectConfig{
 		Host:                     sshCfg.Host,
@@ -450,6 +458,7 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		AssetID:                  assetID,
 		Ctx:                      ctx,
 		Agent:                    agentCfg,
+		MFA:                      mfa,
 		Proxy:                    r.DecryptProxyPassword(sshCfg.Proxy),
 		JumpHosts:                jumpHosts,
 		ProxyChain:               proxyChain,
@@ -457,4 +466,12 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
 	}
 	return ssh_svc.NewManager().Dial(cfg)
+}
+
+type mfaKeyType struct{}
+
+// WithMFA 让经 ctx 发起的 DialAssetSSH 把 keyboard-interactive 挑战交给应答方（opsctl）。
+// newCaller 每次新建连接调用一次（传入目标资产），使应答方可以持有「本连接内」的状态。
+func WithMFA(ctx context.Context, newCaller func(assetID int64) sshagent.InteractiveCaller) context.Context {
+	return context.WithValue(ctx, mfaKeyType{}, newCaller)
 }

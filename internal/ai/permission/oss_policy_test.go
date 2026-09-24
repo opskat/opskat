@@ -598,18 +598,18 @@ func TestEscapeGlobMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow 锁住 checker.go 那条兜底的去向：
+// TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow 锁住"不落常驻授权"的两条去向：
 // 归一化把全部 pattern 都丢掉时（D20 的目录标记），不该退回 []string{原命令}。
 //
 // 那条串（`object delete mybucket/logs/`，一条 DSL）当规则读时 action 段没有点，
 // policy.MatchOSSRule 对任何策略串都失配——落库只是在授权列表 UI 里显示一条用户其实
 // 没拿到的授权，外加一条同样不真实的 grant_submit 审计行。
 //
-// 但"什么都不落"不能等于"什么都不说"：命令本身仍然放行执行，用户点的是"始终允许"，
-// 得不到任何解释就会以为拿到了一条常驻授权，下次同样命令又弹一次框，audit_logs 里也找
-// 不到原因（wrap-up finding 6）。因此这里不再断言零审计行，而是断言恰好落一条独立
-// ToolName 的 grant_discarded 审计行——不是 grant_submit，避免被 AuditLogPage 的
-// "会话已允许模式" 聚合误读成一条真实 pattern。
+// 系统主体本身归一化为空时，ApprovalKindFor 只给一次性审批：根本没有"始终允许"可点，
+// 也就没有要解释的丢弃。用户把一条可落库的主体编辑成用不了的 pattern 时仍会走到丢弃分支：
+// "什么都不落"不能等于"什么都不说"——用户点的是"始终允许"，得不到任何解释就会以为拿到了
+// 一条常驻授权（wrap-up finding 6），所以断言恰好落一条独立 ToolName 的 grant_discarded
+// 审计行——不是 grant_submit，避免被 AuditLogPage 的"会话已允许模式"聚合误读成一条真实 pattern。
 func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 	withOSSPolicyStrings(t)
 	stubAudit := withStubAudit(t)
@@ -627,13 +627,26 @@ func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
 	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
-		return ApprovalResponse{Decision: "allowAll"}
+	var kinds []string
+	checker := NewCommandPolicyChecker(func(_ context.Context, kind string, items []ApprovalItem) ApprovalResponse {
+		kinds = append(kinds, kind)
+		if kind != ApprovalKindSingle {
+			return ApprovalResponse{Decision: "allow"}
+		}
+		edited := items[0]
+		edited.Command = "object delete mybucket/logs/"
+		return ApprovalResponse{Decision: "allowAll", EditedItems: []ApprovalItem{edited}}
 	})
-	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-dead"), 1,
-		asset_entity.AssetTypeOSS, "object delete mybucket/logs/")
+	sessCtx := aictx.WithSessionID(ctx, "sess-dead")
 
+	got := checker.HandleConfirm(sessCtx, 1, asset_entity.AssetTypeOSS, "object delete mybucket/logs/")
 	assert.Equal(t, aictx.Allow, got.Decision, "这一次操作本身仍然被批准，只是不产生常驻授权")
+	assert.Equal(t, []string{ApprovalKindOnce}, kinds, "归一化不出 pattern 的系统主体不给始终允许")
+	assert.Empty(t, stubAudit.entries, "一次性审批没有丢弃可解释")
+
+	got = checker.HandleConfirm(sessCtx, 1, asset_entity.AssetTypeOSS, "object delete mybucket/tmp/old.log")
+	assert.Equal(t, aictx.Allow, got.Decision)
+	assert.Equal(t, []string{ApprovalKindOnce, ApprovalKindSingle}, kinds)
 	assert.Empty(t, stubGrant.items["sess-dead"],
 		"落库的每一条都该是能匹配上东西的授权；这一条只会在授权列表里骗人")
 	// grant_submit 审计行与 grant 行是同一件事的两半：没有落成常驻授权，就没有
@@ -649,7 +662,7 @@ func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 		assert.Equal(t, "grant_discarded", discarded.ToolName)
 		assert.Equal(t, int64(1), discarded.AssetID)
 		assert.Equal(t, "s3-prod", discarded.AssetName)
-		assert.Equal(t, "object delete mybucket/logs/", discarded.Command)
+		assert.Equal(t, "object delete mybucket/tmp/old.log", discarded.Command)
 		assert.Equal(t, "sess-dead", discarded.SessionID)
 	}
 }
@@ -710,7 +723,12 @@ func TestHandleConfirm_OSSTransferSubjectIsNotAUserPattern(t *testing.T) {
 	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
 	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
+	var kinds []string
+	checker := NewCommandPolicyChecker(func(_ context.Context, kind string, _ []ApprovalItem) ApprovalResponse {
+		kinds = append(kinds, kind)
+		if kind != ApprovalKindSingle {
+			return ApprovalResponse{Decision: "allow"}
+		}
 		return ApprovalResponse{Decision: "allowAll"}
 	})
 
@@ -718,6 +736,7 @@ func TestHandleConfirm_OSSTransferSubjectIsNotAUserPattern(t *testing.T) {
 	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-bucket"), 1,
 		asset_entity.AssetTypeOSS, "object.write mybucket/")
 	assert.Equal(t, aictx.Allow, got.Decision)
+	assert.Equal(t, []string{ApprovalKindOnce}, kinds, "归一化不出 pattern 的主体连始终允许的入口都不给")
 	assert.Empty(t, stubGrant.items["sess-bucket"], "一条整桶可写的常驻授权，绝不能由一次畸形目的地换来")
 
 	// `cp s3-prod:/mybucket/secrets* ./` —— key 里的 `*` 是字面量，落库必须转义。

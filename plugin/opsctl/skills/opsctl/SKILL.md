@@ -9,8 +9,11 @@ Standalone CLI for asset management and remote operations without the GUI. All m
 
 ## Global Flags
 
+Global flags go before or after the subcommand (`opsctl --mfa-code 123456 exec web -- uptime` and `opsctl exec web --mfa-code 123456 -- uptime` are equivalent), but never after `--` — that part is the remote command.
+
 - `--data-dir <path>` — Override app data directory
 - `--master-key <key>` — Master encryption key (env: `OPSKAT_MASTER_KEY`)
+- `--mfa-code <code>` — One-time code for an SSH server's MFA prompt (env: `OPSKAT_MFA_CODE`, preferred — the flag shows up in shell history and process lists). Answers a single one-prompt challenge, once per new connection
 
 ## Asset Resolution
 
@@ -93,8 +96,8 @@ Most write operations require approval. Check order: permanent policy rules (the
 
 - **Terminal prompt**: single-kind operations offer `[a]` allow once / `[p]` allow always (writes a permanent rule through the same path as `opsctl policy allow`) / `[d]` deny; every other kind offers allow once / deny. Empty input, EOF, and Ctrl-C count as deny.
 - **Desktop dialog**: concurrent requests queue into one dialog with "Approve All" / "Deny All"; "Remember" saves a 24-hour grant.
-- **Offline refusal**: `exec` / `cp` / `batch` carry a subject a rule could match, so they stop with `NEEDS AUTHORIZATION` plus a paste-ready `opsctl policy allow` line. `create` / `update` / `delete` carry no subject — no rule can ever pre-authorize them — so they stop with `NEEDS TTY`; only a human can perform them (delete additionally has no "allow always").
-- **Pre-approve patterns**: ask the user to run `opsctl policy allow <targets> -- <patterns>` in their own terminal — you cannot run it yourself (see [references/commands.md](references/commands.md)).
+- **Offline refusal**: `exec` / `cp` / `batch` carry a subject a rule could match, so they stop with `NEEDS AUTHORIZATION` plus a paste-ready `opsctl policy allow` line. `create` / `update` / `delete` carry no subject — no rule can ever pre-authorize them — so they stop with `NEEDS TTY`; only a human can perform them (delete additionally has no "allow always"). A shell command the policy cannot split into sub-commands (a syntax error such as an unclosed quote, or input with no command in it) matches no rule either: it stops with `NEEDS TTY` plus a `Reason:` line naming the parse error, and its approval never offers "allow always".
+- **Pre-approve patterns**: ask the user to run `opsctl policy allow <targets> -- <patterns>` in their own terminal — you cannot run it yourself (see [references/commands.md](references/commands.md)). A standalone `*` rule is full access: it also allows shell commands the policy cannot parse, but only while no deny rule is in effect on the asset.
 
 ## Sessions
 
@@ -156,7 +159,8 @@ For full command reference with flags and examples, see [references/commands.md]
 
 - **User rejection** (output contains "USER DENIED" or "denied: user denied"): Stop the entire task immediately. Report the denied command and wait for user instructions. Do NOT retry, work around, or continue with remaining steps.
 - **NEEDS AUTHORIZATION** (first stderr line, exit code 3): No interactive terminal and the desktop app is unreachable, but a rule could authorize the subject. Stop, relay the `opsctl policy allow ...` line from the output verbatim to the user, and after the user has authorized, retry the original command. Do NOT run that authorization line yourself — it needs an interactive terminal and would itself fail with `NEEDS TTY`.
-- **NEEDS TTY** (first stderr line, exit code 3): Only a human in a terminal can perform this (rule-writing commands, or `create`/`update`/`delete`, which carry no subject any rule could match). Stop and relay the original command to the user to run themselves. Do NOT retry — once the user runs it, the operation is already done; retrying performs it a second time (a retried `create` makes a duplicate asset). Confirm the outcome with a read-only command such as `get asset`.
+- **NEEDS MFA** (first stderr line, exit code 3): The SSH server requires multi-factor authentication and opsctl had no way to answer it (no code given, no interactive terminal, desktop app not running — when it runs, the user answers the challenge in its dialog and the command simply continues; if they cancel there, the command fails with an ordinary error: stop and ask). Nothing ran on the server. Ask the user for the current one-time code (or get it from a TOTP tool you have been given), then retry the same command with `OPSKAT_MFA_CODE=<code>`. Never guess a code. If the retry fails with an MFA verification error, do not retry with the same code — ask for a fresh one. Every separate opsctl invocation opens its own connection and needs its own code (many servers reject a code that was already used), so run several commands on the same MFA asset as one `opsctl batch`: a batch verifies each asset once and runs all its commands over that connection.
+- **NEEDS TTY** (first stderr line, exit code 3): Only a human in a terminal can perform this (rule-writing commands, or `create`/`update`/`delete`, which carry no subject any rule could match). Stop and relay the original command to the user to run themselves. Do NOT retry — once the user runs it, the operation is already done; retrying performs it a second time (a retried `create` makes a duplicate asset). Confirm the outcome with a read-only command such as `get asset`. Exception: when the body has a `Reason:` line with a shell parse error, the command matched no rule and never ran — fix its syntax and run the corrected command yourself (a corrected command is a new command, not a retry); if you cannot tell how to fix it, relay it to the user.
 - **SSH connection failure**: Report the error, check asset config with `get asset`. Do not retry blindly — ask user if host/credentials changed.
 - **Partial batch failure**: `batch` returns per-command results. Report failed commands with their errors, summarize successes. Ask user how to proceed with failures.
 - **Command not found on remote**: Suggest installing the missing tool or an alternative command. Do not assume package managers.

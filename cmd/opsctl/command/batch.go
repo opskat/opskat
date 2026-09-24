@@ -21,7 +21,6 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/sshpool"
 	"go.uber.org/zap"
 
 	"golang.org/x/crypto/ssh"
@@ -48,6 +47,8 @@ type batchResult struct {
 	Stdout    string `json:"stdout"`
 	Stderr    string `json:"stderr,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// mfaErr 是该条目因「需要 MFA 却没有应答来源」而未执行时的原始错误，决定退出码 3。
+	mfaErr error
 }
 
 type batchOutput struct {
@@ -272,6 +273,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 
 	// Step 5: Parallel execution
 	if len(execSet) > 0 {
+		execCtx, closeBatchSSH := withBatchSSH(auditCtx)
 		const maxConcurrency = 10
 		sem := make(chan struct{}, maxConcurrency)
 		var wg sync.WaitGroup
@@ -284,10 +286,11 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				defer func() { <-sem }()
 
 				cmd := resolved[i]
-				results[i] = executeBatchItem(auditCtx, handlers, cmd)
+				results[i] = executeBatchItem(execCtx, handlers, cmd)
 			}(idx)
 		}
 		wg.Wait()
+		closeBatchSSH()
 	}
 
 	// Step 6: Output JSON
@@ -299,18 +302,27 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		return 1
 	}
 
-	// Exit 0 if batch mechanism succeeded (even if individual commands failed)
-	// Exit 1 only if ALL commands failed
-	// Exit 3 if the batch approval was a structured refusal (needs authorization)
+	return batchExitCode(os.Stderr, results, batchRefused)
+}
+
+// batchExitCode 决定 batch 的退出码：0 = 机制成功（个别命令失败也算）；1 = 全部失败；
+// 3 = 结构化拒绝——审批拒绝（标记已由调用方打印），或有条目因需要 MFA 却没有应答
+// 来源而未执行（此处在 stderr 打印一次 NEEDS MFA）。
+func batchExitCode(stderr io.Writer, results []batchResult, refused bool) int {
+	if refused {
+		return refusalExitCode
+	}
+	for _, r := range results {
+		if r.mfaErr != nil {
+			return writeRemoteFailure(stderr, r.mfaErr)
+		}
+	}
 	allFailed := true
 	for _, r := range results {
 		if r.Error == "" && r.ExitCode == 0 {
 			allFailed = false
 			break
 		}
-	}
-	if batchRefused {
-		return refusalExitCode
 	}
 	if allFailed && len(results) > 0 {
 		return 1
@@ -366,22 +378,7 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
 	errBuf := audit.NewLimitedBuffer(auditOutputLimit)
 
-	if proxy := getSSHProxyClient(); proxy != nil {
-		exitCode, execErr := proxy.Exec(sshpool.ProxyRequest{
-			AssetID: cmd.asset.ID,
-			Command: cmd.command,
-		}, nil, outBuf, errBuf)
-		result.ExitCode = exitCode
-		result.Stdout = outBuf.String()
-		result.Stderr = errBuf.String()
-		if execErr != nil {
-			result.Error = execErr.Error()
-		}
-		return result
-	}
-
-	// Fallback: direct SSH
-	execErr := helper.ExecWithStdio(ctx, cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
+	execErr := helper.ExecWithStdio(withMFA(ctx), cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
 	result.Stdout = outBuf.String()
 	result.Stderr = errBuf.String()
 	if execErr != nil {
@@ -391,6 +388,9 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 		} else {
 			result.ExitCode = -1
 			result.Error = execErr.Error()
+			if needsMFA(execErr) {
+				result.mfaErr = execErr
+			}
 		}
 	}
 	return result
@@ -518,6 +518,9 @@ func parseBatchInput(args []string) ([]batchCommand, error) {
 				return nil, fmt.Errorf("read stdin: %w", readErr)
 			}
 			if len(data) > 0 {
+				if len(args) > 0 {
+					return nil, fmt.Errorf("unexpected argument(s) with JSON on stdin: %s", strings.Join(args, " "))
+				}
 				var input batchInput
 				if err := json.Unmarshal(data, &input); err != nil {
 					return nil, fmt.Errorf("parse JSON input: %w", err)
@@ -606,6 +609,9 @@ compatibility aliases exec/sql/mongo. It is an assertion, not a dispatch selecto
 it fails that one item fast if the asset isn't actually that type. A bare 'asset:command' entry
 (no prefix) makes no assertion and runs against any asset type.
 
+SSH items on the same asset share one connection, so an asset that requires
+MFA is verified once per batch run (see 'opsctl --help', SSH MFA).
+
 Input Modes:
   Stdin JSON (AI-friendly):
     echo '{"commands":[
@@ -633,4 +639,14 @@ Examples:
   opsctl batch 'sql:prod-db:SELECT COUNT(*) FROM users' 'redis:cache:INFO'
   echo '{"commands":[{"asset":"1","command":"uptime"}]}' | opsctl batch
 `)
+}
+
+// withBatchSSH 为一次 batch 运行准备 SSH 拨号：让同一资产的 exec 条目（含并发条目）
+// 共用一条已验证的连接——一次运行对每个资产至多验证一次。MFA 应答来源只在
+// executeBatchExec 接上，数据类条目的 SSH 隧道拨号不在 MFA 应答范围内。
+// 并发上限 maxConcurrency 与 OpenSSH 默认 MaxSessions（10）一致，同一连接上的会话
+// 数不会超出服务器默认限额。
+func withBatchSSH(ctx context.Context) (context.Context, func()) {
+	set := helper.NewSSHClientSet()
+	return helper.WithSSHClientSet(ctx, set), set.Close
 }

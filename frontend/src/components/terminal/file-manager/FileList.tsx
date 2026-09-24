@@ -1,17 +1,150 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { File, Folder, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder, Loader2 } from "lucide-react";
 import { Button, cn, Input, ScrollArea } from "@opskat/ui";
 import { sftp_svc } from "../../../../wailsjs/go/models";
 import {
+  collapseSingleChildChains,
+  isSftpTreeEntryRow,
+  type SftpTreeChainSegment,
+  type SftpTreeDisplayRow,
+  type SftpTreeRow,
+} from "@/lib/sftpDirTree";
+import {
+  AVG_CHAR_PX,
   canMovePathToDirectory,
+  type ChainRenderItem,
   formatBytes,
   formatDate,
-  getEntryPath,
   getParentPath,
+  getPathBaseName,
+  indentForDepth,
+  planChainRender,
   splitNameForRename,
-  sortEntries,
+  treeGuideLines,
 } from "./utils";
+
+function indentStyle(depth: number, panelWidth: number) {
+  return { paddingLeft: indentForDepth(depth, panelWidth) };
+}
+
+/** 面板宽度未测出前的合理默认,匹配常见的初始面板宽度配置。 */
+const DEFAULT_PANEL_WIDTH_PX = 280;
+
+/**
+ * 缩进封顶要按面板"当前"宽度算,而宽度只有父级容器的渲染尺寸知道 —— 面板可拖拽调宽
+ * (useResizeHandle),用 ResizeObserver 跟着容器盒子实测,而不是让父组件把 width 状态
+ * 透传下来:调用方不用为了这一层缩进细节多接一个 prop,拖宽面板时也能跟着重新封顶。
+ */
+function usePanelWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0) setWidth(rect.width);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width];
+}
+
+/**
+ * 日期列的收起阈值:面板被拖到明显比默认宽度窄时,名字宽度最稀缺,整个日期列先让位(决策 17)。
+ * 取 sftpStore 里 MIN_FILE_MANAGER_WIDTH(200) 与默认宽度(280)之间:等于默认宽度会是刀尖上的
+ * 阈值 —— 默认宽度的面板内实测只有 279px 内容宽,不拖宽就永远没有日期;等于 200 则永远不成立
+ * (面板宽度本身被钳在 200 以上),收起成了永不执行的死代码。
+ */
+const DATE_COLUMN_MIN_PANEL_PX = 240;
+
+/**
+ * 每一级祖先在自己的缩进位置上一条竖直参考线,并用一小段横线把本行接到直接父级的那条线上
+ * (经典树参考线)。绝对定位到祖先的缩进 x —— 行的 paddingLeft 只决定内容起点,画在行元素上
+ * 的 border-l 落在面板边缘,任何深度都表达不了层级归属。祖先链高亮由行上的 data 属性驱动
+ * (见 FileList 的 hover 委托与 lineagePaths),纯 CSS 生效,不为每行引入 React state。
+ */
+function TreeGuides({ depth, panelWidth }: { depth: number; panelWidth: number }) {
+  const lines = treeGuideLines(depth, panelWidth);
+  if (!lines.length) return null;
+  const parentLeft = lines[lines.length - 1].left;
+  const guideTone =
+    "bg-border/70 group-hover/row:bg-primary/50 group-data-[sftp-hover-lineage=true]/row:bg-primary/50 group-data-[sftp-lineage=true]/row:bg-primary/70";
+  return (
+    <>
+      {lines.map((line) => (
+        <span
+          key={line.depth}
+          aria-hidden="true"
+          data-sftp-guide-depth={line.depth}
+          style={{ left: line.left }}
+          className={cn("pointer-events-none absolute inset-y-0 w-px", guideTone)}
+        />
+      ))}
+      <span
+        aria-hidden="true"
+        data-sftp-guide-connector="true"
+        style={{ left: parentLeft, width: indentForDepth(depth, panelWidth) - parentLeft }}
+        className={cn("pointer-events-none absolute top-1/2 h-px", guideTone)}
+      />
+    </>
+  );
+}
+
+/**
+ * 一行的祖先行:展平序是深度优先(父行必在前),因此沿 DOM 往前找 depth 递减的条目行即可。
+ * 折叠链在树里就是一行,按 depth 找因此自动落在链行上,不需要为链特殊处理。
+ */
+function ancestorRowElements(row: HTMLElement): HTMLElement[] {
+  let depth = Number(row.dataset.sftpDepth);
+  if (!Number.isInteger(depth)) return [];
+  const out: HTMLElement[] = [];
+  let node = row.previousElementSibling;
+  while (node && depth > 0) {
+    if (node instanceof HTMLElement && node.dataset.sftpEntryRow && node.dataset.sftpDepth !== undefined) {
+      const nodeDepth = Number(node.dataset.sftpDepth);
+      if (nodeDepth < depth) {
+        out.push(node);
+        depth = nodeDepth;
+      }
+    }
+    node = node.previousElementSibling;
+  }
+  return out;
+}
+
+/** 行内除文件名外的固定开销:展开箭头、图标、右侧大小/日期列与内边距。 */
+const ROW_CHROME_PX = 100;
+/** 日期列在开销里固定占的那一份;不画它的行(目录行、窄面板)必须把这份宽度还给名字。 */
+const DATE_COLUMN_PX = 40;
+/** 非折叠链的行只有一段;共用同一个常量,5000 行的目录不为链的渲染计划多分配数组。 */
+const SINGLE_SEGMENT_ITEMS: ChainRenderItem[] = [{ kind: "segment", index: 0 }];
+
+function middleEllipsisName(name: string, depth: number, panelWidth: number, chromePx: number): string {
+  const available = panelWidth - indentForDepth(depth, panelWidth) - chromePx;
+  const maxChars = Math.max(8, Math.floor(available / AVG_CHAR_PX));
+  if (name.length <= maxChars) return name;
+  const keep = maxChars - 1;
+  const head = Math.ceil(keep * 0.6);
+  const tail = keep - head;
+  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
+}
+
+/**
+ * 拖拽事件的实际落点:从事件目标向上找最近的目录标记 —— 折叠链的每一段都各自携带这份标记
+ * (仅当它自己是目录时才带 dir="true"),因此深层目录与链上的某一段都能被精确命中,而不是
+ * 永远退回外层行代表的最深一段。命中不到目录就是 null,调用方必须当作"这里不能放"处理,
+ * 不能退回行的路径 —— 否则会把文件行也当成合法落点。
+ */
+function resolveDropTargetPath(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null;
+  const hit = target.closest<HTMLElement>('[data-sftp-entry-dir="true"][data-sftp-entry-path]');
+  return hit?.dataset.sftpEntryPath ?? null;
+}
 
 interface RenameInputProps {
   initialName: string;
@@ -51,18 +184,20 @@ interface FileListProps {
   canExternalEdit?: (entry: sftp_svc.FileEntry) => boolean;
   clipboardCutPaths: Set<string>;
   currentPath: string;
-  entries: sftp_svc.FileEntry[];
   error: string | null;
   loading: boolean;
   onExternalOpen?: (path: string) => void;
   onGoUp: () => void;
   onMoveEntriesToDirectory: (sourcePaths: string[], targetDirPath: string) => void;
   onNavigate: (path: string) => void;
-  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null) => void;
+  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null, entryPath: string | null) => void;
   onRenameCancel: () => void;
   onRenameCommit: (oldPath: string, nextName: string) => void;
   onRetry: () => void;
+  onRetryExpand: (dirPath: string) => void;
+  onToggleExpand: (dirPath: string) => void;
   renamePath: string | null;
+  rows: SftpTreeRow[];
   selected: string[];
   setSelected: (next: string[] | ((prev: string[]) => string[])) => void;
 }
@@ -71,7 +206,6 @@ export function FileList({
   canExternalEdit,
   clipboardCutPaths,
   currentPath,
-  entries,
   error,
   loading,
   onExternalOpen,
@@ -82,16 +216,30 @@ export function FileList({
   onRenameCancel,
   onRenameCommit,
   onRetry,
+  onRetryExpand,
+  onToggleExpand,
   renamePath,
+  rows,
   selected,
   setSelected,
 }: FileListProps) {
   const { t } = useTranslation();
-  const sortedEntries = useMemo(() => sortEntries(entries), [entries]);
-  const entryPaths = useMemo(
-    () => sortedEntries.map((entry) => getEntryPath(currentPath, entry)),
-    [currentPath, sortedEntries]
-  );
+  const [containerRef, panelWidth] = usePanelWidth<HTMLDivElement>();
+  // 无文件的单子目录链先在这里折叠成一行(每段各自可展开/换根),再进入选择/渲染管线。
+  const displayRows = useMemo(() => collapseSingleChildChains(rows), [rows]);
+  // 条目行才参与选择与区间选择;加载中 / 空 / 失败三种占位行只负责呈现子层状态。
+  const entryRows = useMemo(() => displayRows.filter(isSftpTreeEntryRow), [displayRows]);
+  const entryPaths = useMemo(() => entryRows.map((row) => row.path), [entryRows]);
+  // 区间选择的下标按「可见条目行」计数,占位行不占位置。
+  const renderRows = useMemo(() => {
+    const items: { row: SftpTreeDisplayRow; index: number }[] = [];
+    let entryIndex = 0;
+    for (const row of displayRows) {
+      items.push({ row, index: isSftpTreeEntryRow(row) ? entryIndex : -1 });
+      if (isSftpTreeEntryRow(row)) entryIndex += 1;
+    }
+    return items;
+  }, [displayRows]);
   // 父组件 FileManagerPanel 把 onNavigate / onOpenContextMenu / onRenameCancel 等
   // 写成内联箭头函数,而 selected 也住在父组件 —— 选中一变父组件就重渲,这些 prop
   // 全部换标识。若把它们直接传给行,行的 memo 一次都不会命中(实测反而更慢,因为白
@@ -104,6 +252,8 @@ export function FileList({
     onMoveEntriesToDirectory,
     onRenameCancel,
     onRenameCommit,
+    onRetryExpand,
+    onToggleExpand,
     renamePath,
   });
   useEffect(() => {
@@ -115,6 +265,8 @@ export function FileList({
       onMoveEntriesToDirectory,
       onRenameCancel,
       onRenameCommit,
+      onRetryExpand,
+      onToggleExpand,
       renamePath,
     };
   }, [
@@ -125,6 +277,8 @@ export function FileList({
     onMoveEntriesToDirectory,
     onRenameCancel,
     onRenameCommit,
+    onRetryExpand,
+    onToggleExpand,
     renamePath,
   ]);
 
@@ -135,9 +289,12 @@ export function FileList({
   const stableExternalOpen = useCallback((path: string) => cbRef.current.onExternalOpen?.(path), []);
   const stableNavigate = useCallback((path: string) => cbRef.current.onNavigate(path), []);
   const stableOpenContextMenu = useCallback(
-    (x: number, y: number, entry: sftp_svc.FileEntry | null) => cbRef.current.onOpenContextMenu(x, y, entry),
+    (x: number, y: number, entry: sftp_svc.FileEntry | null, entryPath: string | null) =>
+      cbRef.current.onOpenContextMenu(x, y, entry, entryPath),
     []
   );
+  const stableToggleExpand = useCallback((dirPath: string) => cbRef.current.onToggleExpand(dirPath), []);
+  const stableRetryExpand = useCallback((dirPath: string) => cbRef.current.onRetryExpand(dirPath), []);
   const stableMoveEntries = useCallback(
     (sourcePaths: string[], targetDirPath: string) =>
       cbRef.current.onMoveEntriesToDirectory(sourcePaths, targetDirPath),
@@ -148,6 +305,51 @@ export function FileList({
   // 命中判断用 Set:以前每行都跑一次 selected.includes(),n 行 × O(选中数) 在
   // 全选(shift 选完整个目录)时退化成 O(n²)。
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  // 选中行 + 它整条祖先链:选中态本来就会让本组件重渲一次(行 memo 逐行比较),顺带算出
+  // 祖先链是 O(可见行) 的一遍走行,不额外引入渲染。栈按 depth 维护 —— 折叠链在 displayRows
+  // 里就是一行,它的 path 是链末段,与子行认到的祖先一致。
+  const lineagePaths = useMemo(() => {
+    const lineage = new Set<string>();
+    if (selectedSet.size === 0) return lineage;
+    const stack: string[] = [];
+    for (const row of displayRows) {
+      if (!isSftpTreeEntryRow(row)) continue;
+      stack.length = row.depth;
+      stack[row.depth] = row.path;
+      if (!selectedSet.has(row.path)) continue;
+      for (let d = row.depth; d >= 0; d -= 1) {
+        // 祖先链一律整条加入,因此撞到已加入的一段就说明更浅的几段也都在里面了。
+        if (lineage.has(stack[d])) break;
+        lineage.add(stack[d]);
+      }
+    }
+    return lineage;
+  }, [displayRows, selectedSet]);
+  // 悬停高亮不走 state:面板实测能挂 5000 行且没有虚拟化,每次移入都重渲一遍列表就是一场
+  // 渲染风暴。这里只在委托到的容器事件里给祖先行打 data 属性,配色交给 CSS。
+  const hoverRowRef = useRef<HTMLElement | null>(null);
+  const hoverLineageRef = useRef<HTMLElement[]>([]);
+  const markHoverLineage = useCallback((row: HTMLElement | null) => {
+    for (const el of hoverLineageRef.current) el.removeAttribute("data-sftp-hover-lineage");
+    hoverLineageRef.current = row ? ancestorRowElements(row) : [];
+    for (const el of hoverLineageRef.current) el.setAttribute("data-sftp-hover-lineage", "true");
+  }, []);
+  const handleRowHover = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      const target = event.target;
+      // 占位行(加载中 / 空目录 / 失败)同样带 depth:悬停它时也该看出它挂在哪个目录下面。
+      const row = target instanceof Element ? target.closest<HTMLElement>("[data-sftp-depth]") : null;
+      if (row === hoverRowRef.current) return;
+      hoverRowRef.current = row;
+      markHoverLineage(row);
+    },
+    [markHoverLineage]
+  );
+  const clearRowHover = useCallback(() => {
+    hoverRowRef.current = null;
+    markHoverLineage(null);
+  }, [markHoverLineage]);
+
   // 事件回调需要"当前选中集合",但不能把它放进依赖 —— 否则每次改选中回调就换标识,
   // 把所有行的 memo 全部打掉(和 QueryResultTable 里 handleCellContextMenu 同一个坑)。
   const selectedRef = useRef(selected);
@@ -166,7 +368,16 @@ export function FileList({
     startY: number;
   } | null>(null);
   const suppressNextClickRef = useRef(false);
-  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  // 落点连同"会搬多少个条目"一起存:高亮之外还要在落点上说清这一放会执行什么。
+  const [dropTarget, setDropTargetState] = useState<{ path: string; count: number } | null>(null);
+  // dragover 每帧都在触发:落点没变就必须交回同一个对象,否则每一帧都换 prop 标识,
+  // 把整目录所有行的 memo 全部打掉(和上面 selected 那一处同一个坑)。
+  const setDropTarget = useCallback((next: { path: string; count: number } | null) => {
+    setDropTargetState((prev) => {
+      if (!prev || !next) return prev === next ? prev : next;
+      return prev.path === next.path && prev.count === next.count ? prev : next;
+    });
+  }, []);
   const slowClickRef = useRef<{ path: string; time: number; timer: number | null }>({ path: "", time: 0, timer: null });
 
   const entryPathsRef = useRef(entryPaths);
@@ -208,7 +419,7 @@ export function FileList({
       ) {
         prev.path = "";
         prev.time = 0;
-        stableOpenContextMenu(-1, -1, null); // closes any pending menu in parent no-op path
+        stableOpenContextMenu(-1, -1, null, null); // closes any pending menu in parent no-op path
         window.dispatchEvent(new CustomEvent("sftp:rename-request", { detail: { path } }));
         return;
       }
@@ -254,19 +465,22 @@ export function FileList({
     [getDragPaths]
   );
 
-  const getPointerDropTargetPath = useCallback((clientX: number, clientY: number, sourcePaths: string[]) => {
+  const getPointerDropTarget = useCallback((clientX: number, clientY: number, sourcePaths: string[]) => {
     const target = document.elementFromPoint(clientX, clientY);
-    const row = target?.closest<HTMLElement>("[data-sftp-entry-row][data-sftp-entry-dir='true']");
-    const targetPath = row?.dataset.sftpEntryPath;
+    // 只认 dir + path 这对标记,不要求 entry-row:折叠链里每一段都单独携带它们,
+    // 这样悬停在链的某一段上也能精确命中那一段,而不是永远退回外层行代表的最深一段。
+    const hit = target?.closest<HTMLElement>('[data-sftp-entry-dir="true"][data-sftp-entry-path]');
+    const targetPath = hit?.dataset.sftpEntryPath;
     if (!targetPath) return null;
-    return sourcePaths.some((path) => canMovePathToDirectory(path, targetPath)) ? targetPath : null;
+    const movable = sourcePaths.filter((path) => canMovePathToDirectory(path, targetPath));
+    return movable.length ? { path: targetPath, count: movable.length } : null;
   }, []);
 
   const clearDragState = useCallback(() => {
     draggedPathsRef.current = [];
     pointerDragRef.current = null;
-    setDropTargetPath(null);
-  }, []);
+    setDropTarget(null);
+  }, [setDropTarget]);
 
   const beginPointerDrag = useCallback((path: string, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return;
@@ -299,18 +513,16 @@ export function FileList({
         setSelected(drag.sourcePaths);
       }
       event.preventDefault();
-      setDropTargetPath(getPointerDropTargetPath(event.clientX, event.clientY, drag.sourcePaths));
+      setDropTarget(getPointerDropTarget(event.clientX, event.clientY, drag.sourcePaths));
     },
-    [getPointerDropTargetPath, setSelected]
+    [getPointerDropTarget, setDropTarget, setSelected]
   );
 
   const endPointerDrag = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       const drag = pointerDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      const targetPath = drag.dragging
-        ? getPointerDropTargetPath(event.clientX, event.clientY, drag.sourcePaths)
-        : null;
+      const target = drag.dragging ? getPointerDropTarget(event.clientX, event.clientY, drag.sourcePaths) : null;
       clearDragState();
       try {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -320,12 +532,12 @@ export function FileList({
       if (!drag.dragging) return;
       event.preventDefault();
       event.stopPropagation();
-      if (targetPath) stableMoveEntries(drag.sourcePaths, targetPath);
+      if (target) stableMoveEntries(drag.sourcePaths, target.path);
       window.setTimeout(() => {
         suppressNextClickRef.current = false;
       }, 0);
     },
-    [clearDragState, getPointerDropTargetPath, stableMoveEntries]
+    [clearDragState, getPointerDropTarget, stableMoveEntries]
   );
 
   // 所有行共用同一个 handlers 对象:每行 26 个 prop 时,5000 行全部改选中(shift 全选)
@@ -339,6 +551,10 @@ export function FileList({
       onOpenContextMenu: stableOpenContextMenu,
       onMoveEntriesToDirectory: stableMoveEntries,
       onRenameCancel: stableRenameCancel,
+      onToggleExpand: stableToggleExpand,
+      collapseLabel: t("sftp.tree.collapse"),
+      expandLabel: t("sftp.tree.expand"),
+      chainElidedLabel: (target: string, count: number) => t("sftp.tree.chainElided", { count, target }),
       commitRename,
       selectEntry,
       maybeStartSlowRename,
@@ -347,7 +563,7 @@ export function FileList({
       draggedPathsRef,
       suppressNextClickRef,
       getMovableDragPaths,
-      setDropTargetPath,
+      setDropTarget,
       clearDragState,
       beginPointerDrag,
       updatePointerDrag,
@@ -361,6 +577,7 @@ export function FileList({
       getMovableDragPaths,
       maybeStartSlowRename,
       selectEntry,
+      setDropTarget,
       setSelected,
       stableCanExternalEdit,
       stableExternalOpen,
@@ -368,6 +585,8 @@ export function FileList({
       stableNavigate,
       stableOpenContextMenu,
       stableRenameCancel,
+      stableToggleExpand,
+      t,
       updatePointerDrag,
     ]
   );
@@ -381,10 +600,15 @@ export function FileList({
       onContextMenu={(e) => {
         if (isEntryTarget(e.target)) return;
         e.preventDefault();
-        onOpenContextMenu(e.clientX, e.clientY, null);
+        onOpenContextMenu(e.clientX, e.clientY, null, null);
       }}
     >
-      <div className="text-xs select-none min-h-full">
+      <div
+        ref={containerRef}
+        className="text-xs select-none min-h-full"
+        onMouseOver={handleRowHover}
+        onMouseLeave={clearRowHover}
+      >
         {loading && (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -399,7 +623,7 @@ export function FileList({
             </Button>
           </div>
         )}
-        {!loading && !error && entries.length === 0 && (
+        {!loading && !error && displayRows.length === 0 && (
           <div className="flex items-center justify-center py-8">
             <span className="text-muted-foreground">{t("sftp.empty")}</span>
           </div>
@@ -413,30 +637,43 @@ export function FileList({
                 data-sftp-entry-path={getParentPath(currentPath)}
                 className={cn(
                   "flex items-center gap-1.5 px-2 py-1 cursor-pointer hover:bg-muted/50",
-                  dropTargetPath === getParentPath(currentPath) && "bg-primary/10 ring-1 ring-primary/30"
+                  dropTarget?.path === getParentPath(currentPath) && "bg-primary/10 ring-1 ring-primary/30"
                 )}
                 onDoubleClick={onGoUp}
               >
                 <Folder className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">..</span>
+                {dropTarget?.path === getParentPath(currentPath) && (
+                  <DropHint
+                    count={dropTarget.count}
+                    target={getPathBaseName(getParentPath(currentPath)) || getParentPath(currentPath)}
+                  />
+                )}
               </div>
             )}
-            {sortedEntries.map((entry, index) => {
-              const fullPath = getEntryPath(currentPath, entry);
-              return (
+            {renderRows.map(({ row, index }) =>
+              isSftpTreeEntryRow(row) ? (
                 <FileRow
-                  key={entry.name}
-                  entry={entry}
-                  fullPath={fullPath}
+                  key={`entry:${row.path}`}
+                  row={row}
                   index={index}
-                  isSelected={selectedSet.has(fullPath)}
-                  isCut={clipboardCutPaths.has(fullPath)}
-                  isRenaming={renamePath === fullPath}
-                  isDropTarget={dropTargetPath === fullPath}
+                  isSelected={selectedSet.has(row.path)}
+                  isCut={clipboardCutPaths.has(row.path)}
+                  isRenaming={renamePath === row.path}
+                  isLineage={lineagePaths.has(row.path)}
+                  dropTarget={dropTarget}
+                  panelWidth={panelWidth}
                   h={rowHandlers}
                 />
-              );
-            })}
+              ) : (
+                <TreeStatusRow
+                  key={`${row.state}:${row.path}`}
+                  row={row}
+                  panelWidth={panelWidth}
+                  onRetry={stableRetryExpand}
+                />
+              )
+            )}
           </>
         )}
       </div>
@@ -444,13 +681,45 @@ export function FileList({
   );
 }
 
+/**
+ * 落点上的动作说明:高亮只说"放这里",还要说清这一放会执行什么 —— 搬几个条目、搬去哪个目录。
+ * 折叠链上它跟着被命中的那一段走,因此链里也能看出目标是哪一级。
+ */
+function DropHint({ count, target }: { count: number; target: string }) {
+  const { t } = useTranslation();
+  return (
+    <span className="shrink-0 text-[10px] text-primary" data-testid="sftp-drop-hint">
+      {t("sftp.tree.dropHint", { count, target })}
+    </span>
+  );
+}
+
+/** 折叠链上任意一段都是独立的落点;单段行退化为长度 1 的数组,渲染路径与之前一致。 */
+function segmentsOf(row: SftpTreeDisplayRow): SftpTreeChainSegment[] {
+  return (
+    row.chain ?? [
+      {
+        path: row.path,
+        name: row.name,
+        entry: row.entry as sftp_svc.FileEntry,
+        expanded: row.expanded,
+        loading: row.loading,
+      },
+    ]
+  );
+}
+
 interface FileRowHandlers {
   canExternalEdit: (entry: sftp_svc.FileEntry) => boolean;
   onExternalOpen: (path: string) => void;
   onNavigate: (path: string) => void;
-  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null) => void;
+  onOpenContextMenu: (x: number, y: number, entry: sftp_svc.FileEntry | null, entryPath: string | null) => void;
   onMoveEntriesToDirectory: (sourcePaths: string[], targetDirPath: string) => void;
   onRenameCancel: () => void;
+  onToggleExpand: (dirPath: string) => void;
+  collapseLabel: string;
+  expandLabel: string;
+  chainElidedLabel: (target: string, count: number) => string;
   commitRename: (nextName: string) => void;
   selectEntry: (path: string, index: number, event: React.MouseEvent) => void;
   maybeStartSlowRename: (path: string, index: number, eventTime: number) => void;
@@ -459,7 +728,7 @@ interface FileRowHandlers {
   draggedPathsRef: React.RefObject<string[]>;
   suppressNextClickRef: React.RefObject<boolean>;
   getMovableDragPaths: (event: React.DragEvent, targetDirPath: string) => string[];
-  setDropTargetPath: (path: string | null) => void;
+  setDropTarget: (target: { path: string; count: number } | null) => void;
   clearDragState: () => void;
   beginPointerDrag: (path: string, event: React.PointerEvent<HTMLElement>) => void;
   updatePointerDrag: (event: React.PointerEvent<HTMLElement>) => void;
@@ -467,13 +736,15 @@ interface FileRowHandlers {
 }
 
 interface FileRowProps {
-  entry: sftp_svc.FileEntry;
-  fullPath: string;
+  row: SftpTreeDisplayRow & { entry: sftp_svc.FileEntry; state: "entry" };
   index: number;
   isSelected: boolean;
   isCut: boolean;
   isRenaming: boolean;
-  isDropTarget: boolean;
+  /** 自己被选中,或它是某个选中行的祖先 —— 参考线与目录行一起高亮,深层也能看出挂在谁下面。 */
+  isLineage: boolean;
+  dropTarget: { path: string; count: number } | null;
+  panelWidth: number;
   h: FileRowHandlers;
 }
 
@@ -481,28 +752,58 @@ interface FileRowProps {
 // 5000 个文件的目录实测单击一次 631ms、shift 全选 1.6s(见 PR 说明)。所有需要
 // "当前选中集合"的回调都通过 ref 读,保证 props 在选中变化时保持同一标识。
 const FileRow = memo(function FileRow({
-  entry,
-  fullPath,
+  row,
   index,
   isSelected,
   isCut,
   isRenaming,
-  isDropTarget,
+  isLineage,
+  dropTarget,
+  panelWidth,
   h,
 }: FileRowProps) {
+  const entry = row.entry;
+  const fullPath = row.path;
+  // 折叠链上的每一段各自是一个可展开/换根的落点;普通行退化为长度 1 的数组,渲染路径不变。
+  const segments = segmentsOf(row);
+  const isDropTarget = !!dropTarget && segments.some((segment) => segment.path === dropTarget.path);
+  const showsDate = !entry.isDir && panelWidth >= DATE_COLUMN_MIN_PANEL_PX;
+  const chromePx = showsDate ? ROW_CHROME_PX : ROW_CHROME_PX - DATE_COLUMN_PX;
+  // 长链在窄面板里画不下:按面板宽度决定渲染哪几项(中段折进一个省略号),否则最深段会被画到
+  // 面板右缘之外而点不到 —— 行的 overflow-x 是 visible,超出部分连裁剪都没有。单段行不进这条
+  // 路径,普通目录的每一行不为链多付任何计算。
+  const chainItems =
+    segments.length > 1
+      ? planChainRender(
+          segments.map((segment) => segment.name),
+          row.depth,
+          panelWidth,
+          chromePx
+        ).items
+      : SINGLE_SEGMENT_ITEMS;
   return (
     <div
       data-sftp-entry-row="true"
       data-sftp-entry-dir={entry.isDir ? "true" : "false"}
       data-sftp-entry-path={fullPath}
+      data-sftp-depth={row.depth}
+      data-sftp-lineage={isLineage || undefined}
       draggable={false}
+      style={{
+        ...indentStyle(row.depth, panelWidth),
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 28px",
+      }}
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 cursor-pointer transition-colors rounded-sm",
+        "group/row relative flex items-center gap-1.5 pr-2 py-1 cursor-pointer transition-colors rounded-sm",
         isSelected ? "bg-primary/15 text-primary" : "hover:bg-muted/50",
+        // 悬停祖先链只有 CSS 认得(属性由容器的委托事件就地打上,不经过 React 渲染)。
+        !isSelected && "data-[sftp-hover-lineage=true]:bg-muted/40",
+        !isSelected && isLineage && "bg-muted/40",
         isCut && "opacity-45",
-        isDropTarget && "bg-primary/10 ring-1 ring-primary/30"
+        // 折叠链的高亮落在具体命中的那一段上(见下方 segments.map);普通行仍是整行高亮。
+        segments.length === 1 && isDropTarget && "bg-primary/10 ring-1 ring-primary/30"
       )}
-      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 28px" }}
       onDragStart={(e) => {
         if (isRenaming) {
           e.preventDefault();
@@ -519,24 +820,26 @@ const FileRow = memo(function FileRow({
       }}
       onDragEnd={h.clearDragState}
       onDragOver={(e) => {
-        if (!entry.isDir || !h.getMovableDragPaths(e, fullPath).length) return;
+        const targetPath = resolveDropTargetPath(e.target);
+        const movable = targetPath ? h.getMovableDragPaths(e, targetPath) : [];
+        if (!targetPath || !movable.length) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        h.setDropTargetPath(fullPath);
+        h.setDropTarget({ path: targetPath, count: movable.length });
       }}
       onDragLeave={(e) => {
         const nextTarget = e.relatedTarget;
         if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) return;
-        if (isDropTarget) h.setDropTargetPath(null);
+        if (isDropTarget) h.setDropTarget(null);
       }}
       onDrop={(e) => {
-        if (!entry.isDir) return;
-        const sourcePaths = h.getMovableDragPaths(e, fullPath);
-        if (!sourcePaths.length) return;
+        const targetPath = resolveDropTargetPath(e.target);
+        const sourcePaths = targetPath ? h.getMovableDragPaths(e, targetPath) : [];
+        if (!targetPath || !sourcePaths.length) return;
         e.preventDefault();
         e.stopPropagation();
         h.clearDragState();
-        h.onMoveEntriesToDirectory(sourcePaths, fullPath);
+        h.onMoveEntriesToDirectory(sourcePaths, targetPath);
       }}
       onPointerDown={(e) => {
         if (!isRenaming) h.beginPointerDrag(fullPath, e);
@@ -555,6 +858,8 @@ const FileRow = memo(function FileRow({
         h.maybeStartSlowRename(fullPath, index, e.timeStamp);
       }}
       onDoubleClick={() => {
+        // 链上非末段自己在 segments.map 里已经 stopPropagation 并换根;这里只兜底末段
+        // (含普通单段行)与文件的双击 —— 与折叠前的行为完全一致。
         if (isRenaming) return;
         if (entry.isDir) {
           h.onNavigate(fullPath);
@@ -568,21 +873,163 @@ const FileRow = memo(function FileRow({
         e.preventDefault();
         e.stopPropagation();
         if (!h.selectedRef.current.includes(fullPath)) h.setSelected([fullPath]);
-        h.onOpenContextMenu(e.clientX, e.clientY, entry);
+        h.onOpenContextMenu(e.clientX, e.clientY, entry, fullPath);
       }}
     >
-      {entry.isDir ? (
-        <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />
-      ) : (
-        <File className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <TreeGuides depth={row.depth} panelWidth={panelWidth} />
+      {chainItems.map((item, i) => {
+        const isLeading = i === 0;
+        if (item.kind === "ellipsis") {
+          const deepestElided = segments[item.index];
+          // 一个省略号顶掉了 N 段,其余项都是段:两者的差就是被省略的级数。
+          const label = h.chainElidedLabel(deepestElided.name, segments.length - chainItems.length + 1);
+          return (
+            <span key={`elided:${deepestElided.path}`} className="flex shrink-0 items-center gap-1">
+              {isLeading && <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />}
+              <button
+                type="button"
+                aria-label={label}
+                title={label}
+                data-testid={`sftp-chain-ellipsis-${deepestElided.path}`}
+                className="flex h-3.5 shrink-0 items-center rounded-sm px-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  // 省略掉的中段仍然可达:换根到其中最深的一段,深度随之归零(决策 2)。
+                  e.preventDefault();
+                  e.stopPropagation();
+                  h.onNavigate(deepestElided.path);
+                }}
+              >
+                …
+              </button>
+              <span className="text-muted-foreground/60 shrink-0">/</span>
+            </span>
+          );
+        }
+        const segment = segments[item.index];
+        const isLast = item.index === segments.length - 1;
+        return (
+          <span
+            key={segment.path}
+            data-sftp-entry-dir={segment.entry.isDir ? "true" : "false"}
+            data-sftp-entry-path={segment.path}
+            className={cn(
+              "flex items-center gap-1 min-w-0",
+              isLast ? "flex-1" : "shrink-0",
+              // 单段行的高亮走外层整行(见上面 className);多段链上每一段各自的落点单独高亮,
+              // 含最后一段 —— 否则拖到链最深的目录时反而看不出命中了哪。
+              segments.length > 1 &&
+                dropTarget?.path === segment.path &&
+                "bg-primary/10 ring-1 ring-primary/30 rounded-sm"
+            )}
+          >
+            {segment.entry.isDir ? (
+              <button
+                type="button"
+                aria-label={segment.expanded ? h.collapseLabel : h.expandLabel}
+                data-testid={`sftp-expand-${segment.path}`}
+                className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  h.onToggleExpand(segment.path);
+                }}
+              >
+                {segment.loading ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : segment.expanded ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+              </button>
+            ) : (
+              <span className="w-3.5 shrink-0" />
+            )}
+            {isLeading &&
+              (entry.isDir ? (
+                <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />
+              ) : (
+                <File className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              ))}
+            {isRenaming && isLast ? (
+              <RenameInput
+                key={fullPath}
+                initialName={segment.name}
+                onCommit={h.commitRename}
+                onCancel={h.onRenameCancel}
+              />
+            ) : (
+              <span
+                className={isLast ? "flex-1 truncate" : "shrink-0"}
+                title={segment.name}
+                onDoubleClick={
+                  isLast
+                    ? undefined
+                    : (e) => {
+                        // 非末段独立换根:阻断冒泡,否则外层双击会用末段路径覆盖这里的选择。
+                        e.stopPropagation();
+                        h.onNavigate(segment.path);
+                      }
+                }
+              >
+                {middleEllipsisName(segment.name, row.depth, panelWidth, chromePx)}
+              </span>
+            )}
+            {dropTarget?.path === segment.path && <DropHint count={dropTarget.count} target={segment.name} />}
+            {!isLast && <span className="text-muted-foreground/60 shrink-0">/</span>}
+          </span>
+        );
+      })}
+      {/* 目录行不带大小也不带日期:名字宽度在深层最稀缺,而目录的修改时间对定位最没帮助。 */}
+      {!entry.isDir && (
+        <>
+          <span className="text-muted-foreground shrink-0 text-[10px]">{formatBytes(entry.size)}</span>
+          {showsDate && <span className="text-muted-foreground shrink-0 text-[10px]">{formatDate(entry.modTime)}</span>}
+        </>
       )}
-      {isRenaming ? (
-        <RenameInput key={fullPath} initialName={entry.name} onCommit={h.commitRename} onCancel={h.onRenameCancel} />
-      ) : (
-        <span className="flex-1 truncate">{entry.name}</span>
-      )}
-      {!entry.isDir && <span className="text-muted-foreground shrink-0 text-[10px]">{formatBytes(entry.size)}</span>}
-      <span className="text-muted-foreground shrink-0 text-[10px]">{formatDate(entry.modTime)}</span>
     </div>
   );
 });
+
+interface TreeStatusRowProps {
+  row: SftpTreeRow;
+  panelWidth: number;
+  onRetry: (dirPath: string) => void;
+}
+
+/** 展开目录的子层状态行:把「加载中 / 空目录 / 加载失败」摆在该目录下方,彼此可区分。 */
+function TreeStatusRow({ row, panelWidth, onRetry }: TreeStatusRowProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-sftp-depth={row.depth}
+      style={indentStyle(row.depth, panelWidth)}
+      className="group/row relative flex items-center gap-1.5 pr-2 py-1 text-muted-foreground"
+    >
+      <TreeGuides depth={row.depth} panelWidth={panelWidth} />
+      <span className="w-3.5 shrink-0" />
+      {row.state === "loading" && (
+        <>
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+          <span className="truncate">{t("sftp.tree.loading")}</span>
+        </>
+      )}
+      {row.state === "empty" && <span className="truncate">{t("sftp.empty")}</span>}
+      {row.state === "error" && (
+        <>
+          <span className="text-destructive shrink-0">{t("sftp.loadError")}</span>
+          <span className="min-w-0 flex-1 truncate text-[10px]" title={row.message ?? undefined}>
+            {row.message}
+          </span>
+          <Button variant="outline" size="xs" className="shrink-0" onClick={() => onRetry(row.path)}>
+            {t("sftp.retry")}
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}

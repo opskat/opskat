@@ -142,7 +142,7 @@ https://github.com/user-attachments/assets/035fc0df-230c-456b-87bd-8a4a125feaec
 
 OpsKat 还提供了独立命令行工具 `opsctl`，主要给 **Claude Code**、**Codex**、**Gemini CLI** 这类 AI 编程助手用。桌面端一键安装 Skill，AI 编程助手就能通过 opsctl 直接管理服务器、查日志、查数据库、排查线上问题。
 
-桌面端运行时，opsctl 会复用桌面端的连接池和审批流程，操作同样受策略管控和审计。
+opsctl 自行建立连接，命令不受桌面端开关影响；无法在终端里提示时，审批会交给运行中的桌面端。操作同样受策略管控和审计。
 
 当然也可以自己手动用：
 

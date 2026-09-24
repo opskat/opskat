@@ -96,6 +96,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 
 	// Stage 2: 统一权限检查（策略 + DB Grant）— 与 AI 的 exec 工具共用 CheckPermission
 	var policyHints []string
+	var policyReason string
 	if req.AssetID > 0 && req.Command != "" {
 		// 注入 sessionID 到 context，供 matchGrantPatterns 使用
 		permCtx := aictx.WithSessionID(ctx, req.SessionID)
@@ -122,6 +123,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 			}, fmt.Errorf("command denied by policy: %s", permResult.Message)
 		default: // NeedConfirm → fall through to approver selection
 			policyHints = permResult.HintRules
+			policyReason = permResult.Message
 		}
 	}
 
@@ -145,7 +147,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 		resp, err := approval.RequestApprovalWithToken(sockPath, authToken, req)
 		if err != nil {
 			// 拨号在探测与请求之间失败：与不可达同一契约，结构化拒绝。
-			return refuseApproval(ctx, req, policyHints)
+			return refuseApproval(ctx, req, policyHints, policyReason)
 		}
 		if !resp.Approved {
 			reason := resp.Reason
@@ -173,7 +175,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 		}, nil
 
 	default:
-		return refuseApproval(ctx, req, policyHints)
+		return refuseApproval(ctx, req, policyHints, policyReason)
 	}
 }
 
@@ -196,17 +198,24 @@ func assetIdentity(name string, id int64, typ string) string {
 }
 
 // refuseApproval 构造结构化拒绝：分支依据是这次操作有没有一个规则能匹配的主体
-// （决策 17）——AssetID 与 Command 双全（与 Stage 2 的策略检查门槛同一判据）给
-// NEEDS AUTHORIZATION，否则 create/update/delete 一类给 NEEDS TTY。它是真实的拒绝
-// 决策，照常以 Deny + SourcePolicyDeny 落审计，不是参数错误。
-func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []string) (ApprovalResult, error) {
+// （决策 17）——命令归一化后有 pattern 给 NEEDS AUTHORIZATION；带着命令却归一化不出
+// pattern（拆不出子命令的 shell 命令）给 NEEDS TTY，写明 reason 并引导修正命令——照抄一条
+// 永远匹配不上的 policy allow 只会让调用方反复撞同一个拒绝；create/update/delete 一类
+// 没有命令，同样给 NEEDS TTY。它是真实的拒绝决策，照常以 Deny + SourcePolicyDeny 落审计，
+// 不是参数错误。reason 是策略层 NeedConfirm 附带的原因（aictx.CheckResult.Message）。
+func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []string, reason string) (ApprovalResult, error) {
 	var refusal *structuredRefusal
 	var matched string
-	if req.AssetID > 0 && req.Command != "" {
-		// face 取 CheckType（方向化：cp 的 cp:read/cp:write），回落 req.Type——照抄命令
-		// 与归一化主体都得按它给，折叠成 "cp" 会丢方向。
-		face := ttyApprovalFace(req)
-		patterns := normalizedApprovalSubjects(face, req.Command)
+	// face 取 CheckType（方向化：cp 的 cp:read/cp:write），回落 req.Type——照抄命令
+	// 与归一化主体都得按它给，折叠成 "cp" 会丢方向。
+	face := ttyApprovalFace(req)
+	hasCommand := req.AssetID > 0 && req.Command != ""
+	var patterns []string
+	if hasCommand {
+		patterns = normalizedApprovalSubjects(face, req.Command)
+	}
+	switch {
+	case len(patterns) > 0:
 		matched = strings.Join(patterns, ", ")
 		refusal = &structuredRefusal{
 			marker: needsAuthorizationMarker,
@@ -217,7 +226,9 @@ func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []s
 				patterns:     patterns,
 			}}, hints),
 		}
-	} else {
+	case hasCommand:
+		refusal = &structuredRefusal{marker: needsTTYMarker, body: formatUnmatchableCommand(ctx, req, face, reason)}
+	default:
 		cmd := originCommandFromCtx(ctx)
 		if cmd == "" {
 			cmd = strings.TrimSpace(req.Detail)
@@ -281,6 +292,12 @@ func formatNeedsAuthorization(ctx context.Context, entries []refusalSubject, hin
 		for _, p := range e.patterns {
 			fmt.Fprintf(&sb, "  - %s\n", p)
 		}
+		if len(e.patterns) == 0 {
+			// 拆不出子命令的 shell 命令：没有可照抄的规则，下面也不会为它给 policy allow。
+			fmt.Fprintf(&sb, "  %s\n", policy.PolicyMsg(ctx,
+				"(no rule can match this command; fix it and retry)",
+				"（没有规则能匹配这条命令；请修正命令后重试）"))
+		}
 	}
 	if len(hints) > 0 {
 		fmt.Fprintf(&sb, "%s\n", policy.PolicyMsg(ctx,
@@ -299,6 +316,27 @@ func formatNeedsAuthorization(ctx context.Context, entries []refusalSubject, hin
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// formatUnmatchableCommand 构造"带着命令、却没有规则能匹配它"的 NEEDS TTY 正文（拆不出
+// 子命令的 shell 命令）：写明策略层给出的原因（如 shell 解析失败的位置）、资产与原命令，
+// 说明命令没有执行、应修正后重新执行，或交给人在交互终端里审批一次。不给 policy allow
+// 建议——任何规则都匹配不上这条命令，照抄只会反复撞同一个拒绝。
+func formatUnmatchableCommand(ctx context.Context, req approval.ApprovalRequest, face, reason string) string {
+	var sb strings.Builder
+	sb.WriteString(policy.PolicyMsg(ctx,
+		"this command cannot be pre-authorized: no rule can match it, and neither an interactive terminal nor the desktop app is available to approve it now",
+		"该命令无法被预先授权：没有规则能匹配它，且当前既无交互终端、桌面端也不可达"))
+	sb.WriteString("\n")
+	if reason != "" {
+		fmt.Fprintf(&sb, "%s %s\n", policy.PolicyMsg(ctx, "Reason:", "原因："), reason)
+	}
+	fmt.Fprintf(&sb, "%s %s\n", policy.PolicyMsg(ctx, "Asset:", "资产："), assetIdentity(req.AssetName, req.AssetID, face))
+	fmt.Fprintf(&sb, "%s\n  %s\n", policy.PolicyMsg(ctx, "Command:", "命令："), req.Command)
+	sb.WriteString(policy.PolicyMsg(ctx,
+		"The command was not executed. Fix it and run the corrected command, or ask a human to approve it once in an interactive terminal.",
+		"命令没有执行。请修正后执行修正过的命令，或请人在交互终端里审批一次。"))
+	return sb.String()
 }
 
 // formatNeedsTTY 构造 NEEDS TTY 的正文：说明这类操作无主体、任何规则都不能预授权，

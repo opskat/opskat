@@ -26,7 +26,9 @@ import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } f
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
+import { formatModKey } from "@/stores/shortcutStore";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
+import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
 
@@ -73,6 +75,10 @@ interface QueryResultTableProps {
   onCellEdit?: (edit: CellEdit) => void;
   onSetCellValue?: (edit: CellEdit) => void;
   onPasteCell?: (edit: CellEdit) => void;
+  // Enables keyboard paste of a tab-separated block. Read-only grids and grids whose host
+  // has no pending-edit staging (SQL results, MongoDB documents) leave the prop out, and
+  // then Ctrl/Cmd+V pastes nothing there.
+  onPasteBlock?: (block: { edits: CellEdit[]; newRowCount: number }) => void;
   onGenerateUuid?: (edit: CellEdit) => void;
   onCopyAs?: (format: CopyAsFormat, ctx: CellActionContext) => void;
   onFilterByCellValue?: (ctx: CellActionContext) => void;
@@ -160,6 +166,59 @@ type ColumnContextMenu = {
 
 type ContextMenuState = CellContextMenu | RowContextMenu | ColumnContextMenu;
 
+/**
+ * A copy target addressed the way a context menu addresses one. When the addressed
+ * row/column is part of the current selection, the whole selection is copied instead.
+ */
+type CopyTarget = { kind: "row" | "column" | "cell"; rowIdx?: number; col?: string; value?: unknown };
+
+/**
+ * The single source of truth for "selection → clipboard text". Both the context-menu copy
+ * and the keyboard copy build their text here, so the two can never disagree.
+ */
+function buildCopyText({
+  target,
+  rows,
+  displayColumns,
+  sortedIndices,
+  selectedRowIdxs,
+  selectedColumns,
+}: {
+  target: CopyTarget;
+  rows: Record<string, unknown>[];
+  displayColumns: string[];
+  sortedIndices: number[];
+  selectedRowIdxs: Set<number>;
+  selectedColumns: Set<string>;
+}): string {
+  const selectedRowOrder = sortedIndices.filter((rowIdx) => selectedRowIdxs.has(rowIdx));
+  const selectedColumnOrder = displayColumns.filter((col) => selectedColumns.has(col));
+  const rowCopyIndices =
+    (target.kind === "row" || target.kind === "cell") &&
+    target.rowIdx != null &&
+    selectedRowIdxs.has(target.rowIdx) &&
+    selectedRowOrder.length > 0
+      ? selectedRowOrder
+      : [target.kind === "row" ? (target.rowIdx ?? -1) : -1];
+  const columnCopyColumns =
+    (target.kind === "column" || target.kind === "cell") &&
+    target.col != null &&
+    selectedColumns.has(target.col) &&
+    selectedColumnOrder.length > 0
+      ? selectedColumnOrder
+      : [target.kind === "column" ? (target.col ?? "") : ""];
+  const hasColumnSelection = columnCopyColumns.length > 0 && columnCopyColumns[0] !== "";
+  const copyGrid = (rowIndices: number[], columns: string[]) =>
+    rowIndices.map((rowIdx) => columns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t")).join("\n");
+  if (target.kind === "row" || (target.kind === "cell" && rowCopyIndices[0] !== -1)) {
+    return copyGrid(rowCopyIndices, displayColumns);
+  }
+  if (target.kind === "column" || (target.kind === "cell" && hasColumnSelection)) {
+    return copyGrid(sortedIndices, columnCopyColumns);
+  }
+  return cellValueToText(target.value);
+}
+
 function getColumnTypeIcon(type?: string) {
   const normalized = type?.toLowerCase() ?? "";
   if (/(int|decimal|numeric|float|double|real|serial|number)/.test(normalized)) return Hash;
@@ -245,6 +304,7 @@ function QueryResultTableImpl({
   onCellEdit,
   onSetCellValue,
   onPasteCell,
+  onPasteBlock,
   onGenerateUuid,
   onCopyAs,
   onFilterByCellValue,
@@ -574,6 +634,22 @@ function QueryResultTableImpl({
     }
   }, [editingCell]);
 
+  // Closing the editor unmounts the input, which drops focus to <body> and silently kills the
+  // grid's keyboard bindings (copy, paste, arrows). Hand focus back to the grid unless the
+  // closing interaction moved it somewhere else on purpose.
+  const editorWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (editingCell) {
+      editorWasOpenRef.current = true;
+      return;
+    }
+    if (!editorWasOpenRef.current) return;
+    editorWasOpenRef.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    containerRef.current?.focus();
+  }, [editingCell]);
+
   // Close context menu on outside click / escape
   useEffect(() => {
     if (!ctxMenu) return;
@@ -729,31 +805,19 @@ function QueryResultTableImpl({
   const handleCopyCell = useCallback(async () => {
     if (!ctxMenu) return;
     try {
-      const selectedRowOrder = sortedIndices.filter((rowIdx) => selectedRowIdxs.has(rowIdx));
-      const selectedColumnOrder = displayColumns.filter((col) => selectedColumns.has(col));
-      const rowCopyIndices =
-        (ctxMenu.kind === "row" || ctxMenu.kind === "cell") &&
-        selectedRowIdxs.has(ctxMenu.rowIdx) &&
-        selectedRowOrder.length > 0
-          ? selectedRowOrder
-          : [ctxMenu.kind === "row" ? ctxMenu.rowIdx : -1];
-      const columnCopyColumns =
-        (ctxMenu.kind === "column" || ctxMenu.kind === "cell") &&
-        selectedColumns.has(ctxMenu.col) &&
-        selectedColumnOrder.length > 0
-          ? selectedColumnOrder
-          : [ctxMenu.kind === "column" ? ctxMenu.col : ""];
-      const hasColumnSelection = columnCopyColumns.length > 0 && columnCopyColumns[0] !== "";
-      const text =
-        ctxMenu.kind === "row" || (ctxMenu.kind === "cell" && rowCopyIndices.length > 0 && rowCopyIndices[0] !== -1)
-          ? rowCopyIndices
-              .map((rowIdx) => displayColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
-              .join("\n")
-          : ctxMenu.kind === "column" || (ctxMenu.kind === "cell" && hasColumnSelection)
-            ? sortedIndices
-                .map((rowIdx) => columnCopyColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
-                .join("\n")
-            : cellValueToText(ctxMenu.value);
+      const text = buildCopyText({
+        target: {
+          kind: ctxMenu.kind,
+          rowIdx: ctxMenu.kind === "cell" || ctxMenu.kind === "row" ? ctxMenu.rowIdx : undefined,
+          col: ctxMenu.kind === "cell" || ctxMenu.kind === "column" ? ctxMenu.col : undefined,
+          value: ctxMenu.kind === "cell" ? ctxMenu.value : undefined,
+        },
+        rows,
+        displayColumns,
+        sortedIndices,
+        selectedRowIdxs,
+        selectedColumns,
+      });
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
@@ -762,6 +826,41 @@ function QueryResultTableImpl({
       setCtxMenu(null);
     }
   }, [ctxMenu, displayColumns, rows, selectedColumns, selectedRowIdxs, sortedIndices, t]);
+
+  // Keyboard copy mirrors what a right-click on the current selection would copy:
+  // rows first, then columns, then the focused cell.
+  const copySelectionToClipboard = useCallback(async () => {
+    const target: CopyTarget | null =
+      selectedRowIdxs.size > 0
+        ? { kind: "row", rowIdx: sortedIndices.find((rowIdx) => selectedRowIdxs.has(rowIdx)) }
+        : selectedColumns.size > 0
+          ? { kind: "column", col: displayColumns.find((col) => selectedColumns.has(col)) }
+          : selectedCell
+            ? {
+                kind: "cell",
+                rowIdx: selectedCell.origIdx,
+                col: selectedCell.col,
+                value: edits?.has(cellKey(selectedCell.origIdx, selectedCell.col))
+                  ? edits.get(cellKey(selectedCell.origIdx, selectedCell.col))
+                  : rows[selectedCell.origIdx]?.[selectedCell.col],
+              }
+            : null;
+    if (!target) return;
+    try {
+      const text = buildCopyText({
+        target,
+        rows,
+        displayColumns,
+        sortedIndices,
+        selectedRowIdxs,
+        selectedColumns,
+      });
+      await navigator.clipboard.writeText(text);
+      notifyCopied(t("query.copied"));
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [selectedRowIdxs, selectedColumns, selectedCell, sortedIndices, displayColumns, edits, rows, t]);
 
   const handleCopyFieldName = useCallback(async () => {
     const col = ctxMenu?.kind === "cell" || ctxMenu?.kind === "column" ? ctxMenu.col : null;
@@ -805,6 +904,51 @@ function QueryResultTableImpl({
       setCtxMenu(null);
     }
   }, [ctxMenu, pasteCellHandler]);
+
+  // Clipboard block paste: every pasted value becomes a pending edit of the cell it lands
+  // in, from the anchor cell rightwards and downwards. A block that runs past the last
+  // displayed row asks the host for that many unsaved rows, the same state the "add row"
+  // affordance creates. Values past the last visible column are discarded.
+  const pasteClipboardBlock = useCallback(async () => {
+    if (!onPasteBlock || displayColumns.length === 0) return;
+    const anchor = selectedCell
+      ? { rowIdx: selectedCell.origIdx, col: selectedCell.col }
+      : selectedRowIdxs.size > 0
+        ? { rowIdx: sortedIndices.find((rowIdx) => selectedRowIdxs.has(rowIdx)), col: displayColumns[0] }
+        : null;
+    if (!anchor || anchor.rowIdx == null) return;
+    const anchorRowIdx = anchor.rowIdx;
+    const anchorDisplayIdx = sortedIndices.indexOf(anchorRowIdx);
+    const startColIdx = displayColumns.indexOf(anchor.col);
+    if (anchorDisplayIdx === -1 || startColIdx === -1) return;
+
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch (e) {
+      toast.error(String(e));
+      return;
+    }
+    if (!text.trim()) return;
+
+    const edits: CellEdit[] = [];
+    let newRowCount = 0;
+    parseTabSeparatedRows(text).forEach((cells, rowOffset) => {
+      const targetDisplayIdx = anchorDisplayIdx + rowOffset;
+      const rowIdx = sortedIndices[targetDisplayIdx] ?? rows.length + targetDisplayIdx - sortedIndices.length;
+      let wrote = false;
+      cells.forEach((value, colOffset) => {
+        const col = displayColumns[startColIdx + colOffset];
+        if (col == null) return;
+        edits.push({ rowIdx, col, value });
+        wrote = true;
+      });
+      if (wrote && rowIdx >= rows.length) newRowCount = Math.max(newRowCount, rowIdx - rows.length + 1);
+    });
+    if (edits.length === 0) return;
+
+    onPasteBlock({ edits, newRowCount });
+  }, [onPasteBlock, displayColumns, selectedCell, selectedRowIdxs, sortedIndices, rows.length]);
 
   const handleGenerateUuid = useCallback(() => {
     if (!ctxMenu || ctxMenu.kind !== "cell") return;
@@ -1161,6 +1305,24 @@ function QueryResultTableImpl({
       // When editing, the input owns key events — only Escape handled here already
       // (the input's onKeyDown calls setEditingCell(null) on Escape).
       if (editingCell) return;
+
+      // Keyboard copy: the browser keeps the key while the user has page text selected.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        const textSelection = window.getSelection();
+        if (textSelection && !textSelection.isCollapsed && textSelection.toString().length > 0) return;
+        if (!selectedCell && selectedRowIdxs.size === 0 && selectedColumns.size === 0) return;
+        e.preventDefault();
+        void copySelectionToClipboard();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (!editable || !onPasteBlock || (!selectedCell && selectedRowIdxs.size === 0)) return;
+        e.preventDefault();
+        void pasteClipboardBlock();
+        return;
+      }
+
       if (!selectedCell) {
         if ((selectedRowIdxs.size > 0 || selectedColumns.size > 0) && e.key === "Escape") {
           e.preventDefault();
@@ -1221,9 +1383,12 @@ function QueryResultTableImpl({
       sortedIndices,
       displayColumns,
       editable,
+      onPasteBlock,
       onSelectedCellChange,
       onSelectedRowsChange,
       selectCell,
+      copySelectionToClipboard,
+      pasteClipboardBlock,
     ]
   );
 
@@ -1725,6 +1890,7 @@ function QueryResultTableImpl({
                 <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyCell}>
                   <Copy className="h-3.5 w-3.5" />
                   {t("query.copyValue")}
+                  <span className="ml-auto text-xs text-muted-foreground">{formatModKey("KeyC")}</span>
                 </button>
                 {onCopyAs && (
                   <div

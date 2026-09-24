@@ -40,6 +40,8 @@ make install-skill                       # Register opsctl plugin marketplace
 
 > **Feature verification & debugging**: the verification order and ad-hoc workflow (cheap signals → `opsctl` → `make dev-sandbox` + `e2e/drive.mjs`; evidence) is [docs/VERIFICATION.md](VERIFICATION.md). Mechanics: reading logs (`logs/opskat.log`) / database (`opskat.db`, e.g. `audit_logs`) / headless `opsctl` — [docs/references/testing-debugging-guide.md](references/testing-debugging-guide.md) (written for agents like Claude/Codex, in English); driving the **real GUI end-to-end** (Playwright × Wails) — [docs/references/e2e-harness-guide.md](references/e2e-harness-guide.md).
 
+For desktop/CLI transport diagnosis, see [Windows local IPC](references/windows-local-ipc.md), including a standalone AF_UNIX probe and cross-platform regression checks.
+
 ## Architecture
 
 The architecture & subsystem map — process topology, backend layering, the request lifecycle, each subsystem, the data model, and the AI / extension / opsctl flows — lives in its own doc: **[ARCHITECTURE.md](ARCHITECTURE.md)**. Read it before working across subsystem boundaries.

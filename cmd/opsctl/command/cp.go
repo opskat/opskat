@@ -15,7 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/sshpool"
 )
 
 // cmdCp 是 opsctl 的传输面：`opsctl cp [-r] <source>... <destination>`，两端各自可以是
@@ -36,6 +35,15 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		return 1
 	}
 	recursive, rest := extractRecursiveFlag(args)
+	var unknown []string
+	for _, arg := range rest {
+		if strings.HasPrefix(arg, "-") {
+			unknown = append(unknown, arg)
+		}
+	}
+	if rejectExtraArgs(unknown) {
+		return 1
+	}
 	if len(rest) < 2 {
 		printCpUsage()
 		return 1
@@ -45,6 +53,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		ctx = aictx.WithSessionID(ctx, session)
 	}
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	ctx = withMFA(ctx)
 	ctx, sftpCache, ownsSFTPCache := helper.EnsureSFTPClientCache(ctx)
 	if ownsSFTPCache {
 		defer func() { _ = sftpCache.Close() }()
@@ -56,16 +65,14 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 
 	dst, err := parseCpEndpoint(ctx, rest[len(rest)-1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+		return writeRemoteFailure(os.Stderr, err)
 	}
 	srcs := make([]*cpEndpoint, 0, len(rest)-1)
 	sourcePaths := make([]string, 0, len(rest)-1)
 	for _, raw := range rest[:len(rest)-1] {
 		src, srcErr := parseCpEndpoint(ctx, raw)
 		if srcErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", srcErr)
-			return 1
+			return writeRemoteFailure(os.Stderr, srcErr)
 		}
 		if !src.isRemote() && !dst.isRemote() {
 			fmt.Fprintln(os.Stderr, "Error: at least one path must be remote (<asset>:/<path>)")
@@ -107,8 +114,7 @@ func cmdCpSingleSource(
 	}
 
 	// 文件传输与执行命令等价（写 authorized_keys / cron / 被 systemd 引用的脚本都够
-	// 换来一次执行），因此必须与 exec 一样过审批。审批放在 proxy 与工具两条路的共同上游，
-	// 否则走 proxy 的那条路径会漏。
+	// 换来一次执行），因此必须与 exec 一样过审批。
 	approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx, []cpTarget{
 		{ep: src, dir: helper.DirRead, path: src.path},
 		{ep: dst, dir: helper.DirWrite, path: dst.path},
@@ -119,24 +125,6 @@ func cmdCpSingleSource(
 	ctx = approvalCtx
 	decision := result.ToCheckResult()
 	params := cpToolParams(src.arg, dst.arg, false, src.assetID(), dst.assetID())
-
-	// proxy 快路径复用桌面端的 SSH 连接池，因此只在远端端点全是 SSH 时启用——对象存储
-	// 没有对应能力。它一次只传一个被指名的文件、且服务端不建父目录（sftp.Create），
-	// 所以也只用在单源形态上，即完全等价于收敛前的四种组合。
-	if proxy := cpSSHProxyClientFn(); proxy != nil && cpAllRemoteSupportPooledProxy(src, dst) {
-		exitCode := cmdCpViaProxy(proxy, src, dst)
-		var cpErr error
-		if exitCode != 0 {
-			cpErr = fmt.Errorf("cp via proxy failed with exit code %d", exitCode)
-		}
-		argsJSON, marshalErr := cpAuditArgs(params)
-		if marshalErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
-			return 1
-		}
-		writeOpsctlAudit(ctx, "cp", argsJSON, fmt.Sprintf(`{"status":"completed","exit_code":%d}`, exitCode), cpErr, decision)
-		return exitCode
-	}
 
 	return callHandler(ctx, handlers, "cp", params, decision)
 }
@@ -332,16 +320,6 @@ func absLocalPath(path string) (string, error) {
 	return abs, nil
 }
 
-// cpAllRemoteSupportPooledProxy 只询问适配器能力，不在共享编排里判断协议类型。
-func cpAllRemoteSupportPooledProxy(eps ...*cpEndpoint) bool {
-	for _, ep := range eps {
-		if ep.isRemote() && !helper.SupportsPooledProxyCopy(ep.adapter) {
-			return false
-		}
-	}
-	return true
-}
-
 // extractRecursiveFlag 取出 -r / --recursive，返回 (recursive, 其余参数)。cp 的其余参数
 // 全是路径，因此不需要 "--" 分隔符那套（exec 才需要，它后面跟的是远端命令）。
 func extractRecursiveFlag(args []string) (bool, []string) {
@@ -444,9 +422,6 @@ var cpBatchApprovalFn = requireCpBatchApproval
 // cpBatchSendFn 是 requireCpBatchApproval 把展开出的 items 交给桌面端的最后一步，同上一套路：
 // 测试替换它以观察真正要发出的 items（含 Detail），不用连真实的审批 socket。
 var cpBatchSendFn = requireBatchApproval
-
-// cpSSHProxyClientFn 允许单测显式关闭 proxy 探测，避免读取默认用户数据目录下的 socket/token。
-var cpSSHProxyClientFn = getSSHProxyClient
 
 // requireCpBatchApproval 让本次传输的远端范围过授权；递归/通配提交目录或对象前缀，
 // 明确列出的多个文件提交各自的具体路径。
@@ -566,59 +541,6 @@ func cpApprovalFailed(
 	writeOpsctlAudit(ctx, "cp", argsJSON, "", approvalErr, result.ToCheckResult())
 	// 结构化拒绝（NEEDS AUTHORIZATION）→ 退出码 3，stderr 首行是裸标记；其余保持 1。
 	return writeApprovalFailure(os.Stderr, approvalErr)
-}
-
-// cmdCpViaProxy 通过 proxy 执行一次单文件传输。至少一端是远端由调用方保证。
-func cmdCpViaProxy(proxy *sshpool.Client, src, dst *cpEndpoint) int {
-	switch {
-	case !src.isRemote():
-		// Upload: local -> remote
-		f, err := os.Open(src.path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		defer func() { _ = f.Close() }()
-		if err := proxy.Upload(sshpool.ProxyRequest{
-			AssetID: dst.asset.ID,
-			DstPath: dst.path,
-		}, f); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		return 0
-
-	case !dst.isRemote():
-		// Download: remote -> local
-		f, err := os.Create(dst.path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		defer func() { _ = f.Close() }()
-		if err := proxy.Download(sshpool.ProxyRequest{
-			AssetID: src.asset.ID,
-			SrcPath: src.path,
-		}, f); err != nil {
-			_ = os.Remove(dst.path)
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		return 0
-
-	default:
-		// Asset-to-asset transfer: remote -> remote
-		if err := proxy.Copy(sshpool.ProxyRequest{
-			AssetID:    dst.asset.ID,
-			SrcAssetID: src.asset.ID,
-			SrcPath:    src.path,
-			DstPath:    dst.path,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		return 0
-	}
 }
 
 func printCpUsage() {

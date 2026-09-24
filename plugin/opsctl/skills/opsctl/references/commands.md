@@ -149,7 +149,7 @@ unknown.
 **Approval flow**:
 1. Command policy check (permanent allow/deny rules from the asset's own column, its group chain, and attached policy groups)
 2. Still-valid grant match (24-hour grants saved by the desktop dialog's "Remember")
-3. Approver selection: an interactive terminal (stdin and stderr both TTYs) prompts right there — `exec` with piped stdin does NOT count; otherwise the running desktop app shows its dialog; with neither, exit code 3 with `NEEDS AUTHORIZATION` on the first stderr line plus a paste-ready `opsctl policy allow` line
+3. Approver selection: an interactive terminal (stdin and stderr both TTYs) prompts right there — `exec` with piped stdin does NOT count; otherwise the running desktop app shows its dialog; with neither, exit code 3 with `NEEDS AUTHORIZATION` on the first stderr line plus a paste-ready `opsctl policy allow` line — or, for a shell command the policy cannot split into sub-commands (e.g. an unclosed quote), `NEEDS TTY` with a `Reason:` line naming the parse error: no rule can match it, so fix the command
 
 ```bash
 opsctl exec web-server --type ssh -- uptime
@@ -423,7 +423,8 @@ Write permanent rules. Targets are one or more assets, or `--group <group>` (rep
 **`--type` semantics differ by target**:
 - Asset target: a type assertion that must match the asset's type; the rule shape comes from the asset itself, so it can be omitted.
 - Group target: **required** — a group has no type of its own, this is the only way to select which policy shape the rules land in.
-- Patterns support `*` wildcard and are normalized like the permission check does; a normalized-empty pattern is refused rather than landing an unusable rule.
+- Patterns support `*` wildcard and are normalized like the permission check does; a normalized-empty pattern is refused rather than landing an unusable rule — including a shell pattern the policy cannot split into sub-commands, since no command would ever match it.
+- A standalone `*` on an ssh / serial / k8s target is full access: it is the only rule that also allows shell commands the policy cannot split into sub-commands, and only while no deny rule is in effect — a deny rule cannot be checked against such a command, so any deny sends it back to a human.
 
 ### `policy rm <asset>|--group <group> <id>`
 

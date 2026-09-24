@@ -471,6 +471,21 @@ func (r *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// WriteTo 把源自己的快路径（SFTP 的并发读）透传出去：计数层挡住它，
+// 远端到本地的下载就会退化成每 32KB 一次往返。源没有快路径时（对象存储的流）
+// 交回 io.Copy，由它去探测目的端的 ReadFrom。
+func (r *countingReader) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	var err error
+	if wt, ok := r.r.(io.WriterTo); ok {
+		n, err = wt.WriteTo(w)
+	} else {
+		n, err = io.Copy(w, r.r)
+	}
+	r.n += n
+	return n, err
+}
+
 func cpSummary(transferred int, bytes int64, skipped []string) (string, error) {
 	out, err := json.Marshal(cpResult{Transferred: transferred, Bytes: bytes, Skipped: skipped})
 	if err != nil {

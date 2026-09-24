@@ -35,6 +35,7 @@ describe("bundle boundaries", () => {
       "@/components/terminal/SessionToolbar",
       "@/components/terminal/TerminalToolbar",
       "@/components/terminal/FileManagerPanel",
+      "@/components/terminal/editor/RemoteFileEditorTab",
       "@/components/settings/SettingsPage",
       "@/components/settings/CredentialManager",
       "@/components/audit/AuditLogPage",

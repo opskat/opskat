@@ -256,7 +256,7 @@ func TestExtensionToolHonoursAnApprovedGrant(t *testing.T) {
 func TestExtensionApprovalSupportsAlwaysAllow(t *testing.T) {
 	registerFake(t, &fakePlugin{})
 
-	assert.Equal(t, permission.ApprovalKindSingle, permission.ApprovalKindForType("acme-store"))
+	assert.Equal(t, permission.ApprovalKindSingle, permission.ApprovalKindFor("acme-store", "list_objects --bucket=prod"))
 	assert.True(t, permission.SupportsGrantApproval("acme-store"))
 	assert.Equal(t, []string{"list_objects --bucket=prod"},
 		permission.NormalizeGrantPatterns("acme-store", "list_objects --bucket=prod", permission.GrantOriginSystem))

@@ -80,7 +80,9 @@ export function ActiveTasksQuitDialog({ open, activities, onOpenChange, onConfir
           </div>
           <AlertDialogTitle>{t("appQuit.activityTitle")}</AlertDialogTitle>
           <div className="mt-1 text-sm text-muted-foreground">
-            {t("appQuit.activitySummary", { running: running.length, connections: connections.length })}
+            {connections.length > 0
+              ? t("appQuit.activitySummary", { running: running.length, connections: connections.length })
+              : t("appQuit.activitySummaryRunningOnly", { running: running.length })}
           </div>
         </AlertDialogHeader>
 
@@ -110,7 +112,7 @@ export function ActiveTasksQuitDialog({ open, activities, onOpenChange, onConfir
         <AlertDialogFooter className="p-6 pt-5">
           <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" data-testid="confirm-force-quit" onClick={onConfirm}>
-            {t("appQuit.quitActivities", { count: activities.length })}
+            {t("appQuit.quitActivities", { count: running.length })}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

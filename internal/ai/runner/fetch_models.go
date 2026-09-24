@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 )
 
 // ModelInfo 从 API 返回的模型信息
@@ -15,17 +17,37 @@ type ModelInfo struct {
 	ID string `json:"id"`
 }
 
+// FetchModelsOptions 拉取模型列表的入参。
+type FetchModelsOptions struct {
+	ProviderType string
+	APIBase      string
+	APIKey       string
+	// ExtraHeaders 该 Provider 配置的自定义请求头。拉列表不属于任何会话，
+	// 值里的 {{session}} 展开为一次性随机标识：要求会话头的网关照样能返回列表，
+	// 又不给对端留一个可以跨次跟踪的固定标识。
+	ExtraHeaders []ai_provider_entity.ExtraHeader
+}
+
 // FetchModels 从 API 获取可用模型列表
-func FetchModels(providerType, apiBase, apiKey string) ([]ModelInfo, error) {
-	switch providerType {
+func FetchModels(opts FetchModelsOptions) ([]ModelInfo, error) {
+	headers := resolveExtraHeaders(opts.ExtraHeaders, oneOffSessionID())
+	switch opts.ProviderType {
 	case "anthropic":
-		return fetchAnthropicModels(apiBase, apiKey)
+		return fetchAnthropicModels(opts.APIBase, opts.APIKey, headers)
 	default:
-		return fetchOpenAIModels(apiBase, apiKey)
+		return fetchOpenAIModels(opts.APIBase, opts.APIKey, headers)
 	}
 }
 
-func fetchOpenAIModels(apiBase, apiKey string) ([]ModelInfo, error) {
+// applyExtraHeaders 在鉴权头之后写，Set 覆盖同名值；保留头已在 IPC 边界拒掉，
+// 这里不会出现自定义头挤掉鉴权头的情况。
+func applyExtraHeaders(req *http.Request, headers map[string]string) {
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+}
+
+func fetchOpenAIModels(apiBase, apiKey string, headers map[string]string) ([]ModelInfo, error) {
 	if apiBase == "" {
 		apiBase = "https://api.openai.com/v1"
 	}
@@ -36,6 +58,7 @@ func fetchOpenAIModels(apiBase, apiKey string) ([]ModelInfo, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	applyExtraHeaders(req, headers)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -68,7 +91,7 @@ func fetchOpenAIModels(apiBase, apiKey string) ([]ModelInfo, error) {
 	return models, nil
 }
 
-func fetchAnthropicModels(apiBase, apiKey string) ([]ModelInfo, error) {
+func fetchAnthropicModels(apiBase, apiKey string, headers map[string]string) ([]ModelInfo, error) {
 	if apiBase == "" {
 		apiBase = "https://api.anthropic.com"
 	}
@@ -80,6 +103,7 @@ func fetchAnthropicModels(apiBase, apiKey string) ([]ModelInfo, error) {
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	applyExtraHeaders(req, headers)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)

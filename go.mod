@@ -4,8 +4,9 @@ go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/bouncyball-git/gopher-rdp v1.0.8
-	github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1
+	github.com/cago-frame/agents v0.0.0-20260914054912-3794c3930948
 	github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.0

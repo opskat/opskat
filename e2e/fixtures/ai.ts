@@ -70,9 +70,18 @@ export async function ensureAIProvider(page: Page): Promise<void> {
       async ([name, apiBase, apiKey]) => {
         const ai = (window as unknown as { go: { ai: { AI: Record<string, (...a: unknown[]) => Promise<unknown>> } } })
           .go.ai.AI;
-        const created = (await ai.CreateAIProvider(name, "openai", apiBase, apiKey, "mock-model", 4096, 32000, false, "")) as {
-          id: number;
-        };
+        const created = (await ai.CreateAIProvider({
+          name,
+          type: "openai",
+          apiBase,
+          apiKey,
+          model: "mock-model",
+          maxOutputTokens: 4096,
+          contextWindow: 32000,
+          reasoningEnabled: false,
+          reasoningEffort: "",
+          extraHeaders: [],
+        })) as { id: number };
         return created.id;
       },
       [AI_PROVIDER_NAME, `${MOCK_BASE}/v1`, AI_PROVIDER_KEY]

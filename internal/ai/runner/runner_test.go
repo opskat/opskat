@@ -188,7 +188,7 @@ func TestRunner_RetriesOn503ProviderError(t *testing.T) {
 
 // TestRunner_EndToEnd_RealOpenAIProvider_503TriggersRetry 是更彻底的端到端回归：
 // 起一个真 httptest server，前 N 次返 503，最后一次正常返回 SSE 流。
-// 走的链路完全是生产路径：BuildProvider(*openai.AIProvider, apiKey) →
+// 走的链路完全是生产路径：BuildProvider(ProviderOptions{Entity, APIKey}) →
 // cago openai.NewProvider → BuildSystem (注入 RetryPolicy) → Runner.Send。
 //
 // 这条路径覆盖的关键 bug:
@@ -232,7 +232,7 @@ func TestRunner_EndToEnd_RealOpenAIProvider_503TriggersRetry(t *testing.T) {
 			APIBase: srv.URL,
 			Model:   "gpt-4o",
 		}
-		prov, err := BuildProvider(entity, "test-key")
+		prov, err := BuildProvider(ProviderOptions{Entity: entity, APIKey: "test-key"})
 		So(err, ShouldBeNil)
 
 		cfg := SystemConfig{

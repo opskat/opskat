@@ -8,25 +8,99 @@ import (
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 	"github.com/opskat/opskat/internal/service/ai_provider_svc"
+
+	"golang.org/x/net/http/httpguts"
 )
+
+// ExtraHeaderInput 前端提交的一条自定义请求头。
+type ExtraHeaderInput struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// AIProviderInput 创建/更新 Provider 的入参。收成一个结构而不是继续排位置参数：
+// 这个列表已经到 10 个，再加就没人能记住第 7 个 bool 是什么。
+type AIProviderInput struct {
+	Name             string             `json:"name"`
+	Type             string             `json:"type"`
+	APIBase          string             `json:"apiBase"`
+	APIKey           string             `json:"apiKey"`
+	Model            string             `json:"model"`
+	MaxOutputTokens  int                `json:"maxOutputTokens"`
+	ContextWindow    int                `json:"contextWindow"`
+	ReasoningEnabled bool               `json:"reasoningEnabled"`
+	ReasoningEffort  string             `json:"reasoningEffort"`
+	ExtraHeaders     []ExtraHeaderInput `json:"extraHeaders"`
+}
+
+// reservedHeaderNames 由 OpsKat 自己写在请求上的头。用户配了同名的只会被静默丢弃，
+// 与其让他以为生效，不如在保存时就拒掉。
+var reservedHeaderNames = map[string]bool{
+	"authorization":     true,
+	"x-api-key":         true,
+	"anthropic-version": true,
+	"content-type":      true,
+}
+
+// normalizeExtraHeaders 校验并规整前端提交的自定义请求头。
+// 名称为空视为用户点了"添加"又改主意，直接丢弃；值不做裁剪，有网关要求带空格的字面量。
+// 名称/值的合法性在这里判：net/http 要到发请求时才拒，那时用户早就把表单关了，
+// 只会看到一条"获取模型列表失败: net/http: invalid header field name"。
+func normalizeExtraHeaders(input []ExtraHeaderInput) ([]ai_provider_entity.ExtraHeader, error) {
+	var out []ai_provider_entity.ExtraHeader
+	seen := make(map[string]bool, len(input))
+	for _, h := range input {
+		name := strings.TrimSpace(h.Name)
+		if name == "" {
+			continue
+		}
+		if !httpguts.ValidHeaderFieldName(name) {
+			return nil, fmt.Errorf("请求头名称 %s 不合法", name)
+		}
+		if !httpguts.ValidHeaderFieldValue(h.Value) {
+			return nil, fmt.Errorf("请求头 %s 的值不合法", name)
+		}
+		key := strings.ToLower(name)
+		if reservedHeaderNames[key] {
+			return nil, fmt.Errorf("请求头 %s 由 OpsKat 设置，不能覆盖", name)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("请求头 %s 重复", name)
+		}
+		seen[key] = true
+		out = append(out, ai_provider_entity.ExtraHeader{Name: name, Value: h.Value})
+	}
+	return out, nil
+}
 
 // AIProviderInfo 返回给前端的 Provider 信息
 type AIProviderInfo struct {
-	ID               int64  `json:"id"`
-	Name             string `json:"name"`
-	Type             string `json:"type"`
-	APIBase          string `json:"apiBase"`
-	APIKey           string `json:"apiKey"`
-	Model            string `json:"model"`
-	MaxOutputTokens  int    `json:"maxOutputTokens"`
-	ContextWindow    int    `json:"contextWindow"`
-	ReasoningEnabled bool   `json:"reasoningEnabled"`
-	ReasoningEffort  string `json:"reasoningEffort"`
-	IsActive         bool   `json:"isActive"`
+	ID               int64              `json:"id"`
+	Name             string             `json:"name"`
+	Type             string             `json:"type"`
+	APIBase          string             `json:"apiBase"`
+	APIKey           string             `json:"apiKey"`
+	Model            string             `json:"model"`
+	MaxOutputTokens  int                `json:"maxOutputTokens"`
+	ContextWindow    int                `json:"contextWindow"`
+	ReasoningEnabled bool               `json:"reasoningEnabled"`
+	ReasoningEffort  string             `json:"reasoningEffort"`
+	IsActive         bool               `json:"isActive"`
+	ExtraHeaders     []ExtraHeaderInput `json:"extraHeaders"`
 }
 
-func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) AIProviderInfo {
+// toProviderInfo 把 entity 转成前端可见的形态。自定义请求头解析失败直接报错：
+// 展示成"没配过"会诱导用户照着空表单再保存一次，把库里真实存在的配置抹掉。
+func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) (AIProviderInfo, error) {
 	enabled, effort := normalizeProviderReasoningConfig(p.Type, p.ReasoningEnabled, p.ReasoningEffort)
+	stored, err := p.GetExtraHeaders()
+	if err != nil {
+		return AIProviderInfo{}, fmt.Errorf("解析 Provider 自定义请求头失败 (id=%d): %w", p.ID, err)
+	}
+	headers := make([]ExtraHeaderInput, 0, len(stored))
+	for _, h := range stored {
+		headers = append(headers, ExtraHeaderInput{Name: h.Name, Value: h.Value})
+	}
 	return AIProviderInfo{
 		ID:               p.ID,
 		Name:             p.Name,
@@ -39,7 +113,8 @@ func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) AIProviderI
 		ReasoningEnabled: enabled,
 		ReasoningEffort:  effort,
 		IsActive:         p.IsActive,
-	}
+		ExtraHeaders:     headers,
+	}, nil
 }
 
 func normalizeProviderReasoningConfig(providerType string, reasoningEnabled bool, reasoningEffort string) (bool, string) {
@@ -77,7 +152,11 @@ func (a *AI) ListAIProviders() ([]AIProviderInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("解密 Provider API Key 失败 (id=%d): %w", p.ID, err)
 		}
-		result = append(result, toProviderInfo(p, decrypted))
+		info, err := toProviderInfo(p, decrypted)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, info)
 	}
 	return result, nil
 }
@@ -95,46 +174,66 @@ func (a *AI) GetActiveAIProvider() (*AIProviderInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("解密 Provider API Key 失败 (id=%d): %w", p.ID, err)
 	}
-	info := toProviderInfo(p, decrypted)
+	info, err := toProviderInfo(p, decrypted)
+	if err != nil {
+		return nil, err
+	}
 	return &info, nil
 }
 
 // CreateAIProvider 创建新 Provider
-func (a *AI) CreateAIProvider(name, providerType, apiBase, apiKey, model string, maxOutputTokens, contextWindow int, reasoningEnabled bool, reasoningEffort string) (*AIProviderInfo, error) {
-	reasoningEnabled, reasoningEffort = normalizeProviderReasoningConfig(providerType, reasoningEnabled, reasoningEffort)
+func (a *AI) CreateAIProvider(in AIProviderInput) (*AIProviderInfo, error) {
+	reasoningEnabled, reasoningEffort := normalizeProviderReasoningConfig(in.Type, in.ReasoningEnabled, in.ReasoningEffort)
+	headers, err := normalizeExtraHeaders(in.ExtraHeaders)
+	if err != nil {
+		return nil, err
+	}
 	p := &ai_provider_entity.AIProvider{
-		Name:             name,
-		Type:             providerType,
-		APIBase:          apiBase,
-		Model:            model,
-		MaxOutputTokens:  maxOutputTokens,
-		ContextWindow:    contextWindow,
+		Name:             in.Name,
+		Type:             in.Type,
+		APIBase:          in.APIBase,
+		Model:            in.Model,
+		MaxOutputTokens:  in.MaxOutputTokens,
+		ContextWindow:    in.ContextWindow,
 		ReasoningEnabled: reasoningEnabled,
 		ReasoningEffort:  reasoningEffort,
 	}
-	if err := ai_provider_svc.AIProvider().Create(i18n.Ctx(a.ctx, a.lang.Lang()), p, apiKey); err != nil {
+	if err := p.SetExtraHeaders(headers); err != nil {
+		return nil, err
+	}
+	if err := ai_provider_svc.AIProvider().Create(i18n.Ctx(a.ctx, a.lang.Lang()), p, in.APIKey); err != nil {
 		return nil, fmt.Errorf("创建 Provider 失败: %w", err)
 	}
-	info := toProviderInfo(p, apiKey)
+	info, err := toProviderInfo(p, in.APIKey)
+	if err != nil {
+		return nil, err
+	}
 	return &info, nil
 }
 
 // UpdateAIProvider 更新 Provider
-func (a *AI) UpdateAIProvider(id int64, name, providerType, apiBase, apiKey, model string, maxOutputTokens, contextWindow int, reasoningEnabled bool, reasoningEffort string) error {
+func (a *AI) UpdateAIProvider(id int64, in AIProviderInput) error {
 	p, err := ai_provider_svc.AIProvider().Get(i18n.Ctx(a.ctx, a.lang.Lang()), id)
 	if err != nil {
 		return fmt.Errorf("provider 不存在: %w", err)
 	}
-	reasoningEnabled, reasoningEffort = normalizeProviderReasoningConfig(providerType, reasoningEnabled, reasoningEffort)
-	p.Name = name
-	p.Type = providerType
-	p.APIBase = apiBase
-	p.Model = model
-	p.MaxOutputTokens = maxOutputTokens
-	p.ContextWindow = contextWindow
+	reasoningEnabled, reasoningEffort := normalizeProviderReasoningConfig(in.Type, in.ReasoningEnabled, in.ReasoningEffort)
+	headers, err := normalizeExtraHeaders(in.ExtraHeaders)
+	if err != nil {
+		return err
+	}
+	p.Name = in.Name
+	p.Type = in.Type
+	p.APIBase = in.APIBase
+	p.Model = in.Model
+	p.MaxOutputTokens = in.MaxOutputTokens
+	p.ContextWindow = in.ContextWindow
 	p.ReasoningEnabled = reasoningEnabled
 	p.ReasoningEffort = reasoningEffort
-	if err := ai_provider_svc.AIProvider().Update(i18n.Ctx(a.ctx, a.lang.Lang()), p, apiKey); err != nil {
+	if err := p.SetExtraHeaders(headers); err != nil {
+		return err
+	}
+	if err := ai_provider_svc.AIProvider().Update(i18n.Ctx(a.ctx, a.lang.Lang()), p, in.APIKey); err != nil {
 		return fmt.Errorf("更新 Provider 失败: %w", err)
 	}
 
@@ -176,13 +275,31 @@ type AIModelInfo struct {
 	ContextWindow   int    `json:"contextWindow"`
 }
 
+// FetchAIModelsInput 拉取模型列表的入参。带上自定义请求头：Provider 可能还没保存，
+// 要求会话头的网关连列表都拉不到，用户就卡在"填不完表单"这一步。
+type FetchAIModelsInput struct {
+	Type         string             `json:"type"`
+	APIBase      string             `json:"apiBase"`
+	APIKey       string             `json:"apiKey"`
+	ExtraHeaders []ExtraHeaderInput `json:"extraHeaders"`
+}
+
 // FetchAIModels 从 API 获取可用模型列表
-func (a *AI) FetchAIModels(providerType, apiBase, apiKey string) ([]AIModelInfo, error) {
-	if apiKey == "" {
+func (a *AI) FetchAIModels(in FetchAIModelsInput) ([]AIModelInfo, error) {
+	if in.APIKey == "" {
 		return nil, fmt.Errorf("API Key 不能为空")
 	}
+	headers, err := normalizeExtraHeaders(in.ExtraHeaders)
+	if err != nil {
+		return nil, err
+	}
 
-	models, err := runner.FetchModels(providerType, apiBase, apiKey)
+	models, err := runner.FetchModels(runner.FetchModelsOptions{
+		ProviderType: in.Type,
+		APIBase:      in.APIBase,
+		APIKey:       in.APIKey,
+		ExtraHeaders: headers,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("获取模型列表失败: %w", err)
 	}

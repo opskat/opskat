@@ -19,13 +19,21 @@ import {
 } from "@opskat/ui";
 import { SFTPCreateFile, SFTPDelete, SFTPGetwd, SFTPMkdir, SFTPPaste, SFTPRename } from "../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../wailsjs/go/models";
-import { openExternalEdit, type ExternalEditMergePrepareResult, type ExternalEditSession } from "@/lib/externalEditApi";
+import {
+  builtInEditorID,
+  getExternalEditSettings,
+  openExternalEdit,
+  type ExternalEditMergePrepareResult,
+  type ExternalEditSession,
+} from "@/lib/externalEditApi";
 import {
   buildExternalEditAttentionItems,
   isExternalEditClipboardResidueSession,
+  resolveExternalEditorTarget,
   useExternalEditStore,
 } from "@/stores/externalEditStore";
 import { useSFTPStore } from "@/stores/sftpStore";
+import { findEditorTabId, openRemoteFileEditorTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { ExternalEditCompareWorkbench } from "./external-edit/CompareWorkbench";
 import { ExternalEditMergeWorkbench } from "./external-edit/MergeWorkbench";
 import { ExternalEditPendingDialog, type ExternalEditPendingItem } from "./external-edit/PendingDialog";
@@ -44,7 +52,6 @@ import { useTerminalDirectorySync } from "./file-manager/useTerminalDirectorySyn
 import {
   canMovePathToDirectory,
   formatBytes,
-  getEntryPath,
   getParentPath,
   getPathBaseName,
   HANDLE_PX,
@@ -73,6 +80,17 @@ function isExternalEditOversizeError(error: unknown) {
     message.includes("读取过程中超过大小上限") ||
     message.includes("无法完整读取")
   );
+}
+
+// 内置编辑器打不开时给出的原因：读取上限与文本/编码判定都在后端，这里只把它的结论
+// 翻译成一句用户能据以行动的说明，不把带路径与字节数的原始错误抛到界面上。
+function builtInOpenReasonKey(error: unknown): string {
+  if (isExternalEditOversizeError(error)) return "externalEdit.builtIn.oversizeReason";
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("不是可编辑文本文件") || message.includes("编码暂不支持")) {
+    return "externalEdit.builtIn.undecodableReason";
+  }
+  return "externalEdit.builtIn.openFailedReason";
 }
 
 let globalClipboard: ClipboardState | null = null;
@@ -107,16 +125,19 @@ export function FileManagerPanel({
   const {
     currentPath,
     currentPathRef,
-    entries,
     error,
     loading,
     loadDir,
     pathInput,
+    refreshTree,
+    retryExpand,
+    rows,
     selected,
     setError,
     setPathInput,
     setSelected,
     storedPath,
+    toggleExpand,
   } = useFileManagerDirectory(tabId, sessionId);
 
   const {
@@ -130,6 +151,8 @@ export function FileManagerPanel({
   } = useTerminalDirectorySync({ currentPathRef, loadDir, sessionId, tabId });
 
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  // 右键命中行的绝对路径:树里同名条目可能分布在不同层,不能再由 currentPath 拼回去。
+  const ctxEntryPathRef = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [renamePath, setRenamePath] = useState<string | null>(null);
   const [permissionTarget, setPermissionTarget] = useState<PermissionTarget | null>(null);
@@ -143,6 +166,7 @@ export function FileManagerPanel({
   const [preparedMergeResult, setPreparedMergeResult] = useState<ExternalEditMergePrepareResult | null>(null);
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
   const [activeSyncMode, setActiveSyncMode] = useState<DirectorySyncMenuMode>(null);
+  const [builtInBlock, setBuiltInBlock] = useState<{ remotePath: string; reasonKey: string } | null>(null);
 
   const startUpload = useSFTPStore((s) => s.startUpload);
   const startUploadDir = useSFTPStore((s) => s.startUploadDir);
@@ -209,11 +233,12 @@ export function FileManagerPanel({
     }
     return items.filter((item) => !isExternalEditClipboardResidueSession(item.session));
   }, [assetId, attentionItems, safePendingConflict]);
+  // 树上任意可见行都可能被选中/右键,因此按行建索引,而不只是根这一层。
   const entryByPath = useMemo(() => {
     const map = new Map<string, sftp_svc.FileEntry>();
-    for (const entry of entries) map.set(getEntryPath(currentPath, entry), entry);
+    for (const row of rows) if (row.entry) map.set(row.path, row.entry);
     return map;
-  }, [currentPath, entries]);
+  }, [rows]);
   const selectedEntries = useMemo(
     () => selected.map((path) => entryByPath.get(path)).filter(Boolean) as sftp_svc.FileEntry[],
     [entryByPath, selected]
@@ -262,11 +287,29 @@ export function FileManagerPanel({
     void loadDir(sessionSync.cwd);
   }, [currentPath, directoryFollowMode, isOpen, loadDir, sessionSync?.cwd, sessionSync?.cwdKnown]);
 
+  // 这里的 pending 对话框会 portal 到 body,不受编辑器 tab 覆盖住面板的影响,弹错了就是
+  // 一次盖住真正呈现界面的模态劫持。只有这次冲突确实会在本面板的 pendingItems 里成为一条,
+  // 才由本面板弹;否则弹出来的是一个空对话框。不该弹的三种情况:
+  //   - 它根本没带会话: 会话在保存在途时被移除时 markSessionState 返回 nil
+  //     (session.go:797-804,markRemoteMissingConflict 即如此),pendingItems 按 session
+  //     建项,没有会话就没有条目 —— 发起这次保存的界面已经拿着 SaveResult 自己呈现了;
+  //   - 它属于别的资产: pendingConflict 是全局的一份,而每个终端 tab 都常驻一个文件面板
+  //     (MainPanel.tsx 只隐藏不卸载),pendingItems 又按 assetId 过滤,不挡就是每开一个终端
+  //     tab 就多弹一个空对话框;
+  //   - 它归属一个开着的内置编辑器 tab: 那个 tab 自己就是冲突界面(顶部横幅 + 合并/差异/
+  //     重读/覆盖),面板弹的是另一套动作。
+  const conflictOwningSession = safePendingConflict?.session;
+  const conflictPresentedByPanel = useTabStore((s) =>
+    conflictOwningSession && conflictOwningSession.assetId === assetId
+      ? findEditorTabId(s.tabs, conflictOwningSession.assetId, conflictOwningSession.remotePath) === null
+      : false
+  );
+
   // safePendingConflict 变化(含首次挂载)时弹出 pending 对话框:渲染期对比上次值,替代 effect 里的同步 setState
   const [prevPendingConflict, setPrevPendingConflict] = useState<typeof safePendingConflict | undefined>(undefined);
   if (safePendingConflict !== prevPendingConflict) {
     setPrevPendingConflict(safePendingConflict);
-    if (safePendingConflict) {
+    if (safePendingConflict && conflictPresentedByPanel) {
       setPendingDialogOpen(true);
     }
   }
@@ -276,7 +319,7 @@ export function FileManagerPanel({
   ).length;
   const prevDoneCount = useRef(0);
   useEffect(() => {
-    if (doneUploadCount > prevDoneCount.current) void loadDir(currentPathRef.current);
+    if (doneUploadCount > prevDoneCount.current) void refreshTree();
     prevDoneCount.current = doneUploadCount;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doneUploadCount]);
@@ -290,7 +333,6 @@ export function FileManagerPanel({
     return () => window.removeEventListener("sftp:rename-request", handler);
   }, []);
 
-  const getFullPath = useCallback((entry: sftp_svc.FileEntry) => getEntryPath(currentPath, entry), [currentPath]);
   const selectedItems = useCallback(() => {
     const paths = selected.length ? selected : [];
     return paths
@@ -341,11 +383,11 @@ export function FileManagerPanel({
         })
       );
       if (clipboard.mode === "cut") setGlobalClipboard(null);
-      await loadDir(currentPathRef.current);
+      await refreshTree();
     } catch (e) {
       toast.error(String(e));
     }
-  }, [clipboard, currentPathRef, loadDir, sessionId]);
+  }, [clipboard, currentPathRef, refreshTree, sessionId]);
 
   const goUp = useCallback(() => {
     if (currentPath === "/") return;
@@ -377,18 +419,18 @@ export function FileManagerPanel({
     if (!deleteTarget) return;
     try {
       for (const item of deleteTarget.paths) await SFTPDelete(sessionId, item.path, item.isDir);
-      await loadDir(currentPathRef.current);
+      await refreshTree();
     } catch (e) {
       setError(String(e));
     } finally {
       setDeleteTarget(null);
     }
-  }, [currentPathRef, deleteTarget, loadDir, sessionId, setError]);
+  }, [deleteTarget, refreshTree, sessionId, setError]);
 
   const canExternalEdit = useCallback((entry: sftp_svc.FileEntry) => !entry.isDir, []);
 
   const handleOpenExternalEdit = useCallback(
-    async (remotePath: string) => {
+    async (remotePath: string, editorId?: string) => {
       // 兼容旧调用方：只有终端页真正绑定资产后才允许进入外部编辑链路，
       // 这样可以让历史测试和非终端场景继续复用组件，而不需要把 assetId 适配带回测试侧。
       if (!assetId) {
@@ -399,12 +441,80 @@ export function FileManagerPanel({
           assetId,
           sessionId,
           remotePath,
+          editorId,
         });
       } catch (error) {
         setError(isExternalEditOversizeError(error) ? EXTERNAL_EDIT_OVERSIZE_ERROR_KEY : String(error));
       }
     },
     [assetId, sessionId, setError]
+  );
+
+  const loadEditorSettings = useCallback(async () => {
+    try {
+      return await getExternalEditSettings();
+    } catch {
+      setError(t(EXTERNAL_EDIT_SAFE_ERROR_KEY));
+      return null;
+    }
+  }, [setError, t]);
+
+  // 内置编辑器：同一资产同一路径已经有 tab 时只聚焦、不再新建会话；
+  // 超限或不可解码时不进入编辑器，改在入口给出原因与出路。
+  const handleOpenBuiltInEditor = useCallback(
+    async (remotePath: string) => {
+      if (!assetId) {
+        return;
+      }
+      try {
+        await openRemoteFileEditorTab({
+          assetId,
+          remotePath,
+          createSession: async () => {
+            const session = await openExternalEdit({ assetId, sessionId, remotePath, editorId: builtInEditorID });
+            return { sessionId: session.id, assetName: session.assetName };
+          },
+        });
+      } catch (error) {
+        setBuiltInBlock({ remotePath, reasonKey: builtInOpenReasonKey(error) });
+      }
+    },
+    [assetId, sessionId]
+  );
+
+  // 「用外部编辑器打开」始终拉起外部编辑器，编辑器的挑选与内置编辑器 tab 共用同一条规则。
+  const handleOpenWithExternalEditor = useCallback(
+    async (remotePath: string) => {
+      if (!assetId) {
+        return;
+      }
+      const settings = await loadEditorSettings();
+      if (!settings) return;
+      const target = resolveExternalEditorTarget(settings);
+      if (!target) {
+        setError(t("externalEdit.builtIn.noExternalEditor"));
+        return;
+      }
+      await handleOpenExternalEdit(remotePath, target.editorId);
+    },
+    [assetId, handleOpenExternalEdit, loadEditorSettings, setError, t]
+  );
+
+  // 双击按「默认编辑器」设置分流：内置编辑器开应用内的编辑器 tab，外部编辑器行为不变。
+  const handleOpenByDefaultEditor = useCallback(
+    async (remotePath: string) => {
+      if (!assetId) {
+        return;
+      }
+      const settings = await loadEditorSettings();
+      if (!settings) return;
+      if (settings.defaultEditorId === builtInEditorID) {
+        await handleOpenBuiltInEditor(remotePath);
+        return;
+      }
+      await handleOpenExternalEdit(remotePath);
+    },
+    [assetId, handleOpenBuiltInEditor, handleOpenExternalEdit, loadEditorSettings]
   );
 
   const handlePrepareMerge = useCallback(
@@ -514,12 +624,12 @@ export function FileManagerPanel({
       try {
         await SFTPRename(sessionId, oldPath, joinRemotePath(getParentPath(oldPath), nextName));
         setRenamePath(null);
-        await loadDir(currentPathRef.current);
+        await refreshTree();
       } catch (e) {
         toast.error(String(e));
       }
     },
-    [currentPathRef, entryByPath, loadDir, sessionId]
+    [entryByPath, refreshTree, sessionId]
   );
 
   const moveEntriesToDirectory = useCallback(
@@ -544,12 +654,12 @@ export function FileManagerPanel({
           await SFTPRename(sessionId, move.from, move.to);
         }
         setSelected([]);
-        await loadDir(currentPathRef.current);
+        await refreshTree();
       } catch (e) {
         toast.error(String(e));
       }
     },
-    [currentPathRef, entryByPath, loadDir, sessionId, setSelected]
+    [entryByPath, refreshTree, sessionId, setSelected]
   );
 
   const openPermission = useCallback(
@@ -572,26 +682,31 @@ export function FileManagerPanel({
     (action: string) => {
       if (!ctxMenu) return;
       const entry = ctxMenu.entry;
-      const targetPath = entry ? getFullPath(entry) : selected[0];
+      const targetPath = entry ? ctxEntryPathRef.current : selected[0];
       const multiPaths = selected.length > 1 ? selected : targetPath ? [targetPath] : [];
       setCtxMenu(null);
       switch (action) {
         case "open":
-          if (entry?.isDir) void navigateToPath(getFullPath(entry));
+          if (entry?.isDir && targetPath) void navigateToPath(targetPath);
           break;
         case "openTerminal":
-          if (entry?.isDir) void syncTerminalToPath(getFullPath(entry));
+          if (entry?.isDir && targetPath) void syncTerminalToPath(targetPath);
           break;
         case "download":
-          if (entry) startDownload(transferTarget, getFullPath(entry));
+          if (entry && targetPath) startDownload(transferTarget, targetPath);
+          break;
+        case "edit":
+          if (entry && targetPath) {
+            void handleOpenBuiltInEditor(targetPath);
+          }
           break;
         case "externalEdit":
-          if (entry) {
-            void handleOpenExternalEdit(getFullPath(entry));
+          if (entry && targetPath) {
+            void handleOpenWithExternalEditor(targetPath);
           }
           break;
         case "downloadDir":
-          if (entry) startDownloadDir(transferTarget, getFullPath(entry));
+          if (entry && targetPath) startDownloadDir(transferTarget, targetPath);
           break;
         case "downloadSelected":
           selectedItems().forEach((item) =>
@@ -654,7 +769,7 @@ export function FileManagerPanel({
           });
           break;
         case "refresh":
-          void loadDir(currentPathRef.current);
+          void refreshTree();
           break;
       }
     },
@@ -665,13 +780,13 @@ export function FileManagerPanel({
       copyFilePaths,
       copyOrCut,
       entryByPath,
-      handleOpenExternalEdit,
-      getFullPath,
-      loadDir,
+      handleOpenBuiltInEditor,
+      handleOpenWithExternalEditor,
       navigateToPath,
       openPermission,
       openProperties,
       paste,
+      refreshTree,
       selected,
       selectedItems,
       startDownload,
@@ -691,7 +806,7 @@ export function FileManagerPanel({
       if (nameDialog === "file") await SFTPCreateFile(sessionId, path);
       if (nameDialog === "folder") await SFTPMkdir(sessionId, path);
       setNameDialog(null);
-      await loadDir(currentPathRef.current);
+      await refreshTree();
     } catch (e) {
       toast.error(String(e));
     }
@@ -773,7 +888,7 @@ export function FileManagerPanel({
               onGoUp={goUp}
               onPathInputChange={setPathInput}
               onPathSubmit={(nextPath) => void navigateToPath(nextPath)}
-              onRefresh={() => void loadDir(currentPathRef.current)}
+              onRefresh={() => void refreshTree()}
               onSyncPanelFromTerminal={() => void handleSyncPanelFromTerminal()}
               onSyncTerminalToPath={() => void handleSyncTerminalToCurrentPath()}
               paneConnected={paneConnected}
@@ -804,15 +919,15 @@ export function FileManagerPanel({
               canExternalEdit={canExternalEdit}
               clipboardCutPaths={clipboardCutPaths}
               currentPath={currentPath}
-              entries={entries}
               error={error}
               loading={loading}
-              onExternalOpen={handleOpenExternalEdit}
+              onExternalOpen={handleOpenByDefaultEditor}
               onGoUp={goUp}
               onMoveEntriesToDirectory={moveEntriesToDirectory}
               onNavigate={(path) => void navigateToPath(path)}
-              onOpenContextMenu={(x, y, entry) => {
+              onOpenContextMenu={(x, y, entry, entryPath) => {
                 if (x < 0 || y < 0) return;
+                ctxEntryPathRef.current = entryPath;
                 if (!entry) {
                   setSelected([]);
                   setCtxMenu({ x, y, entry: null, selectedEntries: [] });
@@ -831,8 +946,11 @@ export function FileManagerPanel({
               }}
               onRenameCancel={() => setRenamePath(null)}
               onRenameCommit={commitRename}
-              onRetry={() => void loadDir(currentPathRef.current)}
+              onRetry={() => void refreshTree()}
+              onRetryExpand={retryExpand}
+              onToggleExpand={toggleExpand}
               renamePath={renamePath}
+              rows={rows}
               selected={selected}
               setSelected={setSelected}
             />
@@ -969,9 +1087,49 @@ export function FileManagerPanel({
         sessionId={sessionId}
         target={permissionTarget}
         onClose={() => setPermissionTarget(null)}
-        onSaved={() => void loadDir(currentPathRef.current)}
+        onSaved={() => void refreshTree()}
       />
       <PropertiesDialog sessionId={sessionId} target={propertiesTarget} onClose={() => setPropertiesTarget(null)} />
+      <Dialog open={!!builtInBlock} onOpenChange={(open) => !open && setBuiltInBlock(null)}>
+        <DialogContent className="max-w-md" data-testid="built-in-editor-blocked">
+          <DialogHeader>
+            <DialogTitle>{t("externalEdit.builtIn.blockedTitle")}</DialogTitle>
+            <DialogDescription>{builtInBlock ? t(builtInBlock.reasonKey) : ""}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                openSettingsTab(t("nav.settings"));
+                setBuiltInBlock(null);
+              }}
+            >
+              {t("externalEdit.builtIn.goToSettings")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (builtInBlock) startDownload(transferTarget, builtInBlock.remotePath);
+                setBuiltInBlock(null);
+              }}
+            >
+              {t("externalEdit.builtIn.download")}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                const blocked = builtInBlock;
+                setBuiltInBlock(null);
+                if (blocked) void handleOpenWithExternalEditor(blocked.remotePath);
+              }}
+            >
+              {t("externalEdit.builtIn.openExternal")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

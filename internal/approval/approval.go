@@ -1,15 +1,17 @@
 package approval
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/localipc"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +44,20 @@ type ApprovalRequest struct {
 	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
 	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
 	Path        string          `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
+	MFA         *MFAChallenge   `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
+}
+
+// MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的
+// ApprovalResponse.Reason；opsctl 据此区分「人取消了」与其它拒绝原因。
+const MFACanceledReason = "mfa canceled"
+
+// MFAChallenge 是 opsctl 请桌面端代为回答的一轮 SSH keyboard-interactive 挑战，
+// 字段与服务器发来的原样一致（名称 / 说明 / 逐条提示与回显标记）。
+type MFAChallenge struct {
+	Name        string   `json:"name"`
+	Instruction string   `json:"instruction"`
+	Prompts     []string `json:"prompts"`
+	Echo        []bool   `json:"echo"`
 }
 
 // GrantItem 授权中的单条操作
@@ -67,6 +83,7 @@ type ApprovalResponse struct {
 	ToolError      string      `json:"tool_error,omitempty"`      // type="ext_tool": execution error message
 	Extension      string      `json:"extension,omitempty"`       // type="ext_dev_install": installed extension name
 	Version        string      `json:"version,omitempty"`         // type="ext_dev_install": installed extension version
+	MFAAnswers     []string    `json:"mfa_answers,omitempty"`     // type="mfa": answers in prompt order; never logged
 }
 
 // SocketPath returns the approval socket path for the given data directory.
@@ -76,10 +93,11 @@ func SocketPath(dataDir string) string {
 
 // --- Server ---
 
-// ApprovalHandler processes an approval request and returns a response.
-type ApprovalHandler func(req ApprovalRequest) ApprovalResponse
+// ApprovalHandler processes an approval request and returns a response. ctx ends
+// when the requesting client disconnects or the server stops.
+type ApprovalHandler func(ctx context.Context, req ApprovalRequest) ApprovalResponse
 
-// Server listens on a Unix socket for approval requests from opsctl.
+// Server listens on a local IPC endpoint for approval requests from opsctl.
 type Server struct {
 	handler   ApprovalHandler
 	listener  net.Listener
@@ -103,38 +121,18 @@ func NewServer(handler ApprovalHandler, authToken string) *Server {
 	}
 }
 
-// Start begins listening on the Unix socket at socketPath.
-// Removes stale socket file if it exists.
+// Start begins listening at the platform-specific endpoint for socketPath.
 func (s *Server) Start(socketPath string) error {
-	// Clean up stale socket
-	if _, err := os.Stat(socketPath); err == nil {
-		// Try to connect - if successful, another instance is running
-		conn, err := net.Dial("unix", socketPath)
-		if err == nil {
-			if err := conn.Close(); err != nil {
-				logger.Default().Warn("close connection check", zap.Error(err))
-			}
-			return fmt.Errorf("another instance is already listening on %s", socketPath)
-		}
-		// Stale socket, remove it
-		if err := os.Remove(socketPath); err != nil {
-			logger.Default().Warn("remove stale socket", zap.String("path", socketPath), zap.Error(err))
-		}
-	}
-
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := localipc.Listen(socketPath)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", socketPath, err)
-	}
-	// 设置 socket 文件权限为 0600（仅所有者可访问）
-	if err := os.Chmod(socketPath, 0600); err != nil {
-		logger.Default().Warn("chmod socket", zap.String("path", socketPath), zap.Error(err))
 	}
 	s.listener = listener
 
 	s.wg.Add(1)
 	go s.acceptLoop()
 
+	logger.Default().Info("approval server listening", zap.Stringer("address", listener.Addr()))
 	return nil
 }
 
@@ -221,7 +219,17 @@ func (s *Server) handleConn(conn net.Conn) {
 	s.active.Add(1)
 	defer s.active.Add(-1)
 
-	resp := s.handler(req)
+	// 请求方只写一个请求就等待响应；此后连接上的任何读返回错误（EOF / 被关闭）都
+	// 意味着请求方已离开（进程退出、Ctrl-C）或服务端正在关停。据此结束 handler 的
+	// ctx，让等人操作的桌面弹窗随之关闭，而不是对着已经不在的调用方挂起。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
+
+	resp := s.handler(ctx, req)
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {
 		logger.Default().Warn("encode approval response", zap.Error(err))
 	}
@@ -240,16 +248,16 @@ func SendNotification(socketPath, token, resource string) {
 	}
 }
 
-// RequestApprovalWithToken connects to the Unix socket and sends an approval request with auth token.
+// RequestApprovalWithToken connects to the local IPC endpoint and sends an approval request with auth token.
 func RequestApprovalWithToken(socketPath, token string, req ApprovalRequest) (ApprovalResponse, error) {
 	req.Token = token
 	return RequestApproval(socketPath, req)
 }
 
-// RequestApproval connects to the Unix socket and sends an approval request.
+// RequestApproval connects to the local IPC endpoint and sends an approval request.
 // Blocks until a response is received.
 func RequestApproval(socketPath string, req ApprovalRequest) (ApprovalResponse, error) {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := localipc.Dial(socketPath)
 	if err != nil {
 		return ApprovalResponse{}, fmt.Errorf("cannot connect to desktop app (is it running?): %w", err)
 	}

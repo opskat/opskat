@@ -29,6 +29,8 @@ type (
 	CompareResult      = external_edit_svc.CompareResult
 	MergePrepareResult = external_edit_svc.MergePrepareResult
 	MergeApplyRequest  = external_edit_svc.MergeApplyRequest
+
+	SaveSessionTextRequest = external_edit_svc.SaveSessionTextRequest
 )
 
 // ExternalEdit 外部编辑 binder：只持有已经装配完成的 service，不直接解析下层依赖。

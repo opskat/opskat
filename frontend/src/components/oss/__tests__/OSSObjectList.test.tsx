@@ -1,9 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { OSSObjectList } from "../OSSObjectList";
 import { formatBytes } from "@/lib/formatBytes";
 import { shouldLoadNextPage } from "@/lib/ossListScroll";
 import type { oss_svc } from "../../../../wailsjs/go/models";
+
+const { toastSuccess, toastError } = vi.hoisted(() => ({ toastSuccess: vi.fn(), toastError: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: toastSuccess, error: toastError } }));
 
 function obj(key: string, size: number): oss_svc.ObjectItem {
   return {
@@ -186,5 +189,84 @@ describe("OSSObjectList", () => {
     expect(onScrollNearBottom).not.toHaveBeenCalled();
     fireEvent.scroll(list, { target: { scrollTop: 900 } });
     expect(onScrollNearBottom).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OSSObjectList — keyboard copy", () => {
+  const writeText = vi.fn();
+
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    toastSuccess.mockReset();
+    toastError.mockReset();
+    window.getSelection()?.removeAllRanges();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+  });
+
+  const base = {
+    selection: new Set<string>(),
+    loading: false,
+    loadingPage: false,
+    truncated: false,
+    onNavigatePrefix: vi.fn(),
+    onToggleSelect: vi.fn(),
+    onScrollNearBottom: vi.fn(),
+  };
+  const copyKey = { key: "c", code: "KeyC", ctrlKey: true, metaKey: true };
+  const objects = [obj("docs/a.txt", 1), obj("docs/b.txt", 2), obj("docs/c.txt", 3)];
+
+  it("copies the selected object keys one per line", async () => {
+    render(
+      <OSSObjectList {...base} selection={new Set(["docs/a.txt", "docs/c.txt"])} prefixes={[]} objects={objects} />
+    );
+
+    fireEvent.keyDown(screen.getByTestId("oss-object-docs/a.txt"), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("docs/a.txt\ndocs/c.txt");
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("oss.keyCopied", expect.anything()));
+  });
+
+  it("copies the focused object when nothing is selected", () => {
+    render(<OSSObjectList {...base} focusedKey="docs/b.txt" prefixes={[]} objects={objects} />);
+
+    fireEvent.keyDown(screen.getByTestId("oss-object-docs/b.txt"), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("docs/b.txt");
+  });
+
+  it("leaves Ctrl/Cmd+C to the browser while object text is selected", () => {
+    render(<OSSObjectList {...base} focusedKey="docs/b.txt" prefixes={[]} objects={objects} />);
+    const label = screen.getByText("b.txt");
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    window.getSelection()!.addRange(range);
+    const event = new KeyboardEvent("keydown", { ...copyKey, bubbles: true, cancelable: true });
+
+    screen.getByTestId("oss-object-docs/b.txt").dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("copies the checked objects from a folder row too", () => {
+    render(<OSSObjectList {...base} selection={new Set(["docs/a.txt"])} prefixes={["docs/sub/"]} objects={objects} />);
+
+    fireEvent.keyDown(screen.getByTestId("oss-folder-docs/sub/"), copyKey);
+
+    expect(writeText).toHaveBeenCalledWith("docs/a.txt");
+  });
+
+  it("leaves Ctrl/Cmd+C alone on a folder row when nothing is checked", () => {
+    render(<OSSObjectList {...base} prefixes={["docs/sub/"]} objects={objects} />);
+
+    const ev = new KeyboardEvent("keydown", { ...copyKey, bubbles: true, cancelable: true });
+    screen.getByTestId("oss-folder-docs/sub/").dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });

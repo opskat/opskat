@@ -5,9 +5,9 @@ import (
 	"gorm.io/gorm"
 )
 
-func migration202609030001() *gormigrate.Migration {
+func migration202609240001() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202609030001",
+		ID: "202609240001",
 		Migrate: func(tx *gorm.DB) error {
 			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS extension_describe (
 				id         INTEGER PRIMARY KEY AUTOINCREMENT,

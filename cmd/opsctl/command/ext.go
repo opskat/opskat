@@ -40,6 +40,9 @@ func cmdExt(args []string) int {
 
 	switch args[0] {
 	case "list":
+		if rejectExtraArgs(args[1:]) {
+			return 1
+		}
 		return cmdExtList()
 	case "dev":
 		return cmdExtDev(args[1:])
@@ -254,6 +257,9 @@ func cmdExtDev(args []string) int {
 		if len(args) > 0 {
 			return 0
 		}
+		return 1
+	}
+	if rejectExtraArgs(args[1:]) {
 		return 1
 	}
 

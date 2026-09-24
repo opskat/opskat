@@ -17,6 +17,7 @@ const assets = [
   { ID: 1, Name: "prod-mysql", Type: "database", Status: 1, Config: "{}" },
   { ID: 2, Name: "staging-mysql", Type: "database", Status: 1, Config: "{}" },
   { ID: 3, Name: "a-ssh", Type: "ssh", Status: 1, Config: "{}" },
+  { ID: 4, Name: "local-powershell", Type: "local", Status: 1, Config: "{}" },
 ];
 
 vi.mock("@/stores/assetStore", () => ({
@@ -45,6 +46,15 @@ describe("SnippetAssetDrawer", () => {
     await waitFor(() => expect(screen.getByText("prod-mysql")).toBeInTheDocument());
     expect(screen.getByText("staging-mysql")).toBeInTheDocument();
     expect(screen.queryByText("a-ssh")).not.toBeInTheDocument();
+  });
+
+  it("shows SSH and local terminal assets for shell snippets", async () => {
+    const snippet = { ID: 11, Name: "shell", Category: "shell", Content: "Get-Process" };
+    render(<SnippetAssetDrawer snippet={snippet as never} onClose={() => {}} />);
+
+    expect(await screen.findByText("a-ssh")).toBeInTheDocument();
+    expect(screen.getByText("local-powershell")).toBeInTheDocument();
+    expect(screen.queryByText("prod-mysql")).not.toBeInTheDocument();
   });
 
   it("pre-checks the assets returned by GetSnippetLastAssets", async () => {

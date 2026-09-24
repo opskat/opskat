@@ -401,7 +401,7 @@ func (s *Service) recoverInternal(sessionID string) (*Session, error) {
 		}
 		return nil, fmt.Errorf("本地恢复副本不存在，请重新打开远程文件")
 	}
-	if err := s.launch.Launch(session.EditorPath, append(cloneArgs(session.EditorArgs), session.LocalPath)); err != nil {
+	if err := s.launchEditorProcess(session.EditorID, session.EditorPath, session.EditorArgs, session.LocalPath); err != nil {
 		failed := s.recordError(sessionID, "recover_launch_editor", err)
 		if failed != nil {
 			s.emit(Event{Type: eventSessionChanged, Session: failed})

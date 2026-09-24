@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   Edit3,
+  ExternalLink,
   FilePlus,
   FolderDown,
   FolderOpen,
@@ -152,7 +153,8 @@ export function FloatingMenu({ canPaste, ctx, onAction, onClose }: FloatingMenuP
           <>
             {ctx.canExternalEdit && (
               <>
-                {item("externalEdit", <PencilLine />, t("externalEdit.actions.open"))}
+                {item("edit", <PencilLine />, t("action.edit"))}
+                {item("externalEdit", <ExternalLink />, t("externalEdit.actions.open"))}
                 {separator}
               </>
             )}

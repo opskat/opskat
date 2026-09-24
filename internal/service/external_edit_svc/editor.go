@@ -133,7 +133,23 @@ func (s *Service) normalizeCustomEditors(customEditors []bootstrap.ExternalEdito
 	return normalized, nil
 }
 
+// builtInEditors 把应用内置编辑器排在按 OS 探测的可执行文件条目之前：
+// 前者没有可执行文件、恒为可用，后者才需要 validateExecutable 置位。
 func builtInEditors() []Editor {
+	return append([]Editor{builtInAppEditor()}, osBuiltInEditors()...)
+}
+
+// builtInAppEditor 是应用内置编辑器条目：没有 Path，因此不参与可执行文件探测，直接标记为可用。
+func builtInAppEditor() Editor {
+	return Editor{
+		ID:        builtInEditorID,
+		Name:      "Built-in Editor",
+		BuiltIn:   true,
+		Available: true,
+	}
+}
+
+func osBuiltInEditors() []Editor {
 	switch {
 	case isWindows():
 		windir := os.Getenv("WINDIR")
@@ -259,13 +275,22 @@ func containsEditorID(editors []Editor, editorID string) bool {
 	return false
 }
 
+// firstAvailableEditorID 只在没有任何其它可用编辑器时才回退到内置编辑器：
+// 内置编辑器恒为可用，若参与常规回退，未显式设置过默认编辑器的用户会被从外部编辑器
+// 静默切换到应用内编辑器。内置编辑器要成为默认项，必须由用户在设置里选中。
 func firstAvailableEditorID(editors []Editor) string {
+	builtInFallback := ""
 	for _, editor := range editors {
-		if editor.Available {
-			return editor.ID
+		if !editor.Available {
+			continue
 		}
+		if editor.ID == builtInEditorID {
+			builtInFallback = editor.ID
+			continue
+		}
+		return editor.ID
 	}
-	return ""
+	return builtInFallback
 }
 
 func firstExistingPath(paths []string) string {

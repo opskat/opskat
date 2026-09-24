@@ -14,16 +14,15 @@ import (
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
-	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 )
 
-// startApprovalServer 启动 opsctl 审批 Unix socket 服务
+// startApprovalServer 启动 opsctl 审批 本地 IPC 服务
 func (o *Opsctl) startApprovalServer() {
-	handler := func(req approval.ApprovalRequest) approval.ApprovalResponse {
+	handler := func(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 		// 数据变更通知：opsctl 通知前端刷新
 		if req.Type == "notify" {
 			wailsRuntime.EventsEmit(o.ctx, "data:changed", map[string]any{
@@ -40,6 +39,11 @@ func (o *Opsctl) startApprovalServer() {
 		// 批量执行审批
 		if req.Type == "batch" {
 			return o.handleBatchApproval(req)
+		}
+
+		// SSH MFA 挑战：opsctl 不可交互时请桌面端代答；请求方断开即关闭对话框
+		if req.Type == "mfa" {
+			return o.mfa.challenge(ctx, req)
 		}
 
 		// 扩展工具执行
@@ -66,7 +70,7 @@ func (o *Opsctl) startApprovalServer() {
 
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-	kind := permission.ApprovalKindForType(req.Type)
+	kind := permission.ApprovalKindFor(req.Type, req.Command)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", req.Type),
@@ -151,17 +155,6 @@ func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (st
 		return edited[0].Command, permission.GrantOriginUser
 	}
 	return command, permission.GrantOriginSystem
-}
-
-// startSSHPoolServer 启动 SSH 连接池 proxy 服务
-func (o *Opsctl) startSSHPoolServer() {
-	if o.proxyServer == nil {
-		return
-	}
-	sockPath := sshpool.SocketPath(bootstrap.ResolvedDataDir())
-	if err := o.proxyServer.Start(sockPath); err != nil {
-		logger.Ctx(o.ctx).Error("ssh pool server failed to start", zap.String("socket", sockPath), zap.Error(err))
-	}
 }
 
 // handleBatchApproval 处理批量执行审批（exec/sql/redis 混合）

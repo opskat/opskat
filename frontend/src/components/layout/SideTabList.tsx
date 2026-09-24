@@ -22,6 +22,7 @@ export function SideTabList() {
   const closeTab = useTabStore((s) => s.closeTab);
   const reorderTab = useTabStore((s) => s.reorderTab);
   const moveTabTo = useTabStore((s) => s.moveTabTo);
+  const unsavedTabIds = useTabStore((s) => s.unsavedTabIds);
   const tabData = useTerminalStore((s) => s.tabData);
 
   const width = useLayoutStore((s) => s.leftPanelWidth);
@@ -114,7 +115,11 @@ export function SideTabList() {
                   iconStyle={visual.iconStyle}
                   indicatorColor={visual.indicatorColor}
                   extra={
-                    allDisconnected ? <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" /> : undefined
+                    unsavedTabIds.includes(tab.id) ? (
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" data-testid="tab-unsaved-marker" />
+                    ) : allDisconnected ? (
+                      <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" />
+                    ) : undefined
                   }
                   onActivate={() => activateTab(tab.id)}
                   onClose={() => closeTab(tab.id)}

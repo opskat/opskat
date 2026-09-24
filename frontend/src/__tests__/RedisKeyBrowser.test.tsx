@@ -296,4 +296,64 @@ describe("RedisKeyBrowser", () => {
 
     expect(RedisScanKeys).toHaveBeenCalledWith(expect.objectContaining({ match: "dispatcher", exact: true }));
   });
+
+  it("copies the selected key name with Ctrl/Cmd+C", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const state = useQueryStore.getState().redisStates["query-10"];
+    useQueryStore.setState({
+      redisStates: { "query-10": { ...state, selectedKey: "common:user:2" } },
+    });
+    render(<RedisKeyBrowser tabId="query-10" />);
+
+    fireEvent.keyDown(screen.getByTestId("redis-key-tree"), { key: "c", ctrlKey: true, metaKey: true });
+
+    expect(writeText).toHaveBeenCalledWith("common:user:2");
+  });
+
+  it("leaves Ctrl/Cmd+C alone when no key is selected", () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<RedisKeyBrowser tabId="query-10" />);
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "c",
+      ctrlKey: true,
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    screen.getByTestId("redis-key-tree").dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("leaves Ctrl/Cmd+C to the browser while key text is selected", () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const state = useQueryStore.getState().redisStates["query-10"];
+    useQueryStore.setState({
+      redisStates: { "query-10": { ...state, selectedKey: "common:user:2" } },
+    });
+    render(<RedisKeyBrowser tabId="query-10" />);
+    fireEvent.click(screen.getByTitle("query.listView"));
+    const label = screen.getByText("common:user:2");
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      ctrlKey: true,
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    label.closest("button")!.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
 });

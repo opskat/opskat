@@ -37,3 +37,33 @@ func TestEventEmitterDropsEventsUntilStartupContextIsAvailable(t *testing.T) {
 	emitter.Startup(ctx)
 	assert.Same(t, ctx, emitter.ctx)
 }
+
+func newSessionTextBinder() *ExternalEdit {
+	binder := New(langStub{}, &external_edit_svc.Service{}, NewEventEmitter())
+	binder.ctx = context.Background()
+	return binder
+}
+
+func TestReadExternalEditSessionTextRejectsEmptyAndUnknownSession(t *testing.T) {
+	binder := newSessionTextBinder()
+
+	_, err := binder.ReadExternalEditSessionText("   ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessionId 不能为空")
+
+	_, err = binder.ReadExternalEditSessionText("missing-session")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "外部编辑会话不存在")
+}
+
+func TestSaveExternalEditSessionTextRejectsEmptyAndUnknownSession(t *testing.T) {
+	binder := newSessionTextBinder()
+
+	_, err := binder.SaveExternalEditSessionText(SaveSessionTextRequest{Text: "hello"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessionId 不能为空")
+
+	_, err = binder.SaveExternalEditSessionText(SaveSessionTextRequest{SessionID: "missing-session", Text: "hello"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "外部编辑会话不存在")
+}

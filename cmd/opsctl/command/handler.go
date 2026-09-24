@@ -88,8 +88,7 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	writeOpsctlAudit(ctx, toolName, string(argsJSON), result, err, dec)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+		return writeRemoteFailure(os.Stderr, err)
 	}
 
 	// 写操作成功后通知桌面端刷新 UI

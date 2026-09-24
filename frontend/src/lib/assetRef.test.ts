@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  ASSET_SIDEBAR_ATTR,
   formatAssetMarkdownRef,
   parseOpsctlAssetHref,
   parseOpsctlAssetMarkdown,
@@ -21,35 +22,50 @@ describe("formatAssetMarkdownRef", () => {
 
 describe("shouldCopyAssetRef", () => {
   beforeEach(() => {
+    document.body.innerHTML = "";
+    window.getSelection()?.removeAllRanges();
     useAssetStore.setState({ selectedAssetId: 1 });
   });
 
-  it("allows copy from a non-editable target when an asset is selected", () => {
+  // Mounts a child of the asset sidebar root, which is the only surface that owns
+  // the asset-reference shortcut.
+  function mountSidebarChild<K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K] {
+    const root = document.createElement("div");
+    root.setAttribute(ASSET_SIDEBAR_ATTR, "");
+    const child = document.createElement(tag);
+    root.appendChild(child);
+    document.body.appendChild(root);
+    return child;
+  }
+
+  it("copies from a target inside the asset sidebar when an asset is selected", () => {
+    expect(shouldCopyAssetRef(mountSidebarChild("div"))).toBe(true);
+  });
+
+  it("does not steal copy from a surface outside the asset sidebar", () => {
     const div = document.createElement("div");
     document.body.appendChild(div);
-    expect(shouldCopyAssetRef(div)).toBe(true);
+    expect(shouldCopyAssetRef(div)).toBe(false);
   });
 
-  it("does not steal copy from an input", () => {
-    const input = document.createElement("input");
-    document.body.appendChild(input);
-    expect(shouldCopyAssetRef(input)).toBe(false);
+  it("does not steal copy from a text input inside the asset sidebar", () => {
+    expect(shouldCopyAssetRef(mountSidebarChild("input"))).toBe(false);
   });
 
-  it("does not steal copy from a terminal", () => {
-    const xterm = document.createElement("div");
-    xterm.className = "xterm";
-    const ta = document.createElement("textarea");
-    xterm.appendChild(ta);
-    document.body.appendChild(xterm);
-    expect(shouldCopyAssetRef(ta)).toBe(false);
+  it("does not steal copy while text is selected inside the asset sidebar", () => {
+    const target = mountSidebarChild("div");
+    target.textContent = "web-01";
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(shouldCopyAssetRef(target)).toBe(false);
   });
 
   it("does nothing when no asset is selected", () => {
     useAssetStore.setState({ selectedAssetId: null });
-    const div = document.createElement("div");
-    document.body.appendChild(div);
-    expect(shouldCopyAssetRef(div)).toBe(false);
+    expect(shouldCopyAssetRef(mountSidebarChild("div"))).toBe(false);
   });
 });
 

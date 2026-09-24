@@ -87,10 +87,15 @@ test("remember-and-allow persists a grant that auto-approves the next command", 
   // The second, identical command settles without prompting *again* — "again"
   // meaning any prompt other than the one just answered.
   expect(await execOutcome(page, () => execRows(asset).length > 1, { exceptConfirmId: answered })).toBe("settled");
+
+  // The two rows are the command the user just approved and the same command
+  // auto-approved by the saved grant — in *either* id order: rows are written by a
+  // fire-and-forget goroutine (internal/ai/runner/hooks.go), so `id` is insertion
+  // order, not execution order (e2e/fixtures/db-queries.js). Select by content: the
+  // contract is what the two rows recorded, not which one has the smaller id.
   const rows = execRows(asset);
-  expect(rows[0].decision_source).toBe("user_allow");
-  expect(rows[1].decision_source).toBe("grant_allow"); // …because the grant matched it
-  expect(rows[1].matched_pattern).toBe("uptime");
+  expect(rows.map((r) => r.decision_source).sort()).toEqual(["grant_allow", "user_allow"]);
+  expect(rows.find((r) => r.decision_source === "grant_allow")?.matched_pattern).toBe("uptime");
   // …and the grant is on disk, not just in memory.
   expect(findApprovedGrantItems(asset).map((g) => g.command)).toEqual(["uptime"]);
 });

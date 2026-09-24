@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button } from "@opskat/ui";
 import { Copy, Link, Download, Trash2, X, Pencil, MoveRight } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
@@ -43,7 +44,10 @@ export function OSSObjectDetail({
     [t("oss.detail.lastModified"), object.lastModified ? new Date(object.lastModified * 1000).toLocaleString() : "—"],
   ];
   const copyKey = () =>
-    void navigator.clipboard?.writeText(object.key).then(() => notifyCopied(t("oss.detail.copyKey")));
+    void navigator.clipboard
+      ?.writeText(object.key)
+      .then(() => notifyCopied(t("oss.detail.copyKeyCopied")))
+      .catch((error) => toast.error(String(error)));
   const iconButtonClass =
     "cursor-pointer rounded-sm p-0.5 outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring/45";
 

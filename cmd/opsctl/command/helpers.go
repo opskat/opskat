@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -11,83 +12,65 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// extractCommand rebuilds the one command string from the argv the user's shell has
-// already split. Everything after the first "--" is the command; with no "--" the
-// whole arg list is.
-//
-// A single word *is* that command string and is passed through untouched — it is the
-// documented form for every DSL opsctl forwards to (`-- "SELECT * FROM users"`,
-// `-- 'GET session:abc'`), and quoting it would hand the database a literal
-// `'SELECT * FROM users'`.
-//
-// Two or more words are argv, and joining them with a bare space drops exactly the
-// quoting the shell just removed: `-- grep "foo bar" file` would arrive downstream as
-// four words. Every consumer re-splits this string with a real shell parser — the
-// extension flag DSL and the k8s/etcd/kafka canonicalizers through cmdline.Words, a
-// remote shell for ssh — so the join must be that parser's inverse. cmdline.QuoteIfNeeded
-// is that inverse and is already what cmdline.Command.Render uses; words that need no
-// quoting are still emitted bare, so the common `-- ls -la /var/log` is unchanged.
-func extractCommand(args []string) string {
-	parts := args
-	for i, arg := range args {
-		if arg == "--" {
-			parts = args[i+1:]
-			break
-		}
-	}
-	if len(parts) < 2 {
-		if len(parts) == 0 {
-			return ""
-		}
-		return parts[0]
-	}
-	joined := make([]string, len(parts))
-	for i, part := range parts {
-		// Re-encode only what the join would destroy: the boundary inside a word the
-		// local shell already unquoted. A word without whitespace survives the round
-		// trip as itself, so quoting it would not preserve anything — it would change
-		// meaning, turning `-- ls *.log` (globbed by the remote shell, as ssh(1) does)
-		// into a literal.
-		if strings.ContainsAny(part, " \t\n") {
-			joined[i] = cmdline.QuoteIfNeeded(part)
+// parseExecArgs 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--] <command>。
+// 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
+// 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的）。命令之前的未知
+// 选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
+func parseExecArgs(args []string) (declaredType, command string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			command = joinCommandWords(args[i+1:])
+		case arg == "--type":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--type requires a value")
+			}
+			declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
+			i++
 			continue
+		case strings.HasPrefix(arg, "--type="):
+			declaredType = strings.TrimPrefix(arg, "--type=")
+			continue
+		case strings.HasPrefix(arg, "-"):
+			return "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
+		default:
+			command = joinCommandWords(args[i:])
 		}
-		joined[i] = part
+		break
 	}
-	return strings.Join(joined, " ")
+	if command == "" {
+		return "", "", fmt.Errorf("no command given")
+	}
+	return declaredType, command, nil
 }
 
-// extractTypeFlag pulls an optional "--type <value>" (or "--type=<value>") token out of
-// args and returns (declaredType, remaining args). It only recognizes the flag before the
-// "--" command separator — after "--" every token belongs to the command, never to opsctl
-// itself (matching extractCommand's contract that everything past "--" is opaque payload).
-// Absent, it returns ("", args) unchanged so extractCommand keeps working on the same list.
-func extractTypeFlag(args []string) (string, []string) {
-	for i, arg := range args {
-		if arg == "--" {
-			break
-		}
-		if arg == "--type" {
-			valueIdx := i + 1
-			if valueIdx >= len(args) {
-				// "--type" with nothing after it: leave it for extractCommand/validation
-				// to deal with rather than silently swallowing a malformed flag.
-				return "", args
-			}
-			value := args[valueIdx] //nolint:gosec // guarded by the valueIdx >= len(args) check above
-			rest := make([]string, 0, len(args)-2)
-			rest = append(rest, args[:i]...)
-			rest = append(rest, args[valueIdx+1:]...)
-			return value, rest
-		}
-		if value, ok := strings.CutPrefix(arg, "--type="); ok {
-			rest := make([]string, 0, len(args)-1)
-			rest = append(rest, args[:i]...)
-			rest = append(rest, args[i+1:]...)
-			return value, rest
-		}
+// joinCommandWords rebuilds the one command string from argv the local shell has
+// already split.
+//
+// A single word *is* that command string and is passed through untouched — it is the
+// documented form for every DSL opsctl forwards to (`-- "SELECT * FROM users"`), and
+// quoting it would hand the database a literal `'SELECT * FROM users'`.
+//
+// Two or more words are argv. Every consumer re-splits the result with a real shell
+// parser (the extension flag DSL and the k8s/etcd/kafka canonicalizers through
+// cmdline.Words, a remote shell for ssh), so a bare-space join would turn
+// `-- grep "foo bar" file` into four words. Only words containing whitespace carry a
+// boundary the join would destroy; the rest are emitted bare, so `-- ls *.log` still
+// reaches the remote shell as a glob, as ssh(1) does.
+func joinCommandWords(words []string) string {
+	if len(words) == 1 {
+		return words[0]
 	}
-	return "", args
+	joined := make([]string, len(words))
+	for i, word := range words {
+		if strings.ContainsAny(word, " \t\n") {
+			joined[i] = cmdline.QuoteIfNeeded(word)
+			continue
+		}
+		joined[i] = word
+	}
+	return strings.Join(joined, " ")
 }
 
 // parseRemotePath parses numeric assetID:path strings without repository lookup.
@@ -154,4 +137,14 @@ func prepareExecCommand(ctx context.Context, asset *asset_entity.Asset, command 
 func unsupportedExecTypeError(asset *asset_entity.Asset) error {
 	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
 		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
+}
+
+// rejectExtraArgs 报告子命令消费不了的多余参数并返回 true。静默忽略会让写错位置的
+// flag（--delete-assets、--mfa-code 等）悄悄失效。
+func rejectExtraArgs(extra []string) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "Error: unexpected argument(s): %s\n", strings.Join(extra, " "))
+	return true
 }

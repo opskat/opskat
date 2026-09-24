@@ -9,6 +9,12 @@ const OPSCTL_ASSET_HREF_RE = /^opsctl:\/\/asset\/(\d+)$/i;
 const OPSCTL_ASSET_MARKDOWN_RE = /\[((?:\\.|[^\]])*)\]\((opsctl:\/\/asset\/\d+)\)/gi;
 const OPSCTL_ASSET_URI_RE = /opsctl:\/\/asset\/(\d+)/gi;
 
+/**
+ * Marks the asset sidebar root. The asset-reference shortcut is scoped to this
+ * surface: see {@link shouldCopyAssetRef}.
+ */
+export const ASSET_SIDEBAR_ATTR = "data-asset-sidebar";
+
 export function formatAssetMarkdownRef(name: string, id: number): string {
   const escaped = name.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
   return `[${escaped}](opsctl://asset/${id})`;
@@ -104,7 +110,10 @@ export async function copySelectedAssetMarkdownRef(): Promise<string | null> {
 export function shouldCopyAssetRef(target: EventTarget | null): boolean {
   const el = target instanceof HTMLElement ? target : null;
   if (!el) return false;
-  if (el.closest(".xterm")) return false;
+  // Only the focused asset sidebar owns this shortcut. A keydown targets the focused
+  // element, so containment here means "the sidebar is the surface the user is acting on"
+  // — every other surface (grid, terminal, SFTP list, OSS list) keeps the copy key.
+  if (!el.closest(`[${ASSET_SIDEBAR_ATTR}]`)) return false;
   if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) {
     return false;
   }

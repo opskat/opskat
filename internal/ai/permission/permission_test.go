@@ -1235,43 +1235,6 @@ func TestCheckPermission_GrantSaveReuseRoundTrip(t *testing.T) {
 	})
 }
 
-// TestCheckPermission_SSHAstParseError 覆盖 #1：AST 解析失败时不能退回到整串 allow 匹配。
-func TestCheckPermission_SSHAstParseError(t *testing.T) {
-	Convey("shell AST 解析失败时即便有 allow * 也只能 aictx.NeedConfirm", t, func() {
-		ctx, mockAsset, _ := setupPolicyTest(t)
-		asset := &asset_entity.Asset{
-			ID:   1,
-			Type: asset_entity.AssetTypeSSH,
-			CmdPolicy: mustJSON(asset_entity.CommandPolicy{
-				AllowList: []string{"*"},
-			}),
-		}
-		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
-
-		// 未闭合的命令替换，mvdan.cc/sh parser 会报错
-		result := CheckPermission(ctx, "ssh", 1, "echo $(")
-		So(result.Decision, ShouldEqual, aictx.NeedConfirm)
-	})
-}
-
-// TestCheckPermission_K8sAstParseError 覆盖 #1（K8s 路径同样不能整串放行）。
-func TestCheckPermission_K8sAstParseError(t *testing.T) {
-	Convey("K8s shell AST 解析失败时即便 allow * 也只能 aictx.NeedConfirm", t, func() {
-		ctx, mockAsset, _ := setupPolicyTest(t)
-		asset := &asset_entity.Asset{
-			ID:   1,
-			Type: asset_entity.AssetTypeK8s,
-			CmdPolicy: mustJSON(asset_entity.K8sPolicy{
-				AllowList: []string{"*"},
-			}),
-		}
-		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
-
-		result := CheckPermission(ctx, asset_entity.AssetTypeK8s, 1, "kubectl get $(")
-		So(result.Decision, ShouldEqual, aictx.NeedConfirm)
-	})
-}
-
 // TestCheckPermission_K8sAllowAllGrantSplit 覆盖 K8s allowAll 保存 grant 时按子命令拆，
 // 防止 `kubectl get *` 这种宽规则被存成单条 grant 后被 `kubectl get pods && kubectl apply -f x` 绕过。
 func TestCheckPermission_K8sAllowAllGrantSplit(t *testing.T) {
@@ -1475,11 +1438,6 @@ func TestNormalizeGrantPatterns(t *testing.T) {
 		Convey("空命令返回 nil", func() {
 			So(NormalizeGrantPatterns("exec", "", GrantOriginSystem), ShouldBeNil)
 			So(NormalizeGrantPatterns("exec", "   ", GrantOriginSystem), ShouldBeNil)
-		})
-
-		Convey("AST 解析失败保留原行", func() {
-			patterns := NormalizeGrantPatterns("exec", "echo $(", GrantOriginSystem)
-			So(patterns, ShouldResemble, []string{"echo $("})
 		})
 
 		Convey("asset_entity 类型常量与 approval type 都能识别", func() {

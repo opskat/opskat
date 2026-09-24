@@ -71,9 +71,9 @@ A run is fully hermetic, and in particular **a running opskat does not interfere
   `run-e2e.mjs` after the run. Your real `~/Library/Application Support/opskat` is never touched.
 - **Keychain** — the explicit `OPSKAT_MASTER_KEY` short-circuits keychain access; nothing is
   read from or written to the OS keychain.
-- **Sockets** — `approval.sock` / `sshpool.sock` are built from `bootstrap.ResolvedDataDir()`
-  (the resolved override), so they land in the temp dir. A real opskat holds its own sockets
-  in the real dir; no `another instance is already listening` collision.
+- **Sockets** — `approval.sock` is built from `bootstrap.ResolvedDataDir()` (the resolved
+  override), so it lands in the temp dir. A real opskat holds its own socket in the real dir;
+  no `another instance is already listening` collision.
 - **Single-instance lock** — `OPSKAT_E2E=1` skips it, so the e2e instance launches even with
   a real opskat open, and doesn't trigger the real app's second-instance handler.
 - **Port** — never Wails' default 34115. The committed `boot` spec also asserts the page
@@ -438,7 +438,7 @@ These bit us while building the harness; keep them in mind when changing it.
 - **A new path derived from the data dir** (a file, a socket, a subdir created at startup) →
   build it from `bootstrap.ResolvedDataDir()`, **not** `AppDataDir()`, or it won't follow the
   e2e override and will break hermeticity / collide with a running app. (`GetLogsDir()` and the
-  approval/sshpool sockets already do this; other on-demand readers like the Settings page's
+  approval socket already does this; other on-demand readers like the Settings page's
   data-dir display still use `AppDataDir()` — fix them to `ResolvedDataDir()` if a spec ever
   needs them.)
 - **A new UI assertion target** → add a `data-testid` (additive) in the same style as §5.

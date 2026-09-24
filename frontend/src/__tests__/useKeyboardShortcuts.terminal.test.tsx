@@ -15,6 +15,7 @@ vi.mock("@/lib/assetRef", async () => {
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useShortcutStore, DEFAULT_SHORTCUTS, isMac, type ShortcutBinding } from "../stores/shortcutStore";
 import { useAssetStore } from "../stores/assetStore";
+import { ASSET_SIDEBAR_ATTR } from "../lib/assetRef";
 
 // Build a keydown event whose modifier flags match `binding` the same way
 // eventMatchesBinding() reads them, so the test works on both macOS and non-mac.
@@ -111,19 +112,32 @@ describe("useKeyboardShortcuts — asset.copyRef", () => {
     useAssetStore.setState({ selectedAssetId: 1 });
   });
 
-  it("copies the selected asset markdown ref on Ctrl/Cmd+C", () => {
+  it("copies the selected asset markdown ref when the asset sidebar is focused", () => {
     renderShortcuts();
-    const div = document.createElement("div");
-    document.body.appendChild(div);
-    const ev = keydownFrom(div, DEFAULT_SHORTCUTS["asset.copyRef"]);
+    const sidebar = document.createElement("div");
+    sidebar.setAttribute(ASSET_SIDEBAR_ATTR, "");
+    document.body.appendChild(sidebar);
+    const ev = keydownFrom(sidebar, DEFAULT_SHORTCUTS["asset.copyRef"]);
     expect(ev.defaultPrevented).toBe(true);
     expect(copySelectedAssetMarkdownRef).toHaveBeenCalledTimes(1);
   });
 
-  it("does not steal Ctrl/Cmd+C from an input", () => {
+  it("leaves Ctrl/Cmd+C to a surface outside the asset sidebar", () => {
     renderShortcuts();
+    const div = document.createElement("div");
+    document.body.appendChild(div);
+    const ev = keydownFrom(div, DEFAULT_SHORTCUTS["asset.copyRef"]);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(copySelectedAssetMarkdownRef).not.toHaveBeenCalled();
+  });
+
+  it("does not steal Ctrl/Cmd+C from an input inside the asset sidebar", () => {
+    renderShortcuts();
+    const sidebar = document.createElement("div");
+    sidebar.setAttribute(ASSET_SIDEBAR_ATTR, "");
     const input = document.createElement("input");
-    document.body.appendChild(input);
+    sidebar.appendChild(input);
+    document.body.appendChild(sidebar);
     const ev = keydownFrom(input, DEFAULT_SHORTCUTS["asset.copyRef"]);
     expect(ev.defaultPrevented).toBe(false);
     expect(copySelectedAssetMarkdownRef).not.toHaveBeenCalled();

@@ -1,16 +1,20 @@
 package approval
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/opskat/opskat/internal/localipc"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServerStopInterruptsConnectedClient(t *testing.T) {
-	server := NewServer(func(ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "")
-	dir, err := os.MkdirTemp("/tmp", "opskat-approval-")
+	server := NewServer(func(context.Context, ApprovalRequest) ApprovalResponse { return ApprovalResponse{} }, "")
+	dir, err := os.MkdirTemp("", "opskat-approval-")
 	if err != nil {
 		t.Fatalf("create socket dir: %v", err)
 	}
@@ -20,11 +24,17 @@ func TestServerStopInterruptsConnectedClient(t *testing.T) {
 		t.Fatalf("start server: %v", err)
 	}
 
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := localipc.Dial(socketPath)
 	if err != nil {
 		t.Fatalf("connect client: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
+
+	require.Eventually(t, func() bool {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		return len(server.conns) == 1
+	}, time.Second, time.Millisecond)
 
 	stopped := make(chan struct{})
 	go func() {
@@ -36,5 +46,12 @@ func TestServerStopInterruptsConnectedClient(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("Stop blocked on a connected client")
+	}
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	var b [1]byte
+	_, readErr := conn.Read(b[:])
+	require.Error(t, readErr)
+	if netErr, ok := readErr.(net.Error); ok {
+		require.False(t, netErr.Timeout(), "Stop must disconnect the accepted client")
 	}
 }

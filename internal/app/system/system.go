@@ -33,9 +33,33 @@ type System struct {
 
 	githubAuthCancel context.CancelFunc
 	confirmQuit      func()
+	quitShownAckCh   chan struct{}
 }
 
 func (s *System) SetConfirmQuitHandler(handler func()) { s.confirmQuit = handler }
+
+// WaitQuitConfirmShown 暴露给 main.go 的 OnBeforeClose：前端接手退出确认框后回执。
+// 拿不到回执说明前端已经弹不出对话框，此时必须放行，否则窗口永远关不掉。
+func (s *System) WaitQuitConfirmShown() <-chan struct{} { return s.quitShownAckCh }
+
+// DrainQuitConfirmShown 在 emit app:quit-confirm 之前清掉上一次残留的回执。
+func (s *System) DrainQuitConfirmShown() {
+	select {
+	case <-s.quitShownAckCh:
+	default:
+	}
+}
+
+// subscribeQuitConfirmShown 在 Startup 中注册：前端显示退出确认框后
+// EventsEmit("app:quit-confirm-shown")。
+func (s *System) subscribeQuitConfirmShown(ctx context.Context) {
+	wailsRuntime.EventsOn(ctx, "app:quit-confirm-shown", func(_ ...any) {
+		select {
+		case s.quitShownAckCh <- struct{}{}:
+		default:
+		}
+	})
+}
 
 // ConfirmQuit records that the user accepted interruption of running tasks.
 func (s *System) ConfirmQuit() {
@@ -64,15 +88,17 @@ var windowOps = windowRuntimeOps{
 // New 构造 System binder。appCtx 来自 main.go 的根 context（cancel 后所有 binder 退出）。
 func New(appCtx context.Context, skill SkillContent) *System {
 	return &System{
-		appCtx:       appCtx,
-		skillContent: skill,
-		lang:         "zh-cn",
+		appCtx:         appCtx,
+		skillContent:   skill,
+		lang:           "zh-cn",
+		quitShownAckCh: make(chan struct{}, 1),
 	}
 }
 
 // Startup Wails 启动回调：保存 Wails ctx 后续 EventsEmit 用，并触发自动更新检查、emit 系统状态。
 func (s *System) Startup(ctx context.Context) {
 	s.ctx = ctx
+	s.subscribeQuitConfirmShown(ctx)
 	s.startAutoUpdateCheck()
 	s.emitSystemStatusImpl()
 }
