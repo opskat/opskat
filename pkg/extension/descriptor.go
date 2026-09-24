@@ -147,6 +147,9 @@ func (d *Descriptor) validateTools() error {
 		if err := t.validateActions(); err != nil {
 			return err
 		}
+		if t.TimeoutMs < 0 || t.TimeoutMs > MaxToolTimeout.Milliseconds() {
+			return fmt.Errorf("describe(): tools[%q].timeoutMs must be between 0 (host default) and %d (%s), got %d", t.Name, MaxToolTimeout.Milliseconds(), MaxToolTimeout, t.TimeoutMs)
+		}
 		if t.Parameters == nil {
 			return fmt.Errorf("describe(): tools[%q].parameters is required (an object schema, empty properties for a no-arg tool)", t.Name)
 		}

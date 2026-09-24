@@ -3,6 +3,7 @@ package extension
 import (
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -167,6 +168,38 @@ func TestParseDescriptorTools(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "parameters.required")
 			So(err.Error(), ShouldContainSubstring, "must be an array")
+		})
+	})
+}
+
+func TestParseDescriptorToolTimeout(t *testing.T) {
+	tool := func(timeout string) []byte {
+		return desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{}}` + timeout + `}]`)
+	}
+	Convey("A tool may declare its own call timeout, within the host's ceiling", t, func() {
+		Convey("undeclared means the host default", func() {
+			d, err := ParseDescriptor(tool(""))
+			So(err, ShouldBeNil)
+			So(d.Tools[0].Timeout(), ShouldEqual, time.Duration(0))
+		})
+
+		Convey("a declaration up to ten minutes is kept", func() {
+			d, err := ParseDescriptor(tool(`,"timeoutMs":600000`))
+			So(err, ShouldBeNil)
+			So(d.Tools[0].Timeout(), ShouldEqual, 10*time.Minute)
+		})
+
+		Convey("a declaration over ten minutes is refused at load", func() {
+			_, err := ParseDescriptor(tool(`,"timeoutMs":600001`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tools["t"].timeoutMs`)
+			So(err.Error(), ShouldContainSubstring, "10m0s")
+		})
+
+		Convey("a negative declaration is refused at load", func() {
+			_, err := ParseDescriptor(tool(`,"timeoutMs":-1`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tools["t"].timeoutMs`)
 		})
 	})
 }

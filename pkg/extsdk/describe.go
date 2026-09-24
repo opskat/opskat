@@ -48,6 +48,7 @@ type descTool struct {
 	// actions its classification can return.
 	PolicyAction  string   `json:"policyAction,omitempty"`
 	PolicyActions []string `json:"policyActions,omitempty"`
+	TimeoutMs     int64    `json:"timeoutMs,omitempty"`
 }
 
 type descToolI18n struct {
@@ -131,6 +132,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 			Parameters:    t.schema,
 			PolicyAction:  t.action,
 			PolicyActions: t.actions,
+			TimeoutMs:     t.timeout.Milliseconds(),
 		})
 	}
 

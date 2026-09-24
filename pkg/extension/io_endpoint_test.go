@@ -62,9 +62,9 @@ func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any)
 // capability enforcement, and fills manifest's functional face from describe()
 // the way Manager.LoadExtension does — the endpoint gate and credential
 // injection read the asset type's declaration from there.
-func loadDescribedFixture(t *testing.T, manifest *Manifest, inner HostProvider) *Plugin {
+func loadDescribedFixture(t *testing.T, manifest *Manifest, inner HostProvider, opts ...PluginOption) *Plugin {
 	t.Helper()
-	p, err := LoadPlugin(context.Background(), manifest, fixtureWasm(t), NewCapabilityHost(inner, manifest, t.TempDir()), nil)
+	p, err := LoadPlugin(context.Background(), manifest, fixtureWasm(t), NewCapabilityHost(inner, manifest, t.TempDir()), nil, opts...)
 	if err != nil {
 		t.Fatalf("load fixture plugin: %v", err)
 	}

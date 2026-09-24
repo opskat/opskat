@@ -3,6 +3,7 @@ package opskat
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -330,6 +331,30 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 				Tool("d", noop).PolicyFunc([]string{"index.read"}, classifySearch).
 					Resource(func(a searchArgs) string { return a.Index })
 			}, ShouldPanic)
+		})
+	})
+}
+
+func TestDescribeReportsToolTimeout(t *testing.T) {
+	Convey("a tool's own timeout is declared through describe", t, func() {
+		resetRegistries()
+		AssetType[demoConfig]("demo")
+		Tool("slow", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read").Timeout(2 * time.Minute)
+		Tool("plain", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
+
+		byName := map[string]map[string]any{}
+		for _, raw := range decodeDescribe(t)["tools"].([]any) {
+			tool := raw.(map[string]any)
+			byName[tool["name"].(string)] = tool
+		}
+		So(byName["slow"]["timeoutMs"], ShouldEqual, float64(120000))
+		So(byName["plain"], ShouldNotContainKey, "timeoutMs")
+
+		Convey("a timeout outside (0, 10m] fails at registration", func() {
+			reg := Tool("bad", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
+			So(func() { reg.Timeout(10*time.Minute + time.Millisecond) }, ShouldPanic)
+			So(func() { reg.Timeout(0) }, ShouldPanic)
+			So(func() { reg.Timeout(10 * time.Minute) }, ShouldNotPanic)
 		})
 	})
 }

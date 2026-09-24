@@ -46,9 +46,14 @@ const (
 	// cost is negligible.
 	defaultMaxInstanceCalls = 512
 	// defaultToolTimeout is the ceiling for tool / policy / config calls, which
-	// are request-response. Actions are long-running by design and take their
+	// are request-response. A tool may declare its own in describe() (up to
+	// MaxToolTimeout). Actions are long-running by design and take their
 	// deadline from the caller's context instead.
 	defaultToolTimeout = 30 * time.Second
+	// defaultMaxResultBytes caps a tool result handed back to the caller. A
+	// result over it fails the call: a truncated result would be read as a
+	// complete one by the model or page that asked.
+	defaultMaxResultBytes = 16 << 20
 )
 
 // Plugin represents a loaded WASM extension.
@@ -65,14 +70,15 @@ type Plugin struct {
 	pool   chan *instance
 	closed atomic.Bool
 
-	// actions maps an in-flight action's invocation id to its cancellation flag.
+	// actions maps an in-flight action's invocation id to its invocation.
 	// Keyed by id rather than held as a single field because several actions of
 	// one extension run at the same time and each is canceled on its own.
 	actionsMu sync.Mutex
-	actions   map[string]*ActionCancellation
+	actions   map[string]*invocation
 
-	// callSeq names invocations that nobody cancels — tools, policy and config
-	// calls. They still need an id because the guest may emit events from them.
+	// callSeq names invocations the caller supplies no id for — tools, policy
+	// and config calls, which are canceled through their context rather than by
+	// id. They still need an id because the guest may emit events from them.
 	callSeq atomic.Uint64
 }
 
@@ -80,6 +86,7 @@ type pluginOptions struct {
 	maxInstances     int
 	maxInstanceCalls int
 	toolTimeout      time.Duration
+	maxResultBytes   int
 }
 
 // PluginOption customizes plugin execution.
@@ -95,9 +102,15 @@ func WithMaxInstanceCalls(n int) PluginOption {
 	return func(o *pluginOptions) { o.maxInstanceCalls = n }
 }
 
-// WithToolTimeout sets the ceiling for tool / policy / config calls.
+// WithToolTimeout sets the ceiling for tool / policy / config calls; a tool's
+// own timeout from describe() replaces it for that tool.
 func WithToolTimeout(d time.Duration) PluginOption {
 	return func(o *pluginOptions) { o.toolTimeout = d }
+}
+
+// WithMaxResultBytes sets the largest tool result returned to a caller.
+func WithMaxResultBytes(n int) PluginOption {
+	return func(o *pluginOptions) { o.maxResultBytes = n }
 }
 
 // instance is one reactor module instance plus its exported entry points.
@@ -116,6 +129,7 @@ func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host 
 		maxInstances:     defaultMaxInstances,
 		maxInstanceCalls: defaultMaxInstanceCalls,
 		toolTimeout:      defaultToolTimeout,
+		maxResultBytes:   defaultMaxResultBytes,
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -157,7 +171,7 @@ func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host 
 		host:     host,
 		opts:     o,
 		pool:     make(chan *instance, o.maxInstances),
-		actions:  make(map[string]*ActionCancellation),
+		actions:  make(map[string]*invocation),
 	}
 	for i := 0; i < o.maxInstances; i++ {
 		p.pool <- nil
@@ -199,12 +213,36 @@ type callEnvelope struct {
 
 // CallTool calls execute_tool on the extension, scoped to asset (nil when the
 // caller has no asset).
+//
+// Every caller of a tool — AI exec, opsctl, the extension's own page — ends up
+// here, so this is where the tool's timeout and the result size limit hold for
+// all of them. Canceling ctx interrupts the call, host IO included.
 func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *AssetRef) (json.RawMessage, error) {
 	input, err := json.Marshal(callEnvelope{Tool: toolName, Args: args, Asset: asset})
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_tool", err)
 	}
-	return p.call(ctx, newInvocation(p.nextInvocationID(), nil).scopedTo(asset), "execute_tool", input, p.opts.toolTimeout)
+	out, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil).scopedTo(asset), "execute_tool", input, p.toolTimeout(toolName))
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > p.opts.maxResultBytes {
+		return nil, fmt.Errorf("tool %s returned %d bytes, over the host's %d-byte result limit — narrow the request (filter, page, limit) instead of fetching it all at once",
+			toolName, len(out), p.opts.maxResultBytes)
+	}
+	return out, nil
+}
+
+// toolTimeout is the deadline for one call of toolName: its own declaration from
+// describe(), or the plugin default. An unknown name gets the default; the guest
+// reports it as unknown.
+func (p *Plugin) toolTimeout(toolName string) time.Duration {
+	for _, t := range p.manifest.Tools {
+		if t.Name == toolName && t.TimeoutMs > 0 {
+			return t.Timeout()
+		}
+	}
+	return p.opts.toolTimeout
 }
 
 // CallAction calls execute_action on the extension.
@@ -223,13 +261,13 @@ func (p *Plugin) CallAction(ctx context.Context, invocationID, actionName string
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_action", err)
 	}
 
-	cancel := NewActionCancellation()
-	if err := p.trackAction(invocationID, cancel); err != nil {
+	inv := newInvocation(invocationID, NewActionCancellation()).scopedTo(asset)
+	if err := p.trackAction(inv); err != nil {
 		return nil, err
 	}
 	defer p.untrackAction(invocationID)
 
-	return p.call(ctx, newInvocation(invocationID, cancel).scopedTo(asset), "execute_action", input, 0)
+	return p.call(ctx, inv, "execute_action", input, 0)
 }
 
 // CancelAction requests cancellation of the one action running under
@@ -238,12 +276,12 @@ func (p *Plugin) CallAction(ctx context.Context, invocationID, actionName string
 // which one.
 func (p *Plugin) CancelAction(invocationID string) bool {
 	p.actionsMu.Lock()
-	cancel, ok := p.actions[invocationID]
+	inv, ok := p.actions[invocationID]
 	p.actionsMu.Unlock()
 	if !ok {
 		return false
 	}
-	cancel.Cancel()
+	inv.stop()
 	return true
 }
 
@@ -251,13 +289,13 @@ func (p *Plugin) CancelAction(invocationID string) bool {
 // rejected rather than overwritten: two runs sharing one id would make both
 // cancellation and event routing ambiguous, which is the bug this id exists to
 // remove.
-func (p *Plugin) trackAction(invocationID string, cancel *ActionCancellation) error {
+func (p *Plugin) trackAction(inv *invocation) error {
 	p.actionsMu.Lock()
 	defer p.actionsMu.Unlock()
-	if _, exists := p.actions[invocationID]; exists {
-		return fmt.Errorf("action invocation %q is already running", invocationID)
+	if _, exists := p.actions[inv.id]; exists {
+		return fmt.Errorf("action invocation %q is already running", inv.id)
 	}
-	p.actions[invocationID] = cancel
+	p.actions[inv.id] = inv
 	return nil
 }
 
@@ -271,8 +309,8 @@ func (p *Plugin) untrackAction(invocationID string) {
 func (p *Plugin) cancelAllActions() {
 	p.actionsMu.Lock()
 	defer p.actionsMu.Unlock()
-	for _, c := range p.actions {
-		c.Cancel()
+	for _, inv := range p.actions {
+		inv.stop()
 	}
 }
 
@@ -381,7 +419,16 @@ func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input
 	// how a host call finds the invocation it belongs to.
 	guestCtx := withInvocation(callCtx, inv)
 
+	// CloseOnContextDone only stops a guest that is running bytecode. One blocked
+	// inside a host function — a TCP read with no deadline, an HTTP round trip or
+	// body read — never gets back to it, so it would ignore both the deadline and
+	// the caller's cancellation and hold its pool slot for good. Closing the
+	// invocation's handles when the context ends fails that host call instead;
+	// the guest returns into bytecode, wazero sees the context and ends the call,
+	// and release discards the instance as poisoned.
+	stopInterrupt := context.AfterFunc(callCtx, inv.close)
 	out, callErr := inst.invoke(guestCtx, req)
+	stopInterrupt()
 	inv.close()
 	p.release(callCtx, inst, callErr != nil)
 

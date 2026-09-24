@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	opskat "github.com/opskat/opskat/pkg/extsdk"
@@ -50,6 +51,10 @@ type logArgs struct {
 
 type spinArgs struct {
 	MS int `json:"ms" desc:"How long to busy-loop, in milliseconds"`
+}
+
+type blobArgs struct {
+	Bytes int `json:"bytes" desc:"Size of the returned data string"`
 }
 
 type urlArgs struct {
@@ -195,20 +200,7 @@ func init() {
 	}).Policy("read")
 
 	opskat.Tool("tcp_echo", func(_ *opskat.ToolContext, args addrArgs) (any, error) {
-		conn, err := opskat.Dial("tcp", args.Addr)
-		if err != nil {
-			return nil, err
-		}
-		defer conn.Close()
-		if _, err := conn.Write([]byte("ping")); err != nil {
-			return nil, err
-		}
-		buf := make([]byte, 16)
-		n, err := conn.Read(buf)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"echo": string(buf[:n])}, nil
+		return tcpEcho(args.Addr)
 	}).Policy("read")
 
 	opskat.Tool("log", func(_ *opskat.ToolContext, args logArgs) (any, error) {
@@ -221,6 +213,21 @@ func init() {
 	opskat.Tool("spin", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
 		return spin(args.MS), nil
 	}).Policy("read")
+	// spin_short and spin_long are spin with their own declared timeouts, which
+	// replace the host's default for their calls — shorter and longer.
+	opskat.Tool("spin_short", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).Policy("read").Timeout(300 * time.Millisecond)
+	opskat.Tool("spin_long", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).Policy("read").Timeout(time.Minute)
+
+	// blob returns a result of the requested size, so a test can cross the
+	// host's result size limit.
+	opskat.Tool("blob", func(_ *opskat.ToolContext, args blobArgs) (any, error) {
+		return map[string]any{"data": strings.Repeat("x", args.Bytes)}, nil
+	}).Policy("read")
+
 	opskat.RegisterAction("spin", func(ctx *opskat.ActionContext) (any, error) {
 		var args spinArgs
 		if err := json.Unmarshal(ctx.Args, &args); err != nil {
@@ -253,6 +260,17 @@ func init() {
 			}
 		}
 		return map[string]any{"sent": sent, "stopped": false}, nil
+	})
+
+	// tcp_echo as an action: it blocks in a host read until the server answers,
+	// so a test can see that canceling the action interrupts host IO instead of
+	// waiting for the guest to next poll ShouldStop.
+	opskat.RegisterAction("tcp_echo", func(ctx *opskat.ActionContext) (any, error) {
+		var args addrArgs
+		if err := json.Unmarshal(ctx.Args, &args); err != nil {
+			return nil, err
+		}
+		return tcpEcho(args.Addr)
 	})
 
 	// should_stop reports the cancellation flag once, without looping. A fresh
@@ -289,4 +307,21 @@ func spin(ms int) map[string]any {
 		iterations++
 	}
 	return map[string]any{"iterations": iterations}
+}
+
+func tcpEcho(addr string) (any, error) {
+	conn, err := opskat.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 16)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"echo": string(buf[:n])}, nil
 }

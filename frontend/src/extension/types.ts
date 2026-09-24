@@ -119,8 +119,16 @@ export interface ExtEvent {
 // asset argument — the backend puts the asset in the call envelope — so a page that
 // works on an asset passes the `assetId` prop it was rendered with. Leaving it out
 // means "this call has no asset", which is what testing an unsaved configuration is.
+//
+// `options.signal` cancels a call in flight: the backend interrupts the tool —
+// host IO it is blocked in included — and the returned promise rejects with the
+// signal's reason (an AbortError unless the caller gave another).
+export interface ExtCallOptions {
+  signal?: AbortSignal;
+}
+
 export interface ExtAPI {
-  callTool(extName: string, tool: string, args: unknown, assetId?: number): Promise<unknown>;
+  callTool(extName: string, tool: string, args: unknown, assetId?: number, options?: ExtCallOptions): Promise<unknown>;
   executeAction(
     extName: string,
     action: string,

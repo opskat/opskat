@@ -137,9 +137,10 @@ func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 // gate at all — hence e.pageGate rather than ext.Plugin.CallTool below.
 //
 // invocationID is the frontend's per-call correlation token (the same convention
-// CallExtensionAction already uses); a later task uses it to cancel a call in
-// flight. It is not the grant session an "always allow" approval persists under —
-// the gate derives that from the asset instead, so the grant outlives this one call.
+// CallExtensionAction already uses): CancelExtensionTool takes it to stop this
+// call while it runs. It is not the grant session an "always allow" approval
+// persists under — the gate derives that from the asset instead, so the grant
+// outlives this one call.
 func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
@@ -163,27 +164,50 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
+	if invocationID == "" {
+		return "", fmt.Errorf("invocation id is required to call a tool")
+	}
+
+	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID)
+	if err != nil {
+		return "", err
+	}
+	defer end()
 
 	if asset == nil {
-		result, err := ext.Plugin.CallTool(i18n.Ctx(e.ctx, e.lang.Lang()), tool, args, nil)
+		result, err := ext.Plugin.CallTool(ctx, tool, args, nil)
 		if err != nil {
 			return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
 		}
 		return string(result), nil
 	}
 
-	if invocationID == "" {
-		return "", fmt.Errorf("invocation id is required to call a tool on an asset")
-	}
 	if e.pageGate == nil {
 		return "", fmt.Errorf("extension tool gate not initialized")
 	}
 
-	result, err := e.pageGate.RunPageToolCall(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID, assetID, extToolCallCommand(tool, args))
+	result, err := e.pageGate.RunPageToolCall(ctx, invocationID, assetID, extToolCallCommand(tool, args))
 	if err != nil {
 		return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
 	}
 	return result, nil
+}
+
+// CancelExtensionTool stops the page tool call running under invocationID: the
+// guest is interrupted, host IO it is blocked in fails, and the call returns an
+// error to the page. A call that has already returned is not an error to cancel
+// — the page cannot know whether its abort raced the result.
+func (e *Extension) CancelExtensionTool(invocationID string) error {
+	if invocationID == "" {
+		return fmt.Errorf("invocation id is required to cancel a tool call")
+	}
+	log := logger.Ctx(e.ctx).With(zap.String("invocationID", invocationID))
+	if !e.toolCalls.cancel(invocationID) {
+		log.Debug("extension tool cancel found nothing running")
+		return nil
+	}
+	log.Info("extension tool cancel requested")
+	return nil
 }
 
 // extToolCallCommand renders a page's (tool, args) call into the same

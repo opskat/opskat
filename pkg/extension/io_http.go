@@ -245,12 +245,24 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	client := h.client
 	h.mu.Unlock()
 
-	resp, err := client.Do(req) //nolint:bodyclose // body is read by Read() and closed by Close()
+	// The body is read by Read() and closed by Close() — or below, when Close
+	// already ran.
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 
 	h.mu.Lock()
+	if h.phase == httpPhaseClosed {
+		// Close ran while the round trip was in flight — the invocation was
+		// interrupted — and had no response to release then. Release it here, or
+		// its body and the connection behind it stay open with no one to close them.
+		h.mu.Unlock()
+		if err := resp.Body.Close(); err != nil {
+			logger.Default().Warn("close HTTP response body of an interrupted request", zap.Error(err))
+		}
+		return nil, fmt.Errorf("HTTP request interrupted: handle closed")
+	}
 	h.resp = resp
 	h.mu.Unlock()
 

@@ -42,6 +42,16 @@ func (inv *invocation) close() {
 	inv.io.CloseAll()
 }
 
+// stop cancels an action: it raises the flag the guest polls and fails whatever
+// host IO the guest is blocked in, since a guest waiting on a read that never
+// completes would never get to poll the flag. Handles opened afterwards still
+// work, so a guest that notices the stop can clean up (abort an upload) before
+// it returns.
+func (inv *invocation) stop() {
+	inv.cancel.Cancel()
+	inv.io.CloseAll()
+}
+
 func (inv *invocation) shouldStop() bool {
 	return inv.cancel != nil && inv.cancel.ShouldStop()
 }

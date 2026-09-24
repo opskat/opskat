@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // HostABIVersion is the current host ABI contract version.
@@ -254,6 +255,21 @@ type ToolDef struct {
 	// classifies each call from its arguments (the SDK's PolicyFunc) may answer
 	// check_policy with. A tool declares exactly one of the two.
 	PolicyActions []string `json:"policyActions,omitempty"`
+	// TimeoutMs is how long one call of this tool may run, in milliseconds; 0
+	// means the host default. It is the tool's to declare because only the tool
+	// knows whether it answers in a second or scans an index for minutes, and it
+	// holds for every caller alike — AI exec, opsctl and the extension's page.
+	TimeoutMs int64 `json:"timeoutMs,omitempty"`
+}
+
+// MaxToolTimeout is the longest timeout a tool may declare. A tool call holds
+// one of the extension's few instance slots for as long as it runs; work that
+// needs longer is an action, which streams progress and can be canceled.
+const MaxToolTimeout = 10 * time.Minute
+
+// Timeout is the tool's declared call timeout, 0 when it leaves the host default.
+func (t ToolDef) Timeout() time.Duration {
+	return time.Duration(t.TimeoutMs) * time.Millisecond
 }
 
 // Actions is every policy action the tool can request.

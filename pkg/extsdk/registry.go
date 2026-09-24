@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 )
 
 // The registration API is the single place an extension declares what it can do.
@@ -69,6 +70,8 @@ type toolEntry struct {
 	// actions and classify are set by PolicyFunc, in place of action / resource.
 	actions  []string
 	classify func(args json.RawMessage) (action, resource string, err error)
+	// timeout is the tool's own call timeout; 0 leaves the host default.
+	timeout time.Duration
 }
 
 type assetTypeEntry struct {
@@ -205,6 +208,23 @@ func (r *ToolReg[T]) PolicyFunc(actions []string, fn func(args T) (action, resou
 		action, resource := fn(args)
 		return action, resource, nil
 	}
+	return r
+}
+
+// maxToolTimeout mirrors the host's ceiling (pkg/extension MaxToolTimeout): a
+// tool call holds one of the extension's few instance slots while it runs, so
+// work that needs longer belongs in an action.
+const maxToolTimeout = 10 * time.Minute
+
+// Timeout sets how long one call of this tool may run before the host stops it,
+// replacing the host default of 30 seconds. d must be at least a millisecond and
+// at most 10 minutes; anything else panics at registration, so the extension
+// fails at load instead of at its first slow call.
+func (r *ToolReg[T]) Timeout(d time.Duration) *ToolReg[T] {
+	if d < time.Millisecond || d > maxToolTimeout {
+		panic(fmt.Sprintf("opskat: tool %q: timeout %s is outside [1ms, %s]", r.e.name, d, maxToolTimeout))
+	}
+	r.e.timeout = d
 	return r
 }
 
