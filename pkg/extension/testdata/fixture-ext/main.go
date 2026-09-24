@@ -60,12 +60,10 @@ type addrArgs struct {
 	Addr string `json:"addr" desc:"host:port to dial"`
 }
 
-// fixtureConfig carries two endpoint fields — a URL and a bare host:port — so the
-// host's network.assetEndpoint gate is exercised against both shapes.
+// fixtureConfig's endpoint (a URL or host:port) is what the host's
+// network.assetEndpoint gate lets a call scoped to the asset reach.
 type fixtureConfig struct {
 	Endpoint string `json:"endpoint" title:"Endpoint" format:"endpoint"`
-	Broker   string `json:"broker,omitempty" title:"Broker" format:"endpoint"`
-	Note     string `json:"note,omitempty" title:"Note"`
 }
 
 func init() {

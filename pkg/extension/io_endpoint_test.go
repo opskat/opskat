@@ -104,14 +104,14 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 		broker := echoListener(t)
 		stranger := echoListener(t)
 
-		config := map[string]any{
-			"endpoint": endpoint.URL,
-			"broker":   broker.Addr().String(),
-			"note":     other.URL, // not an endpoint field: must not widen reach
-		}
+		// The fixture's one endpoint field names the HTTP server for the HTTP
+		// cases and the echo listener for the TCP cases.
+		httpConfig := map[string]any{"endpoint": endpoint.URL}
+		tcpConfig := map[string]any{"endpoint": broker.Addr().String()}
 
 		Convey("with network.assetEndpoint declared", func() {
-			p := newEndpointFixture(t, true, config)
+			p := newEndpointFixture(t, true, httpConfig)
+			tp := newEndpointFixture(t, true, tcpConfig)
 
 			Convey("an HTTP request to the endpoint is allowed although it is loopback", func() {
 				out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": endpoint.URL + "/ok"})
@@ -137,12 +137,12 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			})
 
 			Convey("a TCP connection to a host:port endpoint is allowed", func() {
-				out := callToolOn(t, p, fixtureAsset, "tcp_echo", map[string]any{"addr": broker.Addr().String()})
+				out := callToolOn(t, tp, fixtureAsset, "tcp_echo", map[string]any{"addr": broker.Addr().String()})
 				So(out["echo"], ShouldEqual, "ping")
 			})
 
 			Convey("a TCP connection to a non-endpoint address is rejected", func() {
-				_, err := p.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": stranger.Addr().String()}), fixtureAsset)
+				_, err := tp.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": stranger.Addr().String()}), fixtureAsset)
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")
 			})
@@ -150,13 +150,14 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			Convey("a call not scoped to an asset reaches no endpoint", func() {
 				_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), nil)
 				So(err, ShouldNotBeNil)
-				_, err = p.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": broker.Addr().String()}), nil)
+				_, err = tp.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": broker.Addr().String()}), nil)
 				So(err, ShouldNotBeNil)
 			})
 		})
 
 		Convey("without network.assetEndpoint, reach is the static allowlist as before", func() {
-			p := newEndpointFixture(t, false, config)
+			p := newEndpointFixture(t, false, httpConfig)
+			tp := newEndpointFixture(t, false, tcpConfig)
 
 			Convey("the endpoint URL is refused by the allowlist", func() {
 				_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), fixtureAsset)
@@ -165,7 +166,7 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			})
 
 			Convey("TCP stays ungated", func() {
-				out := callToolOn(t, p, fixtureAsset, "tcp_echo", map[string]any{"addr": stranger.Addr().String()})
+				out := callToolOn(t, tp, fixtureAsset, "tcp_echo", map[string]any{"addr": stranger.Addr().String()})
 				So(out["echo"], ShouldEqual, "ping")
 			})
 		})
