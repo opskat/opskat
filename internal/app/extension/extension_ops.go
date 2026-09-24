@@ -308,3 +308,19 @@ func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string) (s
 	}
 	return manifest.Name, manifest.Version, nil
 }
+
+// InstalledExtensionVersion reports whether an extension named name is installed
+// (enabled or disabled on disk) and its version. `opsctl ext dev` shows it in the
+// confirmation dialog so the user sees an overwrite before approving it; it is a
+// package-level function for the same reason InstallExtensionDir is.
+func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
+	if e.service == nil {
+		return "", false
+	}
+	info, err := e.service.GetDetail(name, e.lang.Lang())
+	if err != nil {
+		// GetDetail's only failure is "not installed".
+		return "", false
+	}
+	return info.Version, true
+}

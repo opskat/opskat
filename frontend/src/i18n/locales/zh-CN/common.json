@@ -1774,6 +1774,7 @@
   "opsctlApproval": {
     "title": "CLI 操作审批",
     "description": "opsctl 正在请求批准以下操作：",
+    "extDevInstallDescription": "opsctl ext dev 请求从以下目录安装并启用一个未打包的扩展，它将获得清单里声明的全部能力：",
     "allow": "允许",
     "deny": "拒绝",
     "typeExec": "执行命令",

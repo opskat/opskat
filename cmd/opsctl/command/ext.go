@@ -247,7 +247,8 @@ func delegateExtExec(assetID int64, assetName, command, session string) (string,
 // 跑偏过（dev 下曾整个不包能力面）。这里没有旁路——安装、加载、注册全部发生在桌面
 // 进程里那一套代码上，opsctl 只送一个目录路径过去。重跑一次即热重载：Install 会先
 // Unload 旧的再装新的并通知前端刷新，所以 `<build> && opsctl ext dev <dir>` 就是
-// 开发回路。
+// 开发回路。桌面端每次安装都会在 opsctl 审批弹窗里请用户确认；同一目录、同一扩展、
+// 能力不变的重装在桌面进程存活期间免于重复确认（见 internal/app/opsctl/ext_dev.go）。
 //
 // 目标数据目录就是 opsctl 的 --data-dir / OPSKAT_DATA_DIR，指向 make dev-sandbox
 // 那个隔离目录即可（docs/VERIFICATION.md）；不另造一套沙箱路径推导。
@@ -260,13 +261,6 @@ func cmdExtDev(args []string) int {
 		return 1
 	}
 	if rejectExtraArgs(args[1:]) {
-		return 1
-	}
-
-	// 装的是未经审阅的 WASM，能力由它自己的 manifest 声明。这道门禁原本长在
-	// cmd/devserver 上，随命令一起搬过来；真正兜底的是桌面端同名检查。
-	if os.Getenv("OPSKAT_ENV") == "production" {
-		fmt.Fprintln(os.Stderr, "Error: opsctl ext dev cannot run when OPSKAT_ENV=production")
 		return 1
 	}
 
@@ -328,7 +322,12 @@ Re-run it after each build; that is the hot-reload loop:
   make -C ../extensions build EXT=oss && opsctl ext dev ../extensions/extensions/oss/dist
 
 Point --data-dir (or OPSKAT_DATA_DIR) at the verification sandbox the app is
-running on — see docs/VERIFICATION.md. Refused when OPSKAT_ENV=production.
+running on — see docs/VERIFICATION.md.
+
+The app asks you to confirm each install — source directory, extension, its
+declared capabilities, and whether it replaces an installed one. Re-running the
+same directory for the same extension with unchanged capabilities reloads
+without asking again until the app restarts.
 `)
 }
 
