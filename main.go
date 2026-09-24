@@ -395,14 +395,23 @@ func initExtensionSystem(
 
 	extDir := filepath.Join(dataDir, "extensions")
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
-		return extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
-			Logger:       logger.Default(),
-			AssetConfigs: extB.NewAssetConfigGetter(extName),
-			FileDialogs:  extB.NewFileDialogOpener(),
-			KV:           extB.NewKVStore(extName),
-			ActionEvents: extB.NewActionEventHandler(extName),
-			AssetDialer:  extB.NewAssetDialer(extName),
+		provider := extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
+			Logger:        logger.Default(),
+			AssetConfigs:  extB.NewAssetConfigGetter(extName),
+			FileDialogs:   extB.NewFileDialogOpener(),
+			KV:            extB.NewKVStore(extName),
+			ActionEvents:  extB.NewActionEventHandler(extName),
+			AssetDialer:   extB.NewAssetDialer(extName),
+			ExtensionName: extName,
 		})
+		// The asset's cached HTTP client (kept for keep-alive reuse across calls)
+		// is built from its connection settings; once those change or the asset
+		// is gone, the cache must be dropped instead of reused on the next open.
+		assetconn.RegisterInvalidator(extName, func(_ context.Context, assetID int64) error {
+			provider.InvalidateAssetHTTPClient(assetID)
+			return nil
+		})
+		return provider
 	}, logger.Default())
 
 	extSvc := extension_svc.New(

@@ -142,6 +142,7 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 
 	s.unregister(name)
 	_ = s.manager.Unload(ctx, name)
+	s.discardHostHTTPCache(name)
 	if s.snippetHook != nil {
 		s.snippetHook.RefreshCategories()
 	}
@@ -347,6 +348,7 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 	if err := s.manager.Uninstall(ctx, name); err != nil {
 		return fmt.Errorf("uninstall extension: %w", err)
 	}
+	s.discardHostHTTPCache(name)
 
 	// Refresh categories AFTER the extension is unloaded from the manager, so the
 	// snippet category registry rebuilds without the uninstalled extension's entries.
@@ -497,6 +499,16 @@ func (s *Service) register(ext *extension.Extension) error {
 func (s *Service) unregister(name string) {
 	extreg.Unregister(name)
 	s.bridge.Unregister(name)
+}
+
+// discardHostHTTPCache releases name's cached HTTP clients (kept for
+// keep-alive reuse across calls — see pkg/extension.DefaultHostProvider) after
+// it is disabled or uninstalled: nothing will re-register the name to pick up
+// the cleanup automatically the way a reinstall's new provider does.
+func (s *Service) discardHostHTTPCache(name string) {
+	if extension.DiscardHostHTTPCache(name) {
+		s.logger.Info("discarded extension HTTP client cache", zap.String("extension", name))
+	}
 }
 
 func (s *Service) ensureState(ctx context.Context, name string, enabled bool) {

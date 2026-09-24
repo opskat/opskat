@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -91,47 +92,91 @@ type httpHandle struct {
 // newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
 // or immediate flushing (GET/HEAD/DELETE/OPTIONS). tlsConfig, when set, is the
 // asset's declared TLS settings — net/http performs its own handshake using it
-// for an https:// URL, over the conn dial returns.
+// for an https:// URL, over the conn dial returns. The client is single-use:
+// for a client reused across many calls to the same asset, see
+// buildCachedHTTPClient / OpenHTTPResourceWithClient.
 func newHTTPHandle(params IOOpenParams, dial DialFunc, tlsConfig *tls.Config) (*httpHandle, error) {
-	method := strings.ToUpper(params.Method)
-	if method == "" {
-		method = "GET"
-	}
-
 	if params.URL == "" {
 		return nil, fmt.Errorf("URL is required for HTTP handle")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Build transport; clone default so we don't mutate the global one.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	var baseDial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// dial has no ctx of its own; the transport's own per-request ctx is
+	// discarded in favor of whatever ctx this call closes dial over. That is
+	// only safe for a client used within a single call's lifetime (this
+	// function) — never for one cached across calls (buildCachedHTTPClient
+	// keeps the transport's per-request ctx instead).
+	var ctxDial func(ctx context.Context, network, addr string) (net.Conn, error)
 	if dial != nil {
-		baseDial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dial(network, addr)
-		}
-	} else {
-		baseDial = transport.DialContext
+		ctxDial = func(_ context.Context, network, addr string) (net.Conn, error) { return dial(network, addr) }
 	}
-	// Always wrap with the dial-time guard to catch DNS rebinding after URL-level checks.
-	transport.DialContext = dialGuard(baseDial, params.AllowPrivate)
+	transport := newHTTPTransport(ctxDial, tlsConfig, params.AllowPrivate)
+	client := newHTTPClient(transport, params.RedirectGuard)
+	return newHandleFromClient(params, client)
+}
+
+// buildCachedHTTPClient builds an *http.Client meant to be reused across many
+// calls to the same asset (see DefaultHostProvider.httpClients). Unlike
+// newHTTPHandle's client, dial keeps its own per-dial context — supplied by
+// the transport at the time it actually needs a new connection — since the
+// transport may open one long after the call that first built it has
+// returned, to serve a different, later call.
+func buildCachedHTTPClient(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool, redirectGuard func(*url.URL) error) *http.Client {
+	var ctxDial func(ctx context.Context, network, addr string) (net.Conn, error)
+	if dial != nil {
+		ctxDial = func(ctx context.Context, network, addr string) (net.Conn, error) { return dial(ctx, network, addr) }
+	}
+	transport := newHTTPTransport(ctxDial, tlsConfig, allowPrivate)
+	return newHTTPClient(transport, redirectGuard)
+}
+
+// newHTTPTransport clones the default transport, wires dial through the
+// dial-time private-IP guard (catching DNS rebinding after URL-level checks),
+// and applies tlsConfig when set. dial nil means "use the clone's own default
+// dialer" (plain outbound TCP).
+func newHTTPTransport(dial func(ctx context.Context, network, addr string) (net.Conn, error), tlsConfig *tls.Config, allowPrivate bool) *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	baseDial := transport.DialContext
+	if dial != nil {
+		baseDial = dial
+	}
+	transport.DialContext = dialGuard(baseDial, allowPrivate)
 	if tlsConfig != nil {
 		transport.TLSClientConfig = tlsConfig
 	}
+	return transport
+}
 
-	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
-
+// newHTTPClient wraps transport in an *http.Client, enforcing redirectGuard
+// (when set) via CheckRedirect while keeping net/http's own redirect limit.
+func newHTTPClient(transport *http.Transport, redirectGuard func(*url.URL) error) *http.Client {
 	client := &http.Client{Transport: transport}
-	if guard := params.RedirectGuard; guard != nil {
+	if redirectGuard != nil {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			// Keep net/http's own redirect limit; the guard only narrows where to.
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			return guard(req.URL)
+			return redirectGuard(req.URL)
 		}
 	}
+	return client
+}
+
+// newHandleFromClient builds the per-call handle state (method, url, headers,
+// its own cancelable context, body buffer) around client, which may be freshly
+// built (newHTTPHandle) or a cached one shared across calls
+// (OpenHTTPResourceWithClient).
+func newHandleFromClient(params IOOpenParams, client *http.Client) (*httpHandle, error) {
+	method := strings.ToUpper(params.Method)
+	if method == "" {
+		method = "GET"
+	}
+	if params.URL == "" {
+		return nil, fmt.Errorf("URL is required for HTTP handle")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
 
 	return &httpHandle{
 		client:  client,
@@ -239,11 +284,33 @@ func (h *httpHandle) Close() error {
 		return nil
 	}
 	h.phase = httpPhaseClosed
-	h.cancel()
+	// Close the response body before canceling: net/http only returns a
+	// finished request's connection to the transport's keep-alive pool once
+	// the body is closed with nothing left unread. Canceling first would race
+	// that handoff and make the transport tear the connection down instead —
+	// silently defeating the whole point of caching the client for reuse.
 	if h.resp != nil {
 		if err := h.resp.Body.Close(); err != nil {
 			logger.Default().Warn("close HTTP response body", zap.Error(err))
 		}
 	}
+	h.cancel()
 	return nil
+}
+
+// OpenHTTPResourceWithClient prepares an HTTP request against a pre-built,
+// possibly cached client — the keep-alive-reuse counterpart of
+// OpenHTTPResource (io_handle.go), used by DefaultHostProvider.OpenIO once it
+// has resolved (or reused) the asset's client via httpClientCache.
+func OpenHTTPResourceWithClient(params IOOpenParams, client *http.Client) (*IOResource, error) {
+	h, err := newHandleFromClient(params, client)
+	if err != nil {
+		return nil, err
+	}
+	return &IOResource{
+		Reader: &httpReadAdapter{h: h},
+		Writer: &httpWriteAdapter{h: h},
+		Closer: &httpCloseAdapter{h: h},
+		http:   h,
+	}, nil
 }

@@ -286,19 +286,19 @@ func parseHostConnectionConfig(configJSON string) (*hostConnectionConfig, error)
 // the same connpool helper, so a bad CA/cert file or a failed handshake fails
 // exactly as it would for a built-in type — never falling back to a direct or
 // unverified connection.
-func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, *tls.Config, error) {
+func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, *tls.Config, string, error) {
 	owner, asset, err := ownedAsset(ctx, d.ext.service, d.extName, assetID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	conn := owner.Manifest.AssetTypeDef(asset.Type).Connection
 	if conn == nil {
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 
 	hostCfg, err := parseHostConnectionConfig(asset.Config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("asset %d connection config: %w", assetID, err)
+		return nil, nil, "", fmt.Errorf("asset %d connection config: %w", assetID, err)
 	}
 
 	var chain *asset_entity.ProxyChainConfig
@@ -309,12 +309,17 @@ func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extens
 	if conn.SSHTunnel {
 		tunnelID = asset.SSHTunnelID
 	}
+	var tlsSettings *hostTLSConfig
+	if conn.TLS && hostCfg != nil {
+		tlsSettings = hostCfg.TLS
+	}
+	fingerprint := connectionFingerprint(tunnelID, chain, tlsSettings)
 
 	var dial extension.DialContextFunc
 	if effective := asset_entity.EffectiveProxyChain(chain, tunnelID, nil); effective != nil {
 		dial, err = connpool.ProxyChainDialContext(ctx, effective)
 		if err != nil {
-			return nil, nil, fmt.Errorf("resolve connection path (asset %d): %w", assetID, err)
+			return nil, nil, "", fmt.Errorf("resolve connection path (asset %d): %w", assetID, err)
 		}
 		logger.Ctx(ctx).Info("extension asset dials through proxy chain",
 			zap.String("extension", d.extName),
@@ -333,7 +338,7 @@ func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extens
 			KeyFile:    hostCfg.TLS.KeyFile,
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("TLS config (asset %d): %w", assetID, err)
+			return nil, nil, "", fmt.Errorf("TLS config (asset %d): %w", assetID, err)
 		}
 		logger.Ctx(ctx).Info("extension asset applies TLS",
 			zap.String("extension", d.extName),
@@ -342,5 +347,21 @@ func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extens
 		)
 	}
 
-	return dial, tlsConfig, nil
+	return dial, tlsConfig, fingerprint, nil
+}
+
+// connectionFingerprint identifies the resolved connection settings behind a
+// dial: the SSH tunnel asset id, proxy chain and TLS settings. Two calls that
+// produce the same fingerprint dial the same way, so a cached HTTP client
+// built for one (see DefaultHostProvider.httpClients) is safe to reuse for the
+// other; the fingerprint changing is the signal that the cached client must be
+// rebuilt instead.
+func connectionFingerprint(tunnelID int64, chain *asset_entity.ProxyChainConfig, tlsSettings *hostTLSConfig) string {
+	payload, _ := json.Marshal(struct {
+		Tunnel int64                          `json:"tunnel,omitempty"`
+		Chain  *asset_entity.ProxyChainConfig `json:"chain,omitempty"`
+		TLS    *hostTLSConfig                 `json:"tls,omitempty"`
+	}{tunnelID, chain, tlsSettings})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }

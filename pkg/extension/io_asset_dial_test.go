@@ -34,15 +34,15 @@ type fakeAssetDialer struct {
 	addrs  []string
 }
 
-func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (DialContextFunc, *tls.Config, error) {
+func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (DialContextFunc, *tls.Config, string, error) {
 	f.mu.Lock()
 	f.assets = append(f.assets, assetID)
 	f.mu.Unlock()
 	if f.openErr != nil {
-		return nil, nil, f.openErr
+		return nil, nil, "", f.openErr
 	}
 	if f.direct {
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		f.mu.Lock()
@@ -53,7 +53,7 @@ func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (Dial
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, f.farSide)
 	}
-	return dial, f.tlsConfig, nil
+	return dial, f.tlsConfig, "fixed", nil
 }
 
 // selfSignedCert generates a self-signed cert/key pair valid for 127.0.0.1.

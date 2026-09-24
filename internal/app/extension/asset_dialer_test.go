@@ -83,14 +83,14 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 
 		Convey("an undeclared tunnel has no effect: the asset dials directly", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(1)).Return(assetOf(1, "plain-store", tunnelID), nil)
-			dial, _, err := e.NewAssetDialer("plain").DialContextFor(ctx, 1)
+			dial, _, _, err := e.NewAssetDialer("plain").DialContextFor(ctx, 1)
 			So(err, ShouldBeNil)
 			So(dial, ShouldBeNil)
 		})
 
 		Convey("a declared tunnel the asset leaves unset dials directly", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(2)).Return(assetOf(2, "es-cluster", 0), nil)
-			dial, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 2)
+			dial, _, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 2)
 			So(err, ShouldBeNil)
 			So(dial, ShouldBeNil)
 		})
@@ -98,7 +98,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 		Convey("a tunnel asset that cannot be resolved is an error, not a direct dial", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(3)).Return(assetOf(3, "es-cluster", tunnelID), nil)
 			assets.EXPECT().Find(gomock.Any(), tunnelID).Return(nil, errors.New("record not found"))
-			dial, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 3)
+			dial, _, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 3)
 			So(dial, ShouldBeNil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "record not found")
@@ -114,7 +114,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), tunnelID).
 				Return(&asset_entity.Asset{ID: tunnelID, Name: "bastion", Type: asset_entity.AssetTypeSSH, Config: string(sshCfg)}, nil)
 
-			dial, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 4)
+			dial, _, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 4)
 			So(err, ShouldBeNil)
 			So(dial, ShouldNotBeNil)
 
@@ -128,7 +128,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 
 		Convey("another extension's asset is refused", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(5)).Return(assetOf(5, "plain-store", 0), nil)
-			_, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 5)
+			_, _, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 5)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "does not belong to extension")
 		})
@@ -172,7 +172,7 @@ func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(10)).
 				Return(&asset_entity.Asset{ID: 10, Name: "es-cluster", Type: "es-cluster", Config: chainConfig(host, portN)}, nil)
 
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 10)
+			dial, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 10)
 			So(err, ShouldBeNil)
 			So(dial, ShouldNotBeNil)
 			So(tlsConfig, ShouldBeNil)
@@ -192,7 +192,7 @@ func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(11)).
 				Return(&asset_entity.Asset{ID: 11, Name: "plain-store", Type: "plain-store", Config: chainConfig(host, portN)}, nil)
 
-			dial, tlsConfig, err := e.NewAssetDialer("plain").DialContextFor(ctx, 11)
+			dial, tlsConfig, _, err := e.NewAssetDialer("plain").DialContextFor(ctx, 11)
 			So(err, ShouldBeNil)
 			So(dial, ShouldBeNil)
 			So(tlsConfig, ShouldBeNil)
@@ -232,7 +232,7 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 				Config: tlsConfigJSON(map[string]any{"enabled": true, "insecure": true, "serverName": "es.example.com"}),
 			}, nil)
 
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 20)
+			dial, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 20)
 			So(err, ShouldBeNil)
 			So(dial, ShouldBeNil) // no tunnel/chain declared, TLS only
 			So(tlsConfig, ShouldNotBeNil)
@@ -246,7 +246,7 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 				Config: tlsConfigJSON(map[string]any{"enabled": false, "insecure": true}),
 			}, nil)
 
-			_, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 21)
+			_, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 21)
 			So(err, ShouldBeNil)
 			So(tlsConfig, ShouldBeNil)
 		})
@@ -257,7 +257,7 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 				Config: tlsConfigJSON(map[string]any{"enabled": true, "insecure": true}),
 			}, nil)
 
-			_, tlsConfig, err := e.NewAssetDialer("plain").DialContextFor(ctx, 22)
+			_, tlsConfig, _, err := e.NewAssetDialer("plain").DialContextFor(ctx, 22)
 			So(err, ShouldBeNil)
 			So(tlsConfig, ShouldBeNil)
 		})
@@ -268,7 +268,7 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 				Config: tlsConfigJSON(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}),
 			}, nil)
 
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextFor(ctx, 23)
+			dial, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 23)
 			So(dial, ShouldBeNil)
 			So(tlsConfig, ShouldBeNil)
 			So(err, ShouldNotBeNil)
