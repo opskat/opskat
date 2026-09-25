@@ -80,7 +80,7 @@ install-cli:
 # SKILL.md / locales 一起落到 extensions/$(EXT)/dist，那正是应用要装的目录形状。
 # 装进正在运行的应用（沙箱见 docs/VERIFICATION.md）：
 #   make build-ext && opsctl ext dev $(CURDIR)/extensions/$(EXT)/dist
-# 重跑这两条就是热重载——Install 会先卸载旧模块。
+# 重跑这两条即热重载——暂存后原子替换，失败时保留旧版本；需桌面审批。
 EXT ?= notebook
 build-ext:
 	@rm -rf extensions/$(EXT)/dist
