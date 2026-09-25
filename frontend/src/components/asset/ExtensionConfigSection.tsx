@@ -57,6 +57,11 @@ interface ExtensionFormState {
   config: Record<string, unknown>;
   /** 编辑态要先拿到后端解密后的配置：资产上存的是密文，拿它回填/保存会把密文再加密一遍。 */
   status: "ready" | "loading" | "error";
+  /**
+   * 宿主没回显的已存密码字段（扩展未声明 credentials:read）→ 其已存密文。表单按内置资产
+   * 的"已设置，留空则不修改"呈现：留空保存沿用这份密文，填了新值才替换。
+   */
+  withheldSecrets: Record<string, string>;
   /** 经 SSH 隧道连接；隧道资产存在资产的 sshTunnelId 列上，不进扩展能读到的 config。 */
   tunnel: boolean;
   sshTunnelId: number;
@@ -128,11 +133,18 @@ export function makeExtensionConfigSection(opts: Options) {
   const proxyChainEnabled = !!opts.connection?.proxyChain;
   const tlsEnabled = !!opts.connection?.tls;
 
-  async function encryptSecrets(config: Record<string, unknown>, ctx: AssetFormContext) {
+  async function encryptSecrets(
+    config: Record<string, unknown>,
+    withheld: Record<string, string>,
+    ctx: AssetFormContext
+  ) {
     const out = { ...config };
     for (const field of secrets) {
       const value = out[field];
-      if (value === undefined || value === null || value === "") continue;
+      if (value === undefined || value === null || value === "") {
+        if (withheld[field]) out[field] = withheld[field];
+        continue;
+      }
       out[field] = await ctx.encryptPassword(String(value));
     }
     return out;
@@ -150,12 +162,12 @@ export function makeExtensionConfigSection(opts: Options) {
       onValidityChange,
       init: (a) => {
         const sshTunnelId = sshTunnel ? a?.sshTunnelId || 0 : 0;
-        const tunnel = { tunnel: sshTunnelId > 0, sshTunnelId };
+        const base = { tunnel: sshTunnelId > 0, sshTunnelId, withheldSecrets: {} };
         if (a?.ID) {
-          return { config: {}, status: "loading", ...tunnel, proxyChain: CONNECTION_DEFAULTS, tls: TLS_DEFAULTS };
+          return { config: {}, status: "loading", ...base, proxyChain: CONNECTION_DEFAULTS, tls: TLS_DEFAULTS };
         }
         const { guestConfig, proxyChain, tls } = splitHostConnection(parseConfig(a?.Config));
-        return { config: guestConfig, status: "ready", ...tunnel, proxyChain, tls };
+        return { config: guestConfig, status: "ready", ...base, proxyChain, tls };
       },
       // 必填校验由后端按 configSchema.required 负责；表单侧不复制一份会漂移的规则。
       validate: (s) => {
@@ -180,7 +192,7 @@ export function makeExtensionConfigSection(opts: Options) {
       },
       build: async (s, buildCtx) => {
         if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
-        const config = await encryptSecrets(s.config, buildCtx);
+        const config = await encryptSecrets(s.config, s.withheldSecrets, buildCtx);
 
         const hostConnection: HostConnectionConfig = {};
         if (proxyChainEnabled) {
@@ -250,7 +262,10 @@ export function makeExtensionConfigSection(opts: Options) {
 
     // 编辑态：把密文字段换成后端解密后的值，用户才能看到自己填过什么。解密失败不能退回
     // 资产上的原始配置——密码框里会是密文，保存时再加密一次就把真实密钥毁了。
+    // 扩展未声明 credentials:read 时后端不回显密码字段：已存密文从资产原始配置里取，
+    // 只用于留空保存时原样写回，不进输入框。
     const editID = editAsset?.ID;
+    const storedConfig = editAsset?.Config;
     useEffect(() => {
       if (!editID) return;
       let cancelled = false;
@@ -258,8 +273,15 @@ export function makeExtensionConfigSection(opts: Options) {
         .then((cfg) => {
           if (cancelled) return;
           const { guestConfig, proxyChain, tls } = splitHostConnection(parseConfig(cfg));
+          const stored = parseConfig(storedConfig);
+          const withheldSecrets: Record<string, string> = {};
+          for (const f of secrets) {
+            if (guestConfig[f] === undefined && typeof stored[f] === "string" && stored[f]) {
+              withheldSecrets[f] = stored[f];
+            }
+          }
           initialSecretsRef.current = Object.fromEntries(secrets.map((f) => [f, String(guestConfig[f] ?? "")]));
-          setState((s) => ({ ...s, config: guestConfig, status: "ready", proxyChain, tls }));
+          setState((s) => ({ ...s, config: guestConfig, status: "ready", proxyChain, tls, withheldSecrets }));
         })
         .catch((err) => {
           if (cancelled) return;
@@ -269,7 +291,7 @@ export function makeExtensionConfigSection(opts: Options) {
       return () => {
         cancelled = true;
       };
-    }, [editID, setState, t]);
+    }, [editID, storedConfig, setState, t]);
 
     // 未就绪时不渲染表单：原因已经由壳在保存按钮旁显示（saveDisabledReason），失败另有 toast。
     if (!opts.schema?.properties || state.status !== "ready") return null;
@@ -278,6 +300,7 @@ export function makeExtensionConfigSection(opts: Options) {
         <ExtensionConfigForm
           configSchema={opts.schema}
           value={state.config}
+          withheldSecrets={state.withheldSecrets}
           onChange={(config) => patch({ config, status: "ready" })}
         />
         {sshTunnel && (

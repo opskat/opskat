@@ -203,8 +203,14 @@ func (h *actionEventHandler) OnActionEvent(invocationID, eventType string, data 
 	return nil
 }
 
-// getDecryptedExtConfig returns the config of an asset extName owns, with
-// password fields decrypted per extName's credentials capability.
+// getDecryptedExtConfig returns the config of an asset extName owns for the
+// host's configuration form. Password fields come back as plaintext only when
+// extName may read credentials; otherwise they are withheld (omitted). The form
+// shares its webview with extName's pages, which can call this binding
+// themselves, so the credentials decision applies here as it does to
+// ctx.AssetConfig() — but the guest's opaque handle is no use to a form, which
+// would render it (and save it back) as a value. The form instead shows a
+// withheld field as already set and keeps its stored ciphertext on save.
 func getDecryptedExtConfig(svc *extension_svc.Service, extName string, assetID int64) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -215,11 +221,37 @@ func getDecryptedExtConfig(svc *extension_svc.Service, extName string, assetID i
 	if asset.Config == "" {
 		return "{}", nil
 	}
-	decrypted, err := decryptConfigPasswordFields(json.RawMessage(asset.Config), asset.Type, owner)
+	raw := json.RawMessage(asset.Config)
+	if owner.Manifest.CheckCredentialRead() != nil {
+		withheld, err := withholdPasswordFields(raw, asset.Type, owner)
+		if err != nil {
+			return "", err
+		}
+		return string(withheld), nil
+	}
+	decrypted, err := decryptConfigPasswordFields(raw, asset.Type, owner)
 	if err != nil {
 		return "", err
 	}
 	return string(decrypted), nil
+}
+
+// withholdPasswordFields drops the fields assetType's configSchema marks
+// format:"password" from raw.
+func withholdPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
+	def := ext.Manifest.AssetTypeDef(assetType)
+	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
+	if len(passwordFields) == 0 {
+		return raw, nil
+	}
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parse %s config: %w", assetType, err)
+	}
+	for _, field := range passwordFields {
+		delete(cfg, field)
+	}
+	return json.Marshal(cfg)
 }
 
 // decryptConfigPasswordFields decrypts the fields assetType's configSchema marks

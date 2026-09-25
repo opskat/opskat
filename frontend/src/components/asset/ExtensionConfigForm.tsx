@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Input,
   Label,
@@ -32,9 +33,12 @@ interface ExtensionConfigFormProps {
   configSchema: JSONSchema;
   value: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  /** 有已存值、但宿主没把明文交给表单的密码字段（按字段名取）：呈现为"已设置，留空则不修改"。 */
+  withheldSecrets?: Record<string, string>;
 }
 
-export function ExtensionConfigForm({ configSchema, value, onChange }: ExtensionConfigFormProps) {
+export function ExtensionConfigForm({ configSchema, value, onChange, withheldSecrets }: ExtensionConfigFormProps) {
+  const { t } = useTranslation();
   const properties = configSchema.properties ?? {};
   const required = useMemo(() => new Set(configSchema.required ?? []), [configSchema.required]);
   const order = configSchema.propertyOrder;
@@ -153,7 +157,7 @@ export function ExtensionConfigForm({ configSchema, value, onChange }: Extension
               id={key}
               value={String(value[key] ?? "")}
               onChange={(e) => updateField(key, e.target.value)}
-              placeholder={placeholder || "••••••••"}
+              placeholder={withheldSecrets?.[key] ? t("asset.passwordUnchanged") : placeholder || "••••••••"}
             />
           ) : (
             <Input
@@ -167,7 +171,7 @@ export function ExtensionConfigForm({ configSchema, value, onChange }: Extension
         </div>
       );
     },
-    [value, required, updateField]
+    [value, required, updateField, withheldSecrets, t]
   );
 
   return <>{fields.map(([key, prop]) => renderField(key, prop))}</>;

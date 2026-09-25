@@ -244,9 +244,10 @@ func (e *Extension) assetRef(extName string, assetID int64) (*extension.AssetRef
 	return &extension.AssetRef{ID: assetID, Name: asset.Name, Type: asset.Type}, nil
 }
 
-// GetDecryptedExtensionConfig returns the config of an asset extName owns, with
-// password fields decrypted, so that extension's configuration form can show the
-// user what they saved. An asset of a type extName does not register is refused.
+// GetDecryptedExtensionConfig returns the config of an asset extName owns for
+// that extension's configuration form: password fields decrypted when extName
+// declares credentials:read, withheld otherwise (see getDecryptedExtConfig). An
+// asset of a type extName does not register is refused.
 func (e *Extension) GetDecryptedExtensionConfig(assetID int64, extName string) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")

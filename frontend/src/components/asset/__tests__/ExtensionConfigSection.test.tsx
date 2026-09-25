@@ -82,6 +82,69 @@ describe("ExtensionConfigSection edit mode", () => {
   });
 });
 
+// 扩展未声明 credentials:read：宿主不把已存密码交给表单（扩展页面与表单同一个
+// webview，能直接调这个绑定），GetDecryptedExtensionConfig 里没有该字段。表单按内置
+// 资产的"已设置，留空则不修改"呈现，保存时沿用已存密文。
+describe("ExtensionConfigSection stored password withheld", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ endpoint: "https://x" }));
+  });
+
+  it("shows the password as set-but-hidden, never as a value", async () => {
+    render(<Section editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const input = screen.getByLabelText("Secret");
+    expect(input).toHaveValue("");
+    expect(input).toHaveAttribute("placeholder", "asset.passwordUnchanged");
+    expect(screen.queryByDisplayValue("[object Object]")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue(CIPHERTEXT)).not.toBeInTheDocument();
+  });
+
+  it("saving untouched keeps the stored ciphertext as is", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Section ref={ref} editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "https://x", secret: CIPHERTEXT });
+  });
+
+  it("a newly typed password replaces the stored one", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Section ref={ref} editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText("Secret"), { target: { value: "rotated" } });
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "https://x", secret: "ENC(rotated)" });
+  });
+
+  it("test connection leaves the untouched password for the host to fill from the stored value", async () => {
+    const Testable = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema: {
+        type: "object",
+        properties: {
+          endpoint: { type: "string", title: "Endpoint" },
+          secret: { type: "string", format: "password", title: "Secret" },
+        },
+      },
+      testConnection: true,
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<Testable ref={ref} editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const tc = await ref.current!.buildTestConfig!(ctx);
+    expect(tc.password).toBe("3");
+    expect(JSON.parse(tc.configJSON)).toEqual({ endpoint: "https://x" });
+  });
+});
+
 describe("ExtensionConfigSection connection settings", () => {
   const schema = {
     type: "object",
