@@ -57,10 +57,18 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return 1
 	}
 
+	// 归属直接问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
+	// 接线）：内置类型天然报 ("", false)，因为注册表拒绝让扩展占用一个内置类型名——
+	// 与桌面端的冲突规则同一条，opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。
+	// 提前拿到这个答案，同时喂给 parseExecArgs（多词 argv 的引号策略——扩展的 flag
+	// DSL 没有远端 shell，元字符必须逐词保真；ssh 等类型的多词语义不变）和下面的派发
+	// 判断，避免同一个"是不是扩展资产"的问题被问两次、答案还可能不一致。
+	extName, isExtensionAsset := assettype.ExtensionOwnerOf(asset.Type)
+
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
 	// 用户不该为一条注定失败的命令点头。
-	declaredType, command, err := parseExecArgs(args[1:])
+	declaredType, command, err := parseExecArgs(args[1:], isExtensionAsset)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		printExecUsage()
@@ -74,11 +82,7 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 扩展提供的资产类型：命令交回桌面进程执行。理由是执行位置而不是语义——WASM 运行时、
 	// 扩展的宿主能力与解密后的资产配置只存在于桌面进程里。桌面端跑的是同一个统一 exec
 	// handler，策略/审批/grant/审计因此与内置类型逐字一致，也由那一端落库。
-	//
-	// 归属直接问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
-	// 接线）：内置类型天然报 ("", false)，因为注册表拒绝让扩展占用一个内置类型名——
-	// 与桌面端的冲突规则同一条，opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。
-	if extName, ok := assettype.ExtensionOwnerOf(asset.Type); ok {
+	if isExtensionAsset {
 		return execViaDesktop(asset, extName, command, session)
 	}
 
@@ -219,19 +223,29 @@ Arguments:
               ways. A single word is that string verbatim, so quoting the whole
               command passes shell syntax through untouched:
                 opsctl exec web-01 -- 'tail -n50 /var/log/app.log | grep ERR'
-              Two or more words are joined back into one string. Only a word
-              containing whitespace is re-quoted, so the boundary your own
-              shell consumed survives the re-split downstream:
+              Two or more words are joined back into one string, and how much
+              of each word's original shape survives that join depends on the
+              asset's real type. For ssh and the other built-in types, only a
+              word containing whitespace is re-quoted, so the boundary your
+              own shell consumed survives the re-split downstream and
+              everything else — globs, pipes, redirection — reaches the
+              remote shell as it always has:
                 opsctl exec web-01 -- grep "foo bar" *.log  →  grep 'foo bar' *.log
-              Everything else is passed through, so globs, pipes and
-              redirection still reach the remote shell as they always have.
+              For an extension asset every word is re-quoted whenever needed,
+              because the extension flag DSL has no remote shell: a value
+              like --path='/x?a=1&b=2' must reach it as that exact literal,
+              not as shell operators:
+                opsctl exec my-store -- request --path='/x?a=1&b=2'
               Dispatched by the asset's real type: ssh keeps its streaming
               channel (pipes, exit code); the other built-in types (database,
               redis, mongodb, etcd, kafka, k8s, oss) run through the unified
               exec handler; an extension-provided type is executed by the
               running desktop app, which owns the WASM runtime.
-              For an extension asset the command is "<tool> --flag=value";
-              run 'opsctl help <asset>' for its tool and flag reference.
+              For an extension asset the command is "<tool> --flag=value" or
+              "<tool> --flag value" (space form; a boolean flag never
+              consumes the following word as its value — pass --flag=false
+              explicitly to set it to false); run 'opsctl help <asset>' for
+              its tool and flag reference.
 
 Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this

@@ -13,16 +13,32 @@ import (
 	"github.com/opskat/opskat/pkg/extension"
 )
 
-// parseCommand 把 `<tool> --flag=value` 解析成工具名与按 manifest 声明类型转换过的
-// JSON 参数。扩展名不在命令里：资产类型 → 扩展是一对一的（注册时强制），命令面上再写
-// 一次扩展名只是让模型多一个能写错的位置。
+// parseCommand 把 `<tool> --flag=value`（或 `<tool> --flag value`，见下）解析成工具名
+// 与按 manifest 声明类型转换过的 JSON 参数。扩展名不在命令里：资产类型 → 扩展是一对一的
+// （注册时强制），命令面上再写一次扩展名只是让模型多一个能写错的位置。
 //
-// 切词复用 internal/ai/cmdline —— 与内置类型的 exec DSL 同一份引号感知实现。
+// 切词复用 internal/ai/cmdline —— 与内置类型的 exec DSL 同一份引号感知实现。裸
+// `--flag value`（空格分隔、不带 "="）按 manifest 声明的参数类型决定：非 boolean
+// 消费下一个词作为值（cmdline.WithValueFlags），boolean 保持裸 flag = "true" 的语义，
+// 不会把下一个词错吞成自己的值。opsctl 一侧的 opsctl exec <asset> -- <tool> --flag ...
+// 多词形式因此不必强制模型总是写 --k=v。
 //
 // --json 是逃生口：flag DSL 表达不了嵌套结构，而 manifest 允许声明它们；没有逃生口
 // 就会出现"注册了却调不动"的工具。它与其它 flag 互斥——两者混用时哪个赢都是猜。
 func parseCommand(m *extension.Manifest, command string) (string, []byte, error) {
-	c, err := cmdline.Parse(command)
+	c, err := cmdline.Parse(command, cmdline.WithValueFlags(func(verb, name string) bool {
+		def, ok := toolDef(m, verb)
+		if !ok {
+			return false
+		}
+		props, _ := def.Parameters["properties"].(map[string]any)
+		prop, ok := props[name].(map[string]any)
+		if !ok {
+			return false
+		}
+		typ, _ := prop["type"].(string)
+		return typ != "boolean"
+	}))
 	if err != nil {
 		return "", nil, err
 	}

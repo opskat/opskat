@@ -145,8 +145,29 @@ type Command struct {
 	Flags map[string]string
 }
 
+// ParseOption customizes Parse's flag semantics. The zero value (no options passed)
+// preserves the original, unconditional behavior every existing caller (mongo/kafka/
+// etcd/k8s DSLs) relies on: a bare "--name" (no "=value") always means boolean "true".
+type ParseOption func(*parseOptions)
+
+type parseOptions struct {
+	valueFlag func(verb, name string) bool
+}
+
+// WithValueFlags makes Parse treat a bare "--name" (no "=value") as consuming the
+// *next* word as its value, for any flag where takesValue(verb, name) reports true;
+// flags it reports false for keep the default bare-boolean meaning ("true", no word
+// consumed). Parse itself has no notion of a flag's declared type — that lives in a
+// manifest (or a protocol's own DSL) the caller already has in hand — so the decision
+// is injected here rather than hardcoded: the extension tool DSL uses this to accept
+// "--path value" for a string/integer/number/array parameter while still rejecting a
+// boolean flag that would otherwise swallow the following word.
+func WithValueFlags(takesValue func(verb, name string) bool) ParseOption {
+	return func(o *parseOptions) { o.valueFlag = takesValue }
+}
+
 // Parse 解析富命令串。
-func Parse(s string) (*Command, error) {
+func Parse(s string, opts ...ParseOption) (*Command, error) {
 	words, err := Words(s)
 	if err != nil {
 		return nil, err
@@ -157,8 +178,15 @@ func Parse(s string) (*Command, error) {
 		return nil, err
 	}
 
+	var cfg parseOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	c := &Command{Verb: verb, Flags: map[string]string{}}
-	for _, w := range words[1:] {
+	rest := words[1:]
+	for i := 0; i < len(rest); i++ {
+		w := rest[i]
 		if !strings.HasPrefix(w, "--") {
 			c.Args = append(c.Args, w)
 			continue
@@ -171,7 +199,15 @@ func Parse(s string) (*Command, error) {
 			return nil, fmt.Errorf("invalid flag name %q: use only letters, digits, and _@%%+=:,./- characters", name)
 		}
 		if !found {
-			value = "true"
+			if cfg.valueFlag != nil && cfg.valueFlag(verb, name) {
+				if i+1 >= len(rest) {
+					return nil, fmt.Errorf("flag --%s requires a value", name)
+				}
+				i++
+				value = rest[i]
+			} else {
+				value = "true"
+			}
 		}
 		if _, dup := c.Flags[name]; dup {
 			return nil, fmt.Errorf("duplicate flag: --%s", name)

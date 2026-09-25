@@ -72,7 +72,7 @@ func TestParseExecArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			declared, cmd, err := parseExecArgs(tc.args)
+			declared, cmd, err := parseExecArgs(tc.args, false)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantType, declared)
 			require.Equal(t, tc.wantCmd, cmd)
@@ -80,13 +80,13 @@ func TestParseExecArgs(t *testing.T) {
 	}
 
 	t.Run("命令前的未知 flag 报错，而不是静默丢弃或发往远端", func(t *testing.T) {
-		_, _, err := parseExecArgs([]string{"--bogus", "1", "--", "ls"})
+		_, _, err := parseExecArgs([]string{"--bogus", "1", "--", "ls"}, false)
 		require.ErrorContains(t, err, "--bogus")
-		_, _, err = parseExecArgs([]string{"--bogus", "ls"})
+		_, _, err = parseExecArgs([]string{"--bogus", "ls"}, false)
 		require.ErrorContains(t, err, "--bogus")
 	})
 	t.Run("--type 缺值报错", func(t *testing.T) {
-		_, _, err := parseExecArgs([]string{"--type"})
+		_, _, err := parseExecArgs([]string{"--type"}, false)
 		require.ErrorContains(t, err, "--type")
 	})
 	t.Run("本地 shell 吃掉的词边界在下游重新切分后仍在", func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestParseExecArgs(t *testing.T) {
 			{"grep", "foo bar", "file"},
 			{"note_put", "--content=restart via systemctl"},
 		} {
-			_, cmd, err := parseExecArgs(append([]string{"--"}, argv...))
+			_, cmd, err := parseExecArgs(append([]string{"--"}, argv...), false)
 			require.NoError(t, err)
 			words, err := cmdline.Words(cmd)
 			require.NoError(t, err)
@@ -104,26 +104,59 @@ func TestParseExecArgs(t *testing.T) {
 		}
 	})
 	t.Run("不含空白的词原样保留，glob 仍交给远端 shell", func(t *testing.T) {
-		_, cmd, err := parseExecArgs([]string{"--", "ls", "*.log"})
+		_, cmd, err := parseExecArgs([]string{"--", "ls", "*.log"}, false)
 		require.NoError(t, err)
 		require.Equal(t, "ls *.log", cmd)
-		_, cmd, err = parseExecArgs([]string{"--", "grep", "foo bar", "*.log"})
+		_, cmd, err = parseExecArgs([]string{"--", "grep", "foo bar", "*.log"}, false)
 		require.NoError(t, err)
 		require.Equal(t, "grep 'foo bar' *.log", cmd)
 	})
 	t.Run("单个词就是命令串本身，不加引号", func(t *testing.T) {
-		// `opsctl exec prod-db -- "SELECT * FROM t"` 是所有 DSL 的文档用法。
-		_, cmd, err := parseExecArgs([]string{"--", "SELECT * FROM users"})
+		// `opsctl exec prod-db -- "SELECT * FROM t"` 是所有 DSL 的文档用法。这对扩展
+		// 资产同样成立——单词形式不做重新分词，所以 literalWords 对它没有影响。
+		_, cmd, err := parseExecArgs([]string{"--", "SELECT * FROM users"}, false)
 		require.NoError(t, err)
 		require.Equal(t, "SELECT * FROM users", cmd)
-		_, cmd, err = parseExecArgs([]string{"ls | wc -l"})
+		_, cmd, err = parseExecArgs([]string{"ls | wc -l"}, false)
 		require.NoError(t, err)
 		require.Equal(t, "ls | wc -l", cmd)
+		_, cmd, err = parseExecArgs([]string{"--", "request --path=/x?a=1&b=2"}, true)
+		require.NoError(t, err)
+		require.Equal(t, "request --path=/x?a=1&b=2", cmd)
 	})
 	t.Run("没有命令时报错", func(t *testing.T) {
-		_, _, err := parseExecArgs([]string{"--"})
+		_, _, err := parseExecArgs([]string{"--"}, false)
 		require.Error(t, err)
-		_, _, err = parseExecArgs(nil)
+		_, _, err = parseExecArgs(nil, false)
 		require.Error(t, err)
+	})
+
+	// 扩展资产：本地 shell 已经交付的每个 argv 词，必须原样（含元字符）到达扩展 flag
+	// DSL 的重新切分——包括 ES 查询串常见的 & 这类字符。这是本用例集要锁的回归：
+	// `opsctl exec <ext-asset> -- request --path='/x?a=1&b=2'` 此前会在下游被
+	// mvdan/sh 当成后台运算符拆成两条语句，报 "only a single command is supported"。
+	t.Run("扩展资产：多词 argv 逐词保真，元字符不被当成 shell 操作符", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			argv []string
+		}{
+			{"& 出现在 flag 值里", []string{"request", "--path=/x?a=1&b=2"}},
+			{"| 出现在 flag 值里", []string{"request", "--query=a|b"}},
+			{"; 出现在 flag 值里", []string{"request", "--body=a;b"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, cmd, err := parseExecArgs(append([]string{"--"}, tc.argv...), true)
+				require.NoError(t, err)
+				words, err := cmdline.Words(cmd)
+				require.NoError(t, err, "joined command %q must re-split cleanly, not error as multiple statements", cmd)
+				require.Equal(t, tc.argv, words, "each argv word must survive the round trip verbatim")
+			})
+		}
+	})
+
+	t.Run("非扩展资产：ssh 式多词语义不变，元字符原样交给远端 shell", func(t *testing.T) {
+		_, cmd, err := parseExecArgs([]string{"--", "ls", "*.log"}, false)
+		require.NoError(t, err)
+		require.Equal(t, "ls *.log", cmd, "a non-extension asset must still see the bare glob, not a quoted literal")
 	})
 }

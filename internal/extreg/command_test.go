@@ -25,8 +25,9 @@ func TestParseCommand(t *testing.T) {
 	}}}
 
 	t.Run("按声明类型转换", func(t *testing.T) {
-		// cmdline 的 flag 语法是 --k=v 或裸 --k（见 internal/ai/cmdline 文档注释），
-		// 不是 --k v 的空格分隔式；与 mongo/kafka DSL 同一种约定。
+		// cmdline 的默认 flag 语法是 --k=v 或裸 --k（见 internal/ai/cmdline 文档注释），
+		// mongo/kafka DSL 就是这个默认语义；扩展工具 DSL 在此基础上另按参数声明类型
+		// 接受 --k v 空格分隔式（见下面的 "按声明类型接受 --flag value" 用例）。
 		tool, argsJSON, err := parseCommand(m, `list_objects --bucket=my-bucket --maxKeys=100 --force`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -68,6 +69,55 @@ func TestParseCommand(t *testing.T) {
 		_, _, err := parseCommand(m, `list_objects --bucket=b --ratio=abc`)
 		if err == nil || !strings.Contains(err.Error(), "ratio") {
 			t.Fatalf("a bad number must name the flag, got %v", err)
+		}
+	})
+
+	t.Run("按声明类型接受 --flag value 空格分隔式", func(t *testing.T) {
+		// 非 boolean 声明的 flag 消费下一个词作为其值——opsctl 的 flag DSL 因此不必
+		// 强制模型总是写 --k=v，与 ES 查询串这类含 = 的值共存时更不容易写错。
+		_, argsJSON, err := parseCommand(m, `list_objects --bucket my-bucket --maxKeys 100`)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(argsJSON, &got); err != nil {
+			t.Fatalf("args must be valid JSON: %v", err)
+		}
+		if got["bucket"] != "my-bucket" {
+			t.Errorf("bucket = %#v, want my-bucket", got["bucket"])
+		}
+		if got["maxKeys"] != float64(100) {
+			t.Errorf("maxKeys = %#v, want 100 (number, not string)", got["maxKeys"])
+		}
+	})
+
+	t.Run("boolean flag 不吞下一个词", func(t *testing.T) {
+		// --force 是 boolean：空格后的词必须留作独立位置参数（进而被拒），而不是被
+		// --force 当成自己的值吃掉。
+		_, _, err := parseCommand(m, `list_objects --bucket=b --force extra`)
+		if err == nil || !strings.Contains(err.Error(), "unexpected positional argument") {
+			t.Fatalf("a boolean flag must not swallow the next word, got %v", err)
+		}
+	})
+
+	t.Run("boolean flag 仍支持 --flag=false 显式赋值", func(t *testing.T) {
+		_, argsJSON, err := parseCommand(m, `list_objects --bucket=b --force=false`)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(argsJSON, &got); err != nil {
+			t.Fatalf("args must be valid JSON: %v", err)
+		}
+		if got["force"] != false {
+			t.Errorf("force = %#v, want false", got["force"])
+		}
+	})
+
+	t.Run("非 boolean flag 空格形式缺值报错", func(t *testing.T) {
+		_, _, err := parseCommand(m, `list_objects --bucket=b --maxKeys`)
+		if err == nil {
+			t.Fatalf("a value-taking flag with nothing following it must be rejected")
 		}
 	})
 

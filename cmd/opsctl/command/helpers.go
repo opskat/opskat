@@ -16,12 +16,16 @@ import (
 // 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
 // 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的）。命令之前的未知
 // 选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
-func parseExecArgs(args []string) (declaredType, command string, err error) {
+//
+// literalWords 选择多词 argv 重新拼接时的引号策略，见 joinCommandWords；调用方
+// （cmdExec）在解析参数前已经从资产类型拿到了这个答案（assettype.ExtensionOwnerOf），
+// 这里只是把那个已知的答案传下去，不重新判断资产类型。
+func parseExecArgs(args []string, literalWords bool) (declaredType, command string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			command = joinCommandWords(args[i+1:])
+			command = joinCommandWords(args[i+1:], literalWords)
 		case arg == "--type":
 			if i+1 >= len(args) {
 				return "", "", fmt.Errorf("--type requires a value")
@@ -35,7 +39,7 @@ func parseExecArgs(args []string) (declaredType, command string, err error) {
 		case strings.HasPrefix(arg, "-"):
 			return "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
 		default:
-			command = joinCommandWords(args[i:])
+			command = joinCommandWords(args[i:], literalWords)
 		}
 		break
 	}
@@ -50,21 +54,35 @@ func parseExecArgs(args []string) (declaredType, command string, err error) {
 //
 // A single word *is* that command string and is passed through untouched — it is the
 // documented form for every DSL opsctl forwards to (`-- "SELECT * FROM users"`), and
-// quoting it would hand the database a literal `'SELECT * FROM users'`.
+// quoting it would hand the database a literal `'SELECT * FROM users'`. This holds
+// regardless of literalWords: a single argv word never gets re-quoted.
 //
-// Two or more words are argv. Every consumer re-splits the result with a real shell
-// parser (the extension flag DSL and the k8s/etcd/kafka canonicalizers through
-// cmdline.Words, a remote shell for ssh), so a bare-space join would turn
-// `-- grep "foo bar" file` into four words. Only words containing whitespace carry a
-// boundary the join would destroy; the rest are emitted bare, so `-- ls *.log` still
-// reaches the remote shell as a glob, as ssh(1) does.
-func joinCommandWords(words []string) string {
+// Two or more words are argv, and every consumer re-splits the result with a real
+// shell parser (cmdline.Words underneath both the extension flag DSL and the
+// k8s/etcd/kafka canonicalizers, a remote shell for ssh) — so how much of each word's
+// original shape must survive that re-split depends on what the re-split feeds into:
+//
+//   - literalWords == false (every non-extension type, ssh included): the re-split
+//     result is handed to something that itself behaves like a shell (ssh(1), or a
+//     canonicalizer speaking a Unix-y command grammar), so a bare metacharacter like
+//     `*` or `&` is meant to keep meaning what it means to a shell. Only words
+//     containing whitespace carry a boundary the join would otherwise destroy; the
+//     rest are emitted bare, so `-- ls *.log` still reaches the remote shell as a
+//     glob, as ssh(1) does.
+//   - literalWords == true (an extension asset): the re-split result is the
+//     extension's flag DSL (internal/extreg/command.go), which has no shell and no
+//     use for shell operators — a value like `--path=/x?a=1&b=2` (one argv word this
+//     process already received intact) must come back out of the re-split as that
+//     exact word, `&` included, not as a background operator splitting the command in
+//     two. Every word is therefore quoted whenever it needs to be (cmdline.QuoteIfNeeded
+//     leaves an already-safe word bare), independent of whitespace.
+func joinCommandWords(words []string, literalWords bool) string {
 	if len(words) == 1 {
 		return words[0]
 	}
 	joined := make([]string, len(words))
 	for i, word := range words {
-		if strings.ContainsAny(word, " \t\n") {
+		if literalWords || strings.ContainsAny(word, " \t\n") {
 			joined[i] = cmdline.QuoteIfNeeded(word)
 			continue
 		}
