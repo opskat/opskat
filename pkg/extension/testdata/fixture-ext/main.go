@@ -11,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -68,12 +69,14 @@ type addrArgs struct {
 // fixtureConfig's endpoint (a URL or host:port) is what the host's
 // network.assetEndpoint gate lets a call scoped to the asset reach. authType
 // picks which of the declared auth groups the host injects into requests to
-// that endpoint, rendered from username / password.
+// that endpoint, rendered from username / password. password is a Credential,
+// so it decodes both the plaintext served with credentials:read and the opaque
+// handle served without it (this manifest does not declare it).
 type fixtureConfig struct {
-	Endpoint string `json:"endpoint" title:"Endpoint" format:"endpoint"`
-	AuthType string `json:"authType,omitempty" title:"Auth type" enum:"none,basic,bearer,signed"`
-	Username string `json:"username,omitempty" title:"Username"`
-	Password string `json:"password,omitempty" title:"Password" format:"password"`
+	Endpoint string            `json:"endpoint" title:"Endpoint" format:"endpoint"`
+	AuthType string            `json:"authType,omitempty" title:"Auth type" enum:"none,basic,bearer,signed"`
+	Username string            `json:"username,omitempty" title:"Username"`
+	Password opskat.Credential `json:"password,omitempty" title:"Password"`
 }
 
 func init() {
@@ -198,6 +201,26 @@ func init() {
 			return nil, err
 		}
 		return map[string]any{"config": json.RawMessage(cfg), "asset": ctx.Asset}, nil
+	}).Policy("read")
+
+	// typed_config decodes the asset config into the same struct AssetType
+	// reflected the form from, the way an extension actually consumes it, and
+	// reports what the password field carried.
+	opskat.Tool("typed_config", func(ctx *opskat.ToolContext, _ noArgs) (any, error) {
+		raw, err := ctx.AssetConfig()
+		if err != nil {
+			return nil, err
+		}
+		var cfg fixtureConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+		password, err := cfg.Password.Plaintext()
+		withheld := errors.Is(err, opskat.ErrCredentialWithheld)
+		if err != nil && !withheld {
+			return nil, err
+		}
+		return map[string]any{"passwordSet": cfg.Password.IsSet(), "password": password, "withheld": withheld}, nil
 	}).Policy("read")
 
 	// http_get and tcp_echo reach the network through host IO, so a test sees

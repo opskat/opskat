@@ -50,7 +50,13 @@ func reflectSchema(t reflect.Type, what string, mode schemaMode) map[string]any 
 			fieldType = fieldType.Elem()
 			optional = true
 		}
-		prop := propertySchema(fieldType, fmt.Sprintf("%s: field %s", what, f.Name))
+		fieldWhat := fmt.Sprintf("%s: field %s", what, f.Name)
+		var prop map[string]any
+		if fieldType == credentialType {
+			prop = credentialSchema(f, fieldWhat, mode)
+		} else {
+			prop = propertySchema(fieldType, fieldWhat)
+		}
 		applyTags(prop, f, mode)
 		props[name] = prop
 		order = append(order, name)
@@ -109,6 +115,19 @@ func propertySchema(t reflect.Type, what string) map[string]any {
 	default:
 		panic(fmt.Sprintf("opskat: %s has unsupported type %s — nested values go through the --json escape hatch, not a flag", what, t))
 	}
+}
+
+// credentialSchema describes a Credential field: always a format:"password"
+// string, and only in an asset config — a secret is stored on the asset, never
+// passed as a tool argument.
+func credentialSchema(f reflect.StructField, what string, mode schemaMode) map[string]any {
+	if mode != schemaModeConfig {
+		panic(fmt.Sprintf("opskat: %s is a Credential, which is only an asset config field", what))
+	}
+	if v := f.Tag.Get("format"); v != "" && v != "password" {
+		panic(fmt.Sprintf("opskat: %s is a Credential, which is always format \"password\", but is tagged format %q", what, v))
+	}
+	return map[string]any{"type": "string", "format": "password"}
 }
 
 // applyTags copies the declaration's presentation tags onto the property.

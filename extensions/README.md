@@ -71,7 +71,8 @@ Each one is enforced at the host call it guards: `fs` patterns are absolute path
 prefixes (`${EXT_DIR}` resolves to the installed extension's directory), the `http`
 allowlist is matched as a URL prefix and private/loopback destinations are refused
 unless `tunnel` is also granted, and `credentials: "read"` is what lets
-`ctx.AssetConfig()` return decrypted password fields. `network.assetEndpoint` lets a
+`ctx.AssetConfig()` return decrypted password fields (see
+[Reading secret fields](#reading-secret-fields)). `network.assetEndpoint` lets a
 call scoped to an asset reach the addresses in that asset's config fields tagged
 `format:"endpoint"` (a URL or `host:port`) over HTTP and TCP — private addresses
 included, since the user typed them. The target's scheme, host and port must match
@@ -132,7 +133,8 @@ type putArgs struct {
 - `desc` on a **tool** argument is shown to the model as written — plain text, not an
   i18n key. On an **asset config** field, `title` / `placeholder` / `desc` are i18n
   keys, and `format:"password"` marks a secret the host encrypts, `enum:"a,b"` renders
-  a select.
+  a select. Declare a secret as an `opskat.Credential` field, which is always
+  `format:"password"` (see [Reading secret fields](#reading-secret-fields)).
 
 ### The asset comes from the host, not from the arguments
 
@@ -141,7 +143,7 @@ envelope and the handler reads it off the context:
 
 ```go
 func listNotes(ctx *opskat.ToolContext, args listArgs) (any, error) {
-    raw, err := ctx.AssetConfig() // config of the exec target, passwords decrypted
+    raw, err := ctx.AssetConfig() // config of the exec target
     ...                           // ctx.Asset is {ID, Name, Type}
 }
 ```
@@ -230,6 +232,39 @@ and not in a failed request's error — and a password that cannot be decrypted 
 request instead of sending it unauthenticated. `credentials: "read"` stays for
 protocols the host cannot authenticate for you (raw TCP handshakes); the install
 confirmation and the extension's details in Settings warn about it prominently.
+
+### Reading secret fields
+
+Declare a secret config field as `opskat.Credential`. The asset form shows it as a
+password, and it decodes from `ctx.AssetConfig()` whether or not the extension may read
+it:
+
+```go
+type esConfig struct {
+	Endpoint string            `json:"endpoint" format:"endpoint"`
+	Username string            `json:"username,omitempty"`
+	Password opskat.Credential `json:"password,omitempty" title:"config.password.title"`
+}
+
+raw, err := ctx.AssetConfig()
+...
+var cfg esConfig
+if err := json.Unmarshal(raw, &cfg); err != nil {
+	return nil, err
+}
+cfg.Password.IsSet()                // the asset has a password, readable or not
+password, err := cfg.Password.Plaintext()
+```
+
+Without `credentials: "read"`, the host serves the field as an opaque handle that
+carries no plaintext: `IsSet` still reports whether the asset has a value, `Plaintext`
+fails with `opskat.ErrCredentialWithheld`, and the host keeps injecting the secret through
+`Auth`. With `credentials: "read"`, `Plaintext` returns the decrypted value (`""` when
+unset). A plain `string` field tagged `format:"password"` decodes only the plaintext, so
+it suits only an extension that declares `credentials: "read"`. Without it,
+`json.Unmarshal` fails on the handle. `Credential` is refused as a tool argument; a secret
+belongs on the asset. `TestConnection` decodes the form into the same struct, and there,
+without `credentials: "read"`, a secret field the host withheld arrives unset.
 
 ### Test connection
 

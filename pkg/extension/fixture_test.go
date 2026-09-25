@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	. "github.com/smartystreets/goconvey/convey"
 )
 
 // The fixture extension in testdata/fixture-ext is the only way to observe the
@@ -201,3 +203,46 @@ func (h *recordedHost) closedCount() int {
 }
 
 var _ HostProvider = (*recordedHost)(nil)
+
+func TestFixtureTypedConfigCredential(t *testing.T) {
+	Convey("Given the fixture extension, whose config struct has a password field", t, func() {
+		host := newRecordedHost()
+		p := newFixturePlugin(t, host, t.TempDir())
+		asset := &AssetRef{ID: 7, Name: "es", Type: "fixture"}
+
+		Convey("without credentials:read the handle the desktop serves decodes, carrying no plaintext", func() {
+			// What internal/app/extension serves an extension that does not
+			// declare credentials:read: the stored password as an opaque handle.
+			host.configs[7] = json.RawMessage(`{"endpoint":"https://es:9200","password":{"__credential_handle":"cred_0011223344556677"}}`)
+			out := callToolOn(t, p, asset, "typed_config", map[string]any{})
+			So(out["passwordSet"], ShouldEqual, true)
+			So(out["password"], ShouldEqual, "")
+			So(out["withheld"], ShouldEqual, true)
+		})
+
+		Convey("with credentials:read the plaintext the desktop serves is readable", func() {
+			host.configs[7] = json.RawMessage(`{"endpoint":"https://es:9200","password":"s3cr3t"}`)
+			out := callToolOn(t, p, asset, "typed_config", map[string]any{})
+			So(out["passwordSet"], ShouldEqual, true)
+			So(out["password"], ShouldEqual, "s3cr3t")
+			So(out["withheld"], ShouldEqual, false)
+		})
+
+		Convey("an unset password decodes as unset", func() {
+			host.configs[7] = json.RawMessage(`{"endpoint":"https://es:9200"}`)
+			out := callToolOn(t, p, asset, "typed_config", map[string]any{})
+			So(out["passwordSet"], ShouldEqual, false)
+			So(out["password"], ShouldEqual, "")
+			So(out["withheld"], ShouldEqual, false)
+		})
+
+		Convey("describe still reports the field as a secret the host encrypts and gates", func() {
+			payload, err := p.Describe(context.Background())
+			So(err, ShouldBeNil)
+			desc, err := ParseDescriptor(payload)
+			So(err, ShouldBeNil)
+			So(desc.AssetTypes, ShouldHaveLength, 1)
+			So(PasswordFieldsFromSchema(desc.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"password"})
+		})
+	})
+}
