@@ -94,6 +94,45 @@ test("an extension asset type without a test-connection handler shows no Test co
   await expect(page.getByTestId("asset-form-dialog").getByTestId("asset-test-connection")).toHaveCount(0);
 });
 
+// The positive side of the two declarations above, against the harness's second
+// extension (pkg/extension/testdata/fixture-ext): its asset type declares
+// connection: {sshTunnel} and a test-connection handler that GETs the asset's
+// format:"endpoint" field through host IO (docs/specs 网络与连接 / 测试连接). The form
+// must render the host's connection section with exactly the declared item, and the
+// button must run the handler on the form's current values and report the outcome.
+test("an extension asset type declaring an SSH tunnel and a test-connection handler gets the host's connection section and a working Test connection", async ({
+  page,
+  baseURL,
+}) => {
+  await openApp(page);
+  await openAssetForm(page);
+  await page.getByTestId("asset-type-picker").click();
+  const option = page.getByTestId("asset-type-option-fixture");
+  await expect(option).toBeVisible({ timeout: EXT_READY });
+  await option.click();
+  const dialog = page.getByTestId("asset-form-dialog");
+
+  // connection.sshTunnel adds an SSH tunnel choice to the host's one connection-method
+  // selector; proxyChain is not declared, so the chain choice is absent.
+  const method = dialog.getByRole("radiogroup", { name: "连接方式" });
+  await expect(method.getByRole("radio")).toHaveText(["直连", "SSH 隧道"]);
+  await method.getByRole("radio", { name: "SSH 隧道" }).click();
+  await expect(dialog.getByTestId("extension-ssh-tunnel-select")).toBeVisible();
+  await method.getByRole("radio", { name: "直连" }).click();
+
+  // The endpoint is the app's own dev server: the host dials it (a loopback address,
+  // admitted because it is the asset's endpoint) and the handler sees its 200.
+  const testButton = dialog.getByTestId("asset-test-connection");
+  await dialog.locator("#endpoint").fill(baseURL!);
+  await testButton.click();
+  await expect(page.locator('[data-sonner-toast][data-type="success"]')).toContainText("连接成功");
+
+  // Nothing listens on the discard port: the handler's dial error is the failure shown.
+  await dialog.locator("#endpoint").fill("http://127.0.0.1:9");
+  await testButton.click();
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toContainText("连接失败");
+});
+
 test("a saved extension asset persists its schema config and renders the detail card from it", async ({
   page,
 }) => {

@@ -4,10 +4,8 @@ import "testing"
 
 // Pick backs host-generated text such as the ext dev install approval detail
 // (internal/app/opsctl/ext_dev.go's credentials:read warning). The lang it
-// receives is o.lang.Lang(), now synced from the frontend's i18next language
-// code (frontend/src/i18n/index.ts calls the Go SetLanguage binding with
-// exactly what i18next carries: "zh-CN" or "en"). This guards those two
-// independent sources of truth staying compatible.
+// receives is o.lang.Lang(): the frontend's i18next code ("zh-CN" or "en"),
+// lowercased by System.SetLanguage — Pick must read either spelling alike.
 func TestPick_MatchesFrontendLanguageCodes(t *testing.T) {
 	cases := []struct {
 		name string

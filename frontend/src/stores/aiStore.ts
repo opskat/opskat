@@ -137,6 +137,7 @@ interface StreamEventData {
     detail?: string;
     action?: string;
     resource?: string;
+    remember_pattern?: string;
   }>;
   description?: string;
   session_id?: string;

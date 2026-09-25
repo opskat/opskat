@@ -198,8 +198,10 @@ Two behaviors bite when writing these specs, both by design in the backend:
 `extension-asset-type` needs a *loaded extension*, so the harness builds one and installs it
 before the app starts — no `make build-ext` step to remember, locally or on CI:
 
-- `harness/env.js` → `installExtensions(dataDir)` cross-compiles each in-repo extension
-  (`GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared`) straight into
+- `harness/env.js` → `installExtensions(dataDir)` cross-compiles each extension in
+  `HARNESS_EXTENSIONS` — the reference `extensions/notebook`, plus `pkg/extension/testdata/fixture-ext`
+  for what notebook does not declare (an endpoint field, the SSH-tunnel connection setting, a
+  test-connection handler) — (`GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared`) straight into
   `<data dir>/extensions/<name>/main.wasm` and copies the rest of the extension directory
   beside it (everything except the Go sources and any local `dist/`) — the shape an installed
   extension has on disk, which the app's boot scan picks up. `playwright.config.ts` calls it in
@@ -490,7 +492,7 @@ These bit us while building the harness; keep them in mind when changing it.
 | `e2e/playwright.scratch.config.ts` | extends base, `testDir: ./scratch` for throwaway specs | yes |
 | `e2e/fixtures/db-queries.js` | the read-only `node:sqlite` statements, shared by specs and `oracle.mjs` | yes |
 | `e2e/fixtures/db.ts` | the DB oracle as specs use it: typed views over `db-queries.js` + `waitForAuditLogs`'s Playwright polling | yes |
-| `extensions/<name>/` | the in-repo extensions the harness builds and installs into a run (`installExtensions`) | yes |
+| `extensions/notebook/`, `pkg/extension/testdata/fixture-ext/` | the in-repo extensions the harness builds and installs into a run (`HARNESS_EXTENSIONS` → `installExtensions`) | yes |
 | `e2e/fixtures/ai.ts` | AI-spec plumbing: model scripting, provider setup via the real bindings, asset seeding, chat gestures, `execOutcome` (§4.1) | yes |
 | `e2e/fixtures/redis-mock.mjs` | minimal pure-Node RESP mock (HELLO→`-ERR` / PING→`+PONG`), started as a 2nd webServer for the `redis-connect` spec | yes |
 | `e2e/fixtures/ssh-mock/main.go` | minimal Go `x/crypto/ssh` server (`NoClientAuth`) that echoes `exec`'d commands, `go run` as a webServer | yes |

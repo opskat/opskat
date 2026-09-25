@@ -238,13 +238,22 @@ function loadDotEnv() {
   return true;
 }
 
-// The in-repo extensions a verification run installs before the app boots.
+// The in-repo extensions a verification run installs before the app boots, each as
+// its installed name and its source directory (relative to the repo root).
 //
 // `notebook` is the reference extension (extensions/notebook): an asset type with a
 // configSchema, tools and policy groups — i.e. everything the extension-facing UI
 // renders. Anything driving that UI needs it present, so the harness ships it rather
 // than each spec arranging its own install.
-const HARNESS_EXTENSIONS = ["notebook"];
+//
+// `fixture-ext` is pkg/extension's test extension: its asset type declares what
+// notebook has no use for — a format:"endpoint" field under network.assetEndpoint, the
+// host's SSH-tunnel connection setting, and a test-connection handler — so the asset
+// form's connection section and "Test connection" button can be driven for real.
+const HARNESS_EXTENSIONS = [
+  { name: "notebook", dir: "extensions/notebook" },
+  { name: "fixture-ext", dir: "pkg/extension/testdata/fixture-ext" },
+];
 
 // Builds each extension's wasm guest and lays the result out in the run's data dir,
 // exactly as an installed extension looks on disk (`<dataDir>/extensions/<name>/`) —
@@ -263,13 +272,13 @@ const HARNESS_EXTENSIONS = ["notebook"];
 // path relative to the installed extension root; a source layout of
 // `extensions/<name>/frontend/page.js` only resolves to that root path if both
 // this harness and `make build-ext` install it the same way.
-function installExtensions(dataDir, names = HARNESS_EXTENSIONS) {
-  for (const name of names) {
-    const source = join(repoRoot, "extensions", name);
+function installExtensions(dataDir, extensions = HARNESS_EXTENSIONS) {
+  for (const { name, dir } of extensions) {
+    const source = join(repoRoot, dir);
     const target = join(dataDir, "extensions", name);
     const frontendDir = join(source, "frontend");
     mkdirSync(target, { recursive: true });
-    execFileSync("go", ["build", "-buildmode=c-shared", "-o", join(target, "main.wasm"), `./extensions/${name}`], {
+    execFileSync("go", ["build", "-buildmode=c-shared", "-o", join(target, "main.wasm"), `./${dir}`], {
       cwd: repoRoot,
       env: { ...process.env, GOOS: "wasip1", GOARCH: "wasm" },
       stdio: "inherit",
@@ -282,7 +291,7 @@ function installExtensions(dataDir, names = HARNESS_EXTENSIONS) {
       cpSync(frontendDir, target, { recursive: true });
     }
   }
-  return names;
+  return extensions.map((e) => e.name);
 }
 
 // Starts the browser host (see harness/browser-host.mjs) detached, so the caller can

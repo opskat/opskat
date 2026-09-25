@@ -6,6 +6,7 @@ package system
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -113,10 +114,12 @@ func (s *System) Lang() string {
 	return s.lang
 }
 
-// SetLanguage 前端调用，同步语言设置。
+// SetLanguage 前端调用，同步语言设置。前端传 i18next 的写法（"zh-CN"），后端各处按
+// 小写码匹配（扩展 locales、AI 提示词语言、cago i18n 注册表都是 "zh-cn"），在这个边界
+// 统一成小写一次。
 func (s *System) SetLanguage(lang string) {
 	s.mu.Lock()
-	s.lang = lang
+	s.lang = strings.ToLower(lang)
 	s.mu.Unlock()
 }
 

@@ -8,13 +8,10 @@ import (
 
 // IsZh/PolicyMsg pick the language opsctl-initiated approval flows show the
 // user (e.g. the "user denied" message in internal/ai/permission/checker.go).
-// That language reaches ctx via aictx.WithPolicyLang(ctx, o.lang.Lang()), and
-// o.lang.Lang() is now synced from the frontend's i18next language code
-// (frontend/src/i18n/index.ts calls the Go SetLanguage binding with exactly
-// what i18next carries: "zh-CN" or "en"). This guards the two independent
-// sources of truth staying compatible: if the frontend's language codes ever
-// change shape, or IsZh's matching narrows, this must fail instead of quietly
-// showing every opsctl user the wrong language.
+// That language reaches ctx via aictx.WithPolicyLang(ctx, o.lang.Lang()):
+// the frontend's i18next code ("zh-CN" or "en"), lowercased by
+// System.SetLanguage. IsZh must read either spelling alike, or opsctl users
+// quietly get the wrong language.
 func TestIsZh_MatchesFrontendLanguageCodes(t *testing.T) {
 	cases := []struct {
 		name string
