@@ -39,15 +39,17 @@ func TestExtToolConfirmShowsClassificationAndReturnsTheAnswer(t *testing.T) {
 	t.Cleanup(func() { permission.UnregisterPolicyCheck("notebook") })
 
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
-	edited := []permission.ApprovalItem{{Type: "notebook", AssetID: 7, Command: `note_put --json='{"key":"runbook/b"}'`}}
+	// For a classified call the Remember editor edits the grant tail
+	// (<action>:<resource-glob>), not the command text.
+	edited := []permission.ApprovalItem{{Type: "notebook", AssetID: 7, Command: "write:runbook/*"}}
 	shown := answeringDialog(o, permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited})
 
 	item := permission.ApprovalItem{
 		Type: "notebook", AssetID: 7, AssetName: "nb",
 		Command: `note_put --json='{"key":"runbook/a"}'`, Detail: `{"tool":"note_put"}`,
-		Action: "write", Resource: "runbook/a",
+		Action: "write", Resource: "runbook/a", RememberPattern: "write:runbook/a",
 	}
-	resp := o.extToolConfirm("session-1")(context.Background(), permission.ApprovalKindFor(item.Type, item.Command), []permission.ApprovalItem{item})
+	resp := o.extToolConfirm("session-1", opsctlOrigin)(context.Background(), permission.ApprovalKindFor(item.Type, item.Command), []permission.ApprovalItem{item})
 
 	require.Equal(t, "write", (*shown)["action"])
 	require.Equal(t, "runbook/a", (*shown)["resource"])

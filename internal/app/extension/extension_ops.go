@@ -186,11 +186,21 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		return "", fmt.Errorf("extension tool gate not initialized")
 	}
 
-	result, err := e.pageGate.RunPageToolCall(ctx, assetID, extToolCallCommand(tool, args))
+	result, err := e.pageGate.RunPageToolCall(ctx, pageDisplayName(ext, e.lang.Lang()), assetID, extToolCallCommand(tool, args))
 	if err != nil {
 		return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
 	}
 	return result, nil
+}
+
+// pageDisplayName is how the approval dialog names the extension whose page is
+// calling: its display name in the UI language, or its name when the manifest
+// declares no display name.
+func pageDisplayName(ext *extension.Extension, lang string) string {
+	if ext.Manifest.I18n.DisplayName == "" {
+		return ext.Name
+	}
+	return ext.Translate(lang, ext.Manifest.I18n.DisplayName)
 }
 
 // CancelExtensionTool stops the page tool call running under invocationID: the

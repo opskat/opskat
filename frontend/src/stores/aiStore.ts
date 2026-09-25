@@ -62,6 +62,8 @@ export interface ContentBlock {
     // 与命令一起展示，让"批准"批的是一个可读的动作+资源，而不只是一串不透明的 exec 文本。
     action?: string;
     resource?: string;
+    // 与 action 同时出现：「记住」实际落库的 <action>:<resource-glob>，编辑器预填并编辑它而不是命令。
+    remember_pattern?: string;
   }>;
   approvalDescription?: string;
   approvalSessionId?: string;

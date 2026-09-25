@@ -302,6 +302,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	if classified {
 		item.Action = classification.Action
 		item.Resource = classification.Resource
+		item.RememberPattern = extGrantTail(classification.Action, classification.Resource)
 		item.Detail = formatExtensionRequestDetail(classification)
 	}
 	if len(detail) > 0 {
@@ -383,32 +384,40 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 }
 
 // extensionGrantPatterns builds the "always allow" grant patterns for a
-// classify-registered extension type. Each pattern is extGrantPattern(classification) —
-// never the raw command text — so matching a later call stays keyed on (action,
-// resource) (see extGrantMatch / MatchExtensionGrant).
+// classify-registered extension type — never the raw command text — so matching a
+// later call stays keyed on (action, resource) (see extGrantMatch /
+// MatchExtensionGrant).
 //
-// Edited items are reclassified from their (possibly hand-edited) command text: the
-// user may have only changed an argument value, which changes the resource the guest
-// reports. An item whose command no longer classifies (parse error, or an action the
-// type never declared) contributes nothing — same "empty is an answer, not a failure"
-// rule the generic NormalizeGrantPatterns path already follows — rather than a
-// phantom, ungrantable pattern.
+// A classified call's Remember editor edits the grant tail itself
+// (ApprovalItem.RememberPattern); ParseApprovalResponse has already held every edit to
+// "<action>:<resource-glob>" with the classified action, so an edit is persisted
+// verbatim — its glob characters are the user's intent.
+//
+// An unclassified call's editor shows command text, so its edits are classified
+// here: an item whose command no longer classifies (parse error, or an action the
+// type never declared) contributes nothing — same "empty is an answer, not a
+// failure" rule the generic NormalizeGrantPatterns path already follows — rather than
+// a phantom, ungrantable pattern.
 func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited []ApprovalItem, classification ExtensionClassification, classified bool) []string {
-	if len(edited) > 0 {
-		var patterns []string
+	if classified {
+		if len(edited) == 0 {
+			return []string{extGrantPattern(classification.PolicyType, classification.Action, classification.Resource)}
+		}
+		patterns := make([]string, 0, len(edited))
 		for _, item := range edited {
-			cls, ok := classify(ctx, item.Command)
-			if !ok {
-				continue
-			}
-			patterns = append(patterns, extGrantPattern(cls.PolicyType, cls.Action, cls.Resource))
+			patterns = append(patterns, extGrantRule(classification.PolicyType, item.Command))
 		}
 		return patterns
 	}
-	if !classified {
-		return nil
+	var patterns []string
+	for _, item := range edited {
+		cls, ok := classify(ctx, item.Command)
+		if !ok {
+			continue
+		}
+		patterns = append(patterns, extGrantPattern(cls.PolicyType, cls.Action, cls.Resource))
 	}
-	return []string{extGrantPattern(classification.PolicyType, classification.Action, classification.Resource)}
+	return patterns
 }
 
 // formatExtensionRequestDetail renders an extension classification's underlying guest

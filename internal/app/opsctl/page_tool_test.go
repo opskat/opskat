@@ -33,7 +33,7 @@ func TestRunPageToolCallTagsAuditSourceExtensionPage(t *testing.T) {
 	executor := &auditSourceCapturingExecutor{}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	result, err := o.RunPageToolCall(context.Background(), 7, "note_list")
+	result, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 
 	require.NoError(t, err)
 	require.Equal(t, `{"ok":true}`, result)
@@ -44,7 +44,7 @@ func TestRunPageToolCallInjectsPolicyChecker(t *testing.T) {
 	executor := &checkingExtExecutor{}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 
 	require.NoError(t, err)
 	require.True(t, executor.checkerPresent, "a page-initiated call must receive the desktop approval checker")
@@ -61,7 +61,7 @@ func TestRunPageToolCallReportsPolicyDenialAsError(t *testing.T) {
 	}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	result, err := o.RunPageToolCall(context.Background(), 7, "note_delete --json='{\"key\":\"k\"}'")
+	result, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_delete --json='{\"key\":\"k\"}'")
 
 	require.Error(t, err)
 	require.Equal(t, refusal, err.Error())
@@ -75,7 +75,7 @@ func TestRunPageToolCallAllowedReturnsResult(t *testing.T) {
 	}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	result, err := o.RunPageToolCall(context.Background(), 7, "note_list")
+	result, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 
 	require.NoError(t, err)
 	require.Equal(t, `{"notes":1}`, result)
@@ -84,7 +84,7 @@ func TestRunPageToolCallAllowedReturnsResult(t *testing.T) {
 func TestRunPageToolCallRequiresInitializedExecutor(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 
-	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 
 	require.Error(t, err)
 }
@@ -98,17 +98,17 @@ func TestRunPageToolCallSessionIsScopedToTheAsset(t *testing.T) {
 	var firstSession, secondSession, thirdSession string
 	one := &sessionCapturingExecutor{capture: &firstSession}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: one}
-	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 	require.NoError(t, err)
 
 	two := &sessionCapturingExecutor{capture: &secondSession}
 	o.extExecutor = two
-	_, err = o.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err = o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 	require.NoError(t, err)
 
 	three := &sessionCapturingExecutor{capture: &thirdSession}
 	o.extExecutor = three
-	_, err = o.RunPageToolCall(context.Background(), 9, "note_list")
+	_, err = o.RunPageToolCall(context.Background(), "Notebook", 9, "note_list")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, firstSession)
@@ -124,12 +124,12 @@ func TestRunPageToolCallSessionDoesNotOutliveTheDesktopRun(t *testing.T) {
 	var thisRun, nextRun string
 	first := New(context.Background(), extTestLang{}, nil)
 	first.extExecutor = &sessionCapturingExecutor{capture: &thisRun}
-	_, err := first.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err := first.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 	require.NoError(t, err)
 
 	second := New(context.Background(), extTestLang{}, nil)
 	second.extExecutor = &sessionCapturingExecutor{capture: &nextRun}
-	_, err = second.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err = second.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, thisRun)
@@ -180,7 +180,7 @@ func TestRunPageToolCallWritesAuditWithSourceExtensionPage(t *testing.T) {
 	}
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: executor}
 
-	_, err := o.RunPageToolCall(context.Background(), 7, "note_list")
+	_, err := o.RunPageToolCall(context.Background(), "Notebook", 7, "note_list")
 
 	require.NoError(t, err)
 	require.Equal(t, "extension_page", aictx.GetAuditSource(writer.ctx),

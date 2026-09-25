@@ -23,9 +23,11 @@ type LangProvider interface {
 // precisely to avoid, because it skips policy, approval, grant and audit
 // entirely. command is the same `<tool> --flag=value` / `<tool> --json=<...>`
 // exec DSL text the unified exec handler parses for every other caller (AI,
-// opsctl). Canceling ctx — which CancelExtensionTool does — ends the call.
+// opsctl). extension is the calling extension's display name, which the approval
+// dialog names as the requester. Canceling ctx — which CancelExtensionTool does —
+// ends the call.
 type PageToolGate interface {
-	RunPageToolCall(ctx context.Context, assetID int64, command string) (string, error)
+	RunPageToolCall(ctx context.Context, extension string, assetID int64, command string) (string, error)
 }
 
 // Extension binder。

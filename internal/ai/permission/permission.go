@@ -3,6 +3,8 @@ package permission
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -863,17 +865,45 @@ func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, asse
 // own permanent rule all speak one namespace — a persisted grant reads back as a valid
 // rule verbatim (context note: "<type> 段是扩展的 policies.type，与规则同一命名空间").
 func extGrantKey(policyType, action, resource string) string {
-	return policy.ExtRulePrefix + policyType + ":" + action + ":" + resource
+	return extGrantRule(policyType, action+":"+resource)
 }
 
-// extGrantPattern is the persisted form of an "always allow" for one classified
-// call: extGrantKey with the resource escaped (escapeGlobMeta) so the stored
-// resource segment — matched as a glob, like a permanent rule's — matches exactly
-// the resource the user approved. A resource is arbitrary guest text; unescaped, one
-// containing '*' would widen the grant to other resources and one containing '['
-// would never match the call it was granted for.
+// extGrantRule prefixes a "<action>:<resource-glob>" tail with the policy type's
+// namespace — the persisted shape of every extension grant.
+func extGrantRule(policyType, tail string) string {
+	return policy.ExtRulePrefix + policyType + ":" + tail
+}
+
+// extGrantTail is the "<action>:<resource-glob>" part of an "always allow" for one
+// classified call — what the Remember editor shows (ApprovalItem.RememberPattern) —
+// with the resource escaped (escapeGlobMeta) so the stored resource segment, matched
+// as a glob like a permanent rule's, matches exactly the resource the user approved.
+// A resource is arbitrary guest text; unescaped, one containing '*' would widen the
+// grant to other resources and one containing '[' would never match the call it was
+// granted for.
+func extGrantTail(action, resource string) string {
+	return action + ":" + escapeGlobMeta(resource)
+}
+
+// extGrantPattern is the persisted form of an unedited "always allow" for one
+// classified call.
 func extGrantPattern(policyType, action, resource string) string {
-	return extGrantKey(policyType, action, escapeGlobMeta(resource))
+	return extGrantRule(policyType, extGrantTail(action, resource))
+}
+
+// validateExtGrantEdit checks a Remember value the user edited for a classified
+// call: it must stay "<action>:<resource-glob>" with the classified action — an
+// edit can widen the resource (its glob characters are intentional), never drop or
+// swap the action into a grant for something the user was not asked about.
+func validateExtGrantEdit(action, edited string) error {
+	editedAction, glob, scoped := policy.ExtensionRuleParts(edited)
+	if editedAction != action || !scoped {
+		return fmt.Errorf("an extension grant must stay %q followed by a resource glob", action+":")
+	}
+	if _, err := path.Match(glob, ""); err != nil {
+		return fmt.Errorf("invalid resource glob %q: %w", glob, err)
+	}
+	return nil
 }
 
 // splitExtGrantKey splits an extGrantKey-shaped string into its policyType and the

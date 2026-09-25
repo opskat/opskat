@@ -14,13 +14,15 @@ import {
   Trash2,
   Boxes,
 } from "lucide-react";
-import { Button, Input, Textarea } from "@opskat/ui";
+import { Button, Textarea } from "@opskat/ui";
 import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
 import { hasApprovalCommandEdits } from "@/lib/approval";
 import { ApprovalClassification } from "./ApprovalClassification";
+import { RememberPatternEditor } from "./RememberPatternEditor";
+import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
 
 interface ApprovalBlockProps {
   block: ContentBlock;
@@ -42,13 +44,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   const localToolName = block.approvalToolName || items[0]?.type || "";
 
   // local_tool 在 rememberMode 用 approvalPatterns（多 sub-command 时多行），
-  // 其它 kind 沿用单条 item.command。
+  // 其它 kind 沿用单条 item 的「记住」初值（命令，或分类过的扩展审批的 <action>:<resource>）。
   const initialPatterns = isLocalTool ? (block.approvalPatterns || []).join("\n") : "";
 
   const [editedCommands, setEditedCommands] = useState<Record<number, string>>(() => {
     const map: Record<number, string> = {};
     items.forEach((item, i) => {
-      map[i] = isLocalTool && i === 0 ? initialPatterns || item.command : item.command;
+      map[i] = isLocalTool && i === 0 ? initialPatterns || item.command : rememberPrefill(item);
     });
     return map;
   });
@@ -57,6 +59,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
 
   // 确认/拒绝后不再显示
   if (!isPending) return null;
+
+  const rememberValues = items.map((_item, i) => editedCommands[i] || "");
 
   // detail 是这次传输唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句
   // "cp src → dst"，哪怕批量只有一条也不为空）；batch_exec 的批量项没有这个概念——
@@ -88,8 +92,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
     resp.decision = decision;
 
     const carriesEdited = kind === "grant" || ((kind === "single" || kind === "local_tool") && decision === "allowAll");
-    const commands = items.map((item, i) => editedCommands[i] || item.command);
-    if (carriesEdited && decision !== "deny" && hasApprovalCommandEdits(items, commands)) {
+    const proposed = items.map((item) => ({ command: rememberPrefill(item) }));
+    const commands = proposed.map((p, i) => editedCommands[i] || p.command);
+    if (carriesEdited && decision !== "deny" && hasApprovalCommandEdits(proposed, commands)) {
       resp.edited_items = items.map((item, i) => {
         const edited = new permission.ApprovalItem();
         edited.type = item.type;
@@ -221,19 +226,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
 
       {/* Remember mode pattern editor */}
       {kind === "single" && rememberMode && (
-        <div className="space-y-1.5 pt-0.5">
-          <div className="text-[10px] text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
-          {items.map((_item, i) => (
-            <Input
-              key={i}
-              value={editedCommands[i] || ""}
-              onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
-              className="font-mono text-[11px] h-8 bg-background border-border"
-              placeholder={t("opsctlApproval.patternPlaceholder")}
-            />
-          ))}
-          <div className="text-[10px] text-muted-foreground/70">{t("opsctlApproval.patternHint")}</div>
-        </div>
+        <RememberPatternEditor
+          items={items}
+          values={rememberValues}
+          onChange={(i, value) => setEditedCommands((prev) => ({ ...prev, [i]: value }))}
+          textClassName="text-[10px]"
+          inputClassName="text-[11px] h-8 bg-background border-border"
+        />
       )}
       {kind === "local_tool" && rememberMode && (
         <div className="space-y-1.5 pt-0.5">
@@ -308,6 +307,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   size="sm"
                   data-testid="ai-approval-allow-all"
                   className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
+                  disabled={kind === "single" && hasRememberPatternErrors(items, rememberValues)}
                   onClick={() => respond("allowAll")}
                 >
                   {t("ai.approvalRememberAndAllow")}

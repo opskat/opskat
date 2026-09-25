@@ -1786,6 +1786,8 @@
   "opsctlApproval": {
     "title": "CLI 操作审批",
     "description": "opsctl 正在请求批准以下操作：",
+    "extensionPageTitle": "「{{extension}}」页面请求审批",
+    "extensionPageDescription": "扩展「{{extension}}」的页面想要执行以下操作：",
     "extDevInstallDescription": "opsctl ext dev 请求从以下目录安装并启用一个未打包的扩展，它将获得清单里声明的全部能力：",
     "allow": "允许",
     "deny": "拒绝",
@@ -1798,6 +1800,9 @@
     "patternLabel": "记住模式（支持 * 通配符）：",
     "patternPlaceholder": "例如: cat /var/log/*",
     "patternHint": "后续匹配此模式的命令将自动放行",
+    "classificationPatternLabel": "按「动作:资源」记住（资源部分可用 * 通配）：",
+    "classificationPatternHint": "之后同一动作、资源匹配的请求将直接放行",
+    "classificationPatternActionRequired": "请保留开头的「{{action}}:」：动作不能改，只能改冒号后面的资源",
     "denyAll": "全部拒绝",
     "approveAll": "全部允许",
     "grantTitle": "权限申请审批",

@@ -8,12 +8,13 @@ import {
   DialogHeader,
   DialogTitle,
   Button,
-  Input,
   Textarea,
 } from "@opskat/ui";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { S3Icon } from "@/components/asset/brand-icons";
 import { ApprovalClassification } from "./ApprovalClassification";
+import { RememberPatternEditor } from "./RememberPatternEditor";
+import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import {
@@ -39,10 +40,15 @@ interface ApprovalItemData {
   group_name?: string;
   command: string;
   detail?: string;
-  // 仅扩展类型（后端 ClassifyFunc 注册）填充：check_policy 分类出的 (action, resource)。
+  // 仅扩展类型（后端 ClassifyFunc 注册）填充：check_policy 分类出的 (action, resource)，
+  // 以及"记住"实际落库的 <action>:<resource-glob>。
   action?: string;
   resource?: string;
+  remember_pattern?: string;
 }
+
+// 单条审批的发起方（internal/app/opsctl 的 approvalOrigin）：opsctl CLI，或某个扩展的页面。
+type ApprovalSource = "opsctl" | "extension_page";
 
 interface SingleApprovalEvent {
   confirm_id: string;
@@ -54,7 +60,11 @@ interface SingleApprovalEvent {
   detail?: string;
   action?: string;
   resource?: string;
+  remember_pattern?: string;
   session_id: string;
+  source: ApprovalSource;
+  // 扩展页面发起时是该扩展的显示名。
+  extension: string;
 }
 
 interface BatchApprovalEvent {
@@ -78,6 +88,9 @@ interface QueueItem {
   description?: string;
   sessionID?: string;
   editable: boolean;
+  // 只有单条审批事件带发起方；批量 / grant 审批只来自 opsctl。
+  source?: ApprovalSource;
+  extension?: string;
 }
 
 // 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
@@ -172,10 +185,13 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               detail,
               action: data.action,
               resource: data.resource,
+              remember_pattern: data.remember_pattern,
             },
           ],
           sessionID: data.session_id,
           editable: false,
+          source: data.source,
+          extension: data.extension,
         });
       },
       [enqueue]
@@ -242,6 +258,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
 
   const current = queue[0] || null;
   const open = !!current;
+  const rememberValues = current
+    ? current.items.map((item, i) => editState[current.id]?.[i] ?? rememberPrefill(item))
+    : [];
   // detail 是 cp 每条共享的"两端基点"摘要（cp.go 给每条 BatchItem 都填了同一句
   // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的 exec/sql/redis 混合批
   // 不产出（item.Detail 留空）。折叠是为 cp 设计的，只对带 detail 的批生效——batch verb
@@ -321,9 +340,10 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
       const shouldSendEdits =
         (current.kind === "grant" && decision !== "deny") || (current.kind === "single" && decision === "allowAll");
       const edits = editState[current.id] || {};
-      const commands = current.items.map((item, i) => edits[i] ?? item.command);
+      const proposed = current.items.map((item) => ({ command: rememberPrefill(item) }));
+      const commands = proposed.map((p, i) => edits[i] ?? p.command);
 
-      if (shouldSendEdits && hasApprovalCommandEdits(current.items, commands)) {
+      if (shouldSendEdits && hasApprovalCommandEdits(proposed, commands)) {
         resp.edited_items = current.items.map((item, i) => {
           const edited = new permission.ApprovalItem();
           edited.type = item.type;
@@ -376,7 +396,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                     ? t("opsctlApproval.batchTitle")
                     : current.kind === "delete"
                       ? t("ai.approvalDeleteTitle")
-                      : t("opsctlApproval.title")}
+                      : current.source === "extension_page"
+                        ? t("opsctlApproval.extensionPageTitle", { extension: current.extension })
+                        : t("opsctlApproval.title")}
                 {queue.length > 1 && (
                   <span className="text-sm font-normal text-muted-foreground">(1/{queue.length})</span>
                 )}
@@ -386,9 +408,11 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                   ? t("opsctlApproval.grantDescription")
                   : current.kind === "batch"
                     ? t("opsctlApproval.batchDescription", { count: current.items.length })
-                    : current.items[0]?.type === "ext_dev_install"
-                      ? t("opsctlApproval.extDevInstallDescription")
-                      : t("opsctlApproval.description")}
+                    : current.source === "extension_page"
+                      ? t("opsctlApproval.extensionPageDescription", { extension: current.extension })
+                      : current.items[0]?.type === "ext_dev_install"
+                        ? t("opsctlApproval.extDevInstallDescription")
+                        : t("opsctlApproval.description")}
               </DialogDescription>
             </DialogHeader>
 
@@ -417,24 +441,18 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               )}
               {/* 记住模式：展开模式编辑器 */}
               {current.kind === "single" && current.sessionID && rememberMode && (
-                <div className="space-y-1.5 pt-1">
-                  <div className="text-xs text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
-                  {current.items.map((_item, i) => (
-                    <Input
-                      key={i}
-                      value={editState[current.id]?.[i] ?? _item.command}
-                      onChange={(e) =>
-                        setEditState((prev) => ({
-                          ...prev,
-                          [current.id]: { ...prev[current.id], [i]: e.target.value },
-                        }))
-                      }
-                      className="font-mono text-xs"
-                      placeholder={t("opsctlApproval.patternPlaceholder")}
-                    />
-                  ))}
-                  <div className="text-[10px] text-muted-foreground/70">{t("opsctlApproval.patternHint")}</div>
-                </div>
+                <RememberPatternEditor
+                  items={current.items}
+                  values={rememberValues}
+                  onChange={(i, value) =>
+                    setEditState((prev) => ({
+                      ...prev,
+                      [current.id]: { ...prev[current.id], [i]: value },
+                    }))
+                  }
+                  textClassName="text-xs"
+                  inputClassName="text-xs"
+                />
               )}
             </div>
 
@@ -445,17 +463,21 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               {current.kind === "single" &&
                 current.sessionID &&
                 (rememberMode ? (
-                  <Button variant="secondary" onClick={() => respond("allowAll")}>
+                  <Button
+                    variant="secondary"
+                    disabled={hasRememberPatternErrors(current.items, rememberValues)}
+                    onClick={() => respond("allowAll")}
+                  >
                     {t("opsctlApproval.approve")}
                   </Button>
                 ) : (
                   <Button
                     variant="secondary"
                     onClick={() => {
-                      // 初始化 editState 用当前命令预填充
+                      // 初始化 editState：命令审批预填命令，分类过的扩展审批预填 <action>:<resource>
                       const edits: Record<number, string> = {};
                       current.items.forEach((it, idx) => {
-                        edits[idx] = it.command;
+                        edits[idx] = rememberPrefill(it);
                       });
                       setEditState((prev) => ({ ...prev, [current.id]: { ...prev[current.id], ...edits } }));
                       setRememberMode(true);
