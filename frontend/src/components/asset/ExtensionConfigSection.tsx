@@ -3,9 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Input, Label, Switch } from "@opskat/ui";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
-import { AssetSelect } from "@/components/asset/AssetSelect";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
-import { Field, Segmented } from "@/components/asset/fields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import {
   CONNECTION_DEFAULTS,
@@ -303,33 +301,23 @@ export function makeExtensionConfigSection(opts: Options) {
           withheldSecrets={state.withheldSecrets}
           onChange={(config) => patch({ config, status: "ready" })}
         />
-        {sshTunnel && (
-          <Field label={t("asset.connectionType")}>
-            <Segmented
-              value={state.tunnel ? "tunnel" : "direct"}
-              onChange={(v) => patch({ tunnel: v === "tunnel", sshTunnelId: 0 })}
-              aria-label={t("asset.connectionType")}
-              options={[
-                { value: "direct", label: t("asset.connectionDirect") },
-                { value: "tunnel", label: t("asset.sshTunnel") },
-              ]}
-            />
-            {state.tunnel && (
-              <AssetSelect
-                value={state.sshTunnelId}
-                onValueChange={(sshTunnelId) => patch({ sshTunnelId })}
-                filterType="ssh"
-                placeholder={t("asset.jumpHostNone")}
-                testId="extension-ssh-tunnel-select"
-              />
-            )}
-          </Field>
-        )}
-        {proxyChainEnabled && (
+        {(sshTunnel || proxyChainEnabled) && (
           <ConnectionMethodFields
             value={state.proxyChain}
             onChange={(patchValue) => patch({ proxyChain: { ...state.proxyChain, ...patchValue } })}
             excludeIds={editAsset?.ID ? [editAsset.ID] : undefined}
+            showChain={proxyChainEnabled}
+            sshTunnel={
+              sshTunnel
+                ? {
+                    assetId: state.sshTunnelId,
+                    onAssetIdChange: (sshTunnelId) => patch({ sshTunnelId }),
+                    active: state.tunnel,
+                    onActiveChange: (active) => patch({ tunnel: active }),
+                    testId: "extension-ssh-tunnel-select",
+                  }
+                : undefined
+            }
           />
         )}
         {tlsEnabled && (

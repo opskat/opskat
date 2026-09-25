@@ -359,6 +359,73 @@ describe("ExtensionConfigSection proxy chain", () => {
   });
 });
 
+// 声明了 sshTunnel + proxyChain 两项时,历史实现各画一组 Segmented,都以 "asset.connectionType"
+// 为 aria-label,渲染成两个并列的"连接方式"单选组。这里验证合并成一组、且切换方式不丢已选值。
+describe("ExtensionConfigSection connection settings — unified selector", () => {
+  const schema = {
+    type: "object",
+    properties: { endpoint: { type: "string", title: "Endpoint" } },
+  } as const;
+  const Both = makeExtensionConfigSection({
+    extensionName: "demo",
+    assetType: "demo-type",
+    schema,
+    connection: { sshTunnel: true, proxyChain: true },
+  });
+  const Tunneled = makeExtensionConfigSection({
+    extensionName: "demo",
+    assetType: "demo-type",
+    schema,
+    connection: { sshTunnel: true },
+  });
+
+  function assetWithTunnel(sshTunnelId: number) {
+    return new asset_entity.Asset({
+      ID: 11,
+      Name: "es",
+      Type: "demo-type",
+      Config: JSON.stringify({ endpoint: "http://es.internal:9200" }),
+      sshTunnelId,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ endpoint: "http://es.internal:9200" }));
+  });
+
+  it("declaring both sshTunnel and proxyChain renders exactly one connection-method selector", async () => {
+    render(<Both editAsset={assetWithTunnel(0)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    expect(screen.getAllByRole("radiogroup", { name: "asset.connectionType" })).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: "asset.connectionDirect" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "asset.sshTunnel" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "asset.connectionTunnelProxy" })).toBeInTheDocument();
+  });
+
+  it("switching the tunnel off and back on keeps the previously selected SSH asset", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Tunneled ref={ref} editAsset={assetWithTunnel(9)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("radio", { name: "asset.connectionDirect" }));
+    fireEvent.click(screen.getByRole("radio", { name: "asset.sshTunnel" }));
+
+    expect((await ref.current!.buildConfig(ctx)).sshTunnelId).toBe(9);
+  });
+
+  it("declaring both, choosing the tunnel saves only the tunnel — not the reserved proxy-chain key", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Both ref={ref} editAsset={assetWithTunnel(9)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.sshTunnelId).toBe(9);
+    expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "http://es.internal:9200" });
+  });
+});
+
 describe("ExtensionConfigSection TLS", () => {
   const schema = {
     type: "object",
