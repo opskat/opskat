@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -41,17 +42,80 @@ func RegisterExtensionRuleSink(canonicalType, policyType string, actions []strin
 		return fmt.Errorf("permission: invalid extension rule sink registration %q", canonicalType)
 	}
 	prefix := extRulePrefix(policyType)
+	land := extLand(prefix, actions)
 	return addRuleSink(canonicalType, &ruleLanding{
 		shape:         commandShape,
 		refPolicyType: policyType,
 		// 扩展的权限组 Policy JSON 就是 {allow_list, deny_list}，与 CommandPolicy 的
 		// 两侧同形，因此用同一个形状解码；它的 kind 是 manifest 声明的策略面名，
 		// 不是宿主的策略列，所以 refShape 只能由这里给出。
-		refShape:  commandShape,
-		land:      extLand(prefix, actions),
-		match:     extRuleShadows(prefix),
-		ownFilter: func(rule string) bool { return strings.HasPrefix(rule, prefix) },
+		refShape:     commandShape,
+		land:         land,
+		grantRequest: land,
+		match:        extRuleShadows(prefix),
+		ownFilter:    func(rule string) bool { return strings.HasPrefix(rule, prefix) },
 	})
+}
+
+// ExtensionGrant is a validated grant request for an extension asset.
+type ExtensionGrant struct {
+	// Type is the extension asset type. A grant approval item for the request carries
+	// it instead of the generic "grant", so an edit made in the dialog is held to the
+	// same syntax (ParseApprovalResponse) and persisted through the same codec
+	// (SaveGrantPatternsForApproval).
+	Type string
+	// Rules are the persisted ext:<policyType>:<action>[:<resource-glob>] grants, one
+	// per requested line.
+	Rules []string
+}
+
+// extensionGrantFor resolves a grant request — request_permission, opsctl grant,
+// or the user's edit of one — for assetType (spec 参数级策略 › 授权请求).
+//
+// An extension asset only matches grants shaped like its permanent rules
+// (MatchExtensionGrant), so its grant request is written the way a rule is —
+// `<action>` or `<action>:<resource-glob>`, one per line — and validated by the very
+// codec a permanent rule lands through (extLand: declared action, well-formed glob).
+// A command-shaped or undeclared pattern is an error: persisting it would store a
+// grant nothing ever consults while telling the caller it was approved.
+//
+// isExt is false for every type whose grant requests are command-shaped (all built-in
+// types); the caller keeps its grant pattern unchanged.
+func extensionGrantFor(assetType, patterns string) (grant ExtensionGrant, isExt bool, err error) {
+	landing, ok := ruleLandingFor(assetType)
+	if !ok || landing.grantRequest == nil {
+		return ExtensionGrant{}, false, nil
+	}
+	grant.Type = assetType
+	for _, line := range strings.Split(patterns, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		landed, err := landing.grantRequest(line)
+		if err != nil {
+			return ExtensionGrant{}, true, fmt.Errorf("invalid grant pattern %q for an extension asset: %w", line, err)
+		}
+		for _, r := range landed {
+			grant.Rules = append(grant.Rules, r.Rule)
+		}
+	}
+	if len(grant.Rules) == 0 {
+		return ExtensionGrant{}, true, errors.New("empty grant request: extension grants are <action> or <action>:<resource-glob>")
+	}
+	return grant, true, nil
+}
+
+// ExtensionGrantForAsset is extensionGrantFor for an asset id — the opsctl grant
+// entry point, which receives asset ids rather than assets. An asset that cannot be
+// resolved is not an extension asset as far as this is concerned (isExt false): its
+// grant request keeps the command-shaped path it always had.
+func ExtensionGrantForAsset(ctx context.Context, assetID int64, patterns string) (ExtensionGrant, bool, error) {
+	asset := resolveAssetForPolicy(ctx, assetID)
+	if asset == nil {
+		return ExtensionGrant{}, false, nil
+	}
+	return extensionGrantFor(asset.Type, patterns)
 }
 
 // UnregisterRuleSink 移除一个运行期注册的永久规则落点（扩展禁用/卸载）。

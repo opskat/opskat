@@ -810,8 +810,21 @@ func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []
 
 // SaveGrantPatternsForApproval 用 NormalizeGrantPatterns 拆出 patterns 后依次落库。
 // 适合 app 层在多种审批回调（opsctl 单审批、AI grant 流）里调用，避免每个路径重复拆分逻辑。
+//
+// 扩展类型的 pattern 是规则语法（`<action>[:<resource-glob>]`），经 extensionGrantFor 落成
+// ext:<policyType>:… ——扩展调用只匹配这种形状。不合法的不落库：上游
+// （SubmitGrantMulti、ParseApprovalResponse）已拒绝它们，走到这里的只会是合法的。
 func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
-	for _, p := range NormalizeGrantPatterns(approvalType, command, origin) {
+	patterns := NormalizeGrantPatterns(approvalType, command, origin)
+	if grant, isExt, err := extensionGrantFor(approvalType, command); isExt {
+		if err != nil {
+			logger.Ctx(ctx).Warn("extension grant pattern invalid; nothing persisted",
+				zap.Int64("assetID", assetID), zap.String("approvalType", approvalType), zap.Error(err))
+			return
+		}
+		patterns = grant.Rules
+	}
+	for _, p := range patterns {
 		SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, p)
 	}
 }

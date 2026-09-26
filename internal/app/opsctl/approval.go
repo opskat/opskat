@@ -252,29 +252,73 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 }
 
 // grantItemsForPersistence 构造可在审批前保存的 grant items。原始 command/detail 原样
-// 写入 grant_items——审批者看到的主体就是最终持久化的授权主体。
-func grantItemsForPersistence(sessionID string, reqItems []approval.GrantItem) []*grant_entity.GrantItem {
+// 写入 grant_items——审批者看到的主体就是最终持久化的授权主体。扩展资产的条目例外：
+// 审批者看到的是规则语法 `<action>[:<resource-glob>]`，落库的是它经同一编解码得出的
+// ext:<policyType>:… 规则（extGrants 按请求下标给出），每条规则一行。
+func grantItemsForPersistence(sessionID string, reqItems []approval.GrantItem, extGrants map[int]permission.ExtensionGrant) []*grant_entity.GrantItem {
 	items := make([]*grant_entity.GrantItem, 0, len(reqItems))
 	for i, item := range reqItems {
-		items = append(items, &grant_entity.GrantItem{
-			GrantSessionID: sessionID,
-			ItemIndex:      i,
-			ToolName:       item.Type,
-			AssetID:        item.AssetID,
-			AssetName:      item.AssetName,
-			GroupID:        item.GroupID,
-			GroupName:      item.GroupName,
-			Command:        item.Command,
-			Detail:         item.Detail,
-		})
+		toolName, commands := item.Type, []string{item.Command}
+		if grant, ok := extGrants[i]; ok {
+			toolName, commands = grant.Type, grant.Rules
+		}
+		for _, command := range commands {
+			items = append(items, &grant_entity.GrantItem{
+				GrantSessionID: sessionID,
+				ItemIndex:      i,
+				ToolName:       toolName,
+				AssetID:        item.AssetID,
+				AssetName:      item.AssetName,
+				GroupID:        item.GroupID,
+				GroupName:      item.GroupName,
+				Command:        command,
+				Detail:         item.Detail,
+			})
+		}
 	}
 	return items
+}
+
+// extensionGrantsFor 校验一次 grant 请求（或用户对它的编辑）里指向扩展资产的条目
+// （spec 参数级策略 › 授权请求），按下标返回它们落库的规则。任何一条不合法就整个请求
+// 拒绝：落一条永远匹配不上的 grant 再回报"已批准"，正是要防的缺陷。
+func extensionGrantsFor(ctx context.Context, items []permission.ApprovalItem) (map[int]permission.ExtensionGrant, error) {
+	grants := make(map[int]permission.ExtensionGrant)
+	for i, item := range items {
+		if item.AssetID == 0 {
+			continue
+		}
+		grant, isExt, err := permission.ExtensionGrantForAsset(ctx, item.AssetID, item.Command)
+		if err != nil {
+			return nil, fmt.Errorf("grant item %d (%s): %w", i, item.AssetName, err)
+		}
+		if isExt {
+			grants[i] = grant
+		}
+	}
+	return grants, nil
 }
 
 // handleGrantApproval 处理批量计划审批
 func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
 	sessionID := req.SessionID
+
+	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
+	for _, item := range req.GrantItems {
+		expectedItems = append(expectedItems, permission.ApprovalItem{
+			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
+			GroupID: item.GroupID, GroupName: item.GroupName, Command: item.Command, Detail: item.Detail,
+		})
+	}
+	extGrants, err := extensionGrantsFor(ctx, expectedItems)
+	if err != nil {
+		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
+	}
+	for i, grant := range extGrants {
+		// 扩展条目带扩展类型：弹窗里的编辑按同一规则语法校验（ParseApprovalResponse）。
+		expectedItems[i].Type = grant.Type
+	}
 
 	description := req.Description
 	session := &grant_entity.GrantSession{
@@ -289,15 +333,8 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		}
 	}
 
-	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
-	for _, item := range req.GrantItems {
-		expectedItems = append(expectedItems, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			GroupID: item.GroupID, GroupName: item.GroupName, Command: item.Command, Detail: item.Detail,
-		})
-	}
 	// 授权事件发送原始 items；pending 保留原始 expectedItems 用于校验与执行。
-	items := grantItemsForPersistence(sessionID, req.GrantItems)
+	items := grantItemsForPersistence(sessionID, req.GrantItems, extGrants)
 	if err := grant_repo.Grant().CreateItems(ctx, items); err != nil {
 		return approval.ApprovalResponse{Approved: false, Reason: "failed to create grant items"}
 	}
@@ -318,7 +355,7 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		o.window.ActivateWindow()
 	}
 
-	wailsRuntime.EventsEmit(o.ctx, "opsctl:grant-approval", map[string]any{
+	o.emit("opsctl:grant-approval", map[string]any{
 		"session_id":  sessionID,
 		"description": description,
 		"items":       eventItems,
@@ -331,6 +368,10 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	select {
 	case resp := <-ch:
 		parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindGrant, resp, expectedItems)
+		var editGrants map[int]permission.ExtensionGrant
+		if parseErr == nil {
+			editGrants, parseErr = extensionGrantsFor(ctx, parsed.EditedItems)
+		}
 		if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
 			if err := grant_repo.Grant().UpdateSessionStatus(ctx, sessionID, grant_entity.GrantStatusRejected); err != nil {
 				logger.Default().Error("update grant session status to rejected", zap.Error(err))
@@ -343,7 +384,10 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		if len(parsed.EditedItems) > 0 {
 			var items []*grant_entity.GrantItem
 			for i, edit := range parsed.EditedItems {
-				lines := strings.Split(edit.Command, "\n")
+				lines, toolName := strings.Split(edit.Command, "\n"), "exec"
+				if grant, ok := editGrants[i]; ok {
+					lines, toolName = grant.Rules, grant.Type
+				}
 				for _, line := range lines {
 					line = strings.TrimSpace(line)
 					if line == "" {
@@ -352,7 +396,7 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 					items = append(items, &grant_entity.GrantItem{
 						GrantSessionID: sessionID,
 						ItemIndex:      i,
-						ToolName:       "exec",
+						ToolName:       toolName,
 						AssetID:        edit.AssetID,
 						AssetName:      edit.AssetName,
 						GroupID:        edit.GroupID,

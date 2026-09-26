@@ -139,6 +139,15 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 					}
 					proposed = want.RememberPattern
 				}
+				if kind == ApprovalKindGrant {
+					// A grant request item for an extension asset carries the extension
+					// type (SubmitGrantMulti / opsctl grant): its edit must stay in rule
+					// syntax, or it would persist a grant nothing ever matches.
+					if _, isExt, err := extensionGrantFor(want.Type, item.Command); isExt && err != nil {
+						return ParsedApprovalResponse{Decision: ApprovalDeny},
+							fmt.Errorf("approval edited_items[%d]: %w", i, err)
+					}
+				}
 				changed = changed || item.Command != proposed
 			}
 			// EditedItems is also the origin signal for grant normalization. Old or

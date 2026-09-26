@@ -36,7 +36,7 @@ func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 		Command: "--password " + secret, Detail: "raw " + secret,
 	}}
 
-	got := grantItemsForPersistence("session-1", reqItems)
+	got := grantItemsForPersistence("session-1", reqItems, nil)
 	require.Len(t, got, 1)
 	require.Equal(t, reqItems[0].Command, got[0].Command)
 	require.Equal(t, reqItems[0].Detail, got[0].Detail)

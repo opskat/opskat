@@ -338,6 +338,12 @@ hold rules in this form; permanent rules on an asset or asset group are written 
 `ext:<PolicyType>:<rule>`, e.g. `opsctl policy allow my-notes -- 'write:runbook/*'`
 lands `ext:notebook:write:runbook/*`. Action names therefore may not contain `:` or
 whitespace.
+A grant request for an extension asset — the AI's `request_permission`, `opsctl grant` —
+is written the same way (`write:runbook/*`, or `write` for every resource) and is stored as
+`ext:<PolicyType>:<rule>`, so the next call it covers runs without asking. A
+command-shaped pattern (`note_put *`) or an undeclared action is refused rather than
+stored as a grant nothing would ever match. The help the host generates for the
+extension's asset type lists each tool's action and this format for the model.
 
 An action `fn` returns that the extension never declared is a defect, not a
 decision: the host logs an error and asks the user, without consulting rules or grants.

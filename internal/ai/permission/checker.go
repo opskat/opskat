@@ -56,40 +56,9 @@ func (c *CommandPolicyChecker) SetGrantRequestFunc(fn GrantRequestFunc) {
 	c.grantRequestFunc = fn
 }
 
-// SubmitGrant 提交 grant 审批请求（request_permission 工具调用）
+// SubmitGrant 提交单资产 grant 审批请求（request_permission 工具调用）
 func (c *CommandPolicyChecker) SubmitGrant(ctx context.Context, assetID int64, patterns []string, reason string) aictx.CheckResult {
-	if c.grantRequestFunc == nil {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
-	}
-
-	assetName := ""
-	if assetID > 0 {
-		asset, err := asset_svc.Asset().Get(ctx, assetID)
-		if err != nil {
-			logger.Default().Warn("get asset for grant submission", zap.Int64("assetID", assetID), zap.Error(err))
-		}
-		if asset != nil {
-			assetName = asset.Name
-		}
-	}
-
-	items := make([]ApprovalItem, 0, len(patterns))
-	for _, p := range patterns {
-		items = append(items, ApprovalItem{
-			Type:      "grant",
-			AssetID:   assetID,
-			AssetName: assetName,
-			Command:   p,
-			Detail:    reason,
-		})
-	}
-
-	approved, finalPatterns := c.grantRequestFunc(ctx, items, reason)
-	if !approved {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "USER DENIED: The user has denied the grant approval request. Stop the current task immediately.", "用户拒绝：用户已拒绝 Grant 审批请求。请立即停止当前任务。"), DecisionSource: aictx.SourceGrantDeny, MatchedPattern: strings.Join(patterns, "; ")}
-	}
-
-	return aictx.CheckResult{Decision: aictx.Allow, Message: policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+	return c.SubmitGrantMulti(ctx, []GrantItem{{AssetID: assetID, Patterns: patterns}}, reason)
 }
 
 // GrantItem represents a single asset's patterns in a multi-asset grant request.
@@ -99,6 +68,10 @@ type GrantItem struct {
 }
 
 // SubmitGrantMulti 提交多资产 grant 审批请求
+//
+// 扩展资产的 pattern 是 `<action>[:<resource-glob>]`（extensionGrantFor）：任何一条不合法
+// 就整个请求拒绝——不弹框、不落库，也不回报"已批准"，因为那条 grant 永远匹配不上。
+// 合法时审批项带扩展类型而不是 "grant"，用户在弹窗里的编辑按同一语法校验、落库。
 func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []GrantItem, reason string) aictx.CheckResult {
 	if c.grantRequestFunc == nil {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
@@ -108,6 +81,7 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 	var allPatterns []string
 	for _, item := range items {
 		assetName := ""
+		itemType := "grant"
 		if item.AssetID > 0 {
 			asset, err := asset_svc.Asset().Get(ctx, item.AssetID)
 			if err != nil {
@@ -115,11 +89,26 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 			}
 			if asset != nil {
 				assetName = asset.Name
+				grant, isExt, err := extensionGrantFor(asset.Type, strings.Join(item.Patterns, "\n"))
+				if err != nil {
+					return aictx.CheckResult{
+						Decision:       aictx.Deny,
+						DecisionSource: aictx.SourceGrantDeny,
+						MatchedPattern: strings.Join(item.Patterns, "; "),
+						Message: policy.PolicyFmt(ctx,
+							"GRANT REQUEST REFUSED for asset %s (nothing was granted): %v. Grant patterns for this extension asset are <action> or <action>:<resource-glob>, using the policy actions listed in its help.",
+							"Grant 请求被拒绝（未授予任何权限），资产 %s：%v。该扩展资产的 grant pattern 是 <action> 或 <action>:<resource-glob>，动作见其帮助文档列出的策略动作。",
+							asset.Name, err),
+					}
+				}
+				if isExt {
+					itemType = grant.Type
+				}
 			}
 		}
 		for _, p := range item.Patterns {
 			approvalItems = append(approvalItems, ApprovalItem{
-				Type:      "grant",
+				Type:      itemType,
 				AssetID:   item.AssetID,
 				AssetName: assetName,
 				Command:   p,

@@ -543,3 +543,60 @@ func withGrantFixturePolicy(t *testing.T, assetID int64, assetType string, cp *a
 	})
 	return aictx.WithSessionID(context.Background(), "sess-ext")
 }
+
+// --- grant requests ----------------------------------------------------------
+
+// grantDialogChecker stands in for the desktop grant dialog (internal/app/ai
+// makeGrantRequestFunc): it approves unedited and persists each shown item through
+// SaveGrantPatternsForApproval under its own Type, exactly as the app does.
+func grantDialogChecker(asked *bool) *permission.CommandPolicyChecker {
+	checker := permission.NewCommandPolicyChecker(nil)
+	checker.SetGrantRequestFunc(func(ctx context.Context, items []permission.ApprovalItem, _ string) (bool, []string) {
+		*asked = true
+		final := make([]string, 0, len(items))
+		for _, item := range items {
+			final = append(final, item.Command)
+			permission.SaveGrantPatternsForApproval(ctx, "sess-ext", item.AssetID, item.AssetName, item.Type, item.Command, permission.GrantOriginSystem)
+		}
+		return true, final
+	})
+	return checker
+}
+
+// request_permission on an extension asset is written <action>[:<resource-glob>]; once
+// approved, the next call check_policy classifies under it runs without a prompt.
+func TestExtensionGrantRequestAllowsTheNextClassifiedCall(t *testing.T) {
+	registerFake(t, &fakePlugin{action: "object.write", resource: "prod-bucket"})
+	ctx := withGrantFixture(t, 1, "acme-store")
+	require.Equal(t, aictx.NeedConfirm, permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod").Decision)
+
+	var asked bool
+	got := grantDialogChecker(&asked).SubmitGrantMulti(ctx,
+		[]permission.GrantItem{{AssetID: 1, Patterns: []string{"object.write:prod-*"}}}, "upload")
+	require.Equal(t, aictx.Allow, got.Decision)
+
+	next := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
+	assert.Equal(t, aictx.Allow, next.Decision, "the approved grant must be the one the policy check consults")
+	assert.Equal(t, aictx.SourceGrantAllow, next.DecisionSource)
+}
+
+// A command-shaped or undeclared-action request could never match: it is refused, not
+// "approved" into a grant nothing consults.
+func TestExtensionGrantRequestRefusesCommandShapedPatterns(t *testing.T) {
+	for _, pattern := range []string{"list_objects *", "object.rename:*"} {
+		t.Run(pattern, func(t *testing.T) {
+			registerFake(t, &fakePlugin{action: "object.write", resource: "prod-bucket"})
+			ctx := withGrantFixture(t, 1, "acme-store")
+
+			var asked bool
+			got := grantDialogChecker(&asked).SubmitGrantMulti(ctx,
+				[]permission.GrantItem{{AssetID: 1, Patterns: []string{pattern}}}, "upload")
+
+			assert.Equal(t, aictx.Deny, got.Decision)
+			assert.False(t, asked)
+			items, err := grant_repo.Grant().ListApprovedItems(ctx, "sess-ext")
+			require.NoError(t, err)
+			assert.Empty(t, items)
+		})
+	}
+}
