@@ -45,8 +45,11 @@ type safeAssetView struct {
 	Driver   string `json:"driver,omitempty"`
 	Database string `json:"database,omitempty"`
 	ReadOnly bool   `json:"read_only,omitempty"`
-	// Redis 专属
-	RedisDB int `json:"redis_db,omitempty"`
+	// Redis 专属：集群 / 哨兵资产额外显示部署模式、节点与主节点名称（单机不写 mode）
+	RedisDB         int      `json:"redis_db,omitempty"`
+	RedisMode       string   `json:"mode,omitempty"`
+	RedisNodes      []string `json:"nodes,omitempty"`
+	RedisMasterName string   `json:"master_name,omitempty"`
 	// K8s 专属
 	Namespace   string `json:"namespace,omitempty"`
 	K8sContext  string `json:"context,omitempty"`
@@ -109,6 +112,15 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			}
 			if val, ok := fields["redis_db"].(int); ok {
 				v.RedisDB = val
+			}
+			if val, ok := fields["mode"].(string); ok {
+				v.RedisMode = val
+			}
+			if val, ok := fields["nodes"].([]string); ok {
+				v.RedisNodes = val
+			}
+			if val, ok := fields["master_name"].(string); ok {
+				v.RedisMasterName = val
 			}
 			if val, ok := fields["auth_type"].(string); ok {
 				v.AuthType = val

@@ -58,13 +58,20 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
 	// 用户不该为一条注定失败的命令点头。
-	declaredType, command, err := parseExecArgs(args[1:])
+	declaredType, scope, command, err := parseExecArgs(args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		printExecUsage()
 		return 1
 	}
 	if err := permission.AssertAssetType(asset, declaredType); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	// --scope 只对 redis 资产有意义（库号 / 集群节点 host:port）；其它类型给出 --scope
+	// 必须报错而不是静默忽略，见 validateRedisScope。同样要在 requireApproval 之前——
+	// 不该为一条注定失败的调用弹审批。
+	if err := validateRedisScope(asset, scope); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -95,13 +102,16 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// （approval.go 的 SaveGrantPatternsForApproval 调用点），必须是规范形状才能在
 	// 下一次同类命令上重新命中。
 	approvalType := permission.ApprovalTypeFor(asset.Type)
-	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, command)
+	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q,"scope":%q}`, asset.ID, command, scope)
 	approvalResult, err := execApprovalFn(ctx, approval.ApprovalRequest{
 		Type:      approvalType,
 		AssetID:   asset.ID,
 		AssetName: asset.Name,
 		Command:   checkCommand,
-		Detail:    fmt.Sprintf("opsctl exec %s -- %s", args[0], command),
+		// scope 不并进 Command/checkCommand：那两个字段驱动策略匹配与 grant pattern
+		// 落库（见上方注释），掺入节点地址会让同一条命令因 scope 不同而匹配不上同一条
+		// 规则。Detail 只是给审批人看的补充说明，同 cp 的 "src → dst" 用法。
+		Detail:    execApprovalDetail(args[0], scope, command),
 		SessionID: session,
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
@@ -124,11 +134,24 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return execSSHStreamFn(ctx, auditCtx, asset, command, approvalResult)
 	}
 	// 其余类型走统一 exec handler：opsctl 由此获得 database/redis/mongodb/etcd/kafka/k8s
-	// 的全部覆盖。
+	// 的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它已经知道
+	// 按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面 validateRedisScope
+	// 挡掉了非空 scope，这里传空字符串等价于不传）。
 	return callHandler(auditCtx, handlers, "exec", map[string]any{
 		"asset":   strconv.FormatInt(asset.ID, 10),
 		"command": command,
+		"scope":   scope,
 	}, approvalResult.ToCheckResult())
+}
+
+// execApprovalDetail 构建审批弹窗里 exec 的补充说明：scope 非空时插进 --scope <value>，
+// 让审批人看到命令会发往哪个节点/库（spec 例："opsctl exec cache --scope
+// 10.0.0.1:6379 -- DBSIZE"）；scope 为空时与改造前完全一致。
+func execApprovalDetail(assetRef, scope, command string) string {
+	if scope == "" {
+		return fmt.Sprintf("opsctl exec %s -- %s", assetRef, command)
+	}
+	return fmt.Sprintf("opsctl exec %s --scope %s -- %s", assetRef, scope, command)
 }
 
 // execSSHStreaming 是 ssh 资产的流式执行体：转发 stdin 管道、stdout/stderr 直写
@@ -196,7 +219,7 @@ func buildExecAuditResult(exitCode int, stdout, stderr string) string {
 
 func printExecUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl exec <asset> [--type <type>] [--] <command>
+  opsctl exec <asset> [--type <type>] [--scope <db|host:port>] [--] <command>
 
 Arguments:
   asset       Asset name or numeric ID
@@ -217,6 +240,17 @@ Flags:
                   "--type mysql" fails on a PostgreSQL asset.
                   Does not select dispatch — that always comes from the
                   asset's real type.
+  --scope <s>     Only meaningful for redis assets (fails with exit code 1 on
+                  any other type — it is never silently ignored). Standalone /
+                  sentinel: a db index, defaulting to the asset's configured
+                  db; SELECT is always rejected. Cluster: a node "host:port"
+                  the command runs on, required for commands that have no key
+                  to route by (PING/ECHO/TIME/COMMAND and CLUSTER INFO/NODES/
+                  SLOTS/SHARDS/KEYSLOT run on any node when scope is
+                  omitted; a keyed command routes by slot and
+                  ignores scope). Missing/invalid scope on a cluster command
+                  that needs one exits 1 and lists the current master
+                  addresses on stderr.
 
 Pipe Support (ssh assets only):
   If stdin is not a terminal (i.e., data is piped in), it is forwarded to the
@@ -244,5 +278,7 @@ Examples:
   echo "hello" | opsctl exec web-server --type ssh -- cat
   opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
   opsctl exec cache --type redis -- "GET session:abc123"
+  opsctl exec cache --type redis --scope 1 -- "GET session:abc123"
+  opsctl exec cache-cluster --type redis --scope 10.0.0.1:6379 -- DBSIZE
 `)
 }

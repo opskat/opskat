@@ -12,6 +12,7 @@ import { RedisStringEditor } from "@/components/query/RedisStringEditor";
 import { RedisCollectionTable } from "@/components/query/RedisCollectionTable";
 import { RedisStreamViewer } from "@/components/query/RedisStreamViewer";
 import { parseRedisCommandLine } from "@/lib/redisCommand";
+import { redisKeyDeleted, toastRedisDeleteFailures } from "@/lib/redisDelete";
 
 interface RedisKeyDetailProps {
   tabId: string;
@@ -48,6 +49,16 @@ const TYPE_COLORS: Record<string, string> = {
   stream: "bg-info/15 text-info",
 };
 
+/**
+ * Matches the backend's `*RedisNodeRequiredError` message (internal/ai/helper/redis_cluster.go):
+ * a cluster command with no key ran without a node scope. The error text isn't wrapped by any
+ * caller (ExecuteRedisArgs returns it unchanged), so a substring match is a stable signal without
+ * pre-classifying commands on the frontend.
+ */
+function isRedisNodeRequiredError(message: string): boolean {
+  return message.includes("must run on a specific node");
+}
+
 function formatResult(parsed: RedisResult): string {
   if (parsed.type === "nil") return "(nil)";
   if (parsed.type === "string" || parsed.type === "integer") {
@@ -70,6 +81,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
   const state = redisStates[tabId];
   const tab = useTabStore((s) => s.tabs.find((tb) => tb.id === tabId));
   const tabMeta = tab?.meta as QueryTabMeta | undefined;
+  const isCluster = tabMeta?.redisMode === "cluster";
 
   const [command, setCommand] = useState("");
   const [executing, setExecuting] = useState(false);
@@ -97,17 +109,23 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     });
     setHistoryIdx(-1);
 
+    const scope = isCluster ? state.scanNode || "" : String(state.currentDb);
     try {
       const args = parseRedisCommandLine(command);
-      const result = await ExecuteRedisArgs(tabMeta.assetId, args, state.currentDb);
+      const result = await ExecuteRedisArgs(tabMeta.assetId, args, scope);
       const parsed: RedisResult = JSON.parse(result);
       setCmdResult(formatResult(parsed));
     } catch (err) {
-      setCmdError(String(err));
+      const message = String(err);
+      if (isCluster && !scope && isRedisNodeRequiredError(message)) {
+        setCmdError(t("query.redisSelectNodeHint"));
+      } else {
+        setCmdError(message);
+      }
     } finally {
       setExecuting(false);
     }
-  }, [command, tabMeta, state]);
+  }, [command, tabMeta, state, isCluster, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -143,14 +161,17 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     if (!tabMeta || !state?.selectedKey) return;
     setDeleting(true);
     try {
-      await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [state.selectedKey]);
-      removeKey(tabId, state.selectedKey);
+      const result = await RedisDeleteKeys(tabMeta.assetId, state.currentDb, [state.selectedKey]);
+      toastRedisDeleteFailures(t, result);
+      if (redisKeyDeleted(result, state.selectedKey)) {
+        removeKey(tabId, state.selectedKey);
+      }
       loadDbKeyCounts(tabId);
     } catch (err) {
       toast.error(String(err));
     }
     setDeleting(false);
-  }, [tabMeta, state, tabId, removeKey, loadDbKeyCounts]);
+  }, [tabMeta, state, tabId, removeKey, loadDbKeyCounts, t]);
 
   const handleRefreshKey = useCallback(() => {
     if (state?.selectedKey) {
@@ -268,6 +289,16 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
                   title={ttl > 0 ? `${ttl}s` : undefined}
                 >
                   {t("query.ttl")}: {ttlDisplay}
+                </span>
+              )}
+              {isCluster && keyInfo.slot !== undefined && (
+                <span
+                  data-testid="redis-key-slot-tag"
+                  data-slot={keyInfo.slot}
+                  data-node={keyInfo.node}
+                  className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                >
+                  {t("query.redisKeySlotTag", { slot: keyInfo.slot, node: keyInfo.node })}
                 </span>
               )}
               <div className="ml-auto flex items-center gap-0.5">

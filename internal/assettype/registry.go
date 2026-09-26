@@ -204,6 +204,44 @@ func ArgStringSlice(args map[string]any, key string) []string {
 	}
 }
 
+// ArgStringMap 从 args 中解析 map[string]string（如 node_address_map）。支持
+// map[string]string 与 map[string]any（且每个 value 都是 string）；map[string]any 含任一
+// 非字符串 value（数字/布尔/嵌套 map/slice）整体拒绝返回 nil，绝不用 fmt.Sprintf 把 value
+// 字符串化——那会让藏了嵌套 secret 的映射值混过校验。缺失、nil、非对象类型与空对象一律
+// 返回 nil。
+func ArgStringMap(args map[string]any, key string) map[string]string {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case map[string]string:
+		if len(x) == 0 {
+			return nil
+		}
+		out := make(map[string]string, len(x))
+		for k, val := range x {
+			out[k] = val
+		}
+		return out
+	case map[string]any:
+		if len(x) == 0 {
+			return nil
+		}
+		out := make(map[string]string, len(x))
+		for k, val := range x {
+			s, ok := val.(string)
+			if !ok {
+				return nil
+			}
+			out[k] = s
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func cleanStrings(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {

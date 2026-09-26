@@ -45,6 +45,8 @@ references managed authentication, the response adds `authentication` with a typ
 availability (`stored`/`missing` for credentials; runtime status for SSH Agent). It never
 returns passwords, private keys/passphrases, kubeconfig, Agent endpoint values, or Agent
 public-key blobs. Existing inline-encrypted authentication has no fabricated managed ref.
+A redis asset in cluster/sentinel mode additionally shows `mode`, `nodes`, and (sentinel
+only) `master_name`; never `sentinel_password`.
 
 ```bash
 opsctl get asset web-server
@@ -114,7 +116,7 @@ opsctl help kafka
 
 ## exec
 
-### `exec <asset> [--type <type>] [--] <command>`
+### `exec <asset> [--type <type>] [--scope <db|host:port>] [--] <command>`
 
 Execute a command against **any** asset type (ssh, serial, database, redis,
 mongodb, etcd, kafka, k8s, oss, ...) — dispatch always comes from the asset's
@@ -140,10 +142,29 @@ real type, never from a flag or verb name.
     `sqlserver`, `sqlite` / `sqlite3`. These assert the driver **as well as**
     the type — `--type mysql` fails on a PostgreSQL asset, which is the whole
     reason driver names are accepted rather than folded into `database`.
+- `--scope <s>` — Connection-level target that is not part of the command
+  itself. Only meaningful for **redis** assets — any other asset type given
+  `--scope` fails immediately (exit code 1, before approval), it is never
+  silently ignored. Semantics match the AI `exec` tool's `scope` parameter
+  and depend on the redis asset's deployment mode:
+  - **standalone / sentinel**: a db index, defaulting to the asset's
+    configured db. `SELECT` is always rejected — use `--scope` instead.
+  - **cluster**: a node `host:port` the command runs on. A command with a
+    key routes by slot to its owning master and ignores `--scope` (the
+    result notes which node actually ran it); a node-independent command
+    (`PING`, `ECHO`, `TIME`, `COMMAND ...`, `CLUSTER INFO|NODES|SLOTS|SHARDS|KEYSLOT`) runs on any node
+    when `--scope` is omitted; every other keyless command **requires**
+    `--scope` — a missing or invalid one (not a node of this cluster, or a
+    db index) exits 1 and lists the current master addresses on stderr.
+    `--scope` may point at a replica for read-only diagnostics.
+  - The approval dialog's detail line shows `--scope` when given (e.g.
+    `opsctl exec cache --scope 10.0.0.1:6379 -- DBSIZE`) so the approver
+    sees which node/db the command targets; it does not change what the
+    policy check matches against.
 
-When the type is known, always pass this assertion. Prefer the canonical
-asset type; reach for a driver name only when the dialect actually matters to
-the command you are about to run. Omit it only when the type is genuinely
+When the type is known, always pass `--type`. Prefer the canonical asset
+type; reach for a driver name only when the dialect actually matters to the
+command you are about to run. Omit it only when the type is genuinely
 unknown.
 
 **Approval flow**:
@@ -158,6 +179,8 @@ echo "data" | opsctl exec web-server --type ssh -- cat
 opsctl exec web-01 --type ssh -- systemctl restart nginx
 opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
 opsctl exec cache --type redis -- "GET session:abc123"
+opsctl exec cache --type redis --scope 1 -- "GET session:abc123"
+opsctl exec cache-cluster --type redis --scope 10.0.0.1:6379 -- DBSIZE
 opsctl exec mongo-db --type mongodb -- find users --query='{"filter":{"status":"active"}}'
 opsctl exec etcd-cluster --type etcd -- get /app/config --prefix
 opsctl exec events --type kafka -- topic list
@@ -180,10 +203,17 @@ echo '{"commands":[
   {"asset":"web-01","type":"ssh","command":"uptime"},
   {"asset":"db-01","type":"database","command":"SELECT 1"},
   {"asset":"cache","type":"redis","command":"PING"},
+  {"asset":"cache","type":"redis","command":"GET session:abc123","scope":"1"},
+  {"asset":"cache-cluster","type":"redis","command":"DBSIZE","scope":"10.0.0.1:6379"},
   {"asset":"mongo-db","type":"mongodb","command":"find users --query={\"filter\":{\"status\":\"active\"}}"},
   {"asset":"events","type":"kafka","command":"topic list"}
 ]}' | opsctl batch
 ```
+
+   Optional `"scope"` field — same semantics as `exec`'s `--scope` above
+   (only meaningful for redis; a non-redis item with `scope` set fails that
+   one item, the rest of the batch still runs). Only available in this JSON
+   input mode.
 
 2. **Positional args**:
 ```bash
@@ -199,7 +229,8 @@ types (`ssh`, `database`, `redis`, `mongodb`, `etcd`, `kafka`, `k8s`,
 `serial`); compatibility aliases (`exec`, `sql`, `mongo`) remain accepted.
 The prefix is a **type assertion**, not a dispatch selector: a mismatch fails
 that item before approval, while dispatch always uses the asset's real type.
-This mirrors `exec`'s `--type` flag.
+This mirrors `exec`'s `--type` flag. This form has no `scope` field — use the
+JSON input mode for a redis item that needs one.
 
 **Output**: JSON with per-command results:
 ```json
@@ -248,6 +279,21 @@ the command fails instead of applying override precedence.
 Only explicitly supplied convenience flags override matching non-secret generic config keys.
 `--kubeconfig-file` remains a K8s raw-file convenience input.
 
+**`--type redis` deployment mode** (`--config` field `mode`, default `standalone` when
+omitted): validation and required fields mirror the desktop form.
+- `cluster` — requires `nodes` (seed node `host:port` strings, JSON array).
+- `sentinel` — requires `nodes` (sentinel `host:port` strings) and `master_name` (the
+  monitored master group's name); `sentinel_username` / `sentinel_password` are optional
+  sentinel-side auth, encrypted like the data-node `password`; `sentinel_password` is
+  write-only — it is never echoed back, `update asset` re-sends it to change it.
+- `cluster` / `sentinel` — `node_address_map` (object: announced `host:port` → dialable
+  `host:port`) overrides discovered node addresses that are not directly reachable (e.g.
+  behind NAT or an SSH tunnel). Standalone assets have no address map.
+- Only the fields of the chosen `mode` are stored; switching `mode` with `update asset`
+  drops the other modes' fields (e.g. `nodes` when switching back to `standalone`).
+- `opsctl get asset` / `opsctl list assets` show `mode`, `nodes`, and `master_name` for
+  cluster/sentinel assets, never `sentinel_password` or any other secret.
+
 The flow is parse/merge → resolve references/files and validate → approval → one
 asset transaction. Approval is always required — no rule can pre-authorize a
 create: an interactive terminal prompts there, otherwise the running desktop app
@@ -263,6 +309,8 @@ opsctl create asset --type database --name "Prod DB" --config '{"driver":"mysql"
 opsctl create asset --type database --name "Local SQLite" --config '{"driver":"sqlite","path":"/var/lib/app.db"}'
 opsctl create asset --type ssh --name "Agent Host" --host host.internal --username root --agent-source-id 2 --agent-key-fingerprint SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 opsctl create asset --type k8s --name "Prod Cluster" --kubeconfig-file ~/.kube/config --context prod
+opsctl create asset --type redis --name "Cache Cluster" --config '{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379","10.0.0.3:6379"]}' --password="$REDIS_PASSWORD"
+opsctl create asset --type redis --name "Cache Sentinel" --config '{"mode":"sentinel","nodes":["10.0.1.1:26379","10.0.1.2:26379","10.0.1.3:26379"],"master_name":"mymaster","sentinel_username":"sentinel","sentinel_password":"'"$SENTINEL_PASSWORD"'"}' --password="$REDIS_PASSWORD"
 ```
 
 ### `create group [flags]`
@@ -291,7 +339,9 @@ Update an existing asset. Only provided fields change. Requires approval — an
 interactive terminal prompts there, otherwise the running desktop app is asked;
 with neither available opsctl exits with code 3 and a NEEDS TTY marker telling
 you to run the command yourself (like `create`/`delete`, no rule can
-pre-authorize it).
+pre-authorize it). The approval detail and audit log only ever show the safe,
+type-owned projection of the changed fields (name/type/config) — never a
+plaintext secret, whether it arrived via a convenience flag or `--config`.
 
 **Optional flags**:
 - `--name <string>` — New display name
@@ -301,11 +351,25 @@ pre-authorize it).
 - `--description <string>` — New description
 - `--group-id <int>` — New group ID (-1 = unchanged, 0 = ungrouped)
 - `--icon <string>` — New icon name (see `opsctl create asset --help` for full list)
+- `--config '<JSON object>'` — Type-owned partial config object; only the fields present are
+  changed, the rest of the stored config is untouched. The change is merged onto the stored
+  config and validated like the desktop form before approval — a bad field (e.g. a missing
+  `master_name`, a malformed `node_address_map` line) is named and nothing is asked or written.
+  This is the only way to reach fields that have no dedicated flag, such as a Redis asset's
+  `mode`/`nodes`/`master_name`/`sentinel_username`/`sentinel_password`/`node_address_map`
+  (see `create asset`'s `--type redis` deployment mode section for the field rules — they are
+  identical for update)
+- `--config-file <path>` — File containing that JSON object; mutually exclusive with `--config`
+
+`--host`/`--port`/`--username` only override matching keys already present in `--config`/
+`--config-file`; fields the JSON doesn't set are left as they were before the call.
 
 ```bash
 opsctl update asset web-server --name "New Name"
 opsctl update asset 1 --host 192.168.1.100 --port 2222
 opsctl update asset 1 --icon kubernetes
+opsctl update asset cache --config '{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379","10.0.0.3:6379"]}'
+opsctl update asset cache --config '{"sentinel_password":"'"$SENTINEL_PASSWORD"'"}'
 ```
 
 ### `update group <group> [flags]`

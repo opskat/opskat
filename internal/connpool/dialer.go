@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
@@ -12,13 +13,39 @@ import (
 )
 
 // dialContextFunc 按目标地址建立底层 TCP 连接。
-// 隧道实现忽略 addr(目标在建隧道时已确定),代理实现按 addr 拨号。
+// tunnelDialFunc 忽略 addr(目标在建隧道时已确定),其余实现按 addr 拨号。
 type dialContextFunc func(ctx context.Context, addr string) (net.Conn, error)
 
-// tunnelDialFunc 把 SSH 隧道包装为 dialContextFunc。
+// tunnelDialFunc 把 SSH 隧道包装为固定目标的 dialContextFunc。
 func tunnelDialFunc(t *SSHTunnel) dialContextFunc {
 	return func(ctx context.Context, _ string) (net.Conn, error) {
 		return t.Dial(ctx)
+	}
+}
+
+// tunnelAddrDialFunc 把 SSH 隧道包装为按请求地址转发的 dialContextFunc。
+func tunnelAddrDialFunc(t *SSHTunnel) dialContextFunc {
+	return t.DialAddr
+}
+
+// directDialFunc 直连目标地址,超时与保活对齐 go-redis 默认 dialer。
+func directDialFunc() dialContextFunc {
+	d := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Minute}
+	return func(ctx context.Context, addr string) (net.Conn, error) {
+		return d.DialContext(ctx, "tcp", addr)
+	}
+}
+
+// mappedDialFunc 拨号前把命中映射表左侧的地址改写为右侧的实际地址。
+func mappedDialFunc(dial dialContextFunc, addrMap map[string]string) dialContextFunc {
+	if len(addrMap) == 0 {
+		return dial
+	}
+	return func(ctx context.Context, addr string) (net.Conn, error) {
+		if actual, ok := addrMap[addr]; ok {
+			addr = actual
+		}
+		return dial(ctx, addr)
 	}
 }
 

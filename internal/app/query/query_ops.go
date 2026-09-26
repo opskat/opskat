@@ -16,6 +16,8 @@ import (
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/query_svc"
+	"github.com/opskat/opskat/internal/service/redis_svc"
+	"github.com/opskat/opskat/internal/service/testreg"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/redis/go-redis/v9"
@@ -56,11 +58,16 @@ func finishPanelDBOperation(opErr error, cleanup func() error) error {
 	return opErr
 }
 
-// getOrDialPanelRedis 从面板缓存取 *redis.Client。
-func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (*redis.Client, error) {
+// getOrDialPanelRedis 从面板缓存取 Redis 客户端。
+func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (redis.UniversalClient, error) {
 	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
-	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (*redis.Client, io.Closer, error) {
+	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (redis.UniversalClient, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+		var err error
+		cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("解析凭据失败: %w", err)
+		}
 		return connpool.DialRedis(ctx, asset, cfg, password, q.pool)
 	})
 	if err != nil {
@@ -121,23 +128,11 @@ func (q *Query) testDatabaseConnection(ctx context.Context, configJSON string, p
 // testRedisConnection 测试一份未保存的 Redis 配置；经 conntest 注册表由
 // System.TestAssetConnection 分发，信封（超时/取消/i18n ctx）由调用方统一施加。
 func (q *Query) testRedisConnection(ctx context.Context, configJSON string, plainPassword string) error {
-	var cfg asset_entity.RedisConfig
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return fmt.Errorf("配置解析失败: %w", err)
+	cfg, password, err := redisTestConfig(ctx, configJSON, plainPassword, "")
+	if err != nil {
+		return err
 	}
-
-	password := plainPassword
-	if password == "" {
-		var err error
-		password, err = credential_resolver.Default().ResolveRedisPassword(ctx, &cfg)
-		if err != nil {
-			return fmt.Errorf("连接失败: %w", err)
-		}
-	}
-
-	testAsset := &asset_entity.Asset{}
-	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-	client, tunnel, err := connpool.DialRedis(ctx, testAsset, &cfg, password, q.pool)
+	client, tunnel, err := connpool.DialRedis(ctx, &asset_entity.Asset{}, cfg, password, q.pool)
 	if err != nil {
 		return err
 	}
@@ -152,6 +147,52 @@ func (q *Query) testRedisConnection(ctx context.Context, configJSON string, plai
 		}
 	}()
 	return nil
+}
+
+// RedisProbe 探测一份未保存的 Redis 配置（资产表单「测试连接」与自动识别）：部署模式、
+// 集群状态与不可直连节点、哨兵监控组与其他哨兵。信封同 System.TestAssetConnection：
+// i18n ctx + 10s 超时，testID 配合 System.CancelTest 中断。
+// plainPassword / plainSentinelPassword 为表单中的明文密码；为空时解析 configJSON 中已保存的
+// （加密）值。数据节点连接或认证失败返回错误。
+func (q *Query) RedisProbe(testID, configJSON, plainPassword, plainSentinelPassword string) (redis_svc.RedisProbeResult, error) {
+	parent, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 10*time.Second)
+	defer cancel()
+	ctx, release := testreg.Begin(parent, testID)
+	defer release()
+	cfg, password, err := redisTestConfig(ctx, configJSON, plainPassword, plainSentinelPassword)
+	if err != nil {
+		return redis_svc.RedisProbeResult{}, err
+	}
+	return redis_svc.New(q.pool).Probe(ctx, cfg, password)
+}
+
+// redisTestConfig 解析表单提交的未保存 Redis 配置，返回代理密码与哨兵密码已为明文的配置
+// 及明文数据节点密码。明文参数为空时解析配置中已保存的值（托管凭据 / 密文）。
+func redisTestConfig(ctx context.Context, configJSON, plainPassword, plainSentinelPassword string) (*asset_entity.RedisConfig, string, error) {
+	var cfg asset_entity.RedisConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return nil, "", fmt.Errorf("配置解析失败: %w", err)
+	}
+
+	password := plainPassword
+	if password == "" {
+		var err error
+		password, err = credential_resolver.Default().ResolveRedisPassword(ctx, &cfg)
+		if err != nil {
+			return nil, "", fmt.Errorf("连接失败: %w", err)
+		}
+	}
+	sentinelPassword := plainSentinelPassword
+	if sentinelPassword == "" {
+		var err error
+		sentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(&cfg)
+		if err != nil {
+			return nil, "", fmt.Errorf("连接失败: %w", err)
+		}
+	}
+	cfg.SentinelPassword = sentinelPassword
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+	return &cfg, password, nil
 }
 
 // ExecuteSQL 在指定数据库资产上执行 SQL 查询
@@ -317,8 +358,9 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 	return result, nil
 }
 
-// ExecuteRedis 在指定 Redis 资产上执行命令
-func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, error) {
+// ExecuteRedis 在指定 Redis 资产上执行命令。scope：单机 / 哨兵为库号（空 = 资产默认库），
+// 集群为节点 host:port（不带 key 的命令发往该节点，见 helper.ExecuteRedisRaw）。
+func (q *Query) ExecuteRedis(assetID int64, command string, scope string) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -330,7 +372,9 @@ func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, err
 	if err != nil {
 		return "", fmt.Errorf("获取 Redis 配置失败: %w", err)
 	}
-	cfg.Database = db
+	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
+		return "", err
+	}
 	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
 	if err != nil {
 		return "", fmt.Errorf("解析凭据失败: %w", err)
@@ -344,7 +388,7 @@ func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, err
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
 
-	return helper.ExecuteRedis(ctx, client, command)
+	return helper.ExecuteRedis(ctx, client, command, scope)
 }
 
 // testMongoConnection 测试一份未保存的 MongoDB 配置；经 conntest 注册表由
@@ -486,8 +530,8 @@ func (q *Query) ListMongoCollections(assetID int64, database string) (string, er
 	return string(result), nil
 }
 
-// ExecuteRedisArgs 使用预拆分的参数执行 Redis 命令（支持含空格的值）
-func (q *Query) ExecuteRedisArgs(assetID int64, args []string, db int) (string, error) {
+// ExecuteRedisArgs 使用预拆分的参数执行 Redis 命令（支持含空格的值），scope 语义同 ExecuteRedis。
+func (q *Query) ExecuteRedisArgs(assetID int64, args []string, scope string) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -499,7 +543,9 @@ func (q *Query) ExecuteRedisArgs(assetID int64, args []string, db int) (string, 
 	if err != nil {
 		return "", fmt.Errorf("获取 Redis 配置失败: %w", err)
 	}
-	cfg.Database = db
+	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
+		return "", err
+	}
 	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
 	if err != nil {
 		return "", fmt.Errorf("解析凭据失败: %w", err)
@@ -513,5 +559,5 @@ func (q *Query) ExecuteRedisArgs(assetID int64, args []string, db int) (string, 
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
 
-	return helper.ExecuteRedisRaw(ctx, client, args)
+	return helper.ExecuteRedisRaw(ctx, client, args, scope)
 }

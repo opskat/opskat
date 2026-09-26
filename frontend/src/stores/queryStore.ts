@@ -19,6 +19,7 @@ export interface QueryTab {
   redisDatabase?: number;
   redisScanPageSize?: number;
   redisKeySeparator?: string;
+  redisMode?: "standalone" | "cluster" | "sentinel";
 }
 
 export type InnerTab =
@@ -59,6 +60,21 @@ export interface RedisKeyInfo {
   valueOffset: number; // LRANGE/ZRANGE next offset
   hasMoreValues: boolean;
   loadingMore: boolean;
+  /** Cluster mode: the slot the key hashes to and the master currently serving it. */
+  slot?: number;
+  node?: string;
+}
+
+export interface RedisClusterMasterKeyCount {
+  addr: string;
+  slots: string;
+  keys: number;
+  reachable: boolean;
+}
+
+export interface RedisClusterUnreachableNode {
+  addr: string;
+  slots: string;
 }
 
 export interface RedisTabState {
@@ -78,6 +94,15 @@ export interface RedisTabState {
   removedKey?: string;
   removedKeySeq?: number;
   error: string | null;
+  /** Cluster mode: footer scan-range selection — "" means all masters, else a master addr. */
+  scanNode?: string;
+  /** Cluster mode: how many / how many total masters the last scan covered. */
+  scannedMasters?: number;
+  totalMasters?: number;
+  /** Cluster mode: masters the last scan could not reach, with their slot ranges. */
+  unreachableMasters?: RedisClusterUnreachableNode[];
+  /** Cluster mode: per-master key counts for the scan-range selector (from RedisListDatabases). */
+  masterKeyCounts?: RedisClusterMasterKeyCount[];
 }
 
 export type MongoInnerTab =
@@ -129,6 +154,7 @@ interface QueryState {
   // Redis actions
   scanKeys: (tabId: string, reset?: boolean) => Promise<void>;
   selectRedisDb: (tabId: string, db: number) => Promise<void>;
+  selectRedisScanNode: (tabId: string, node: string) => Promise<void>;
   selectKey: (tabId: string, key: string) => Promise<void>;
   loadMoreValues: (tabId: string) => Promise<void>;
   setKeyFilter: (tabId: string, pattern: string) => void;
@@ -189,6 +215,7 @@ function defaultRedisState(options: { database?: number } = {}): RedisTabState {
     openKeyTabs: [],
     activeRedisKey: null,
     error: null,
+    scanNode: "",
   };
 }
 
@@ -242,6 +269,8 @@ interface RedisKeyDetailResult {
   valueCursor: string;
   valueOffset: number;
   hasMoreValues: boolean;
+  slot?: number;
+  node?: string;
 }
 
 function normalizeRedisDetailValue(type: string, value: unknown): unknown {
@@ -279,6 +308,8 @@ function toRedisKeyInfo(detail: RedisKeyDetailResult): RedisKeyInfo {
     valueOffset: detail.valueOffset,
     hasMoreValues: detail.hasMoreValues,
     loadingMore: false,
+    slot: detail.slot,
+    node: detail.node,
   };
 }
 
@@ -311,6 +342,7 @@ function getQueryTabFromTabStore(tabId: string): QueryTab | undefined {
     redisDatabase: m.redisDatabase,
     redisScanPageSize: m.redisScanPageSize,
     redisKeySeparator: m.redisKeySeparator,
+    redisMode: m.redisMode,
   };
 }
 
@@ -420,6 +452,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     let redisDatabase: number | undefined;
     let redisScanPageSize: number | undefined;
     let redisKeySeparator: string | undefined;
+    let redisMode: "standalone" | "cluster" | "sentinel" | undefined;
     try {
       const cfg = JSON.parse(asset.Config || "{}");
       driver = cfg.driver;
@@ -427,6 +460,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         redisDatabase = Math.max(0, Number(cfg.database) || 0);
         redisScanPageSize = Math.max(0, Number(cfg.scan_page_size) || 0) || undefined;
         redisKeySeparator = typeof cfg.key_separator === "string" ? cfg.key_separator : undefined;
+        redisMode = cfg.mode === "cluster" || cfg.mode === "sentinel" ? cfg.mode : "standalone";
       } else {
         defaultDatabase = cfg.database;
       }
@@ -451,6 +485,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         redisDatabase,
         redisScanPageSize,
         redisKeySeparator,
+        redisMode,
       },
     });
 
@@ -825,6 +860,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         type: "",
         count: tab.redisScanPageSize || 200,
         exact: !hasRedisMatchWildcard(pattern),
+        node: state.scanNode || undefined,
       });
 
       set((s) => ({
@@ -839,6 +875,9 @@ export const useQueryStore = create<QueryState>((set, get) => ({
                   hasMore: !!result.hasMore,
                   loadingKeys: false,
                   error: null,
+                  scannedMasters: result.scannedMasters,
+                  totalMasters: result.totalMasters,
+                  unreachableMasters: result.unreachable,
                 }
               : s.redisStates[tabId],
         },
@@ -869,6 +908,27 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           currentDb: db,
           keyFilter: prev?.keyFilter || "*",
           dbKeyCounts: prev?.dbKeyCounts || {},
+        },
+      },
+    }));
+
+    get().scanKeys(tabId, true);
+  },
+
+  selectRedisScanNode: async (tabId, node) => {
+    const tab = getQueryTabFromTabStore(tabId);
+    if (!tab) return;
+
+    const prev = get().redisStates[tabId];
+    set((s) => ({
+      redisStates: {
+        ...s.redisStates,
+        [tabId]: {
+          ...defaultRedisState({ database: prev?.currentDb }),
+          scanNode: node,
+          keyFilter: prev?.keyFilter || "*",
+          dbKeyCounts: prev?.dbKeyCounts || {},
+          masterKeyCounts: prev?.masterKeyCounts,
         },
       },
     }));
@@ -1046,13 +1106,15 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     try {
       const databases = await RedisListDatabases(tab.assetId);
       const counts: Record<number, number> = {};
+      let masterKeyCounts: RedisClusterMasterKeyCount[] | undefined;
       for (const db of databases || []) {
         counts[db.db] = db.keys;
+        if (db.masters) masterKeyCounts = db.masters;
       }
       set((s) => ({
         redisStates: {
           ...s.redisStates,
-          [tabId]: { ...s.redisStates[tabId], dbKeyCounts: counts },
+          [tabId]: { ...s.redisStates[tabId], dbKeyCounts: counts, masterKeyCounts },
         },
       }));
     } catch (err) {

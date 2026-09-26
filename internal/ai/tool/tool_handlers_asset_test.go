@@ -190,3 +190,57 @@ func TestToSafeViewAgentSSH(t *testing.T) {
 		assert.NotContains(t, string(data), banned)
 	}
 }
+
+// TestToSafeViewRedisModes 覆盖 opsctl get / list_assets 的安全视图：集群 / 哨兵资产显示
+// mode、nodes、master_name，不含任何密钥；单机资产的输出与引入部署模式前相同（无 mode）。
+func TestToSafeViewRedisModes(t *testing.T) {
+	marshal := func(cfg *asset_entity.RedisConfig) map[string]any {
+		t.Helper()
+		asset := &asset_entity.Asset{ID: 7, Name: "cache", Type: asset_entity.AssetTypeRedis}
+		require.NoError(t, asset.SetRedisConfig(cfg))
+		data, err := json.Marshal(toSafeView(asset))
+		require.NoError(t, err)
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(data, &out))
+		return out
+	}
+
+	t.Run("cluster", func(t *testing.T) {
+		out := marshal(&asset_entity.RedisConfig{
+			Mode:     asset_entity.RedisModeCluster,
+			Nodes:    []string{"10.0.0.1:7001", "10.0.0.2:7002"},
+			Password: "cipher-data",
+		})
+		assert.Equal(t, "cluster", out["mode"])
+		assert.Equal(t, []any{"10.0.0.1:7001", "10.0.0.2:7002"}, out["nodes"])
+		assert.NotContains(t, out, "master_name")
+		assert.NotContains(t, string(mustJSON(t, out)), "cipher-data")
+	})
+
+	t.Run("sentinel", func(t *testing.T) {
+		out := marshal(&asset_entity.RedisConfig{
+			Mode:             asset_entity.RedisModeSentinel,
+			Nodes:            []string{"10.0.1.1:26379"},
+			MasterName:       "mymaster",
+			SentinelPassword: "cipher-sentinel",
+		})
+		assert.Equal(t, "sentinel", out["mode"])
+		assert.Equal(t, []any{"10.0.1.1:26379"}, out["nodes"])
+		assert.Equal(t, "mymaster", out["master_name"])
+		assert.NotContains(t, string(mustJSON(t, out)), "cipher-sentinel")
+	})
+
+	t.Run("standalone output unchanged", func(t *testing.T) {
+		out := marshal(&asset_entity.RedisConfig{Host: "10.0.0.1", Port: 6379})
+		assert.Equal(t, "10.0.0.1", out["host"])
+		assert.NotContains(t, out, "mode")
+		assert.NotContains(t, out, "nodes")
+	})
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	require.NoError(t, err)
+	return data
+}

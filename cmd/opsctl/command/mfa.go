@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -164,12 +165,19 @@ func needsMFA(err error) bool {
 }
 
 // writeRemoteFailure 上报远程操作的错误：需要 MFA 却没有应答来源时是结构化拒绝
-// （stderr 首行 NEEDS MFA、退出码 3），其余错误照旧 "Error: " + 退出码 1。
+// （stderr 首行 NEEDS MFA、退出码 3）；redis 集群缺节点（helper.RedisNodeRequiredError）
+// 是普通错误但要追加 opsctl 侧的 --scope 用法（该错误类型本身是 AI/opsctl/桌面控制台
+// 共用的 helper 级文案，只列主节点，不认识 CLI 的 --scope 标志）；其余错误照旧
+// "Error: " + 退出码 1。
 func writeRemoteFailure(w io.Writer, err error) int {
 	if needsMFA(err) {
 		err = &structuredRefusal{marker: needsMFAMarker, body: "The server requires multi-factor authentication (MFA) and opsctl has no way to answer it here.\n" +
 			"Retry with the code: set " + mfaCodeEnv + "=<code> (preferred; --mfa-code <code> also works but is visible in shell history and process lists),\n" +
 			"or open the OpsKat desktop app, or run the command in an interactive terminal."}
+	}
+	var nodeErr *helper.RedisNodeRequiredError
+	if errors.As(err, &nodeErr) {
+		err = fmt.Errorf("%w\nUsage: --scope <host:port>", err)
 	}
 	return writeApprovalFailure(w, err)
 }

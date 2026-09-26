@@ -293,6 +293,43 @@ describe("RedisDetailInfoCard", () => {
     const { getByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
     expect(getByText("redis-bastion")).toBeInTheDocument();
   });
+
+  it("cluster mode: shows node list instead of host, no database, no host:port line", () => {
+    const asset = makeAsset("redis", {
+      mode: "cluster",
+      nodes: ["10.0.0.1:7001", "10.0.0.2:7001"],
+      username: "admin",
+    });
+    const { getByText, queryByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("10.0.0.1:7001, 10.0.0.2:7001")).toBeInTheDocument();
+    expect(getByText("admin")).toBeInTheDocument();
+    expect(queryByText("0")).not.toBeInTheDocument(); // no database index line for cluster
+  });
+
+  it("sentinel mode: shows master name, sentinel node list, masked sentinel password", () => {
+    const asset = makeAsset("redis", {
+      mode: "sentinel",
+      nodes: ["10.0.0.31:26379"],
+      master_name: "mymaster",
+      sentinel_username: "sentinel-admin",
+      sentinel_password: "ENCRYPTED",
+    });
+    const { getByText, container } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("mymaster")).toBeInTheDocument();
+    expect(getByText("10.0.0.31:26379")).toBeInTheDocument();
+    expect(getByText("sentinel-admin")).toBeInTheDocument();
+    expect(within(container).getByText("●●●●●●")).toBeInTheDocument();
+  });
+
+  it("cluster/sentinel mode: shows node address mapping when present", () => {
+    const asset = makeAsset("redis", {
+      mode: "cluster",
+      nodes: ["172.18.0.11:6379"],
+      node_address_map: { "172.18.0.11:6379": "10.20.0.5:7001" },
+    });
+    const { getByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("172.18.0.11:6379 = 10.20.0.5:7001")).toBeInTheDocument();
+  });
 });
 
 describe("MongoDBDetailInfoCard", () => {

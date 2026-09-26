@@ -1,17 +1,22 @@
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { toast } from "sonner";
+import type { redis_svc } from "../../wailsjs/go/models";
 import { RedisKeyBrowser } from "../components/query/RedisKeyBrowser";
 import { buildKeyTree, flattenTree, makeLocalKeyMatcher } from "../lib/redisKeyTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { RedisHashSet } from "../../wailsjs/go/redis/Redis";
 import {
+  RedisDeleteKeys,
   RedisListDatabases,
   RedisListPush,
   RedisScanKeys,
   RedisSetKeyTTL,
   RedisSetStringValue,
 } from "../../wailsjs/go/redis/Redis";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 describe("RedisKeyBrowser", () => {
   beforeEach(() => {
@@ -297,6 +302,48 @@ describe("RedisKeyBrowser", () => {
     expect(RedisScanKeys).toHaveBeenCalledWith(expect.objectContaining({ match: "dispatcher", exact: true }));
   });
 
+  it("reports a failed key and keeps it listed when delete resolves with a partial failure", async () => {
+    // RedisDeleteKeys resolves even when a key failed to delete (e.g. a cluster CLUSTERDOWN on
+    // its slot) — it does not reject, so the UI must read the failure from the result.
+    vi.mocked(RedisDeleteKeys).mockResolvedValue({
+      deleted: 0,
+      failed: [{ key: "common:user:1", error: "CLUSTERDOWN" }],
+    } as unknown as redis_svc.RedisDeleteResult);
+
+    render(<RedisKeyBrowser tabId="query-10" />);
+    fireEvent.click(screen.getByTitle("query.listView"));
+
+    fireEvent.contextMenu(screen.getByText("common:user:1"));
+    fireEvent.click(screen.getByText("query.deleteKey"));
+    fireEvent.click(screen.getByRole("button", { name: "action.delete" }));
+
+    await waitFor(() => {
+      // Redis's own error (e.g. CLUSTERDOWN) must reach the user verbatim, per failed key.
+      expect(toast.error).toHaveBeenCalledWith("query.redisDeleteKeysFailed", {
+        description: "common:user:1: CLUSTERDOWN",
+      });
+    });
+    expect(screen.getByText("common:user:1")).toBeInTheDocument();
+  });
+
+  it("drops a key that no longer exists (DEL returned 0, nothing failed) from the list", async () => {
+    // The key was removed elsewhere after the scan: DEL counts 0 but reports no failure, so the
+    // stale row must go away instead of lingering until the next rescan.
+    vi.mocked(RedisDeleteKeys).mockResolvedValue({ deleted: 0, failed: [] } as unknown as redis_svc.RedisDeleteResult);
+
+    render(<RedisKeyBrowser tabId="query-10" />);
+    fireEvent.click(screen.getByTitle("query.listView"));
+
+    fireEvent.contextMenu(screen.getByText("common:user:1"));
+    fireEvent.click(screen.getByText("query.deleteKey"));
+    fireEvent.click(screen.getByRole("button", { name: "action.delete" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("common:user:1")).not.toBeInTheDocument();
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("copies the selected key name with Ctrl/Cmd+C", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -355,5 +402,121 @@ describe("RedisKeyBrowser", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("RedisKeyBrowser cluster mode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(RedisScanKeys).mockResolvedValue({
+      cursor: "0",
+      keys: ["user:1", "user:2"],
+      hasMore: false,
+      scannedMasters: 2,
+      totalMasters: 3,
+      unreachable: [{ addr: "10.20.0.13:6379", slots: "10923-16383" }],
+    });
+    vi.mocked(RedisListDatabases).mockResolvedValue([
+      {
+        db: 0,
+        keys: 131,
+        expires: 0,
+        avgTtl: 0,
+        masters: [
+          { addr: "10.20.0.11:6379", slots: "0-5460", keys: 62, reachable: true },
+          { addr: "10.20.0.12:6379", slots: "5461-10922", keys: 69, reachable: true },
+          { addr: "10.20.0.13:6379", slots: "10923-16383", keys: -1, reachable: false },
+        ],
+      },
+    ]);
+    useTabStore.setState({
+      activeTabId: "query-20",
+      tabs: [
+        {
+          id: "query-20",
+          type: "query",
+          label: "Redis Cluster",
+          meta: {
+            type: "query",
+            assetId: 20,
+            assetName: "Redis Cluster",
+            assetIcon: "",
+            assetType: "redis",
+            redisMode: "cluster",
+          },
+        },
+      ],
+    });
+    useQueryStore.setState({
+      redisStates: {
+        "query-20": {
+          currentDb: 0,
+          keys: ["user:1", "user:2"],
+          loadingKeys: false,
+          keyFilter: "*",
+          scanCursor: "0",
+          hasMore: false,
+          selectedKey: null,
+          keyInfo: null,
+          dbKeyCounts: { 0: 131 },
+          error: null,
+          scanNode: "",
+          scannedMasters: 2,
+          totalMasters: 3,
+          unreachableMasters: [{ addr: "10.20.0.13:6379", slots: "10923-16383" }],
+        },
+      },
+    });
+  });
+
+  it("replaces the db footer with a scan-range selector and shows partial coverage", async () => {
+    render(<RedisKeyBrowser tabId="query-20" />);
+
+    expect(screen.queryByTestId("redis-db-footer")).not.toBeInTheDocument();
+    const footer = screen.getByTestId("redis-scan-range-footer");
+    expect(footer).toHaveTextContent("query.redisAllMasters");
+
+    const coverage = screen.getByTestId("redis-scan-coverage");
+    expect(coverage).toHaveAttribute("data-scanned", "2");
+    expect(coverage).toHaveAttribute("data-total", "3");
+    expect(coverage).toHaveAttribute("data-partial", "true");
+    expect(coverage).toHaveClass("text-warning");
+  });
+
+  it("shows an unreachable-master banner with addr and slot range", async () => {
+    render(<RedisKeyBrowser tabId="query-20" />);
+
+    const banner = screen.getByTestId("redis-unreachable-banner");
+    expect(banner).toBeInTheDocument();
+    const node = screen.getByTestId("redis-unreachable-node");
+    expect(node).toHaveAttribute("data-addr", "10.20.0.13:6379");
+    expect(node).toHaveAttribute("data-slots", "10923-16383");
+  });
+
+  it("scans a single master when selected from the scan-range menu", async () => {
+    render(<RedisKeyBrowser tabId="query-20" />);
+    await waitFor(() => {
+      expect(useQueryStore.getState().redisStates["query-20"].masterKeyCounts).toBeDefined();
+    });
+    vi.mocked(RedisScanKeys).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: /query.redisAllMasters/ }));
+    const menu = screen.getByTestId("redis-scan-range-menu");
+    expect(within(menu).getByText("10.20.0.11:6379")).toBeInTheDocument();
+    fireEvent.click(within(menu).getByText("10.20.0.11:6379"));
+
+    await waitFor(() => {
+      expect(RedisScanKeys).toHaveBeenCalledWith(
+        expect.objectContaining({ assetId: 20, node: "10.20.0.11:6379", cursor: "0" })
+      );
+    });
+  });
+
+  it("hides the database picker in the create-key dialog", async () => {
+    render(<RedisKeyBrowser tabId="query-20" />);
+
+    fireEvent.click(screen.getByTitle("query.createRedisKey"));
+
+    expect(screen.queryByText("query.redisDbIndex")).not.toBeInTheDocument();
   });
 });

@@ -29,8 +29,18 @@ func (r *Redis) RedisRenameKey(assetID int64, db int, oldKey string, newKey stri
 	return r.service.RenameKey(i18n.Ctx(r.ctx, r.lang.Lang()), assetID, db, oldKey, newKey)
 }
 
-func (r *Redis) RedisDeleteKeys(assetID int64, db int, keys []string) error {
+func (r *Redis) RedisDeleteKeys(assetID int64, db int, keys []string) (redis_svc.RedisDeleteResult, error) {
 	return r.service.DeleteKeys(i18n.Ctx(r.ctx, r.lang.Lang()), assetID, db, keys)
+}
+
+// RedisClusterOverview 返回集群模式资产的概览；infoNode 为要返回 INFO 的节点 host:port，空表示第一个主节点。
+func (r *Redis) RedisClusterOverview(assetID int64, infoNode string) (redis_svc.RedisClusterOverview, error) {
+	return r.service.ClusterOverview(i18n.Ctx(r.ctx, r.lang.Lang()), assetID, infoNode)
+}
+
+// RedisSentinelOverview 返回哨兵模式资产的概览（组、当前主节点、从节点、哨兵、quorum）。
+func (r *Redis) RedisSentinelOverview(assetID int64) (redis_svc.RedisSentinelOverview, error) {
+	return r.service.SentinelOverview(i18n.Ctx(r.ctx, r.lang.Lang()), assetID)
 }
 
 func (r *Redis) RedisSetStringValue(req redis_svc.RedisStringSetRequest) error {
