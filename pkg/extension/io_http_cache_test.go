@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -283,4 +286,90 @@ func TestDefaultHostProviderCachedClientUsesEachCallsRedirectGuard(t *testing.T)
 			So(second.Closer.Close(), ShouldBeNil)
 		})
 	})
+}
+
+// tlsDialer resolves an asset whose connection settings enable TLS.
+type tlsDialer struct{}
+
+func (tlsDialer) DialContextFor(context.Context, int64) (DialContextFunc, *tls.Config, string, error) {
+	return nil, &tls.Config{InsecureSkipVerify: true}, "tls", nil
+}
+
+// The asset's TLS settings are the user's decision about how its endpoint is
+// reached: a guest asking for plain http to that endpoint must not get a
+// connection that silently skips them.
+func TestAssetEndpointWithTLSRefusesPlainHTTP(t *testing.T) {
+	Convey("Given an asset whose connection settings enable TLS", t, func() {
+		srv, accepts := newCountingServer(t)
+		h := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: tlsDialer{}})
+		res, err := h.OpenIO(context.Background(), &AssetRef{ID: 42, Type: "fixture"},
+			IOOpenParams{Type: "http", Method: "GET", URL: srv.URL, AllowPrivate: true})
+		So(err, ShouldBeNil)
+		defer func() { _ = res.Closer.Close() }()
+
+		_, err = res.http.Flush()
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "TLS")
+		So(accepts.Load(), ShouldEqual, int32(0))
+	})
+}
+
+// A test-connection call gets a client no later call will reuse: its connection
+// (possibly an SSH session to a jump host behind it) must close with the call,
+// not idle in a pool nothing reads from again.
+func TestAdHocEndpointCallReleasesItsConnection(t *testing.T) {
+	Convey("Given an ad-hoc (test connection) call to an endpoint", t, func() {
+		srv, closes := newCloseTrackingServer(t)
+		h := NewDefaultHostProvider(DefaultHostConfig{})
+		openAndDrain(t, h, &AssetRef{Type: "fixture", AdHoc: &AdHocAssetConfig{}}, srv.URL)
+
+		So(waitForCount(closes, 1), ShouldBeTrue)
+	})
+}
+
+// recordingDialer routes every dial to one server and records the address the
+// transport asked for.
+type recordingDialer struct {
+	target string
+	mu     sync.Mutex
+	addrs  []string
+}
+
+func (d *recordingDialer) DialContextFor(context.Context, int64) (DialContextFunc, *tls.Config, string, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d.mu.Lock()
+		d.addrs = append(d.addrs, addr)
+		d.mu.Unlock()
+		return (&net.Dialer{}).DialContext(ctx, network, d.target)
+	}, nil, "recording", nil
+}
+
+// The host owns the path to an asset's endpoint (direct, SSH tunnel, proxy
+// chain): a process-wide HTTP(S)_PROXY must not reroute it — through a tunnel
+// that would dial the proxy's address instead of the endpoint, and without one
+// it would hand the injected credentials to the proxy. net/http reads the proxy
+// environment once per process, so the check runs in a child process that has
+// it set from the start.
+func TestAssetEndpointClientIgnoresProxyEnvironment(t *testing.T) {
+	if os.Getenv("OPSKAT_TEST_PROXY_ENV_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAssetEndpointClientIgnoresProxyEnvironment$", "-test.count=1") //nolint:gosec // re-runs this test binary
+		cmd.Env = append(os.Environ(), "OPSKAT_TEST_PROXY_ENV_CHILD=1",
+			"HTTP_PROXY=http://proxy.test:3128", "http_proxy=http://proxy.test:3128",
+			"HTTPS_PROXY=http://proxy.test:3128", "https_proxy=http://proxy.test:3128",
+			"NO_PROXY=", "no_proxy=")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("child: %v\n%s", err, out)
+		}
+		return
+	}
+	srv, _ := newCountingServer(t)
+	dialer := &recordingDialer{target: srv.Listener.Addr().String()}
+	h := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: dialer})
+	openAndDrain(t, h, &AssetRef{ID: 42, Type: "fixture"}, "http://es.test:9200/ok")
+
+	dialer.mu.Lock()
+	defer dialer.mu.Unlock()
+	if len(dialer.addrs) != 1 || dialer.addrs[0] != "es.test:9200" {
+		t.Fatalf("dialed %v, want only the endpoint es.test:9200", dialer.addrs)
+	}
 }

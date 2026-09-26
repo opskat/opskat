@@ -118,6 +118,16 @@ func testManifest() *extension.Manifest {
 				},
 				"required": []any{"bucket"},
 			},
+			PolicyActions: []string{"object.list", "object.write", "object.delete"},
+		}, {
+			Name: "delete_bucket",
+			I18n: extension.I18nDesc{Description: "Delete a bucket"},
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"bucket": map[string]any{"type": "string"}},
+				"required":   []any{"bucket"},
+			},
+			PolicyAction: "object.delete",
 		}},
 		Policies: extension.PoliciesDef{
 			Type:    "acme",

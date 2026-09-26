@@ -50,22 +50,25 @@ var permissionTypes = make(map[string]*permissionTypeHandler)
 var commandShape *shapeLanding
 
 func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {
-	if err := addPermissionType(canonical, approvalType, grantPatterns, check, aliases...); err != nil {
-		panic(err.Error())
-	}
-}
-
-func addPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) error {
-	if canonical == "" || approvalType == "" || check == nil {
-		return fmt.Errorf("permission: invalid type registration")
-	}
 	handler := &permissionTypeHandler{
 		canonical:     canonical,
 		approvalType:  approvalType,
 		grantPatterns: grantPatterns,
 		check:         check,
 	}
-	names := append([]string{canonical}, aliases...)
+	if err := addPermissionType(handler, aliases...); err != nil {
+		panic(err.Error())
+	}
+}
+
+// addPermissionType publishes a fully built handler under its canonical name and
+// aliases. The handler is never mutated afterwards: readers take it from the map
+// under registryMu and then use its fields without the lock.
+func addPermissionType(handler *permissionTypeHandler, aliases ...string) error {
+	if handler.canonical == "" || handler.approvalType == "" || handler.check == nil {
+		return fmt.Errorf("permission: invalid type registration")
+	}
+	names := append([]string{handler.canonical}, aliases...)
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	for _, name := range names {
@@ -121,13 +124,12 @@ func RegisterPolicyCheck(canonical string, check PolicyCheckFunc, classify Class
 	if check == nil {
 		return fmt.Errorf("permission: invalid policy check registration %q", canonical)
 	}
-	if err := addPermissionType(canonical, canonical, nil, permissionCheckFunc(check)); err != nil {
-		return err
-	}
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	permissionTypes[canonical].classify = classify
-	return nil
+	return addPermissionType(&permissionTypeHandler{
+		canonical:    canonical,
+		approvalType: canonical,
+		check:        permissionCheckFunc(check),
+		classify:     classify,
+	})
 }
 
 // UnregisterPolicyCheck 移除一个由 RegisterPolicyCheck 注册的类型。

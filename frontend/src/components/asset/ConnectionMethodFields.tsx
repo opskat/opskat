@@ -55,8 +55,9 @@ interface ConnectionMethodFieldsProps {
    * 扩展资产类型专用:声明了 connection.sshTunnel 时传入,在同一个"连接方式"选择器里追加
    * 一个 SSH 隧道选项。隧道资产走资产的 sshTunnelId 列,与代理链走宿主保留键是两条独立的
    * 持久化路径,因此隧道资产 id 由调用方独立维护、独立传入,不占用
-   * value.proxyChainLayers / value.connectionType——切到 chain 再切回 tunnel(或反过来)
-   * 都不会碰对方的数据。省略时(内置类型)渲染与之前完全一致:Direct / Tunnel+Proxy 两项。
+   * value.proxyChainLayers / value.connectionType。三种方式互斥:选中隧道时代理链与直连
+   * 一样被清空(本次会话切回 chain 时恢复),切离隧道时隧道资产 id 保留。
+   * 省略时(内置类型)渲染与之前完全一致:Direct / Tunnel+Proxy 两项。
    */
   sshTunnel?: {
     assetId: number;
@@ -164,20 +165,17 @@ export function ConnectionMethodFields({
     updateLayers([...layers, layer]);
     setSelectedLayerId(layer.id);
   };
-  // 记住切到「直连」前的链路,切回时恢复;避免误触直连丢失已配置的代理节点。
-  // 「直连」仍会清空持久化的 proxyChainLayers(build 语义不变),恢复只发生在本次会话的来回切换。
+  // 记住切离代理链(到「直连」或隧道)前的链路,切回时恢复;避免误触丢失已配置的代理节点。
+  // 切离仍会清空持久化的 proxyChainLayers(build 语义不变),恢复只发生在本次会话的来回切换。
   const stashedLayers = useRef<ProxyChainLayerForm[]>([]);
   const setMethod = (next: ConnectionMethod) => {
-    if (next === "tunnel") {
-      // 只切换"选中哪个方式",不碰代理链数据——从 chain 切到 tunnel 再切回时链路原样还在。
-      sshTunnel?.onActiveChange(true);
-      return;
+    // 隧道方式只开关"是否选中";隧道资产 id 留在调用方状态里不清零,切回 tunnel 时不用重选。
+    if (sshTunnel && sshTunnel.active !== (next === "tunnel")) {
+      sshTunnel.onActiveChange(next === "tunnel");
     }
-    if (sshTunnel?.active) {
-      // 关闭隧道方式;隧道资产 id 留在调用方状态里不清零,切回 tunnel 时不用重选。
-      sshTunnel.onActiveChange(false);
-    }
-    if (next === "direct") {
+    // 直连与隧道都不走代理链:与直连同样清空持久化的链路(否则一条看不见的链会随保存/
+    // 测试连接一起发出),切回 chain 时从暂存恢复。
+    if (next !== "chain") {
       if (layers.length) stashedLayers.current = layers;
       onChange({
         connectionType: "direct",

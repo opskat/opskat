@@ -72,9 +72,6 @@ const (
 	httpPhaseClosed
 )
 
-// DialFunc is a custom dialer for HTTP transports (e.g. SSH tunnel).
-type DialFunc func(network, addr string) (net.Conn, error)
-
 type httpHandle struct {
 	mu      sync.Mutex
 	client  *http.Client
@@ -95,40 +92,51 @@ type httpHandle struct {
 }
 
 // newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
-// or immediate flushing (GET/HEAD/DELETE/OPTIONS). The client is single-use:
-// for a client reused across many calls to the same asset, see
-// buildCachedHTTPClient / openHTTPResourceWithClient.
-func newHTTPHandle(params IOOpenParams, dial DialFunc) (*httpHandle, error) {
-	if params.URL == "" {
-		return nil, fmt.Errorf("URL is required for HTTP handle")
-	}
-
-	// dial has no ctx of its own; the transport's own per-request ctx is
-	// discarded in favor of whatever ctx this call closes dial over. That is
-	// only safe for a client used within a single call's lifetime (this
-	// function) — never for one cached across calls (buildCachedHTTPClient
-	// keeps the transport's per-request ctx instead).
-	var ctxDial func(ctx context.Context, network, addr string) (net.Conn, error)
-	if dial != nil {
-		ctxDial = func(_ context.Context, network, addr string) (net.Conn, error) { return dial(network, addr) }
-	}
-	return newHandleFromClient(params, newHTTPClient(newHTTPTransport(ctxDial, nil, params.AllowPrivate)), nil)
+// or immediate flushing (GET/HEAD/DELETE/OPTIONS) to a target that is not an
+// asset's endpoint. Its client is single-use: no later call reads its pool, so
+// it keeps no connection alive past the call. For an asset's endpoint, see
+// buildCachedHTTPClient / buildSingleUseEndpointClient.
+func newHTTPHandle(params IOOpenParams) (*httpHandle, error) {
+	transport := newHTTPTransport(nil, nil, params.AllowPrivate)
+	transport.DisableKeepAlives = true
+	return newHandleFromClient(params, newHTTPClient(transport, false), nil)
 }
 
 // buildCachedHTTPClient builds an *http.Client meant to be reused across many
-// calls to the same asset (see DefaultHostProvider.httpClients). Unlike
-// newHTTPHandle's client, dial keeps its own per-dial context — supplied by
-// the transport at the time it actually needs a new connection — since the
-// transport may open one long after the call that first built it has
-// returned, to serve a different, later call. Nothing a call decides — its
-// credentials, where it may be redirected — is built in: each request carries
-// its own (see httpHandle.Flush).
+// calls to the same asset (see DefaultHostProvider.httpClients). dial keeps
+// its own per-dial context — supplied by the transport at the time it
+// actually needs a new connection — since the transport may open one long
+// after the call that first built it has returned, to serve a different,
+// later call. Nothing a call decides — its credentials, where it may be
+// redirected — is built in: each request carries its own (see
+// httpHandle.Flush).
 func buildCachedHTTPClient(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool) *http.Client {
+	return newHTTPClient(newEndpointTransport(dial, tlsConfig, allowPrivate), tlsConfig != nil)
+}
+
+// buildSingleUseEndpointClient is buildCachedHTTPClient for a call nothing will
+// ever reuse a client for (an ad-hoc test-connection call): its connection —
+// possibly an SSH session to a jump host behind it — closes with the call
+// instead of idling in a pool no one reads again.
+func buildSingleUseEndpointClient(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool) *http.Client {
+	transport := newEndpointTransport(dial, tlsConfig, allowPrivate)
+	transport.DisableKeepAlives = true
+	return newHTTPClient(transport, tlsConfig != nil)
+}
+
+// newEndpointTransport is the transport to an asset's endpoint. The host owns
+// that connection path (direct, SSH tunnel, proxy chain — see AssetDialer), so
+// the process's HTTP(S)_PROXY environment does not apply: through a tunnel the
+// transport would dial the proxy's address instead of the endpoint, and without
+// one it would hand the proxy the credentials injected for the endpoint.
+func newEndpointTransport(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool) *http.Transport {
 	var ctxDial func(ctx context.Context, network, addr string) (net.Conn, error)
 	if dial != nil {
 		ctxDial = func(ctx context.Context, network, addr string) (net.Conn, error) { return dial(ctx, network, addr) }
 	}
-	return newHTTPClient(newHTTPTransport(ctxDial, tlsConfig, allowPrivate))
+	transport := newHTTPTransport(ctxDial, tlsConfig, allowPrivate)
+	transport.Proxy = nil
+	return transport
 }
 
 // newHTTPTransport clones the default transport, wires dial through the
@@ -151,9 +159,10 @@ func newHTTPTransport(dial func(ctx context.Context, network, addr string) (net.
 // newHTTPClient wraps transport in an *http.Client. The client itself holds
 // neither credentials nor a redirect policy: authTransport injects only the
 // credentials a request carries on its context, and checkRedirect applies only
-// the guard the request carries there.
-func newHTTPClient(transport *http.Transport) *http.Client {
-	return &http.Client{Transport: &authTransport{base: transport}, CheckRedirect: checkRedirect}
+// the guard the request carries there. requireTLS is set for an asset endpoint
+// whose connection settings enable TLS: authTransport then refuses plain http.
+func newHTTPClient(transport *http.Transport, requireTLS bool) *http.Client {
+	return &http.Client{Transport: &authTransport{base: transport, requireTLS: requireTLS}, CheckRedirect: checkRedirect}
 }
 
 type redirectGuardKey struct{}

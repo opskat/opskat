@@ -120,9 +120,9 @@ func TestParseExecArgs(t *testing.T) {
 		_, cmd, err = parseExecArgs([]string{"ls | wc -l"}, false)
 		require.NoError(t, err)
 		require.Equal(t, "ls | wc -l", cmd)
-		_, cmd, err = parseExecArgs([]string{"--", "request --path=/x?a=1&b=2"}, true)
+		_, cmd, err = parseExecArgs([]string{"--", "request --path='/x?a=1&b=2'"}, true)
 		require.NoError(t, err)
-		require.Equal(t, "request --path=/x?a=1&b=2", cmd)
+		require.Equal(t, "request --path='/x?a=1&b=2'", cmd)
 	})
 	t.Run("没有命令时报错", func(t *testing.T) {
 		_, _, err := parseExecArgs([]string{"--"}, false)

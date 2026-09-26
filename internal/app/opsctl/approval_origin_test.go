@@ -3,6 +3,7 @@ package opsctl
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -89,4 +90,36 @@ func TestOpsctlSingleApprovalKeepsOpsctlOrigin(t *testing.T) {
 
 	require.True(t, resp.Approved)
 	require.Equal(t, "opsctl", (*shown)["source"])
+}
+
+// Canceling a page call (CancelExtensionTool cancels its ctx) while its approval
+// dialog is still open must end the call: the gate stops waiting instead of
+// blocking until the user answers a dialog for a call that no longer exists.
+func TestPageCallCanceledWhileAwaitingApprovalEnds(t *testing.T) {
+	withClassifiedOriginType(t)
+	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}, extExecutor: confirmingExtExecutor{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	shown := make(chan string, 1)
+	o.emit = func(name string, payload map[string]any) {
+		if name == "opsctl:approval" {
+			shown <- payload["confirm_id"].(string)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := o.RunPageToolCall(ctx, "ES Verify", 3, "request --method=DELETE --path=/logs-app")
+		done <- err
+	}()
+	confirmID := <-shown
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "a canceled call must not report success")
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunPageToolCall still waits on the approval dialog after its call was canceled")
+	}
+	_, pending := o.pendingOpsctlApprovals.Load(confirmID)
+	require.False(t, pending, "the canceled call's approval must no longer be pending")
 }

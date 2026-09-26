@@ -147,6 +147,22 @@ func TestParseCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("--json 同样接受空格分隔式", func(t *testing.T) {
+		// 多词 opsctl exec 与 --flag value 写法对 --json 一视同仁：
+		// `opsctl exec <asset> -- list_objects --json '{...}'` 不能掉成"多余位置参数"。
+		_, argsJSON, err := parseCommand(m, `list_objects --json '{"bucket":"b","maxKeys":3}'`)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(argsJSON, &got); err != nil {
+			t.Fatalf("args must be valid JSON: %v", err)
+		}
+		if got["bucket"] != "b" || got["maxKeys"] != float64(3) {
+			t.Errorf("args = %#v, want bucket=b maxKeys=3", got)
+		}
+	})
+
 	t.Run("--json 与其它 flag 混用报错", func(t *testing.T) {
 		_, _, err := parseCommand(m, `list_objects --json='{"bucket":"b"}' --force`)
 		if err == nil || !strings.Contains(err.Error(), "json") {
@@ -217,4 +233,47 @@ func TestParseCommand(t *testing.T) {
 			t.Fatalf("wrong JSON parameter type = %v, want rejection", err)
 		}
 	})
+}
+
+// The canonical command is re-parsed by every later stage (policy, classify,
+// execute), so it must parse back to exactly the arguments it was rendered from —
+// including a string or array value that happens to be the literal "true", which
+// must not come out as a bare flag that the space-separated form then reads as
+// "take the next word".
+func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
+	m := &extension.Manifest{Name: "notes", Tools: []extension.ToolDef{{
+		Name: "put", Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"a":     map[string]any{"type": "string"},
+				"b":     map[string]any{"type": "string"},
+				"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"force": map[string]any{"type": "boolean"},
+			},
+		},
+	}}}
+	for _, command := range []string{
+		`put --a=true --b=x`,
+		`put --b=true`,
+		`put --tags=true --a=y`,
+		`put --force --a=true`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			_, want, err := parseCommand(m, command)
+			if err != nil {
+				t.Fatalf("parse %q: %v", command, err)
+			}
+			canonical, err := canonicalCommand(m, command)
+			if err != nil {
+				t.Fatalf("canonicalize %q: %v", command, err)
+			}
+			_, got, err := parseCommand(m, canonical)
+			if err != nil {
+				t.Fatalf("canonical %q does not parse back: %v", canonical, err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("canonical %q parses to %s, want %s", canonical, got, want)
+			}
+		})
+	}
 }

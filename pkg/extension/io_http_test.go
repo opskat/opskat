@@ -3,7 +3,6 @@ package extension
 
 import (
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,7 +31,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL + "/test",
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 			So(h, ShouldNotBeNil)
 
@@ -63,7 +62,7 @@ func TestHTTPHandle(t *testing.T) {
 				URL:          srv.URL + "/submit",
 				Headers:      map[string]string{"Content-Type": "application/json"},
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			n, err := h.Write([]byte(`{"key":"value"}`))
@@ -92,7 +91,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "POST",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			meta, err := h.Flush()
@@ -116,7 +115,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			_, err = h.Read(make([]byte, 10))
@@ -139,7 +138,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			// Flush in a goroutine since the server blocks
@@ -171,45 +170,12 @@ func TestHTTPHandle(t *testing.T) {
 				URL:          srv.URL,
 				Headers:      map[string]string{"X-Custom": "test-value"},
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			_, err = h.Flush()
 			So(err, ShouldBeNil)
 			So(receivedHeader, ShouldEqual, "test-value")
-			So(h.Close(), ShouldBeNil)
-		})
-
-		Convey("custom dial function is used", func() {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte("tunneled"))
-			}))
-			defer srv.Close()
-
-			dialCalled := false
-			customDial := func(network, addr string) (net.Conn, error) {
-				dialCalled = true
-				// Delegate to real dialer so the request actually succeeds
-				return net.Dial(network, addr)
-			}
-
-			h, err := newHTTPHandle(IOOpenParams{
-				Method:       "GET",
-				URL:          srv.URL,
-				AllowPrivate: true, // httptest server binds to loopback
-			}, customDial)
-			So(err, ShouldBeNil)
-
-			meta, err := h.Flush()
-			So(err, ShouldBeNil)
-			So(meta.Status, ShouldEqual, 200)
-			So(dialCalled, ShouldBeTrue)
-
-			all, err := io.ReadAll(&readerFunc{fn: h.Read})
-			So(err, ShouldBeNil)
-			So(string(all), ShouldEqual, "tunneled")
-
 			So(h.Close(), ShouldBeNil)
 		})
 	})
@@ -232,7 +198,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 			So(res.Meta.Status, ShouldEqual, 0) // no status yet before flush
 			id, err := mgr.Register(res)

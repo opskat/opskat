@@ -131,6 +131,16 @@ export function makeExtensionConfigSection(opts: Options) {
   const proxyChainEnabled = !!opts.connection?.proxyChain;
   const tlsEnabled = !!opts.connection?.tls;
 
+  // 已存配置里有值的密码字段 → 其密文：表单不回显它，留空保存时原样写回。
+  function storedSecrets(stored: Record<string, unknown>, fields: string[] = secrets): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const f of fields) {
+      const value = stored[f];
+      if (typeof value === "string" && value) out[f] = value;
+    }
+    return out;
+  }
+
   async function encryptSecrets(
     config: Record<string, unknown>,
     withheld: Record<string, string>,
@@ -164,8 +174,12 @@ export function makeExtensionConfigSection(opts: Options) {
         if (a?.ID) {
           return { config: {}, status: "loading", ...base, proxyChain: CONNECTION_DEFAULTS, tls: TLS_DEFAULTS };
         }
+        // 复制资产（ID 为 0 但带着源资产的存储配置）：密码字段是源资产的密文，按已存密码
+        // 对待——不进输入框，留空保存时原样沿用，而不是被当成明文再加密一遍。
         const { guestConfig, proxyChain, tls } = splitHostConnection(parseConfig(a?.Config));
-        return { config: guestConfig, status: "ready", ...base, proxyChain, tls };
+        const withheldSecrets = storedSecrets(guestConfig);
+        for (const f of secrets) delete guestConfig[f];
+        return { config: guestConfig, status: "ready", ...base, withheldSecrets, proxyChain, tls };
       },
       // 必填校验由后端按 configSchema.required 负责；表单侧不复制一份会漂移的规则。
       validate: (s) => {
@@ -271,13 +285,10 @@ export function makeExtensionConfigSection(opts: Options) {
         .then((cfg) => {
           if (cancelled) return;
           const { guestConfig, proxyChain, tls } = splitHostConnection(parseConfig(cfg));
-          const stored = parseConfig(storedConfig);
-          const withheldSecrets: Record<string, string> = {};
-          for (const f of secrets) {
-            if (guestConfig[f] === undefined && typeof stored[f] === "string" && stored[f]) {
-              withheldSecrets[f] = stored[f];
-            }
-          }
+          const withheldSecrets = storedSecrets(
+            parseConfig(storedConfig),
+            secrets.filter((f) => guestConfig[f] === undefined)
+          );
           initialSecretsRef.current = Object.fromEntries(secrets.map((f) => [f, String(guestConfig[f] ?? "")]));
           setState((s) => ({ ...s, config: guestConfig, status: "ready", proxyChain, tls, withheldSecrets }));
         })

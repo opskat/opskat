@@ -26,19 +26,7 @@ import (
 // --json 是逃生口：flag DSL 表达不了嵌套结构，而 manifest 允许声明它们；没有逃生口
 // 就会出现"注册了却调不动"的工具。它与其它 flag 互斥——两者混用时哪个赢都是猜。
 func parseCommand(m *extension.Manifest, command string) (string, []byte, error) {
-	c, err := cmdline.Parse(command, cmdline.WithValueFlags(func(verb, name string) bool {
-		def, ok := toolDef(m, verb)
-		if !ok {
-			return false
-		}
-		props, _ := def.Parameters["properties"].(map[string]any)
-		prop, ok := props[name].(map[string]any)
-		if !ok {
-			return false
-		}
-		typ, _ := prop["type"].(string)
-		return typ != "boolean"
-	}))
+	c, err := cmdline.Parse(command, flagGrammar(m))
 	if err != nil {
 		return "", nil, err
 	}
@@ -92,6 +80,29 @@ func parseCommand(m *extension.Manifest, command string) (string, []byte, error)
 	return toolName, argsJSON, nil
 }
 
+// flagGrammar 是扩展工具 DSL 的 flag 语法：按 manifest 声明，非 boolean 参数（以及
+// --json 逃生口）是取值 flag。parseCommand 读、canonicalCommand 写都用它，规范串才能
+// 被原样解析回同一组参数。
+func flagGrammar(m *extension.Manifest) cmdline.Option {
+	return cmdline.WithValueFlags(func(verb, name string) bool {
+		if name == "json" {
+			// 逃生口永远带一个值，空格分隔式与其它取值 flag 一致。
+			return true
+		}
+		def, ok := toolDef(m, verb)
+		if !ok {
+			return false
+		}
+		props, _ := def.Parameters["properties"].(map[string]any)
+		prop, ok := props[name].(map[string]any)
+		if !ok {
+			return false
+		}
+		typ, _ := prop["type"].(string)
+		return typ != "boolean"
+	})
+}
+
 // canonicalCommand 把一条命令还原为规范形式：工具名 + 按名称排序的 flag。策略匹配、
 // 审批弹窗、审计与 grant 都用它，所以同一次调用无论模型怎么排列 flag 都得到同一个串。
 func canonicalCommand(m *extension.Manifest, command string) (string, error) {
@@ -107,7 +118,7 @@ func canonicalCommand(m *extension.Manifest, command string) (string, error) {
 	for name, raw := range values {
 		c.Flags[name] = flagLiteral(raw)
 	}
-	return c.Render(), nil
+	return c.Render(flagGrammar(m)), nil
 }
 
 // flagLiteral 把一个已校验的参数值渲染回 flag 值文本。字符串取其内容（而不是带引号的

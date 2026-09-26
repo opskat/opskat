@@ -123,12 +123,14 @@ describe("OpsctlApprovalDialog — 分类审批的「记住」编辑器", () => 
   it("未分类的审批仍预填命令串，沿用命令模式编辑器", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);
+    // awaitSingleApproval 的事件是 map 字面量，未分类时 action/resource/remember_pattern
+    // 照样发出，只是空串——不是缺省字段。
     fireClassifiedApproval(handlers, {
       type: "exec",
       command: "cat /var/log/app.log",
-      action: undefined,
-      resource: undefined,
-      remember_pattern: undefined,
+      action: "",
+      resource: "",
+      remember_pattern: "",
       source: "opsctl",
       extension: "",
     });

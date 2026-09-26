@@ -32,29 +32,8 @@ export interface ExtAssetType {
   configSchema?: Record<string, unknown>;
   /** Host-owned connection settings the type supports; absent means none. */
   connection?: ExtConnection;
-  /** Credentials the host injects into requests to the asset's endpoint; absent means none. */
-  auth?: ExtAuth;
   /** The type registers a test-connection handler; the asset form shows "Test connection" only when true. */
   testConnection?: boolean;
-}
-
-/**
- * Credential injection an asset type declares in describe(). The host renders each
- * binding from the asset's config (decrypting password fields itself) into HTTP
- * requests to the asset's endpoint; the extension never sees the result.
- */
-export interface ExtAuth {
-  /** Config field whose value picks the active group; absent means a single group. */
-  selector?: string;
-  groups: { when?: string; bindings: ExtAuthBinding[] }[];
-}
-
-export interface ExtAuthBinding {
-  in: "header" | "query" | "basic";
-  /** Header or query parameter name; absent for basic. */
-  name?: string;
-  /** Template: {{field}} and {{base64(part, ...)}} placeholders over config fields. */
-  value: string;
 }
 
 /**
@@ -74,11 +53,9 @@ export interface ExtToolDef {
   parameters: Record<string, unknown>;
   /**
    * The fixed policy action this tool requests; declared at the tool's registration in
-   * the guest. Absent for a tool that classifies each call (see `policyActions`).
+   * the guest. Absent for a tool that classifies each call from its arguments.
    */
   policyAction?: string;
-  /** For a tool that classifies each call from its arguments: every action it can request. */
-  policyActions?: string[];
 }
 
 export interface ExtPolicies {

@@ -72,7 +72,7 @@ func (o *Opsctl) startApprovalServer() {
 // requestSingleApproval 是 opsctl socket 上单条审批的入口：弹窗、等用户作答，"始终允许"
 // 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
-	parsed, reason := o.awaitSingleApproval(permission.ApprovalItem{
+	parsed, reason := o.awaitSingleApproval(o.ctx, permission.ApprovalItem{
 		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
 		Command: req.Command, Detail: req.Detail,
 	}, req.SessionID, opsctlOrigin)
@@ -110,8 +110,9 @@ func extensionPageOrigin(extension string) approvalOrigin {
 // awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
 // 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串落
 // （requestSingleApproval），扩展工具闸门交给 HandleConfirm 按 (action, resource) 落
-// （extToolConfirm）。拒绝时第二个返回值是原因。
-func (o *Opsctl) awaitSingleApproval(item permission.ApprovalItem, sessionID string, origin approvalOrigin) (permission.ParsedApprovalResponse, string) {
+// （extToolConfirm）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
+// （扩展页面取消了这次工具调用）就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
+func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string, origin approvalOrigin) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
 	kind := permission.ApprovalKindFor(item.Type, item.Command)
 	log := logger.Ctx(o.ctx).With(
@@ -167,6 +168,9 @@ func (o *Opsctl) awaitSingleApproval(item permission.ApprovalItem, sessionID str
 			return parsed, "user denied"
 		}
 		return parsed, ""
+	case <-ctx.Done():
+		log.Info("opsctl approval abandoned: the call was canceled")
+		return denied, "call canceled"
 	case <-o.ctx.Done():
 		log.Error("opsctl approval failed", zap.Error(o.ctx.Err()))
 		return denied, "app shutting down"
@@ -443,8 +447,8 @@ func (o *Opsctl) gateExtToolCall(ctx context.Context, origin approvalOrigin, ses
 // included. Persisting an "always allow" is HandleConfirm's: it grants the
 // classification, the only shape extension grant matching reads.
 func (o *Opsctl) extToolConfirm(sessionID string, origin approvalOrigin) permission.CommandConfirmFunc {
-	return func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		parsed, _ := o.awaitSingleApproval(items[0], sessionID, origin)
+	return func(ctx context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		parsed, _ := o.awaitSingleApproval(ctx, items[0], sessionID, origin)
 		switch parsed.Decision {
 		case permission.ApprovalAllowAll:
 			return permission.ApprovalResponse{Decision: "allowAll", EditedItems: parsed.EditedItems}

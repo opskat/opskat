@@ -145,6 +145,29 @@ describe("ExtensionConfigSection stored password withheld", () => {
   });
 });
 
+// 复制资产：表单拿到的是源资产的完整存储配置（ID 为 0，密码字段是密文）。密文不能进
+// 输入框，也不能被当成明文再加密一遍——那会把复制出来的资产的密钥毁掉。
+describe("ExtensionConfigSection copying an asset", () => {
+  function copiedAsset() {
+    return new asset_entity.Asset({
+      ID: 0,
+      Name: "demo - copy",
+      Type: "demo-type",
+      Config: JSON.stringify({ endpoint: "https://x", secret: CIPHERTEXT }),
+    });
+  }
+
+  it("keeps the source's stored secret as is instead of encrypting its ciphertext again", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Section ref={ref} editAsset={copiedAsset()} ctx={ctx} onValidityChange={() => {}} />);
+
+    expect(screen.queryByDisplayValue(CIPHERTEXT)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Secret")).toHaveAttribute("placeholder", "asset.passwordUnchanged");
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "https://x", secret: CIPHERTEXT });
+  });
+});
+
 describe("ExtensionConfigSection connection settings", () => {
   const schema = {
     type: "object",
@@ -356,6 +379,53 @@ describe("ExtensionConfigSection proxy chain", () => {
     expect(onValidity).toHaveBeenLastCalledWith(
       expect.objectContaining({ canSave: false, saveDisabledReason: "asset.formTunnelWithProxyChain" })
     );
+  });
+
+  // 同一个"连接方式"选择器里选中 SSH 隧道，代理链就不再生效：与切到直连一样不再持久化它
+  // （本次会话里切回代理链时恢复），而不是让看不见的链路把保存拦下来、或随测试连接一起发出去。
+  it("choosing the tunnel in the selector drops a configured chain from save and test, and restores it on switching back", async () => {
+    const Both = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema,
+      connection: { sshTunnel: true, proxyChain: true },
+      testConnection: true,
+    });
+    const savedLayer = {
+      id: "hop1",
+      name: "Existing Hop",
+      enabled: true,
+      type: "socks5",
+      host: "10.0.0.5",
+      port: 1080,
+    };
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(
+      JSON.stringify({
+        endpoint: "http://es.internal:9200",
+        [HOST_CONNECTION_CONFIG_KEY]: { proxyChain: { layers: [savedLayer] } },
+      })
+    );
+    const asset = chainAsset(savedLayer);
+    asset.sshTunnelId = 9;
+    const ref = createRef<AssetFormHandle>();
+    const onValidity = vi.fn();
+    render(<Both ref={ref} editAsset={asset} ctx={ctx} onValidityChange={onValidity} />);
+    await act(async () => {});
+
+    // 先看到链路，再选隧道。
+    fireEvent.click(screen.getByRole("radio", { name: "asset.connectionTunnelProxy" }));
+    expect(screen.getByText("Existing Hop")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "asset.sshTunnel" }));
+
+    expect(onValidity).toHaveBeenLastCalledWith(expect.objectContaining({ canSave: true }));
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.sshTunnelId).toBe(9);
+    expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "http://es.internal:9200" });
+    const tested = await ref.current!.buildTestConfig!(ctx);
+    expect(JSON.parse(tested.configJSON)[HOST_CONNECTION_CONFIG_KEY]).toEqual({ sshTunnelId: 9 });
+
+    fireEvent.click(screen.getByRole("radio", { name: "asset.connectionTunnelProxy" }));
+    expect(screen.getByText("Existing Hop")).toBeInTheDocument();
   });
 });
 

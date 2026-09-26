@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 
@@ -151,5 +152,55 @@ func TestAssetAuthInjection(t *testing.T) {
 			So(err.Error(), ShouldNotContainSubstring, "token=")
 			So(err.Error(), ShouldNotContainSubstring, "s3cret")
 		})
+	})
+}
+
+// Injecting a query credential must leave the guest's own query exactly as it
+// wrote it: order kept, and pairs Go's url.ParseQuery would drop (a ';') kept.
+// Only a same-name parameter is replaced — the guest cannot pre-set the one the
+// host injects.
+func TestAssetAuthQueryInjectionKeepsTheGuestsQuery(t *testing.T) {
+	Convey("Given an endpoint that records the raw query it received", t, func() {
+		var mu sync.Mutex
+		var rawQueries []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			rawQueries = append(rawQueries, r.URL.RawQuery)
+			mu.Unlock()
+			_, _ = w.Write([]byte("ok"))
+		}))
+		t.Cleanup(srv.Close)
+		other := newAuthRecorder(t)
+		signed := base64.StdEncoding.EncodeToString([]byte("elastic:s3cret"))
+		p := newAuthFixture(t, srv.URL, other.URL, "signed")
+
+		callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": srv.URL + "/ok?z=1&q=a;b&token=guest&a=2"})
+
+		mu.Lock()
+		defer mu.Unlock()
+		So(rawQueries, ShouldResemble, []string{"z=1&q=a;b&a=2&token=" + url.QueryEscape(signed)})
+	})
+}
+
+// A TRACE is answered by echoing the request, headers included: carrying the
+// asset's credentials, it would hand the guest the secret the host injects so
+// that the guest never has to see it.
+func TestAssetAuthRefusesTrace(t *testing.T) {
+	Convey("Given an endpoint request carrying credentials", t, func() {
+		endpoint := newAuthRecorder(t)
+		target, _ := url.Parse(endpoint.URL)
+		auth := &requestAuth{
+			bindings:   []renderedBinding{{in: authInHeader, name: "Authorization", value: "Bearer s3cret"}},
+			isEndpoint: func(u *url.URL) bool { return u.Host == target.Host },
+		}
+		res, err := openHTTPResourceWithClient(IOOpenParams{Type: "http", Method: "TRACE", URL: endpoint.URL + "/ok"},
+			buildCachedHTTPClient(nil, nil, true), auth)
+		So(err, ShouldBeNil)
+		defer func() { _ = res.Closer.Close() }()
+
+		_, err = res.http.Flush()
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "TRACE")
+		So(endpoint.requests(), ShouldBeEmpty)
 	})
 }

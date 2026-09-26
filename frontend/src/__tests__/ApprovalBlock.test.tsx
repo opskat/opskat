@@ -190,7 +190,7 @@ describe("ApprovalBlock", () => {
       expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("delete:logs-app");
     });
 
-    it("未修改时不发送 edited_items；修改后原样发回", () => {
+    it("修改后的 action:resource-glob 原样作为 edited_items 发回", () => {
       renderApproval({ approvalKind: "single", approvalItems: [classified] });
 
       fireEvent.click(screen.getByTestId("ai-approval-remember"));

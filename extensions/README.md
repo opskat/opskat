@@ -191,7 +191,9 @@ hostname is resolved on the far side of a tunnel; anything else the same call re
 endpoint, declaring any of them needs `network.assetEndpoint` and a `format:"endpoint"`
 config field — the host refuses the extension at load otherwise. A cert file that cannot be read, a
 failed TLS handshake, or a chain hop that cannot be reached all fail the open with
-the host's error; there is no fallback to a direct or unverified connection. With both
+the host's error; there is no fallback to a direct or unverified connection — with TLS
+enabled, a plain `http://` request to the endpoint is refused, and the process's
+`HTTP(S)_PROXY` never reroutes an endpoint request. With both
 `SSHTunnel` and `ProxyChain` declared, an asset uses one or the other — an SSH jump host
 goes into the chain as a hop — and one that sets both is refused rather than dialed
 without the tunnel. An item left undeclared is neither shown nor applied, and the host
@@ -228,8 +230,10 @@ selected unambiguously, and — like
 `Connection` — when the manifest lacks `network.assetEndpoint` or the config has no
 `format:"endpoint"` field: requests to any target other than the asset's endpoint get
 no credentials. The injected values never reach the guest — not in the response metadata
-and not in a failed request's error — and a password that cannot be decrypted fails the
-request instead of sending it unauthenticated. `credentials: "read"` stays for
+and not in a failed request's error; a `TRACE`, which a server answers by echoing the
+request, is refused when it would carry them — and a password that cannot be decrypted
+fails the request instead of sending it unauthenticated. A `query` binding replaces a
+same-name parameter and leaves the rest of the query exactly as the extension wrote it. `credentials: "read"` stays for
 protocols the host cannot authenticate for you (raw TCP handshakes); the install
 confirmation and the extension's details in Settings warn about it prominently.
 

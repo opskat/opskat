@@ -347,13 +347,13 @@ func execTool(l loaded) permission.ExecFunc {
 // 自身那一列与它引用的权限组里的 `<action>[:<resource-glob>]` 规则
 // （policy.CheckExtensionPolicy）。两套引擎不合并，是因为它们判定的根本不是同一种东西。
 //
-// guest 给出的 action 必须属于类型在 describe() 里声明的动作集合（manifest 的
-// policies.actions）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
+// guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（ToolDef.Actions，
+// 不是整个扩展的 policies.actions 并集）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
 // 这次调用本身。
 //
 // 返回 NeedConfirm 之后发生什么，则与内置类型完全一致：CheckForAsset 弹审批框，
-// "全部允许"落 grant，下一条同样的命令由这里的 MatchGrant 直接放行。
+// "全部允许"落 grant，下一条同样的调用由这里的 MatchExtensionGrant 直接放行。
 func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 	return func(ctx context.Context, assetID int64, command string) aictx.CheckResult {
 		action, resource, _, _, ok := classifyCommand(ctx, l, command)
@@ -386,7 +386,9 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 }
 
 // classifyCommand parses a command and runs the guest's check_policy classification,
-// validating the action against the type's declared set (manifest.Policies.Actions).
+// validating the action against the actions the called tool declares
+// (ToolDef.Actions) — not the extension-wide union, so one tool cannot answer with
+// an action only another tool may request.
 // It is the single place policyCheck and classifyForApproval both call, so "undeclared
 // action never classifies" can't drift between the check path and the approval/grant
 // path — both must see the same failure the same way.
@@ -403,7 +405,8 @@ func classifyCommand(ctx context.Context, l loaded, command string) (action, res
 			zap.String("extension", l.name), zap.String("tool", toolName))
 		return "", "", "", nil, false
 	}
-	if !slices.Contains(l.manifest.Policies.Actions, action) {
+	def, _ := toolDef(l.manifest, toolName)
+	if !slices.Contains(def.Actions(), action) {
 		logger.Ctx(ctx).Error("extension policy returned an undeclared action",
 			zap.String("extension", l.name), zap.String("tool", toolName), zap.String("action", action))
 		return "", "", "", nil, false

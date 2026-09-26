@@ -7,9 +7,10 @@ export interface RememberableItem {
 }
 
 // 「记住」编辑器的初始值：分类过的扩展审批记住的是分类（落库为 ext:<type>:<remember_pattern>），
-// 不是命令串；其余审批记住的就是命令串本身。
+// 不是命令串；其余审批记住的就是命令串本身。按 action 判断是否分类（与 losesAction 同一个
+// 判据）：opsctl 事件对未分类的审批项照样发出 remember_pattern，只是空串。
 export function rememberPrefill(item: RememberableItem): string {
-  return item.remember_pattern ?? item.command;
+  return item.action ? (item.remember_pattern ?? "") : item.command;
 }
 
 // 分类审批的编辑值必须保留 "<action>:" 前缀——只能改资源段，动作被删掉或换掉就成了

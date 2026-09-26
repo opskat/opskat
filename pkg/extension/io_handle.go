@@ -88,9 +88,10 @@ func OpenFileResource(path, mode string) (*IOResource, error) {
 	}
 }
 
-// OpenHTTPResource prepares an HTTP request. dial may be nil for a direct connection.
-func OpenHTTPResource(params IOOpenParams, dial DialFunc) (*IOResource, error) {
-	h, err := newHTTPHandle(params, dial)
+// OpenHTTPResource prepares an HTTP request to a target that is not an asset's
+// endpoint: a direct, single-use connection.
+func OpenHTTPResource(params IOOpenParams) (*IOResource, error) {
+	h, err := newHTTPHandle(params)
 	if err != nil {
 		return nil, err
 	}

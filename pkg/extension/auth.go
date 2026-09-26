@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -208,17 +209,29 @@ func withRequestAuth(ctx context.Context, auth *requestAuth) context.Context {
 // authTransport injects a request's credentials (see requestAuth) on the way
 // out. It works on a clone: the request the client holds — and the URL it
 // reports in errors that reach the guest — never carries them.
+//
+// requireTLS is set on the client of an asset endpoint whose connection
+// settings enable TLS: a plain http hop to it would silently skip what the
+// user configured, so it is refused.
 type authTransport struct {
-	base *http.Transport
+	base       *http.Transport
+	requireTLS bool
 }
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.requireTLS && req.URL.Scheme != "https" {
+		return nil, refuseRequest(req, fmt.Errorf("plain %s to the asset's endpoint refused: its connection settings require TLS", req.URL.Scheme))
+	}
 	auth, _ := req.Context().Value(requestAuthKey{}).(*requestAuth)
 	if auth == nil || !auth.isEndpoint(req.URL) {
 		return t.base.RoundTrip(req)
 	}
+	if req.Method == http.MethodTrace {
+		// A TRACE is answered by echoing the request, headers included: it would
+		// hand the guest the credentials injected so that it never sees them.
+		return nil, refuseRequest(req, errors.New("TRACE refused on a request carrying the asset's credentials"))
+	}
 	out := req.Clone(req.Context())
-	var query url.Values
 	for _, b := range auth.bindings {
 		switch b.in {
 		case authInHeader:
@@ -226,16 +239,38 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		case authInBasic:
 			out.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(b.value)))
 		case authInQuery:
-			if query == nil {
-				query = out.URL.Query()
-			}
-			query.Set(b.name, b.value)
+			out.URL.RawQuery = setRawQueryParam(out.URL.RawQuery, b.name, b.value)
 		}
 	}
-	if query != nil {
-		out.URL.RawQuery = query.Encode()
-	}
 	return t.base.RoundTrip(out)
+}
+
+// refuseRequest honors the RoundTripper contract — the request body is closed
+// even when the request is never sent — and returns err.
+func refuseRequest(req *http.Request, err error) error {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	return err
+}
+
+// setRawQueryParam replaces every name=... pair of rawQuery with name=value,
+// appended last, and leaves every other pair byte for byte as the guest wrote
+// it: re-encoding through url.Values would reorder the query and drop pairs
+// url.ParseQuery rejects (such as one containing ';').
+func setRawQueryParam(rawQuery, name, value string) string {
+	var kept []string
+	if rawQuery != "" {
+		for _, pair := range strings.Split(rawQuery, "&") {
+			key, _, _ := strings.Cut(pair, "=")
+			if unescaped, err := url.QueryUnescape(key); err == nil && unescaped == name {
+				continue
+			}
+			kept = append(kept, pair)
+		}
+	}
+	kept = append(kept, url.QueryEscape(name)+"="+url.QueryEscape(value))
+	return strings.Join(kept, "&")
 }
 
 // CloseIdleConnections lets http.Client.CloseIdleConnections reach the pool.

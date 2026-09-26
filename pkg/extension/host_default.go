@@ -100,7 +100,7 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 		if asset == nil {
 			// Not an asset endpoint: a direct, single-use client — no connection
 			// path to apply and no asset to key a cache on.
-			return OpenHTTPResource(params, nil)
+			return OpenHTTPResource(params)
 		}
 		dial, tlsConfig, fingerprint, err := h.assetDial(ctx, asset)
 		if err != nil {
@@ -116,9 +116,9 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 		if asset.AdHoc != nil {
 			// An ad-hoc call (test connection) will never be asked again the same
 			// way — nothing to key a cache entry on that would ever hit — so it
-			// gets a single-use client, exactly as the unscoped path above, but
-			// still carries whatever credentials resolveAuth rendered.
-			client := buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate)
+			// gets a single-use client, like the unscoped path above, but still
+			// carries whatever credentials resolveAuth rendered.
+			client := buildSingleUseEndpointClient(dial, tlsConfig, params.AllowPrivate)
 			return openHTTPResourceWithClient(params, client, auth)
 		}
 		client, built := h.httpClients.getOrCreate(asset.ID, fingerprint, func() *http.Client {

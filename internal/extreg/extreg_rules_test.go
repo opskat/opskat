@@ -226,6 +226,20 @@ func TestExtensionUndeclaredActionNeedsConfirmAndIsLogged(t *testing.T) {
 	assert.Equal(t, "object.nuke", fields["action"])
 }
 
+// 动作按工具核对，不是按整个扩展的并集：一个只声明了 object.delete 的工具，guest 的
+// check_policy 却答成另一个工具才有的 object.list，就是 guest 缺陷——不能借一条
+// object.list 的 allow 规则让删除免审批。
+func TestExtensionActionMustBeDeclaredByTheCalledTool(t *testing.T) {
+	registerFake(t, &fakePlugin{action: "object.list"})
+	ctx := withGrantFixturePolicy(t, 1, "acme-store", &asset_entity.CommandPolicy{
+		AllowList: []string{"ext:acme:object.list"},
+	})
+
+	got := permission.CheckPermission(ctx, "acme-store", 1, "delete_bucket --bucket=prod")
+	assert.Equal(t, aictx.NeedConfirm, got.Decision,
+		"an action another tool declares must not classify a call of this tool")
+}
+
 // resource 是 guest 的任意文本，可以含 ':'。规则串在 action 之后的第一个 ':' 处切开，
 // 其后整段都是 glob；guest 既不能借 resource 伪造 action 段，也不能借带 ':' 的 action
 // 撞上一条带 glob 的规则。

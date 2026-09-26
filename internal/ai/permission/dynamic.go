@@ -8,23 +8,9 @@ import (
 	"github.com/opskat/opskat/internal/ai/policy"
 )
 
-// MatchGrant 报告该资产上是否已有一条批准过的常驻授权覆盖这条命令。
-//
-// 导出的理由与 RegisterPolicyCheck 一样：运行期注册进来的类型（扩展提供的资产类型）
-// 的判定函数住在本包之外，而 grant 匹配是**每个** PolicyCheckFunc 在返回 NeedConfirm
-// 之前必须走的最后一步。内置类型的检查函数在本包内直接调 matchGrantForAsset；包外的
-// 检查函数漏掉这一步的后果，正是扩展路径以前的样子：用户点过"始终允许"，下一条同样的
-// 命令还是弹框。
-func MatchGrant(ctx context.Context, assetID int64, command, approvalType string) (aictx.CheckResult, bool) {
-	result := matchGrantForAsset(ctx, assetID, command, approvalType)
-	if result == nil {
-		return aictx.CheckResult{}, false
-	}
-	return *result, true
-}
-
-// MatchExtensionGrant is MatchGrant's counterpart for classify-registered extension
-// types: it builds the current call's grant key from its live (policyType, action,
+// MatchExtensionGrant is the grant lookup of a classify-registered extension type's
+// policy check (a PolicyCheckFunc lives outside this package, so the lookup is
+// exported): it builds the current call's grant key from its live (policyType, action,
 // resource) classification — never from the raw command text — so a later call that
 // spells the same request differently (different flag order, an equivalent literal)
 // still hits the grant, and a grant for one resource never covers another. See

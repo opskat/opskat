@@ -577,7 +577,7 @@ func TestParseRender_RoundTrip(t *testing.T) {
 }
 
 // TestParse_WithValueFlags pins the opt-in "--name value" (space-separated) flag
-// form: Parse's default (no ParseOption) never changes — a bare "--name" always
+// form: Parse's default (no Option) never changes — a bare "--name" always
 // means boolean "true", which is what mongo/kafka/etcd/k8s rely on. Only a caller
 // that passes WithValueFlags (the extension tool DSL, keyed off each tool's
 // manifest-declared parameter type) gets space-separated values, and only for the
