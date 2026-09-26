@@ -17,7 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 )
 
-// An opsctl grant for an extension asset is written <action>[:<resource-glob>] and
+// A grant request over the opsctl approval channel for an extension asset is written <action>[:<resource-glob>] and
 // persisted as ext:<policyType>:… — the only grant shape an extension call matches.
 // One that could never match is refused before anything is stored or shown.
 

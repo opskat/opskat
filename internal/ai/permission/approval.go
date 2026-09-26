@@ -141,7 +141,7 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 				}
 				if kind == ApprovalKindGrant {
 					// A grant request item for an extension asset carries the extension
-					// type (SubmitGrantMulti / opsctl grant): its edit must stay in rule
+					// type (SubmitGrantMulti / opsctl approval channel): its edit must stay in rule
 					// syntax, or it would persist a grant nothing ever matches.
 					if _, isExt, err := extensionGrantFor(want.Type, item.Command); isExt && err != nil {
 						return ParsedApprovalResponse{Decision: ApprovalDeny},

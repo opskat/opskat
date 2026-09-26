@@ -69,8 +69,8 @@ type ExtensionGrant struct {
 	Rules []string
 }
 
-// extensionGrantFor resolves a grant request — request_permission, opsctl grant,
-// or the user's edit of one — for assetType (spec 参数级策略 › 授权请求).
+// extensionGrantFor resolves a grant request — request_permission, the opsctl
+// approval channel, or the user's edit of one — for assetType (spec 参数级策略 › 授权请求).
 //
 // An extension asset only matches grants shaped like its permanent rules
 // (MatchExtensionGrant), so its grant request is written the way a rule is —
@@ -106,10 +106,10 @@ func extensionGrantFor(assetType, patterns string) (grant ExtensionGrant, isExt 
 	return grant, true, nil
 }
 
-// ExtensionGrantForAsset is extensionGrantFor for an asset id — the opsctl grant
-// entry point, which receives asset ids rather than assets. An asset that cannot be
-// resolved is not an extension asset as far as this is concerned (isExt false): its
-// grant request keeps the command-shaped path it always had.
+// ExtensionGrantForAsset is extensionGrantFor for an asset id — the opsctl
+// approval-channel entry point, which receives asset ids rather than assets. An
+// asset that cannot be resolved is not an extension asset as far as this is concerned
+// (isExt false): its grant request keeps the command-shaped path it always had.
 func ExtensionGrantForAsset(ctx context.Context, assetID int64, patterns string) (ExtensionGrant, bool, error) {
 	asset := resolveAssetForPolicy(ctx, assetID)
 	if asset == nil {

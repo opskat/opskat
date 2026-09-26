@@ -14,7 +14,7 @@ import (
 
 // An extension asset only ever matches grants shaped ext:<policyType>:<action>
 // [:<resource-glob>] (MatchExtensionGrant). A grant request for one — request_permission
-// or opsctl grant — is therefore written <action>[:<resource-glob>], validated like a
+// or the opsctl approval channel — is therefore written <action>[:<resource-glob>], validated like a
 // permanent rule, and refused outright when it could never match: telling the caller
 // "grant approved" for a pattern nothing will ever consult is the defect this locks.
 

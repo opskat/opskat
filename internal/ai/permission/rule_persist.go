@@ -100,7 +100,7 @@ type ruleLanding struct {
 	ownFilter func(rule string) bool
 	// land 把一条已归一化的 pattern 变成落库的规则。
 	land func(pattern string) ([]LandedRule, error)
-	// grantRequest 非空时，该类型的 grant 请求（request_permission、opsctl grant）与永久
+	// grantRequest 非空时，该类型的 grant 请求（request_permission、opsctl 审批通道）与永久
 	// 规则同一语法、经同一个编解码落库（见 rule_ext.go 的 extensionGrantFor）。只有扩展
 	// 类型设它：内置类型的 grant 请求是命令形状，原样落库。
 	grantRequest func(pattern string) ([]LandedRule, error)
