@@ -59,6 +59,7 @@
 - **分类。** SDK 为工具提供 `PolicyFunc(args) → (action, resource)`，替代或补充固定 `.Policy(action)`。action 必须属于该类型在 `describe()` 中声明的动作集合；resource 为任意字符串（可空）。返回未声明的 action → 视为 NeedConfirm 并记录错误。
 - **规则。** 规则形如 `ext:<type>:<action>` 或 `ext:<type>:<action>:<resource-glob>`，存于现有 CommandPolicy 列与权限组，`opsctl policy allow/deny` 与资产详情策略卡均可编辑；glob 语义与现有命令规则一致。判定顺序：deny → allow → grant → confirm。无 resource 的规则匹配该 action 的任意 resource。
 - **审批展示。** 审批弹窗显示 action、resource 与格式化后的请求（工具名 + 参数，长 JSON 可折叠）。"始终允许"落库的 grant 为 `ext:<type>:<action>:<resource>`。
+- **授权请求。** 对扩展资产的 grant 请求（AI 的 `request_permission`、`opsctl grant`）以 `<action>[:<resource-glob>]` 表达，落库为 `ext:<type>:<action>[:<resource-glob>]`，与规则走同一套校验（action 须属于声明集合）；不合法的请求明确拒绝，不得在 grant 永不命中时告诉调用方"已批准"。扩展的 AI 技能文案按此格式引导。
 - **兼容。** 只用固定 `.Policy(action)` 的已有工具行为不变（resource 为空）。
 
 ## 扩展页面调用闸门
