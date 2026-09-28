@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/app/ai"
+	"github.com/opskat/opskat/internal/app/customtype"
 	"github.com/opskat/opskat/internal/app/etcd"
 	"github.com/opskat/opskat/internal/app/extension"
 	"github.com/opskat/opskat/internal/app/external_edit"
@@ -34,13 +35,14 @@ import (
 
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/assetconn"
-	_ "github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
 	"github.com/opskat/opskat/internal/service/localterm_svc"
@@ -219,6 +221,7 @@ func main() {
 	aiB := ai.New(appCtx, sys, pool)
 	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
+	customtypeB := customtype.New(sys)
 	extB := extension.New(appCtx, sys, pool)
 	externalEditEmitter := external_edit.NewEventEmitter()
 	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
@@ -241,7 +244,13 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB}
+	// 保留类型名：自定义类型标识不能与内置类型重名。扩展系统异步初始化（甚至可能被
+	// OPSKAT_EXTENSIONS=0 禁用），这里先装一份只含内置类型的基线，避免扩展系统禁用
+	// 时创建自定义类型永远报"未注入保留类型名"；扩展加载完成后 initExtensionSystem
+	// 会换成含扩展类型的完整版本。
+	registerReservedTypeNames(nil)
+
+	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, customtypeB, extB, extEditB, ossB}
 	var forceQuit atomic.Bool
 	sys.SetConfirmQuitHandler(func() { forceQuit.Store(true) })
 
@@ -337,7 +346,7 @@ func main() {
 			go pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB,
+			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, customtypeB, extB, extEditB, ossB,
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,
@@ -419,6 +428,9 @@ func initExtensionSystem(
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)
 	opsctlB.SetExtToolExecutor(&bridgeExtExecutor{bridge: extSvc.Bridge})
+	// 扩展系统就绪后，保留类型名换成含已加载扩展类型的完整版本（覆盖 main() 里注册的
+	// 内置类型基线）；闭包在每次 Save 时才求值，扩展异步加载完成也能看到。
+	registerReservedTypeNames(extSvc.Bridge)
 
 	// 接入 snippet 分类注册表
 	if svc := snippet_svc.Snippet(); svc != nil {
@@ -442,6 +454,29 @@ func initExtensionSystem(
 			zap.L().Warn("extension watcher failed", zap.Error(err))
 		}
 	}()
+}
+
+// registerReservedTypeNames 装 custom_type_svc 的保留类型名来源：内置类型
+// （assettype.RegisteredTypes()）与已加载扩展声明的类型（bridge 为 nil 或扩展系统
+// 禁用时只有内置类型）。custom_type_svc 不得 import internal/assettype（避免循环
+// 依赖），保留名只能由调用方（这里是组合根 main.go）注入；闭包在每次创建类型时才
+// 求值，因此扩展异步加载完成后也能看到新类型，不需要重新调用本函数——除非要换掉
+// bridge getter 本身（extSvc 从无到有时）。
+func registerReservedTypeNames(bridge func() *extpkg.Bridge) {
+	custom_type_svc.CustomType().SetReservedNames(func() []string {
+		names := append([]string(nil), assettype.RegisteredTypes()...)
+		if bridge == nil {
+			return names
+		}
+		br := bridge()
+		if br == nil {
+			return names
+		}
+		for _, at := range br.GetAssetTypes() {
+			names = append(names, at.Type)
+		}
+		return names
+	})
 }
 
 // bridgeExtExecutor 把 extension_svc.Service.Bridge() 包装成 opsctl.ExtToolExecutor。

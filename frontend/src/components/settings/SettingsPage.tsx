@@ -21,8 +21,10 @@ import {
   Activity,
   Puzzle,
   PencilLine,
+  Blocks,
 } from "lucide-react";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
+import { CustomTypeSection } from "@/components/settings/CustomTypeSection";
 import { AISettingsSection } from "@/components/settings/AISettingsSection";
 import { ImportSection } from "@/components/settings/ImportSection";
 import { BackupSection } from "@/components/settings/BackupSection";
@@ -79,6 +81,10 @@ export function SettingsPage() {
               <Palette className="h-3.5 w-3.5" />
               {t("nav.appearance")}
             </TabsTrigger>
+            <TabsTrigger value="custom-types" className="gap-1">
+              <Blocks className="h-3.5 w-3.5" />
+              {t("customType.tabTitle")}
+            </TabsTrigger>
             <TabsTrigger value="status" className="gap-1">
               <Activity className="h-3.5 w-3.5" />
               {t("systemStatus.title")}
@@ -134,6 +140,11 @@ export function SettingsPage() {
           {/* Appearance and Language */}
           <TabsContent value="appearance" className="space-y-4">
             <AppearanceSection />
+          </TabsContent>
+
+          {/* Custom types */}
+          <TabsContent value="custom-types" className="space-y-4">
+            <CustomTypeSection />
           </TabsContent>
 
           {/* About & Update */}
