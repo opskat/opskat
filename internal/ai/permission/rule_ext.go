@@ -6,15 +6,17 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/opskat/opskat/internal/ai/policy"
+	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 )
 
 // 扩展提供的资产类型的永久规则落点（opsctl policy allow / deny / rm / show）。
 //
-// 落点是**共用的 CommandPolicy 列**，规则形状 `ext:<policyType>:<action>`——不新增
-// 数据库列、不写 migration，与 cp 面把方向前缀写进同一列（rule_persist.go 的 cpLand）
-// 是同一个做法。policyType 段不能省：一个资产组可以同时挂着多个扩展的资产，而
-// CommandPolicy 只有一列，不带类型段两个扩展的同名动作会串。
+// 每个扩展策略面（manifest 的 policies.type）在运行期注册成一个自己的策略面，与内置
+// 类型"一种策略一列"同构：
+//   - 资产只有一种类型，它的 CommandPolicy 列就是这个类型的策略，规则是裸动作名——
+//     与桌面端详情页写下的形状相同；
+//   - 资产组同时挂着多种类型，扩展的策略落在组的 ext_policy 列里、按策略面名分开，
+//     从不进 shell 的 CommandPolicy，因此 shell 判定不必认识扩展规则。
 //
 // 与内置类型的两点差别，都来自"扩展的策略语言是动作名"：
 //   - 落点校验动作名。扩展声明的动作集是封闭的（manifest 的 policies.actions 由每个
@@ -27,40 +29,57 @@ import (
 // 注册是运行期的：扩展随用户启用/禁用来去，因此重复注册返回错误而不是 panic
 // （与 RegisterDynamicExecutor / RegisterPolicyCheck 一致）。
 
-// extRulePrefix 是一个扩展策略面在共用 CommandPolicy 列里的命名空间前缀。
-func extRulePrefix(policyType string) string {
-	return policy.ExtRulePrefix + policyType + ":"
+// extensionShape 是一个扩展策略面在 holder 上的读写落点。
+func extensionShape(policyType string) *shapeLanding {
+	return newRuleShape(shapeSides[policyent.ExtensionPolicy]{
+		get: func(h policyent.Holder) (*policyent.ExtensionPolicy, error) { return h.GetExtensionPolicy(policyType) },
+		set: func(h policyRWHolder, p *policyent.ExtensionPolicy) error { return h.SetExtensionPolicy(policyType, p) },
+		sides: func(p *policyent.ExtensionPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.ExtensionPolicy { return &policyent.ExtensionPolicy{} },
+	})
 }
 
-// RegisterExtensionRuleSink 为一个扩展提供的资产类型注册永久规则落点。
+// RegisterExtensionRuleSink 为一个扩展提供的资产类型注册永久规则落点及其策略面。
 // actions 是该扩展声明的全部策略动作，落点只接受其中之一。
 func RegisterExtensionRuleSink(canonicalType, policyType string, actions []string) error {
 	if canonicalType == "" || policyType == "" {
 		return fmt.Errorf("permission: invalid extension rule sink registration %q", canonicalType)
 	}
-	prefix := extRulePrefix(policyType)
-	return addRuleSink(canonicalType, &ruleLanding{
-		shape:         commandShape,
+	shape := extensionShape(policyType)
+	if err := addRuleShape(policyType, shape); err != nil {
+		return err
+	}
+	err := addRuleSink(canonicalType, &ruleLanding{
+		shape:         shape,
 		refPolicyType: policyType,
-		// 扩展的权限组 Policy JSON 就是 {allow_list, deny_list}，与 CommandPolicy 的
-		// 两侧同形，因此用同一个形状解码；它的 kind 是 manifest 声明的策略面名，
-		// 不是宿主的策略列，所以 refShape 只能由这里给出。
-		refShape:  commandShape,
-		land:      extLand(prefix, actions),
-		match:     extActionMatch(prefix),
-		ownFilter: func(rule string) bool { return strings.HasPrefix(rule, prefix) },
+		// 扩展权限组的 Policy JSON 就是 {allow_list, deny_list}，与策略面同形。
+		refShape:     shape,
+		runtimeShape: policyType,
+		land:         extLand(actions),
+		match:        func(denyRule, rule string) bool { return strings.TrimSpace(denyRule) == strings.TrimSpace(rule) },
 	})
+	if err != nil {
+		removeRuleShape(policyType)
+	}
+	return err
 }
 
-// UnregisterRuleSink 移除一个运行期注册的永久规则落点（扩展禁用/卸载）。
+// UnregisterRuleSink 移除一个运行期注册的永久规则落点（扩展禁用/卸载），连同随它
+// 注册的策略面。
 func UnregisterRuleSink(canonicalType string) {
 	landingMu.Lock()
-	defer landingMu.Unlock()
+	landing, ok := ruleLandings[canonicalType]
 	delete(ruleLandings, canonicalType)
+	landingMu.Unlock()
+	if ok && landing.runtimeShape != "" {
+		removeRuleShape(landing.runtimeShape)
+	}
 }
 
-// extLand 把一个动作名落成 `ext:<policyType>:<action>`。
-func extLand(prefix string, actions []string) func(pattern string) ([]LandedRule, error) {
+// extLand 校验一个动作名属于该扩展后原样落库。
+func extLand(actions []string) func(pattern string) ([]LandedRule, error) {
 	known := slices.Clone(actions)
 	return func(pattern string) ([]LandedRule, error) {
 		action := strings.TrimSpace(pattern)
@@ -72,21 +91,6 @@ func extLand(prefix string, actions []string) func(pattern string) ([]LandedRule
 				"%q is not a policy action of this extension: extension rules are written per action, not per command (known actions: %s)",
 				pattern, strings.Join(known, ", "))
 		}
-		return []LandedRule{{Rule: prefix + action}}, nil
-	}
-}
-
-// extActionMatch 判定一条 deny 是否遮蔽一条落点：都还原成动作名后全等。
-//
-// 两边形态不同是有原因的：holder 自己那一列的规则带命名空间前缀（同一列还住着别的
-// 类型），而权限组里的规则是裸动作名（一个扩展权限组整体就属于这个策略面，
-// policy.CheckExtensionPolicy 也是拿裸动作名比的）。还原掉前缀，两个来源才用同一
-// 把尺子。
-func extActionMatch(prefix string) func(denyRule, rule string) bool {
-	action := func(s string) string {
-		return strings.TrimPrefix(strings.TrimSpace(s), prefix)
-	}
-	return func(denyRule, rule string) bool {
-		return action(denyRule) == action(rule)
+		return []LandedRule{{Rule: action}}, nil
 	}
 }

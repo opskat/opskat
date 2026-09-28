@@ -39,8 +39,8 @@ var registryMu sync.RWMutex
 
 var permissionTypes = make(map[string]*permissionTypeHandler)
 
-// commandShape 是共用的 CommandPolicy 列。它是包级变量而不是 init 里的局部：运行期
-// 注册进来的扩展类型也把永久规则落在这一列（见 rule_ext.go）。
+// commandShape 是 CommandPolicy 列。它是包级变量而不是 init 里的局部：
+// genericRuleLanding（组通用层）也读这一列。
 var commandShape *shapeLanding
 
 func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {

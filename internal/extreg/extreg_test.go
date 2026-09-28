@@ -15,9 +15,12 @@ import (
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
+	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -320,8 +323,24 @@ func withGrantFixture(t *testing.T, assetID int64, assetType string) context.Con
 // out — permanent extension rules land in that same column.
 func withGrantFixturePolicy(t *testing.T, assetID int64, assetType string, cp *asset_entity.CommandPolicy) context.Context {
 	t.Helper()
+	return withGrantFixturePolicyInGroup(t, assetID, assetType, cp, nil)
+}
+
+// withGrantFixturePolicyInGroup is withGrantFixturePolicy with the asset placed in
+// group (nil = ungrouped), so the policy walk reaches the group's own rules.
+func withGrantFixturePolicyInGroup(t *testing.T, assetID int64, assetType string, cp *asset_entity.CommandPolicy, group *group_entity.Group) context.Context {
+	t.Helper()
 	asset := &asset_entity.Asset{ID: assetID, Name: "acme-1", Type: assetType}
 	require.NoError(t, asset.SetCommandPolicy(cp))
+	if group != nil {
+		asset.GroupID = group.ID
+		ctrl := gomock.NewController(t)
+		mockGroup := mock_group_repo.NewMockGroupRepo(ctrl)
+		mockGroup.EXPECT().Find(gomock.Any(), group.ID).Return(group, nil).AnyTimes()
+		origGroup := group_repo.Group()
+		group_repo.RegisterGroup(mockGroup)
+		t.Cleanup(func() { group_repo.RegisterGroup(origGroup) })
+	}
 
 	origGrant := grant_repo.Grant()
 	grant_repo.RegisterGrant(&stubGrantRepo{})

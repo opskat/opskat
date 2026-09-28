@@ -11,9 +11,8 @@ import (
 )
 
 // ExtensionPolicyRule represents the allow/deny action lists in an extension policy
-// group's Policy JSON — and, with the namespace prefix stripped, a holder's own
-// permanent extension rules, which are stored in the shared CommandPolicy column
-// under the same {allow_list, deny_list} shape.
+// group's Policy JSON — and a holder's own permanent rules on the same policy face,
+// which share the {allow_list, deny_list} shape.
 type ExtensionPolicyRule struct {
 	AllowList []string `json:"allow_list"`
 	DenyList  []string `json:"deny_list"`
@@ -28,7 +27,7 @@ type ExtensionCheck struct {
 	// 得到似是而非的判定。
 	PolicyType string
 	GroupIDs   []string
-	// Own 是 holder 链自身那一列的规则，动作名已还原（去掉 ext:<policyType>: 前缀）。
+	// Own 是 holder 链上各 holder 自身在这个策略面上的规则（动作名）。
 	Own    ExtensionPolicyRule
 	Action string
 }
