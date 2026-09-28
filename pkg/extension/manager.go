@@ -352,7 +352,7 @@ func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Ex
 		return nil, pendingDescriptor{}, fmt.Errorf("read wasm binary: %w", err)
 	}
 
-	skillMD, skillDescription, err := readSkillMD(srcDir, manifest.Name, m.logger)
+	skillMD, skillDescription, err := readSkillMD(srcDir)
 	if err != nil {
 		return nil, pendingDescriptor{}, err
 	}

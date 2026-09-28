@@ -33,10 +33,9 @@ installs.
 
 **`manifest.json` carries the security contract and nothing else** — `name`,
 `version`, `minAppVersion`, `hostABI`, `backend`, `capabilities`. That is what a user
-must be able to audit *before* the code runs, so it can never come from the code. A
-manifest that also declares `tools` / `assetTypes` / `policies` / `frontend` / `i18n` /
-`icon` / `snippets` is **refused at load** with the list of retired keys: those moved
-into `describe()`.
+must be able to audit *before* the code runs, so it can never come from the code.
+Everything else — tools, asset types, policies, pages, display strings — is answered by
+`describe()`.
 
 ```json
 {
@@ -167,10 +166,11 @@ is never declared — the host derives it from the tools.
 
 ## SKILL.md and locales
 
-`SKILL.md` is what the model reads before working with the asset type. Frontmatter is
-optional but recommended: `description` is the one line that appears in the model's
-skill list, and without it the extension's `i18n.description` is used instead. The
-body is injected only when the model actually asks for `help`, and the host appends a
+`SKILL.md` is what the model reads before working with the asset type. It is
+optional, but when present it must open with a frontmatter carrying `description` —
+the one line that appears in the model's skill list (an extension without `SKILL.md`
+falls back to its `i18n.description`); a missing or broken frontmatter fails the load.
+The body is injected only when the model actually asks for `help`, and the host appends a
 tool/parameter reference rendered from the reflected schemas — so document *intent*,
 not flag syntax.
 

@@ -64,13 +64,8 @@ type installedExtension struct {
 }
 
 // scanInstalledExtensions reads every extension directory through the real manifest
-// parser and applies the enabled/disabled state the desktop app persists.
-//
-// It used to hand-roll a second manifest parser (an anonymous struct pulling four
-// fields) that also ignored enabled state, so `opsctl ext list` happily listed
-// extensions the user had switched off and silently accepted manifests the app itself
-// would refuse. Both are the same mistake: a second, laxer reader of a contract that
-// already has one owner.
+// parser and applies the enabled/disabled state the desktop app persists, so it lists
+// exactly what the app would load.
 func scanInstalledExtensions() ([]installedExtension, error) {
 	scanned, err := scanExtensionDirs()
 	if err != nil {
@@ -243,9 +238,8 @@ func delegateExtExec(assetID int64, assetName, command, session string) (string,
 
 // cmdExtDev 把一个未打包的扩展目录装进运行中的桌面应用。
 //
-// 它取代了 cmd/devserver：那是第二套宿主加第二套 UI，一致性只能靠纪律维持，也确实
-// 跑偏过（dev 下曾整个不包能力面）。这里没有旁路——安装、加载、注册全部发生在桌面
-// 进程里那一套代码上，opsctl 只送一个目录路径过去。重跑一次即热重载：Install 会先
+// 扩展开发没有第二套宿主——安装、加载、注册全部发生在桌面进程里那一套代码上，
+// opsctl 只送一个目录路径过去。重跑一次即热重载：Install 会先
 // Unload 旧的再装新的并通知前端刷新，所以 `<build> && opsctl ext dev <dir>` 就是
 // 开发回路。桌面端每次安装都会在 opsctl 审批弹窗里请用户确认；同一目录、同一扩展、
 // 能力不变的重装在桌面进程存活期间免于重复确认（见 internal/app/opsctl/ext_dev.go）。
@@ -319,7 +313,7 @@ button performs, so a dev build loads exactly like a shipped one.
 
 Re-run it after each build; that is the hot-reload loop:
 
-  make -C ../extensions build EXT=oss && opsctl ext dev ../extensions/extensions/oss/dist
+  make build-ext EXT=notebook && opsctl ext dev "$PWD/extensions/notebook/dist"
 
 Point --data-dir (or OPSKAT_DATA_DIR) at the verification sandbox the app is
 running on — see docs/VERIFICATION.md.
@@ -348,7 +342,7 @@ extension. Run 'opsctl help <asset>' to see the tool and flag reference.
 
 Examples:
   opsctl ext list
-  opsctl ext dev ../extensions/extensions/oss/dist
-  opsctl exec my-bucket -- list_objects --bucket=logs --maxKeys=100
+  opsctl ext dev "$PWD/extensions/notebook/dist"
+  opsctl exec my-notes -- note_list
 `)
 }

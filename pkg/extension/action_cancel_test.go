@@ -27,9 +27,7 @@ func TestActionCancellation(t *testing.T) {
 }
 
 // TestInvocationCancellationIsScoped pins the property the instance pool
-// depends on: canceling one running action must not reach any other. The flag
-// used to live on the shared HostProvider, which was only safe while a plugin
-// mutex serialized every call.
+// depends on: canceling one running action must not reach any other.
 func TestInvocationCancellationIsScoped(t *testing.T) {
 	Convey("Given two concurrent invocations of one plugin", t, func() {
 		a := newInvocation("inv-a", NewActionCancellation())

@@ -4,7 +4,6 @@ package extension
 import "encoding/json"
 
 // HostProvider defines the capabilities that the host provides to extensions.
-// Main App and DevServer each provide their own implementation.
 //
 // Every method is stateless with respect to a single call: the runtime owns the
 // per-invocation IO handle table and the action cancellation flag, so a provider

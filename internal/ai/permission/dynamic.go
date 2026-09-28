@@ -13,8 +13,7 @@ import (
 // 导出的理由与 RegisterPolicyCheck 一样：运行期注册进来的类型（扩展提供的资产类型）
 // 的判定函数住在本包之外，而 grant 匹配是**每个** PolicyCheckFunc 在返回 NeedConfirm
 // 之前必须走的最后一步。内置类型的检查函数在本包内直接调 matchGrantForAsset；包外的
-// 检查函数漏掉这一步的后果，正是扩展路径以前的样子：用户点过"始终允许"，下一条同样的
-// 命令还是弹框。
+// 检查函数漏掉这一步，用户点过"始终允许"后下一条同样的命令还是会弹框。
 func MatchGrant(ctx context.Context, assetID int64, command, approvalType string) (aictx.CheckResult, bool) {
 	result := matchGrantForAsset(ctx, assetID, command, approvalType)
 	if result == nil {
@@ -29,7 +28,6 @@ func MatchGrant(ctx context.Context, assetID int64, command, approvalType string
 //
 // 之所以由本包给出：holder 链的走法（policyHoldersForAsset）与永久规则的落点形状
 // （rule_ext.go 的命名空间前缀）都是本包的知识，而扩展的判定函数住在包外。
-// 此前只有权限组这一半，因此 opsctl policy allow 写下的规则没有任何读它的地方。
 func ExtensionPolicyForAsset(ctx context.Context, assetID int64, policyType string) (groups []string, own policy.ExtensionPolicyRule) {
 	asset := resolveAssetForPolicy(ctx, assetID)
 	if asset == nil {

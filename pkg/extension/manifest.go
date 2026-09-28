@@ -17,9 +17,7 @@ import (
 //
 // 2.0 is the reactor contract: the module is a WASI reactor exporting
 // opskat_call / malloc / free, it imports exactly host_call + host_io, and it
-// answers describe(). A 1.x extension satisfies none of those, so it is refused
-// here — at parse time, where the message can name what to do — rather than
-// failing later with a missing export.
+// answers describe().
 const HostABIVersion = "2.0"
 
 // SupportedHostABIs lists all host ABI versions the runtime accepts.
@@ -95,13 +93,6 @@ type manifestFile struct {
 	HostABI       string          `json:"hostABI"`
 	Backend       ManifestBackend `json:"backend"`
 	Capabilities  Capabilities    `json:"capabilities"`
-}
-
-// retiredManifestKeys are the blocks that moved into describe(). A manifest that
-// still carries one is refused rather than silently ignored: a stale block that
-// looks authoritative but is never read is exactly the drift this change removes.
-var retiredManifestKeys = []string{
-	"icon", "i18n", "assetTypes", "tools", "policies", "frontend", "snippets",
 }
 
 // SnippetsDef declares snippet categories and seed snippets contributed by this extension.
@@ -236,20 +227,6 @@ type PageDef struct {
 // Manifest carries no functional face yet — that arrives with (*Manifest).apply
 // once describe() has been read, either from the guest or from the cache.
 func ParseManifest(data []byte) (*Manifest, error) {
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(data, &keys); err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
-	}
-	var retired []string
-	for _, k := range retiredManifestKeys {
-		if _, present := keys[k]; present {
-			retired = append(retired, k)
-		}
-	}
-	if len(retired) > 0 {
-		return nil, fmt.Errorf("manifest: %s moved into describe() — declare them in the guest and rebuild against the reactor SDK", strings.Join(retired, ", "))
-	}
-
 	var f manifestFile
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse manifest: %w", err)

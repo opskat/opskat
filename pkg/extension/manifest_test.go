@@ -44,23 +44,8 @@ func TestParseManifest(t *testing.T) {
 			})
 		})
 
-		Convey("should reject a manifest that still declares what moved into describe()", func() {
-			// Silently ignoring the block is what lets a stale declaration keep looking
-			// authoritative; the extension has to be rebuilt, so say so.
-			for _, key := range retiredManifestKeys {
-				data := []byte(`{"name":"x","version":"1.0.0","hostABI":"2.0",` +
-					`"backend":{"runtime":"wasm","binary":"main.wasm"},"` + key + `":{}}`)
-				_, err := ParseManifest(data)
-				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, key)
-				So(err.Error(), ShouldContainSubstring, "describe()")
-			}
-		})
-
-		Convey("should reject an extension built against the 1.x ABI at parse time", func() {
-			// A 1.x module exports neither opskat_call nor describe(); refusing it here
-			// names the fix instead of surfacing a missing export on first use.
-			data := []byte(`{"name":"x","version":"1.0.0","hostABI":"1.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`)
+		Convey("should reject a host ABI this runtime does not support", func() {
+			data := []byte(`{"name":"x","version":"1.0.0","hostABI":"9.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "hostABI")

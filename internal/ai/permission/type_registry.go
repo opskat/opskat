@@ -82,7 +82,7 @@ func addPermissionType(canonical, approvalType string, grantPatterns GrantPatter
 //
 // 注册进来之后，该类型走的是**同一条** CheckForAsset：NeedConfirm 会经 HandleConfirm
 // 弹审批框，"全部允许"照常落 grant，下一次同类命令由 grant 匹配直接放行。绕开这条路
-// 自己调 ConfirmFunc 的写法（曾经的 ext_exec）恰恰是把 grant 整条丢掉的原因。
+// 自己调 ConfirmFunc 会把 grant 整条丢掉。
 type PolicyCheckFunc func(ctx context.Context, assetID int64, command string) aictx.CheckResult
 
 // RegisterPolicyCheck 注册一个运行期可再移除的资产类型的策略检查。审批面标签取类型名
