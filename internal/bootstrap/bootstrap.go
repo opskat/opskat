@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
@@ -162,6 +163,7 @@ func registerRepositories() {
 	extension_data_repo.RegisterExtensionData(extension_data_repo.NewExtensionData())
 	extension_state_repo.RegisterExtensionState(extension_state_repo.NewExtensionState())
 	snippet_repo.RegisterSnippet(snippet_repo.NewSnippet())
+	custom_type_repo.RegisterCustomType(custom_type_repo.New())
 }
 
 // resolveKDFSalt 从 config.json 获取 salt，不存在则生成并持久化

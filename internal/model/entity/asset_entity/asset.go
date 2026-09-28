@@ -27,6 +27,9 @@ const (
 	AssetTypeVNC      = "vnc"
 	AssetTypeRDP      = "rdp"
 	AssetTypeOSS      = "oss"
+	// AssetTypeGeneric 通用资产：必须基于一个自定义类型（custom_type_entity），
+	// 配置在类型上，资产只存字段值（见 GenericConfig）。
+	AssetTypeGeneric = "generic"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -927,6 +930,8 @@ func (a *Asset) Validate() error {
 		return a.validateVNC()
 	case AssetTypeRDP:
 		return a.validateRDP()
+	case AssetTypeGeneric:
+		return a.validateGeneric()
 	default:
 		// 扩展资产类型由扩展自行校验
 		return nil

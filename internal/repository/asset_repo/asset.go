@@ -34,6 +34,9 @@ type AssetRepo interface {
 	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产
 	// （口径同 CountAgentAuthBySourceID，含 Agent 转发引用）。
 	ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error)
+	// ListByCustomType 列出引用了指定自定义类型（按标识 slug，见
+	// asset_entity.GenericConfig.CustomType）的活动通用资产，按 id 升序。
+	ListByCustomType(ctx context.Context, slug string) ([]*asset_entity.Asset, error)
 }
 
 // ListOptions 列表查询选项
@@ -213,6 +216,17 @@ func (r *assetRepo) CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Conte
 func (r *assetRepo) ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error) {
 	var assets []*asset_entity.Asset
 	if err := agentSourceAssetQuery(ctx, sourceID).Order("id ASC").Find(&assets).Error; err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+func (r *assetRepo) ListByCustomType(ctx context.Context, slug string) ([]*asset_entity.Asset, error) {
+	var assets []*asset_entity.Asset
+	if err := db.Ctx(ctx).
+		Where("status = ? AND type = ?", asset_entity.StatusActive, asset_entity.AssetTypeGeneric).
+		Where("json_extract(config, '$.custom_type') = ?", slug).
+		Order("id ASC").Find(&assets).Error; err != nil {
 		return nil, err
 	}
 	return assets, nil
