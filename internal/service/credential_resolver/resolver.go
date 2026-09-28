@@ -341,6 +341,19 @@ func (r *Resolver) ResolveRedisPassword(ctx context.Context, cfg *asset_entity.R
 	return decrypted, nil
 }
 
+// ResolveRedisSentinelPassword 解密哨兵认证密码。哨兵密码只支持直接输入(加密保存),
+// 与数据节点的密码/托管凭据相互独立。
+func (r *Resolver) ResolveRedisSentinelPassword(cfg *asset_entity.RedisConfig) (string, error) {
+	if cfg.SentinelPassword == "" {
+		return "", nil
+	}
+	decrypted, err := credential_svc.Default().Decrypt(cfg.SentinelPassword)
+	if err != nil {
+		return "", fmt.Errorf("解密 Redis 哨兵密码失败: %w", err)
+	}
+	return decrypted, nil
+}
+
 // ResolveMongoDBPassword 解密 MongoDBConfig 中的密码
 // 优先使用统一凭证，向后兼容内联密码
 func (r *Resolver) ResolveMongoDBPassword(ctx context.Context, cfg *asset_entity.MongoDBConfig) (string, error) {

@@ -30,27 +30,44 @@ func TestOpenWithDialerMSSQLRouted(t *testing.T) {
 }
 
 func TestPgDialConnectorPassesAddr(t *testing.T) {
-	Convey("pgDialConnector 把目标地址透传给 dial", t, func() {
+	Convey("pgDialConnector 把目标网络与地址透传给 dial", t, func() {
 		cfg := &asset_entity.DatabaseConfig{
 			Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433,
 			Username: "u", Database: "d",
 		}
 		_, dsn := buildDSN(cfg, "pw")
-		var gotAddr string
-		connector := newPgDialConnector(dsn, func(ctx context.Context, addr string) (net.Conn, error) {
-			gotAddr = addr
+		var gotNetwork, gotAddr string
+		connector := newPgDialConnector(dsn, func(ctx context.Context, network, addr string) (net.Conn, error) {
+			gotNetwork, gotAddr = network, addr
 			return nil, errors.New("dial-sentinel")
 		})
 		_, err := connector.Connect(context.Background())
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "dial-sentinel")
+		So(gotNetwork, ShouldEqual, "tcp")
 		So(gotAddr, ShouldEqual, "pg.internal:5433")
+	})
+
+	Convey("pgDialConnector 对 unix socket 主机透传 unix 网络(直连本机 PG)", t, func() {
+		_, dsn := buildDSN(&asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverPostgreSQL, Host: "localhost", Port: 5432,
+			Username: "u", Database: "d", Params: "host=/tmp",
+		}, "pw")
+		var gotNetwork, gotAddr string
+		connector := newPgDialConnector(dsn, func(ctx context.Context, network, addr string) (net.Conn, error) {
+			gotNetwork, gotAddr = network, addr
+			return nil, errors.New("dial-sentinel")
+		})
+		_, err := connector.Connect(context.Background())
+		So(err, ShouldNotBeNil)
+		So(gotNetwork, ShouldEqual, "unix")
+		So(gotAddr, ShouldEqual, "/tmp/.s.PGSQL.5432")
 	})
 }
 
 func TestRegisterMySQLDialerUnique(t *testing.T) {
 	Convey("registerMySQLDialer 每次返回唯一注册名", t, func() {
-		dial := func(ctx context.Context, addr string) (net.Conn, error) {
+		dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return nil, errors.New("unused")
 		}
 		n1 := registerMySQLDialer(dial)

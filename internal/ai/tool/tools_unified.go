@@ -34,7 +34,7 @@ func unifiedTools() []tool.Tool {
 				Properties: map[string]*agent.Property{
 					"asset":   {Type: "string", Description: "Target asset id or name. Use list_assets to find it."},
 					"command": {Type: "string", Description: "Command to run, in the syntax for this asset's type — call help first if you don't know it."},
-					"scope":   {Type: "string", Description: "Optional connection-level target that is not part of the command itself: database name for database assets, db index for redis assets. Ignored for other types."},
+					"scope":   {Type: "string", Description: "Optional connection-level target that is not part of the command itself: database name for database assets; for redis assets the db index (standalone/sentinel, default = the asset's db) or, in cluster mode, the node host:port that keyless commands run on. Ignored for other types."},
 					"type":    {Type: "string", Description: "Optional assertion of the asset's canonical type (e.g. \"redis\", \"database\"). Always pass it when the type is known; omit only when genuinely unknown. Not used for dispatch — the protocol always comes from the asset record. A mismatch is reported before anything executes."},
 				},
 				Required: []string{"asset", "command"},

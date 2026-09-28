@@ -49,6 +49,8 @@ interface RedisCreateKeyDialogProps {
   assetId: number;
   db: number;
   dbOptions?: number[];
+  /** Cluster mode has only db0 — hide the database picker and always create in db0. */
+  isCluster?: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (key: string, db: number) => void | Promise<void>;
 }
@@ -78,6 +80,7 @@ export function RedisCreateKeyDialog({
   assetId,
   db,
   dbOptions,
+  isCluster,
   onOpenChange,
   onCreated,
 }: RedisCreateKeyDialogProps) {
@@ -283,21 +286,23 @@ export function RedisCreateKeyDialog({
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{t("query.redisDbIndex")}</label>
-              <Select value={targetDb} onValueChange={setTargetDb} disabled={submitting}>
-                <SelectTrigger className="h-8 w-full text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {dbChoices.map((item) => (
-                    <SelectItem key={item} value={String(item)}>
-                      db{item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {!isCluster && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">{t("query.redisDbIndex")}</label>
+                <Select value={targetDb} onValueChange={setTargetDb} disabled={submitting}>
+                  <SelectTrigger className="h-8 w-full text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {dbChoices.map((item) => (
+                      <SelectItem key={item} value={String(item)}>
+                        db{item}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">{t("query.redisKeyType")}</label>

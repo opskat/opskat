@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/sshpool"
 )
 
@@ -122,13 +123,13 @@ func TestParseHostFromURI(t *testing.T) {
 
 func TestConfigureMongoTransport(t *testing.T) {
 	Convey("configureMongoTransport", t, func() {
-		Convey("直连不设置 dialer", func() {
+		Convey("直连使用统一拨号器", func() {
 			cfg := &asset_entity.MongoDBConfig{Host: "h", Port: 27017}
 			clientOpts := options.Client().ApplyURI(buildMongoURI(cfg, ""))
 			tunnel, err := configureMongoTransport(clientOpts, &asset_entity.Asset{}, cfg, nil)
 			So(err, ShouldBeNil)
 			So(tunnel, ShouldBeNil)
-			So(clientOpts.Dialer, ShouldBeNil)
+			So(clientOpts.Dialer, ShouldHaveSameTypeAs, &netdial.Dialer{})
 			So(clientOpts.Direct, ShouldBeNil)
 		})
 

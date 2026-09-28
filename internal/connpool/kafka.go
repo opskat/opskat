@@ -193,6 +193,30 @@ func DialKafka(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 	return client, nil
 }
 
+// kafkaDefaultDialTimeout 与 kgo 默认 DialTimeout 一致。
+const kafkaDefaultDialTimeout = 10 * time.Second
+
+// kafkaDefaultDial 复刻 kgo 未设置 Dialer 时的默认拨号(net.Dialer{Timeout} + 可选 tls.Dialer,
+// ServerName 缺省取目标 host)。franz-go 禁止 Dialer 与 DialTLSConfig 共存,直连需要自定义
+// Dialer 以分流 .local 地址,非 .local 地址经此保持 kgo 默认行为。
+func kafkaDefaultDial(tlsConfig *tls.Config, timeout time.Duration) networkDialFunc {
+	dialer := &net.Dialer{Timeout: timeout}
+	if tlsConfig == nil {
+		return dialer.DialContext
+	}
+	return func(ctx context.Context, network, host string) (net.Conn, error) {
+		c := tlsConfig.Clone()
+		if c.ServerName == "" {
+			server, _, err := net.SplitHostPort(host)
+			if err != nil {
+				return nil, fmt.Errorf("unable to split host:port for dialing: %w", err)
+			}
+			c.ServerName = server
+		}
+		return (&tls.Dialer{NetDialer: dialer, Config: c}).DialContext(ctx, network, host)
+	}
+}
+
 func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig, password string, sshPool *sshpool.Pool) ([]kgo.Opt, error) {
 	brokers := NormalizeKafkaBrokers(cfg.Brokers)
 	if len(brokers) == 0 {
@@ -203,8 +227,10 @@ func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig,
 		kgo.ClientID(resolveKafkaClientID(cfg)),
 		kgo.DisableClientMetrics(),
 	}
+	dialTimeout := kafkaDefaultDialTimeout
 	if cfg.RequestTimeoutSeconds > 0 {
 		timeout := time.Duration(cfg.RequestTimeoutSeconds) * time.Second
+		dialTimeout = timeout
 		opts = append(opts, kgo.DialTimeout(timeout), kgo.RetryTimeout(timeout), kgo.RequestTimeoutOverhead(timeout))
 	}
 	tunnelID := int64(0)
@@ -225,8 +251,8 @@ func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig,
 	if cfg.ProxyChain == nil && tunnelID > 0 && sshPool == nil {
 		return nil, fmt.Errorf("kafka 配置了 SSH 隧道但 sshPool 不可用")
 	}
-	// 底层拨号:隧道 > 代理 > 直连。franz-go 禁止 Dialer 与 DialTLSConfig 共存,
-	// 自定义拨号时 TLS 在 dialer 内手动包裹(tlsWrappedDialFunc)。
+	// 底层拨号:隧道 > 代理 > 直连。直连按地址分流:.local broker(含 advertised listener)走统一拨号器,
+	// 其余保持 kgo 默认拨号;franz-go 禁止 Dialer 与 DialTLSConfig 共存,TLS 一律在 dialer 内处理。
 	var dial dialContextFunc
 	switch {
 	case cfg.ProxyChain != nil:
@@ -246,11 +272,10 @@ func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig,
 	case cfg.Proxy != nil:
 		dial = proxyDialFunc(cfg.Proxy)
 	}
-	switch {
-	case dial != nil:
+	if dial != nil {
 		opts = append(opts, kgo.Dialer(tlsWrappedDialFunc(dial, tlsConfig)))
-	case cfg.TLS:
-		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
+	} else {
+		opts = append(opts, kgo.Dialer(localAwareDial(directTLSDialer(tlsConfig, dialTimeout), kafkaDefaultDial(tlsConfig, dialTimeout))))
 	}
 	mech := normalizeKafkaSASLMechanism(cfg.SASLMechanism)
 	switch mech {

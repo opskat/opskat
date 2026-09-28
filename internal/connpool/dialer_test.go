@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -95,4 +96,56 @@ func TestWrapTLSClient(t *testing.T) {
 	_, err = io.ReadFull(conn, buf)
 	require.NoError(t, err)
 	assert.Equal(t, msg, buf)
+}
+
+func TestLocalAwareDial(t *testing.T) {
+	errLocal := errors.New("local")
+	errFallback := errors.New("fallback")
+	dial := localAwareDial(
+		func(context.Context, string, string) (net.Conn, error) { return nil, errLocal },
+		func(context.Context, string, string) (net.Conn, error) { return nil, errFallback },
+	)
+
+	t.Run(".local hosts go through the unified dialer", func(t *testing.T) {
+		_, err := dial(context.Background(), "tcp", "node1.corp.local:7001")
+		assert.ErrorIs(t, err, errLocal)
+	})
+
+	t.Run("other hosts keep the driver default dial", func(t *testing.T) {
+		for _, addr := range []string{"10.0.0.1:7001", "node1.corp.example:7001"} {
+			_, err := dial(context.Background(), "tcp", addr)
+			assert.ErrorIs(t, err, errFallback, addr)
+		}
+	})
+}
+
+func TestDirectTLSDialer(t *testing.T) {
+	t.Run("timeout covers the tls handshake like the drivers' default dialers", func(t *testing.T) {
+		// 只接受 TCP、从不应答 TLS 握手的 broker:超时必须覆盖握手,否则拨号永久挂起。
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				t.Cleanup(func() { _ = c.Close() })
+			}
+		}()
+
+		dial := directTLSDialer(&tls.Config{InsecureSkipVerify: true}, 300*time.Millisecond)
+		start := time.Now()
+		_, err = dial(context.Background(), "tcp", ln.Addr().String())
+		require.Error(t, err)
+		assert.Less(t, time.Since(start), 2*time.Second)
+	})
+
+	t.Run("plaintext dials the broker address", func(t *testing.T) {
+		echo := socksdialtest.StartEcho(t)
+		conn, err := directTLSDialer(nil, time.Second)(context.Background(), "tcp", echo)
+		require.NoError(t, err)
+		_ = conn.Close()
+	})
 }

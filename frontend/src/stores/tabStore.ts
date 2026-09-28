@@ -32,6 +32,8 @@ export interface QueryTabMeta {
   redisDatabase?: number;
   redisScanPageSize?: number;
   redisKeySeparator?: string;
+  /** Redis deployment mode from the asset config (`mode`); absent/undefined means standalone. */
+  redisMode?: "standalone" | "cluster" | "sentinel";
 }
 
 export interface PageTabMeta {

@@ -45,14 +45,20 @@ func NewSSHTunnel(sshAssetID int64, host string, port int, pool *sshpool.Pool) *
 	}
 }
 
-// Dial 通过 SSH 转发获得到目标地址的 net.Conn。
-// 每条连接独立持有 SSH 池引用，连接关闭时自动释放。
+// Dial 通过 SSH 转发获得到建隧道时配置的目标地址的 net.Conn。
 func (t *SSHTunnel) Dial(ctx context.Context) (net.Conn, error) {
+	return t.DialAddr(ctx, t.targetAddr)
+}
+
+// DialAddr 通过 SSH 转发获得到 addr 的 net.Conn,用于目标由驱动动态决定的场景
+// (Redis 集群自动发现的节点、哨兵返回的主节点)。
+// 每条连接独立持有 SSH 池引用，连接关闭时自动释放。
+func (t *SSHTunnel) DialAddr(ctx context.Context, addr string) (net.Conn, error) {
 	sshClient, err := t.pool.Get(ctx, t.sshAssetID)
 	if err != nil {
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	conn, err := sshClient.Dial("tcp", t.targetAddr)
+	conn, err := sshClient.Dial("tcp", addr)
 	if err != nil {
 		t.pool.Release(t.sshAssetID)
 		return nil, fmt.Errorf("SSH 隧道建立失败: %w", err)

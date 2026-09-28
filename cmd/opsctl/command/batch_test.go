@@ -160,6 +160,18 @@ func TestBatchInputJSON(t *testing.T) {
 			So(input.Commands[0].Type, ShouldEqual, "")
 		})
 
+		Convey("scope is optional and decodes when present", func() {
+			data := `{"commands":[
+				{"asset":"cache","type":"redis","command":"DBSIZE","scope":"10.0.0.1:6379"},
+				{"asset":"cache","type":"redis","command":"PING"}
+			]}`
+			var input batchInput
+			err := json.Unmarshal([]byte(data), &input)
+			So(err, ShouldBeNil)
+			So(input.Commands[0].Scope, ShouldEqual, "10.0.0.1:6379")
+			So(input.Commands[1].Scope, ShouldEqual, "")
+		})
+
 		Convey("empty commands", func() {
 			data := `{"commands":[]}`
 			var input batchInput
@@ -305,6 +317,32 @@ func TestExecuteBatchItem_DefaultDispatchesByRealType(t *testing.T) {
 		So(called, ShouldBeTrue)
 		So(result.Error, ShouldBeEmpty)
 		So(result.ExitCode, ShouldEqual, 0)
+	})
+}
+
+// TestExecuteBatchItem_ScopePassedToHandler 锁住 batch 条目的 scope 字段原样透传给统一
+// exec handler，与 opsctl exec 的 --scope（exec_test.go 的 TestCmdExec_ScopePassedToHandler）
+// 同一份契约——handleExec 按资产类型解释它，batch 侧不重新解析。
+func TestExecuteBatchItem_ScopePassedToHandler(t *testing.T) {
+	Convey("resolvedBatchCmd.scope 透传进 handler 的 args[scope]", t, func() {
+		var gotArgs map[string]any
+		handlers := map[string]tool.ToolHandlerFunc{
+			"exec": func(_ context.Context, args map[string]any) (string, error) {
+				gotArgs = args
+				return `{"result":"1"}`, nil
+			},
+		}
+		cmd := resolvedBatchCmd{
+			asset:   &asset_entity.Asset{ID: 7, Name: "cache", Type: asset_entity.AssetTypeRedis},
+			cmdType: "redis",
+			command: "DBSIZE",
+			scope:   "10.0.0.1:6379",
+		}
+
+		result := executeBatchItem(context.Background(), handlers, cmd)
+
+		So(result.Error, ShouldBeEmpty)
+		So(gotArgs["scope"], ShouldEqual, "10.0.0.1:6379")
 	})
 }
 
@@ -788,5 +826,56 @@ func TestCmdBatch_SSHDenyAuditCommandStaysRaw(t *testing.T) {
 
 		got := effectiveAuditCommand(t, mockAudit.lastCall())
 		So(got, ShouldEqual, command)
+	})
+}
+
+// runBatchWithStdinJSON feeds body to os.Stdin (piped, not a terminal — parseBatchInput
+// switches to JSON mode only then) and runs cmdBatch with empty positional args, the same
+// os.Pipe dance TestParseBatchInputRejectsArgsWithPipedStdin (extra_args_test.go) uses for
+// stdin and runBatchCapturingStdout uses for stdout.
+func runBatchWithStdinJSON(t *testing.T, ctx context.Context, handlers map[string]tool.ToolHandlerFunc, body, session string) (int, batchOutput) {
+	t.Helper()
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe (stdin): %v", err)
+	}
+	if _, err := inW.WriteString(body); err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+	if err := inW.Close(); err != nil {
+		t.Fatalf("close stdin writer: %v", err)
+	}
+	origStdin := os.Stdin
+	os.Stdin = inR
+	t.Cleanup(func() { os.Stdin = origStdin })
+
+	return runBatchCapturingStdout(t, ctx, handlers, nil, session)
+}
+
+// TestCmdBatch_ScopeOnNonRedisAssetFailsThatItemOnly 锁住 batch JSON 条目的 scope 字段
+// 语义与 opsctl exec 的 --scope 完全一致（spec opsctl 一节："JSON 条目支持可选 scope
+// 字段，语义同上"）：非 redis 资产给出 scope 必须失败，但只失败那一条，其余条目照常跑，
+// 与 Step 2 已有的 resolve/assert 失败隔离行为一致（见
+// TestCmdBatch_ResolveFailureDoesNotAbortWholeBatch）。
+func TestCmdBatch_ScopeOnNonRedisAssetFailsThatItemOnly(t *testing.T) {
+	Convey("非 redis 资产的 scope 字段只让那一条失败", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		sshAsset := &asset_entity.Asset{ID: 601, Name: "web-batch-scope", Type: asset_entity.AssetTypeSSH}
+		batchTestAsset(t, ctrl, sshAsset)
+
+		handlers := map[string]tool.ToolHandlerFunc{
+			"exec": func(_ context.Context, _ map[string]any) (string, error) {
+				return `{"ok":true}`, nil
+			},
+		}
+
+		body := `{"commands":[{"asset":"601","type":"ssh","command":"uptime","scope":"6379"}]}`
+		code, output := runBatchWithStdinJSON(t, context.Background(), handlers, body, "")
+
+		So(code, ShouldEqual, 1) // the only entry fails
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldContainSubstring, "--scope")
+		So(output.Results[0].Error, ShouldContainSubstring, "redis")
 	})
 }

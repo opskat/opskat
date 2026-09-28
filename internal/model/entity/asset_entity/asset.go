@@ -213,8 +213,10 @@ type DatabaseConfig struct {
 
 // RedisConfig Redis类型的特定配置
 type RedisConfig struct {
-	Host                  string            `json:"host"`
-	Port                  int               `json:"port"`
+	// omitempty: 集群/哨兵模式不用 host/port(KeepModeFieldsOnly 清成零值),存储的 config
+	// 不应带上这两个空键;单机模式下 host/port 恒非零,依旧照常写出。
+	Host                  string            `json:"host,omitempty"`
+	Port                  int               `json:"port,omitempty"`
 	Username              string            `json:"username,omitempty"`
 	Password              string            `json:"password,omitempty"`
 	CredentialID          int64             `json:"credential_id,omitempty"`           // 统一凭证 ID（密码）
@@ -231,6 +233,14 @@ type RedisConfig struct {
 	SSHAssetID            int64             `json:"ssh_asset_id,omitempty"`            // Deprecated: use Asset.SSHTunnelID
 	Proxy                 *ProxyConfig      `json:"proxy,omitempty"`                   // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 	ProxyChain            *ProxyChainConfig `json:"proxy_chain,omitempty"`
+
+	// 部署模式相关字段;Mode 为空按单机处理(旧资产无此字段)。
+	Mode             string            `json:"mode,omitempty"`              // standalone / cluster / sentinel
+	Nodes            []string          `json:"nodes,omitempty"`             // 集群种子节点或哨兵节点 host:port
+	MasterName       string            `json:"master_name,omitempty"`       // 哨兵监控的主节点名称
+	SentinelUsername string            `json:"sentinel_username,omitempty"` // 哨兵认证用户名
+	SentinelPassword string            `json:"sentinel_password,omitempty"` // 哨兵认证密码(AES-256-GCM 密文)
+	NodeAddressMap   map[string]string `json:"node_address_map,omitempty"`  // 宣告地址 → 实际地址
 }
 
 // EtcdConfig etcd类型的特定配置
@@ -1022,11 +1032,8 @@ func (a *Asset) validateRedis() error {
 	if err != nil {
 		return fmt.Errorf("redis配置无效: %w", err)
 	}
-	if cfg.Host == "" {
-		return errors.New("Redis主机地址不能为空")
-	}
-	if cfg.Port <= 0 {
-		return errors.New("Redis端口无效")
+	if err := cfg.ValidateMode(); err != nil {
+		return err
 	}
 	return ValidateProxyChain(EffectiveProxyChain(cfg.ProxyChain, firstNonZero(a.SSHTunnelID, cfg.SSHAssetID), cfg.Proxy))
 }
@@ -1259,7 +1266,7 @@ func (a *Asset) CanConnect() bool {
 		if err != nil {
 			return false
 		}
-		return cfg.Host != "" && cfg.Port > 0
+		return cfg.ValidateMode() == nil
 	case AssetTypeMongoDB:
 		cfg, err := a.GetMongoDBConfig()
 		if err != nil {

@@ -57,20 +57,23 @@ func setStringValue(ctx context.Context, exec redisExecutor, req RedisStringSetR
 	return nil
 }
 
-func deleteKeys(ctx context.Context, exec redisExecutor, keys []string) error {
+func deleteKeys(ctx context.Context, exec redisExecutor, keys []string) (RedisDeleteResult, error) {
 	if len(keys) == 0 {
-		return nil
+		return RedisDeleteResult{}, nil
+	}
+	if _, ok := exec.(clusterExecutor); ok {
+		return deleteKeysEach(ctx, exec, keys), nil
 	}
 	args := make([]any, 0, len(keys)+1)
 	args = append(args, "DEL")
 	for _, key := range keys {
 		args = append(args, key)
 	}
-	_, err := exec.Do(ctx, args...)
+	result, err := exec.Do(ctx, args...)
 	if err != nil {
-		return fmt.Errorf("delete Redis keys: %w", err)
+		return RedisDeleteResult{}, fmt.Errorf("delete Redis keys: %w", err)
 	}
-	return nil
+	return RedisDeleteResult{Deleted: toInt64(result)}, nil
 }
 
 func hashSet(ctx context.Context, exec redisExecutor, key, field, value string) error {

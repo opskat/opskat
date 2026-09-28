@@ -249,6 +249,14 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 								cfg.Password = encrypted
 							}
 						}
+						if data.IncludesCredentials && cfg.SentinelPassword != "" && crypto != nil {
+							encrypted, encErr := crypto.Encrypt(cfg.SentinelPassword)
+							if encErr != nil {
+								logger.Default().Warn("re-encrypt redis sentinel password", zap.Error(encErr))
+							} else {
+								cfg.SentinelPassword = encrypted
+							}
+						}
 						if err := a.SetRedisConfig(cfg); err != nil {
 							logger.Default().Warn("set redis config in import", zap.Error(err))
 						}

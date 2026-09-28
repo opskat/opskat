@@ -10,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/app/sshadapt"
 	"github.com/opskat/opskat/internal/model/entity/forward_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/service/forward_svc"
 
@@ -349,7 +350,7 @@ func startRemoteForward(ctx context.Context, client *ssh.Client, rule *forward_e
 			}
 			go func() {
 				local := net.JoinHostPort(rule.LocalHost, fmt.Sprintf("%d", rule.LocalPort))
-				lconn, err := net.Dial("tcp", local)
+				lconn, err := (&netdial.Dialer{}).DialContext(ctx, "tcp", local)
 				if err != nil {
 					if closeErr := conn.Close(); closeErr != nil {
 						logger.Default().Warn("close conn", zap.Error(closeErr))

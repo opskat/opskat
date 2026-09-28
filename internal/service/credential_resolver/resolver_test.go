@@ -109,3 +109,23 @@ func TestResolveMongoDBPassword(t *testing.T) {
 		})
 	})
 }
+
+func TestResolveRedisSentinelPassword(t *testing.T) {
+	svc := setupCredentialSvc(t)
+	r := Default()
+
+	password, err := r.ResolveRedisSentinelPassword(&asset_entity.RedisConfig{})
+	assert.NoError(t, err)
+	assert.Equal(t, "", password)
+
+	encrypted, err := svc.Encrypt("sentinel-secret")
+	assert.NoError(t, err)
+	// 哨兵密码独立于数据节点密码/托管凭据,只取 SentinelPassword。
+	password, err = r.ResolveRedisSentinelPassword(&asset_entity.RedisConfig{SentinelPassword: encrypted, CredentialID: 7})
+	assert.NoError(t, err)
+	assert.Equal(t, "sentinel-secret", password)
+
+	_, err = r.ResolveRedisSentinelPassword(&asset_entity.RedisConfig{SentinelPassword: "not-encrypted"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "哨兵密码")
+}

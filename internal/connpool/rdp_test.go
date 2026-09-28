@@ -23,11 +23,15 @@ func (d failingPoolDialer) DialAsset(context.Context, int64) (*ssh.Client, []io.
 	return nil, nil, d.err
 }
 
-func TestRDPDialContextDirectReturnsNil(t *testing.T) {
+func TestRDPDialContextDirectDialsTarget(t *testing.T) {
+	echo := socksdialtest.StartEcho(t)
 	dial, err := RDPDialContext(context.Background(), 0, &asset_entity.RDPConfig{Host: "h", Port: 3389}, nil)
-
 	require.NoError(t, err)
-	assert.Nil(t, dial)
+	require.NotNil(t, dial)
+
+	conn, err := dial(context.Background(), "tcp", echo)
+	require.NoError(t, err)
+	_ = conn.Close()
 }
 
 func TestRDPDialContextProxyRoutesViaSocks(t *testing.T) {

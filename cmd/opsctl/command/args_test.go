@@ -58,35 +58,41 @@ func TestHoistGlobalFlags(t *testing.T) {
 
 func TestParseExecArgs(t *testing.T) {
 	cases := []struct {
-		name     string
-		args     []string
-		wantType string
-		wantCmd  string
+		name      string
+		args      []string
+		wantType  string
+		wantScope string
+		wantCmd   string
 	}{
-		{"-- 分隔", []string{"--", "echo", "hi"}, "", "echo hi"},
-		{"无 --", []string{"uptime", "-a"}, "", "uptime -a"},
-		{"--type 断言", []string{"--type", "ssh", "--", "ls"}, "ssh", "ls"},
-		{"--type= 形式", []string{"--type=redis", "GET", "k"}, "redis", "GET k"},
-		{"远端命令里的 --type 属于命令（无 --）", []string{"find", "/", "--type", "f"}, "", "find / --type f"},
-		{"-- 之后的 -- 属于命令", []string{"--", "echo", "--", "x"}, "", "echo -- x"},
+		{"-- 分隔", []string{"--", "echo", "hi"}, "", "", "echo hi"},
+		{"无 --", []string{"uptime", "-a"}, "", "", "uptime -a"},
+		{"--type 断言", []string{"--type", "ssh", "--", "ls"}, "ssh", "", "ls"},
+		{"--type= 形式", []string{"--type=redis", "GET", "k"}, "redis", "", "GET k"},
+		{"远端命令里的 --type 属于命令（无 --）", []string{"find", "/", "--type", "f"}, "", "", "find / --type f"},
+		{"-- 之后的 -- 属于命令", []string{"--", "echo", "--", "x"}, "", "", "echo -- x"},
+		{"--scope 断言", []string{"--scope", "10.0.0.1:6379", "--", "DBSIZE"}, "", "10.0.0.1:6379", "DBSIZE"},
+		{"--scope= 形式", []string{"--scope=0", "GET", "k"}, "", "0", "GET k"},
+		{"--type 与 --scope 混写", []string{"--type", "redis", "--scope", "1", "--", "GET", "k"}, "redis", "1", "GET k"},
+		{"远端命令里的 --scope 属于命令（无 --）", []string{"find", "/", "--scope", "f"}, "", "", "find / --scope f"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			declared, cmd, err := parseExecArgs(tc.args)
+			declared, scope, cmd, err := parseExecArgs(tc.args)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantType, declared)
+			require.Equal(t, tc.wantScope, scope)
 			require.Equal(t, tc.wantCmd, cmd)
 		})
 	}
 
 	t.Run("命令前的未知 flag 报错，而不是静默丢弃或发往远端", func(t *testing.T) {
-		_, _, err := parseExecArgs([]string{"--bogus", "1", "--", "ls"})
+		_, _, _, err := parseExecArgs([]string{"--bogus", "1", "--", "ls"})
 		require.ErrorContains(t, err, "--bogus")
-		_, _, err = parseExecArgs([]string{"--bogus", "ls"})
+		_, _, _, err = parseExecArgs([]string{"--bogus", "ls"})
 		require.ErrorContains(t, err, "--bogus")
 	})
 	t.Run("--type 缺值报错", func(t *testing.T) {
-		_, _, err := parseExecArgs([]string{"--type"})
+		_, _, _, err := parseExecArgs([]string{"--type"})
 		require.ErrorContains(t, err, "--type")
 	})
 	t.Run("本地 shell 吃掉的词边界在下游重新切分后仍在", func(t *testing.T) {
@@ -96,7 +102,7 @@ func TestParseExecArgs(t *testing.T) {
 			{"grep", "foo bar", "file"},
 			{"note_put", "--content=restart via systemctl"},
 		} {
-			_, cmd, err := parseExecArgs(append([]string{"--"}, argv...))
+			_, _, cmd, err := parseExecArgs(append([]string{"--"}, argv...))
 			require.NoError(t, err)
 			words, err := cmdline.Words(cmd)
 			require.NoError(t, err)
@@ -104,26 +110,30 @@ func TestParseExecArgs(t *testing.T) {
 		}
 	})
 	t.Run("不含空白的词原样保留，glob 仍交给远端 shell", func(t *testing.T) {
-		_, cmd, err := parseExecArgs([]string{"--", "ls", "*.log"})
+		_, _, cmd, err := parseExecArgs([]string{"--", "ls", "*.log"})
 		require.NoError(t, err)
 		require.Equal(t, "ls *.log", cmd)
-		_, cmd, err = parseExecArgs([]string{"--", "grep", "foo bar", "*.log"})
+		_, _, cmd, err = parseExecArgs([]string{"--", "grep", "foo bar", "*.log"})
 		require.NoError(t, err)
 		require.Equal(t, "grep 'foo bar' *.log", cmd)
 	})
 	t.Run("单个词就是命令串本身，不加引号", func(t *testing.T) {
 		// `opsctl exec prod-db -- "SELECT * FROM t"` 是所有 DSL 的文档用法。
-		_, cmd, err := parseExecArgs([]string{"--", "SELECT * FROM users"})
+		_, _, cmd, err := parseExecArgs([]string{"--", "SELECT * FROM users"})
 		require.NoError(t, err)
 		require.Equal(t, "SELECT * FROM users", cmd)
-		_, cmd, err = parseExecArgs([]string{"ls | wc -l"})
+		_, _, cmd, err = parseExecArgs([]string{"ls | wc -l"})
 		require.NoError(t, err)
 		require.Equal(t, "ls | wc -l", cmd)
 	})
+	t.Run("--scope 缺值报错", func(t *testing.T) {
+		_, _, _, err := parseExecArgs([]string{"--scope"})
+		require.ErrorContains(t, err, "--scope")
+	})
 	t.Run("没有命令时报错", func(t *testing.T) {
-		_, _, err := parseExecArgs([]string{"--"})
+		_, _, _, err := parseExecArgs([]string{"--"})
 		require.Error(t, err)
-		_, _, err = parseExecArgs(nil)
+		_, _, _, err = parseExecArgs(nil)
 		require.Error(t, err)
 	})
 }

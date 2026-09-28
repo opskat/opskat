@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -102,6 +103,25 @@ func TestWriteRemoteFailure_MFARequiredIsStructuredRefusal(t *testing.T) {
 		&sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires keyboard-interactive but no interactive caller is available"}))
 	assert.Equal(t, 1, code, "a dial opsctl cannot answer is not NEEDS MFA")
 	assert.True(t, strings.HasPrefix(out.String(), "Error: "))
+}
+
+// 集群缺节点的错误（helper.RedisNodeRequiredError）已经列出当前主节点，但那条消息是
+// AI/opsctl/桌面控制台共用的 helper 级文案，不认识 opsctl 的 --scope 标志（spec opsctl
+// 一节："集群缺少节点时退出码 1，stderr 给出主节点列表与 --scope 用法"）。
+// writeRemoteFailure 是 cmdExec 通往统一 exec handler 那条路径（callHandler）的唯一
+// 出口，跟 needsMFA 用的是同一种"识别特定错误类型再追加文案"手法——不按资产类型
+// 字符串分支，只认错误类型。
+func TestWriteRemoteFailure_RedisNodeRequiredErrorShowsScopeUsage(t *testing.T) {
+	err := &helper.RedisNodeRequiredError{Command: "DBSIZE", Masters: []string{"10.0.0.1:6379", "10.0.0.2:6379"}}
+
+	var out bytes.Buffer
+	code := writeRemoteFailure(&out, err)
+
+	assert.Equal(t, 1, code, "not a structured refusal")
+	assert.Contains(t, out.String(), "10.0.0.1:6379")
+	assert.Contains(t, out.String(), "10.0.0.2:6379")
+	assert.Contains(t, out.String(), "--scope")
+	assert.Contains(t, out.String(), "host:port")
 }
 
 func TestResolveMFACode_FlagBeatsEnv(t *testing.T) {
