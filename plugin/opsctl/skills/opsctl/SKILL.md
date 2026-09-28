@@ -5,7 +5,7 @@ description: "opskat CLI for asset management and remote operations (SSH, databa
 
 # opsctl CLI Tool
 
-Standalone CLI for asset management and remote operations without the GUI. All managed assets are stored in the desktop app — use `list`/`get` to discover targets and `help <asset-or-type>` for the registered type's current config/command contract. `create asset --help` discovers the registered built-in type set at runtime; do not maintain a separate supported-type list in automation.
+Standalone CLI for asset management and remote operations without the GUI. All managed assets are stored in the desktop app — use `list`/`get` to discover targets and `help <asset-or-type>` for the registered type's current config/command contract. `create asset --help` discovers the registered built-in type set at runtime; do not maintain a separate supported-type list in automation. Users can also define their own **custom types** in the desktop app (an internal HTTP API, a local CLI, …) and build assets on them — a custom type's slug works as `help <slug>` and as `create`/`update asset --type <slug>`, the same as a built-in type name. A custom type's slug is not yet a valid `exec --type` assertion or batch type prefix — those are for the built-in asset types only. **Always run `opsctl help <asset-or-type>` before the first `create`/`update`/`exec` against a type in a session** — for a custom type there is no other way to learn its field names, secret/required attributes, or (once wired up) its request syntax.
 
 ## Global Flags
 
@@ -50,10 +50,20 @@ Minimize output to save context window:
 ## Generic Asset Creation and Credentials
 
 `opsctl create asset --name <name> --type <type> --config '<JSON object>'` accepts every
-registered built-in type. Use `--config-file <path>` instead for a JSON object file; the two
-inputs are mutually exclusive. Existing convenience flags (`--host`, `--port`, `--username`,
-`--driver`, K8s flags, etc.) remain compatible, and only explicitly supplied flags override
-non-secret config keys. Run `opsctl help <type>` for exact accepted fields and defaults.
+registered built-in type, and also a user-defined custom type's slug (e.g. `--type
+grafana`) — that creates a **generic asset**, stored as type `generic` but referenced
+everywhere by its custom type's slug. Use `--config-file <path>` instead for a JSON object
+file; the two inputs are mutually exclusive. Existing convenience flags (`--host`,
+`--port`, `--username`, `--driver`, K8s flags, etc.) remain compatible, and only explicitly
+supplied flags override non-secret config keys. Run `opsctl help <type>` for exact accepted
+fields and defaults — for a custom type, `--config`'s keys are exactly that type's field
+names, and there is no other way to learn them (custom types themselves are desktop-only;
+opsctl never lists or defines their structure on its own).
+
+`--secret <field>` (repeatable) types one write-only config field's value in the terminal
+without echo, instead of putting it in `--config` — useful for a custom type's secret
+fields, and for a built-in type's own (e.g. Redis's `sentinel_password`). Same TTY
+requirement as bare `--password` below; also available on `update asset`.
 
 `--password` is the only plaintext flag. Written bare it reads the secret from an
 interactive terminal without echo — **you cannot use that form**, because an agent session

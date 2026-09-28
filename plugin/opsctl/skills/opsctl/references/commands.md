@@ -114,6 +114,19 @@ opsctl help 1
 opsctl help kafka
 ```
 
+**Custom types**: a custom type's slug (e.g. `grafana`) works the same way as a
+canonical type name — pass it directly, or pass an existing asset built on that
+type. The output is the `generic` doc (shared `put_asset` / `create asset` /
+`--secret` syntax and policy shape for every custom type) plus that type's own
+structure: exec mode, Base URL or command template, auth/env bindings, and the
+field list with secret/required/default. Asking for a specific generic asset
+adds that instance's field values (secret fields report only "set", never the
+value), its rendered actual address, SSH tunnel, and Description. Always run
+`opsctl help <asset-or-type>` before the first `exec` / `create asset` /
+`update asset` against a custom type in a session — the exact field names,
+required/secret attributes, and (for HTTP types) the request syntax all live
+there, not in this reference.
+
 ## exec
 
 ### `exec <asset> [--type <type>] [--scope <db|host:port>] [--] <command>`
@@ -250,10 +263,17 @@ JSON input mode for a redis item that needs one.
 
 ### `create asset [flags]`
 
-Create any registered built-in asset type. `--name` is required; `--type` defaults to `ssh`.
-The selected registered handler owns accepted fields, required combinations, and defaults.
-`opsctl create asset --help` prints the current registered types; `opsctl help <type>` prints
-the exact config contract. Unknown config keys fail before approval.
+Create any registered built-in asset type, or a generic asset on a user-defined custom
+type. `--name` is required; `--type` defaults to `ssh`. The selected registered handler
+owns accepted fields, required combinations, and defaults. `opsctl create asset --help`
+prints the current registered types; `opsctl help <type>` prints the exact config
+contract. Unknown config keys fail before approval.
+
+**Custom types**: pass a custom type's slug as `--type` (e.g. `--type grafana`) to create
+a generic asset on it. `--config` keys are that type's field names — run `opsctl help
+<slug>` first to learn them; there is no separate "generic" `--type` value to pass. Custom
+types themselves (defined, changed, deleted, imported, exported) are desktop-only — opsctl
+only creates/updates the assets built on them.
 
 **Generic config**:
 - `--config '<JSON object>'` — Type-owned config object
@@ -261,6 +281,13 @@ the exact config contract. Unknown config keys fail before approval.
 
 **Authentication**:
 - `--credential-id <id>` — Reuse an existing managed credential after type/auth validation
+- `--secret <field>` (repeatable) — Type that field's value in the terminal without echo,
+  instead of putting it in `--config`. Valid for any of the type's write-only config
+  fields — a custom type's secret fields, or a built-in type's own (e.g. Redis's
+  `sentinel_password`). Same TTY requirement as bare `--password`: without an interactive
+  terminal opsctl exits with code 3 and `NEEDS TTY`, so an agent session cannot use it —
+  hand the command to the user, or reference a managed credential
+  (`{"credential_id": N}` inline in `--config`) instead.
 - `--password` (bare) — Reads the plaintext from an interactive terminal without echo. Needs a TTY:
   without one the command exits with code 3 and a `NEEDS TTY` marker, so an agent session cannot use it —
   hand the command to the user to run themselves instead
@@ -360,6 +387,12 @@ plaintext secret, whether it arrived via a convenience flag or `--config`.
   (see `create asset`'s `--type redis` deployment mode section for the field rules — they are
   identical for update)
 - `--config-file <path>` — File containing that JSON object; mutually exclusive with `--config`
+- `--secret <field>` (repeatable) — Type that write-only field's new value in the terminal
+  without echo, instead of putting it in `--config`; same TTY requirement as bare
+  `--password`. On a generic asset (`--type <slug>` as an assertion, if given), this is
+  the way to rotate one of the type's secret fields without touching its other stored
+  values — a partial `--config` already leaves unlisted fields untouched, `--secret`
+  extends that to secret fields typed interactively.
 
 `--host`/`--port`/`--username` only override matching keys already present in `--config`/
 `--config-file`; fields the JSON doesn't set are left as they were before the call.
@@ -370,6 +403,7 @@ opsctl update asset 1 --host 192.168.1.100 --port 2222
 opsctl update asset 1 --icon kubernetes
 opsctl update asset cache --config '{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379","10.0.0.3:6379"]}'
 opsctl update asset cache --config '{"sentinel_password":"'"$SENTINEL_PASSWORD"'"}'
+opsctl update asset grafana-prod --secret token
 ```
 
 ### `update group <group> [flags]`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/conversation_entity"
 	"github.com/opskat/opskat/internal/service/ai_provider_svc"
 	"github.com/opskat/opskat/internal/service/conversation_svc"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/app/coding"
@@ -70,6 +72,28 @@ func allBuiltinAssetTypeSkills() map[string]string {
 			out[assetType] = desc
 		}
 	}
+	return out
+}
+
+// definedCustomTypeSummaries returns slug+name pairs for every currently defined custom
+// type, sorted by slug, for PromptBuilder.SetCustomTypes — the "Defined custom types"
+// discovery section of the skill list (spec "帮助、技能与门禁"). Like
+// allBuiltinAssetTypeSkills it is a pure discovery aid, not a doc-gate signal.
+//
+// A listing failure degrades to an empty (nil) result instead of failing the whole
+// prompt build / Send call: the custom-type list is a convenience for the model to spot
+// slugs it has never seen an asset of, not a required part of the system prompt.
+func definedCustomTypeSummaries(ctx context.Context) []runner.CustomTypeSummary {
+	types, err := custom_type_svc.CustomType().List(ctx)
+	if err != nil {
+		logger.Default().Warn("list custom types for system prompt", zap.Error(err))
+		return nil
+	}
+	out := make([]runner.CustomTypeSummary, 0, len(types))
+	for _, ct := range types {
+		out = append(out, runner.CustomTypeSummary{Slug: ct.Slug, Name: ct.Name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
 	return out
 }
 
@@ -477,6 +501,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	// thing that satisfies the gate is an explicit help(asset) call, handled inside
 	// handleHelp (internal/ai/tool/tool_handlers_unified.go).
 	builder.SetAssetTypeSkills(allBuiltinAssetTypeSkills())
+	builder.SetCustomTypes(definedCustomTypeSummaries(ctx))
 
 	systemPrompt := builder.Build()
 

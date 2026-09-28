@@ -6,14 +6,19 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 )
 
@@ -57,6 +62,19 @@ func setupUnified(t *testing.T) *mock_asset_repo.MockAssetRepo {
 			asset_repo.RegisterAsset(orig)
 		}
 	})
+
+	// 没有自定义类型：helpForTypeName 在静态注册类型名不命中后，会把 ref 当自定义类型
+	// 标识查 custom_type_svc（本任务新增的回落，见 tool_handlers_unified.go）。在真实
+	// 运行环境里 custom_type_repo 总是由 bootstrap 注册好，这里同样注册一个总是报
+	// "未找到" 的假实现，让这批不关心自定义类型的测试保持原有行为（未命中任何静态类型
+	// 名 == 真的没有这个类型），而不是在 nil 的默认仓储上 panic。与 setupCRUD 的同一
+	// 处理一致（tool_handlers_crud_test.go）。
+	customTypes := mock_custom_type_repo.NewMockCustomTypeRepo(ctrl)
+	customTypes.EXPECT().FindBySlug(gomock.Any(), gomock.Any()).Return(nil, gorm.ErrRecordNotFound).AnyTimes()
+	origCustomType := custom_type_repo.CustomType()
+	custom_type_repo.RegisterCustomType(customTypes)
+	t.Cleanup(func() { custom_type_repo.RegisterCustomType(origCustomType) })
+
 	return m
 }
 
@@ -810,5 +828,145 @@ func TestHandleExec_MongoMissingDatabaseNeverReachesPermissionCheck(t *testing.T
 	if *checkCalled {
 		t.Fatal("CheckForAsset ran for a write op with no resolvable database — an approval " +
 			"dialog must never appear for a command that is going to fail regardless")
+	}
+}
+
+// --- generic asset / custom type help & doc gate (spec "帮助、技能与门禁") ---
+
+// createGenericGrafanaAsset creates a generic asset on the "grafana" custom type
+// registered by setupGenericPutDB, via the real handlePutAsset path, and returns the
+// stored entity (so callers get the real ID assigned by the real asset_repo).
+func createGenericGrafanaAsset(t *testing.T, name string, config map[string]any, description string) *asset_entity.Asset {
+	t.Helper()
+	args := map[string]any{"name": name, "type": "grafana", "config": config}
+	if description != "" {
+		args["description"] = description
+	}
+	if _, err := handlePutAsset(context.Background(), args); err != nil {
+		t.Fatalf("handlePutAsset(%s): %v", name, err)
+	}
+	assets, err := asset_repo.Asset().FindByName(context.Background(), name)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("FindByName(%s) = %v, %v; want exactly one asset", name, assets, err)
+	}
+	return assets[0]
+}
+
+// TestHelpForTypeName_CustomTypeSlugReturnsGenericDocPlusStructure locks the type-level
+// half of spec §"帮助、技能与门禁": `help <slug>` must return the generic SKILL.md body
+// (put_asset / opsctl create asset syntax, common to every custom type) plus this type's
+// own structure — exec mode, Base URL / command template, auth binding, and the field
+// list with its secret/required/default attributes.
+func TestHelpForTypeName_CustomTypeSlugReturnsGenericDocPlusStructure(t *testing.T) {
+	setupGenericPutDB(t)
+	genericDoc, ok := permission.HelpFor(asset_entity.AssetTypeGeneric)
+	if !ok {
+		t.Fatal("generic SKILL.md must be registered as a doc-only type")
+	}
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": "grafana"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, genericDoc) {
+		t.Fatalf("help for a custom type slug must include the base generic SKILL.md body, got %q", out)
+	}
+	for _, want := range []string{"grafana", "http", "https://{{host}}", "host", "token", "secret", "required"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help should describe the type's structure (want %q), got %q", want, out)
+		}
+	}
+	if !GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), "grafana") {
+		t.Fatal("help on the type slug must mark the slug documented on the gate")
+	}
+}
+
+// TestHandleHelp_GenericAssetAddsInstanceValuesMaskedSecretAddressTunnelAndDescription
+// locks the asset-level half: `help <asset>` for a generic asset appends the type
+// structure plus this instance's field values — secret fields report only "set", never
+// the plaintext — the rendered actual HTTP address, the tunnel line, and the asset's
+// Description ("备注"). It also proves the doc gate for a generic asset is marked with
+// the custom type slug, not the static asset.Type="generic".
+func TestHandleHelp_GenericAssetAddsInstanceValuesMaskedSecretAddressTunnelAndDescription(t *testing.T) {
+	setupGenericPutDB(t)
+	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
+	secret := "glsa_ai_must_not_leak_in_help"
+	asset := createGenericGrafanaAsset(t, "grafana-prod",
+		map[string]any{"host": "grafana.internal", "token": secret}, "internal Grafana for team X")
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": asset.Name})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, secret) {
+		t.Fatalf("help must never include the secret field's plaintext value, got %q", out)
+	}
+	for _, want := range []string{
+		"grafana.internal",            // non-secret field value
+		"https://grafana.internal",    // rendered actual address
+		"internal Grafana for team X", // asset Description
+		"Tunnel: none",                // no SSH tunnel configured
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help should include %q, got %q", want, out)
+		}
+	}
+	if !GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), "grafana") {
+		t.Fatal("help on a generic asset must mark the custom type slug documented, not asset.Type")
+	}
+	if GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeGeneric) {
+		t.Fatal("help on a generic asset must not mark the static \"generic\" type documented — " +
+			"exec's gate check must key on the slug so a different custom type's assets stay gated")
+	}
+}
+
+// TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing locks that a required
+// field added to the custom type after the asset was created (Design decision 15) is
+// reported as missing on the asset's help, not silently rendered as an empty value.
+func TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing(t *testing.T) {
+	setupGenericPutDB(t)
+	asset := createGenericGrafanaAsset(t, "grafana-old",
+		map[string]any{"host": "grafana.internal", "token": "tok"}, "")
+
+	ct, err := custom_type_svc.CustomType().GetBySlug(context.Background(), "grafana")
+	if err != nil {
+		t.Fatalf("GetBySlug: %v", err)
+	}
+	ct.Fields = append(ct.Fields, custom_type_entity.Field{Name: "org", Required: true})
+	if err := custom_type_svc.CustomType().Save(context.Background(), ct); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": asset.Name})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "org") || !strings.Contains(out, "missing") {
+		t.Fatalf("help should mark the newly required field org as missing, got %q", out)
+	}
+}
+
+// TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType locks the doc
+// gate requirement: help on one asset of a custom type marks that type's slug, which is
+// exactly the key exec's own gate check now reads (permission's ExecutorFor("generic")
+// doesn't exist yet for HTTP/command execution — tasks 5/6 — so this test observes the
+// shared mechanism, DocGate, directly rather than through a not-yet-implemented exec
+// dispatch).
+func TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType(t *testing.T) {
+	setupGenericPutDB(t)
+	assetA := createGenericGrafanaAsset(t, "grafana-a", map[string]any{"host": "a.internal", "token": "a-tok"}, "")
+	createGenericGrafanaAsset(t, "grafana-b", map[string]any{"host": "b.internal", "token": "b-tok"}, "")
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	if _, err := handleHelp(ctx, map[string]any{"asset": assetA.Name}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	convID := aictx.GetConversationID(ctx)
+	if !GetDocGate(ctx).IsDocumented(convID, "grafana") {
+		t.Fatal("calling help on one grafana asset must document the grafana slug for all grafana assets")
 	}
 }

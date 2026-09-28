@@ -47,7 +47,7 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	t.Helper()
 
 	origExec, hadExec := permission.ExecutorFor(assetType)
-	origHelp, _ := permission.HelpFor(assetType)
+	origHelp, hadHelp := permission.HelpFor(assetType)
 	origCanon, hadCanon := permission.CanonicalizeFor(assetType)
 	origPrecheck, hadPrecheck := permission.PrecheckFor(assetType)
 
@@ -64,6 +64,14 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	t.Cleanup(func() {
 		permission.UnregisterExecutorForTest(assetType)
 		if !hadExec {
+			// assetType had no executor before the swap — it was either unregistered
+			// (nothing to restore) or doc-only (generic, rdp, vnc, local, oss:
+			// RegisterHelpDoc, not RegisterExecutor). Restoring only the executor half
+			// of a doc-only type would leave it permanently promoted to exec-capable
+			// for every test that runs later in this binary.
+			if hadHelp {
+				permission.RegisterHelpDoc(assetType, origHelp)
+			}
 			return
 		}
 		if hadCanon {
@@ -558,4 +566,87 @@ func TestHandleBatch_AggregateOutcomeSemantics(t *testing.T) {
 				decision.Decision, decision.DecisionSource, aictx.SourceBatchFailed)
 		}
 	})
+}
+
+// TestHandleBatchCommand_GenericAssetGateKeyedByCustomTypeSlug locks that batch's doc gate
+// check uses assettype.TypeName — the custom type slug for a generic asset — the same key
+// handleHelp marks (see tool_handlers_unified.go and its TestHandleHelp_GenericAsset*
+// tests). Seeing help for one generic asset, or its type, must cover every other asset
+// built on the same custom type in batch too, not just in single exec. permission has no
+// registered HTTP/command executor for "generic" yet (tasks 5/6), so this test stands one
+// in via replaceExecutorForTest to exercise the gate check on the batch dispatch path
+// itself rather than asserting on DocGate state alone.
+func TestHandleBatchCommand_GenericAssetGateKeyedByCustomTypeSlug(t *testing.T) {
+	m := setupUnified(t)
+
+	asset := &asset_entity.Asset{ID: 202, Name: "grafana-b", Type: asset_entity.AssetTypeGeneric}
+	if err := asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}); err != nil {
+		t.Fatalf("SetGenericConfig: %v", err)
+	}
+	m.EXPECT().FindByName(gomock.Any(), "grafana-b").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+
+	execCalls := 0
+	replaceExecutorForTest(t, asset_entity.AssetTypeGeneric,
+		func(context.Context, *asset_entity.Asset, string, string) (string, error) {
+			execCalls++
+			return "ok", nil
+		})
+
+	checker, _ := newRecordingChecker()
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	// Marks the custom type slug — exactly what handleHelp marks for either "grafana-a" or
+	// the type name "grafana" itself — never assetB's own id/name, and never the static
+	// "generic" type.
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), "grafana")
+
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"grafana-b","command":"GET /"}]`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if execCalls != 1 {
+		t.Fatalf("the item should have executed once (gate satisfied via the shared slug key), "+
+			"got %d calls; output: %s", execCalls, out)
+	}
+}
+
+// TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated is the converse of the test
+// above: marking only the static "generic" type (the old, wrong key) must not satisfy the
+// gate for a generic asset whose custom type slug was never documented.
+func TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated(t *testing.T) {
+	m := setupUnified(t)
+
+	asset := &asset_entity.Asset{ID: 203, Name: "grafana-c", Type: asset_entity.AssetTypeGeneric}
+	if err := asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}); err != nil {
+		t.Fatalf("SetGenericConfig: %v", err)
+	}
+	m.EXPECT().FindByName(gomock.Any(), "grafana-c").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+
+	execCalls := 0
+	replaceExecutorForTest(t, asset_entity.AssetTypeGeneric,
+		func(context.Context, *asset_entity.Asset, string, string) (string, error) {
+			execCalls++
+			return "ok", nil
+		})
+
+	checker, _ := newRecordingChecker()
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeGeneric)
+
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"grafana-c","command":"GET /"}]`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if execCalls != 0 {
+		t.Fatalf("the item must stay gated — the static \"generic\" type was documented, not the "+
+			"\"grafana\" slug — got %d calls; output: %s", execCalls, out)
+	}
+	if !strings.Contains(out, "call help") {
+		t.Fatalf("output should carry the gate guidance, got %s", out)
+	}
 }

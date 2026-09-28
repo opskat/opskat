@@ -25,11 +25,23 @@ type AIContext struct {
 	OpenTabs []TabInfo `json:"openTabs"`
 }
 
+// CustomTypeSummary is a discovery-only slug + display-name pair for a user-defined
+// custom type, rendered in the skill list so the model can find `put_asset type=<slug>`
+// / `opsctl create asset --type <slug>` targets even before any asset of that type
+// exists (spec "帮助、技能与门禁": the skill list must include generic and list the
+// defined custom types). It does not satisfy the doc gate — same rule as
+// assetTypeSkills below: only an explicit help(<slug-or-asset>) call does that.
+type CustomTypeSummary struct {
+	Slug string
+	Name string
+}
+
 // PromptBuilder 动态构建 System Prompt
 type PromptBuilder struct {
 	language          string
 	context           AIContext
 	assetTypeSkills   map[string]string // 内置资产类型 → 一行描述（skills.Description）
+	customTypes       []CustomTypeSummary
 	extensionSkillMDs map[string]string // extName → SKILL.md content
 }
 
@@ -53,6 +65,14 @@ func (b *PromptBuilder) SetExtensionSkillMDs(mds map[string]string) {
 // (it's one line each), not just the types with an open tab.
 func (b *PromptBuilder) SetAssetTypeSkills(descriptions map[string]string) {
 	b.assetTypeSkills = descriptions
+}
+
+// SetCustomTypes sets the slug/name pairs of every currently defined custom type, for the
+// "Defined custom types" listing appended to the skill section. Callers pass the full,
+// unconditional list (like SetAssetTypeSkills) — this is a discovery aid, not something
+// scoped to open tabs.
+func (b *PromptBuilder) SetCustomTypes(types []CustomTypeSummary) {
+	b.customTypes = types
 }
 
 // NewPromptBuilder 创建 PromptBuilder
@@ -220,6 +240,17 @@ func (b *PromptBuilder) buildAssetTypeSkills() string {
 			for _, t := range configOnlyTypes {
 				lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
 			}
+		}
+	}
+	if len(b.customTypes) > 0 {
+		sorted := append([]CustomTypeSummary(nil), b.customTypes...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Slug < sorted[j].Slug })
+		lines = append(lines, "",
+			"Defined custom types — every generic asset is built on one of these; use the slug as `type` "+
+				"for put_asset / `opsctl create asset --type`, and as the asset-or-type reference for help "+
+				"(see \"generic\" above for the shared config/exec syntax):", "")
+		for _, ct := range sorted {
+			lines = append(lines, fmt.Sprintf("- %s: %s", ct.Slug, ct.Name))
 		}
 	}
 	return strings.Join(lines, "\n")

@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -145,9 +146,11 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		// 同一个位置（执行器查找之后、规范化之前）。没有这道检查，batch 就是绕过它的
 		// 通道：模型可以借 batch 执行一个从没查过语法的类型。deny 文案复用
 		// execGuidance，措辞与 handleExec 的引导语一致（点名资产与类型、指引先调 help）。
+		// 门禁键与 handleExec 同一约定（assettype.TypeName）：通用资产按自定义类型标识
+		// 记录，其余类型等于 asset.Type 本身——见 tool_handlers_unified.go 的注释。
 		if gate := GetDocGate(ctx); gate != nil {
 			convID := aictx.GetConversationID(ctx)
-			if !gate.IsDocumented(convID, asset.Type) {
+			if !gate.IsDocumented(convID, assettype.TypeName(asset)) {
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 					decision: "deny", denyMsg: execGuidance(asset),
