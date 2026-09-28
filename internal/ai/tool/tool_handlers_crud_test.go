@@ -18,20 +18,26 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 // fakeAssetRepo is a minimal in-memory AssetRepo for the CRUD tests below.
@@ -308,6 +314,13 @@ func setupCRUD(t *testing.T) *crudTestEnv {
 	origGroup := group_repo.Group()
 	group_repo.RegisterGroup(groups)
 	t.Cleanup(func() { group_repo.RegisterGroup(origGroup) })
+
+	// 没有自定义类型：未注册的类型名经自定义类型表确认不是某个类型标识后报未知类型。
+	customTypes := mock_custom_type_repo.NewMockCustomTypeRepo(gomock.NewController(t))
+	customTypes.EXPECT().FindBySlug(gomock.Any(), gomock.Any()).Return(nil, gorm.ErrRecordNotFound).AnyTimes()
+	origCustomType := custom_type_repo.CustomType()
+	custom_type_repo.RegisterCustomType(customTypes)
+	t.Cleanup(func() { custom_type_repo.RegisterCustomType(origCustomType) })
 
 	env := &crudTestEnv{assets: assets, groups: groups}
 	assets.policyLookups = &env.policyChecks
@@ -1389,4 +1402,87 @@ func TestHandlePutAsset_CompositeConfigNeverLeaksIntoAuditProjection(t *testing.
 		_, hasAuthType := config["auth_type"]
 		assert.False(t, hasAuthType, "composite auth_type must be omitted from the audit projection")
 	})
+}
+
+// setupGenericPutDB 在 setupPutAssetDB 的库上加自定义类型表，并存一个 grafana 类型。
+func setupGenericPutDB(t *testing.T) {
+	t.Helper()
+	gdb := setupPutAssetDB(t)
+	require.NoError(t, gdb.AutoMigrate(&custom_type_entity.CustomType{}))
+	orig := custom_type_repo.CustomType()
+	custom_type_repo.RegisterCustomType(custom_type_repo.New())
+	t.Cleanup(func() { custom_type_repo.RegisterCustomType(orig) })
+	custom_type_svc.CustomType().SetReservedNames(assettype.RegisteredTypes)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Grafana", Slug: "grafana", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{
+			{Name: "host", Required: true},
+			{Name: "token", Secret: true, Required: true},
+		},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
+	}))
+}
+
+// put_asset 的 type 可以是自定义类型标识：落成绑定该类型的通用资产，config 键是字段名，
+// 审计投影与安全视图都不含密钥值。
+func TestHandlePutAsset_CustomTypeSlugCreatesAndUpdatesGenericAsset(t *testing.T) {
+	setupGenericPutDB(t)
+	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
+	secret := "glsa_ai_must_not_leak"
+	ctx := aictx.WithAuditRequestSlot(context.Background(), aictx.NewAuditRequestSlot())
+
+	out, err := handlePutAsset(ctx, map[string]any{
+		"name": "grafana-prod", "type": "grafana",
+		"config": map[string]any{"host": "grafana.internal", "token": secret},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out, secret)
+	encoded, err := json.Marshal(aictx.GetAuditRequest(ctx))
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), secret)
+	assert.NotContains(t, string(encoded), "token")
+	assert.Contains(t, string(encoded), "grafana.internal")
+
+	assets, err := asset_repo.Asset().FindByName(context.Background(), "grafana-prod")
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	assert.Equal(t, asset_entity.AssetTypeGeneric, assets[0].Type)
+	assert.JSONEq(t, `{"allow_list":["GET *","HEAD *","OPTIONS *"],"deny_list":null}`, assets[0].CmdPolicy)
+
+	view, err := handleGetAsset(context.Background(), map[string]any{"id": float64(assets[0].ID)})
+	require.NoError(t, err)
+	assert.Contains(t, view, `"custom_type":"grafana"`)
+	assert.NotContains(t, view, secret)
+
+	// 更新时 type 仍是断言：写类型标识对得上，写别的类型报错。
+	_, err = handlePutAsset(context.Background(), map[string]any{
+		"asset": "grafana-prod", "type": "grafana", "config": map[string]any{"host": "grafana2.internal"},
+	})
+	require.NoError(t, err)
+	stored, err := asset_repo.Asset().Find(context.Background(), assets[0].ID)
+	require.NoError(t, err)
+	resolved, err := custom_type_svc.CustomType().ResolveAsset(context.Background(), stored)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"host": "grafana2.internal", "token": secret}, resolved.Values)
+
+	_, err = handlePutAsset(context.Background(), map[string]any{
+		"asset": "grafana-prod", "type": "redis", "config": map[string]any{"host": "x"},
+	})
+	require.Error(t, err)
+}
+
+func TestHandlePutAsset_CustomTypeRejectsUnknownFieldAndMissingRequired(t *testing.T) {
+	setupGenericPutDB(t)
+	for name, config := range map[string]map[string]any{
+		"unknown field":    {"host": "g", "token": "t", "org": "x"},
+		"missing required": {"host": "g"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := handlePutAsset(context.Background(), map[string]any{"name": "g", "type": "grafana", "config": config})
+			require.Error(t, err)
+		})
+	}
+	assets, err := asset_repo.Asset().List(context.Background(), asset_repo.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, assets)
 }

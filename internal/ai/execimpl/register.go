@@ -82,10 +82,12 @@ func init() {
 
 	// 没有命令面、但可以被 put_asset 创建/更新的类型：只注册文档。
 	// exec 对它们仍然报 "no exec support yet"（RegisteredExecTypes 会跳过 exec == nil 的条目）。
+	// generic 暂时也只有文档：HTTP / 本地命令执行器落地前，exec 对通用资产报尚不支持。
 	for _, docOnly := range []string{
 		asset_entity.AssetTypeRDP,
 		asset_entity.AssetTypeVNC,
 		asset_entity.AssetTypeLocal,
+		asset_entity.AssetTypeGeneric,
 	} {
 		permission.RegisterHelpDoc(docOnly, mustSkillDoc(docOnly))
 	}
@@ -93,7 +95,7 @@ func init() {
 
 // mustSkillDoc 返回某资产类型内嵌的 SKILL.md 正文，缺失时直接 panic。
 //
-// 这是本文件所有 12 处注册（9 个 exec 类型 + 3 个 doc-only 类型）取 help 文档的唯一
+// 这是本文件所有 13 处注册（9 个 exec 类型 + 4 个 doc-only 类型）取 help 文档的唯一
 // 入口，取代了曾经的 `doc, _ := skills.Get(assetType)`——当时 8 处 exec 类型全部丢弃了
 // skills.Get 的第二个返回值，SKILL.md 缺失时会静默把一个空字符串喂给
 // permission.RegisterExecutor：HelpFor 依然返回 ("", true)（entry 存在，只是内容为

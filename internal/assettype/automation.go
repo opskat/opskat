@@ -1,9 +1,13 @@
 package assettype
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/pkg/jsonscalar"
 )
@@ -19,8 +23,13 @@ type AutomationContract struct {
 	// that happens to hold a map value (composite/attacker-supplied) is still dropped by
 	// approvalView's default scalar-only rule — this allowlist is opt-in per field, not a
 	// blanket exception for "looks flat".
-	FlatMapFields  []string
-	Normalize      func(map[string]any) error
+	FlatMapFields []string
+	Normalize     func(map[string]any) error
+	// ValidateCreate / Validate are the contract-level counterparts of the handler's
+	// ValidateCreateArgs (create only) and ValidateAutomationConfig (create and update),
+	// for contracts resolved per asset whose rules the handler cannot know statically.
+	ValidateCreate func(map[string]any) error
+	Validate       func(map[string]any) error
 	CredentialPlan func(map[string]any) (CredentialPlan, error)
 	BindCredential func(map[string]any, CredentialBinding) (map[string]any, error)
 }
@@ -53,11 +62,86 @@ type automationValidator interface {
 	ValidateAutomationConfig(map[string]any) error
 }
 
+// dynamicAutomationContract is implemented by a handler whose automation surface depends
+// on the asset being written (the generic handler: the fields come from the asset's
+// custom type). Its static AutomationContract() is empty; every write resolves the
+// contract through this hook instead.
+type dynamicAutomationContract interface {
+	AutomationContractFor(ctx context.Context, a *asset_entity.Asset) (AutomationContract, error)
+}
+
+// typeNameOwner is implemented by a handler that serves caller-facing type names other
+// than its own Type() (the generic handler serves every custom-type slug).
+type typeNameOwner interface {
+	// NewAssetForTypeName reports whether name is one of the handler's type names and, if
+	// so, returns a new asset stamped with that type identity.
+	NewAssetForTypeName(ctx context.Context, name string) (*asset_entity.Asset, bool, error)
+	// TypeNameOf returns the caller-facing type name of one of the handler's assets.
+	TypeNameOf(a *asset_entity.Asset) string
+}
+
+// ErrUnknownType reports a type name that no registered handler serves.
+var ErrUnknownType = errors.New("unsupported asset type")
+
+// NewAsset returns a new, unsaved asset for a caller-facing type name (opsctl --type,
+// put_asset type): a registered type name maps to itself, any other name is offered to
+// the handlers that serve additional names (a custom-type slug becomes a generic asset
+// bound to that type). A name nobody serves wraps ErrUnknownType.
+func NewAsset(ctx context.Context, typeName string) (*asset_entity.Asset, error) {
+	if _, ok := Get(typeName); ok {
+		return &asset_entity.Asset{Type: typeName}, nil
+	}
+	for _, h := range All() {
+		owner, ok := h.(typeNameOwner)
+		if !ok {
+			continue
+		}
+		a, owned, err := owner.NewAssetForTypeName(ctx, typeName)
+		if err != nil {
+			return nil, err
+		}
+		if owned {
+			return a, nil
+		}
+	}
+	return nil, fmt.Errorf("%w %q (registered types: %s, or a custom type slug)", ErrUnknownType, typeName, joinRegisteredTypes())
+}
+
+// TypeName returns the caller-facing type name of an asset — the inverse of NewAsset:
+// the custom-type slug for a generic asset, the stored type otherwise.
+func TypeName(a *asset_entity.Asset) string {
+	if h, ok := Get(a.Type); ok {
+		if owner, ok := h.(typeNameOwner); ok {
+			return owner.TypeNameOf(a)
+		}
+	}
+	return a.Type
+}
+
+// ContractOf returns the automation contract that governs writes to a: the handler's
+// static contract, or the one its dynamic hook resolves for this asset.
+func ContractOf(ctx context.Context, a *asset_entity.Asset) (AssetTypeHandler, AutomationContract, error) {
+	h, ok := Get(a.Type)
+	if !ok {
+		return nil, AutomationContract{}, fmt.Errorf("%w %q (registered types: %s)", ErrUnknownType, a.Type, joinRegisteredTypes())
+	}
+	dynamic, ok := h.(dynamicAutomationContract)
+	if !ok {
+		return h, h.AutomationContract(), nil
+	}
+	contract, err := dynamic.AutomationContractFor(ctx, a)
+	if err != nil {
+		return nil, AutomationContract{}, err
+	}
+	return h, contract, nil
+}
+
 type PreparedCreate struct {
 	Handler    AssetTypeHandler
 	Config     map[string]any
 	Approval   map[string]any
 	Credential CredentialPlan
+	contract   AutomationContract
 }
 
 // BindCredential applies a validated existing credential through the selected type owner.
@@ -65,7 +149,7 @@ func (p PreparedCreate) BindCredential(binding CredentialBinding) (map[string]an
 	if binding.ID <= 0 {
 		return nil, fmt.Errorf("credential binding ID must be positive")
 	}
-	bind := p.Handler.AutomationContract().BindCredential
+	bind := p.contract.BindCredential
 	if bind == nil {
 		return nil, fmt.Errorf("managed credentials are not applicable to asset type %q", p.Handler.Type())
 	}
@@ -82,13 +166,15 @@ func newAutomationContract(configFields, approvalFields []string, normalize func
 	}
 }
 
-func PrepareCreate(assetType string, args map[string]any) (PreparedCreate, error) {
-	prepared, contract, err := prepareAutomation(assetType, args)
+// PrepareCreate validates a create of the unsaved asset a (see NewAsset) through the
+// contract its type owns.
+func PrepareCreate(ctx context.Context, a *asset_entity.Asset, args map[string]any) (PreparedCreate, error) {
+	prepared, err := prepareAutomation(ctx, a, args)
 	if err != nil {
 		return PreparedCreate{}, err
 	}
-	if contract.Normalize != nil {
-		if err := contract.Normalize(prepared.Config); err != nil {
+	if prepared.contract.Normalize != nil {
+		if err := prepared.contract.Normalize(prepared.Config); err != nil {
 			return PreparedCreate{}, err
 		}
 	}
@@ -98,16 +184,22 @@ func PrepareCreate(assetType string, args map[string]any) (PreparedCreate, error
 	if err := prepared.Handler.ValidateCreateArgs(prepared.Config); err != nil {
 		return PreparedCreate{}, err
 	}
+	if prepared.contract.ValidateCreate != nil {
+		if err := prepared.contract.ValidateCreate(prepared.Config); err != nil {
+			return PreparedCreate{}, err
+		}
+	}
 	if err := validateAutomation(prepared); err != nil {
 		return PreparedCreate{}, err
 	}
-	return finalizeAutomation(prepared, contract)
+	return finalizeAutomation(prepared)
 }
 
-// PrepareUpdate validates a partial update through the same type-owned field and
-// credential declarations without applying create-only defaults or required fields.
-func PrepareUpdate(assetType string, args map[string]any) (PreparedCreate, error) {
-	prepared, contract, err := prepareAutomation(assetType, args)
+// PrepareUpdate validates a partial update of the existing asset a through the same
+// type-owned field and credential declarations without applying create-only defaults or
+// required fields.
+func PrepareUpdate(ctx context.Context, a *asset_entity.Asset, args map[string]any) (PreparedCreate, error) {
+	prepared, err := prepareAutomation(ctx, a, args)
 	if err != nil {
 		return PreparedCreate{}, err
 	}
@@ -117,7 +209,7 @@ func PrepareUpdate(assetType string, args map[string]any) (PreparedCreate, error
 	if err := validateAutomation(prepared); err != nil {
 		return PreparedCreate{}, err
 	}
-	return finalizeAutomation(prepared, contract)
+	return finalizeAutomation(prepared)
 }
 
 func normalizeAutomation(prepared PreparedCreate) error {
@@ -129,12 +221,18 @@ func normalizeAutomation(prepared PreparedCreate) error {
 
 func validateAutomation(prepared PreparedCreate) error {
 	if validator, ok := prepared.Handler.(automationValidator); ok {
-		return validator.ValidateAutomationConfig(prepared.Config)
+		if err := validator.ValidateAutomationConfig(prepared.Config); err != nil {
+			return err
+		}
+	}
+	if prepared.contract.Validate != nil {
+		return prepared.contract.Validate(prepared.Config)
 	}
 	return nil
 }
 
-func finalizeAutomation(prepared PreparedCreate, contract AutomationContract) (PreparedCreate, error) {
+func finalizeAutomation(prepared PreparedCreate) (PreparedCreate, error) {
+	contract := prepared.contract
 	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields, contract.FlatMapFields)
 	credential, err := credentialPlan(contract, prepared.Config)
 	if err != nil {
@@ -144,20 +242,19 @@ func finalizeAutomation(prepared PreparedCreate, contract AutomationContract) (P
 	return prepared, nil
 }
 
-func prepareAutomation(assetType string, args map[string]any) (PreparedCreate, AutomationContract, error) {
-	h, ok := Get(assetType)
-	if !ok {
-		return PreparedCreate{}, AutomationContract{}, fmt.Errorf("unsupported asset type %q (registered types: %s)", assetType, joinRegisteredTypes())
+func prepareAutomation(ctx context.Context, a *asset_entity.Asset, args map[string]any) (PreparedCreate, error) {
+	h, contract, err := ContractOf(ctx, a)
+	if err != nil {
+		return PreparedCreate{}, err
 	}
-	contract := h.AutomationContract()
 	if len(contract.ConfigFields) == 0 {
-		return PreparedCreate{}, AutomationContract{}, fmt.Errorf("asset type %q has no automation config contract", assetType)
+		return PreparedCreate{}, fmt.Errorf("asset type %q has no automation config contract", a.Type)
 	}
 	config := cloneArgs(args)
 	if err := rejectUnknownFields(config, contract.ConfigFields); err != nil {
-		return PreparedCreate{}, AutomationContract{}, fmt.Errorf("invalid %s config: %w", assetType, err)
+		return PreparedCreate{}, fmt.Errorf("invalid %s config: %w", TypeName(a), err)
 	}
-	return PreparedCreate{Handler: h, Config: config}, contract, nil
+	return PreparedCreate{Handler: h, Config: config, contract: contract}, nil
 }
 
 func credentialPlan(contract AutomationContract, config map[string]any) (CredentialPlan, error) {
@@ -341,6 +438,14 @@ func positiveInt64Arg(args map[string]any, key string) (int64, bool, error) {
 		if float64(id) != typed {
 			return 0, true, fmt.Errorf("%s must be a positive integer", key)
 		}
+	case json.Number:
+		// opsctl 按 UseNumber 解码 --config，嵌套对象里的数字（通用资产密钥字段的
+		// {"credential_id": N}）以 json.Number 到达。
+		parsed, err := typed.Int64()
+		if err != nil {
+			return 0, true, fmt.Errorf("%s must be a positive integer", key)
+		}
+		id = parsed
 	default:
 		return 0, true, fmt.Errorf("%s must be a positive integer", key)
 	}

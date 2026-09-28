@@ -58,10 +58,14 @@ func TestPrepareCreateCoversRegisteredBuiltins(t *testing.T) {
 	assert.True(t, sort.StringsAreSorted(types), "registered types must be stable and sorted")
 
 	for _, assetType := range types {
+		h, _ := Get(assetType)
+		if _, dynamic := h.(dynamicAutomationContract); dynamic {
+			continue // 字段契约按资产解析（通用资产），由 generic_test.go 覆盖
+		}
 		t.Run(assetType, func(t *testing.T) {
 			args, ok := valid[assetType]
 			require.True(t, ok, "every registered built-in needs a contract fixture")
-			prepared, err := PrepareCreate(assetType, args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: assetType}, args)
 			require.NoError(t, err)
 			assert.Equal(t, assetType, prepared.Handler.Type())
 			assert.NotEmpty(t, prepared.Handler.AutomationContract().ConfigFields)
@@ -75,7 +79,7 @@ func TestPrepareCreateCoversRegisteredBuiltins(t *testing.T) {
 func TestPrepareVNCEncryptionPolicyBoundary(t *testing.T) {
 	for _, policy := range []string{"server", "always_maximum", "always_on", "prefer_on", "prefer_off"} {
 		t.Run(policy, func(t *testing.T) {
-			prepared, err := PrepareCreate(asset_entity.AssetTypeVNC, map[string]any{
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeVNC}, map[string]any{
 				"host": "vnc.example.com", "encryption": policy,
 			})
 			require.NoError(t, err)
@@ -88,19 +92,19 @@ func TestPrepareVNCEncryptionPolicyBoundary(t *testing.T) {
 		{"host": "vnc.example.com"},
 		{"host": "vnc.example.com", "encryption": ""},
 	} {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeVNC, args)
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeVNC}, args)
 		require.NoError(t, err)
 		assert.Equal(t, "server", prepared.Config["encryption"])
 	}
 
-	_, err := PrepareCreate(asset_entity.AssetTypeVNC, map[string]any{
+	_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeVNC}, map[string]any{
 		"host": "vnc.example.com", "encryption": "downgrade",
 	})
 	require.ErrorContains(t, err, "downgrade")
 }
 
 func TestPrepareCreateRejectsNamedUnknownFields(t *testing.T) {
-	_, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+	_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 		"host": "redis.example.com", "username": "default",
 		"z_typo": true, "a_typo": true,
 	})
@@ -141,7 +145,7 @@ func TestPrepareCreateNormalizesOwnerDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prepared, err := PrepareCreate(tt.assetType, tt.args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: tt.assetType}, tt.args)
 			require.NoError(t, err)
 			for key, want := range tt.want {
 				assert.Equal(t, want, prepared.Config[key], key)
@@ -156,7 +160,7 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 		args := map[string]any{
 			"driver": "mysql", "host": "db.example.com", "username": "admin", "password": "secret",
 		}
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 		require.NoError(t, err)
 		assert.Equal(t, CredentialKindNone, prepared.Credential.Kind)
 		assert.Equal(t, "secret", prepared.Config["password"])
@@ -164,7 +168,7 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 	})
 
 	t.Run("ssh reference type owns auth inference", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeSSH}, map[string]any{
 			"host": "ssh.example.com", "username": "root", "credential_id": float64(9),
 		})
 		require.NoError(t, err)
@@ -177,7 +181,7 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 	})
 
 	t.Run("ssh private material is not accepted by asset automation", func(t *testing.T) {
-		_, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
+		_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeSSH}, map[string]any{
 			"host": "ssh.example.com", "username": "root", "private_key": "PEM", "passphrase": "key-secret",
 		})
 		require.Error(t, err)
@@ -193,14 +197,14 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 			{assetType: asset_entity.AssetTypeSSH, args: map[string]any{"host": "ssh.example.com", "username": "root", "credential_id": 9.5}},
 			{assetType: asset_entity.AssetTypeRedis, args: map[string]any{"host": "redis.example.com", "username": "default", "credential_id": 9.5}},
 		} {
-			_, err := PrepareCreate(tt.assetType, tt.args)
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: tt.assetType}, tt.args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "credential_id must be a positive integer")
 		}
 	})
 
 	t.Run("oss owns secret field mapping", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeOSS, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeOSS}, map[string]any{
 			"endpoint": "s3.example.com", "access_key_id": "AKIA", "secret_access_key": "secret",
 		})
 		require.NoError(t, err)
@@ -209,7 +213,7 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 	})
 
 	t.Run("password owners reject SSH key binding", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 			"host": "redis.example.com", "username": "default", "credential_id": float64(8),
 		})
 		require.NoError(t, err)
@@ -234,7 +238,7 @@ func TestMaterializedBindingFlowsThroughOwnerApply(t *testing.T) {
 	}
 	for assetType, args := range passwordOwners {
 		t.Run(assetType, func(t *testing.T) {
-			prepared, err := PrepareCreate(assetType, args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: assetType}, args)
 			require.NoError(t, err)
 			bound, err := prepared.BindCredential(CredentialBinding{ID: 41, Type: credential_entity.TypePassword})
 			require.NoError(t, err)
@@ -247,7 +251,7 @@ func TestMaterializedBindingFlowsThroughOwnerApply(t *testing.T) {
 	}
 
 	t.Run("ssh key", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeSSH}, map[string]any{
 			"host": "ssh.example.com", "username": "root", "credential_id": float64(42),
 		})
 		require.NoError(t, err)
@@ -298,7 +302,7 @@ func TestOwnersRejectInapplicableCredentialInputs(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := PrepareCreate(tt.assetType, tt.args)
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: tt.assetType}, tt.args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.field)
 		})
@@ -348,7 +352,7 @@ func TestDatabasePreparationSupportsSQLiteShapes(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, tt.args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, tt.args)
 			require.NoError(t, err)
 			assert.Equal(t, CredentialKindNone, prepared.Credential.Kind)
 			for key, want := range tt.want {
@@ -399,7 +403,7 @@ func TestPrepareCreateDoesNotAdvertiseUnappliedFields(t *testing.T) {
 		},
 	} {
 		t.Run(tt.assetType+"_"+tt.field, func(t *testing.T) {
-			_, err := PrepareCreate(tt.assetType, tt.args)
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: tt.assetType}, tt.args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.field)
 		})
@@ -437,7 +441,7 @@ func TestPrepareCreateRejectsCompositeRequiredScalarFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := PrepareCreate(tt.assetType, tt.args)
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: tt.assetType}, tt.args)
 			require.Error(t, err, "composite required input must fail validation at the owning type boundary")
 			assert.NotContains(t, err.Error(), secret)
 		})
@@ -453,7 +457,7 @@ func TestPrepareUpdatePreservesBooleanDatabaseReadOnly(t *testing.T) {
 				Username: "reader", ReadOnly: !want,
 			}))
 
-			prepared, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"read_only": want})
+			prepared, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"read_only": want})
 			require.NoError(t, err)
 			require.NoError(t, prepared.Handler.ApplyUpdateArgs(context.Background(), asset, prepared.Config))
 
@@ -472,7 +476,7 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 	secret := "nested-secret-must-not-leak"
 
 	t.Run("ssh optional approval field composite is omitted", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeSSH}, map[string]any{
 			"host": "box.example.com", "username": "root",
 			"auth_type": map[string]any{"password": secret},
 		})
@@ -486,7 +490,7 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 
 	t.Run("kafka flat []any of strings normalized to []string", func(t *testing.T) {
 		brokers := []any{"kafka-1:9092", "kafka-2:9092"}
-		prepared, err := PrepareCreate(asset_entity.AssetTypeKafka, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeKafka}, map[string]any{
 			"brokers": brokers,
 		})
 		require.NoError(t, err)
@@ -500,7 +504,7 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 
 	t.Run("etcd []string retained without alias", func(t *testing.T) {
 		endpoints := []string{"etcd-1:2379", "etcd-2:2379"}
-		prepared, err := PrepareCreate(asset_entity.AssetTypeEtcd, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeEtcd}, map[string]any{
 			"endpoints": endpoints, "username": "root",
 		})
 		require.NoError(t, err)
@@ -513,7 +517,7 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 	})
 
 	t.Run("local args flat array retained", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeLocal, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeLocal}, map[string]any{
 			"shell": "/bin/zsh", "args": []any{"-l", "-f"},
 		})
 		require.NoError(t, err)
@@ -523,7 +527,7 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 	})
 
 	t.Run("redis node_address_map flat string map kept in approval, no secret inside", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
 			"node_address_map": map[string]any{"10.0.0.1:6379": "127.0.0.1:16379"},
 		})
@@ -534,7 +538,7 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 	})
 
 	t.Run("redis node_address_map with nested composite value is rejected without echoing it", func(t *testing.T) {
-		_, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+		_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
 			"node_address_map": map[string]any{"10.0.0.1:6379": map[string]any{"nested": secret}},
 		})
@@ -552,14 +556,14 @@ func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testi
 	})
 
 	t.Run("redis approval does not inject default port:6379 for cluster/sentinel", func(t *testing.T) {
-		cluster, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+		cluster, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
 		})
 		require.NoError(t, err)
 		_, hasPort := cluster.Approval["port"]
 		assert.False(t, hasPort, "cluster approval must not carry an injected default port")
 
-		sentinel, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+		sentinel, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 			"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}, "master_name": "mymaster",
 		})
 		require.NoError(t, err)

@@ -22,6 +22,9 @@ import (
 //     （oss 曾经也在这一列：它此前 PolicyKind 为空且只有 doc-only 文档，现在两者都有。）
 var exemptFromExec = map[string]string{
 	"local": "spec §2 非目标：有 PolicyKind 却无 permission 注册",
+	// 通用资产的 HTTP / 本地命令执行器随 docs/specs/2026-09-28-generic-asset.md 的后续
+	// 任务落地，届时注册执行器并删除这一条。
+	"generic": "执行器尚未落地：目前只能经 put_asset / opsctl create 创建与更新",
 }
 
 func TestEveryPolicyKindTypeHasExecutor(t *testing.T) {

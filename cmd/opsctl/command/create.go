@@ -143,10 +143,7 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 	ctx = withOriginCommand(ctx, "opsctl create asset "+strings.Join(args, " "))
 	deps := assetCreateParserDeps{
 		stderr: streams.stderr, readFile: streams.readFile, resolveAssetID: resolveAssetID,
-	}
-	// 与随后的终端审批用同一个可交互判据，避免「能输密码但审批被判非交互」的错位。
-	if isInteractive(stdinIsTerminal(), stderrIsTerminal()) {
-		deps.promptSecret = promptTerminalSecret
+		promptSecret: terminalSecretPrompter(),
 	}
 	request, err := parseAssetCreate(ctx, args, deps)
 	if err != nil {
@@ -198,6 +195,16 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 		return 1
 	}
 	return 0
+}
+
+// terminalSecretPrompter 返回终端无回显读取器；不可交互时返回 nil（--password / --secret
+// 据此给出 NEEDS TTY）。与随后的终端审批用同一个可交互判据，避免「能输密码但审批被判
+// 非交互」的错位。
+func terminalSecretPrompter() func(string) (string, error) {
+	if isInteractive(stdinIsTerminal(), stderrIsTerminal()) {
+		return promptTerminalSecret
+	}
+	return nil
 }
 
 // promptTerminalSecret 在终端上无回显读取一行密码：提示写 stderr（stdout 只承载
@@ -285,6 +292,8 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 	icon := fs.String("icon", "", "New icon name (e.g. server, kubernetes, docker)")
 	configJSON := fs.String("config", "", "Type-owned JSON object with fields to update")
 	configFile := fs.String("config-file", "", "Path to a type-owned JSON object with fields to update")
+	var secretFields stringSliceFlag
+	fs.Var(&secretFields, "secret", "Secret config field to type interactively, no echo (repeatable)")
 	fs.Usage = func() { printUpdateAssetUsage() }
 	_ = fs.Parse(args[1:])
 	if rejectExtraArgs(fs.Args()) {
@@ -325,7 +334,12 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 			return 1
 		}
 	}
-	if writeOnlyFieldPresent(asset.Type, config) {
+	_, contract, err := assettype.ContractOf(ctx, asset)
+	if err != nil {
+		writeCreateAssetError(ctx, streams.stderr, err)
+		return 1
+	}
+	if writeOnlyFieldPresent(contract, config) {
 		switch configSource {
 		case "--config":
 			if err := warnArgvPlaintext(streams.stderr); err != nil {
@@ -350,6 +364,14 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 	}
 	if *username != "" {
 		config["username"] = *username
+	}
+	// 与 create 相同：--secret 字段先校验，最后才在终端无回显读入。
+	if err := validateSecretFlags(secretFields, contract, config, ""); err != nil {
+		writeCreateAssetError(ctx, streams.stderr, err)
+		return 1
+	}
+	if err := readSecretFlags(ctx, secretFields, config, terminalSecretPrompter()); err != nil {
+		return writeApprovalFailure(streams.stderr, err)
 	}
 
 	if *name != "" {
@@ -405,21 +427,11 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 	return 0
 }
 
-// writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
-// AutomationContract 声明——接受（ConfigFields）但不进审批（ApprovalFields）的字段，
-// 如 password / credential_id / Redis 的 sentinel_password。
-func writeOnlyFieldPresent(assetType string, config map[string]any) bool {
-	handler, ok := assettype.Get(assetType)
-	if !ok {
-		return false
-	}
-	contract := handler.AutomationContract()
-	for _, field := range contract.ConfigFields {
-		if !slices.Contains(contract.ApprovalFields, field) && configValuePresent(config[field]) {
-			return true
-		}
-	}
-	return false
+// writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段（见 writeOnlyFields）。
+func writeOnlyFieldPresent(contract assettype.AutomationContract, config map[string]any) bool {
+	return slices.ContainsFunc(writeOnlyFields(contract), func(field string) bool {
+		return configValuePresent(config[field])
+	})
 }
 
 func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -545,12 +557,19 @@ func printCreateAssetUsage() {
   opsctl create asset --name <name> [flags]
 
 Generic config:
-  --type <type>           Registered built-in asset type (default: ssh)
+  --type <type>           Registered built-in asset type, or a custom type slug (default: ssh)
   --config '<JSON>'       Type-owned JSON object
   --config-file <path>    File containing a type-owned JSON object (mutually exclusive with --config)
+  --secret <field>        Type that secret field in your terminal, no echo (repeatable)
 
 Registered built-in types: %s
 Run 'opsctl help <type>' for that type's exact accepted/required config fields.
+
+Custom types (defined in the desktop app under Settings) are created with --type <slug>
+and stored as type generic. Their --config keys are the type's field names; a secret field
+takes a plaintext string or {"credential_id": N} to reference a managed credential, or use
+--secret <field> to type it. Like a bare --password, --secret needs an interactive terminal
+(otherwise exit code 3 with a NEEDS TTY marker).
 
 Authentication:
   --credential-id <id>       Reuse an existing managed credential
@@ -584,6 +603,7 @@ Examples:
   opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password
   opsctl create asset --type database --name "Prod DB" --config '{"driver":"mysql","host":"db.internal","username":"app"}' --credential-id 4
   opsctl create asset --type k8s --name "Prod Cluster" --kubeconfig-file ~/.kube/config --context prod
+  opsctl create asset --type grafana --name "Grafana Prod" --config '{"host":"grafana.internal"}' --secret token
 `, strings.Join(assettype.RegisteredTypes(), ", "))
 }
 
@@ -642,6 +662,8 @@ Flags (only provided fields are updated, others remain unchanged):
   --icon <string>         New icon name (see 'opsctl create asset --help' for list)
   --config '<JSON>'       Type-owned partial config object; only the given fields change
   --config-file <path>    File containing that JSON object (mutually exclusive with --config)
+  --secret <field>        Type that secret field in your terminal, no echo (repeatable); with
+                          no terminal, opsctl exits with code 3 and a NEEDS TTY marker
 
 --config/--config-file is the only way to reach fields with no dedicated flag (e.g. a Redis
 asset's mode/nodes/master_name/sentinel_username/sentinel_password/node_address_map — see
@@ -661,5 +683,6 @@ Examples:
   opsctl update asset 1 --host 192.168.1.100 --port 2222
   opsctl update asset web-server --group-id 3
   opsctl update asset cache --config '{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379"]}'
+  opsctl update asset grafana-prod --secret token
 `)
 }

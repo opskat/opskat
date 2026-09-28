@@ -5,19 +5,29 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/cago-frame/cago/database/db"
+	"github.com/glebarez/sqlite"
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
+	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"go.uber.org/mock/gomock"
 )
@@ -72,6 +82,18 @@ func validCreateConfig(assetType string) map[string]any {
 	return fixtures[assetType]
 }
 
+// staticContractTypes 是字段契约静态声明的已注册类型。静态契约为空的处理器（通用资产）
+// 按资产的自定义类型解析契约，没有固定夹具，由 setupGenericOpsctl 下的测试覆盖。
+func staticContractTypes() []assettype.AssetTypeHandler {
+	var out []assettype.AssetTypeHandler
+	for _, handler := range assettype.All() {
+		if len(handler.AutomationContract().ConfigFields) > 0 {
+			out = append(out, handler)
+		}
+	}
+	return out
+}
+
 func createArgs(t *testing.T, assetType string, config map[string]any) []string {
 	t.Helper()
 	encoded, err := json.Marshal(config)
@@ -111,7 +133,7 @@ func registerMockAssetRepo(t *testing.T, ctrl *gomock.Controller, assets []*asse
 }
 
 func TestCreateAssetParserFeedsRealSharedPrepareForEveryRegisteredBuiltin(t *testing.T) {
-	for _, handler := range assettype.All() {
+	for _, handler := range staticContractTypes() {
 		t.Run(handler.Type(), func(t *testing.T) {
 			config := validCreateConfig(handler.Type())
 			if config == nil {
@@ -148,7 +170,7 @@ func TestCreateAssetEveryRegisteredBuiltinReachesSharedPrepareWithoutHardcodedTy
 	}
 	notifyAssetChanged = func() {}
 
-	for _, handler := range assettype.All() {
+	for _, handler := range staticContractTypes() {
 		config := validCreateConfig(handler.Type())
 		if config == nil {
 			t.Fatalf("missing parser fixture for registered built-in type %q", handler.Type())
@@ -160,7 +182,7 @@ func TestCreateAssetEveryRegisteredBuiltinReachesSharedPrepareWithoutHardcodedTy
 		assert.Equal(t, 0, code, "type=%s stderr=%s", handler.Type(), stderr.String())
 		assert.Contains(t, stdout.String(), `"id": 77`)
 	}
-	for _, handler := range assettype.All() {
+	for _, handler := range staticContractTypes() {
 		assert.True(t, preparedTypes[handler.Type()], "registered type %q never reached asset_put_svc.Prepare", handler.Type())
 	}
 }
@@ -1092,4 +1114,185 @@ func TestCmdCreateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
 			}
 		})
 	}
+}
+
+// setupGenericOpsctl 用内存 SQLite 跑真实仓储：--type <slug> 的字段契约、默认策略都来自
+// 库里的自定义类型。grafana 是普通的 HTTP 类型；legacy-app 的字段名恰好与内置单凭据
+// 类型的 password / private_key 重名，用来证明单凭据互斥规则不套用到通用资产上。
+func setupGenericOpsctl(t *testing.T) context.Context {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&custom_type_entity.CustomType{}, &asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	oldAsset, oldCredential, oldCustomType := asset_repo.Asset(), credential_repo.Credential(), custom_type_repo.CustomType()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	custom_type_repo.RegisterCustomType(custom_type_repo.New())
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(oldAsset)
+		credential_repo.RegisterCredential(oldCredential)
+		custom_type_repo.RegisterCustomType(oldCustomType)
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	credential_svc.SetDefault(credential_svc.New("opsctl-generic-test-key", []byte("opsctl-generic16")))
+	custom_type_svc.CustomType().SetReservedNames(assettype.RegisteredTypes)
+
+	ctx := context.Background()
+	for _, ct := range []*custom_type_entity.CustomType{
+		{
+			Name: "Grafana", Slug: "grafana", ExecMode: custom_type_entity.ExecModeHTTP,
+			Fields: []custom_type_entity.Field{
+				{Name: "host", Required: true},
+				{Name: "token", Secret: true, Required: true},
+			},
+			HTTP: &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
+		},
+		{
+			Name: "Legacy app", Slug: "legacy-app", ExecMode: custom_type_entity.ExecModeCommand,
+			Fields: []custom_type_entity.Field{
+				{Name: "password", Secret: true},
+				{Name: "private_key", Secret: true},
+			},
+			Command: &custom_type_entity.CommandConfig{Template: "legacy-cli"},
+		},
+	} {
+		require.NoError(t, custom_type_svc.CustomType().Save(ctx, ct))
+	}
+	return ctx
+}
+
+func TestCreateAssetCustomTypeSlugCreatesGenericAssetWithSafeApprovalAndAudit(t *testing.T) {
+	ctx := setupGenericOpsctl(t)
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	writer := &mockAuditWriter{}
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	var approvalDetail string
+	requireCreateApproval = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalDetail = req.Detail
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyAssetChanged = func() {}
+
+	var stdout, stderr bytes.Buffer
+	code := createAsset(ctx, []string{
+		"--type", "grafana", "--name", "grafana-prod", "--config", `{"host":"grafana.internal","token":"glsa_argv_secret"}`,
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	assert.Contains(t, stderr.String(), "shell history", "a plaintext secret field in --config gets the argv warning")
+	assert.NotContains(t, stderr.String(), "glsa_argv_secret")
+	assert.Contains(t, approvalDetail, "grafana.internal")
+	assert.NotContains(t, approvalDetail, "glsa_argv_secret")
+	call := writer.lastCall()
+	assert.Equal(t, "put_asset", call.ToolName)
+	assert.NotContains(t, call.ArgsJSON, "glsa_argv_secret")
+	assert.NotContains(t, call.ArgsJSON, "token")
+
+	assets, err := asset_repo.Asset().FindByName(ctx, "grafana-prod")
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	stored := assets[0]
+	assert.Equal(t, asset_entity.AssetTypeGeneric, stored.Type)
+	assert.Equal(t, "grafana", assettype.TypeName(stored))
+	assert.JSONEq(t, `{"allow_list":["GET *","HEAD *","OPTIONS *"],"deny_list":null}`, stored.CmdPolicy)
+	resolved, err := custom_type_svc.CustomType().ResolveAsset(ctx, stored)
+	require.NoError(t, err)
+	assert.Equal(t, "glsa_argv_secret", resolved.Values["token"])
+}
+
+// --config 按 UseNumber 解码：密钥字段 {"credential_id": N} 里的 N 以 json.Number 到达，
+// 仍须按托管凭据引用落库。
+func TestCreateAssetCustomTypeSecretReferencesManagedCredential(t *testing.T) {
+	ctx := setupGenericOpsctl(t)
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	opsctlAuditWriter = &mockAuditWriter{}
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyAssetChanged = func() {}
+	cipher, err := credential_svc.Default().Encrypt("managed-token")
+	require.NoError(t, err)
+	cred := &credential_entity.Credential{Name: "grafana token", Type: credential_entity.TypePassword, Password: cipher}
+	require.NoError(t, credential_repo.Credential().Create(ctx, cred))
+
+	var stdout, stderr bytes.Buffer
+	config := fmt.Sprintf(`{"host":"grafana.internal","token":{"credential_id":%d}}`, cred.ID)
+	code := createAsset(ctx, []string{"--type", "grafana", "--name", "grafana-ref", "--config", config}, "session",
+		commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	assets, err := asset_repo.Asset().FindByName(ctx, "grafana-ref")
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, asset_entity.GenericValue{CredentialID: cred.ID}, cfg.Values["token"])
+}
+
+func TestCreateAssetCustomTypeRejectsInvalidRequestsBeforeApproval(t *testing.T) {
+	ctx := setupGenericOpsctl(t)
+	preserveCreateSeams(t)
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		t.Fatal("an invalid request must never reach approval")
+		return ApprovalResult{}, nil
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"unknown field":    {args: []string{"--type", "grafana", "--name", "g", "--config", `{"host":"h","token":"t","org":"x"}`}, want: "org"},
+		"missing required": {args: []string{"--type", "grafana", "--name", "g", "--config", `{"host":"h"}`}, want: "token"},
+		"unknown slug":     {args: []string{"--type", "no-such-type", "--name", "g"}, want: "no-such-type"},
+		"bare generic":     {args: []string{"--type", "generic", "--name", "g", "--config", `{"host":"h"}`}, want: "custom type"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := createAsset(ctx, tc.args, "session", commandIO{stdout: &stdout, stderr: &stderr})
+			assert.Equal(t, 1, code)
+			assert.Contains(t, stderr.String(), tc.want)
+		})
+	}
+}
+
+func TestCmdUpdateAssetCustomTypeMergesFieldsAndSecretNeedsTerminal(t *testing.T) {
+	ctx := setupGenericOpsctl(t)
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	opsctlAuditWriter = &mockAuditWriter{}
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	allow := func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	requireCreateApproval, requireUpdateApproval = allow, allow
+	notifyAssetChanged = func() {}
+
+	var stdout, stderr bytes.Buffer
+	require.Equal(t, 0, createAsset(ctx, []string{
+		"--type", "grafana", "--name", "grafana-prod", "--config", `{"host":"old.internal","token":"keep-me"}`,
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr}), stderr.String())
+
+	stderr.Reset()
+	code := updateAsset(ctx, []string{"grafana-prod", "--config", `{"host":"new.internal"}`}, "session",
+		commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+	assets, err := asset_repo.Asset().FindByName(ctx, "grafana-prod")
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	resolved, err := custom_type_svc.CustomType().ResolveAsset(ctx, assets[0])
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"host": "new.internal", "token": "keep-me"}, resolved.Values)
+
+	stderr.Reset()
+	code = updateAsset(ctx, []string{"grafana-prod", "--secret", "token"}, "session",
+		commandIO{stdout: &stdout, stderr: &stderr})
+	assert.Equal(t, refusalExitCode, code, "without a terminal a bare --secret is a NEEDS TTY refusal")
+	assert.Contains(t, stderr.String(), needsTTYMarker)
+	assert.Contains(t, stderr.String(), "--secret")
 }

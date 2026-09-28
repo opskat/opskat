@@ -115,6 +115,7 @@ var skillDocOnlyTypes = []string{
 	asset_entity.AssetTypeRDP,
 	asset_entity.AssetTypeVNC,
 	asset_entity.AssetTypeLocal,
+	asset_entity.AssetTypeGeneric, // 执行器落地后改由其 canonicalizer 校验示例
 }
 
 func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
