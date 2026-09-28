@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -50,13 +51,12 @@ func buildMinioOptions(ctx context.Context, cfg *asset_entity.OSSConfig, secret 
 		lookup = minio.BucketLookupPath
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	dialer := netdial.Default()
+	transport.DialContext = netdial.Default().DialContext
 	if cfg.ConnectTimeout > 0 {
 		timeout := time.Duration(cfg.ConnectTimeout) * time.Second
-		dialer.Timeout = timeout
+		transport.DialContext = (&netdial.Dialer{Dialer: net.Dialer{Timeout: timeout}}).DialContext
 		transport.TLSHandshakeTimeout = timeout
 	}
-	transport.DialContext = dialer.DialContext
 	if cfg.ProxyChain != nil {
 		dial, err := ProxyChainDialContext(ctx, cfg.ProxyChain)
 		if err != nil {

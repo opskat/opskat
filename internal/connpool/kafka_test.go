@@ -1,14 +1,9 @@
 package connpool
 
 import (
-	"context"
-	"crypto/tls"
-	"net"
 	"testing"
-	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/pkg/socksdial/socksdialtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,36 +85,5 @@ func TestBuildKafkaOptionsProxy(t *testing.T) {
 		client, err := kgo.NewClient(opts...)
 		require.NoError(t, err)
 		client.Close()
-	})
-}
-
-func TestKafkaDirectDialer(t *testing.T) {
-	t.Run("timeout covers the tls handshake like kgo's default dialer", func(t *testing.T) {
-		// 只接受 TCP、从不应答 TLS 握手的 broker:超时必须覆盖握手,否则拨号永久挂起。
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = ln.Close() })
-		go func() {
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				t.Cleanup(func() { _ = c.Close() })
-			}
-		}()
-
-		dial := kafkaDirectDialer(&tls.Config{InsecureSkipVerify: true}, 300*time.Millisecond)
-		start := time.Now()
-		_, err = dial(context.Background(), "tcp", ln.Addr().String())
-		require.Error(t, err)
-		assert.Less(t, time.Since(start), 2*time.Second)
-	})
-
-	t.Run("plaintext dials the broker address", func(t *testing.T) {
-		echo := socksdialtest.StartEcho(t)
-		conn, err := kafkaDirectDialer(nil, time.Second)(context.Background(), "tcp", echo)
-		require.NoError(t, err)
-		_ = conn.Close()
 	})
 }

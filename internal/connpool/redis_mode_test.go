@@ -232,7 +232,7 @@ func TestRedisTransportDialsRequestedAddress(t *testing.T) {
 		assertEcho(t, opts.Dialer, echo)
 	})
 
-	t.Run("direct connection without mapping dials through the unified dialer", func(t *testing.T) {
+	t.Run("direct connection without mapping dials the requested address", func(t *testing.T) {
 		echo := socksdialtest.StartEcho(t)
 		cfg := &asset_entity.RedisConfig{Mode: asset_entity.RedisModeCluster, Nodes: []string{echo}}
 		opts, err := buildRedisOptions(cfg, "")

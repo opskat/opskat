@@ -13,6 +13,7 @@ import (
 
 	"github.com/opskat/opskat/internal/connpool/sqlitevfs"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -63,7 +64,7 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 			return nil, nil, dialErr
 		}
 		if dial == nil { // 代理链解析为空层即直连
-			db, err = openWithDialer(cfg, password, directDialer().DialContext)
+			db, err = openDirect(cfg, password)
 		} else {
 			db, err = openWithDialer(cfg, password, dial.ignoreNetwork())
 		}
@@ -73,7 +74,7 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	case cfg.Proxy != nil:
 		db, err = openWithDialer(cfg, password, proxyDialFunc(cfg.Proxy).ignoreNetwork())
 	default:
-		db, err = openWithDialer(cfg, password, directDialer().DialContext)
+		db, err = openDirect(cfg, password)
 	}
 	if err != nil {
 		if tunnel != nil {
@@ -228,7 +229,12 @@ func (c *remoteSQLiteCloser) Close() error {
 	return err
 }
 
+// openDirect 直连:主机名为 .local 时经统一拨号器(绕过系统解析器的 mDNS;零值参数,超时仍由驱动经 ctx 控制),
+// 否则保留驱动默认拨号。
 func openDirect(cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, error) {
+	if netdial.IsLocalAddr(cfg.Host) {
+		return openWithDialer(cfg, password, (&netdial.Dialer{}).DialContext)
+	}
 	driverName, dsn := buildDSN(cfg, password)
 	return sql.Open(driverName, dsn)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,7 +220,9 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 			grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 				return dial(ctx, addr)
 			}))
-	} else {
+	} else if slices.ContainsFunc(cfg.Endpoints, netdial.IsLocalAddr) {
+		// 直连且含 .local endpoint 才换统一拨号器;gRPC 设置自定义 dialer 后会停用环境变量代理,
+		// 其余直连保持 gRPC 默认拨号。
 		clientCfg.DialOptions = append(clientCfg.DialOptions, grpc.WithContextDialer(etcdDirectDial))
 	}
 

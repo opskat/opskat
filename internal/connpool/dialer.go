@@ -20,7 +20,7 @@ type dialContextFunc func(ctx context.Context, addr string) (net.Conn, error)
 // networkDialFunc 是驱动要求的三参拨号签名(按 network 区分 tcp / unix / udp)。
 type networkDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// DialContext 使 networkDialFunc 满足 mssql / mongo 等驱动的 ContextDialer 接口。
+// DialContext 使 networkDialFunc 满足 mssql 驱动的 Dialer 接口。
 func (f networkDialFunc) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return f(ctx, network, addr)
 }
@@ -29,6 +29,32 @@ func (f networkDialFunc) DialContext(ctx context.Context, network, addr string) 
 func (f dialContextFunc) ignoreNetwork() networkDialFunc {
 	return func(ctx context.Context, _, addr string) (net.Conn, error) {
 		return f(ctx, addr)
+	}
+}
+
+// localAwareDial 按拨号时的实际地址分流:.local 主机交给 local(统一拨号器,绕过系统解析器的 mDNS),
+// 其余地址原样交给 fallback(驱动默认拨号),保证非 .local 行为与驱动默认一致。
+// 按实际地址而非配置判断,才能覆盖集群宣告、advertised listener 等自动发现的 .local 节点。
+func localAwareDial(local, fallback networkDialFunc) networkDialFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if netdial.IsLocalAddr(addr) {
+			return local(ctx, network, addr)
+		}
+		return fallback(ctx, network, addr)
+	}
+}
+
+// directTLSDialer 经统一拨号器直连并按需包裹 TLS(tlsConfig 为 nil 时不做 TLS)。timeout 覆盖
+// TCP 拨号与 TLS 握手,与 kgo / go-redis 默认 dialer(tls.Dialer + net.Dialer{Timeout})语义一致。
+func directTLSDialer(tlsConfig *tls.Config, timeout time.Duration) networkDialFunc {
+	d := &netdial.Dialer{}
+	dial := tlsWrappedDialFunc(func(ctx context.Context, addr string) (net.Conn, error) {
+		return d.DialContext(ctx, "tcp", addr)
+	}, tlsConfig)
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return dial(ctx, network, addr)
 	}
 }
 
@@ -44,14 +70,9 @@ func tunnelAddrDialFunc(t *SSHTunnel) dialContextFunc {
 	return t.DialAddr
 }
 
-// directDialer 是 connpool 各驱动直连的统一拨号器,超时与保活对齐 go-redis 默认 dialer。
-func directDialer() *netdial.Dialer {
-	return &netdial.Dialer{Dialer: net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Minute}}
-}
-
-// directDialFunc 直连目标地址。
+// directDialFunc 直连目标地址,超时与保活对齐 go-redis 默认 dialer。
 func directDialFunc() dialContextFunc {
-	d := directDialer()
+	d := &netdial.Dialer{Dialer: net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Minute}}
 	return func(ctx context.Context, addr string) (net.Conn, error) {
 		return d.DialContext(ctx, "tcp", addr)
 	}

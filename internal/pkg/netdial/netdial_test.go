@@ -133,3 +133,24 @@ func TestDialContext(t *testing.T) {
 		_ = conn.Close()
 	})
 }
+
+func TestIsLocalAddr(t *testing.T) {
+	Convey("识别主机名、host:port 与 URL 中的 .local 主机", t, func() {
+		for addr, want := range map[string]bool{
+			"srv01.corp.local":              true,
+			"SRV01.Corp.LOCAL.":             true,
+			"srv01.corp.local:6379":         true,
+			"https://k8s.corp.local:6443":   true,
+			"http://etcd.corp.local:2379/x": true,
+			"srv01.corp.example:6379":       false,
+			"local":                         false,
+			"notlocal:6379":                 false,
+			"10.0.0.1:2379":                 false,
+			"[fe80::1]:22":                  false,
+			"https://10.0.0.1:6443":         false,
+			"unix:///tmp/etcd.sock":         false,
+		} {
+			So(IsLocalAddr(addr), ShouldEqual, want)
+		}
+	})
+}

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -77,6 +78,22 @@ func lookupUnicast(ctx context.Context, network, host string) ([]net.IP, error) 
 	ctx, cancel := context.WithTimeout(ctx, unicastLookupTimeout)
 	defer cancel()
 	return unicastResolver.LookupIP(ctx, network, host)
+}
+
+// IsLocalAddr 判断地址（主机名、host:port 或 scheme://host:port/...）的主机是否属于 .local。
+// 供按配置决定是否替换驱动默认拨号的调用方使用。
+func IsLocalAddr(addr string) bool {
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		if err != nil {
+			return false
+		}
+		return isLocalDomain(u.Hostname())
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return isLocalDomain(host)
+	}
+	return isLocalDomain(addr)
 }
 
 func isLocalDomain(host string) bool {

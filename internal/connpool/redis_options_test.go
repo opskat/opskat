@@ -48,7 +48,7 @@ func TestBuildRedisOptions(t *testing.T) {
 }
 
 func TestConfigureRedisTransport(t *testing.T) {
-	t.Run("direct uses the unified dialer and moves tls into it", func(t *testing.T) {
+	t.Run("direct sets an address-aware dialer and moves tls into it", func(t *testing.T) {
 		cfg := &asset_entity.RedisConfig{Host: "h", Port: 6379, TLS: true, TLSInsecure: true}
 		opts, err := buildRedisOptions(cfg, "")
 		require.NoError(t, err)
