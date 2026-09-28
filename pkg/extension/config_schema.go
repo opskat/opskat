@@ -1,6 +1,37 @@
 package extension
 
-import "sort"
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+)
+
+// ConfigFieldValues reads the named fields of an asset config as strings — the
+// values credential injection renders into requests (AuthDef bindings). A field
+// absent or null is omitted, not ""; a number or bool renders as its JSON text. It
+// does not decrypt: a stored config's password fields come back as ciphertext, and
+// the caller that holds the key decrypts them (AssetConfigGetter.AssetCredentialValues).
+// A config that does not parse is an error: injecting nothing would send the request
+// without the credentials the user configured.
+func ConfigFieldValues(config json.RawMessage, fields []string) (map[string]string, error) {
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	values := make(map[string]string, len(fields))
+	for _, field := range fields {
+		raw, ok := cfg[field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			s = string(raw)
+		}
+		values[field] = s
+	}
+	return values, nil
+}
 
 // PasswordFieldsFromSchema extracts property names that have "format": "password"
 // from a JSON Schema configSchema.

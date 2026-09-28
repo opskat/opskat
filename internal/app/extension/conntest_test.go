@@ -193,6 +193,15 @@ func TestConnTestRegistrarBuild(t *testing.T) {
 			So(out["password"], ShouldEqual, "s3cret")
 		})
 
+		Convey("an asset id that is not a number is refused, not tested as a new asset", func() {
+			caller := &fakeTestConnCaller{}
+			fn := reg.Build("acme", manifest, "acme-store", caller)
+
+			err := fn(context.Background(), `{"host":"h"}`, "4x")
+			So(err, ShouldNotBeNil)
+			So(caller.adhoc, ShouldBeNil)
+		})
+
 		Convey("the plugin's own connection failure reaches the caller", func() {
 			caller := &fakeTestConnCaller{err: assertErr}
 			fn := reg.Build("acme", manifest, "acme-store", caller)

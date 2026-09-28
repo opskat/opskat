@@ -204,3 +204,28 @@ func TestAssetAuthRefusesTrace(t *testing.T) {
 		So(endpoint.requests(), ShouldBeEmpty)
 	})
 }
+
+// A server that redirects by echoing the request URI (a common http→https or
+// trailing-slash redirect) puts the injected query credential into Location.
+// When the host refuses that hop — it leaves the endpoint, or drops the TLS the
+// asset requires — net/http reports the refused hop's URL in its error, and that
+// error travels back to the guest: it must not carry the credential.
+func TestAssetAuthRefusedRedirectDoesNotLeakTheInjectedQuery(t *testing.T) {
+	Convey("Given an endpoint that redirects off itself echoing the request URI", t, func() {
+		other := newAuthRecorder(t)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.URL+r.URL.RequestURI(), http.StatusMovedPermanently) //nolint:gosec // G710: the echoing redirect is the server behavior under test
+		}))
+		t.Cleanup(srv.Close)
+		signed := base64.StdEncoding.EncodeToString([]byte("elastic:s3cret"))
+		p := newAuthFixture(t, srv.URL, other.URL, "signed")
+
+		_, err := p.CallTool(context.Background(), "http_get", mustJSON(t, map[string]any{"url": srv.URL + "/ok?q=1"}), fixtureAsset)
+
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")
+		So(err.Error(), ShouldNotContainSubstring, url.QueryEscape(signed))
+		So(err.Error(), ShouldNotContainSubstring, signed)
+		So(other.requests(), ShouldBeEmpty)
+	})
+}

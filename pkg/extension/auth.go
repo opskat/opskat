@@ -202,6 +202,42 @@ type requestAuth struct {
 
 type requestAuthKey struct{}
 
+// redact removes the injected values from err's text. A server may echo the
+// request it received — a redirect whose Location repeats the request URI, query
+// credential included, is the common case — and net/http names that hop's URL in
+// the error it returns when the hop is refused or fails. The error travels back
+// to the guest, which must never see what the host injected for it.
+func (a *requestAuth) redact(err error) error {
+	msg := err.Error()
+	redacted := msg
+	for _, b := range a.bindings {
+		if b.value == "" {
+			continue
+		}
+		forms := []string{b.value, url.QueryEscape(b.value), url.PathEscape(b.value)}
+		if b.in == authInBasic {
+			forms = append(forms, base64.StdEncoding.EncodeToString([]byte(b.value)))
+		}
+		for _, form := range forms {
+			redacted = strings.ReplaceAll(redacted, form, "[REDACTED]")
+		}
+	}
+	if redacted == msg {
+		return err
+	}
+	return &redactedError{msg: redacted, err: err}
+}
+
+// redactedError reports a redacted message while keeping the original error
+// reachable for errors.Is / errors.As (a canceled call is still recognizable).
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
 func withRequestAuth(ctx context.Context, auth *requestAuth) context.Context {
 	return context.WithValue(ctx, requestAuthKey{}, auth)
 }

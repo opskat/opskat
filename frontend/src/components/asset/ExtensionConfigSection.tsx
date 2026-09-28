@@ -206,19 +206,12 @@ export function makeExtensionConfigSection(opts: Options) {
         if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
         const config = await encryptSecrets(s.config, s.withheldSecrets, buildCtx);
 
-        const hostConnection: HostConnectionConfig = {};
-        if (proxyChainEnabled) {
-          const secretsByLayer = await resolveSaveProxyChainSecrets(
-            s.proxyChain.proxyChainLayers,
-            buildCtx.encryptPassword
-          );
-          const chainJSON = buildProxyChainJSON(s.proxyChain.proxyChainLayers, secretsByLayer);
-          if (chainJSON) hostConnection.proxyChain = chainJSON;
-        }
-        if (tlsEnabled) {
-          const tls = buildTLS(s.tls);
-          if (tls) hostConnection.tls = tls;
-        }
+        const hostConnection = hostConnectionOf(
+          s,
+          proxyChainEnabled
+            ? await resolveSaveProxyChainSecrets(s.proxyChain.proxyChainLayers, buildCtx.encryptPassword)
+            : {}
+        );
         if (Object.keys(hostConnection).length > 0) {
           config[HOST_CONNECTION_CONFIG_KEY] = hostConnection;
         }
@@ -232,25 +225,14 @@ export function makeExtensionConfigSection(opts: Options) {
       buildTest: opts.testConnection ? buildTestConfig : undefined,
     });
 
-    // 测试连接：表单当前值（含连接区）原样送出；未改动的密码字段整体去掉，宿主拿资产 id
-    // （借道 AssetTestConfig.password——测试连接没有独立密码语义，这个类型专用的分发闭包
-    // 把它当资产 id 解析）用已存密文补齐。新建资产没有资产 id，送空串。
-    function buildTestConfig(s: ExtensionFormState): Promise<AssetTestConfig> {
-      if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
-      const config: Record<string, unknown> = { ...s.config };
-      for (const field of secrets) {
-        const current = String(config[field] ?? "");
-        if (current === (initialSecretsRef.current[field] ?? "")) {
-          delete config[field];
-        }
-      }
-
+    // 宿主保留键里的连接设置（代理链 / TLS），保存与测试连接共用；两者只差代理链各层
+    // 密钥的形态（保存时加密，测试时明文）。SSH 隧道存在资产列上，不在这里。
+    function hostConnectionOf(
+      s: ExtensionFormState,
+      secretsByLayer: Parameters<typeof buildProxyChainJSON>[1]
+    ): HostConnectionConfig {
       const hostConnection: HostConnectionConfig = {};
       if (proxyChainEnabled) {
-        const secretsByLayer: Record<string, { password?: string; token?: string }> = {};
-        for (const layer of s.proxyChain.proxyChainLayers) {
-          secretsByLayer[layer.id] = { password: layer.password || undefined, token: layer.token || undefined };
-        }
         const chainJSON = buildProxyChainJSON(s.proxyChain.proxyChainLayers, secretsByLayer);
         if (chainJSON) hostConnection.proxyChain = chainJSON;
       }
@@ -258,6 +240,32 @@ export function makeExtensionConfigSection(opts: Options) {
         const tls = buildTLS(s.tls);
         if (tls) hostConnection.tls = tls;
       }
+      return hostConnection;
+    }
+
+    // 测试连接：表单当前值（含连接区）原样送出；未改动的密码字段整体去掉，宿主拿资产 id
+    // （借道 AssetTestConfig.password——测试连接没有独立密码语义，这个类型专用的分发闭包
+    // 把它当资产 id 解析）用已存密文补齐。新建资产没有资产 id，送空串。
+    async function buildTestConfig(s: ExtensionFormState): Promise<AssetTestConfig> {
+      if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
+      const config: Record<string, unknown> = { ...s.config };
+      for (const field of secrets) {
+        const current = String(config[field] ?? "");
+        // 复制出来的资产没有资产 id，宿主无从补齐沿用的源资产密文：不带它测试测的就不是
+        // 保存下来的那份配置，让用户重新输入。
+        if (!editAsset?.ID && current === "" && s.withheldSecrets[field]) {
+          throw new Error(t("asset.extTestCopiedSecret"));
+        }
+        if (current === (initialSecretsRef.current[field] ?? "")) {
+          delete config[field];
+        }
+      }
+
+      const secretsByLayer: Record<string, { password?: string; token?: string }> = {};
+      for (const layer of s.proxyChain.proxyChainLayers) {
+        secretsByLayer[layer.id] = { password: layer.password || undefined, token: layer.token || undefined };
+      }
+      const hostConnection = hostConnectionOf(s, secretsByLayer);
       if (sshTunnel && s.tunnel && s.sshTunnelId) {
         hostConnection.sshTunnelId = s.sshTunnelId;
       }
@@ -265,11 +273,11 @@ export function makeExtensionConfigSection(opts: Options) {
         config[HOST_CONNECTION_CONFIG_KEY] = hostConnection;
       }
 
-      return Promise.resolve({
+      return {
         assetType: opts.assetType,
         configJSON: JSON.stringify(config),
         password: editAsset?.ID ? String(editAsset.ID) : "",
-      });
+      };
     }
 
     // 编辑态：把密文字段换成后端解密后的值，用户才能看到自己填过什么。解密失败不能退回

@@ -184,34 +184,9 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 // call, which has no database row to decrypt from in the first place.
 func (h *DefaultHostProvider) credentialValues(ctx context.Context, asset *AssetRef, fields []string) (map[string]string, error) {
 	if asset.AdHoc != nil {
-		return adHocFieldValues(asset.AdHoc.Credentials, fields), nil
+		return ConfigFieldValues(asset.AdHoc.Credentials, fields)
 	}
 	return h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, fields)
-}
-
-// adHocFieldValues reads fields out of config as strings, exactly as
-// AssetCredentialValues does for a stored asset, minus the decrypt step: an
-// ad-hoc call's Credentials carry their password fields already resolved to
-// plaintext by the caller that built the AdHocAssetConfig. A field absent from
-// config is omitted, not "".
-func adHocFieldValues(config json.RawMessage, fields []string) map[string]string {
-	values := make(map[string]string, len(fields))
-	var cfg map[string]json.RawMessage
-	if json.Unmarshal(config, &cfg) != nil {
-		return values
-	}
-	for _, field := range fields {
-		raw, ok := cfg[field]
-		if !ok || string(raw) == "null" {
-			continue
-		}
-		var s string
-		if json.Unmarshal(raw, &s) != nil {
-			s = string(raw) // a number or bool renders as its JSON text
-		}
-		values[field] = s
-	}
-	return values
 }
 
 // assetDial resolves the connection path and TLS settings of the invocation's

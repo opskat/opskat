@@ -257,6 +257,10 @@ func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
 		`put --b=true`,
 		`put --tags=true --a=y`,
 		`put --force --a=true`,
+		// Values the flag DSL cannot spell: the canonical form policy, approval and
+		// grant judge must still be the arguments that run.
+		`put --json='{"tags":["a,b"],"a":"x"}'`,
+		`put --json='{"tags":[]}'`,
 	} {
 		t.Run(command, func(t *testing.T) {
 			_, want, err := parseCommand(m, command)

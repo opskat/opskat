@@ -4,6 +4,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -37,7 +38,16 @@ type connTestRegistrar struct{ ext *Extension }
 // registrant's signature for a need only extension types have.
 func (r *connTestRegistrar) Build(extName string, manifest *extension.Manifest, assetType string, plugin extreg.TestConnectionCaller) conntest.TestFunc {
 	return func(ctx context.Context, configJSON, plainPassword string) error {
-		assetID, _ := strconv.ParseInt(plainPassword, 10, 64)
+		var assetID int64
+		if plainPassword != "" {
+			id, err := strconv.ParseInt(plainPassword, 10, 64)
+			if err != nil {
+				// Not wrapped: strconv's error quotes the argument, which rides in the
+				// password parameter.
+				return errors.New("test connection: the asset id is not a number")
+			}
+			assetID = id
+		}
 		adhoc, err := r.ext.buildAdHocTestConfig(ctx, extName, manifest, assetType, assetID, configJSON)
 		if err != nil {
 			return err

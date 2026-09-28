@@ -172,7 +172,8 @@ func (o options) takesValue(verb, name string) bool {
 // WithValueFlags makes Parse treat a bare "--name" (no "=value") as consuming the
 // *next* word as its value, for any flag where takesValue(verb, name) reports true;
 // flags it reports false for keep the default bare-boolean meaning ("true", no word
-// consumed). Render, given the same option, never writes such a flag bare. Parse
+// consumed). A next word that is itself a flag ("--...") is never taken as the value:
+// the flag is missing its value. Render, given the same option, never writes such a flag bare. Parse
 // itself has no notion of a flag's declared type — that lives in a manifest (or a
 // protocol's own DSL) the caller already has in hand — so the decision is injected
 // here rather than hardcoded: the extension tool DSL uses this to accept
@@ -213,8 +214,10 @@ func Parse(s string, opts ...Option) (*Command, error) {
 		}
 		if !found {
 			if cfg.takesValue(verb, name) {
-				if i+1 >= len(rest) {
-					return nil, fmt.Errorf("flag --%s requires a value", name)
+				if i+1 >= len(rest) || strings.HasPrefix(rest[i+1], "--") {
+					// The next word is another flag: this one has no value. A value that
+					// really starts with "--" is written --name=--value.
+					return nil, fmt.Errorf("flag --%s requires a value (write --%s=<value> for one starting with --)", name, name)
 				}
 				i++
 				value = rest[i]

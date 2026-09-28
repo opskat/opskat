@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,23 +117,35 @@ func canonicalCommand(m *extension.Manifest, command string) (string, error) {
 	}
 	c := &cmdline.Command{Verb: toolName, Flags: make(map[string]string, len(values))}
 	for name, raw := range values {
-		c.Flags[name] = flagLiteral(raw)
+		literal, ok := flagLiteral(raw)
+		if !ok {
+			// 有值 flag 写不出来（见 flagLiteral）：整组参数改用 --json 逃生口。规范串
+			// 是策略分类、审批与 grant 判的主体，它必须解析回真正执行的那组参数。
+			c.Flags = map[string]string{"json": string(argsJSON)}
+			break
+		}
+		c.Flags[name] = literal
 	}
 	return c.Render(flagGrammar(m)), nil
 }
 
 // flagLiteral 把一个已校验的参数值渲染回 flag 值文本。字符串取其内容（而不是带引号的
 // JSON），数组用逗号连接——与 convertFlag 的输入形状对称，规范串因此能被再次解析。
-func flagLiteral(raw json.RawMessage) string {
+// ok 为 false 表示 flag 写法无法无损表达这个值：空数组（"" 会解析成 [""]）或含逗号的
+// 元素（会被切开）。
+func flagLiteral(raw json.RawMessage) (string, bool) {
 	var str string
 	if err := json.Unmarshal(raw, &str); err == nil {
-		return str
+		return str, true
 	}
 	var items []string
 	if err := json.Unmarshal(raw, &items); err == nil {
-		return strings.Join(items, ",")
+		if len(items) == 0 || slices.ContainsFunc(items, func(item string) bool { return strings.Contains(item, ",") }) {
+			return "", false
+		}
+		return strings.Join(items, ","), true
 	}
-	return strings.TrimSpace(string(raw))
+	return strings.TrimSpace(string(raw)), true
 }
 
 func toolDef(m *extension.Manifest, name string) (extension.ToolDef, bool) {

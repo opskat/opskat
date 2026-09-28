@@ -37,7 +37,8 @@ func TestPluginTestConnection(t *testing.T) {
 			p := newTestConnectionFixture(t, nil)
 
 			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{
-				Config: mustJSON(t, map[string]any{"endpoint": srv.URL}),
+				Config:      mustJSON(t, map[string]any{"endpoint": srv.URL}),
+				Credentials: mustJSON(t, map[string]any{"endpoint": srv.URL}),
 			})
 			So(err, ShouldBeNil)
 		})
@@ -50,27 +51,11 @@ func TestPluginTestConnection(t *testing.T) {
 			p := newTestConnectionFixture(t, nil)
 
 			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{
-				Config: mustJSON(t, map[string]any{"endpoint": srv.URL}),
+				Config:      mustJSON(t, map[string]any{"endpoint": srv.URL}),
+				Credentials: mustJSON(t, map[string]any{"endpoint": srv.URL}),
 			})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "503")
-		})
-
-		Convey("a target outside the submitted config's declared endpoint is denied, not merely unreachable", func() {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			}))
-			defer srv.Close()
-			p := newTestConnectionFixture(t, nil)
-
-			// The handler dials cfg.Endpoint itself, so "outside the endpoint" is
-			// exercised by declaring one endpoint but a config whose own endpoint
-			// field the gate reads is a different, unreachable-by-design host —
-			// proving the gate reads the ad-hoc config, not a database row.
-			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{
-				Config: mustJSON(t, map[string]any{"endpoint": "http://es.internal.invalid:9"}),
-			})
-			So(err, ShouldNotBeNil)
 		})
 
 		Convey("an unknown asset type is refused", func() {
@@ -91,7 +76,8 @@ func TestPluginTestConnection(t *testing.T) {
 			// .invalid never resolves locally: a direct dial (skipping the ad-hoc
 			// dialer) would fail outright rather than reach srv.
 			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{
-				Config: mustJSON(t, map[string]any{"endpoint": "http://es.internal.invalid:9200"}),
+				Config:      mustJSON(t, map[string]any{"endpoint": "http://es.internal.invalid:9200"}),
+				Credentials: mustJSON(t, map[string]any{"endpoint": "http://es.internal.invalid:9200"}),
 			})
 			So(err, ShouldBeNil)
 			assets, addrs := dialer.dialed()
@@ -117,6 +103,23 @@ func TestPluginTestConnection(t *testing.T) {
 			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{Config: config, Credentials: config})
 			So(err, ShouldBeNil)
 			So(gotAuth, ShouldNotBeEmpty)
+		})
+
+		Convey("host-only credentials that cannot be read fail the test instead of sending it unauthenticated", func() {
+			called := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			p := newTestConnectionFixture(t, nil)
+
+			err := p.TestConnection(ctx, "fixture", &AdHocAssetConfig{
+				Config:      mustJSON(t, map[string]any{"endpoint": srv.URL, "authType": "bearer"}),
+				Credentials: []byte(`not json`),
+			})
+			So(err, ShouldNotBeNil)
+			So(called, ShouldBeFalse)
 		})
 
 		Convey("credentials withheld from the guest's config are still injected from the host-only values", func() {

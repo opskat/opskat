@@ -166,6 +166,32 @@ describe("ExtensionConfigSection copying an asset", () => {
     const built = await ref.current!.buildConfig(ctx);
     expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "https://x", secret: CIPHERTEXT });
   });
+
+  // A copy has no asset id for the host to fill the kept secret from: testing it
+  // without the secret would test a different configuration than Save stores.
+  it("test connection asks for the kept secret instead of testing without it", async () => {
+    const Testable = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema: {
+        type: "object",
+        properties: {
+          endpoint: { type: "string", title: "Endpoint" },
+          secret: { type: "string", format: "password", title: "Secret" },
+        },
+      },
+      testConnection: true,
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<Testable ref={ref} editAsset={copiedAsset()} ctx={ctx} onValidityChange={() => {}} />);
+
+    await expect(ref.current!.buildTestConfig!(ctx)).rejects.toThrow("asset.extTestCopiedSecret");
+
+    fireEvent.change(screen.getByLabelText("Secret"), { target: { value: "typed" } });
+    const tc = await ref.current!.buildTestConfig!(ctx);
+    expect(tc.password).toBe("");
+    expect(JSON.parse(tc.configJSON)).toEqual({ endpoint: "https://x", secret: "typed" });
+  });
 });
 
 describe("ExtensionConfigSection connection settings", () => {

@@ -72,33 +72,19 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 	if err != nil {
 		return nil, err
 	}
-	values := make(map[string]string, len(fields))
 	if asset.Config == "" {
-		return values, nil
+		return map[string]string{}, nil
 	}
-	var cfg map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(asset.Config), &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s config: %w", asset.Type, err)
+	values, err := extension.ConfigFieldValues(json.RawMessage(asset.Config), fields)
+	if err != nil {
+		return nil, fmt.Errorf("%s config: %w", asset.Type, err)
 	}
-	passwords := map[string]bool{}
-	for _, f := range extension.PasswordFieldsFromSchema(caller.Manifest.AssetTypeDef(asset.Type).ConfigSchema) {
-		passwords[f] = true
-	}
-	for _, field := range fields {
-		raw, ok := cfg[field]
-		if !ok || string(raw) == "null" {
-			continue
-		}
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			value = string(raw) // a number or bool renders as its JSON text
-		}
-		if passwords[field] && value != "" {
-			if value, err = decryptPasswordField(asset.Type, field, value); err != nil {
+	for _, field := range extension.PasswordFieldsFromSchema(caller.Manifest.AssetTypeDef(asset.Type).ConfigSchema) {
+		if value := values[field]; value != "" {
+			if values[field], err = decryptPasswordField(asset.Type, field, value); err != nil {
 				return nil, err
 			}
 		}
-		values[field] = value
 	}
 	logger.Ctx(ctx).Debug("extension asset credentials resolved for injection",
 		zap.String("extension", caller.Name),

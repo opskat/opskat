@@ -42,18 +42,17 @@ func RegisterExtensionRuleSink(canonicalType, policyType string, actions []strin
 		return fmt.Errorf("permission: invalid extension rule sink registration %q", canonicalType)
 	}
 	prefix := extRulePrefix(policyType)
-	land := extLand(prefix, actions)
 	return addRuleSink(canonicalType, &ruleLanding{
 		shape:         commandShape,
 		refPolicyType: policyType,
 		// 扩展的权限组 Policy JSON 就是 {allow_list, deny_list}，与 CommandPolicy 的
 		// 两侧同形，因此用同一个形状解码；它的 kind 是 manifest 声明的策略面名，
 		// 不是宿主的策略列，所以 refShape 只能由这里给出。
-		refShape:     commandShape,
-		land:         land,
-		grantRequest: land,
-		match:        extRuleShadows(prefix),
-		ownFilter:    func(rule string) bool { return strings.HasPrefix(rule, prefix) },
+		refShape:       commandShape,
+		land:           extLand(prefix, actions),
+		grantsAreRules: true,
+		match:          extRuleShadows(prefix),
+		ownFilter:      func(rule string) bool { return strings.HasPrefix(rule, prefix) },
 	})
 }
 
@@ -83,7 +82,7 @@ type ExtensionGrant struct {
 // types); the caller keeps its grant pattern unchanged.
 func extensionGrantFor(assetType, patterns string) (grant ExtensionGrant, isExt bool, err error) {
 	landing, ok := ruleLandingFor(assetType)
-	if !ok || landing.grantRequest == nil {
+	if !ok || !landing.grantsAreRules {
 		return ExtensionGrant{}, false, nil
 	}
 	grant.Type = assetType
@@ -92,7 +91,7 @@ func extensionGrantFor(assetType, patterns string) (grant ExtensionGrant, isExt 
 		if line == "" {
 			continue
 		}
-		landed, err := landing.grantRequest(line)
+		landed, err := landing.land(line)
 		if err != nil {
 			return ExtensionGrant{}, true, fmt.Errorf("invalid grant pattern %q for an extension asset: %w", line, err)
 		}

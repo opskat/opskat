@@ -154,11 +154,14 @@ type SeedSnippetDef struct {
 // extension's own directory. Extensions must declare every capability they need;
 // the host enforces these at each host_* call site.
 type Capabilities struct {
-	FS          FSCapability      `json:"fs"`
-	HTTP        HTTPCapability    `json:"http"`
-	Credentials string            `json:"credentials"` // "" (none) | "read"
-	Tunnel      bool              `json:"tunnel"`      // allow routing HTTP through the asset's SSH tunnel
-	Network     NetworkCapability `json:"network"`
+	FS          FSCapability   `json:"fs"`
+	HTTP        HTTPCapability `json:"http"`
+	Credentials string         `json:"credentials"` // "" (none) | "read"
+	// Tunnel lets an allowlisted (non-endpoint) HTTP target resolve to a private
+	// address. Routing through an asset's SSH tunnel is an asset type's
+	// connection.sshTunnel declaration, not this capability.
+	Tunnel  bool              `json:"tunnel"`
+	Network NetworkCapability `json:"network"`
 }
 
 // NetworkCapability grants network reach that is decided per call rather than by

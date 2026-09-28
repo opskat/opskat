@@ -273,6 +273,9 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	// already ran.
 	resp, err := client.Do(req)
 	if err != nil {
+		if h.auth != nil {
+			err = h.auth.redact(err)
+		}
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 

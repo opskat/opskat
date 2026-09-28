@@ -30,8 +30,8 @@ func (m *Manifest) ToolReference() string {
 	var b strings.Builder
 	b.WriteString("## exec syntax\n\n")
 	b.WriteString("`exec(asset=<asset>, command=\"<tool> [--flag=value ...]\")`. ")
-	b.WriteString("The first token is the tool name. Flags are `--flag=value` or a bare `--flag` (true) — ")
-	b.WriteString("not space separated. `array` parameters take a comma-separated value (`--keys=a,b,c`). ")
+	b.WriteString("The first token is the tool name. Flags are `--flag=value` or a bare `--flag` (true); ")
+	b.WriteString("a non-boolean flag also accepts `--flag value`. `array` parameters take a comma-separated value (`--keys=a,b,c`). ")
 	b.WriteString("Use `--json='{...}'` (single-quoted) when a value the flag syntax cannot express is needed; ")
 	b.WriteString("`--json` replaces the whole argument object and cannot be combined with other flags.\n\n")
 	b.WriteString("## tools\n")

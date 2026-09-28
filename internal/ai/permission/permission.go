@@ -815,14 +815,15 @@ func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []
 // ext:<policyType>:… ——扩展调用只匹配这种形状。不合法的不落库：上游
 // （SubmitGrantMulti、ParseApprovalResponse）已拒绝它们，走到这里的只会是合法的。
 func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
-	patterns := NormalizeGrantPatterns(approvalType, command, origin)
-	if grant, isExt, err := extensionGrantFor(approvalType, command); isExt {
-		if err != nil {
-			logger.Ctx(ctx).Warn("extension grant pattern invalid; nothing persisted",
-				zap.Int64("assetID", assetID), zap.String("approvalType", approvalType), zap.Error(err))
-			return
-		}
-		patterns = grant.Rules
+	grant, isExt, err := extensionGrantFor(approvalType, command)
+	patterns := grant.Rules
+	switch {
+	case !isExt:
+		patterns = NormalizeGrantPatterns(approvalType, command, origin)
+	case err != nil:
+		logger.Ctx(ctx).Warn("extension grant pattern invalid; nothing persisted",
+			zap.Int64("assetID", assetID), zap.String("approvalType", approvalType), zap.Error(err))
+		return
 	}
 	for _, p := range patterns {
 		SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, p)

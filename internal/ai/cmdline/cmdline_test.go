@@ -629,4 +629,16 @@ func TestParse_WithValueFlags(t *testing.T) {
 			t.Fatalf("Parse(%q) = nil error, want rejection (no value for --path)", "request --path")
 		}
 	})
+
+	t.Run("下一个词是 flag 时不当作值吞掉", func(t *testing.T) {
+		// "--path --verbose" is a --path missing its value, not path="--verbose" with
+		// --verbose silently dropped.
+		if c, err := Parse(`request --path --verbose`, WithValueFlags(takesValue)); err == nil {
+			t.Fatalf("Parse = %#v, want rejection (--path has no value)", c.Flags)
+		}
+		c, err := Parse(`request --path=--verbose`, WithValueFlags(takesValue))
+		if err != nil || c.Flags["path"] != "--verbose" {
+			t.Fatalf("Parse(--path=--verbose) = %#v, %v; a value starting with -- is written with =", c, err)
+		}
+	})
 }
