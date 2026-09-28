@@ -172,6 +172,9 @@ func (r *fakeAssetRepo) CountAgentAuthBySourceIDGroupByFingerprint(_ context.Con
 func (r *fakeAssetRepo) ListAgentAuthBySourceID(_ context.Context, _ int64) ([]*asset_entity.Asset, error) {
 	return nil, nil
 }
+func (r *fakeAssetRepo) ListByCustomType(_ context.Context, _ string) ([]*asset_entity.Asset, error) {
+	return nil, nil
+}
 
 // fakeGroupRepo mirrors fakeAssetRepo for groups, for the same reason.
 type fakeGroupRepo struct {
