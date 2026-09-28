@@ -9,6 +9,7 @@ package netdial
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"strings"
@@ -72,6 +73,34 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		errs = append(errs, err)
 	}
 	return nil, errors.Join(errs...)
+}
+
+// Resolve 按与 DialContext 相同的策略解析 host，供要先检查解析结果、再拨号已检查地址的调用方使用
+// （如扩展 HTTP 的内网地址拦截），同一主机名只解析一次：.local 先查单播 DNS，查不到再交系统解析器
+// （d.Resolver，未设置时为 net.DefaultResolver）。network 为拨号网络（tcp / tcp4 / tcp6）。
+func (d *Dialer) Resolve(ctx context.Context, network, host string) ([]net.IP, error) {
+	ipNetwork, ok := lookupNetworks[network]
+	if !ok {
+		return nil, fmt.Errorf("netdial: cannot resolve host for network %q", network)
+	}
+	if d.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.Timeout)
+		defer cancel()
+	}
+	if isLocalDomain(host) {
+		ips, err := lookupUnicast(ctx, ipNetwork, host)
+		if err == nil {
+			return ips, nil
+		}
+		logger.Ctx(ctx).Debug("unicast lookup for .local host failed, falling back to system resolver",
+			zap.String("host", host), zap.Error(err))
+	}
+	resolver := d.Resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	return resolver.LookupIP(ctx, ipNetwork, host)
 }
 
 func lookupUnicast(ctx context.Context, network, host string) ([]net.IP, error) {

@@ -4,6 +4,7 @@ package extension
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,37 +13,56 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
-// dialGuard wraps a DialContext function and rejects connections to private/loopback
-// IPs at dial time. This catches DNS rebinding attacks where a hostname resolves to
-// a private IP after the URL-level allowlist check has already passed.
-func dialGuard(origDial func(ctx context.Context, network, addr string) (net.Conn, error), allowPrivate bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+type dialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// resolveFunc resolves a hostname for a dial network (tcp / tcp4 / tcp6).
+type resolveFunc func(ctx context.Context, network, host string) ([]net.IP, error)
+
+// dialGuard wraps dial and rejects connections to private/loopback IPs at dial time,
+// catching DNS rebinding where a hostname resolves to a private IP after the URL-level
+// allowlist check has already passed. A hostname is resolved once and the checked IPs
+// are what gets dialed, so a second lookup can never hand dial a different answer.
+//
+// With allowPrivate there is nothing to check: addr goes to dial untouched, so an SSH
+// tunnel resolves it on the remote side instead of failing on a name only it knows.
+func dialGuard(dial dialContextFunc, resolve resolveFunc, allowPrivate bool) dialContextFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			host = addr
+		if allowPrivate {
+			return dial(ctx, network, addr)
 		}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		var ips []net.IP
 		if ip := net.ParseIP(host); ip != nil {
-			if IsPrivateIP(ip) && !allowPrivate {
+			if IsPrivateIP(ip) {
 				return nil, fmt.Errorf("dial denied: private IP %s", ip)
 			}
+			ips = []net.IP{ip}
 		} else {
-			// Resolve hostname to catch DNS rebinding.
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
+			if ips, err = resolve(ctx, network, host); err != nil {
 				return nil, err
 			}
-			for _, ipa := range ips {
-				if IsPrivateIP(ipa.IP) && !allowPrivate {
-					return nil, fmt.Errorf("dial denied: hostname %q resolves to private IP %s", host, ipa.IP)
+			for _, ip := range ips {
+				if IsPrivateIP(ip) {
+					return nil, fmt.Errorf("dial denied: hostname %q resolves to private IP %s", host, ip)
 				}
 			}
 		}
-		if origDial != nil {
-			return origDial(ctx, network, addr)
+		var errs []error
+		for _, ip := range ips {
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			errs = append(errs, err)
 		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+		return nil, errors.Join(errs...)
 	}
 }
 
@@ -85,18 +105,19 @@ func newHTTPHandle(params IOOpenParams, dial DialFunc) (*httpHandle, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Build transport; clone default so we don't mutate the global one.
+	// Build transport; clone default so we don't mutate the global one. Direct dials
+	// go through netdial so .local hosts resolve over unicast DNS instead of waiting
+	// out the system resolver's mDNS timeout.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	var baseDial func(ctx context.Context, network, addr string) (net.Conn, error)
+	direct := netdial.Default()
+	baseDial := dialContextFunc(direct.DialContext)
 	if dial != nil {
-		baseDial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		baseDial = func(_ context.Context, network, addr string) (net.Conn, error) {
 			return dial(network, addr)
 		}
-	} else {
-		baseDial = transport.DialContext
 	}
 	// Always wrap with the dial-time guard to catch DNS rebinding after URL-level checks.
-	transport.DialContext = dialGuard(baseDial, params.AllowPrivate)
+	transport.DialContext = dialGuard(baseDial, direct.Resolve, params.AllowPrivate)
 
 	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
 
