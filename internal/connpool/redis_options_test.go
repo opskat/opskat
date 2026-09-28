@@ -48,7 +48,7 @@ func TestBuildRedisOptions(t *testing.T) {
 }
 
 func TestConfigureRedisTransport(t *testing.T) {
-	t.Run("direct keeps default dialer and tls", func(t *testing.T) {
+	t.Run("direct uses the unified dialer and moves tls into it", func(t *testing.T) {
 		cfg := &asset_entity.RedisConfig{Host: "h", Port: 6379, TLS: true, TLSInsecure: true}
 		opts, err := buildRedisOptions(cfg, "")
 		require.NoError(t, err)
@@ -56,8 +56,8 @@ func TestConfigureRedisTransport(t *testing.T) {
 		tunnel, err := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
 		require.NoError(t, err)
 		assert.Nil(t, tunnel)
-		assert.Nil(t, opts.Dialer)
-		assert.NotNil(t, opts.TLSConfig)
+		assert.NotNil(t, opts.Dialer)
+		assert.Nil(t, opts.TLSConfig)
 	})
 
 	t.Run("proxy sets custom dialer", func(t *testing.T) {

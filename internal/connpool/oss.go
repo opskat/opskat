@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"go.uber.org/zap"
 )
 
@@ -50,11 +50,13 @@ func buildMinioOptions(ctx context.Context, cfg *asset_entity.OSSConfig, secret 
 		lookup = minio.BucketLookupPath
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := netdial.Default()
 	if cfg.ConnectTimeout > 0 {
 		timeout := time.Duration(cfg.ConnectTimeout) * time.Second
-		transport.DialContext = (&net.Dialer{Timeout: timeout}).DialContext
+		dialer.Timeout = timeout
 		transport.TLSHandshakeTimeout = timeout
 	}
+	transport.DialContext = dialer.DialContext
 	if cfg.ProxyChain != nil {
 		dial, err := ProxyChainDialContext(ctx, cfg.ProxyChain)
 		if err != nil {

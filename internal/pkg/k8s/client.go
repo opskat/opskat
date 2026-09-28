@@ -18,6 +18,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 type NodeInfo struct {
@@ -153,6 +155,9 @@ func buildClient(kubeconfig string, opts ...ClientOption) (*kubernetes.Clientset
 		config.Proxy = func(*http.Request) (*url.URL, error) {
 			return nil, nil
 		}
+	} else {
+		// 直连也走统一拨号器(参数与 client-go 默认一致),环境变量代理照常生效
+		config.Dial = netdial.Default().DialContext
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)

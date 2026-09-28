@@ -232,14 +232,15 @@ func TestRedisTransportDialsRequestedAddress(t *testing.T) {
 		assertEcho(t, opts.Dialer, echo)
 	})
 
-	t.Run("direct connection without mapping keeps go-redis default dialer", func(t *testing.T) {
-		cfg := &asset_entity.RedisConfig{Mode: asset_entity.RedisModeCluster, Nodes: []string{"10.0.0.1:7001"}, TLS: true}
+	t.Run("direct connection without mapping dials through the unified dialer", func(t *testing.T) {
+		echo := socksdialtest.StartEcho(t)
+		cfg := &asset_entity.RedisConfig{Mode: asset_entity.RedisModeCluster, Nodes: []string{echo}}
 		opts, err := buildRedisOptions(cfg, "")
 		require.NoError(t, err)
 		_, err = configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
 		require.NoError(t, err)
-		assert.Nil(t, opts.Dialer)
-		assert.NotNil(t, opts.TLSConfig)
+
+		assertEcho(t, opts.Dialer, echo)
 	})
 }
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 // TunnelDialer dials a TCP address through an SSH tunnel.
@@ -95,7 +97,7 @@ func (h *DefaultHostProvider) openTCP(params IOOpenParams) (uint32, IOMeta, erro
 		// set a deadline on the resulting handle via IOSetDeadline.
 		conn, err = h.cfg.TunnelDialer.Dial(h.cfg.AssetSSHTunnelID, params.Addr)
 	} else {
-		dialer := &net.Dialer{Timeout: timeout}
+		dialer := &netdial.Dialer{Dialer: net.Dialer{Timeout: timeout}}
 		conn, err = dialer.Dial("tcp", params.Addr)
 	}
 	if err != nil {

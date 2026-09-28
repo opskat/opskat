@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/sshpool"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -162,6 +164,19 @@ func etcdTunnelID(asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig) int64
 	return 0
 }
 
+// etcdDirectDial 直连 etcd endpoint,经统一拨号器解析主机名。grpc 对自定义 dialer 原样传入
+// unix socket 端点("unix://绝对路径" / "unix:相对路径"),这里按 grpc 默认 dialer 的规则还原。
+func etcdDirectDial(ctx context.Context, addr string) (net.Conn, error) {
+	d := &netdial.Dialer{}
+	if rest, ok := strings.CutPrefix(addr, "unix:"); ok {
+		if path, abs := strings.CutPrefix(rest, "//"); abs {
+			return d.DialContext(ctx, "unix", path)
+		}
+		return d.DialContext(ctx, "unix", rest)
+	}
+	return d.DialContext(ctx, "tcp", addr)
+}
+
 // DialEtcd 创建新的 etcd 客户端。可选走 SSH 隧道(仅对第一个 endpoint)或 SOCKS5 代理(隧道优先)。
 // 返回的 tunnel 可为 nil(直连/代理场景)。调用方负责 client.Close() / tunnel.Close()(若非 nil)。
 func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig, password string, sshPool *sshpool.Pool) (*clientv3.Client, io.Closer, error) {
@@ -204,6 +219,8 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 			grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 				return dial(ctx, addr)
 			}))
+	} else {
+		clientCfg.DialOptions = append(clientCfg.DialOptions, grpc.WithContextDialer(etcdDirectDial))
 	}
 
 	client, err := clientv3.New(clientCfg)

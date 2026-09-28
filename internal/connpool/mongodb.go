@@ -12,6 +12,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/sshpool"
 	mongov1 "go.mongodb.org/mongo-driver/mongo"
@@ -99,7 +100,10 @@ func configureMongoTransport(clientOpts *options.ClientOptions, asset *asset_ent
 	}
 	if cfg.Proxy != nil {
 		clientOpts.SetDialer(&mongoProxyDialer{proxy: cfg.Proxy})
+		return nil, nil
 	}
+	// 直连也走统一拨号器(与驱动默认的零值 net.Dialer 参数一致),不用驱动默认 dialer
+	clientOpts.SetDialer(&netdial.Dialer{})
 	return nil, nil
 }
 

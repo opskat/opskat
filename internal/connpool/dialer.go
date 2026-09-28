@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -15,6 +16,21 @@ import (
 // dialContextFunc 按目标地址建立底层 TCP 连接。
 // tunnelDialFunc 忽略 addr(目标在建隧道时已确定),其余实现按 addr 拨号。
 type dialContextFunc func(ctx context.Context, addr string) (net.Conn, error)
+
+// networkDialFunc 是驱动要求的三参拨号签名(按 network 区分 tcp / unix / udp)。
+type networkDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// DialContext 使 networkDialFunc 满足 mssql / mongo 等驱动的 ContextDialer 接口。
+func (f networkDialFunc) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return f(ctx, network, addr)
+}
+
+// ignoreNetwork 把只按地址拨号的 dialContextFunc 适配为三参签名;隧道/代理只承载 TCP,忽略 network。
+func (f dialContextFunc) ignoreNetwork() networkDialFunc {
+	return func(ctx context.Context, _, addr string) (net.Conn, error) {
+		return f(ctx, addr)
+	}
+}
 
 // tunnelDialFunc 把 SSH 隧道包装为固定目标的 dialContextFunc。
 func tunnelDialFunc(t *SSHTunnel) dialContextFunc {
@@ -28,9 +44,14 @@ func tunnelAddrDialFunc(t *SSHTunnel) dialContextFunc {
 	return t.DialAddr
 }
 
-// directDialFunc 直连目标地址,超时与保活对齐 go-redis 默认 dialer。
+// directDialer 是 connpool 各驱动直连的统一拨号器,超时与保活对齐 go-redis 默认 dialer。
+func directDialer() *netdial.Dialer {
+	return &netdial.Dialer{Dialer: net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Minute}}
+}
+
+// directDialFunc 直连目标地址。
 func directDialFunc() dialContextFunc {
-	d := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Minute}
+	d := directDialer()
 	return func(ctx context.Context, addr string) (net.Conn, error) {
 		return d.DialContext(ctx, "tcp", addr)
 	}

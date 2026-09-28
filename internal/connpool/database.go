@@ -62,14 +62,18 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 		if dialErr != nil {
 			return nil, nil, dialErr
 		}
-		db, err = openWithDialer(cfg, password, dial)
+		if dial == nil { // 代理链解析为空层即直连
+			db, err = openWithDialer(cfg, password, directDialer().DialContext)
+		} else {
+			db, err = openWithDialer(cfg, password, dial.ignoreNetwork())
+		}
 	case tunnelID > 0 && sshPool != nil:
 		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
-		db, err = openWithDialer(cfg, password, tunnelDialFunc(tunnel))
+		db, err = openWithDialer(cfg, password, tunnelDialFunc(tunnel).ignoreNetwork())
 	case cfg.Proxy != nil:
-		db, err = openWithDialer(cfg, password, proxyDialFunc(cfg.Proxy))
+		db, err = openWithDialer(cfg, password, proxyDialFunc(cfg.Proxy).ignoreNetwork())
 	default:
-		db, err = openDirect(cfg, password)
+		db, err = openWithDialer(cfg, password, directDialer().DialContext)
 	}
 	if err != nil {
 		if tunnel != nil {
@@ -229,7 +233,7 @@ func openDirect(cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, err
 	return sql.Open(driverName, dsn)
 }
 
-func openWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial dialContextFunc) (*sql.DB, error) {
+func openWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
 	switch cfg.Driver {
 	case asset_entity.DriverMySQL:
 		return openMySQLWithDialer(cfg, password, dial)
@@ -247,15 +251,15 @@ func openWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial dial
 // 后注册者会劫持先前连接池的重拨,因此每次 open 都用独立的名字。
 var mysqlDialerSeq atomic.Int64
 
-func registerMySQLDialer(dial dialContextFunc) string {
+func registerMySQLDialer(dial networkDialFunc) string {
 	name := fmt.Sprintf("opskat-dialer-%d", mysqlDialerSeq.Add(1))
 	mysql.RegisterDialContext(name, func(ctx context.Context, addr string) (net.Conn, error) {
-		return dial(ctx, addr)
+		return dial(ctx, "tcp", addr)
 	})
 	return name
 }
 
-func openMySQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial dialContextFunc) (*sql.DB, error) {
+func openMySQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
 	mysqlCfg := mysql.NewConfig()
 	mysqlCfg.User = cfg.Username
 	mysqlCfg.Passwd = password
@@ -271,30 +275,22 @@ func openMySQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial
 	return sql.Open("mysql", mysqlCfg.FormatDSN())
 }
 
-func openPgWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial dialContextFunc) (*sql.DB, error) {
+func openPgWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
 	// pgx 支持通过 DialFunc 自定义连接方式,使用 connector API
 	_, dsn := buildDSN(cfg, password)
 	db := sql.OpenDB(newPgDialConnector(dsn, dial))
 	return db, nil
 }
 
-func openMSSQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial dialContextFunc) (*sql.DB, error) {
+func openMSSQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
 	_, dsn := buildDSN(cfg, password)
 	msdsnCfg, err := msdsn.Parse(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse mssql dsn: %w", err)
 	}
 	connector := mssql.NewConnectorConfig(msdsnCfg)
-	connector.Dialer = mssqlDialerFunc(func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return dial(ctx, addr)
-	})
+	connector.Dialer = dial
 	return sql.OpenDB(connector), nil
-}
-
-type mssqlDialerFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-func (f mssqlDialerFunc) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	return f(ctx, network, addr)
 }
 
 func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName string, dsn string) {

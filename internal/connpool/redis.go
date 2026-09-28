@@ -100,7 +100,7 @@ func redisSeedAddrs(cfg *asset_entity.RedisConfig) []string {
 
 // configureRedisTransport 按 代理链 > 隧道 > 代理 > 直连 设置 opts.Dialer,返回隧道(可为 nil)。
 // 拨号一律使用 go-redis 请求的目标地址(集群发现的节点、哨兵返回的主节点),并先做地址映射;
-// 直连且无映射时保留 go-redis 默认 dialer(哨兵模式除外:需记录拨号地址以发现主从切换)。
+// 直连也走 directDialFunc(统一的 .local 解析策略),不使用 go-redis 默认 dialer。
 // go-redis 设置自定义 Dialer 后默认 dialer 的 TLS 逻辑被绕过,因此把 TLSConfig
 // 移入 dialer 内手动包裹并清空 opts.TLSConfig,避免 TLS 静默失效。
 func configureRedisTransport(opts *redis.UniversalOptions, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
@@ -127,13 +127,10 @@ func configureRedisTransport(opts *redis.UniversalOptions, asset *asset_entity.A
 	case cfg.Proxy != nil:
 		dial = proxyDialFunc(cfg.Proxy)
 	}
-	sentinel := cfg.EffectiveMode() == asset_entity.RedisModeSentinel
 	if dial == nil { // 直连(含代理链解析为空层)
-		if len(addrMap) == 0 && !sentinel {
-			return nil, nil
-		}
 		dial = directDialFunc()
 	}
+	sentinel := cfg.EffectiveMode() == asset_entity.RedisModeSentinel
 	dial = mappedDialFunc(dial, addrMap)
 	if sentinel {
 		dial = recordDialedAddr(dial) // 供 sentinelMasterWatcher 得知数据连接拨往的主节点
