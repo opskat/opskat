@@ -38,6 +38,10 @@ const httpUsage = "usage: <METHOD> <PATH> [-H 'Name: value']... [-d <data> | -d 
 
 const maxGenericRedirects = 10
 
+// GenericSecretMask 在展示用的地址（审批、help、详情页、错误信息）里顶替密钥字段的值：
+// Base URL 模板可以引用密钥字段，实际请求用真值，展示结果里不能出现明文。
+const GenericSecretMask = "****"
+
 var httpMethods = []string{
 	http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch,
 	http.MethodDelete, http.MethodHead, http.MethodOptions,
@@ -203,9 +207,38 @@ func RenderGenericBaseURL(ct *custom_type_entity.CustomType, values map[string]s
 	return u, nil
 }
 
-// targetURL 是这次请求的目标（不含注入的 query）：Base URL + 调用方的路径与 query。
+// RenderGenericDisplayBaseURL 渲染给人和模型看的 Base URL（审批、help、详情页）：密钥字段
+// 以 GenericSecretMask 代替，只有真正发出的请求才用真值。
+func RenderGenericDisplayBaseURL(ct *custom_type_entity.CustomType, values map[string]string, now time.Time) (*url.URL, error) {
+	return RenderGenericBaseURL(ct, maskedGenericValues(ct, values), now)
+}
+
+// maskedGenericValues 返回展示用的字段值：有值的密钥字段换成 GenericSecretMask。
+func maskedGenericValues(ct *custom_type_entity.CustomType, values map[string]string) map[string]string {
+	masked := make(map[string]string, len(values))
+	for name, v := range values {
+		masked[name] = v
+	}
+	for _, f := range ct.Fields {
+		if f.Secret && masked[f.Name] != "" {
+			masked[f.Name] = GenericSecretMask
+		}
+	}
+	return masked
+}
+
+// targetURL 是这次请求实际发往的目标（不含注入的 query）：Base URL + 调用方的路径与 query。
 func targetURL(t *GenericTarget, cmd *HTTPCommand, now time.Time) (*url.URL, error) {
-	base, err := RenderGenericBaseURL(t.Type, t.Values, now)
+	return joinTarget(t, cmd, t.Values, now)
+}
+
+// displayTargetURL 是 targetURL 的展示版本：Base URL 里的密钥字段以掩码代替。
+func displayTargetURL(t *GenericTarget, cmd *HTTPCommand, now time.Time) (*url.URL, error) {
+	return joinTarget(t, cmd, maskedGenericValues(t.Type, t.Values), now)
+}
+
+func joinTarget(t *GenericTarget, cmd *HTTPCommand, values map[string]string, now time.Time) (*url.URL, error) {
+	base, err := RenderGenericBaseURL(t.Type, values, now)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +258,7 @@ func describeHTTPCommand(_ context.Context, t *GenericTarget, command string) (s
 	if err != nil {
 		return "", err
 	}
-	u, err := targetURL(t, cmd, time.Now())
+	u, err := displayTargetURL(t, cmd, time.Now())
 	if err != nil {
 		return "", err
 	}
@@ -257,6 +290,10 @@ func sendGenericHTTP(ctx context.Context, t *GenericTarget, cmd *HTTPCommand, lo
 	if err != nil {
 		return nil, err
 	}
+	display, err := displayTargetURL(t, cmd, now)
+	if err != nil {
+		return nil, err
+	}
 	auth, err := parseAuthBindings(t.Type)
 	if err != nil {
 		return nil, err
@@ -285,7 +322,7 @@ func sendGenericHTTP(ctx context.Context, t *GenericTarget, cmd *HTTPCommand, lo
 			}
 			if !sameOrigin(next.URL, via[0].URL) {
 				return fmt.Errorf("cross-origin redirect to %s refused: credentials are only sent to %s",
-					originOf(next.URL), originOf(via[0].URL))
+					originOf(next.URL), originOf(display))
 			}
 			// 307/308 保留请求体（GetBody 非 nil），301/302/303 改成无体的 GET。
 			var redirectBody []byte
@@ -303,7 +340,7 @@ func sendGenericHTTP(ctx context.Context, t *GenericTarget, cmd *HTTPCommand, lo
 	resp, err := client.Do(req) //nolint:bodyclose // closed by genericHTTPResponse.close, which every caller defers
 	if err != nil {
 		transport.CloseIdleConnections()
-		err = redactURLError(err, cmd.Method, target)
+		err = redactURLError(err, cmd.Method, display)
 		log.Error("generic http request failed", zap.Duration("elapsed", time.Since(started)), zap.Error(err))
 		return nil, err
 	}

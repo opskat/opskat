@@ -14,10 +14,6 @@ import (
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
 
-// secretMask 在渲染详情页的实际地址时顶替密钥字段的值：地址只用于展示，Base URL 模板
-// 若引用了密钥，展示结果里也不能出现明文。
-const secretMask = "****"
-
 // GenericFieldView 是通用资产详情页的一个字段。密钥字段从不携带明文：只报告是否已设置、
 // 是否托管凭据及凭据名；查看明文走 RevealGenericSecret。
 type GenericFieldView struct {
@@ -81,8 +77,6 @@ func (c *CustomType) GetGenericAssetView(assetID int64) (*GenericAssetView, erro
 		Fields:   make([]GenericFieldView, 0, len(ct.Fields)),
 		Missing:  append([]string{}, resolved.Missing...),
 	}
-	// 渲染地址用的字段值：密钥换成掩码，保证展示结果里不出现明文。
-	display := make(map[string]string, len(resolved.Values))
 	for _, f := range ct.Fields {
 		value := resolved.Values[f.Name]
 		fv := GenericFieldView{
@@ -93,11 +87,7 @@ func (c *CustomType) GetGenericAssetView(assetID int64) (*GenericAssetView, erro
 			Set:      value != "",
 			Missing:  missing[f.Name],
 		}
-		display[f.Name] = value
 		if f.Secret {
-			if value != "" {
-				display[f.Name] = secretMask
-			}
 			if stored := cfg.Values[f.Name]; stored.CredentialID > 0 {
 				cred, err := credential_mgr_svc.Get(ctx, stored.CredentialID)
 				if err != nil {
@@ -113,7 +103,8 @@ func (c *CustomType) GetGenericAssetView(assetID int64) (*GenericAssetView, erro
 	}
 
 	if ct.ExecMode == custom_type_entity.ExecModeHTTP && ct.HTTP != nil {
-		u, err := helper.RenderGenericBaseURL(ct, display, time.Now())
+		// 展示用渲染：Base URL 里引用的密钥字段以掩码代替。
+		u, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now())
 		if err != nil {
 			// exec 会用同一个渲染把错误原样报出来；详情页只是不显示地址这一行。
 			logger.Ctx(ctx).Warn("render generic base url for detail view", zap.Int64("assetID", assetID), zap.Error(err))

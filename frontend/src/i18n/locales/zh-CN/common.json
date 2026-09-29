@@ -52,6 +52,7 @@
     "commandTemplate": "命令",
     "commandTemplatePlaceholder": "留空：调用时传整条 shell 命令",
     "commandTemplateHint": "模板只在这里渲染；exec 传入的参数按字面拼在后面，按 argv 直接执行，不经过 shell。",
+    "commandTemplateEmptyHint": "命令模板为空时，exec 传入整条命令，用系统默认 Shell 执行。任何命令都能读到注入的环境变量，只能依靠策略拦截。",
     "env": "环境变量",
     "envName": "变量名",
     "envValue": "值模板",

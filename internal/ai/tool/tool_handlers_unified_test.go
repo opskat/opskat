@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 	"gorm.io/gorm"
 
@@ -923,6 +925,38 @@ func TestHandleHelp_GenericAssetAddsInstanceValuesMaskedSecretAddressTunnelAndDe
 		t.Fatal("help on a generic asset must not mark the static \"generic\" type documented — " +
 			"exec's gate check must key on the slug so a different custom type's assets stay gated")
 	}
+}
+
+// TestHandleHelp_GenericSecretInBaseURLMaskedAndAuthTemplatesShown: the rendered actual
+// address never carries a secret field's value even when the Base URL template references
+// it (Hard invariant: rendered credentials stay out of the AI context), and the type
+// structure shows each auth binding's value template alongside its type and name — the
+// same way env bindings are shown — since templates are type configuration, not values.
+func TestHandleHelp_GenericSecretInBaseURLMaskedAndAuthTemplatesShown(t *testing.T) {
+	setupGenericPutDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Hook", Slug: "hook", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{
+			{Name: "host", Required: true},
+			{Name: "token", Secret: true, Required: true},
+		},
+		HTTP: &custom_type_entity.HTTPConfig{
+			BaseURL: "https://{{host}}/robot/{{token}}",
+			Auth:    []custom_type_entity.AuthBinding{{Type: "header", Name: "X-Sign", Values: []string{"{{hex(sha256(token))}}"}}},
+		},
+	}))
+	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
+	secret := "hook_secret_must_not_leak"
+	_, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "hook-prod", "type": "hook", "config": map[string]any{"host": "hook.internal", "token": secret},
+	})
+	require.NoError(t, err)
+
+	out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": "hook-prod"})
+	require.NoError(t, err)
+	assert.NotContains(t, out, secret)
+	assert.Contains(t, out, "https://hook.internal/robot/****")
+	assert.Contains(t, out, "{{hex(sha256(token))}}")
 }
 
 // TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing locks that a required

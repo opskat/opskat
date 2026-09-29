@@ -38,21 +38,6 @@ async function openCustomTypesSettings(page: Page): Promise<void> {
   await page.getByRole("tab", { name: "Custom types" }).click();
 }
 
-/**
- * Adds one `allow`-list tag on the editor's currently-open "Default policy" tab
- * (`PolicyTagEditor`, shared allow/deny component with no per-field testid or
- * aria-label — `<Input placeholder={placeholder} .../>` is its only distinguishing
- * attribute, and Allow/Deny share the same placeholder text). `policyTab`'s JSX
- * renders the Allow editor before the Deny one unconditionally, so the first of the
- * two matching textboxes is always Allow, regardless of exec mode (HTTP vs. command
- * only changes the placeholder's wording, not the DOM order).
- */
-async function addAllowRule(dialog: Locator, rule: string): Promise<void> {
-  const input = dialog.getByPlaceholder(/^e\.g\. /).first();
-  await input.fill(rule);
-  await input.press("Enter");
-}
-
 export interface CreateHttpCustomTypeOptions {
   name: string;
   slug: string;
@@ -64,22 +49,6 @@ export interface CreateHttpCustomTypeOptions {
   authHeaderName: string;
   /** e.g. `Bearer {{token}}` — `authValueTemplate` renders against `secretField`. */
   authValueTemplate: string;
-  /**
-   * Allow-list rules to seed on the type's default policy (e.g. `["GET *"]`).
-   *
-   * `custom_type_svc.Save` only auto-prefills GET/HEAD/OPTIONS for a brand-new HTTP
-   * type when `DefaultPolicy` arrives `nil` (design decision 9,
-   * `custom_type_entity.DefaultPolicyFor`) — but `CustomTypeEditorDialog.tsx`'s
-   * `toWire()` always sends a non-nil `{allow_list: [...], deny_list: [...]}`, even
-   * an empty one, for a freshly-opened editor (`emptyDraft()` seeds `allowList: []`
-   * regardless of exec mode). So a type created through the UI without touching the
-   * "Default policy" tab ends up with an *empty* allow list, not the documented
-   * prefill — confirmed against a running sandbox: `custom_types.default_policy` was
-   * `{"allow_list":[],"deny_list":[]}` after saving a fresh HTTP type untouched. This
-   * option exists so a spec that needs "GET succeeds without approval" can add the
-   * rule itself, the same way a real user would have to today.
-   */
-  allow?: string[];
 }
 
 /** Settings → Custom types → New type, execution mode HTTP request (the default). */
@@ -111,11 +80,6 @@ export async function createHttpCustomTypeViaUI(page: Page, opts: CreateHttpCust
   await dialog.getByRole("button", { name: "Add field" }).click();
   await dialog.locator('[aria-label="Field name"]').nth(1).fill(opts.secretField);
   await dialog.locator('[aria-label="Secret"]').nth(1).click();
-
-  if (opts.allow?.length) {
-    await dialog.getByTestId("config-tab-policy").click();
-    for (const rule of opts.allow) await addAllowRule(dialog, rule);
-  }
 
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(dialog).toBeHidden();

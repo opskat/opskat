@@ -410,6 +410,35 @@ func TestGenericHTTP_AIExecOutput(t *testing.T) {
 	assert.NotContains(t, detail, testSecret)
 }
 
+// Base URL 模板可以引用密钥字段（例如把 token 写进 webhook 路径）。实际请求要用真值，
+// 但给人和模型看的地址——审批展示补充、错误信息——一律以掩码代替密钥（spec Hard invariant：
+// 渲染结果不出现在审批内容、调用方输出与 AI 上下文里）。
+func TestGenericHTTP_SecretInBaseURLNeverDisplayed(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "hook", "http://{{host}}/robot/{{token}}")
+	asset := genericAsset(t, "hook", map[string]string{"host": srv.host(), "token": testSecret})
+
+	res, stdout, _, err := streamHTTP(t, ctx, asset, nil, "GET", "/send")
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.ExitCode)
+	assert.Contains(t, stdout, "GET /robot/"+testSecret+"/send", "the request itself uses the real value")
+
+	detail, err := DescribeGenericCommand(ctx, asset, "GET /send")
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: GET "+srv.URL+"/robot/"+GenericSecretMask+"/send", detail)
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	dead := l.Addr().String()
+	require.NoError(t, l.Close())
+	deadAsset := genericAsset(t, "hook", map[string]string{"host": dead, "token": testSecret})
+	_, stdout, _, err = streamHTTP(t, ctx, deadAsset, nil, "GET", "/send")
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	assert.NotContains(t, err.Error(), testSecret)
+}
+
 // 通用资产的命令执行方式见 generic_command.go / generic_command_test.go：本文件曾在
 // helper.RegisterGenericMode(ExecModeCommand, ...) 落地前用这条测试锁住"尚不支持"的占位
 // 行为，现在命令方式已注册，占位行为不再成立。

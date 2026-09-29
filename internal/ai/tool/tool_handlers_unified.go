@@ -271,12 +271,13 @@ func renderCustomTypeStructure(ct *custom_type_entity.CustomType) string {
 	case custom_type_entity.ExecModeHTTP:
 		if ct.HTTP != nil {
 			fmt.Fprintf(&b, "Base URL: %s\n", ct.HTTP.BaseURL)
+			// 与环境变量绑定一样给出值模板：模板是类型配置，不是注入值。
 			for _, auth := range ct.HTTP.Auth {
+				kind := auth.Type
 				if auth.Name != "" {
-					fmt.Fprintf(&b, "Auth: %s %s\n", auth.Type, auth.Name)
-				} else {
-					fmt.Fprintf(&b, "Auth: %s\n", auth.Type)
+					kind += " " + auth.Name
 				}
+				fmt.Fprintf(&b, "Auth: %s = %s\n", kind, strings.Join(auth.Values, " : "))
 			}
 		}
 	case custom_type_entity.ExecModeCommand:
@@ -352,7 +353,8 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 	if ct.ExecMode == custom_type_entity.ExecModeHTTP && ct.HTTP != nil {
 		// 渲染失败只可能来自数据一致性问题（如字段被并发改名）：跳过地址这一行比让整条
 		// help 报错更有用；exec 时同一个渲染会把错误原样报出来。
-		if addr, err := helper.RenderGenericBaseURL(ct, resolved.Values, time.Now()); err == nil {
+		// Base URL 可以引用密钥字段：展示用渲染以掩码代替密钥（Hard invariant）。
+		if addr, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now()); err == nil {
 			fmt.Fprintf(&b, "\nActual address: %s\n", addr)
 		}
 		b.WriteString(renderGenericTunnelLine(ctx, asset))

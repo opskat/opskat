@@ -2,6 +2,7 @@ package permission
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -39,6 +40,22 @@ func init() {
 			panic(fmt.Sprintf("permission: driver alias %q collides with a registered permission type", name))
 		}
 	}
+}
+
+// BuiltinDeclaredTypeNames 返回调用方可以声明为类型的全部内置名字：权限类型与其别名
+// （exec / sql / db / mongo / kube …）以及驱动名（mysql / postgres …）。resolveDeclaredType
+// 先查这些名字、最后才查自定义类型标识，所以与它们同名的标识会在 --type 断言、batch 前缀里
+// 被内置类型遮蔽——自定义类型的保留类型名必须包含它们（组合根 main.go 注入）。
+func BuiltinDeclaredTypeNames() []string {
+	names := make([]string, 0, len(permissionTypes)+len(driverAliases))
+	for name := range permissionTypes {
+		names = append(names, name)
+	}
+	for name := range driverAliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // resolveDeclaredType 解析一个调用方声明的类型名，返回它断言的资产类型，以及——仅当

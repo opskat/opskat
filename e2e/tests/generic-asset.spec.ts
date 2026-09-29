@@ -35,10 +35,6 @@ test("HTTP custom type: GET is allowed and injects auth, DELETE needs approval, 
       baseUrl: mock.baseUrl,
       authHeaderName: "Authorization",
       authValueTemplate: "Bearer {{apiKey}}",
-      // GET succeeds "without approval" requires an allow rule on the type; see the
-      // option's doc comment in fixtures/customTypes.ts for why the UI does not
-      // prefill one on its own (a confirmed gap against design decision 9).
-      allow: ["GET *"],
     });
     await createGenericAssetViaUI(page, {
       name: asset,
@@ -47,7 +43,8 @@ test("HTTP custom type: GET is allowed and injects auth, DELETE needs approval, 
       secrets: { apiKey: secret },
     });
 
-    // GET matches the type's allow rule: no approval dialog, and the rendered
+    // GET matches the editor's prefilled HTTP default allow rule (GET / HEAD / OPTIONS,
+    // design decision 9), copied onto the asset: no approval dialog, and the rendered
     // Authorization header actually reaches the wire.
     const getResult = await runOpsctl([
       "--data-dir",
@@ -130,8 +127,8 @@ test("command custom type: a harmless command needs approval and runs through th
   await createCommandCustomTypeViaUI(page, { name: `E2E Command ${Date.now()}`, slug, field: "note" });
   await createGenericAssetViaUI(page, { name: asset, typeSlug: slug });
 
-  // The command mode never gets a default allow rule regardless of the UI gap above
-  // (custom_type_entity.DefaultPolicyFor returns an empty policy for "command"), so
+  // The command mode never gets a default allow rule (the editor prefills none when the
+  // execution mode switches to command, matching custom_type_entity.DefaultPolicyFor), so
   // every command needs approval — including this harmless, cross-platform one
   // ("echo" exists as a shell builtin on both POSIX shells and cmd.exe).
   const resultPromise = runOpsctl([

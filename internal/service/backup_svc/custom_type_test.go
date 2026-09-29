@@ -181,6 +181,52 @@ func TestImport_CustomTypes_Merge_KeepsLocalOnSlugConflict(t *testing.T) {
 	assert.Equal(t, "grafana", cfg.CustomType, "the imported asset binds to the local type by slug")
 }
 
+// 合并模式下备份资产绑定到本地版本：值按本地版本的字段结构存储——本地是密钥的字段加密、
+// 本地是普通字段的保持明文、本地没有的字段随之删除（与修改类型结构时的规则一致）。
+func TestImport_CustomTypes_Merge_ValuesStoredPerLocalVersion(t *testing.T) {
+	ctx := setupBackupTest(t)
+	local := grafanaCustomType("grafana")
+	local.Fields = []custom_type_entity.Field{
+		{Name: "host", Required: true},
+		{Name: "token", Secret: true, Required: true},
+		{Name: "org"},
+	}
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, local))
+
+	backupType := grafanaCustomType("grafana")
+	backupType.Fields = []custom_type_entity.Field{
+		{Name: "host", Secret: true},
+		{Name: "token"},
+		{Name: "org"},
+		{Name: "legacy"},
+	}
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":   {Value: "grafana.internal"},
+		"token":  {Value: "tok"},
+		"org":    {Value: "main"},
+		"legacy": {Value: "old"},
+	})
+	data := &BackupData{
+		IncludesCredentials: true,
+		CustomTypes:         []*custom_type_entity.CustomType{backupType},
+		Assets:              []*asset_entity.Asset{asset},
+	}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, taggedCredentialCrypto{tag: "dst:"})
+	require.NoError(t, err)
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]asset_entity.GenericValue{
+		"host":  {Value: "grafana.internal"},
+		"token": {Value: "dst:tok"},
+		"org":   {Value: "main"},
+	}, cfg.Values)
+}
+
 func TestImport_CustomTypes_NotImportedWhenImportAssetsFalse(t *testing.T) {
 	ctx := setupBackupTest(t)
 	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{grafanaCustomType("grafana")}}

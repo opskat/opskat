@@ -33,6 +33,7 @@ import (
 	"github.com/opskat/opskat/internal/app/system"
 	"github.com/opskat/opskat/internal/app/vnc"
 
+	aipermission "github.com/opskat/opskat/internal/ai/permission"
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/assettype"
@@ -459,14 +460,16 @@ func initExtensionSystem(
 }
 
 // registerReservedTypeNames 装 custom_type_svc 的保留类型名来源：内置类型
-// （assettype.RegisteredTypes()）与已加载扩展声明的类型（bridge 为 nil 或扩展系统
-// 禁用时只有内置类型）。custom_type_svc 不得 import internal/assettype（避免循环
-// 依赖），保留名只能由调用方（这里是组合根 main.go）注入；闭包在每次创建类型时才
-// 求值，因此扩展异步加载完成后也能看到新类型，不需要重新调用本函数——除非要换掉
-// bridge getter 本身（extSvc 从无到有时）。
+// （assettype.RegisteredTypes()，外加 --type / batch 前缀认的内置别名与驱动名
+// permission.BuiltinDeclaredTypeNames()——同名标识会被它们遮蔽）与已加载扩展声明的类型
+// （bridge 为 nil 或扩展系统禁用时只有内置类型）。custom_type_svc 不得 import
+// internal/assettype（避免循环依赖），保留名只能由调用方（这里是组合根 main.go）注入；
+// 闭包在每次创建类型时才求值，因此扩展异步加载完成后也能看到新类型，不需要重新调用本
+// 函数——除非要换掉 bridge getter 本身（extSvc 从无到有时）。
 func registerReservedTypeNames(bridge func() *extpkg.Bridge) {
 	custom_type_svc.CustomType().SetReservedNames(func() []string {
 		names := append([]string(nil), assettype.RegisteredTypes()...)
+		names = append(names, aipermission.BuiltinDeclaredTypeNames()...)
 		if bridge == nil {
 			return names
 		}

@@ -34,6 +34,18 @@ const AUTH_VALUE_COUNT: Record<string, number> = { header: 1, query: 1, basic: 2
 const AUTH_HAS_NAME: Record<string, boolean> = { header: true, query: true, basic: false };
 const AUTH_KINDS = ["header", "query", "basic"] as const;
 
+// 新建类型时按执行方式预填的默认放行规则,与 custom_type_entity.DefaultPolicyFor 一一对应
+// (HTTP 放行 GET / HEAD / OPTIONS,命令方式没有默认放行)。
+const DEFAULT_ALLOW: Record<string, string[]> = { http: ["GET *", "HEAD *", "OPTIONS *"], command: [] };
+
+function defaultAllowFor(execMode: string): string[] {
+  return [...(DEFAULT_ALLOW[execMode] ?? [])];
+}
+
+function sameRules(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((r, i) => r === b[i]);
+}
+
 interface FieldDraft {
   name: string;
   label: string;
@@ -89,7 +101,7 @@ function emptyDraft(): CustomTypeDraft {
     commandTemplate: "",
     commandEnv: [],
     usage: "",
-    allowList: [],
+    allowList: defaultAllowFor("http"),
     denyList: [],
   };
 }
@@ -509,7 +521,14 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
         {issueMap.get("command.template") && (
           <p className="text-xs text-destructive">{issueMap.get("command.template")}</p>
         )}
-        <p className="text-xs text-muted-foreground">{t("customType.commandTemplateHint")}</p>
+        {draft.commandTemplate.trim() ? (
+          <p className="text-xs text-muted-foreground">{t("customType.commandTemplateHint")}</p>
+        ) : (
+          <p className="flex items-start gap-1.5 text-xs text-warning">
+            <Info className="mt-0.5 size-3.5 shrink-0" />
+            {t("customType.commandTemplateEmptyHint")}
+          </p>
+        )}
         {warnings.some((w) => w.path === "command.template") && (
           <p className="flex items-start gap-1.5 text-xs text-warning">
             <Info className="mt-0.5 size-3.5 shrink-0" />
@@ -676,7 +695,16 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
             <Field label={t("customType.execMode")}>
               <Segmented
                 value={draft.execMode}
-                onChange={(v) => setDraft((d) => ({ ...d, execMode: v }))}
+                onChange={(v) =>
+                  setDraft((d) => ({
+                    ...d,
+                    execMode: v,
+                    // 新建类型:放行列表仍是上一个执行方式的预填值时,换成新执行方式的预填值;
+                    // 用户改过的规则不动。
+                    allowList:
+                      !isEdit && sameRules(d.allowList, defaultAllowFor(d.execMode)) ? defaultAllowFor(v) : d.allowList,
+                  }))
+                }
                 options={[
                   { value: "http", label: t("customType.execModeHttp"), icon: Globe },
                   { value: "command", label: t("customType.execModeCommand"), icon: SquareTerminal },

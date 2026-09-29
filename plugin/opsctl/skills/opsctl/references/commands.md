@@ -142,11 +142,24 @@ real type, never from a flag or verb name.
   and returns captured output (JSON for database/redis/mongodb/etcd/kafka
   reads; an affected-row / exit-code summary for writes). Command syntax is
   per-type — run `opsctl help <asset-or-type>` first if you don't already know it.
+- **generic** (custom-type) assets keep each argument after `--` as given and
+  stream too: stdin, stdout/stderr and the exit code pass straight through.
+  The host injects the type's credentials; nothing after `--` is rendered as a
+  template.
+  - HTTP types: `<METHOD> <PATH> [-H 'Name: value']... [-d <data> | -d @<file> | -d @-] [-i]`.
+    PATH starts with `/` and is appended to the asset's Base URL. The body goes to
+    stdout, the status line to stderr (`-i` also puts the status line and headers on
+    stdout); exit code 0 for 2xx, 1 otherwise, 1 with empty stdout when the request did
+    not complete. Policy matches `<METHOD> <path>` (no query).
+  - Command types: the arguments are appended to the type's command template and run
+    as argv without a shell (policy matches the arguments joined by spaces); a type
+    with no command template takes the whole command, run by the system's default
+    shell (policy parses it like an ssh command).
 
 **Flags**:
 - `--type <type>` — Optional assertion: fails fast (before any approval
   prompt) if the asset is not of this type. Does not select dispatch — that
-  always comes from the asset's real type. Accepts three kinds of value:
+  always comes from the asset's real type. Accepts four kinds of value:
   - canonical asset types: `ssh`, `serial`, `database`, `redis`, `mongodb`,
     `etcd`, `kafka`, `k8s`, `oss`;
   - protocol aliases: `exec` (ssh), `sql` / `db` (database), `mongo`
@@ -154,7 +167,8 @@ real type, never from a flag or verb name.
   - database driver names: `mysql`, `postgresql` / `postgres`, `mssql` /
     `sqlserver`, `sqlite` / `sqlite3`. These assert the driver **as well as**
     the type — `--type mysql` fails on a PostgreSQL asset, which is the whole
-    reason driver names are accepted rather than folded into `database`.
+    reason driver names are accepted rather than folded into `database`;
+  - a custom type's slug (e.g. `grafana`) for a generic asset built on it.
 - `--scope <s>` — Connection-level target that is not part of the command
   itself. Only meaningful for **redis** assets — any other asset type given
   `--scope` fails immediately (exit code 1, before approval), it is never

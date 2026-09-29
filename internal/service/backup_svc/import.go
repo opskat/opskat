@@ -117,6 +117,8 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 		// 不需要像其他实体那样维护 ID 重映射表：replace 模式用备份替换本地全部类型；
 		// merge 模式标识已存在时保留本地版本，备份中的资产按标识绑定到本地版本
 		// （因此出现的缺值按“新增必填字段”的规则展示，见 custom_type_svc.ResolveAsset）。
+		// localTypesBySlug 记下合并模式保留的本地版本：资产的值要按它的字段结构存储。
+		localTypesBySlug := make(map[string]*custom_type_entity.CustomType)
 		if opts.ImportAssets && len(data.CustomTypes) > 0 {
 			if isReplace {
 				if err := tx.Exec("DELETE FROM custom_types").Error; err != nil {
@@ -129,6 +131,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 					err := tx.Where("slug = ?", ct.Slug).First(&existing).Error
 					switch {
 					case err == nil:
+						localTypesBySlug[ct.Slug] = &existing
 						continue // 合并模式：标识已存在，保留本地版本
 					case !errors.Is(err, gorm.ErrRecordNotFound):
 						return fmt.Errorf("检查自定义类型 %s 是否存在失败: %w", ct.Slug, err)
@@ -142,10 +145,10 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				result.CustomTypesImported++
 			}
 		}
-		// 通用资产字段值的密钥重加密要按备份导出时的字段结构判定哪些字段是密钥
-		// （见 export.go 的 decryptGenericSecrets/stripGenericSecrets 同一约定）：
-		// 必须用 data.CustomTypes 里随备份带的定义，而不是本地（可能已被用户改过
-		// 结构，或合并模式下刻意保留的）版本。
+		// 备份里的值是什么形态（明文 / 已清空）按备份导出时的字段结构判定（见 export.go 的
+		// decryptGenericSecrets/stripGenericSecrets 同一约定），所以用 data.CustomTypes 里
+		// 随备份带的定义；值怎么存则按资产最终绑定的版本（合并模式保留的本地版本，见下面
+		// 资产一步的通用资产分支）。
 		customTypesBySlug := make(map[string]*custom_type_entity.CustomType, len(data.CustomTypes))
 		for _, ct := range data.CustomTypes {
 			customTypesBySlug[ct.Slug] = ct
@@ -304,8 +307,23 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				case a.IsGeneric() && a.Config != "":
 					cfg, err := a.GetGenericConfig()
 					if err == nil {
-						ct := customTypesBySlug[cfg.CustomType]
+						backupCT := customTypesBySlug[cfg.CustomType]
+						// 资产绑定的版本：合并模式保留的本地版本，否则是随备份导入的版本。
+						storeCT := backupCT
+						if local, ok := localTypesBySlug[cfg.CustomType]; ok {
+							storeCT = local
+						}
 						for name, v := range cfg.Values {
+							var storeField custom_type_entity.Field
+							if storeCT != nil {
+								f, ok := storeCT.FieldByName(name)
+								if !ok {
+									// 绑定的版本没有这个字段：值随之删除（与删除字段同一规则）。
+									delete(cfg.Values, name)
+									continue
+								}
+								storeField = f
+							}
 							if v.CredentialID > 0 {
 								// 托管凭据引用重映射：与 SSH 的 cfg.CredentialID 同一套机制。
 								if newID, ok := credIDMap[v.CredentialID]; ok {
@@ -316,16 +334,18 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 								cfg.Values[name] = v
 								continue
 							}
-							if ct == nil {
+							if backupCT == nil {
 								continue
 							}
-							f, ok := ct.FieldByName(name)
-							if !ok || !f.Secret {
+							backupField, ok := backupCT.FieldByName(name)
+							if !ok {
 								continue
 							}
-							// 重新加密内联密钥字段值（备份里已解密为明文，见 export.go 的
-							// decryptGenericSecrets）。
-							if data.IncludesCredentials && v.Value != "" && crypto != nil {
+							// 备份里普通字段是明文；密钥字段含凭据时已解密为明文（export.go 的
+							// decryptGenericSecrets），不含凭据时已清空。绑定版本上是密钥的字段
+							// 重新加密，是普通字段的保持明文。
+							plain := !backupField.Secret || data.IncludesCredentials
+							if plain && storeField.Secret && v.Value != "" && crypto != nil {
 								encrypted, encErr := crypto.Encrypt(v.Value)
 								if encErr != nil {
 									logger.Default().Warn("re-encrypt generic secret", zap.String("field", name), zap.Error(encErr))

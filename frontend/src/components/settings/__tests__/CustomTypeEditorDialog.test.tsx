@@ -75,6 +75,35 @@ describe("CustomTypeEditorDialog", () => {
     expect(await screen.findByText("customType.usageFooter")).toBeInTheDocument();
   });
 
+  it("prefills the default policy by execution mode for a new type and saves it", async () => {
+    const { SaveCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(SaveCustomType).mockResolvedValue({ issues: [{ path: "name", message: "x" }] } as any);
+    render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "action.save" }));
+    expect(vi.mocked(SaveCustomType).mock.calls[0][0].defaultPolicy?.allow_list).toEqual([
+      "GET *",
+      "HEAD *",
+      "OPTIONS *",
+    ]);
+
+    await user.click(screen.getByRole("radio", { name: "customType.execModeCommand" }));
+    await user.click(screen.getByRole("button", { name: "action.save" }));
+    expect(vi.mocked(SaveCustomType).mock.calls[1][0].defaultPolicy?.allow_list).toEqual([]);
+  });
+
+  it("warns that any command can read the injected env vars when the command template is empty", async () => {
+    render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("radio", { name: "customType.execModeCommand" }));
+    await user.click(screen.getByTestId("config-tab-request"));
+
+    expect(screen.getByText("customType.commandTemplateEmptyHint")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("customType.commandTemplate"), "aws");
+    expect(screen.queryByText("customType.commandTemplateEmptyHint")).not.toBeInTheDocument();
+  });
+
   it("expands a template input to a multi-line textarea on focus and collapses back on blur", async () => {
     render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
     const user = userEvent.setup();
