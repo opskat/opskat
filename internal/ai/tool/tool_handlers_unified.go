@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
@@ -102,7 +100,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 			// 清单里，却不在可执行的 mongoOps 里）。不记的话，一条被挡下的高危尝试
 			// 连 decision 都不落，比策略拒绝还难查。
 			recordShortCircuit(ctx, aictx.SourceExecCanonicalizeError)
-			return "", fmt.Errorf("asset %q is type=%s; invalid command: %w", asset.Name, asset.Type, err)
+			return "", fmt.Errorf("asset %q is type=%s; invalid command: %w", asset.Name, assettype.TypeName(asset), err)
 		}
 		checkCommand = canonicalCommand
 	}
@@ -168,11 +166,12 @@ func recordShortCircuit(ctx context.Context, source string) {
 
 // execGuidance 门禁未满足时返回的引导文本：点名资产与解析出的类型，指引模型
 // 先调 help 再重试 exec（spec §4.6 第 1 条给出的措辞）。返回值而非 error——
-// 模型看到这段文本后能在同一轮内自纠。
+// 模型看到这段文本后能在同一轮内自纠。类型用 assettype.TypeName（与 help 的
+// "type=" 行、门禁键一致：通用资产报它的自定义类型标识）。
 func execGuidance(asset *asset_entity.Asset) string {
 	return fmt.Sprintf(
 		"asset %q is type=%s — call help(asset=%q) for its command syntax before using exec.",
-		asset.Name, asset.Type, asset.Name)
+		asset.Name, assettype.TypeName(asset), asset.Name)
 }
 
 // unsupportedTypeError 类型未注册执行器（只注册了 help 文档的 doc-only 类型，
@@ -252,7 +251,7 @@ func helpForTypeName(ctx context.Context, ref string) (string, error) {
 			gate.MarkDocumented(aictx.GetConversationID(ctx), typeName)
 		}
 		return fmt.Sprintf("Type %q.\n\n%s%s", typeName, genericDoc, renderCustomTypeStructure(ct)), nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
+	case custom_type_svc.IsNotFound(err):
 		return "", fmt.Errorf("%q is neither an existing asset nor a known asset type; documented types: %s",
 			ref, strings.Join(permission.RegisteredHelpTypes(), ", "))
 	default:
@@ -351,11 +350,13 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 	}
 
 	if ct.ExecMode == custom_type_entity.ExecModeHTTP && ct.HTTP != nil {
-		// 渲染失败只可能来自数据一致性问题（如字段被并发改名）：跳过地址这一行比让整条
-		// help 报错更有用；exec 时同一个渲染会把错误原样报出来。
-		// Base URL 可以引用密钥字段：展示用渲染以掩码代替密钥（Hard invariant）。
+		// Base URL 可以引用密钥字段：展示用渲染以掩码代替密钥（Hard invariant）。渲染失败
+		// （如字段值拼不出绝对 http(s) URL）照实写在这一行，而不是悄悄省略——exec 会因同一个
+		// 原因失败，help 正是模型该看到原因的地方；错误只含类型标识与原因，不含字段值。
 		if addr, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now()); err == nil {
-			fmt.Fprintf(&b, "\nActual address: %s\n", addr)
+			fmt.Fprintf(&b, "\nActual address: %s\n", addr.Redacted())
+		} else {
+			fmt.Fprintf(&b, "\nActual address: unavailable (%v)\n", err)
 		}
 		b.WriteString(renderGenericTunnelLine(ctx, asset))
 	}

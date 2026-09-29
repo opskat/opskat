@@ -2,13 +2,11 @@ package permission
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
@@ -28,9 +26,12 @@ import (
 //     shell 解析；取值的 `secret:<字段>` 同样是普通 glob。
 //   - 本地命令：由命令执行方式在这张表里登记自己的判定（本文件之外）。
 //
-// 表里查不到的执行方式一律 NeedConfirm——不猜匹配方式，也不放行。
-var genericModeChecks = map[string]func(ctx context.Context, asset *asset_entity.Asset, subject string) aictx.CheckResult{
-	custom_type_entity.ExecModeHTTP: checkPlainGlobPolicy,
+// 表里查不到的执行方式一律 NeedConfirm——不猜匹配方式，也不放行。ct 是 checkGeneric
+// Permission 已经查到的资产所属类型，登记的判定不必再查一次。
+var genericModeChecks = map[string]func(ctx context.Context, asset *asset_entity.Asset, ct *custom_type_entity.CustomType, subject string) aictx.CheckResult{
+	custom_type_entity.ExecModeHTTP: func(ctx context.Context, asset *asset_entity.Asset, _ *custom_type_entity.CustomType, subject string) aictx.CheckResult {
+		return checkPlainGlobPolicy(ctx, asset, subject)
+	},
 }
 
 // SecretSubjectPrefix is the match-object prefix for get_asset_secret (spec 「策略、审批与
@@ -64,7 +65,7 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 	if !ok {
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
 	}
-	return check(ctx, asset, subject)
+	return check(ctx, asset, ct, subject)
 }
 
 // checkPlainGlobPolicy 用 MatchPlainGlob 按 deny → allow → grant → confirm 判定一个
@@ -176,7 +177,7 @@ func customTypeSlugExists(name string) bool {
 	switch {
 	case err == nil:
 		return true
-	case errors.Is(err, gorm.ErrRecordNotFound):
+	case custom_type_svc.IsNotFound(err):
 		return false
 	default:
 		logger.Default().Warn("lookup custom type slug for type assertion", zap.String("slug", name), zap.Error(err))

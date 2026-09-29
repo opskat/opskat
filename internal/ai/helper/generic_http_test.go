@@ -439,6 +439,26 @@ func TestGenericHTTP_SecretInBaseURLNeverDisplayed(t *testing.T) {
 	assert.NotContains(t, err.Error(), testSecret)
 }
 
+// 调用方的 PATH 拼到渲染后的 Base URL 上若解析失败（例如带控制字符），错误信息不能带出
+// 拼好的完整 URL——Base URL 可能引用了密钥字段。batch 这类不先跑审批展示补充的路径会把
+// 这条错误原样交给模型。
+func TestGenericHTTP_InvalidPathErrorOmitsSecretBaseURL(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "hook", "http://{{host}}/robot/{{token}}")
+	asset := genericAsset(t, "hook", map[string]string{"host": srv.host(), "token": testSecret})
+
+	_, stdout, _, err := streamHTTP(t, ctx, asset, nil, "GET", "/send\x7f")
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	assert.NotContains(t, err.Error(), testSecret)
+
+	_, err = ExecGenericOnAsset(ctx, asset, "GET '/send\x7f'", "")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), testSecret)
+	assert.Equal(t, int32(0), srv.hits.Load())
+}
+
 // 通用资产的命令执行方式见 generic_command.go / generic_command_test.go：本文件曾在
 // helper.RegisterGenericMode(ExecModeCommand, ...) 落地前用这条测试锁住"尚不支持"的占位
 // 行为，现在命令方式已注册，占位行为不再成立。

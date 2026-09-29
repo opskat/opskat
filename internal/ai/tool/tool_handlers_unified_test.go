@@ -959,6 +959,27 @@ func TestHandleHelp_GenericSecretInBaseURLMaskedAndAuthTemplatesShown(t *testing
 	assert.Contains(t, out, "{{hex(sha256(token))}}")
 }
 
+// TestHandleHelp_GenericUnrenderableAddressIsReportedNotOmitted: when the instance's values
+// don't render to an absolute http(s) Base URL, exec will fail for exactly that reason —
+// help must say so on the address line instead of silently dropping it.
+func TestHandleHelp_GenericUnrenderableAddressIsReportedNotOmitted(t *testing.T) {
+	setupGenericPutDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Bare", Slug: "bare-host", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}},
+		HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "{{host}}"},
+	}))
+	_, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "bare-prod", "type": "bare-host", "config": map[string]any{"host": "bare.internal"},
+	})
+	require.NoError(t, err)
+
+	out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": "bare-prod"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Actual address: unavailable")
+	assert.Contains(t, out, "not an absolute http(s) URL")
+}
+
 // TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing locks that a required
 // field added to the custom type after the asset was created (Design decision 15) is
 // reported as missing on the asset's help, not silently rendered as an empty value.
@@ -998,6 +1019,11 @@ func TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType(t *te
 	createGenericGrafanaAsset(t, "grafana-b", map[string]any{"host": "b.internal", "token": "b-tok"}, "")
 
 	ctx := WithDocGate(context.Background(), NewDocGate())
+	// Before help, exec's gate guidance names the same type help reports (the slug), not
+	// the stored asset.Type "generic".
+	guidance, err := handleExec(ctx, map[string]any{"asset": assetA.Name, "command": "GET /"})
+	require.NoError(t, err)
+	assert.Contains(t, guidance, "type=grafana")
 	if _, err := handleHelp(ctx, map[string]any{"asset": assetA.Name}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

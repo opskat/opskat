@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"gorm.io/gorm"
-
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
@@ -80,7 +78,7 @@ func (h *genericHandler) AutomationContractFor(ctx context.Context, a *asset_ent
 
 func (h *genericHandler) NewAssetForTypeName(ctx context.Context, name string) (*asset_entity.Asset, bool, error) {
 	ct, err := custom_type_svc.CustomType().GetBySlug(ctx, name)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if custom_type_svc.IsNotFound(err) {
 		return nil, false, nil
 	}
 	if err != nil {

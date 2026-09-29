@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -165,4 +166,31 @@ func TestGenericCommand_AIExecCapturesOutputAndExitCode(t *testing.T) {
 	require.NoError(t, err, "a non-zero exit is a result for the model, not a tool error")
 	assert.Contains(t, out, "<hello>")
 	assert.Contains(t, out, "exit code 3")
+}
+
+// AI exec 捕获输出时 os/exec 经管道转发 stdout/stderr：shell 退出后留在后台的子进程
+// （`sleep 5 &`、启动一个守护进程）仍握着管道写端，不设上限的话 Wait 要等它退出，
+// 这次工具调用就一直挂着。shell 本身已经退出，结果与退出码在它退出时就确定了。
+func TestGenericCommand_AIExecReturnsWhenShellExitsLeavingBackgroundChild(t *testing.T) {
+	ctx := setupGenericDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "shell-box", Slug: "shell-box-bg", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "note"}},
+		Command: &custom_type_entity.CommandConfig{},
+	}))
+	asset := genericAsset(t, "shell-box-bg", nil)
+
+	started := time.Now()
+	out, err := ExecGenericOnAsset(ctx, asset, "'sleep 5 & echo started; exit 4'", "")
+	elapsed := time.Since(started)
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 4*time.Second, "exec must not wait for a background child that inherited the output pipe")
+	assert.Contains(t, out, "started")
+	assert.Contains(t, out, "exit code 4")
+
+	started = time.Now()
+	out, err = ExecGenericOnAsset(ctx, asset, "'sleep 5 & echo ok'", "")
+	require.NoError(t, err, "a shell that exited 0 is a completed run even though its pipe outlived it")
+	assert.Less(t, time.Since(started), 4*time.Second)
+	assert.Equal(t, "ok\n(exit code 0)", out)
 }

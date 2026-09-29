@@ -126,6 +126,11 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				}
 			}
 			for _, ct := range data.CustomTypes {
+				// 备份是外部输入：类型定义过与保存类型相同的实体校验，执行器与权限判定
+				// 都以"保存时已校验"为前提。
+				if err := ct.Validate(); err != nil {
+					return fmt.Errorf("备份中的自定义类型 %s 无效: %w", ct.Slug, err)
+				}
 				if !isReplace {
 					var existing custom_type_entity.CustomType
 					err := tx.Where("slug = ?", ct.Slug).First(&existing).Error

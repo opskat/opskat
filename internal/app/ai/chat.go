@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +75,7 @@ func allBuiltinAssetTypeSkills() map[string]string {
 }
 
 // definedCustomTypeSummaries returns slug+name pairs for every currently defined custom
-// type, sorted by slug, for PromptBuilder.SetCustomTypes — the "Defined custom types"
+// type for PromptBuilder.SetCustomTypes (which owns the ordering) — the "Defined custom types"
 // discovery section of the skill list (spec "帮助、技能与门禁"). Like
 // allBuiltinAssetTypeSkills it is a pure discovery aid, not a doc-gate signal.
 //
@@ -86,14 +85,13 @@ func allBuiltinAssetTypeSkills() map[string]string {
 func definedCustomTypeSummaries(ctx context.Context) []runner.CustomTypeSummary {
 	types, err := custom_type_svc.CustomType().List(ctx)
 	if err != nil {
-		logger.Default().Warn("list custom types for system prompt", zap.Error(err))
+		logger.Ctx(ctx).Warn("list custom types for system prompt", zap.Error(err))
 		return nil
 	}
 	out := make([]runner.CustomTypeSummary, 0, len(types))
 	for _, ct := range types {
 		out = append(out, runner.CustomTypeSummary{Slug: ct.Slug, Name: ct.Name})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
 	return out
 }
 

@@ -3,14 +3,11 @@ package ai
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 
 	"go.uber.org/mock/gomock"
 
-	"github.com/opskat/opskat/internal/ai/runner"
-	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
 )
@@ -98,28 +95,6 @@ func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 			t.Fatalf("bogus is not a real asset type; must not be included, got %v", got)
 		}
 	})
-}
-
-// TestDefinedCustomTypeSummaries covers the discovery list PromptBuilder.SetCustomTypes
-// consumes (spec "帮助、技能与门禁": the skill list must name every defined custom
-// type). Sorted by slug so the rendered prompt is deterministic across runs.
-func TestDefinedCustomTypeSummaries(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
-	repo := mock_custom_type_repo.NewMockCustomTypeRepo(ctrl)
-	repo.EXPECT().List(gomock.Any()).Return([]*custom_type_entity.CustomType{
-		{Slug: "grafana", Name: "Grafana"},
-		{Slug: "aws-cli", Name: "AWS CLI"},
-	}, nil)
-	orig := custom_type_repo.CustomType()
-	custom_type_repo.RegisterCustomType(repo)
-	t.Cleanup(func() { custom_type_repo.RegisterCustomType(orig) })
-
-	got := definedCustomTypeSummaries(context.Background())
-	want := []runner.CustomTypeSummary{{Slug: "aws-cli", Name: "AWS CLI"}, {Slug: "grafana", Name: "Grafana"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
 }
 
 // TestDefinedCustomTypeSummaries_ListErrorDegradesToEmpty locks that a listing failure

@@ -170,6 +170,10 @@ func TestBuild_ListsDefinedCustomTypes(t *testing.T) {
 			t.Fatalf("prompt should list the defined custom type (want %q), got:\n%s", want, got)
 		}
 	}
+	// Sorted by slug regardless of the caller's order, so the prompt is deterministic.
+	if strings.Index(got, "- aws-cli: AWS CLI") > strings.Index(got, "- grafana: Grafana") {
+		t.Fatalf("custom types should be listed sorted by slug, got:\n%s", got)
+	}
 }
 
 // TestBuild_NoCustomTypesOmitsSection ensures an empty custom-type list (the common case

@@ -539,28 +539,28 @@ func exportCustomTypes(ctx context.Context, assets []*asset_entity.Asset, partia
 		return custom_type_repo.CustomType().List(ctx)
 	}
 
-	slugs := make(map[string]bool)
+	// 与密钥解密 / 清除共用 lookupCustomType：同一个类型只查一次，只有"类型不存在"被
+	// 容忍（资产引用了已不存在的类型时没有定义可导出），其余查询错误原样返回。
+	cache := make(map[string]*custom_type_entity.CustomType)
+	var result []*custom_type_entity.CustomType
 	for _, a := range assets {
 		if !a.IsGeneric() || a.Config == "" {
 			continue
 		}
 		cfg, err := a.GetGenericConfig()
-		if err != nil || cfg.CustomType == "" {
-			continue
-		}
-		slugs[cfg.CustomType] = true
-	}
-	if len(slugs) == 0 {
-		return nil, nil
-	}
-	var result []*custom_type_entity.CustomType
-	for slug := range slugs {
-		ct, err := custom_type_repo.CustomType().FindBySlug(ctx, slug)
 		if err != nil {
-			logger.Default().Warn("custom type not found during export", zap.String("slug", slug), zap.Error(err))
 			continue
 		}
-		result = append(result, ct)
+		if _, seen := cache[cfg.CustomType]; seen {
+			continue
+		}
+		ct, err := lookupCustomType(ctx, cache, cfg.CustomType)
+		if err != nil {
+			return nil, fmt.Errorf("资产 %s 引用的自定义类型 %q: %w", a.Name, cfg.CustomType, err)
+		}
+		if ct != nil {
+			result = append(result, ct)
+		}
 	}
 	return result, nil
 }

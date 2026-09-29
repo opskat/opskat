@@ -48,10 +48,16 @@ func (e *InUseError) Error() string {
 	return fmt.Sprintf("自定义类型 %q 仍被 %d 个资产使用，不能删除: %s", e.Slug, len(e.Assets), strings.Join(e.Assets, ", "))
 }
 
+// IsNotFound 报告 err 是否是 Get / GetBySlug 的"类型不存在"。调用方（含不得 import gorm
+// 的 internal/app）借它区分"不存在"与查询失败，而不是各自对 gorm.ErrRecordNotFound 判等。
+func IsNotFound(err error) bool {
+	return errors.Is(err, gorm.ErrRecordNotFound)
+}
+
 // CustomTypeSvc 自定义类型业务接口。
 type CustomTypeSvc interface {
 	List(ctx context.Context) ([]*custom_type_entity.CustomType, error)
-	// Get / GetBySlug 未找到时返回的错误包装了 gorm.ErrRecordNotFound。
+	// Get / GetBySlug 未找到时返回的错误满足 IsNotFound。
 	Get(ctx context.Context, id int64) (*custom_type_entity.CustomType, error)
 	GetBySlug(ctx context.Context, slug string) (*custom_type_entity.CustomType, error)
 	// Save 创建（ID == 0）或整体更新一个类型，会原地回填 ID、时间戳与默认策略。

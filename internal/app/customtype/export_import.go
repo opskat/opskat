@@ -78,8 +78,12 @@ func (c *CustomType) SelectImportTypeFile() (*ImportPreview, error) {
 	}
 
 	preview := &ImportPreview{Type: ct}
-	if _, err := custom_type_svc.CustomType().GetBySlug(ctx, ct.Slug); err == nil {
+	_, err = custom_type_svc.CustomType().GetBySlug(ctx, ct.Slug)
+	switch {
+	case err == nil:
 		preview.SlugTaken = true
+	case !custom_type_svc.IsNotFound(err):
+		return nil, err
 	}
 	return preview, nil
 }

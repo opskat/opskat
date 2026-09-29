@@ -248,7 +248,13 @@ func joinTarget(t *GenericTarget, cmd *HTTPCommand, values map[string]string, no
 	}
 	u, err := url.Parse(strings.TrimRight(base.String(), "/") + cmd.requestURI())
 	if err != nil {
-		return nil, fmt.Errorf("invalid request URL: %w", err)
+		// *url.Error 会带出拼好的完整 URL，而 Base URL 可能引用了密钥字段：只报调用方自己
+		// 写的路径与解析原因。
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("invalid request path %q: %w", cmd.requestURI(), err)
 	}
 	return u, nil
 }

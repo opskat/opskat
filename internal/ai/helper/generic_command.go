@@ -212,9 +212,14 @@ func renderCommandEnv(ct *custom_type_entity.CustomType, rc *authtmpl.RenderCont
 	return env, nil
 }
 
+// commandPipeDrainTimeout 是子进程退出后等 os/exec 的输出管道读完的上限：留在后台的
+// 孙进程（`cmd &`、守护进程）继承了管道写端，不设上限 Wait 会一直等到它退出。
+const commandPipeDrainTimeout = time.Second
+
 // runCommandInvocation 启动子进程并等待结束：已启动、跑完的进程即便退出码非零也不是
 // error（错误留给调用方按 exitCode 处理），只有没能跑起来（程序不存在、权限不足等）才
 // 是 error——StreamExecFunc / ExecFunc 的契约要求"请求没有完成"用 error 表达。
+// 子进程退出后只再等 commandPipeDrainTimeout 收尾输出，之后后台孙进程写的内容不再收集。
 func runCommandInvocation(ctx context.Context, inv *commandInvocation, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, inv.argv[0], inv.argv[1:]...) //nolint:gosec // argv comes from the custom type's own rendered template/shell choice plus literally-appended exec args; never shell-interpreted here
 	executil.HideConsoleWindow(cmd)
@@ -224,6 +229,7 @@ func runCommandInvocation(ctx context.Context, inv *commandInvocation, stdin io.
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.WaitDelay = commandPipeDrainTimeout
 
 	err := cmd.Run()
 	if err == nil {
@@ -232,6 +238,10 @@ func runCommandInvocation(ctx context.Context, inv *commandInvocation, stdin io.
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), nil
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// 子进程已正常退出（退出码 0），只是后台孙进程还握着输出管道。
+		return cmd.ProcessState.ExitCode(), nil
 	}
 	return 0, err
 }

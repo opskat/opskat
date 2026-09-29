@@ -120,10 +120,10 @@ func TestExport_CustomTypes_WithCredentials_DecryptsSecretFieldToPlain(t *testin
 
 func TestImport_CustomTypes_Replace(t *testing.T) {
 	ctx := setupBackupTest(t)
-	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("a")))
-	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("b")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("type-a")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("type-b")))
 
-	backupType := grafanaCustomType("a")
+	backupType := grafanaCustomType("type-a")
 	backupType.Name = "Grafana From Backup"
 	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{backupType}}
 
@@ -134,7 +134,7 @@ func TestImport_CustomTypes_Replace(t *testing.T) {
 	types, err := custom_type_repo.CustomType().List(ctx)
 	require.NoError(t, err)
 	require.Len(t, types, 1, "replace mode must remove local types not present in the backup")
-	assert.Equal(t, "a", types[0].Slug)
+	assert.Equal(t, "type-a", types[0].Slug)
 	assert.Equal(t, "Grafana From Backup", types[0].Name)
 }
 
@@ -225,6 +225,25 @@ func TestImport_CustomTypes_Merge_ValuesStoredPerLocalVersion(t *testing.T) {
 		"token": {Value: "dst:tok"},
 		"org":   {Value: "main"},
 	}, cfg.Values)
+}
+
+// 备份文件是外部输入：其中的类型定义要过与保存类型相同的校验，否则一个缺了命令配置的
+// 「本地命令」类型会被原样写库，之后执行器 / 权限判定按"保存时已校验"的约定解引用而崩溃。
+func TestImport_CustomTypes_RejectsInvalidTypeDefinition(t *testing.T) {
+	ctx := setupBackupTest(t)
+	broken := &custom_type_entity.CustomType{
+		Slug: "broken", Name: "Broken", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields: []custom_type_entity.Field{{Name: "note"}},
+	}
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{broken}}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broken")
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, types, "an invalid type definition must not be written")
 }
 
 func TestImport_CustomTypes_NotImportedWhenImportAssetsFalse(t *testing.T) {

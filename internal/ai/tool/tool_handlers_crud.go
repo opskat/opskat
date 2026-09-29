@@ -159,8 +159,8 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 	}
 	// 更新时给出的 type 与 exec 的 type 同语义：断言，不是改类型。
 	// 资产类型是不可变的——改类型等于换协议、换配置形状、换策略组。
-	// 通用资产对外的类型名是其自定义类型标识，与之相符即通过。
-	if declared := aictx.ArgString(args, "type"); declared != "" && declared != assettype.TypeName(asset) {
+	// 通用资产对外的类型名是其自定义类型标识，与之相符即通过（AssertAssetType 负责）。
+	if declared := aictx.ArgString(args, "type"); declared != "" {
 		if err := permission.AssertAssetType(asset, declared); err != nil {
 			return "", err
 		}
