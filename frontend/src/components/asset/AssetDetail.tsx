@@ -92,11 +92,13 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
 
   const handleResetPolicy = async () => {
     try {
-      const defaultJSON = await GetDefaultPolicy(asset.Type);
+      const def = getAssetType(asset.Type);
+      const defaultJSON = def?.policy?.loadDefault
+        ? await def.policy.loadDefault(asset)
+        : await GetDefaultPolicy(asset.Type);
       const parsed = JSON.parse(defaultJSON);
       const groups = parsed.groups || [];
       setPolicyGroups(groups);
-      const def = getAssetType(asset.Type);
       const fields: Record<string, string[]> = {};
       if (def?.policy) {
         for (const f of def.policy.fields) {
@@ -126,6 +128,9 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     );
   }
 
+  const typeDef = getAssetType(asset.Type);
+  const Subtitle = typeDef?.DetailSubtitle;
+
   const sshTunnelName = (id?: number) => {
     if (!id) return null;
     return assets.find((a) => a.ID === id)?.Name || `ID:${id}`;
@@ -140,7 +145,11 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           </div>
           <div>
             <h2 className="font-semibold leading-tight">{asset.Name}</h2>
-            <span className="text-xs text-muted-foreground uppercase">{asset.Type}</span>
+            {Subtitle ? (
+              <Subtitle asset={asset} />
+            ) : (
+              <span className="text-xs text-muted-foreground uppercase">{asset.Type}</span>
+            )}
           </div>
         </div>
         <div className="flex gap-1.5">
@@ -193,7 +202,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           const def = getAssetType(asset.Type);
           if (!def) return null;
           const Card = def.DetailInfoCard;
-          return <Card asset={asset} sshTunnelName={sshTunnelName} />;
+          return <Card asset={asset} sshTunnelName={sshTunnelName} onEdit={onEdit} />;
         })()}
 
         {/* Extension Config Info */}
@@ -273,6 +282,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                 })
               }
               hint={t(pol.hintKey)}
+              testable={pol.testable}
               saving={savingPolicy}
               assetID={asset.ID}
               onReset={handleResetPolicy}

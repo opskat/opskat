@@ -13,6 +13,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -25,6 +26,7 @@ import (
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
 	"github.com/opskat/opskat/internal/service/ssh_agent_svc"
 	"github.com/opskat/opskat/internal/service/testreg"
+	"github.com/opskat/opskat/internal/sshpool"
 )
 
 // --- 策略测试 ---
@@ -91,18 +93,28 @@ func (s *System) TestPolicyRule(req PolicyTestRequest) (*PolicyTestResult, error
 
 // TestAssetConnection 测试一份未保存的资产配置(资产表单「测试连接」)。
 // testID 配合 CancelTest 中断;assetType 经 conntest 注册表分发到对应 binder 的 tester。
-// 共享信封(i18n ctx + 10s 超时 + testreg 取消)在此统一施加,各 tester 只做解析/解析凭据/拨号。
-func (s *System) TestAssetConnection(testID, assetType, configJSON, plainPassword string) error {
-	fn, ok := conntest.Lookup(assetType)
+// 共享信封(i18n ctx + SSH 连接池 + 10s 超时 + testreg 取消)在此统一施加,各 tester 只做
+// 解析/解析凭据/拨号。返回值是 tester 给出的成功详情(如通用资产的状态行与经过的路径),
+// 没有详情的 tester 返回空串。
+func (s *System) TestAssetConnection(testID, assetType, configJSON, plainPassword string) (string, error) {
+	fn, ok := conntest.LookupDetailed(assetType)
 	if !ok {
-		return fmt.Errorf("unsupported asset type: %s", assetType)
+		return "", fmt.Errorf("unsupported asset type: %s", assetType)
 	}
-	parent, cancel := context.WithTimeout(i18n.Ctx(s.ctx, s.Lang()), 10*time.Second)
+	base := i18n.Ctx(s.ctx, s.Lang())
+	if s.sshPool != nil {
+		// 经 SSH 隧道 / 代理链里的 SSH 层拨号的 tester（如通用资产）从 ctx 取连接池。
+		base = helper.WithSSHPool(base, s.sshPool)
+	}
+	parent, cancel := context.WithTimeout(base, 10*time.Second)
 	defer cancel()
 	ctx, release := testreg.Begin(parent, testID)
 	defer release()
 	return fn(ctx, configJSON, plainPassword)
 }
+
+// SetSSHPool 注入桌面端共享的 SSH 连接池，供测试连接经隧道拨号（main.go 构造 binder 后调用）。
+func (s *System) SetSSHPool(pool *sshpool.Pool) { s.sshPool = pool }
 
 // GetDefaultPolicy 获取指定资产类型的默认策略 JSON
 func (s *System) GetDefaultPolicy(assetType string) (string, error) {

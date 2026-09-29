@@ -118,8 +118,13 @@
       "servers": "服务器与终端",
       "databases": "数据库",
       "middleware": "中间件与平台",
-      "extension": "扩展"
-    }
+      "extension": "扩展",
+      "custom": "自定义"
+    },
+    "generic": "自定义资产",
+    "newCustomType": "新建自定义类型",
+    "manageCustomTypes": "管理",
+    "customBadge": "自定义"
   },
   "forward": {
     "create": "新建配置",
@@ -540,11 +545,6 @@
     "redisCommandTimeout": "命令超时（秒）",
     "redisScanPageSize": "SCAN 分页大小",
     "redisKeySeparator": "Key 分隔符",
-    "redisTlsInsecure": "跳过证书校验",
-    "redisTlsServerName": "TLS Server Name",
-    "redisTlsCAFile": "CA 证书路径",
-    "redisTlsCertFile": "客户端证书路径",
-    "redisTlsKeyFile": "客户端私钥路径",
     "redisDeployMode": "部署模式",
     "redisModeStandalone": "单机",
     "redisModeCluster": "集群 Cluster",
@@ -590,11 +590,6 @@
     "kafkaRequestTimeout": "请求超时（秒）",
     "kafkaMessagePreviewBytes": "消息预览字节",
     "kafkaMessageFetchLimit": "消息读取数量",
-    "kafkaTlsInsecure": "跳过证书校验",
-    "kafkaTlsServerName": "TLS Server Name",
-    "kafkaTlsCAFile": "CA 证书路径",
-    "kafkaTlsCertFile": "客户端证书路径",
-    "kafkaTlsKeyFile": "客户端私钥路径",
     "kafkaSchemaRegistry": "Schema Registry",
     "kafkaSchemaRegistryURL": "Schema Registry URL",
     "kafkaSchemaRegistryURLRequired": "请填写 Schema Registry URL",
@@ -903,7 +898,36 @@
     "sshStartupCommandHint": "每次连接（含重连）与每个分屏窗格都会执行；同时开启「重连恢复上次目录」时，在恢复目录之后执行。",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
-    "addDescription": "添加备注"
+    "addDescription": "添加备注",
+    "tlsInsecure": "跳过证书校验",
+    "tlsServerName": "TLS Server Name",
+    "tlsCAFile": "CA 证书路径",
+    "tlsCertFile": "客户端证书路径",
+    "tlsKeyFile": "客户端私钥路径",
+    "generic": {
+      "tabConfig": "配置",
+      "required": "必填",
+      "missingRequired": "还有必填字段没填。",
+      "typeNotFound": "找不到自定义类型「{{slug}}」",
+      "secretValue": "密钥",
+      "fromType": "字段、认证方式与使用说明来自类型",
+      "editType": "编辑类型",
+      "customTypeLabel": "自定义类型",
+      "policyTitle": "权限策略",
+      "policyHint": "新建时复制自类型的默认策略；HTTP 按「方法 路径」匹配，取值按 secret:<字段>，命令按程序与参数。未命中规则的操作需要确认。",
+      "policyPlaceholder": "例如 GET /api/*、secret:token",
+      "notFilled": "未填写",
+      "managedCredential": "托管凭据",
+      "missingBannerTitle": "类型「{{name}}」新增了必填字段，这台实例还没填",
+      "missingBannerList": "缺少：",
+      "listSeparator": "、",
+      "fillIn": "去填写",
+      "actualAddress": "实际地址",
+      "usageTitle": "用法",
+      "usageNotesHint": "使用说明在类型「{{name}}」里维护，同类型的资产共用。",
+      "viewUsageNotes": "查看",
+      "usageNotesTitle": "「{{name}}」使用说明"
+    }
   },
   "sshKey": {
     "title": "SSH 密钥",
@@ -1395,7 +1419,8 @@
       "sync": "联动此 tab",
       "syncing": "联动中",
       "referencedThisSession": "本次引用"
-    }
+    },
+    "approvalGenericTarget": "目标"
   },
   "shortcut": {
     "title": "快捷键",
@@ -1901,7 +1926,10 @@
     "batchCollapsedSummary": "已折叠 {{count}} 条审批项，点击展开逐条查看",
     "alwaysAllow": "始终允许",
     "approve": "批准",
-    "scopeAll": "所有资产"
+    "scopeAll": "所有资产",
+    "genericHttp": "HTTP 请求",
+    "genericCommand": "命令",
+    "genericSecret": "取值"
   },
   "audit": {
     "title": "审计日志",
@@ -3103,12 +3131,7 @@
       "advancedSection": "高级",
       "dialTimeout": "拨号超时（秒）",
       "commandTimeout": "命令超时（秒）",
-      "test": "测试连接",
-      "tlsServerName": "Server Name",
-      "tlsCAFile": "CA 证书路径",
-      "tlsCertFile": "客户端证书路径",
-      "tlsKeyFile": "客户端私钥路径",
-      "tlsInsecure": "跳过证书校验"
+      "test": "测试连接"
     },
     "tree": {
       "filterPlaceholder": "过滤 key",

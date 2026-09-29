@@ -310,4 +310,21 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
   });
+
+  it.each([
+    ["DELETE /api/dashboards/uid/k8s", "opsctlApproval.genericHttp"],
+    ["secret:token", "opsctlApproval.genericSecret"],
+    ["aws s3 ls", "opsctlApproval.genericCommand"],
+  ])("通用资产审批按匹配对象标出操作类型：%s", (command, label) => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireSingleApproval(handlers, {
+      type: "generic",
+      asset_name: "grafana-prod",
+      command,
+      detail: "HTTP request: DELETE https://grafana.internal:3000/api/dashboards/uid/k8s",
+    });
+    expect(screen.getByTestId("approval-type-badge")).toHaveTextContent(label);
+    expect(screen.getByText(/https:\/\/grafana\.internal:3000/)).toBeInTheDocument();
+  });
 });

@@ -28,6 +28,12 @@ interface PasswordSourceFieldProps {
   selectSecretLabel?: string;
   /** Fires when the selected credential has a non-empty username; passes it to the parent. */
   onUsernameChange?: (username: string) => void;
+  /** Override label for the inline/managed source switch. */
+  sourceLabel?: string;
+  /** Marks the source label as required. */
+  required?: boolean;
+  /** Decrypts the existing secret on reveal; defaults to the asset password of editAssetId. */
+  revealExisting?: () => Promise<string>;
 }
 
 export function PasswordSourceField({
@@ -44,6 +50,9 @@ export function PasswordSourceField({
   secretLabel,
   selectSecretLabel,
   onUsernameChange,
+  sourceLabel,
+  required,
+  revealExisting,
 }: PasswordSourceFieldProps) {
   const { t } = useTranslation();
   const [showPassword, setShowPassword] = useState(false);
@@ -53,10 +62,11 @@ export function PasswordSourceField({
   const handleTogglePassword = useCallback(
     async (next: boolean) => {
       // 如果要显示密码，且有已保存的密码但用户未输入新密码，调用后端解密
-      if (next && hasExistingPassword && !password && editAssetId && !decryptedOnce) {
+      const reveal = revealExisting ?? (editAssetId ? () => GetAssetPassword(editAssetId) : undefined);
+      if (next && hasExistingPassword && !password && reveal && !decryptedOnce) {
         setDecrypting(true);
         try {
-          const plaintext = await GetAssetPassword(editAssetId);
+          const plaintext = await reveal();
           if (plaintext) {
             onPasswordChange(plaintext);
             setDecryptedOnce(true);
@@ -70,12 +80,12 @@ export function PasswordSourceField({
       }
       setShowPassword(next);
     },
-    [hasExistingPassword, password, editAssetId, decryptedOnce, onPasswordChange]
+    [hasExistingPassword, password, editAssetId, revealExisting, decryptedOnce, onPasswordChange]
   );
 
   return (
     <div className="flex flex-col gap-3">
-      <Field label={t("asset.passwordSource")}>
+      <Field label={sourceLabel ?? t("asset.passwordSource")} required={required}>
         <Segmented
           value={source}
           onChange={onSourceChange}

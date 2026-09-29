@@ -2,6 +2,7 @@ import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
+import { tlsToggleFields } from "./tlsFields";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
@@ -40,47 +41,7 @@ const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
     ],
   },
   { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
-  {
-    key: "tls",
-    label: "asset.tabTls",
-    fields: [
-      { kind: "switch", key: "tls", label: "asset.tls" },
-      {
-        kind: "switch",
-        key: "tlsInsecure",
-        label: "etcd.form.tlsInsecure",
-        visibleWhen: (s) => s.tls,
-      },
-      {
-        kind: "text",
-        key: "tlsServerName",
-        label: "etcd.form.tlsServerName",
-        placeholder: "etcd.example.com",
-        visibleWhen: (s) => s.tls,
-      },
-      {
-        kind: "text",
-        key: "tlsCAFile",
-        label: "etcd.form.tlsCAFile",
-        placeholder: "/path/to/ca.pem",
-        visibleWhen: (s) => s.tls,
-      },
-      {
-        kind: "text",
-        key: "tlsCertFile",
-        label: "etcd.form.tlsCertFile",
-        placeholder: "/path/to/client.crt",
-        visibleWhen: (s) => s.tls,
-      },
-      {
-        kind: "text",
-        key: "tlsKeyFile",
-        label: "etcd.form.tlsKeyFile",
-        placeholder: "/path/to/client.key",
-        visibleWhen: (s) => s.tls,
-      },
-    ],
-  },
+  { key: "tls", label: "asset.tabTls", fields: tlsToggleFields<EtcdFormState>("etcd.example.com") },
 ];
 
 export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {

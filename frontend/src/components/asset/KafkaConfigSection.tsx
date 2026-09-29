@@ -4,7 +4,8 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button, Input, Label, Switch } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
-import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
+import { buildConfigGroups, Fields, type ConfigGroupSchema } from "@/components/asset/configFields";
+import { TLS_FILE_DEFAULTS, tlsFileFields, tlsToggleFields, type TlsFileFormFields } from "./tlsFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
@@ -28,19 +29,17 @@ import {
 
 export type KafkaPasswordSource = "inline" | "managed";
 
-export interface KafkaCompanionAuthForm {
+export interface KafkaCompanionAuthForm extends TlsFileFormFields {
   authType: string;
   username: string;
   password: string;
   encryptedPassword: string;
   passwordSource: KafkaPasswordSource;
   credentialId: number;
-  tlsInsecure: boolean;
-  tlsServerName: string;
-  tlsCAFile: string;
-  tlsCertFile: string;
-  tlsKeyFile: string;
 }
+
+// 伴随服务(Schema Registry / Connect)没有 TLS 开关:证书字段总是可填,按 URL scheme 决定是否握手。
+const COMPANION_TLS_FIELDS = tlsFileFields<KafkaCompanionAuthForm>({ serverNamePlaceholder: "" });
 
 export interface KafkaSchemaRegistryForm extends KafkaCompanionAuthForm {
   enabled: boolean;
@@ -61,11 +60,7 @@ function defaultKafkaCompanionAuth(): KafkaCompanionAuthForm {
     encryptedPassword: "",
     passwordSource: "inline",
     credentialId: 0,
-    tlsInsecure: false,
-    tlsServerName: "",
-    tlsCAFile: "",
-    tlsCertFile: "",
-    tlsKeyFile: "",
+    ...TLS_FILE_DEFAULTS,
   };
 }
 
@@ -357,59 +352,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       ],
     },
     { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
-    {
-      key: "tls",
-      label: "asset.tabTls",
-      fields: [
-        {
-          kind: "custom",
-          render: (s, p) => (
-            <div className="flex items-center justify-between">
-              <Label>{t("asset.tls")}</Label>
-              <Switch checked={s.tls} onCheckedChange={(v) => p({ tls: v })} />
-            </div>
-          ),
-        },
-        {
-          kind: "custom",
-          visibleWhen: (s) => s.tls,
-          render: (s, p) => (
-            <div className="flex items-center justify-between">
-              <Label>{t("asset.kafkaTlsInsecure")}</Label>
-              <Switch checked={s.tlsInsecure} onCheckedChange={(v) => p({ tlsInsecure: v })} />
-            </div>
-          ),
-        },
-        {
-          kind: "text",
-          key: "tlsServerName",
-          label: "asset.kafkaTlsServerName",
-          placeholder: "kafka.example.com",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsCAFile",
-          label: "asset.kafkaTlsCAFile",
-          placeholder: "/path/to/ca.pem",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsCertFile",
-          label: "asset.kafkaTlsCertFile",
-          placeholder: "/path/to/client.crt",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsKeyFile",
-          label: "asset.kafkaTlsKeyFile",
-          placeholder: "/path/to/client.key",
-          visibleWhen: (s) => s.tls,
-        },
-      ],
-    },
+    { key: "tls", label: "asset.tabTls", fields: tlsToggleFields<KafkaFormState>("kafka.example.com") },
     {
       key: "schema_registry",
       label: "asset.tabSchemaRegistry",
@@ -587,24 +530,7 @@ function KafkaCompanionAuthFields({
           />
         </>
       )}
-      <div className="flex items-center justify-between">
-        <Label>{t("asset.kafkaTlsInsecure")}</Label>
-        <Switch checked={value.tlsInsecure} onCheckedChange={(tlsInsecure) => onChange({ tlsInsecure })} />
-      </div>
-      <Field label={t("asset.kafkaTlsServerName")}>
-        <Input value={value.tlsServerName} onChange={(e) => onChange({ tlsServerName: e.target.value })} />
-      </Field>
-      <Field label={t("asset.kafkaTlsCAFile")}>
-        <Input value={value.tlsCAFile} onChange={(e) => onChange({ tlsCAFile: e.target.value })} />
-      </Field>
-      <div className="flex items-end gap-3">
-        <Field label={t("asset.kafkaTlsCertFile")} className="flex-1">
-          <Input value={value.tlsCertFile} onChange={(e) => onChange({ tlsCertFile: e.target.value })} />
-        </Field>
-        <Field label={t("asset.kafkaTlsKeyFile")} className="flex-1">
-          <Input value={value.tlsKeyFile} onChange={(e) => onChange({ tlsKeyFile: e.target.value })} />
-        </Field>
-      </div>
+      <Fields fields={COMPANION_TLS_FIELDS} state={value} patch={onChange} />
     </div>
   );
 }

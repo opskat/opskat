@@ -27,8 +27,23 @@ describe("getAssetTypeOptions", () => {
       "rdp",
       "etcd",
       "oss",
+      "generic",
     ]);
     expect(opts.every((o) => o.group === "builtin")).toBe(true);
+  });
+
+  it("expands the custom group into one option per custom type when custom types are given", () => {
+    const opts = getAssetTypeOptions({}, [
+      { slug: "grafana", name: "Grafana", icon: "boxes" },
+      { slug: "aws-cli", name: "AWS CLI", icon: "" },
+    ]);
+    const custom = opts.filter((o) => o.category === "custom");
+    expect(custom.map((o) => [o.value, o.variant, o.label, o.defaultIcon])).toEqual([
+      ["generic", "grafana", "Grafana", "boxes"],
+      ["generic", "aws-cli", "AWS CLI", undefined],
+    ]);
+    expect(custom.every((o) => o.group === "custom" && !o.labelIsI18nKey)).toBe(true);
+    expect(opts.some((o) => o.value === "generic" && !o.variant)).toBe(false);
   });
 
   it("aliases on database include mysql, postgresql, database", () => {
@@ -134,6 +149,7 @@ describe("category classification", () => {
       oss: "databases",
       kafka: "middleware",
       k8s: "middleware",
+      generic: "custom",
     });
   });
 
@@ -154,9 +170,9 @@ describe("category classification", () => {
 });
 
 describe("buildAssetTypeGroups", () => {
-  it("orders groups servers → databases → middleware → extension and drops empty groups", () => {
+  it("orders groups servers → databases → middleware → extension → custom and drops empty groups", () => {
     const groups = buildAssetTypeGroups(getAssetTypeOptions({}));
-    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware"]);
+    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware", "custom"]);
     expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local", "vnc", "rdp"]);
     expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd", "oss"]);
   });

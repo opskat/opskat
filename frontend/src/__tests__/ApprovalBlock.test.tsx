@@ -292,4 +292,25 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.getByText("do something 0")).toBeVisible();
     expect(screen.getByText("do something 10")).toBeVisible();
   });
+
+  it.each([
+    ["GET /api/search", "opsctlApproval.genericHttp"],
+    ["secret:token", "opsctlApproval.genericSecret"],
+    ["aws s3 ls", "opsctlApproval.genericCommand"],
+  ])("通用资产审批按匹配对象标出操作类型并常驻显示目标：%s", (command, label) => {
+    renderApproval({
+      approvalItems: [
+        {
+          type: "generic",
+          asset_id: 3,
+          asset_name: "grafana-prod",
+          command,
+          detail: "HTTP request: GET https://grafana.internal:3000/api/search",
+        },
+      ],
+    });
+    expect(screen.getByTestId("approval-type-badge")).toHaveTextContent(label);
+    expect(screen.getByText("ai.approvalGenericTarget")).toBeVisible();
+    expect(screen.getByText(/https:\/\/grafana\.internal:3000/)).toBeVisible();
+  });
 });

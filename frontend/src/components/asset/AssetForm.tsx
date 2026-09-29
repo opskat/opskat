@@ -23,9 +23,10 @@ import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
 import { useExtensionStore } from "@/extension";
+import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
-import { getAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
+import { getAssetTypeOptions, getAssetTypeLabel, findAssetTypeOption } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import type {
   AssetFormHandle,
@@ -79,6 +80,7 @@ const DEFAULT_ICONS: Record<string, string> = {
   local: "terminal",
   vnc: "screen-share",
   rdp: "monitor-up",
+  generic: "boxes",
 };
 
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
@@ -86,10 +88,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const { createAsset, updateAsset } = useAssetStore();
 
   const extensions = useExtensionStore((s) => s.extensions);
-  const assetTypeOptions = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
+  const customTypes = useCustomTypeStore((s) => s.types);
+  const assetTypeOptions = useMemo(() => getAssetTypeOptions(extensions, customTypes), [extensions, customTypes]);
 
-  // Asset type
+  // Asset type(+ 子类型:通用资产的自定义类型标识)
   const [assetType, setAssetType] = useState<AssetType>("ssh");
+  const [typeVariant, setTypeVariant] = useState<string | undefined>(undefined);
 
   // Basic fields
   const [name, setName] = useState("");
@@ -145,6 +149,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (editAsset) {
         const editType = (editAsset.Type || "ssh") as AssetType;
         setAssetType(editType);
+        setTypeVariant(getAssetType(editType)?.variantOf?.(editAsset));
         setName(editAsset.Name);
         setGroupId(editAsset.GroupID);
         setIcon(editAsset.Icon || DEFAULT_ICONS[editType] || "server");
@@ -165,6 +170,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         }
       } else {
         setAssetType("ssh");
+        setTypeVariant(undefined);
         setName("");
         setGroupId(defaultGroupId);
         setIcon("server");
@@ -175,10 +181,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   }
 
-  const handleTypeChange = (newType: AssetType) => {
-    if (newType === assetType) return;
+  const handleTypeChange = (newType: AssetType, variant?: string) => {
+    if (newType === assetType && variant === typeVariant) return;
     setAssetType(newType);
-    setIcon(newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server");
+    setTypeVariant(variant);
+    const option = findAssetTypeOption(assetTypeOptions, newType, variant);
+    setIcon(option?.defaultIcon ?? (newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server"));
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -227,8 +235,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           const tc = await handle.buildTestConfig!(ctx);
           if (cancelled) return {};
           testStarted = true;
-          await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
-          return {};
+          const detail = await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
+          return detail ? { successDetail: detail } : {};
         })();
         attempt = {
           result,
@@ -337,10 +345,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     await persistAsset(asset);
   };
 
-  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
+  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions, typeVariant);
   const sectionDef = getAssetType(assetType);
 
-  const isTestableAssetType = sectionDef?.ConfigSection ? !!sectionDef.testable : false;
+  const isTestableAssetType = sectionDef?.ConfigSection ? !!sectionDef.testable && validity.testable !== false : false;
 
   const isTestConnectionDisabled = testing || !validity.canTest;
 
@@ -403,7 +411,15 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* Asset Type */}
             {!editAsset && (
               <Field label={t("asset.type")}>
-                <AssetTypePicker value={assetType} onChange={(v) => handleTypeChange(v as AssetType)} />
+                <AssetTypePicker
+                  value={assetType}
+                  variant={typeVariant}
+                  onChange={(v, variant) => handleTypeChange(v as AssetType, variant)}
+                  onLeave={() => {
+                    cancelActiveTest();
+                    onOpenChange(false);
+                  }}
+                />
               </Field>
             )}
 
@@ -442,12 +458,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* 注册化类型:通用 ConfigSection 路径 */}
             {sectionDef?.ConfigSection && (
               <sectionDef.ConfigSection
-                key={assetType}
+                key={`${assetType}:${typeVariant ?? ""}`}
                 ref={sectionRef}
                 editAsset={editAsset ?? undefined}
                 ctx={ctx}
                 onValidityChange={setValidity}
                 onIconChange={setIcon}
+                variant={typeVariant}
               />
             )}
 

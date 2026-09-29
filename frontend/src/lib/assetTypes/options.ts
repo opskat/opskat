@@ -25,13 +25,24 @@ export interface AssetTypeOption {
   i18nNs?: string;
   /** Icon component for direct render. */
   icon: ComponentType<{ className?: string; style?: React.CSSProperties }>;
-  group: "builtin" | "extension";
+  group: "builtin" | "extension" | "custom";
   /** 语义分组（选择器展示用）。 */
   category: AssetTypeCategory;
+  /** 子类型：同一 `value` 下区分选项（通用资产 = 自定义类型标识）。 */
+  variant?: string;
+  /** 选中后给资产预填的图标（自定义类型的图标）；缺省由表单按类型取默认图标。 */
+  defaultIcon?: string;
 }
 
 interface ExtensionEntryLike {
   manifest: ExtManifest;
+}
+
+/** 自定义类型列表项（customtype.Summary 的子集）。 */
+export interface CustomTypeEntryLike {
+  slug: string;
+  name: string;
+  icon: string;
 }
 
 /** 内置资产类型选项：从 registry 的 AssetTypeDefinition 派生（单一来源）。 */
@@ -47,8 +58,36 @@ function builtinOptions(): AssetTypeOption[] {
   }));
 }
 
-export function getAssetTypeOptions(extensions: Record<string, ExtensionEntryLike>): AssetTypeOption[] {
-  const out: AssetTypeOption[] = builtinOptions();
+/** 每个自定义类型一项：挂在「自定义」分组的内置定义（通用资产）下，variant = 类型标识。 */
+function customTypeOptions(customTypes: CustomTypeEntryLike[]): AssetTypeOption[] {
+  return getBuiltinTypes()
+    .filter((def) => def.category === "custom")
+    .flatMap((def) =>
+      customTypes.map((ct) => ({
+        value: def.type,
+        aliases: def.aliases,
+        label: ct.name,
+        labelIsI18nKey: false,
+        icon: ct.icon ? getIconComponent(ct.icon) : def.icon,
+        group: "custom" as const,
+        category: def.category,
+        variant: ct.slug,
+        defaultIcon: ct.icon || undefined,
+      }))
+    );
+}
+
+/**
+ * 全部可选类型：内置 + 扩展。给出 customTypes（新建资产的类型选择器）时，「自定义」分组的
+ * 内置定义换成每个自定义类型一项；不给时（资产树类型筛选）保留一项，按 asset.Type 匹配全部通用资产。
+ */
+export function getAssetTypeOptions(
+  extensions: Record<string, ExtensionEntryLike>,
+  customTypes?: CustomTypeEntryLike[]
+): AssetTypeOption[] {
+  const out: AssetTypeOption[] = customTypes
+    ? [...builtinOptions().filter((o) => o.category !== "custom"), ...customTypeOptions(customTypes)]
+    : builtinOptions();
   for (const entry of Object.values(extensions)) {
     const m = entry.manifest;
     if (!m.assetTypes?.length) continue;
@@ -88,7 +127,24 @@ export interface AssetTypeGroup {
   options: AssetTypeOption[];
 }
 
-const CATEGORY_ORDER: AssetTypeCategory[] = ["servers", "databases", "middleware", "extension"];
+const CATEGORY_ORDER: AssetTypeCategory[] = ["servers", "databases", "middleware", "extension", "custom"];
+
+/** 选项的唯一键（React key / data-testid）：带子类型时为 `value:variant`。 */
+export function optionKey(o: AssetTypeOption): string {
+  return o.variant ? `${o.value}:${o.variant}` : o.value;
+}
+
+/** 按 value + 子类型查选项；子类型选项查不到（如列表未加载）时退到同 value 的无子类型选项。 */
+export function findAssetTypeOption(
+  options: AssetTypeOption[],
+  value: string,
+  variant?: string
+): AssetTypeOption | undefined {
+  return (
+    options.find((o) => o.value === value && o.variant === variant) ??
+    options.find((o) => o.value === value && !o.variant)
+  );
+}
 
 /** 按固定分类顺序分组，丢弃空组（保持各组内 options 原顺序）。 */
 export function buildAssetTypeGroups(options: AssetTypeOption[]): AssetTypeGroup[] {
@@ -116,8 +172,8 @@ export function resolveAssetTypeLabel(option: AssetTypeOption, t: TranslateFn): 
 }
 
 /** 取某类型的展示标签；未命中返回原始 type（兼容未知/未加载扩展）。 */
-export function getAssetTypeLabel(type: string, t: TranslateFn, options: AssetTypeOption[]): string {
-  const opt = options.find((o) => o.value === type);
+export function getAssetTypeLabel(type: string, t: TranslateFn, options: AssetTypeOption[], variant?: string): string {
+  const opt = findAssetTypeOption(options, type, variant);
   if (!opt) return type;
   return resolveAssetTypeLabel(opt, t);
 }

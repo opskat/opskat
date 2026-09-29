@@ -17,6 +17,7 @@ import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
+import { GENERIC_APPROVAL_TYPE, genericApprovalOp } from "./genericApprovalOp";
 
 interface ApprovalItemData {
   type: string;
@@ -72,7 +73,10 @@ const BATCH_COLLAPSE_THRESHOLD = 10;
 // React.FC，这张表按调用点唯一用到的形状（接收 className 的组件）收窄类型。
 type IconComponent = ComponentType<{ className?: string }>;
 
-function TypeBadge({ type }: { type: string }) {
+function TypeBadge({ type, command }: { type: string; command: string }) {
+  const { t } = useTranslation();
+  // 通用资产的操作类型(HTTP 请求 / 命令 / 取值)由匹配对象决定。
+  const op = type === GENERIC_APPROVAL_TYPE ? genericApprovalOp(command) : null;
   const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
@@ -86,11 +90,14 @@ function TypeBadge({ type }: { type: string }) {
     cp: FileUp,
     oss: S3Icon,
   };
-  const Icon = icons[type] || Terminal;
+  const Icon = op?.icon ?? icons[type] ?? Terminal;
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted">
+    <span
+      data-testid="approval-type-badge"
+      className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted"
+    >
       <Icon className="h-3 w-3" />
-      {type.toUpperCase()}
+      {op ? t(op.labelKey) : type.toUpperCase()}
     </span>
   );
 }
@@ -241,7 +248,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           <ScopeBadge item={item} />
         ) : (
           <>
-            <TypeBadge type={item.type} />
+            <TypeBadge type={item.type} command={item.command} />
             {item.asset_name && (
               <span className="text-sm text-muted-foreground">
                 {item.asset_name}
