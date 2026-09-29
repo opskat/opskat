@@ -123,9 +123,9 @@ field list with secret/required/default. Asking for a specific generic asset
 adds that instance's field values (secret fields report only "set", never the
 value), its rendered actual address, SSH tunnel, and Description. Always run
 `opsctl help <asset-or-type>` before the first `exec` / `create asset` /
-`update asset` against a custom type in a session — the exact field names,
-required/secret attributes, and (for HTTP types) the request syntax all live
-there, not in this reference.
+`update asset` / `secret get` against a custom type in a session — the exact
+field names, required/secret attributes, and (for HTTP types) the request
+syntax all live there, not in this reference.
 
 ## exec
 
@@ -198,6 +198,37 @@ opsctl exec mongo-db --type mongodb -- find users --query='{"filter":{"status":"
 opsctl exec etcd-cluster --type etcd -- get /app/config --prefix
 opsctl exec events --type kafka -- topic list
 opsctl exec prod-k8s --type k8s -- get pods -A
+```
+
+## secret
+
+### `secret get <asset> <field>`
+
+Read one field's value back out of a **generic** (custom-type) asset. Only generic assets
+are supported — a built-in typed asset (ssh, database, redis, ...) is rejected; it never
+reads a built-in type's own credentials. Run `opsctl help <asset-or-type>` first to see the
+type's field names if you don't already know them.
+
+- An unknown field name fails with the list of available field names.
+- A required field with no value set fails before anything is returned.
+- A **non-secret** field is returned immediately — no approval prompt, the same value
+  `opsctl help <asset>` already shows.
+- A **secret** field is checked against policy (match object `secret:<field>`, no default
+  allow rule). If it needs confirmation, the prompt discloses that the plaintext value will
+  be output to the caller, and — when the call is going through the AI — that it enters the
+  conversation and is sent to the model provider. "Allow always" saves `secret:<field>` as a
+  standing grant.
+- Prints the raw value to stdout followed by a newline, and exits 0. A denial never writes
+  anything to stdout.
+- The audit log for this command records the asset, the field name and the decision — never
+  the value, secret or not.
+
+**Approval flow**: same three stages as `exec` above (policy → grant → approver selection),
+with the same `NEEDS AUTHORIZATION` / `NEEDS TTY` offline refusals.
+
+```bash
+opsctl secret get grafana-prod host    # non-secret field, no approval
+opsctl secret get grafana-prod token   # secret field, may prompt for approval
 ```
 
 ## batch

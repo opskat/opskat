@@ -61,6 +61,7 @@ func AllToolDefs() []ToolDef {
 		{"ext_exec", handleExecTool},
 		{"exec", handleExec},
 		{"help", handleHelp},
+		{"get_asset_secret", handleGetAssetSecret},
 	}
 }
 

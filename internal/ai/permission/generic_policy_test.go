@@ -138,6 +138,28 @@ func TestCheckPermission_GenericUnknownExecModeNeedsConfirm(t *testing.T) {
 	assert.Equal(t, aictx.NeedConfirm, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "anything").Decision)
 }
 
+// 取值（`secret:<字段>`）适用于所有执行方式的通用资产，判定与类型的 exec mode 无关——
+// 用一个 genericModeChecks 里都没有登记的 exec mode 证明它不经过那张按 mode 分派的表，
+// 而是直接走 checkPlainGlobPolicy；新建类型没有为取值预填任何默认规则（Design decision
+// 9），未配置规则的字段落到 NeedConfirm，不是意外放行。
+func TestCheckPermission_GenericSecretFieldIgnoresExecModeAndHasNoDefaultAllow(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	asset := &asset_entity.Asset{ID: 1, Name: "cli-prod", Type: asset_entity.AssetTypeGeneric,
+		CmdPolicy: mustJSON(asset_entity.CommandPolicy{
+			AllowList: []string{"secret:token"},
+			DenyList:  []string{"secret:admin_key"},
+		})}
+	require.NoError(t, asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "future-cli"}))
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+	registerGenericTypes(t, &custom_type_entity.CustomType{Slug: "future-cli", ExecMode: "future-mode"})
+
+	assert.Equal(t, aictx.Allow, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "secret:token").Decision,
+		"an explicit allow rule for a secret match object must work even though \"future-mode\" has no exec-mode check registered")
+	assert.Equal(t, aictx.Deny, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "secret:admin_key").Decision)
+	assert.Equal(t, aictx.NeedConfirm, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "secret:other").Decision,
+		"no rule matches secret:other and there is no default allow for secret values")
+}
+
 func TestGenericGrantPatterns(t *testing.T) {
 	assert.Equal(t, []string{"GET /api/x"}, NormalizeGrantPatterns("generic", "GET /api/x", GrantOriginSystem))
 	assert.Equal(t, []string{`GET /api/a\*b`}, NormalizeGrantPatterns("generic", "GET /api/a*b", GrantOriginSystem),

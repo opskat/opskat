@@ -124,6 +124,27 @@ command template is configured). The same syntax works in `exec` and after
   through unchanged; a program that does not exist fails before anything runs.
 - A missing required field value fails before any process starts.
 
+## Reading a field value (secret get)
+
+`get_asset_secret` (and `opsctl secret get <asset> <field>`, the same handler) reads one
+field's value back out of a generic asset — only generic assets, never a built-in type's own
+credentials. An unknown field name fails with the type's available field names.
+
+- A **non-secret** field is returned immediately, no approval needed — the same value `help`
+  already shows.
+- A **secret** field is checked against policy with match object `secret:<field>`; there is
+  no default allow for it (unlike HTTP's `GET *`/`HEAD *`/`OPTIONS *`). If it needs
+  confirmation, the approval prompt discloses that the plaintext value will be output to the
+  caller, and — when this call is going through the AI — that it enters the conversation and
+  is sent to the model provider. Only call this when the value is actually needed, not to
+  preemptively inspect every field. "Always allow" saves `secret:<field>` as a standing grant.
+- A required field with no value set fails before anything is returned.
+- The audit log for this tool records the asset, the field name and the decision — never the
+  value, secret or not.
+
+Example: `get_asset_secret(asset="grafana-prod", field="token")`, or
+`opsctl secret get grafana-prod token`.
+
 ## Policy
 
 Generic assets use a command-style allow / deny policy (with policy groups). A new asset
@@ -143,3 +164,6 @@ command and are parsed the same way as a shell (`ssh`) asset's command policy �
 `ls *` covers `ls -la`, and every stage of a pipeline must be covered for the pipeline to be
 allowed. Local commands have no default allow rules either way; everything asks for
 confirmation until a rule or a grant covers it.
+
+Reading a secret field (see "Reading a field value" above) matches on `secret:<field>` — same
+plain-glob matcher, independent of the type's execution mode, with no default allow rule.

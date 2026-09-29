@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -32,10 +33,22 @@ var genericModeChecks = map[string]func(ctx context.Context, asset *asset_entity
 	custom_type_entity.ExecModeHTTP: checkPlainGlobPolicy,
 }
 
+// SecretSubjectPrefix is the match-object prefix for get_asset_secret (spec 「策略、审批与
+// 审计」：取值 `secret:<字段>`). Exported so package tool (which already imports permission,
+// not the other way around — no cycle) builds the same match object with this constant
+// instead of a second, independently-typed "secret:" literal.
+const SecretSubjectPrefix = "secret:"
+
 func checkGenericPermission(ctx context.Context, assetID int64, subject string) aictx.CheckResult {
 	asset := resolveAssetForPolicy(ctx, assetID)
 	if asset == nil {
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+	// 取值适用于所有执行方式的通用资产——判定与类型的 exec mode 无关，在查 genericModeChecks
+	// 之前短路，直接走跟 HTTP 共用的普通 glob 匹配器。新建类型从不预填 secret:* 的默认允许
+	// 规则（Design decision 9），所以这条路径没有额外的"默认放行"要处理。
+	if strings.HasPrefix(subject, SecretSubjectPrefix) {
+		return checkPlainGlobPolicy(ctx, asset, subject)
 	}
 	cfg, err := asset.GetGenericConfig()
 	if err != nil {

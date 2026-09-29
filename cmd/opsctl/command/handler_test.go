@@ -128,6 +128,7 @@ func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 			"exec", "help", "ext_exec", "cp",
 			"list_credentials", "get_credential",
 			"put_asset", "put_group", "delete_asset", "delete_group",
+			"get_asset_secret",
 		} {
 			So(handlers, ShouldContainKey, name)
 		}

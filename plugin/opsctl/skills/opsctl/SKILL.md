@@ -65,6 +65,13 @@ without echo, instead of putting it in `--config` — useful for a custom type's
 fields, and for a built-in type's own (e.g. Redis's `sentinel_password`). Same TTY
 requirement as bare `--password` below; also available on `update asset`.
 
+`opsctl secret get <asset> <field>` reads a generic asset's field value back out (never a
+built-in type's own credentials). A non-secret field returns immediately; a secret field is
+checked against policy and, if it needs confirmation, the prompt says the plaintext will be
+output to you and — for an AI-driven call — enters the conversation and is sent to the model
+provider. Only call it when the value is actually needed. Run `opsctl help <asset-or-type>`
+first if you don't already know the field names.
+
 `--password` is the only plaintext flag. Written bare it reads the secret from an
 interactive terminal without echo — **you cannot use that form**, because an agent session
 has no TTY and opsctl answers with exit code 3 and a `NEEDS TTY` marker. Pass the value
@@ -157,7 +164,7 @@ opsctl cp 'web-01:/var/log/*.log' ./logs/                   # remote glob: quote
 
 ## Commands
 
-Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `policy`, `ext`, `version`.
+Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `secret`, `batch`, `cp`, `policy`, `ext`, `version`.
 
 For full command reference with flags and examples, see [references/commands.md](references/commands.md).
 
