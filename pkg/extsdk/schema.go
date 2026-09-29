@@ -3,6 +3,7 @@ package opskat
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func reflectSchema(t reflect.Type, what string, mode schemaMode) map[string]any 
 		} else {
 			prop = propertySchema(fieldType, fieldWhat)
 		}
-		applyTags(prop, f, mode)
+		applyTags(prop, f, mode, fieldWhat)
 		props[name] = prop
 		order = append(order, name)
 		if !optional {
@@ -131,7 +132,7 @@ func credentialSchema(f reflect.StructField, what string, mode schemaMode) map[s
 }
 
 // applyTags copies the declaration's presentation tags onto the property.
-func applyTags(prop map[string]any, f reflect.StructField, mode schemaMode) {
+func applyTags(prop map[string]any, f reflect.StructField, mode schemaMode, what string) {
 	if v := f.Tag.Get("desc"); v != "" {
 		prop["description"] = v
 	}
@@ -147,7 +148,27 @@ func applyTags(prop map[string]any, f reflect.StructField, mode schemaMode) {
 	if v := f.Tag.Get("format"); v != "" {
 		prop["format"] = v
 	}
-	if v := f.Tag.Get("enum"); v != "" {
-		prop["enum"] = strings.Split(v, ",")
+	options := strings.Split(f.Tag.Get("enum"), ",")
+	if f.Tag.Get("enum") != "" {
+		prop["enum"] = options
+	}
+	if v := f.Tag.Get("enumLabels"); v != "" {
+		if f.Tag.Get("enum") == "" {
+			panic(fmt.Sprintf("opskat: %s declares enumLabels without enum", what))
+		}
+		labels := strings.Split(v, ",")
+		if len(labels) != len(options) {
+			panic(fmt.Sprintf("opskat: %s declares %d enumLabels for %d enum options", what, len(labels), len(options)))
+		}
+		prop["enumLabels"] = labels
+	}
+	if v, ok := f.Tag.Lookup("default"); ok {
+		if prop["type"] != "string" {
+			panic(fmt.Sprintf("opskat: %s declares a default, which is only supported on string fields", what))
+		}
+		if f.Tag.Get("enum") != "" && !slices.Contains(options, v) {
+			panic(fmt.Sprintf("opskat: %s declares default %q, which is not one of its enum options", what, v))
+		}
+		prop["default"] = v
 	}
 }

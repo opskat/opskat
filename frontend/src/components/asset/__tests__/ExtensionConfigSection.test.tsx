@@ -4,7 +4,7 @@ import { render, screen, act, fireEvent } from "@testing-library/react";
 import { makeExtensionConfigSection } from "@/components/asset/ExtensionConfigSection";
 import type { AssetFormHandle } from "@/lib/assetTypes/formContract";
 import { toast } from "sonner";
-import { GetDecryptedExtensionConfig } from "../../../../wailsjs/go/extension/Extension";
+import { GetDecryptedExtensionConfig, ValidateExtensionConfig } from "../../../../wailsjs/go/extension/Extension";
 import { asset_entity } from "../../../../wailsjs/go/models";
 import { HOST_CONNECTION_CONFIG_KEY } from "@/extension/connectionConfig";
 
@@ -23,6 +23,11 @@ const Section = makeExtensionConfigSection({
 });
 
 const CIPHERTEXT = "ENC(v1:deadbeef)";
+
+// The guest's validator accepts unless a test says otherwise.
+beforeEach(() => {
+  vi.mocked(ValidateExtensionConfig).mockResolvedValue([]);
+});
 
 function editAsset() {
   return new asset_entity.Asset({
@@ -691,5 +696,97 @@ describe("ExtensionConfigSection test connection", () => {
     const tc = await ref.current!.buildTestConfig!(ctx);
     const parsed = JSON.parse(tc.configJSON);
     expect(parsed[HOST_CONNECTION_CONFIG_KEY]).toEqual(expect.objectContaining({ sshTunnelId: 7 }));
+  });
+});
+
+// 保存前把配置交给扩展的校验器：逐字段错误显示在对应字段上，且不放行保存。
+describe("ExtensionConfigSection validation errors", () => {
+  const authSchema = {
+    type: "object",
+    properties: {
+      username: { type: "string", title: "Username" },
+      secret: { type: "string", format: "password", title: "Secret" },
+      auth: {
+        type: "string",
+        title: "Auth",
+        enum: ["none", "basic"],
+        enumLabels: ["No auth", "Basic auth"],
+        default: "none",
+      },
+    },
+  };
+  const Validated = makeExtensionConfigSection({ extensionName: "demo", assetType: "demo-type", schema: authSchema });
+
+  it("shows a field error on its field and refuses the save", async () => {
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([
+      { field: "username", message: "username is required for basic authentication" },
+    ] as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<Validated ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+
+    await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow();
+
+    await screen.findByText("username is required for basic authentication");
+    expect(screen.getByLabelText("Username")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Secret")).not.toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("clears a field's error once the user edits that field", async () => {
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([
+      { field: "username", message: "username is required" },
+    ] as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<Validated ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+    await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow();
+    await screen.findByText("username is required");
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "elastic" } });
+
+    expect(screen.queryByText("username is required")).not.toBeInTheDocument();
+  });
+
+  it("an error naming no field of the form is carried by the refusal instead", async () => {
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([{ field: "", message: "config is inconsistent" }] as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<Validated ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+
+    await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow("config is inconsistent");
+  });
+
+  it("validates the config that would be saved: an untouched stored secret counts as filled", async () => {
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ username: "u", auth: "basic" }));
+    const ref = createRef<AssetFormHandle>();
+    const asset = new asset_entity.Asset({
+      ID: 3,
+      Type: "demo-type",
+      Config: JSON.stringify({ username: "u", auth: "basic", secret: CIPHERTEXT }),
+    });
+    render(<Validated ref={ref} editAsset={asset} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    await ref.current!.buildConfig(ctx);
+
+    expect(ValidateExtensionConfig).toHaveBeenCalledWith("demo", "demo-type", expect.any(String));
+    const sent = JSON.parse(vi.mocked(ValidateExtensionConfig).mock.calls.at(-1)![2]);
+    expect(sent).toEqual({ username: "u", auth: "basic", secret: CIPHERTEXT });
+  });
+
+  it("a new asset starts with the declared default selected and saved", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Validated ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("No auth");
+    const built = await ref.current!.buildConfig({ ...ctx, isEdit: false });
+    expect(JSON.parse(built.configJSON)).toEqual({ auth: "none" });
+  });
+
+  it("an asset saved without the field is not given the default behind the user's back", async () => {
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ username: "u" }));
+    const ref = createRef<AssetFormHandle>();
+    render(<Validated ref={ref} editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON)).toEqual({ username: "u", secret: CIPHERTEXT });
   });
 });

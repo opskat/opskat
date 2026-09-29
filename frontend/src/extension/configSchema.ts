@@ -8,6 +8,10 @@ export interface ExtensionConfigProperty {
   type?: string;
   format?: string;
   enum?: string[];
+  /** 与 enum 一一对应的显示标签（后端已按扩展语言翻译）；缺省时显示原值。 */
+  enumLabels?: string[];
+  /** 新建资产时预选的值。 */
+  default?: string;
   title?: string;
   description?: string;
   placeholder?: string;
@@ -26,4 +30,13 @@ export function passwordFields(schema?: ExtensionConfigSchema): string[] {
   return Object.entries(props)
     .filter(([, prop]) => prop.format === "password")
     .map(([name]) => name);
+}
+
+/** 声明了 default 的属性的默认值：新建资产的表单以它起步。 */
+export function defaultValues(schema?: ExtensionConfigSchema): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, prop] of Object.entries(schema?.properties ?? {})) {
+    if (prop.default !== undefined) out[name] = prop.default;
+  }
+  return out;
 }

@@ -109,6 +109,12 @@ opskat.PolicyGroup("ext:notebook:read").
 opskat.Tool("note_list", listNotes).Policy("read").Doc("tools.note_list.description")
 ```
 
+The validator runs when the asset form saves and whenever the asset is written. Each
+`ValidationError.Field` that names a config field is shown under that field in the form
+and the save is refused; an error with an empty or unknown `Field` is shown as the save
+error instead. A stored secret the user leaves untouched reaches the validator as its
+ciphertext, so "is it filled" checks work when editing.
+
 **An extension must declare at least one asset type**, and `Meta.PolicyType` must be
 set. Extension tools are reached through `exec` on an asset, so an extension without
 one has no reachable entry point and is refused at load.
@@ -134,7 +140,12 @@ type putArgs struct {
 - `desc` on a **tool** argument is shown to the model as written — plain text, not an
   i18n key. On an **asset config** field, `title` / `placeholder` / `desc` are i18n
   keys, and `format:"password"` marks a secret the host encrypts, `enum:"a,b"` renders
-  a select. Declare a secret as an `opskat.Credential` field, which is always
+  a select. A select shows the raw option values unless you add
+  `enumLabels:"key.a,key.b"` — one i18n key per option, in option order (a different
+  count is refused at registration and at load) — and `default:"a"` preselects an
+  option when a new asset is created (it must be one of the options; `default` is
+  supported on string fields only, and an asset already saved without the field is not
+  given it). Declare a secret as an `opskat.Credential` field, which is always
   `format:"password"` (see [Reading secret fields](#reading-secret-fields)).
 
 ### Parameters opsctl can read from a file

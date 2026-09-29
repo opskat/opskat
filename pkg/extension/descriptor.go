@@ -3,6 +3,7 @@ package extension
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -81,6 +82,9 @@ func (d *Descriptor) validateAssetScope() error {
 		props := ConfigSchemaProperties(at.ConfigSchema)
 		if len(props) == 0 {
 			return fmt.Errorf("describe(): assetTypes[%q].configSchema must declare properties", at.Type)
+		}
+		if err := validateEnumPresentation(at.ConfigSchema); err != nil {
+			return fmt.Errorf("describe(): assetTypes[%q].configSchema.%w", at.Type, err)
 		}
 		if at.bindsEndpoint() && len(EndpointFieldsFromSchema(at.ConfigSchema)) == 0 {
 			return fmt.Errorf(`describe(): assetTypes[%q] declares auth or connection, which apply only to the asset's endpoint, but its configSchema marks no field format:"endpoint"`, at.Type)
@@ -359,4 +363,39 @@ func policyActions(tools []ToolDef) []string {
 	}
 	sort.Strings(actions)
 	return actions
+}
+
+// validateEnumPresentation checks the presentation keys a config field may add to
+// its enum: enumLabels (one display label per option, in option order) and default
+// (one of the options). The form indexes labels by option position and preselects
+// the default, so a mismatch would mislabel or preselect a value the guest rejects.
+func validateEnumPresentation(schema map[string]any) error {
+	props, _ := schema["properties"].(map[string]any)
+	for _, name := range ConfigSchemaProperties(schema) {
+		prop, ok := props[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		enum, hasEnum := prop["enum"].([]any)
+		if labels, ok := prop["enumLabels"]; ok {
+			list, isList := labels.([]any)
+			if !hasEnum {
+				return fmt.Errorf("properties[%q].enumLabels requires enum", name)
+			}
+			if !isList || len(list) != len(enum) {
+				return fmt.Errorf("properties[%q].enumLabels must be an array with one label per enum option (%d)", name, len(enum))
+			}
+			for _, l := range list {
+				if _, ok := l.(string); !ok {
+					return fmt.Errorf("properties[%q].enumLabels must contain only strings", name)
+				}
+			}
+		}
+		if def, ok := prop["default"]; ok && hasEnum {
+			if !slices.Contains(enum, def) {
+				return fmt.Errorf("properties[%q].default %v is not one of its enum options", name, def)
+			}
+		}
+	}
+	return nil
 }

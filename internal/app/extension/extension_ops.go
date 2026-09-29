@@ -222,6 +222,29 @@ func (e *Extension) GetDecryptedExtensionConfig(assetID int64, extName string) (
 	return getDecryptedExtConfig(e.service, extName, assetID)
 }
 
+// ValidateExtensionConfig runs the guest's config validator over configJSON, the
+// configuration the asset form is about to save for one of extName's asset types,
+// and returns its errors with their field names so the form can show each on its
+// field. Saving still runs the same validator (extreg.validateConfig) — this is
+// the structured view of that check, not a second rule set. An empty result means
+// the configuration is valid.
+func (e *Extension) ValidateExtensionConfig(extName, assetType, configJSON string) ([]extension.ValidationError, error) {
+	if e.service == nil {
+		return nil, fmt.Errorf("extension system not initialized")
+	}
+	ext := e.service.Bridge().Get(extName)
+	if ext == nil {
+		return nil, fmt.Errorf("extension %q not loaded", extName)
+	}
+	if ext.Manifest.AssetTypeDef(assetType) == nil {
+		return nil, fmt.Errorf("asset type %q does not belong to extension %q", assetType, extName)
+	}
+	if ext.Plugin == nil {
+		return nil, fmt.Errorf("extension %q has no backend plugin", extName)
+	}
+	return ext.Plugin.ValidateConfig(i18n.Ctx(e.ctx, e.lang.Lang()), json.RawMessage(configJSON))
+}
+
 // InstallExtension opens a file dialog and installs an extension from a zip file.
 func (e *Extension) InstallExtension() (*extension_svc.ExtensionInfo, error) {
 	if e.service == nil {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Input, Label, Switch } from "@opskat/ui";
@@ -13,9 +13,9 @@ import {
   resolveSaveProxyChainSecrets,
   type ConnectionFormFields,
 } from "@/components/asset/proxyConfig";
-import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
+import { GetDecryptedExtensionConfig, ValidateExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import type { AssetFormContext, AssetTestConfig, ConfigSectionProps } from "@/lib/assetTypes/formContract";
-import { passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
+import { defaultValues, passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
 import type { ExtConnection } from "@/extension/types";
 import {
   HOST_CONNECTION_CONFIG_KEY,
@@ -164,6 +164,8 @@ export function makeExtensionConfigSection(opts: Options) {
     // 从测试请求里整体去掉，让宿主用已存密文补齐，而不是把解密明文再走一遍 IPC。新建
     // 资产没有已存值，起始为空对象：任何非空输入都当作"用户填的"，原样送出。
     const initialSecretsRef = useRef<Record<string, string>>({});
+    // 保存校验（扩展的 validate_config）返回的逐字段错误，显示在对应字段下；用户改动该字段即清除。
+    const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
     const { state, setState, patch } = useConfigSection<ExtensionFormState>({
       ref,
       editAsset,
@@ -179,7 +181,15 @@ export function makeExtensionConfigSection(opts: Options) {
         const { guestConfig, proxyChain, tls } = splitHostConnection(parseConfig(a?.Config));
         const withheldSecrets = storedSecrets(guestConfig);
         for (const f of secrets) delete guestConfig[f];
-        return { config: guestConfig, status: "ready", ...base, withheldSecrets, proxyChain, tls };
+        // 新建资产以声明的默认值起步；复制资产已带源配置，缺失的键同样补默认。
+        return {
+          config: { ...defaultValues(opts.schema), ...guestConfig },
+          status: "ready",
+          ...base,
+          withheldSecrets,
+          proxyChain,
+          tls,
+        };
       },
       // 必填校验由后端按 configSchema.required 负责；表单侧不复制一份会漂移的规则。
       validate: (s) => {
@@ -216,14 +226,36 @@ export function makeExtensionConfigSection(opts: Options) {
           config[HOST_CONNECTION_CONFIG_KEY] = hostConnection;
         }
 
+        const configJSON = JSON.stringify(config);
+        await checkConfig(configJSON);
+
         return {
-          configJSON: JSON.stringify(config),
+          configJSON,
           // 未声明 sshTunnel 的类型不生效：宿主拨号时同样按声明忽略该列。
           sshTunnelId: s.tunnel ? s.sshTunnelId : 0,
         };
       },
       buildTest: opts.testConnection ? buildTestConfig : undefined,
     });
+
+    // 保存前跑扩展的校验器（保存入口还会再跑一遍同一个校验器，这里是它的结构化视图）：
+    // 落在本表单字段上的错误显示在字段旁，其余的并进拒绝保存的错误里交给壳 toast。
+    async function checkConfig(configJSON: string) {
+      const errors = await ValidateExtensionConfig(opts.extensionName, opts.assetType, configJSON);
+      if (errors.length === 0) {
+        setFieldErrors({});
+        return;
+      }
+      const declared = opts.schema?.properties ?? {};
+      const placed: Record<string, string> = {};
+      const unplaced: string[] = [];
+      for (const e of errors) {
+        if (e.field in declared) placed[e.field] = e.message;
+        else unplaced.push(e.field ? `${e.field}: ${e.message}` : e.message);
+      }
+      setFieldErrors(placed);
+      throw new Error(unplaced.length > 0 ? unplaced.join("; ") : t("asset.extConfigInvalid"));
+    }
 
     // 宿主保留键里的连接设置（代理链 / TLS），保存与测试连接共用；两者只差代理链各层
     // 密钥的形态（保存时加密，测试时明文）。SSH 隧道存在资产列上，不在这里。
@@ -318,7 +350,14 @@ export function makeExtensionConfigSection(opts: Options) {
           configSchema={opts.schema}
           value={state.config}
           withheldSecrets={state.withheldSecrets}
-          onChange={(config) => patch({ config, status: "ready" })}
+          fieldErrors={fieldErrors}
+          onChange={(config) => {
+            // 改动过的字段，其校验错误作废。
+            setFieldErrors((errs) =>
+              Object.fromEntries(Object.entries(errs).filter(([k]) => config[k] === state.config[k]))
+            );
+            patch({ config, status: "ready" });
+          }}
         />
         {(sshTunnel || proxyChainEnabled) && (
           <ConnectionMethodFields

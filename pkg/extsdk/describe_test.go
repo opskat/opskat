@@ -2,6 +2,7 @@ package opskat
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ type demoConfig struct {
 	Endpoint string `json:"endpoint" title:"config.endpoint.title" placeholder:"config.endpoint.placeholder"`
 	Secret   string `json:"secret,omitempty" title:"config.secret.title" format:"password"`
 	Mode     string `json:"mode,omitempty" enum:"fast,safe"`
+	Auth     string `json:"auth,omitempty" enum:"none,basic" enumLabels:"config.auth.none,config.auth.basic" default:"none"`
 }
 
 func decodeDescribe(t *testing.T) map[string]any {
@@ -117,8 +119,12 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 			})
 			So(props["secret"].(map[string]any)["format"], ShouldEqual, "password")
 			So(props["mode"].(map[string]any)["enum"], ShouldResemble, []any{"fast", "safe"})
+			auth := props["auth"].(map[string]any)
+			So(auth["enum"], ShouldResemble, []any{"none", "basic"})
+			So(auth["enumLabels"], ShouldResemble, []any{"config.auth.none", "config.auth.basic"})
+			So(auth["default"], ShouldEqual, "none")
 			So(schema["required"], ShouldResemble, []any{"endpoint"})
-			So(schema["propertyOrder"], ShouldResemble, []any{"endpoint", "secret", "mode"})
+			So(schema["propertyOrder"], ShouldResemble, []any{"endpoint", "secret", "mode", "auth"})
 		})
 
 		Convey("a tool registered after the first describe still shows up", func() {
@@ -481,6 +487,36 @@ func TestDescribeReportsFileParams(t *testing.T) {
 			So(func() { reg.FileParam("body") }, ShouldNotPanic)
 			So(func() { reg.FileParam("body") }, ShouldPanic)
 			So(func() { reg.FileParam("index") }, ShouldPanic) // its -file spelling is the index-file parameter
+		})
+	})
+}
+
+func TestConfigSchemaEnumTagsAreChecked(t *testing.T) {
+	Convey("enumLabels and default that the host could not render fail at registration", t, func() {
+		refl := func(v any) func() { return func() { reflectSchema(reflect.TypeOf(v), "cfg", schemaModeConfig) } }
+		Convey("labels without an enum", func() {
+			type c struct {
+				A string `json:"a" enumLabels:"x"`
+			}
+			So(refl(c{}), ShouldPanicWith, "opskat: cfg: field A declares enumLabels without enum")
+		})
+		Convey("labels of a different length than the enum", func() {
+			type c struct {
+				A string `json:"a" enum:"x,y" enumLabels:"x"`
+			}
+			So(refl(c{}), ShouldPanic)
+		})
+		Convey("a default that is not one of the options", func() {
+			type c struct {
+				A string `json:"a" enum:"x,y" default:"z"`
+			}
+			So(refl(c{}), ShouldPanic)
+		})
+		Convey("a default on a non-string field", func() {
+			type c struct {
+				A int `json:"a" default:"1"`
+			}
+			So(refl(c{}), ShouldPanic)
 		})
 	})
 }

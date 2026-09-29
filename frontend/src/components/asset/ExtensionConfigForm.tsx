@@ -12,32 +12,25 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { SecretInput } from "@/components/SecretInput";
-
-interface JSONSchemaProperty {
-  type?: string;
-  format?: string;
-  enum?: string[];
-  title?: string;
-  description?: string;
-  placeholder?: string;
-}
-
-interface JSONSchema {
-  type?: string;
-  properties?: Record<string, JSONSchemaProperty>;
-  required?: string[];
-  propertyOrder?: string[];
-}
+import type { ExtensionConfigProperty, ExtensionConfigSchema } from "@/extension/configSchema";
 
 interface ExtensionConfigFormProps {
-  configSchema: JSONSchema;
+  configSchema: ExtensionConfigSchema;
   value: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
   /** 有已存值、但宿主没把明文交给表单的密码字段（按字段名取）：呈现为"已设置，留空则不修改"。 */
   withheldSecrets?: Record<string, string>;
+  /** 保存校验返回的逐字段错误（按字段名）：显示在对应字段下方。 */
+  fieldErrors?: Record<string, string>;
 }
 
-export function ExtensionConfigForm({ configSchema, value, onChange, withheldSecrets }: ExtensionConfigFormProps) {
+export function ExtensionConfigForm({
+  configSchema,
+  value,
+  onChange,
+  withheldSecrets,
+  fieldErrors,
+}: ExtensionConfigFormProps) {
   const { t } = useTranslation();
   const properties = configSchema.properties ?? {};
   const required = useMemo(() => new Set(configSchema.required ?? []), [configSchema.required]);
@@ -53,8 +46,20 @@ export function ExtensionConfigForm({ configSchema, value, onChange, withheldSec
     [value, onChange]
   );
 
+  // 字段的错误提示与 aria 标记；无错误时两者都为空。
+  const errorProps = useCallback(
+    (key: string) => ({
+      "aria-invalid": fieldErrors?.[key] ? (true as const) : undefined,
+    }),
+    [fieldErrors]
+  );
+  const errorText = useCallback(
+    (key: string) => (fieldErrors?.[key] ? <p className="text-xs text-destructive">{fieldErrors[key]}</p> : null),
+    [fieldErrors]
+  );
+
   const renderField = useCallback(
-    (key: string, prop: JSONSchemaProperty) => {
+    (key: string, prop: ExtensionConfigProperty) => {
       // Config schema values are already translated by the backend
       const label = prop.title || key;
       const description = prop.description || "";
@@ -70,17 +75,18 @@ export function ExtensionConfigForm({ configSchema, value, onChange, withheldSec
               {isRequired && <span className="text-destructive ml-0.5">*</span>}
             </Label>
             <Select value={String(value[key] ?? "")} onValueChange={(v) => updateField(key, v)}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full" {...errorProps(key)}>
                 <SelectValue placeholder={placeholder} />
               </SelectTrigger>
               <SelectContent>
-                {prop.enum.map((opt) => (
+                {prop.enum.map((opt, i) => (
                   <SelectItem key={opt} value={opt}>
-                    {opt}
+                    {prop.enumLabels?.[i] ?? opt}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {errorText(key)}
             {description && <p className="text-xs text-muted-foreground">{description}</p>}
           </div>
         );
@@ -118,7 +124,9 @@ export function ExtensionConfigForm({ configSchema, value, onChange, withheldSec
               // rather than saved as a value the user never chose.
               onChange={(e) => updateField(key, e.target.value === "" ? undefined : Number(e.target.value))}
               placeholder={placeholder}
+              {...errorProps(key)}
             />
+            {errorText(key)}
             {description && <p className="text-xs text-muted-foreground">{description}</p>}
           </div>
         );
@@ -139,7 +147,9 @@ export function ExtensionConfigForm({ configSchema, value, onChange, withheldSec
               placeholder={placeholder}
               rows={6}
               className="font-mono text-xs"
+              {...errorProps(key)}
             />
+            {errorText(key)}
             {description && <p className="text-xs text-muted-foreground">{description}</p>}
           </div>
         );
@@ -158,6 +168,7 @@ export function ExtensionConfigForm({ configSchema, value, onChange, withheldSec
               value={String(value[key] ?? "")}
               onChange={(e) => updateField(key, e.target.value)}
               placeholder={withheldSecrets?.[key] ? t("asset.passwordUnchanged") : placeholder || "••••••••"}
+              {...errorProps(key)}
             />
           ) : (
             <Input
@@ -165,13 +176,15 @@ export function ExtensionConfigForm({ configSchema, value, onChange, withheldSec
               value={String(value[key] ?? "")}
               onChange={(e) => updateField(key, e.target.value)}
               placeholder={placeholder}
+              {...errorProps(key)}
             />
           )}
+          {errorText(key)}
           {description && <p className="text-xs text-muted-foreground">{description}</p>}
         </div>
       );
     },
-    [value, required, updateField, withheldSecrets, t]
+    [value, required, updateField, withheldSecrets, t, errorProps, errorText]
   );
 
   return <>{fields.map(([key, prop]) => renderField(key, prop))}</>;

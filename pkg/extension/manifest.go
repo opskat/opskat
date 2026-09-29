@@ -431,7 +431,7 @@ func (m *Manifest) Localized(tr func(key string) string) *Manifest {
 	return &out
 }
 
-// localizeConfigSchema translates title, placeholder, description fields in a JSON Schema.
+// localizeConfigSchema translates title, placeholder, description and enumLabels fields in a JSON Schema.
 func localizeConfigSchema(schema map[string]any, tr func(string) string) map[string]any {
 	if schema == nil {
 		return nil
@@ -445,6 +445,18 @@ func localizeConfigSchema(schema map[string]any, tr func(string) string) map[str
 		if s, ok := out[field].(string); ok && s != "" {
 			out[field] = tr(s)
 		}
+	}
+	// Enum option labels are i18n keys, like title.
+	if labels, ok := out["enumLabels"].([]any); ok {
+		translated := make([]any, len(labels))
+		for i, l := range labels {
+			if key, ok := l.(string); ok {
+				translated[i] = tr(key)
+			} else {
+				translated[i] = l
+			}
+		}
+		out["enumLabels"] = translated
 	}
 	// Recurse into properties
 	if props, ok := out["properties"].(map[string]any); ok {

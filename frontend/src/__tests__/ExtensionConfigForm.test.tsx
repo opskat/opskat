@@ -67,4 +67,42 @@ describe("ExtensionConfigForm", () => {
     expect(el.tagName.toLowerCase()).toBe("input");
     expect(el.type).toBe("password");
   });
+
+  it("shows enum option labels instead of raw values, and the select fills its column", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        auth: { type: "string", title: "Auth", enum: ["none", "apiKey"], enumLabels: ["No auth", "API key"] },
+      },
+    };
+    render(<ExtensionConfigForm configSchema={schema} value={{ auth: "apiKey" }} onChange={() => {}} />);
+    const trigger = screen.getByRole("combobox");
+    expect(trigger).toHaveTextContent("API key");
+    expect(trigger).not.toHaveTextContent("apiKey");
+    expect(trigger.className).toContain("w-full");
+  });
+
+  it("falls back to the raw option value when the schema declares no labels", () => {
+    const schema = { type: "object", properties: { mode: { type: "string", title: "Mode", enum: ["fast", "safe"] } } };
+    render(<ExtensionConfigForm configSchema={schema} value={{ mode: "safe" }} onChange={() => {}} />);
+    expect(screen.getByRole("combobox")).toHaveTextContent("safe");
+  });
+
+  it("puts a field error under its field and marks only that field invalid", () => {
+    const schema = {
+      type: "object",
+      properties: { username: { type: "string", title: "Username" }, host: { type: "string", title: "Host" } },
+    };
+    render(
+      <ExtensionConfigForm
+        configSchema={schema}
+        value={{}}
+        onChange={() => {}}
+        fieldErrors={{ username: "username is required" }}
+      />
+    );
+    expect(screen.getByText("username is required")).toBeInTheDocument();
+    expect(screen.getByLabelText("Username")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Host")).not.toHaveAttribute("aria-invalid", "true");
+  });
 });
