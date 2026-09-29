@@ -241,7 +241,8 @@ export function makeExtensionConfigSection(opts: Options) {
     // 保存前跑扩展的校验器（保存入口还会再跑一遍同一个校验器，这里是它的结构化视图）：
     // 落在本表单字段上的错误显示在字段旁，其余的并进拒绝保存的错误里交给壳 toast。
     async function checkConfig(configJSON: string) {
-      const errors = await ValidateExtensionConfig(opts.extensionName, opts.assetType, configJSON);
+      // A nil error list crosses IPC as null, which the host's save check also reads as valid.
+      const errors = (await ValidateExtensionConfig(opts.extensionName, opts.assetType, configJSON)) ?? [];
       if (errors.length === 0) {
         setFieldErrors({});
         return;

@@ -169,8 +169,9 @@ argument — there is nothing to implement. `describe()` reports the marker as
 "opsctl only".
 
 - `FileParam` panics at registration unless the name is a declared **string**
-  parameter, and on a repeat; the host's describe validation refuses a non-string
-  entry as well. It ships under host ABI 2.2, no further bump.
+  parameter whose `<name>-file` spelling is not itself a parameter, and on a repeat;
+  the host's describe validation refuses such an entry as well. It ships under host
+  ABI 2.2, no further bump.
 - opsctl refuses, sending nothing and exiting non-zero: both `--body` and
   `--body-file`; an unreadable file; content over 16 MiB or not valid UTF-8; stdin
   named twice.

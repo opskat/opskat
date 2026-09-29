@@ -753,6 +753,16 @@ describe("ExtensionConfigSection validation errors", () => {
     await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow("config is inconsistent");
   });
 
+  // Go hands a nil error list over IPC as null; the host's own save check reads it as valid.
+  it("a validator answering no error list at all lets the save through", async () => {
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue(null as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<Validated ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+
+    const built = await ref.current!.buildConfig({ ...ctx, isEdit: false });
+    expect(JSON.parse(built.configJSON)).toEqual({ auth: "none" });
+  });
+
   it("validates the config that would be saved: an untouched stored secret counts as filled", async () => {
     vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(JSON.stringify({ username: "u", auth: "basic" }));
     const ref = createRef<AssetFormHandle>();
