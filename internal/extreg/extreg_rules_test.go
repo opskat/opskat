@@ -285,23 +285,36 @@ func TestExtensionWildcardResourceIsJudgedByTheNamesItStandsFor(t *testing.T) {
 	assert.Equal(t, aictx.Deny, judge(4, "logs-a", "*").Decision, "* may name any index")
 }
 
-// 多资源调用的"始终允许"：逐资源落 grant，下一次同样的调用逐资源命中。
-func TestExtensionMultiResourceAllowAllGrantsEachResource(t *testing.T) {
-	registerFake(t, &fakePlugin{action: "object.write", resources: []string{"a", "logs-*"}})
-	ctx := withGrantFixture(t, 1, "acme-store")
-
-	require.Equal(t, aictx.Allow, allowAllChecker().CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)
-	items, err := grant_repo.Grant().ListApprovedItems(ctx, "sess-ext")
-	require.NoError(t, err)
-	persisted := make([]string, 0, len(items))
-	for _, item := range items {
-		persisted = append(persisted, item.Command)
+// 多资源调用的"始终允许"：未改动时落后端算出的那一条预填规则（覆盖全部资源的最窄
+// <action>:<公共前缀>*，没有公共前缀退回裸动作），下一次同样的调用被它命中。
+func TestExtensionMultiResourceAllowAllPersistsThePrefill(t *testing.T) {
+	cases := []struct {
+		name      string
+		resources []string
+		want      string
+	}{
+		{"common prefix", []string{"logs-a", "logs-b"}, "ext:acme:object.write:logs-*"},
+		{"no common prefix", []string{"a", "logs-*"}, "ext:acme:object.write"},
 	}
-	assert.Equal(t, []string{"ext:acme:object.write:a", "ext:acme:object.write:logs-*"}, persisted)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registerFake(t, &fakePlugin{action: "object.write", resources: tc.resources})
+			ctx := withGrantFixture(t, 1, "acme-store")
 
-	got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
-	assert.Equal(t, aictx.Allow, got.Decision)
-	assert.Equal(t, "ext:acme:object.write:a; ext:acme:object.write:logs-*", got.MatchedPattern)
+			require.Equal(t, aictx.Allow, allowAllChecker().CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)
+			items, err := grant_repo.Grant().ListApprovedItems(ctx, "sess-ext")
+			require.NoError(t, err)
+			persisted := make([]string, 0, len(items))
+			for _, item := range items {
+				persisted = append(persisted, item.Command)
+			}
+			assert.Equal(t, []string{tc.want}, persisted)
+
+			got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
+			assert.Equal(t, aictx.Allow, got.Decision)
+			assert.Equal(t, tc.want, got.MatchedPattern)
+		})
+	}
 }
 
 // 资源 glob 与 manifest 权限组里的规则同一套语言。
