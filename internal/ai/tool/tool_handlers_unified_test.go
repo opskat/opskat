@@ -2,6 +2,9 @@ package tool
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -968,5 +971,83 @@ func TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType(t *te
 	convID := aictx.GetConversationID(ctx)
 	if !GetDocGate(ctx).IsDocumented(convID, "grafana") {
 		t.Fatal("calling help on one grafana asset must document the grafana slug for all grafana assets")
+	}
+}
+
+// --- generic asset HTTP exec (spec "HTTP 请求" / "策略、审批与审计") ---
+
+// TestHandleExec_GenericHTTPApprovalShowsTargetButNeverInjectedValues drives the unified
+// exec tool end to end against an httptest server: the slug is accepted as `type`, the
+// default `GET *` rule lets a GET through without a dialog, a POST asks for approval
+// whose match object is `<METHOD> <path>` and whose detail names the rendered target URL
+// — and neither the dialog nor the tool output ever carries the injected credential.
+func TestHandleExec_GenericHTTPApprovalShowsTargetButNeverInjectedValues(t *testing.T) {
+	setupGenericPutDB(t)
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	secret := "echo_api_injected_secret"
+	var seenKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenKey = r.Header.Get("X-Api-Key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"path":"`+r.URL.Path+`"}`) //nolint:gosec // test server echoes the path back for the assertion
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	if err := custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Echo API", Slug: "echo-api", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}, {Name: "token", Secret: true, Required: true}},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "http://{{host}}", Auth: []custom_type_entity.AuthBinding{
+			{Type: "header", Name: "X-Api-Key", Values: []string{"{{token}}"}},
+		}},
+	}); err != nil {
+		t.Fatalf("save custom type: %v", err)
+	}
+	if _, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "echo-prod", "type": "echo-api", "config": map[string]any{"host": host, "token": secret},
+	}); err != nil {
+		t.Fatalf("handlePutAsset: %v", err)
+	}
+
+	var items []permission.ApprovalItem
+	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, got []permission.ApprovalItem) permission.ApprovalResponse {
+		items = append(items, got...)
+		return permission.ApprovalResponse{Decision: "allow"}
+	})
+	ctx := permission.WithPolicyChecker(context.Background(), checker)
+
+	out, err := handleExec(ctx, map[string]any{"asset": "echo-prod", "type": "echo-api", "command": "GET /api/health"})
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("the default GET * rule must allow a GET without approval, got %+v", items)
+	}
+	if out != "HTTP 200 OK\n\n{\"path\":\"/api/health\"}" {
+		t.Fatalf("exec must return the status line and body, got %q", out)
+	}
+	if seenKey != secret {
+		t.Fatalf("the host must inject the auth binding, server saw %q", seenKey)
+	}
+
+	out, err = handleExec(ctx, map[string]any{
+		"asset": "echo-prod", "command": `POST /api/items?dry=1 -H 'Content-Type: application/json' -d '{"a":1}'`,
+	})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("a POST is not covered by the default rules and must ask for approval, got %+v", items)
+	}
+	item := items[0]
+	if item.Command != "POST /api/items" {
+		t.Fatalf("the approval match object must be `<METHOD> <path>` without query, got %q", item.Command)
+	}
+	if !strings.Contains(item.Detail, srv.URL+"/api/items?dry=1") {
+		t.Fatalf("the approval detail must name the rendered target URL, got %q", item.Detail)
+	}
+	for _, s := range []string{item.Command, item.Detail, out} {
+		if strings.Contains(s, secret) {
+			t.Fatalf("injected values must never reach approval or output, got %q", s)
+		}
 	}
 }

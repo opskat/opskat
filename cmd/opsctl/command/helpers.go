@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -21,14 +22,25 @@ import (
 // 节点 host:port。仅对 redis 资产有意义——cmdExec 在解析后用 validateRedisScope 对非
 // redis 资产报错，而不是这里静默忽略或直接执行。
 func parseExecArgs(args []string) (declaredType, scope, command string, err error) {
+	declaredType, scope, argv, err := parseExecArgv(args)
+	if err != nil {
+		return "", "", "", err
+	}
+	return declaredType, scope, strings.Join(argv, " "), nil
+}
+
+// parseExecArgv 与 parseExecArgs 规则相同，但把命令原样保留成 argv：注册了流式执行入口
+// 的类型（permission.StreamExecutorFor，如通用资产的 HTTP 方式）按参数边界执行，
+// `-H 'X-Caller: two words'` 必须仍是一个参数，不能被空格拼接抹掉。
+func parseExecArgv(args []string) (declaredType, scope string, argv []string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			command = strings.Join(args[i+1:], " ")
+			argv = args[i+1:]
 		case arg == "--type":
 			if i+1 >= len(args) {
-				return "", "", "", fmt.Errorf("--type requires a value")
+				return "", "", nil, fmt.Errorf("--type requires a value")
 			}
 			declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
@@ -38,7 +50,7 @@ func parseExecArgs(args []string) (declaredType, scope, command string, err erro
 			continue
 		case arg == "--scope":
 			if i+1 >= len(args) {
-				return "", "", "", fmt.Errorf("--scope requires a value")
+				return "", "", nil, fmt.Errorf("--scope requires a value")
 			}
 			scope = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
@@ -47,16 +59,26 @@ func parseExecArgs(args []string) (declaredType, scope, command string, err erro
 			scope = strings.TrimPrefix(arg, "--scope=")
 			continue
 		case strings.HasPrefix(arg, "-"):
-			return "", "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
+			return "", "", nil, fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
 		default:
-			command = strings.Join(args[i:], " ")
+			argv = args[i:]
 		}
 		break
 	}
-	if command == "" {
-		return "", "", "", fmt.Errorf("no command given")
+	if strings.Join(argv, " ") == "" {
+		return "", "", nil, fmt.Errorf("no command given")
 	}
-	return declaredType, scope, command, nil
+	return declaredType, scope, argv, nil
+}
+
+// quoteExecArgv 把 argv 逐个按需加引号拼成命令串，cmdline.Words 能把它原样切回 argv。
+// 流式执行的类型用它作为 canonicalize / 审批 / 审计看到的命令串，与 AI exec 的写法一致。
+func quoteExecArgv(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
+		quoted[i] = cmdline.QuoteIfNeeded(a)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // validateRedisScope 校验 --scope（opsctl exec）/ batch 条目的 scope 字段只用在 redis

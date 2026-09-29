@@ -16,6 +16,20 @@ import (
 type GenericConfig struct {
 	CustomType string                  `json:"custom_type"`
 	Values     map[string]GenericValue `json:"values,omitempty"`
+	GenericConnection
+}
+
+// GenericConnection 是 HTTP 执行方式的连接配置，JSON 平铺在 GenericConfig 里（Design
+// decision 17：网络路径随实例而定，配在资产上，复用内置类型的代理链 / TLS 配置区；SSH 隧道
+// 走 Asset.SSHTunnelID）。命令执行方式忽略它们。拨号出错时原样报错，不会退回直连或跳过
+// 校验（connpool.NewHTTPTransport）。
+type GenericConnection struct {
+	ProxyChain    *ProxyChainConfig `json:"proxy_chain,omitempty"`
+	TLSInsecure   bool              `json:"tls_insecure,omitempty"`    // 跳过 TLS 证书校验（仅用户显式开启）
+	TLSServerName string            `json:"tls_server_name,omitempty"` // TLS SNI / ServerName
+	TLSCAFile     string            `json:"tls_ca_file,omitempty"`     // CA 证书路径
+	TLSCertFile   string            `json:"tls_cert_file,omitempty"`   // 客户端证书路径
+	TLSKeyFile    string            `json:"tls_key_file,omitempty"`    // 客户端私钥路径
 }
 
 // GenericValue 是一个字段的值。存储约定（由 custom_type_svc 维护）：

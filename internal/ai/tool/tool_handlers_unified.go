@@ -5,16 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
-	"github.com/opskat/opskat/internal/pkg/authtmpl"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
@@ -113,6 +114,18 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		}
 	}
 
+	// 审批展示补充（如通用资产渲染后的目标地址）同样无副作用，失败说明命令必然执行失败，
+	// 与 precheck 同样在权限检查之前短路。
+	var detail []string
+	if describe, ok := permission.ApprovalDetailFor(asset.Type); ok {
+		d, err := describe(ctx, asset, command)
+		if err != nil {
+			recordShortCircuit(ctx, aictx.SourceExecPrecheckFailed)
+			return "", err
+		}
+		detail = append(detail, d)
+	}
+
 	scope := aictx.ArgString(args, "scope")
 
 	// checker 为 nil 只在 opsctl 那条已预检的路径上合法（permission.WithPreapproved），
@@ -122,7 +135,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 	if checker != nil {
-		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, checkCommand)
+		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, checkCommand, detail...)
 		aictx.RecordDecision(ctx, result)
 		if result.Decision != aictx.Allow {
 			return result.Message, nil
@@ -337,7 +350,9 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 	}
 
 	if ct.ExecMode == custom_type_entity.ExecModeHTTP && ct.HTTP != nil {
-		if addr, err := renderGenericAddress(ct, resolved.Values); err == nil {
+		// 渲染失败只可能来自数据一致性问题（如字段被并发改名）：跳过地址这一行比让整条
+		// help 报错更有用；exec 时同一个渲染会把错误原样报出来。
+		if addr, err := helper.RenderGenericBaseURL(ct, resolved.Values, time.Now()); err == nil {
 			fmt.Fprintf(&b, "\nActual address: %s\n", addr)
 		}
 		b.WriteString(renderGenericTunnelLine(ctx, asset))
@@ -350,18 +365,6 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 	}
 
 	return b.String(), nil
-}
-
-// renderGenericAddress 用 authtmpl 渲染 HTTP 方式的 Base URL 模板，得到这个实例实际会
-// 访问的地址。模板语法与字段引用在类型保存时已经过 Validate 校验，这里的 Parse 失败
-// 只可能来自数据一致性问题（如字段被并发改名），help 因此不把它当成致命错误——跳过地址
-// 这一行比让整条 help 报错更有用。
-func renderGenericAddress(ct *custom_type_entity.CustomType, values map[string]string) (string, error) {
-	tmpl, err := authtmpl.Parse(ct.HTTP.BaseURL, authtmpl.ParseOptions{Fields: ct.FieldNames()})
-	if err != nil {
-		return "", err
-	}
-	return tmpl.Render(authtmpl.NewRenderContext(values))
 }
 
 // renderGenericTunnelLine 显示 HTTP 方式使用的 SSH 隧道（Design decision 17：连接复用

@@ -7,9 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/mock/gomock"
+
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
 )
 
 // SKILL.md 是**喂给模型**的那份文档：模型照着它写命令。在此之前没有任何测试读过它，
@@ -89,6 +94,27 @@ var skillExampleAssetConfig = map[string]func(*asset_entity.Asset) error{
 		// SKILL.md 的多数示例不写 --db，靠资产默认库补齐（resolveMongoCommand）。
 		return a.SetMongoDBConfig(&asset_entity.MongoDBConfig{Database: "appdb"})
 	},
+	asset_entity.AssetTypeGeneric: func(a *asset_entity.Asset) error {
+		// 通用资产的 canonicalizer 按自定义类型的执行方式分派：示例资产引用一个 HTTP 方式的
+		// 类型（registerSkillExampleCustomTypes 注册），示例须能解析成 `<METHOD> <path>`。
+		return a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: skillExampleHTTPType.Slug})
+	},
+}
+
+var skillExampleHTTPType = &custom_type_entity.CustomType{
+	Slug: "skill-example-http", Name: "skill example", ExecMode: custom_type_entity.ExecModeHTTP,
+	Fields: []custom_type_entity.Field{{Name: "host", Required: true}},
+	HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
+}
+
+// registerSkillExampleCustomTypes 让通用资产的 canonicalizer 能查到示例资产的自定义类型。
+func registerSkillExampleCustomTypes(t *testing.T) {
+	t.Helper()
+	repo := mock_custom_type_repo.NewMockCustomTypeRepo(gomock.NewController(t))
+	repo.EXPECT().FindBySlug(gomock.Any(), skillExampleHTTPType.Slug).Return(skillExampleHTTPType, nil).AnyTimes()
+	orig := custom_type_repo.CustomType()
+	custom_type_repo.RegisterCustomType(repo)
+	t.Cleanup(func() { custom_type_repo.RegisterCustomType(orig) })
 }
 
 // skillTypesWithoutCanonicalizer 是有 SKILL.md、但没有注册 canonicalizer 的类型：
@@ -115,10 +141,10 @@ var skillDocOnlyTypes = []string{
 	asset_entity.AssetTypeRDP,
 	asset_entity.AssetTypeVNC,
 	asset_entity.AssetTypeLocal,
-	asset_entity.AssetTypeGeneric, // 执行器落地后改由其 canonicalizer 校验示例
 }
 
 func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
+	registerSkillExampleCustomTypes(t)
 	types := skills.Types()
 	if len(types) == 0 {
 		t.Fatal("skills.Types() is empty; the embedded SKILL.md set went missing")
