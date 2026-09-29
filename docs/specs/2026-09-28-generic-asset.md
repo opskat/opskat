@@ -2,7 +2,7 @@
 
 > Status: Approved
 > Owner: OpsKat maintainers
-> Last updated: 2026-09-28
+> Last updated: 2026-09-29
 
 **Objective:** 用户可以自己定义一类服务（如 Grafana、钉钉机器人、AWS CLI）：字段结构、凭据怎么注入、这类服务怎么用。之后只要为每个实例填上值，就能通过 opsctl 和内置 AI 访问，受现有策略、审批和审计约束。OpsKat 不为这类资产提供专门的操作界面。
 
@@ -108,7 +108,7 @@
 - **输出**：响应体原样写到 stdout；状态行（如 `HTTP 200 OK`）写到 stderr；加 `-i` 时状态行和响应头也写到 stdout，放在响应体前面。响应为 2xx 时退出码为 0；其他状态码退出码为 1，响应体照常输出。请求没有完成时（校验失败、连接失败、TLS 失败、模板渲染失败），错误写到 stderr，退出码为 1，stdout 为空。
 - **重定向**：同源重定向跟随（最多 10 次），继续注入认证；跨源重定向不跟随，返回错误，也不会把认证发往别的源。
 - **连接**：按资产的隧道 / 代理链 / TLS 配置拨号；隧道、证书、握手出错时原样报错，不会退回直连或跳过校验。
-- **AI**：通过统一 `exec` 调用，command 参数的写法与 opsctl 相同（`GET /api/search?query=cpu`）。返回内容是状态行加响应体，沿用 exec 现有的输出截断规则。响应不是文本（Content-Type 不属于 text/*、json、xml）时，只返回"二进制响应，N 字节，Content-Type"。
+- **AI**：通过统一 `exec` 调用，command 参数的写法与 opsctl 相同（`GET /api/search?query=cpu`），但请求体只能用 `-d '<数据>'` 内联写出：`-d @<文件>` 与 `-d @-` 会被拒绝，避免模型绕过本地工具审批读取本机文件。**[用户决定]**返回内容是状态行加响应体，沿用 exec 现有的输出截断规则。响应不是文本（Content-Type 不属于 text/*、json、xml）时，只返回"二进制响应，N 字节，Content-Type"。
 
 ## 本地命令
 
