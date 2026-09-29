@@ -13,23 +13,6 @@ type LangProvider interface {
 	Lang() string
 }
 
-// PageToolGate runs one tool call an extension's own frontend page makes against
-// the asset it was opened for, through the same policy check / in-app approval /
-// grant / audit gate opsctl's socket bridge runs delegated exec commands through
-// (main.go wires *opsctl.Opsctl in, whose RunPageToolCall implements this).
-//
-// Without this seam, CallExtensionTool would have to call straight into
-// Plugin.CallTool — the direct-dial path opsctl.handleExtToolExec exists
-// precisely to avoid, because it skips policy, approval, grant and audit
-// entirely. command is the same `<tool> --flag=value` / `<tool> --json=<...>`
-// exec DSL text the unified exec handler parses for every other caller (AI,
-// opsctl). extension is the calling extension's display name, which the approval
-// dialog names as the requester. Canceling ctx — which CancelExtensionTool does —
-// ends the call.
-type PageToolGate interface {
-	RunPageToolCall(ctx context.Context, extension string, assetID int64, command string) (string, error)
-}
-
 // Extension binder。
 type Extension struct {
 	appCtx context.Context
@@ -37,8 +20,7 @@ type Extension struct {
 	lang   LangProvider
 	pool   *sshpool.Pool
 
-	service  *extension_svc.Service
-	pageGate PageToolGate
+	service *extension_svc.Service
 
 	// toolCalls are the page tool calls in flight, for CancelExtensionTool.
 	toolCalls toolCalls
@@ -51,9 +33,6 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Extensi
 
 // SetService main.go 在创建 extension_svc.Service 后注入。
 func (e *Extension) SetService(svc *extension_svc.Service) { e.service = svc }
-
-// SetPageToolGate main.go 注入页面工具调用闸门（*opsctl.Opsctl）。
-func (e *Extension) SetPageToolGate(gate PageToolGate) { e.pageGate = gate }
 
 // Service 返回当前持有的 extension_svc.Service（main.go 需要它去做附加配置）。
 func (e *Extension) Service() *extension_svc.Service { return e.service }

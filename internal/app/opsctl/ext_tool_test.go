@@ -7,18 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
 )
 
-// The gate handleExtToolExec and RunPageToolCall share (gateExtToolCall) builds a
-// context carrying the audit source and returns it explicitly rather than mutating
-// the caller's variable in place — Go contexts are immutable, so a caller that
-// wrote its audit row with its own original ctx instead of the one gateExtToolCall
-// handed back would silently lose the audit source. This test protects that seam
-// for handleExtToolExec's "opsctl" source the same way
-// TestRunPageToolCallWritesAuditWithSourceExtensionPage protects it for
-// RunPageToolCall's "extension_page" source.
+// gateExtToolCall builds a context carrying the audit source and returns it
+// explicitly rather than mutating the caller's variable in place — Go contexts are
+// immutable, so a caller that wrote its audit row with its own original ctx instead
+// of the one gateExtToolCall handed back would silently lose the audit source. This
+// test protects that seam for handleExtToolExec's "opsctl" source.
 func TestHandleExtToolExecWritesAuditWithSourceOpsctl(t *testing.T) {
 	writer := withFakeAuditWriter(t)
 	executor := &decidingExtExecutor{
@@ -31,6 +29,32 @@ func TestHandleExtToolExecWritesAuditWithSourceOpsctl(t *testing.T) {
 
 	require.True(t, resp.Approved)
 	require.Equal(t, "opsctl", aictx.GetAuditSource(writer.ctx))
+}
+
+// fakeAuditWriter records the ctx and info WriteToolCall was actually called with,
+// so a test can check what a caller put into the *context it wrote with* — not
+// just what gateExtToolCall computed — which is the seam a caller can get wrong by
+// writing with a context it never re-assigned (exactly what happened here: an
+// earlier version of gateExtToolCall built a context carrying the audit source but
+// returned only the result struct, so both callers audited with their original,
+// unannotated context and every gated call's audit row silently lost its source).
+type fakeAuditWriter struct {
+	ctx  context.Context
+	info audit.ToolCallInfo
+}
+
+func (w *fakeAuditWriter) WriteToolCall(ctx context.Context, info audit.ToolCallInfo) {
+	w.ctx = ctx
+	w.info = info
+}
+
+func withFakeAuditWriter(t *testing.T) *fakeAuditWriter {
+	t.Helper()
+	original := extAuditWriter
+	fake := &fakeAuditWriter{}
+	extAuditWriter = fake
+	t.Cleanup(func() { extAuditWriter = original })
+	return fake
 }
 
 type extTestLang struct{}

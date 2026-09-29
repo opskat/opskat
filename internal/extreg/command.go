@@ -169,6 +169,20 @@ func toolNames(m *extension.Manifest) []string {
 	return names
 }
 
+// ValidateToolArgs is the entry an extension page's tool call takes into the
+// schema check: raw is the JSON object the page passed for tool, and the result is
+// its canonical form. A page has no command line, so it never goes through
+// parseCommand — but it must be held to the same declaration, which is what keeps
+// unknown keys (and the opsctl-only `<flag>-file` spelling) out of the guest.
+func ValidateToolArgs(m *extension.Manifest, tool string, raw []byte) ([]byte, error) {
+	def, ok := toolDef(m, tool)
+	if !ok {
+		return nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
+			m.Name, tool, strings.Join(toolNames(m), ", "))
+	}
+	return validateToolArgs(m.Name, def, raw)
+}
+
 // validateToolArgs applies the manifest's supported JSON-schema subset at call time.
 // Manifest loading proves the schema itself is well-formed; this function proves one
 // invocation is an object with no duplicate/unknown keys, contains every required key,

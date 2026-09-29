@@ -50,9 +50,6 @@ interface ApprovalItemData {
   remember_pattern?: string;
 }
 
-// 单条审批的发起方（internal/app/opsctl 的 approvalOrigin）：opsctl CLI，或某个扩展的页面。
-type ApprovalSource = "opsctl" | "extension_page";
-
 interface SingleApprovalEvent {
   confirm_id: string;
   kind: "single" | "once" | "delete" | "extension";
@@ -66,9 +63,6 @@ interface SingleApprovalEvent {
   resources?: string[];
   remember_pattern?: string;
   session_id: string;
-  source: ApprovalSource;
-  // 扩展页面发起时是该扩展的显示名。
-  extension: string;
 }
 
 interface BatchApprovalEvent {
@@ -92,9 +86,6 @@ interface QueueItem {
   description?: string;
   sessionID?: string;
   editable: boolean;
-  // 只有单条审批事件带发起方；批量 / grant 审批只来自 opsctl。
-  source?: ApprovalSource;
-  extension?: string;
 }
 
 // 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
@@ -195,8 +186,6 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           ],
           sessionID: data.session_id,
           editable: false,
-          source: data.source,
-          extension: data.extension,
         });
       },
       [enqueue]
@@ -404,9 +393,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                     ? t("opsctlApproval.batchTitle")
                     : current.kind === "delete"
                       ? t("ai.approvalDeleteTitle")
-                      : current.source === "extension_page"
-                        ? t("opsctlApproval.extensionPageTitle", { extension: current.extension })
-                        : t("opsctlApproval.title")}
+                      : t("opsctlApproval.title")}
                 {queue.length > 1 && (
                   <span className="text-sm font-normal text-muted-foreground">(1/{queue.length})</span>
                 )}
@@ -416,11 +403,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                   ? t("opsctlApproval.grantDescription")
                   : current.kind === "batch"
                     ? t("opsctlApproval.batchDescription", { count: current.items.length })
-                    : current.source === "extension_page"
-                      ? t("opsctlApproval.extensionPageDescription", { extension: current.extension })
-                      : current.items[0]?.type === "ext_dev_install"
-                        ? t("opsctlApproval.extDevInstallDescription")
-                        : t("opsctlApproval.description")}
+                    : current.items[0]?.type === "ext_dev_install"
+                      ? t("opsctlApproval.extDevInstallDescription")
+                      : t("opsctlApproval.description")}
               </DialogDescription>
             </DialogHeader>
 

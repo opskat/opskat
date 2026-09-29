@@ -54,14 +54,10 @@ export function createExtensionAPI(): ExtActionAPI {
       assetId?: number,
       options?: ExtCallOptions
     ): Promise<unknown> {
-      // A call scoped to an asset now clears the desktop's policy/approval gate
-      // (internal/app/opsctl's RunPageToolCall) instead of dialing the plugin
-      // directly. The invocation id is this call's own correlation token — the
-      // same per-call convention startAction already uses, reused here rather
-      // than inventing a second one — not the identity an "always allow" grant
-      // persists under; the backend derives that from the asset (for the current
-      // desktop run) so a grant outlives the one call that requested it. It is
-      // also what cancel names.
+      // A call scoped to an asset runs directly on the backend (no approval or
+      // audit; see CallExtensionTool). The invocation id is this call's own
+      // correlation token — the same per-call convention startAction already uses,
+      // reused here rather than inventing a second one — and is what cancel names.
       const signal = options?.signal;
       signal?.throwIfAborted();
       const invocationId = newInvocationId();

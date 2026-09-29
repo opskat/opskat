@@ -6,14 +6,10 @@
 // injects before loading it (frontend/src/extension/inject.ts), and every page an
 // extension ships is loaded the same way (frontend/src/extension/loader.ts).
 //
-// Its purpose beyond "show the notes" is to exercise the seam task 8 adds: every
-// call below goes through window.__OPSKAT_EXT__.api.callTool, which the host now
-// runs through the exact same policy check / in-app approval / grant / audit gate
-// opsctl's delegated exec uses (internal/app/opsctl's handleExtToolExec) instead of
-// dialing the plugin directly. note_put asks for confirmation the first time (the
-// "write" policy group is not granted by default); note_delete is refused outright
-// (the "no-delete" group denies it by default) — so this one page's buttons are
-// what e2e drives to cover the approval dialog and the deny-as-error path.
+// Every call below goes through window.__OPSKAT_EXT__.api.callTool, which the host
+// runs directly against the page's asset: the page is the user's own action, so no
+// policy check, approval or audit applies (AI exec and opsctl on the same asset stay
+// gated). A tool error, note_delete's included, reaches runTool as a rejected promise.
 //
 // It also renders the note list a second time through window.__OPSKAT_EXT__.hostUI
 // (task 11's @opskat/host-ui — this is why manifest.json declares hostABI 2.1

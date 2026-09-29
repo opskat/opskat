@@ -190,10 +190,14 @@ call: it runs the type's declared handler with the submitted config — see
 [Test connection](#test-connection).) An extension page that *does* work on a saved asset passes its `assetId` prop —
 `api.callTool(ext, tool, args, assetId)` / `api.executeAction(ext, action, args,
 onEvent, assetId)` — and the handler reads it from `ctx.Asset` the same way.
-`api.callTool` against a saved asset clears the exact same policy check / in-app
-approval dialog / grant / audit trail as `opsctl exec` on that asset does — a call
-needing confirmation pops the app's usual approval dialog, and a denial reaches the
-page as a rejected promise, not a result to display.
+`api.callTool` against a saved asset runs directly: it is the user's own action in the
+page, so there is no policy check, approval dialog, grant or audit row (those belong to
+AI `exec` and opsctl, which stay gated on the same asset). It is still scoped to that
+asset — `ctx.AssetConfig()`, endpoint gating, the connection settings and credential
+injection all apply — its arguments are checked against the tool's declared
+parameters (unknown keys are rejected), and it can be cancelled and honours the
+tool's timeout. A tool failure, the handler's error included, reaches the page as a
+rejected promise carrying the message as-is.
 
 ### Connection settings belong to the host
 

@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/app/i18n"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
@@ -123,22 +122,18 @@ func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 //
 // assetID is how the asset reaches the guest: a tool takes no asset argument, so
 // a page that leaves this 0 gets a call the guest reports as unscoped rather than
-// one that silently reads whatever asset the arguments happened to name. A call
-// against no asset has nothing for a policy check to run against — the asset
-// configuration form calling a tool before the asset is saved is the one caller
-// today — so it dials the plugin directly, exactly as before this gate existed.
+// one that silently reads whatever asset the arguments happened to name. Any other
+// id must be an asset of extName's own types (see assetRef).
 //
-// A call against a saved asset is what the spec means by "a page calls a tool on
-// the asset it was opened for": it must clear the exact same policy check / in-app
-// approval / grant / audit gate opsctl's delegated exec runs through
-// (internal/app/opsctl's handleExtToolExec), not a second direct-dial path with no
-// gate at all — hence e.pageGate rather than ext.Plugin.CallTool below.
+// The call runs directly: it is the user's own action in the page, so there is no
+// policy check, approval, grant or audit — those belong to AI exec and opsctl. It
+// is still scoped to its asset (ctx.AssetConfig, endpoint gating, connection
+// settings and credential injection all follow the AssetRef) and its arguments are
+// held to the tool's declared schema, as Plugin.CallTool does not check them.
 //
 // invocationID is the frontend's per-call correlation token (the same convention
 // CallExtensionAction already uses): CancelExtensionTool takes it to stop this
-// call while it runs. It is not the grant session an "always allow" approval
-// persists under — the gate derives that from the asset (for the current
-// desktop run) instead, so the grant outlives this one call.
+// call while it runs. A failure, the guest's included, is returned as-is.
 func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
@@ -151,11 +146,13 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		return "", fmt.Errorf("extension %q has no backend plugin", extName)
 	}
 
-	var args json.RawMessage
-	if argsJSON != "" {
-		args = json.RawMessage(argsJSON)
-	} else {
-		args = json.RawMessage("{}")
+	args := []byte(argsJSON)
+	if argsJSON == "" {
+		args = []byte("{}")
+	}
+	args, err := extreg.ValidateToolArgs(ext.Manifest, tool, args)
+	if err != nil {
+		return "", err
 	}
 
 	asset, err := e.assetRef(extName, assetID)
@@ -172,33 +169,11 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	}
 	defer end()
 
-	if asset == nil {
-		result, err := ext.Plugin.CallTool(ctx, tool, args, nil)
-		if err != nil {
-			return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
-		}
-		return string(result), nil
-	}
-
-	if e.pageGate == nil {
-		return "", fmt.Errorf("extension tool gate not initialized")
-	}
-
-	result, err := e.pageGate.RunPageToolCall(ctx, pageDisplayName(ext, e.lang.Lang()), assetID, extToolCallCommand(tool, args))
+	result, err := ext.Plugin.CallTool(ctx, tool, args, asset)
 	if err != nil {
-		return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
+		return "", err
 	}
-	return result, nil
-}
-
-// pageDisplayName is how the approval dialog names the extension whose page is
-// calling: its display name in the UI language, or its name when the manifest
-// declares no display name.
-func pageDisplayName(ext *extension.Extension, lang string) string {
-	if ext.Manifest.I18n.DisplayName == "" {
-		return ext.Name
-	}
-	return ext.Translate(lang, ext.Manifest.I18n.DisplayName)
+	return string(result), nil
 }
 
 // CancelExtensionTool stops the page tool call running under invocationID: the
@@ -217,22 +192,6 @@ func (e *Extension) CancelExtensionTool(invocationID string) error {
 	}
 	log.Info("extension tool cancel requested")
 	return nil
-}
-
-// extToolCallCommand renders a page's (tool, args) call into the same
-// `<tool> --json=<...>` exec DSL text the unified exec handler parses for every
-// other caller of an extension tool (AI, opsctl) — see internal/extreg's
-// parseCommand. --json is that DSL's escape hatch for a JSON object that cannot
-// always be expressed as `--flag=value` pairs; rendering it through cmdline.Command
-// reuses its quoting rules instead of duplicating (and inevitably drifting from)
-// them by hand.
-func extToolCallCommand(tool string, args json.RawMessage) string {
-	raw := strings.TrimSpace(string(args))
-	if raw == "" {
-		raw = "{}"
-	}
-	cmd := &cmdline.Command{Verb: tool, Flags: map[string]string{"json": raw}}
-	return cmd.Render()
 }
 
 // assetRef names the asset a frontend-initiated call runs against. A 0 id is the
