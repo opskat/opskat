@@ -21,15 +21,16 @@ import (
 const extEditTestType = "esverify-edit-test"
 
 // registerClassifiedExtType registers an extension-like type whose every command
-// classifies as (delete, resource) under policy type "esverify".
-func registerClassifiedExtType(t *testing.T, resource string) {
+// classifies as (delete, resources) under policy type "esverify". resources are in
+// the host's glob form (pkg/extension quotes a literal resource).
+func registerClassifiedExtType(t *testing.T, resources ...string) {
 	t.Helper()
 	require.NoError(t, RegisterPolicyCheck(extEditTestType,
 		func(context.Context, int64, string) aictx.CheckResult {
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		},
 		func(context.Context, string) (ExtensionClassification, bool) {
-			return ExtensionClassification{PolicyType: "esverify", Action: "delete", Resource: resource, Tool: "request"}, true
+			return ExtensionClassification{PolicyType: "esverify", Action: "delete", Resources: resources, Tool: "request"}, true
 		}))
 	t.Cleanup(func() { UnregisterPolicyCheck(extEditTestType) })
 }
@@ -59,11 +60,12 @@ func persistedCommands(stub *stubGrantRepo) []string {
 }
 
 func TestClassifiedApprovalItemCarriesTheGrantTailToEdit(t *testing.T) {
-	cases := []struct{ resource, want string }{
-		{"logs-app", "delete:logs-app"},
-		// The resource is escaped exactly as the persisted grant escapes it, so the
-		// untouched value still grants only the literal resource the user saw.
-		{"logs-*[1]", `delete:logs-\*\[1]`},
+	cases := []struct{ resource, shown, want string }{
+		{"logs-app", "logs-app", "delete:logs-app"},
+		// A literal resource arrives quoted (the extension returned "logs-*[1]"): the
+		// dialog shows it as returned, and the pre-filled tail keeps the quoting, so
+		// the untouched value still grants only the literal resource the user saw.
+		{`logs-\*\[1]`, "logs-*[1]", `delete:logs-\*\[1]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.resource, func(t *testing.T) {
@@ -78,11 +80,37 @@ func TestClassifiedApprovalItemCarriesTheGrantTailToEdit(t *testing.T) {
 			got := checker.HandleConfirm(ctx, 3, extEditTestType, "request --method=DELETE --path=/logs-app")
 
 			require.Equal(t, aictx.Allow, got.Decision)
+			require.Equal(t, tc.shown, shown.Resource)
+			require.Equal(t, []string{tc.shown}, shown.Resources)
 			require.Equal(t, tc.want, shown.RememberPattern)
 			require.Equal(t, []string{"ext:esverify:" + tc.want}, persistedCommands(stub),
 				"an unedited Remember persists exactly the value the editor was pre-filled with")
 		})
 	}
+}
+
+// A multi-resource item carries every resource as the extension returned it. Until
+// a multi-resource Remember pre-fill exists, the item offers none, and an unedited
+// "always allow" persists one exact grant per resource.
+func TestMultiResourceApprovalCarriesEveryResource(t *testing.T) {
+	registerClassifiedExtType(t, "logs-*", `a\[1\]`, "prod-1")
+	ctx, stub := confirmWithGrantRepo(t)
+
+	var shown ApprovalItem
+	checker := NewCommandPolicyChecker(func(_ context.Context, _ string, items []ApprovalItem) ApprovalResponse {
+		shown = items[0]
+		return ApprovalResponse{Decision: "allowAll"}
+	})
+	got := checker.HandleConfirm(ctx, 3, extEditTestType, "request --method=DELETE --path=/logs-*,a[1],prod-1")
+
+	require.Equal(t, aictx.Allow, got.Decision)
+	require.Equal(t, "delete", shown.Action)
+	require.Equal(t, []string{"logs-*", "a[1]", "prod-1"}, shown.Resources)
+	require.Empty(t, shown.Resource)
+	require.Empty(t, shown.RememberPattern)
+	require.Equal(t, []string{
+		"ext:esverify:delete:logs-*", `ext:esverify:delete:a\[1\]`, "ext:esverify:delete:prod-1",
+	}, persistedCommands(stub))
 }
 
 func TestClassifiedApprovalPersistsTheEditedGrantTail(t *testing.T) {

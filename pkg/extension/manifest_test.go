@@ -80,7 +80,15 @@ func TestParseManifest(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "not supported")
 		})
 
-		Convey("should accept the current hostABI declaring @opskat/host-ui", func() {
+		Convey("should accept the current hostABI declaring multi-resource classification", func() {
+			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "2.2",` +
+				`"backend":{"runtime":"wasm","binary":"main.wasm"}}`)
+			m, err := ParseManifest(data)
+			So(err, ShouldBeNil)
+			So(m.HostABI, ShouldEqual, "2.2")
+		})
+
+		Convey("should still accept the 2.1 hostABI declaring @opskat/host-ui", func() {
 			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "2.1",` +
 				`"backend":{"runtime":"wasm","binary":"main.wasm"}}`)
 			m, err := ParseManifest(data)
@@ -97,7 +105,7 @@ func TestParseManifest(t *testing.T) {
 		})
 
 		Convey("should reject an hostABI newer than anything this runtime supports", func() {
-			for _, abi := range []string{"2.2", "3.0"} {
+			for _, abi := range []string{"2.3", "3.0"} {
 				data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "` + abi + `"}`)
 				_, err := ParseManifest(data)
 				So(err, ShouldNotBeNil)

@@ -335,6 +335,93 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 	})
 }
 
+type bulkArgs struct {
+	Indices []string `json:"indices,omitempty"`
+	Write   bool     `json:"write,omitempty"`
+}
+
+func classifyBulk(args bulkArgs) (string, []string) {
+	if args.Write {
+		return "index.write", args.Indices
+	}
+	return "index.read", args.Indices
+}
+
+func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
+	Convey("PolicyResources answers check_policy with every resource the call touches", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		Tool("request", func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }).
+			PolicyResources([]string{"index.read", "index.write"}, classifyBulk)
+
+		check := func(args string) (string, error) {
+			raw, err := dispatch("check_policy", []byte(`{"tool":"request","args":`+args+`}`))
+			return string(raw), err
+		}
+
+		Convey("the reply carries the resource list, not the single-resource field", func() {
+			raw, err := check(`{"indices":["a","prod-1","logs-*"],"write":true}`)
+			So(err, ShouldBeNil)
+			So(raw, ShouldEqual, `{"action":"index.write","resources":["a","prod-1","logs-*"]}`)
+		})
+
+		Convey("a call touching no resource answers an empty list, never null", func() {
+			raw, err := check(`{}`)
+			So(err, ShouldBeNil)
+			So(raw, ShouldEqual, `{"action":"index.read","resources":[]}`)
+		})
+
+		Convey("arguments the tool cannot decode fail the check instead of classifying blind", func() {
+			_, err := check(`{"indices":"a"}`)
+			So(err, ShouldNotBeNil)
+		})
+
+		Convey("describe declares the action set", func() {
+			tool := decodeDescribe(t)["tools"].([]any)[0].(map[string]any)
+			So(tool["policyActions"], ShouldResemble, []any{"index.read", "index.write"})
+		})
+
+		Convey("TestHost reports both reply shapes as a resource list", func() {
+			Tool("list", func(_ *ToolContext, _ listArgs) (any, error) { return nil, nil }).
+				Policy("list").Resource(func(a listArgs) string { return a.Bucket })
+			host := NewTestHost()
+			defer host.Close()
+
+			action, resources, err := host.CheckPolicy("request", bulkArgs{Indices: []string{"x", "prod-1"}, Write: true})
+			So(err, ShouldBeNil)
+			So(action, ShouldEqual, "index.write")
+			So(resources, ShouldResemble, []string{"x", "prod-1"})
+
+			action, resources, err = host.CheckPolicy("list", listArgs{Bucket: "b1"})
+			So(err, ShouldBeNil)
+			So(action, ShouldEqual, "list")
+			So(resources, ShouldResemble, []string{"b1"})
+		})
+	})
+
+	Convey("a PolicyResources declaration that cannot be honored fails at init", t, func() {
+		resetRegistries()
+		noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
+		classifyOne := func(a bulkArgs) (string, string) { return "index.read", "" }
+
+		So(func() { Tool("a", noop).PolicyResources(nil, classifyBulk) }, ShouldPanic)
+		So(func() { Tool("b", noop).Policy("index.read").PolicyResources([]string{"index.read"}, classifyBulk) }, ShouldPanic)
+		So(func() { Tool("c", noop).PolicyResources([]string{"index.read"}, classifyBulk).Policy("index.read") }, ShouldPanic)
+		So(func() {
+			Tool("d", noop).PolicyResources([]string{"index.read"}, classifyBulk).
+				Resource(func(bulkArgs) string { return "" })
+		}, ShouldPanic)
+		So(func() {
+			Tool("e", noop).PolicyFunc([]string{"index.read"}, classifyOne).
+				PolicyResources([]string{"index.read"}, classifyBulk)
+		}, ShouldPanic)
+		So(func() {
+			Tool("f", noop).PolicyResources([]string{"index.read"}, classifyBulk).
+				PolicyFunc([]string{"index.read"}, classifyOne)
+		}, ShouldPanic)
+	})
+}
+
 func TestDescribeReportsToolTimeout(t *testing.T) {
 	Convey("a tool's own timeout is declared through describe", t, func() {
 		resetRegistries()

@@ -14,9 +14,10 @@ import type { ExtAPI } from "./types";
 // they follow the host's theme (CSS vars flipped by ThemeProvider) and language
 // (the shared react-i18next instance below) with no extra wiring on either side.
 // The version is bound to hostABI (pkg/extension.HostABIVersion): bump both together
-// whenever a hostUI-visible change ships, and keep this in sync by hand — there is no
-// generated binding for a Go string constant into the frontend bundle.
-export const HOST_UI_VERSION = "2.1";
+// whenever hostABI changes, and keep this in sync by hand — there is no generated
+// binding for a Go string constant into the frontend bundle (pkg/extension's
+// TestHostUIVersionMirrorsHostABI fails when the two drift).
+export const HOST_UI_VERSION = "2.2";
 
 const hostUI = {
   version: HOST_UI_VERSION,

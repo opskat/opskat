@@ -99,12 +99,35 @@ func TestExtensionGrantRequestPersistsRuleShapedGrantsThatMatch(t *testing.T) {
 	require.Len(t, shown, 2)
 	require.Equal(t, "delete:logs-*", shown[0].Command)
 
-	_, ok := MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", "logs-app")
+	_, ok := MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", []string{"logs-app"})
 	require.True(t, ok, "a delete on a matching resource must now run without a prompt")
-	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "read", "anything/at/all")
+	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "read", []string{"anything/at/all"})
 	require.True(t, ok, "an action-only grant covers every resource, like an action-only rule")
-	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", "metrics-app")
+	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", []string{"metrics-app"})
 	require.False(t, ok, "the resource glob still bounds the grant")
+}
+
+// Grants cover a multi-resource call per resource: each resource needs some grant
+// covering it (different resources may be covered by different grants), and a
+// wildcard resource needs a grant covering every name it stands for.
+func TestExtensionGrantsCoverEachResourceOfACall(t *testing.T) {
+	registerGrantRequestExtType(t)
+	ctx, _ := grantRequestFixture(t)
+	SaveGrantPattern(ctx, "sess-req", 3, "es-logs", extGrantReqType, "ext:esgrant:delete:logs-*")
+	SaveGrantPattern(ctx, "sess-req", 3, "es-logs", extGrantReqType, "ext:esgrant:delete:a")
+
+	patterns, ok := MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", []string{"logs-1", "a", "logs-2"})
+	require.True(t, ok, "every resource is covered, by different grants")
+	require.Equal(t, []string{"ext:esgrant:delete:logs-*", "ext:esgrant:delete:a"}, patterns,
+		"every grant that took part is reported, each once")
+
+	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", []string{"logs-1", "b"})
+	require.False(t, ok, "one uncovered resource leaves the call to the user")
+
+	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", []string{"logs-2026-*"})
+	require.True(t, ok, "a wildcard resource inside the grant's glob is covered")
+	_, ok = MatchExtensionGrant(ctx, 3, extGrantReqType, "esgrant", "delete", []string{"*"})
+	require.False(t, ok, "a wildcard resource wider than the grant is not covered")
 }
 
 func TestExtensionGrantRequestRefusesPatternsThatCouldNeverMatch(t *testing.T) {

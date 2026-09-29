@@ -361,29 +361,25 @@ func (p *Plugin) nextInvocationID() string {
 // CheckPolicy calls check_policy on the extension.
 //
 // No asset travels with it: the guest answers from the tool's own registration
-// (its policy action and the resource derived from the arguments), and the asset
+// (its policy action and the resources derived from the arguments), and the asset
 // side of the decision — which permission groups are granted on it — is the
 // host's own (internal/extreg).
-func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action, resource string, err error) {
+//
+// resources are path.Match globs (see decodePolicyDecision); empty means the call
+// touches no resource.
+func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action string, resources []string, err error) {
 	input, err := json.Marshal(map[string]any{
 		"tool": toolName,
 		"args": json.RawMessage(args),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("marshal %s input: %w", "check_policy", err)
+		return "", nil, fmt.Errorf("marshal %s input: %w", "check_policy", err)
 	}
 	result, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), "check_policy", input, p.opts.toolTimeout)
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
-	var decision struct {
-		Action   string `json:"action"`
-		Resource string `json:"resource"`
-	}
-	if err := json.Unmarshal(result, &decision); err != nil {
-		return "", "", fmt.Errorf("unmarshal policy decision: %w", err)
-	}
-	return decision.Action, decision.Resource, nil
+	return decodePolicyDecision(result)
 }
 
 // ValidateConfig calls validate_config on the extension. config is the asset's

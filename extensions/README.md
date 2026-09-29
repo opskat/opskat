@@ -48,10 +48,12 @@ Everything else — tools, asset types, policies, pages, display strings — is 
 ```
 
 `hostABI` is checked as an exact-set membership, not a minimum: `pkg/extension.SupportedHostABIs`
-currently accepts `2.0` and `2.1`, so an already-built `2.0` extension keeps loading
+currently accepts `2.0`, `2.1` and `2.2`, so an already-built `2.0` extension keeps loading
 unchanged (it just doesn't get `@opskat/host-ui` — see below), while one declaring
-anything not in that set (`2.2`, `3.0`, …) is refused at load with the list of what is
-supported.
+anything not in that set (`2.3`, `3.0`, …) is refused at load with the list of what is
+supported. Declare `2.2` when a tool classifies with `.PolicyResources` (see
+[The policy face](#the-policy-face)): an older app would read its reply as a call on no
+resource at all, so it must refuse the extension instead.
 
 `capabilities` defaults to deny-all, and the notebook needs nothing: the host KV, the
 asset config and logging are available without a grant. Declare only what you use:
@@ -320,14 +322,40 @@ opskat.Tool("note_put", putNote).
     })
 ```
 
-The host does not take the classification as permission: it matches the action and
-resource against the rules on the asset and the permission groups granted on it, in
-this order — **deny → allow → grant → ask**.
+A call that may touch several resources at once — one request naming several indices,
+a bulk body spanning many — classifies with `.PolicyResources(actions, fn)`: `fn(args)`
+returns the action and every resource the call touches (zero, one or many). In these
+resources `*` and `?` are **wildcards** — `logs-*` stands for every index it could
+match — and every other character is literal; `.PolicyFunc` / `.Resource` resources stay
+literal, so a key that happens to contain `*` means exactly that key. A tool uses one of
+`.Policy`, `.PolicyFunc`, `.PolicyResources`. `.PolicyResources` needs `"hostABI": "2.2"`.
 
-- a matching **deny** rule refuses the call, and a denial beats every allow;
-- a matching **allow** rule runs it unattended;
-- otherwise a grant saved by an earlier "always allow" runs it;
+```go
+opskat.Tool("request", doRequest).
+    PolicyResources([]string{"read", "write", "delete"}, func(args requestArgs) (string, []string) {
+        return classify(args.Method, args.Path) // e.g. "delete", []string{"a", "prod-1"}
+    })
+```
+
+The host does not take the classification as permission: it matches the action and
+each resource against the rules on the asset and the permission groups granted on it,
+in this order — **deny → allow → grant → ask**.
+
+- a **deny** rule matching **any** resource refuses the call, and a denial beats every
+  allow (`deny delete:prod-*` refuses `delete [x, prod-1]` even under a bare `delete`
+  allow);
+- the call runs unattended when **every** resource is covered by an **allow** rule or a
+  grant saved by an earlier "always allow" — different resources may be covered by
+  different rules or grants, and allow rules are consulted before grants;
 - anything else **asks the user**.
+
+A call with no resource is judged as the empty resource. For a wildcard resource, a deny
+rule hits when its glob **could** match one of the names the resource stands for (and
+when that cannot be decided), while an allow rule or grant covers it only when its glob
+matches **all** of them (`write:logs-*` covers `logs-2026-*` but not `logs*` or `*`).
+The audit log's matched pattern lists every rule and grant that allowed a
+multi-resource call, or each deny rule followed by the resources it denied
+(`delete:prod-* (prod-1)`).
 
 A rule is `<action>` or `<action>:<resource-glob>`. A rule without a resource covers
 the action on every resource; a glob uses the same `path.Match` semantics as command
@@ -341,7 +369,8 @@ contain `:` or whitespace.
 A grant request for an extension asset — the AI's `request_permission`, or one delivered
 over the opsctl approval channel (opsctl has no user-facing grant command) — is written
 the same way (`write:runbook/*`, or `write` for every resource) and is stored as
-`ext:<PolicyType>:<rule>`, so the next call it covers runs without asking. A
+`ext:<PolicyType>:<rule>`, so the next call it covers runs without asking — a grant
+covers a multi-resource call resource by resource, like a rule. A
 command-shaped pattern (`note_put *`) or an undeclared action is refused rather than
 stored as a grant nothing would ever match. The help the host generates for the
 extension's asset type lists each tool's action and this format for the model.
@@ -354,7 +383,7 @@ Group ids must be namespaced by the extension's policy type — `ext:<PolicyType
 A policy type belongs to one extension: loading a second extension that claims the same
 policy type, or a group id that is already registered, is refused. The action set itself
 is never declared separately — the host derives it from the tools' `.Policy` actions
-and `.PolicyFunc` action sets.
+and `.PolicyFunc` / `.PolicyResources` action sets.
 
 ## SKILL.md and locales
 
@@ -411,7 +440,8 @@ result, err := host.CallTool(asset, "note_put", putArgs{Key: "k", Content: "v"})
 
 `WithMockHTTP`, `WithMockTCP` and `WithActionCancel` stand in for the other host
 capabilities; `CallAction` captures the events an action emits, and `CheckPolicy`
-returns the action and resource a call requests.
+returns the action and the resources a call requests (a single-resource tool's as a
+one-element list).
 
 ## Frontend pages (optional)
 
@@ -447,8 +477,8 @@ h(hostUI.QueryResultTable, { columns: ["key", "size"], rows: notes });
 h(hostUI.JsonTreeView, { data: someNote });
 ```
 
-`hostUI.version` is bound to `hostABI` (currently `"2.1"`) — it tells a page which
-host-ui revision it's running against. Declare `"hostABI": "2.1"` in your own
+`hostUI.version` is bound to `hostABI` (currently `"2.2"`) — it tells a page which
+host-ui revision it's running against. Declare `"hostABI": "2.1"` (or later) in your own
 manifest once your page uses `hostUI`: that is the contract you are relying on, and
 it is what keeps a future host free to drop `hostUI` behind a still-higher ABI
 without silently breaking a `2.0` extension that never touched it.

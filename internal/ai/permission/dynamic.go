@@ -2,28 +2,39 @@ package permission
 
 import (
 	"context"
+	"slices"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
 )
 
 // MatchExtensionGrant is the grant lookup of a classify-registered extension type's
 // policy check (a PolicyCheckFunc lives outside this package, so the lookup is
-// exported): it builds the current call's grant key from its live (policyType, action,
-// resource) classification — never from the raw command text — so a later call that
-// spells the same request differently (different flag order, an equivalent literal)
-// still hits the grant, and a grant for one resource never covers another. See
-// extGrantMatch for how a stored pattern is compared against it.
-func MatchExtensionGrant(ctx context.Context, assetID int64, approvalType, policyType, action, resource string) (aictx.CheckResult, bool) {
-	key := extGrantKey(policyType, action, resource)
-	result := matchGrantForAssetWith(ctx, assetID, key, approvalType, extGrantMatch)
-	if result == nil {
-		return aictx.CheckResult{}, false
+// exported): it builds one grant key per resource from the call's live (policyType,
+// action, resource) classification — never from the raw command text — so a later
+// call that spells the same request differently (different flag order, an
+// equivalent literal) still hits the grant, and a grant for one resource never
+// covers another. Every resource must be covered by some grant (different
+// resources may be covered by different grants); patterns lists each grant that
+// took part, once. See extGrantMatch for how a stored pattern is compared.
+func MatchExtensionGrant(ctx context.Context, assetID int64, approvalType, policyType, action string, resources []string) (patterns []string, ok bool) {
+	resources = policy.ExtensionResources(resources)
+	keys := make([]string, len(resources))
+	for i, resource := range resources {
+		keys[i] = extGrantKey(policyType, action, resource)
 	}
-	return *result, true
+	matched := grantPatternsForAsset(ctx, assetID, keys, approvalType, extGrantMatch)
+	if matched == nil {
+		return nil, false
+	}
+	for _, p := range matched {
+		if !slices.Contains(patterns, p) {
+			patterns = append(patterns, p)
+		}
+	}
+	return patterns, true
 }
 
 // ExtensionPolicyForAsset 收集一个扩展策略面在资产 holder 链（资产 → 组 → 父组）

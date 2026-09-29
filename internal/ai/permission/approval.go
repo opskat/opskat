@@ -14,16 +14,21 @@ type ApprovalItem struct {
 	GroupName string `json:"group_name,omitempty"`
 	Command   string `json:"command"`
 	Detail    string `json:"detail,omitempty"`
-	// Action / Resource are set only for extension types registered with a
-	// ClassifyFunc (type_registry.go): the check_policy classification of Command,
-	// shown next to it so approving means approving a legible (action, resource)
-	// pair rather than only an opaque exec string (spec 参数级策略 › 审批展示).
-	Action   string `json:"action,omitempty"`
-	Resource string `json:"resource,omitempty"`
-	// RememberPattern is set together with Action: the "<action>:<resource-glob>"
-	// tail an "always allow" persists as ext:<type>:<tail> (resource glob-escaped, so
-	// untouched it grants only the resource shown). The "Remember" editor pre-fills
-	// and edits this instead of Command; an edited value must keep "<action>:".
+	// Action / Resource / Resources are set only for extension types registered
+	// with a ClassifyFunc (type_registry.go): the check_policy classification of
+	// Command, shown next to it so approving means approving a legible (action,
+	// resources) pair rather than only an opaque exec string (spec 参数级策略 ›
+	// 审批展示). Resources lists every resource the call touches as the extension
+	// returned it; Resource is that resource when there is exactly one.
+	Action    string   `json:"action,omitempty"`
+	Resource  string   `json:"resource,omitempty"`
+	Resources []string `json:"resources,omitempty"`
+	// RememberPattern is set together with Action for a call touching at most one
+	// resource: the "<action>:<resource-glob>" tail an "always allow" persists as
+	// ext:<type>:<tail> (a literal resource glob-quoted, so untouched it grants only
+	// the resource shown). The "Remember" editor pre-fills and edits this instead of
+	// Command; an edited value must keep "<action>:". A multi-resource item has none
+	// yet: untouched, its "always allow" persists one exact grant per resource.
 	RememberPattern string `json:"remember_pattern,omitempty"`
 }
 

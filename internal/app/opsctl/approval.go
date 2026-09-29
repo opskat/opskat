@@ -135,8 +135,9 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: kind, items: expectedItems, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(confirmID)
 	// 发往 Wails 的 command/detail 即原始主体，展示与执行逐字一致；action/resource/
-	// remember_pattern 只有扩展类型才有（check_policy 的分类），前端据此在命令上方展示，
-	// 并让"记住"编辑实际落库的 <action>:<resource>。source/extension 是发起方。
+	// resources/remember_pattern 只有扩展类型才有（check_policy 的分类；resources 是这次
+	// 调用触及的全部资源，按扩展返回的原样），前端据此在命令上方展示，并让"记住"编辑
+	// 实际落库的 <action>:<resource>。source/extension 是发起方。
 	o.emit("opsctl:approval", map[string]any{
 		"confirm_id":       confirmID,
 		"kind":             kind,
@@ -147,6 +148,7 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 		"detail":           item.Detail,
 		"action":           item.Action,
 		"resource":         item.Resource,
+		"resources":        item.Resources,
 		"remember_pattern": item.RememberPattern,
 		"session_id":       sessionID,
 		"source":           origin.source,

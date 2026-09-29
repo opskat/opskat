@@ -122,10 +122,15 @@ func TestHandleGrantApprovalPersistsExtensionGrantsThatMatch(t *testing.T) {
 	require.Equal(t, []string{"ext:esgrant:delete:logs-*", "ext:esgrant:read"}, persisted)
 
 	ctx := aictx.WithSessionID(context.Background(), "opsctl-sess")
-	_, ok := permission.MatchExtensionGrant(ctx, 3, grantExtTestType, "esgrant", "delete", "logs-app")
+	_, ok := permission.MatchExtensionGrant(ctx, 3, grantExtTestType, "esgrant", "delete", []string{"logs-app"})
 	require.True(t, ok, "the next delete on a matching resource must run without a prompt")
-	_, ok = permission.MatchExtensionGrant(ctx, 3, grantExtTestType, "esgrant", "delete", "metrics-app")
+	_, ok = permission.MatchExtensionGrant(ctx, 3, grantExtTestType, "esgrant", "delete", []string{"metrics-app"})
 	require.False(t, ok)
+	// The request format is unchanged; the grant covers a multi-resource call per resource.
+	_, ok = permission.MatchExtensionGrant(ctx, 3, grantExtTestType, "esgrant", "delete", []string{"logs-app", "logs-b"})
+	require.True(t, ok, "every resource of the call is inside the granted glob")
+	_, ok = permission.MatchExtensionGrant(ctx, 3, grantExtTestType, "esgrant", "delete", []string{"logs-app", "metrics-app"})
+	require.False(t, ok, "one resource outside the granted glob leaves the call to the user")
 }
 
 func TestHandleGrantApprovalRefusesExtensionPatternsThatCouldNeverMatch(t *testing.T) {
@@ -159,6 +164,6 @@ func TestHandleGrantApprovalRejectsAnInvalidExtensionEdit(t *testing.T) {
 	require.False(t, resp.Approved)
 	require.Equal(t, grant_entity.GrantStatusRejected, repo.sessions["opsctl-sess"].Status)
 	_, ok := permission.MatchExtensionGrant(aictx.WithSessionID(context.Background(), "opsctl-sess"),
-		3, grantExtTestType, "esgrant", "delete", "logs-app")
+		3, grantExtTestType, "esgrant", "delete", []string{"logs-app"})
 	require.False(t, ok)
 }

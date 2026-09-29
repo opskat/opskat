@@ -13,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
+	"github.com/opskat/opskat/internal/repository/grant_repo"
 )
 
 // 扩展资产的永久规则（opsctl policy allow/deny/rm/show 与桌面端详情页）。
@@ -229,6 +230,78 @@ func TestExtensionDecisionOrderIsDenyAllowGrantConfirm(t *testing.T) {
 	got = permission.CheckPermission(ctx, "acme-store", 3, command)
 	assert.Equal(t, aictx.Allow, got.Decision)
 	assert.Equal(t, aictx.SourceGrantAllow, got.DecisionSource, "no rule decides → the grant does")
+}
+
+// --- 多资源：guest 用 PolicyResources 给出 (action, [resources])，逐个资源判 ---
+
+// 宽 allow 下，任一资源命中 deny 即拒——资源还是单个串时 "x,prod-1" 整体撞不上 prod-*。
+func TestExtensionDenyOnAnyResourceBeatsABroadAllow(t *testing.T) {
+	cp := &asset_entity.CommandPolicy{
+		AllowList: []string{"object.write"},
+		DenyList:  []string{"object.write:prod-*"},
+	}
+	registerFake(t, &fakePlugin{action: "object.write", resources: []string{"x", "prod-1"}})
+	got := permission.CheckPermission(withGrantFixturePolicy(t, 1, "acme-store", cp), "acme-store", 1, "list_objects --bucket=x")
+	assert.Equal(t, aictx.Deny, got.Decision)
+	assert.Equal(t, aictx.SourcePolicyDeny, got.DecisionSource)
+	assert.Equal(t, "object.write:prod-* (prod-1)", got.MatchedPattern,
+		"the audit's matched pattern names the deny rule and the resource it denied")
+}
+
+// allow 须覆盖每个资源：logs-* 放行不了 [logs-a, secret]；grant 补上没覆盖的那个即放行，
+// MatchedPattern 列出参与判定的规则与 grant。
+func TestExtensionAllowMustCoverEveryResourceAndGrantsFillTheRest(t *testing.T) {
+	const command = "list_objects --bucket=prod"
+	cp := &asset_entity.CommandPolicy{AllowList: []string{"object.write:logs-*"}}
+	registerFake(t, &fakePlugin{action: "object.write", resources: []string{"logs-a", "secret"}})
+	ctx := withGrantFixturePolicy(t, 1, "acme-store", cp)
+
+	got := permission.CheckPermission(ctx, "acme-store", 1, command)
+	require.Equal(t, aictx.NeedConfirm, got.Decision, "secret is covered by no allow rule")
+
+	permission.SaveGrantPattern(ctx, "sess-ext", 1, "acme-1", "acme-store", "ext:acme:object.write:secret")
+	got = permission.CheckPermission(ctx, "acme-store", 1, command)
+	assert.Equal(t, aictx.Allow, got.Decision)
+	assert.Equal(t, aictx.SourceGrantAllow, got.DecisionSource)
+	assert.Equal(t, "object.write:logs-*; ext:acme:object.write:secret", got.MatchedPattern)
+}
+
+// 通配资源：deny 可能重叠即命中，allow 须完整覆盖。
+func TestExtensionWildcardResourceIsJudgedByTheNamesItStandsFor(t *testing.T) {
+	const command = "list_objects --bucket=prod"
+	cp := &asset_entity.CommandPolicy{
+		AllowList: []string{"object.write:logs-*"},
+		DenyList:  []string{"object.write:prod-*"},
+	}
+	judge := func(assetID int64, resources ...string) aictx.CheckResult {
+		Unregister("acme")
+		registerFake(t, &fakePlugin{action: "object.write", resources: resources})
+		return permission.CheckPermission(withGrantFixturePolicy(t, assetID, "acme-store", cp), "acme-store", assetID, command)
+	}
+
+	assert.Equal(t, aictx.Allow, judge(1, "logs-2026-*").Decision, "logs-2026-* stands only for names logs-* covers")
+	assert.Equal(t, aictx.NeedConfirm, judge(2, "logs*").Decision, "logs* also stands for names outside logs-*")
+	assert.Equal(t, aictx.Deny, judge(3, "p*").Decision, "p* may name a prod- index")
+	assert.Equal(t, aictx.Deny, judge(4, "logs-a", "*").Decision, "* may name any index")
+}
+
+// 多资源调用的"始终允许"：逐资源落 grant，下一次同样的调用逐资源命中。
+func TestExtensionMultiResourceAllowAllGrantsEachResource(t *testing.T) {
+	registerFake(t, &fakePlugin{action: "object.write", resources: []string{"a", "logs-*"}})
+	ctx := withGrantFixture(t, 1, "acme-store")
+
+	require.Equal(t, aictx.Allow, allowAllChecker().CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)
+	items, err := grant_repo.Grant().ListApprovedItems(ctx, "sess-ext")
+	require.NoError(t, err)
+	persisted := make([]string, 0, len(items))
+	for _, item := range items {
+		persisted = append(persisted, item.Command)
+	}
+	assert.Equal(t, []string{"ext:acme:object.write:a", "ext:acme:object.write:logs-*"}, persisted)
+
+	got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
+	assert.Equal(t, aictx.Allow, got.Decision)
+	assert.Equal(t, "ext:acme:object.write:a; ext:acme:object.write:logs-*", got.MatchedPattern)
 }
 
 // 资源 glob 与 manifest 权限组里的规则同一套语言。

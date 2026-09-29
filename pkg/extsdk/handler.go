@@ -89,26 +89,38 @@ func dispatchAction(input []byte) (json.RawMessage, error) {
 // dispatchPolicy answers from the tool's own registration. The action a tool
 // requests is part of declaring the tool, so there is no per-tool switch here to
 // fall out of step with the handler table.
+//
+// The reply has two shapes. {"action","resource"} is the 2.0/2.1 wire: one literal
+// resource, what Policy/Resource and PolicyFunc answer. {"action","resources"} is
+// the 2.2 wire PolicyResources answers — a list (never null) whose '*' / '?' are
+// wildcards. Which shape a tool answers is fixed by how it registered, so a
+// single-resource extension's reply is byte-for-byte what it always was.
 func dispatchPolicy(input []byte) (json.RawMessage, error) {
 	entry, req, err := parseToolCall(input)
 	if err != nil {
 		return nil, err
 	}
-	if entry.classify != nil {
-		action, resource, err := entry.classify(req.Args)
-		if err != nil {
-			return nil, err
+	if entry.classify == nil {
+		resource := ""
+		if entry.resource != nil {
+			resource = entry.resource(req.Args)
 		}
-		return json.Marshal(map[string]string{"action": action, "resource": resource})
+		return json.Marshal(map[string]string{"action": entry.action, "resource": resource})
 	}
-	resource := ""
-	if entry.resource != nil {
-		resource = entry.resource(req.Args)
+	action, resources, err := entry.classify(req.Args)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(map[string]string{
-		"action":   entry.action,
-		"resource": resource,
-	})
+	if !entry.multiResource {
+		return json.Marshal(map[string]string{"action": action, "resource": resources[0]})
+	}
+	if resources == nil {
+		resources = []string{}
+	}
+	return json.Marshal(struct {
+		Action    string   `json:"action"`
+		Resources []string `json:"resources"`
+	}{action, resources})
 }
 
 // testConnectionCall is the shape of test_connection's input: which asset

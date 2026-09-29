@@ -125,8 +125,11 @@ func (h *TestHost) CallAction(asset Asset, name string, args any, onEvent func(T
 	return out, nil
 }
 
-// CheckPolicy invokes the registered policy checker.
-func (h *TestHost) CheckPolicy(tool string, args any) (action, resource string, err error) {
+// CheckPolicy invokes the registered policy checker and reports the resources
+// the call touches as the extension returned them: a single-resource reply
+// (Policy/Resource, PolicyFunc) is a one-element list, a PolicyResources reply is
+// its list as-is.
+func (h *TestHost) CheckPolicy(tool string, args any) (action string, resources []string, err error) {
 	argsJSON, _ := json.Marshal(args)
 	input, _ := json.Marshal(map[string]any{
 		"tool": tool,
@@ -134,16 +137,20 @@ func (h *TestHost) CheckPolicy(tool string, args any) (action, resource string, 
 	})
 	result, err := dispatch("check_policy", input)
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	var out struct {
-		Action   string `json:"action"`
-		Resource string `json:"resource"`
+		Action    string    `json:"action"`
+		Resource  string    `json:"resource"`
+		Resources *[]string `json:"resources"`
 	}
 	if err := json.Unmarshal(result, &out); err != nil {
-		return "", "", err
+		return "", nil, err
 	}
-	return out.Action, out.Resource, nil
+	if out.Resources != nil {
+		return out.Action, *out.Resources, nil
+	}
+	return out.Action, []string{out.Resource}, nil
 }
 
 // Events returns all captured action events.

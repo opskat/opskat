@@ -31,6 +31,13 @@ type echoArgs struct {
 	N   int    `json:"n,omitempty" desc:"A number to echo back"`
 }
 
+// policyArgs feeds the two classification shapes check_policy can answer: the
+// single literal resource (PolicyFunc) and the resource list (PolicyResources).
+type policyArgs struct {
+	Resource  string   `json:"resource,omitempty" desc:"The one resource to classify the call on"`
+	Resources []string `json:"resources,omitempty" desc:"Every resource to classify the call on"`
+}
+
 type pathArgs struct {
 	Path string `json:"path" desc:"Path to read"`
 }
@@ -121,6 +128,11 @@ func init() {
 		return map[string]any{"tool": ctx.Tool, "args": args}, nil
 	}).Policy("read").Doc("Echo the arguments back").
 		Resource(func(echoArgs) string { return "fixture:echo" })
+
+	opskat.Tool("classify_one", func(*opskat.ToolContext, policyArgs) (any, error) { return nil, nil }).
+		PolicyFunc([]string{"read"}, func(a policyArgs) (string, string) { return "read", a.Resource })
+	opskat.Tool("classify_many", func(*opskat.ToolContext, policyArgs) (any, error) { return nil, nil }).
+		PolicyResources([]string{"write"}, func(a policyArgs) (string, []string) { return "write", a.Resources })
 
 	// seq counts calls in a guest global. Because a reactor instance survives
 	// between calls the counter keeps climbing, so the host-side test can see

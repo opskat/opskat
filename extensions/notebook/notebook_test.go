@@ -215,15 +215,15 @@ func TestNotebookPolicy(t *testing.T) {
 		host := newHost(notebookConfig{Notebook: "team-runbooks"})
 		defer host.Close()
 
-		action, resource, err := host.CheckPolicy("note_put", putArgs{Key: " runbook/failover ", Content: "x"})
+		action, resources, err := host.CheckPolicy("note_put", putArgs{Key: " runbook/failover ", Content: "x"})
 		So(err, ShouldBeNil)
 		So(action, ShouldEqual, "write")
-		So(resource, ShouldEqual, "runbook/failover")
+		So(resources, ShouldResemble, []string{"runbook/failover"})
 
-		action, resource, err = host.CheckPolicy("note_delete", deleteArgs{Key: "scratch"})
+		action, resources, err = host.CheckPolicy("note_delete", deleteArgs{Key: "scratch"})
 		So(err, ShouldBeNil)
 		So(action, ShouldEqual, "delete")
-		So(resource, ShouldEqual, "scratch")
+		So(resources, ShouldResemble, []string{"scratch"})
 
 		action, _, err = host.CheckPolicy("note_list", listArgs{})
 		So(err, ShouldBeNil)

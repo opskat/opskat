@@ -150,10 +150,10 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("policy and config validation go through the same entry point", func() {
-			action, resource, err := p.CheckPolicy(ctx, "echo", json.RawMessage(`{}`))
+			action, resources, err := p.CheckPolicy(ctx, "echo", json.RawMessage(`{}`))
 			So(err, ShouldBeNil)
 			So(action, ShouldEqual, "read")
-			So(resource, ShouldEqual, "fixture:echo")
+			So(resources, ShouldResemble, []string{"fixture:echo"})
 
 			errs, err := p.ValidateConfig(ctx, json.RawMessage(`{}`))
 			So(err, ShouldBeNil)
@@ -163,6 +163,30 @@ func TestPluginCallsFixture(t *testing.T) {
 			errs, err = p.ValidateConfig(ctx, json.RawMessage(`{"endpoint":"e"}`))
 			So(err, ShouldBeNil)
 			So(errs, ShouldHaveLength, 0)
+		})
+
+		// The host judges every resource as a glob. A 2.0/2.1 single-resource reply
+		// names one literal resource, so every glob character in it is quoted; a
+		// PolicyResources reply keeps '*' / '?' as wildcards and quotes the rest.
+		Convey("check_policy's resources cross into the host as globs", func() {
+			action, resources, err := p.CheckPolicy(ctx, "classify_one", json.RawMessage(`{"resource":"prod-*?[1]\\x"}`))
+			So(err, ShouldBeNil)
+			So(action, ShouldEqual, "read")
+			So(resources, ShouldResemble, []string{`prod-\*\?\[1]\\x`})
+
+			_, resources, err = p.CheckPolicy(ctx, "classify_one", json.RawMessage(`{}`))
+			So(err, ShouldBeNil)
+			So(resources, ShouldBeEmpty)
+
+			action, resources, err = p.CheckPolicy(ctx, "classify_many",
+				json.RawMessage(`{"resources":["a","logs-*","b?","we[ird]\\"]}`))
+			So(err, ShouldBeNil)
+			So(action, ShouldEqual, "write")
+			So(resources, ShouldResemble, []string{"a", "logs-*", "b?", `we\[ird\]\\`})
+
+			_, resources, err = p.CheckPolicy(ctx, "classify_many", json.RawMessage(`{}`))
+			So(err, ShouldBeNil)
+			So(resources, ShouldBeEmpty)
 		})
 
 		Convey("validate_config never sees the host's reserved connection key", func() {

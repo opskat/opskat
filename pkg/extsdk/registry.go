@@ -15,7 +15,8 @@ import (
 //
 //	opskat.Tool("list_objects", handler).Policy("list").Doc("tools.list_objects.description")
 //
-// or, when the action depends on the arguments, .PolicyFunc(actions, classify).
+// or, when the action depends on the arguments, .PolicyFunc(actions, classify)
+// (.PolicyResources when one call may touch several resources).
 //
 // describe() is generated from these registries, so a declaration cannot drift
 // from the handler that serves it: there is no second list to update. The
@@ -67,9 +68,13 @@ type toolEntry struct {
 	schema   map[string]any
 	invoke   func(ctx *ToolContext) (any, error)
 	resource func(args json.RawMessage) string
-	// actions and classify are set by PolicyFunc, in place of action / resource.
-	actions  []string
-	classify func(args json.RawMessage) (action, resource string, err error)
+	// actions and classify are set by PolicyFunc or PolicyResources, in place of
+	// action / resource. multiResource records which: it picks the check_policy
+	// reply shape (see dispatchPolicy) — PolicyFunc's single resource is a literal
+	// name, PolicyResources' resources may carry '*' / '?' wildcards.
+	actions       []string
+	classify      func(args json.RawMessage) (action string, resources []string, err error)
+	multiResource bool
 	// timeout is the tool's own call timeout; 0 leaves the host default.
 	timeout time.Duration
 }
@@ -177,10 +182,10 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 
 // Policy declares which policy action this tool requests. The host matches it
 // against the user's permission groups before the tool runs; every tool needs
-// either this or PolicyFunc.
+// either this, PolicyFunc or PolicyResources.
 func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
 	if r.e.classify != nil {
-		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc; Policy and PolicyFunc are exclusive", r.e.name))
+		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources; Policy is exclusive with both", r.e.name))
 	}
 	r.e.action = action
 	return r
@@ -200,22 +205,53 @@ func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
 // writes), or to derive action and resource in one place. A tool whose action is
 // fixed may equally keep Policy, plus Resource when it reports a resource.
 func (r *ToolReg[T]) PolicyFunc(actions []string, fn func(args T) (action, resource string)) *ToolReg[T] {
+	r.setClassify("PolicyFunc", actions, false, func(args T) (string, []string) {
+		action, resource := fn(args)
+		return action, []string{resource}
+	})
+	return r
+}
+
+// PolicyResources classifies each call from its arguments like PolicyFunc, for a
+// call that may touch several resources at once (one request naming several
+// indices, a bulk body spanning many): fn returns the action and every resource
+// the call touches — zero, one or many. A '*' or '?' in a resource is a wildcard:
+// the resource stands for every name it could match (an index pattern such as
+// logs-*). Every other character is literal.
+//
+// The host judges the call per resource: it is denied if any resource hits a deny
+// rule (a wildcard resource hits when the deny glob could match one of its names),
+// allowed only when every resource is covered by an allow rule or grant (a
+// wildcard resource must be covered for every name it could stand for), and asked
+// about otherwise. Zero resources is judged like PolicyFunc's empty resource.
+//
+// actions is the set fn can return, as for PolicyFunc. The reply is
+// {"action","resources"}, which only a host speaking hostABI 2.2 understands — an
+// extension using PolicyResources must declare hostABI "2.2" so an older app
+// refuses it instead of judging the call on no resource at all.
+func (r *ToolReg[T]) PolicyResources(actions []string, fn func(args T) (action string, resources []string)) *ToolReg[T] {
+	r.setClassify("PolicyResources", actions, true, fn)
+	return r
+}
+
+// setClassify installs a per-call classification (PolicyFunc / PolicyResources).
+func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource bool, fn func(args T) (string, []string)) {
 	if len(actions) == 0 {
-		panic(fmt.Sprintf("opskat: tool %q: PolicyFunc needs the set of actions it can return", r.e.name))
+		panic(fmt.Sprintf("opskat: tool %q: %s needs the set of actions it can return", r.e.name, method))
 	}
-	if r.e.action != "" || r.e.resource != nil {
-		panic(fmt.Sprintf("opskat: tool %q already declares Policy/Resource; PolicyFunc replaces both", r.e.name))
+	if r.e.action != "" || r.e.resource != nil || r.e.classify != nil {
+		panic(fmt.Sprintf("opskat: tool %q already declares its policy; %s replaces Policy/Resource and excludes the other classifier", r.e.name, method))
 	}
 	r.e.actions = append([]string(nil), actions...)
-	r.e.classify = func(raw json.RawMessage) (string, string, error) {
+	r.e.multiResource = multiResource
+	r.e.classify = func(raw json.RawMessage) (string, []string, error) {
 		args, err := decodeArgs[T](raw)
 		if err != nil {
-			return "", "", fmt.Errorf("tool %s: %w", r.e.name, err)
+			return "", nil, fmt.Errorf("tool %s: %w", r.e.name, err)
 		}
-		action, resource := fn(args)
-		return action, resource, nil
+		action, resources := fn(args)
+		return action, resources, nil
 	}
-	return r
 }
 
 // maxToolTimeout mirrors the host's ceiling (pkg/extension MaxToolTimeout): a
@@ -244,7 +280,7 @@ func (r *ToolReg[T]) Doc(description string) *ToolReg[T] {
 // Resource derives the resource string reported alongside the fixed policy action.
 func (r *ToolReg[T]) Resource(fn func(args T) string) *ToolReg[T] {
 	if r.e.classify != nil {
-		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc, which returns the resource", r.e.name))
+		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources, which return the resource", r.e.name))
 	}
 	r.e.resource = func(raw json.RawMessage) string {
 		args, err := decodeArgs[T](raw)

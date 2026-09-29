@@ -154,17 +154,26 @@ func grantItemAppliesTo(item *grant_entity.GrantItem, toolName string) bool {
 }
 
 func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, toolName string, matchFn policy.MatchFunc) string {
+	if patterns := matchGrantPatternsEachWith(ctx, assetID, groups, subCmds, toolName, matchFn); patterns != nil {
+		return patterns[0]
+	}
+	return ""
+}
+
+// matchGrantPatternsEachWith 要求每条子命令都匹配某个 grant item，按子命令顺序返回各自命中的
+// pattern；任一条匹配不上（或没有会话 / 没有已批准的 item）返回 nil。
+func matchGrantPatternsEachWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, toolName string, matchFn policy.MatchFunc) []string {
 	sessionID := aictx.GetSessionID(ctx)
 	if sessionID == "" {
-		return ""
+		return nil
 	}
 	repo := grant_repo.Grant()
 	if repo == nil {
-		return ""
+		return nil
 	}
 	items, err := repo.ListApprovedItems(ctx, sessionID)
 	if err != nil || len(items) == 0 {
-		return ""
+		return nil
 	}
 
 	// 构建资产所属的组 ID 集合，用于匹配 group 级 grant item
@@ -174,7 +183,7 @@ func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_
 	}
 
 	// 所有子命令都必须匹配某个 grant item
-	var firstPattern string
+	patterns := make([]string, 0, len(subCmds))
 	for _, cmd := range subCmds {
 		matched := false
 		for _, item := range items {
@@ -186,17 +195,18 @@ func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_
 			}
 			if matchFn(item.Command, cmd) {
 				matched = true
-				if firstPattern == "" {
-					firstPattern = item.Command
-				}
+				patterns = append(patterns, item.Command)
 				break
 			}
 		}
 		if !matched {
-			return ""
+			return nil
 		}
 	}
-	return firstPattern
+	if len(patterns) == 0 {
+		return nil
+	}
+	return patterns
 }
 
 // grantItemMatchesTarget 检查 grant item 是否匹配目标资产
@@ -290,8 +300,13 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	}
 	if classified {
 		item.Action = classification.Action
-		item.Resource = classification.Resource
-		item.RememberPattern = extGrantTail(classification.Action, classification.Resource)
+		for _, resource := range classification.Resources {
+			item.Resources = append(item.Resources, policy.DisplayExtensionResource(resource))
+		}
+		if resources := policy.ExtensionResources(classification.Resources); len(resources) == 1 {
+			item.Resource = policy.DisplayExtensionResource(resources[0])
+			item.RememberPattern = extGrantTail(classification.Action, resources[0])
+		}
 		item.Detail = formatExtensionRequestDetail(classification)
 	}
 	if len(detail) > 0 {
@@ -331,7 +346,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		if isExtension {
 			// Extension "always allow" never falls back to NormalizeGrantPatterns'
 			// whole-command-string default: the grant is the check_policy
-			// classification (extGrantPattern), not the command text, so a later call
+			// classification (extGrantKey), not the command text, so a later call
 			// spelling the same request differently still matches (spec 参数级策略 ›
 			// 审批展示) and matching stays keyed on (action, resource) — see
 			// extGrantMatch / MatchExtensionGrant.
@@ -377,9 +392,11 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 // later call stays keyed on (action, resource) (see extGrantMatch /
 // MatchExtensionGrant).
 //
-// A classified call's Remember editor edits the grant tail itself
-// (ApprovalItem.RememberPattern); ParseApprovalResponse has already held every edit to
-// "<action>:<resource-glob>" with the classified action, so an edit is persisted
+// Unedited, a classified call persists one exact grant per resource it touches
+// (extGrantKey) — the same grant key the next identical call is matched as, per
+// resource. A classified call's Remember editor edits the grant tail itself
+// (ApprovalItem.RememberPattern); ParseApprovalResponse has already held every edit
+// to "<action>:<resource-glob>" with the classified action, so an edit is persisted
 // verbatim — its glob characters are the user's intent.
 //
 // An unclassified call's editor shows command text, so its edits are classified
@@ -390,7 +407,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited []ApprovalItem, classification ExtensionClassification, classified bool) []string {
 	if classified {
 		if len(edited) == 0 {
-			return []string{extGrantPattern(classification.PolicyType, classification.Action, classification.Resource)}
+			return classificationGrantKeys(classification)
 		}
 		patterns := make([]string, 0, len(edited))
 		for _, item := range edited {
@@ -404,9 +421,19 @@ func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited [
 		if !ok {
 			continue
 		}
-		patterns = append(patterns, extGrantPattern(cls.PolicyType, cls.Action, cls.Resource))
+		patterns = append(patterns, classificationGrantKeys(cls)...)
 	}
 	return patterns
+}
+
+// classificationGrantKeys is one exact grant per resource of a classified call.
+func classificationGrantKeys(c ExtensionClassification) []string {
+	resources := policy.ExtensionResources(c.Resources)
+	keys := make([]string, len(resources))
+	for i, resource := range resources {
+		keys[i] = extGrantKey(c.PolicyType, c.Action, resource)
+	}
+	return keys
 }
 
 // formatExtensionRequestDetail renders an extension classification's underlying guest

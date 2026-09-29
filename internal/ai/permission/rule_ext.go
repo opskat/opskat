@@ -174,8 +174,8 @@ func extLand(actions []string) func(pattern string) ([]LandedRule, error) {
 // extRuleShadows 判定一条 deny 是否遮蔽一条落点。
 //
 // 遮蔽要求 deny 覆盖落点能匹配的每一个调用：不限资源的落点只被不限资源的 deny 遮蔽；
-// 限资源的落点把它的 glob 当作资源文本交给 deny 匹配——与命令形状拿 deny 模式去撞
-// allow 规则原文是同一个近似。
+// 限资源的落点把它的 glob 当作通配资源交给 policy.MatchExtensionRule——deny 的 glob
+// 须覆盖落点 glob 代表的每一个名字（判不出按不遮蔽）。
 func extRuleShadows(denyRule, rule string) bool {
 	deny := strings.TrimSpace(denyRule)
 	action, glob, scoped := policy.ExtensionRuleParts(strings.TrimSpace(rule))

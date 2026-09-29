@@ -47,12 +47,13 @@ func TestExtToolConfirmShowsClassificationAndReturnsTheAnswer(t *testing.T) {
 	item := permission.ApprovalItem{
 		Type: "notebook", AssetID: 7, AssetName: "nb",
 		Command: `note_put --json='{"key":"runbook/a"}'`, Detail: `{"tool":"note_put"}`,
-		Action: "write", Resource: "runbook/a", RememberPattern: "write:runbook/a",
+		Action: "write", Resource: "runbook/a", Resources: []string{"runbook/a"}, RememberPattern: "write:runbook/a",
 	}
 	resp := o.extToolConfirm("session-1", opsctlOrigin)(context.Background(), permission.ApprovalKindFor(item.Type, item.Command), []permission.ApprovalItem{item})
 
 	require.Equal(t, "write", (*shown)["action"])
 	require.Equal(t, "runbook/a", (*shown)["resource"])
+	require.Equal(t, []string{"runbook/a"}, (*shown)["resources"])
 	require.Equal(t, "allowAll", resp.Decision)
 	require.Len(t, resp.EditedItems, 1)
 	require.Equal(t, edited[0].Command, resp.EditedItems[0].Command)

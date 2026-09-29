@@ -95,15 +95,21 @@ func addPermissionType(handler *permissionTypeHandler, aliases ...string) error 
 type PolicyCheckFunc func(ctx context.Context, assetID int64, command string) aictx.CheckResult
 
 // ExtensionClassification is what a registered extension type's classifier
-// (ClassifyFunc) reports about a command it just parsed: PolicyType/Action/Resource
+// (ClassifyFunc) reports about a command it just parsed: PolicyType/Action/Resources
 // are the check_policy classification used for policy matching, the approval item's
-// Action/Resource, and the "always allow" grant key (extGrantKey); Tool/Args are the
-// underlying guest call, rendered into the approval item's collapsible Detail (spec
-// 参数级策略 › 审批展示 — "工具名 + 参数，长 JSON 可折叠").
+// Action/Resource(s), and the "always allow" grant keys (extGrantKey, one per
+// resource); Tool/Args are the underlying guest call, rendered into the approval
+// item's collapsible Detail (spec 参数级策略 › 审批展示 — "工具名 + 参数，长 JSON 可折叠").
+//
+// Resources are the resources the call touches, each a path.Match glob as
+// pkg/extension decodes them (a literal resource quoted, a PolicyResources
+// resource with '*' / '?' as wildcards); none means the call touches no resource
+// (policy.ExtensionResources). policy.DisplayExtensionResource gives a resource
+// back as the extension returned it.
 type ExtensionClassification struct {
 	PolicyType string
 	Action     string
-	Resource   string
+	Resources  []string
 	Tool       string
 	Args       json.RawMessage
 }

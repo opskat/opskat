@@ -43,7 +43,7 @@ func withClassifiedOriginType(t *testing.T) {
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		},
 		func(context.Context, string) (permission.ExtensionClassification, bool) {
-			return permission.ExtensionClassification{PolicyType: "esverify", Action: "delete", Resource: "logs-app", Tool: "request"}, true
+			return permission.ExtensionClassification{PolicyType: "esverify", Action: "delete", Resources: []string{"logs-app"}, Tool: "request"}, true
 		}))
 	t.Cleanup(func() { permission.UnregisterPolicyCheck(originTestType) })
 

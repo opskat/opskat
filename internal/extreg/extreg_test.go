@@ -44,9 +44,14 @@ func init() {
 
 // --- fakes -------------------------------------------------------------------
 
+// fakePlugin stands in for *extension.Plugin. Its resources are what
+// Plugin.CheckPolicy hands the host — globs, a literal resource quoted — so a
+// test meaning the literal resource "prod-*" writes `prod-\*`. resource is the
+// single-resource shorthand.
 type fakePlugin struct {
 	action    string
 	resource  string
+	resources []string
 	policyErr error
 	callErr   error
 	lastTool  string
@@ -88,8 +93,11 @@ func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawM
 	return json.RawMessage(result), nil
 }
 
-func (p *fakePlugin) CheckPolicy(_ context.Context, _ string, _ json.RawMessage) (string, string, error) {
-	return p.action, p.resource, p.policyErr
+func (p *fakePlugin) CheckPolicy(_ context.Context, _ string, _ json.RawMessage) (string, []string, error) {
+	if p.resources != nil || p.resource == "" {
+		return p.action, p.resources, p.policyErr
+	}
+	return p.action, []string{p.resource}, p.policyErr
 }
 
 func testManifest() *extension.Manifest {
@@ -408,7 +416,7 @@ func TestExtensionGrantDoesNotCoverADifferentResource(t *testing.T) {
 // the very call it was granted for.
 func TestExtensionGrantForAGlobLikeResourceIsExact(t *testing.T) {
 	t.Run("a '*' in the resource does not cover other resources", func(t *testing.T) {
-		plugin := &fakePlugin{action: "object.write", resource: "prod-*"}
+		plugin := &fakePlugin{action: "object.write", resource: `prod-\*`} // the literal resource "prod-*"
 		registerFake(t, plugin)
 		ctx := withGrantFixture(t, 1, "acme-store")
 
@@ -422,7 +430,7 @@ func TestExtensionGrantForAGlobLikeResourceIsExact(t *testing.T) {
 	})
 
 	t.Run("a '[' in the resource still matches itself", func(t *testing.T) {
-		registerFake(t, &fakePlugin{action: "object.write", resource: "logs[1]"})
+		registerFake(t, &fakePlugin{action: "object.write", resource: `logs\[1]`}) // the literal resource "logs[1]"
 		ctx := withGrantFixture(t, 1, "acme-store")
 
 		require.Equal(t, aictx.Allow, allowAllChecker().CheckForAsset(ctx, 1, "acme-store", "list_objects --bucket=prod").Decision)

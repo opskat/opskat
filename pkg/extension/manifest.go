@@ -26,13 +26,19 @@ import (
 // a frontend-only addition that changes nothing about the WASM host_call/host_io
 // contract. A 2.0 extension keeps loading and working exactly as before; it just
 // doesn't get hostUI.
-const HostABIVersion = "2.1"
+//
+// 2.2 lets check_policy answer {"action","resources":[...]} (the SDK's
+// PolicyResources): a call classified on several resources at once, whose '*' /
+// '?' are wildcards. The {"action","resource"} reply keeps its exact meaning. An
+// older host would read the list reply as a call with no resource at all, so an
+// extension that uses it declares 2.2 and an older app refuses to load it.
+const HostABIVersion = "2.2"
 
-// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 stays
-// listed so extensions built before host-ui keep loading unchanged; only a
-// hostABI newer than everything here (e.g. an extension declaring 2.2 or 3.0)
-// is refused.
-var SupportedHostABIs = []string{"2.0", "2.1"}
+// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 and 2.1
+// stay listed so extensions built before host-ui or multi-resource classification
+// keep loading unchanged; only a hostABI newer than everything here (e.g. an
+// extension declaring 2.3 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
