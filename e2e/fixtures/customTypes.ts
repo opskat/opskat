@@ -6,32 +6,9 @@
 // e2e/tests/ only, not those components, so these helpers locate through what is
 // already there (aria-label / placeholder / role / the existing `config-tab-*` /
 // `generic-*` testids) instead of adding new ones.
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { findAssetByName } from "./db";
-
-/**
- * `TemplateInput` (CustomTypeEditorDialog.tsx) swaps its `<input>` for a multi-line
- * `<textarea>` on focus (spec "自定义类型": 模板输入框聚焦时展开为多行). Confirmed by
- * hand against a running sandbox: a *first* `fill()` on a field that still holds the
- * value it loaded with races that swap and appends instead of replacing (the DOM node
- * changes under Playwright mid-action), while a second `fill()` on the now-stable
- * `<textarea>` cleanly replaces it. Filling twice always converges on `value` — for a
- * field that started empty the first fill is already correct and the second is a
- * no-op — so it is the safe way to drive every templated input below.
- */
-async function fillTemplate(locator: Locator, value: string): Promise<void> {
-  await locator.fill(value);
-  await locator.fill(value);
-  // TemplateInput swaps back from <textarea> to <input> on blur, which shrinks the
-  // field (rows="3" → one line) and shifts everything below it. Left alone, the
-  // *next* action's click lands after Playwright computes coordinates but before
-  // that shift settles, and silently misses — reproduced against a real run, where
-  // a click on "Add authentication" right after filling Base URL did nothing.
-  // Blurring here, synchronously in the same step, moves the shift before the
-  // caller's next click instead of leaving it to race one.
-  await locator.evaluate((el) => (el as HTMLElement).blur());
-}
 
 async function openCustomTypesSettings(page: Page): Promise<void> {
   await page.getByTestId("nav-settings").click();
@@ -70,10 +47,10 @@ export async function createHttpCustomTypeViaUI(page: Page, opts: CreateHttpCust
   await dialog.locator('[aria-label="Field name"]').fill(opts.field);
 
   await dialog.getByTestId("config-tab-request").click();
-  await fillTemplate(dialog.locator('[aria-label="Base URL"]'), opts.baseUrl);
+  await dialog.locator('[aria-label="Base URL"]').fill(opts.baseUrl);
   await dialog.getByRole("button", { name: "Add authentication" }).click();
   await dialog.getByPlaceholder("Name", { exact: true }).fill(opts.authHeaderName);
-  await fillTemplate(dialog.getByPlaceholder("Value template", { exact: true }), opts.authValueTemplate);
+  await dialog.getByPlaceholder("Value template", { exact: true }).fill(opts.authValueTemplate);
 
   // A second field row for the secret referenced by the auth template.
   await dialog.getByTestId("config-tab-fields").click();

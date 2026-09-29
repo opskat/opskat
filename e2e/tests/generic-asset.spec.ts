@@ -244,3 +244,24 @@ test("export and import round-trip a custom type through the binder the settings
   expect(rejectedResult.type).toBeFalsy();
   expect(rejectedResult.issues?.some((i) => i.path === "slug")).toBe(true);
 });
+
+test("custom type editor: the first click after typing into a template input takes effect", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto("/");
+  await expect(page.getByTestId("app-root")).toBeVisible();
+
+  await page.getByTestId("nav-settings").click();
+  await page.getByRole("tab", { name: "Custom types" }).click();
+  await page.getByRole("button", { name: "New type" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByTestId("config-tab-request").click();
+  // Deliberately plain fill + click: the template input must not change size when it
+  // loses focus, otherwise the mousedown that blurs it and the mouseup land on
+  // different elements and the click is swallowed.
+  await dialog.getByLabel("Base URL").fill("https://example.test");
+  await dialog.getByRole("button", { name: "Add authentication" }).click();
+
+  await expect(dialog.getByPlaceholder("Value template", { exact: true })).toHaveCount(1);
+});

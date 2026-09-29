@@ -171,13 +171,21 @@ function toWire(d: CustomTypeDraft): custom_type_entity.CustomType {
   });
 }
 
+/** path 本身及其子路径(`a.b`、`a[0]`)是否落在 prefix 之下。 */
+function underPath(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`);
+}
+
 function buildIssueMap(t: TFunction, issues: custom_type_entity.Issue[]): Map<string, string> {
   const m = new Map<string, string>();
   for (const it of issues) m.set(it.path, issueText(t, it));
   return m;
 }
 
-/** 模板输入框:失焦时单行省略,聚焦时展开为等宽多行(spec「自定义类型」)。 */
+/**
+ * 模板输入框:始终是同一个 textarea,随内容增高(field-sizing-content)。聚焦/失焦不换元素、
+ * 不改尺寸,否则失焦造成的布局位移会让 mousedown 与 mouseup 落在不同元素上、吞掉下一次点击。
+ */
 function TemplateInput({
   value,
   onChange,
@@ -191,29 +199,14 @@ function TemplateInput({
   className?: string;
   "aria-label"?: string;
 }) {
-  const [focused, setFocused] = useState(false);
-  if (focused) {
-    return (
-      <Textarea
-        autoFocus
-        rows={3}
-        value={value}
-        aria-label={ariaLabel}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={() => setFocused(false)}
-        placeholder={placeholder}
-        className={cn("font-mono text-[13px]", className)}
-      />
-    );
-  }
   return (
-    <Input
+    <Textarea
+      rows={1}
       value={value}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
-      onFocus={() => setFocused(true)}
       placeholder={placeholder}
-      className={cn("h-8 truncate font-mono text-[13px]", className)}
+      className={cn("min-h-8 resize-none py-1 font-mono text-[13px]", className)}
     />
   );
 }
@@ -286,6 +279,14 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   const commandTemplateWarning = warnings.find((w) => w.path === "command.template");
   const isEdit = typeId !== undefined;
 
+  // 用户改动某个字段后,该字段上一次保存留下的校验错误随即失效,不必等下一次保存才消失。
+  const dismissIssues = (...paths: string[]) => {
+    setIssues((prev) => {
+      const next = prev.filter((it) => !paths.some((p) => underPath(it.path, p)));
+      return next.length === prev.length ? prev : next;
+    });
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -308,6 +309,7 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   };
 
   const updateField = (idx: number, patch: Partial<FieldDraft>) => {
+    dismissIssues(...Object.keys(patch).map((k) => `fields[${idx}].${k}`));
     setDraft((d) => ({
       ...d,
       fields: d.fields.map((f, i) => (i === idx ? { ...f, ...patch } : f)),
@@ -382,7 +384,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
           <div className={cn(i === 0 && "pt-[15px]")}>
             <RemoveButton
               label={t("customType.removeField")}
-              onClick={() => setDraft((d) => ({ ...d, fields: d.fields.filter((_, idx) => idx !== i) }))}
+              onClick={() => {
+                dismissIssues("fields");
+                setDraft((d) => ({ ...d, fields: d.fields.filter((_, idx) => idx !== i) }));
+              }}
             />
           </div>
         </div>
@@ -392,7 +397,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
         variant="ghost"
         size="sm"
         className="w-fit gap-1 px-2 text-xs text-primary hover:bg-primary/10 hover:text-primary"
-        onClick={() => setDraft((d) => ({ ...d, fields: [...d.fields, emptyField()] }))}
+        onClick={() => {
+          dismissIssues("fields");
+          setDraft((d) => ({ ...d, fields: [...d.fields, emptyField()] }));
+        }}
       >
         <Plus className="size-3.5" />
         {t("customType.addField")}
@@ -401,6 +409,7 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   );
 
   const updateAuth = (idx: number, patch: Partial<AuthDraft>) => {
+    dismissIssues(...Object.keys(patch).map((k) => `http.auth[${idx}].${k}`));
     setDraft((d) => ({ ...d, httpAuth: d.httpAuth.map((a, i) => (i === idx ? { ...a, ...patch } : a)) }));
   };
 
@@ -410,7 +419,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
       <Field label={t("customType.baseUrl")} required>
         <TemplateInput
           value={draft.httpBaseUrl}
-          onChange={(v) => setDraft((d) => ({ ...d, httpBaseUrl: v }))}
+          onChange={(v) => {
+            dismissIssues("http.base_url");
+            setDraft((d) => ({ ...d, httpBaseUrl: v }));
+          }}
           placeholder="https://{{host}}"
           aria-label={t("customType.baseUrl")}
         />
@@ -454,7 +466,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
                 <div className="ml-auto">
                   <RemoveButton
                     label={t("customType.removeAuth")}
-                    onClick={() => setDraft((d) => ({ ...d, httpAuth: d.httpAuth.filter((_, idx) => idx !== i) }))}
+                    onClick={() => {
+                      dismissIssues("http.auth");
+                      setDraft((d) => ({ ...d, httpAuth: d.httpAuth.filter((_, idx) => idx !== i) }));
+                    }}
                   />
                 </div>
               </div>
@@ -468,7 +483,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
                 <div key={j}>
                   <TemplateInput
                     value={v}
-                    onChange={(nv) => updateAuth(i, { values: a.values.map((ov, oj) => (oj === j ? nv : ov)) })}
+                    onChange={(nv) => {
+                      dismissIssues(`http.auth[${i}].values[${j}]`);
+                      updateAuth(i, { values: a.values.map((ov, oj) => (oj === j ? nv : ov)) });
+                    }}
                     placeholder={
                       a.type === "basic"
                         ? j === 0
@@ -492,12 +510,13 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
             variant="ghost"
             size="sm"
             className="w-fit gap-1 px-2 text-xs text-primary hover:bg-primary/10 hover:text-primary"
-            onClick={() =>
+            onClick={() => {
+              dismissIssues("http.auth");
               setDraft((d) => ({
                 ...d,
                 httpAuth: [...d.httpAuth, { type: "header", name: "", values: [""] }],
-              }))
-            }
+              }));
+            }}
           >
             <Plus className="size-3.5" />
             {t("customType.addAuth")}
@@ -508,6 +527,7 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   );
 
   const updateEnv = (idx: number, patch: Partial<EnvDraft>) => {
+    dismissIssues(...Object.keys(patch).map((k) => `command.env[${idx}].${k}`));
     setDraft((d) => ({ ...d, commandEnv: d.commandEnv.map((e, i) => (i === idx ? { ...e, ...patch } : e)) }));
   };
 
@@ -517,7 +537,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
       <Field label={t("customType.commandTemplate")}>
         <TemplateInput
           value={draft.commandTemplate}
-          onChange={(v) => setDraft((d) => ({ ...d, commandTemplate: v }))}
+          onChange={(v) => {
+            dismissIssues("command.template");
+            setDraft((d) => ({ ...d, commandTemplate: v }));
+          }}
           placeholder={t("customType.commandTemplatePlaceholder")}
           aria-label={t("customType.commandTemplate")}
         />
@@ -558,7 +581,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
                 />
                 <RemoveButton
                   label={t("customType.removeEnv")}
-                  onClick={() => setDraft((d) => ({ ...d, commandEnv: d.commandEnv.filter((_, idx) => idx !== i) }))}
+                  onClick={() => {
+                    dismissIssues("command.env");
+                    setDraft((d) => ({ ...d, commandEnv: d.commandEnv.filter((_, idx) => idx !== i) }));
+                  }}
                 />
               </div>
               {issueMap.get(`command.env[${i}].name`) && (
@@ -575,7 +601,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
               variant="ghost"
               size="sm"
               className="w-fit gap-1 px-2 text-xs text-primary hover:bg-primary/10 hover:text-primary"
-              onClick={() => setDraft((d) => ({ ...d, commandEnv: [...d.commandEnv, { name: "", value: "" }] }))}
+              onClick={() => {
+                dismissIssues("command.env");
+                setDraft((d) => ({ ...d, commandEnv: [...d.commandEnv, { name: "", value: "" }] }));
+              }}
             >
               <Plus className="size-3.5" />
               {t("customType.addEnv")}
@@ -585,15 +614,16 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
               variant="ghost"
               size="sm"
               className="h-7 w-fit px-2 text-xs text-muted-foreground"
-              onClick={() =>
+              onClick={() => {
+                dismissIssues("command.env");
                 setDraft((d) => {
                   const existing = new Set(d.commandEnv.map((e) => e.name));
                   const generated = d.fields
                     .filter((f) => f.name && !existing.has(f.name.toUpperCase()))
                     .map((f) => ({ name: f.name.toUpperCase(), value: `{{${f.name}}}` }));
                   return { ...d, commandEnv: [...d.commandEnv, ...generated] };
-                })
-              }
+                });
+              }}
             >
               {t("customType.envFromFields")}
             </Button>
@@ -677,14 +707,23 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
                 <IconPicker value={draft.icon} onChange={(icon) => setDraft((d) => ({ ...d, icon }))} compact />
               </Field>
               <Field label={t("customType.name")} required className="min-w-0 flex-1">
-                <Input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+                <Input
+                  value={draft.name}
+                  onChange={(e) => {
+                    dismissIssues("name");
+                    setDraft((d) => ({ ...d, name: e.target.value }));
+                  }}
+                />
                 {issueMap.get("name") && <p className="text-xs text-destructive">{issueMap.get("name")}</p>}
               </Field>
               <Field label={t("customType.slug")} required className="w-[220px] shrink-0">
                 <Input
                   value={draft.slug}
                   disabled={isEdit}
-                  onChange={(e) => setDraft((d) => ({ ...d, slug: e.target.value }))}
+                  onChange={(e) => {
+                    dismissIssues("slug");
+                    setDraft((d) => ({ ...d, slug: e.target.value }));
+                  }}
                   className="font-mono text-[13px]"
                 />
                 {isEdit ? (
@@ -698,7 +737,8 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
             <Field label={t("customType.execMode")}>
               <Segmented
                 value={draft.execMode}
-                onChange={(v) =>
+                onChange={(v) => {
+                  dismissIssues("exec_mode");
                   setDraft((d) => ({
                     ...d,
                     execMode: v,
@@ -706,8 +746,8 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
                     // 用户改过的规则不动。
                     allowList:
                       !isEdit && sameRules(d.allowList, defaultAllowFor(d.execMode)) ? defaultAllowFor(v) : d.allowList,
-                  }))
-                }
+                  }));
+                }}
                 options={[
                   { value: "http", label: t("customType.execModeHttp"), icon: Globe },
                   { value: "command", label: t("customType.execModeCommand"), icon: SquareTerminal },

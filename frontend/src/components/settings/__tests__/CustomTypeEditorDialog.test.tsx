@@ -104,18 +104,53 @@ describe("CustomTypeEditorDialog", () => {
     expect(screen.queryByText("customType.commandTemplateEmptyHint")).not.toBeInTheDocument();
   });
 
-  it("expands a template input to a multi-line textarea on focus and collapses back on blur", async () => {
+  it("keeps a template input as the same element while focused so the layout does not shift on blur", async () => {
     render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
     const user = userEvent.setup();
     await user.click(screen.getByTestId("config-tab-request"));
 
     const input = screen.getByLabelText("customType.baseUrl");
-    expect(input.tagName).toBe("INPUT");
-
     await user.click(input);
-    expect(screen.getByLabelText("customType.baseUrl").tagName).toBe("TEXTAREA");
+    expect(screen.getByLabelText("customType.baseUrl")).toBe(input);
 
     await user.tab();
-    expect(screen.getByLabelText("customType.baseUrl").tagName).toBe("INPUT");
+    expect(screen.getByLabelText("customType.baseUrl")).toBe(input);
+  });
+
+  it("drops a field's validation message as soon as that field is edited, without saving again", async () => {
+    const { SaveCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(SaveCustomType).mockResolvedValue({
+      issues: [
+        { path: "name", code: "name_required" },
+        { path: "slug", code: "slug_required" },
+      ],
+    } as any);
+    render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "action.save" }));
+    expect(await screen.findByText("customType.issue.name_required")).toBeInTheDocument();
+
+    const [nameInput] = screen.getAllByRole("textbox");
+    await user.type(nameInput, "G");
+
+    expect(screen.queryByText("customType.issue.name_required")).not.toBeInTheDocument();
+    expect(screen.getByText("customType.issue.slug_required")).toBeInTheDocument();
+    expect(vi.mocked(SaveCustomType)).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the message of a template input once its value is edited", async () => {
+    const { SaveCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(SaveCustomType).mockResolvedValue({
+      issues: [{ path: "http.base_url", code: "base_url_required" }],
+    } as any);
+    render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("config-tab-request"));
+    await user.click(screen.getByRole("button", { name: "action.save" }));
+    expect(await screen.findByText("customType.issue.base_url_required")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("customType.baseUrl"), "h");
+
+    expect(screen.queryByText("customType.issue.base_url_required")).not.toBeInTheDocument();
   });
 });
