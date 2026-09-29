@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Blocks, Globe, Loader2, PencilLine, Plus, SquareTerminal, Trash2 } from "lucide-react";
+import { Blocks, Download, Globe, Loader2, PencilLine, Plus, SquareTerminal, Trash2, Upload } from "lucide-react";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmDialog } from "@opskat/ui";
 import { notifySuccess } from "@/lib/notify";
 import { getIconComponent } from "@/components/asset/IconPicker";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
+import { ImportCustomTypeDialog } from "@/components/settings/ImportCustomTypeDialog";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { ExportCustomType, SelectImportTypeFile } from "../../../wailsjs/go/customtype/CustomType";
 import type { customtype } from "../../../wailsjs/go/models";
 
 /** 设置 → 自定义类型:列表(执行方式 + 在用资产数)+ 新建 / 编辑 / 删除。 */
@@ -21,6 +23,7 @@ export function CustomTypeSection() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<customtype.Summary | null>(null);
+  const [importPreview, setImportPreview] = useState<customtype.ImportPreview | null>(null);
 
   const [didLoad, setDidLoad] = useState(false);
   if (!didLoad && !loaded && !loading) {
@@ -35,6 +38,23 @@ export function CustomTypeSection() {
   const openEdit = (id: number) => {
     setEditingId(id);
     setEditorOpen(true);
+  };
+
+  const handleExport = async (id: number) => {
+    try {
+      await ExportCustomType(id);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const handleImport = async () => {
+    try {
+      const preview = await SelectImportTypeFile();
+      if (preview) setImportPreview(preview);
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -66,10 +86,22 @@ export function CustomTypeSection() {
             <CardTitle className="text-base">{t("customType.sectionTitle")}</CardTitle>
             <CardDescription>{t("customType.sectionDesc")}</CardDescription>
           </div>
-          <Button variant="outline" size="sm" className="gap-1" onClick={openCreate}>
-            <Plus className="h-3.5 w-3.5" />
-            {t("customType.new")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              onClick={() => void handleImport()}
+              data-testid="customtype-import-button"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              {t("customType.import")}
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={openCreate}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("customType.new")}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading && types.length === 0 ? (
@@ -114,6 +146,15 @@ export function CustomTypeSection() {
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        aria-label={t("customType.export")}
+                        data-testid={`customtype-export-${ct.id}`}
+                        onClick={() => void handleExport(ct.id)}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
                         aria-label={t("action.edit")}
                         onClick={() => openEdit(ct.id)}
                       >
@@ -142,6 +183,13 @@ export function CustomTypeSection() {
         typeId={editingId}
         onOpenChange={setEditorOpen}
         onSaved={() => void load()}
+      />
+
+      <ImportCustomTypeDialog
+        preview={importPreview}
+        onOpenChange={(open) => {
+          if (!open) setImportPreview(null);
+        }}
       />
 
       <ConfirmDialog

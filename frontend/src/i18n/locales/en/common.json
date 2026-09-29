@@ -66,7 +66,16 @@
     "policyPlaceholderCommand": "e.g. s3 ls *",
     "policyHint": "Copied onto each new asset when it's created; editing it here doesn't change existing assets.",
     "usageFooter": "Used by {{count}} asset(s)",
-    "usageFooterNew": "Not used by any asset yet"
+    "usageFooterNew": "Not used by any asset yet",
+    "export": "Export",
+    "import": "Import type",
+    "importTitle": "Import custom type",
+    "importRejectedTitle": "This file can't be imported",
+    "importSlugTakenHint": "This identifier is already used by another type — enter a new one to continue.",
+    "importFieldsLabel": "Fields",
+    "importBindingsLabel": "Bindings",
+    "importConfirm": "Create type",
+    "importSuccess": "Custom type imported"
   },
   "app": {
     "title": "OpsKat",
@@ -1252,6 +1261,7 @@
     "decryptPreview": "Decrypt & Preview",
     "backupFrom": "Backup date",
     "importAssets": "Assets & Groups",
+    "importCustomTypes": "Custom Types",
     "importCredentials": "Credentials",
     "importForwards": "Port Forwarding",
     "importPolicyGroups": "Policy Groups",

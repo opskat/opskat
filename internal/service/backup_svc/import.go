@@ -3,6 +3,7 @@ package backup_svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -12,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/sshagent"
@@ -111,7 +113,45 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 4. 分组
+		// 4. 自定义类型。以标识（slug）而非自增 ID 跨库引用（Design decision 13），
+		// 不需要像其他实体那样维护 ID 重映射表：replace 模式用备份替换本地全部类型；
+		// merge 模式标识已存在时保留本地版本，备份中的资产按标识绑定到本地版本
+		// （因此出现的缺值按“新增必填字段”的规则展示，见 custom_type_svc.ResolveAsset）。
+		if opts.ImportAssets && len(data.CustomTypes) > 0 {
+			if isReplace {
+				if err := tx.Exec("DELETE FROM custom_types").Error; err != nil {
+					return fmt.Errorf("清除自定义类型失败: %w", err)
+				}
+			}
+			for _, ct := range data.CustomTypes {
+				if !isReplace {
+					var existing custom_type_entity.CustomType
+					err := tx.Where("slug = ?", ct.Slug).First(&existing).Error
+					switch {
+					case err == nil:
+						continue // 合并模式：标识已存在，保留本地版本
+					case !errors.Is(err, gorm.ErrRecordNotFound):
+						return fmt.Errorf("检查自定义类型 %s 是否存在失败: %w", ct.Slug, err)
+					}
+				}
+				newCT := *ct
+				newCT.ID = 0
+				if err := tx.Create(&newCT).Error; err != nil {
+					return fmt.Errorf("创建自定义类型 %s 失败: %w", ct.Slug, err)
+				}
+				result.CustomTypesImported++
+			}
+		}
+		// 通用资产字段值的密钥重加密要按备份导出时的字段结构判定哪些字段是密钥
+		// （见 export.go 的 decryptGenericSecrets/stripGenericSecrets 同一约定）：
+		// 必须用 data.CustomTypes 里随备份带的定义，而不是本地（可能已被用户改过
+		// 结构，或合并模式下刻意保留的）版本。
+		customTypesBySlug := make(map[string]*custom_type_entity.CustomType, len(data.CustomTypes))
+		for _, ct := range data.CustomTypes {
+			customTypesBySlug[ct.Slug] = ct
+		}
+
+		// 5. 分组
 		groupIDMap := make(map[int64]int64)
 		if opts.ImportAssets && len(data.Groups) > 0 {
 			if isReplace {
@@ -138,7 +178,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 5. 资产
+		// 6. 资产
 		assetIDMap := make(map[int64]int64)
 		if opts.ImportAssets && len(data.Assets) > 0 {
 			if isReplace {
@@ -261,6 +301,43 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 							logger.Default().Warn("set redis config in import", zap.Error(err))
 						}
 					}
+				case a.IsGeneric() && a.Config != "":
+					cfg, err := a.GetGenericConfig()
+					if err == nil {
+						ct := customTypesBySlug[cfg.CustomType]
+						for name, v := range cfg.Values {
+							if v.CredentialID > 0 {
+								// 托管凭据引用重映射：与 SSH 的 cfg.CredentialID 同一套机制。
+								if newID, ok := credIDMap[v.CredentialID]; ok {
+									v.CredentialID = newID
+								} else if !opts.ImportCredentials {
+									v.CredentialID = 0
+								}
+								cfg.Values[name] = v
+								continue
+							}
+							if ct == nil {
+								continue
+							}
+							f, ok := ct.FieldByName(name)
+							if !ok || !f.Secret {
+								continue
+							}
+							// 重新加密内联密钥字段值（备份里已解密为明文，见 export.go 的
+							// decryptGenericSecrets）。
+							if data.IncludesCredentials && v.Value != "" && crypto != nil {
+								encrypted, encErr := crypto.Encrypt(v.Value)
+								if encErr != nil {
+									logger.Default().Warn("re-encrypt generic secret", zap.String("field", name), zap.Error(encErr))
+								} else {
+									cfg.Values[name] = asset_entity.GenericValue{Value: encrypted}
+								}
+							}
+						}
+						if err := a.SetGenericConfig(cfg); err != nil {
+							logger.Default().Warn("set generic config in import", zap.Error(err))
+						}
+					}
 				}
 
 				if err := tx.Create(a).Error; err != nil {
@@ -324,7 +401,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 6. 端口转发
+		// 7. 端口转发
 		if opts.ImportForwards && len(data.Forwards) > 0 {
 			if isReplace {
 				if err := tx.Exec("DELETE FROM forward_rules").Error; err != nil {
@@ -363,7 +440,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 		return nil, err
 	}
 
-	// 6. 客户端设置透传
+	// 8. 客户端设置透传
 	if opts.ImportShortcuts && len(data.Shortcuts) > 0 {
 		result.Shortcuts = string(data.Shortcuts)
 	}

@@ -66,7 +66,16 @@
     "policyPlaceholderCommand": "如 s3 ls *",
     "policyHint": "新建资产时会复制一份到资产上，改这里不影响已有资产。",
     "usageFooter": "已有 {{count}} 个资产使用",
-    "usageFooterNew": "还没有资产使用"
+    "usageFooterNew": "还没有资产使用",
+    "export": "导出",
+    "import": "导入类型",
+    "importTitle": "导入自定义类型",
+    "importRejectedTitle": "无法导入该文件",
+    "importSlugTakenHint": "该标识已被其他类型占用，请填一个新标识后再确认",
+    "importFieldsLabel": "字段",
+    "importBindingsLabel": "绑定",
+    "importConfirm": "创建类型",
+    "importSuccess": "自定义类型已导入"
   },
   "app": {
     "title": "OpsKat",
@@ -1252,6 +1261,7 @@
     "decryptPreview": "解密预览",
     "backupFrom": "备份时间",
     "importAssets": "资产与分组",
+    "importCustomTypes": "自定义类型",
     "importCredentials": "密码/密钥",
     "importForwards": "端口转发",
     "importPolicyGroups": "策略组",
