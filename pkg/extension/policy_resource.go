@@ -22,14 +22,24 @@ import (
 //     An empty resource is no resource.
 //   - {"action","resources"} (2.2, PolicyResources) is a list whose '*' / '?'
 //     are wildcards; '\', '[' and ']' are quoted so nothing else is glob syntax.
+//   - {"reject"} (2.2, the SDK's RejectArgs) is no classification at all: the
+//     tool refuses the call's arguments, and the error is an *ArgsRejectedError
+//     carrying the tool's reason. Every other error is a malformed reply.
 func decodePolicyDecision(raw []byte) (action string, resources []string, err error) {
 	var decision struct {
 		Action    string    `json:"action"`
 		Resource  string    `json:"resource"`
 		Resources *[]string `json:"resources"`
+		Reject    *string   `json:"reject"`
 	}
 	if err := json.Unmarshal(raw, &decision); err != nil {
 		return "", nil, fmt.Errorf("unmarshal policy decision: %w", err)
+	}
+	if decision.Reject != nil {
+		if decision.Action != "" || decision.Resource != "" || decision.Resources != nil {
+			return "", nil, errors.New("policy decision both rejects the call and classifies it")
+		}
+		return "", nil, &ArgsRejectedError{Reason: *decision.Reject}
 	}
 	if decision.Resources == nil {
 		if decision.Resource == "" {
@@ -73,3 +83,13 @@ func quoteGlob(s, chars string) string {
 	}
 	return b.String()
 }
+
+// ArgsRejectedError is Plugin.CheckPolicy's answer for a call whose tool refused
+// its arguments (the SDK's RejectArgs — a request path naming a host of its own,
+// say). It is a decision, not a failure: the call must not run whatever the rules
+// or grants say, and there is nothing to ask the user about. Reason is the tool's
+// own words, shown to the caller and kept in the audit row. Any other CheckPolicy
+// error is a guest fault the host must not mistake for this one.
+type ArgsRejectedError struct{ Reason string }
+
+func (e *ArgsRejectedError) Error() string { return "arguments rejected: " + e.Reason }

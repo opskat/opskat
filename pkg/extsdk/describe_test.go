@@ -2,7 +2,10 @@ package opskat
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -431,6 +434,112 @@ func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
 			Tool("f", noop).PolicyResources([]string{"index.read"}, classifyBulk).
 				PolicyFunc([]string{"index.read"}, classifyOne)
 		}, ShouldPanic)
+	})
+}
+
+type pathArgs struct {
+	Path  string `json:"path,omitempty"`
+	Index string `json:"index,omitempty"`
+}
+
+func rejectHostPath(a pathArgs) error {
+	if strings.Contains(a.Path, "://") {
+		return fmt.Errorf("path %q must not name a host", a.Path)
+	}
+	return nil
+}
+
+func TestRejectArgsRefusesTheCallWithTheToolsReason(t *testing.T) {
+	Convey("RejectArgs lets a tool refuse a call's arguments outright", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		ran := false
+		Tool("request", func(_ *ToolContext, _ pathArgs) (any, error) {
+			ran = true
+			return map[string]string{"ok": "1"}, nil
+		}).
+			RejectArgs(rejectHostPath).
+			PolicyResources([]string{"index.read"}, func(a pathArgs) (string, []string) {
+				return "index.read", []string{a.Index}
+			})
+
+		Convey("check_policy answers the rejection and its reason instead of a classification", func() {
+			raw, err := dispatch("check_policy", []byte(`{"tool":"request","args":{"path":"http://evil/x"}}`))
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldEqual, `{"reject":"path \"http://evil/x\" must not name a host"}`)
+		})
+
+		Convey("accepted arguments classify exactly as without RejectArgs", func() {
+			raw, err := dispatch("check_policy", []byte(`{"tool":"request","args":{"path":"/a/_search","index":"a"}}`))
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldEqual, `{"action":"index.read","resources":["a"]}`)
+		})
+
+		Convey("arguments the tool cannot decode are still a failed check, not a rejection", func() {
+			_, err := dispatch("check_policy", []byte(`{"tool":"request","args":{"path":7}}`))
+			So(err, ShouldNotBeNil)
+			var rejected *ArgsRejectedError
+			So(errors.As(err, &rejected), ShouldBeFalse)
+		})
+
+		Convey("TestHost observes the rejection as an ArgsRejectedError", func() {
+			host := NewTestHost()
+			defer host.Close()
+
+			_, _, err := host.CheckPolicy("request", pathArgs{Path: "http://evil/x"})
+			var rejected *ArgsRejectedError
+			So(errors.As(err, &rejected), ShouldBeTrue)
+			So(rejected.Reason, ShouldEqual, `path "http://evil/x" must not name a host`)
+
+			action, resources, err := host.CheckPolicy("request", pathArgs{Path: "/a", Index: "a"})
+			So(err, ShouldBeNil)
+			So(action, ShouldEqual, "index.read")
+			So(resources, ShouldResemble, []string{"a"})
+		})
+
+		// A page calls the tool without asking policy first; the refusal still
+		// holds, so the handler never needs a second copy of the check.
+		Convey("the handler never runs on arguments the tool rejects", func() {
+			host := NewTestHost()
+			defer host.Close()
+
+			_, err := host.CallTool(Asset{ID: 1}, "request", pathArgs{Path: "http://evil/x"})
+			var rejected *ArgsRejectedError
+			So(errors.As(err, &rejected), ShouldBeTrue)
+			So(err.Error(), ShouldContainSubstring, "must not name a host")
+			So(ran, ShouldBeFalse)
+
+			_, err = host.CallTool(Asset{ID: 1}, "request", pathArgs{Path: "/a"})
+			So(err, ShouldBeNil)
+			So(ran, ShouldBeTrue)
+		})
+	})
+
+	Convey("RejectArgs works with every way a tool declares its policy", t, func() {
+		resetRegistries()
+		noop := func(_ *ToolContext, _ pathArgs) (any, error) { return nil, nil }
+		Tool("fixed", noop).Policy("index.read").
+			Resource(func(a pathArgs) string { return a.Index }).RejectArgs(rejectHostPath)
+		Tool("one", noop).RejectArgs(rejectHostPath).
+			PolicyFunc([]string{"index.read"}, func(a pathArgs) (string, string) { return "index.read", a.Index })
+
+		for _, tool := range []string{"fixed", "one"} {
+			raw, err := dispatch("check_policy", []byte(`{"tool":"`+tool+`","args":{"path":"http://evil/x"}}`))
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldStartWith, `{"reject":`)
+
+			// The single-resource reply of an accepted call is byte-for-byte the 2.0/2.1 one.
+			raw, err = dispatch("check_policy", []byte(`{"tool":"`+tool+`","args":{"index":"a"}}`))
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldEqual, `{"action":"index.read","resource":"a"}`)
+		}
+	})
+
+	Convey("a second RejectArgs on one tool fails at init", t, func() {
+		resetRegistries()
+		reg := Tool("request", func(_ *ToolContext, _ pathArgs) (any, error) { return nil, nil }).
+			Policy("index.read").RejectArgs(rejectHostPath)
+		So(func() { reg.RejectArgs(rejectHostPath) }, ShouldPanic)
 	})
 }
 

@@ -51,9 +51,10 @@ Everything else — tools, asset types, policies, pages, display strings — is 
 currently accepts `2.0`, `2.1` and `2.2`, so an already-built `2.0` extension keeps loading
 unchanged (it just doesn't get `@opskat/host-ui` — see below), while one declaring
 anything not in that set (`2.3`, `3.0`, …) is refused at load with the list of what is
-supported. Declare `2.2` when a tool classifies with `.PolicyResources` (see
-[The policy face](#the-policy-face)): an older app would read its reply as a call on no
-resource at all, so it must refuse the extension instead.
+supported. Declare `2.2` when a tool classifies with `.PolicyResources` or refuses
+arguments with `.RejectArgs` (see [The policy face](#the-policy-face)): an older app
+would read either reply as a call on no resource at all, so it must refuse the extension
+instead.
 
 `capabilities` defaults to deny-all, and the notebook needs nothing: the host KV, the
 asset config and logging are available without a grant. Declare only what you use:
@@ -379,6 +380,39 @@ opskat.Tool("request", doRequest).
         return classify(args.Method, args.Path) // e.g. "delete", []string{"a", "prod-1"}
     })
 ```
+
+Some arguments are wrong whatever the user's rules say — a request path naming a host of
+its own, when every request must go to the asset. `.RejectArgs(fn)` refuses them
+outright: `fn(args)` returns `nil` to accept the call, or an error whose text is the
+reason. The host then denies the call with that reason before any rule or grant is
+consulted and **never asks the user** (there is nothing to approve: the call would only
+fail afterwards), and the audit log records it as a deny whose error is the reason.
+`fn` runs before the classifier, which only ever sees accepted arguments, and again
+before the handler on every call — including a page's, which skips policy — so the
+handler needs no second copy of the check. It works with `.Policy`, `.PolicyFunc` and
+`.PolicyResources`, and needs `"hostABI": "2.2"`. Keep it for arguments that can never
+run; what a user may do is the rules' to decide.
+
+```go
+opskat.Tool("request", doRequest).
+    RejectArgs(func(args requestArgs) error {
+        _, err := parseRequestPath(args.Path) // "path must not name a host", …
+        return err
+    }).
+    PolicyResources(requestActions, classifyRequest)
+```
+
+In a unit test, `TestHost.CheckPolicy` and `TestHost.CallTool` return the refusal as an
+`*opskat.ArgsRejectedError` whose `Reason` is `fn`'s error text:
+
+```go
+_, _, err := host.CheckPolicy("request", requestArgs{Path: "http://evil/x"})
+var rejected *opskat.ArgsRejectedError
+if !errors.As(err, &rejected) { t.Fatalf("want a rejection, got %v", err) }
+```
+
+Any other failure to classify — the guest erring, a malformed reply, an action the tool
+never declared — is not a refusal: the host asks the user about the call instead.
 
 The host does not take the classification as permission: it matches the action and
 each resource against the rules on the asset and the permission groups granted on it,

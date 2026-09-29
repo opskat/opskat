@@ -15,6 +15,7 @@ package extreg
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -358,14 +359,23 @@ func execTool(l loaded) permission.ExecFunc {
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
 // 这次调用本身。
 //
+// 工具拒绝这次调用的参数（SDK 的 RejectArgs，guest 答 {"reject"}）则不是缺陷而是结论：
+// 这条调用在任何规则 / grant 下都不会执行，问用户只会让他批准一条随后必然失败的调用。
+// 于是它先于 deny → allow → grant 直接 Deny，Message 带上工具给出的原因——调用方与
+// 审计行（decision=deny，原因落 error 列）看到的都是它。
+//
 // 返回 NeedConfirm 之后发生什么，则与内置类型完全一致：CheckForAsset 弹审批框，
 // "全部允许"落 grant，下一条同样的调用由这里的 MatchExtensionGrant 直接放行。
 func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 	return func(ctx context.Context, assetID int64, command string) aictx.CheckResult {
-		action, resources, _, _, ok := classifyCommand(ctx, l, command)
-		if !ok {
+		call, err := classifyCommand(ctx, l, command)
+		if rejected, ok := errors.AsType[*extension.ArgsRejectedError](err); ok {
+			return argsRejected(ctx, call.tool, rejected)
+		}
+		if err != nil {
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		}
+		action, resources := call.action, call.resources
 		policyType := l.manifest.Policies.Type
 		groups, own := permission.ExtensionPolicyForAsset(ctx, assetID, policyType)
 		if len(groups) == 0 {
@@ -391,6 +401,18 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 	}
 }
 
+// classifiedCall is a command classifyCommand parsed and the guest classified.
+type classifiedCall struct {
+	action    string
+	resources []string
+	tool      string
+	args      json.RawMessage
+}
+
+// errClassifyFailed is classifyCommand failing on a defect — a command the parser
+// refuses, a guest that errs or answers an undeclared action — already logged.
+var errClassifyFailed = errors.New("extension policy classification failed")
+
 // classifyCommand parses a command and runs the guest's check_policy classification,
 // validating the action against the actions the called tool declares
 // (ToolDef.Actions) — not the extension-wide union, so one tool cannot answer with
@@ -398,26 +420,47 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 // It is the single place policyCheck and classifyForApproval both call, so "undeclared
 // action never classifies" can't drift between the check path and the approval/grant
 // path — both must see the same failure the same way.
-func classifyCommand(ctx context.Context, l loaded, command string) (action string, resources []string, toolName string, argsJSON json.RawMessage, ok bool) {
+//
+// The error is either the tool refusing the arguments — an
+// *extension.ArgsRejectedError, with call.tool set — or errClassifyFailed.
+func classifyCommand(ctx context.Context, l loaded, command string) (classifiedCall, error) {
 	toolName, argsJSON, err := parseCommand(l.manifest, command)
 	if err != nil {
 		// 到不了这里：canonicalize 已经用同一个解析器跑过一遍。真发生了就是
 		// fail-closed 的"分类失败"，而不是放行或落 grant。
-		return "", nil, "", nil, false
+		return classifiedCall{}, errClassifyFailed
 	}
-	action, resources, err = l.plugin.CheckPolicy(ctx, toolName, argsJSON)
+	call := classifiedCall{tool: toolName, args: argsJSON}
+	call.action, call.resources, err = l.plugin.CheckPolicy(ctx, toolName, argsJSON)
+	if rejected, ok := errors.AsType[*extension.ArgsRejectedError](err); ok {
+		// 不记原因：它常常原样带着用户 / 模型写的参数。
+		logger.Ctx(ctx).Info("extension tool rejected its arguments",
+			zap.String("extension", l.name), zap.String("tool", toolName))
+		return classifiedCall{tool: toolName}, rejected
+	}
 	if err != nil {
 		logger.Ctx(ctx).Warn("extension policy check failed",
 			zap.String("extension", l.name), zap.String("tool", toolName), zap.Error(err))
-		return "", nil, "", nil, false
+		return classifiedCall{}, errClassifyFailed
 	}
 	def, _ := toolDef(l.manifest, toolName)
-	if !slices.Contains(def.Actions(), action) {
+	if !slices.Contains(def.Actions(), call.action) {
 		logger.Ctx(ctx).Error("extension policy returned an undeclared action",
-			zap.String("extension", l.name), zap.String("tool", toolName), zap.String("action", action))
-		return "", nil, "", nil, false
+			zap.String("extension", l.name), zap.String("tool", toolName), zap.String("action", call.action))
+		return classifiedCall{}, errClassifyFailed
 	}
-	return action, resources, toolName, argsJSON, true
+	return call, nil
+}
+
+// argsRejected is the deny for a call whose tool refused its arguments. No rule
+// decided it, so MatchedPattern stays empty; the tool's reason is the message.
+func argsRejected(ctx context.Context, tool string, rejected *extension.ArgsRejectedError) aictx.CheckResult {
+	return aictx.CheckResult{
+		Decision:       aictx.Deny,
+		DecisionSource: aictx.SourcePolicyDeny,
+		Message: aipolicy.PolicyFmt(ctx, "extension tool %q rejected its arguments: %s", "扩展工具 %q 拒绝了这次调用的参数：%s",
+			tool, rejected.Reason),
+	}
 }
 
 // classifyForApproval adapts classifyCommand to permission.ClassifyFunc: it is the
@@ -427,16 +470,16 @@ func classifyCommand(ctx context.Context, l loaded, command string) (action stri
 // common-prefix rule for several).
 func classifyForApproval(l loaded) permission.ClassifyFunc {
 	return func(ctx context.Context, command string) (permission.ExtensionClassification, bool) {
-		action, resources, toolName, argsJSON, ok := classifyCommand(ctx, l, command)
-		if !ok {
+		call, err := classifyCommand(ctx, l, command)
+		if err != nil {
 			return permission.ExtensionClassification{}, false
 		}
 		return permission.ExtensionClassification{
 			PolicyType: l.manifest.Policies.Type,
-			Action:     action,
-			Resources:  resources,
-			Tool:       toolName,
-			Args:       argsJSON,
+			Action:     call.action,
+			Resources:  call.resources,
+			Tool:       call.tool,
+			Args:       call.args,
 		}, true
 	}
 }

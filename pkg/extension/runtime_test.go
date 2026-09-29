@@ -4,6 +4,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -187,6 +188,29 @@ func TestPluginCallsFixture(t *testing.T) {
 			_, resources, err = p.CheckPolicy(ctx, "classify_many", json.RawMessage(`{}`))
 			So(err, ShouldBeNil)
 			So(resources, ShouldBeEmpty)
+		})
+
+		// RejectArgs crosses the boundary as its own answer: the host can tell the
+		// tool refusing the arguments from the guest failing to classify them.
+		Convey("a tool's argument rejection crosses into the host as an ArgsRejectedError", func() {
+			_, _, err := p.CheckPolicy(ctx, "reject_host", json.RawMessage(`{"resource":"http://evil/x"}`))
+			var rejected *ArgsRejectedError
+			So(errors.As(err, &rejected), ShouldBeTrue)
+			So(rejected.Reason, ShouldEqual, `resource "http://evil/x" must not name a host`)
+
+			action, resources, err := p.CheckPolicy(ctx, "reject_host", json.RawMessage(`{"resource":"a"}`))
+			So(err, ShouldBeNil)
+			So(action, ShouldEqual, "write")
+			So(resources, ShouldResemble, []string{"a"})
+
+			_, _, err = p.CheckPolicy(ctx, "reject_host", json.RawMessage(`{"resource":7}`))
+			So(err, ShouldNotBeNil)
+			So(errors.As(err, &rejected), ShouldBeFalse)
+
+			// execute_tool holds the same line without any policy check before it.
+			_, err = p.CallTool(ctx, "reject_host", json.RawMessage(`{"resource":"http://evil/x"}`), nil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "must not name a host")
 		})
 
 		Convey("validate_config never sees the host's reserved connection key", func() {

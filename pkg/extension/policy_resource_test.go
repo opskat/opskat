@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"errors"
 	"os"
 	"regexp"
 	"testing"
@@ -26,6 +27,32 @@ func TestDecodePolicyDecision(t *testing.T) {
 		Convey("a reply naming both shapes is refused rather than judged on one of them", func() {
 			_, _, err := decodePolicyDecision([]byte(`{"action":"write","resource":"a","resources":["b"]}`))
 			So(err, ShouldNotBeNil)
+		})
+
+		// A tool refusing the call's arguments is not a classification and not a
+		// guest fault: the host must be able to tell it apart from both.
+		Convey("a rejection decodes into an ArgsRejectedError carrying the guest's reason", func() {
+			action, resources, err := decodePolicyDecision([]byte(`{"reject":"path must not name a host"}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "path must not name a host")
+			var rejected *ArgsRejectedError
+			So(errors.As(err, &rejected), ShouldBeTrue)
+			So(rejected.Reason, ShouldEqual, "path must not name a host")
+			So(action, ShouldBeEmpty)
+			So(resources, ShouldBeNil)
+		})
+
+		Convey("a reply that both rejects and classifies is malformed, not a rejection", func() {
+			for _, raw := range []string{
+				`{"reject":"x","action":"read"}`,
+				`{"reject":"x","resource":"a"}`,
+				`{"reject":"x","resources":[]}`,
+			} {
+				_, _, err := decodePolicyDecision([]byte(raw))
+				So(err, ShouldNotBeNil)
+				var rejected *ArgsRejectedError
+				So(errors.As(err, &rejected), ShouldBeFalse)
+			}
 		})
 	})
 }

@@ -54,6 +54,13 @@ func dispatchTool(input []byte) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	rejected, err := entry.checkArgs(req.Args)
+	if err != nil {
+		return nil, err
+	}
+	if rejected != nil {
+		return nil, rejected
+	}
 	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args, Asset: req.Asset})
 	if err != nil {
 		return nil, err
@@ -95,10 +102,22 @@ func dispatchAction(input []byte) (json.RawMessage, error) {
 // the 2.2 wire PolicyResources answers — a list (never null) whose '*' / '?' are
 // wildcards. Which shape a tool answers is fixed by how it registered, so a
 // single-resource extension's reply is byte-for-byte what it always was.
+//
+// A tool declaring RejectArgs may answer a third shape first, {"reject":"<reason>"}
+// (2.2 too): no classification, the tool refusing the arguments themselves.
 func dispatchPolicy(input []byte) (json.RawMessage, error) {
 	entry, req, err := parseToolCall(input)
 	if err != nil {
 		return nil, err
+	}
+	rejected, err := entry.checkArgs(req.Args)
+	if err != nil {
+		return nil, err
+	}
+	if rejected != nil {
+		return json.Marshal(struct {
+			Reject string `json:"reject"`
+		}{rejected.Reason})
 	}
 	if entry.classify == nil {
 		resource := ""

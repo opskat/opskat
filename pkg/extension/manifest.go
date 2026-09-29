@@ -31,7 +31,9 @@ import (
 // PolicyResources): a call classified on several resources at once, whose '*' /
 // '?' are wildcards. The {"action","resource"} reply keeps its exact meaning. An
 // older host would read the list reply as a call with no resource at all, so an
-// extension that uses it declares 2.2 and an older app refuses to load it.
+// extension that uses it declares 2.2 and an older app refuses to load it. 2.2
+// also lets check_policy answer {"reject":"<reason>"} (the SDK's RejectArgs): the
+// tool refusing the call's arguments, which the host denies without asking.
 const HostABIVersion = "2.2"
 
 // SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 and 2.1

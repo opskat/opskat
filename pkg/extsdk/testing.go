@@ -128,7 +128,9 @@ func (h *TestHost) CallAction(asset Asset, name string, args any, onEvent func(T
 // CheckPolicy invokes the registered policy checker and reports the resources
 // the call touches as the host reads them: a single-resource reply (Policy/
 // Resource, PolicyFunc) is a one-element list — none when the resource is empty —
-// and a PolicyResources reply is its list as-is.
+// and a PolicyResources reply is its list as-is. A call the tool's RejectArgs
+// refuses returns an *ArgsRejectedError carrying its reason, which the host turns
+// into a deny.
 func (h *TestHost) CheckPolicy(tool string, args any) (action string, resources []string, err error) {
 	argsJSON, _ := json.Marshal(args)
 	input, _ := json.Marshal(map[string]any{
@@ -143,9 +145,13 @@ func (h *TestHost) CheckPolicy(tool string, args any) (action string, resources 
 		Action    string    `json:"action"`
 		Resource  string    `json:"resource"`
 		Resources *[]string `json:"resources"`
+		Reject    *string   `json:"reject"`
 	}
 	if err := json.Unmarshal(result, &out); err != nil {
 		return "", nil, err
+	}
+	if out.Reject != nil {
+		return "", nil, &ArgsRejectedError{Reason: *out.Reject}
 	}
 	if out.Resources != nil {
 		return out.Action, *out.Resources, nil

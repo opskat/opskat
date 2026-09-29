@@ -133,6 +133,17 @@ func init() {
 		PolicyFunc([]string{"read"}, func(a policyArgs) (string, string) { return "read", a.Resource })
 	opskat.Tool("classify_many", func(*opskat.ToolContext, policyArgs) (any, error) { return nil, nil }).
 		PolicyResources([]string{"write"}, func(a policyArgs) (string, []string) { return "write", a.Resources })
+	// reject_host refuses a resource naming a host of its own, whatever the rules say.
+	opskat.Tool("reject_host", func(*opskat.ToolContext, policyArgs) (any, error) {
+		return map[string]any{"ran": true}, nil
+	}).
+		RejectArgs(func(a policyArgs) error {
+			if strings.Contains(a.Resource, "://") {
+				return fmt.Errorf("resource %q must not name a host", a.Resource)
+			}
+			return nil
+		}).
+		PolicyResources([]string{"write"}, func(a policyArgs) (string, []string) { return "write", []string{a.Resource} })
 
 	// seq counts calls in a guest global. Because a reactor instance survives
 	// between calls the counter keeps climbing, so the host-side test can see

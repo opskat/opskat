@@ -366,7 +366,8 @@ func (p *Plugin) nextInvocationID() string {
 // host's own (internal/extreg).
 //
 // resources are path.Match globs (see decodePolicyDecision); empty means the call
-// touches no resource.
+// touches no resource. A tool refusing the call's arguments returns an
+// *ArgsRejectedError — a decision to deny, not a failure to classify.
 func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action string, resources []string, err error) {
 	input, err := json.Marshal(map[string]any{
 		"tool": toolName,

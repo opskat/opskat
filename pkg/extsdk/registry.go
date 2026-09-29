@@ -76,6 +76,9 @@ type toolEntry struct {
 	actions       []string
 	classify      func(args json.RawMessage) (action string, resources []string, err error)
 	multiResource bool
+	// reject is set by RejectArgs: it answers a non-nil *ArgsRejectedError for
+	// arguments the tool refuses, and err for arguments that do not decode.
+	reject func(args json.RawMessage) (*ArgsRejectedError, error)
 	// timeout is the tool's own call timeout; 0 leaves the host default.
 	timeout time.Duration
 	// fileParams are the string parameters opsctl may read from a file (FileParam).
@@ -285,6 +288,60 @@ func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource 
 		action, resources := fn(args)
 		return action, resources, nil
 	}
+}
+
+// RejectArgs lets the tool refuse a call's arguments outright: fn returns nil to
+// accept them, or an error whose text is the reason they can never run — a request
+// path naming a host of its own, say, when every request must go to the asset.
+//
+// A refusal is not a classification. check_policy answers {"reject":"<reason>"}
+// instead of an action and resources, and the host denies the call with that
+// reason — no rule, grant or approval dialog can let it through, so the user is
+// never asked about a call that would only fail afterwards — and audits it as a
+// deny. execute_tool refuses it too, before the handler runs, so a call that
+// reaches the tool without a policy check (an extension page) is held to the same
+// rule and the handler needs no second copy of it. Both answer the refusal as an
+// *ArgsRejectedError. fn runs before the tool's classifier, which therefore only
+// ever sees accepted arguments; arguments that do not decode into T fail the call
+// as they always have.
+//
+// Reserve it for arguments that are wrong whatever the user's rules say; what a
+// user may or may not do is the policy's to decide. The {"reject"} reply is part
+// of hostABI 2.2: an extension using RejectArgs must declare "2.2", like
+// PolicyResources. It panics when the tool already declares one.
+func (r *ToolReg[T]) RejectArgs(fn func(args T) error) *ToolReg[T] {
+	if r.e.reject != nil {
+		panic(fmt.Sprintf("opskat: tool %q already declares RejectArgs", r.e.name))
+	}
+	r.e.reject = func(raw json.RawMessage) (*ArgsRejectedError, error) {
+		args, err := decodeArgs[T](raw)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s: %w", r.e.name, err)
+		}
+		if err := fn(args); err != nil {
+			return &ArgsRejectedError{Reason: err.Error()}, nil
+		}
+		return nil, nil
+	}
+	return r
+}
+
+// ArgsRejectedError is a call refused by the tool's RejectArgs: what check_policy
+// and execute_tool answer for it, and what TestHost's CheckPolicy and CallTool
+// return, so a test can tell the refusal from any other failure with errors.As.
+type ArgsRejectedError struct {
+	// Reason is the error text RejectArgs' fn returned.
+	Reason string
+}
+
+func (e *ArgsRejectedError) Error() string { return e.Reason }
+
+// checkArgs runs the tool's RejectArgs, if it declares one.
+func (e *toolEntry) checkArgs(args json.RawMessage) (*ArgsRejectedError, error) {
+	if e.reject == nil {
+		return nil, nil
+	}
+	return e.reject(args)
 }
 
 // maxToolTimeout mirrors the host's ceiling (pkg/extension MaxToolTimeout): a
