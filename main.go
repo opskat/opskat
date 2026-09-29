@@ -207,6 +207,8 @@ func main() {
 
 	// 2. 构造 binder（system 先建，其它持有它做 LangProvider/WindowActivator）
 	sys := system.New(appCtx, skillContent)
+	// 测试连接经 SSH 隧道 / 代理链 SSH 层拨号时由 System 把连接池交给 tester。
+	sys.SetSSHPool(pool)
 	sshB := ssh.New(appCtx, sys, sshMgr, sftpSvc, pool)
 	queryB := query.New(appCtx, sys, pool)
 	redisB := redis.New(appCtx, sys, pool)
