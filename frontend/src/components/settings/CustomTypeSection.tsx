@@ -7,17 +7,14 @@ import { notifySuccess } from "@/lib/notify";
 import { getIconComponent } from "@/components/asset/IconPicker";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 import { ImportCustomTypeDialog } from "@/components/settings/ImportCustomTypeDialog";
-import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import { ExportCustomType, SelectImportTypeFile } from "../../../wailsjs/go/customtype/CustomType";
 import type { customtype } from "../../../wailsjs/go/models";
 
 /** 设置 → 自定义类型:列表(执行方式 + 在用资产数)+ 新建 / 编辑 / 删除。 */
 export function CustomTypeSection() {
   const { t } = useTranslation();
-  const types = useCustomTypeStore((s) => s.types);
-  const loading = useCustomTypeStore((s) => s.loading);
-  const loaded = useCustomTypeStore((s) => s.loaded);
-  const load = useCustomTypeStore((s) => s.load);
+  const { types, loading } = useCustomTypeList();
   const remove = useCustomTypeStore((s) => s.remove);
   const usage = useCustomTypeStore((s) => s.usage);
 
@@ -25,12 +22,6 @@ export function CustomTypeSection() {
   const [editingId, setEditingId] = useState<number | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<customtype.Summary | null>(null);
   const [importPreview, setImportPreview] = useState<customtype.ImportPreview | null>(null);
-
-  const [didLoad, setDidLoad] = useState(false);
-  if (!didLoad && !loaded && !loading) {
-    setDidLoad(true);
-    void load();
-  }
 
   const openCreate = () => {
     setEditingId(undefined);
@@ -190,12 +181,7 @@ export function CustomTypeSection() {
         </CardContent>
       </Card>
 
-      <CustomTypeEditorDialog
-        open={editorOpen}
-        typeId={editingId}
-        onOpenChange={setEditorOpen}
-        onSaved={() => void load()}
-      />
+      <CustomTypeEditorDialog open={editorOpen} typeId={editingId} onOpenChange={setEditorOpen} />
 
       <ImportCustomTypeDialog
         preview={importPreview}

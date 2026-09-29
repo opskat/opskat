@@ -39,16 +39,6 @@ func TestTopLevelUsageRetiresGrantSurface(t *testing.T) {
 	require.NotContains(t, usage, "grant")
 }
 
-// TestTopLevelUsageNamesSecretGet locks that the top-level usage screen advertises the
-// `secret get` verb (docs/specs/2026-09-28-generic-asset.md「取值」), the same way it
-// already names every other command — an agent discovering opsctl via `opsctl help`
-// alone must be able to find it.
-func TestTopLevelUsageNamesSecretGet(t *testing.T) {
-	usage := captureStderr(t, printUsage)
-	require.Contains(t, usage, "secret")
-	require.Contains(t, usage, "secret get")
-}
-
 func TestCreateAssetUsageDocumentsGenericAndSafeCredentialInputs(t *testing.T) {
 	usage := captureStderr(t, printCreateAssetUsage)
 	for _, want := range []string{

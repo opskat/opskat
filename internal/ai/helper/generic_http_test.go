@@ -459,6 +459,21 @@ func TestGenericHTTP_InvalidPathErrorOmitsSecretBaseURL(t *testing.T) {
 	assert.Equal(t, int32(0), srv.hits.Load())
 }
 
-// 通用资产的命令执行方式见 generic_command.go / generic_command_test.go：本文件曾在
-// helper.RegisterGenericMode(ExecModeCommand, ...) 落地前用这条测试锁住"尚不支持"的占位
-// 行为，现在命令方式已注册，占位行为不再成立。
+// 整个 Base URL 都来自一个密钥字段（例如 webhook 地址整条保存为密钥）时，掩码后的展示文本
+// 不再是 URL；展示只是展示，不能因此拦下真实请求，也不能把真值带进审批展示补充或错误信息。
+func TestGenericHTTP_BaseURLEntirelyFromSecretField(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "webhook", "{{token}}")
+	secretURL := srv.URL + "/robot/" + testSecret
+	asset := genericAsset(t, "webhook", map[string]string{"host": "unused", "token": secretURL})
+
+	res, stdout, _, err := streamHTTP(t, ctx, asset, nil, "GET", "/send")
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.ExitCode)
+	assert.Contains(t, stdout, "GET /robot/"+testSecret+"/send", "the request itself uses the real value")
+
+	detail, err := DescribeGenericCommand(ctx, asset, "GET /send")
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: GET "+GenericSecretMask+"/send", detail)
+}

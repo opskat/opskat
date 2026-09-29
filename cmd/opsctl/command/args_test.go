@@ -1,6 +1,7 @@
 package command
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func TestHoistGlobalFlags(t *testing.T) {
 	})
 }
 
-func TestParseExecArgs(t *testing.T) {
+func TestParseExecArgv(t *testing.T) {
 	cases := []struct {
 		name      string
 		args      []string
@@ -75,32 +76,32 @@ func TestParseExecArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			declared, scope, cmd, err := parseExecArgs(tc.args)
+			declared, scope, argv, err := parseExecArgv(tc.args)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantType, declared)
 			require.Equal(t, tc.wantScope, scope)
-			require.Equal(t, tc.wantCmd, cmd)
+			require.Equal(t, tc.wantCmd, strings.Join(argv, " "))
 		})
 	}
 
 	t.Run("命令前的未知 flag 报错，而不是静默丢弃或发往远端", func(t *testing.T) {
-		_, _, _, err := parseExecArgs([]string{"--bogus", "1", "--", "ls"})
+		_, _, _, err := parseExecArgv([]string{"--bogus", "1", "--", "ls"})
 		require.ErrorContains(t, err, "--bogus")
-		_, _, _, err = parseExecArgs([]string{"--bogus", "ls"})
+		_, _, _, err = parseExecArgv([]string{"--bogus", "ls"})
 		require.ErrorContains(t, err, "--bogus")
 	})
 	t.Run("--type 缺值报错", func(t *testing.T) {
-		_, _, _, err := parseExecArgs([]string{"--type"})
+		_, _, _, err := parseExecArgv([]string{"--type"})
 		require.ErrorContains(t, err, "--type")
 	})
 	t.Run("--scope 缺值报错", func(t *testing.T) {
-		_, _, _, err := parseExecArgs([]string{"--scope"})
+		_, _, _, err := parseExecArgv([]string{"--scope"})
 		require.ErrorContains(t, err, "--scope")
 	})
 	t.Run("没有命令时报错", func(t *testing.T) {
-		_, _, _, err := parseExecArgs([]string{"--"})
+		_, _, _, err := parseExecArgv([]string{"--"})
 		require.Error(t, err)
-		_, _, _, err = parseExecArgs(nil)
+		_, _, _, err = parseExecArgv(nil)
 		require.Error(t, err)
 	})
 }

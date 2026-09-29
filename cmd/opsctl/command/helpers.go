@@ -12,7 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// parseExecArgs 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [--] <command>。
+// parseExecArgv 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [--] <command>。
 // 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
 // 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的，--scope 同理）。命令之前的
 // 未知选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
@@ -21,17 +21,9 @@ import (
 // 描述）：单机/哨兵资产是库号（缺省用资产配置的库），集群资产是无 key 命令必须指定的
 // 节点 host:port。仅对 redis 资产有意义——cmdExec 在解析后用 validateRedisScope 对非
 // redis 资产报错，而不是这里静默忽略或直接执行。
-func parseExecArgs(args []string) (declaredType, scope, command string, err error) {
-	declaredType, scope, argv, err := parseExecArgv(args)
-	if err != nil {
-		return "", "", "", err
-	}
-	return declaredType, scope, strings.Join(argv, " "), nil
-}
-
-// parseExecArgv 与 parseExecArgs 规则相同，但把命令原样保留成 argv：注册了流式执行入口
-// 的类型（permission.StreamExecutorFor，如通用资产的 HTTP 方式）按参数边界执行，
-// `-H 'X-Caller: two words'` 必须仍是一个参数，不能被空格拼接抹掉。
+//
+// 命令原样保留成 argv：注册了流式执行入口的类型（permission.StreamExecutorFor，如通用资产）
+// 按参数边界执行，`-H 'X-Caller: two words'` 必须仍是一个参数；其余类型由调用方用空格拼接。
 func parseExecArgv(args []string) (declaredType, scope string, argv []string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]

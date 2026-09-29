@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 import { AlertCircle, Info, Loader2 } from "lucide-react";
 import { Button, Input } from "@opskat/ui";
 import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
@@ -10,7 +9,7 @@ import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { useAssetCredential } from "@/components/asset/useAssetCredential";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
-import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import type { asset_entity, custom_type_entity } from "../../../wailsjs/go/models";
 import { RevealGenericSecret } from "../../../wailsjs/go/customtype/CustomType";
@@ -35,17 +34,8 @@ export function GenericConfigSection({ ref, editAsset, variant, onValidityChange
   const editConfig = useMemo(() => (editAsset ? parseGenericConfig(editAsset.Config) : undefined), [editAsset]);
   const slug = editConfig?.custom_type ?? variant ?? "";
 
-  const types = useCustomTypeStore((s) => s.types);
-  const loaded = useCustomTypeStore((s) => s.loaded);
-  const loading = useCustomTypeStore((s) => s.loading);
-  const load = useCustomTypeStore((s) => s.load);
+  const { types, loaded } = useCustomTypeList();
   const getType = useCustomTypeStore((s) => s.get);
-
-  const [didLoad, setDidLoad] = useState(false);
-  if (!didLoad && !loaded && !loading) {
-    setDidLoad(true);
-    load().catch((e) => toast.error(String(e)));
-  }
 
   const summary = types.find((ct) => ct.slug === slug);
   const [reloadKey, setReloadKey] = useState(0);

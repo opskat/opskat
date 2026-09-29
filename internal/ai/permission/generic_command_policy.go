@@ -31,5 +31,17 @@ func checkCommandModePermission(ctx context.Context, asset *asset_entity.Asset, 
 	if asset.GroupID > 0 {
 		groups = policy.ResolveGroupChain(ctx, asset.GroupID)
 	}
-	return checkShellCommandPolicy(ctx, asset.ID, asset, groups, subject, ApprovalTypeFor(asset_entity.AssetTypeGeneric))
+	return checkShellCommandPolicy(ctx, asset.ID, asset, groups, subject, ApprovalTypeFor(asset_entity.AssetTypeGeneric), genericShellSubPatterns)
+}
+
+// genericShellSubPatterns 是无模板命令方式的 storedSubPatterns。通用资产的 grant 归一化
+// （genericGrantPatterns）不知道资产的执行方式，「全部允许」/「永久允许」落下的是整条命令
+// （系统主体已转义通配元字符）；这里按与 SSH 落库时相同的子命令拆法（shellGrantPatterns）
+// 拆开，才能与逐条子命令匹配对上。拆不出子命令的 pattern 原样参与匹配，与 SSH 对待它的方式相同。
+func genericShellSubPatterns(pattern string) []string {
+	subs, err := policy.ExtractSubCommands(pattern)
+	if err != nil || len(subs) == 0 {
+		return []string{pattern}
+	}
+	return subs
 }

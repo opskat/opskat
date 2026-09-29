@@ -6,7 +6,7 @@ import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, cn } from "@o
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 import { parseGenericConfig, EXEC_MODE_HTTP } from "@/components/asset/GenericConfigSection.config";
 import { notifyCopied } from "@/lib/notify";
-import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import type { DetailInfoCardProps, DetailSubtitleProps } from "@/lib/assetTypes/types";
 import type { customtype } from "../../../../wailsjs/go/models";
 import { GetGenericAssetView, RevealGenericSecret } from "../../../../wailsjs/go/customtype/CustomType";
@@ -244,17 +244,8 @@ export function GenericDetailInfoCard({ asset, sshTunnelName, onEdit }: DetailIn
 /** 详情页头部副标题:「<类型名> · 自定义类型 · 编辑类型」。 */
 export function GenericDetailSubtitle({ asset }: DetailSubtitleProps) {
   const { t } = useTranslation();
-  const types = useCustomTypeStore((s) => s.types);
-  const loaded = useCustomTypeStore((s) => s.loaded);
-  const loading = useCustomTypeStore((s) => s.loading);
-  const load = useCustomTypeStore((s) => s.load);
+  const { types } = useCustomTypeList();
   const [editorOpen, setEditorOpen] = useState(false);
-
-  const [didLoad, setDidLoad] = useState(false);
-  if (!didLoad && !loaded && !loading) {
-    setDidLoad(true);
-    load().catch((e) => toast.error(String(e)));
-  }
 
   const slug = parseGenericConfig(asset.Config).custom_type ?? "";
   const summary = types.find((ct) => ct.slug === slug);

@@ -104,12 +104,12 @@ func (c *CustomType) GetGenericAssetView(assetID int64) (*GenericAssetView, erro
 
 	if ct.ExecMode == custom_type_entity.ExecModeHTTP && ct.HTTP != nil {
 		// 展示用渲染：Base URL 里引用的密钥字段以掩码代替。
-		u, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now())
+		addr, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now())
 		if err != nil {
 			// exec 会用同一个渲染把错误原样报出来；详情页只是不显示地址这一行。
 			logger.Ctx(ctx).Warn("render generic base url for detail view", zap.Int64("assetID", assetID), zap.Error(err))
 		} else {
-			view.ActualAddress = u.Redacted()
+			view.ActualAddress = addr
 		}
 	}
 	return view, nil

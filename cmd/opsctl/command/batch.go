@@ -36,7 +36,7 @@ type batchCommand struct {
 	Type    string `json:"type,omitempty"` // Optional canonical asset type or protocol alias.
 	Command string `json:"command"`
 	// Scope has the same semantics as opsctl exec's --scope (helpers.go's
-	// validateRedisScope / parseExecArgs doc comment): only meaningful for redis assets.
+	// validateRedisScope / parseExecArgv doc comment): only meaningful for redis assets.
 	// Only reachable through the JSON input mode — the positional `type:asset:command`
 	// grammar has no slot for a fourth field (spec opsctl 一节: "位置参数形式
 	// redis:<asset>:<command> 不变（无 scope）").

@@ -1,10 +1,9 @@
 import { useState, useMemo, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 import { Search, ChevronDown, Plus, Settings2 } from "lucide-react";
 import { cn, Popover, PopoverContent, PopoverTrigger, Input, Button } from "@opskat/ui";
 import { useExtensionStore } from "@/extension";
-import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
@@ -31,21 +30,12 @@ interface AssetTypePickerProps {
 export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }: AssetTypePickerProps) {
   const { t } = useTranslation();
   const extensions = useExtensionStore((s) => s.extensions);
-  const customTypes = useCustomTypeStore((s) => s.types);
-  const customLoaded = useCustomTypeStore((s) => s.loaded);
-  const customLoading = useCustomTypeStore((s) => s.loading);
-  const loadCustomTypes = useCustomTypeStore((s) => s.load);
+  const { types: customTypes } = useCustomTypeList();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
   // 打开「新建自定义类型」时已有的类型 id;保存后多出来的那个就是新建的类型。
   const idsBeforeCreate = useRef<Set<number>>(new Set());
-
-  const [didLoad, setDidLoad] = useState(false);
-  if (!didLoad && !customLoaded && !customLoading) {
-    setDidLoad(true);
-    loadCustomTypes().catch((e) => toast.error(String(e)));
-  }
 
   const options = useMemo(() => getAssetTypeOptions(extensions, customTypes), [extensions, customTypes]);
   const resolveLabel = useCallback((o: AssetTypeOption) => resolveAssetTypeLabel(o, t), [t]);

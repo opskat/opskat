@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { toast } from "sonner";
 import { create } from "zustand";
 import {
   ListCustomTypes,
@@ -60,3 +62,20 @@ export const useCustomTypeStore = create<CustomTypeState>((set, get) => ({
     return res;
   },
 }));
+
+/**
+ * 订阅自定义类型列表快照；列表还没加载、也没在加载时，首次渲染触发一次加载，失败 toast。
+ * 各处列表消费方共用这一个"只加载一次"，不各写一份。
+ */
+export function useCustomTypeList(): { types: customtype.Summary[]; loaded: boolean; loading: boolean } {
+  const types = useCustomTypeStore((s) => s.types);
+  const loaded = useCustomTypeStore((s) => s.loaded);
+  const loading = useCustomTypeStore((s) => s.loading);
+  const load = useCustomTypeStore((s) => s.load);
+  const [requested, setRequested] = useState(false);
+  if (!requested && !loaded && !loading) {
+    setRequested(true);
+    load().catch((e) => toast.error(String(e)));
+  }
+  return { types, loaded, loading };
+}

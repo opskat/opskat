@@ -4,6 +4,7 @@ package helper
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -193,4 +194,29 @@ func TestGenericCommand_AIExecReturnsWhenShellExitsLeavingBackgroundChild(t *tes
 	require.NoError(t, err, "a shell that exited 0 is a completed run even though its pipe outlived it")
 	assert.Less(t, time.Since(started), 4*time.Second)
 	assert.Equal(t, "ok\n(exit code 0)", out)
+}
+
+// 调用被取消 / 超时时 exec.CommandContext 杀掉子进程，os/exec 报的是信号退出（-1）。那不是
+// 程序跑完给出的退出码：必须报成未完成的调用，而不是一次"exit code -1"的正常结果
+// （AI 与审计会把后者当成程序自己的失败）。
+func TestGenericCommand_CancelledRunIsAnErrorNotAnExitCode(t *testing.T) {
+	ctx := setupGenericDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "shell-box", Slug: "shell-box-cancel", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "note"}},
+		Command: &custom_type_entity.CommandConfig{},
+	}))
+	asset := genericAsset(t, "shell-box-cancel", nil)
+
+	runCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	out, err := ExecGenericOnAsset(runCtx, asset, "'sleep 5'", "")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Empty(t, out)
+
+	var stdout, stderr bytes.Buffer
+	streamCtx, cancelStream := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancelStream()
+	_, err = StreamGenericOnAsset(streamCtx, asset, []string{"sleep 5"}, permission.Stdio{Stdout: &stdout, Stderr: &stderr})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

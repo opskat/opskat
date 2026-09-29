@@ -3,6 +3,7 @@ package permission
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,22 +53,31 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 	if asset != nil && asset.GroupID > 0 {
 		groups = policy.ResolveGroupChain(ctx, asset.GroupID)
 	}
-	return checkShellCommandPolicy(ctx, assetID, asset, groups, command, "exec")
+	return checkShellCommandPolicy(ctx, assetID, asset, groups, command, "exec", storedPatternAsIs)
 }
+
+// storedPatternAsIs 是 SSH / 串口的 storedSubPatterns：它们的 allow 规则与 grant 在落库前已经
+// 按子命令拆好（shellGrantPatterns），原样用来匹配子命令。
+func storedPatternAsIs(pattern string) []string { return []string{pattern} }
 
 // checkShellCommandPolicy 是 shell 类命令面的判定核心：deny → allow → grant → confirm，
 // 按 policy.ExtractSubCommands 拆出的子命令逐条匹配 policy.MatchCommandRule。SSH / 串口
 // （grantToolName "exec"）与通用资产命令方式的无模板情形（grantToolName "generic"，见
 // generic_command_policy.go）共用这套判定——两者的"命令"都是要真的交给一个 shell 执行的
-// 整条文本，语义完全一致，唯一的差异是 grant 落在哪个工具面。
+// 整条文本，语义完全一致，差异只在 grant 落在哪个工具面，以及已存的 allow 规则 / grant
+// 怎样变成逐条匹配子命令的 pattern（storedSubPatterns）。
 //
 // assetID 单独传入而不是取 asset.ID：调用方在资产查找失败（asset 为 nil）时仍要用原始
 // assetID 去匹配 grant——一条真实存在的 grant 不该因为这一次资产查询失败就找不到。
-func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_entity.Asset, groups []*group_entity.Group, command, grantToolName string) aictx.CheckResult {
+func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_entity.Asset, groups []*group_entity.Group, command, grantToolName string, storedSubPatterns func(string) []string) aictx.CheckResult {
 	// 策略检查
 	allPolicies := collectPolicies(ctx, asset, groups)
 	allDenyRules := policy.ShellCommandRules(collectDenyRules(allPolicies))
-	allAllowRules := policy.ShellCommandRules(collectAllowRules(allPolicies))
+	storedAllowRules := policy.ShellCommandRules(collectAllowRules(allPolicies))
+	allAllowRules := make([]string, 0, len(storedAllowRules))
+	for _, rule := range storedAllowRules {
+		allAllowRules = append(allAllowRules, storedSubPatterns(rule)...)
+	}
 
 	// 解析失败或没有可枚举的执行单元（纯赋值/注释等）时不能整串匹配规则，
 	// 否则 `ls *` 这类规则会误放行 parser 失败的输入；只按独立 `*` 判定。
@@ -101,7 +111,10 @@ func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_en
 	}
 
 	// DB Grant 匹配
-	if grantPattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, grantToolName, policy.MatchCommandRule); grantPattern != "" {
+	matchGrant := func(pattern, cmd string) bool {
+		return slices.ContainsFunc(storedSubPatterns(pattern), func(sub string) bool { return policy.MatchCommandRule(sub, cmd) })
+	}
+	if grantPattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, grantToolName, matchGrant); grantPattern != "" {
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: grantPattern}
 	}
 

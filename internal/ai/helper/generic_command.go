@@ -217,8 +217,8 @@ func renderCommandEnv(ct *custom_type_entity.CustomType, rc *authtmpl.RenderCont
 const commandPipeDrainTimeout = time.Second
 
 // runCommandInvocation 启动子进程并等待结束：已启动、跑完的进程即便退出码非零也不是
-// error（错误留给调用方按 exitCode 处理），只有没能跑起来（程序不存在、权限不足等）才
-// 是 error——StreamExecFunc / ExecFunc 的契约要求"请求没有完成"用 error 表达。
+// error（错误留给调用方按 exitCode 处理），只有没能跑起来（程序不存在、权限不足等）或被
+// ctx 取消 / 超时打断才是 error——StreamExecFunc / ExecFunc 的契约要求"请求没有完成"用 error 表达。
 // 子进程退出后只再等 commandPipeDrainTimeout 收尾输出，之后后台孙进程写的内容不再收集。
 func runCommandInvocation(ctx context.Context, inv *commandInvocation, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, inv.argv[0], inv.argv[1:]...) //nolint:gosec // argv comes from the custom type's own rendered template/shell choice plus literally-appended exec args; never shell-interpreted here
@@ -234,6 +234,10 @@ func runCommandInvocation(ctx context.Context, inv *commandInvocation, stdin io.
 	err := cmd.Run()
 	if err == nil {
 		return 0, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// 调用被取消 / 超时：CommandContext 杀掉了子进程，os/exec 报的信号退出不是程序给出的退出码。
+		return 0, fmt.Errorf("command interrupted: %w", ctxErr)
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {

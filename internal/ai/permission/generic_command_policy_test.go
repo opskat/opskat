@@ -99,3 +99,34 @@ func TestCheckPermission_GenericCommandNoTemplateGrantRoundTrip(t *testing.T) {
 	assert.Equal(t, aictx.SourceGrantAllow, granted.DecisionSource)
 	assert.Equal(t, aictx.NeedConfirm, CheckPermission(grantCtx, asset_entity.AssetTypeGeneric, 1, "rm -rf /").Decision)
 }
+
+// 「全部允许」与「永久允许」落下的是 NormalizeGrantPatterns 的结果：通用资产的归一化不知道
+// 执行方式，整串存一条（系统主体转义通配元字符）。无模板命令方式按子命令匹配，存下的整串
+// 必须同样按子命令拆开才对得上——否则批准过的复合命令下次仍要审批。
+func TestCheckPermission_GenericCommandNoTemplateHonorsStoredCompoundApprovals(t *testing.T) {
+	ct := &custom_type_entity.CustomType{Slug: "shell-box", ExecMode: custom_type_entity.ExecModeCommand, Command: &custom_type_entity.CommandConfig{}}
+
+	t.Run("session grant", func(t *testing.T) {
+		ctx := setupGenericCommandPermission(t, "shell-box", ct, asset_entity.CommandPolicy{})
+		stub := newStubGrantRepo()
+		origGrant := grant_repo.Grant()
+		grant_repo.RegisterGrant(stub)
+		t.Cleanup(func() { grant_repo.RegisterGrant(origGrant) })
+		grantCtx := aictx.WithSessionID(ctx, "s1")
+
+		for _, approved := range []string{"ls -la | grep foo", "cat *.log && wc -l x"} {
+			SaveGrantPatternsForApproval(grantCtx, "s1", 1, "runner", ApprovalTypeFor(asset_entity.AssetTypeGeneric), approved, GrantOriginSystem)
+			got := CheckPermission(grantCtx, asset_entity.AssetTypeGeneric, 1, approved)
+			assert.Equal(t, aictx.Allow, got.Decision, "the approved command %q must be granted", approved)
+		}
+		assert.Equal(t, aictx.NeedConfirm, CheckPermission(grantCtx, asset_entity.AssetTypeGeneric, 1, "cat secret.log").Decision,
+			"the escaped `*` of an approved command stays literal")
+		assert.Equal(t, aictx.NeedConfirm, CheckPermission(grantCtx, asset_entity.AssetTypeGeneric, 1, "ls -la | rm -rf /").Decision)
+	})
+
+	t.Run("persisted allow rule", func(t *testing.T) {
+		ctx := setupGenericCommandPermission(t, "shell-box", ct, asset_entity.CommandPolicy{AllowList: []string{"ls -la | grep foo"}})
+		assert.Equal(t, aictx.Allow, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "ls -la | grep foo").Decision)
+		assert.Equal(t, aictx.NeedConfirm, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "ls -la | wc -l").Decision)
+	})
+}

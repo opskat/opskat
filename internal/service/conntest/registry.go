@@ -30,7 +30,7 @@ func Register(assetType string, fn TestFunc) {
 	})
 }
 
-// RegisterDetailed 登记一个连通时带详情的 tester；Lookup 与 LookupDetailed 都能取到它。
+// RegisterDetailed 登记一个连通时带详情的 tester。
 func RegisterDetailed(assetType string, fn DetailedTestFunc) {
 	mu.Lock()
 	testers[assetType] = fn
@@ -44,19 +44,7 @@ func Unregister(assetType string) {
 	mu.Unlock()
 }
 
-// Lookup 取某资产类型的 tester;未注册返回 ok=false。详情型 tester 的详情被丢弃。
-func Lookup(assetType string) (TestFunc, bool) {
-	fn, ok := LookupDetailed(assetType)
-	if !ok {
-		return nil, false
-	}
-	return func(ctx context.Context, configJSON, plainPassword string) error {
-		_, err := fn(ctx, configJSON, plainPassword)
-		return err
-	}, true
-}
-
-// LookupDetailed 取某资产类型的 tester；只登记了 TestFunc 的类型详情恒为空。
+// LookupDetailed 取某资产类型的 tester；未注册返回 ok=false，只登记了 TestFunc 的类型详情恒为空。
 func LookupDetailed(assetType string) (DetailedTestFunc, bool) {
 	mu.RLock()
 	fn, ok := testers[assetType]

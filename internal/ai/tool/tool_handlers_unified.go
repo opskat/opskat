@@ -356,7 +356,7 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 		// （如字段值拼不出绝对 http(s) URL）照实写在这一行，而不是悄悄省略——exec 会因同一个
 		// 原因失败，help 正是模型该看到原因的地方；错误只含类型标识与原因，不含字段值。
 		if addr, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now()); err == nil {
-			fmt.Fprintf(&b, "\nActual address: %s\n", addr.Redacted())
+			fmt.Fprintf(&b, "\nActual address: %s\n", addr)
 		} else {
 			fmt.Fprintf(&b, "\nActual address: unavailable (%v)\n", err)
 		}

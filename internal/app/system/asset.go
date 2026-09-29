@@ -101,11 +101,8 @@ func (s *System) TestAssetConnection(testID, assetType, configJSON, plainPasswor
 	if !ok {
 		return "", fmt.Errorf("unsupported asset type: %s", assetType)
 	}
-	base := i18n.Ctx(s.ctx, s.Lang())
-	if s.sshPool != nil {
-		// 经 SSH 隧道 / 代理链里的 SSH 层拨号的 tester（如通用资产）从 ctx 取连接池。
-		base = helper.WithSSHPool(base, s.sshPool)
-	}
+	// 经 SSH 隧道 / 代理链里的 SSH 层拨号的 tester（如通用资产）从 ctx 取连接池。
+	base := helper.WithSSHPool(i18n.Ctx(s.ctx, s.Lang()), s.sshPool)
 	parent, cancel := context.WithTimeout(base, 10*time.Second)
 	defer cancel()
 	ctx, release := testreg.Begin(parent, testID)

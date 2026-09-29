@@ -192,13 +192,9 @@ func canonicalizeHTTPCommand(command string) (string, error) {
 // RenderGenericBaseURL 渲染 HTTP 方式的 Base URL，结果必须是 http / https 绝对 URL。
 // now 固定了这一次调用的时刻，与认证渲染共用（authtmpl.RenderContext 的 now 一致性）。
 func RenderGenericBaseURL(ct *custom_type_entity.CustomType, values map[string]string, now time.Time) (*url.URL, error) {
-	tmpl, err := authtmpl.Parse(ct.HTTP.BaseURL, authtmpl.ParseOptions{Fields: ct.FieldNames()})
+	rendered, err := renderBaseURLText(ct, values, now)
 	if err != nil {
-		return nil, fmt.Errorf("custom type %q Base URL: %w", ct.Slug, err)
-	}
-	rendered, err := tmpl.Render(authtmpl.NewRenderContext(values, authtmpl.WithClock(func() time.Time { return now })))
-	if err != nil {
-		return nil, fmt.Errorf("render Base URL of custom type %q: %w", ct.Slug, err)
+		return nil, err
 	}
 	u, err := url.Parse(rendered)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -207,10 +203,44 @@ func RenderGenericBaseURL(ct *custom_type_entity.CustomType, values map[string]s
 	return u, nil
 }
 
-// RenderGenericDisplayBaseURL 渲染给人和模型看的 Base URL（审批、help、详情页）：密钥字段
-// 以 GenericSecretMask 代替，只有真正发出的请求才用真值。
-func RenderGenericDisplayBaseURL(ct *custom_type_entity.CustomType, values map[string]string, now time.Time) (*url.URL, error) {
-	return RenderGenericBaseURL(ct, maskedGenericValues(ct, values), now)
+func renderBaseURLText(ct *custom_type_entity.CustomType, values map[string]string, now time.Time) (string, error) {
+	tmpl, err := authtmpl.Parse(ct.HTTP.BaseURL, authtmpl.ParseOptions{Fields: ct.FieldNames()})
+	if err != nil {
+		return "", fmt.Errorf("custom type %q Base URL: %w", ct.Slug, err)
+	}
+	rendered, err := tmpl.Render(authtmpl.NewRenderContext(values, authtmpl.WithClock(func() time.Time { return now })))
+	if err != nil {
+		return "", fmt.Errorf("render Base URL of custom type %q: %w", ct.Slug, err)
+	}
+	return rendered, nil
+}
+
+// RenderGenericDisplayBaseURL 渲染给人和模型看的 Base URL（审批、help、详情页）：先确认用真值
+// 渲染出的是 http(s) 绝对 URL（exec 会因同一原因失败），再以 GenericSecretMask 代替密钥字段
+// 重新渲染，只有真正发出的请求才用真值。
+func RenderGenericDisplayBaseURL(ct *custom_type_entity.CustomType, values map[string]string, now time.Time) (string, error) {
+	if _, err := RenderGenericBaseURL(ct, values, now); err != nil {
+		return "", err
+	}
+	return displayAddress(ct, values, "", now)
+}
+
+// displayAddress 以掩码代替密钥字段渲染 Base URL 并接上调用方的 requestURI。掩码后的文本不一定
+// 还是 URL（整条 Base URL 来自一个密钥字段时只剩掩码），所以返回展示文本；能解析成绝对 URL 时
+// 再经 Redacted 隐去 userinfo 里的密码。
+func displayAddress(ct *custom_type_entity.CustomType, values map[string]string, requestURI string, now time.Time) (string, error) {
+	base, err := renderBaseURLText(ct, maskedGenericValues(ct, values), now)
+	if err != nil {
+		return "", err
+	}
+	text := base
+	if requestURI != "" {
+		text = strings.TrimRight(base, "/") + requestURI
+	}
+	if u, err := url.Parse(text); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Redacted(), nil
+	}
+	return text, nil
 }
 
 // maskedGenericValues 返回展示用的字段值：有值的密钥字段换成 GenericSecretMask。
@@ -229,16 +259,7 @@ func maskedGenericValues(ct *custom_type_entity.CustomType, values map[string]st
 
 // targetURL 是这次请求实际发往的目标（不含注入的 query）：Base URL + 调用方的路径与 query。
 func targetURL(t *GenericTarget, cmd *HTTPCommand, now time.Time) (*url.URL, error) {
-	return joinTarget(t, cmd, t.Values, now)
-}
-
-// displayTargetURL 是 targetURL 的展示版本：Base URL 里的密钥字段以掩码代替。
-func displayTargetURL(t *GenericTarget, cmd *HTTPCommand, now time.Time) (*url.URL, error) {
-	return joinTarget(t, cmd, maskedGenericValues(t.Type, t.Values), now)
-}
-
-func joinTarget(t *GenericTarget, cmd *HTTPCommand, values map[string]string, now time.Time) (*url.URL, error) {
-	base, err := RenderGenericBaseURL(t.Type, values, now)
+	base, err := RenderGenericBaseURL(t.Type, t.Values, now)
 	if err != nil {
 		return nil, err
 	}
@@ -259,16 +280,25 @@ func joinTarget(t *GenericTarget, cmd *HTTPCommand, values map[string]string, no
 	return u, nil
 }
 
+// displayTarget 是 targetURL 的展示版本：Base URL 里的密钥字段以掩码代替。
+func displayTarget(t *GenericTarget, cmd *HTTPCommand, now time.Time) (string, error) {
+	return displayAddress(t.Type, t.Values, cmd.requestURI(), now)
+}
+
 func describeHTTPCommand(_ context.Context, t *GenericTarget, command string) (string, error) {
 	cmd, err := parseHTTPCommandLine(command)
 	if err != nil {
 		return "", err
 	}
-	u, err := displayTargetURL(t, cmd, time.Now())
+	now := time.Now()
+	if _, err := targetURL(t, cmd, now); err != nil {
+		return "", err
+	}
+	display, err := displayTarget(t, cmd, now)
 	if err != nil {
 		return "", err
 	}
-	return "HTTP request: " + cmd.Method + " " + u.Redacted(), nil
+	return "HTTP request: " + cmd.Method + " " + display, nil
 }
 
 // genericHTTPResponse 是一次已完成请求的响应；调用方读完 Body 后必须 close。
@@ -296,7 +326,7 @@ func sendGenericHTTP(ctx context.Context, t *GenericTarget, cmd *HTTPCommand, lo
 	if err != nil {
 		return nil, err
 	}
-	display, err := displayTargetURL(t, cmd, now)
+	display, err := displayTarget(t, cmd, now)
 	if err != nil {
 		return nil, err
 	}
@@ -327,8 +357,8 @@ func sendGenericHTTP(ctx context.Context, t *GenericTarget, cmd *HTTPCommand, lo
 				return fmt.Errorf("stopped after %d redirects", maxGenericRedirects)
 			}
 			if !sameOrigin(next.URL, via[0].URL) {
-				return fmt.Errorf("cross-origin redirect to %s refused: credentials are only sent to %s",
-					originOf(next.URL), originOf(display))
+				return fmt.Errorf("cross-origin redirect to %s refused: credentials are only sent to the origin of %s",
+					originOf(next.URL), display)
 			}
 			// 307/308 保留请求体（GetBody 非 nil），301/302/303 改成无体的 GET。
 			var redirectBody []byte
@@ -447,10 +477,10 @@ func originOf(u *url.URL) string {
 
 // redactURLError 去掉 *url.Error 里带出的完整请求 URL：注入的 query 认证就在那条 URL 里。
 // 改用调用方视角的目标地址（Base URL + 调用方写的路径与 query）点名这次请求。
-func redactURLError(err error, method string, target *url.URL) error {
+func redactURLError(err error, method, display string) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return fmt.Errorf("%s %s: %w", method, target.Redacted(), ue.Err)
+		return fmt.Errorf("%s %s: %w", method, display, ue.Err)
 	}
 	return err
 }
