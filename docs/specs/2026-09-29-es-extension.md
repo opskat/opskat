@@ -73,7 +73,7 @@
 ## 官方扩展仓（`../extensions`）
 
 - 删除 `sdk/go`、`examples/echo`、`extensions/oss` 及其说明；远端旧分支不动。
-- `README.md`、`README_zh.md`、`CLAUDE.md` 改写为：仓库定位（官方扩展源码）、目录约定、构建 / 测试 / 本地安装（`opsctl ext dev`）步骤；SDK 用法指向 opskat 仓 `extensions/README.md`，不在此仓复述。
+- `README.md`、`README_zh.md` 改写为：仓库定位（官方扩展源码）、目录约定、构建 / 测试 / 本地安装（`opsctl ext dev`）步骤；SDK 用法指向 opskat 仓 `extensions/README.md`，不在此仓复述。
 - `make build EXT=<name>` 产出 `extensions/<name>/dist/`，该目录可直接经"从目录安装"或 `opsctl ext dev` 安装。
 - 扩展依赖 `github.com/opskat/opskat/pkg/extsdk`，固定到包含本 spec 平台变更的 opskat 版本。ES 扩展声明的 hostABI 与最低应用版本取该版本；不支持的旧应用按现有规则拒绝加载并列出其支持的 hostABI。
 - CI：PR 与主分支推送时对每个扩展运行 Go 测试、WASM 构建、前端类型检查与构建；任一失败即 CI 失败。发布产物与索引留给商店 spec。
@@ -149,11 +149,11 @@
 
 | Seam | What it verifies | Prior art |
 |---|---|---|
-| `internal/extreg` + `internal/ai/permission` | 多资源 deny / allow / grant 判定；通配资源的"可能重叠即 deny、完整覆盖才 allow"；单资源行为不变；grant 按资源分别覆盖 | `extreg_rules_test.go`、`grant_request_ext_test.go` |
+| `internal/extreg` + `internal/ai/permission` | 多资源 deny / allow / grant 判定；通配资源的"可能重叠即 deny、完整覆盖才 allow"；单资源行为不变；grant 按资源分别覆盖；记住预填的公共前缀规则与回退（预填由后端计算，未改动时按它落库） | `extreg_rules_test.go`、`grant_request_ext_test.go` |
 | `pkg/extsdk` + `pkg/extension` describe 校验 | 多资源分类与可读文件标记经 `describe()` / `check_policy` 往返；非字符串参数标记被拒 | `registry_test.go`、`describe_test.go`、`descriptor_test.go` |
 | `cmd/opsctl/command` | `--<flag>-file` 读文件 / stdin 等价于内联；互斥、缺文件、超限、非 UTF-8 报错且不发送；AI 路径不接受 `-file` | `args_test.go` |
 | `internal/app/extension` | 页面调用不经策略 / 审批 / 审计但仍带资产作用域；可取消 | `host_test.go`、`tool_cancel_test.go` |
-| 前端 vitest（opskat） | 多资源审批列出全部资源；记住预填的公共前缀规则与回退 | 无（`rememberPattern.ts` 尚无测试） |
+| 前端 vitest（opskat） | 多资源审批列出全部资源；超长参数截断显示与展开 | `ApprovalBlock.test.tsx`、`OpsctlApprovalDialogExtension.test.tsx` |
 | ES 扩展 Go 测试（`../extensions`） | 分类表：方法 × 路径 × 请求体 → 动作 + 资源集合；各工具经 `TestHost` + mock HTTP 的结果与错误 | notebook 的 `notebook_test.go` |
 | ES 页面 vitest（`../extensions`） | 控制台请求切分（注释、NDJSON、光标定位）；按光标上下文给出的提示集合（行首 / 路径 / 请求体，含索引名与 mapping 字段）；文档表列推导 | 无 |
 | e2e（opskat） | 页面调用不再弹审批（改写现有"页面调用触发审批弹窗"用例） | `e2e/tests/extension-asset-type.spec.ts` |
