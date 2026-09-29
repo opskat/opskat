@@ -137,6 +137,34 @@ type putArgs struct {
   a select. Declare a secret as an `opskat.Credential` field, which is always
   `format:"password"` (see [Reading secret fields](#reading-secret-fields)).
 
+### Parameters opsctl can read from a file
+
+A payload too large or too awkward for a command line — an NDJSON bulk body — can be
+marked file-readable on the tool's registration handle:
+
+```go
+opskat.Tool("request", handleRequest).
+    PolicyResources(actions, classify).
+    FileParam("body") // the JSON name of a string parameter
+```
+
+`opsctl exec <asset> -- request --body-file payload.ndjson` (or `--body-file -` for
+stdin) is then exactly `--body <file content>`: opsctl reads the file and sends the
+inline form, so `PolicyFunc` / `PolicyResources`, the approval dialog, grants and
+audit all see the content, and the handler receives it as the ordinary `body`
+argument — there is nothing to implement. `describe()` reports the marker as
+`tools[].fileParams`, and `opsctl help <asset>` lists the `--body-file` form marked
+"opsctl only".
+
+- `FileParam` panics at registration unless the name is a declared **string**
+  parameter, and on a repeat; the host's describe validation refuses a non-string
+  entry as well. It ships under host ABI 2.2, no further bump.
+- opsctl refuses, sending nothing and exiting non-zero: both `--body` and
+  `--body-file`; an unreadable file; content over 16 MiB or not valid UTF-8; stdin
+  named twice.
+- AI `exec` and the extension's own pages do not accept `--body-file` — it is an
+  unknown flag there. Reading files happens only inside the opsctl process.
+
 ### The asset comes from the host, not from the arguments
 
 `exec <asset> -- <tool>` already names an asset, so the host puts it in the call

@@ -86,7 +86,8 @@ type loaded struct {
 
 var (
 	mu         sync.Mutex
-	registered = make(map[string][]string) // extension name → registered asset types
+	registered = make(map[string][]string)            // extension name → registered asset types
+	manifests  = make(map[string]*extension.Manifest) // extension name → its manifest, for ExpandFileFlags
 	// policyTypeOwner 记录每个策略面（manifest 的 policies.type）归哪个扩展。策略面是
 	// 权限组 ID（ext:<policyType>:<name>）的命名空间段、组上扩展永久规则的落点键，也是
 	// CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，一方的组与规则就会被
@@ -150,6 +151,7 @@ func register(l loaded, help, description string) error {
 	}
 
 	registered[l.name] = done
+	manifests[l.name] = m
 	logger.Default().Info("extension registered",
 		zap.String("extension", l.name), zap.Strings("assetTypes", done))
 	return nil
@@ -173,6 +175,7 @@ func Unregister(name string) {
 		}
 	}
 	delete(registered, name)
+	delete(manifests, name)
 	logger.Default().Info("extension unregistered",
 		zap.String("extension", name), zap.Strings("assetTypes", types))
 }

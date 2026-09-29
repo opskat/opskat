@@ -2,6 +2,7 @@ package extension
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -126,6 +127,9 @@ func renderToolParams(t ToolDef) string {
 			desc, _ = prop["title"].(string)
 		}
 		fmt.Fprintf(&b, "| `--%s` | %s | %s | %s |\n", name, typ, req, escapeTableCell(desc))
+		if slices.Contains(t.FileParams, name) {
+			fmt.Fprintf(&b, "| `--%s-file` | string (path, or `-` for stdin) | no | opsctl only: reads `--%s` from a file; not accepted with `--%s` or through AI exec |\n", name, name, name)
+		}
 	}
 	return b.String()
 }

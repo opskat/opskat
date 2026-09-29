@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
 )
 
@@ -77,6 +78,8 @@ type toolEntry struct {
 	multiResource bool
 	// timeout is the tool's own call timeout; 0 leaves the host default.
 	timeout time.Duration
+	// fileParams are the string parameters opsctl may read from a file (FileParam).
+	fileParams []string
 }
 
 type assetTypeEntry struct {
@@ -178,6 +181,31 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 	tools[name] = entry
 	toolOrder = append(toolOrder, name)
 	return &ToolReg[T]{e: entry}
+}
+
+// FileParam marks the string parameter name (its JSON field name) as file-readable:
+// `opsctl exec <asset> -- <tool> --<name>-file <path>` (or `-` for stdin) is
+// exactly `--<name> <file content>`, so a large payload — an NDJSON bulk body —
+// need not be squeezed onto a command line. The marker changes nothing in the
+// handler, which still receives the content as the ordinary argument, and nothing
+// in policy, approval or audit, which see the content too. Only opsctl reads files:
+// AI exec and extension pages reject the `-file` form.
+//
+// It panics unless name is a declared string parameter, and on a repeat: like
+// every other registration error it fails the extension at load, not at first use.
+func (r *ToolReg[T]) FileParam(name string) *ToolReg[T] {
+	prop, ok := r.e.schema["properties"].(map[string]any)[name].(map[string]any)
+	if !ok {
+		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): no such parameter", r.e.name, name))
+	}
+	if typ, _ := prop["type"].(string); typ != "string" {
+		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): only a string parameter can be read from a file, not %v", r.e.name, name, prop["type"]))
+	}
+	if slices.Contains(r.e.fileParams, name) {
+		panic(fmt.Sprintf("opskat: tool %q FileParam(%q) is already declared", r.e.name, name))
+	}
+	r.e.fileParams = append(r.e.fileParams, name)
+	return r
 }
 
 // Policy declares which policy action this tool requests. The host matches it

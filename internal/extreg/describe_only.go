@@ -124,6 +124,7 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	}
 
 	registered[info.Name] = done
+	manifests[info.Name] = m
 	logger.Default().Info("extension registered from cached descriptor",
 		zap.String("extension", info.Name), zap.Strings("assetTypes", done))
 	return nil

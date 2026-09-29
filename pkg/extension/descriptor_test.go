@@ -546,3 +546,26 @@ func TestParseDescriptorPolicyActionSets(t *testing.T) {
 		})
 	})
 }
+
+func TestParseDescriptorFileParams(t *testing.T) {
+	tool := func(fileParams string) []byte {
+		return desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"},"n":{"type":"integer"}}},"fileParams":` + fileParams + `}]`)
+	}
+	Convey("A tool may mark string parameters as file-readable", t, func() {
+		Convey("a string parameter is kept on the tool", func() {
+			d, err := ParseDescriptor(tool(`["body"]`))
+			So(err, ShouldBeNil)
+			So(d.Tools[0].FileParams, ShouldResemble, []string{"body"})
+		})
+		Convey("a non-string parameter is refused at load", func() {
+			_, err := ParseDescriptor(tool(`["n"]`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tools["t"].fileParams`)
+		})
+		Convey("an undeclared parameter is refused at load", func() {
+			_, err := ParseDescriptor(tool(`["nope"]`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tools["t"].fileParams`)
+		})
+	})
+}

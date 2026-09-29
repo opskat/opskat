@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -234,6 +235,7 @@ func TestRegisterExtensionAssetTypesReportsAMissingDescriptorInsteadOfRegisterin
 // --- delegation --------------------------------------------------------------
 
 func TestExecViaDesktopFailsClosedWhenDesktopIsOffline(t *testing.T) {
+	registerBulkExtension(t)
 	orig := delegateExtExecFn
 	delegateExtExecFn = func(int64, string, string, string) (string, error) {
 		return "", errors.New("cannot connect to approval socket")
@@ -245,6 +247,7 @@ func TestExecViaDesktopFailsClosedWhenDesktopIsOffline(t *testing.T) {
 }
 
 func TestExecViaDesktopPassesTheCommandThroughVerbatim(t *testing.T) {
+	registerBulkExtension(t)
 	var gotID int64
 	var gotCommand string
 	orig := delegateExtExecFn
@@ -266,6 +269,7 @@ func TestExecViaDesktopPassesTheCommandThroughVerbatim(t *testing.T) {
 // the way a denied builtin exec does — exit 1, the reason on stderr, nothing on
 // stdout — so a script piping the output cannot mistake the refusal for a result.
 func TestExecViaDesktopPolicyDenialExitsNonZeroOnStderr(t *testing.T) {
+	registerBulkExtension(t)
 	refusal := "command denied by policy: delete_bucket"
 	orig := delegateExtExecFn
 	delegateExtExecFn = func(int64, string, string, string) (string, error) {
@@ -351,4 +355,87 @@ func TestExtRoutesDevToTheDevSubcommand(t *testing.T) {
 
 	require.Equal(t, 0, cmdExt([]string{"dev", dir}))
 	assert.Equal(t, dir, *sent)
+}
+
+// --- file-readable parameters -------------------------------------------------
+
+// registerBulkExtension makes opsctl learn, from the cached describe(), an
+// extension whose `bulk` tool has a file-readable `body` parameter.
+func registerBulkExtension(t *testing.T) {
+	t.Helper()
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "acme", "acme-store")
+	var d map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stub.payloads["acme"]), &d))
+	d["tools"] = []map[string]any{{
+		"name":         "bulk",
+		"policyAction": "write",
+		"fileParams":   []string{"body"},
+		"parameters": map[string]any{"type": "object", "properties": map[string]any{
+			"body":  map[string]any{"type": "string"},
+			"index": map[string]any{"type": "string"},
+		}},
+	}}
+	raw, err := json.Marshal(d)
+	require.NoError(t, err)
+	stub.payloads["acme"] = string(raw)
+	forgetExtension(t, "acme")
+	registerExtensionAssetTypes()
+}
+
+// captureDelegation replaces the desktop hand-off and records what would be sent.
+func captureDelegation(t *testing.T) *[]string {
+	t.Helper()
+	var sent []string
+	orig := delegateExtExecFn
+	delegateExtExecFn = func(_ int64, _, command, _ string) (string, error) {
+		sent = append(sent, command)
+		return "{}", nil
+	}
+	t.Cleanup(func() { delegateExtExecFn = orig })
+	return &sent
+}
+
+func TestExecViaDesktopExpandsFileFlagsBeforeSending(t *testing.T) {
+	registerBulkExtension(t)
+	asset := &asset_entity.Asset{ID: 7, Name: "s", Type: "acme-store"}
+	path := filepath.Join(t.TempDir(), "body.ndjson")
+	require.NoError(t, os.WriteFile(path, []byte("line1\nline2\n"), 0o600))
+
+	t.Run("file path", func(t *testing.T) {
+		sent := captureDelegation(t)
+		require.Equal(t, 0, execViaDesktop(asset, "acme", "bulk --index=logs --body-file "+path, "sess"))
+		require.Len(t, *sent, 1)
+		assert.NotContains(t, (*sent)[0], "-file", "the desktop must only ever see the inline form")
+		assert.Contains(t, (*sent)[0], "--body='line1\nline2\n'")
+	})
+
+	t.Run("stdin", func(t *testing.T) {
+		sent := captureDelegation(t)
+		orig := execStdin
+		execStdin = strings.NewReader("line1\nline2\n")
+		t.Cleanup(func() { execStdin = orig })
+		require.Equal(t, 0, execViaDesktop(asset, "acme", "bulk --index=logs --body-file -", "sess"))
+		require.Len(t, *sent, 1)
+		assert.Contains(t, (*sent)[0], "--body='line1\nline2\n'")
+	})
+
+	t.Run("a refused file sends nothing and exits non-zero", func(t *testing.T) {
+		sent := captureDelegation(t)
+		var code int
+		stderr := captureStderr(t, func() {
+			code = execViaDesktop(asset, "acme", "bulk --body=x --body-file "+path, "sess")
+		})
+		assert.NotEqual(t, 0, code)
+		assert.Empty(t, *sent)
+		assert.Contains(t, stderr, "--body")
+
+		stderr = captureStderr(t, func() {
+			code = execViaDesktop(asset, "acme", "bulk --body-file "+path+".missing", "sess")
+		})
+		assert.NotEqual(t, 0, code)
+		assert.Empty(t, *sent)
+		assert.Contains(t, stderr, "missing")
+	})
 }

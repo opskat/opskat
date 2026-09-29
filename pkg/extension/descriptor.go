@@ -185,6 +185,12 @@ func (d *Descriptor) validateTools() error {
 				}
 			}
 		}
+		for _, name := range t.FileParams {
+			prop, _ := props[name].(map[string]any)
+			if typ, _ := prop["type"].(string); typ != "string" {
+				return fmt.Errorf("describe(): tools[%q].fileParams names %q, which is not a declared string parameter", t.Name, name)
+			}
+		}
 		if rawReq, exists := t.Parameters["required"]; exists {
 			req, ok := rawReq.([]any)
 			if !ok {

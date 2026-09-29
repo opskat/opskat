@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
 	"golang.org/x/crypto/ssh"
@@ -26,6 +27,9 @@ const auditOutputLimit = 32768 // 审计日志捕获输出大小限制
 // execApprovalFn 是 exec 的审批入口。变量化是为了可测——与 cp.go 的 cpApprovalFn/
 // cpBatchApprovalFn 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
 var execApprovalFn = requireApproval
+
+// execStdin is where `--<flag>-file -` reads from; a variable so tests can feed it.
+var execStdin io.Reader = os.Stdin
 
 // execSSHStreamFn 是 exec 对 ssh 资产的流式执行入口，同上一套路。测试只需要断言
 // "ssh 资产走了这条路径"，不需要真的起一个 SSH 会话。
@@ -330,6 +334,13 @@ Examples:
 // 桌面端不在时 fail closed：本进程既没有 WASM 运行时，也没有扩展的策略引擎，
 // 在这里"本地跑一下"等于同时绕开两者。
 func execViaDesktop(asset *asset_entity.Asset, extName, command, session string) int {
+	// `--<flag>-file` is opsctl-only: read here, so the desktop (and its approval,
+	// grants and audit) only ever sees the inline `--<flag> <content>` form.
+	command, err := extreg.ExpandFileFlags(extName, command, execStdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	result, err := delegateExtExecFn(asset.ID, asset.Name, command, session)
 	if err != nil {
 		if strings.Contains(err.Error(), "cannot connect") {

@@ -445,3 +445,34 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 		})
 	})
 }
+
+func TestDescribeReportsFileParams(t *testing.T) {
+	type bulkArgs struct {
+		Body  string `json:"body"`
+		Index string `json:"index"`
+		Size  int    `json:"size"`
+	}
+	noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
+	Convey("a string parameter marked file-readable is reported by describe", t, func() {
+		resetRegistries()
+		AssetType[demoConfig]("demo")
+		Tool("bulk", noop).Policy("write").FileParam("body")
+		Tool("plain", noop).Policy("read")
+
+		byName := map[string]map[string]any{}
+		for _, raw := range decodeDescribe(t)["tools"].([]any) {
+			tool := raw.(map[string]any)
+			byName[tool["name"].(string)] = tool
+		}
+		So(byName["bulk"]["fileParams"], ShouldResemble, []any{"body"})
+		So(byName["plain"], ShouldNotContainKey, "fileParams")
+
+		Convey("a non-string, unknown or repeated parameter fails at registration", func() {
+			reg := Tool("bad", noop).Policy("read")
+			So(func() { reg.FileParam("size") }, ShouldPanic)
+			So(func() { reg.FileParam("missing") }, ShouldPanic)
+			So(func() { reg.FileParam("index") }, ShouldNotPanic)
+			So(func() { reg.FileParam("index") }, ShouldPanic)
+		})
+	})
+}

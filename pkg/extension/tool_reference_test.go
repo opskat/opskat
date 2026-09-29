@@ -45,3 +45,22 @@ func TestToolReferenceOmitsGrantFormatWithoutPolicyActions(t *testing.T) {
 
 	assert.NotContains(t, m.ToolReference(), "request_permission")
 }
+
+// The `-file` form is only understood by opsctl: the parameter table must say so, or
+// a model would try it through exec and get an unknown-flag error.
+func TestToolReferenceMarksFileParams(t *testing.T) {
+	m := &Manifest{
+		Tools: []ToolDef{{
+			Name: "bulk", PolicyAction: "write", FileParams: []string{"body"},
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{
+				"body":  map[string]any{"type": "string"},
+				"index": map[string]any{"type": "string"},
+			}},
+		}},
+		Policies: PoliciesDef{Type: "x", Actions: []string{"write"}},
+	}
+	ref := m.ToolReference()
+	assert.Contains(t, ref, "`--body-file`")
+	assert.Contains(t, ref, "opsctl only")
+	assert.NotContains(t, ref, "`--index-file`")
+}

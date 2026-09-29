@@ -85,23 +85,26 @@ func parseCommand(m *extension.Manifest, command string) (string, []byte, error)
 // --json 逃生口）是取值 flag。parseCommand 读、canonicalCommand 写都用它，规范串才能
 // 被原样解析回同一组参数。
 func flagGrammar(m *extension.Manifest) cmdline.Option {
-	return cmdline.WithValueFlags(func(verb, name string) bool {
-		if name == "json" {
-			// 逃生口永远带一个值，空格分隔式与其它取值 flag 一致。
-			return true
-		}
-		def, ok := toolDef(m, verb)
-		if !ok {
-			return false
-		}
-		props, _ := def.Parameters["properties"].(map[string]any)
-		prop, ok := props[name].(map[string]any)
-		if !ok {
-			return false
-		}
-		typ, _ := prop["type"].(string)
-		return typ != "boolean"
-	})
+	return cmdline.WithValueFlags(func(verb, name string) bool { return flagTakesValue(m, verb, name) })
+}
+
+// flagTakesValue reports whether a bare `--name` of verb consumes the next word.
+func flagTakesValue(m *extension.Manifest, verb, name string) bool {
+	if name == "json" {
+		// 逃生口永远带一个值，空格分隔式与其它取值 flag 一致。
+		return true
+	}
+	def, ok := toolDef(m, verb)
+	if !ok {
+		return false
+	}
+	props, _ := def.Parameters["properties"].(map[string]any)
+	prop, ok := props[name].(map[string]any)
+	if !ok {
+		return false
+	}
+	typ, _ := prop["type"].(string)
+	return typ != "boolean"
 }
 
 // canonicalCommand 把一条命令还原为规范形式：工具名 + 按名称排序的 flag。策略匹配、

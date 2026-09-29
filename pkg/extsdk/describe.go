@@ -50,6 +50,7 @@ type descTool struct {
 	PolicyAction  string   `json:"policyAction,omitempty"`
 	PolicyActions []string `json:"policyActions,omitempty"`
 	TimeoutMs     int64    `json:"timeoutMs,omitempty"`
+	FileParams    []string `json:"fileParams,omitempty"`
 }
 
 type descToolI18n struct {
@@ -135,6 +136,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 			PolicyAction:  t.action,
 			PolicyActions: t.actions,
 			TimeoutMs:     t.timeout.Milliseconds(),
+			FileParams:    t.fileParams,
 		})
 	}
 

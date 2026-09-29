@@ -300,6 +300,9 @@ type ToolDef struct {
 	// knows whether it answers in a second or scans an index for minutes, and it
 	// holds for every caller alike — AI exec, opsctl and the extension's page.
 	TimeoutMs int64 `json:"timeoutMs,omitempty"`
+	// FileParams names the string parameters opsctl may fill from a file
+	// (`--<name>-file <path>`); every other entry point rejects that form.
+	FileParams []string `json:"fileParams,omitempty"`
 }
 
 // MaxToolTimeout is the longest timeout a tool may declare. A tool call holds
