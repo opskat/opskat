@@ -88,9 +88,9 @@ var (
 	mu         sync.Mutex
 	registered = make(map[string][]string) // extension name → registered asset types
 	// policyTypeOwner 记录每个策略面（manifest 的 policies.type）归哪个扩展。策略面是
-	// 权限组 ID（ext:<policyType>:<name>）与永久规则（ext:<policyType>:<action>）共同的
-	// 命名空间段，也是 CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，
-	// 一方的组与规则就会被当成另一方的来判。
+	// 权限组 ID（ext:<policyType>:<name>）的命名空间段、组上扩展永久规则的落点键，也是
+	// CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，一方的组与规则就会被
+	// 当成另一方的来判。
 	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
 
@@ -205,7 +205,7 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
 	// 永久规则落点：opsctl policy allow/deny/rm/show 走它，规则形状
-	// `ext:<policyType>:<action>`，落在共用的 CommandPolicy 列上。
+	// `<action>[:<resource-glob>]`，按策略面落在资产 / 组各自的列上（rule_ext.go）。
 	if err := permission.RegisterExtensionRuleSink(at.Type, m.Policies.Type, m.Policies.Actions); err != nil {
 		assettype.Unregister(at.Type)
 		permission.UnregisterPolicyCheck(at.Type)
@@ -287,8 +287,8 @@ func skillDescription(ext *extension.Extension) string {
 // helpDocument 是 help(asset) 对扩展类型返回的内容：SKILL.md 正文 + 由 manifest
 // describe() 报上来的 tools[].parameters 渲染出的工具/参数表。
 //
-// 这两半各自补对方的洞：SKILL.md 是散文，说得清"这个扩展是干什么的"，但曾经是模型能拿到
-// 的**唯一**信息，flag 名与类型只能靠猜；参数表是权威的（同一份声明被 parseCommand 强制
+// 这两半各自补对方的洞：SKILL.md 是散文，说得清"这个扩展是干什么的"，但单靠它
+// flag 名与类型只能靠猜；参数表是权威的（同一份声明被 parseCommand 强制
 // 执行），但读不出语义。缺 SKILL.md 也照常给出参数表——没有散文不等于没有语法。
 func helpDocument(skillMD, extName string, localized *extension.Manifest) string {
 	var parts []string

@@ -45,8 +45,8 @@ var registryMu sync.RWMutex
 
 var permissionTypes = make(map[string]*permissionTypeHandler)
 
-// commandShape 是共用的 CommandPolicy 列。它是包级变量而不是 init 里的局部：运行期
-// 注册进来的扩展类型也把永久规则落在这一列（见 rule_ext.go）。
+// commandShape 是 CommandPolicy 列。它是包级变量而不是 init 里的局部：
+// genericRuleLanding（组通用层）也读这一列。
 var commandShape *shapeLanding
 
 func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {
@@ -91,7 +91,7 @@ func addPermissionType(handler *permissionTypeHandler, aliases ...string) error 
 //
 // 注册进来之后，该类型走的是**同一条** CheckForAsset：NeedConfirm 会经 HandleConfirm
 // 弹审批框，"全部允许"照常落 grant，下一次同类命令由 grant 匹配直接放行。绕开这条路
-// 自己调 ConfirmFunc 的写法（曾经的 ext_exec）恰恰是把 grant 整条丢掉的原因。
+// 自己调 ConfirmFunc 会把 grant 整条丢掉。
 type PolicyCheckFunc func(ctx context.Context, assetID int64, command string) aictx.CheckResult
 
 // ExtensionClassification is what a registered extension type's classifier

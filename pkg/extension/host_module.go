@@ -26,9 +26,7 @@ import (
 // happens once per operation and benefits from being self-describing; a data
 // call happens once per chunk of a file or HTTP body, where a JSON round trip
 // per chunk would dominate the transfer. Adding a capability is one entry in
-// hostOps below plus its typed wrapper in the guest SDK — it used to mean a new
-// wasmimport, a new host function, a new HostProvider method, and a matching
-// pass-through in capHost.
+// hostOps below plus its typed wrapper in the guest SDK.
 const (
 	hostReplyTagOK  = 0
 	hostReplyTagErr = 1

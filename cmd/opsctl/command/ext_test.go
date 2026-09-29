@@ -133,12 +133,11 @@ func TestScanInstalledExtensionsUsesTheRealManifestParser(t *testing.T) {
 	dir := withExtensionDir(t)
 	stub := installDescribeStub(t)
 	writeExtManifest(t, stub, dir, "acme", "acme-store")
-	// A directory whose manifest the app itself would refuse (here: built against the
-	// retired 1.x host ABI) must not be listed either: opsctl used to hand-roll a laxer
-	// parser and list it anyway.
+	// A directory whose manifest the app itself would refuse (here: an unsupported
+	// host ABI) must not be listed either.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "bogus"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "bogus", "manifest.json"),
-		[]byte(`{"name":"bogus","version":"1.0.0","hostABI":"1.0"}`), 0o600))
+		[]byte(`{"name":"bogus","version":"1.0.0","hostABI":"9.0"}`), 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "no-manifest"), 0o755))
 
 	got, err := scanInstalledExtensions()

@@ -873,11 +873,14 @@ func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, asse
 
 // --- 扩展 grant（按分类而非命令串匹配） ---
 
-// extGrantKey formats an extension "always allow" grant the same way a permanent
-// extension rule is written (rule_ext.go's extRulePrefix): ext:<policyType>:<action>:
-// <resource>. Reusing the rule's own shape means a grant, a group rule and a holder's
-// own permanent rule all speak one namespace — a persisted grant reads back as a valid
-// rule verbatim (context note: "<type> 段是扩展的 policies.type，与规则同一命名空间").
+// extGrantPrefix namespaces extension grants in the grant table, which every asset
+// type shares: ext:<policyType>:<action>[:<resource-glob>]. The tail after the policy
+// type is a permanent rule's own syntax (rule_ext.go), so a grant and a rule are
+// matched by the same function (policy.MatchExtensionRule).
+const extGrantPrefix = "ext:"
+
+// extGrantKey formats the grant key of one classified extension call:
+// ext:<policyType>:<action>:<resource>.
 func extGrantKey(policyType, action, resource string) string {
 	return extGrantRule(policyType, action+":"+resource)
 }
@@ -885,7 +888,7 @@ func extGrantKey(policyType, action, resource string) string {
 // extGrantRule prefixes a "<action>:<resource-glob>" tail with the policy type's
 // namespace — the persisted shape of every extension grant.
 func extGrantRule(policyType, tail string) string {
-	return policy.ExtRulePrefix + policyType + ":" + tail
+	return extGrantPrefix + policyType + ":" + tail
 }
 
 // extGrantTail is the "<action>:<resource-glob>" part of an "always allow" for one
@@ -923,7 +926,7 @@ func validateExtGrantEdit(action, edited string) error {
 // splitExtGrantKey splits an extGrantKey-shaped string into its policyType and the
 // "<action>[:<resource>]" tail policy.ExtensionRuleParts / MatchExtensionRule expect.
 func splitExtGrantKey(key string) (policyType, tail string, ok bool) {
-	rest, ok := strings.CutPrefix(key, policy.ExtRulePrefix)
+	rest, ok := strings.CutPrefix(key, extGrantPrefix)
 	if !ok {
 		return "", "", false
 	}

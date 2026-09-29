@@ -532,7 +532,7 @@ func (p *Plugin) newInstance(ctx context.Context) (*instance, error) {
 		if closeErr := mod.Close(ctx); closeErr != nil {
 			logger.Default().Warn("close wasm instance after export check", zap.Error(closeErr))
 		}
-		return nil, fmt.Errorf("extension does not export %s/%s/%s — rebuild it against the reactor SDK (GOOS=wasip1 go build -buildmode=c-shared)",
+		return nil, fmt.Errorf("extension does not export %s/%s/%s — build it with pkg/extsdk (GOOS=wasip1 go build -buildmode=c-shared)",
 			guestEntry, guestMalloc, guestFree)
 	}
 	return inst, nil

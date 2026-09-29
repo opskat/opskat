@@ -89,13 +89,9 @@ function buildDefinition(
 function buildPolicy(manifest: ExtManifest, ns: string): PolicyDefinition | undefined {
   const policies = manifest.policies;
   if (!policies?.type) return undefined;
-  // 扩展规则的动作段是 action 名，可用取值由 manifest 列出——那是数据不是文案，
+  // 扩展的规则语言是 action 名，可用取值由 manifest 列出——那是数据不是文案，
   // 所以作为字面占位符给出，而标题走扩展自己的 i18n 命名空间。
   const placeholder = (policies.actions ?? []).join(", ");
-  // 扩展规则与别的类型共用 CommandPolicy 列，靠命名空间前缀区分（后端 rule_ext.go 的
-  // ext:<policyType>:<action>[:<resource-glob>]）。卡片显示去掉前缀，写回时补上，
-  // 与 opsctl policy allow/deny 落的是同一种条目。
-  const prefix = `ext:${policies.type}:`;
   return {
     policyType: policies.type,
     titleKey: manifest.i18n.displayName,
@@ -104,9 +100,5 @@ function buildPolicy(manifest: ExtManifest, ns: string): PolicyDefinition | unde
       { key: "allow_list", labelKey: "asset.cmdPolicyAllowList", placeholder, variant: "allow" },
       { key: "deny_list", labelKey: "asset.cmdPolicyDenyList", placeholder, variant: "deny" },
     ],
-    rules: {
-      toStored: (rule) => prefix + rule,
-      fromStored: (stored) => (stored.startsWith(prefix) ? stored.slice(prefix.length) : stored),
-    },
   };
 }

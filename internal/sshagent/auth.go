@@ -3,10 +3,11 @@ package sshagent
 import (
 	"context"
 	"io"
-	"net"
 	"sync/atomic"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 // AgentAuth is the result of precise signer selection: a locally-verifying
@@ -136,7 +137,7 @@ func (a *Agent) Dial(ctx context.Context, addr string, cfg *ssh.ClientConfig, aa
 		dialCtx, cancel = context.WithTimeout(ctx, cc.Timeout)
 		defer cancel()
 	}
-	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", addr)
+	raw, err := (&netdial.Dialer{}).DialContext(dialCtx, "tcp", addr)
 	if err != nil {
 		a.closeLog(ctx)
 		if ctx.Err() != nil {

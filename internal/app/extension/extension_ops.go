@@ -79,11 +79,9 @@ func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID 
 	return string(result), nil
 }
 
-// CancelExtensionAction stops the one action run identified by invocationID.
-//
-// It used to take only the extension name, which stopped every action that
-// extension had in flight — harmless while a plugin-wide lock made "in flight"
-// mean one, wrong once the instance pool let several uploads run at once.
+// CancelExtensionAction stops the one action run identified by invocationID. The
+// instance pool runs several actions of one extension at once, so cancellation is
+// per run, never per extension.
 func (e *Extension) CancelExtensionAction(extName, invocationID string) error {
 	plugin, err := e.actionPlugin(extName)
 	if err != nil {

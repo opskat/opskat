@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
@@ -82,12 +83,31 @@ func preserveCreateSeams(t *testing.T) {
 	t.Helper()
 	oldPrepare := prepareAssetPut
 	oldApproval := requireCreateApproval
+	oldUpdateApproval := requireUpdateApproval
 	oldNotify := notifyAssetChanged
 	t.Cleanup(func() {
 		prepareAssetPut = oldPrepare
 		requireCreateApproval = oldApproval
+		requireUpdateApproval = oldUpdateApproval
 		notifyAssetChanged = oldNotify
 	})
+}
+
+// registerMockAssetRepo swaps in a mock AssetRepo whose List returns assets, restoring the
+// original registration on cleanup. updateAsset resolves its target asset ref through
+// resolveAsset, which for a non-numeric ref goes through AssetRepo.List.
+func registerMockAssetRepo(t *testing.T, ctrl *gomock.Controller, assets []*asset_entity.Asset) *mock_asset_repo.MockAssetRepo {
+	t.Helper()
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().List(gomock.Any(), gomock.Any()).Return(assets, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() {
+		if origAsset != nil {
+			asset_repo.RegisterAsset(origAsset)
+		}
+	})
+	return mockAsset
 }
 
 func TestCreateAssetParserFeedsRealSharedPrepareForEveryRegisteredBuiltin(t *testing.T) {
@@ -473,72 +493,61 @@ func TestCreateAssetCompositeConfigOmittedFromAuditViaRealPrepare(t *testing.T) 
 	assert.False(t, hasAuthType, "composite auth_type must be omitted from the opsctl audit")
 }
 
-// TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges 锁住 spec 决策 18
-// （Problem 6）：update asset 的审批主体 Detail 必须带上本次实际变更的字段，未经
-// flag 指定的字段不出现。Detail 是审批人看到的全部——桌面 OpsctlApprovalDialog 对
-// 这类请求只渲染它，终端提示（renderTTYApprovalPrompt）也照抄，所以修的是生产者
-// （cmdUpdate 构造 ApprovalRequest 的地方），不是提示侧的本地摘要。Command 依合同
-// 保持为空：非空会唤醒 requireApproval 的 Stage-2 策略/grant 检查，而 update 没有
-// 可被规则匹配的主体（spec 决策 17）。
-func TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges(t *testing.T) {
+// TestCmdUpdateAssetApprovalDetailUsesSafeProjectionWithOnlyFlagSpecifiedConfig 取代了旧版
+// TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges：update asset 现在与
+// createAsset 走同一条 prepare → 审批（SafeApprovalDetail）→ commit → put_asset 审计路径
+// （E34 修复），不再把 flag 拼出的原始 params 直接序列化进 Detail——原始 params 一旦掺进
+// --config/--config-file 提供的字段（集群/哨兵模式含 write-only 的 sentinel_password），
+// 会把密钥整段带进审批文本。SafeApprovalDetail 只按类型白名单展示 name/type/config，且
+// config 只含本次调用实际提供的字段（asset_put_svc.approvalView 的既有行为）。
+func TestCmdUpdateAssetApprovalDetailUsesSafeProjectionWithOnlyFlagSpecifiedConfig(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
-	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
-	mockAsset.EXPECT().List(gomock.Any(), gomock.Any()).Return([]*asset_entity.Asset{
+	registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{
 		{ID: 9, Name: "web-9", Type: asset_entity.AssetTypeSSH},
-	}, nil).AnyTimes()
-	origAsset := asset_repo.Asset()
-	asset_repo.RegisterAsset(mockAsset)
-	t.Cleanup(func() {
-		if origAsset != nil {
-			asset_repo.RegisterAsset(origAsset)
-		}
 	})
 
+	preserveCreateSeams(t)
 	origWriter := opsctlAuditWriter
 	opsctlAuditWriter = &mockAuditWriter{}
 	t.Cleanup(func() { opsctlAuditWriter = origWriter })
 
-	handlers := map[string]tool.ToolHandlerFunc{
-		"put_asset": func(context.Context, map[string]any) (string, error) {
-			return `{"id":9,"message":"asset updated"}`, nil
-		},
+	prepareAssetPut = func(_ context.Context, request asset_put_svc.Request) (preparedAssetCreate, error) {
+		prepared, err := asset_put_svc.Prepare(context.Background(), request)
+		if err != nil {
+			return nil, err
+		}
+		return &realProjectionPrepared{Prepared: prepared, result: &asset_put_svc.Result{ID: request.Asset.ID}}, nil
 	}
+	notifyAssetChanged = func() {}
 
 	var approvalReq approval.ApprovalRequest
-	origApproval := requireUpdateApproval
 	requireUpdateApproval = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
 		approvalReq = req
 		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-update"}, nil
 	}
-	t.Cleanup(func() { requireUpdateApproval = origApproval })
 
 	run := func(t *testing.T, changeFlags ...string) map[string]any {
 		t.Helper()
 		approvalReq = approval.ApprovalRequest{}
-		code := cmdUpdate(context.Background(), handlers, append([]string{"asset", "web-9"}, changeFlags...), "sess-update")
-		require.Equal(t, 0, code)
+		var stdout, stderr bytes.Buffer
+		code := updateAsset(context.Background(), append([]string{"web-9"}, changeFlags...), "sess-update",
+			commandIO{stdout: &stdout, stderr: &stderr})
+		require.Equal(t, 0, code, stderr.String())
 		require.Equal(t, "update", approvalReq.Type)
 		require.Equal(t, int64(9), approvalReq.AssetID)
 		require.Empty(t, approvalReq.Command, "Command must stay empty (non-empty wakes Stage-2 policy/grant checks)")
 		var decoded map[string]any
 		require.NoError(t, json.Unmarshal([]byte(approvalReq.Detail), &decoded),
-			"Detail %q must carry the change set as JSON, not just echo the command line", approvalReq.Detail)
+			"Detail %q must carry the safe projection as JSON", approvalReq.Detail)
 		return decoded
 	}
 
-	t.Run("全部变更 flag 都进入 Detail", func(t *testing.T) {
-		decoded := run(t,
-			"--name", "New Name", "--host", "10.0.0.2", "--port", "2222",
-			"--username", "root", "--description", "edge box",
-			"--group-id", "3", "--icon", "server")
-		assert.ElementsMatch(t,
-			[]string{"asset", "name", "description", "group_id", "icon", "config"}, mapKeys(decoded))
-		assert.Equal(t, "9", decoded["asset"])
-		assert.Equal(t, "New Name", decoded["name"])
-		assert.Equal(t, "edge box", decoded["description"])
-		assert.Equal(t, float64(3), decoded["group_id"])
-		assert.Equal(t, "server", decoded["icon"])
+	t.Run("全部连接变更 flag 都进入安全投影的 config", func(t *testing.T) {
+		decoded := run(t, "--host", "10.0.0.2", "--port", "2222", "--username", "root")
+		assert.ElementsMatch(t, []string{"name", "type", "config"}, mapKeys(decoded))
+		assert.Equal(t, "web-9", decoded["name"])
+		assert.Equal(t, "ssh", decoded["type"])
 		config, ok := decoded["config"].(map[string]any)
 		require.True(t, ok, "config must be an object, got %T", decoded["config"])
 		assert.ElementsMatch(t, []string{"host", "port", "username"}, mapKeys(config))
@@ -547,16 +556,292 @@ func TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges(t *testing.
 		assert.Equal(t, "root", config["username"])
 	})
 
-	t.Run("只改 group-id（0=移出组）：未经 flag 指定的字段不出现", func(t *testing.T) {
-		decoded := run(t, "--group-id", "0")
-		assert.ElementsMatch(t, []string{"asset", "group_id"}, mapKeys(decoded))
-		assert.Equal(t, float64(0), decoded["group_id"])
+	t.Run("不带任何连接变更 flag：安全投影 config 为空", func(t *testing.T) {
+		decoded := run(t)
+		config, ok := decoded["config"].(map[string]any)
+		require.True(t, ok, "config must still be an object, got %T", decoded["config"])
+		assert.Empty(t, config)
+	})
+}
+
+// TestCmdUpdateAssetExistingFlagsStillFeedRequestUnchanged 钉住"已有 flag 行为不变"：
+// name/host/port/username/description/group-id/icon 依旧只在被传入时才改动目标资产，
+// 未传入的字段保留原值——即便它们不再出现在 SafeApprovalDetail 里（上一个测试锁的是
+// 审批视图，这个测试锁的是实际派给 asset_put_svc.Request 的内容）。
+func TestCmdUpdateAssetExistingFlagsStillFeedRequestUnchanged(t *testing.T) {
+	// resolveAsset 返回的是 AssetRepo 里那份实体的指针；updateAsset 直接在它上面改字段
+	// （与生产行为一致），所以每个子用例都要有一份自己的 fixture，不能跨子用例共享同一个
+	// *asset_entity.Asset——否则前一个子用例的改名会让后一个子用例按旧名字找不到资产。
+	newHarness := func(t *testing.T, asset *asset_entity.Asset) (capturedAsset **asset_entity.Asset, capturedConfig *map[string]any, notified *bool) {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+		registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{asset})
+
+		preserveCreateSeams(t)
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = &mockAuditWriter{}
+		t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+		capturedAsset = new(*asset_entity.Asset)
+		capturedConfig = new(map[string]any)
+		prepareAssetPut = func(_ context.Context, request asset_put_svc.Request) (preparedAssetCreate, error) {
+			*capturedAsset = request.Asset
+			*capturedConfig = request.Config
+			return &fakePreparedAssetCreate{
+				approval: map[string]any{"name": request.Asset.Name, "type": request.Asset.Type},
+				result:   &asset_put_svc.Result{ID: request.Asset.ID},
+			}, nil
+		}
+		requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+			return ApprovalResult{Decision: aictx.Allow}, nil
+		}
+		notified = new(bool)
+		notifyAssetChanged = func() { *notified = true }
+		return
+	}
+
+	t.Run("全部 flag 都传：全部字段按 flag 改写", func(t *testing.T) {
+		capturedAsset, capturedConfig, notified := newHarness(t, &asset_entity.Asset{
+			ID: 9, Name: "web-9", Type: asset_entity.AssetTypeSSH, Description: "old", GroupID: 1, Icon: "server",
+		})
+		var stdout, stderr bytes.Buffer
+		code := updateAsset(context.Background(), []string{
+			"web-9", "--name", "New Name", "--host", "10.0.0.2", "--port", "2222",
+			"--username", "root", "--description", "edge box", "--group-id", "3", "--icon", "kubernetes",
+		}, "sess-update", commandIO{stdout: &stdout, stderr: &stderr})
+		require.Equal(t, 0, code, stderr.String())
+		require.NotNil(t, *capturedAsset)
+		assert.Equal(t, "New Name", (*capturedAsset).Name)
+		assert.Equal(t, "edge box", (*capturedAsset).Description)
+		assert.Equal(t, int64(3), (*capturedAsset).GroupID)
+		assert.Equal(t, "kubernetes", (*capturedAsset).Icon)
+		assert.Equal(t, "10.0.0.2", (*capturedConfig)["host"])
+		assert.Equal(t, float64(2222), (*capturedConfig)["port"])
+		assert.Equal(t, "root", (*capturedConfig)["username"])
+		assert.True(t, *notified)
 	})
 
-	t.Run("不带任何变更 flag：Detail 不含变更字段", func(t *testing.T) {
-		decoded := run(t)
-		assert.ElementsMatch(t, []string{"asset"}, mapKeys(decoded))
+	t.Run("不传任何 flag：既有字段原样保留", func(t *testing.T) {
+		capturedAsset, capturedConfig, _ := newHarness(t, &asset_entity.Asset{
+			ID: 9, Name: "web-9", Type: asset_entity.AssetTypeSSH, Description: "old", GroupID: 1, Icon: "server",
+		})
+		var stdout, stderr bytes.Buffer
+		code := updateAsset(context.Background(), []string{"web-9"}, "sess-update",
+			commandIO{stdout: &stdout, stderr: &stderr})
+		require.Equal(t, 0, code, stderr.String())
+		require.NotNil(t, *capturedAsset)
+		assert.Equal(t, "web-9", (*capturedAsset).Name)
+		assert.Equal(t, "old", (*capturedAsset).Description)
+		assert.Equal(t, int64(1), (*capturedAsset).GroupID)
+		assert.Equal(t, "server", (*capturedAsset).Icon)
+		assert.Empty(t, *capturedConfig)
 	})
+}
+
+// TestCmdUpdateAssetConfigFlagAppliesRedisModeFieldsAfterApproval 是 E34 的核心复现/回归
+// 用例："opsctl update asset rc-cluster --config '{"mode":"cluster",...}'" 此前直接命中
+// Go flag 的 "flag provided but not defined: -config"（退出码 2，update asset 从未开放这个
+// flag）。用真实 asset_put_svc.Prepare/Commit（不打桩）+ 打桩的 AssetRepo 证明：--config 现在
+// 能把 mode/nodes/node_address_map 写到已存在的 Redis 资产上，且沿用同一条 prepare → 审批 →
+// commit → put_asset 审计路径（不经 callHandler 的原始 JSON 审计）。
+func TestCmdUpdateAssetConfigFlagAppliesRedisModeFieldsAfterApproval(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	existing := &asset_entity.Asset{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis}
+	require.NoError(t, existing.SetRedisConfig(&asset_entity.RedisConfig{
+		Host: "10.0.0.1", Port: 6379, Username: "default",
+	}))
+	mockAsset := registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{existing})
+	var updated *asset_entity.Asset
+	mockAsset.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, a *asset_entity.Asset) error {
+		updated = a
+		return nil
+	}).AnyTimes()
+
+	preserveCreateSeams(t)
+	origWriter := opsctlAuditWriter
+	writer := &mockAuditWriter{}
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+	requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notified := false
+	notifyAssetChanged = func() { notified = true }
+
+	ctx := dbutil.WithTransactionRunner(context.Background(),
+		func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) })
+
+	var stdout, stderr bytes.Buffer
+	code := updateAsset(ctx, []string{
+		"rc-cluster", "--config",
+		`{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379"],"node_address_map":{"10.0.0.1:6379":"127.0.0.1:16379"}}`,
+	}, "sess-update", commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	require.NotNil(t, updated, "commit must reach AssetRepo.Update")
+	cfg, err := updated.GetRedisConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "cluster", cfg.Mode)
+	assert.Equal(t, []string{"10.0.0.1:6379", "10.0.0.2:6379"}, cfg.Nodes)
+	assert.Equal(t, "127.0.0.1:16379", cfg.NodeAddressMap["10.0.0.1:6379"])
+	assert.Empty(t, cfg.Host, "cluster mode must not retain the standalone host")
+	assert.True(t, notified)
+	assert.Contains(t, stdout.String(), `"id": 9`)
+
+	call := writer.lastCall()
+	assert.Equal(t, "put_asset", call.ToolName)
+}
+
+// TestCmdUpdateAssetConfigAndConfigFileMutuallyExclusive 复用 create 的互斥规则：两个源
+// 一起给，报错退出 1，且从不触达审批（approvalCalls 必须是 0）。
+func TestCmdUpdateAssetConfigAndConfigFileMutuallyExclusive(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{
+		{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis},
+	})
+
+	preserveCreateSeams(t)
+	approvalCalls := 0
+	requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalCalls++
+		return ApprovalResult{}, errors.New("must not be reached")
+	}
+	notifyAssetChanged = func() {}
+
+	var stdout, stderr bytes.Buffer
+	code := updateAsset(context.Background(), []string{
+		"rc-cluster", "--config", `{"mode":"cluster"}`, "--config-file", "/tmp/does-not-matter.json",
+	}, "sess-update", commandIO{stdout: &stdout, stderr: &stderr})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "mutually exclusive")
+	assert.Zero(t, approvalCalls)
+}
+
+// TestCmdUpdateAssetUnknownConfigFieldRejectedBeforeApproval 证明 --config 里的结构性错误
+// （未知字段名）在真实 Prepare() 里立即报出具体字段，且从不触达审批——与 create 侧的
+// TestCreateAssetRedisModeErrorsExitOneWithoutInvokingApproval 同一条规则,只是入口换成 update。
+func TestCmdUpdateAssetUnknownConfigFieldRejectedBeforeApproval(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{
+		{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis, Config: `{"mode":"cluster","nodes":["10.0.0.1:6379"]}`},
+	})
+
+	preserveCreateSeams(t)
+	approvalCalls := 0
+	requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalCalls++
+		return ApprovalResult{}, errors.New("must not be reached")
+	}
+	notifyAssetChanged = func() {}
+
+	var stdout, stderr bytes.Buffer
+	code := updateAsset(context.Background(), []string{
+		"rc-cluster", "--config", `{"bogus_field":"x"}`,
+	}, "sess-update", commandIO{stdout: &stdout, stderr: &stderr})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "bogus_field")
+	assert.Zero(t, approvalCalls)
+}
+
+// update 的 --config / --config-file 带任一 write-only 字段（含 Redis 的 sentinel_password，
+// 而不只是 password）时，照常给出明文暴露提醒。
+func TestCmdUpdateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"--config", []string{"--config", `{"sentinel_password":"s3cret"}`}, "plaintext supplied in argv"},
+		{"--config-file", []string{"--config-file", "/tmp/update.json"}, "plaintext config files"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			t.Cleanup(ctrl.Finish)
+			registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{{
+				ID: 9, Name: "rc-sentinel", Type: asset_entity.AssetTypeRedis,
+				Config: `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster"}`,
+			}})
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+			requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				return ApprovalResult{Decision: aictx.Deny}, errors.New("denied")
+			}
+			notifyAssetChanged = func() {}
+
+			var stdout, stderr bytes.Buffer
+			code := updateAsset(context.Background(), append([]string{"rc-sentinel"}, tc.args...), "sess-update",
+				commandIO{stdout: &stdout, stderr: &stderr, readFile: func(string) ([]byte, error) {
+					return []byte(`{"sentinel_password":"s3cret"}`), nil
+				}})
+			assert.Equal(t, 1, code)
+			assert.Contains(t, stderr.String(), tc.want)
+		})
+	}
+}
+
+// TestCmdUpdateAssetRedisConfigApprovalAndAuditExcludeSentinelPassword 用真实 Prepare()
+// （不打桩）证明 sentinel_password 这类 write-only 密钥既不出现在审批 Detail 里，也不出现在
+// put_asset 审计的 ArgsJSON/Result 里——同一份 asset_put_svc 去密投影（approvalView 的
+// ApprovalFields 白名单不含 sentinel_password/password/credential_id）覆盖 update，不需要
+// update 自己重新实现一遍脱敏规则。
+func TestCmdUpdateAssetRedisConfigApprovalAndAuditExcludeSentinelPassword(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{
+		{ID: 9, Name: "rc-sentinel", Type: asset_entity.AssetTypeRedis, Config: `{"host":"10.0.0.1","port":6379}`},
+	})
+
+	preserveCreateSeams(t)
+	writer := &mockAuditWriter{}
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+	prepareAssetPut = func(_ context.Context, request asset_put_svc.Request) (preparedAssetCreate, error) {
+		prepared, err := asset_put_svc.Prepare(context.Background(), request)
+		if err != nil {
+			return nil, err
+		}
+		return &realProjectionPrepared{Prepared: prepared, result: &asset_put_svc.Result{ID: request.Asset.ID}}, nil
+	}
+	var approvalReq approval.ApprovalRequest
+	requireUpdateApproval = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalReq = req
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyAssetChanged = func() {}
+
+	secret := "sentinel-top-secret"
+	var stdout, stderr bytes.Buffer
+	code := updateAsset(context.Background(), []string{
+		"rc-sentinel", "--config",
+		`{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_username":"sentuser","sentinel_password":"` + secret + `"}`,
+	}, "sess-update", commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	assert.NotContains(t, approvalReq.Detail, secret)
+	assert.NotContains(t, approvalReq.Detail, "sentinel_password")
+	assert.Contains(t, approvalReq.Detail, "mymaster")
+
+	call := writer.lastCall()
+	assert.NotContains(t, call.ArgsJSON, secret)
+	assert.NotContains(t, call.Result, secret)
+	var args map[string]any
+	require.NoError(t, json.Unmarshal([]byte(call.ArgsJSON), &args))
+	config, ok := args["config"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "sentinel", config["mode"])
+	assert.Equal(t, "mymaster", config["master_name"])
+	_, hasSentinelPassword := config["sentinel_password"]
+	assert.False(t, hasSentinelPassword)
 }
 
 func mapKeys(m map[string]any) []string {
@@ -565,4 +850,246 @@ func mapKeys(m map[string]any) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// TestCreateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField 复现 E27:opsctl
+// help 称「Validation and reference checks run before desktop approval」，但集群/哨兵
+// 模式字段错误此前只在批准后的 commit 里被 validateRedis 发现。用真实的
+// assettype.PrepareCreate（不打桩）证明 Prepare() 本身此时就已经报错，且指出具体字段。
+func TestCreateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		config  map[string]any
+		wantErr string
+	}{
+		{
+			name:    "sentinel missing master_name",
+			config:  map[string]any{"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}},
+			wantErr: "master_name",
+		},
+		{
+			name: "node_address_map target has no port",
+			config: map[string]any{
+				"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+				"node_address_map": map[string]any{"10.0.0.1:6379": "bad-no-port"},
+			},
+			wantErr: "node_address_map",
+		},
+		{
+			name:    "node without a port",
+			config:  map[string]any{"mode": "cluster", "nodes": []any{"nohostport"}},
+			wantErr: "nodes",
+		},
+		{
+			name:    "unknown mode",
+			config:  map[string]any{"mode": "weird", "host": "x"},
+			wantErr: "mode",
+		},
+		{
+			name:    "cluster redis_db must stay 0",
+			config:  map[string]any{"mode": "cluster", "nodes": []any{"10.0.0.1:6379"}, "redis_db": 3},
+			wantErr: "redis_db",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request, _, err := parseAssetCreateForTest(t, createArgs(t, "redis", tt.config), nil, nil)
+			require.NoError(t, err)
+			_, err = asset_put_svc.Prepare(context.Background(), asset_put_svc.Request{Asset: request.asset, Config: request.config})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestCreateAssetRedisModeErrorsExitOneWithoutInvokingApproval drives the full createAsset
+// command (real prepareAssetPut) and asserts the desktop approval hook is never reached for
+// any of the four E27 mode error shapes — the bug let all four through to approval/commit.
+// requireCreateApproval denies rather than allows: if the pre-approval reject regresses, this
+// must fail on the approvalCalls assertion below rather than falling through to a real
+// dbutil.WithTransaction commit with no test database configured.
+func TestCreateAssetRedisModeErrorsExitOneWithoutInvokingApproval(t *testing.T) {
+	preserveCreateSeams(t)
+	approvalCalls := 0
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalCalls++
+		return ApprovalResult{}, errors.New("operation denied")
+	}
+	notifyAssetChanged = func() {}
+
+	for _, tt := range []struct {
+		name   string
+		config map[string]any
+	}{
+		{name: "sentinel missing master_name", config: map[string]any{"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}}},
+		{name: "node_address_map target has no port", config: map[string]any{
+			"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+			"node_address_map": map[string]any{"10.0.0.1:6379": "bad-no-port"},
+		}},
+		{name: "node without a port", config: map[string]any{"mode": "cluster", "nodes": []any{"nohostport"}}},
+		{name: "unknown mode", config: map[string]any{"mode": "weird", "host": "x"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := createAsset(context.Background(), createArgs(t, "redis", tt.config), "session", commandIO{stdout: &stdout, stderr: &stderr})
+			assert.Equal(t, 1, code, stderr.String())
+			assert.NotEmpty(t, stderr.String())
+		})
+	}
+	assert.Zero(t, approvalCalls, "mode errors must be rejected before desktop approval, not after")
+}
+
+// TestCmdUpdateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField 与 create 同一条规则
+// (spec「校验与桌面表单相同，失败时报出具体字段」)：update 的模式字段错误在审批前报出并指出
+// 字段，审批从不被触达，也不写入。部分更新先叠加到已存储的配置上再校验——例如集群资产只改
+// mode=sentinel 时，集群种子节点不会被当作哨兵节点沿用。requireUpdateApproval 用拒绝而不是
+// 放行：若审批前拒绝回退，断言 approvalCalls 失败，而不是落到没有 AssetRepo.Update 期望的提交。
+func TestCmdUpdateAssetRedisModeErrorsRejectedBeforeApprovalNamingTheField(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{name: "sentinel missing master_name", config: `{"mode":"sentinel","nodes":["10.0.0.1:26379"]}`, wantErr: "master_name"},
+		{name: "switching mode does not reuse the other mode's nodes", config: `{"mode":"sentinel","master_name":"mymaster"}`, wantErr: "nodes"},
+		{name: "node_address_map target has no port", config: `{"node_address_map":{"10.0.0.1:6379":"bad-no-port"}}`, wantErr: "node_address_map"},
+		{name: "node without a port", config: `{"nodes":["nohostport"]}`, wantErr: "nodes"},
+		{name: "unknown mode", config: `{"mode":"weird"}`, wantErr: "mode"},
+		{name: "cluster redis_db must stay 0", config: `{"redis_db":3}`, wantErr: "redis_db"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			t.Cleanup(ctrl.Finish)
+			existing := &asset_entity.Asset{ID: 9, Name: "rc-cluster", Type: asset_entity.AssetTypeRedis}
+			require.NoError(t, existing.SetRedisConfig(&asset_entity.RedisConfig{
+				Mode: asset_entity.RedisModeCluster, Nodes: []string{"10.0.0.1:6379"}, Username: "default",
+			}))
+			registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{existing})
+
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+			approvalCalls := 0
+			requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				approvalCalls++
+				return ApprovalResult{}, errors.New("operation denied")
+			}
+			notifyAssetChanged = func() { t.Fatal("rejected update must not notify") }
+
+			var stdout, stderr bytes.Buffer
+			code := updateAsset(context.Background(), []string{"rc-cluster", "--config", tt.config}, "sess-update",
+				commandIO{stdout: &stdout, stderr: &stderr})
+			assert.Equal(t, 1, code, stderr.String())
+			assert.Contains(t, stderr.String(), tt.wantErr)
+			assert.Zero(t, approvalCalls, "mode errors must be rejected before approval, not after")
+		})
+	}
+}
+
+// TestCreateAssetRedisApprovalDetailIncludesNodeAddressMapWithoutInjectedPort 复现 E27 的
+// approvalView 部分:node_address_map 不含密钥却被复合值判定整体丢弃，而 normalizeDefaultPort
+// 对所有模式都注入 port:6379。用真实 Prepare() 验证审批详情的 config 视图。
+func TestCreateAssetRedisApprovalDetailIncludesNodeAddressMapWithoutInjectedPort(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		config      map[string]any
+		expectedMap map[string]string
+	}{
+		{
+			name: "cluster",
+			config: map[string]any{
+				"mode": "cluster", "nodes": []any{"10.0.0.1:6379"},
+				"node_address_map": map[string]any{"10.0.0.1:6379": "127.0.0.1:16379"},
+			},
+			expectedMap: map[string]string{"10.0.0.1:6379": "127.0.0.1:16379"},
+		},
+		{
+			name: "sentinel",
+			config: map[string]any{
+				"mode": "sentinel", "nodes": []any{"10.0.0.1:26379"}, "master_name": "mymaster",
+				"node_address_map": map[string]any{"10.0.0.1:26379": "127.0.0.1:36379"},
+			},
+			expectedMap: map[string]string{"10.0.0.1:26379": "127.0.0.1:36379"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request, _, err := parseAssetCreateForTest(t, createArgs(t, "redis", tt.config), nil, nil)
+			require.NoError(t, err)
+			prepared, err := asset_put_svc.Prepare(context.Background(), asset_put_svc.Request{Asset: request.asset, Config: request.config})
+			require.NoError(t, err)
+			approvalConfig := prepared.SafeApprovalDetail()["config"].(map[string]any)
+			assert.Equal(t, tt.expectedMap, approvalConfig["node_address_map"])
+			_, hasPort := approvalConfig["port"]
+			assert.False(t, hasPort, "cluster/sentinel approval config must not carry an injected port:6379")
+		})
+	}
+}
+
+// TestCmdCreateAssetWarnsOnPlaintextSentinelPassword verifies that create asset
+// --config with a write-only field like sentinel_password prints the plaintext-exposure
+// warning, just like update does. The warning should be printed once even when both
+// --password and an inline secret are given.
+func TestCmdCreateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		args          []string
+		wantWarning   string
+		shouldNotWarn bool
+	}{
+		{
+			name:        "--config with sentinel_password",
+			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--config", `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"s3cret"}`},
+			wantWarning: "plaintext supplied in argv",
+		},
+		{
+			name:          "--config without secrets",
+			args:          []string{"--type", "redis", "--name", "rc-standalone", "--config", `{"host":"localhost","port":6379}`},
+			shouldNotWarn: true,
+		},
+		{
+			name:        "--config-file with sentinel_password should warn about config file, not argv",
+			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--config-file", "/tmp/sentinel.json"},
+			wantWarning: "plaintext config files",
+		},
+		{
+			name:        "both --password and --config with sentinel_password should warn once",
+			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--password", "nodepass", "--config", `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"sentpass"}`},
+			wantWarning: "plaintext supplied in argv",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+			requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				return ApprovalResult{Decision: aictx.Deny}, errors.New("denied")
+			}
+			notifyAssetChanged = func() {}
+
+			var stdout, stderr bytes.Buffer
+			readFile := func(path string) ([]byte, error) {
+				if path == "/tmp/sentinel.json" {
+					return []byte(`{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"s3cret"}`), nil
+				}
+				return nil, errors.New("file not found")
+			}
+			code := createAsset(context.Background(), tc.args, "sess-create",
+				commandIO{stdout: &stdout, stderr: &stderr, readFile: readFile})
+			assert.Equal(t, 1, code, "create should fail due to approval denial")
+			for _, secret := range []string{"s3cret", "sentpass", "nodepass"} {
+				assert.NotContains(t, stderr.String(), secret, "warnings must not echo the plaintext itself")
+			}
+			if tc.shouldNotWarn {
+				assert.NotContains(t, stderr.String(), "plaintext", "should not warn about plaintext")
+				assert.NotContains(t, stderr.String(), "Warning")
+			} else {
+				assert.Contains(t, stderr.String(), tc.wantWarning, "should warn about plaintext in argv or config file")
+				// Verify warning appears exactly once
+				warningCount := strings.Count(stderr.String(), "Warning:")
+				assert.Equal(t, 1, warningCount, "warning should appear exactly once")
+			}
+		})
+	}
 }

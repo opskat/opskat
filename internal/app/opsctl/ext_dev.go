@@ -22,8 +22,7 @@ const extDevApprovalType = "ext_dev_install"
 // handleExtDevInstall 处理 `opsctl ext dev <dir>`：经用户在桌面端确认后，把一个
 // 未打包的扩展目录装进当前进程。
 //
-// 这条通道存在的意义是让扩展开发者不必再跑第二套宿主（原 cmd/devserver）：安装走的
-// 就是 ExtDevInstaller 背后那一个 extension_svc.Install，与用户在扩展页点"从目录
+// 这条通道让扩展开发不需要第二套宿主：安装走的就是 ExtDevInstaller 背后那一个 extension_svc.Install，与用户在扩展页点"从目录
 // 安装"逐字相同，装完的扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。
 // 重装即热重载——Install 会先 Unload 再加载并通知前端刷新。
 //

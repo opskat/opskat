@@ -110,7 +110,7 @@ func TestLoadExtensionRefusesAModuleThatIsNotAReactor(t *testing.T) {
 		_, err := mgr.LoadExtension(context.Background(), extDir)
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "describe extension")
-		So(err.Error(), ShouldContainSubstring, "reactor SDK")
+		So(err.Error(), ShouldContainSubstring, "pkg/extsdk")
 		So(mgr.GetExtension("fixture-ext"), ShouldBeNil)
 	})
 }

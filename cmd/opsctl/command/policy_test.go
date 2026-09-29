@@ -577,7 +577,7 @@ func TestParsePolicyWriteFlagsInlineEqualsForm(t *testing.T) {
 	assert.Equal(t, []string{"web-01"}, targets)
 }
 
-// 扩展资产的规则是 <action> 或 <action>:<resource-glob>，落成 ext:<policyType>:… 。
+// 扩展资产的规则是 <action> 或 <action>:<resource-glob>，原样落进资产的策略列。
 func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
 	require.NoError(t, permission.RegisterExtensionRuleSink("acme-store", "acme", []string{"object.list", "object.delete"}))
 	t.Cleanup(func() { permission.UnregisterRuleSink("acme-store") })
@@ -597,8 +597,8 @@ func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
 
 	p, err := asset.GetCommandPolicy()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ext:acme:object.list:prod-*"}, p.AllowList)
-	assert.Equal(t, []string{"ext:acme:object.delete:prod/*"}, p.DenyList)
+	assert.Equal(t, []string{"object.list:prod-*"}, p.AllowList)
+	assert.Equal(t, []string{"object.delete:prod/*"}, p.DenyList)
 
 	env.stderrBuf.Reset()
 	assert.NotEqual(t, 0, env.run("allow", "acme-1", "--", "object.nuke:prod-*"))

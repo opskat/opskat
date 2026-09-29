@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 const (
@@ -54,8 +56,7 @@ func (c Chain) Dial(ctx context.Context, targetAddr string) (net.Conn, error) {
 	dial := c.Direct
 	if dial == nil {
 		dial = func(ctx context.Context, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "tcp", addr)
+			return (&netdial.Dialer{}).DialContext(ctx, "tcp", addr)
 		}
 	}
 	layers := normalizeLayers(c.Layers)

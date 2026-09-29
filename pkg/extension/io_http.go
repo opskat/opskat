@@ -15,53 +15,55 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
-// dialGuard wraps a DialContext function and rejects connections to private/loopback
-// IPs at dial time. This catches DNS rebinding attacks where a hostname resolves to
-// a private IP after the URL-level allowlist check has already passed.
+// resolveFunc resolves a hostname for a dial network (tcp / tcp4 / tcp6).
+type resolveFunc func(ctx context.Context, network, host string) ([]net.IP, error)
+
+// dialGuard wraps dial and rejects connections to private/loopback IPs at dial time,
+// catching DNS rebinding where a hostname resolves to a private IP after the URL-level
+// allowlist check has already passed. A hostname is resolved once and the checked IPs
+// are what gets dialed, so a second lookup can never hand dial a different answer.
 //
-// When private targets are allowed there is nothing to deny, so the host is not
-// resolved here: the dial — possibly through the asset's SSH tunnel — resolves it
-// where it will be reached, and a local lookup would fail a hostname only the far
-// side knows.
-func dialGuard(origDial func(ctx context.Context, network, addr string) (net.Conn, error), allowPrivate bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+// With allowPrivate there is nothing to check: addr goes to dial untouched, so an SSH
+// tunnel resolves it on the remote side instead of failing on a name only it knows.
+func dialGuard(dial DialContextFunc, resolve resolveFunc, allowPrivate bool) DialContextFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if !allowPrivate {
-			if err := denyPrivateTarget(ctx, addr); err != nil {
+		if allowPrivate {
+			return dial(ctx, network, addr)
+		}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		var ips []net.IP
+		if ip := net.ParseIP(host); ip != nil {
+			if IsPrivateIP(ip) {
+				return nil, fmt.Errorf("dial denied: private IP %s", ip)
+			}
+			ips = []net.IP{ip}
+		} else {
+			if ips, err = resolve(ctx, network, host); err != nil {
 				return nil, err
 			}
+			for _, ip := range ips {
+				if IsPrivateIP(ip) {
+					return nil, fmt.Errorf("dial denied: hostname %q resolves to private IP %s", host, ip)
+				}
+			}
 		}
-		if origDial != nil {
-			return origDial(ctx, network, addr)
+		var errs []error
+		for _, ip := range ips {
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			errs = append(errs, err)
 		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+		return nil, errors.Join(errs...)
 	}
-}
-
-// denyPrivateTarget rejects addr when it is, or its hostname resolves to, a
-// private/loopback IP.
-func denyPrivateTarget(ctx context.Context, addr string) error {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if IsPrivateIP(ip) {
-			return fmt.Errorf("dial denied: private IP %s", ip)
-		}
-		return nil
-	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return err
-	}
-	for _, ipa := range ips {
-		if IsPrivateIP(ipa.IP) {
-			return fmt.Errorf("dial denied: hostname %q resolves to private IP %s", host, ipa.IP)
-		}
-	}
-	return nil
 }
 
 type httpPhase int
@@ -130,26 +132,24 @@ func buildSingleUseEndpointClient(dial DialContextFunc, tlsConfig *tls.Config, a
 // transport would dial the proxy's address instead of the endpoint, and without
 // one it would hand the proxy the credentials injected for the endpoint.
 func newEndpointTransport(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool) *http.Transport {
-	var ctxDial func(ctx context.Context, network, addr string) (net.Conn, error)
-	if dial != nil {
-		ctxDial = func(ctx context.Context, network, addr string) (net.Conn, error) { return dial(ctx, network, addr) }
-	}
-	transport := newHTTPTransport(ctxDial, tlsConfig, allowPrivate)
+	transport := newHTTPTransport(dial, tlsConfig, allowPrivate)
 	transport.Proxy = nil
 	return transport
 }
 
 // newHTTPTransport clones the default transport, wires dial through the
 // dial-time private-IP guard (catching DNS rebinding after URL-level checks),
-// and applies tlsConfig when set. dial nil means "use the clone's own default
-// dialer" (plain outbound TCP).
-func newHTTPTransport(dial func(ctx context.Context, network, addr string) (net.Conn, error), tlsConfig *tls.Config, allowPrivate bool) *http.Transport {
+// and applies tlsConfig when set. dial nil means a plain outbound TCP dial
+// through netdial, so .local hosts resolve over unicast DNS instead of waiting
+// out the system resolver's mDNS timeout.
+func newHTTPTransport(dial DialContextFunc, tlsConfig *tls.Config, allowPrivate bool) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	baseDial := transport.DialContext
+	direct := netdial.Default()
+	baseDial := DialContextFunc(direct.DialContext)
 	if dial != nil {
 		baseDial = dial
 	}
-	transport.DialContext = dialGuard(baseDial, allowPrivate)
+	transport.DialContext = dialGuard(baseDial, direct.Resolve, allowPrivate)
 	if tlsConfig != nil {
 		transport.TLSClientConfig = tlsConfig
 	}

@@ -10,6 +10,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 // Default values used when a setting is left unconfigured. The 30s keepalive is
@@ -92,11 +94,11 @@ func ResolveKeepAlive(overrideSeconds int) time.Duration {
 	return Get().KeepAliveInterval
 }
 
-// Dialer builds a net.Dialer honoring the timeout and SO_KEEPALIVE settings.
-// TCP_NODELAY is NOT a Dialer field — apply it on the resulting *net.TCPConn
-// (see ApplyTCPOptions).
-func (s Settings) Dialer() *net.Dialer {
-	d := &net.Dialer{Timeout: s.DialTimeoutOrDefault()}
+// Dialer builds the unified netdial.Dialer honoring the timeout and SO_KEEPALIVE
+// settings. TCP_NODELAY is NOT a Dialer field — apply it on the resulting
+// *net.TCPConn (see ApplyTCPOptions).
+func (s Settings) Dialer() *netdial.Dialer {
+	d := &netdial.Dialer{Dialer: net.Dialer{Timeout: s.DialTimeoutOrDefault()}}
 	if s.TCPKeepAlive {
 		// 0 keeps Go's default keepalive period while still enabling probes.
 		d.KeepAlive = 0

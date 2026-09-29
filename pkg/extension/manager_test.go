@@ -162,55 +162,24 @@ func TestManager(t *testing.T) {
 			So(ext.SkillDescription, ShouldEqual, "")
 		})
 
-		Convey("LoadExtension tolerates a SKILL.md with no frontmatter at all", func() {
-			// Extension SKILL.md predates the frontmatter convention -- the published
-			// extensions/oss/SKILL.md is exactly this shape (starts with
-			// "# OSS Object Storage", no frontmatter block). We cannot retroactively
-			// edit that separate repo, so this boundary must keep accepting bare
-			// Markdown rather than hard-failing the load.
+		Convey("LoadExtension fails when SKILL.md has no frontmatter", func() {
+			// The description the model uses to pick the skill lives in the frontmatter,
+			// so a bare Markdown file is refused rather than loaded without one.
 			extDir := filepath.Join(dir, "bare-skill")
 			writeMinimalExtension(t, extDir, "bare-skill")
-			raw := "# Just a heading\n\nNo frontmatter here.\n"
-			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte(raw), 0644), ShouldBeNil)
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte("# Just a heading\n\nNo frontmatter here.\n"), 0644), ShouldBeNil)
 
 			_, err := mgr.LoadExtension(ctx, extDir)
-			So(err, ShouldBeNil)
-
-			ext := mgr.GetExtension("bare-skill")
-			So(ext, ShouldNotBeNil)
-			So(ext.SkillMD, ShouldEqual, raw)
-			So(ext.SkillDescription, ShouldEqual, "")
-		})
-
-		Convey("LoadExtension warns when SKILL.md has no frontmatter", func() {
-			// The tolerate branch above degrades silently on success (err == nil,
-			// empty SkillDescription) -- there was previously no way to tell from the
-			// logs that a given extension's SKILL.md fell back to raw body text.
-			// ScanManifests logs a Warn on its sibling silent-failure path
-			// ("skip extension manifest"); this asserts the same for LoadExtension's
-			// degrade branch.
-			core, logs := observer.New(zap.WarnLevel)
-			obsMgr := NewManager(dir, newHost, zap.New(core))
-
-			extDir := filepath.Join(dir, "bare-skill-warn")
-			writeMinimalExtension(t, extDir, "bare-skill-warn")
-			raw := "# Just a heading\n\nNo frontmatter here.\n"
-			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte(raw), 0644), ShouldBeNil)
-
-			_, err := obsMgr.LoadExtension(ctx, extDir)
-			So(err, ShouldBeNil)
-
-			entries := logs.FilterMessageSnippet("SKILL.md").All()
-			So(len(entries), ShouldEqual, 1)
-			So(entries[0].Level, ShouldEqual, zap.WarnLevel)
-			So(entries[0].ContextMap()["extension"], ShouldEqual, "bare-skill-warn")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "SKILL.md")
+			So(mgr.GetExtension("bare-skill"), ShouldBeNil)
 		})
 
 		Convey("LoadExtension fails when SKILL.md has a malformed frontmatter block", func() {
 			extDir := filepath.Join(dir, "bad-skill")
 			writeMinimalExtension(t, extDir, "bad-skill")
 			// Opens a frontmatter block but never closes it -- a real authoring
-			// mistake (as opposed to no frontmatter at all) that must still fail loudly.
+			// mistake that must fail loudly.
 			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte("---\nname: bad-skill\n"), 0644), ShouldBeNil)
 
 			_, err := mgr.LoadExtension(ctx, extDir)

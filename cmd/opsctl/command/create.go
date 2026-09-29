@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -250,6 +250,178 @@ func writePutAssetAudit(ctx context.Context, toolName string, auditArgs map[stri
 	writeOpsctlAudit(ctx, toolName, string(argsJSON), result, execErr, decision)
 }
 
+// updateAsset 实现 `opsctl update asset <ref> [flags]`：与 createAsset 走同一条
+// prepare → 审批（SafeApprovalDetail）→ commit → put_asset 审计路径（asset_put_svc），
+// 而不是像旧实现那样把 flag 拼出的原始 params 直接序列化进审批详情——集群/哨兵模式
+// 字段只能经 --config/--config-file 到达（不开单独 flag，与 create 一致），其中
+// sentinel_password 是 write-only 密钥，原始 params 会把它整段带进审批/审计文本；
+// SafeApprovalDetail/SafeAuditArgsForResult 是 asset_put_svc 按类型白名单产出的去密
+// 投影，同 createAsset 一样保证密钥不出现。
+//
+// asset_put_svc.Prepare 对 update 不重新从库里取整行——它按调用方传入的 *asset_entity.Asset
+// 原样在 Commit 时整行覆写（UpdateWithinTransaction → Save 语义），因此这里必须先用
+// resolveAsset（而不是只拿 id 的 resolveAssetID）取到当前完整实体（含既有 Config 原始
+// 字节），未经 flag 改动的字段才不会被清空；host/port/username 等既有 flag 行为不变，
+// 仍是"传了才覆盖"。
+func updateAsset(ctx context.Context, args []string, session string, streams commandIO) int {
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	if streams.stdout == nil {
+		streams.stdout = os.Stdout
+	}
+	if streams.stderr == nil {
+		streams.stderr = os.Stderr
+	}
+	if streams.readFile == nil {
+		streams.readFile = os.ReadFile
+	}
+
+	fs := flag.NewFlagSet("update asset", flag.ExitOnError)
+	name := fs.String("name", "", "New display name")
+	host := fs.String("host", "", "New hostname or IP address")
+	port := fs.Int("port", 0, "New SSH port number (0 = unchanged)")
+	username := fs.String("username", "", "New SSH login username")
+	description := fs.String("description", "", "New description")
+	groupID := fs.Int64("group-id", -1, "New group ID (-1 = unchanged, 0 = ungrouped)")
+	icon := fs.String("icon", "", "New icon name (e.g. server, kubernetes, docker)")
+	configJSON := fs.String("config", "", "Type-owned JSON object with fields to update")
+	configFile := fs.String("config-file", "", "Path to a type-owned JSON object with fields to update")
+	fs.Usage = func() { printUpdateAssetUsage() }
+	_ = fs.Parse(args[1:])
+	if rejectExtraArgs(fs.Args()) {
+		return 1
+	}
+	visited := visitedFlags(fs)
+	if visited["config"] && visited["config-file"] {
+		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("--config and --config-file are mutually exclusive"))
+		return 1
+	}
+
+	ctx = withOriginCommand(ctx, "opsctl update asset "+strings.Join(args, " "))
+
+	asset, err := resolveAsset(ctx, args[0])
+	if err != nil {
+		writeCreateAssetError(ctx, streams.stderr, err)
+		return 1
+	}
+
+	config := map[string]any{}
+	var configSource string
+	if visited["config"] {
+		configSource = "--config"
+		if err := decodeJSONObject([]byte(*configJSON), configSource, &config); err != nil {
+			writeCreateAssetError(ctx, streams.stderr, err)
+			return 1
+		}
+	}
+	if visited["config-file"] {
+		configSource = "--config-file"
+		data, err := streams.readFile(*configFile)
+		if err != nil {
+			writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("read --config-file: %w", err))
+			return 1
+		}
+		if err := decodeJSONObject(data, configSource, &config); err != nil {
+			writeCreateAssetError(ctx, streams.stderr, err)
+			return 1
+		}
+	}
+	if writeOnlyFieldPresent(asset.Type, config) {
+		switch configSource {
+		case "--config":
+			if err := warnArgvPlaintext(streams.stderr); err != nil {
+				writeCreateAssetError(ctx, streams.stderr, err)
+				return 1
+			}
+		case "--config-file":
+			if err := warnConfigFilePlaintext(streams.stderr); err != nil {
+				writeCreateAssetError(ctx, streams.stderr, err)
+				return 1
+			}
+		}
+	}
+
+	// 兼容 flag 只覆盖它们显式指定的键，其余 --config/--config-file 提供的字段原样保留——
+	// 与 create 的 "only explicitly supplied flags override --config" 是同一条规则。
+	if *host != "" {
+		config["host"] = *host
+	}
+	if *port != 0 {
+		config["port"] = float64(*port)
+	}
+	if *username != "" {
+		config["username"] = *username
+	}
+
+	if *name != "" {
+		asset.Name = *name
+	}
+	if *description != "" {
+		asset.Description = *description
+	}
+	if *groupID >= 0 {
+		asset.GroupID = *groupID
+	}
+	if *icon != "" {
+		asset.Icon = *icon
+	}
+
+	prepared, err := prepareAssetPut(ctx, asset_put_svc.Request{Asset: asset, Config: config})
+	if err != nil {
+		writeCreateAssetError(ctx, streams.stderr, err)
+		return 1
+	}
+	approvalDetail, err := json.Marshal(prepared.SafeApprovalDetail())
+	if err != nil {
+		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("encode safe approval detail: %w", err))
+		return 1
+	}
+	approvalResult, err := requireUpdateApproval(ctx, approval.ApprovalRequest{
+		Type: "update", AssetID: asset.ID, Detail: string(approvalDetail), SessionID: session,
+	})
+	if err != nil {
+		// 拒绝（含结构化拒绝 NEEDS TTY）是真实决策，照常落审计。
+		writePutAssetAudit(ctx, "put_asset", prepared.SafeAuditArgsForResult(nil), "", err,
+			approvalResult.ToCheckResult())
+		return writeApprovalFailure(streams.stderr, err)
+	}
+
+	result, err := prepared.Commit(ctx)
+	auditArgs := prepared.SafeAuditArgsForResult(result)
+	resultJSON := ""
+	if err == nil {
+		resultJSON, err = asset_put_svc.ResultJSON(result, "asset updated successfully")
+	}
+	if err != nil {
+		writePutAssetAudit(ctx, "put_asset", auditArgs, resultJSON, err, approvalResult.ToCheckResult())
+		writeCreateAssetError(ctx, streams.stderr, err)
+		return 1
+	}
+	writePutAssetAudit(ctx, "put_asset", auditArgs, resultJSON, nil, approvalResult.ToCheckResult())
+	notifyAssetChanged()
+	if _, err := fmt.Fprintln(streams.stdout, prettyJSON(resultJSON)); err != nil {
+		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("write asset result: %w", err))
+		return 1
+	}
+	return 0
+}
+
+// writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
+// AutomationContract 声明——接受（ConfigFields）但不进审批（ApprovalFields）的字段，
+// 如 password / credential_id / Redis 的 sentinel_password。
+func writeOnlyFieldPresent(assetType string, config map[string]any) bool {
+	handler, ok := assettype.Get(assetType)
+	if !ok {
+		return false
+	}
+	contract := handler.AutomationContract()
+	for _, field := range contract.ConfigFields {
+		if !slices.Contains(contract.ApprovalFields, field) && configValuePresent(config[field]) {
+			return true
+		}
+	}
+	return false
+}
+
 func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printUpdateUsage()
@@ -266,85 +438,9 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 	resource := args[0]
 	switch resource {
 	case "asset":
-		fs := flag.NewFlagSet("update asset", flag.ExitOnError)
-		name := fs.String("name", "", "New display name")
-		host := fs.String("host", "", "New hostname or IP address")
-		port := fs.Int("port", 0, "New SSH port number (0 = unchanged)")
-		username := fs.String("username", "", "New SSH login username")
-		description := fs.String("description", "", "New description")
-		groupID := fs.Int64("group-id", -1, "New group ID (-1 = unchanged, 0 = ungrouped)")
-		icon := fs.String("icon", "", "New icon name (e.g. server, kubernetes, docker)")
-		fs.Usage = func() { printUpdateAssetUsage() }
-		_ = fs.Parse(args[2:])
-		if rejectExtraArgs(fs.Args()) {
-			return 1
-		}
-
-		id, err := resolveAssetID(ctx, args[1])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-
-		// handlePutAsset resolves the target via assetref.Resolve, which accepts numeric
-		// id strings — so the "asset" key takes the same id already resolved above, just
-		// formatted as a string. Connection fields go under "config" (see cmdCreate).
-		config := map[string]any{}
-		if *host != "" {
-			config["host"] = *host
-		}
-		if *port != 0 {
-			config["port"] = float64(*port)
-		}
-		if *username != "" {
-			config["username"] = *username
-		}
-
-		params := map[string]any{
-			"asset": strconv.FormatInt(id, 10),
-		}
-		if len(config) > 0 {
-			params["config"] = config
-		}
-		if *name != "" {
-			params["name"] = *name
-		}
-		if *description != "" {
-			params["description"] = *description
-		}
-		if *groupID >= 0 {
-			params["group_id"] = float64(*groupID)
-		}
-		if *icon != "" {
-			params["icon"] = *icon
-		}
-		// Require approval
-		ctx = aictx.WithAuditSource(ctx, "opsctl")
-		ctx = withOriginCommand(ctx, "opsctl update asset "+strings.Join(args[2:], " "))
-		// Detail 是审批人看到的全部（spec 决策 18 / Problem 6）：桌面 OpsctlApprovalDialog
-		// 对这类请求只渲染它，终端提示（renderTTYApprovalPrompt）也照抄。params 恰好就是
-		// "目标 asset + 经 flag 指定的本次变更"，未指定的字段从不进来，直接序列化它即
-		// 审批主体，与即将派发给 put_asset 的请求体同源，不会漂移。update asset 的
-		// flag 集没有密码/密钥项，无需 create 那套 SafeApprovalDetail 去密；将来若新增
-		// 带密 flag，必须改走 asset_put_svc 的去密投影（SafeApprovalDetail 一路），不得
-		// 把密文放进 Detail。
-		approvalDetail, err := json.Marshal(params)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		approvalResult, err := requireUpdateApproval(ctx, approval.ApprovalRequest{
-			Type:      "update",
-			AssetID:   id,
-			Detail:    string(approvalDetail),
-			SessionID: session,
+		return updateAsset(ctx, args[1:], session, commandIO{
+			stdout: os.Stdout, stderr: os.Stderr, readFile: os.ReadFile,
 		})
-		if err != nil {
-			writeOpsctlAudit(ctx, "put_asset", string(approvalDetail), "", err, approvalResult.ToCheckResult())
-			return writeApprovalFailure(os.Stderr, err)
-		}
-
-		return callHandler(ctx, handlers, "put_asset", params)
 
 	case "group":
 		fs := flag.NewFlagSet("update group", flag.ExitOnError)
@@ -544,16 +640,26 @@ Flags (only provided fields are updated, others remain unchanged):
   --description <string>  New description
   --group-id <int>        New group ID (-1 = unchanged, 0 = ungrouped)
   --icon <string>         New icon name (see 'opsctl create asset --help' for list)
+  --config '<JSON>'       Type-owned partial config object; only the given fields change
+  --config-file <path>    File containing that JSON object (mutually exclusive with --config)
+
+--config/--config-file is the only way to reach fields with no dedicated flag (e.g. a Redis
+asset's mode/nodes/master_name/sentinel_username/sentinel_password/node_address_map — see
+'opsctl create asset --help'). --host/--port/--username only override matching keys already
+present in --config/--config-file. The change is merged onto the stored config and validated
+before approval; an invalid field is named and nothing is asked or written.
 
 Approval:
   Always requires confirmation — no rule can pre-authorize this. An interactive
   terminal prompts here; otherwise the running desktop app is asked, and with
   neither available opsctl exits with code 3 and a NEEDS TTY marker telling you
-  to run the command yourself.
+  to run the command yourself. The approval detail and audit log only show the
+  safe, type-owned projection of the changed fields — never a plaintext secret.
 
 Examples:
   opsctl update asset web-server --name "New Name"
   opsctl update asset 1 --host 192.168.1.100 --port 2222
   opsctl update asset web-server --group-id 3
+  opsctl update asset cache --config '{"mode":"cluster","nodes":["10.0.0.1:6379","10.0.0.2:6379"]}'
 `)
 }

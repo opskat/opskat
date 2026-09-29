@@ -311,7 +311,7 @@ func TestApplyDescriptor(t *testing.T) {
 }
 
 // 权限组 ID 按声明者的策略面命名空间化（ext:<policies.type>:<name>），策略面名本身
-// 与资产类型同一套命名规则——组 ID 与规则落点 ext:<policyType>:<action> 都以它为段，
+// 与资产类型同一套命名规则——组 ID 与 grant（ext:<policyType>:<action>:<resource>）都以它为段，
 // 一个不受约束的策略面名会让两者的命名空间失去意义。
 func TestParseDescriptorPolicyNamespace(t *testing.T) {
 	group := func(id string) string {
@@ -533,7 +533,7 @@ func TestParseDescriptorPolicyActionSets(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "duplicate")
 		})
 
-		// 规则是 ext:<type>:<action>[:<resource-glob>]，动作段在第一个 ':' 处结束；一个
+		// 规则是 <action>[:<resource-glob>]，动作段在第一个 ':' 处结束；一个
 		// 自带 ':' 的动作名会让 "动作:资源" 与 "动作" 无从区分。
 		Convey("an action name that could be read as action:resource", func() {
 			_, err := ParseDescriptor(desc(tool(`"policyAction":"read:secret"`)))

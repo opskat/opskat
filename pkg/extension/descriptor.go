@@ -11,13 +11,10 @@ import (
 // Descriptor is what the guest answers to describe(): everything an extension can
 // do, derived inside the guest from the registration calls themselves.
 //
-// It exists because these declarations used to live in manifest.json, next to the
-// capability grants, in a second declaration language that nothing checked against
-// the code: a tool was spelled out once in the manifest's JSON-Schema, once in the
-// guest's RegisterTool call and once more in its check_policy switch, and the three
-// only met at runtime, as "unknown tool". The manifest keeps what a user must be
-// able to audit *before* running the code — the capability grants — and the rest is
-// read back from the code that implements it.
+// Declaring these in manifest.json would be a second declaration language that
+// nothing checks against the code. The manifest keeps what a user must be able to
+// audit *before* running the code — the capability grants — and the rest is read
+// back from the code that implements it.
 //
 // The wire shape mirrors pkg/extsdk/describe.go; the field names are the ones the
 // merged Manifest already exposes, so the frontend contract is unchanged.
@@ -62,12 +59,8 @@ func (d *Descriptor) validate() error {
 
 // validateAssetScope enforces "an extension belongs to an asset type".
 //
-// There used to be a class of asset-less extension: one that declared no asset type
-// was loaded anyway, and its tools were reachable only through a dedicated dispatch
-// tool whose sole act was a non-reusable confirmation prompt — no policy, no grant,
-// no approval surface. Since that class was retired, extension tools travel the same
-// exec / help / policy / grant path built-in types do, and the entry to that path is
-// an *asset*. A missing declaration is therefore not "an optional field left out"
+// Extension tools travel the same exec / help / policy / grant path built-in types
+// do, and the entry to that path is an *asset*. A missing declaration is therefore not "an optional field left out"
 // but "this extension has no reachable entry point", and must be said at load time.
 func (d *Descriptor) validateAssetScope() error {
 	if len(d.AssetTypes) == 0 {
@@ -109,9 +102,9 @@ func (d *Descriptor) validateAssetScope() error {
 	if d.Policies.Type == "" {
 		return fmt.Errorf("describe(): policies.type is required — it names the policy face the extension's asset types are checked under")
 	}
-	// The policy type is a namespace segment of both the extension's policy group
-	// IDs (ext:<type>:<name>) and its permanent rules (ext:<type>:<action>); a name
-	// that could itself contain ":" would let one face's namespace spell another's.
+	// The policy type is a namespace segment of the extension's policy group IDs
+	// (ext:<type>:<name>) and grants (ext:<type>:<action>:<resource>); a name that
+	// could itself contain ":" would let one face's namespace spell another's.
 	if !nameRe.MatchString(d.Policies.Type) {
 		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policies.Type)
 	}
@@ -297,7 +290,7 @@ func (d *Descriptor) validateSnippets() error {
 // validateActions checks what the tool declares it can request: a fixed action or
 // the set a per-call classification picks from, never both and never neither.
 //
-// An action name is the segment of a permanent rule ext:<type>:<action>[:<glob>]
+// An action name is the segment of a rule <action>[:<resource-glob>]
 // that ends at the first ':' — a name that itself contains ':' (or whitespace,
 // which a rule is trimmed of) could not be told apart from an action plus a
 // resource, so it is refused here rather than silently never matching.
@@ -315,7 +308,7 @@ func (t ToolDef) validateActions() error {
 			return fmt.Errorf("describe(): tools[%q] declares an empty policy action", t.Name)
 		}
 		if strings.ContainsFunc(a, func(r rune) bool { return r == ':' || unicode.IsSpace(r) }) {
-			return fmt.Errorf("describe(): tools[%q] policy action %q must not contain ':' or whitespace — rules are ext:<type>:<action>[:<resource-glob>]", t.Name, a)
+			return fmt.Errorf("describe(): tools[%q] policy action %q must not contain ':' or whitespace — rules are <action>[:<resource-glob>]", t.Name, a)
 		}
 		if _, dup := seen[a]; dup {
 			return fmt.Errorf("describe(): tools[%q] declares policy action %q twice (duplicate)", t.Name, a)

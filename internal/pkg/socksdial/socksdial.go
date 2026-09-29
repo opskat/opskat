@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 
 	"golang.org/x/net/proxy"
 )
@@ -26,7 +27,8 @@ func Dial(ctx context.Context, proxyCfg *asset_entity.ProxyConfig, targetAddr st
 			Password: proxyCfg.Password,
 		}
 	}
-	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
+	// 连代理本身的主机名同样走统一拨号器;目标地址由代理远端解析。
+	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, &netdial.Dialer{})
 	if err != nil {
 		return nil, fmt.Errorf("创建SOCKS代理失败: %w", err)
 	}

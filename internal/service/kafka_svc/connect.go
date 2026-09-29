@@ -18,6 +18,7 @@ import (
 
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
 
@@ -317,6 +318,7 @@ func newKafkaConnectClient(cfg *asset_entity.KafkaConnectClusterConfig, cluster 
 
 func kafkaConnectHTTPClient(cfg *asset_entity.KafkaConnectClusterConfig, timeout time.Duration, chains ...*asset_entity.ProxyChainConfig) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = netdial.Default().DialContext
 	if len(chains) > 0 && chains[0] != nil {
 		dial, err := connpool.ProxyChainDialContext(context.Background(), chains[0])
 		if err != nil {

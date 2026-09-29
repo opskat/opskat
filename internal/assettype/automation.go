@@ -13,6 +13,13 @@ import (
 type AutomationContract struct {
 	ConfigFields   []string
 	ApprovalFields []string
+	// FlatMapFields lists ApprovalFields whose value, when a flat string→string map (no
+	// nested secret can hide inside a bare string), may pass through SafeApprovalDetail /
+	// SafeAuditArgs un-redacted (e.g. Redis node_address_map). Any other approval field
+	// that happens to hold a map value (composite/attacker-supplied) is still dropped by
+	// approvalView's default scalar-only rule — this allowlist is opt-in per field, not a
+	// blanket exception for "looks flat".
+	FlatMapFields  []string
 	Normalize      func(map[string]any) error
 	CredentialPlan func(map[string]any) (CredentialPlan, error)
 	BindCredential func(map[string]any, CredentialBinding) (map[string]any, error)
@@ -128,7 +135,7 @@ func validateAutomation(prepared PreparedCreate) error {
 }
 
 func finalizeAutomation(prepared PreparedCreate, contract AutomationContract) (PreparedCreate, error) {
-	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields)
+	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields, contract.FlatMapFields)
 	credential, err := credentialPlan(contract, prepared.Config)
 	if err != nil {
 		return PreparedCreate{}, err
@@ -187,7 +194,11 @@ func rejectUnknownFields(args map[string]any, accepted []string) error {
 	return fmt.Errorf("unknown config field(s): %v", unknown)
 }
 
-func approvalView(args map[string]any, fields []string) map[string]any {
+func approvalView(args map[string]any, fields []string, flatMapFields []string) map[string]any {
+	mapAllowed := make(map[string]struct{}, len(flatMapFields))
+	for _, field := range flatMapFields {
+		mapAllowed[field] = struct{}{}
+	}
 	out := make(map[string]any, len(fields))
 	for _, field := range fields {
 		value, ok := args[field]
@@ -197,6 +208,15 @@ func approvalView(args map[string]any, fields []string) map[string]any {
 		if strings, ok := copyFlatStringArray(value); ok {
 			out[field] = strings
 			continue
+		}
+		// map 值只对显式加入 FlatMapFields 的字段放行(如 Redis node_address_map)；其它
+		// 字段哪怕值恰好是扁平字符串 map(如攻击者构造的 auth_type={"password":secret})，
+		// 也要按下面的标量规则整体省略，不能靠"形状是扁平的"就当作安全。
+		if _, allowed := mapAllowed[field]; allowed {
+			if m := ArgStringMap(args, field); m != nil {
+				out[field] = m
+				continue
+			}
 		}
 		// 只拷贝能安全 JSON 编码的标量（nil/bool/string/有限数值，含命名标量别名与合法
 		// json.Number）。复合值（map/slice/array/struct/pointer）整体省略——嵌套 secret

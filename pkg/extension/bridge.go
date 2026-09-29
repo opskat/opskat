@@ -6,13 +6,10 @@ import (
 
 // Bridge is the lifecycle table of currently loaded extensions: name → *Extension.
 //
-// It used to be a second, parallel registry — asset types, policy groups, default
-// policies, SKILL.md bodies and a tool index all lived here, in shapes the app's own
-// registries already had. Every consumer therefore had to ask twice ("is it built in?
-// no? then is it an extension?"), which is the type-string branching the registries
-// exist to remove. Those registrations now go through internal/extreg into the same
-// registries built-in asset types use, and the bridge keeps only the one thing that is
-// genuinely its own: which extensions are loaded right now.
+// It is deliberately not a registry: asset types, policy groups, default policies,
+// SKILL.md bodies and tools go through internal/extreg into the same registries
+// built-in asset types use, so no consumer has to ask "built in, or extension?". The
+// bridge keeps only what is genuinely its own: which extensions are loaded right now.
 type Bridge struct {
 	mu         sync.RWMutex
 	extensions map[string]*Extension

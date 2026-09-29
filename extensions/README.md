@@ -33,10 +33,9 @@ installs.
 
 **`manifest.json` carries the security contract and nothing else** — `name`,
 `version`, `minAppVersion`, `hostABI`, `backend`, `capabilities`. That is what a user
-must be able to audit *before* the code runs, so it can never come from the code. A
-manifest that also declares `tools` / `assetTypes` / `policies` / `frontend` / `i18n` /
-`icon` / `snippets` is **refused at load** with the list of retired keys: those moved
-into `describe()`.
+must be able to audit *before* the code runs, so it can never come from the code.
+Everything else — tools, asset types, policies, pages, display strings — is answered by
+`describe()`.
 
 ```json
 {
@@ -334,10 +333,11 @@ A rule is `<action>` or `<action>:<resource-glob>`. A rule without a resource co
 the action on every resource; a glob uses the same `path.Match` semantics as command
 rules (`*` does not cross `/`) and is matched against the whole resource, which may
 itself contain `:` — the rule is split at the first `:` only. Group allow/deny lists
-hold rules in this form; permanent rules on an asset or asset group are written as
-`ext:<PolicyType>:<rule>`, e.g. `opsctl policy allow my-notes -- 'write:runbook/*'`
-lands `ext:notebook:write:runbook/*`. Action names therefore may not contain `:` or
-whitespace.
+hold rules in this form, and so do the permanent allow/deny rules users write on an
+asset (its detail page, or `opsctl policy allow|deny`, e.g.
+`opsctl policy allow my-notes -- 'write:runbook/*'`) or on an asset group
+(`opsctl policy … --group`, kept per policy type). Action names therefore may not
+contain `:` or whitespace.
 A grant request for an extension asset — the AI's `request_permission`, or one delivered
 over the opsctl approval channel (opsctl has no user-facing grant command) — is written
 the same way (`write:runbook/*`, or `write` for every resource) and is stored as
@@ -350,8 +350,7 @@ An action `fn` returns that the extension never declared is a defect, not a
 decision: the host logs an error and asks the user, without consulting rules or grants.
 
 `.Default()` marks a group granted to every new asset of the extension's types.
-Group ids must be namespaced by the extension's policy type — `ext:<PolicyType>:<group>`,
-the same segment the host writes permanent rules under.
+Group ids must be namespaced by the extension's policy type — `ext:<PolicyType>:<group>`.
 A policy type belongs to one extension: loading a second extension that claims the same
 policy type, or a group id that is already registered, is refused. The action set itself
 is never declared separately — the host derives it from the tools' `.Policy` actions
@@ -359,10 +358,11 @@ and `.PolicyFunc` action sets.
 
 ## SKILL.md and locales
 
-`SKILL.md` is what the model reads before working with the asset type. Frontmatter is
-optional but recommended: `description` is the one line that appears in the model's
-skill list, and without it the extension's `i18n.description` is used instead. The
-body is injected only when the model actually asks for `help`, and the host appends a
+`SKILL.md` is what the model reads before working with the asset type. It is
+optional, but when present it must open with a frontmatter carrying `description` —
+the one line that appears in the model's skill list (an extension without `SKILL.md`
+falls back to its `i18n.description`); a missing or broken frontmatter fails the load.
+The body is injected only when the model actually asks for `help`, and the host appends a
 tool/parameter reference rendered from the reflected schemas — so document *intent*,
 not flag syntax.
 

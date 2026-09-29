@@ -32,7 +32,7 @@
 
 | # | Decision | Basis and rejected option |
 |---|---|---|
-| 1 | **[用户决定]** 策略采用"guest 分类 + 资源 glob"：guest 按参数返回 action 与 resource，宿主按 `ext:<type>:<action>[:<resource-glob>]` 匹配 | 协议语义只有扩展懂，匹配 / 审批 / 审计由宿主统一。Rejected: 宿主对规范化命令串做通配——用户需懂 flag 串格式，参数顺序 / 写法变体可绕过；仅按工具拆分——无法做通用 request 工具，无法按索引名限制 |
+| 1 | **[用户决定]** 策略采用"guest 分类 + 资源 glob"：guest 按参数返回 action 与 resource，宿主按 `<action>[:<resource-glob>]` 匹配 | 协议语义只有扩展懂，匹配 / 审批 / 审计由宿主统一。Rejected: 宿主对规范化命令串做通配——用户需懂 flag 串格式，参数顺序 / 写法变体可绕过；仅按工具拆分——无法做通用 request 工具，无法按索引名限制 |
 | 2 | **[用户决定]** 凭据走通用模板注入，`credentials:read` 保留给非 HTTP 协议 | 模板（header / query / basic）覆盖绝大多数 REST 服务且明文不入 WASM；裸 TCP 协议宿主无法代做握手。Rejected: 只保留明文读取——凭据安全完全依赖安装时的信任；只支持注入——堵死 TCP 协议扩展 |
 | 3 | 网络目标来自"当前调用资产配置中标记为 endpoint 的字段"，由新能力 `network.assetEndpoint` 授权；该目标自动允许私网地址 | 地址是用户亲手配置的，放行它不扩大信任面；静态 allowlist 保留给固定公网 API。Rejected: 让扩展声明 `https://` 全放——安全契约失效；继续借用 `tunnel:true` 放行私网——语义错位 |
 | 4 | 隧道 / 代理链 / TLS 是宿主拥有的标准"连接"配置区，资产类型在 `describe()` 中声明支持哪些；宿主在拨号时应用 | 与内置类型同一套字段与 `connpool` 实现，证书文件不进 WASM。Rejected: 由扩展在 configSchema 里自定义这些字段并自行处理——重复实现且 guest 需读本地文件 |
@@ -57,7 +57,7 @@
 ## 参数级策略
 
 - **分类。** SDK 为工具提供 `PolicyFunc(args) → (action, resource)`，替代或补充固定 `.Policy(action)`。action 必须属于该类型在 `describe()` 中声明的动作集合；resource 为任意字符串（可空）。返回未声明的 action → 视为 NeedConfirm 并记录错误。
-- **规则。** 规则形如 `ext:<type>:<action>` 或 `ext:<type>:<action>:<resource-glob>`，存于现有 CommandPolicy 列与权限组，`opsctl policy allow/deny` 与资产详情策略卡均可编辑；glob 语义与现有命令规则一致。判定顺序：deny → allow → grant → confirm。无 resource 的规则匹配该 action 的任意 resource。
+- **规则。** 规则形如 `<action>` 或 `<action>:<resource-glob>`，存于资产的策略列、资产组按策略面分开的 ext_policy 列与权限组，`opsctl policy allow/deny` 与资产详情策略卡均可编辑；glob 语义与现有命令规则一致。判定顺序：deny → allow → grant → confirm。无 resource 的规则匹配该 action 的任意 resource。
 - **审批展示。** 审批弹窗显示 action、resource 与格式化后的请求（工具名 + 参数，长 JSON 可折叠）。"始终允许"落库的 grant 为 `ext:<type>:<action>:<resource>`。
 - **授权请求。** 对扩展资产的 grant 请求（AI 的 `request_permission`，以及经 opsctl 审批通道送达的 grant 请求；opsctl 已无面向用户的 grant 子命令）以 `<action>[:<resource-glob>]` 表达，落库为 `ext:<type>:<action>[:<resource-glob>]`，与规则走同一套校验（action 须属于声明集合）；不合法的请求明确拒绝，不得在 grant 永不命中时告诉调用方"已批准"。扩展的 AI 技能文案按此格式引导。
 - **兼容。** 只用固定 `.Policy(action)` 的已有工具行为不变（resource 为空）。
@@ -90,7 +90,7 @@
 | Seam | What it verifies | Prior art |
 |---|---|---|
 | `pkg/extension` 宿主 IO（fixture-ext WASM） | endpoint 放行 / 拒绝 / 重定向拒绝；私网放行；凭据注入只发往 endpoint 且 guest 读不到；连接复用与失效；取消中断阻塞 IO | `runtime_test.go`、`io_http_test.go`、`fixture_test.go` |
-| `internal/extreg` + `permission` | `PolicyFunc` 分类；`ext:<type>:<action>:<glob>` 的 deny→allow→grant→confirm；未声明 action → confirm；grant 落库格式 | `extreg_rules_test.go`、`extreg_test.go` |
+| `internal/extreg` + `permission` | `PolicyFunc` 分类；`<action>[:<glob>]` 的 deny→allow→grant→confirm；未声明 action → confirm；grant 落库格式 | `extreg_rules_test.go`、`extreg_test.go` |
 | `internal/app/extension` | 页面调用经策略 / 审批 / 审计；测试连接补齐已存密码 | `host_test.go` |
 | `describe()` 校验 | 非法 auth 模板、未知 connection 项、超时超上限被拒 | `descriptor_test.go` |
 | 前端 vitest | 连接配置区按声明显示；测试连接按钮按声明显示；`@opskat/host-ui` 注入 | `ExtensionConfigForm.test.tsx`、`extensionInit.test.ts` |

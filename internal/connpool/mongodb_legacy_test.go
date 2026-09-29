@@ -8,18 +8,19 @@ import (
 	mongov1opts "go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/sshpool"
 )
 
 func TestConfigureMongoTransportV1(t *testing.T) {
 	Convey("configureMongoTransportV1", t, func() {
-		Convey("直连不设置 dialer", func() {
+		Convey("直连使用统一拨号器", func() {
 			cfg := &asset_entity.MongoDBConfig{Host: "h", Port: 27017}
 			clientOpts := mongov1opts.Client().ApplyURI(buildMongoURI(cfg, ""))
 			tunnel, err := configureMongoTransportV1(clientOpts, &asset_entity.Asset{}, cfg, nil)
 			So(err, ShouldBeNil)
 			So(tunnel, ShouldBeNil)
-			So(clientOpts.Dialer, ShouldBeNil)
+			So(clientOpts.Dialer, ShouldHaveSameTypeAs, &netdial.Dialer{})
 		})
 
 		Convey("代理设置 dialer 且不强制直连", func() {

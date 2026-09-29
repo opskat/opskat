@@ -9,11 +9,9 @@ import (
 // IO handle table the guest may address, and the cancellation flag a long
 // running action polls.
 //
-// Both used to hang off the HostProvider, which was only safe because Plugin.mu
-// serialized every call into a plugin. With a reactor instance pool several
-// calls run concurrently, so a plugin-wide handle table would let one call read
-// another's file descriptor, and a plugin-wide cancellation would stop every
-// action at once.
+// The reactor instance pool runs several calls of one plugin concurrently, so a
+// plugin-wide handle table would let one call read another's file descriptor,
+// and a plugin-wide cancellation would stop every action at once.
 type invocation struct {
 	// id names this run for the whole system: the caller cancels by it, and every
 	// action event the guest emits is stamped with it so a listener can tell two

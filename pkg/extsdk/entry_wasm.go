@@ -31,9 +31,8 @@ var lastResponse []byte
 //
 // The request is a JSON envelope {"fn":"<name>","input":<raw>}; the reply is a
 // one-byte tag followed by either the handler result (tag 0) or the error
-// message (tag 1). The tag replaces the old "does the JSON have an .error key"
-// sniffing, which could not tell a failure apart from a handler that legitimately
-// returned {"error": ...}.
+// message (tag 1). The tag, not the JSON, carries failure, so a handler may
+// legitimately return {"error": ...}.
 //
 //go:wasmexport opskat_call
 func opskatCall(reqPtr, reqLen uint32) uint64 {

@@ -18,6 +18,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 type NodeInfo struct {
@@ -153,6 +155,10 @@ func buildClient(kubeconfig string, opts ...ClientOption) (*kubernetes.Clientset
 		config.Proxy = func(*http.Request) (*url.URL, error) {
 			return nil, nil
 		}
+	} else if netdial.IsLocalAddr(config.Host) {
+		// 直连 .local 集群才换统一拨号器(参数与 client-go 默认一致,环境变量代理照常生效);
+		// 设置 Dial 会让 client-go 不再缓存 transport,其余直连保持默认。
+		config.Dial = netdial.Default().DialContext
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)

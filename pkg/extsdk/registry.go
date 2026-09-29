@@ -188,7 +188,7 @@ func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
 
 // PolicyFunc classifies each call from its arguments: fn returns the policy action
 // the call requests and the resource it touches (any string, may be empty). The
-// host matches the pair against rules ext:<PolicyType>:<action>[:<resource-glob>].
+// host matches the pair against rules <action>[:<resource-glob>].
 //
 // actions is every action fn can return. It is what describe() declares, so it is
 // the set the user writes rules and permission groups against; the host treats

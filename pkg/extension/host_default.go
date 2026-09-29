@@ -13,6 +13,8 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
 // DialContextFunc opens a network connection, like net.Dialer.DialContext.
@@ -236,7 +238,7 @@ func openTCP(ctx context.Context, dial DialContextFunc, tlsConfig *tls.Config, p
 		timeout = 10 * time.Second
 	}
 	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
+		dial = (&netdial.Dialer{}).DialContext
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

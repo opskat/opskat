@@ -12,9 +12,8 @@ import (
 )
 
 // ExtensionPolicyRule represents the allow/deny rule lists in an extension policy
-// group's Policy JSON — and, with the namespace prefix stripped, a holder's own
-// permanent extension rules, which are stored in the shared CommandPolicy column
-// under the same {allow_list, deny_list} shape. Each rule is `<action>` or
+// group's Policy JSON — and a holder's own permanent rules on the same policy face,
+// which share the {allow_list, deny_list} shape. Each rule is `<action>` or
 // `<action>:<resource-glob>` (see MatchExtensionRule).
 type ExtensionPolicyRule struct {
 	AllowList []string `json:"allow_list"`
@@ -30,7 +29,7 @@ type ExtensionCheck struct {
 	// 得到似是而非的判定。
 	PolicyType string
 	GroupIDs   []string
-	// Own 是 holder 链自身那一列的规则，已还原成组里的形态（去掉 ext:<policyType>: 前缀）。
+	// Own 是 holder 链上各 holder 自身在这个策略面上的规则。
 	Own ExtensionPolicyRule
 	// Action / Resource 是 guest 的 check_policy 按这次调用的参数给出的分类。Action 由
 	// 调用方先对照类型声明的动作集合核过；Resource 是 guest 的任意文本（可空）。
@@ -38,7 +37,7 @@ type ExtensionCheck struct {
 	Resource string
 }
 
-// ExtensionRuleParts 把一条扩展规则（已去掉 ext:<policyType>: 前缀）拆成动作与资源 glob。
+// ExtensionRuleParts 把一条扩展规则拆成动作与资源 glob。
 // 在第一个 ':' 处切开：动作名不含 ':'（describe() 校验），其后整段都是 glob——glob 自己
 // 可以写 ':' 去匹配含 ':' 的资源。scoped 为 false 表示规则不限资源。
 func ExtensionRuleParts(rule string) (action, glob string, scoped bool) {
