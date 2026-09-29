@@ -111,7 +111,14 @@ func (h *genericHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.As
 	if err := storeGenericValues(ctx, ct, cfg, args); err != nil {
 		return err
 	}
-	return a.SetGenericConfig(cfg)
+	if err := a.SetGenericConfig(cfg); err != nil {
+		return err
+	}
+	// If icon is empty, use the custom type's icon
+	if a.Icon == "" && ct.Icon != "" {
+		a.Icon = ct.Icon
+	}
+	return nil
 }
 
 // ApplyUpdateArgs 只改写给出的字段，其余字段的值保持不变。

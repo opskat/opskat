@@ -52,7 +52,7 @@ func setupGeneric(t *testing.T) *genericEnv {
 
 	ctx := context.Background()
 	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
-		Name: "Grafana", Slug: "grafana", ExecMode: custom_type_entity.ExecModeHTTP,
+		Name: "Grafana", Slug: "grafana", Icon: "gauge-circle", ExecMode: custom_type_entity.ExecModeHTTP,
 		Fields: []custom_type_entity.Field{
 			{Name: "host", Required: true},
 			{Name: "org", Required: true, Default: "main"},
@@ -236,4 +236,32 @@ func TestGenericDefaultPolicyIsCopiedFromTheCustomType(t *testing.T) {
 	_, _, err = policy.DefaultPolicyForAsset(env.ctx, missing.Type, missing.Config)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "deleted-type")
+}
+
+func TestGenericApplyCreateArgsUsesCustomTypeIconWhenEmpty(t *testing.T) {
+	env := setupGeneric(t)
+
+	a := env.newAsset(t)
+	// Icon is empty when creating via opsctl without --icon
+	a.Icon = ""
+
+	prepared, err := PrepareCreate(env.ctx, a, map[string]any{"host": "g.internal", "token": "s3cret"})
+	require.NoError(t, err)
+	require.NoError(t, prepared.Handler.ApplyCreateArgs(env.ctx, a, prepared.Config))
+
+	assert.Equal(t, "gauge-circle", a.Icon, "empty icon should be set to custom type's icon")
+}
+
+func TestGenericApplyCreateArgsPreservesExplicitIcon(t *testing.T) {
+	env := setupGeneric(t)
+
+	a := env.newAsset(t)
+	// Icon is explicitly set via --icon
+	a.Icon = "globe"
+
+	prepared, err := PrepareCreate(env.ctx, a, map[string]any{"host": "g.internal", "token": "s3cret"})
+	require.NoError(t, err)
+	require.NoError(t, prepared.Handler.ApplyCreateArgs(env.ctx, a, prepared.Config))
+
+	assert.Equal(t, "globe", a.Icon, "explicit icon should be preserved")
 }
