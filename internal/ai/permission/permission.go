@@ -52,7 +52,18 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 	if asset != nil && asset.GroupID > 0 {
 		groups = policy.ResolveGroupChain(ctx, asset.GroupID)
 	}
+	return checkShellCommandPolicy(ctx, assetID, asset, groups, command, "exec")
+}
 
+// checkShellCommandPolicy 是 shell 类命令面的判定核心：deny → allow → grant → confirm，
+// 按 policy.ExtractSubCommands 拆出的子命令逐条匹配 policy.MatchCommandRule。SSH / 串口
+// （grantToolName "exec"）与通用资产命令方式的无模板情形（grantToolName "generic"，见
+// generic_command_policy.go）共用这套判定——两者的"命令"都是要真的交给一个 shell 执行的
+// 整条文本，语义完全一致，唯一的差异是 grant 落在哪个工具面。
+//
+// assetID 单独传入而不是取 asset.ID：调用方在资产查找失败（asset 为 nil）时仍要用原始
+// assetID 去匹配 grant——一条真实存在的 grant 不该因为这一次资产查询失败就找不到。
+func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_entity.Asset, groups []*group_entity.Group, command, grantToolName string) aictx.CheckResult {
 	// 策略检查
 	allPolicies := collectPolicies(ctx, asset, groups)
 	allDenyRules := policy.ShellCommandRules(collectDenyRules(allPolicies))
@@ -65,14 +76,15 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 		return policy.DecideUnenumerableShell(ctx, command, parseErr, allAllowRules, allDenyRules)
 	}
 
+	assetName := ""
+	if asset != nil {
+		assetName = asset.Name
+	}
+
 	// deny list
 	for _, cmd := range subCmds {
 		for _, rule := range allDenyRules {
 			if policy.MatchCommandRule(rule, cmd) {
-				assetName := ""
-				if asset != nil {
-					assetName = asset.Name
-				}
 				hints := policy.FindHintRules(cmd, allAllowRules)
 				reason := policy.PolicyMsg(ctx, "command blocked by policy", "命令被策略禁止执行")
 				msg := policy.FormatDenyMessage(ctx, assetName, command, reason, hints)
@@ -89,7 +101,7 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 	}
 
 	// DB Grant 匹配
-	if grantPattern := matchGrantPatterns(ctx, assetID, groups, subCmds); grantPattern != "" {
+	if grantPattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, grantToolName, policy.MatchCommandRule); grantPattern != "" {
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: grantPattern}
 	}
 

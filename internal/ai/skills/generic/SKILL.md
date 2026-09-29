@@ -67,6 +67,16 @@ HTTP (`help` shows the mode). The same syntax works in `exec` and after `opsctl 
 - `POST /api/dashboards/db -H 'Content-Type: application/json' -d '{"dashboard":{"title":"CPU"}}'`
 - `DELETE /api/dashboards/uid/abc`
 
+## Local command syntax
+
+For a custom type whose exec mode is a local command (`help` shows the mode, and whether a
+command template is configured). The same syntax works in `exec` and after
+`opsctl exec <asset> --`.
+
+- `s3 ls s3://bucket`
+- `s3 cp s3://bucket/a s3://bucket/b`
+- `'ls -la | grep example'`
+
 ## HTTP requests
 
 - METHOD is one of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS (any case). PATH must start
@@ -94,6 +104,26 @@ HTTP (`help` shows the mode). The same syntax works in `exec` and after `opsctl 
   any other status (the body is still written) and 1 with nothing on stdout when the request
   did not complete.
 
+## Local commands
+
+- A custom type with a command template renders it and runs the result directly, with no
+  shell: the template is split into words *before* rendering, so a field value containing
+  spaces stays one argument. Whatever you pass after the asset is appended **literally**, as
+  further words, never rendered — `{{ ... }}` in what you pass is sent as-is, byte for byte.
+  Example: template `aws --region {{region}} --output json` plus `s3 ls s3://bucket` runs
+  `aws --region <region> --output json s3 ls s3://bucket`.
+- A custom type with no command template runs what you pass through the system's default
+  shell (the same one a local terminal asset would use), so pipes, `&&` and redirection all
+  work. Because it goes through a real shell, wrap the whole thing in one quoted argument —
+  `'ls -la | grep example'` — so it arrives as a single value instead of being split by
+  *your* shell before it ever reaches this tool.
+- Either way, the child process gets the type's rendered environment variable bindings added
+  on top of the normal environment, runs in the current working directory, and its stdin,
+  stdout and stderr are connected directly (`opsctl exec`) or captured and returned as text
+  (`exec`) — captured output includes the exit code. The exit code is otherwise passed
+  through unchanged; a program that does not exist fails before anything runs.
+- A missing required field value fails before any process starts.
+
 ## Policy
 
 Generic assets use a command-style allow / deny policy (with policy groups). A new asset
@@ -105,3 +135,11 @@ for example `GET /api/dashboards/uid/abc`. Rules are plain globs, not shell comm
 matches any run of characters including `/` (`GET /api/*` covers `/api/a/b`), `?` matches one
 character. New HTTP types allow `GET *`, `HEAD *` and `OPTIONS *` by default; everything else
 asks for confirmation, and "always allow" saves the request's `<METHOD> <path>` as a grant.
+
+For a local command with a command template, the rules match what you pass after the asset,
+joined with single spaces (for example `s3 ls s3://bucket`) — the same plain-glob matching as
+HTTP, not shell parsing. For a local command with no template, the rules match the whole shell
+command and are parsed the same way as a shell (`ssh`) asset's command policy — a rule like
+`ls *` covers `ls -la`, and every stage of a pipeline must be covered for the pipeline to be
+allowed. Local commands have no default allow rules either way; everything asks for
+confirmation until a rule or a grant covers it.

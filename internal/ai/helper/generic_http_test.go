@@ -410,19 +410,6 @@ func TestGenericHTTP_AIExecOutput(t *testing.T) {
 	assert.NotContains(t, detail, testSecret)
 }
 
-func TestGenericExec_CommandModeNotSupportedYet(t *testing.T) {
-	ctx := setupGenericDB(t)
-	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
-		Name: "cli", Slug: "cli", ExecMode: custom_type_entity.ExecModeCommand,
-		Fields:  []custom_type_entity.Field{{Name: "profile"}},
-		Command: &custom_type_entity.CommandConfig{Template: "aws --profile {{profile}}"},
-	}))
-	asset := genericAsset(t, "cli", map[string]string{"profile": "prod"})
-
-	_, err := CanonicalizeGenericCommand(asset, "s3 ls")
-	assert.ErrorContains(t, err, "not supported yet")
-	_, err = ExecGenericOnAsset(ctx, asset, "s3 ls", "")
-	assert.ErrorContains(t, err, "not supported yet")
-	_, _, _, err = streamHTTP(t, ctx, asset, nil, "s3", "ls")
-	assert.ErrorContains(t, err, "not supported yet")
-}
+// 通用资产的命令执行方式见 generic_command.go / generic_command_test.go：本文件曾在
+// helper.RegisterGenericMode(ExecModeCommand, ...) 落地前用这条测试锁住"尚不支持"的占位
+// 行为，现在命令方式已注册，占位行为不再成立。

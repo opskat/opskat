@@ -35,9 +35,24 @@ import (
 // 现在的规则是：文档里每一处**看起来像示例**的地方都必须被抽取器认出来，认不出就报错
 // 并指名文件、行号与那一行的形状（见 scanSkillDoc）。
 
-// skillCommandSection 是示例命令所在的小节标题。示例只能写在这一节里：Notes 里的
-// 行内代码是讲解片段与**反例**，不是可执行命令。
+// skillCommandSection 是示例命令所在的小节标题。示例只能写在这一节里（或
+// skillLocalCommandSection，仅通用资产用到）：Notes 里的行内代码是讲解片段与**反例**，
+// 不是可执行命令。
 const skillCommandSection = "## Command syntax"
+
+// skillLocalCommandSection 是通用资产命令执行方式的第二套示例小节。通用资产的一份
+// SKILL.md 同时讲两种执行方式（HTTP 与本地命令），语法完全不同、canonicalizer 也不是
+// 同一份配置能覆盖的——所以单独开一节，抽取与 skillCommandSection 一视同仁，只是
+// canonicalize 时按 skillExampleAssetConfigBySection 换一个配置了本地命令执行方式的
+// 测试资产（见该 map 与 skillExampleAsset）。
+const skillLocalCommandSection = "## Local command syntax"
+
+// skillExampleSections 是全部被承认为"示例小节"的标题。
+var skillExampleSections = []string{skillCommandSection, skillLocalCommandSection}
+
+func isSkillExampleSection(title string) bool {
+	return slices.Contains(skillExampleSections, title)
+}
 
 // skillExampleShape 定义唯一被承认的"可执行示例"写法：`## Command syntax` 一节里、
 // 整行就是一个列表项 + 一个反引号命令，后面最多再跟一个括号说明。
@@ -95,9 +110,23 @@ var skillExampleAssetConfig = map[string]func(*asset_entity.Asset) error{
 		return a.SetMongoDBConfig(&asset_entity.MongoDBConfig{Database: "appdb"})
 	},
 	asset_entity.AssetTypeGeneric: func(a *asset_entity.Asset) error {
-		// 通用资产的 canonicalizer 按自定义类型的执行方式分派：示例资产引用一个 HTTP 方式的
-		// 类型（registerSkillExampleCustomTypes 注册），示例须能解析成 `<METHOD> <path>`。
+		// 通用资产的 canonicalizer 按自定义类型的执行方式分派：默认（skillCommandSection）
+		// 资产引用一个 HTTP 方式的类型，示例须能解析成 `<METHOD> <path>`。
+		// skillLocalCommandSection 的例子改用 skillExampleAssetConfigBySection 换成一个
+		// 命令方式的类型。
 		return a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: skillExampleHTTPType.Slug})
+	},
+}
+
+// skillExampleAssetConfigBySection 是 skillExampleAssetConfig 按小节的例外：目前只有
+// 通用资产需要——它的一份 SKILL.md 同时讲两种执行方式，两节示例各自对着配了对应执行
+// 方式的类型才能被 canonicalizer 正确解析。没有例外条目的 (assetType, section) 组合
+// 落回 skillExampleAssetConfig。
+var skillExampleAssetConfigBySection = map[string]map[string]func(*asset_entity.Asset) error{
+	asset_entity.AssetTypeGeneric: {
+		skillLocalCommandSection: func(a *asset_entity.Asset) error {
+			return a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: skillExampleCommandType.Slug})
+		},
 	},
 }
 
@@ -107,11 +136,18 @@ var skillExampleHTTPType = &custom_type_entity.CustomType{
 	HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
 }
 
+var skillExampleCommandType = &custom_type_entity.CustomType{
+	Slug: "skill-example-command", Name: "skill example (command)", ExecMode: custom_type_entity.ExecModeCommand,
+	Fields:  []custom_type_entity.Field{{Name: "profile", Required: true}},
+	Command: &custom_type_entity.CommandConfig{Template: "aws --profile {{profile}}"},
+}
+
 // registerSkillExampleCustomTypes 让通用资产的 canonicalizer 能查到示例资产的自定义类型。
 func registerSkillExampleCustomTypes(t *testing.T) {
 	t.Helper()
 	repo := mock_custom_type_repo.NewMockCustomTypeRepo(gomock.NewController(t))
 	repo.EXPECT().FindBySlug(gomock.Any(), skillExampleHTTPType.Slug).Return(skillExampleHTTPType, nil).AnyTimes()
+	repo.EXPECT().FindBySlug(gomock.Any(), skillExampleCommandType.Slug).Return(skillExampleCommandType, nil).AnyTimes()
 	orig := custom_type_repo.CustomType()
 	custom_type_repo.RegisterCustomType(repo)
 	t.Cleanup(func() { custom_type_repo.RegisterCustomType(orig) })
@@ -167,17 +203,17 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 
 		if slices.Contains(skillDocOnlyTypes, assetType) {
 			if len(examples) != 0 {
-				t.Errorf("%s/SKILL.md: doc-only type documents %d example(s) under %q, but this type has no "+
+				t.Errorf("%s/SKILL.md: doc-only type documents %d example(s) under %v, but this type has no "+
 					"command surface — exec is not registered for it, so an example here would mislead the model",
-					assetType, len(examples), skillCommandSection)
+					assetType, len(examples), skillExampleSections)
 			}
 			continue
 		}
 		// 每个类型都必须抽到东西：抽取规则一旦与文档写法整体错位（改了标题），
 		// 静默地什么都不检查是最坏的结果——这条断言把"空转"变成失败。
 		if len(examples) == 0 {
-			t.Errorf("%s/SKILL.md: extracted 0 executable examples; they must live under %q, one per list item, written as \"- `<command>`\"",
-				assetType, skillCommandSection)
+			t.Errorf("%s/SKILL.md: extracted 0 executable examples; they must live under one of %v, one per list item, written as \"- `<command>`\"",
+				assetType, skillExampleSections)
 			continue
 		}
 		totalExamples += len(examples)
@@ -196,8 +232,8 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 			continue
 		}
 
-		asset := skillExampleAsset(t, assetType)
 		for _, ex := range examples {
+			asset := skillExampleAsset(t, assetType, ex.section)
 			if _, err := canonicalize(asset, ex.command); err != nil {
 				t.Errorf("%s/SKILL.md (body line %d) documents %q, but the registered canonicalizer rejects it: %v",
 					assetType, ex.line, ex.command, err)
@@ -222,6 +258,7 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 type skillExample struct {
 	line    int
 	command string
+	section string
 }
 
 type skillViolation struct {
@@ -246,10 +283,10 @@ type skillViolation struct {
 //   - 任何位置的围栏代码块（``` ）——本抽取器不读围栏块，允许它存在就是允许夹带
 func scanSkillDoc(body string) ([]skillExample, []skillViolation) {
 	var (
-		examples   []skillExample
-		violations []skillViolation
-		inSection  bool
-		inFence    bool
+		examples       []skillExample
+		violations     []skillViolation
+		currentSection string
+		inFence        bool
 	)
 	for i, line := range strings.Split(body, "\n") {
 		lineNo := i + 1
@@ -258,8 +295,8 @@ func scanSkillDoc(body string) ([]skillExample, []skillViolation) {
 		if strings.HasPrefix(trimmed, "```") {
 			if !inFence {
 				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
-					"fenced code block (%q) is not a recognized shape — this scanner does not read fenced blocks, so any command inside one would never be checked; write each command as a list item \"- `<command>`\" under %q",
-					trimmed, skillCommandSection)})
+					"fenced code block (%q) is not a recognized shape — this scanner does not read fenced blocks, so any command inside one would never be checked; write each command as a list item \"- `<command>`\" under %v",
+					trimmed, skillExampleSections)})
 			}
 			inFence = !inFence
 			continue
@@ -269,7 +306,10 @@ func scanSkillDoc(body string) ([]skillExample, []skillViolation) {
 		}
 
 		if strings.HasPrefix(line, "## ") {
-			inSection = trimmed == skillCommandSection
+			currentSection = ""
+			if isSkillExampleSection(trimmed) {
+				currentSection = trimmed
+			}
 			continue
 		}
 
@@ -277,18 +317,18 @@ func scanSkillDoc(body string) ([]skillExample, []skillViolation) {
 		case skillListItem.MatchString(line):
 			m := skillExampleShape.FindStringSubmatch(line)
 			switch {
-			case inSection && m != nil:
-				examples = append(examples, skillExample{lineNo, m[1]})
-			case inSection:
+			case currentSection != "" && m != nil:
+				examples = append(examples, skillExample{lineNo, m[1], currentSection})
+			case currentSection != "":
 				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
 					"unrecognized example shape %q; under %q every list item must be exactly \"- `<command>`\" (one command per item, optionally followed by a parenthetical note)",
-					trimmed, skillCommandSection)})
+					trimmed, currentSection)})
 			case m != nil:
 				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
-					"example-shaped list item %q outside %q — it would never be checked; move it into that section, or reword it so it reads as prose",
-					trimmed, skillCommandSection)})
+					"example-shaped list item %q outside %v — it would never be checked; move it into one of those sections, or reword it so it reads as prose",
+					trimmed, skillExampleSections)})
 			}
-		case inSection && skillSpanOnlyLine.MatchString(trimmed):
+		case currentSection != "" && skillSpanOnlyLine.MatchString(trimmed):
 			// 语法模板（`<op> [key] [value]`）与示例的唯一区别就是占位符，
 			// 所以不含占位符的裸片段行按"漏写列表标记的示例"处理。
 			if _, match := skillPlaceholderIn(trimmed); match == "" {
@@ -312,12 +352,16 @@ func skillPlaceholderIn(command string) (name, match string) {
 	return "", ""
 }
 
-func skillExampleAsset(t *testing.T, assetType string) *asset_entity.Asset {
+func skillExampleAsset(t *testing.T, assetType, section string) *asset_entity.Asset {
 	t.Helper()
 	asset := &asset_entity.Asset{ID: 1, Name: assetType + "-doc", Type: assetType}
-	if configure, ok := skillExampleAssetConfig[assetType]; ok {
+	configure, ok := skillExampleAssetConfigBySection[assetType][section]
+	if !ok {
+		configure, ok = skillExampleAssetConfig[assetType]
+	}
+	if ok {
 		if err := configure(asset); err != nil {
-			t.Fatalf("configure %s test asset: %v", assetType, err)
+			t.Fatalf("configure %s test asset (section %q): %v", assetType, section, err)
 		}
 	}
 	return asset
