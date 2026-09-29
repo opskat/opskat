@@ -49,7 +49,7 @@ func TestExtToolConfirmShowsClassificationAndReturnsTheAnswer(t *testing.T) {
 		Command: `note_put --json='{"key":"runbook/a"}'`, Detail: `{"tool":"note_put"}`,
 		Action: "write", Resource: "runbook/a", Resources: []string{"runbook/a"}, RememberPattern: "write:runbook/a",
 	}
-	resp := o.extToolConfirm("session-1", opsctlOrigin)(context.Background(), permission.ApprovalKindFor(item.Type, item.Command), []permission.ApprovalItem{item})
+	resp := o.extToolConfirm("session-1")(context.Background(), permission.ApprovalKindFor(item.Type, item.Command), []permission.ApprovalItem{item})
 
 	require.Equal(t, "write", (*shown)["action"])
 	require.Equal(t, "runbook/a", (*shown)["resource"])

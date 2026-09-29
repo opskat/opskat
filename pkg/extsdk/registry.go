@@ -191,12 +191,17 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 // in policy, approval or audit, which see the content too. Only opsctl reads files:
 // AI exec and extension pages reject the `-file` form.
 //
-// It panics unless name is a declared string parameter, and on a repeat: like
-// every other registration error it fails the extension at load, not at first use.
+// It panics unless name is a declared string parameter whose `<name>-file`
+// spelling is not a parameter too, and on a repeat: like every other registration
+// error it fails the extension at load, not at first use.
 func (r *ToolReg[T]) FileParam(name string) *ToolReg[T] {
-	prop, ok := r.e.schema["properties"].(map[string]any)[name].(map[string]any)
+	props, _ := r.e.schema["properties"].(map[string]any)
+	prop, ok := props[name].(map[string]any)
 	if !ok {
 		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): no such parameter", r.e.name, name))
+	}
+	if _, clash := props[name+"-file"]; clash {
+		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): %q is itself a parameter, which opsctl would read as the file form", r.e.name, name, name+"-file"))
 	}
 	if typ, _ := prop["type"].(string); typ != "string" {
 		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): only a string parameter can be read from a file, not %v", r.e.name, name, prop["type"]))

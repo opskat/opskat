@@ -395,9 +395,10 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 // later call stays keyed on (action, resource) (see extGrantMatch /
 // MatchExtensionGrant).
 //
-// Unedited, a classified call persists one exact grant per resource it touches
-// (extGrantKey) — the same grant key the next identical call is matched as, per
-// resource. A classified call's Remember editor edits the grant tail itself
+// Unedited, a classified call persists the Remember pre-fill it showed
+// (classificationGrantKeys): for one resource its exact grant key (extGrantKey) —
+// the key the next identical call is matched as — and for several the one rule
+// covering them all. A classified call's Remember editor edits the grant tail itself
 // (ApprovalItem.RememberPattern); ParseApprovalResponse has already held every edit
 // to "<action>:<resource-glob>" with the classified action, so an edit is persisted
 // verbatim — its glob characters are the user's intent.
@@ -437,11 +438,7 @@ func classificationGrantKeys(c ExtensionClassification) []string {
 	if len(resources) > 1 {
 		return []string{extGrantRule(c.PolicyType, multiResourceRememberPattern(c.Action, resources))}
 	}
-	keys := make([]string, len(resources))
-	for i, resource := range resources {
-		keys[i] = extGrantKey(c.PolicyType, c.Action, resource)
-	}
-	return keys
+	return []string{extGrantKey(c.PolicyType, c.Action, resources[0])}
 }
 
 // multiResourceRememberPattern is the Remember pre-fill of a call touching several

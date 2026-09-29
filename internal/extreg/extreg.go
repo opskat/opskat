@@ -422,8 +422,9 @@ func classifyCommand(ctx context.Context, l loaded, command string) (action stri
 
 // classifyForApproval adapts classifyCommand to permission.ClassifyFunc: it is the
 // grant-pattern producer HandleConfirm calls to show an approval item's Action/
-// Resource(s)/Detail and to build the "always allow" grant keys (spec 参数级策略 ›
-// 审批展示 — grant persisted as ext:<type>:<action>:<resource>, one per resource).
+// Resource(s)/Detail and to build the "always allow" grant (spec 参数级策略 ›
+// 审批展示 — persisted as ext:<type>:<action>:<resource> for one resource, the
+// common-prefix rule for several).
 func classifyForApproval(l loaded) permission.ClassifyFunc {
 	return func(ctx context.Context, command string) (permission.ExtensionClassification, bool) {
 		action, resources, toolName, argsJSON, ok := classifyCommand(ctx, l, command)

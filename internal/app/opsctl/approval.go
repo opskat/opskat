@@ -74,7 +74,7 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	parsed, reason := o.awaitSingleApproval(o.ctx, permission.ApprovalItem{
 		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
 		Command: req.Command, Detail: req.Detail,
-	}, req.SessionID, opsctlOrigin)
+	}, req.SessionID)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
 		return approval.ApprovalResponse{Approved: true}
@@ -92,19 +92,15 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	}
 }
 
-// approvalOrigin 说明一次单条审批是谁发起的；source 同时是审计来源列。
-type approvalOrigin struct {
-	source string
-}
-
-var opsctlOrigin = approvalOrigin{source: "opsctl"}
+// opsctlAuditSource 是 opsctl 发起的审批与扩展工具调用落审计的来源列。
+const opsctlAuditSource = "opsctl"
 
 // awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
 // 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串落
 // （requestSingleApproval），扩展工具闸门交给 HandleConfirm 按 (action, resource) 落
 // （extToolConfirm）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
 // 就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
-func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string, origin approvalOrigin) (permission.ParsedApprovalResponse, string) {
+func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
 	kind := permission.ApprovalKindFor(item.Type, item.Command)
 	log := logger.Ctx(o.ctx).With(
@@ -112,7 +108,6 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 		zap.String("approvalType", item.Type),
 		zap.Int64("assetID", item.AssetID),
 		zap.String("sessionID", sessionID),
-		zap.String("source", origin.source),
 	)
 	log.Info("opsctl approval started")
 	denied := permission.ParsedApprovalResponse{Decision: permission.ApprovalDeny}
@@ -431,11 +426,10 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	}
 }
 
-// extToolGateResult is what gateExtToolCall hands back to either caller: exactly
-// the three things that exist regardless of who initiated the call (output,
-// decision, error), plus the normalized command the unified exec handler actually
-// ran — canonicalization can rewrite flag order/spelling, and a caller's audit row
-// should show what ran, not what was sent.
+// extToolGateResult is what gateExtToolCall hands back: the output and decision,
+// plus the normalized command the unified exec handler actually ran —
+// canonicalization can rewrite flag order/spelling, and the audit row should show
+// what ran, not what was sent.
 type extToolGateResult struct {
 	output            string
 	normalizedCommand string
@@ -452,10 +446,10 @@ type extToolGateResult struct {
 // installed on it) alongside the result: a caller's own WriteToolCall must use
 // that returned context, not the one it passed in, or the audit row it writes
 // carries none of what this function just annotated, the audit source included.
-func (o *Opsctl) gateExtToolCall(ctx context.Context, origin approvalOrigin, sessionID string, assetID int64, command string) (context.Context, extToolGateResult, error) {
-	ctx = aictx.WithAuditSource(ctx, origin.source)
+func (o *Opsctl) gateExtToolCall(ctx context.Context, sessionID string, assetID int64, command string) (context.Context, extToolGateResult, error) {
+	ctx = aictx.WithAuditSource(ctx, opsctlAuditSource)
 	ctx = aictx.WithSessionID(ctx, sessionID)
-	checker := permission.NewCommandPolicyChecker(o.extToolConfirm(sessionID, origin))
+	checker := permission.NewCommandPolicyChecker(o.extToolConfirm(sessionID))
 	ctx = permission.WithPolicyChecker(ctx, checker)
 
 	// 审计行由**做出决策的进程**写：策略判定、审批结果与规范化命令都只在这里存在，
@@ -476,9 +470,9 @@ func (o *Opsctl) gateExtToolCall(ctx context.Context, origin approvalOrigin, ses
 // "opsctl:approval" dialog, and the user's answer goes back unchanged, edits
 // included. Persisting an "always allow" is HandleConfirm's: it grants the
 // classification, the only shape extension grant matching reads.
-func (o *Opsctl) extToolConfirm(sessionID string, origin approvalOrigin) permission.CommandConfirmFunc {
+func (o *Opsctl) extToolConfirm(sessionID string) permission.CommandConfirmFunc {
 	return func(ctx context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		parsed, _ := o.awaitSingleApproval(ctx, items[0], sessionID, origin)
+		parsed, _ := o.awaitSingleApproval(ctx, items[0], sessionID)
 		switch parsed.Decision {
 		case permission.ApprovalAllowAll:
 			return permission.ApprovalResponse{Decision: "allowAll", EditedItems: parsed.EditedItems}
@@ -502,7 +496,7 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 	}
 
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
-	gateCtx, gateResult, err := o.gateExtToolCall(ctx, opsctlOrigin, req.SessionID, req.AssetID, req.Command)
+	gateCtx, gateResult, err := o.gateExtToolCall(ctx, req.SessionID, req.AssetID, req.Command)
 	decision := gateResult.decision
 	extAuditWriter.WriteToolCall(gateCtx, audit.ToolCallInfo{
 		ToolName: "exec",

@@ -190,6 +190,11 @@ func (d *Descriptor) validateTools() error {
 			if typ, _ := prop["type"].(string); typ != "string" {
 				return fmt.Errorf("describe(): tools[%q].fileParams names %q, which is not a declared string parameter", t.Name, name)
 			}
+			// opsctl reads `--<name>-file` as the file form of name, so a parameter
+			// spelled that way could never be passed.
+			if _, clash := props[name+"-file"]; clash {
+				return fmt.Errorf("describe(): tools[%q].fileParams names %q, but %q is itself a parameter", t.Name, name, name+"-file")
+			}
 		}
 		if rawReq, exists := t.Parameters["required"]; exists {
 			req, ok := rawReq.([]any)

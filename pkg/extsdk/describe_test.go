@@ -396,6 +396,12 @@ func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(action, ShouldEqual, "list")
 			So(resources, ShouldResemble, []string{"b1"})
+
+			// As the host reads it (pkg/extension decodePolicyDecision): an empty
+			// single resource is no resource, not one empty-named resource.
+			_, resources, err = host.CheckPolicy("list", listArgs{})
+			So(err, ShouldBeNil)
+			So(resources, ShouldBeEmpty)
 		})
 	})
 
@@ -448,9 +454,10 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 
 func TestDescribeReportsFileParams(t *testing.T) {
 	type bulkArgs struct {
-		Body  string `json:"body"`
-		Index string `json:"index"`
-		Size  int    `json:"size"`
+		Body     string `json:"body"`
+		Index    string `json:"index"`
+		Size     int    `json:"size"`
+		IndexArg string `json:"index-file"`
 	}
 	noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
 	Convey("a string parameter marked file-readable is reported by describe", t, func() {
@@ -471,8 +478,9 @@ func TestDescribeReportsFileParams(t *testing.T) {
 			reg := Tool("bad", noop).Policy("read")
 			So(func() { reg.FileParam("size") }, ShouldPanic)
 			So(func() { reg.FileParam("missing") }, ShouldPanic)
-			So(func() { reg.FileParam("index") }, ShouldNotPanic)
-			So(func() { reg.FileParam("index") }, ShouldPanic)
+			So(func() { reg.FileParam("body") }, ShouldNotPanic)
+			So(func() { reg.FileParam("body") }, ShouldPanic)
+			So(func() { reg.FileParam("index") }, ShouldPanic) // its -file spelling is the index-file parameter
 		})
 	})
 }

@@ -126,9 +126,9 @@ func (h *TestHost) CallAction(asset Asset, name string, args any, onEvent func(T
 }
 
 // CheckPolicy invokes the registered policy checker and reports the resources
-// the call touches as the extension returned them: a single-resource reply
-// (Policy/Resource, PolicyFunc) is a one-element list, a PolicyResources reply is
-// its list as-is.
+// the call touches as the host reads them: a single-resource reply (Policy/
+// Resource, PolicyFunc) is a one-element list — none when the resource is empty —
+// and a PolicyResources reply is its list as-is.
 func (h *TestHost) CheckPolicy(tool string, args any) (action string, resources []string, err error) {
 	argsJSON, _ := json.Marshal(args)
 	input, _ := json.Marshal(map[string]any{
@@ -149,6 +149,9 @@ func (h *TestHost) CheckPolicy(tool string, args any) (action string, resources 
 	}
 	if out.Resources != nil {
 		return out.Action, *out.Resources, nil
+	}
+	if out.Resource == "" {
+		return out.Action, nil, nil
 	}
 	return out.Action, []string{out.Resource}, nil
 }

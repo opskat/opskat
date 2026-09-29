@@ -567,5 +567,12 @@ func TestParseDescriptorFileParams(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, `tools["t"].fileParams`)
 		})
+		// opsctl reads --body-file as body's file form, so a real body-file
+		// parameter could never be passed.
+		Convey("a parameter whose -file spelling is itself a parameter is refused at load", func() {
+			_, err := ParseDescriptor(desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"},"body-file":{"type":"string"}}},"fileParams":["body"]}]`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"body-file"`)
+		})
 	})
 }

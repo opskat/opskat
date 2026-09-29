@@ -888,8 +888,8 @@ const extGrantPrefix = "ext:"
 
 // extGrantKey formats the grant key of one resource of a classified extension call:
 // ext:<policyType>:<action>:<resource>. It is both the command side a live call is
-// matched as (MatchExtensionGrant) and the grant an unedited "always allow"
-// persists for that resource.
+// matched as (MatchExtensionGrant) and the grant an unedited "always allow" of a
+// single-resource call persists.
 func extGrantKey(policyType, action, resource string) string {
 	return extGrantRule(policyType, extGrantTail(action, resource))
 }
