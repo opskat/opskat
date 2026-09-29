@@ -325,7 +325,11 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
   );
 
   return (
-    <Dialog open={open && !suspended} onOpenChange={handleOpenChange}>
+    // key 按当前审批项切换：Radix 把 overlay 与 content 各包一层 Presence+Portal，退场时长不同。
+    // 队列清空后紧接着来第二条审批时，若复用同一个 Dialog，先退场完的 overlay 会重新挂载并追加到
+    // body 末尾，同为 z-50 却排在仍存活的 content 之后，盖住新弹窗的按钮。换 key 让 React 同步
+    // 拆掉旧的整棵 Dialog（overlay 与 content 一起），新审批总是全新且顺序正确的一对。
+    <Dialog key={current?.id ?? "idle"} open={open && !suspended} onOpenChange={handleOpenChange}>
       <DialogContent
         data-testid="opsctl-approval-dialog"
         className="sm:max-w-lg max-h-[80vh] flex flex-col"
