@@ -318,7 +318,7 @@ func renderCustomTypeStructure(ct *custom_type_entity.CustomType) string {
 }
 
 // renderGenericAssetHelp 在类型结构之外追加这个通用资产实例的详情（spec 同一条第 2
-// 项）：字段值——密钥字段只报告"set"，从不带出明文，避免解密结果在这里被一个 Fprintf
+// 项）：字段值——密钥字段只报告"set" / "not set"，从不带出明文，避免解密结果在这里被一个 Fprintf
 // 之遥地打进模型上下文；缺值的必填字段标 missing；HTTP 方式下渲染后的实际地址与 SSH
 // 隧道名；以及资产的 Description（备注，回答"这个实例里有什么"，与类型的使用说明区分
 // 开——Design decision 11）。
@@ -342,6 +342,8 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 		switch {
 		case missing[f.Name]:
 			fmt.Fprintf(&b, "- %s: missing (required)\n", f.Name)
+		case f.Secret && resolved.Values[f.Name] == "":
+			fmt.Fprintf(&b, "- %s: not set\n", f.Name)
 		case f.Secret:
 			fmt.Fprintf(&b, "- %s: set\n", f.Name)
 		default:

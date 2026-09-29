@@ -638,6 +638,36 @@ func setupGenericBatch(t *testing.T) func() int32 {
 	return hits.Load
 }
 
+// TestHandleBatchCommand_GenericApprovalItemCarriesRenderedTarget locks spec「策略、审批与
+// 审计」: the approval shows the rendered target address for an HTTP generic asset — in a
+// batch approval as well as a single exec one.
+func TestHandleBatchCommand_GenericApprovalItemCarriesRenderedTarget(t *testing.T) {
+	setupGenericBatch(t)
+	var got []permission.ApprovalItem
+	confirm := func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		got = items
+		return permission.ApprovalResponse{Decision: "deny"}
+	}
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, permission.NewCommandPolicyChecker(confirm))
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), "metrics")
+
+	if _, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"metrics-a","command":"POST /api/x?y=1"}]`,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want one approval item, got %d", len(got))
+	}
+	if got[0].Command != "POST /api/x" {
+		t.Fatalf("approval command = %q, want the match object %q", got[0].Command, "POST /api/x")
+	}
+	if !strings.HasPrefix(got[0].Detail, "HTTP request: POST http://127.0.0.1:") || !strings.HasSuffix(got[0].Detail, "/api/x?y=1") {
+		t.Fatalf("approval detail = %q, want the rendered target address", got[0].Detail)
+	}
+}
+
 // TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated is the converse of the test
 // above: marking only the static "generic" type (the old, wrong key) must not satisfy the
 // gate for a generic asset whose custom type slug was never documented.

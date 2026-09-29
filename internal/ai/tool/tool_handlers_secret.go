@@ -32,7 +32,7 @@ func init() {
 // 这里唯一有副作用的步骤是审批弹窗）：
 //  1. 解析资产 + 校验是通用资产——内置类型的密码走各自的凭据机制，不经这条路。
 //  2. ResolveAsset 拿到类型结构与已解密的字段值。
-//  3. 按字段名查找：不存在报错并列出可用字段名；是必填但无值（ResolveAsset.Missing）报错。
+//  3. 按字段名查找：不存在报错并列出可用字段名；资产缺任一必填值（ResolveAsset.Missing）报错。
 //  4. 非密钥字段直接返回值，不做权限检查（spec："本来就在详情和 help 里可见"）。
 //  5. 密钥字段按 `secret:<字段>` 走权限检查；NeedConfirm 会经 HandleConfirm 弹审批
 //     （detail 写明明文会输出给调用方、来自 AI 时会进入对话并发给模型服务商）；Deny 时
@@ -106,10 +106,11 @@ func LookupGenericSecretField(ctx context.Context, ref, fieldName string) (*asse
 		return nil, nil, nil, fmt.Errorf(
 			"asset %q has no field %q; available fields: %s", asset.Name, fieldName, strings.Join(names, ", "))
 	}
-	for _, missing := range resolved.Missing {
-		if missing == fieldName {
-			return nil, nil, nil, fmt.Errorf("asset %q field %q has no value set", asset.Name, fieldName)
-		}
+	// 与 exec 同一规则（spec「自定义类型」修改已有类型："补填之前…取值同理"）：资产还缺必填
+	// 值时，不论读哪个字段都直接报缺少的字段。
+	if len(resolved.Missing) > 0 {
+		return nil, nil, nil, fmt.Errorf("asset %q is missing required field(s): %s — fill them in on the asset first",
+			asset.Name, strings.Join(resolved.Missing, ", "))
 	}
 	return asset, field, resolved, nil
 }

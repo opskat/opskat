@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 describe("CustomTypeEditorDialog", () => {
   beforeEach(async () => {
@@ -52,6 +52,24 @@ describe("CustomTypeEditorDialog", () => {
     await user.click(screen.getByRole("button", { name: "action.save" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("surfaces the non-blocking save warnings to the user even though the dialog closes", async () => {
+    const { SaveCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
+    const { toast } = await import("sonner");
+    vi.mocked(toast.warning).mockReset();
+    vi.mocked(SaveCustomType).mockResolvedValue({
+      type: { id: 6, slug: "aws", name: "AWS", execMode: "command", fields: [] },
+      warnings: [{ path: "command.template", code: "command_secret_in_args" }],
+    } as any);
+    const onOpenChange = vi.fn();
+
+    render(<CustomTypeEditorDialog open onOpenChange={onOpenChange} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "action.save" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(toast.warning).toHaveBeenCalledWith("customType.issue.command_secret_in_args");
   });
 
   it("shows how many assets use the type in the footer once it loads for editing", async () => {

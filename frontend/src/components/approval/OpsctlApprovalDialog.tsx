@@ -179,7 +179,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           command: i.command,
           // detail 是一条 cp 传输唯一携带"两端基点"的地方（"opsctl cp <src> → <dst>"）。
           // internal/app/opsctl/approval.go 的 handleBatchApproval 与 approval.BatchItem
-          // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
+          // 都带了它（batch verb 的混合批只给带 scope / 通用资产目标的条目逐条填），折叠摘要
           // 因此报得出两端基点，不止是条数。
           detail: i.detail,
         }));
@@ -229,13 +229,15 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
   const current = queue[0] || null;
   const open = !!current;
   // detail 是 cp 每条共享的"两端基点"摘要（cp.go 给每条 BatchItem 都填了同一句
-  // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的 exec/sql/redis 混合批
-  // 不产出（item.Detail 留空）。折叠是为 cp 设计的，只对带 detail 的批生效——batch verb
-  // 的条目分属不同资产/类型，没有可摘要的共同点，硬折叠会藏起本该看见的差异。
+  // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的混合批只给带 scope 或审批
+  // 展示补充（通用资产的目标地址）的条目逐条填 Detail，各条不同。折叠是为 cp 设计的，只对
+  // 每条共享同一句非空 detail 的批生效——batch verb 的条目分属不同资产/类型，没有可摘要的
+  // 共同点，硬折叠会藏起本该看见的差异。
   const isBatchCollapsed =
     !!current &&
     current.kind === "batch" &&
     !!current.items[0]?.detail &&
+    current.items.every((item) => item.detail === current.items[0].detail) &&
     current.items.length > BATCH_COLLAPSE_THRESHOLD;
 
   // 折叠态与展开态共用同一份单条渲染，避免同一段 JSX 抄两份。cur 显式传参而不是闭包

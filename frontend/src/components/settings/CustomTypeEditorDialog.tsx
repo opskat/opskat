@@ -242,7 +242,6 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [issues, setIssues] = useState<custom_type_entity.Issue[]>([]);
-  const [warnings, setWarnings] = useState<custom_type_entity.Issue[]>([]);
   const [usage, setUsage] = useState<number | null>(null);
 
   // 打开(或切换编辑目标)时从后端回填;渲染期对比上次值,避免 effect 里 setState
@@ -252,7 +251,6 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
     setPrevSync({ open, typeId });
     if (open) {
       setIssues([]);
-      setWarnings([]);
       if (typeId === undefined) {
         setDraft(emptyDraft());
         setUsage(null);
@@ -276,7 +274,6 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   }
 
   const issueMap = buildIssueMap(t, issues);
-  const commandTemplateWarning = warnings.find((w) => w.path === "command.template");
   const isEdit = typeId !== undefined;
 
   // 用户改动某个字段后,该字段上一次保存留下的校验错误随即失效,不必等下一次保存才消失。
@@ -293,12 +290,12 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
       const res = await store.save(toWire(draft));
       if (res.issues && res.issues.length > 0) {
         setIssues(res.issues);
-        setWarnings([]);
         return;
       }
       setIssues([]);
-      setWarnings(res.warnings ?? []);
       notifySuccess(t("customType.saved"));
+      // 不阻止保存的提示(如命令模板引用了密钥字段)在对话框关闭后仍要让用户看到。
+      for (const w of res.warnings ?? []) toast.warning(issueText(t, w));
       onOpenChange(false);
       onSaved?.();
     } catch (e) {
@@ -553,12 +550,6 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
           <p className="flex items-start gap-1.5 text-xs text-warning">
             <Info className="mt-0.5 size-3.5 shrink-0" />
             {t("customType.commandTemplateEmptyHint")}
-          </p>
-        )}
-        {commandTemplateWarning && (
-          <p className="flex items-start gap-1.5 text-xs text-warning">
-            <Info className="mt-0.5 size-3.5 shrink-0" />
-            {issueText(t, commandTemplateWarning)}
           </p>
         )}
       </Field>

@@ -879,3 +879,32 @@ func TestCmdBatch_ScopeOnNonRedisAssetFailsThatItemOnly(t *testing.T) {
 		So(output.Results[0].Error, ShouldContainSubstring, "redis")
 	})
 }
+
+// TestCmdBatch_GenericApprovalItemCarriesRenderedTarget: spec「策略、审批与审计」— the
+// approval shows the rendered target address of an HTTP generic asset; a batch approval
+// item must carry it too, never the injected value.
+func TestCmdBatch_GenericApprovalItemCarriesRenderedTarget(t *testing.T) {
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	ctx, srv := setupGenericHTTPExec(t, "batch_secret_must_not_leak")
+
+	var got []approval.BatchItem
+	origApproval := requireBatchApprovalFn
+	requireBatchApprovalFn = func(items []approval.BatchItem, session string) (ApprovalResult, error) {
+		got = items
+		return ApprovalResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, SessionID: session},
+			errors.New("batch denied: no")
+	}
+	t.Cleanup(func() { requireBatchApprovalFn = origApproval })
+
+	runBatchCapturingStdout(t, ctx, map[string]tool.ToolHandlerFunc{}, []string{"echo-prod:POST /api/x?y=1"}, "")
+
+	if len(got) != 1 {
+		t.Fatalf("want one approval item, got %d", len(got))
+	}
+	if got[0].Command != "POST /api/x" {
+		t.Fatalf("approval command = %q, want the match object %q", got[0].Command, "POST /api/x")
+	}
+	if want := "HTTP request: POST " + srv.URL + "/api/x?y=1"; got[0].Detail != want {
+		t.Fatalf("approval detail = %q, want %q", got[0].Detail, want)
+	}
+}

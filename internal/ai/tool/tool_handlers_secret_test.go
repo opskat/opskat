@@ -62,6 +62,25 @@ func TestHandleGetAssetSecret_MissingRequiredValueErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "org")
 }
 
+// TestHandleGetAssetSecret_AssetMissingRequiredValueErrorsForAnyField locks spec「自定义类型」
+// 修改已有类型: "补填之前，对该资产执行 exec 会直接报'缺少字段 X'…；取值同理" — like exec, a
+// read on an asset that still lacks a newly required value fails naming the missing field,
+// even when the requested field itself has a value.
+func TestHandleGetAssetSecret_AssetMissingRequiredValueErrorsForAnyField(t *testing.T) {
+	setupGenericPutDB(t)
+	asset := createGenericGrafanaAsset(t, "grafana-old", map[string]any{"host": "grafana.internal", "token": "tok"}, "")
+
+	ct, err := custom_type_svc.CustomType().GetBySlug(context.Background(), "grafana")
+	require.NoError(t, err)
+	ct.Fields = append(ct.Fields, custom_type_entity.Field{Name: "org", Required: true})
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), ct))
+
+	out, err := handleGetAssetSecret(context.Background(), map[string]any{"asset": asset.Name, "field": "host"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "org")
+	assert.Empty(t, out)
+}
+
 // TestHandleGetAssetSecret_NonSecretFieldReturnsDirectlyWithoutApproval locks "非密钥字段
 // 本来就在详情和 help 里可见，直接返回，不经过审批" — no PolicyChecker is installed on ctx
 // at all, so a permission check on this path would fail with "permission checker not

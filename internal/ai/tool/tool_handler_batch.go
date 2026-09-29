@@ -88,6 +88,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		assetID      int64
 		assetName    string
 		checkCommand string // 权限检查用的（可能已规范化的）命令串
+		detail       string // 审批展示补充（permission.ApprovalDetailFor，如通用资产的目标地址）
 		decision     string // "allow" / "deny" / "needConfirm"
 		denyMsg      string
 		checkResult  aictx.CheckResult // 每项独立审计的授权/拒绝语义
@@ -195,6 +196,23 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			}
 		}
 
+		// 审批展示补充：与 handleExec 同一位置、同一理由——无副作用，失败说明命令必然执行
+		// 失败，在权限检查之前按单项 deny 处理。
+		var detail string
+		if describe, ok := permission.ApprovalDetailFor(asset.Type); ok {
+			d, err := describe(ctx, asset, cmd.Command)
+			if err != nil {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					checkCommand: checkCommand, decision: "deny", denyMsg: err.Error(),
+					checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecPrecheckFailed,
+						Message: err.Error()},
+				})
+				continue
+			}
+			detail = d
+		}
+
 		decision, denyMsg := "allow", ""
 		result := permission.CheckPermission(ctx, asset.Type, asset.ID, checkCommand)
 		switch result.Decision {
@@ -208,7 +226,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 
 		resolved = append(resolved, resolvedCmd{
 			item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
-			checkCommand: checkCommand, decision: decision, denyMsg: denyMsg, checkResult: result,
+			checkCommand: checkCommand, detail: detail, decision: decision, denyMsg: denyMsg, checkResult: result,
 		})
 	}
 
@@ -223,6 +241,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 					AssetID:   r.assetID,
 					AssetName: r.assetName,
 					Command:   r.checkCommand,
+					Detail:    r.detail,
 				})
 				needConfirmIndices = append(needConfirmIndices, i)
 			}

@@ -1007,6 +1007,30 @@ func TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing(t *testing
 	}
 }
 
+// TestHandleHelp_GenericOptionalSecretWithoutValueIsNotReportedAsSet: "set" tells the model
+// a secret has a value; an optional secret field the instance never filled must not claim
+// that (spec「帮助、技能与门禁」: 密钥只标注"已设置"，缺值的字段标明缺失).
+func TestHandleHelp_GenericOptionalSecretWithoutValueIsNotReportedAsSet(t *testing.T) {
+	setupGenericPutDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Opt", Slug: "opt-secret", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{
+			{Name: "host", Required: true},
+			{Name: "sign_key", Secret: true},
+		},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
+	}))
+	_, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "opt-prod", "type": "opt-secret", "config": map[string]any{"host": "opt.internal"},
+	})
+	require.NoError(t, err)
+
+	out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": "opt-prod"})
+	require.NoError(t, err)
+	assert.NotContains(t, out, "- sign_key: set")
+	assert.Contains(t, out, "- sign_key: not set")
+}
+
 // TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType locks the doc
 // gate requirement: help on one asset of a custom type marks that type's slug, which is
 // exactly the key exec's own gate check now reads (permission's ExecutorFor("generic")

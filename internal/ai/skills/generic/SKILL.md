@@ -138,7 +138,8 @@ credentials. An unknown field name fails with the type's available field names.
   caller, and — when this call is going through the AI — that it enters the conversation and
   is sent to the model provider. Only call this when the value is actually needed, not to
   preemptively inspect every field. "Always allow" saves `secret:<field>` as a standing grant.
-- A required field with no value set fails before anything is returned.
+- While the asset still lacks a value for any required field, the read fails naming the
+  missing field(s), whichever field you asked for.
 - The audit log for this tool records the asset, the field name and the decision — never the
   value, secret or not.
 

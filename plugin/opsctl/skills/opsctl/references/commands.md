@@ -224,7 +224,8 @@ reads a built-in type's own credentials. Run `opsctl help <asset-or-type>` first
 type's field names if you don't already know them.
 
 - An unknown field name fails with the list of available field names.
-- A required field with no value set fails before anything is returned.
+- While the asset still lacks a value for any required field, the read fails naming the
+  missing field(s), whichever field you asked for.
 - A **non-secret** field is returned immediately — no approval prompt, the same value
   `opsctl help <asset>` already shows.
 - A **secret** field is checked against policy (match object `secret:<field>`, no default

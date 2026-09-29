@@ -313,4 +313,21 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.getByText("ai.approvalGenericTarget")).toBeVisible();
     expect(screen.getByText(/https:\/\/grafana\.internal:3000/)).toBeVisible();
   });
+
+  // 通用资产的目标地址对批量审批同样必须可见（spec「策略、审批与审计」）；各条目标不同，
+  // 不能被当成 cp 那种"每条共享同一句摘要"折叠起来。
+  it("批量审批里通用资产条目常驻显示各自的目标，目标各异时超过 10 条也不折叠", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: "generic",
+      asset_id: i + 1,
+      asset_name: `grafana-${i}`,
+      command: `GET /api/${i}`,
+      detail: `HTTP request: GET https://grafana-${i}.internal/api/${i}`,
+    }));
+    renderApproval({ approvalKind: "batch", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/grafana-0\.internal\/api\/0/)).toBeVisible();
+    expect(screen.getByText(/https:\/\/grafana-10\.internal\/api\/10/)).toBeVisible();
+  });
 });
