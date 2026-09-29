@@ -68,7 +68,7 @@ describe("CustomTypeEditorDialog", () => {
       createtime: 0,
       updatetime: 0,
     } as any);
-    vi.mocked(GetCustomTypeUsage).mockResolvedValue(4);
+    vi.mocked(GetCustomTypeUsage).mockResolvedValue(["a", "b", "c", "d"]);
 
     render(<CustomTypeEditorDialog open typeId={3} onOpenChange={vi.fn()} />);
 

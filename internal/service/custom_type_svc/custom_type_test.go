@@ -380,9 +380,9 @@ func TestDeleteAndUsage(t *testing.T) {
 	a := createGeneric(t, ctx, "prod-grafana", "grafana", nil)
 	createGeneric(t, ctx, "dev-grafana", "grafana", nil)
 
-	n, err := svc.UsageCount(ctx, ct.ID)
+	names, err := svc.UsedBy(ctx, ct.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, []string{"prod-grafana", "dev-grafana"}, names)
 
 	err = svc.Delete(ctx, ct.ID)
 	var inUse *InUseError

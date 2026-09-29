@@ -62,12 +62,12 @@ func (c *CustomType) ListCustomTypes() ([]Summary, error) {
 	}
 	out := make([]Summary, 0, len(types))
 	for _, t := range types {
-		n, err := custom_type_svc.CustomType().UsageCount(ctx, t.ID)
+		names, err := custom_type_svc.CustomType().UsedBy(ctx, t.ID)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, Summary{
-			ID: t.ID, Slug: t.Slug, Name: t.Name, Icon: t.Icon, ExecMode: t.ExecMode, AssetCount: n,
+			ID: t.ID, Slug: t.Slug, Name: t.Name, Icon: t.Icon, ExecMode: t.ExecMode, AssetCount: len(names),
 		})
 	}
 	return out, nil
@@ -78,9 +78,10 @@ func (c *CustomType) GetCustomType(id int64) (*custom_type_entity.CustomType, er
 	return custom_type_svc.CustomType().Get(c.ctxWithLang(), id)
 }
 
-// GetCustomTypeUsage 读取在用资产数，供编辑器底栏显示"已有 N 个资产使用"。
-func (c *CustomType) GetCustomTypeUsage(id int64) (int, error) {
-	return custom_type_svc.CustomType().UsageCount(c.ctxWithLang(), id)
+// GetCustomTypeUsage 读取在用资产名称：设置页据此在删除前直接提示占用，编辑器底栏取其
+// 长度显示"已有 N 个资产使用"。
+func (c *CustomType) GetCustomTypeUsage(id int64) ([]string, error) {
+	return custom_type_svc.CustomType().UsedBy(c.ctxWithLang(), id)
 }
 
 // SaveResult 是保存的结构化结果。校验失败（含标识重名 / 被修改）时 Issues 非空、

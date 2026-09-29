@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CustomTypeSection } from "@/components/settings/CustomTypeSection";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
@@ -8,12 +8,23 @@ import { customtype } from "../../../../wailsjs/go/models";
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 
+// 全局 mock 的 t() 只回显 key;这里同时回显参数,才能断言资产名随消息带出。
+vi.mock("react-i18next", () => {
+  const t = (key: string, opts?: Record<string, unknown>) => (opts ? `${key} ${JSON.stringify(opts)}` : key);
+  const i18n = { language: "en", changeLanguage: vi.fn() };
+  return {
+    useTranslation: () => ({ t, i18n }),
+    initReactI18next: { type: "3rdParty", init: vi.fn() },
+  };
+});
+
 describe("CustomTypeSection", () => {
   beforeEach(async () => {
     toastError.mockClear();
     const mod = await import("../../../../wailsjs/go/customtype/CustomType");
     vi.mocked(mod.ListCustomTypes).mockReset();
     vi.mocked(mod.DeleteCustomType).mockReset();
+    vi.mocked(mod.GetCustomTypeUsage).mockReset();
     vi.mocked(mod.ExportCustomType).mockReset();
     vi.mocked(mod.SelectImportTypeFile).mockReset();
     useCustomTypeStore.setState({ types: [], loading: false, loaded: false });
@@ -75,28 +86,76 @@ describe("CustomTypeSection", () => {
     expect(await screen.findByText("Grafana")).toBeInTheDocument();
     expect(screen.getByText("AWS CLI")).toBeInTheDocument();
     expect(screen.getByText(/grafana/)).toBeInTheDocument();
-    expect(screen.getAllByText("customType.assetCount")).toHaveLength(2);
+    expect(screen.getAllByText(/customType.assetCount/)).toHaveLength(2);
   });
 
-  it("refuses to delete an in-use type and reports the blocking assets instead of removing it", async () => {
-    const { ListCustomTypes, DeleteCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
+  it("reports an in-use type's assets directly without a confirm dialog or a delete call", async () => {
+    const { ListCustomTypes, DeleteCustomType, GetCustomTypeUsage } =
+      await import("../../../../wailsjs/go/customtype/CustomType");
     vi.mocked(ListCustomTypes).mockResolvedValue([
-      { id: 1, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 1 },
+      { id: 1, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 2 },
     ]);
+    vi.mocked(GetCustomTypeUsage).mockResolvedValue(["grafana-prod", "grafana-dev"]);
+
+    render(<CustomTypeSection />);
+    const user = userEvent.setup();
+    await screen.findByText("Grafana");
+
+    await user.click(screen.getByRole("button", { name: /action.delete/ }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(GetCustomTypeUsage).toHaveBeenCalledWith(1);
+    // mocked t() 只回显 key 与 JSON 参数;资产名与数量必须随消息带出
+    const msg = String(toastError.mock.calls[0][0]);
+    expect(msg).toContain("customType.deleteInUse");
+    expect(msg).toContain("grafana-prod, grafana-dev");
+    expect(msg).toContain("Grafana");
+    expect(screen.queryByText(/customType.deleteConfirmTitle/)).not.toBeInTheDocument();
+    expect(DeleteCustomType).not.toHaveBeenCalled();
+  });
+
+  it("opens the confirm dialog for an unused type and deletes it on confirm", async () => {
+    const { ListCustomTypes, DeleteCustomType, GetCustomTypeUsage } =
+      await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(ListCustomTypes).mockResolvedValue([
+      { id: 1, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 0 },
+    ]);
+    vi.mocked(GetCustomTypeUsage).mockResolvedValue([]);
+    vi.mocked(DeleteCustomType).mockResolvedValue({ deleted: true });
+
+    render(<CustomTypeSection />);
+    const user = userEvent.setup();
+    await screen.findByText("Grafana");
+
+    await user.click(screen.getByRole("button", { name: /action.delete/ }));
+    expect(await screen.findByText(/customType.deleteConfirmTitle/)).toBeInTheDocument();
+    expect(DeleteCustomType).not.toHaveBeenCalled();
+
+    const confirmButtons = screen.getAllByRole("button", { name: /action.delete/ });
+    await user.click(confirmButtons[confirmButtons.length - 1]);
+    await waitFor(() => expect(DeleteCustomType).toHaveBeenCalledWith(1));
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("still reports the assets when the backend refuses a delete after the pre-check (race)", async () => {
+    const { ListCustomTypes, DeleteCustomType, GetCustomTypeUsage } =
+      await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(ListCustomTypes).mockResolvedValue([
+      { id: 1, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 0 },
+    ]);
+    vi.mocked(GetCustomTypeUsage).mockResolvedValue([]);
     vi.mocked(DeleteCustomType).mockResolvedValue({ deleted: false, assets: ["grafana-prod"] });
 
     render(<CustomTypeSection />);
     const user = userEvent.setup();
     await screen.findByText("Grafana");
 
-    await user.click(screen.getByRole("button", { name: "action.delete" }));
-    const confirmButtons = await screen.findAllByRole("button", { name: "action.delete" });
+    await user.click(screen.getByRole("button", { name: /action.delete/ }));
+    await screen.findByText(/customType.deleteConfirmTitle/);
+    const confirmButtons = screen.getAllByRole("button", { name: /action.delete/ });
     await user.click(confirmButtons[confirmButtons.length - 1]);
 
-    // 拒绝原因走 toast.error(customType.deleteInUse),而不是当作删除成功处理
-    // (mocked t() 只回显 key,资产名是否正确传参由 customTypeStore.test.ts 覆盖)。
-    expect(toastError).toHaveBeenCalledWith(expect.stringContaining("customType.deleteInUse"));
-    // 仍在列表里——没有被当作已删除处理
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringContaining("grafana-prod")));
     expect(screen.getByText("Grafana")).toBeInTheDocument();
   });
 });

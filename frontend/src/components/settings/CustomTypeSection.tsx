@@ -19,6 +19,7 @@ export function CustomTypeSection() {
   const loaded = useCustomTypeStore((s) => s.loaded);
   const load = useCustomTypeStore((s) => s.load);
   const remove = useCustomTypeStore((s) => s.remove);
+  const usage = useCustomTypeStore((s) => s.usage);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | undefined>(undefined);
@@ -57,18 +58,29 @@ export function CustomTypeSection() {
     }
   };
 
+  const notifyInUse = (name: string, assets: string[]) =>
+    toast.error(t("customType.deleteInUse", { name, count: assets.length, assets: assets.join(", ") }));
+
+  // 先查占用:有资产在用就直接提示,不弹确认框;后端 Delete 的拦截仍兜底并发新增。
+  const handleDeleteClick = async (ct: customtype.Summary) => {
+    try {
+      const assets = await usage(ct.id);
+      if (assets.length > 0) {
+        notifyInUse(ct.name, assets);
+        return;
+      }
+      setDeleteTarget(ct);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
     try {
       const res = await remove(deleteTarget.id);
       if (!res.deleted) {
-        toast.error(
-          t("customType.deleteInUse", {
-            name: deleteTarget.name,
-            count: res.assets?.length ?? 0,
-            assets: (res.assets ?? []).join(", "),
-          })
-        );
+        notifyInUse(deleteTarget.name, res.assets ?? []);
       } else {
         notifySuccess(t("customType.deleted"));
       }
@@ -165,7 +177,7 @@ export function CustomTypeSection() {
                         size="icon-sm"
                         aria-label={t("action.delete")}
                         className="text-muted-foreground hover:text-destructive"
-                        onClick={() => setDeleteTarget(ct)}
+                        onClick={() => void handleDeleteClick(ct)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

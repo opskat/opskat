@@ -268,9 +268,9 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
         setUsage(null);
         void (async () => {
           try {
-            const [ct, n] = await Promise.all([store.get(typeId), store.usage(typeId)]);
+            const [ct, usedBy] = await Promise.all([store.get(typeId), store.usage(typeId)]);
             setDraft(fromWire(ct));
-            setUsage(n);
+            setUsage(usedBy.length);
           } catch (e) {
             toast.error(String(e));
             onOpenChange(false);

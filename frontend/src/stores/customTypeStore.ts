@@ -15,7 +15,7 @@ interface CustomTypeState {
 
   load: () => Promise<void>;
   get: (id: number) => Promise<custom_type_entity.CustomType>;
-  usage: (id: number) => Promise<number>;
+  usage: (id: number) => Promise<string[]>;
   save: (ct: custom_type_entity.CustomType) => Promise<customtype.SaveResult>;
   remove: (id: number) => Promise<customtype.DeleteResult>;
 }

@@ -124,17 +124,17 @@ func TestGetCustomTypeUsage(t *testing.T) {
 	saveRes, err := b.SaveCustomType(grafanaType())
 	require.NoError(t, err)
 
-	n, err := b.GetCustomTypeUsage(saveRes.Type.ID)
+	names, err := b.GetCustomTypeUsage(saveRes.Type.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 0, n)
+	assert.Empty(t, names)
 
 	a := &asset_entity.Asset{Name: "grafana-prod", Type: asset_entity.AssetTypeGeneric, Status: asset_entity.StatusActive}
 	require.NoError(t, a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}))
 	require.NoError(t, asset_repo.Asset().Create(t.Context(), a))
 
-	n, err = b.GetCustomTypeUsage(saveRes.Type.ID)
+	names, err = b.GetCustomTypeUsage(saveRes.Type.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, n)
+	assert.Equal(t, []string{"grafana-prod"}, names)
 }
 
 func TestDeleteCustomType_InUseListsAssetNames(t *testing.T) {

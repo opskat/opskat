@@ -69,8 +69,8 @@ type CustomTypeSvc interface {
 	Save(ctx context.Context, ct *custom_type_entity.CustomType) error
 	// Delete 删除类型；还有资产在用时返回 *InUseError。
 	Delete(ctx context.Context, id int64) error
-	// UsageCount 返回使用该类型的活动资产数。
-	UsageCount(ctx context.Context, id int64) (int, error)
+	// UsedBy 返回使用该类型的活动资产名称；没有资产在用时为空。
+	UsedBy(ctx context.Context, id int64) ([]string, error)
 	// ResolveAsset 解析一台通用资产：找到其类型并解出全部字段的明文值。
 	ResolveAsset(ctx context.Context, asset *asset_entity.Asset) (*Resolved, error)
 	// SetReservedNames 注入返回内置 + 已加载扩展类型名的函数；每次创建类型时调用
@@ -315,15 +315,11 @@ func (s *customTypeSvc) Delete(ctx context.Context, id int64) error {
 		if err != nil {
 			return err
 		}
-		assets, err := asset_repo.Asset().ListByCustomType(txCtx, ct.Slug)
+		names, err := s.assetNamesUsing(txCtx, ct.Slug)
 		if err != nil {
-			return fmt.Errorf("查询使用该类型的资产失败: %w", err)
+			return err
 		}
-		if len(assets) > 0 {
-			names := make([]string, 0, len(assets))
-			for _, a := range assets {
-				names = append(names, a.Name)
-			}
+		if len(names) > 0 {
 			return &InUseError{Slug: ct.Slug, Assets: names}
 		}
 		return custom_type_repo.CustomType().Delete(txCtx, id)
@@ -336,16 +332,24 @@ func (s *customTypeSvc) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *customTypeSvc) UsageCount(ctx context.Context, id int64) (int, error) {
+func (s *customTypeSvc) UsedBy(ctx context.Context, id int64) ([]string, error) {
 	ct, err := s.Get(ctx, id)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	assets, err := asset_repo.Asset().ListByCustomType(ctx, ct.Slug)
+	return s.assetNamesUsing(ctx, ct.Slug)
+}
+
+func (s *customTypeSvc) assetNamesUsing(ctx context.Context, slug string) ([]string, error) {
+	assets, err := asset_repo.Asset().ListByCustomType(ctx, slug)
 	if err != nil {
-		return 0, fmt.Errorf("查询使用该类型的资产失败: %w", err)
+		return nil, fmt.Errorf("查询使用该类型的资产失败: %w", err)
 	}
-	return len(assets), nil
+	names := make([]string, 0, len(assets))
+	for _, a := range assets {
+		names = append(names, a.Name)
+	}
+	return names, nil
 }
 
 func (s *customTypeSvc) ResolveAsset(ctx context.Context, asset *asset_entity.Asset) (*Resolved, error) {
