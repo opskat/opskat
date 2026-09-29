@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cago-frame/cago/database/db"
@@ -19,7 +22,9 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/migrations"
 )
 
@@ -572,64 +577,72 @@ func TestHandleBatch_AggregateOutcomeSemantics(t *testing.T) {
 // check uses assettype.TypeName — the custom type slug for a generic asset — the same key
 // handleHelp marks (see tool_handlers_unified.go and its TestHandleHelp_GenericAsset*
 // tests). Seeing help for one generic asset, or its type, must cover every other asset
-// built on the same custom type in batch too, not just in single exec. permission has no
-// registered HTTP/command executor for "generic" yet (tasks 5/6), so this test stands one
-// in via replaceExecutorForTest to exercise the gate check on the batch dispatch path
-// itself rather than asserting on DocGate state alone.
+// built on the same custom type in batch too, not just in single exec. The item runs
+// through the real generic executor and canonicalizer, so "executed" means the HTTP
+// server behind the asset saw the request.
 func TestHandleBatchCommand_GenericAssetGateKeyedByCustomTypeSlug(t *testing.T) {
-	m := setupUnified(t)
+	for _, helpRef := range []string{"metrics-a", "metrics"} {
+		t.Run("help "+helpRef, func(t *testing.T) {
+			hits := setupGenericBatch(t)
+			checker, _ := newRecordingChecker()
+			ctx := WithDocGate(context.Background(), NewDocGate())
+			ctx = permission.WithPolicyChecker(ctx, checker)
+			// help on another asset of the type, or on the type slug itself — never on
+			// metrics-b, and never on the static "generic" type.
+			if _, err := handleHelp(ctx, map[string]any{"asset": helpRef}); err != nil {
+				t.Fatalf("help %s: %v", helpRef, err)
+			}
 
-	asset := &asset_entity.Asset{ID: 202, Name: "grafana-b", Type: asset_entity.AssetTypeGeneric}
-	if err := asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}); err != nil {
-		t.Fatalf("SetGenericConfig: %v", err)
-	}
-	m.EXPECT().FindByName(gomock.Any(), "grafana-b").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
-
-	execCalls := 0
-	replaceExecutorForTest(t, asset_entity.AssetTypeGeneric,
-		func(context.Context, *asset_entity.Asset, string, string) (string, error) {
-			execCalls++
-			return "ok", nil
+			out, err := handleBatchCommand(ctx, map[string]any{
+				"commands": `[{"asset":"metrics-b","command":"GET /"}]`,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := hits(); got != 1 {
+				t.Fatalf("metrics-b should have executed once (gate satisfied via the shared slug key), "+
+					"server saw %d requests; output: %s", got, out)
+			}
 		})
-
-	checker, _ := newRecordingChecker()
-	ctx := WithDocGate(context.Background(), NewDocGate())
-	ctx = permission.WithPolicyChecker(ctx, checker)
-	// Marks the custom type slug — exactly what handleHelp marks for either "grafana-a" or
-	// the type name "grafana" itself — never assetB's own id/name, and never the static
-	// "generic" type.
-	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), "grafana")
-
-	out, err := handleBatchCommand(ctx, map[string]any{
-		"commands": `[{"asset":"grafana-b","command":"GET /"}]`,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
-	if execCalls != 1 {
-		t.Fatalf("the item should have executed once (gate satisfied via the shared slug key), "+
-			"got %d calls; output: %s", execCalls, out)
+}
+
+// setupGenericBatch creates, on real repositories (setupGenericPutDB), an HTTP custom type
+// "metrics" whose Base URL points at an httptest server, plus two assets metrics-a and
+// metrics-b of that type (put_asset copies the type's default `GET *` allow rule). It
+// returns a counter of the requests the server has received.
+func setupGenericBatch(t *testing.T) func() int32 {
+	t.Helper()
+	setupGenericPutDB(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	if err := custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Metrics", Slug: "metrics", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}},
+		HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "http://{{host}}"},
+	}); err != nil {
+		t.Fatalf("save custom type: %v", err)
 	}
+	host := strings.TrimPrefix(srv.URL, "http://")
+	for _, name := range []string{"metrics-a", "metrics-b"} {
+		if _, err := handlePutAsset(context.Background(), map[string]any{
+			"name": name, "type": "metrics", "config": map[string]any{"host": host},
+		}); err != nil {
+			t.Fatalf("put_asset %s: %v", name, err)
+		}
+	}
+	return hits.Load
 }
 
 // TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated is the converse of the test
 // above: marking only the static "generic" type (the old, wrong key) must not satisfy the
 // gate for a generic asset whose custom type slug was never documented.
 func TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated(t *testing.T) {
-	m := setupUnified(t)
-
-	asset := &asset_entity.Asset{ID: 203, Name: "grafana-c", Type: asset_entity.AssetTypeGeneric}
-	if err := asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}); err != nil {
-		t.Fatalf("SetGenericConfig: %v", err)
-	}
-	m.EXPECT().FindByName(gomock.Any(), "grafana-c").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
-
-	execCalls := 0
-	replaceExecutorForTest(t, asset_entity.AssetTypeGeneric,
-		func(context.Context, *asset_entity.Asset, string, string) (string, error) {
-			execCalls++
-			return "ok", nil
-		})
+	hits := setupGenericBatch(t)
 
 	checker, _ := newRecordingChecker()
 	ctx := WithDocGate(context.Background(), NewDocGate())
@@ -637,14 +650,14 @@ func TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated(t *testing.T) {
 	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeGeneric)
 
 	out, err := handleBatchCommand(ctx, map[string]any{
-		"commands": `[{"asset":"grafana-c","command":"GET /"}]`,
+		"commands": `[{"asset":"metrics-b","command":"GET /"}]`,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if execCalls != 0 {
+	if got := hits(); got != 0 {
 		t.Fatalf("the item must stay gated — the static \"generic\" type was documented, not the "+
-			"\"grafana\" slug — got %d calls; output: %s", execCalls, out)
+			"\"metrics\" slug — server saw %d requests; output: %s", got, out)
 	}
 	if !strings.Contains(out, "call help") {
 		t.Fatalf("output should carry the gate guidance, got %s", out)
