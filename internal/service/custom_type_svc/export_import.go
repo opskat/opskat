@@ -3,6 +3,7 @@ package custom_type_svc
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -63,16 +64,17 @@ func ExportType(ct *custom_type_entity.CustomType) ([]byte, error) {
 func ParseImportFile(data []byte) (*custom_type_entity.CustomType, error) {
 	var wire wireType
 	if err := json.Unmarshal(data, &wire); err != nil {
-		return nil, fmt.Errorf("解析类型文件失败: %w", err)
+		return nil, fmt.Errorf("parse custom type file: %w", err)
 	}
 	if wire.Format != ExportFormat {
 		return nil, &custom_type_entity.ValidationError{Issues: []custom_type_entity.Issue{
-			{Path: "format", Message: fmt.Sprintf("不是自定义类型文件（format=%q）", wire.Format)},
+			custom_type_entity.NewIssue("format", custom_type_entity.IssueImportFormatUnknown, "format", wire.Format),
 		}}
 	}
 	if wire.Version != ExportFormatVersion {
 		return nil, &custom_type_entity.ValidationError{Issues: []custom_type_entity.Issue{
-			{Path: "format", Message: fmt.Sprintf("不支持的格式版本 %d（当前支持 %d）", wire.Version, ExportFormatVersion)},
+			custom_type_entity.NewIssue("format", custom_type_entity.IssueImportVersionUnsupported,
+				"version", strconv.Itoa(wire.Version), "supported", strconv.Itoa(ExportFormatVersion)),
 		}}
 	}
 	ct := &custom_type_entity.CustomType{

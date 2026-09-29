@@ -197,12 +197,12 @@ func (s *customTypeSvc) validate(ctx context.Context, ct, existing *custom_type_
 		}
 		issues = verr.Issues
 	}
-	slugIssue := func(format string, args ...any) {
-		issues = append(issues, custom_type_entity.Issue{Path: "slug", Message: fmt.Sprintf(format, args...)})
+	slugIssue := func(code string, kv ...string) {
+		issues = append(issues, custom_type_entity.NewIssue("slug", code, kv...))
 	}
 	switch {
 	case existing != nil && existing.Slug != ct.Slug:
-		slugIssue("标识创建后不可修改（原为 %q）", existing.Slug)
+		slugIssue(custom_type_entity.IssueSlugImmutable, "original", existing.Slug)
 	case existing == nil:
 		reserved, err := s.reservedNames()
 		if err != nil {
@@ -210,14 +210,14 @@ func (s *customTypeSvc) validate(ctx context.Context, ct, existing *custom_type_
 		}
 		for _, name := range reserved {
 			if strings.EqualFold(name, ct.Slug) {
-				slugIssue("标识 %q 与内置或扩展类型重名", ct.Slug)
+				slugIssue(custom_type_entity.IssueSlugReserved, "slug", ct.Slug)
 				break
 			}
 		}
 		other, err := custom_type_repo.CustomType().FindBySlug(ctx, ct.Slug)
 		switch {
 		case err == nil:
-			slugIssue("标识 %q 与自定义类型「%s」重名", ct.Slug, other.Name)
+			slugIssue(custom_type_entity.IssueSlugTaken, "slug", ct.Slug, "name", other.Name)
 		case !errors.Is(err, gorm.ErrRecordNotFound):
 			return fmt.Errorf("检查标识是否重名失败: %w", err)
 		}

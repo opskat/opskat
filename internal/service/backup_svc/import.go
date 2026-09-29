@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
@@ -129,7 +130,8 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				// 备份是外部输入：类型定义过与保存类型相同的实体校验，执行器与权限判定
 				// 都以"保存时已校验"为前提。
 				if err := ct.Validate(); err != nil {
-					return fmt.Errorf("备份中的自定义类型 %s 无效: %w", ct.Slug, err)
+					return fmt.Errorf("%s: %w", policy.PolicyFmt(ctx,
+						"custom type %s in the backup is invalid", "备份中的自定义类型 %s 无效", ct.Slug), err)
 				}
 				if !isReplace {
 					var existing custom_type_entity.CustomType

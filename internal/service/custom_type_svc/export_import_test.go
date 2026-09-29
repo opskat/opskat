@@ -67,8 +67,9 @@ func TestParseImportFile_UnknownFormat(t *testing.T) {
 	require.Error(t, err)
 	var verr *custom_type_entity.ValidationError
 	require.True(t, errors.As(err, &verr))
-	require.Len(t, verr.Issues, 1)
-	assert.Equal(t, "format", verr.Issues[0].Path)
+	assert.Equal(t, []custom_type_entity.Issue{
+		{Path: "format", Code: "format_unknown", Params: map[string]string{"format": "something-else"}},
+	}, verr.Issues)
 }
 
 func TestParseImportFile_UnknownVersion(t *testing.T) {
@@ -79,7 +80,9 @@ func TestParseImportFile_UnknownVersion(t *testing.T) {
 	require.Error(t, err)
 	var verr *custom_type_entity.ValidationError
 	require.True(t, errors.As(err, &verr))
-	assert.Equal(t, "format", verr.Issues[0].Path)
+	assert.Equal(t, []custom_type_entity.Issue{
+		{Path: "format", Code: "version_unsupported", Params: map[string]string{"version": "999", "supported": "1"}},
+	}, verr.Issues)
 }
 
 func TestParseImportFile_UnregisteredAuthType(t *testing.T) {
@@ -96,7 +99,7 @@ func TestParseImportFile_UnregisteredAuthType(t *testing.T) {
 	for _, is := range verr.Issues {
 		if is.Path == "http.auth[0].type" {
 			found = true
-			assert.Contains(t, is.Message, "未注册")
+			assert.Equal(t, "auth_type_unknown", is.Code)
 		}
 	}
 	assert.True(t, found, "expected an issue on http.auth[0].type, got %+v", verr.Issues)
@@ -118,7 +121,7 @@ func TestParseImportFile_UnknownFunction(t *testing.T) {
 	for _, is := range verr.Issues {
 		if is.Path == "command.template" {
 			found = true
-			assert.Contains(t, is.Message, "unknown function")
+			assert.Equal(t, "template.unknown_function", is.Code)
 		}
 	}
 	assert.True(t, found, "expected an issue on command.template, got %+v", verr.Issues)

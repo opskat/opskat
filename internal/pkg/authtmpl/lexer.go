@@ -1,7 +1,7 @@
 package authtmpl
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -25,7 +25,7 @@ type token struct {
 
 // lexExpr 把一个 `{{ }}` 内部的表达式源码切成 token 序列。
 // 字符串字面量在这里就完成转义解码，未识别的转义序列在这里报错。
-func lexExpr(src string) ([]token, error) {
+func lexExpr(src string) ([]token, *ParseError) {
 	var toks []token
 	i := 0
 	n := len(src)
@@ -64,7 +64,7 @@ func lexExpr(src string) ([]token, error) {
 			toks = append(toks, token{kind: tokIdent, text: src[i:j]})
 			i = j
 		default:
-			return nil, fmt.Errorf("unexpected character %q", string(c))
+			return nil, newParseError(CodeUnexpectedCharacter, "unexpected character "+strconv.Quote(string(c)), "char", string(c))
 		}
 	}
 	return toks, nil
@@ -80,10 +80,8 @@ func isIdentPart(c byte) bool {
 
 // lexString 解码从 s[0]=='"' 开始的一个字符串字面量，返回解码后的值、
 // 消耗掉的字节数（含首尾引号），以及遇到未识别转义 / 未闭合引号时的错误。
-func lexString(s string) (string, int, error) {
-	if len(s) == 0 || s[0] != '"' {
-		return "", 0, fmt.Errorf("internal: lexString called without leading quote")
-	}
+// 只由 lexExpr 在遇到 '"' 时调用。
+func lexString(s string) (string, int, *ParseError) {
 	var b strings.Builder
 	i := 1
 	n := len(s)
@@ -94,7 +92,7 @@ func lexString(s string) (string, int, error) {
 		}
 		if c == '\\' {
 			if i+1 >= n {
-				return "", 0, fmt.Errorf("unterminated escape sequence in string literal")
+				return "", 0, newParseError(CodeUnterminatedString, "unterminated escape sequence in string literal")
 			}
 			switch s[i+1] {
 			case 'n':
@@ -104,7 +102,7 @@ func lexString(s string) (string, int, error) {
 			case '\\':
 				b.WriteByte('\\')
 			default:
-				return "", 0, fmt.Errorf("invalid escape sequence \\%c in string literal", s[i+1])
+				return "", 0, newParseError(CodeInvalidEscape, "invalid escape sequence \\"+string(s[i+1])+" in string literal", "char", string(s[i+1]))
 			}
 			i += 2
 			continue
@@ -112,5 +110,5 @@ func lexString(s string) (string, int, error) {
 		b.WriteByte(c)
 		i++
 	}
-	return "", 0, fmt.Errorf("unterminated string literal")
+	return "", 0, newParseError(CodeUnterminatedString, "unterminated string literal")
 }

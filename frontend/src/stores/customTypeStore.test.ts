@@ -34,7 +34,7 @@ describe("useCustomTypeStore", () => {
     const { SaveCustomType, ListCustomTypes } = await import("../../wailsjs/go/customtype/CustomType");
 
     // 失败:校验错误——不应刷新列表
-    vi.mocked(SaveCustomType).mockResolvedValueOnce({ issues: [{ path: "name", message: "required" }] } as any);
+    vi.mocked(SaveCustomType).mockResolvedValueOnce({ issues: [{ path: "name", code: "name_required" }] } as any);
     await useCustomTypeStore.getState().save({} as never);
     expect(ListCustomTypes).not.toHaveBeenCalled();
 

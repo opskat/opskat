@@ -30,14 +30,14 @@ describe("CustomTypeEditorDialog", () => {
   it("renders backend validation issues next to the field they belong to instead of a generic error", async () => {
     const { SaveCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
     vi.mocked(SaveCustomType).mockResolvedValue({
-      issues: [{ path: "name", message: "名称不能为空" }],
+      issues: [{ path: "name", code: "name_required" }],
     } as any);
 
     render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "action.save" }));
 
-    expect(await screen.findByText("名称不能为空")).toBeInTheDocument();
+    expect(await screen.findByText("customType.issue.name_required")).toBeInTheDocument();
   });
 
   it("closes and reports success once the backend accepts the save", async () => {
@@ -77,7 +77,7 @@ describe("CustomTypeEditorDialog", () => {
 
   it("prefills the default policy by execution mode for a new type and saves it", async () => {
     const { SaveCustomType } = await import("../../../../wailsjs/go/customtype/CustomType");
-    vi.mocked(SaveCustomType).mockResolvedValue({ issues: [{ path: "name", message: "x" }] } as any);
+    vi.mocked(SaveCustomType).mockResolvedValue({ issues: [{ path: "name", code: "name_required" }] } as any);
     render(<CustomTypeEditorDialog open onOpenChange={vi.fn()} />);
     const user = userEvent.setup();
 

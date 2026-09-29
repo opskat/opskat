@@ -5,8 +5,11 @@
 package custom_type_entity
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -94,10 +97,54 @@ func (CustomType) TableName() string {
 // 取值形如 "name"、"slug"、"exec_mode"、"fields"、"fields[2].name"、
 // "fields[1].default"、"http"、"http.base_url"、"http.auth[0].type"、
 // "http.auth[0].name"、"http.auth[0].values"、"http.auth[0].values[1]"、
-// "command"、"command.template"、"command.env[1].name"、"command.env[1].value"。
+// "command"、"command.template"、"command.env[1].name"、"command.env[1].value"、
+// "format"（导入文件）。Code 是下面的问题码之一（模板问题为
+// IssueTemplatePrefix + authtmpl 错误码），Params 是填进文案的参数——界面按
+// Code 翻译成界面语言（frontend 的 customType.issue.<code>），不在后端拼文案。
 type Issue struct {
-	Path    string `json:"path"`
-	Message string `json:"message"`
+	Path   string            `json:"path"`
+	Code   string            `json:"code"`
+	Params map[string]string `json:"params,omitempty"`
+}
+
+// 问题码。值是与前端语言包之间的契约，改名要同步两份语言包。
+const (
+	IssueNameRequired             = "name_required"
+	IssueSlugInvalid              = "slug_invalid"
+	IssueSlugImmutable            = "slug_immutable"
+	IssueSlugReserved             = "slug_reserved"
+	IssueSlugTaken                = "slug_taken"
+	IssueExecModeInvalid          = "exec_mode_invalid"
+	IssueFieldsRequired           = "fields_required"
+	IssueFieldNameInvalid         = "field_name_invalid"
+	IssueFieldNameDuplicate       = "field_name_duplicate"
+	IssueSecretDefault            = "secret_default_not_allowed"
+	IssueHTTPConfigMissing        = "http_config_missing"
+	IssueBaseURLRequired          = "base_url_required"
+	IssueAuthTypeUnknown          = "auth_type_unknown"
+	IssueAuthNameRequired         = "auth_name_required"
+	IssueAuthNameNotAllowed       = "auth_name_not_allowed"
+	IssueAuthValueCount           = "auth_value_count"
+	IssueCommandConfigMissing     = "command_config_missing"
+	IssueEnvNameInvalid           = "env_name_invalid"
+	IssueEnvNameDuplicate         = "env_name_duplicate"
+	IssueCommandSecretInArgs      = "command_secret_in_args"
+	IssueImportFormatUnknown      = "format_unknown"
+	IssueImportVersionUnsupported = "version_unsupported"
+	// IssueTemplatePrefix 加在 authtmpl.ParseError.Code 前面，Params 沿用 ParseError 的。
+	IssueTemplatePrefix = "template."
+)
+
+// NewIssue 构造一条问题；kv 是成对的参数名 / 参数值。
+func NewIssue(path, code string, kv ...string) Issue {
+	is := Issue{Path: path, Code: code}
+	if len(kv) > 0 {
+		is.Params = make(map[string]string, len(kv)/2)
+		for i := 0; i+1 < len(kv); i += 2 {
+			is.Params[kv[i]] = kv[i+1]
+		}
+	}
+	return is
 }
 
 // ValidationError 汇总一次校验发现的全部问题（而不是遇到第一个就停）。
@@ -105,18 +152,32 @@ type ValidationError struct {
 	Issues []Issue `json:"issues"`
 }
 
+// Error 给日志与包装报错用：逐条列出路径、问题码与参数（界面不用它，按 Issues 翻译）。
 func (e *ValidationError) Error() string {
 	parts := make([]string, 0, len(e.Issues))
 	for _, is := range e.Issues {
-		parts = append(parts, is.Path+": "+is.Message)
+		part := is.Path + ": " + is.Code
+		if len(is.Params) > 0 {
+			keys := make([]string, 0, len(is.Params))
+			for k := range is.Params {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			kvs := make([]string, 0, len(keys))
+			for _, k := range keys {
+				kvs = append(kvs, k+"="+strconv.Quote(is.Params[k]))
+			}
+			part += " (" + strings.Join(kvs, ", ") + ")"
+		}
+		parts = append(parts, part)
 	}
-	return "自定义类型校验失败: " + strings.Join(parts, "; ")
+	return "invalid custom type: " + strings.Join(parts, "; ")
 }
 
 type issues []Issue
 
-func (l *issues) add(path, format string, args ...any) {
-	*l = append(*l, Issue{Path: path, Message: fmt.Sprintf(format, args...)})
+func (l *issues) add(path, code string, kv ...string) {
+	*l = append(*l, NewIssue(path, code, kv...))
 }
 
 func (l issues) err() error {
@@ -152,10 +213,10 @@ func (c *CustomType) FieldByName(name string) (Field, bool) {
 func (c *CustomType) Validate() error {
 	var l issues
 	if strings.TrimSpace(c.Name) == "" {
-		l.add("name", "名称不能为空")
+		l.add("name", IssueNameRequired)
 	}
 	if !slugPattern.MatchString(c.Slug) {
-		l.add("slug", "标识 %q 不合法，须匹配 %s", c.Slug, slugPattern.String())
+		l.add("slug", IssueSlugInvalid, "slug", c.Slug)
 	}
 	c.validateFields(&l)
 	fields := c.FieldNames()
@@ -165,14 +226,14 @@ func (c *CustomType) Validate() error {
 	case ExecModeCommand:
 		c.validateCommand(&l, fields)
 	default:
-		l.add("exec_mode", "执行方式 %q 不合法，只能是 %s 或 %s", c.ExecMode, ExecModeHTTP, ExecModeCommand)
+		l.add("exec_mode", IssueExecModeInvalid, "mode", c.ExecMode)
 	}
 	return l.err()
 }
 
 func (c *CustomType) validateFields(l *issues) {
 	if len(c.Fields) == 0 {
-		l.add("fields", "至少需要一个字段")
+		l.add("fields", IssueFieldsRequired)
 		return
 	}
 	seen := make(map[string]bool, len(c.Fields))
@@ -180,24 +241,24 @@ func (c *CustomType) validateFields(l *issues) {
 		path := fmt.Sprintf("fields[%d]", i)
 		switch {
 		case !identPattern.MatchString(f.Name):
-			l.add(path+".name", "字段名 %q 不合法，须匹配 %s", f.Name, identPattern.String())
+			l.add(path+".name", IssueFieldNameInvalid, "name", f.Name)
 		case seen[f.Name]:
-			l.add(path+".name", "字段名 %q 重复", f.Name)
+			l.add(path+".name", IssueFieldNameDuplicate, "name", f.Name)
 		}
 		seen[f.Name] = true
 		if f.Secret && f.Default != "" {
-			l.add(path+".default", "密钥字段不能有默认值")
+			l.add(path+".default", IssueSecretDefault)
 		}
 	}
 }
 
 func (c *CustomType) validateHTTP(l *issues, fields []string) {
 	if c.HTTP == nil {
-		l.add("http", "HTTP 请求方式缺少配置")
+		l.add("http", IssueHTTPConfigMissing)
 		return
 	}
 	if strings.TrimSpace(c.HTTP.BaseURL) == "" {
-		l.add("http.base_url", "Base URL 不能为空")
+		l.add("http.base_url", IssueBaseURLRequired)
 	} else {
 		parseInto(l, "http.base_url", c.HTTP.BaseURL, fields, false)
 	}
@@ -205,17 +266,18 @@ func (c *CustomType) validateHTTP(l *issues, fields []string) {
 		path := fmt.Sprintf("http.auth[%d]", i)
 		at, ok := authtmpl.AuthTypeFor(b.Type)
 		if !ok {
-			l.add(path+".type", "认证类型 %q 未注册", b.Type)
+			l.add(path+".type", IssueAuthTypeUnknown, "type", b.Type)
 			continue
 		}
 		if at.HasName && strings.TrimSpace(b.Name) == "" {
-			l.add(path+".name", "认证类型 %s 需要名称", b.Type)
+			l.add(path+".name", IssueAuthNameRequired, "type", b.Type)
 		}
 		if !at.HasName && b.Name != "" {
-			l.add(path+".name", "认证类型 %s 没有名称", b.Type)
+			l.add(path+".name", IssueAuthNameNotAllowed, "type", b.Type)
 		}
 		if len(b.Values) != at.ValueCount {
-			l.add(path+".values", "认证类型 %s 需要 %d 个值模板，实际 %d 个", b.Type, at.ValueCount, len(b.Values))
+			l.add(path+".values", IssueAuthValueCount,
+				"type", b.Type, "want", strconv.Itoa(at.ValueCount), "got", strconv.Itoa(len(b.Values)))
 		}
 		for j, v := range b.Values {
 			parseInto(l, fmt.Sprintf("%s.values[%d]", path, j), v, fields, true)
@@ -225,7 +287,7 @@ func (c *CustomType) validateHTTP(l *issues, fields []string) {
 
 func (c *CustomType) validateCommand(l *issues, fields []string) {
 	if c.Command == nil {
-		l.add("command", "本地命令方式缺少配置")
+		l.add("command", IssueCommandConfigMissing)
 		return
 	}
 	parseInto(l, "command.template", c.Command.Template, fields, false)
@@ -234,9 +296,9 @@ func (c *CustomType) validateCommand(l *issues, fields []string) {
 		path := fmt.Sprintf("command.env[%d]", i)
 		switch {
 		case !identPattern.MatchString(e.Name):
-			l.add(path+".name", "环境变量名 %q 不合法，须匹配 %s", e.Name, identPattern.String())
+			l.add(path+".name", IssueEnvNameInvalid, "name", e.Name)
 		case seen[e.Name]:
-			l.add(path+".name", "环境变量名 %q 重复", e.Name)
+			l.add(path+".name", IssueEnvNameDuplicate, "name", e.Name)
 		}
 		seen[e.Name] = true
 		parseInto(l, path+".value", e.Value, fields, false)
@@ -244,8 +306,10 @@ func (c *CustomType) validateCommand(l *issues, fields []string) {
 }
 
 func parseInto(l *issues, path, src string, fields []string, allowRequest bool) {
-	if _, err := authtmpl.Parse(src, authtmpl.ParseOptions{Fields: fields, AllowRequest: allowRequest}); err != nil {
-		l.add(path, "%s", err.Error())
+	_, err := authtmpl.Parse(src, authtmpl.ParseOptions{Fields: fields, AllowRequest: allowRequest})
+	var perr *authtmpl.ParseError
+	if errors.As(err, &perr) {
+		*l = append(*l, Issue{Path: path, Code: IssueTemplatePrefix + perr.Code, Params: perr.Params})
 	}
 }
 
@@ -269,7 +333,7 @@ func (c *CustomType) Warnings() []Issue {
 	if _, err := authtmpl.Parse(c.Command.Template, authtmpl.ParseOptions{Fields: plain}); err == nil {
 		return nil
 	}
-	return []Issue{{Path: "command.template", Message: "命令模板引用了密钥字段，命令行参数会被本机其他进程（ps）看到，建议改用环境变量"}}
+	return []Issue{NewIssue("command.template", IssueCommandSecretInArgs)}
 }
 
 // DefaultPolicyFor 返回新建类型时按执行方式预填的默认规则（Design decision 9）：

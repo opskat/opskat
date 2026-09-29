@@ -9,7 +9,6 @@ package authtmpl
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
 )
 
@@ -37,7 +36,7 @@ type segment struct {
 
 // Parse 解析模板源码。src 里的 `{{ 表达式 }}` 会被解析为表达式，
 // 其余部分原样作为字面文本。所有语法错误、未知字段、未知函数、
-// 参数个数不对、以及在不允许的位置使用 request.* 都会在这里报错，
+// 参数个数不对、以及在不允许的位置使用 request.* 都会在这里报错（*ParseError），
 // 而不是留到 Render 时才发现。
 func Parse(src string, opts ParseOptions) (*Template, error) {
 	fieldSet := make(map[string]struct{}, len(opts.Fields))
@@ -61,14 +60,15 @@ func Parse(src string, opts ParseOptions) (*Template, error) {
 		rest = rest[start+2:]
 		end := strings.Index(rest, "}}")
 		if end < 0 {
-			return nil, fmt.Errorf("authtmpl: unterminated expression (missing '}}')")
+			return nil, newParseError(CodeUnterminatedExpression, "unterminated expression (missing '}}')")
 		}
 		exprSrc := rest[:end]
 		rest = rest[end+2:]
 
-		node, err := parseExpr(exprSrc, fieldSet, opts.AllowRequest)
-		if err != nil {
-			return nil, fmt.Errorf("authtmpl: %w (in {{%s}})", err, exprSrc)
+		node, perr := parseExpr(exprSrc, fieldSet, opts.AllowRequest)
+		if perr != nil {
+			perr.Params["expr"] = strings.TrimSpace(exprSrc)
+			return nil, perr
 		}
 		parts = append(parts, segment{expr: node})
 	}

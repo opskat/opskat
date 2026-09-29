@@ -37,12 +37,12 @@ describe("ImportCustomTypeDialog", () => {
 
   it("shows rejection reasons and no confirm button when the file fails validation", async () => {
     const preview = new customtype.ImportPreview({
-      issues: [{ path: "format", message: "不支持的格式版本 99" }],
+      issues: [{ path: "format", code: "version_unsupported", params: { version: "99", supported: "1" } }],
       slugTaken: false,
     });
     render(<ImportCustomTypeDialog preview={preview} onOpenChange={vi.fn()} />);
 
-    expect(await screen.findByText("不支持的格式版本 99")).toBeInTheDocument();
+    expect(await screen.findByText("customType.issue.version_unsupported")).toBeInTheDocument();
     expect(screen.queryByTestId("customtype-import-confirm")).not.toBeInTheDocument();
   });
 
@@ -60,7 +60,7 @@ describe("ImportCustomTypeDialog", () => {
     vi.mocked(mod.SaveCustomType).mockImplementation(async (ct) => {
       if (ct.slug === "grafana") {
         return new customtype.SaveResult({
-          issues: [{ path: "slug", message: '标识 "grafana" 与自定义类型「Local」重名' }],
+          issues: [{ path: "slug", code: "slug_taken", params: { slug: "grafana", name: "Local" } }],
         });
       }
       return new customtype.SaveResult({ type: ct });
@@ -71,7 +71,7 @@ describe("ImportCustomTypeDialog", () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByTestId("customtype-import-confirm"));
-    expect(await screen.findByText(/重名/)).toBeInTheDocument();
+    expect(await screen.findByText("customType.issue.slug_taken")).toBeInTheDocument();
     expect(screen.getByTestId("customtype-import-confirm")).toBeInTheDocument(); // dialog stays open
 
     const slugInput = screen.getByTestId("customtype-import-slug-input");

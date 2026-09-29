@@ -5,6 +5,7 @@ import { AlertTriangle, Globe, Loader2, SquareTerminal } from "lucide-react";
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label } from "@opskat/ui";
 import { notifySuccess } from "@/lib/notify";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { issueText } from "./customTypeIssue";
 import { custom_type_entity, customtype } from "../../../wailsjs/go/models";
 
 interface ImportCustomTypeDialogProps {
@@ -78,7 +79,7 @@ export function ImportCustomTypeDialog({ preview, onOpenChange }: ImportCustomTy
             </div>
             <ul className="list-inside list-disc text-muted-foreground">
               {(preview?.issues ?? []).map((is, i) => (
-                <li key={i}>{is.message}</li>
+                <li key={i}>{issueText(t, is)}</li>
               ))}
             </ul>
           </div>
@@ -154,7 +155,7 @@ export function ImportCustomTypeDialog({ preview, onOpenChange }: ImportCustomTy
               <div className="space-y-1 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
                 {issues.map((is, i) => (
                   <p key={i} className="text-destructive">
-                    {is.path}: {is.message}
+                    {issueText(t, is)}
                   </p>
                 ))}
               </div>

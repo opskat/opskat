@@ -7,6 +7,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
@@ -40,7 +41,7 @@ func (c *CustomType) ExportCustomType(id int64) error {
 		Filters:         []wailsRuntime.FileFilter{{DisplayName: "OpsKat Custom Type", Pattern: "*.opskat-type.json"}},
 	})
 	if err != nil {
-		return fmt.Errorf("保存文件对话框失败: %w", err)
+		return fmt.Errorf("%s: %w", i18n.Pick(c.lang.Lang(), "保存文件对话框失败", "save file dialog failed"), err)
 	}
 	if filePath == "" {
 		return nil
@@ -51,12 +52,13 @@ func (c *CustomType) ExportCustomType(id int64) error {
 // SelectImportTypeFile 选择一个类型导入文件并返回预览。用户取消对话框时返回
 // nil, nil（不是错误）。
 func (c *CustomType) SelectImportTypeFile() (*ImportPreview, error) {
+	lang := c.lang.Lang()
 	filePath, err := wailsRuntime.OpenFileDialog(c.ctx, wailsRuntime.OpenDialogOptions{
-		Title:   "导入自定义类型",
+		Title:   i18n.Pick(lang, "导入自定义类型", "Import custom type"),
 		Filters: []wailsRuntime.FileFilter{{DisplayName: "OpsKat Custom Type", Pattern: "*.opskat-type.json"}},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.Pick(lang, "打开文件对话框失败", "open file dialog failed"), err)
 	}
 	if filePath == "" {
 		return nil, nil
@@ -64,7 +66,7 @@ func (c *CustomType) SelectImportTypeFile() (*ImportPreview, error) {
 
 	data, err := os.ReadFile(filePath) //nolint:gosec // filePath 来自文件对话框
 	if err != nil {
-		return nil, fmt.Errorf("读取文件失败: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.Pick(lang, "读取文件失败", "read file failed"), err)
 	}
 
 	ctx := c.ctxWithLang()
@@ -74,7 +76,7 @@ func (c *CustomType) SelectImportTypeFile() (*ImportPreview, error) {
 		if errors.As(err, &verr) {
 			return &ImportPreview{Issues: verr.Issues}, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", i18n.Pick(lang, "类型文件无法解析", "can't parse the type file"), err)
 	}
 
 	preview := &ImportPreview{Type: ct}

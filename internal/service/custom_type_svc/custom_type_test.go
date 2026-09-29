@@ -159,12 +159,24 @@ func TestSave_SlugConflicts(t *testing.T) {
 		})
 	}
 
-	// 冲突提示要指出冲突对象：自定义类型给出其名称。
+	// 冲突提示要指出冲突对象（界面按 Code 翻译、用 Params 填文案）：内置 / 扩展类型
+	// 给出标识，自定义类型再给出其名称。
+	reserved := grafanaType()
+	reserved.Slug = "ext-es"
+	assert.Contains(t, validationIssues(t, svc.Save(ctx, reserved)),
+		custom_type_entity.Issue{Path: "slug", Code: "slug_reserved", Params: map[string]string{"slug": "ext-es"}})
+
 	dup := grafanaType()
 	dup.Name = "Another"
-	err := svc.Save(ctx, dup)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Grafana")
+	assert.Contains(t, validationIssues(t, svc.Save(ctx, dup)),
+		custom_type_entity.Issue{Path: "slug", Code: "slug_taken", Params: map[string]string{"slug": "grafana", "name": "Grafana"}})
+}
+
+func validationIssues(t *testing.T, err error) []custom_type_entity.Issue {
+	t.Helper()
+	var verr *custom_type_entity.ValidationError
+	require.ErrorAs(t, err, &verr)
+	return verr.Issues
 }
 
 func TestSave_RequiresReservedNames(t *testing.T) {
@@ -182,7 +194,8 @@ func TestSave_SlugIsImmutable(t *testing.T) {
 	renamed := grafanaType()
 	renamed.ID = ct.ID
 	renamed.Slug = "grafana-new"
-	assert.Contains(t, issuePaths(t, svc.Save(ctx, renamed)), "slug")
+	assert.Contains(t, validationIssues(t, svc.Save(ctx, renamed)),
+		custom_type_entity.Issue{Path: "slug", Code: "slug_immutable", Params: map[string]string{"original": "grafana"}})
 
 	// 更新自己不算与自己重名；未编辑默认策略时保留原策略。
 	same := grafanaType()

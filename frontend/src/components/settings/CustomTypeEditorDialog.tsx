@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Globe, SquareTerminal, Plus, Trash2, Lock, LockOpen, Loader2, Info } from "lucide-react";
 import {
   Button,
@@ -26,6 +27,7 @@ import { PolicyTagEditor } from "@/components/asset/PolicyTagEditor";
 import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 import { Field, Segmented } from "@/components/asset/fields";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { issueText } from "./customTypeIssue";
 import { custom_type_entity } from "../../../wailsjs/go/models";
 
 // 认证类型的值个数 / 是否带名称,与 internal/pkg/authtmpl.builtinAuthTypes 一一对应
@@ -169,9 +171,9 @@ function toWire(d: CustomTypeDraft): custom_type_entity.CustomType {
   });
 }
 
-function buildIssueMap(issues: custom_type_entity.Issue[] | undefined): Map<string, string> {
+function buildIssueMap(t: TFunction, issues: custom_type_entity.Issue[]): Map<string, string> {
   const m = new Map<string, string>();
-  for (const it of issues ?? []) m.set(it.path, it.message);
+  for (const it of issues) m.set(it.path, issueText(t, it));
   return m;
 }
 
@@ -280,7 +282,8 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
     }
   }
 
-  const issueMap = buildIssueMap(issues);
+  const issueMap = buildIssueMap(t, issues);
+  const commandTemplateWarning = warnings.find((w) => w.path === "command.template");
   const isEdit = typeId !== undefined;
 
   const handleSave = async () => {
@@ -529,10 +532,10 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
             {t("customType.commandTemplateEmptyHint")}
           </p>
         )}
-        {warnings.some((w) => w.path === "command.template") && (
+        {commandTemplateWarning && (
           <p className="flex items-start gap-1.5 text-xs text-warning">
             <Info className="mt-0.5 size-3.5 shrink-0" />
-            {warnings.find((w) => w.path === "command.template")?.message}
+            {issueText(t, commandTemplateWarning)}
           </p>
         )}
       </Field>

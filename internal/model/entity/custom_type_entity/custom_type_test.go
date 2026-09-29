@@ -195,6 +195,75 @@ func TestWarnings_SecretInCommandTemplate(t *testing.T) {
 	assert.Empty(t, h.Warnings(), "HTTP 方式不涉及命令行参数")
 }
 
+// 界面按 Code 翻译、用 Params 填文案（跟随界面语言），所以问题只携带错误码与参数，
+// 模板问题沿用 authtmpl 的错误码（加 template. 前缀），不带任何 "authtmpl:" 字样。
+func TestValidate_IssuesCarryCodeAndParams(t *testing.T) {
+	cases := []struct {
+		name   string
+		ct     func() *CustomType
+		mutate func(*CustomType)
+		want   Issue
+	}{
+		{"name required", httpType, func(c *CustomType) { c.Name = "" },
+			Issue{Path: "name", Code: "name_required"}},
+		{"slug invalid", httpType, func(c *CustomType) { c.Slug = "A" },
+			Issue{Path: "slug", Code: "slug_invalid", Params: map[string]string{"slug": "A"}}},
+		{"exec mode invalid", httpType, func(c *CustomType) { c.ExecMode = "store" },
+			Issue{Path: "exec_mode", Code: "exec_mode_invalid", Params: map[string]string{"mode": "store"}}},
+		{"fields required", httpType, func(c *CustomType) { c.Fields = nil; c.HTTP.BaseURL = "https://x"; c.HTTP.Auth = nil },
+			Issue{Path: "fields", Code: "fields_required"}},
+		{"field name invalid", httpType, func(c *CustomType) { c.Fields[0].Name = "my-host" },
+			Issue{Path: "fields[0].name", Code: "field_name_invalid", Params: map[string]string{"name": "my-host"}}},
+		{"field name duplicate", httpType, func(c *CustomType) { c.Fields[1].Name = "host" },
+			Issue{Path: "fields[1].name", Code: "field_name_duplicate", Params: map[string]string{"name": "host"}}},
+		{"secret default", httpType, func(c *CustomType) { c.Fields[1].Default = "x" },
+			Issue{Path: "fields[1].default", Code: "secret_default_not_allowed"}},
+		{"http config missing", httpType, func(c *CustomType) { c.HTTP = nil },
+			Issue{Path: "http", Code: "http_config_missing"}},
+		{"base url required", httpType, func(c *CustomType) { c.HTTP.BaseURL = " " },
+			Issue{Path: "http.base_url", Code: "base_url_required"}},
+		{"base url template", httpType, func(c *CustomType) { c.HTTP.BaseURL = "https://{{hostname}}" },
+			Issue{Path: "http.base_url", Code: "template.unknown_field", Params: map[string]string{"name": "hostname", "expr": "hostname"}}},
+		{"auth type unknown", httpType, func(c *CustomType) { c.HTTP.Auth[0].Type = "sigv4" },
+			Issue{Path: "http.auth[0].type", Code: "auth_type_unknown", Params: map[string]string{"type": "sigv4"}}},
+		{"auth name required", httpType, func(c *CustomType) { c.HTTP.Auth[0].Name = "" },
+			Issue{Path: "http.auth[0].name", Code: "auth_name_required", Params: map[string]string{"type": "header"}}},
+		{"auth name not allowed", httpType, func(c *CustomType) {
+			c.HTTP.Auth[0] = AuthBinding{Type: "basic", Name: "x", Values: []string{"{{host}}", "{{token}}"}}
+		}, Issue{Path: "http.auth[0].name", Code: "auth_name_not_allowed", Params: map[string]string{"type": "basic"}}},
+		{"auth value count", httpType, func(c *CustomType) { c.HTTP.Auth[0] = AuthBinding{Type: "basic", Values: []string{"{{host}}"}} },
+			Issue{Path: "http.auth[0].values", Code: "auth_value_count", Params: map[string]string{"type": "basic", "want": "2", "got": "1"}}},
+		{"auth value template", httpType, func(c *CustomType) { c.HTTP.Auth[0].Values[0] = "{{md5(token)}}" },
+			Issue{Path: "http.auth[0].values[0]", Code: "template.unknown_function", Params: map[string]string{"name": "md5", "expr": "md5(token)"}}},
+		{"command config missing", commandType, func(c *CustomType) { c.Command = nil },
+			Issue{Path: "command", Code: "command_config_missing"}},
+		{"command template", commandType, func(c *CustomType) { c.Command.Template = "x {{request.method}}" },
+			Issue{Path: "command.template", Code: "template.request_not_allowed", Params: map[string]string{"expr": "request.method"}}},
+		{"env name invalid", commandType, func(c *CustomType) { c.Command.Env[0].Name = "AWS-KEY" },
+			Issue{Path: "command.env[0].name", Code: "env_name_invalid", Params: map[string]string{"name": "AWS-KEY"}}},
+		{"env name duplicate", commandType, func(c *CustomType) {
+			c.Command.Env = append(c.Command.Env, EnvBinding{Name: "AWS_ACCESS_KEY_ID", Value: "x"})
+		}, Issue{Path: "command.env[1].name", Code: "env_name_duplicate", Params: map[string]string{"name": "AWS_ACCESS_KEY_ID"}}},
+		{"env value template", commandType, func(c *CustomType) { c.Command.Env[0].Value = "{{access_key" },
+			Issue{Path: "command.env[0].value", Code: "template.unterminated_expression", Params: map[string]string{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ct := tc.ct()
+			tc.mutate(ct)
+			var verr *ValidationError
+			require.ErrorAs(t, ct.Validate(), &verr)
+			assert.Contains(t, verr.Issues, tc.want)
+		})
+	}
+}
+
+func TestWarnings_CarryCode(t *testing.T) {
+	ct := commandType()
+	ct.Command.Template = "aws --key {{access_key}}"
+	assert.Equal(t, []Issue{{Path: "command.template", Code: "command_secret_in_args"}}, ct.Warnings())
+}
+
 func TestDefaultPolicyFor(t *testing.T) {
 	p := DefaultPolicyFor(ExecModeHTTP)
 	assert.Equal(t, []string{"GET *", "HEAD *", "OPTIONS *"}, p.AllowList)
