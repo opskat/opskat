@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -35,14 +36,16 @@ type GenericConnTestInput struct {
 func ProbeGenericConnection(ctx context.Context, configJSON, _ string) (string, error) {
 	var in GenericConnTestInput
 	if err := json.Unmarshal([]byte(configJSON), &in); err != nil {
-		return "", fmt.Errorf("解析测试连接配置失败: %w", err)
+		return "", fmt.Errorf("%s: %w", policy.PolicyMsg(ctx, "failed to parse test-connection config", "解析测试连接配置失败"), err)
 	}
 	ct, err := custom_type_svc.CustomType().GetBySlug(ctx, in.CustomType)
 	if err != nil {
-		return "", fmt.Errorf("自定义类型 %q: %w", in.CustomType, err)
+		return "", fmt.Errorf("%s: %w", policy.PolicyFmt(ctx, "custom type %q", "自定义类型 %q", in.CustomType), err)
 	}
 	if ct.ExecMode != custom_type_entity.ExecModeHTTP {
-		return "", fmt.Errorf("测试连接只适用于 HTTP 执行方式的自定义类型；%q 的执行方式是 %s", ct.Slug, ct.ExecMode)
+		return "", fmt.Errorf("%s", policy.PolicyFmt(ctx,
+			"test connection only supports custom types using the HTTP exec mode; %q uses exec mode %s",
+			"测试连接只适用于 HTTP 执行方式的自定义类型；%q 的执行方式是 %s", ct.Slug, ct.ExecMode))
 	}
 	asset, err := genericConnTestAsset(ctx, ct, &in)
 	if err != nil {
@@ -60,9 +63,9 @@ func ProbeGenericConnection(ctx context.Context, configJSON, _ string) (string, 
 
 	status := statusLine(resp.Response)
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("认证失败: %s", status)
+		return "", fmt.Errorf("%s", policy.PolicyFmt(ctx, "authentication failed: %s", "认证失败: %s", status))
 	}
-	return status + "（" + describeHTTPRoute(ctx, resp.route, asset.SSHTunnelID) + "）", nil
+	return policy.PolicyFmt(ctx, "%s (%s)", "%s（%s）", status, describeHTTPRoute(ctx, resp.route, asset.SSHTunnelID)), nil
 }
 
 // genericConnTestAsset 按表单内容构造一台未保存的通用资产。字段值经 put_asset 同一条
@@ -79,7 +82,9 @@ func genericConnTestAsset(ctx context.Context, ct *custom_type_entity.CustomType
 			return nil, err
 		}
 		if cfg.CustomType != ct.Slug {
-			return nil, fmt.Errorf("资产 %q 的自定义类型是 %q，不是 %q", stored.Name, cfg.CustomType, ct.Slug)
+			return nil, fmt.Errorf("%s", policy.PolicyFmt(ctx,
+				"asset %q uses custom type %q, not %q", "资产 %q 的自定义类型是 %q，不是 %q",
+				stored.Name, cfg.CustomType, ct.Slug))
 		}
 		copied := *stored
 		asset = &copied
@@ -119,12 +124,14 @@ func describeHTTPRoute(ctx context.Context, route connpool.HTTPRoute, tunnelID i
 	case connpool.HTTPRouteSSHTunnel:
 		tunnel, err := asset_svc.Asset().Get(ctx, tunnelID)
 		if err != nil {
-			return fmt.Sprintf("经 SSH 隧道：资产 %d（名称查询失败: %v）", tunnelID, err)
+			return policy.PolicyFmt(ctx,
+				"via SSH tunnel: asset %d (failed to look up name: %v)",
+				"经 SSH 隧道：资产 %d（名称查询失败: %v）", tunnelID, err)
 		}
-		return "经 SSH 隧道：" + tunnel.Name
+		return policy.PolicyMsg(ctx, "via SSH tunnel: ", "经 SSH 隧道：") + tunnel.Name
 	case connpool.HTTPRouteProxyChain:
-		return "经代理链"
+		return policy.PolicyMsg(ctx, "via proxy chain", "经代理链")
 	default:
-		return "直连"
+		return policy.PolicyMsg(ctx, "direct connection", "直连")
 	}
 }

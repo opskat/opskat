@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
@@ -52,8 +53,35 @@ func connTestJSON(t *testing.T, in map[string]any) string {
 	return string(b)
 }
 
-func TestGenericConnTest_GetsBaseURLAndReportsStatus(t *testing.T) {
+// TestGenericConnTest_EnglishCtxProducesEnglishRouteAndFailureText covers O1: the route
+// label and the auth-failure text must follow the ctx language (policy.PolicyMsg/PolicyFmt),
+// not a hardcoded Chinese string, per spec "通用资产"「测试连接」+ the desktop binder's
+// i18n.Ctx (internal/app/system/asset.go:104) already carrying the user's language.
+func TestGenericConnTest_EnglishCtxProducesEnglishRouteAndFailureText(t *testing.T) {
 	ctx := setupGenericDB(t)
+	srv, _ := authServer(t)
+	saveHTTPType(t, ctx, "probe", "http://{{host}}/",
+		custom_type_entity.AuthBinding{Type: "header", Name: "X-Api-Key", Values: []string{"{{token}}"}})
+	host := strings.TrimPrefix(srv.URL, "http://")
+	enCtx := aictx.WithPolicyLang(ctx, "en")
+
+	detail, err := ProbeGenericConnection(enCtx, connTestJSON(t, map[string]any{
+		"custom_type": "probe", "values": map[string]any{"host": host, "token": testSecret},
+	}), "")
+	require.NoError(t, err)
+	assert.Contains(t, detail, "direct connection", "en ctx names the route in English")
+	assert.NotContainsf(t, detail, "直连", "detail %q must not leak Chinese under an English ctx", detail)
+
+	_, err = ProbeGenericConnection(enCtx, connTestJSON(t, map[string]any{
+		"custom_type": "probe", "values": map[string]any{"host": host, "token": "wrong"},
+	}), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication failed")
+	assert.NotContainsf(t, err.Error(), "认证失败", "error %q must not leak Chinese under an English ctx", err.Error())
+}
+
+func TestGenericConnTest_GetsBaseURLAndReportsStatus(t *testing.T) {
+	ctx := aictx.WithPolicyLang(setupGenericDB(t), "zh")
 	srv, seen := authServer(t)
 	saveHTTPType(t, ctx, "probe", "http://{{host}}/",
 		custom_type_entity.AuthBinding{Type: "header", Name: "X-Api-Key", Values: []string{"{{token}}"}})
