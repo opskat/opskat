@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -306,6 +307,8 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		if resources := policy.ExtensionResources(classification.Resources); len(resources) == 1 {
 			item.Resource = policy.DisplayExtensionResource(resources[0])
 			item.RememberPattern = extGrantTail(classification.Action, resources[0])
+		} else {
+			item.RememberPattern = multiResourceRememberPattern(classification.Action, resources)
 		}
 		item.Detail = formatExtensionRequestDetail(classification)
 	}
@@ -426,14 +429,81 @@ func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited [
 	return patterns
 }
 
-// classificationGrantKeys is one exact grant per resource of a classified call.
+// classificationGrantKeys is the grant an unedited "always allow" persists: for a
+// single resource its exact key, for several the one rule the approval item offered
+// as its Remember pre-fill (multiResourceRememberPattern).
 func classificationGrantKeys(c ExtensionClassification) []string {
 	resources := policy.ExtensionResources(c.Resources)
+	if len(resources) > 1 {
+		return []string{extGrantRule(c.PolicyType, multiResourceRememberPattern(c.Action, resources))}
+	}
 	keys := make([]string, len(resources))
 	for i, resource := range resources {
 		keys[i] = extGrantKey(c.PolicyType, c.Action, resource)
 	}
 	return keys
+}
+
+// multiResourceRememberPattern is the Remember pre-fill of a call touching several
+// resources: the narrowest "<action>:<common-prefix>*" covering every one, so one
+// grant spans the family the user approved. resources are host-form globs, so the
+// prefix is taken on that form — it ends before the first wildcard (an escaped
+// character is a literal and is kept with its backslash) and the rule is verified
+// with the host's own matcher; a prefix that is empty or whose '*' would not cross a
+// '/' the resources contain falls back to the bare action, which covers any resource
+// of that action. Identical resources keep their exact tail.
+func multiResourceRememberPattern(action string, resources []string) string {
+	prefix := literalGlobPrefix(resources[0])
+	for _, r := range resources[1:] {
+		prefix = commonGlobPrefix(prefix, literalGlobPrefix(r))
+	}
+	if prefix == "" {
+		return action
+	}
+	rule := extGrantTail(action, prefix+"*")
+	for _, r := range resources {
+		if r == prefix {
+			continue
+		}
+		if !policy.MatchExtensionRule(rule, action, r) {
+			return action
+		}
+	}
+	if slices.ContainsFunc(resources, func(r string) bool { return r != prefix }) {
+		return rule
+	}
+	return extGrantTail(action, prefix)
+}
+
+// literalGlobPrefix is the leading run of a glob that matches only itself: up to the
+// first unescaped '*', '?' or '['. A backslash pair stays whole.
+func literalGlobPrefix(glob string) string {
+	for i := 0; i < len(glob); i++ {
+		switch glob[i] {
+		case '*', '?', '[':
+			return glob[:i]
+		case '\\':
+			i++
+		}
+	}
+	return glob
+}
+
+// commonGlobPrefix is the longest shared prefix of a and b made of whole glob
+// characters: a backslash pair is one unit and is never split.
+func commonGlobPrefix(a, b string) string {
+	n := 0
+	for n < len(a) && n < len(b) {
+		step := 1
+		if a[n] == '\\' {
+			step = 2
+		}
+		if n+step > len(a) || n+step > len(b) || a[n:n+step] != b[n:n+step] {
+			break
+		}
+		n += step
+	}
+	return a[:n]
 }
 
 // formatExtensionRequestDetail renders an extension classification's underlying guest

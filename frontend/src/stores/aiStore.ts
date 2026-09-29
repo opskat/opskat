@@ -62,6 +62,8 @@ export interface ContentBlock {
     // 与命令一起展示，让"批准"批的是一个可读的动作+资源，而不只是一串不透明的 exec 文本。
     action?: string;
     resource?: string;
+    // 这次调用触及的全部资源（扩展返回的原样）；多资源时 resource 为空。
+    resources?: string[];
     // 与 action 同时出现：「记住」实际落库的 <action>:<resource-glob>，编辑器预填并编辑它而不是命令。
     remember_pattern?: string;
   }>;
@@ -137,6 +139,7 @@ interface StreamEventData {
     detail?: string;
     action?: string;
     resource?: string;
+    resources?: string[];
     remember_pattern?: string;
   }>;
   description?: string;

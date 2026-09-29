@@ -23,12 +23,13 @@ type ApprovalItem struct {
 	Action    string   `json:"action,omitempty"`
 	Resource  string   `json:"resource,omitempty"`
 	Resources []string `json:"resources,omitempty"`
-	// RememberPattern is set together with Action for a call touching at most one
-	// resource: the "<action>:<resource-glob>" tail an "always allow" persists as
-	// ext:<type>:<tail> (a literal resource glob-quoted, so untouched it grants only
-	// the resource shown). The "Remember" editor pre-fills and edits this instead of
-	// Command; an edited value must keep "<action>:". A multi-resource item has none
-	// yet: untouched, its "always allow" persists one exact grant per resource.
+	// RememberPattern is set together with Action: the "<action>[:<resource-glob>]"
+	// tail an "always allow" persists as ext:<type>:<tail>. One resource: its exact
+	// tail (a literal resource glob-quoted, so untouched it grants only the resource
+	// shown). Several: the narrowest "<action>:<common-prefix>*" covering all of
+	// them, else the bare action (multiResourceRememberPattern). The "Remember"
+	// editor pre-fills and edits this instead of Command; an edited value must keep
+	// "<action>:", and echoing the pre-fill back unchanged is no edit.
 	RememberPattern string `json:"remember_pattern,omitempty"`
 }
 
@@ -138,7 +139,9 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 				if want.Action != "" {
 					// A classified extension item's Remember value is its grant tail,
 					// not its command text (see ApprovalItem.RememberPattern).
-					if err := validateExtGrantEdit(want.Action, item.Command); err != nil {
+					// Echoing the backend's own pre-fill is no edit and is trusted as
+					// is — it may be the bare action, which a typed edit may not be.
+					if err := validateExtGrantEdit(want.Action, item.Command); err != nil && item.Command != want.RememberPattern {
 						return ParsedApprovalResponse{Decision: ApprovalDeny},
 							fmt.Errorf("approval edited_items[%d]: %w", i, err)
 					}

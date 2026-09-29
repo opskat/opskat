@@ -169,3 +169,77 @@ describe("OpsctlApprovalDialog — 审批来源", () => {
     expect(screen.getByText("opsctlApproval.description")).toBeInTheDocument();
   });
 });
+
+describe("OpsctlApprovalDialog — 多资源与超长参数", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function fireMultiResource(handlers: Map<string, (data: unknown) => void>, overrides: Record<string, unknown> = {}) {
+    fireClassifiedApproval(handlers, {
+      resource: "",
+      resources: ["logs-a", "logs-b", "metrics-1"],
+      remember_pattern: "delete",
+      ...overrides,
+    });
+  }
+
+  it("列出动作与全部资源", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireMultiResource(handlers);
+
+    expect(screen.getByText("delete")).toBeInTheDocument();
+    const resources = screen.getAllByTestId("approval-resource").map((el) => el.textContent);
+    expect(resources).toEqual(["logs-a", "logs-b", "metrics-1"]);
+  });
+
+  it("多资源的记住预填取后端给的规则，原样发回不算编辑", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireMultiResource(handlers, { resources: ["logs-a", "logs-b"], remember_pattern: "delete:logs-*" });
+
+    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("delete:logs-*");
+    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+
+    const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
+    expect(response?.decision).toBe("allowAll");
+    expect(response?.edited_items).toBeUndefined();
+  });
+
+  it("预填退回裸动作时不报错、可直接提交；手改成别的裸动作仍报错", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireMultiResource(handlers);
+
+    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("delete");
+    expect(screen.queryByTestId("approval-remember-pattern-error")).not.toBeInTheDocument();
+    expect(screen.getByText("opsctlApproval.approve")).toBeEnabled();
+
+    fireEvent.change(screen.getByTestId("approval-remember-pattern"), { target: { value: "get" } });
+    expect(screen.getByTestId("approval-remember-pattern-error")).toBeInTheDocument();
+    expect(screen.getByText("opsctlApproval.approve")).toBeDisabled();
+  });
+
+  it("超长参数值截断显示并标出总大小，可展开看全文", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    const body = "x".repeat(5000) + "TAIL-MARKER";
+    fireClassifiedApproval(handlers, {
+      detail: JSON.stringify({ tool: "request", args: { method: "POST", body } }, null, 2),
+    });
+
+    fireEvent.click(screen.getByText("ai.approvalRequestDetail"));
+    const value = screen.getByTestId("approval-arg-body");
+    expect(value.textContent).not.toContain("TAIL-MARKER");
+    expect(screen.getByTestId("approval-arg-body-size")).toHaveTextContent("4.9 KB");
+    // 短参数不受影响
+    expect(screen.getByTestId("approval-arg-method")).toHaveTextContent("POST");
+    expect(screen.queryByTestId("approval-arg-method-size")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("approval-arg-body-toggle"));
+    expect(screen.getByTestId("approval-arg-body").textContent).toBe(body);
+  });
+});

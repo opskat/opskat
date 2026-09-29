@@ -168,7 +168,8 @@ describe("ApprovalBlock", () => {
     // 请求详情走既有的 <details> 折叠机制，摘要用专门的文案，不是传输/删除的文案。
     const summary = screen.getByText("ai.approvalRequestDetail");
     expect(summary.closest("details")).not.toBeNull();
-    expect(screen.getByText(/"tool": "list_objects"/)).toBeInTheDocument();
+    expect(screen.getByTestId("approval-tool")).toHaveTextContent("list_objects");
+    expect(screen.getByTestId("approval-arg-bucket")).toHaveTextContent("prod");
   });
 
   describe("分类过的扩展审批：「记住」编辑的是落库的 action:resource", () => {
@@ -382,5 +383,51 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getByText("do something 0")).toBeVisible();
     expect(screen.getByText("do something 10")).toBeVisible();
+  });
+
+  it("扩展审批列出动作与全部资源，记住预填取后端规则", () => {
+    renderApproval({
+      approvalItems: [
+        {
+          type: "esverify",
+          asset_id: 3,
+          asset_name: "es-logs",
+          command: "request --method=DELETE",
+          action: "delete",
+          resources: ["logs-a", "logs-b"],
+          remember_pattern: "delete:logs-*",
+        },
+      ],
+    });
+
+    expect(screen.getByText("delete")).toBeInTheDocument();
+    expect(screen.getAllByTestId("approval-resource").map((el) => el.textContent)).toEqual(["logs-a", "logs-b"]);
+    fireEvent.click(screen.getByTestId("ai-approval-remember"));
+    expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("delete:logs-*");
+  });
+
+  it("超长参数值截断显示并标出总大小，可展开看全文", () => {
+    const body = "y".repeat(3000) + "TAIL-MARKER";
+    renderApproval({
+      approvalItems: [
+        {
+          type: "esverify",
+          asset_id: 3,
+          asset_name: "es-logs",
+          command: "request --method=POST",
+          action: "write",
+          resource: "logs-a",
+          resources: ["logs-a"],
+          remember_pattern: "write:logs-a",
+          detail: JSON.stringify({ tool: "request", args: { body } }, null, 2),
+        },
+      ],
+    });
+
+    expect(screen.getByTestId("approval-arg-body").textContent).not.toContain("TAIL-MARKER");
+    // 全局 t 丢掉插值参数，大小数值在 OpsctlApprovalDialogExtension 里断言。
+    expect(screen.getByTestId("approval-arg-body-size")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("approval-arg-body-toggle"));
+    expect(screen.getByTestId("approval-arg-body").textContent).toBe(body);
   });
 });

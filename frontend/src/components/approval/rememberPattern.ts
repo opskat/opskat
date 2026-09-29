@@ -15,8 +15,9 @@ export function rememberPrefill(item: RememberableItem): string {
 
 // 分类审批的编辑值必须保留 "<action>:" 前缀——只能改资源段，动作被删掉或换掉就成了
 // 用户没被问过的授权。后端 ParseApprovalResponse 同样校验，这里是为了当场提示而不是提交后被拒。
+// 原样交回后端给的预填不算编辑（多资源无公共前缀时预填就是裸动作）。
 export function losesAction(item: RememberableItem, value: string): boolean {
-  return !!item.action && !value.startsWith(`${item.action}:`);
+  return !!item.action && value !== item.remember_pattern && !value.startsWith(`${item.action}:`);
 }
 
 export function hasRememberPatternErrors(items: RememberableItem[], values: string[]): boolean {

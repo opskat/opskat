@@ -13,6 +13,8 @@ import {
 import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { S3Icon } from "@/components/asset/brand-icons";
 import { ApprovalClassification } from "./ApprovalClassification";
+import { ExtensionRequestDetail } from "./ExtensionRequestDetail";
+import { TruncatedText } from "./TruncatedText";
 import { RememberPatternEditor } from "./RememberPatternEditor";
 import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
@@ -44,6 +46,7 @@ interface ApprovalItemData {
   // 以及"记住"实际落库的 <action>:<resource-glob>。
   action?: string;
   resource?: string;
+  resources?: string[];
   remember_pattern?: string;
 }
 
@@ -60,6 +63,7 @@ interface SingleApprovalEvent {
   detail?: string;
   action?: string;
   resource?: string;
+  resources?: string[];
   remember_pattern?: string;
   session_id: string;
   source: ApprovalSource;
@@ -185,6 +189,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               detail,
               action: data.action,
               resource: data.resource,
+              resources: data.resources,
               remember_pattern: data.remember_pattern,
             },
           ],
@@ -294,6 +299,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
       <ApprovalClassification
         action={item.action}
         resource={item.resource}
+        resources={item.resources}
         className="text-xs"
         labelClassName="text-foreground"
       />
@@ -311,7 +317,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
         />
       ) : (
         <div className="rounded-md bg-muted p-2 max-h-[150px] overflow-auto">
-          <code className="select-text text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
+          <code className="text-xs font-mono">
+            <TruncatedText testId="approval-command-text" text={item.command} />
+          </code>
         </div>
       )}
       {item.detail &&
@@ -320,9 +328,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           // <details> 折叠机制展示（与 ApprovalBlock.tsx 同一套），而不是常驻铺开。
           <details className="text-xs text-muted-foreground">
             <summary className="cursor-pointer select-none">{t("ai.approvalRequestDetail")}</summary>
-            <pre className="select-text mt-1 max-h-48 overflow-auto rounded bg-muted p-2 font-mono whitespace-pre-wrap break-all">
-              {item.detail}
-            </pre>
+            <div className="mt-1 max-h-48 overflow-auto rounded bg-muted p-2 text-xs">
+              <ExtensionRequestDetail detail={item.detail} />
+            </div>
           </details>
         ) : (
           <div className="select-text text-xs text-muted-foreground font-mono whitespace-pre-wrap">{item.detail}</div>
