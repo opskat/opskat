@@ -7,11 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/desktopopen"
 	k8spkg "github.com/opskat/opskat/internal/pkg/k8s"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
@@ -186,6 +191,128 @@ func (k *K8s) StopK8sPodLogs(streamID string) {
 	if cancel, ok := k.logStreams.LoadAndDelete(streamID); ok {
 		cancel.(context.CancelFunc)()
 	}
+}
+
+// FetchK8sPodLogsTail 拉取容器日志末尾 tailLines 行（不 follow），用于终端上滑加载更早内容。
+func (k *K8s) FetchK8sPodLogsTail(assetID int64, namespace, podName, container string, tailLines int64) (string, error) {
+	ctx, cancel := context.WithTimeout(k.ctx, 60*time.Second)
+	defer cancel()
+
+	c, err := k.loadK8sCall(ctx, assetID)
+	if err != nil {
+		return "", err
+	}
+
+	reader, err := k8spkg.TailPodLogs(ctx, c.kubeconfig, namespace, podName, container, tailLines, c.opts...)
+	if err != nil {
+		return "", fmt.Errorf("fetch pod log tail: %w", err)
+	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			logger.Ctx(ctx).Warn("close k8s log tail reader", zap.Error(closeErr))
+		}
+	}()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("read pod log tail: %w", err)
+	}
+	return string(data), nil
+}
+
+// OpenK8sPodLogsBuffer 把终端当前缓存的日志写入临时文件，并用系统默认文本关联程序打开。
+func (k *K8s) OpenK8sPodLogsBuffer(logText string, namespace, podName, container string) error {
+	if strings.TrimSpace(logText) == "" {
+		return fmt.Errorf("log buffer is empty")
+	}
+	dir := filepath.Join(bootstrap.AppDataDir(), "k8s-log-buffers")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create log buffer dir: %w", err)
+	}
+	path := filepath.Join(dir, k8spkg.LogDownloadFilename(namespace, podName, container))
+	if err := os.WriteFile(path, []byte(logText), 0o600); err != nil {
+		return fmt.Errorf("write log buffer file: %w", err)
+	}
+	if err := desktopopen.Open(path); err != nil {
+		return fmt.Errorf("open log with default app: %w", err)
+	}
+	return nil
+}
+
+// SaveK8sPodLogs 把当前容器完整日志文件保存到用户选择的本地路径（不 follow）。
+// 返回 false 表示用户取消了保存对话框。
+func (k *K8s) SaveK8sPodLogs(assetID int64, namespace, podName, container string) (saved bool, err error) {
+	ctx := k.ctx
+	logger.Ctx(ctx).Info("save k8s pod logs start",
+		zap.Int64("assetID", assetID),
+		zap.String("namespace", namespace),
+		zap.String("podName", podName),
+		zap.String("container", container),
+	)
+	defer func() {
+		if err != nil {
+			logger.Ctx(ctx).Error("save k8s pod logs failed",
+				zap.Int64("assetID", assetID),
+				zap.String("namespace", namespace),
+				zap.String("podName", podName),
+				zap.Error(err),
+			)
+			return
+		}
+		if saved {
+			logger.Ctx(ctx).Info("save k8s pod logs done",
+				zap.Int64("assetID", assetID),
+				zap.String("namespace", namespace),
+				zap.String("podName", podName),
+			)
+		}
+	}()
+
+	loadCtx, loadCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer loadCancel()
+	c, err := k.loadK8sCall(loadCtx, assetID)
+	if err != nil {
+		return false, err
+	}
+
+	filePath, err := wailsRuntime.SaveFileDialog(ctx, wailsRuntime.SaveDialogOptions{
+		Title:           "Save logs",
+		DefaultFilename: k8spkg.LogDownloadFilename(namespace, podName, container),
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "Log Files", Pattern: "*.log"},
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("save file dialog failed: %w", err)
+	}
+	if filePath == "" {
+		return false, nil
+	}
+
+	reader, err := k8spkg.SnapshotPodLogs(ctx, c.kubeconfig, namespace, podName, container, c.opts...)
+	if err != nil {
+		return false, fmt.Errorf("open pod log snapshot: %w", err)
+	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			logger.Ctx(ctx).Warn("close k8s log snapshot reader", zap.Error(closeErr))
+		}
+	}()
+
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644) //nolint:gosec // user-selected export path
+	if err != nil {
+		return false, fmt.Errorf("create log file: %w", err)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close log file: %w", closeErr)
+		}
+	}()
+
+	if _, err := io.Copy(file, reader); err != nil {
+		return false, fmt.Errorf("write log file: %w", err)
+	}
+	return true, nil
 }
 
 func (k *K8s) k8sClientOptions(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.K8sConfig) ([]k8spkg.ClientOption, error) {

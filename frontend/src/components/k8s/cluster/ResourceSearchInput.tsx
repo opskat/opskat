@@ -9,7 +9,7 @@ interface ResourceSearchInputProps {
 
 export function ResourceSearchInput({ value, onChange, placeholder }: ResourceSearchInputProps) {
   return (
-    <div className="relative my-1 ml-9 mr-2">
+    <div className="relative my-1 mx-2">
       <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={value}
