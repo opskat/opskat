@@ -15,7 +15,7 @@ import {
 } from "@/components/asset/proxyConfig";
 import { GetDecryptedExtensionConfig, ValidateExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import type { AssetFormContext, AssetTestConfig, ConfigSectionProps } from "@/lib/assetTypes/formContract";
-import { defaultValues, passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
+import { defaultValues, formFields, passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
 import type { ExtConnection } from "@/extension/types";
 import {
   HOST_CONNECTION_CONFIG_KEY,
@@ -247,11 +247,11 @@ export function makeExtensionConfigSection(opts: Options) {
         setFieldErrors({});
         return;
       }
-      const declared = opts.schema?.properties ?? {};
+      const shown = new Set(formFields(opts.schema).map(([key]) => key));
       const placed: Record<string, string> = {};
       const unplaced: string[] = [];
       for (const e of errors) {
-        if (e.field in declared) placed[e.field] = e.message;
+        if (shown.has(e.field)) placed[e.field] = e.message;
         else unplaced.push(e.field ? `${e.field}: ${e.message}` : e.message);
       }
       setFieldErrors(placed);

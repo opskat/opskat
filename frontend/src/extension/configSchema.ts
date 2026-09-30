@@ -24,6 +24,17 @@ export interface ExtensionConfigSchema {
   propertyOrder?: string[];
 }
 
+/**
+ * 表单呈现的字段及其顺序：有 propertyOrder 时按它，只取其中已声明的属性；否则按声明顺序。
+ * 保存校验的逐字段错误也按它判断能否落到字段上——没呈现的字段无处显示错误。
+ */
+export function formFields(schema?: ExtensionConfigSchema): [string, ExtensionConfigProperty][] {
+  const properties = schema?.properties ?? {};
+  const order = schema?.propertyOrder;
+  if (!order) return Object.entries(properties);
+  return order.filter((k) => Object.prototype.hasOwnProperty.call(properties, k)).map((k) => [k, properties[k]]);
+}
+
 /** 返回 format:"password" 的属性名——它们保存前要经后端加密，展示时要打码。 */
 export function passwordFields(schema?: ExtensionConfigSchema): string[] {
   const props = schema?.properties ?? {};

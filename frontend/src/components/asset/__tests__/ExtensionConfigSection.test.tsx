@@ -753,6 +753,27 @@ describe("ExtensionConfigSection validation errors", () => {
     await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow("config is inconsistent");
   });
 
+  // A field the form does not show (left out of propertyOrder, or no declared field
+  // at all, even one named like an Object.prototype member) has nowhere to show its
+  // error, so the refusal carries it.
+  it("an error on a field the form does not show is carried by the refusal", async () => {
+    const Ordered = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema: { ...authSchema, propertyOrder: ["username", "secret"] },
+    });
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([
+      { field: "auth", message: "unknown authentication type" },
+      { field: "constructor", message: "not a field" },
+    ] as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<Ordered ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+
+    await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow(
+      "auth: unknown authentication type; constructor: not a field"
+    );
+  });
+
   // Go hands a nil error list over IPC as null; the host's own save check reads it as valid.
   it("a validator answering no error list at all lets the save through", async () => {
     vi.mocked(ValidateExtensionConfig).mockResolvedValue(null as never);

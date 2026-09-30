@@ -12,7 +12,7 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { SecretInput } from "@/components/SecretInput";
-import type { ExtensionConfigProperty, ExtensionConfigSchema } from "@/extension/configSchema";
+import { formFields, type ExtensionConfigProperty, type ExtensionConfigSchema } from "@/extension/configSchema";
 
 interface ExtensionConfigFormProps {
   configSchema: ExtensionConfigSchema;
@@ -32,12 +32,8 @@ export function ExtensionConfigForm({
   fieldErrors,
 }: ExtensionConfigFormProps) {
   const { t } = useTranslation();
-  const properties = configSchema.properties ?? {};
   const required = useMemo(() => new Set(configSchema.required ?? []), [configSchema.required]);
-  const order = configSchema.propertyOrder;
-  const fields = order
-    ? order.filter((k) => k in properties).map((k) => [k, properties[k]] as const)
-    : Object.entries(properties);
+  const fields = formFields(configSchema);
 
   const updateField = useCallback(
     (key: string, fieldValue: unknown) => {
