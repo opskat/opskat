@@ -25,6 +25,8 @@ import { ListAuditLogs } from "../../../wailsjs/go/system/System";
 import { ListAuditSessions } from "../../../wailsjs/go/system/System";
 import { GetSSHPoolConnections } from "../../../wailsjs/go/ssh/SSH";
 import { audit_entity, audit_repo, sshpool } from "../../../wailsjs/go/models";
+import { ReviewMark, ReviewNotice, ReviewScores } from "@/components/approval/ReviewNotice";
+import { parseReviewInfo } from "@/lib/commandReview";
 
 const PAGE_SIZE = 20;
 
@@ -36,6 +38,24 @@ const TIME_PRESETS = [
   { value: "1d", seconds: 86400 },
   { value: "7d", seconds: 604800 },
 ] as const;
+
+// 审计记录里的模型审核结果（后端存的 JSON）；解析不了就原样显示，不隐藏。
+function AuditReview({ raw }: { raw: string }) {
+  const { t } = useTranslation();
+  const review = parseReviewInfo(raw);
+  if (!review) return <code className="font-mono text-xs break-all">{raw}</code>;
+  return (
+    <div className="space-y-1.5">
+      <ReviewNotice review={review} withMode className="text-sm" />
+      <ReviewScores review={review} />
+      {review.attempts !== undefined && review.attempts > 1 && (
+        <p data-testid="review-attempts" className="text-xs text-muted-foreground">
+          {t("commandReview.retried", { attempts: review.attempts })}
+        </p>
+      )}
+    </div>
+  );
+}
 
 // 决策来源标签样式
 function decisionSourceBadge(source: string): { label: string; className: string } {
@@ -52,6 +72,12 @@ function decisionSourceBadge(source: string): { label: string; className: string
       return { label: "grant", className: "bg-info/15 text-info" };
     case "grant_deny":
       return { label: "grant", className: "bg-destructive/15 text-destructive" };
+    case "assisted_allow":
+      return { label: "assisted", className: "bg-success/15 text-success" };
+    case "autopilot_allow":
+      return { label: "autopilot", className: "bg-success/15 text-success" };
+    case "autopilot_deny":
+      return { label: "autopilot", className: "bg-destructive/15 text-destructive" };
     default:
       return { label: source || "-", className: "bg-muted" };
   }
@@ -407,6 +433,7 @@ export function AuditLogPage() {
                 )}
                 {logs.map((log) => {
                   const badge = decisionSourceBadge(log.DecisionSource);
+                  const review = log.Review ? parseReviewInfo(log.Review) : null;
                   return (
                     <tr key={log.ID} className="border-b hover:bg-muted/50 transition-colors">
                       <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
@@ -429,6 +456,11 @@ export function AuditLogPage() {
                           </span>
                         ) : (
                           "-"
+                        )}
+                        {review && (
+                          <span className="ml-1">
+                            <ReviewMark review={review} />
+                          </span>
                         )}
                       </td>
                       <td className="px-4 py-2 text-center">
@@ -553,6 +585,12 @@ export function AuditLogPage() {
                   <div className="col-span-2">
                     <span className="text-muted-foreground">{t("audit.matchedPattern")}:</span>{" "}
                     <code className="font-mono bg-muted px-1 rounded">{detailLog.MatchedPattern}</code>
+                  </div>
+                )}
+                {detailLog.Review && (
+                  <div className="col-span-2 flex items-start gap-1">
+                    <span className="shrink-0 text-muted-foreground">{t("commandReview.auditLabel")}:</span>
+                    <AuditReview raw={detailLog.Review} />
                   </div>
                 )}
                 {detailLog.SessionID && (

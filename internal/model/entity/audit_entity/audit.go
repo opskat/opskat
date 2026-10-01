@@ -18,6 +18,7 @@ type AuditLog struct {
 	Decision       string `gorm:"column:decision;type:varchar(10)"`         // "allow" | "deny"
 	DecisionSource string `gorm:"column:decision_source;type:varchar(30)"`  // 决策来源
 	MatchedPattern string `gorm:"column:matched_pattern;type:varchar(500)"` // 匹配的命令模式
+	Review         string `gorm:"column:review;type:text"`                  // 模型审核结果 JSON（aictx.ReviewInfo），没有审核时为空
 	Createtime     int64  `gorm:"column:createtime;not null;index"`
 }
 

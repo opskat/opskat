@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -182,7 +183,7 @@ func cpSingleSource(
 	if err != nil {
 		return "", err
 	}
-	transferredBytes, err := transferOne(ctx, src, dst, res.Entries[0], dst.path, filepath.Dir(dst.path))
+	transferredBytes, err := transferOne(ctx, src, dst, res.Entries[0], dst.path, cpDestinationScope(dst))
 	if err != nil {
 		return "", err
 	}
@@ -190,6 +191,16 @@ func cpSingleSource(
 		Completed: 1, Total: 1, Src: res.Entries[0].Path, Dst: dst.path, Bytes: transferredBytes,
 	})
 	return cpSummary(1, transferredBytes, res.SkippedSymlinks)
+}
+
+// cpDestinationScope 是单文件写入不得逃出的父目录。远端路径以 / 分隔，必须用 path.Dir：
+// Windows 上 filepath.Dir("/var/log/app.log") 得到 \var\log，SFTP 按 / 校验，合法落点会被
+// 判成 escapes approved scope，一个字节都不写。本地路径仍用本机分隔符。
+func cpDestinationScope(dst *cpEndpoint) string {
+	if dst.asset == nil {
+		return filepath.Dir(dst.path)
+	}
+	return path.Dir(dst.path)
 }
 
 // cpMultiSource 处理多源形态：recursive 为真，或源路径含 glob 元字符（spec §6.5）。
@@ -317,6 +328,8 @@ func checkAccessBatch(
 				continue
 			}
 			seen[item] = true
+			// 去重之后再挂审核结果：它是指针，参与比较会让同一条主体出现两次。
+			item.Review = result.Review
 
 			items = append(items, item)
 		}
@@ -331,6 +344,12 @@ func checkAccessBatch(
 	}
 	resp := confirm(ctx, permission.ApprovalKindBatch, items)
 	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, items)
+	// 这次确认只落一行审计：带上说明为什么问人的那个审核结果。
+	reviews := make([]*aictx.ReviewInfo, len(items))
+	for i, item := range items {
+		reviews[i] = item.Review
+	}
+	review := aictx.BatchReview(reviews)
 	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
 		// 响应解析失败与用户点拒绝合成同一条出路，与 HandleConfirm 同一裁定：两者都不是
 		// 授权，而模型该做的事（立刻停下）也是同一件。
@@ -338,11 +357,11 @@ func checkAccessBatch(
 			"USER DENIED: The user has denied this transfer (%d paths). Stop the current task immediately.",
 			len(items))
 		aictx.RecordDecision(ctx, aictx.CheckResult{
-			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: msg,
+			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: msg, Review: review,
 		})
 		return false, fmt.Errorf("%s", msg)
 	}
-	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, Review: review})
 	return true, nil
 }
 

@@ -95,9 +95,11 @@ type Asset struct {
 	SortOrder     int    `gorm:"column:sort_order;default:0"`
 	SSHTunnelID   int64  `gorm:"column:ssh_tunnel_id;default:0" json:"sshTunnelId"`
 	ExtensionName string `gorm:"column:extension_name;type:varchar(64);index" json:"extensionName,omitempty"`
-	Status        int    `gorm:"column:status;default:1"`
-	Createtime    int64  `gorm:"column:createtime"`
-	Updatetime    int64  `gorm:"column:updatetime"`
+	// PermissionMode 见 policy.PermissionMode*；空表示沿用分组设置。
+	PermissionMode string `gorm:"column:permission_mode;type:varchar(20);default:''" json:"permissionMode,omitempty"`
+	Status         int    `gorm:"column:status;default:1"`
+	Createtime     int64  `gorm:"column:createtime"`
+	Updatetime     int64  `gorm:"column:updatetime"`
 }
 
 // TableName GORM表名
@@ -922,6 +924,9 @@ func (a *Asset) Validate() error {
 	}
 	if a.Type == "" {
 		return errors.New("资产类型不能为空")
+	}
+	if err := policy.ValidatePermissionMode(a.PermissionMode); err != nil {
+		return err
 	}
 
 	// 校验类型是否合法

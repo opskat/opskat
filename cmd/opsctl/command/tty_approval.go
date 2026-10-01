@@ -262,6 +262,9 @@ func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, 
 	if req.Detail != "" {
 		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Detail:", "详情："), req.Detail) //nolint:errcheck // 终端呈现尽力而为
 	}
+	if req.Review != nil {
+		fmt.Fprintln(out, permission.ReviewSummary(ctx, req.Review)) //nolint:errcheck // 终端呈现尽力而为
+	}
 	fmt.Fprintln(out, ttyOptionsLine(ctx, kind))               //nolint:errcheck // 终端呈现尽力而为
 	fmt.Fprint(out, policy.PolicyMsg(ctx, "Choice: ", "请选择：")) //nolint:errcheck // 终端呈现尽力而为
 }
@@ -277,6 +280,9 @@ func renderTTYBatchPrompt(ctx context.Context, items []approval.BatchItem, out i
 		}
 		if item.Detail != "" {
 			fmt.Fprintf(out, "      %s %s\n", policy.PolicyMsg(ctx, "Detail:", "详情："), item.Detail) //nolint:errcheck // 终端呈现尽力而为
+		}
+		if item.Review != nil {
+			fmt.Fprintf(out, "      %s\n", permission.ReviewSummary(ctx, item.Review)) //nolint:errcheck // 终端呈现尽力而为
 		}
 	}
 	fmt.Fprintln(out, policy.PolicyMsg(ctx, //nolint:errcheck // 终端呈现尽力而为

@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +24,13 @@ func (s *stubResolver) resolve(_ context.Context, ref string) (*asset_entity.Ass
 		return a, nil
 	}
 	return nil, errors.New("no asset found matching " + ref)
+}
+
+func windowsDriveRefs() []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	return []string{"C"}
 }
 
 func newStubResolver(assets ...*asset_entity.Asset) *stubResolver {
@@ -83,8 +91,8 @@ func TestParseTransferEndpoint_Local(t *testing.T) {
 		{"./local-file.txt", nil},
 		{"/absolute/path", nil},
 		{":foo", nil},
-		// D15 守卫会查一次前缀（"C" 不是资产），查不到就仍是本地路径。
-		{`C:\windows`, []string{"C"}},
+		// Windows 上盘符在解析资产之前就判成本地，不查 "C"；别的系统没有盘符，仍走 D15。
+		{`C:\windows`, windowsDriveRefs()},
 		{"note:todo", []string{"note"}},
 	}
 	for _, c := range cases {
@@ -102,6 +110,31 @@ func TestParseTransferEndpoint_Local(t *testing.T) {
 		if strings.Join(r.refs, ",") != strings.Join(c.wantRefs, ",") {
 			t.Fatalf("ParseTransferEndpoint(%q) asked resolver for %q, want %q", c.in, r.refs, c.wantRefs)
 		}
+	}
+}
+
+// Windows 上 E:/src/... 是盘符路径，不是资产 E 上的 /src/...。即使真有名为 E 的资产，
+// 盘符也优先，并且不该去查资产。
+func TestParseTransferEndpoint_WindowsDriveSlashIsLocal(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("drive-letter paths are local only on Windows")
+	}
+	r := newStubResolver(&asset_entity.Asset{ID: 1, Name: "E", Type: asset_entity.AssetTypeSSH})
+	in := "E:/src/vaalhub-workspace/plugin-catalog.sql"
+
+	asset, path, err := ParseTransferEndpoint(context.Background(), in, r.resolve)
+
+	if err != nil {
+		t.Fatalf("ParseTransferEndpoint(%q) unexpected error: %v", in, err)
+	}
+	if asset != nil {
+		t.Fatalf("ParseTransferEndpoint(%q) asset = %+v, want nil", in, asset)
+	}
+	if path != in {
+		t.Fatalf("ParseTransferEndpoint(%q) path = %q, want the input unchanged", in, path)
+	}
+	if len(r.refs) != 0 {
+		t.Fatalf("ParseTransferEndpoint(%q) asked resolver for %q, want no query", in, r.refs)
 	}
 }
 

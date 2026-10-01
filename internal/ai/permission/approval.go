@@ -3,6 +3,8 @@ package permission
 import (
 	"fmt"
 	"strings"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
 )
 
 // ApprovalItem 统一审批项，AI 和 opsctl 共用
@@ -25,6 +27,8 @@ type ApprovalItem struct {
 	// untouched it grants only the resource shown). The "Remember" editor pre-fills
 	// and edits this instead of Command; an edited value must keep "<action>:".
 	RememberPattern string `json:"remember_pattern,omitempty"`
+	// Review 是模型审核结果：辅助审批下审核未通过或审核失败时带上，给人看为什么要确认。
+	Review *aictx.ReviewInfo `json:"review,omitempty"`
 }
 
 // ApprovalResponse 统一审批响应

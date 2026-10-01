@@ -77,6 +77,15 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
 	}
 
+	items, autopilot := splitAutopilotGrants(ctx, items)
+	autopilotNote := ""
+	if len(autopilot) > 0 {
+		autopilotNote = autopilotGrantMessage(ctx, autopilot)
+		if len(items) == 0 {
+			return aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceAutopilotDeny, Message: autopilotNote}
+		}
+	}
+
 	approvalItems := make([]ApprovalItem, 0)
 	var allPatterns []string
 	for _, item := range items {
@@ -120,10 +129,18 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 
 	approved, finalPatterns := c.grantRequestFunc(ctx, approvalItems, reason)
 	if !approved {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "USER DENIED: The user has denied the grant approval request. Stop the current task immediately.", "用户拒绝：用户已拒绝 Grant 审批请求。请立即停止当前任务。"), DecisionSource: aictx.SourceGrantDeny, MatchedPattern: strings.Join(allPatterns, "; ")}
+		return aictx.CheckResult{Decision: aictx.Deny, Message: joinNote(policy.PolicyMsg(ctx, "USER DENIED: The user has denied the grant approval request. Stop the current task immediately.", "用户拒绝：用户已拒绝 Grant 审批请求。请立即停止当前任务。"), autopilotNote), DecisionSource: aictx.SourceGrantDeny, MatchedPattern: strings.Join(allPatterns, "; ")}
 	}
 
-	return aictx.CheckResult{Decision: aictx.Allow, Message: policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+	return aictx.CheckResult{Decision: aictx.Allow, Message: joinNote(policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), autopilotNote), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+}
+
+// joinNote 在消息后附上一段说明；说明为空时原样返回。
+func joinNote(msg, note string) string {
+	if note == "" {
+		return msg
+	}
+	return msg + "\n" + note
 }
 
 // matchGrantPatterns 从 DB 中查找已批准 grant 的 items，用通配匹配命令
@@ -238,7 +255,7 @@ func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command
 	if result.Decision != aictx.NeedConfirm {
 		return result
 	}
-	return c.HandleConfirm(ctx, assetID, asset_entity.AssetTypeSSH, command)
+	return c.handleConfirm(ctx, assetID, asset_entity.AssetTypeSSH, command, result.Review)
 }
 
 // CheckForAsset 按资产类型分发权限检查。
@@ -248,13 +265,21 @@ func (c *CommandPolicyChecker) CheckForAsset(ctx context.Context, assetID int64,
 	if result.Decision != aictx.NeedConfirm {
 		return result
 	}
-	return c.HandleConfirm(ctx, assetID, assetType, command, detail...)
+	return c.handleConfirm(ctx, assetID, assetType, command, result.Review, detail...)
 }
 
 // HandleConfirm 处理需要用户确认的情况。
 // detail 是可选的展示补充（沿用本包 RegisterExecutor 的可选参数写法），
 // 只影响审批项在前端的呈现，不参与任何匹配。
 func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64, assetType, command string, detail ...string) aictx.CheckResult {
+	return c.handleConfirm(ctx, assetID, assetType, command, nil, detail...)
+}
+
+// handleConfirm 同 HandleConfirm，review 是这条命令的模型审核结果（辅助审批下审核未通过或失败时才有）：
+// 放进审批项给人看，每一种结局（确认、拒绝、无从确认）的结果里也带上它，审计据此记下
+// "模型没通过、人批准了"。
+func (c *CommandPolicyChecker) handleConfirm(ctx context.Context, assetID int64, assetType, command string, review *aictx.ReviewInfo, detail ...string) (result aictx.CheckResult) {
+	defer func() { result.Review = review }()
 	if c.confirmFunc == nil {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "command not authorized and no confirmation mechanism", "命令未授权且无确认机制"), DecisionSource: aictx.SourcePolicyDeny}
 	}
@@ -287,6 +312,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		AssetID:   assetID,
 		AssetName: assetName,
 		Command:   command,
+		Review:    review,
 	}
 	if classified {
 		item.Action = classification.Action

@@ -11,6 +11,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useAssetTypeDef } from "@/lib/assetTypes";
 import { AssetIcon } from "@/components/asset/AssetIcon";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
+import { PermissionModeCard } from "@/components/asset/PermissionModeCard";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { GetDefaultPolicy } from "../../../wailsjs/go/system/System";
 
@@ -159,6 +160,16 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {/* 类型详情卡：内置类型手写，扩展类型由它的 configSchema 生成（同一个槽位） */}
         {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} />}
+
+        {/* 权限模式：只对有命令权限策略的类型有意义 */}
+        {def?.policy && (
+          <PermissionModeCard
+            value={asset.permissionMode ?? ""}
+            subject="asset"
+            parentGroupId={asset.GroupID}
+            onChange={(mode) => updateAsset(new asset_entity.Asset({ ...asset, permissionMode: mode }))}
+          />
+        )}
 
         {/* 策略卡：内置类型与扩展类型走同一段渲染，差别只在定义里 */}
         {(() => {

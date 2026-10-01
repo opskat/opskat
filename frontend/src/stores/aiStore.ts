@@ -32,6 +32,7 @@ import { useAssetStore } from "./assetStore";
 import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
 import { tabToAssetRef } from "@/lib/tabAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
+import type { ReviewInfo } from "@/lib/commandReview";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
 // "error" 块由 EventError 推入，或在 retry 中途退出落盘时由 retryStatus 物化而来。
@@ -64,6 +65,8 @@ export interface ContentBlock {
     resource?: string;
     // 与 action 同时出现：「记住」实际落库的 <action>:<resource-glob>，编辑器预填并编辑它而不是命令。
     remember_pattern?: string;
+    // 模型审核结果：辅助审批下审核未通过或审核失败时才有，说明为什么要人确认。
+    review?: ReviewInfo;
   }>;
   approvalDescription?: string;
   approvalSessionId?: string;
@@ -138,6 +141,7 @@ interface StreamEventData {
     action?: string;
     resource?: string;
     remember_pattern?: string;
+    review?: ReviewInfo;
   }>;
   description?: string;
   session_id?: string;

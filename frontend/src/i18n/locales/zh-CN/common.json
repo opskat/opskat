@@ -3203,5 +3203,100 @@
       "error": "错误",
       "closed": "已断开"
     }
+  },
+  "commandReview": {
+    "withMode": "{{mode}} · {{summary}}",
+    "auditLabel": "模型审核",
+    "listSeparator": "、",
+    "summary": {
+      "pass": "模型审核通过",
+      "reject": "模型审核未通过（{{detail}}）",
+      "fail": "模型审核失败（{{detail}}）"
+    },
+    "question": {
+      "destructive": "可能破坏或不可恢复地修改数据",
+      "disruptive": "可能中断服务",
+      "remote_code": "会下载并执行代码"
+    },
+    "reason": {
+      "not_configured": "未配置命令审核的 API key",
+      "api_key_unreadable": "已保存的命令审核 API key 无法读取",
+      "invalid_api_key": "命令审核的 API key 无效",
+      "timeout": "超时",
+      "too_long": "命令过长",
+      "unparseable": "命令无法解析",
+      "undecodable": "命令把要执行的内容藏在解码后面",
+      "unavailable": "服务不可用"
+    },
+    "settings": {
+      "title": "命令审核",
+      "desc": "服务器的权限模式为辅助审批或 Autopilot 时，规则判断不了、原本要问人的命令会先交给 Jev 格式（TypeSafe System One API）的模型审核，只拦破坏数据、中断服务、下载并执行代码这类明确的危险操作。发送前会把命令里的密码、token、密钥等敏感信息替换掉。",
+      "apiKey": "API key",
+      "apiKeySet": "已设置。留空则保持不变",
+      "apiKeyNotSet": "未设置",
+      "apiKeyPlaceholder": "填写 API key",
+      "clearApiKey": "清除 API key",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "Jev 格式（TypeSafe System One API）的服务地址，默认是 TypeSafe 官方地址",
+      "model": "模型",
+      "modelHint": "填写服务端提供的模型名，点「测试模型」确认可用",
+      "timeout": "超时（毫秒）",
+      "threshold": "阈值",
+      "timeoutHint": "超时指单次请求；超时或连接出错时会自动重试一次",
+      "thresholdHint": "任意一项风险的概率达到阈值就不通过，数值越小越严格",
+      "timeoutRange": "超时需在 {{min}}~{{max}} 毫秒之间",
+      "thresholdRange": "阈值需大于 0、小于 1",
+      "save": "保存",
+      "saved": "命令审核设置已保存",
+      "test": "测试模型",
+      "testing": "正在测试…",
+      "testSuccess": "模型可用：{{model}}",
+      "lastFail": "最近一次审核失败：{{reason}}（{{time}}）",
+      "notice": "这是省事功能，不是安全防线：命令里故意写的误导文字可能影响判断，真正的底线仍然是禁止规则。"
+    },
+    "mode": {
+      "title": "权限模式",
+      "desc": "规则判断不了、原本要问人的命令怎么处理",
+      "inheritOption": {
+        "asset": "沿用分组",
+        "group": "沿用上级分组"
+      },
+      "inheritFrom": {
+        "asset": "当前沿用「{{mode}}」，来自分组",
+        "group": "当前沿用「{{mode}}」，来自上级分组"
+      },
+      "inheritNone": {
+        "ungrouped": "资产未分组，按默认处理",
+        "asset": "所在分组及上级分组都没有设置，按默认处理。所在分组",
+        "top": "顶层分组没有上级可沿用，按默认处理",
+        "group": "上级分组都没有设置，按默认处理。上级分组"
+      },
+      "default": "默认",
+      "assisted": "辅助审批",
+      "autopilot": "Autopilot",
+      "defaultDesc": "问人，和原来一样",
+      "assistedDesc": "模型审核通过就自动执行，否则转人工确认",
+      "autopilotDesc": "模型审核通过就自动执行，否则直接拒绝并告诉调用方原因，不等人",
+      "confirmTitle": "开启{{mode}}？",
+      "confirmAssisted": "规则判断不了的命令会先交给审核模型，审核通过就自动执行，不再问你。审核未通过或审核失败时仍然问你。命令会（替换掉敏感信息后）发给设置里的审核服务。",
+      "confirmAutopilot": "规则判断不了的命令会先交给审核模型，审核通过就自动执行；判断为明确危险或审核失败时直接拒绝，不会等你确认。适合无人值守的场景。命令会（替换掉敏感信息后）发给设置里的审核服务。",
+      "confirm": "开启",
+      "noApiKey": "还没配置命令审核的 API key：需要审核的命令都会审核失败（辅助审批转人工确认，Autopilot 直接拒绝）。请到设置 › AI 里配置。",
+      "saved": "权限模式已保存"
+    },
+    "configError": {
+      "not_configured": "有服务器开启了辅助审批或 Autopilot，但还没配置命令审核的 API key，需要审核的命令都会审核失败。",
+      "api_key_unreadable": "已保存的命令审核 API key 无法读取（可能换了主密钥），需要审核的命令都会审核失败。请重新填写 API key。",
+      "invalid_api_key": "命令审核的 API key 无效，需要审核的命令都会审核失败。",
+      "openSettings": "打开设置"
+    },
+    "scores": "评分",
+    "scoreThreshold": "阈值 {{threshold}}",
+    "retried": "自动重试过：共请求 {{attempts}} 次",
+    "scoreName": {
+      "destructive": "破坏数据",
+      "disruptive": "中断服务",
+      "remote_code": "下载并执行代码"
+    }
   }
 }

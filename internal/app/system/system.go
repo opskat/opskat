@@ -102,6 +102,7 @@ func (s *System) Startup(ctx context.Context) {
 	s.subscribeQuitConfirmShown(ctx)
 	s.startAutoUpdateCheck()
 	s.emitSystemStatusImpl()
+	s.watchCommandReviewConfigErrors()
 }
 
 // Cleanup 关闭时调用：当前没有持有的资源。

@@ -21,6 +21,7 @@ import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
 import { hasApprovalCommandEdits } from "@/lib/approval";
 import { ApprovalClassification } from "./ApprovalClassification";
+import { ReviewNotice } from "./ReviewNotice";
 import { RememberPatternEditor } from "./RememberPatternEditor";
 import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
 
@@ -77,6 +78,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
         <TypeBadge type={item.type} compact />
         {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
       </div>
+      {item.review && <ReviewNotice review={item.review} className="text-[11px]" />}
       <div className="rounded bg-warning/5 px-2 py-[5px]">
         <code className="select-text block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
           {item.command}
@@ -180,6 +182,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   className="text-[11px]"
                   labelClassName="text-warning"
                 />
+                {item.review && <ReviewNotice review={item.review} className="text-[11px]" />}
                 {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}
