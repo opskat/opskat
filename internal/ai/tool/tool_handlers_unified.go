@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
@@ -360,7 +361,11 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 		} else {
 			fmt.Fprintf(&b, "\nActual address: unavailable (%v)\n", err)
 		}
-		b.WriteString(renderGenericTunnelLine(ctx, asset))
+		line, err := renderGenericTunnelLine(ctx, asset)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(line)
 	}
 
 	if strings.TrimSpace(asset.Description) != "" {
@@ -372,17 +377,38 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 	return b.String(), nil
 }
 
-// renderGenericTunnelLine 显示 HTTP 方式使用的 SSH 隧道（Design decision 17：连接复用
-// 内置类型的隧道配置，配在资产的 Asset.SSHTunnelID 上，不在类型里）。查不到隧道资产
-// （如已被删除）时明确说明查不到，而不是静默显示成"无隧道"——那会把一个配置不一致的
-// 问题伪装成"直连"。
-func renderGenericTunnelLine(ctx context.Context, asset *asset_entity.Asset) string {
-	if asset.SSHTunnelID == 0 {
-		return "Tunnel: none (direct connection)\n"
-	}
-	tunnel, err := asset_svc.Asset().Get(ctx, asset.SSHTunnelID)
+// renderGenericTunnelLine 显示 HTTP 方式实际使用的网络路径，路径判定与传输层共用
+// connpool.HTTPRouteFor（代理链 > SSH 隧道 > 直连；隧道在 Asset.SSHTunnelID，代理链在
+// GenericConfig，Design decision 17）。查不到隧道 / 代理链 SSH 层资产（如已被删除）时明确
+// 说明查不到，而不是静默显示成"无隧道"——那会把一个配置不一致的问题伪装成"直连"。
+func renderGenericTunnelLine(ctx context.Context, asset *asset_entity.Asset) (string, error) {
+	cfg, err := asset.GetGenericConfig()
 	if err != nil {
-		return fmt.Sprintf("Tunnel: asset id %d (name lookup failed: %v)\n", asset.SSHTunnelID, err)
+		return "", err
 	}
-	return fmt.Sprintf("Tunnel: %s\n", tunnel.Name)
+	conn := connpool.GenericHTTPConn(asset, cfg)
+	switch connpool.HTTPRouteFor(conn) {
+	case connpool.HTTPRouteProxyChain:
+		var hops []string
+		for _, layer := range asset_entity.NormalizeProxyChain(conn.ProxyChain).Layers {
+			if layer.Type == asset_entity.ProxyChainLayerSSH {
+				hops = append(hops, assetNameOrID(ctx, layer.SSHAssetID))
+			} else {
+				hops = append(hops, fmt.Sprintf("%s %s:%d", layer.Type, layer.Host, layer.Port))
+			}
+		}
+		return fmt.Sprintf("Tunnel: proxy chain %s\n", strings.Join(hops, " -> ")), nil
+	case connpool.HTTPRouteSSHTunnel:
+		return fmt.Sprintf("Tunnel: %s\n", assetNameOrID(ctx, conn.TunnelID)), nil
+	default:
+		return "Tunnel: none (direct connection)\n", nil
+	}
+}
+
+func assetNameOrID(ctx context.Context, id int64) string {
+	a, err := asset_svc.Asset().Get(ctx, id)
+	if err != nil {
+		return fmt.Sprintf("asset id %d (name lookup failed: %v)", id, err)
+	}
+	return a.Name
 }

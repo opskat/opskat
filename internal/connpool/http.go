@@ -45,6 +45,19 @@ const (
 	HTTPRouteProxyChain HTTPRoute = "proxy_chain"
 )
 
+// HTTPRouteFor 是 HTTP 网络路径的唯一判定：代理链（经 NormalizeProxyChain 去掉停用层后仍有层）
+// > SSH 隧道 > 直连。NewHTTPTransport 据此拨号，help 与「测试连接」据此描述，三者不会各说各话。
+func HTTPRouteFor(conn HTTPConnConfig) HTTPRoute {
+	switch {
+	case asset_entity.NormalizeProxyChain(conn.ProxyChain) != nil:
+		return HTTPRouteProxyChain
+	case conn.TunnelID > 0:
+		return HTTPRouteSSHTunnel
+	default:
+		return HTTPRouteDirect
+	}
+}
+
 // NewHTTPTransport 按 代理链 > SSH 隧道 > 直连 构建一个 *http.Transport，并返回选用的路径。
 // TLS 握手由 transport 在拨出的连接上完成（ServerName 为空时取请求 URL 的 host），因此经
 // 隧道 / 代理远端解析时 SNI 与证书校验仍针对目标主机。
@@ -61,21 +74,17 @@ func NewHTTPTransport(ctx context.Context, conn HTTPConnConfig, sshPool *sshpool
 	transport.TLSClientConfig = tlsConfig
 
 	var dial dialContextFunc
-	route := HTTPRouteDirect
-	if conn.ProxyChain != nil {
+	route := HTTPRouteFor(conn)
+	switch route {
+	case HTTPRouteProxyChain:
 		if dial, err = chainDialFunc(ctx, conn.ProxyChain); err != nil {
 			return nil, "", fmt.Errorf("解析代理链失败: %w", err)
 		}
-		if dial != nil {
-			route = HTTPRouteProxyChain
-		}
-	}
-	if dial == nil && conn.TunnelID > 0 {
+	case HTTPRouteSSHTunnel:
 		if sshPool == nil {
 			return nil, "", fmt.Errorf("配置了 SSH 隧道（资产 %d）但 SSH 连接池不可用", conn.TunnelID)
 		}
 		dial = tunnelAddrDialFunc(&SSHTunnel{sshAssetID: conn.TunnelID, pool: sshPool})
-		route = HTTPRouteSSHTunnel
 	}
 	if dial == nil {
 		// 直连：保留 http.DefaultTransport 的环境变量代理，拨号换成统一拨号器（.local 走单播 DNS）。

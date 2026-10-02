@@ -1135,3 +1135,47 @@ func TestHandleExec_GenericHTTPApprovalShowsTargetButNeverInjectedValues(t *test
 		}
 	}
 }
+
+// TestHandleHelp_GenericAssetTunnelLineFollowsActualRoute: the Tunnel line must agree with
+// the route the HTTP transport really takes — proxy chain (naming its hops) over SSH
+// tunnel over direct (V17b: a chained asset used to print "none (direct connection)").
+func TestHandleHelp_GenericAssetTunnelLineFollowsActualRoute(t *testing.T) {
+	setupGenericPutDB(t)
+	ctx := context.Background()
+	jump := &asset_entity.Asset{Name: "jump-host", Type: asset_entity.AssetTypeSSH}
+	require.NoError(t, asset_repo.Asset().Create(ctx, jump))
+	tunnel := &asset_entity.Asset{Name: "tunnel-host", Type: asset_entity.AssetTypeSSH}
+	require.NoError(t, asset_repo.Asset().Create(ctx, tunnel))
+
+	asset := createGenericGrafanaAsset(t, "grafana-chain", map[string]any{"host": "grafana.internal", "token": "t"}, "")
+	cfg, err := asset.GetGenericConfig()
+	require.NoError(t, err)
+	enabled := true
+	cfg.ProxyChain = &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{
+		{Type: asset_entity.ProxyChainLayerSSH, Enabled: &enabled, Order: 1, SSHAssetID: jump.ID},
+		{Type: asset_entity.ProxyChainLayerSOCKS5, Enabled: &enabled, Order: 2, Host: "socks.example", Port: 1080},
+	}}
+	require.NoError(t, asset.SetGenericConfig(cfg))
+	asset.SSHTunnelID = tunnel.ID
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+
+	out, err := handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Tunnel: proxy chain jump-host -> socks5 socks.example:1080")
+	assert.NotContains(t, out, "direct connection")
+
+	// No chain: the SSH tunnel is reported by name.
+	cfg.ProxyChain = nil
+	require.NoError(t, asset.SetGenericConfig(cfg))
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+	out, err = handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Tunnel: tunnel-host\n")
+
+	// Neither: direct.
+	asset.SSHTunnelID = 0
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+	out, err = handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Tunnel: none (direct connection)")
+}

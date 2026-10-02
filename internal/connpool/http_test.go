@@ -129,3 +129,18 @@ func closedAddr(t *testing.T) string {
 	require.NoError(t, l.Close())
 	return addr
 }
+
+func TestHTTPRouteFor(t *testing.T) {
+	on, off := true, false
+	ssh := asset_entity.ProxyChainLayer{Type: asset_entity.ProxyChainLayerSSH, Enabled: &on, Order: 1, SSHAssetID: 3}
+	disabled := asset_entity.ProxyChainLayer{Type: asset_entity.ProxyChainLayerSSH, Enabled: &off, Order: 1, SSHAssetID: 3}
+
+	assert.Equal(t, HTTPRouteProxyChain,
+		HTTPRouteFor(HTTPConnConfig{ProxyChain: &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{ssh}}, TunnelID: 5}),
+		"an enabled proxy chain wins over the tunnel")
+	assert.Equal(t, HTTPRouteSSHTunnel, HTTPRouteFor(HTTPConnConfig{TunnelID: 5}))
+	assert.Equal(t, HTTPRouteSSHTunnel,
+		HTTPRouteFor(HTTPConnConfig{ProxyChain: &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{disabled}}, TunnelID: 5}),
+		"a chain whose layers are all disabled is empty and falls through to the tunnel")
+	assert.Equal(t, HTTPRouteDirect, HTTPRouteFor(HTTPConnConfig{}))
+}
