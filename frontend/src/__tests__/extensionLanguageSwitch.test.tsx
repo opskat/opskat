@@ -152,8 +152,7 @@ describe("extension manifest follows the app language without reload", () => {
     await act(async () => {
       pending["zh-CN"]();
     });
-    // The late zh-CN answer is not applied; it is asked for again in en.
-    expect(ListInstalledExtensions).toHaveBeenLastCalledWith("en");
+    // The late zh-CN answer is not applied over the newer en one.
     expectFormIn("en");
     expect(screen.queryByText(TEXT["zh-CN"].address)).not.toBeInTheDocument();
   });
@@ -189,5 +188,77 @@ describe("extension manifest follows the app language without reload", () => {
     await waitFor(() => expect(ListInstalledExtensions).toHaveBeenCalledTimes(2));
     expect(useExtensionStore.getState().extensions["es"]).toBeDefined();
     expect(useExtensionStore.getState().extensions["es"]?.loaded).toBeUndefined();
+  });
+
+  // A reloaded extension may ship a different frontend (new entry file, new pages):
+  // its bundle must be loaded against the reloaded manifest, so the old bundle is
+  // dropped together with the new manifest arriving — not while the old manifest is
+  // still the one an open page would load against.
+  it("drops loaded bundles on reload only when the reloaded manifest arrives", async () => {
+    const handlers: Record<string, () => void> = {};
+    vi.mocked(EventsOn).mockImplementation((name: string, cb: (...args: any[]) => void) => {
+      handlers[name] = cb as () => void;
+      return () => {};
+    });
+    await bootstrapExtensions();
+    const loaded = { name: "es", manifest: localizedManifest("en"), components: {} } as unknown as LoadedExtension;
+    useExtensionStore.getState().setLoaded("es", loaded);
+
+    let answer: () => void = () => {};
+    vi.mocked(ListInstalledExtensions).mockImplementation(
+      (lang: string) =>
+        new Promise((resolve) => {
+          answer = () =>
+            resolve([
+              { name: "es", enabled: true, manifest: { ...localizedManifest(lang as Lang), version: "2.0.0" } },
+            ] as any);
+        }) as any
+    );
+    await act(async () => {
+      handlers["ext:reload"]();
+    });
+    expect(useExtensionStore.getState().extensions["es"]?.loaded).toBe(loaded);
+
+    await act(async () => {
+      answer();
+    });
+    expect(useExtensionStore.getState().extensions["es"]?.manifest.version).toBe("2.0.0");
+    expect(useExtensionStore.getState().extensions["es"]?.loaded).toBeUndefined();
+  });
+
+  it("does not apply a list asked for before a reload over the reloaded one", async () => {
+    const handlers: Record<string, () => void> = {};
+    vi.mocked(EventsOn).mockImplementation((name: string, cb: (...args: any[]) => void) => {
+      handlers[name] = cb as () => void;
+      return () => {};
+    });
+    await bootstrapExtensions();
+
+    const answers: Array<() => void> = [];
+    let version = 1;
+    vi.mocked(ListInstalledExtensions).mockImplementation((lang: string) => {
+      const v = `${++version}.0.0`;
+      return new Promise((resolve) => {
+        answers.push(() =>
+          resolve([{ name: "es", enabled: true, manifest: { ...localizedManifest(lang as Lang), version: v } }] as any)
+        );
+      }) as any;
+    });
+    // A language switch asks for the pre-reload list (2.0.0); the reload then asks for 3.0.0.
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    await act(async () => {
+      handlers["ext:reload"]();
+    });
+    expect(answers).toHaveLength(2);
+    await act(async () => {
+      answers[1]();
+    });
+    await act(async () => {
+      answers[0]();
+    });
+    expect(useExtensionStore.getState().extensions["es"]?.manifest.version).toBe("3.0.0");
+    expect(useExtensionStore.getState().extensions["es"]?.manifest.i18n.displayName).toBe(TEXT["zh-CN"].type);
   });
 });

@@ -7,7 +7,6 @@ import { useExtensionStore } from "./store";
 import { injectExtensionAPI } from "./inject";
 import { createExtensionAPI } from "./api";
 import { clearExtensionCache } from "./loader";
-import type { extension_svc } from "../../wailsjs/go/models";
 import type { ExtManifest } from "./types";
 
 let _bootstrapped = false;
@@ -42,9 +41,8 @@ export function subscribeExtensionReload(): () => void {
   if (_subscribed) return () => {};
   _subscribed = true;
   const cancel = EventsOn("ext:reload", () => {
-    clearExtensionCache();
-    useExtensionStore.getState().clearLoaded();
-    refreshExtensions();
+    _bundlesStale = true;
+    void refreshExtensions();
   });
   return cancel;
 }
@@ -80,27 +78,39 @@ function subscribeLanguageChange(): void {
 }
 
 /**
- * Fetch the extension list localized for the current language. An answer that
- * arrives after the language changed again is not applied — it is asked for
- * again in the language now current, so a late answer can never overwrite a
- * newer one.
+ * Set by ext:reload: the installed extensions changed on disk, so their loaded
+ * frontend bundles are stale. They are dropped by the refresh that applies the
+ * reloaded manifests — not when the event arrives, or an open page would load the
+ * new files against the old manifest in between.
  */
-async function listInstalledForCurrentLanguage(): Promise<extension_svc.ExtensionInfo[] | null> {
-  for (;;) {
-    const lang = i18n.language;
-    const extensions = await ListInstalledExtensions(lang);
-    if (i18n.language === lang) return extensions;
-  }
-}
+let _bundlesStale = false;
+let _refreshSeq = 0;
+let _latestRefresh: Promise<boolean> = Promise.resolve(false);
 
 /**
- * Refresh extension list from the backend.
+ * Refresh extension list from the backend, localized for the current language.
+ * Only the most recently started refresh applies its answer: language switches,
+ * ext:reload and ext:ready all refresh concurrently, and an older answer (another
+ * language, or the list from before a reload) must never land over a newer one. A
+ * superseded refresh resolves with the newest refresh's result.
  * Returns true if extensions were loaded, false if the list was empty.
  */
-async function refreshExtensions(): Promise<boolean> {
+function refreshExtensions(): Promise<boolean> {
+  const seq = ++_refreshSeq;
+  _latestRefresh = applyExtensionList(seq);
+  return _latestRefresh;
+}
+
+async function applyExtensionList(seq: number): Promise<boolean> {
   try {
-    const extensions = await listInstalledForCurrentLanguage();
+    const extensions = await ListInstalledExtensions(i18n.language);
+    if (seq !== _refreshSeq) return _latestRefresh;
     const store = useExtensionStore.getState();
+    if (_bundlesStale) {
+      _bundlesStale = false;
+      clearExtensionCache();
+      store.clearLoaded();
+    }
 
     const list = extensions || [];
     const installed = new Set(list.map((e: { name: string }) => e.name));
@@ -122,6 +132,7 @@ async function refreshExtensions(): Promise<boolean> {
 
     return list.length > 0;
   } catch (err) {
+    if (seq !== _refreshSeq) return _latestRefresh;
     toast.error(`${i18n.t("extension.loadError")}: ${String(err)}`);
     return false;
   }
@@ -133,6 +144,7 @@ export function _resetForTesting(): void {
   _bootstrapped = false;
   _subscribed = false;
   _readySubscribed = false;
+  _bundlesStale = false;
   i18n.off("languageChanged", onLanguageChanged);
   _languageSubscribed = false;
 }
