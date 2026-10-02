@@ -94,6 +94,7 @@
       "auth_name_required": "{{type}} authentication needs a name",
       "auth_name_not_allowed": "{{type}} authentication doesn't take a name",
       "auth_value_count": "{{type}} authentication takes {{want}} value template(s), but has {{got}}",
+      "auth_value_required": "Enter a value for this field",
       "command_config_missing": "Local command settings are missing",
       "env_name_invalid": "\"{{name}}\" isn't a valid variable name — start with a letter or underscore, then use letters, digits or underscores",
       "env_name_duplicate": "Variable \"{{name}}\" is defined more than once",

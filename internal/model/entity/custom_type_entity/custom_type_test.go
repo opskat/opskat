@@ -138,12 +138,27 @@ func TestValidate_HTTP(t *testing.T) {
 			c.HTTP.Auth[0] = AuthBinding{Type: "basic", Values: []string{"{{host}}"}}
 		}, "http.auth[0].values"},
 		{"auth value unknown function", func(c *CustomType) { c.HTTP.Auth[0].Values[0] = "{{md5(token)}}" }, "http.auth[0].values[0]"},
+		{"header value empty", func(c *CustomType) { c.HTTP.Auth[0].Values[0] = "" }, "http.auth[0].values[0]"},
+		{"header value whitespace only", func(c *CustomType) { c.HTTP.Auth[0].Values[0] = "  " }, "http.auth[0].values[0]"},
+		{"query value empty", func(c *CustomType) {
+			c.HTTP.Auth[0] = AuthBinding{Type: "query", Name: "token", Values: []string{""}}
+		}, "http.auth[0].values[0]"},
+		{"basic username empty", func(c *CustomType) {
+			c.HTTP.Auth[0] = AuthBinding{Type: "basic", Values: []string{"", "{{token}}"}}
+		}, "http.auth[0].values[0]"},
+		{"basic password can be empty", func(c *CustomType) {
+			c.HTTP.Auth[0] = AuthBinding{Type: "basic", Values: []string{"{{host}}", ""}}
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ct := httpType()
 			tc.mutate(ct)
-			assert.Contains(t, issuePaths(t, ct.Validate()), tc.path)
+			if tc.path == "" {
+				assert.NoError(t, ct.Validate(), "should accept empty basic password")
+			} else {
+				assert.Contains(t, issuePaths(t, ct.Validate()), tc.path)
+			}
 		})
 	}
 }
@@ -246,6 +261,11 @@ func TestValidate_IssuesCarryCodeAndParams(t *testing.T) {
 		}, Issue{Path: "command.env[1].name", Code: "env_name_duplicate", Params: map[string]string{"name": "AWS_ACCESS_KEY_ID"}}},
 		{"env value template", commandType, func(c *CustomType) { c.Command.Env[0].Value = "{{access_key" },
 			Issue{Path: "command.env[0].value", Code: "template.unterminated_expression", Params: map[string]string{}}},
+		{"auth value required (header empty)", httpType, func(c *CustomType) { c.HTTP.Auth[0].Values[0] = "" },
+			Issue{Path: "http.auth[0].values[0]", Code: "auth_value_required"}},
+		{"auth value required (basic username empty)", httpType, func(c *CustomType) {
+			c.HTTP.Auth[0] = AuthBinding{Type: "basic", Values: []string{"", "{{token}}"}}
+		}, Issue{Path: "http.auth[0].values[0]", Code: "auth_value_required"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

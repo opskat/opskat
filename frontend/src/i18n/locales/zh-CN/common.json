@@ -94,6 +94,7 @@
       "auth_name_required": "{{type}} 认证需要填写名称",
       "auth_name_not_allowed": "{{type}} 认证不需要名称",
       "auth_value_count": "{{type}} 认证需要 {{want}} 个值模板，当前有 {{got}} 个",
+      "auth_value_required": "该字段不能为空",
       "command_config_missing": "缺少本地命令配置",
       "env_name_invalid": "变量名「{{name}}」不合法：须以字母或下划线开头，只能包含字母、数字和下划线",
       "env_name_duplicate": "环境变量「{{name}}」重复",

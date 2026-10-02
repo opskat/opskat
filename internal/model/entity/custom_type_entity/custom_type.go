@@ -125,6 +125,7 @@ const (
 	IssueAuthNameRequired         = "auth_name_required"
 	IssueAuthNameNotAllowed       = "auth_name_not_allowed"
 	IssueAuthValueCount           = "auth_value_count"
+	IssueAuthValueRequired        = "auth_value_required"
 	IssueCommandConfigMissing     = "command_config_missing"
 	IssueEnvNameInvalid           = "env_name_invalid"
 	IssueEnvNameDuplicate         = "env_name_duplicate"
@@ -280,7 +281,15 @@ func (c *CustomType) validateHTTP(l *issues, fields []string) {
 				"type", b.Type, "want", strconv.Itoa(at.ValueCount), "got", strconv.Itoa(len(b.Values)))
 		}
 		for j, v := range b.Values {
-			parseInto(l, fmt.Sprintf("%s.values[%d]", path, j), v, fields, true)
+			valuePath := fmt.Sprintf("%s.values[%d]", path, j)
+			// header/query value and basic username must not be empty; basic password can be empty
+			if b.Type != "basic" || j == 0 {
+				if strings.TrimSpace(v) == "" {
+					l.add(valuePath, IssueAuthValueRequired)
+					continue
+				}
+			}
+			parseInto(l, valuePath, v, fields, true)
 		}
 	}
 }
