@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CustomTypeSection } from "@/components/settings/CustomTypeSection";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
+import { useAssetStore } from "@/stores/assetStore";
 import { customtype } from "../../../../wailsjs/go/models";
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
@@ -87,6 +88,22 @@ describe("CustomTypeSection", () => {
     expect(screen.getByText("AWS CLI")).toBeInTheDocument();
     expect(screen.getByText(/grafana/)).toBeInTheDocument();
     expect(screen.getAllByText(/customType.assetCount/)).toHaveLength(2);
+  });
+
+  it("refreshes the asset counts when assets change", async () => {
+    const { ListCustomTypes } = await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(ListCustomTypes).mockResolvedValueOnce([
+      { id: 1, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 1 },
+    ]);
+    render(<CustomTypeSection />);
+    expect(await screen.findByText(/customType.assetCount.*"count":1/)).toBeInTheDocument();
+
+    vi.mocked(ListCustomTypes).mockResolvedValueOnce([
+      { id: 1, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 4 },
+    ]);
+    act(() => useAssetStore.setState({ assets: [{ ID: 9 } as never] }));
+
+    expect(await screen.findByText(/customType.assetCount.*"count":4/)).toBeInTheDocument();
   });
 
   it("reports an in-use type's assets directly without a confirm dialog or a delete call", async () => {

@@ -9,6 +9,7 @@ import {
   DeleteCustomType,
 } from "../../wailsjs/go/customtype/CustomType";
 import type { customtype, custom_type_entity } from "../../wailsjs/go/models";
+import { useAssetStore } from "./assetStore";
 
 interface CustomTypeState {
   types: customtype.Summary[];
@@ -79,3 +80,12 @@ export function useCustomTypeList(): { types: customtype.Summary[]; loaded: bool
   }
   return { types, loaded, loading };
 }
+
+// 资产变化(opsctl/AI data:changed、备份导入、界面增删改都经 useAssetStore.refresh)会改动类型 ID 与"N 个资产"计数；
+// 已加载过才跟着重载，首次使用前不抢跑。失败与首次加载一样 toast。
+useAssetStore.subscribe((state, prev) => {
+  if (state.assets === prev.assets) return;
+  const { loaded, load } = useCustomTypeStore.getState();
+  if (!loaded) return;
+  load().catch((e) => toast.error(String(e)));
+});

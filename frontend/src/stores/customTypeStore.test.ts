@@ -9,7 +9,11 @@ vi.mock("../../wailsjs/go/customtype/CustomType", () => ({
   DeleteCustomType: vi.fn(),
 }));
 
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
+
 import { useCustomTypeStore } from "./customTypeStore";
+import { useAssetStore } from "./assetStore";
 
 describe("useCustomTypeStore", () => {
   beforeEach(async () => {
@@ -18,6 +22,8 @@ describe("useCustomTypeStore", () => {
     vi.mocked(mod.SaveCustomType).mockClear();
     vi.mocked(mod.DeleteCustomType).mockClear();
     useCustomTypeStore.setState({ types: [], loading: false, loaded: false });
+    useAssetStore.setState({ assets: [] });
+    toastError.mockClear();
   });
 
   it("load() populates the type list", async () => {
@@ -57,5 +63,43 @@ describe("useCustomTypeStore", () => {
     vi.mocked(DeleteCustomType).mockResolvedValueOnce({ deleted: true });
     await useCustomTypeStore.getState().remove(1);
     expect(ListCustomTypes).toHaveBeenCalledTimes(1);
+  });
+
+  describe("reacting to asset changes", () => {
+    const summary = (assetCount: number) => ({
+      id: 1,
+      slug: "grafana",
+      name: "Grafana",
+      icon: "",
+      execMode: "http",
+      assetCount,
+    });
+
+    it("reloads the list and counts when assets change after the first load", async () => {
+      const { ListCustomTypes } = await import("../../wailsjs/go/customtype/CustomType");
+      vi.mocked(ListCustomTypes).mockResolvedValueOnce([summary(1)]);
+      await useCustomTypeStore.getState().load();
+
+      vi.mocked(ListCustomTypes).mockResolvedValueOnce([summary(2)]);
+      useAssetStore.setState({ assets: [{ ID: 9 } as never] });
+
+      await vi.waitFor(() => expect(useCustomTypeStore.getState().types[0].assetCount).toBe(2));
+      expect(ListCustomTypes).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not load on asset changes before the list was ever loaded", async () => {
+      const { ListCustomTypes } = await import("../../wailsjs/go/customtype/CustomType");
+      useAssetStore.setState({ assets: [{ ID: 9 } as never] });
+      await Promise.resolve();
+      expect(ListCustomTypes).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a failed reload as an error toast", async () => {
+      const { ListCustomTypes } = await import("../../wailsjs/go/customtype/CustomType");
+      await useCustomTypeStore.getState().load();
+      vi.mocked(ListCustomTypes).mockRejectedValueOnce(new Error("boom"));
+      useAssetStore.setState({ assets: [{ ID: 9 } as never] });
+      await vi.waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringContaining("boom")));
+    });
   });
 });
