@@ -151,7 +151,8 @@ func TestCheckPermission_GenericSecretFieldIgnoresExecModeAndHasNoDefaultAllow(t
 		})}
 	require.NoError(t, asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "future-cli"}))
 	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
-	registerGenericTypes(t, &custom_type_entity.CustomType{Slug: "future-cli", ExecMode: "future-mode"})
+	registerGenericTypes(t, &custom_type_entity.CustomType{Slug: "future-cli", ExecMode: "future-mode",
+		Fields: []custom_type_entity.Field{{Name: "token", Secret: true}, {Name: "admin_key", Secret: true}, {Name: "other", Secret: true}}})
 
 	assert.Equal(t, aictx.Allow, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "secret:token").Decision,
 		"an explicit allow rule for a secret match object must work even though \"future-mode\" has no exec-mode check registered")

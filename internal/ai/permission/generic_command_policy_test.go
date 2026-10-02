@@ -130,3 +130,20 @@ func TestCheckPermission_GenericCommandNoTemplateHonorsStoredCompoundApprovals(t
 		assert.Equal(t, aictx.NeedConfirm, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "ls -la | wc -l").Decision)
 	})
 }
+
+// 取值的匹配对象是 `secret:<字段名>`；exec 的命令只是恰好以 "secret:" 开头时仍是命令，必须按
+// 执行方式判定——否则无模板命令方式里 `secret:x; rm -rf /` 会绕开 shell 子命令拆分与 deny 规则，
+// 被 `secret:*` 这条只为取值写的 allow 规则放行。
+func TestCheckPermission_GenericCommandPrefixedLikeSecretIsStillACommand(t *testing.T) {
+	ct := &custom_type_entity.CustomType{Slug: "shell-box", ExecMode: custom_type_entity.ExecModeCommand, Command: &custom_type_entity.CommandConfig{},
+		Fields: []custom_type_entity.Field{{Name: "token", Secret: true}}}
+	ctx := setupGenericCommandPermission(t, "shell-box", ct, asset_entity.CommandPolicy{
+		AllowList: []string{"secret:*"},
+		DenyList:  []string{"rm *"},
+	})
+
+	got := CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "secret:x; rm -rf /")
+	assert.Equal(t, aictx.Deny, got.Decision, "the rm sub-command hits the deny rule")
+	assert.Equal(t, aictx.Allow, CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, "secret:token").Decision,
+		"a well-formed secret subject is still judged as a value read")
+}

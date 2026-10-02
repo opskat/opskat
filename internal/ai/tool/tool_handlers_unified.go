@@ -182,6 +182,12 @@ func unsupportedTypeError(asset *asset_entity.Asset) error {
 		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
 }
 
+// assetHelpExtensions 按资产类型登记 help(<资产>) 在类型文档之后追加的实例详情（通用资产：
+// 所属自定义类型的结构、字段值、实际地址与网络路径）。登记而不是在 handleHelp 里按类型分支。
+var assetHelpExtensions = map[string]func(ctx context.Context, asset *asset_entity.Asset) (string, error){
+	asset_entity.AssetTypeGeneric: renderGenericAssetHelp,
+}
+
 // handleHelp 返回资产类型的用法文档，并把该类型标记为"该会话已知晓"，供 exec 的
 // 门禁检查使用。
 //
@@ -211,8 +217,8 @@ func handleHelp(ctx context.Context, args map[string]any) (string, error) {
 	// what the doc gate is keyed by: for a generic asset that's its custom type's slug, for
 	// every other asset it's asset.Type itself (assettype.TypeName is the identity there).
 	typeKey := assettype.TypeName(asset)
-	if asset.IsGeneric() {
-		extended, err := renderGenericAssetHelp(ctx, asset)
+	if extend, ok := assetHelpExtensions[asset.Type]; ok {
+		extended, err := extend(ctx, asset)
 		if err != nil {
 			return "", err
 		}

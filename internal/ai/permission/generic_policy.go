@@ -45,12 +45,6 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 	if asset == nil {
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
 	}
-	// 取值适用于所有执行方式的通用资产——判定与类型的 exec mode 无关，在查 genericModeChecks
-	// 之前短路，直接走跟 HTTP 共用的普通 glob 匹配器。新建类型从不预填 secret:* 的默认允许
-	// 规则（Design decision 9），所以这条路径没有额外的"默认放行"要处理。
-	if strings.HasPrefix(subject, SecretSubjectPrefix) {
-		return checkPlainGlobPolicy(ctx, asset, subject)
-	}
 	cfg, err := asset.GetGenericConfig()
 	if err != nil {
 		logger.Ctx(ctx).Warn("read generic config for permission check", zap.Int64("assetID", assetID), zap.Error(err))
@@ -60,6 +54,16 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 	if err != nil {
 		logger.Ctx(ctx).Warn("resolve custom type for permission check", zap.Int64("assetID", assetID), zap.Error(err))
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+	// 取值适用于所有执行方式的通用资产——判定与类型的 exec mode 无关，在查 genericModeChecks
+	// 之前短路，直接走跟 HTTP 共用的普通 glob 匹配器。新建类型从不预填 secret:* 的默认允许
+	// 规则（Design decision 9），所以这条路径没有额外的"默认放行"要处理。只有 `secret:` 后面
+	// 恰是该类型的一个字段名才是取值：命令方式的 exec 内容是任意文本，`secret:x; rm -rf /`
+	// 这样的命令必须照常按执行方式判定，不能借前缀绕开 shell 拆分与 deny 规则。
+	if field, ok := strings.CutPrefix(subject, SecretSubjectPrefix); ok {
+		if _, isField := ct.FieldByName(field); isField {
+			return checkPlainGlobPolicy(ctx, asset, subject)
+		}
 	}
 	check, ok := genericModeChecks[ct.ExecMode]
 	if !ok {

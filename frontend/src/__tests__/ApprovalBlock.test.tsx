@@ -297,6 +297,8 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     ["GET /api/search", "opsctlApproval.genericHttp"],
     ["secret:token", "opsctlApproval.genericSecret"],
     ["aws s3 ls", "opsctlApproval.genericCommand"],
+    // 只是以 "secret:" 开头的命令仍是命令（后端按执行方式判定），不能标成取值。
+    ["secret:x; rm -rf /", "opsctlApproval.genericCommand"],
   ])("通用资产审批按匹配对象标出操作类型并常驻显示目标：%s", (command, label) => {
     renderApproval({
       approvalItems: [

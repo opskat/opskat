@@ -56,6 +56,11 @@ export interface AssetTypeDefinition {
   DetailSubtitle?: ComponentType<DetailSubtitleProps>;
   /** 从已存资产读出类型选择器里的子类型(通用资产 = 自定义类型标识);与 ConfigSectionProps.variant 对应。 */
   variantOf?: (asset: asset_entity.Asset) => string | undefined;
+  /**
+   * 资产表单给这类资产预填的图标名;缺省 = 表单按类型名取内置默认图标。空串 = 不预填(通用资产:
+   * 图标来自所选自定义类型,类型没有图标就留空,显示时由 getIconComponent 取默认图标)。
+   */
+  formIcon?: string;
   /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。 */
   ConfigSection?: ConfigSectionComponent;
   /** 是否支持"测试连接"(替代 isTestableAssetType 链)。 */

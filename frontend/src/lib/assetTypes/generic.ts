@@ -36,6 +36,7 @@ registerAssetType({
   DetailInfoCard: GenericDetailInfoCard,
   DetailSubtitle: GenericDetailSubtitle,
   ConfigSection: GenericConfigSection,
+  formIcon: "",
   testable: true,
   variantOf: customTypeSlugOf,
   policy: {

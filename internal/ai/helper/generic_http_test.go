@@ -502,3 +502,21 @@ func TestGenericHTTP_BaseURLEntirelyFromSecretField(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "HTTP request: GET "+GenericSecretMask+"/send", detail)
 }
+
+// Base URL 自带 query（如 webhook 把 access_token 写在 Base URL 里）时，调用方的 PATH 接在
+// Base URL 的路径后面、两边的 query 合并——不能把 PATH 拼进 query 值里，改坏真正发出的 token。
+func TestGenericHTTP_BaseURLWithQueryKeepsPathAndQuerySeparate(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "robot", "http://{{host}}/robot/send?access_token={{token}}")
+	asset := genericAsset(t, "robot", map[string]string{"host": srv.host(), "token": testSecret})
+
+	_, stdout, _, err := streamHTTP(t, ctx, asset, nil, "POST", "/x?y=1")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "POST /robot/send/x\n")
+	assert.Contains(t, stdout, "query=access_token="+testSecret+"&y=1\n")
+
+	detail, err := DescribeGenericCommand(ctx, asset, "POST '/x?y=1'")
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: POST "+srv.URL+"/robot/send/x?access_token="+GenericSecretMask+"&y=1", detail)
+}

@@ -82,6 +82,11 @@ const DEFAULT_ICONS: Record<string, string> = {
   rdp: "monitor-up",
 };
 
+/** 表单给该类型资产预填的图标:类型定义声明了 formIcon 时用它(可为空串),否则取内置默认图标。 */
+function formIconFor(type: string): string {
+  return getAssetType(type)?.formIcon ?? (DEFAULT_ICONS[type] || "server");
+}
+
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
   const { t } = useTranslation();
   const { createAsset, updateAsset } = useAssetStore();
@@ -151,7 +156,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setTypeVariant(getAssetType(editType)?.variantOf?.(editAsset));
         setName(editAsset.Name);
         setGroupId(editAsset.GroupID);
-        setIcon(editAsset.Icon || (editType === "generic" ? "" : DEFAULT_ICONS[editType] || "server"));
+        setIcon(editAsset.Icon || formIconFor(editType));
         setDescription(editAsset.Description);
 
         if (getAssetType(editType)?.ConfigSection) {
@@ -185,10 +190,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setAssetType(newType);
     setTypeVariant(variant);
     const option = findAssetTypeOption(assetTypeOptions, newType, variant);
-    setIcon(
-      option?.defaultIcon ??
-        (newType === "generic" ? "" : newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server")
-    );
+    setIcon(option?.defaultIcon ?? (newType === "database" ? "mysql" : formIconFor(newType)));
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。

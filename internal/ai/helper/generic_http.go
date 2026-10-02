@@ -235,7 +235,7 @@ func displayAddress(ct *custom_type_entity.CustomType, values map[string]string,
 	}
 	text := base
 	if requestURI != "" {
-		text = strings.TrimRight(base, "/") + requestURI
+		text = joinRequestURI(base, requestURI)
 	}
 	if u, err := url.Parse(text); err == nil && u.Scheme != "" && u.Host != "" {
 		return u.Redacted(), nil
@@ -257,6 +257,26 @@ func maskedGenericValues(ct *custom_type_entity.CustomType, values map[string]st
 	return masked
 }
 
+// joinRequestURI 把调用方的 `<路径>[?<query>]` 接到 Base URL 上：路径接在 Base URL 的路径之后，
+// Base URL 自带的 query（如写在 Base URL 里的 access_token）与调用方的 query 合并，片段不发往
+// 服务端、丢弃。按文本处理，真值渲染与掩码展示共用同一条拼接规则。
+func joinRequestURI(base, requestURI string) string {
+	base, _, _ = strings.Cut(base, "#")
+	basePath, baseQuery, _ := strings.Cut(base, "?")
+	path, query, _ := strings.Cut(requestURI, "?")
+	joined := strings.TrimRight(basePath, "/") + path
+	switch {
+	case baseQuery != "" && query != "":
+		return joined + "?" + baseQuery + "&" + query
+	case baseQuery != "":
+		return joined + "?" + baseQuery
+	case query != "":
+		return joined + "?" + query
+	default:
+		return joined
+	}
+}
+
 // targetURL 是这次请求实际发往的目标（不含注入的 query）：Base URL + 调用方的路径与 query。
 func targetURL(t *GenericTarget, cmd *HTTPCommand, now time.Time) (*url.URL, error) {
 	base, err := RenderGenericBaseURL(t.Type, t.Values, now)
@@ -267,7 +287,7 @@ func targetURL(t *GenericTarget, cmd *HTTPCommand, now time.Time) (*url.URL, err
 		// 只有「测试连接」这样构造：GET Base URL 本身（ParseHTTPCommand 要求 PATH 以 / 开头）。
 		return base, nil
 	}
-	u, err := url.Parse(strings.TrimRight(base.String(), "/") + cmd.requestURI())
+	u, err := url.Parse(joinRequestURI(base.String(), cmd.requestURI()))
 	if err != nil {
 		// *url.Error 会带出拼好的完整 URL，而 Base URL 可能引用了密钥字段：只报调用方自己
 		// 写的路径与解析原因。
