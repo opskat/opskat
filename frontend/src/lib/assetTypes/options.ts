@@ -68,7 +68,7 @@ function customTypeOptions(customTypes: CustomTypeEntryLike[]): AssetTypeOption[
         aliases: def.aliases,
         label: ct.name,
         labelIsI18nKey: false,
-        icon: ct.icon ? getIconComponent(ct.icon) : def.icon,
+        icon: getIconComponent(ct.icon),
         group: "custom" as const,
         category: def.category,
         variant: ct.slug,

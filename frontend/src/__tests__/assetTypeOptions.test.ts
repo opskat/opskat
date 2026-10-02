@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Server } from "lucide-react";
 import {
   getAssetTypeOptions,
   matchSelectedTypes,
@@ -8,6 +9,7 @@ import {
   resolveAssetTypeLabel,
 } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
+import { getIconComponent } from "@/components/asset/IconPicker";
 import { asset_entity } from "../../wailsjs/go/models";
 
 describe("getAssetTypeOptions", () => {
@@ -247,5 +249,13 @@ describe("resolveAssetTypeLabel", () => {
     const t = (k: string, o?: { ns?: string }) =>
       o?.ns === "ext-filestore" && k === "assetType.filestore.name" ? "对象存储" : k;
     expect(resolveAssetTypeLabel(extOpt, t)).toBe("对象存储");
+  });
+});
+
+describe("icon-less custom type option", () => {
+  it("shows Server component for custom type with no icon", () => {
+    const opts = getAssetTypeOptions({}, [{ slug: "aws-cli", name: "AWS CLI", icon: "" }]);
+    const awsCliOpt = opts.find((o) => o.variant === "aws-cli")!;
+    expect(awsCliOpt.icon).toBe(Server);
   });
 });

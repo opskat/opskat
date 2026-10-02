@@ -5,12 +5,13 @@ import { AssetForm } from "@/components/asset/AssetForm";
 import { asset_entity, custom_type_entity, customtype } from "../../../../wailsjs/go/models";
 import { GetCustomType, ListCustomTypes } from "../../../../wailsjs/go/customtype/CustomType";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
-import { CancelTest, TestAssetConnection } from "../../../../wailsjs/go/system/System";
+import { CancelTest, TestAssetConnection, CreateAsset, UpdateAsset, ListAssets } from "../../../../wailsjs/go/system/System";
 import { ConnectVNCTemporary, DisconnectVNC } from "../../../../wailsjs/go/vnc/VNC";
 import { startVNCClient, VNCClientError, type VNCNegotiatedSecurity } from "@/lib/vncClient";
 import { notifySuccess } from "@/lib/notify";
 import { toast } from "sonner";
 import { EventsOff } from "../../../../wailsjs/runtime/runtime";
+import { useAssetStore } from "@/stores/assetStore";
 
 const mocks = vi.hoisted(() => ({
   notifySuccess: vi.fn(),
@@ -217,6 +218,9 @@ describe("AssetForm generic assets", () => {
       )
     );
     vi.mocked(GetCustomType).mockImplementation(async (id: number) => (id === grafana.id ? grafana : awsCli));
+    vi.mocked(CreateAsset).mockResolvedValue(undefined as never);
+    vi.mocked(UpdateAsset).mockResolvedValue(undefined as never);
+    vi.mocked(ListAssets).mockResolvedValue([] as never);
   });
 
   it("creates from a picked custom type and shows the tester's status detail on success", async () => {
@@ -258,5 +262,38 @@ describe("AssetForm generic assets", () => {
     await waitFor(() => expect(screen.getByTestId("asset-form-submit")).toBeDisabled());
     await userEvent.type(host, "g.example.com");
     await waitFor(() => expect(screen.getByTestId("asset-form-submit")).toBeEnabled());
+  });
+
+  it("choosing an icon-less custom type and saving submits icon '' not 'boxes'", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await userEvent.type(screen.getByTestId("asset-form-name-input"), "aws-cli-test");
+    await userEvent.click(screen.getByTestId("asset-type-picker"));
+    await userEvent.click(await screen.findByTestId("asset-type-option-generic:aws-cli"));
+    await screen.findByTestId("generic-field-profile");
+
+    await userEvent.click(screen.getByTestId("asset-form-submit"));
+
+    await waitFor(() => expect(CreateAsset).toHaveBeenCalled());
+    const savedAsset = vi.mocked(CreateAsset).mock.calls[0][0];
+    expect(savedAsset.Icon).toBe("");
+  });
+
+  it("editing an icon-less custom type asset does not write 'boxes'", async () => {
+    const iconlessAsset = new asset_entity.Asset({
+      ID: 99,
+      Name: "aws-cli-prod",
+      Type: "generic",
+      Icon: "",
+      Config: JSON.stringify({ custom_type: "aws-cli", values: {} }),
+    });
+
+    render(<AssetForm open editAsset={iconlessAsset} onOpenChange={vi.fn()} />);
+    await screen.findByTestId("generic-field-profile");
+
+    await userEvent.click(screen.getByTestId("asset-form-submit"));
+
+    await waitFor(() => expect(UpdateAsset).toHaveBeenCalled());
+    const savedAsset = vi.mocked(UpdateAsset).mock.calls[0][0];
+    expect(savedAsset.Icon).toBe("");
   });
 });

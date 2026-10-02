@@ -80,7 +80,6 @@ const DEFAULT_ICONS: Record<string, string> = {
   local: "terminal",
   vnc: "screen-share",
   rdp: "monitor-up",
-  generic: "boxes",
 };
 
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
@@ -152,7 +151,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setTypeVariant(getAssetType(editType)?.variantOf?.(editAsset));
         setName(editAsset.Name);
         setGroupId(editAsset.GroupID);
-        setIcon(editAsset.Icon || DEFAULT_ICONS[editType] || "server");
+        setIcon(editAsset.Icon || (editType === "generic" ? "" : DEFAULT_ICONS[editType] || "server"));
         setDescription(editAsset.Description);
 
         if (getAssetType(editType)?.ConfigSection) {
@@ -186,7 +185,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setAssetType(newType);
     setTypeVariant(variant);
     const option = findAssetTypeOption(assetTypeOptions, newType, variant);
-    setIcon(option?.defaultIcon ?? (newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server"));
+    setIcon(
+      option?.defaultIcon ??
+        (newType === "generic" ? "" : newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server")
+    );
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
