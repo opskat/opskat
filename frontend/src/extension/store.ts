@@ -19,6 +19,8 @@ interface ExtensionState {
   unregister: (name: string) => void;
   markDisabled: (name: string) => void;
   setLoaded: (name: string, loaded: LoadedExtension) => void;
+  /** 丢弃全部已加载的前端包（扩展重装/重载后，下次打开页面重新加载）。 */
+  clearLoaded: () => void;
 }
 
 export const useExtensionStore = create<ExtensionState>((set) => ({
@@ -33,7 +35,10 @@ export const useExtensionStore = create<ExtensionState>((set) => ({
   register(name, manifest) {
     set((s) => {
       const { [name]: _, ...disabled } = s.disabled;
-      return { extensions: { ...s.extensions, [name]: { manifest } }, disabled };
+      // 重新注册（如切换语言后换上新语言的 manifest）不换前端包：已加载的保留，
+      // 打开着的扩展页不因此重载。换包只走 clearLoaded（扩展重装/重载）。
+      const loaded = s.extensions[name]?.loaded;
+      return { extensions: { ...s.extensions, [name]: loaded ? { manifest, loaded } : { manifest } }, disabled };
     });
     // 资产类型进的是内置类型那张注册表（见 ./assetTypes）。挂在这里而不是调用方，
     // 是为了让"扩展已加载"与"它的资产类型可用"永远同时成立——分开写迟早会漂移。
@@ -55,6 +60,12 @@ export const useExtensionStore = create<ExtensionState>((set) => ({
       return { extensions: rest, disabled: { ...s.disabled, [name]: true } };
     });
     unregisterExtensionAssetTypes(name);
+  },
+
+  clearLoaded() {
+    set((s) => ({
+      extensions: Object.fromEntries(Object.entries(s.extensions).map(([name, { manifest }]) => [name, { manifest }])),
+    }));
   },
 
   setLoaded(name, loaded) {

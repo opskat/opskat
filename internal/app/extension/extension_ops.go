@@ -15,12 +15,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// ListInstalledExtensions returns all loaded extensions.
-func (e *Extension) ListInstalledExtensions() []extension_svc.ExtensionInfo {
+// ListInstalledExtensions returns all installed extensions with their manifests
+// localized for lang (the frontend's i18next language, e.g. "zh-CN"). The caller
+// names the language instead of relying on the System.SetLanguage mirror: the
+// frontend re-fetches on every language switch, and Wails runs the two calls
+// concurrently, so the mirror may not hold the new language yet.
+func (e *Extension) ListInstalledExtensions(lang string) []extension_svc.ExtensionInfo {
 	if e.service == nil {
 		return nil
 	}
-	return e.service.ListInstalled(e.lang.Lang())
+	return e.service.ListInstalled(lang)
 }
 
 // GetExtensionManifest returns a single extension's manifest.

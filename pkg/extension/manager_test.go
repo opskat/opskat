@@ -393,3 +393,22 @@ func TestManagerRefusesEndpointBindingsWithoutAnEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// The frontend names the language the way i18next does ("zh-CN") while locale
+// files are keyed lowercase on load; a lookup must match regardless of case
+// instead of silently falling back to English.
+func TestTranslateMatchesLanguageCaseInsensitively(t *testing.T) {
+	Convey("a locale file named zh-CN.json answers lookups for zh-CN and zh-cn", t, func() {
+		dir := t.TempDir()
+		So(os.MkdirAll(filepath.Join(dir, "locales"), 0o755), ShouldBeNil)
+		So(os.WriteFile(filepath.Join(dir, "locales", "en.json"), []byte(`{"field.address":"Address"}`), 0o644), ShouldBeNil)
+		So(os.WriteFile(filepath.Join(dir, "locales", "zh-CN.json"), []byte(`{"field.address":"地址"}`), 0o644), ShouldBeNil)
+		locales, err := LoadLocales(dir)
+		So(err, ShouldBeNil)
+		ext := &Extension{Locales: locales}
+
+		So(ext.Translate("zh-CN", "field.address"), ShouldEqual, "地址")
+		So(ext.Translate("zh-cn", "field.address"), ShouldEqual, "地址")
+		So(ext.Translate("en", "field.address"), ShouldEqual, "Address")
+	})
+}

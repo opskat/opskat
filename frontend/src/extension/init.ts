@@ -7,10 +7,12 @@ import { useExtensionStore } from "./store";
 import { injectExtensionAPI } from "./inject";
 import { createExtensionAPI } from "./api";
 import { clearExtensionCache } from "./loader";
+import type { extension_svc } from "../../wailsjs/go/models";
 import type { ExtManifest } from "./types";
 
 let _bootstrapped = false;
 let _subscribed = false;
+let _languageSubscribed = false;
 
 /**
  * One-shot bootstrap: inject API, load extension list, subscribe to events.
@@ -24,6 +26,7 @@ export async function bootstrapExtensions(): Promise<void> {
   injectExtensionAPI(createExtensionAPI());
   subscribeExtensionReload(); // subscribe BEFORE async gap — no events lost
   subscribeExtensionReady();
+  subscribeLanguageChange();
   const loaded = await refreshExtensions();
   // 只有实际获取到扩展时才设置 ready，否则等 ext:ready 事件
   if (loaded) {
@@ -40,6 +43,7 @@ export function subscribeExtensionReload(): () => void {
   _subscribed = true;
   const cancel = EventsOn("ext:reload", () => {
     clearExtensionCache();
+    useExtensionStore.getState().clearLoaded();
     refreshExtensions();
   });
   return cancel;
@@ -61,12 +65,41 @@ function subscribeExtensionReady(): void {
 }
 
 /**
+ * The manifests are localized by the backend for the language they were asked
+ * for, so a language switch must fetch them again — otherwise the asset form,
+ * type labels and policy titles keep the old language until reload.
+ */
+function onLanguageChanged(): void {
+  void refreshExtensions();
+}
+
+function subscribeLanguageChange(): void {
+  if (_languageSubscribed) return;
+  _languageSubscribed = true;
+  i18n.on("languageChanged", onLanguageChanged);
+}
+
+/**
+ * Fetch the extension list localized for the current language. An answer that
+ * arrives after the language changed again is not applied — it is asked for
+ * again in the language now current, so a late answer can never overwrite a
+ * newer one.
+ */
+async function listInstalledForCurrentLanguage(): Promise<extension_svc.ExtensionInfo[] | null> {
+  for (;;) {
+    const lang = i18n.language;
+    const extensions = await ListInstalledExtensions(lang);
+    if (i18n.language === lang) return extensions;
+  }
+}
+
+/**
  * Refresh extension list from the backend.
  * Returns true if extensions were loaded, false if the list was empty.
  */
 async function refreshExtensions(): Promise<boolean> {
   try {
-    const extensions = await ListInstalledExtensions();
+    const extensions = await listInstalledForCurrentLanguage();
     const store = useExtensionStore.getState();
 
     const list = extensions || [];
@@ -100,4 +133,6 @@ export function _resetForTesting(): void {
   _bootstrapped = false;
   _subscribed = false;
   _readySubscribed = false;
+  i18n.off("languageChanged", onLanguageChanged);
+  _languageSubscribed = false;
 }

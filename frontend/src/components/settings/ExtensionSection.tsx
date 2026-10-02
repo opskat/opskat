@@ -39,6 +39,7 @@ import {
   DialogTitle,
   Separator,
 } from "@opskat/ui";
+import i18n from "@/i18n";
 import { ListInstalledExtensions } from "../../../wailsjs/go/extension/Extension";
 import {
   ReloadExtensions,
@@ -85,7 +86,7 @@ export function ExtensionSection() {
 
   const loadExtensions = async () => {
     try {
-      const exts = await ListInstalledExtensions();
+      const exts = await ListInstalledExtensions(i18n.language);
       setExtensions(exts || []);
     } catch {
       setExtensions([]);

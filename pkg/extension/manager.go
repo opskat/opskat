@@ -31,10 +31,11 @@ func (e *Extension) Translate(lang, key string) string {
 	return translateFromLocales(e.Locales, lang, key)
 }
 
-// translateFromLocales resolves an i18n key from a locales map.
+// translateFromLocales resolves an i18n key from a locales map. The map is keyed
+// by lowercase language code (LoadLocales), so the lookup lowercases too.
 func translateFromLocales(locales map[string]map[string]string, lang, key string) string {
 	if locales != nil {
-		if m, ok := locales[lang]; ok {
+		if m, ok := locales[strings.ToLower(lang)]; ok {
 			if v, ok := m[key]; ok {
 				return v
 			}
