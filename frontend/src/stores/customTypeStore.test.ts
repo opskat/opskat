@@ -65,6 +65,13 @@ describe("useCustomTypeStore", () => {
     expect(ListCustomTypes).toHaveBeenCalledTimes(1);
   });
 
+  it("importing the module has no side effect on useAssetStore", async () => {
+    vi.resetModules();
+    vi.doMock("./assetStore", () => ({ useAssetStore: () => [] }));
+    await expect(import("./customTypeStore")).resolves.toBeDefined();
+    vi.doUnmock("./assetStore");
+  });
+
   describe("reacting to asset changes", () => {
     const summary = (assetCount: number) => ({
       id: 1,

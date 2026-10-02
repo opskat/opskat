@@ -23,6 +23,20 @@ interface CustomTypeState {
   remove: (id: number) => Promise<customtype.DeleteResult>;
 }
 
+// 资产变化(opsctl/AI data:changed、备份导入、界面增删改都经 useAssetStore.refresh)会改动类型 ID 与"N 个资产"计数；
+// 首次加载成功后才开始跟随(导入模块无副作用、首次使用前不抢跑)，失败与首次加载一样 toast。
+let followingAssets = false;
+function followAssetChanges() {
+  if (followingAssets) return;
+  followingAssets = true;
+  useAssetStore.subscribe((state, prev) => {
+    if (state.assets === prev.assets) return;
+    const { loaded, load } = useCustomTypeStore.getState();
+    if (!loaded) return;
+    load().catch((e) => toast.error(String(e)));
+  });
+}
+
 // 只存列表快照 + 加载态；对话框的打开/草稿状态留在组件里(与 AgentSourceDialog / CredentialManager 同款)。
 export const useCustomTypeStore = create<CustomTypeState>((set, get) => ({
   types: [],
@@ -34,6 +48,7 @@ export const useCustomTypeStore = create<CustomTypeState>((set, get) => ({
     try {
       const list = await ListCustomTypes();
       set({ types: list ?? [], loaded: true });
+      followAssetChanges();
     } finally {
       set({ loading: false });
     }
@@ -80,12 +95,3 @@ export function useCustomTypeList(): { types: customtype.Summary[]; loaded: bool
   }
   return { types, loaded, loading };
 }
-
-// 资产变化(opsctl/AI data:changed、备份导入、界面增删改都经 useAssetStore.refresh)会改动类型 ID 与"N 个资产"计数；
-// 已加载过才跟着重载，首次使用前不抢跑。失败与首次加载一样 toast。
-useAssetStore.subscribe((state, prev) => {
-  if (state.assets === prev.assets) return;
-  const { loaded, load } = useCustomTypeStore.getState();
-  if (!loaded) return;
-  load().catch((e) => toast.error(String(e)));
-});
