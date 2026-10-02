@@ -35,6 +35,7 @@ func auditMiddleware(c *agent.ToolContext) {
 	ctx := aictx.WithCheckResultSlot(c.Context(), slot)
 	ctx = aictx.WithAuditCommandSlot(ctx, &commandSlot)
 	ctx = aictx.WithAuditRequestSlot(ctx, auditRequestSlot)
+	ctx = aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 	c.WithContext(ctx)
 
 	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
@@ -65,6 +66,12 @@ func auditMiddleware(c *agent.ToolContext) {
 	result, errVal := extractAuditResult(c.Output)
 	if assetID == 0 && errVal == nil && audit.ShouldResolveAssetFromResult(c.ToolName) {
 		assetID, assetName = resolveResultAssetForAudit(c.Context(), result)
+	}
+	// 审计 result 默认是返回给模型的完整输出。执行器（通用资产 exec、含通用资产条目的
+	// batch_exec）通过 aictx.RecordAuditResult 写了摘要时，审计改存摘要——输出可能回显
+	// 注入值；c.Output 不变，模型仍拿到完整输出。
+	if summary, ok := aictx.GetAuditResult(c.Context()); ok && errVal == nil {
+		result = summary
 	}
 
 	info := audit.ToolCallInfo{

@@ -32,9 +32,9 @@ import (
 //
 // 两种情形都：在当前进程环境基础上追加渲染后的环境变量绑定；工作目录是调用方的当前
 // 工作目录（os/exec 的 Cmd.Dir 留空即是）；stdin/stdout/stderr 透传（Stream）或捕获
-// （Exec，供 AI 与审计使用）；退出码原样返回；程序不存在或无法启动时返回 error（由
-// StreamExecFunc / ExecFunc 的契约转成 opsctl 的退出码 1），已完成、只是退出码非零的
-// 运行不是错误。
+// （Exec，输出只返回给 AI——审计只记 exec 传入的内容与退出码，不记输出）；退出码原样
+// 返回；程序不存在或无法启动时返回 error（由 StreamExecFunc / ExecFunc 的契约转成 opsctl
+// 的退出码 1），已完成、只是退出码非零的运行不是错误。
 
 func init() {
 	RegisterGenericMode(custom_type_entity.ExecModeCommand, GenericMode{
@@ -80,24 +80,29 @@ func describeCommandMode(_ context.Context, t *GenericTarget, _ string) (string,
 }
 
 // execCommandModeForAI 是命令方式的 AI exec 执行入口：捕获 stdout/stderr（AI 没有本地
-// 终端可以透传），返回值同时是模型看到的内容与审计 result（内容含 exec 传入的输出和
-// 退出码，绝不含渲染出的环境变量值或模板渲染出的密钥——那些只进子进程的环境/argv，
-// 不会被我们自己写回文本）。
-func execCommandModeForAI(ctx context.Context, t *GenericTarget, command string) (string, error) {
+// 终端可以透传），输出与退出码只返回给模型。审计摘要只有 exit N（spec「策略、审批与
+// 审计」：命令记录 exec 传入的内容——审计 command 列——和退出码）：子进程拿到了渲染出的
+// 环境变量与密钥参数，完全可能把它们打印出来，所以输出不进入审计。
+func execCommandModeForAI(ctx context.Context, t *GenericTarget, command string) (string, string, error) {
 	argvWords, err := cmdline.Words(command)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	inv, err := commandInvocationFor(t.Type, t.Values, argvWords)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var stdout, stderr bytes.Buffer
 	exitCode, err := runCommandInvocation(ctx, inv, nil, &stdout, &stderr)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return formatCommandModeOutputForAI(exitCode, formatCommandOutput(stdout.String(), stderr.String())), nil
+	return formatCommandModeOutputForAI(exitCode, formatCommandOutput(stdout.String(), stderr.String())), commandAuditResult(exitCode), nil
+}
+
+// commandAuditResult 是命令方式写进审计 result 的摘要，AI exec 与 opsctl 流式执行共用。
+func commandAuditResult(exitCode int) string {
+	return fmt.Sprintf("exit %d", exitCode)
 }
 
 func formatCommandModeOutputForAI(exitCode int, output string) string {
@@ -121,7 +126,7 @@ func streamCommandMode(ctx context.Context, t *GenericTarget, argv []string, std
 	if err != nil {
 		return permission.StreamResult{}, err
 	}
-	return permission.StreamResult{ExitCode: exitCode, AuditResult: fmt.Sprintf("exit %d", exitCode)}, nil
+	return permission.StreamResult{ExitCode: exitCode, AuditResult: commandAuditResult(exitCode)}, nil
 }
 
 // commandInvocation 是即将启动的子进程：完整 argv 与完整环境变量列表（当前进程环境 +

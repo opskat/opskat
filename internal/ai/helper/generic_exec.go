@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
@@ -33,8 +34,11 @@ type GenericMode struct {
 	Canonicalize func(command string) (string, error)
 	// Describe 生成审批弹窗的展示补充（操作类型与目标），不得含注入值。
 	Describe func(ctx context.Context, t *GenericTarget, command string) (string, error)
-	// Exec 是 AI exec 的执行入口：返回给模型的文本。
-	Exec func(ctx context.Context, t *GenericTarget, command string) (string, error)
+	// Exec 是 AI exec 的执行入口：output 是返回给模型的完整文本；auditResult 是写进审计
+	// result 的摘要（HTTP：状态行；命令：exit N），与 permission.StreamResult.AuditResult
+	// 同一约定，不得含注入值——output 可能回显注入值（例如服务把请求头写回响应体），
+	// 所以审计绝不存 output。
+	Exec func(ctx context.Context, t *GenericTarget, command string) (output, auditResult string, err error)
 	// Stream 是 opsctl exec 的流式执行入口，契约见 permission.StreamExecFunc。
 	Stream func(ctx context.Context, t *GenericTarget, argv []string, stdio permission.Stdio) (permission.StreamResult, error)
 }
@@ -97,12 +101,19 @@ func resolveGenericTarget(ctx context.Context, asset *asset_entity.Asset) (*Gene
 }
 
 // ExecGenericOnAsset 是通用资产的 AI exec 执行入口（permission.ExecFunc）。scope 不适用。
+// 返回值是给模型的完整输出；审计只拿执行方式给出的摘要，经 aictx.RecordAuditResult 写进
+// 写审计的一方（runner 的 auditMiddleware、AI / opsctl batch 的每个条目）安装的槽。
 func ExecGenericOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
 	t, m, err := resolveGenericTarget(ctx, asset)
 	if err != nil {
 		return "", err
 	}
-	return m.Exec(ctx, t, command)
+	output, auditResult, err := m.Exec(ctx, t, command)
+	if err != nil {
+		return "", err
+	}
+	aictx.RecordAuditResult(ctx, auditResult)
+	return output, nil
 }
 
 // StreamGenericOnAsset 是通用资产的 opsctl 流式执行入口（permission.StreamExecFunc）。

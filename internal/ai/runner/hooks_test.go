@@ -83,3 +83,72 @@ func TestAuditMiddleware_GetAssetSecretDeniedResultAlsoProjected(t *testing.T) {
 		So(entry.Result, ShouldContainSubstring, "decision=deny")
 	})
 }
+
+// auditResultTool 模拟一个在执行中通过 aictx.RecordAuditResult 写审计摘要的工具（通用资产
+// 的 exec 执行器就是这样做的），返回给模型的仍是完整文本。summary 为空表示不写摘要。
+type auditResultTool struct {
+	name    string
+	summary string
+	text    string
+}
+
+func (r *auditResultTool) Name() string         { return r.name }
+func (r *auditResultTool) Description() string  { return "audit-result stub" }
+func (r *auditResultTool) Schema() agent.Schema { return agent.Schema{Type: "object"} }
+func (r *auditResultTool) Call(ctx context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
+	if r.summary != "" {
+		aictx.RecordAuditResult(ctx, r.summary)
+	}
+	return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: r.text}}}, nil
+}
+
+func dispatchWithAudit(ctx context.Context, tool agent.Tool, input map[string]any) agent.DispatchResult {
+	td := &agent.ToolDispatcher{
+		Tools:      []agent.Tool{tool},
+		Middleware: []agent.ToolHookEntry[agent.ToolMiddleware]{{Matcher: ".*", Fn: auditMiddleware}},
+	}
+	return td.Run(ctx, agent.DispatchInput{ToolName: tool.Name(), ToolUseID: "tu_" + tool.Name(), Input: input})
+}
+
+// TestAuditMiddleware_RecordedAuditResultReplacesOutputInAuditOnly locks spec「策略、审批与
+// 审计」for the AI path (V16b): a generic HTTP exec whose response body echoes the injected
+// Authorization header must store only the status line in audit_logs.result, while the
+// model still receives the full body. A tool that records no summary — every other asset
+// type's exec — keeps its full output in the audit row.
+func TestAuditMiddleware_RecordedAuditResultReplacesOutputInAuditOnly(t *testing.T) {
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	body := "HTTP 200 OK\n\nGET /echo\nAuthorization=Bearer glsa_echoed_must_not_reach_audit"
+
+	Convey("通用资产 exec 记录的摘要替换审计 result，模型输出不变", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+		m := setupExecAssetRepo(t)
+		m.EXPECT().FindByName(gomock.Any(), "11").Return(nil, nil)
+		m.EXPECT().Find(gomock.Any(), int64(11)).Return(
+			&asset_entity.Asset{ID: 11, Name: "grafana-prod", Type: asset_entity.AssetTypeGeneric}, nil)
+
+		res := dispatchWithAudit(context.Background(),
+			&auditResultTool{name: "exec", summary: "HTTP 200 OK", text: body},
+			map[string]any{"asset": "11", "command": "GET /echo"})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 11)
+		So(entry.Result, ShouldEqual, "HTTP 200 OK")
+		got, err := extractAuditResult(res.Output)
+		So(err, ShouldBeNil)
+		So(got, ShouldEqual, body)
+	})
+
+	Convey("未记录摘要的 exec（其他资产类型）审计 result 保持完整输出", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+		m := setupExecAssetRepo(t)
+		m.EXPECT().FindByName(gomock.Any(), "12").Return(nil, nil)
+		m.EXPECT().Find(gomock.Any(), int64(12)).Return(
+			&asset_entity.Asset{ID: 12, Name: "web-1", Type: asset_entity.AssetTypeSSH}, nil)
+
+		dispatchWithAudit(context.Background(),
+			&auditResultTool{name: "exec", text: "uptime output"},
+			map[string]any{"asset": "12", "command": "uptime"})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 12)
+		So(entry.Result, ShouldEqual, "uptime output")
+	})
+}

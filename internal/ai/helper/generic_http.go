@@ -540,24 +540,27 @@ func streamHTTPMode(ctx context.Context, t *GenericTarget, argv []string, stdio 
 	return result, nil
 }
 
-// execHTTPForAI 返回状态行加响应体；非文本响应只给摘要，不把二进制塞进模型上下文。
-// 截断沿用 exec 结果的既有规则，这里不另设上限。
-func execHTTPForAI(ctx context.Context, t *GenericTarget, command string) (string, error) {
+// execHTTPForAI 给模型返回状态行加响应体；非文本响应只给摘要，不把二进制塞进模型上下文。
+// 截断沿用 exec 结果的既有规则，这里不另设上限。审计摘要只是状态行（spec「策略、审批与
+// 审计」：HTTP 记录方法、路径和状态码——方法与路径在审计 command 列）：响应体可能回显注入的
+// 认证头，不得进入审计。
+func execHTTPForAI(ctx context.Context, t *GenericTarget, command string) (string, string, error) {
 	cmd, err := parseHTTPCommandLine(command)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	resp, err := sendGenericHTTP(ctx, t, cmd, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.close()
 
+	status := statusLine(resp.Response)
 	var b strings.Builder
-	b.WriteString(statusLine(resp.Response) + "\n")
+	b.WriteString(status + "\n")
 	if cmd.Include {
 		if err := writeHeaders(&b, resp.Header); err != nil {
-			return "", err
+			return "", "", err
 		}
 	} else {
 		b.WriteString("\n")
@@ -565,19 +568,19 @@ func execHTTPForAI(ctx context.Context, t *GenericTarget, command string) (strin
 	contentType := resp.Header.Get("Content-Type")
 	if isTextContentType(contentType) {
 		if _, err := io.Copy(&b, resp.Body); err != nil {
-			return "", fmt.Errorf("read response body: %w", err)
+			return "", "", fmt.Errorf("read response body: %w", err)
 		}
-		return strings.TrimRight(b.String(), "\n"), nil
+		return strings.TrimRight(b.String(), "\n"), status, nil
 	}
 	n, err := io.Copy(io.Discard, resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response body: %w", err)
+		return "", "", fmt.Errorf("read response body: %w", err)
 	}
 	if n == 0 {
-		return strings.TrimRight(b.String(), "\n"), nil
+		return strings.TrimRight(b.String(), "\n"), status, nil
 	}
 	fmt.Fprintf(&b, "(binary response, %d bytes, %s)", n, contentType)
-	return b.String(), nil
+	return b.String(), status, nil
 }
 
 // isTextContentType：text/*、JSON（含 +json）、XML（含 +xml）按文本返回（spec「HTTP 请求」AI 一条）。

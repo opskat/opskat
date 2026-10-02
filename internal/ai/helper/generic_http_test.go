@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
@@ -408,6 +409,30 @@ func TestGenericHTTP_AIExecOutput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "HTTP request: GET "+srv.URL+"/api/search?query=cpu", detail)
 	assert.NotContains(t, detail, testSecret)
+}
+
+// spec「策略、审批与审计」：HTTP 的审计只记方法、路径和状态码。AI exec 返回给模型的是状态行
+// 加响应体，而响应体可能回显注入的认证头——审计 result 只能是状态行，模型仍拿到完整输出。
+func TestGenericHTTP_AIExecAuditResultIsStatusLineOnly(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "ai-audit", "http://{{host}}",
+		custom_type_entity.AuthBinding{Type: "header", Name: "Authorization", Values: []string{"Bearer {{token}}"}})
+	asset := genericAsset(t, "ai-audit", map[string]string{"host": srv.host(), "token": testSecret})
+
+	callCtx := aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
+	out, err := ExecGenericOnAsset(callCtx, asset, "GET /echo", "")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Authorization=Bearer "+testSecret, "the model still receives the full response body")
+	summary, ok := aictx.GetAuditResult(callCtx)
+	require.True(t, ok, "the HTTP exec must record its audit summary")
+	assert.Equal(t, "HTTP 200 OK", summary)
+
+	callCtx = aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
+	_, err = ExecGenericOnAsset(callCtx, asset, "GET /missing", "")
+	require.NoError(t, err)
+	summary, _ = aictx.GetAuditResult(callCtx)
+	assert.Equal(t, "HTTP 404 Not Found", summary)
 }
 
 // Base URL 模板可以引用密钥字段（例如把 token 写进 webhook 路径）。实际请求要用真值，

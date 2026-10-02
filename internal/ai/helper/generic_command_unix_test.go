@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
@@ -163,10 +164,17 @@ func TestGenericCommand_AIExecCapturesOutputAndExitCode(t *testing.T) {
 	}))
 	asset := genericAsset(t, "cli-ai", nil)
 
-	out, err := ExecGenericOnAsset(ctx, asset, "hello", "")
+	callCtx := aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
+	out, err := ExecGenericOnAsset(callCtx, asset, "hello", "")
 	require.NoError(t, err, "a non-zero exit is a result for the model, not a tool error")
 	assert.Contains(t, out, "<hello>")
 	assert.Contains(t, out, "exit code 3")
+
+	// spec「策略、审批与审计」：命令的审计只记 exec 传入的内容（审计 command 列）和退出码——
+	// 输出不进审计 result，模型仍拿到上面的完整输出。
+	summary, ok := aictx.GetAuditResult(callCtx)
+	require.True(t, ok, "the command exec must record its audit summary")
+	assert.Equal(t, "exit 3", summary)
 }
 
 // AI exec 捕获输出时 os/exec 经管道转发 stdout/stderr：shell 退出后留在后台的子进程

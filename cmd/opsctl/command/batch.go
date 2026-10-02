@@ -375,12 +375,17 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 		Command:   cmd.command,
 	}
 
+	// Each item gets its own audit-result slot (items run concurrently). An executor that
+	// records a summary there — a generic asset: the HTTP status line / "exit N", the same
+	// summary opsctl exec's stream path audits — has it audited instead of its output, which
+	// can echo injected values; the caller's JSON output still carries the full output.
+	itemCtx := aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 	// cmdType is assertion metadata only. Dispatch always follows the resolved
 	// asset's real type, for canonical names, aliases, and the unprefixed form.
 	if cmd.asset.IsSSH() {
-		result = executeBatchExec(ctx, cmd)
+		result = executeBatchExec(itemCtx, cmd)
 	} else {
-		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+		result = executeBatchHandler(itemCtx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
 			"scope":   cmd.scope,
@@ -393,8 +398,12 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	if result.Error != "" {
 		execErr = fmt.Errorf("%s", result.Error)
 	}
+	auditResult := result.Stdout
+	if summary, ok := aictx.GetAuditResult(itemCtx); ok && execErr == nil {
+		auditResult = summary
+	}
 	auditCtx := withBatchAuditCommand(ctx, cmd.checkCommand)
-	writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, result.Stdout, execErr, cmd.decision)
+	writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, auditResult, execErr, cmd.decision)
 
 	return result
 }

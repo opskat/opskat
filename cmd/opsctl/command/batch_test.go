@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -906,5 +907,55 @@ func TestCmdBatch_GenericApprovalItemCarriesRenderedTarget(t *testing.T) {
 	}
 	if want := "HTTP request: POST " + srv.URL + "/api/x?y=1"; got[0].Detail != want {
 		t.Fatalf("approval detail = %q, want %q", got[0].Detail, want)
+	}
+}
+
+// TestCmdBatch_GenericItemAuditStoresOnlyStatusLine: spec「策略、审批与审计」— an HTTP
+// generic item's audit row stores only the status line, the same summary opsctl exec's
+// stream path stores, even though the response body (which echoes the injected X-Api-Key)
+// is still printed to the caller in the batch JSON output.
+func TestCmdBatch_GenericItemAuditStoresOnlyStatusLine(t *testing.T) {
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	secret := "batch_echo_secret_must_not_reach_audit"
+	ctx, _ := setupGenericHTTPExec(t, secret)
+	writer := opsctlAuditWriter.(*mockAuditWriter)
+	origApproval := requireBatchApprovalFn
+	requireBatchApprovalFn = func(_ []approval.BatchItem, session string) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: session}, nil
+	}
+	t.Cleanup(func() { requireBatchApprovalFn = origApproval })
+
+	code, output := runBatchCapturingStdout(t, ctx, buildHandlerMap(), []string{"echo-prod:GET /x"}, "")
+
+	if code != 0 || len(output.Results) != 1 || output.Results[0].Error != "" {
+		t.Fatalf("batch code=%d results=%+v", code, output.Results)
+	}
+	if !strings.Contains(output.Results[0].Stdout, "X-Api-Key="+secret) {
+		t.Fatalf("the caller still receives the full response body, got %q", output.Results[0].Stdout)
+	}
+	if got := writer.lastCall().Result; got != "HTTP 200 OK" {
+		t.Fatalf("audit result = %q, want only the status line", got)
+	}
+}
+
+// TestExecuteBatchItem_NonGenericAuditKeepsOutput: an item whose executor records no audit
+// summary (every non-generic type) keeps its full output in the audit row.
+func TestExecuteBatchItem_NonGenericAuditKeepsOutput(t *testing.T) {
+	writer := &mockAuditWriter{}
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+	handlers := map[string]tool.ToolHandlerFunc{
+		"exec": func(context.Context, map[string]any) (string, error) { return `{"result":"PONG"}`, nil },
+	}
+	cmd := resolvedBatchCmd{
+		asset:   &asset_entity.Asset{ID: 7, Name: "cache", Type: asset_entity.AssetTypeRedis},
+		command: "PING",
+	}
+
+	executeBatchItem(context.Background(), handlers, cmd)
+
+	if got := writer.lastCall().Result; got != `{"result":"PONG"}` {
+		t.Fatalf("audit result = %q, want the full output", got)
 	}
 }
