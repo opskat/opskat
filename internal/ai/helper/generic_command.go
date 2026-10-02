@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -93,7 +92,10 @@ func execCommandModeForAI(ctx context.Context, t *GenericTarget, command string)
 		return "", "", err
 	}
 	var stdout, stderr bytes.Buffer
-	exitCode, err := runCommandInvocation(ctx, inv, nil, &stdout, &stderr)
+	cmd := newInvocationCmd(ctx, inv, permission.Stdio{Stdout: &stdout, Stderr: &stderr})
+	// 输出已捕获、不对任何终端透传：桌面端（GUI 进程）里不给控制台程序弹出黑窗。
+	executil.HideConsoleWindow(cmd)
+	exitCode, err := runInvocationCmd(ctx, cmd)
 	if err != nil {
 		return "", "", err
 	}
@@ -117,12 +119,17 @@ func formatCommandModeOutputForAI(exitCode int, output string) string {
 // （有模板时是要追加的参数；没有模板时是整条命令的各个 argv 元素，用空格重新拼接还原成
 // 一条 shell 命令——两者与 canonicalizeCommandMode 用的是同一条还原规则）。stdin/stdout/
 // stderr 直接透传给子进程。
+//
+// 这里刻意不调 executil.HideConsoleWindow：opsctl 在终端里运行时（例如终端审批之后）
+// stdout/stderr 是控制台句柄，Windows 上以 CREATE_NO_WINDOW 启动的子进程会拿到自己的
+// 隐藏控制台，写往透传句柄的输出落进那个看不见的控制台，终端里只剩退出码。子进程应当
+// 共用 opsctl 的控制台——若 opsctl 的控制台本身是隐藏的，子进程也就同样隐藏。
 func streamCommandMode(ctx context.Context, t *GenericTarget, argv []string, stdio permission.Stdio) (permission.StreamResult, error) {
 	inv, err := commandInvocationFor(t.Type, t.Values, argv)
 	if err != nil {
 		return permission.StreamResult{}, err
 	}
-	exitCode, err := runCommandInvocation(ctx, inv, stdio.Stdin, stdio.Stdout, stdio.Stderr)
+	exitCode, err := runInvocationCmd(ctx, newInvocationCmd(ctx, inv, stdio))
 	if err != nil {
 		return permission.StreamResult{}, err
 	}
@@ -221,21 +228,25 @@ func renderCommandEnv(ct *custom_type_entity.CustomType, rc *authtmpl.RenderCont
 // 孙进程（`cmd &`、守护进程）继承了管道写端，不设上限 Wait 会一直等到它退出。
 const commandPipeDrainTimeout = time.Second
 
-// runCommandInvocation 启动子进程并等待结束：已启动、跑完的进程即便退出码非零也不是
+// newInvocationCmd 构造子进程：argv 与环境变量取自 inv，stdio 原样接上，工作目录留空即
+// 调用方的当前目录。子进程退出后只再等 commandPipeDrainTimeout 收尾输出，之后后台孙进程
+// 写的内容不再收集。是否隐藏控制台窗口取决于输出去向，由两个入口各自决定。
+func newInvocationCmd(ctx context.Context, inv *commandInvocation, stdio permission.Stdio) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, inv.argv[0], inv.argv[1:]...) //nolint:gosec // argv comes from the custom type's own rendered template/shell choice plus literally-appended exec args; never shell-interpreted here
+	cmd.Env = inv.env
+	if stdio.Stdin != nil {
+		cmd.Stdin = stdio.Stdin
+	}
+	cmd.Stdout = stdio.Stdout
+	cmd.Stderr = stdio.Stderr
+	cmd.WaitDelay = commandPipeDrainTimeout
+	return cmd
+}
+
+// runInvocationCmd 运行子进程并等待结束：已启动、跑完的进程即便退出码非零也不是
 // error（错误留给调用方按 exitCode 处理），只有没能跑起来（程序不存在、权限不足等）或被
 // ctx 取消 / 超时打断才是 error——StreamExecFunc / ExecFunc 的契约要求"请求没有完成"用 error 表达。
-// 子进程退出后只再等 commandPipeDrainTimeout 收尾输出，之后后台孙进程写的内容不再收集。
-func runCommandInvocation(ctx context.Context, inv *commandInvocation, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	cmd := exec.CommandContext(ctx, inv.argv[0], inv.argv[1:]...) //nolint:gosec // argv comes from the custom type's own rendered template/shell choice plus literally-appended exec args; never shell-interpreted here
-	executil.HideConsoleWindow(cmd)
-	cmd.Env = inv.env
-	if stdin != nil {
-		cmd.Stdin = stdin
-	}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	cmd.WaitDelay = commandPipeDrainTimeout
-
+func runInvocationCmd(ctx context.Context, cmd *exec.Cmd) (int, error) {
 	err := cmd.Run()
 	if err == nil {
 		return 0, nil
