@@ -1138,7 +1138,7 @@ func setupGenericOpsctl(t *testing.T) context.Context {
 		}
 	})
 	credential_svc.SetDefault(credential_svc.New("opsctl-generic-test-key", []byte("opsctl-generic16")))
-	custom_type_svc.CustomType().SetReservedNames(assettype.RegisteredTypes)
+	custom_type_svc.CustomType().SetReservedNames(custom_type_svc.BuiltinReservedNames(assettype.RegisteredTypes))
 
 	ctx := context.Background()
 	for _, ct := range []*custom_type_entity.CustomType{

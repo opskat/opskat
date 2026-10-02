@@ -51,7 +51,7 @@ func setupGenericDB(t *testing.T) context.Context {
 	custom_type_repo.RegisterCustomType(custom_type_repo.New())
 	oldCrypto := credential_svc.Default()
 	credential_svc.SetDefault(credential_svc.New("helper-generic-test-key", []byte("helper-generic16")))
-	custom_type_svc.CustomType().SetReservedNames(func() []string { return []string{"ssh"} })
+	custom_type_svc.CustomType().SetReservedNames(custom_type_svc.BuiltinReservedNames(func() []string { return []string{"ssh"} }))
 	t.Cleanup(func() {
 		asset_repo.RegisterAsset(oldAsset)
 		credential_repo.RegisterCredential(oldCredential)

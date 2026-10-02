@@ -1412,7 +1412,7 @@ func setupGenericPutDB(t *testing.T) {
 	orig := custom_type_repo.CustomType()
 	custom_type_repo.RegisterCustomType(custom_type_repo.New())
 	t.Cleanup(func() { custom_type_repo.RegisterCustomType(orig) })
-	custom_type_svc.CustomType().SetReservedNames(assettype.RegisteredTypes)
+	custom_type_svc.CustomType().SetReservedNames(custom_type_svc.BuiltinReservedNames(assettype.RegisteredTypes))
 	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
 		Name: "Grafana", Slug: "grafana", ExecMode: custom_type_entity.ExecModeHTTP,
 		Fields: []custom_type_entity.Field{

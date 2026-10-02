@@ -56,6 +56,8 @@ export function ImportCustomTypeDialog({ preview, onOpenChange }: ImportCustomTy
         return;
       }
       notifySuccess(t("customType.importSuccess"));
+      // 与类型编辑器保存一致:不阻止保存的提示(如命令模板引用了密钥字段)在对话框关闭后仍要让用户看到。
+      for (const w of res.warnings ?? []) toast.warning(issueText(t, w));
       onOpenChange(false);
     } catch (e) {
       toast.error(String(e));

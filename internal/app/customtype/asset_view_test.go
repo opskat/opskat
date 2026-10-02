@@ -102,6 +102,35 @@ func TestGetGenericAssetView_ValuesMissingAndAddressWithoutSecrets(t *testing.T)
 	assert.NotContains(t, string(raw), "managed-plaintext", "the view must never carry a secret's plaintext")
 }
 
+// 详情页的用法示例随调用形态变：命令方式有命令模板时 exec 只传参数，没有模板时传整条
+// shell 命令（spec「本地命令」），视图要告诉前端是哪一种。
+func TestGetGenericAssetView_ReportsWhetherCommandTypeHasTemplate(t *testing.T) {
+	b := setup(t)
+	for _, tc := range []struct {
+		slug     string
+		template string
+		want     bool
+	}{
+		{slug: "aws-cli", template: "aws --region {{region}}", want: true},
+		{slug: "shell-env", template: "", want: false},
+	} {
+		res, err := b.SaveCustomType(&custom_type_entity.CustomType{
+			Name: tc.slug, Slug: tc.slug, ExecMode: custom_type_entity.ExecModeCommand,
+			Fields:  []custom_type_entity.Field{{Name: "region"}},
+			Command: &custom_type_entity.CommandConfig{Template: tc.template},
+		})
+		require.NoError(t, err)
+		require.Empty(t, res.Issues)
+		a := &asset_entity.Asset{Name: tc.slug + "-asset", Type: asset_entity.AssetTypeGeneric, Status: asset_entity.StatusActive}
+		require.NoError(t, a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: tc.slug}))
+		require.NoError(t, asset_repo.Asset().Create(t.Context(), a))
+
+		view, err := b.GetGenericAssetView(a.ID)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, view.HasCommandTemplate, tc.slug)
+	}
+}
+
 func TestGetGenericAssetView_RejectsNonGenericAsset(t *testing.T) {
 	b := setup(t)
 	a := &asset_entity.Asset{Name: "web-01", Type: asset_entity.AssetTypeSSH, Status: asset_entity.StatusActive, Config: "{}"}

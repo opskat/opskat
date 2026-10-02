@@ -35,7 +35,9 @@ func setup(t *testing.T) (context.Context, CustomTypeSvc) {
 	credential_svc.SetDefault(credential_svc.New("test-master-key", []byte("0123456789abcdef")))
 
 	svc := New()
-	svc.SetReservedNames(func() []string { return []string{"ssh", "redis", "ext-es"} })
+	svc.SetReservedNames(func() []ReservedName {
+		return []ReservedName{{Name: "ssh"}, {Name: "redis"}, {Name: "ext-es", Extension: "elasticsearch"}}
+	})
 	return context.Background(), svc
 }
 
@@ -159,12 +161,18 @@ func TestSave_SlugConflicts(t *testing.T) {
 		})
 	}
 
-	// 冲突提示要指出冲突对象（界面按 Code 翻译、用 Params 填文案）：内置 / 扩展类型
-	// 给出标识，自定义类型再给出其名称。
+	// 冲突提示要指出冲突对象（界面按 Code 翻译、用 Params 填文案）：内置类型给出标识，
+	// 扩展类型再给出声明它的扩展，自定义类型再给出其名称。
+	builtin := grafanaType()
+	builtin.Slug = "redis"
+	assert.Contains(t, validationIssues(t, svc.Save(ctx, builtin)),
+		custom_type_entity.Issue{Path: "slug", Code: "slug_reserved", Params: map[string]string{"slug": "redis"}})
+
 	reserved := grafanaType()
 	reserved.Slug = "ext-es"
 	assert.Contains(t, validationIssues(t, svc.Save(ctx, reserved)),
-		custom_type_entity.Issue{Path: "slug", Code: "slug_reserved", Params: map[string]string{"slug": "ext-es"}})
+		custom_type_entity.Issue{Path: "slug", Code: "slug_reserved_extension",
+			Params: map[string]string{"slug": "ext-es", "extension": "elasticsearch"}})
 
 	dup := grafanaType()
 	dup.Name = "Another"

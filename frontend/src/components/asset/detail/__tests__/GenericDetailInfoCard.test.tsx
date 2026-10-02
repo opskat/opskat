@@ -121,9 +121,18 @@ describe("GenericDetailInfoCard", () => {
     expect(mocks.notifyCopied).toHaveBeenCalled();
   });
 
+  it("uses a whole-command example for command types without a command template", async () => {
+    vi.mocked(GetGenericAssetView).mockResolvedValue(
+      view({ execMode: "command", hasCommandTemplate: false, actualAddress: undefined, fields: [view().fields[0]] })
+    );
+    render(<GenericDetailInfoCard asset={asset} sshTunnelName={() => null} />);
+    const texts = (await screen.findAllByTestId("generic-usage-example")).map((e) => e.textContent);
+    expect(texts[0]).toBe("opsctl exec grafana-prod -- '<command>'");
+  });
+
   it("uses a command example for command types and quotes names with spaces", async () => {
     vi.mocked(GetGenericAssetView).mockResolvedValue(
-      view({ execMode: "command", actualAddress: undefined, fields: [view().fields[0]] })
+      view({ execMode: "command", hasCommandTemplate: true, actualAddress: undefined, fields: [view().fields[0]] })
     );
     render(
       <GenericDetailInfoCard

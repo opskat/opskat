@@ -76,12 +76,31 @@ type CustomTypeSvc interface {
 	// SetReservedNames 注入返回内置 + 已加载扩展类型名的函数；每次创建类型时调用
 	// （比较不区分大小写，另外总是保留 "generic"）。未注入时创建报错，以免产生与
 	// 内置类型重名的标识；更新不受影响（标识不可改）。
-	SetReservedNames(fn func() []string)
+	SetReservedNames(fn func() []ReservedName)
+}
+
+// ReservedName 是一个不能用作自定义类型标识的类型名。Extension 是声明它的扩展名，为空
+// 表示内置类型——重名时据此指出冲突对象（spec「自定义类型」基本信息）。
+type ReservedName struct {
+	Name      string
+	Extension string
+}
+
+// BuiltinReservedNames 把一组内置类型名包装成 SetReservedNames 需要的函数。
+func BuiltinReservedNames(fn func() []string) func() []ReservedName {
+	return func() []ReservedName {
+		names := fn()
+		out := make([]ReservedName, 0, len(names))
+		for _, n := range names {
+			out = append(out, ReservedName{Name: n})
+		}
+		return out
+	}
 }
 
 type customTypeSvc struct {
 	mu       sync.RWMutex
-	reserved func() []string
+	reserved func() []ReservedName
 }
 
 var defaultSvc CustomTypeSvc = New()
@@ -92,13 +111,13 @@ func CustomType() CustomTypeSvc { return defaultSvc }
 // New 创建一个独立的服务实例（测试用；业务代码走 CustomType()）。
 func New() CustomTypeSvc { return &customTypeSvc{} }
 
-func (s *customTypeSvc) SetReservedNames(fn func() []string) {
+func (s *customTypeSvc) SetReservedNames(fn func() []ReservedName) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reserved = fn
 }
 
-func (s *customTypeSvc) reservedNames() ([]string, error) {
+func (s *customTypeSvc) reservedNames() ([]ReservedName, error) {
 	s.mu.RLock()
 	fn := s.reserved
 	s.mu.RUnlock()
@@ -106,7 +125,7 @@ func (s *customTypeSvc) reservedNames() ([]string, error) {
 		return nil, fmt.Errorf("自定义类型服务未注入保留类型名")
 	}
 	// 通用资产自身的类型名同样不能作为标识。
-	return append(fn(), asset_entity.AssetTypeGeneric), nil
+	return append(fn(), ReservedName{Name: asset_entity.AssetTypeGeneric}), nil
 }
 
 func (s *customTypeSvc) List(ctx context.Context) ([]*custom_type_entity.CustomType, error) {
@@ -208,11 +227,16 @@ func (s *customTypeSvc) validate(ctx context.Context, ct, existing *custom_type_
 		if err != nil {
 			return err
 		}
-		for _, name := range reserved {
-			if strings.EqualFold(name, ct.Slug) {
-				slugIssue(custom_type_entity.IssueSlugReserved, "slug", ct.Slug)
-				break
+		for _, r := range reserved {
+			if !strings.EqualFold(r.Name, ct.Slug) {
+				continue
 			}
+			if r.Extension != "" {
+				slugIssue(custom_type_entity.IssueSlugReservedExtension, "slug", ct.Slug, "extension", r.Extension)
+			} else {
+				slugIssue(custom_type_entity.IssueSlugReserved, "slug", ct.Slug)
+			}
+			break
 		}
 		other, err := custom_type_repo.CustomType().FindBySlug(ctx, ct.Slug)
 		switch {

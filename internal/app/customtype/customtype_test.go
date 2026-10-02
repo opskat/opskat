@@ -37,7 +37,7 @@ func setup(t *testing.T) *CustomType {
 	asset_repo.RegisterAsset(asset_repo.NewAsset())
 	credential_repo.RegisterCredential(credential_repo.NewCredential())
 	credential_svc.SetDefault(credential_svc.New("test-master-key", []byte("0123456789abcdef")))
-	custom_type_svc.CustomType().SetReservedNames(func() []string { return []string{"ssh", "redis"} })
+	custom_type_svc.CustomType().SetReservedNames(custom_type_svc.BuiltinReservedNames(func() []string { return []string{"ssh", "redis"} }))
 
 	b := New(fakeLang{})
 	b.Startup(t.Context())

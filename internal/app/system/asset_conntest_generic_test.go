@@ -57,7 +57,7 @@ func TestTestAssetConnectionInjectsSSHPool(t *testing.T) {
 	asset_repo.RegisterAsset(asset_repo.NewAsset())
 	credential_repo.RegisterCredential(credential_repo.NewCredential())
 	credential_svc.SetDefault(credential_svc.New("test-master-key", []byte("0123456789abcdef")))
-	custom_type_svc.CustomType().SetReservedNames(func() []string { return []string{"ssh"} })
+	custom_type_svc.CustomType().SetReservedNames(custom_type_svc.BuiltinReservedNames(func() []string { return []string{"ssh"} }))
 	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
 		Name: "Grafana", Slug: "grafana", ExecMode: custom_type_entity.ExecModeHTTP,
 		Fields: []custom_type_entity.Field{{Name: "host", Required: true}},

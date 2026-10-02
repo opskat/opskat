@@ -22,7 +22,9 @@ function shellQuote(s: string): string {
 /** 按执行方式给出 opsctl 用法示例(可直接复制)。 */
 function genericUsageExamples(assetName: string, view: customtype.GenericAssetView): string[] {
   const name = shellQuote(assetName);
-  const out = [view.execMode === EXEC_MODE_HTTP ? `opsctl exec ${name} -- GET /` : `opsctl exec ${name} -- <args>`];
+  // 命令方式:有命令模板时 exec 只传参数,没有模板时传一整条 shell 命令。
+  const execArgs = view.execMode === EXEC_MODE_HTTP ? "GET /" : view.hasCommandTemplate ? "<args>" : "'<command>'";
+  const out = [`opsctl exec ${name} -- ${execArgs}`];
   const secret = view.fields.find((f) => f.secret);
   if (secret) out.push(`opsctl secret get ${name} ${secret.name}`);
   out.push(`opsctl help ${name}`);

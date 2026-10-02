@@ -44,6 +44,9 @@ type GenericAssetView struct {
 	Missing  []string           `json:"missing"`
 	// ActualAddress 是 HTTP 方式渲染后的 Base URL（密钥位置以掩码代替）；渲染失败时为空。
 	ActualAddress string `json:"actualAddress,omitempty"`
+	// HasCommandTemplate 只对命令方式有意义：有命令模板时 exec 只传参数，没有时传整条
+	// shell 命令（spec「本地命令」），详情页的用法示例据此给出对应写法。
+	HasCommandTemplate bool `json:"hasCommandTemplate"`
 }
 
 // GetGenericAssetView 解析一台通用资产供详情页展示。
@@ -102,6 +105,9 @@ func (c *CustomType) GetGenericAssetView(assetID int64) (*GenericAssetView, erro
 		view.Fields = append(view.Fields, fv)
 	}
 
+	if ct.ExecMode == custom_type_entity.ExecModeCommand && ct.Command != nil {
+		view.HasCommandTemplate = ct.Command.Template != ""
+	}
 	if ct.ExecMode == custom_type_entity.ExecModeHTTP && ct.HTTP != nil {
 		// 展示用渲染：Base URL 里引用的密钥字段以掩码代替。
 		addr, err := helper.RenderGenericDisplayBaseURL(ct, resolved.Values, time.Now())

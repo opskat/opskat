@@ -48,7 +48,7 @@ func setupGeneric(t *testing.T) *genericEnv {
 			_ = sqlDB.Close()
 		}
 	})
-	custom_type_svc.CustomType().SetReservedNames(RegisteredTypes)
+	custom_type_svc.CustomType().SetReservedNames(custom_type_svc.BuiltinReservedNames(RegisteredTypes))
 
 	ctx := context.Background()
 	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{

@@ -113,6 +113,7 @@ const (
 	IssueSlugInvalid              = "slug_invalid"
 	IssueSlugImmutable            = "slug_immutable"
 	IssueSlugReserved             = "slug_reserved"
+	IssueSlugReservedExtension    = "slug_reserved_extension"
 	IssueSlugTaken                = "slug_taken"
 	IssueExecModeInvalid          = "exec_mode_invalid"
 	IssueFieldsRequired           = "fields_required"

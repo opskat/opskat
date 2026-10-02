@@ -467,9 +467,11 @@ func initExtensionSystem(
 // 闭包在每次创建类型时才求值，因此扩展异步加载完成后也能看到新类型，不需要重新调用本
 // 函数——除非要换掉 bridge getter 本身（extSvc 从无到有时）。
 func registerReservedTypeNames(bridge func() *extpkg.Bridge) {
-	custom_type_svc.CustomType().SetReservedNames(func() []string {
-		names := append([]string(nil), assettype.RegisteredTypes()...)
-		names = append(names, aipermission.BuiltinDeclaredTypeNames()...)
+	builtin := custom_type_svc.BuiltinReservedNames(func() []string {
+		return append(assettype.RegisteredTypes(), aipermission.BuiltinDeclaredTypeNames()...)
+	})
+	custom_type_svc.CustomType().SetReservedNames(func() []custom_type_svc.ReservedName {
+		names := builtin()
 		if bridge == nil {
 			return names
 		}
@@ -477,8 +479,9 @@ func registerReservedTypeNames(bridge func() *extpkg.Bridge) {
 		if br == nil {
 			return names
 		}
+		// 扩展声明的类型带上扩展名：重名时据此指出冲突对象。
 		for _, at := range br.GetAssetTypes() {
-			names = append(names, at.Type)
+			names = append(names, custom_type_svc.ReservedName{Name: at.Type, Extension: at.ExtensionName})
 		}
 		return names
 	})

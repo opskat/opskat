@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { ImportCustomTypeDialog } from "@/components/settings/ImportCustomTypeDialog";
 import { custom_type_entity, customtype } from "../../../../wailsjs/go/models";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 function httpPreview(overrides: Partial<custom_type_entity.CustomType> = {}): customtype.ImportPreview {
   return new customtype.ImportPreview({
@@ -96,5 +96,24 @@ describe("ImportCustomTypeDialog", () => {
 
     expect(mod.SaveCustomType).toHaveBeenCalled();
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("surfaces the non-blocking save warnings after importing, same as saving in the editor", async () => {
+    const mod = await import("../../../../wailsjs/go/customtype/CustomType");
+    const { toast } = await import("sonner");
+    vi.mocked(toast.warning).mockClear();
+    vi.mocked(mod.SaveCustomType).mockResolvedValue(
+      new customtype.SaveResult({
+        type: httpPreview().type,
+        warnings: [{ path: "command.template", code: "command_secret_in_args" }],
+      })
+    );
+    const onOpenChange = vi.fn();
+
+    render(<ImportCustomTypeDialog preview={httpPreview()} onOpenChange={onOpenChange} />);
+    await userEvent.setup().click(screen.getByTestId("customtype-import-confirm"));
+
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(toast.warning).toHaveBeenCalledWith("customType.issue.command_secret_in_args");
   });
 });
