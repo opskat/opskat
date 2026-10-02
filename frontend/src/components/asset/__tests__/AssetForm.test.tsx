@@ -5,13 +5,13 @@ import { AssetForm } from "@/components/asset/AssetForm";
 import { asset_entity, custom_type_entity, customtype } from "../../../../wailsjs/go/models";
 import { GetCustomType, ListCustomTypes } from "../../../../wailsjs/go/customtype/CustomType";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
-import { CancelTest, TestAssetConnection, CreateAsset, UpdateAsset, ListAssets } from "../../../../wailsjs/go/system/System";
+import { CancelTest, TestAssetConnection } from "../../../../wailsjs/go/system/System";
+import { CreateAsset, UpdateAsset, ListAssets } from "../../../../wailsjs/go/system/System";
 import { ConnectVNCTemporary, DisconnectVNC } from "../../../../wailsjs/go/vnc/VNC";
 import { startVNCClient, VNCClientError, type VNCNegotiatedSecurity } from "@/lib/vncClient";
 import { notifySuccess } from "@/lib/notify";
 import { toast } from "sonner";
 import { EventsOff } from "../../../../wailsjs/runtime/runtime";
-import { useAssetStore } from "@/stores/assetStore";
 
 const mocks = vi.hoisted(() => ({
   notifySuccess: vi.fn(),

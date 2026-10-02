@@ -9,7 +9,6 @@ import {
   resolveAssetTypeLabel,
 } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
-import { getIconComponent } from "@/components/asset/IconPicker";
 import { asset_entity } from "../../wailsjs/go/models";
 
 describe("getAssetTypeOptions", () => {
