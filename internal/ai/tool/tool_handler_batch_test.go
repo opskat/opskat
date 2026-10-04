@@ -57,7 +57,7 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	origCanon, hadCanon := permission.CanonicalizeFor(assetType)
 	origPrecheck, hadPrecheck := permission.PrecheckFor(assetType)
 
-	permission.UnregisterExecutorForTest(assetType)
+	permission.UnregisterExecutor(assetType)
 	if hadCanon {
 		permission.RegisterExecutor(assetType, fake, origHelp, origCanon)
 	} else {
@@ -68,7 +68,7 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	}
 
 	t.Cleanup(func() {
-		permission.UnregisterExecutorForTest(assetType)
+		permission.UnregisterExecutor(assetType)
 		if !hadExec {
 			// assetType had no executor before the swap — it was either unregistered
 			// (nothing to restore) or doc-only (generic, rdp, vnc, local, oss:

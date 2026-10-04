@@ -3,6 +3,8 @@ package permission
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -756,6 +758,16 @@ func matchGrantForAssetSubCmds(ctx context.Context, assetID int64, subCmds []str
 }
 
 func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds []string, toolName string, matchFn policy.MatchFunc) *aictx.CheckResult {
+	if patterns := grantPatternsForAsset(ctx, assetID, subCmds, toolName, matchFn); patterns != nil {
+		return &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: patterns[0]}
+	}
+	return nil
+}
+
+// grantPatternsForAsset returns, for each of subCmds in order, the approved grant
+// pattern of the current session covering it on assetID (directly or through its
+// group chain) — or nil when any one of them is not covered.
+func grantPatternsForAsset(ctx context.Context, assetID int64, subCmds []string, toolName string, matchFn policy.MatchFunc) []string {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
 		return nil
@@ -764,10 +776,7 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 	if asset != nil && asset.GroupID > 0 {
 		groups = policy.ResolveGroupChain(ctx, asset.GroupID)
 	}
-	if pattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, toolName, matchFn); pattern != "" {
-		return &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: pattern}
-	}
-	return nil
+	return matchGrantPatternsEachWith(ctx, assetID, groups, subCmds, toolName, matchFn)
 }
 
 // --- SaveGrantPattern ---
@@ -833,8 +842,22 @@ func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []
 
 // SaveGrantPatternsForApproval 用 NormalizeGrantPatterns 拆出 patterns 后依次落库。
 // 适合 app 层在多种审批回调（opsctl 单审批、AI grant 流）里调用，避免每个路径重复拆分逻辑。
+//
+// 扩展类型的 pattern 是规则语法（`<action>[:<resource-glob>]`），经 extensionGrantFor 落成
+// ext:<policyType>:… ——扩展调用只匹配这种形状。不合法的不落库：上游
+// （SubmitGrantMulti、ParseApprovalResponse）已拒绝它们，走到这里的只会是合法的。
 func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
-	for _, p := range NormalizeGrantPatterns(approvalType, command, origin) {
+	grant, isExt, err := extensionGrantFor(approvalType, command)
+	patterns := grant.Rules
+	switch {
+	case !isExt:
+		patterns = NormalizeGrantPatterns(approvalType, command, origin)
+	case err != nil:
+		logger.Ctx(ctx).Warn("extension grant pattern invalid; nothing persisted",
+			zap.Int64("assetID", assetID), zap.String("approvalType", approvalType), zap.Error(err))
+		return
+	}
+	for _, p := range patterns {
 		SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, p)
 	}
 }
@@ -878,4 +901,88 @@ func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, asse
 	if err := repo.CreateItems(ctx, []*grant_entity.GrantItem{item}); err != nil {
 		logger.Default().Error("save grant pattern", zap.Error(err))
 	}
+}
+
+// --- 扩展 grant（按分类而非命令串匹配） ---
+
+// extGrantPrefix namespaces extension grants in the grant table, which every asset
+// type shares: ext:<policyType>:<action>[:<resource-glob>]. The tail after the policy
+// type is a permanent rule's own syntax (rule_ext.go), so a grant and a rule are
+// matched by the same function (policy.MatchExtensionRule).
+const extGrantPrefix = "ext:"
+
+// extGrantKey formats the grant key of one resource of a classified extension call:
+// ext:<policyType>:<action>:<resource>. It is both the command side a live call is
+// matched as (MatchExtensionGrant) and the grant an unedited "always allow" of a
+// single-resource call persists.
+func extGrantKey(policyType, action, resource string) string {
+	return extGrantRule(policyType, extGrantTail(action, resource))
+}
+
+// extGrantRule prefixes a "<action>:<resource-glob>" tail with the policy type's
+// namespace — the persisted shape of every extension grant.
+func extGrantRule(policyType, tail string) string {
+	return extGrantPrefix + policyType + ":" + tail
+}
+
+// extGrantTail is the "<action>:<resource-glob>" part of an "always allow" for one
+// resource of a classified call — what the Remember editor shows
+// (ApprovalItem.RememberPattern). The resource is already a glob
+// (ExtensionClassification.Resources): a literal resource arrives with its glob
+// characters quoted, so the stored resource segment matches exactly the resource
+// the user approved — unquoted, one containing '*' would widen the grant to other
+// resources and one containing '[' would never match the call it was granted for.
+func extGrantTail(action, resource string) string {
+	return action + ":" + resource
+}
+
+// validateExtGrantEdit checks a Remember value the user edited for a classified
+// call: it must stay "<action>:<resource-glob>" with the classified action — an
+// edit can widen the resource (its glob characters are intentional), never drop or
+// swap the action into a grant for something the user was not asked about.
+func validateExtGrantEdit(action, edited string) error {
+	editedAction, glob, scoped := policy.ExtensionRuleParts(edited)
+	if editedAction != action || !scoped {
+		return fmt.Errorf("an extension grant must stay %q followed by a resource glob", action+":")
+	}
+	if _, err := path.Match(glob, ""); err != nil {
+		return fmt.Errorf("invalid resource glob %q: %w", glob, err)
+	}
+	return nil
+}
+
+// splitExtGrantKey splits an extGrantKey-shaped string into its policyType and the
+// "<action>[:<resource>]" tail policy.ExtensionRuleParts / MatchExtensionRule expect.
+func splitExtGrantKey(key string) (policyType, tail string, ok bool) {
+	rest, ok := strings.CutPrefix(key, extGrantPrefix)
+	if !ok {
+		return "", "", false
+	}
+	policyType, tail, ok = strings.Cut(rest, ":")
+	return policyType, tail, ok
+}
+
+// extGrantMatch is the policy.MatchFunc for extension grants: both rule and command
+// are extGrantKey-shaped keys (MatchExtensionGrant builds the command side from one
+// resource of the current call's live classification, never from command text). The
+// policyType segment must match exactly; the remaining "<action>[:<resource-glob>]"
+// tail is matched with the same semantics a permanent allow rule uses
+// (policy.MatchExtensionRule) — action exact, the grant's glob covering every name
+// the resource stands for — so a "remember" pattern a user hand-edited to add a '*'
+// still behaves like a rule would.
+func extGrantMatch(rule, command string) bool {
+	ruleType, ruleTail, ok := splitExtGrantKey(rule)
+	if !ok {
+		return false
+	}
+	cmdType, cmdTail, ok := splitExtGrantKey(command)
+	if !ok || ruleType != cmdType {
+		return false
+	}
+	// cmdTail is always an exact "<action>:<resource>" (extGrantKey always emits the
+	// ':' + resource segment, even when resource is ""), so scoped is never false here
+	// and resource — which may itself contain ':' — comes back whole (spec: "resource
+	// 匹配整体，含 ':' 不可越权").
+	action, resource, _ := policy.ExtensionRuleParts(cmdTail)
+	return policy.MatchExtensionRule(ruleTail, action, resource)
 }

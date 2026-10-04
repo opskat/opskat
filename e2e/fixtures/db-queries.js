@@ -106,7 +106,7 @@ function findAIProviderByName(name) {
   );
 }
 
-// custom_types rows (migrations/202609280001_custom_types.go) — the independent
+// custom_types rows (migrations/202610040001_custom_types.go) — the independent
 // persistence check for the type editor / import round trip: the binder's own
 // SaveCustomType response proves the IPC call succeeded, this proves the row is
 // really on disk with the fields/bindings/policy the caller asked for.
@@ -121,10 +121,23 @@ function findCustomTypeBySlug(slug) {
   );
 }
 
+// What the app actually persisted for one asset: the config JSON it wrote, the
+// policy it attached, and which extension owns the type. Separate from
+// findAssetByName because that one is also `oracle.mjs assets`' table output, which
+// these long JSON blobs would drown.
+function findAssetPersistenceByName(name) {
+  return query((db) =>
+    db
+      .prepare("SELECT id, name, type, config, command_policy, extension_name FROM assets WHERE name = ?")
+      .get(name),
+  );
+}
+
 module.exports = {
   dbPath,
   query,
   findAssetByName,
+  findAssetPersistenceByName,
   listAssets,
   findAuditLogs,
   maxAuditId,

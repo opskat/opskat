@@ -66,7 +66,7 @@ func execTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "request_permission",
-			DescStr: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent exec calls matching any approved pattern will be auto-approved.",
+			DescStr: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent exec calls matching any approved pattern will be auto-approved. For an extension-provided asset type the patterns are not commands but `<action>` or `<action>:<resource-glob>` using the policy actions its help lists (e.g. `write:runbook/*`); command-shaped patterns for such an asset are refused.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{

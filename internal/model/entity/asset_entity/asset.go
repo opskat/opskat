@@ -493,6 +493,9 @@ var DefaultEtcdPolicy = policy.DefaultEtcdPolicy
 // OSSPolicy OSS 权限策略（类型别名，定义在 policy 包）
 type OSSPolicy = policy.OSSPolicy
 
+// ExtensionPolicy 扩展资产类型的权限策略
+type ExtensionPolicy = policy.ExtensionPolicy
+
 // DefaultOSSPolicy 返回默认 OSS 权限策略
 var DefaultOSSPolicy = policy.DefaultOSSPolicy
 
@@ -897,6 +900,24 @@ func (a *Asset) SetOSSPolicy(p *OSSPolicy) error {
 	return nil
 }
 
+// GetExtensionPolicy 解析扩展资产的权限策略。资产只有一种类型，它那一列就是这个类型
+// 的策略，所以 policyType 不参与取值。
+func (a *Asset) GetExtensionPolicy(string) (*ExtensionPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[ExtensionPolicy](a.CmdPolicy, "扩展权限策略")
+}
+
+// SetExtensionPolicy 序列化扩展资产的权限策略
+func (a *Asset) SetExtensionPolicy(_ string, p *ExtensionPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *ExtensionPolicy) bool {
+		return v.IsEmpty()
+	}, "扩展权限策略")
+	if err != nil {
+		return err
+	}
+	a.CmdPolicy = s
+	return nil
+}
+
 // Validate 校验资产必填字段和类型配置的完整性
 func (a *Asset) Validate() error {
 	if a.Name == "" {
@@ -933,7 +954,7 @@ func (a *Asset) Validate() error {
 	case AssetTypeGeneric:
 		return a.validateGeneric()
 	default:
-		// 扩展资产类型由扩展自行校验
+		// 扩展资产类型的配置由扩展运行期注册的校验器把关（RegisterConfigValidator），asset_svc 写入前调用
 		return nil
 	}
 }

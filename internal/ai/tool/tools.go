@@ -13,7 +13,6 @@ func Tools() []tool.Tool {
 	tools = append(tools, credentialTools()...)
 	tools = append(tools, crudTools()...)
 	tools = append(tools, execTools()...)
-	tools = append(tools, extTools()...)
 	tools = append(tools, unifiedTools()...)
 	return tools
 }

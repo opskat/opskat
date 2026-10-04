@@ -2,13 +2,13 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Search, ChevronDown, Plus, Settings2 } from "lucide-react";
 import { cn, Popover, PopoverContent, PopoverTrigger, Input, Button } from "@opskat/ui";
-import { useExtensionStore } from "@/extension";
 import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 import {
   getAssetTypeOptions,
+  useAssetTypeOptions,
   buildAssetTypeGroups,
   filterAssetTypeOptions,
   findAssetTypeOption,
@@ -29,7 +29,6 @@ interface AssetTypePickerProps {
 
 export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }: AssetTypePickerProps) {
   const { t } = useTranslation();
-  const extensions = useExtensionStore((s) => s.extensions);
   const { types: customTypes } = useCustomTypeList();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -37,7 +36,7 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
   // 打开「新建自定义类型」时已有的类型 id;保存后多出来的那个就是新建的类型。
   const idsBeforeCreate = useRef<Set<number>>(new Set());
 
-  const options = useMemo(() => getAssetTypeOptions(extensions, customTypes), [extensions, customTypes]);
+  const options = useAssetTypeOptions(customTypes);
   const resolveLabel = useCallback((o: AssetTypeOption) => resolveAssetTypeLabel(o, t), [t]);
 
   const selected = findAssetTypeOption(options, value, variant);
@@ -69,7 +68,7 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
     // store.save 成功后已重新加载列表。
     const created = useCustomTypeStore.getState().types.find((ct) => !idsBeforeCreate.current.has(ct.id));
     if (!created) return;
-    const opt = getAssetTypeOptions({}, [created]).find((o) => o.variant === created.slug);
+    const opt = getAssetTypeOptions([created]).find((o) => o.variant === created.slug);
     if (opt) select(opt);
   };
 

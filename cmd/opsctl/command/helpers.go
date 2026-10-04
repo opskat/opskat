@@ -86,6 +86,48 @@ func validateRedisScope(asset *asset_entity.Asset, scope string) error {
 	return fmt.Errorf("--scope is only meaningful for redis assets; asset %q is type=%s", asset.Name, asset.Type)
 }
 
+// joinCommandWords rebuilds the one command string from argv the local shell has
+// already split.
+//
+// A single word *is* that command string and is passed through untouched — it is the
+// documented form for every DSL opsctl forwards to (`-- "SELECT * FROM users"`), and
+// quoting it would hand the database a literal `'SELECT * FROM users'`. This holds
+// regardless of literalWords: a single argv word never gets re-quoted.
+//
+// Two or more words are argv, and every consumer re-splits the result with a real
+// shell parser (cmdline.Words underneath both the extension flag DSL and the
+// k8s/etcd/kafka canonicalizers, a remote shell for ssh) — so how much of each word's
+// original shape must survive that re-split depends on what the re-split feeds into:
+//
+//   - literalWords == false (every non-extension type, ssh included): the re-split
+//     result is handed to something that itself behaves like a shell (ssh(1), or a
+//     canonicalizer speaking a Unix-y command grammar), so a bare metacharacter like
+//     `*` or `&` is meant to keep meaning what it means to a shell. Only words
+//     containing whitespace carry a boundary the join would otherwise destroy; the
+//     rest are emitted bare, so `-- ls *.log` still reaches the remote shell as a
+//     glob, as ssh(1) does.
+//   - literalWords == true (an extension asset): the re-split result is the
+//     extension's flag DSL (internal/extreg/command.go), which has no shell and no
+//     use for shell operators — a value like `--path=/x?a=1&b=2` (one argv word this
+//     process already received intact) must come back out of the re-split as that
+//     exact word, `&` included, not as a background operator splitting the command in
+//     two. Every word is therefore quoted whenever it needs to be (cmdline.QuoteIfNeeded
+//     leaves an already-safe word bare), independent of whitespace.
+func joinCommandWords(words []string, literalWords bool) string {
+	if len(words) == 1 {
+		return words[0]
+	}
+	joined := make([]string, len(words))
+	for i, word := range words {
+		if literalWords || strings.ContainsAny(word, " \t\n") {
+			joined[i] = cmdline.QuoteIfNeeded(word)
+			continue
+		}
+		joined[i] = word
+	}
+	return strings.Join(joined, " ")
+}
+
 // parseRemotePath parses numeric assetID:path strings without repository lookup.
 func parseRemotePath(s string) (int64, string) {
 	idx := strings.Index(s, ":")

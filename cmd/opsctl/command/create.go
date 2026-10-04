@@ -520,7 +520,7 @@ func printCreateUsage() {
   opsctl create <resource> [flags]
 
 Resources:
-  asset     Create any registered built-in asset type through generic config
+  asset     Create any registered asset type through generic config
   group     Create a new asset group
 
 Run 'opsctl create asset --help' or 'opsctl create group --help' for details.
@@ -557,12 +557,12 @@ func printCreateAssetUsage() {
   opsctl create asset --name <name> [flags]
 
 Generic config:
-  --type <type>           Registered built-in asset type, or a custom type slug (default: ssh)
+  --type <type>           Registered asset type (built-in or extension-provided), or a custom type slug (default: ssh)
   --config '<JSON>'       Type-owned JSON object
   --config-file <path>    File containing a type-owned JSON object (mutually exclusive with --config)
   --secret <field>        Type that secret field in your terminal, no echo (repeatable)
 
-Registered built-in types: %s
+Registered types: %s
 Run 'opsctl help <type>' for that type's exact accepted/required config fields.
 
 Custom types (defined in the desktop app under Settings) are created with --type <slug>

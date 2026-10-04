@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/ai/cmdline"
 )
 
 func TestHoistGlobalFlags(t *testing.T) {
@@ -94,6 +96,30 @@ func TestParseExecArgv(t *testing.T) {
 		_, _, _, err := parseExecArgv([]string{"--type"})
 		require.ErrorContains(t, err, "--type")
 	})
+	t.Run("本地 shell 吃掉的词边界在下游重新切分后仍在", func(t *testing.T) {
+		// 下游（扩展 flag DSL、k8s/etcd/kafka canonicalizer、ssh 远端 shell）都会用真正
+		// 的 shell 解析器重新切分这个串；裸空格拼接会让带空格的值变成两个词。
+		for _, argv := range [][]string{
+			{"grep", "foo bar", "file"},
+			{"note_put", "--content=restart via systemctl"},
+		} {
+			cmd := joinCommandWords(argv, false)
+			words, err := cmdline.Words(cmd)
+			require.NoError(t, err)
+			require.Equal(t, argv, words)
+		}
+	})
+	t.Run("不含空白的词原样保留，glob 仍交给远端 shell", func(t *testing.T) {
+		require.Equal(t, "ls *.log", joinCommandWords([]string{"ls", "*.log"}, false))
+		require.Equal(t, "grep 'foo bar' *.log", joinCommandWords([]string{"grep", "foo bar", "*.log"}, false))
+	})
+	t.Run("单个词就是命令串本身，不加引号", func(t *testing.T) {
+		// `opsctl exec prod-db -- "SELECT * FROM t"` 是所有 DSL 的文档用法。这对扩展
+		// 资产同样成立——单词形式不做重新分词，所以 literalWords 对它没有影响。
+		require.Equal(t, "SELECT * FROM users", joinCommandWords([]string{"SELECT * FROM users"}, false))
+		require.Equal(t, "ls | wc -l", joinCommandWords([]string{"ls | wc -l"}, false))
+		require.Equal(t, "request --path='/x?a=1&b=2'", joinCommandWords([]string{"request --path='/x?a=1&b=2'"}, true))
+	})
 	t.Run("--scope 缺值报错", func(t *testing.T) {
 		_, _, _, err := parseExecArgv([]string{"--scope"})
 		require.ErrorContains(t, err, "--scope")
@@ -103,5 +129,31 @@ func TestParseExecArgv(t *testing.T) {
 		require.Error(t, err)
 		_, _, _, err = parseExecArgv(nil)
 		require.Error(t, err)
+	})
+
+	// 扩展资产：本地 shell 已经交付的每个 argv 词，必须原样（含元字符）到达扩展 flag
+	// DSL 的重新切分——包括 ES 查询串常见的 & 这类字符。这是本用例集要锁的回归：
+	// `opsctl exec <ext-asset> -- request --path='/x?a=1&b=2'` 此前会在下游被
+	// mvdan/sh 当成后台运算符拆成两条语句，报 "only a single command is supported"。
+	t.Run("扩展资产：多词 argv 逐词保真，元字符不被当成 shell 操作符", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			argv []string
+		}{
+			{"& 出现在 flag 值里", []string{"request", "--path=/x?a=1&b=2"}},
+			{"| 出现在 flag 值里", []string{"request", "--query=a|b"}},
+			{"; 出现在 flag 值里", []string{"request", "--body=a;b"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				cmd := joinCommandWords(tc.argv, true)
+				words, err := cmdline.Words(cmd)
+				require.NoError(t, err, "joined command %q must re-split cleanly, not error as multiple statements", cmd)
+				require.Equal(t, tc.argv, words, "each argv word must survive the round trip verbatim")
+			})
+		}
+	})
+
+	t.Run("非扩展资产：ssh 式多词语义不变，元字符原样交给远端 shell", func(t *testing.T) {
+		require.Equal(t, "ls *.log", joinCommandWords([]string{"ls", "*.log"}, false), "a non-extension asset must still see the bare glob, not a quoted literal")
 	})
 }

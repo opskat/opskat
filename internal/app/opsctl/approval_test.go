@@ -21,11 +21,11 @@ type opsctlTestLang struct{}
 func (opsctlTestLang) Lang() string { return "en" }
 
 type extToolExecutorStub struct {
-	result []byte
+	result string
 	err    error
 }
 
-func (s extToolExecutorStub) ExecuteExtTool(context.Context, string, string, []byte) ([]byte, error) {
+func (s extToolExecutorStub) ExecuteExtTool(context.Context, int64, string) (string, error) {
 	return s.result, s.err
 }
 
@@ -36,7 +36,7 @@ func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 		Command: "--password " + secret, Detail: "raw " + secret,
 	}}
 
-	got := grantItemsForPersistence("session-1", reqItems)
+	got := grantItemsForPersistence("session-1", reqItems, nil)
 	require.Len(t, got, 1)
 	require.Equal(t, reqItems[0].Command, got[0].Command)
 	require.Equal(t, reqItems[0].Detail, got[0].Detail)
@@ -48,9 +48,9 @@ func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 func TestHandleExtToolExecPassesThroughResultAndError(t *testing.T) {
 	t.Run("result bytes unchanged", func(t *testing.T) {
 		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{
-			result: []byte(`{"token":"extension-credential-sentinel","rows":1}`),
+			result: `{"token":"extension-credential-sentinel","rows":1}`,
 		}}
-		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{Extension: "demo", Tool: "read"})
+		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{AssetID: 3, Command: "read"})
 		require.True(t, resp.Approved)
 		require.Equal(t, `{"token":"extension-credential-sentinel","rows":1}`, resp.ToolResult)
 	})
@@ -58,7 +58,7 @@ func TestHandleExtToolExecPassesThroughResultAndError(t *testing.T) {
 	t.Run("error text unchanged", func(t *testing.T) {
 		execErr := errors.New("Authorization: Basic extension-credential-sentinel")
 		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{err: execErr}}
-		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{Extension: "demo", Tool: "read"})
+		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{AssetID: 3, Command: "read"})
 		require.False(t, resp.Approved)
 		require.Equal(t, execErr.Error(), resp.ToolError)
 	})

@@ -118,6 +118,19 @@ func (p *OSSPolicy) IsEmpty() bool {
 	return len(p.AllowList) == 0 && len(p.DenyList) == 0 && len(p.Groups) == 0
 }
 
+// ExtensionPolicy 扩展提供的资产类型的权限策略。规则是扩展声明的策略动作名（全等匹配），
+// 引用的权限组是该扩展策略面（ext:<policyType>:<name>）或用户自建的同类型组。
+type ExtensionPolicy struct {
+	AllowList []string `json:"allow_list"`
+	DenyList  []string `json:"deny_list"`
+	Groups    []string `json:"groups,omitempty"`
+}
+
+// IsEmpty 检查策略是否为空
+func (p *ExtensionPolicy) IsEmpty() bool {
+	return len(p.AllowList) == 0 && len(p.DenyList) == 0 && len(p.Groups) == 0
+}
+
 // DefaultOSSPolicy 返回默认 OSS 权限策略（引用内置权限组）
 func DefaultOSSPolicy() *OSSPolicy {
 	return &OSSPolicy{
@@ -135,6 +148,9 @@ type Holder interface {
 	GetK8sPolicy() (*K8sPolicy, error)
 	GetEtcdPolicy() (*EtcdPolicy, error)
 	GetOSSPolicy() (*OSSPolicy, error)
+	// GetExtensionPolicy 读一个扩展策略面（manifest 声明的 policies.type）的策略。
+	// 扩展的策略面在运行期才出现，因此按名取，而不是一面一个方法。
+	GetExtensionPolicy(policyType string) (*ExtensionPolicy, error)
 }
 
 // DefaultRedisPolicy 返回默认 Redis 权限策略（引用内置权限组）

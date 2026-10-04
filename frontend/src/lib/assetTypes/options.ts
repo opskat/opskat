@@ -1,11 +1,9 @@
 // frontend/src/lib/assetTypes/options.ts
-import type { ComponentType } from "react";
-import { Server } from "lucide-react";
-import { getIconComponent } from "@/components/asset/IconPicker";
-import { getBuiltinTypes } from "./index";
-import type { AssetTypeCategory } from "./types";
-import type { ExtManifest } from "@/extension/types";
+import { useMemo, type ComponentType } from "react";
+import { getAllAssetTypes, useAssetTypes } from "./index";
+import type { AssetTypeCategory, AssetTypeDefinition } from "./types";
 import type { asset_entity } from "../../../wailsjs/go/models";
+import { getIconComponent } from "@/components/asset/IconPicker";
 
 export type { AssetTypeCategory };
 
@@ -34,10 +32,6 @@ export interface AssetTypeOption {
   defaultIcon?: string;
 }
 
-interface ExtensionEntryLike {
-  manifest: ExtManifest;
-}
-
 /** 自定义类型列表项（customtype.Summary 的子集）。 */
 export interface CustomTypeEntryLike {
   slug: string;
@@ -45,66 +39,53 @@ export interface CustomTypeEntryLike {
   icon: string;
 }
 
-/** 内置资产类型选项：从 registry 的 AssetTypeDefinition 派生（单一来源）。 */
-function builtinOptions(): AssetTypeOption[] {
-  return getBuiltinTypes().map((def) => ({
+function toOption(def: AssetTypeDefinition): AssetTypeOption {
+  return {
     value: def.type,
     aliases: def.aliases,
     label: def.label,
     labelIsI18nKey: true,
+    i18nNs: def.labelNs,
     icon: def.icon,
-    group: "builtin",
+    group: def.extensionName ? "extension" : "builtin",
     category: def.category,
+  };
+}
+
+/** 每个自定义类型一项：挂在「自定义」分组的定义（通用资产）下，variant = 类型标识。 */
+function customTypeOptions(def: AssetTypeDefinition, customTypes: CustomTypeEntryLike[]): AssetTypeOption[] {
+  return customTypes.map((ct) => ({
+    value: def.type,
+    aliases: def.aliases,
+    label: ct.name,
+    labelIsI18nKey: false,
+    icon: getIconComponent(ct.icon),
+    group: "custom" as const,
+    category: def.category,
+    variant: ct.slug,
+    defaultIcon: ct.icon || undefined,
   }));
 }
 
-/** 每个自定义类型一项：挂在「自定义」分组的内置定义（通用资产）下，variant = 类型标识。 */
-function customTypeOptions(customTypes: CustomTypeEntryLike[]): AssetTypeOption[] {
-  return getBuiltinTypes()
-    .filter((def) => def.category === "custom")
-    .flatMap((def) =>
-      customTypes.map((ct) => ({
-        value: def.type,
-        aliases: def.aliases,
-        label: ct.name,
-        labelIsI18nKey: false,
-        icon: getIconComponent(ct.icon),
-        group: "custom" as const,
-        category: def.category,
-        variant: ct.slug,
-        defaultIcon: ct.icon || undefined,
-      }))
-    );
+function toOptions(defs: AssetTypeDefinition[], customTypes?: CustomTypeEntryLike[]): AssetTypeOption[] {
+  if (!customTypes) return defs.map(toOption);
+  return defs.flatMap((def) => (def.category === "custom" ? customTypeOptions(def, customTypes) : [toOption(def)]));
 }
 
 /**
- * 全部可选类型：内置 + 扩展。给出 customTypes（新建资产的类型选择器）时，「自定义」分组的
- * 内置定义换成每个自定义类型一项；不给时（资产树类型筛选）保留一项，按 asset.Type 匹配全部通用资产。
+ * 全部资产类型选项，从注册表派生（单一来源；扩展类型也在注册表里）。给出 customTypes（新建资产
+ * 的类型选择器）时，「自定义」分组的定义换成每个自定义类型一项；不给时（资产树类型筛选）保留
+ * 一项，按 asset.Type 匹配全部通用资产。
  */
-export function getAssetTypeOptions(
-  extensions: Record<string, ExtensionEntryLike>,
-  customTypes?: CustomTypeEntryLike[]
-): AssetTypeOption[] {
-  const out: AssetTypeOption[] = customTypes
-    ? [...builtinOptions().filter((o) => o.category !== "custom"), ...customTypeOptions(customTypes)]
-    : builtinOptions();
-  for (const entry of Object.values(extensions)) {
-    const m = entry.manifest;
-    if (!m.assetTypes?.length) continue;
-    for (const at of m.assetTypes) {
-      out.push({
-        value: at.type,
-        aliases: [at.type],
-        label: at.i18n?.name ?? at.type,
-        labelIsI18nKey: true,
-        i18nNs: `ext-${m.name}`,
-        icon: m.icon ? getIconComponent(m.icon) : Server,
-        group: "extension",
-        category: "extension",
-      });
-    }
-  }
-  return out;
+export function getAssetTypeOptions(customTypes?: CustomTypeEntryLike[]): AssetTypeOption[] {
+  return toOptions(getAllAssetTypes(), customTypes);
+}
+
+/** 响应式版本：注册表增删（扩展启用/禁用）或自定义类型列表变化时组件会重渲染。
+ *  返回值在输入不变时保持同一引用——下游 useMemo 会拿它做依赖。 */
+export function useAssetTypeOptions(customTypes?: CustomTypeEntryLike[]): AssetTypeOption[] {
+  const defs = useAssetTypes();
+  return useMemo(() => toOptions(defs, customTypes), [defs, customTypes]);
 }
 
 export function matchSelectedTypes(

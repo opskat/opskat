@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -38,6 +37,7 @@ import (
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -56,6 +56,7 @@ import (
 	extpkg "github.com/opskat/opskat/pkg/extension"
 	skillplugin "github.com/opskat/opskat/plugin"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -238,7 +239,7 @@ func main() {
 		Emit:           externalEditEmitter.Emit,
 	})
 	if err != nil {
-		zap.L().Warn("init external edit service", zap.Error(err))
+		logger.Default().Warn("init external edit service", zap.Error(err))
 	}
 	extEditB := external_edit.New(sys, externalEditSvc, externalEditEmitter)
 
@@ -247,11 +248,8 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	// 保留类型名：自定义类型标识不能与内置类型重名。扩展系统异步初始化（甚至可能被
-	// OPSKAT_EXTENSIONS=0 禁用），这里先装一份只含内置类型的基线，避免扩展系统禁用
-	// 时创建自定义类型永远报"未注入保留类型名"；扩展加载完成后 initExtensionSystem
-	// 会换成含扩展类型的完整版本。
-	registerReservedTypeNames(nil)
+	// 保留类型名：自定义类型标识不能与内置类型、已加载扩展声明的类型重名。
+	registerReservedTypeNames()
 
 	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, customtypeB, extB, extEditB, ossB}
 	var forceQuit atomic.Bool
@@ -401,39 +399,47 @@ func initExtensionSystem(
 	opsctlB *opsctl.Opsctl,
 ) {
 	if os.Getenv("OPSKAT_EXTENSIONS") == "0" {
-		zap.L().Info("extension system disabled via OPSKAT_EXTENSIONS=0")
+		logger.Default().Info("extension system disabled via OPSKAT_EXTENSIONS=0")
 		return
 	}
 
 	extDir := filepath.Join(dataDir, "extensions")
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
-		return extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
-			Logger:       zap.L(),
-			AssetConfigs: extB.NewAssetConfigGetter(),
-			FileDialogs:  extB.NewFileDialogOpener(),
-			KV:           extB.NewKVStore(extName),
-			ActionEvents: extB.NewActionEventHandler(extName),
-			TunnelDialer: extB.NewTunnelDialer(),
+		provider := extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
+			Logger:        logger.Default(),
+			AssetConfigs:  extB.NewAssetConfigGetter(extName),
+			FileDialogs:   extB.NewFileDialogOpener(),
+			KV:            extB.NewKVStore(extName),
+			ActionEvents:  extB.NewActionEventHandler(extName),
+			AssetDialer:   extB.NewAssetDialer(extName),
+			ExtensionName: extName,
 		})
-	}, zap.L())
+		// The asset's cached HTTP client (kept for keep-alive reuse across calls)
+		// is built from its connection settings; once those change or the asset
+		// is gone, the cache must be dropped instead of reused on the next open.
+		extension.RegisterHTTPCacheInvalidator(extName, provider)
+		return provider
+	}, logger.Default())
+
+	// 测试连接：declare()d 处理器要跑 WASM，只在桌面进程接线（opsctl 走
+	// RegisterDescribeOnly，从不设置这个）。必须在任何扩展加载之前接好——extreg
+	// 加载期一遇到声明了处理器的类型就要拿它建 tester。
+	extreg.SetConnTestRegistrar(extB.NewConnTestRegistrar())
 
 	extSvc := extension_svc.New(
 		mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
 		asset_repo.Asset(),
-		zap.L(),
-		func(b *extpkg.Bridge) { aitool.SetExecToolExecutor(b) },
+		logger.Default(),
 		func() { wailsRuntime.EventsEmit(wctx, "ext:reload", nil) },
 		extension.SnippetExtensionHook{},
 	)
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)
-	opsctlB.SetExtToolExecutor(&bridgeExtExecutor{bridge: extSvc.Bridge})
-	// 扩展系统就绪后，保留类型名换成含已加载扩展类型的完整版本（覆盖 main() 里注册的
-	// 内置类型基线）；闭包在每次 Save 时才求值，扩展异步加载完成也能看到。
-	registerReservedTypeNames(extSvc.Bridge)
+	opsctlB.SetExtToolExecutor(desktopExecExecutor{})
+	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
 
 	// 接入 snippet 分类注册表
 	if svc := snippet_svc.Snippet(); svc != nil {
@@ -445,74 +451,60 @@ func initExtensionSystem(
 	// 异步初始化扩展，避免阻塞 Startup（WASM 编译较慢）
 	go func() {
 		if err := extSvc.Init(appCtx); err != nil {
-			zap.L().Error("extension init failed", zap.Error(err))
+			logger.Default().Error("extension init failed", zap.Error(err))
 		}
 		// 扩展 Init 完成后刷新 snippet 分类表
 		if svc := snippet_svc.Snippet(); svc != nil {
 			svc.RefreshCategories()
 		}
 		wailsRuntime.EventsEmit(wctx, "ext:ready", nil)
-
-		if err := extSvc.StartWatch(appCtx); err != nil {
-			zap.L().Warn("extension watcher failed", zap.Error(err))
-		}
 	}()
 }
 
-// registerReservedTypeNames 装 custom_type_svc 的保留类型名来源：内置类型
-// （assettype.RegisteredTypes()，外加 --type / batch 前缀认的内置别名与驱动名
-// permission.BuiltinDeclaredTypeNames()——同名标识会被它们遮蔽）与已加载扩展声明的类型
-// （bridge 为 nil 或扩展系统禁用时只有内置类型）。custom_type_svc 不得 import
-// internal/assettype（避免循环依赖），保留名只能由调用方（这里是组合根 main.go）注入；
-// 闭包在每次创建类型时才求值，因此扩展异步加载完成后也能看到新类型，不需要重新调用本
-// 函数——除非要换掉 bridge getter 本身（extSvc 从无到有时）。
-func registerReservedTypeNames(bridge func() *extpkg.Bridge) {
-	builtin := custom_type_svc.BuiltinReservedNames(func() []string {
-		return append(assettype.RegisteredTypes(), aipermission.BuiltinDeclaredTypeNames()...)
-	})
-	custom_type_svc.CustomType().SetReservedNames(func() []custom_type_svc.ReservedName {
-		names := builtin()
-		if bridge == nil {
-			return names
-		}
-		br := bridge()
-		if br == nil {
-			return names
-		}
-		// 扩展声明的类型带上扩展名：重名时据此指出冲突对象。
-		for _, at := range br.GetAssetTypes() {
-			names = append(names, custom_type_svc.ReservedName{Name: at.Type, Extension: at.ExtensionName})
-		}
-		return names
-	})
+// registerReservedTypeNames 装 custom_type_svc 的保留类型名来源（reservedTypeNames）。
+// custom_type_svc 不得 import internal/assettype（避免循环依赖），保留名只能由组合根注入；
+// 闭包在每次创建类型时才求值，扩展异步加载、装卸后都能看到最新集合。
+func registerReservedTypeNames() {
+	custom_type_svc.CustomType().SetReservedNames(reservedTypeNames)
 }
 
-// bridgeExtExecutor 把 extension_svc.Service.Bridge() 包装成 opsctl.ExtToolExecutor。
-type bridgeExtExecutor struct {
-	bridge func() *extpkg.Bridge
+// reservedTypeNames 是不能用作自定义类型标识的类型名：资产类型注册表里的全部类型（扩展加载时
+// 注册进同一张表，归属扩展的带上扩展名，重名时据此指出冲突对象），外加 --type / batch 前缀
+// 认的内置别名与驱动名 permission.BuiltinDeclaredTypeNames()——同名标识会被它们遮蔽。
+// 注册表名排在前面：custom_type_svc 取第一个命中，扩展类型的归属不会被同名别名盖掉。
+func reservedTypeNames() []custom_type_svc.ReservedName {
+	types := assettype.RegisteredTypes()
+	aliases := aipermission.BuiltinDeclaredTypeNames()
+	names := make([]custom_type_svc.ReservedName, 0, len(types)+len(aliases))
+	for _, t := range types {
+		ext, _ := assettype.ExtensionOwnerOf(t)
+		names = append(names, custom_type_svc.ReservedName{Name: t, Extension: ext})
+	}
+	for _, n := range aliases {
+		names = append(names, custom_type_svc.ReservedName{Name: n})
+	}
+	return names
 }
 
-func (b *bridgeExtExecutor) ExecuteExtTool(ctx context.Context, extName, tool string, args []byte) ([]byte, error) {
-	br := b.bridge()
-	if br == nil {
-		return nil, errExtNotInit
-	}
-	var input struct {
-		AssetID int64 `json:"asset_id"`
-	}
-	if err := json.Unmarshal(args, &input); err != nil {
-		return nil, fmt.Errorf("decode extension tool args: %w", err)
-	}
-	return aitool.ExecuteExtensionTool(ctx, br, input.AssetID, extName, tool, args)
+// desktopExecExecutor 把统一 exec handler 交给 opsctl binder：opsctl 对扩展资产的命令
+// 由桌面进程执行（WASM 运行时只在这里），走的仍然是同一个 handler。
+type desktopExecExecutor struct{}
+
+func (desktopExecExecutor) ExecuteExtTool(ctx context.Context, assetID int64, command string) (string, error) {
+	return aitool.ExecOnAsset(ctx, assetID, command)
 }
 
-var (
-	errExtNotInit = errExt("extension system not initialized")
-)
+// desktopExtDevInstaller 把 `opsctl ext dev` 的安装请求交回扩展 binder，跑的是
+// "从目录安装"那一条 extension_svc.Install。
+type desktopExtDevInstaller struct{ ext *extension.Extension }
 
-type errExt string
+func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
+	return extension.InstalledExtensionVersion(i.ext, name)
+}
 
-func (e errExt) Error() string { return string(e) }
+func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
+	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
+}
 
 func initialWindowSize(cfg *bootstrap.AppConfig) (int, int) {
 	width := defaultWindowWidth

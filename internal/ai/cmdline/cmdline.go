@@ -145,8 +145,46 @@ type Command struct {
 	Flags map[string]string
 }
 
+// Option customizes the flag grammar Parse reads and Render writes; a DSL passes the
+// same options to both so a rendered command parses back to itself. The zero value
+// (no options passed) preserves the original, unconditional behavior every existing
+// caller (mongo/kafka/etcd/k8s DSLs) relies on: a bare "--name" (no "=value") always
+// means boolean "true".
+type Option func(*options)
+
+type options struct {
+	valueFlag func(verb, name string) bool
+}
+
+func applyOptions(opts []Option) options {
+	var cfg options
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
+// takesValue reports whether a bare "--name" of verb consumes the next word.
+func (o options) takesValue(verb, name string) bool {
+	return o.valueFlag != nil && o.valueFlag(verb, name)
+}
+
+// WithValueFlags makes Parse treat a bare "--name" (no "=value") as consuming the
+// *next* word as its value, for any flag where takesValue(verb, name) reports true;
+// flags it reports false for keep the default bare-boolean meaning ("true", no word
+// consumed). A next word that is itself a flag ("--...") is never taken as the value:
+// the flag is missing its value. Render, given the same option, never writes such a flag bare. Parse
+// itself has no notion of a flag's declared type — that lives in a manifest (or a
+// protocol's own DSL) the caller already has in hand — so the decision is injected
+// here rather than hardcoded: the extension tool DSL uses this to accept
+// "--path value" for a string/integer/number/array parameter while still rejecting a
+// boolean flag that would otherwise swallow the following word.
+func WithValueFlags(takesValue func(verb, name string) bool) Option {
+	return func(o *options) { o.valueFlag = takesValue }
+}
+
 // Parse 解析富命令串。
-func Parse(s string) (*Command, error) {
+func Parse(s string, opts ...Option) (*Command, error) {
 	words, err := Words(s)
 	if err != nil {
 		return nil, err
@@ -157,8 +195,12 @@ func Parse(s string) (*Command, error) {
 		return nil, err
 	}
 
+	cfg := applyOptions(opts)
+
 	c := &Command{Verb: verb, Flags: map[string]string{}}
-	for _, w := range words[1:] {
+	rest := words[1:]
+	for i := 0; i < len(rest); i++ {
+		w := rest[i]
 		if !strings.HasPrefix(w, "--") {
 			c.Args = append(c.Args, w)
 			continue
@@ -171,7 +213,17 @@ func Parse(s string) (*Command, error) {
 			return nil, fmt.Errorf("invalid flag name %q: use only letters, digits, and _@%%+=:,./- characters", name)
 		}
 		if !found {
-			value = "true"
+			if cfg.takesValue(verb, name) {
+				if i+1 >= len(rest) || strings.HasPrefix(rest[i+1], "--") {
+					// The next word is another flag: this one has no value. A value that
+					// really starts with "--" is written --name=--value.
+					return nil, fmt.Errorf("flag --%s requires a value (write --%s=<value> for one starting with --)", name, name)
+				}
+				i++
+				value = rest[i]
+			} else {
+				value = "true"
+			}
 		}
 		if _, dup := c.Flags[name]; dup {
 			return nil, fmt.Errorf("duplicate flag: --%s", name)
@@ -235,14 +287,18 @@ func validateVerb(verb string) error {
 // safeUnquotedWord（flag 名）在入口处过滤过，保证不会是需要引号的字符串。
 // 手写 Command 字面量（测试代码里常见）不受这层保护，调用方需自行保证 Verb/flag
 // 名合法。
-func (c *Command) Render() string {
+//
+// 值为 "true" 的 flag 默认渲染成裸 --name；传给 Parse 的 WithValueFlags 也要传给这里，
+// 取值 flag 才会写成 --name=true，而不是一个重新解析时会吞掉下一个词的裸 flag。
+func (c *Command) Render(opts ...Option) string {
+	cfg := applyOptions(opts)
 	parts := make([]string, 0, 1+len(c.Args)+len(c.Flags))
 	parts = append(parts, c.Verb)
 	for _, a := range c.Args {
 		parts = append(parts, QuoteIfNeeded(a))
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Flags)) {
-		if c.Flags[name] == "true" {
+		if c.Flags[name] == "true" && !cfg.takesValue(c.Verb, name) {
 			parts = append(parts, "--"+name)
 			continue
 		}

@@ -51,7 +51,28 @@ interface ConnectionMethodFieldsProps {
   onChange: (patch: Partial<ConnectionFormFields>) => void;
   /** 排除可选 SSH 资产(如自身),不能把自己选作跳板机/隧道。 */
   excludeIds?: number[];
+  /**
+   * 扩展资产类型专用:声明了 connection.sshTunnel 时传入,在同一个"连接方式"选择器里追加
+   * 一个 SSH 隧道选项。隧道资产走资产的 sshTunnelId 列,与代理链走宿主保留键是两条独立的
+   * 持久化路径,因此隧道资产 id 由调用方独立维护、独立传入,不占用
+   * value.proxyChainLayers / value.connectionType。三种方式互斥:选中隧道时代理链与直连
+   * 一样被清空(本次会话切回 chain 时恢复),切离隧道时隧道资产 id 保留。
+   * 省略时(内置类型)渲染与之前完全一致:Direct / Tunnel+Proxy 两项。
+   */
+  sshTunnel?: {
+    assetId: number;
+    onAssetIdChange: (assetId: number) => void;
+    /** 隧道方式当前是否选中(与 chain 互斥),由调用方在自己的表单状态里维护。 */
+    active: boolean;
+    onActiveChange: (active: boolean) => void;
+    testId?: string;
+  };
+  /** 是否出现"代理链"(chain)选项;省略时默认 true,内置类型行为不变。扩展类型只声明了
+   *  connection.sshTunnel、未声明 proxyChain 时传 false,隐藏链路构建器。 */
+  showChain?: boolean;
 }
+
+type ConnectionMethod = "direct" | "tunnel" | "chain";
 
 interface LayerVisual {
   icon: ComponentType<{ className?: string }>;
@@ -97,11 +118,19 @@ const LAYER_VISUAL: Record<ProxyChainLayerType, LayerVisual> = {
   },
 };
 
-/** 连接方式与代理链配置,SSH 与数据库族共用。 */
-export function ConnectionMethodFields({ value, onChange, excludeIds }: ConnectionMethodFieldsProps) {
+/** 连接方式与代理链配置,SSH 与数据库族共用;扩展资产类型经 sshTunnel/showChain 复用同一个选择器。 */
+export function ConnectionMethodFields({
+  value,
+  onChange,
+  excludeIds,
+  sshTunnel,
+  showChain = true,
+}: ConnectionMethodFieldsProps) {
   const { t } = useTranslation();
   const layers = useMemo(() => value.proxyChainLayers || [], [value.proxyChainLayers]);
-  const isChainMode = value.connectionType !== "direct";
+  const chainConfigured = showChain && value.connectionType !== "direct";
+  const method: ConnectionMethod = sshTunnel?.active ? "tunnel" : chainConfigured ? "chain" : "direct";
+  const isChainMode = method === "chain";
   const [selectedLayerIdValue, setSelectedLayerId] = useState("");
   const selectedLayerId = layers.some((l) => l.id === selectedLayerIdValue) ? selectedLayerIdValue : "";
   const errors = useMemo(() => proxyChainLayerErrors(layers), [layers]);
@@ -136,11 +165,17 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
     updateLayers([...layers, layer]);
     setSelectedLayerId(layer.id);
   };
-  // 记住切到「直连」前的链路,切回时恢复;避免误触直连丢失已配置的代理节点。
-  // 「直连」仍会清空持久化的 proxyChainLayers(build 语义不变),恢复只发生在本次会话的来回切换。
+  // 记住切离代理链(到「直连」或隧道)前的链路,切回时恢复;避免误触丢失已配置的代理节点。
+  // 切离仍会清空持久化的 proxyChainLayers(build 语义不变),恢复只发生在本次会话的来回切换。
   const stashedLayers = useRef<ProxyChainLayerForm[]>([]);
-  const setMode = (mode: "direct" | "chain") => {
-    if (mode === "direct") {
+  const setMethod = (next: ConnectionMethod) => {
+    // 隧道方式只开关"是否选中";隧道资产 id 留在调用方状态里不清零,切回 tunnel 时不用重选。
+    if (sshTunnel && sshTunnel.active !== (next === "tunnel")) {
+      sshTunnel.onActiveChange(next === "tunnel");
+    }
+    // 直连与隧道都不走代理链:与直连同样清空持久化的链路(否则一条看不见的链会随保存/
+    // 测试连接一起发出),切回 chain 时从暂存恢复。
+    if (next !== "chain") {
       if (layers.length) stashedLayers.current = layers;
       onChange({
         connectionType: "direct",
@@ -168,14 +203,24 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
     <div className="flex flex-col gap-4">
       <Field label={t("asset.connectionType")}>
         <Segmented
-          value={isChainMode ? "chain" : "direct"}
-          onChange={(v) => setMode(v as "direct" | "chain")}
+          value={method}
+          onChange={setMethod}
           aria-label={t("asset.connectionType")}
           options={[
-            { value: "direct", label: t("asset.connectionDirect") },
-            { value: "chain", label: t("asset.connectionTunnelProxy") },
+            { value: "direct" as const, label: t("asset.connectionDirect") },
+            ...(sshTunnel ? [{ value: "tunnel" as const, label: t("asset.sshTunnel") }] : []),
+            ...(showChain ? [{ value: "chain" as const, label: t("asset.connectionTunnelProxy") }] : []),
           ]}
         />
+        {sshTunnel && method === "tunnel" && (
+          <AssetSelect
+            value={sshTunnel.assetId}
+            onValueChange={sshTunnel.onAssetIdChange}
+            filterType="ssh"
+            placeholder={t("asset.jumpHostNone")}
+            testId={sshTunnel.testId}
+          />
+        )}
       </Field>
 
       {isChainMode && (

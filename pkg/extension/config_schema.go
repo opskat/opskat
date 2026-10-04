@@ -1,11 +1,53 @@
 package extension
 
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+)
+
+// ConfigFieldValues reads the named fields of an asset config as strings — the
+// values credential injection renders into requests (AuthDef bindings). A field
+// absent or null is omitted, not ""; a number or bool renders as its JSON text. It
+// does not decrypt: a stored config's password fields come back as ciphertext, and
+// the caller that holds the key decrypts them (AssetConfigGetter.AssetCredentialValues).
+// A config that does not parse is an error: injecting nothing would send the request
+// without the credentials the user configured.
+func ConfigFieldValues(config json.RawMessage, fields []string) (map[string]string, error) {
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	values := make(map[string]string, len(fields))
+	for _, field := range fields {
+		raw, ok := cfg[field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			s = string(raw)
+		}
+		values[field] = s
+	}
+	return values, nil
+}
+
 // PasswordFieldsFromSchema extracts property names that have "format": "password"
 // from a JSON Schema configSchema.
 func PasswordFieldsFromSchema(schema map[string]any) []string {
-	if len(schema) == 0 {
-		return nil
-	}
+	return fieldsWithFormat(schema, "password")
+}
+
+// EndpointFieldsFromSchema extracts property names that have "format": "endpoint"
+// from a JSON Schema configSchema: the fields whose value (a URL or host:port) an
+// extension declaring network.assetEndpoint may connect to.
+func EndpointFieldsFromSchema(schema map[string]any) []string {
+	return fieldsWithFormat(schema, "endpoint")
+}
+
+// fieldsWithFormat returns the sorted names of the properties declaring format.
+func fieldsWithFormat(schema map[string]any, format string) []string {
 	props, ok := schema["properties"].(map[string]any)
 	if !ok {
 		return nil
@@ -16,9 +58,49 @@ func PasswordFieldsFromSchema(schema map[string]any) []string {
 		if !ok {
 			continue
 		}
-		if fmt, ok := prop["format"].(string); ok && fmt == "password" {
+		if f, ok := prop["format"].(string); ok && f == format {
 			fields = append(fields, name)
 		}
 	}
+	sort.Strings(fields)
 	return fields
+}
+
+// ConfigSchemaProperties returns the declared property names of a configSchema,
+// sorted. Empty for a schema without a properties object.
+func ConfigSchemaProperties(schema map[string]any) []string {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ConfigSchemaRequired returns the property names listed in a configSchema's
+// "required" array, sorted. Entries that are not declared properties are dropped:
+// a required name nothing declares can never be supplied.
+func ConfigSchemaRequired(schema map[string]any) []string {
+	raw, ok := schema["required"].([]any)
+	if !ok {
+		return nil
+	}
+	props, _ := schema["properties"].(map[string]any)
+	names := make([]string, 0, len(raw))
+	for _, item := range raw {
+		name, ok := item.(string)
+		if !ok {
+			continue
+		}
+		if _, declared := props[name]; !declared {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

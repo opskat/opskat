@@ -134,6 +134,47 @@ func TestDialContext(t *testing.T) {
 	})
 }
 
+func TestResolve(t *testing.T) {
+	loopback := net.ParseIP("127.0.0.1")
+
+	Convey(".local 主机名走单播 DNS，不依赖系统解析器", t, func() {
+		_, unicast := startFakeDNS(t, map[string]net.IP{"srv01.corp.local": loopback})
+		useUnicastResolver(t, unicast)
+		system, systemResolver := startFakeDNS(t, nil)
+
+		d := &Dialer{Dialer: net.Dialer{Resolver: systemResolver}}
+		ips, err := d.Resolve(context.Background(), "tcp", "SRV01.Corp.LOCAL.")
+		So(err, ShouldBeNil)
+		So(ips, ShouldHaveLength, 1)
+		So(ips[0].Equal(loopback), ShouldBeTrue)
+		So(system.queries.Load(), ShouldEqual, 0)
+	})
+
+	Convey("单播 DNS 查不到的 .local 交回系统解析器", t, func() {
+		_, unicast := startFakeDNS(t, nil)
+		useUnicastResolver(t, unicast)
+		_, system := startFakeDNS(t, map[string]net.IP{"printer.local": loopback})
+
+		d := &Dialer{Dialer: net.Dialer{Resolver: system}}
+		ips, err := d.Resolve(context.Background(), "tcp", "printer.local")
+		So(err, ShouldBeNil)
+		So(ips, ShouldHaveLength, 1)
+		So(ips[0].Equal(loopback), ShouldBeTrue)
+	})
+
+	Convey("非 .local 主机名照常走系统解析器，不查单播 DNS", t, func() {
+		dns, unicast := startFakeDNS(t, map[string]net.IP{"db.corp.example": loopback})
+		useUnicastResolver(t, unicast)
+		_, system := startFakeDNS(t, map[string]net.IP{"db.corp.example": loopback})
+
+		d := &Dialer{Dialer: net.Dialer{Resolver: system}}
+		ips, err := d.Resolve(context.Background(), "tcp", "db.corp.example")
+		So(err, ShouldBeNil)
+		So(ips, ShouldHaveLength, 1)
+		So(dns.queries.Load(), ShouldEqual, 0)
+	})
+}
+
 func TestIsLocalAddr(t *testing.T) {
 	Convey("识别主机名、host:port 与 URL 中的 .local 主机", t, func() {
 		for addr, want := range map[string]bool{

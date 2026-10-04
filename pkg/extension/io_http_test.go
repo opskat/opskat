@@ -2,6 +2,8 @@
 package extension
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -32,7 +34,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL + "/test",
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 			So(h, ShouldNotBeNil)
 
@@ -63,7 +65,7 @@ func TestHTTPHandle(t *testing.T) {
 				URL:          srv.URL + "/submit",
 				Headers:      map[string]string{"Content-Type": "application/json"},
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			n, err := h.Write([]byte(`{"key":"value"}`))
@@ -92,7 +94,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "POST",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			meta, err := h.Flush()
@@ -116,7 +118,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			_, err = h.Read(make([]byte, 10))
@@ -139,7 +141,7 @@ func TestHTTPHandle(t *testing.T) {
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			// Flush in a goroutine since the server blocks
@@ -171,45 +173,12 @@ func TestHTTPHandle(t *testing.T) {
 				URL:          srv.URL,
 				Headers:      map[string]string{"X-Custom": "test-value"},
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
 			So(err, ShouldBeNil)
 
 			_, err = h.Flush()
 			So(err, ShouldBeNil)
 			So(receivedHeader, ShouldEqual, "test-value")
-			So(h.Close(), ShouldBeNil)
-		})
-
-		Convey("custom dial function is used", func() {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte("tunneled"))
-			}))
-			defer srv.Close()
-
-			dialCalled := false
-			customDial := func(network, addr string) (net.Conn, error) {
-				dialCalled = true
-				// Delegate to real dialer so the request actually succeeds
-				return net.Dial(network, addr)
-			}
-
-			h, err := newHTTPHandle(IOOpenParams{
-				Method:       "GET",
-				URL:          srv.URL,
-				AllowPrivate: true, // httptest server binds to loopback
-			}, customDial)
-			So(err, ShouldBeNil)
-
-			meta, err := h.Flush()
-			So(err, ShouldBeNil)
-			So(meta.Status, ShouldEqual, 200)
-			So(dialCalled, ShouldBeTrue)
-
-			all, err := io.ReadAll(&readerFunc{fn: h.Read})
-			So(err, ShouldBeNil)
-			So(string(all), ShouldEqual, "tunneled")
-
 			So(h.Close(), ShouldBeNil)
 		})
 	})
@@ -220,7 +189,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 		mgr := NewIOHandleManager()
 		defer mgr.CloseAll()
 
-		Convey("OpenHTTP and Flush round-trip", func() {
+		Convey("OpenHTTPResource and Flush round-trip", func() {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
@@ -228,14 +197,16 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			id, meta, err := mgr.OpenHTTP(IOOpenParams{
+			res, err := OpenHTTPResource(IOOpenParams{
 				Method:       "GET",
 				URL:          srv.URL,
 				AllowPrivate: true, // httptest server binds to loopback
-			}, nil)
+			})
+			So(err, ShouldBeNil)
+			So(res.Meta.Status, ShouldEqual, 0) // no status yet before flush
+			id, err := mgr.Register(res)
 			So(err, ShouldBeNil)
 			So(id, ShouldBeGreaterThan, 0)
-			So(meta.Status, ShouldEqual, 0) // no status yet before flush
 
 			flushed, err := mgr.Flush(id)
 			So(err, ShouldBeNil)
@@ -253,7 +224,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 		Convey("Flush on non-HTTP handle returns error", func() {
 			// Register a plain handle (non-HTTP)
 			r := strings.NewReader("hello")
-			id, regErr := mgr.Register(r, nil, io.NopCloser(r), IOMeta{})
+			id, regErr := mgr.Register(&IOResource{Reader: r, Closer: io.NopCloser(r)})
 			So(regErr, ShouldBeNil)
 
 			_, err := mgr.Flush(id)
@@ -265,5 +236,72 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 			_, err := mgr.Flush(99999)
 			So(err, ShouldNotBeNil)
 		})
+	})
+}
+
+func TestDialGuard(t *testing.T) {
+	// recordDial 记录下游拨号收到的地址；failFor 中的地址拨号失败。
+	recordDial := func(got *[]string, failFor ...string) DialContextFunc {
+		return func(_ context.Context, _, addr string) (net.Conn, error) {
+			*got = append(*got, addr)
+			for _, f := range failFor {
+				if addr == f {
+					return nil, errors.New("connection refused")
+				}
+			}
+			c, _ := net.Pipe()
+			return c, nil
+		}
+	}
+	resolveTo := func(calls *int, ips ...string) resolveFunc {
+		return func(_ context.Context, _, _ string) ([]net.IP, error) {
+			*calls++
+			out := make([]net.IP, 0, len(ips))
+			for _, ip := range ips {
+				out = append(out, net.ParseIP(ip))
+			}
+			return out, nil
+		}
+	}
+
+	Convey("AllowPrivate 时不在本机解析，主机名原样交给下游拨号（隧道由远端解析）", t, func() {
+		var got []string
+		var resolves int
+		conn, err := dialGuard(recordDial(&got), resolveTo(&resolves), true)(context.Background(), "tcp", "only-remote.invalid:443")
+		So(err, ShouldBeNil)
+		_ = conn.Close()
+		So(got, ShouldResemble, []string{"only-remote.invalid:443"})
+		So(resolves, ShouldEqual, 0)
+	})
+
+	Convey("主机名只解析一次，拨的是检查过的 IP 而不是主机名", t, func() {
+		var got []string
+		var resolves int
+		guard := dialGuard(recordDial(&got, "203.0.113.10:443"), resolveTo(&resolves, "203.0.113.10", "2001:db8::1"), false)
+		conn, err := guard(context.Background(), "tcp", "api.example.com:443")
+		So(err, ShouldBeNil)
+		_ = conn.Close()
+		So(resolves, ShouldEqual, 1)
+		So(got, ShouldResemble, []string{"203.0.113.10:443", "[2001:db8::1]:443"})
+	})
+
+	Convey("解析结果含内网 IP 时拒绝，且不拨号", t, func() {
+		var got []string
+		var resolves int
+		guard := dialGuard(recordDial(&got), resolveTo(&resolves, "203.0.113.10", "10.0.0.5"), false)
+		_, err := guard(context.Background(), "tcp", "rebind.example.com:443")
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "resolves to private IP 10.0.0.5")
+		So(got, ShouldBeEmpty)
+	})
+
+	Convey("内网 IP 字面量直接拒绝，不解析", t, func() {
+		var got []string
+		var resolves int
+		_, err := dialGuard(recordDial(&got), resolveTo(&resolves), false)(context.Background(), "tcp", "127.0.0.1:8080")
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "private IP 127.0.0.1")
+		So(resolves, ShouldEqual, 0)
+		So(got, ShouldBeEmpty)
 	})
 }

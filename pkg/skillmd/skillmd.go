@@ -89,12 +89,8 @@ func Parse(raw string) (Skill, error) {
 // auto-formatting, and the underlying frontmatter can otherwise be entirely
 // well-formed.
 //
-// This exists so such input hard-fails instead of falling through to
-// ErrNoFrontmatter: at the pkg/extension boundary that sentinel means
-// "nothing was attempted, tolerate it and use the whole document as body" --
-// which would silently fold a near-miss frontmatter block into the body and
-// inject it into the system prompt as raw noise, exactly the failure mode
-// pkg/skillmd exists to avoid.
+// This exists so such input fails with an error that names the near-miss
+// instead of the generic ErrNoFrontmatter.
 func looksLikeFrontmatterAttempt(raw string) bool {
 	for _, line := range strings.Split(raw, "\n") {
 		trimmed := strings.TrimSpace(line)

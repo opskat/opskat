@@ -26,7 +26,7 @@ make install        # 安装前端依赖
 make dev            # 开发模式（热重载）
 ```
 
-完整命令列表（构建、opsctl CLI、扩展 devserver、覆盖率等）见 [docs/DEVELOP.md → Common Commands](./DEVELOP.md#common-commands)。
+完整命令列表（构建、opsctl CLI、扩展开发、覆盖率等）见 [docs/DEVELOP.md → Common Commands](./DEVELOP.md#common-commands)。
 
 > ⚠️ 部分文件是**生成物**（如 `frontend/wailsjs/`、`mock_*/`、lockfile），不要手工编辑。清单见 [docs/DEVELOP.md → Generated / auto-managed files](./DEVELOP.md#️-generated--auto-managed-files)。
 

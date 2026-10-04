@@ -14,12 +14,17 @@ import {
   Trash2,
   Boxes,
 } from "lucide-react";
-import { Button, Input, Textarea } from "@opskat/ui";
+import { Button, Textarea } from "@opskat/ui";
 import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
 import { hasApprovalCommandEdits } from "@/lib/approval";
+import { ApprovalClassification } from "./ApprovalClassification";
+import { ExtensionRequestDetail } from "./ExtensionRequestDetail";
+import { TruncatedText } from "./TruncatedText";
+import { RememberPatternEditor } from "./RememberPatternEditor";
+import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
 import { GENERIC_APPROVAL_TYPE, genericApprovalOp } from "./genericApprovalOp";
 
 interface ApprovalBlockProps {
@@ -42,13 +47,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   const localToolName = block.approvalToolName || items[0]?.type || "";
 
   // local_tool 在 rememberMode 用 approvalPatterns（多 sub-command 时多行），
-  // 其它 kind 沿用单条 item.command。
+  // 其它 kind 沿用单条 item 的「记住」初值（命令，或分类过的扩展审批的 <action>:<resource>）。
   const initialPatterns = isLocalTool ? (block.approvalPatterns || []).join("\n") : "";
 
   const [editedCommands, setEditedCommands] = useState<Record<number, string>>(() => {
     const map: Record<number, string> = {};
     items.forEach((item, i) => {
-      map[i] = isLocalTool && i === 0 ? initialPatterns || item.command : item.command;
+      map[i] = isLocalTool && i === 0 ? initialPatterns || item.command : rememberPrefill(item);
     });
     return map;
   });
@@ -57,6 +62,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
 
   // 确认/拒绝后不再显示
   if (!isPending) return null;
+
+  const rememberValues = items.map((_item, i) => editedCommands[i] || "");
 
   // detail 是这次传输唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句
   // "cp src → dst"，哪怕批量只有一条也不为空）；batch_exec 的批量项没有这个概念——
@@ -86,8 +93,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       {item.type === GENERIC_APPROVAL_TYPE && item.detail && (
         // 通用资产的目标地址 / 程序名是批准时必须看到的，与单条审批一样常驻。
         <div className="text-[10px] text-muted-foreground/80">
-          <div className="select-none">{t(detailSummaryKey(item.type))}</div>
-          <DetailPre text={item.detail} />
+          <div className="select-none">{t(detailSummaryKey(item))}</div>
+          <DetailPre text={item.detail} structured={!!item.action} />
         </div>
       )}
     </div>
@@ -100,8 +107,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
     resp.decision = decision;
 
     const carriesEdited = kind === "grant" || ((kind === "single" || kind === "local_tool") && decision === "allowAll");
-    const commands = items.map((item, i) => editedCommands[i] || item.command);
-    if (carriesEdited && decision !== "deny" && hasApprovalCommandEdits(items, commands)) {
+    const proposed = items.map((item) => ({ command: rememberPrefill(item) }));
+    const commands = proposed.map((p, i) => editedCommands[i] || p.command);
+    if (carriesEdited && decision !== "deny" && hasApprovalCommandEdits(proposed, commands)) {
       resp.edited_items = items.map((item, i) => {
         const edited = new permission.ApprovalItem();
         edited.type = item.type;
@@ -181,6 +189,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     </>
                   )}
                 </div>
+                <ApprovalClassification
+                  action={item.action}
+                  resource={item.resource}
+                  resources={item.resources}
+                  className="text-[11px]"
+                  labelClassName="text-warning"
+                />
                 {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}
@@ -194,7 +209,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                       data-testid="ai-approval-command"
                       className="select-text block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
                     >
-                      {item.command}
+                      <TruncatedText testId="ai-approval-command-text" text={item.command} />
                     </code>
                   </div>
                 )}
@@ -203,13 +218,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
                     // 通用资产的目标地址 / 程序名是批准时必须看到的，同样常驻。
                     <div className="text-[10px] text-muted-foreground/80">
-                      <div className="select-none">{t(detailSummaryKey(item.type))}</div>
-                      <DetailPre text={item.detail} />
+                      <div className="select-none">{t(detailSummaryKey(item))}</div>
+                      <DetailPre text={item.detail} structured={!!item.action} />
                     </div>
                   ) : (
                     <details className="text-[10px] text-muted-foreground/80">
-                      <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
-                      <DetailPre text={item.detail} />
+                      <summary className="cursor-pointer select-none">{t(detailSummaryKey(item))}</summary>
+                      <DetailPre text={item.detail} structured={!!item.action} />
                     </details>
                   ))}
               </div>
@@ -228,19 +243,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
 
       {/* Remember mode pattern editor */}
       {kind === "single" && rememberMode && (
-        <div className="space-y-1.5 pt-0.5">
-          <div className="text-[10px] text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
-          {items.map((_item, i) => (
-            <Input
-              key={i}
-              value={editedCommands[i] || ""}
-              onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
-              className="font-mono text-[11px] h-8 bg-background border-border"
-              placeholder={t("opsctlApproval.patternPlaceholder")}
-            />
-          ))}
-          <div className="text-[10px] text-muted-foreground/70">{t("opsctlApproval.patternHint")}</div>
-        </div>
+        <RememberPatternEditor
+          items={items}
+          values={rememberValues}
+          onChange={(i, value) => setEditedCommands((prev) => ({ ...prev, [i]: value }))}
+          textClassName="text-[10px]"
+          inputClassName="text-[11px] h-8 bg-background border-border"
+        />
       )}
       {kind === "local_tool" && rememberMode && (
         <div className="space-y-1.5 pt-0.5">
@@ -315,6 +324,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   size="sm"
                   data-testid="ai-approval-allow-all"
                   className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
+                  disabled={kind === "single" && hasRememberPatternErrors(items, rememberValues)}
                   onClick={() => respond("allowAll")}
                 >
                   {t("ai.approvalRememberAndAllow")}
@@ -346,9 +356,15 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   );
 });
 
-// detail 的展开标题按审批类型取：本地写入看内容、本地编辑看改动、删除看不可撤销影响、文件传输看方向。
-function detailSummaryKey(type: string): string {
-  switch (type) {
+// detail 的展开标题按审批项取：扩展类型（有 action）看请求详情、本地写入看内容、
+// 本地编辑看改动、删除看不可撤销影响，其余（cp）看传输方向。action 判据放在最前面——
+// 扩展的 item.type 是任意的动态资产类型字符串，不在下面这张固定表里，落进 default
+// 会显示"查看传输详情"这种文不对题的文案。
+function detailSummaryKey(item: { type: string; action?: string }): string {
+  if (item.action) {
+    return "ai.approvalRequestDetail";
+  }
+  switch (item.type) {
     case "local_write":
       return "ai.approvalLocalToolContentPreview";
     case "local_edit":
@@ -362,11 +378,16 @@ function detailSummaryKey(type: string): string {
   }
 }
 
-function DetailPre({ text }: { text: string }) {
+// structured：扩展请求的 detail 是 {tool, args} JSON，逐参数展示并截断超长值。
+function DetailPre({ text, structured }: { text: string; structured: boolean }) {
   return (
-    <pre className="select-text mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
-      {text}
-    </pre>
+    <div className="mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5">
+      {structured ? (
+        <ExtensionRequestDetail detail={text} />
+      ) : (
+        <pre className="select-text font-mono whitespace-pre-wrap break-all">{text}</pre>
+      )}
+    </div>
   );
 }
 

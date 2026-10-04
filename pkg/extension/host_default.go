@@ -2,26 +2,53 @@
 package extension
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"sync/atomic"
+	"net/http"
+	"sync"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
-// TunnelDialer dials a TCP address through an SSH tunnel.
-type TunnelDialer interface {
-	Dial(tunnelAssetID int64, addr string) (net.Conn, error)
+// DialContextFunc opens a network connection, like net.Dialer.DialContext.
+type DialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// AssetDialer resolves the host-owned connection path (SSH tunnel, proxy chain,
+// TLS) to an asset's endpoint. An implementation is scoped to one extension and
+// refuses an asset whose type that extension does not register.
+type AssetDialer interface {
+	// DialContextFor returns the dial function, TLS config, and a fingerprint of
+	// assetID's connection settings. dial is nil when the asset connects
+	// directly (no tunnel/proxy chain); tlsConfig is nil when the asset's type
+	// does not declare/enable TLS. fingerprint changes whenever the resolved
+	// tunnel, proxy chain or TLS settings change — it lets a cached HTTP client
+	// (see DefaultHostProvider.httpClients) detect that it was built for a
+	// since-changed configuration and must be rebuilt rather than reused. An
+	// error means the path cannot be built; it must be returned, never
+	// downgraded to a direct or unverified connection.
+	DialContextFor(ctx context.Context, assetID int64) (dial DialContextFunc, tlsConfig *tls.Config, fingerprint string, err error)
 }
 
-// Dependency interfaces for DefaultHostProvider
+// AssetConfigGetter reads the config of the assets an extension owns.
 type AssetConfigGetter interface {
+	// GetAssetConfig returns the config the guest sees through
+	// ctx.AssetConfig(): password fields as plaintext or opaque handles, per the
+	// extension's credentials capability.
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
+	// AssetCredentialValues returns the named config fields of assetID as
+	// strings, format:"password" fields decrypted whatever the extension's
+	// credentials capability — it feeds host-side credential injection
+	// (AuthDef) only, and its result must never reach the guest. A field the
+	// config lacks is absent from the map; a password field that does not
+	// decrypt is an error.
+	AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error)
 }
 
 type FileDialogOpener interface {
@@ -34,119 +61,224 @@ type KVStore interface {
 }
 
 type ActionEventHandler interface {
-	OnActionEvent(eventType string, data json.RawMessage) error
+	OnActionEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type DefaultHostConfig struct {
-	Logger           *zap.Logger
-	AssetConfigs     AssetConfigGetter
-	FileDialogs      FileDialogOpener
-	KV               KVStore
-	ActionEvents     ActionEventHandler
-	TunnelDialer     TunnelDialer // SSH tunnel dialer (nil = no tunnel support)
-	AssetSSHTunnelID int64        // Current asset's SSH tunnel ID (0 = direct)
+	Logger       *zap.Logger
+	AssetConfigs AssetConfigGetter
+	FileDialogs  FileDialogOpener
+	KV           KVStore
+	ActionEvents ActionEventHandler
+	AssetDialer  AssetDialer // connection path of the invocation's asset (nil = always direct)
+	// ExtensionName scopes this provider's cached HTTP clients (httpClientCache)
+	// in the process-wide registry (registerHTTPClientCache / DiscardHostHTTPCache)
+	// so the extension lifecycle (internal/service/extension_svc) can release them
+	// on disable/uninstall, and a reinstall's new provider can release the version
+	// it supersedes. Left empty, the provider still caches per-instance — it is
+	// just invisible to that lifecycle, which is fine for callers (mainly tests)
+	// that never disable/uninstall/reinstall the extension they build one for.
+	ExtensionName string
 }
 
 type DefaultHostProvider struct {
-	cfg          DefaultHostConfig
-	io           *IOHandleManager
-	activeCancel atomic.Pointer[ActionCancellation]
+	cfg         DefaultHostConfig
+	httpClients *httpClientCache
 }
 
 func NewDefaultHostProvider(cfg DefaultHostConfig) *DefaultHostProvider {
-	return &DefaultHostProvider{
-		cfg: cfg,
-		io:  NewIOHandleManager(),
+	cache := newHTTPClientCache(cfg.ExtensionName, cfg.Logger)
+	if cfg.ExtensionName != "" {
+		registerHTTPClientCache(cfg.ExtensionName, cache)
 	}
+	return &DefaultHostProvider{cfg: cfg, httpClients: cache}
 }
 
-func (h *DefaultHostProvider) IOOpen(params IOOpenParams) (uint32, IOMeta, error) {
+func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error) {
 	switch params.Type {
 	case "file":
-		return h.io.OpenFile(params.Path, params.Mode)
+		return OpenFileResource(params.Path, params.Mode)
 	case "http":
-		var dial DialFunc
-		if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
-			tunnelID := h.cfg.AssetSSHTunnelID
-			dial = func(network, addr string) (net.Conn, error) {
-				return h.cfg.TunnelDialer.Dial(tunnelID, addr)
-			}
+		if asset == nil {
+			// Not an asset endpoint: a direct, single-use client — no connection
+			// path to apply and no asset to key a cache on.
+			return OpenHTTPResource(params)
 		}
-		return h.io.OpenHTTP(params, dial)
+		dial, tlsConfig, fingerprint, err := h.assetDial(ctx, asset)
+		if err != nil {
+			return nil, err
+		}
+		// Credentials are resolved per request and ride on it, never on the
+		// cached client: the client outlives this call and serves the asset's
+		// requests to any target.
+		auth, err := h.resolveAuth(ctx, asset, params.Auth)
+		if err != nil {
+			return nil, err
+		}
+		if asset.AdHoc != nil {
+			// An ad-hoc call (test connection) will never be asked again the same
+			// way — nothing to key a cache entry on that would ever hit — so it
+			// gets a single-use client, like the unscoped path above, but still
+			// carries whatever credentials resolveAuth rendered.
+			client := buildSingleUseEndpointClient(dial, tlsConfig, params.AllowPrivate)
+			return openHTTPResourceWithClient(params, client, auth)
+		}
+		client, built := h.httpClients.getOrCreate(asset.ID, fingerprint, func() *http.Client {
+			return buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate)
+		})
+		if built {
+			logger.Ctx(ctx).Info("extension HTTP client cache miss, built new client",
+				zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID))
+		}
+		return openHTTPResourceWithClient(params, client, auth)
 	case "tcp":
-		return h.openTCP(params)
+		dial, tlsConfig, _, err := h.assetDial(ctx, asset)
+		if err != nil {
+			return nil, err
+		}
+		return openTCP(ctx, dial, tlsConfig, params, asset)
 	default:
-		return 0, IOMeta{}, fmt.Errorf("unknown IO type: %q", params.Type)
+		return nil, fmt.Errorf("unknown IO type: %q", params.Type)
 	}
 }
 
-func (h *DefaultHostProvider) openTCP(params IOOpenParams) (uint32, IOMeta, error) {
+// resolveAuth renders the asset's active auth group into the credentials to
+// inject; nil when the request carries no auth declaration or no group is
+// selected. Any failure to read or decrypt a referenced field fails the open —
+// sending the request without the credentials the user configured would be a
+// silent downgrade.
+func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, auth *HTTPAuth) (*requestAuth, error) {
+	if auth == nil {
+		return nil, nil
+	}
+	fail := func(err error) (*requestAuth, error) {
+		logger.Ctx(ctx).Error("extension credential injection failed",
+			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.Error(err))
+		return nil, fmt.Errorf("credentials of asset %q: %w", asset.Name, err)
+	}
+	var selected string
+	if auth.Def.Selector != "" {
+		values, err := h.credentialValues(ctx, asset, []string{auth.Def.Selector})
+		if err != nil {
+			return fail(err)
+		}
+		selected = values[auth.Def.Selector]
+	}
+	group := auth.Def.activeGroup(selected)
+	if group == nil {
+		logger.Ctx(ctx).Debug("extension asset selects no auth group",
+			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.String("selector", selected))
+		return nil, nil
+	}
+	values, err := h.credentialValues(ctx, asset, group.fields())
+	if err != nil {
+		return fail(err)
+	}
+	logger.Ctx(ctx).Debug("extension credentials injected for endpoint request",
+		zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID),
+		zap.String("group", group.When), zap.Int("bindings", len(group.Bindings)))
+	return &requestAuth{bindings: group.render(values), isEndpoint: auth.IsEndpoint}, nil
+}
+
+// credentialValues resolves the named config fields of asset as strings: from
+// the database for a saved asset, or out of an ad-hoc call's host-only
+// Credentials (already plaintext — see AdHocAssetConfig) for a test-connection
+// call, which has no database row to decrypt from in the first place.
+func (h *DefaultHostProvider) credentialValues(ctx context.Context, asset *AssetRef, fields []string) (map[string]string, error) {
+	if asset.AdHoc != nil {
+		return ConfigFieldValues(asset.AdHoc.Credentials, fields)
+	}
+	return h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, fields)
+}
+
+// assetDial resolves the connection path and TLS settings of the invocation's
+// asset; a nil dial means a direct dial, a nil tlsConfig means no TLS. A path
+// that cannot be built fails the open — falling back to a direct or unverified
+// connection would silently bypass what the user configured.
+func (h *DefaultHostProvider) assetDial(ctx context.Context, asset *AssetRef) (DialContextFunc, *tls.Config, string, error) {
+	if asset == nil || h.cfg.AssetDialer == nil {
+		return nil, nil, "", nil
+	}
+	if asset.AdHoc != nil {
+		dialer, ok := h.cfg.AssetDialer.(AdHocAssetDialer)
+		if !ok {
+			return nil, nil, "", fmt.Errorf("connection path of asset type %q: host does not support testing an ad-hoc connection", asset.Type)
+		}
+		dial, tlsConfig, err := dialer.DialContextForConfig(ctx, asset.Type, asset.AdHoc)
+		if err != nil {
+			logger.Ctx(ctx).Error("extension ad-hoc connection path failed",
+				zap.String("assetType", asset.Type), zap.Error(err))
+			return nil, nil, "", fmt.Errorf("connection path of asset type %q: %w", asset.Type, err)
+		}
+		return dial, tlsConfig, "", nil
+	}
+	dial, tlsConfig, fingerprint, err := h.cfg.AssetDialer.DialContextFor(ctx, asset.ID)
+	if err != nil {
+		logger.Ctx(ctx).Error("extension asset connection path failed",
+			zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))
+		return nil, nil, "", fmt.Errorf("connection path of asset %q: %w", asset.Name, err)
+	}
+	return dial, tlsConfig, fingerprint, nil
+}
+
+// InvalidateAssetHTTPClient drops assetID's cached HTTP client, closing its
+// idle connections — called (via internal/assetconn, wired in main.go) when
+// the asset's stored config changes or the asset is deleted, so the next open
+// dials fresh instead of reusing a connection built for the old configuration.
+func (h *DefaultHostProvider) InvalidateAssetHTTPClient(assetID int64) {
+	h.httpClients.invalidate(assetID)
+}
+
+func openTCP(ctx context.Context, dial DialContextFunc, tlsConfig *tls.Config, params IOOpenParams, asset *AssetRef) (*IOResource, error) {
 	if params.Addr == "" {
-		return 0, IOMeta{}, fmt.Errorf("tcp: addr is required")
+		return nil, fmt.Errorf("tcp: addr is required")
 	}
 	timeout := time.Duration(params.Timeout) * time.Millisecond
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
-
-	var conn net.Conn
-	var err error
-	if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
-		// NOTE: params.Timeout is not honored on the tunnel path — TunnelDialer.Dial
-		// uses its own default dial timeout. Callers that need tighter control should
-		// set a deadline on the resulting handle via IOSetDeadline.
-		conn, err = h.cfg.TunnelDialer.Dial(h.cfg.AssetSSHTunnelID, params.Addr)
-	} else {
-		dialer := &netdial.Dialer{Dialer: net.Dialer{Timeout: timeout}}
-		conn, err = dialer.Dial("tcp", params.Addr)
+	if dial == nil {
+		dial = (&netdial.Dialer{}).DialContext
 	}
-	if err != nil {
-		return 0, IOMeta{}, err
-	}
-
-	id, err := h.io.Register(conn, conn, conn, IOMeta{})
-	if err != nil {
-		_ = conn.Close()
-		return 0, IOMeta{}, err
-	}
-	return id, IOMeta{}, nil
-}
-
-func (h *DefaultHostProvider) IORead(handleID uint32, size int) ([]byte, error) {
-	buf := make([]byte, size)
-	n, err := h.io.Read(handleID, buf)
-	if n > 0 {
-		// Only io.EOF is safe to delay — the guest will get it on the next Read when n==0.
-		if err == nil || err == io.EOF {
-			return buf[:n], nil
-		}
-		// Real error occurred — surface it so the guest sees the failure rather than silent truncation.
-		return nil, fmt.Errorf("read handle %d: %w (had %d bytes)", handleID, err, n)
-	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := dial(dialCtx, "tcp", params.Addr)
 	if err != nil {
 		return nil, err
 	}
-	return buf[:0], nil
-}
-
-func (h *DefaultHostProvider) IOWrite(handleID uint32, data []byte) (int, error) {
-	return h.io.Write(handleID, data)
-}
-
-func (h *DefaultHostProvider) IOFlush(handleID uint32) (*IOMeta, error) {
-	return h.io.Flush(handleID)
-}
-
-func (h *DefaultHostProvider) IOClose(handleID uint32) error {
-	return h.io.Close(handleID)
-}
-
-func (h *DefaultHostProvider) IOSetDeadline(handleID uint32, kind string, unixNanos int64) error {
-	var t time.Time
-	if unixNanos != 0 {
-		t = time.Unix(0, unixNanos)
+	if tlsConfig == nil {
+		return NewConnResource(conn), nil
 	}
-	return h.io.SetDeadline(handleID, kind, t)
+	tlsConn, err := wrapTLS(dialCtx, conn, tlsConfig, params.Addr)
+	if err != nil {
+		fields := []zap.Field{zap.String("addr", params.Addr), zap.Error(err)}
+		if asset != nil {
+			fields = append(fields, zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type))
+		}
+		logger.Ctx(ctx).Error("extension asset TLS handshake failed", fields...)
+		return nil, fmt.Errorf("TLS handshake with %q: %w", params.Addr, err)
+	}
+	return NewConnResource(tlsConn), nil
+}
+
+// wrapTLS performs a client TLS handshake over conn, closing it on failure so
+// the caller never ends up with a half-open socket. addr's host becomes the
+// default ServerName when tlsConfig does not already set one.
+func wrapTLS(ctx context.Context, conn net.Conn, tlsConfig *tls.Config, addr string) (net.Conn, error) {
+	cfg := tlsConfig.Clone()
+	if cfg.ServerName == "" {
+		if host, _, err := net.SplitHostPort(addr); err == nil {
+			cfg.ServerName = host
+		} else {
+			cfg.ServerName = addr
+		}
+	}
+	tlsConn := tls.Client(conn, cfg)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return tlsConn, nil
 }
 
 func (h *DefaultHostProvider) GetAssetConfig(assetID int64) (json.RawMessage, error) {
@@ -195,22 +327,134 @@ func (h *DefaultHostProvider) KVSet(key string, value []byte) error {
 	return h.cfg.KV.Set(key, value)
 }
 
-func (h *DefaultHostProvider) ActionEvent(eventType string, data json.RawMessage) error {
+func (h *DefaultHostProvider) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
 	if h.cfg.ActionEvents == nil {
 		return nil
 	}
-	return h.cfg.ActionEvents.OnActionEvent(eventType, data)
+	return h.cfg.ActionEvents.OnActionEvent(invocationID, eventType, data)
 }
 
-func (h *DefaultHostProvider) ActionShouldStop() bool {
-	c := h.activeCancel.Load()
-	return c != nil && c.ShouldStop()
+// httpClientCache caches one *http.Client per asset, keyed by the asset id and
+// a fingerprint of the connection settings (SSH tunnel, proxy chain, TLS) that
+// determine how it dials — so a client is rebuilt, not reused, once those
+// settings change. It belongs to one DefaultHostProvider instance, which
+// itself belongs to one loaded extension (see the newHost factory in
+// main.go): entries are never shared across extensions, and a fresh load of
+// the same extension gets a fresh, empty cache.
+type httpClientCache struct {
+	extName string
+	logger  *zap.Logger
+
+	mu      sync.Mutex
+	entries map[int64]cachedHTTPClient
 }
 
-func (h *DefaultHostProvider) SetActiveCancellation(c *ActionCancellation) {
-	h.activeCancel.Store(c)
+type cachedHTTPClient struct {
+	fingerprint string
+	client      *http.Client
 }
 
-func (h *DefaultHostProvider) CloseAll() {
-	h.io.CloseAll()
+func newHTTPClientCache(extName string, l *zap.Logger) *httpClientCache {
+	return &httpClientCache{extName: extName, logger: l, entries: make(map[int64]cachedHTTPClient)}
+}
+
+// getOrCreate returns the cached client for assetID when its fingerprint still
+// matches, or builds (and caches) a new one via build otherwise. The returned
+// bool reports whether build ran (a cache miss) — callers use it to decide
+// whether the event is worth logging. A fingerprint mismatch means the
+// asset's connection settings changed since the cached client was built;
+// normally caught earlier by InvalidateAssetHTTPClient, checking it here too
+// means a stale client is never handed out even if that call is ever missed.
+func (c *httpClientCache) getOrCreate(assetID int64, fingerprint string, build func() *http.Client) (*http.Client, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.entries[assetID]; ok {
+		if entry.fingerprint == fingerprint {
+			return entry.client, false
+		}
+		closeIdleHTTPClient(entry.client)
+	}
+	client := build()
+	c.entries[assetID] = cachedHTTPClient{fingerprint: fingerprint, client: client}
+	return client, true
+}
+
+// invalidate drops and closes assetID's cached client, if any. Returns
+// whether there was one.
+func (c *httpClientCache) invalidate(assetID int64) bool {
+	c.mu.Lock()
+	entry, ok := c.entries[assetID]
+	if ok {
+		delete(c.entries, assetID)
+	}
+	c.mu.Unlock()
+	if ok {
+		closeIdleHTTPClient(entry.client)
+	}
+	return ok
+}
+
+// closeAll drops and closes every cached client. Returns whether there was
+// anything to close.
+func (c *httpClientCache) closeAll() bool {
+	c.mu.Lock()
+	entries := c.entries
+	c.entries = make(map[int64]cachedHTTPClient)
+	c.mu.Unlock()
+	for _, entry := range entries {
+		closeIdleHTTPClient(entry.client)
+	}
+	if len(entries) > 0 && c.logger != nil {
+		c.logger.Info("extension HTTP client cache discarded",
+			zap.String("extension", c.extName), zap.Int("entries", len(entries)))
+	}
+	return len(entries) > 0
+}
+
+// closeIdleHTTPClient releases a cached client's pooled connections instead of
+// leaving them to expire on the transport's own idle timeout — the client is
+// being discarded (invalidated, or superseded by a reinstall/disable), so
+// nothing will read from that pool again.
+func closeIdleHTTPClient(client *http.Client) {
+	client.CloseIdleConnections()
+}
+
+// hostHTTPCacheRegistry tracks the live httpClientCache for each loaded
+// extension by name, so the extension lifecycle (internal/service/extension_svc)
+// can release cached keep-alive connections on disable/uninstall, and so a
+// reinstall's new DefaultHostProvider can release the version it replaces —
+// without pkg/extension depending on that layer (DefaultHostProvider's
+// dependencies are all injected the other way around, e.g. AssetDialer).
+// Same-name registration always supersedes: the loader never keeps two live
+// providers under one name, so the superseded one will never be called again,
+// matching the invariant internal/assetconn documents for its own registry.
+var (
+	hostHTTPCacheRegistryMu sync.Mutex
+	hostHTTPCacheRegistry   = map[string]*httpClientCache{}
+)
+
+func registerHTTPClientCache(extName string, cache *httpClientCache) {
+	hostHTTPCacheRegistryMu.Lock()
+	old := hostHTTPCacheRegistry[extName]
+	hostHTTPCacheRegistry[extName] = cache
+	hostHTTPCacheRegistryMu.Unlock()
+	if old != nil {
+		old.closeAll()
+	}
+}
+
+// DiscardHostHTTPCache releases extName's cached HTTP clients (closing their
+// idle connections) and forgets it. Call this when an extension is disabled or
+// uninstalled — nothing will re-register the name afterward, unlike a
+// reinstall where the new provider's own construction handles it. Returns
+// whether there was a cache to discard.
+func DiscardHostHTTPCache(extName string) bool {
+	hostHTTPCacheRegistryMu.Lock()
+	cache, ok := hostHTTPCacheRegistry[extName]
+	delete(hostHTTPCacheRegistry, extName)
+	hostHTTPCacheRegistryMu.Unlock()
+	if !ok {
+		return false
+	}
+	return cache.closeAll()
 }

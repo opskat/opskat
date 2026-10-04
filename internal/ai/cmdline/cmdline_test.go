@@ -575,3 +575,70 @@ func TestParseRender_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_WithValueFlags pins the opt-in "--name value" (space-separated) flag
+// form: Parse's default (no Option) never changes — a bare "--name" always
+// means boolean "true", which is what mongo/kafka/etcd/k8s rely on. Only a caller
+// that passes WithValueFlags (the extension tool DSL, keyed off each tool's
+// manifest-declared parameter type) gets space-separated values, and only for the
+// flags its predicate marks true.
+func TestParse_WithValueFlags(t *testing.T) {
+	takesValue := func(verb, name string) bool { return name == "path" }
+
+	t.Run("非 boolean 声明的 flag 消费下一个词", func(t *testing.T) {
+		// 值本身单引号包裹（Words 的输入永远是这样一个已经词法安全的串——上游要么是
+		// 手写字面量，要么经 QuoteIfNeeded 加过引号），"?" "&" 这些字符落在值里，
+		// Parse 只是把它们当成 path 的值，不重新解释。
+		c, err := Parse(`request --path '/x?a=1&b=2'`, WithValueFlags(takesValue))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c.Flags["path"] != "/x?a=1&b=2" {
+			t.Fatalf("Flags[path] = %q, want %q", c.Flags["path"], "/x?a=1&b=2")
+		}
+		if len(c.Args) != 0 {
+			t.Fatalf("Args = %#v, want none (the value must be consumed as path's value, not left as a positional arg)", c.Args)
+		}
+	})
+
+	t.Run("predicate 为 false 的 flag 不吞下一个词", func(t *testing.T) {
+		c, err := Parse(`request --verbose extra`, WithValueFlags(takesValue))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c.Flags["verbose"] != "true" {
+			t.Fatalf("Flags[verbose] = %q, want %q (bare boolean)", c.Flags["verbose"], "true")
+		}
+		if !reflect.DeepEqual(c.Args, []string{"extra"}) {
+			t.Fatalf("Args = %#v, want [\"extra\"] (must not be swallowed by --verbose)", c.Args)
+		}
+	})
+
+	t.Run("--flag=value 显式赋值不受 predicate 影响", func(t *testing.T) {
+		c, err := Parse(`request --path=/a --verbose=false`, WithValueFlags(takesValue))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c.Flags["path"] != "/a" || c.Flags["verbose"] != "false" {
+			t.Fatalf("Flags = %#v, want path=/a verbose=false", c.Flags)
+		}
+	})
+
+	t.Run("值缺失报错", func(t *testing.T) {
+		if _, err := Parse(`request --path`, WithValueFlags(takesValue)); err == nil {
+			t.Fatalf("Parse(%q) = nil error, want rejection (no value for --path)", "request --path")
+		}
+	})
+
+	t.Run("下一个词是 flag 时不当作值吞掉", func(t *testing.T) {
+		// "--path --verbose" is a --path missing its value, not path="--verbose" with
+		// --verbose silently dropped.
+		if c, err := Parse(`request --path --verbose`, WithValueFlags(takesValue)); err == nil {
+			t.Fatalf("Parse = %#v, want rejection (--path has no value)", c.Flags)
+		}
+		c, err := Parse(`request --path=--verbose`, WithValueFlags(takesValue))
+		if err != nil || c.Flags["path"] != "--verbose" {
+			t.Fatalf("Parse(--path=--verbose) = %#v, %v; a value starting with -- is written with =", c, err)
+		}
+	})
+}

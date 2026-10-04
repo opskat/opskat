@@ -1,7 +1,12 @@
 package permission
 
 import (
+	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/stretchr/testify/assert"
@@ -94,5 +99,47 @@ func TestSupportsGrantApprovalUsesPermissionRegistry(t *testing.T) {
 	}
 	for _, approvalType := range []string{"create", "update", "delete", "ext_tool", "unknown"} {
 		assert.False(t, SupportsGrantApproval(approvalType), approvalType)
+	}
+}
+
+// A type registered with a classifier is published together with it: a
+// concurrent HandleConfirm that finds the type must also find its classifier,
+// or it would treat an extension call as unclassified and persist a raw-command
+// grant that extension grant matching never reads.
+func TestRegisterPolicyCheckPublishesTheClassifierWithTheType(t *testing.T) {
+	const name = "classify-publish-test"
+	check := func(context.Context, int64, string) aictx.CheckResult { return aictx.CheckResult{} }
+	classify := func(context.Context, string) (ExtensionClassification, bool) {
+		return ExtensionClassification{}, true
+	}
+
+	var sawTypeWithoutClassifier atomic.Bool
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if handler, registered := permissionTypeFor(name); registered && handler.classify == nil {
+				sawTypeWithoutClassifier.Store(true)
+			}
+		}
+	}()
+	for range 2000 {
+		if err := RegisterPolicyCheck(name, check, classify); err != nil {
+			t.Fatal(err)
+		}
+		UnregisterPolicyCheck(name)
+	}
+	close(stop)
+	wg.Wait()
+
+	if sawTypeWithoutClassifier.Load() {
+		t.Fatal("a registered extension type was visible without its classifier")
 	}
 }

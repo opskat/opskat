@@ -119,8 +119,9 @@ func (s *System) Lang() string {
 	return s.lang
 }
 
-// SetLanguage 前端调用，同步语言设置。cago 只注册 "zh-cn"/"en" 两个精确键，
-// 前端的 "zh-CN" 在此统一转小写后存储。
+// SetLanguage 前端调用，同步语言设置。前端传 i18next 的写法（"zh-CN"），后端各处按
+// 小写码匹配（扩展 locales、AI 提示词语言、cago i18n 注册表都是 "zh-cn"），在这个边界
+// 统一成小写一次。
 func (s *System) SetLanguage(lang string) {
 	s.mu.Lock()
 	s.lang = strings.ToLower(lang)

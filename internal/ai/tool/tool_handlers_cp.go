@@ -289,8 +289,14 @@ func checkAccessBatch(
 		return false, nil
 	}
 
+	// seenKey 是一条审批项在本批里的身份：cp 构造审批项时填的全部字段
+	// （ApprovalItem 自身带切片字段，不能直接作 map key）。
+	type seenKey struct {
+		typ, assetName, command, detail string
+		assetID                         int64
+	}
 	items := make([]permission.ApprovalItem, 0, len(accesses))
-	seen := make(map[permission.ApprovalItem]bool, len(accesses))
+	seen := make(map[seenKey]bool, len(accesses))
 	for _, access := range accesses {
 		if !access.ep.isRemote() {
 			continue
@@ -313,10 +319,11 @@ func checkAccessBatch(
 				Detail:    detail,
 			}
 			// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同。
-			if seen[item] {
+			key := seenKey{typ: item.Type, assetName: item.AssetName, command: item.Command, detail: item.Detail, assetID: item.AssetID}
+			if seen[key] {
 				continue
 			}
-			seen[item] = true
+			seen[key] = true
 
 			items = append(items, item)
 		}

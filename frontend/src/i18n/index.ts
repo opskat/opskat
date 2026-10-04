@@ -1,9 +1,9 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
-import { SetLanguage } from "../../wailsjs/go/system/System";
 import zhCommon from "./locales/zh-CN/common.json";
 import enCommon from "./locales/en/common.json";
+import { SetLanguage } from "../../wailsjs/go/system/System";
 
 const resources = {
   "zh-CN": { common: zhCommon },
@@ -16,9 +16,11 @@ function detectLanguage(): string {
   return (navigator.language || "").toLowerCase().startsWith("zh") ? "zh-CN" : "en";
 }
 
+const initialLanguage = detectLanguage();
+
 i18n.use(initReactI18next).init({
   resources,
-  lng: detectLanguage(),
+  lng: initialLanguage,
   fallbackLng: "en",
   defaultNS: "common",
   interpolation: {
@@ -26,10 +28,13 @@ i18n.use(initReactI18next).init({
   },
 });
 
-// 后端按语言挑选文案（扩展名称、测试连接描述等），以界面语言为准：启动时同步一次，之后每次切换再同步。
-export const backendLanguageReady: Promise<void> = SetLanguage(i18n.language);
+// 唯一同步点：opsctl 审批弹窗（ext dev 安装详情、用户拒绝提示等）由 Go 后端拼出文案，
+// 语言取自 System.Lang()，而后端自己没有别的办法知道用户选的 UI 语言——这里把它同步
+// 过去一次覆盖启动时的默认值，并在每次切换时再同步一次，而不是要求每个调用
+// i18n.changeLanguage 的地方（如 AppearanceSection）各自去调一次后端。
+void SetLanguage(initialLanguage);
 i18n.on("languageChanged", (lng) => {
-  SetLanguage(lng).catch((err) => console.error("Sync language to backend failed:", err));
+  void SetLanguage(lng);
 });
 
 export default i18n;

@@ -22,9 +22,12 @@ type Group struct {
 	K8sPol      string `gorm:"column:k8s_policy;type:text"`
 	EtdPolicy   string `gorm:"column:etcd_policy;type:text"`
 	OssPolicy   string `gorm:"column:oss_policy;type:text"`
-	SortOrder   int    `gorm:"column:sort_order;default:0"`
-	Createtime  int64  `gorm:"column:createtime"`
-	Updatetime  int64  `gorm:"column:updatetime"`
+	// ExtPolicy 是组上各扩展策略面的策略：{<policyType>: ExtensionPolicy}。扩展的策略面
+	// 在运行期才出现，没法像内置类型一样一面一列，所以合在一列里按策略面名分开。
+	ExtPolicy  string `gorm:"column:ext_policy;type:text"`
+	SortOrder  int    `gorm:"column:sort_order;default:0"`
+	Createtime int64  `gorm:"column:createtime"`
+	Updatetime int64  `gorm:"column:updatetime"`
 }
 
 // TableName GORM表名
@@ -179,4 +182,46 @@ func (g *Group) SetOSSPolicy(p *policy.OSSPolicy) error {
 	}
 	g.OssPolicy = s
 	return nil
+}
+
+// GetExtensionPolicy 解析组上一个扩展策略面的策略；该面没有策略时返回零值。
+func (g *Group) GetExtensionPolicy(policyType string) (*policy.ExtensionPolicy, error) {
+	faces, err := g.extensionPolicies()
+	if err != nil {
+		return nil, err
+	}
+	p := faces[policyType]
+	return &p, nil
+}
+
+// SetExtensionPolicy 序列化组上一个扩展策略面的策略；空策略移除该面，全部为空时清空字段。
+func (g *Group) SetExtensionPolicy(policyType string, p *policy.ExtensionPolicy) error {
+	faces, err := g.extensionPolicies()
+	if err != nil {
+		return err
+	}
+	if p.IsEmpty() {
+		delete(faces, policyType)
+	} else {
+		faces[policyType] = *p
+	}
+	s, err := jsonfield.MarshalOrClear(&faces, func(v *map[string]policy.ExtensionPolicy) bool {
+		return len(*v) == 0
+	}, "扩展权限策略")
+	if err != nil {
+		return err
+	}
+	g.ExtPolicy = s
+	return nil
+}
+
+func (g *Group) extensionPolicies() (map[string]policy.ExtensionPolicy, error) {
+	faces, err := jsonfield.UnmarshalOrDefault[map[string]policy.ExtensionPolicy](g.ExtPolicy, "扩展权限策略")
+	if err != nil {
+		return nil, err
+	}
+	if *faces == nil {
+		*faces = make(map[string]policy.ExtensionPolicy)
+	}
+	return *faces, nil
 }

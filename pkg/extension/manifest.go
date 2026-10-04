@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -8,16 +9,38 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // HostABIVersion is the current host ABI contract version.
 // Extensions must declare a compatible hostABI in their manifest.
 // Bump the minor version when adding new host functions (backward compatible);
 // bump the major version when removing or changing existing host function signatures.
-const HostABIVersion = "1.0"
+//
+// 2.0 is the reactor contract: the module is a WASI reactor exporting
+// opskat_call / malloc / free, it imports exactly host_call + host_io, and it
+// answers describe().
+//
+// 2.1 additionally exposes @opskat/host-ui to extension pages (a code editor,
+// JSON tree view, and result table injected on window.__OPSKAT_EXT__.hostUI) —
+// a frontend-only addition that changes nothing about the WASM host_call/host_io
+// contract. A 2.0 extension keeps loading and working exactly as before; it just
+// doesn't get hostUI.
+//
+// 2.2 lets check_policy answer {"action","resources":[...]} (the SDK's
+// PolicyResources): a call classified on several resources at once, whose '*' /
+// '?' are wildcards. The {"action","resource"} reply keeps its exact meaning. An
+// older host would read the list reply as a call with no resource at all, so an
+// extension that uses it declares 2.2 and an older app refuses to load it. 2.2
+// also lets check_policy answer {"reject":"<reason>"} (the SDK's RejectArgs): the
+// tool refusing the call's arguments, which the host denies without asking.
+const HostABIVersion = "2.2"
 
-// SupportedHostABIs lists all host ABI versions the runtime accepts.
-var SupportedHostABIs = []string{"1.0"}
+// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 and 2.1
+// stay listed so extensions built before host-ui or multi-resource classification
+// keep loading unchanged; only a hostABI newer than everything here (e.g. an
+// extension declaring 2.3 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -52,20 +75,43 @@ const (
 	CredentialAccessRead = "read"
 )
 
+// Manifest is the host's complete view of one extension: the security contract it
+// reads from manifest.json plus the functional face the guest reports through
+// describe(). Only the first half is written by hand — see manifestFile.
 type Manifest struct {
+	// -- security contract, from manifest.json --
 	Name          string          `json:"name"`
 	Version       string          `json:"version"`
-	Icon          string          `json:"icon"`
 	MinAppVersion string          `json:"minAppVersion"`
 	HostABI       string          `json:"hostABI"`
-	Capabilities  Capabilities    `json:"capabilities"`
-	I18n          ManifestI18n    `json:"i18n"`
 	Backend       ManifestBackend `json:"backend"`
-	AssetTypes    []AssetTypeDef  `json:"assetTypes"`
-	Tools         []ToolDef       `json:"tools"`
-	Policies      PoliciesDef     `json:"policies"`
-	Frontend      FrontendDef     `json:"frontend"`
-	Snippets      SnippetsDef     `json:"snippets"`
+	Capabilities  Capabilities    `json:"capabilities"`
+
+	// -- functional face, from describe() (see descriptor.go) --
+	Icon       string         `json:"icon"`
+	I18n       ManifestI18n   `json:"i18n"`
+	AssetTypes []AssetTypeDef `json:"assetTypes"`
+	Tools      []ToolDef      `json:"tools"`
+	Policies   PoliciesDef    `json:"policies"`
+	Frontend   FrontendDef    `json:"frontend"`
+	Snippets   SnippetsDef    `json:"snippets"`
+}
+
+// manifestFile is what manifest.json is allowed to say.
+//
+// It is deliberately the whole security contract and nothing else: the capability
+// grants are what a user must be able to audit *before* the extension's code runs,
+// so they can never come from the code itself. Everything a running extension can
+// tell the host about itself — its tools, asset types, policy groups, pages,
+// snippets, display strings — is read back from describe() instead of being
+// declared a second time here.
+type manifestFile struct {
+	Name          string          `json:"name"`
+	Version       string          `json:"version"`
+	MinAppVersion string          `json:"minAppVersion"`
+	HostABI       string          `json:"hostABI"`
+	Backend       ManifestBackend `json:"backend"`
+	Capabilities  Capabilities    `json:"capabilities"`
 }
 
 // SnippetsDef declares snippet categories and seed snippets contributed by this extension.
@@ -110,7 +156,22 @@ type Capabilities struct {
 	FS          FSCapability   `json:"fs"`
 	HTTP        HTTPCapability `json:"http"`
 	Credentials string         `json:"credentials"` // "" (none) | "read"
-	Tunnel      bool           `json:"tunnel"`      // allow routing HTTP through the asset's SSH tunnel
+	// Tunnel lets an allowlisted (non-endpoint) HTTP target resolve to a private
+	// address. Routing through an asset's SSH tunnel is an asset type's
+	// connection.sshTunnel declaration, not this capability.
+	Tunnel  bool              `json:"tunnel"`
+	Network NetworkCapability `json:"network"`
+}
+
+// NetworkCapability grants network reach that is decided per call rather than by
+// a static list.
+//
+// AssetEndpoint lets a call scoped to an asset reach the addresses the user typed
+// into that asset's format:"endpoint" config fields — private-network addresses
+// included, since the user configured them — over HTTP and TCP. Undeclared, HTTP
+// reach is exactly the static http allowlist and TCP stays ungated.
+type NetworkCapability struct {
+	AssetEndpoint bool `json:"assetEndpoint"`
 }
 
 // FSCapability lists filesystem path patterns an extension may access.
@@ -143,7 +204,75 @@ type AssetTypeDef struct {
 	Type         string         `json:"type"`
 	I18n         I18nName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
-	ProxyChain   bool           `json:"proxyChain,omitempty"` // opt in; false keeps the asset direct
+	Connection   *ConnectionDef `json:"connection,omitempty"`
+	Auth         *AuthDef       `json:"auth,omitempty"`
+	// TestConnection reports whether the type registered a test-connection
+	// handler (opskat.AssetTypeReg.TestConnection in the guest SDK). The
+	// asset form shows its "Test connection" button only when this is true;
+	// the host dispatches the call itself (Plugin.TestConnection), never
+	// through policy — testing a connection is not an operation on the asset.
+	TestConnection bool `json:"testConnection,omitempty"`
+}
+
+// ConnectionDef is the subset of the host-owned connection settings an asset
+// type supports. The host renders a declared item in the asset form and detail
+// card and applies it when dialing the asset's endpoint; an undeclared item is
+// neither shown nor applied. The extension never reads these settings — the SSH
+// tunnel is the asset's own SSHTunnelID column, outside its config.
+type ConnectionDef struct {
+	SSHTunnel  bool `json:"sshTunnel,omitempty"`
+	ProxyChain bool `json:"proxyChain,omitempty"`
+	TLS        bool `json:"tls,omitempty"`
+}
+
+// UnmarshalJSON refuses an item the host does not own: silently dropping it would
+// load an extension whose author believes a setting is applied when it is not.
+func (c *ConnectionDef) UnmarshalJSON(data []byte) error {
+	type plain ConnectionDef
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var v plain
+	if err := dec.Decode(&v); err != nil {
+		return fmt.Errorf("connection (supported items: sshTunnel, proxyChain, tls): %w", err)
+	}
+	*c = ConnectionDef(v)
+	return nil
+}
+
+// bindsEndpoint reports whether the type declares anything the host applies only
+// on a connection to the asset's endpoint: credential injection or a connection
+// setting.
+func (at AssetTypeDef) bindsEndpoint() bool {
+	c := at.Connection
+	return at.Auth != nil || (c != nil && (c.SSHTunnel || c.ProxyChain || c.TLS))
+}
+
+// validateEndpointBindings refuses an asset type whose auth or connection
+// declaration could never take effect: both apply only to a request to one of the
+// asset's endpoints, and an extension without network.assetEndpoint has none. It
+// runs once describe() is merged in, since the declaration comes from the guest
+// and the capability from manifest.json.
+func (m *Manifest) validateEndpointBindings() error {
+	if m.Capabilities.Network.AssetEndpoint {
+		return nil
+	}
+	for _, at := range m.AssetTypes {
+		if at.bindsEndpoint() {
+			return fmt.Errorf("asset type %q declares auth or connection, which apply only to the asset's endpoint, but the manifest does not declare capabilities.network.assetEndpoint", at.Type)
+		}
+	}
+	return nil
+}
+
+// AssetTypeDef returns the declaration of assetType, nil when the extension does
+// not register it.
+func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {
+	for i := range m.AssetTypes {
+		if m.AssetTypes[i].Type == assetType {
+			return &m.AssetTypes[i]
+		}
+	}
+	return nil
 }
 
 type I18nName struct {
@@ -159,6 +288,41 @@ type ToolDef struct {
 	Name       string         `json:"name"`
 	I18n       I18nDesc       `json:"i18n"`
 	Parameters map[string]any `json:"parameters"`
+	// PolicyAction is the fixed action this tool requests; the asset's permission
+	// groups are matched against it. It is declared at the tool's registration in
+	// the guest, which is also what makes the guest's policy answer unable to drift
+	// from its tool table.
+	PolicyAction string `json:"policyAction,omitempty"`
+	// PolicyActions is, instead of PolicyAction, the set of actions a tool that
+	// classifies each call from its arguments (the SDK's PolicyFunc) may answer
+	// check_policy with. A tool declares exactly one of the two.
+	PolicyActions []string `json:"policyActions,omitempty"`
+	// TimeoutMs is how long one call of this tool may run, in milliseconds; 0
+	// means the host default. It is the tool's to declare because only the tool
+	// knows whether it answers in a second or scans an index for minutes, and it
+	// holds for every caller alike — AI exec, opsctl and the extension's page.
+	TimeoutMs int64 `json:"timeoutMs,omitempty"`
+	// FileParams names the string parameters opsctl may fill from a file
+	// (`--<name>-file <path>`); every other entry point rejects that form.
+	FileParams []string `json:"fileParams,omitempty"`
+}
+
+// MaxToolTimeout is the longest timeout a tool may declare. A tool call holds
+// one of the extension's few instance slots for as long as it runs; work that
+// needs longer is an action, which streams progress and can be canceled.
+const MaxToolTimeout = 10 * time.Minute
+
+// Timeout is the tool's declared call timeout, 0 when it leaves the host default.
+func (t ToolDef) Timeout() time.Duration {
+	return time.Duration(t.TimeoutMs) * time.Millisecond
+}
+
+// Actions is every policy action the tool can request.
+func (t ToolDef) Actions() []string {
+	if t.PolicyAction != "" {
+		return []string{t.PolicyAction}
+	}
+	return t.PolicyActions
 }
 
 type I18nDesc struct {
@@ -191,15 +355,26 @@ type PageDef struct {
 	Component string   `json:"component"`
 }
 
+// ParseManifest reads the security contract from manifest.json. The returned
+// Manifest carries no functional face yet — that arrives with (*Manifest).apply
+// once describe() has been read, either from the guest or from the cache.
 func ParseManifest(data []byte) (*Manifest, error) {
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	var f manifestFile
+	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	m := &Manifest{
+		Name:          f.Name,
+		Version:       f.Version,
+		MinAppVersion: f.MinAppVersion,
+		HostABI:       f.HostABI,
+		Backend:       f.Backend,
+		Capabilities:  f.Capabilities,
 	}
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
-	return &m, nil
+	return m, nil
 }
 
 // Localized returns a shallow copy of the manifest with all i18n string fields
@@ -258,7 +433,7 @@ func (m *Manifest) Localized(tr func(key string) string) *Manifest {
 	return &out
 }
 
-// localizeConfigSchema translates title, placeholder, description fields in a JSON Schema.
+// localizeConfigSchema translates title, placeholder, description and enumLabels fields in a JSON Schema.
 func localizeConfigSchema(schema map[string]any, tr func(string) string) map[string]any {
 	if schema == nil {
 		return nil
@@ -272,6 +447,18 @@ func localizeConfigSchema(schema map[string]any, tr func(string) string) map[str
 		if s, ok := out[field].(string); ok && s != "" {
 			out[field] = tr(s)
 		}
+	}
+	// Enum option labels are i18n keys, like title.
+	if labels, ok := out["enumLabels"].([]any); ok {
+		translated := make([]any, len(labels))
+		for i, l := range labels {
+			if key, ok := l.(string); ok {
+				translated[i] = tr(key)
+			} else {
+				translated[i] = l
+			}
+		}
+		out["enumLabels"] = translated
 	}
 	// Recurse into properties
 	if props, ok := out["properties"].(map[string]any); ok {
@@ -313,166 +500,8 @@ func (m *Manifest) validate() error {
 	if !credentialRe.MatchString(m.Capabilities.Credentials) {
 		return fmt.Errorf("manifest: capabilities.credentials must be \"\" or \"read\" (got %q)", m.Capabilities.Credentials)
 	}
-	for _, g := range m.Policies.Groups {
-		if !strings.HasPrefix(g.ID, "ext:") {
-			return fmt.Errorf("manifest: policy group ID must start with ext: (got %q)", g.ID)
-		}
-		if !policyIDRe.MatchString(g.ID) {
-			return fmt.Errorf("manifest: policy group ID has invalid characters (got %q)", g.ID)
-		}
-	}
-	if err := m.validateTools(); err != nil {
-		return err
-	}
-	if err := m.validateSnippets(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// supportedParamTypes 是 flag DSL 能表达的参数类型。
-// 现存两个真实 manifest 只用到 string / integer / array<string>；
-// number / boolean 一并支持（它们的转换是同一形状），object 不支持——
-// 嵌套结构走 ext_exec 的 --json 逃生口，而不是发明一套嵌套 flag 语法。
-var supportedParamTypes = map[string]bool{
-	"string": true, "integer": true, "number": true, "boolean": true, "array": true,
-}
-
-// validateTools validates tools[].parameters.
-//
-// This field was never validated — nor read by any code — before this change:
-// ext_exec's flag DSL (task 9) is its first consumer. Promoting a field that was
-// never exercised into a load-bearing contract requires giving it load-time
-// validation in the same change: otherwise a manifest that omits parameters would
-// install silently, only to surface as a runtime error that reads like a parser
-// bug the day a model actually calls the tool.
-func (m *Manifest) validateTools() error {
-	seen := make(map[string]bool, len(m.Tools))
-	for i, t := range m.Tools {
-		if t.Name == "" {
-			return fmt.Errorf("manifest: tools[%d].name is required", i)
-		}
-		if seen[t.Name] {
-			// Bridge.toolIndex is a map; a duplicate name would silently keep only one entry,
-			// and which one survives depends on iteration order.
-			return fmt.Errorf("manifest: duplicate tool name %q", t.Name)
-		}
-		seen[t.Name] = true
-
-		if t.Parameters == nil {
-			return fmt.Errorf("manifest: tools[%q].parameters is required (use {\"type\":\"object\",\"properties\":{}} for a no-arg tool)", t.Name)
-		}
-		if typ, _ := t.Parameters["type"].(string); typ != "object" {
-			return fmt.Errorf("manifest: tools[%q].parameters.type must be \"object\", got %q", t.Name, typ)
-		}
-		props, ok := t.Parameters["properties"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("manifest: tools[%q].parameters.properties must be an object", t.Name)
-		}
-		for name, raw := range props {
-			prop, ok := raw.(map[string]any)
-			if !ok {
-				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s must be an object", t.Name, name)
-			}
-			typ, _ := prop["type"].(string)
-			if typ == "" {
-				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has no type", t.Name, name)
-			}
-			if !supportedParamTypes[typ] {
-				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has unsupported type %q (supported: string, integer, number, boolean, array)", t.Name, name, typ)
-			}
-			if typ == "array" {
-				rawItems, exists := prop["items"]
-				if !exists {
-					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s is an array without items", t.Name, name)
-				}
-				items, ok := rawItems.(map[string]any)
-				if !ok {
-					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s.items must be an object, got %T", t.Name, name, rawItems)
-				}
-				if it, _ := items["type"].(string); it != "string" {
-					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s: only array<string> is supported, got array<%s>", t.Name, name, it)
-				}
-			}
-		}
-		if rawReq, exists := t.Parameters["required"]; exists {
-			req, ok := rawReq.([]any)
-			if !ok {
-				return fmt.Errorf("manifest: tools[%q].parameters.required must be an array, got %T", t.Name, rawReq)
-			}
-			for _, r := range req {
-				name, _ := r.(string)
-				if _, exists := props[name]; !exists {
-					return fmt.Errorf("manifest: tools[%q].parameters.required references undeclared property %q", t.Name, name)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// validateSnippets validates the snippets.categories and snippets.seed blocks.
-// Both are optional; an empty block passes.
-func (m *Manifest) validateSnippets() error {
-	// assetTypes declared by this manifest; used to validate category.assetType.
-	assetTypeSet := make(map[string]struct{}, len(m.AssetTypes))
-	for _, at := range m.AssetTypes {
-		if at.Type != "" {
-			assetTypeSet[at.Type] = struct{}{}
-		}
-	}
-
-	// Validate categories.
-	catIDs := make(map[string]struct{}, len(m.Snippets.Categories))
-	for _, c := range m.Snippets.Categories {
-		if c.ID == "" {
-			return fmt.Errorf("manifest: snippets.categories[].id is required")
-		}
-		if !snippetCatIDRe.MatchString(c.ID) {
-			return fmt.Errorf("manifest: snippets.categories[].id must match %s (got %q)", snippetCatIDRe.String(), c.ID)
-		}
-		if IsBuiltinSnippetCategoryID(c.ID) {
-			return fmt.Errorf("manifest: snippets.categories[].id %q collides with a builtin category", c.ID)
-		}
-		if _, dup := catIDs[c.ID]; dup {
-			return fmt.Errorf("manifest: duplicate snippets.categories[].id %q", c.ID)
-		}
-		catIDs[c.ID] = struct{}{}
-		if c.AssetType == "" {
-			return fmt.Errorf("manifest: snippets.categories[%q].assetType is required", c.ID)
-		}
-		if _, ok := assetTypeSet[c.AssetType]; !ok {
-			return fmt.Errorf("manifest: snippets.categories[%q].assetType %q must be declared in assetTypes[]", c.ID, c.AssetType)
-		}
-	}
-
-	// Validate seed snippets.
-	seedKeys := make(map[string]struct{}, len(m.Snippets.Seed))
-	for _, s := range m.Snippets.Seed {
-		if s.Key == "" {
-			return fmt.Errorf("manifest: snippets.seed[].key is required")
-		}
-		if !snippetSeedKeyRe.MatchString(s.Key) {
-			return fmt.Errorf("manifest: snippets.seed[].key must match %s (got %q)", snippetSeedKeyRe.String(), s.Key)
-		}
-		if _, dup := seedKeys[s.Key]; dup {
-			return fmt.Errorf("manifest: duplicate snippets.seed[].key %q", s.Key)
-		}
-		seedKeys[s.Key] = struct{}{}
-		if strings.TrimSpace(s.Name) == "" {
-			return fmt.Errorf("manifest: snippets.seed[%q].name is required", s.Key)
-		}
-		if strings.TrimSpace(s.Content) == "" {
-			return fmt.Errorf("manifest: snippets.seed[%q].content is required", s.Key)
-		}
-		if s.Category == "" {
-			return fmt.Errorf("manifest: snippets.seed[%q].category is required", s.Key)
-		}
-		isBuiltin := IsBuiltinSnippetCategoryID(s.Category)
-		_, isLocal := catIDs[s.Category]
-		if !isBuiltin && !isLocal {
-			return fmt.Errorf("manifest: snippets.seed[%q].category %q is neither builtin nor declared in this manifest", s.Key, s.Category)
-		}
+	if m.Backend.Binary == "" {
+		return fmt.Errorf("manifest: backend.binary is required — it names the WASM module the host loads")
 	}
 	return nil
 }

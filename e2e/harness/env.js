@@ -20,7 +20,7 @@
 // Conventions and rationale: docs/references/e2e-harness-guide.md
 const { execFileSync, spawn } = require("node:child_process");
 const { createHash } = require("node:crypto");
-const { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } = require("node:fs");
+const { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } = require("node:fs");
 const { homedir, tmpdir } = require("node:os");
 const { join } = require("node:path");
 
@@ -238,6 +238,62 @@ function loadDotEnv() {
   return true;
 }
 
+// The in-repo extensions a verification run installs before the app boots, each as
+// its installed name and its source directory (relative to the repo root).
+//
+// `notebook` is the reference extension (extensions/notebook): an asset type with a
+// configSchema, tools and policy groups — i.e. everything the extension-facing UI
+// renders. Anything driving that UI needs it present, so the harness ships it rather
+// than each spec arranging its own install.
+//
+// `fixture-ext` is pkg/extension's test extension: its asset type declares what
+// notebook has no use for — a format:"endpoint" field under network.assetEndpoint, the
+// host's SSH-tunnel connection setting, and a test-connection handler — so the asset
+// form's connection section and "Test connection" button can be driven for real.
+const HARNESS_EXTENSIONS = [
+  { name: "notebook", dir: "extensions/notebook" },
+  { name: "fixture-ext", dir: "pkg/extension/testdata/fixture-ext" },
+];
+
+// Builds each extension's wasm guest and lays the result out in the run's data dir,
+// exactly as an installed extension looks on disk (`<dataDir>/extensions/<name>/`) —
+// the app scans that directory at boot, so nothing else has to run.
+//
+// Building here rather than in a CI step or a Makefile recipe keeps `pnpm test` the
+// single entry point on every platform: CI already has the Go toolchain (it runs
+// `wails dev`), and `GOOS=wasip1` needs no extra SDK. The go build cache makes the
+// repeat cost negligible.
+//
+// The copy rule mirrors `make build-ext`: ship the whole extension directory except
+// the Go sources it was built from and any previous local build output — and, like
+// `make build-ext`, flatten a `frontend/` subdirectory's contents into the
+// installed root rather than nesting it. An extension's manifest frontend.entry
+// (declared via opskat.Frontend in the guest's describe(), e.g. "page.js") names a
+// path relative to the installed extension root; a source layout of
+// `extensions/<name>/frontend/page.js` only resolves to that root path if both
+// this harness and `make build-ext` install it the same way.
+function installExtensions(dataDir, extensions = HARNESS_EXTENSIONS) {
+  for (const { name, dir } of extensions) {
+    const source = join(repoRoot, dir);
+    const target = join(dataDir, "extensions", name);
+    const frontendDir = join(source, "frontend");
+    mkdirSync(target, { recursive: true });
+    execFileSync("go", ["build", "-buildmode=c-shared", "-o", join(target, "main.wasm"), `./${dir}`], {
+      cwd: repoRoot,
+      env: { ...process.env, GOOS: "wasip1", GOARCH: "wasm" },
+      stdio: "inherit",
+    });
+    cpSync(source, target, {
+      recursive: true,
+      filter: (path) => !path.endsWith(".go") && !path.startsWith(join(source, "dist")) && !path.startsWith(frontendDir),
+    });
+    if (existsSync(frontendDir)) {
+      cpSync(frontendDir, target, { recursive: true });
+    }
+  }
+  return extensions.map((e) => e.name);
+}
+
 // Starts the browser host (see harness/browser-host.mjs) detached, so the caller can
 // exit while the browser keeps running, and returns its pid for `sandbox.mjs down`.
 //
@@ -345,6 +401,7 @@ module.exports = {
   sessionFile,
   webserverLogPath,
   prepareFrontendDist,
+  installExtensions,
   loadDotEnv,
   spawnBrowserHost,
   waitForCdp,

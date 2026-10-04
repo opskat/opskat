@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -88,8 +91,20 @@ type ruleLanding struct {
 	// refPolicyType 是引用组按哪张权限组表解析（k8s 的 K8sPolicy 列按 command 表
 	// 解析，与 collectK8sPolicies 用 ResolveCommandGroups 一致）。
 	refPolicyType string
+	// refShape 是解码引用权限组 Policy JSON 用的形状，注册时一次解析。内置类型的
+	// refPolicyType 就是宿主的一张策略列，因此它等于 ruleShapes[refPolicyType]；
+	// 扩展的权限组 kind 是 manifest 自己声明的策略面名（不是宿主的列），所以由注册
+	// 方直接给出。nil 表示该落点不读引用组。
+	refShape *shapeLanding
+	// runtimeShape 非空时是随这个落点一起在运行期注册的策略面（扩展的策略面），
+	// 注销落点时一并注销。
+	runtimeShape string
 	// land 把一条已归一化的 pattern 变成落库的规则。
 	land func(pattern string) ([]LandedRule, error)
+	// grantsAreRules 为真时，该类型的 grant 请求（request_permission、opsctl 审批通道）与永久
+	// 规则同一语法、经 land 落库（见 rule_ext.go 的 extensionGrantFor）。只有扩展类型设它：
+	// 内置类型的 grant 请求是命令形状，原样落库。
+	grantsAreRules bool
 	// match 判定该形状的一条 deny 是否遮蔽一条 allow 落点（deny 无条件先判，
 	// permission.go checkCommandPolicyPermission 的同一优先序）。
 	match func(denyRule, rule string) bool
@@ -98,6 +113,13 @@ type ruleLanding struct {
 	// 置 nil 避免同一列读两遍。
 	generic func(denyRule, rule string) bool
 }
+
+// landingMu 保护 ruleLandings 与 ruleShapes / ruleShapeOrder。内置类型在 init() 里
+// 一次写完，扩展提供的类型（及其策略面）则在用户启用/禁用扩展时增删，与 opsctl
+// policy / AI 会话上正在跑的读取并发（与 type_registry.go 的 registryMu 同一理由）。
+// shapeCanonicals 只由 init 期的 registerRuleSink 写，运行期落点不参与认领，因此不在
+// 锁的范围里。
+var landingMu sync.RWMutex
 
 var ruleLandings = make(map[string]*ruleLanding)
 
@@ -110,19 +132,34 @@ var shapeCanonicals = make(map[*shapeLanding]string)
 // grantPatterns 并列（type_registry.go 的 init 里一起注册）。重复注册 panic——注册
 // 冲突是启动期编程错误。
 func registerRuleSink(canonical string, landing *ruleLanding) {
-	if _, exists := ruleLandings[canonical]; exists {
-		panic(fmt.Sprintf("permission: duplicate rule sink registration %q", canonical))
-	}
-	if landing.shape == nil || landing.land == nil || landing.match == nil {
-		panic(fmt.Sprintf("permission: invalid rule sink registration %q", canonical))
-	}
+	// 内置类型引用的权限组 kind 就是宿主的一张策略列，解析一次存起来。
+	landing.refShape, _ = ruleShapeFor(landing.refPolicyType)
 	if _, ok := shapeCanonicals[landing.shape]; !ok {
 		shapeCanonicals[landing.shape] = canonical
 	}
+	if err := addRuleSink(canonical, landing); err != nil {
+		panic(err.Error())
+	}
+}
+
+// addRuleSink 是 init 期与运行期共用的写入：重复/非法注册报错，由调用方决定是 panic
+// （内置类型的编程错误）还是拒绝加载（用户启用的扩展）。
+func addRuleSink(canonical string, landing *ruleLanding) error {
+	if landing.shape == nil || landing.land == nil || landing.match == nil {
+		return fmt.Errorf("permission: invalid rule sink registration %q", canonical)
+	}
+	landingMu.Lock()
+	defer landingMu.Unlock()
+	if _, exists := ruleLandings[canonical]; exists {
+		return fmt.Errorf("permission: duplicate rule sink registration %q", canonical)
+	}
 	ruleLandings[canonical] = landing
+	return nil
 }
 
 func ruleLandingFor(canonicalType string) (*ruleLanding, bool) {
+	landingMu.RLock()
+	defer landingMu.RUnlock()
 	landing, ok := ruleLandings[canonicalType]
 	return landing, ok
 }
@@ -166,7 +203,7 @@ func RemoveTypeRule(holder policyent.Holder, canonicalType string, side RuleSide
 // RemoveShapeRule 从 holder 的某一形状列（policy kind）移除一条精确匹配的规则；
 // 组目标的 rm 按形状定位，不经过资产类型。
 func RemoveShapeRule(holder policyent.Holder, policyKind string, side RuleSide, rule string) error {
-	shape, ok := ruleShapes[policyKind]
+	shape, ok := ruleShapeFor(policyKind)
 	if !ok {
 		return fmt.Errorf("no permanent rule support for policy kind %q", policyKind)
 	}
@@ -185,6 +222,7 @@ type policyRWHolder interface {
 	SetK8sPolicy(*policyent.K8sPolicy) error
 	SetEtcdPolicy(*policyent.EtcdPolicy) error
 	SetOSSPolicy(*policyent.OSSPolicy) error
+	SetExtensionPolicy(string, *policyent.ExtensionPolicy) error
 }
 
 func asRWHolder(holder policyent.Holder) (policyRWHolder, error) {
@@ -246,6 +284,12 @@ func (h *policyGroupHolder) GetEtcdPolicy() (*policyent.EtcdPolicy, error) {
 func (h *policyGroupHolder) GetOSSPolicy() (*policyent.OSSPolicy, error) {
 	return policyGroupPolicyOf[policyent.OSSPolicy](h.group)
 }
+func (h *policyGroupHolder) GetExtensionPolicy(policyType string) (*policyent.ExtensionPolicy, error) {
+	if h.group.PolicyType != policyType {
+		return &policyent.ExtensionPolicy{}, nil
+	}
+	return policyGroupPolicyOf[policyent.ExtensionPolicy](h.group)
+}
 func (h *policyGroupHolder) SetCommandPolicy(p *policyent.CommandPolicy) error {
 	return h.set(policyent.PolicyKindCommand, p)
 }
@@ -269,6 +313,9 @@ func (h *policyGroupHolder) SetEtcdPolicy(p *policyent.EtcdPolicy) error {
 }
 func (h *policyGroupHolder) SetOSSPolicy(p *policyent.OSSPolicy) error {
 	return h.set(policyent.PolicyKindOSS, p)
+}
+func (h *policyGroupHolder) SetExtensionPolicy(policyType string, p *policyent.ExtensionPolicy) error {
+	return h.set(policyType, p)
 }
 
 // --- 形状层：一个策略列的读写 ---
@@ -296,12 +343,45 @@ var (
 	ruleShapeOrder []string
 )
 
-// registerRuleShape 注册一个策略列的读写落点（kind = policy kind 或 k8s 列）。
+// registerRuleShape 注册一个策略列的读写落点（kind = policy kind 或 k8s 列）。重复
+// 注册 panic——内置策略列冲突是启动期编程错误。
 func registerRuleShape[T any](kind string, s shapeSides[T]) *shapeLanding {
-	if _, exists := ruleShapes[kind]; exists {
-		panic(fmt.Sprintf("permission: duplicate rule shape registration %q", kind))
+	l := newRuleShape(s)
+	if err := addRuleShape(kind, l); err != nil {
+		panic(err.Error())
 	}
-	l := &shapeLanding{
+	return l
+}
+
+// addRuleShape 登记一个策略面；init 期的内置列与运行期的扩展策略面共用。
+func addRuleShape(kind string, l *shapeLanding) error {
+	landingMu.Lock()
+	defer landingMu.Unlock()
+	if _, exists := ruleShapes[kind]; exists {
+		return fmt.Errorf("permission: duplicate rule shape registration %q", kind)
+	}
+	ruleShapes[kind] = l
+	ruleShapeOrder = append(ruleShapeOrder, kind)
+	return nil
+}
+
+func removeRuleShape(kind string) {
+	landingMu.Lock()
+	defer landingMu.Unlock()
+	delete(ruleShapes, kind)
+	ruleShapeOrder = slices.DeleteFunc(ruleShapeOrder, func(k string) bool { return k == kind })
+}
+
+func ruleShapeFor(kind string) (*shapeLanding, bool) {
+	landingMu.RLock()
+	defer landingMu.RUnlock()
+	shape, ok := ruleShapes[kind]
+	return shape, ok
+}
+
+// newRuleShape 由形状 T 的访问四件套构造一个策略面的读写落点（不登记）。
+func newRuleShape[T any](s shapeSides[T]) *shapeLanding {
+	return &shapeLanding{
 		appendRules: func(holder policyent.Holder, side RuleSide, land func(pattern string) ([]LandedRule, error), patterns []string) ([]LandedRule, error) {
 			rw, err := asRWHolder(holder)
 			if err != nil {
@@ -403,16 +483,13 @@ func registerRuleShape[T any](kind string, s shapeSides[T]) *shapeLanding {
 			return s.set(rw, p)
 		},
 	}
-	ruleShapes[kind] = l
-	ruleShapeOrder = append(ruleShapeOrder, kind)
-	return l
 }
 
 // PolicyShapeRefs exposes the registered policy-shape seam to services which
 // manage policy-group attachments. Callers do not duplicate the concrete
 // policy Get/Set table.
 func PolicyShapeRefs(holder policyent.Holder, policyKind string) ([]string, error) {
-	shape, ok := ruleShapes[policyKind]
+	shape, ok := ruleShapeFor(policyKind)
 	if !ok {
 		return nil, fmt.Errorf("no permanent rule support for policy kind %q", policyKind)
 	}
@@ -420,7 +497,7 @@ func PolicyShapeRefs(holder policyent.Holder, policyKind string) ([]string, erro
 }
 
 func updatePolicyShapeRefs(holder policyent.Holder, policyKind string, mutate func(*[]string) error) error {
-	shape, ok := ruleShapes[policyKind]
+	shape, ok := ruleShapeFor(policyKind)
 	if !ok {
 		return fmt.Errorf("no permanent rule support for policy kind %q", policyKind)
 	}
@@ -459,6 +536,8 @@ func PolicyShapeForType(canonicalType string) (column, acceptedGroupType string,
 	if !ok {
 		return "", "", false
 	}
+	landingMu.RLock()
+	defer landingMu.RUnlock()
 	for kind, shape := range ruleShapes {
 		if shape == landing.shape {
 			return kind, landing.refPolicyType, true
@@ -471,7 +550,7 @@ func PolicyShapeForType(canonicalType string) (column, acceptedGroupType string,
 // 类型。权限组只有 kind 没有资产类型，规则落点与归一化需要 canonical；同列的
 // canonical 共享同一落点，取注册的第一个即可，新增形状无需在调用方维护镜像表。
 func CanonicalForPolicyKind(policyKind string) (string, bool) {
-	shape, ok := ruleShapes[policyKind]
+	shape, ok := ruleShapeFor(policyKind)
 	if !ok {
 		return "", false
 	}
@@ -676,7 +755,8 @@ func sourcedRule(o ruleHolderOrigin, rule string, generic bool) SourcedRule {
 	return SourcedRule{Rule: rule, Kind: o.kind, HolderID: o.id, HolderName: o.name, Generic: generic}
 }
 
-// genericRuleLanding 是组通用层读引用组用的落点（command 表），init 里注册后填充。
+// genericRuleLanding 是组通用层读引用组用的落点（command 表），shape / refShape 都在
+// init 里 commandShape 注册之后填充。
 var genericRuleLanding = &ruleLanding{
 	refPolicyType: policyKindCommand,
 }
@@ -698,8 +778,8 @@ func collectPolicyGroupRules(ctx context.Context, landing *ruleLanding, refs []s
 	if len(refs) == 0 {
 		return
 	}
-	shape, ok := ruleShapes[landing.refPolicyType]
-	if !ok {
+	shape := landing.refShape
+	if shape == nil {
 		return
 	}
 	for _, id := range refs {
@@ -767,9 +847,14 @@ type HolderShapeRules struct {
 // ListHolderRuleShapes 按形状注册顺序列出 holder 自身非空的形状列。
 // 注册表同时拥有读写落点和稳定顺序，新增形状无需再维护一份枚举镜像。
 func ListHolderRuleShapes(holder policyent.Holder) ([]HolderShapeRules, error) {
+	landingMu.RLock()
+	kinds := slices.Clone(ruleShapeOrder)
+	registered := maps.Clone(ruleShapes)
+	landingMu.RUnlock()
+
 	var shapes []HolderShapeRules
-	for _, kind := range ruleShapeOrder {
-		shape := ruleShapes[kind]
+	for _, kind := range kinds {
+		shape := registered[kind]
 		allow, deny, refs, err := shape.ownSides(holder)
 		if err != nil {
 			return nil, fmt.Errorf("read %s policy shape: %w", kind, err)

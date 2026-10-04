@@ -1,5 +1,6 @@
 // frontend/src/extension/ExtensionPage.tsx
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useExtensionStore } from "./store";
 import { loadExtension } from "./loader";
 import { loadExtensionLocales } from "./i18n";
@@ -47,11 +48,16 @@ interface ExtensionPageError {
 }
 
 export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageProps) {
+  const { t } = useTranslation();
   const ready = useExtensionStore((s) => s.ready);
   const entry = useExtensionStore((s) => s.extensions[extensionName]);
+  const disabled = useExtensionStore((s) => !!s.disabled[extensionName]);
   const setLoaded = useExtensionStore((s) => s.setLoaded);
   const [loadedLocal, setLoadedLocal] = useState<{ extensionName: string; loaded: LoadedExtension } | null>(null);
-  const loaded = entry?.loaded ?? (loadedLocal?.extensionName === extensionName ? loadedLocal.loaded : null);
+  // 只在扩展仍注册时渲染组件：注销/禁用后本地缓存的组件还在，但它的后端调用已全部失效。
+  const loaded = entry
+    ? (entry.loaded ?? (loadedLocal?.extensionName === extensionName ? loadedLocal.loaded : null))
+    : null;
   const [error, setError] = useState<ExtensionPageError | null>(null);
   const currentError =
     error?.extensionName === extensionName && error.pageId === pageId && (error.kind !== "not_registered" || !entry)
@@ -59,7 +65,7 @@ export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageP
       : null;
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || disabled) return;
 
     if (!entry) {
       // Extension not registered yet — wait for ext:reload to bring it in.
@@ -93,7 +99,15 @@ export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageP
     return () => {
       cancelled = true;
     };
-  }, [ready, entry, extensionName, pageId, setLoaded]);
+  }, [ready, disabled, entry, extensionName, pageId, setLoaded]);
+
+  if (disabled) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-muted-foreground">{t("extension.pageDisabled", { name: extensionName })}</p>
+      </div>
+    );
+  }
 
   if (currentError) {
     return (
@@ -111,7 +125,7 @@ export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageP
     );
   }
 
-  const page = loaded.manifest.frontend?.pages.find((p) => p.id === pageId);
+  const page = loaded.manifest.frontend?.pages?.find((p) => p.id === pageId);
   if (!page) {
     return (
       <div className="flex items-center justify-center h-full">

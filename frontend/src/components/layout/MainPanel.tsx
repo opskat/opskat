@@ -315,7 +315,10 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
         {activeTab &&
           activeTab.type === "page" &&
           !REMOTE_PANE_PAGE_IDS.has((activeTab.meta as PageTabMeta).pageId) && (
-            <div className="absolute inset-0 bg-background">
+            // key: every page tab renders at this one spot, so without it switching between two
+            // tabs of the same page (two assets' extension pages) would hand the second tab the
+            // first one's component instance and state.
+            <div key={activeTab.id} className="absolute inset-0 bg-background">
               <LazySurface>{renderActiveContent()}</LazySurface>
             </div>
           )}

@@ -27,6 +27,7 @@ import { join } from "node:path";
 
 import {
   SANDBOX_MASTER_KEY,
+  installExtensions,
   loadDotEnv,
   mockServers,
   ports,
@@ -60,6 +61,8 @@ if (flag("help")) {
 
   --reset          wipe the sandbox data dir (with up: before starting)
   --mocks          also start the in-harness redis / ssh / openai mocks
+  --extensions     build the in-repo extensions into the sandbox and enable the
+                   extension system (off by default: the wasm compile is slow)
   --headed         show the browser window (default: headless)
   --no-browser     don't launch Chromium (drive.mjs will start its own on demand)
   --port=N         app port (default ${PORTS.sandboxApp}, allocated per checkout)
@@ -104,12 +107,19 @@ async function up() {
   prepareFrontendDist();
   if (loadDotEnv()) log("loaded .env (real verification targets available as E2E_*)");
 
+  // The extension system is off unless asked for: initialising it compiles every
+  // installed guest's wasm, which a sandbox that is not about to drive an extension
+  // should not pay for. `--extensions` installs the in-repo ones the same way the
+  // suite does, so what you drive here is what the suite runs against.
+  const extensions = flag("extensions") || process.env.OPSKAT_EXTENSIONS === "1";
+  if (extensions) log(`installed extensions: ${installExtensions(dataDir).join(", ")}`);
+
   const appEnv = {
     ...process.env,
     OPSKAT_DATA_DIR: dataDir,
     OPSKAT_MASTER_KEY: SANDBOX_MASTER_KEY,
     OPSKAT_E2E: "1",
-    OPSKAT_EXTENSIONS: process.env.OPSKAT_EXTENSIONS ?? "0",
+    OPSKAT_EXTENSIONS: extensions ? "1" : "0",
   };
 
   const pids = {};

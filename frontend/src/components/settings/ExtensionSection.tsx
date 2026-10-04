@@ -2,7 +2,17 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { RefreshCw, Puzzle, Plus, MoreVertical, Info, Trash2, FolderOpen, FileArchive } from "lucide-react";
+import {
+  RefreshCw,
+  Puzzle,
+  Plus,
+  MoreVertical,
+  Info,
+  Trash2,
+  FolderOpen,
+  FileArchive,
+  ShieldAlert,
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -29,6 +39,7 @@ import {
   DialogTitle,
   Separator,
 } from "@opskat/ui";
+import i18n from "@/i18n";
 import { ListInstalledExtensions } from "../../../wailsjs/go/extension/Extension";
 import {
   ReloadExtensions,
@@ -39,6 +50,7 @@ import {
   DisableExtension,
   GetExtensionDetail,
 } from "../../../wailsjs/go/extension/Extension";
+import type { ExtCapabilities } from "@/extension/types";
 
 interface ExtInfo {
   name: string;
@@ -48,6 +60,7 @@ interface ExtInfo {
   description: string;
   enabled: boolean;
   manifest?: {
+    capabilities?: ExtCapabilities;
     tools?: { name: string; i18n?: { description?: string } }[];
     policies?: {
       groups?: {
@@ -73,7 +86,7 @@ export function ExtensionSection() {
 
   const loadExtensions = async () => {
     try {
-      const exts = await ListInstalledExtensions();
+      const exts = await ListInstalledExtensions(i18n.language);
       setExtensions(exts || []);
     } catch {
       setExtensions([]);
@@ -309,9 +322,20 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
   const policyGroups: { id: string; i18n?: { name?: string }; policy?: Record<string, string[]> }[] =
     manifest?.policies?.groups || [];
   const pages: { id: string; i18n?: { name?: string }; slot?: string }[] = manifest?.frontend?.pages || [];
+  const credentialsRead = ext.manifest?.capabilities?.credentials === "read";
 
   return (
     <div className="space-y-4">
+      {credentialsRead && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-sm text-warning"
+        >
+          <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>{t("extension.credentialsReadWarning")}</span>
+        </div>
+      )}
+
       {/* Basic Info */}
       <div className="space-y-1 text-sm">
         <p>

@@ -2,7 +2,9 @@ package permission
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -55,40 +57,9 @@ func (c *CommandPolicyChecker) SetGrantRequestFunc(fn GrantRequestFunc) {
 	c.grantRequestFunc = fn
 }
 
-// SubmitGrant 提交 grant 审批请求（request_permission 工具调用）
+// SubmitGrant 提交单资产 grant 审批请求（request_permission 工具调用）
 func (c *CommandPolicyChecker) SubmitGrant(ctx context.Context, assetID int64, patterns []string, reason string) aictx.CheckResult {
-	if c.grantRequestFunc == nil {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
-	}
-
-	assetName := ""
-	if assetID > 0 {
-		asset, err := asset_svc.Asset().Get(ctx, assetID)
-		if err != nil {
-			logger.Default().Warn("get asset for grant submission", zap.Int64("assetID", assetID), zap.Error(err))
-		}
-		if asset != nil {
-			assetName = asset.Name
-		}
-	}
-
-	items := make([]ApprovalItem, 0, len(patterns))
-	for _, p := range patterns {
-		items = append(items, ApprovalItem{
-			Type:      "grant",
-			AssetID:   assetID,
-			AssetName: assetName,
-			Command:   p,
-			Detail:    reason,
-		})
-	}
-
-	approved, finalPatterns := c.grantRequestFunc(ctx, items, reason)
-	if !approved {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "USER DENIED: The user has denied the grant approval request. Stop the current task immediately.", "用户拒绝：用户已拒绝 Grant 审批请求。请立即停止当前任务。"), DecisionSource: aictx.SourceGrantDeny, MatchedPattern: strings.Join(patterns, "; ")}
-	}
-
-	return aictx.CheckResult{Decision: aictx.Allow, Message: policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+	return c.SubmitGrantMulti(ctx, []GrantItem{{AssetID: assetID, Patterns: patterns}}, reason)
 }
 
 // GrantItem represents a single asset's patterns in a multi-asset grant request.
@@ -98,6 +69,10 @@ type GrantItem struct {
 }
 
 // SubmitGrantMulti 提交多资产 grant 审批请求
+//
+// 扩展资产的 pattern 是 `<action>[:<resource-glob>]`（extensionGrantFor）：任何一条不合法
+// 就整个请求拒绝——不弹框、不落库，也不回报"已批准"，因为那条 grant 永远匹配不上。
+// 合法时审批项带扩展类型而不是 "grant"，用户在弹窗里的编辑按同一语法校验、落库。
 func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []GrantItem, reason string) aictx.CheckResult {
 	if c.grantRequestFunc == nil {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
@@ -107,6 +82,7 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 	var allPatterns []string
 	for _, item := range items {
 		assetName := ""
+		itemType := "grant"
 		if item.AssetID > 0 {
 			asset, err := asset_svc.Asset().Get(ctx, item.AssetID)
 			if err != nil {
@@ -114,11 +90,26 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 			}
 			if asset != nil {
 				assetName = asset.Name
+				grant, isExt, err := extensionGrantFor(asset.Type, strings.Join(item.Patterns, "\n"))
+				if err != nil {
+					return aictx.CheckResult{
+						Decision:       aictx.Deny,
+						DecisionSource: aictx.SourceGrantDeny,
+						MatchedPattern: strings.Join(item.Patterns, "; "),
+						Message: policy.PolicyFmt(ctx,
+							"GRANT REQUEST REFUSED for asset %s (nothing was granted): %v. Grant patterns for this extension asset are <action> or <action>:<resource-glob>, using the policy actions listed in its help.",
+							"Grant 请求被拒绝（未授予任何权限），资产 %s：%v。该扩展资产的 grant pattern 是 <action> 或 <action>:<resource-glob>，动作见其帮助文档列出的策略动作。",
+							asset.Name, err),
+					}
+				}
+				if isExt {
+					itemType = grant.Type
+				}
 			}
 		}
 		for _, p := range item.Patterns {
 			approvalItems = append(approvalItems, ApprovalItem{
-				Type:      "grant",
+				Type:      itemType,
 				AssetID:   item.AssetID,
 				AssetName: assetName,
 				Command:   p,
@@ -157,17 +148,26 @@ func grantItemAppliesTo(item *grant_entity.GrantItem, toolName string) bool {
 }
 
 func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, toolName string, matchFn policy.MatchFunc) string {
+	if patterns := matchGrantPatternsEachWith(ctx, assetID, groups, subCmds, toolName, matchFn); patterns != nil {
+		return patterns[0]
+	}
+	return ""
+}
+
+// matchGrantPatternsEachWith 要求每条子命令都匹配某个 grant item，按子命令顺序返回各自命中的
+// pattern；任一条匹配不上（或没有会话 / 没有已批准的 item）返回 nil。
+func matchGrantPatternsEachWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, toolName string, matchFn policy.MatchFunc) []string {
 	sessionID := aictx.GetSessionID(ctx)
 	if sessionID == "" {
-		return ""
+		return nil
 	}
 	repo := grant_repo.Grant()
 	if repo == nil {
-		return ""
+		return nil
 	}
 	items, err := repo.ListApprovedItems(ctx, sessionID)
 	if err != nil || len(items) == 0 {
-		return ""
+		return nil
 	}
 
 	// 构建资产所属的组 ID 集合，用于匹配 group 级 grant item
@@ -177,7 +177,7 @@ func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_
 	}
 
 	// 所有子命令都必须匹配某个 grant item
-	var firstPattern string
+	patterns := make([]string, 0, len(subCmds))
 	for _, cmd := range subCmds {
 		matched := false
 		for _, item := range items {
@@ -189,17 +189,18 @@ func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_
 			}
 			if matchFn(item.Command, cmd) {
 				matched = true
-				if firstPattern == "" {
-					firstPattern = item.Command
-				}
+				patterns = append(patterns, item.Command)
 				break
 			}
 		}
 		if !matched {
-			return ""
+			return nil
 		}
 	}
-	return firstPattern
+	if len(patterns) == 0 {
+		return nil
+	}
+	return patterns
 }
 
 // grantItemMatchesTarget 检查 grant item 是否匹配目标资产
@@ -275,11 +276,34 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	// 不是静默变成 "exec"（type_registry.go 的 ApprovalTypeFor doc comment 有论证）。
 	approvalType := ApprovalTypeFor(assetType)
 
+	// classify is non-nil only for extension types (RegisterPolicyCheck); every
+	// built-in type falls through with classified=false and an approval item that
+	// looks exactly as it did before this classification existed.
+	classify, isExtension := classifyFor(assetType)
+	var classification ExtensionClassification
+	var classified bool
+	if isExtension {
+		classification, classified = classify(ctx, command)
+	}
+
 	item := ApprovalItem{
 		Type:      approvalType,
 		AssetID:   assetID,
 		AssetName: assetName,
 		Command:   command,
+	}
+	if classified {
+		item.Action = classification.Action
+		for _, resource := range classification.Resources {
+			item.Resources = append(item.Resources, policy.DisplayExtensionResource(resource))
+		}
+		if resources := policy.ExtensionResources(classification.Resources); len(resources) == 1 {
+			item.Resource = policy.DisplayExtensionResource(resources[0])
+			item.RememberPattern = extGrantTail(classification.Action, resources[0])
+		} else {
+			item.RememberPattern = multiResourceRememberPattern(classification.Action, resources)
+		}
+		item.Detail = formatExtensionRequestDetail(classification)
 	}
 	if len(detail) > 0 {
 		item.Detail = detail[0]
@@ -315,7 +339,15 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 掉进兜底，把用户的编辑**静默换成系统主体**——用户改这一栏通常是想收窄，
 		// 却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
 		var patterns []string
-		if len(parsed.EditedItems) > 0 {
+		if isExtension {
+			// Extension "always allow" never falls back to NormalizeGrantPatterns'
+			// whole-command-string default: the grant is the check_policy
+			// classification (extGrantKey), not the command text, so a later call
+			// spelling the same request differently still matches (spec 参数级策略 ›
+			// 审批展示) and matching stays keyed on (action, resource) — see
+			// extGrantMatch / MatchExtensionGrant.
+			patterns = extensionGrantPatterns(ctx, classify, parsed.EditedItems, classification, classified)
+		} else if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
 				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
 			}
@@ -349,6 +381,136 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	default:
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "invalid approval response, execution denied", "审批响应无效，拒绝执行"), DecisionSource: aictx.SourceUserDeny}
 	}
+}
+
+// extensionGrantPatterns builds the "always allow" grant patterns for a
+// classify-registered extension type — never the raw command text — so matching a
+// later call stays keyed on (action, resource) (see extGrantMatch /
+// MatchExtensionGrant).
+//
+// Unedited, a classified call persists the Remember pre-fill it showed
+// (classificationGrantKeys): for one resource its exact grant key (extGrantKey) —
+// the key the next identical call is matched as — and for several the one rule
+// covering them all. A classified call's Remember editor edits the grant tail itself
+// (ApprovalItem.RememberPattern); ParseApprovalResponse has already held every edit
+// to "<action>:<resource-glob>" with the classified action, so an edit is persisted
+// verbatim — its glob characters are the user's intent.
+//
+// An unclassified call's editor shows command text, so its edits are classified
+// here: an item whose command no longer classifies (parse error, or an action the
+// type never declared) contributes nothing — same "empty is an answer, not a
+// failure" rule the generic NormalizeGrantPatterns path already follows — rather than
+// a phantom, ungrantable pattern.
+func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited []ApprovalItem, classification ExtensionClassification, classified bool) []string {
+	if classified {
+		if len(edited) == 0 {
+			return classificationGrantKeys(classification)
+		}
+		patterns := make([]string, 0, len(edited))
+		for _, item := range edited {
+			patterns = append(patterns, extGrantRule(classification.PolicyType, item.Command))
+		}
+		return patterns
+	}
+	var patterns []string
+	for _, item := range edited {
+		cls, ok := classify(ctx, item.Command)
+		if !ok {
+			continue
+		}
+		patterns = append(patterns, classificationGrantKeys(cls)...)
+	}
+	return patterns
+}
+
+// classificationGrantKeys is the grant an unedited "always allow" persists: for a
+// single resource its exact key, for several the one rule the approval item offered
+// as its Remember pre-fill (multiResourceRememberPattern).
+func classificationGrantKeys(c ExtensionClassification) []string {
+	resources := policy.ExtensionResources(c.Resources)
+	if len(resources) > 1 {
+		return []string{extGrantRule(c.PolicyType, multiResourceRememberPattern(c.Action, resources))}
+	}
+	return []string{extGrantKey(c.PolicyType, c.Action, resources[0])}
+}
+
+// multiResourceRememberPattern is the Remember pre-fill of a call touching several
+// resources: the narrowest "<action>:<common-prefix>*" covering every one, so one
+// grant spans the family the user approved. resources are host-form globs, so the
+// prefix is taken on that form — it ends before the first wildcard (an escaped
+// character is a literal and is kept with its backslash) and the rule is verified
+// with the host's own matcher; a prefix that is empty or whose '*' would not cross a
+// '/' the resources contain falls back to the bare action, which covers any resource
+// of that action. Identical resources keep their exact tail.
+func multiResourceRememberPattern(action string, resources []string) string {
+	prefix := literalGlobPrefix(resources[0])
+	for _, r := range resources[1:] {
+		prefix = commonGlobPrefix(prefix, literalGlobPrefix(r))
+	}
+	if prefix == "" {
+		return action
+	}
+	rule := extGrantTail(action, prefix+"*")
+	for _, r := range resources {
+		if r == prefix {
+			continue
+		}
+		if !policy.MatchExtensionRule(rule, action, r) {
+			return action
+		}
+	}
+	if slices.ContainsFunc(resources, func(r string) bool { return r != prefix }) {
+		return rule
+	}
+	return extGrantTail(action, prefix)
+}
+
+// literalGlobPrefix is the leading run of a glob that matches only itself: up to the
+// first unescaped '*', '?' or '['. A backslash pair stays whole.
+func literalGlobPrefix(glob string) string {
+	for i := 0; i < len(glob); i++ {
+		switch glob[i] {
+		case '*', '?', '[':
+			return glob[:i]
+		case '\\':
+			i++
+		}
+	}
+	return glob
+}
+
+// commonGlobPrefix is the longest shared prefix of a and b made of whole glob
+// characters: a backslash pair is one unit and is never split.
+func commonGlobPrefix(a, b string) string {
+	n := 0
+	for n < len(a) && n < len(b) {
+		step := 1
+		if a[n] == '\\' {
+			step = 2
+		}
+		if n+step > len(a) || n+step > len(b) || a[n:n+step] != b[n:n+step] {
+			break
+		}
+		n += step
+	}
+	return a[:n]
+}
+
+// formatExtensionRequestDetail renders an extension classification's underlying guest
+// call as the collapsible "request" the approval dialog shows next to Action/Resource
+// (spec 参数级策略 › 审批展示: "格式化后的请求（工具名 + 参数，长 JSON 可折叠）"). It reuses
+// ApprovalItem.Detail — the same field cp/delete already render inside a <details> —
+// rather than adding a second display channel.
+func formatExtensionRequestDetail(c ExtensionClassification) string {
+	payload := struct {
+		Tool string          `json:"tool"`
+		Args json.RawMessage `json:"args,omitempty"`
+	}{Tool: c.Tool, Args: c.Args}
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // --- 策略收集 ---

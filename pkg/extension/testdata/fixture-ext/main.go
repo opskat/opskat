@@ -1,0 +1,393 @@
+// Command fixture-ext is the minimal WASM extension used by pkg/extension's
+// end-to-end tests. It is built on demand by fixtureWasm (see fixture_test.go),
+// never shipped, and deliberately exercises one host capability per handler so a
+// broken host call fails one assertion instead of the whole suite.
+//
+// Handlers register from init(): the guest is a WASI reactor, so the host runs
+// _initialize and func main() is never called. The registrations below are also
+// the extension's entire functional declaration — manifest.json carries only the
+// capability grants, and the host reads everything else back through describe().
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	opskat "github.com/opskat/opskat/pkg/extsdk"
+)
+
+func main() {}
+
+var callSeq int
+
+type noArgs struct{}
+
+type echoArgs struct {
+	Msg string `json:"msg,omitempty" desc:"Message to echo back"`
+	N   int    `json:"n,omitempty" desc:"A number to echo back"`
+}
+
+// policyArgs feeds the two classification shapes check_policy can answer: the
+// single literal resource (PolicyFunc) and the resource list (PolicyResources).
+type policyArgs struct {
+	Resource  string   `json:"resource,omitempty" desc:"The one resource to classify the call on"`
+	Resources []string `json:"resources,omitempty" desc:"Every resource to classify the call on"`
+}
+
+type pathArgs struct {
+	Path string `json:"path" desc:"Path to read"`
+}
+
+type writeArgs struct {
+	Path    string `json:"path" desc:"Path to write"`
+	Content string `json:"content" desc:"Content to write"`
+}
+
+type kvArgs struct {
+	Key   string `json:"key" desc:"Key to store under"`
+	Value string `json:"value" desc:"Value to store"`
+}
+
+type logArgs struct {
+	Level string `json:"level" desc:"Log level"`
+	Msg   string `json:"msg" desc:"Message to log"`
+}
+
+type spinArgs struct {
+	MS int `json:"ms" desc:"How long to busy-loop, in milliseconds"`
+}
+
+type blobArgs struct {
+	Bytes int `json:"bytes" desc:"Size of the returned data string"`
+}
+
+type urlArgs struct {
+	URL string `json:"url" desc:"URL to GET"`
+}
+
+type addrArgs struct {
+	Addr string `json:"addr" desc:"host:port to dial"`
+}
+
+// fixtureConfig's endpoint (a URL or host:port) is what the host's
+// network.assetEndpoint gate lets a call scoped to the asset reach. authType
+// picks which of the declared auth groups the host injects into requests to
+// that endpoint, rendered from username / password. password is a Credential,
+// so it decodes both the plaintext served with credentials:read and the opaque
+// handle served without it (this manifest does not declare it).
+type fixtureConfig struct {
+	Endpoint string            `json:"endpoint" title:"Endpoint" format:"endpoint"`
+	AuthType string            `json:"authType,omitempty" title:"Auth type" enum:"none,basic,bearer,signed"`
+	Username string            `json:"username,omitempty" title:"Username"`
+	Password opskat.Credential `json:"password,omitempty" title:"Password"`
+}
+
+func init() {
+	opskat.Extension(opskat.Meta{
+		DisplayName: "Fixture Extension",
+		Description: "Minimal extension used by pkg/extension end-to-end tests",
+		PolicyType:  "fixture",
+	})
+	opskat.AssetType[fixtureConfig]("fixture").Name("Fixture").Connection(opskat.Connection{SSHTunnel: true}).
+		Auth(opskat.Auth{
+			Selector: "authType",
+			Groups: []opskat.AuthGroup{
+				{When: "basic", Bindings: []opskat.AuthBinding{{In: "basic", Value: "{{username}}:{{password}}"}}},
+				{When: "bearer", Bindings: []opskat.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}}},
+				{When: "signed", Bindings: []opskat.AuthBinding{{In: "query", Name: "token", Value: `{{base64(username, ":", password)}}`}}},
+			},
+		}).
+		// TestConnection reaches the endpoint through the same host IO and
+		// network gate a tool call would, and reports HTTP's own client error —
+		// so the host-side test exercises the real ad-hoc dial/endpoint/auth path
+		// a "test connection" call runs (not a real tool call), rather than a
+		// second handler that just returns nil.
+		TestConnection(func(cfg fixtureConfig) error {
+			h, err := opskat.IOOpen("http", map[string]any{"method": "GET", "url": cfg.Endpoint})
+			if err != nil {
+				return err
+			}
+			defer h.Close()
+			meta, err := h.Flush()
+			if err != nil {
+				return err
+			}
+			if meta.Status >= 400 {
+				return fmt.Errorf("test connection: unexpected status %d", meta.Status)
+			}
+			return nil
+		})
+	opskat.PolicyGroup("ext:fixture:read").Name("Read").Description("Read-only").
+		Allow("read").Default()
+
+	opskat.Tool("echo", func(ctx *opskat.ToolContext, args echoArgs) (any, error) {
+		return map[string]any{"tool": ctx.Tool, "args": args}, nil
+	}).Policy("read").Doc("Echo the arguments back").
+		Resource(func(echoArgs) string { return "fixture:echo" })
+
+	opskat.Tool("classify_one", func(*opskat.ToolContext, policyArgs) (any, error) { return nil, nil }).
+		PolicyFunc([]string{"read"}, func(a policyArgs) (string, string) { return "read", a.Resource })
+	opskat.Tool("classify_many", func(*opskat.ToolContext, policyArgs) (any, error) { return nil, nil }).
+		PolicyResources([]string{"write"}, func(a policyArgs) (string, []string) { return "write", a.Resources })
+	// reject_host refuses a resource naming a host of its own, whatever the rules say.
+	opskat.Tool("reject_host", func(*opskat.ToolContext, policyArgs) (any, error) {
+		return map[string]any{"ran": true}, nil
+	}).
+		RejectArgs(func(a policyArgs) error {
+			if strings.Contains(a.Resource, "://") {
+				return fmt.Errorf("resource %q must not name a host", a.Resource)
+			}
+			return nil
+		}).
+		PolicyResources([]string{"write"}, func(a policyArgs) (string, []string) { return "write", []string{a.Resource} })
+
+	// seq counts calls in a guest global. Because a reactor instance survives
+	// between calls the counter keeps climbing, so the host-side test can see
+	// both that instances are reused and when one is recycled.
+	opskat.Tool("seq", func(*opskat.ToolContext, noArgs) (any, error) {
+		callSeq++
+		return map[string]any{"seq": callSeq}, nil
+	}).Policy("read")
+
+	opskat.Tool("fail", func(*opskat.ToolContext, noArgs) (any, error) {
+		return nil, fmt.Errorf("deliberate failure")
+	}).Policy("read")
+
+	// panics must be contained: a reactor instance is reused by later calls.
+	opskat.Tool("panic", func(*opskat.ToolContext, noArgs) (any, error) {
+		panic("boom")
+	}).Policy("read")
+
+	// looks_like_error returns a payload that the old ABI would have mistaken
+	// for a failure because it sniffed for a top-level "error" key.
+	opskat.Tool("looks_like_error", func(*opskat.ToolContext, noArgs) (any, error) {
+		return map[string]any{"error": "this is data, not a failure"}, nil
+	}).Policy("read")
+
+	opskat.Tool("read_file", func(_ *opskat.ToolContext, args pathArgs) (any, error) {
+		h, err := opskat.IOOpen("file", map[string]any{"path": args.Path, "mode": "read"})
+		if err != nil {
+			return nil, err
+		}
+		defer h.Close()
+		data, err := io.ReadAll(h)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"handle": h.ID(), "content": string(data)}, nil
+	}).Policy("read")
+
+	// open_file leaks a handle on purpose: the test asserts the host reclaims it
+	// when the invocation ends instead of keeping it for the plugin's lifetime.
+	opskat.Tool("open_file", func(_ *opskat.ToolContext, args pathArgs) (any, error) {
+		h, err := opskat.IOOpen("file", map[string]any{"path": args.Path, "mode": "read"})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"handle": h.ID()}, nil
+	}).Policy("read")
+
+	opskat.Tool("write_file", func(_ *opskat.ToolContext, args writeArgs) (any, error) {
+		h, err := opskat.IOOpen("file", map[string]any{"path": args.Path, "mode": "write"})
+		if err != nil {
+			return nil, err
+		}
+		defer h.Close()
+		n, err := h.Write([]byte(args.Content))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"written": n}, nil
+	}).Policy("write")
+
+	opskat.Tool("kv_roundtrip", func(_ *opskat.ToolContext, args kvArgs) (any, error) {
+		if err := opskat.KVSet(args.Key, []byte(args.Value)); err != nil {
+			return nil, err
+		}
+		got, err := opskat.KVGet(args.Key)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"value": string(got)}, nil
+	}).Policy("write")
+
+	// asset_config takes no arguments: the asset a tool runs against is the exec
+	// target the host injects, so the guest reads it off the context instead of
+	// being told which asset it is working on.
+	opskat.Tool("asset_config", func(ctx *opskat.ToolContext, _ noArgs) (any, error) {
+		cfg, err := ctx.AssetConfig()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"config": json.RawMessage(cfg), "asset": ctx.Asset}, nil
+	}).Policy("read")
+
+	// typed_config decodes the asset config into the same struct AssetType
+	// reflected the form from, the way an extension actually consumes it, and
+	// reports what the password field carried.
+	opskat.Tool("typed_config", func(ctx *opskat.ToolContext, _ noArgs) (any, error) {
+		raw, err := ctx.AssetConfig()
+		if err != nil {
+			return nil, err
+		}
+		var cfg fixtureConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+		password, err := cfg.Password.Plaintext()
+		withheld := errors.Is(err, opskat.ErrCredentialWithheld)
+		if err != nil && !withheld {
+			return nil, err
+		}
+		return map[string]any{"passwordSet": cfg.Password.IsSet(), "password": password, "withheld": withheld}, nil
+	}).Policy("read")
+
+	// http_get and tcp_echo reach the network through host IO, so a test sees
+	// exactly what the host's network gate lets a guest reach.
+	opskat.Tool("http_get", func(_ *opskat.ToolContext, args urlArgs) (any, error) {
+		h, err := opskat.IOOpen("http", map[string]any{"method": "GET", "url": args.URL})
+		if err != nil {
+			return nil, err
+		}
+		defer h.Close()
+		meta, err := h.Flush()
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(h)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": meta.Status, "headers": meta.Headers, "body": string(body)}, nil
+	}).Policy("read")
+
+	opskat.Tool("tcp_echo", func(_ *opskat.ToolContext, args addrArgs) (any, error) {
+		return tcpEcho(args.Addr)
+	}).Policy("read")
+
+	opskat.Tool("log", func(_ *opskat.ToolContext, args logArgs) (any, error) {
+		opskat.Log(args.Level, args.Msg)
+		return map[string]any{"ok": true}, nil
+	}).Policy("read")
+
+	// spin busy-loops for the requested duration without ever yielding to a WASI
+	// clock, so a host-side deadline has to interrupt the guest to stop it.
+	opskat.Tool("spin", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).Policy("read")
+	// spin_short and spin_long are spin with their own declared timeouts, which
+	// replace the host's default for their calls — shorter and longer.
+	opskat.Tool("spin_short", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).Policy("read").Timeout(300 * time.Millisecond)
+	opskat.Tool("spin_long", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).Policy("read").Timeout(time.Minute)
+
+	// blob returns a result of the requested size, so a test can cross the
+	// host's result size limit.
+	opskat.Tool("blob", func(_ *opskat.ToolContext, args blobArgs) (any, error) {
+		return map[string]any{"data": strings.Repeat("x", args.Bytes)}, nil
+	}).Policy("read")
+
+	opskat.RegisterAction("spin", func(ctx *opskat.ActionContext) (any, error) {
+		var args spinArgs
+		if err := json.Unmarshal(ctx.Args, &args); err != nil {
+			return nil, err
+		}
+		return spin(args.MS), nil
+	})
+
+	// stream emits events then returns; it polls ShouldStop so the test can
+	// observe cooperative cancellation.
+	opskat.RegisterAction("stream", func(ctx *opskat.ActionContext) (any, error) {
+		var args struct {
+			Count int `json:"count"`
+			Delay int `json:"delay_ms"`
+		}
+		if err := json.Unmarshal(ctx.Args, &args); err != nil {
+			return nil, err
+		}
+		sent := 0
+		for i := 0; i < args.Count; i++ {
+			if ctx.ShouldStop() {
+				return map[string]any{"sent": sent, "stopped": true}, nil
+			}
+			if err := ctx.Events.Send("progress", map[string]any{"i": i}); err != nil {
+				return nil, err
+			}
+			sent++
+			if args.Delay > 0 {
+				time.Sleep(time.Duration(args.Delay) * time.Millisecond)
+			}
+		}
+		return map[string]any{"sent": sent, "stopped": false}, nil
+	})
+
+	// tcp_echo as an action: it blocks in a host read until the server answers,
+	// so a test can see that canceling the action interrupts host IO instead of
+	// waiting for the guest to next poll ShouldStop.
+	opskat.RegisterAction("tcp_echo", func(ctx *opskat.ActionContext) (any, error) {
+		var args addrArgs
+		if err := json.Unmarshal(ctx.Args, &args); err != nil {
+			return nil, err
+		}
+		return tcpEcho(args.Addr)
+	})
+
+	// should_stop reports the cancellation flag once, without looping. A fresh
+	// invocation must never inherit a previous invocation's cancellation.
+	opskat.RegisterAction("should_stop", func(ctx *opskat.ActionContext) (any, error) {
+		return map[string]any{"stopped": ctx.ShouldStop()}, nil
+	})
+
+	opskat.RegisterConfigValidator(func(config json.RawMessage) []opskat.ValidationError {
+		var cfg fixtureConfig
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return []opskat.ValidationError{{Field: "", Message: err.Error()}}
+		}
+		if cfg.Endpoint == "" {
+			return []opskat.ValidationError{{Field: "endpoint", Message: "endpoint is required"}}
+		}
+		// The host reserves this key for connection settings (proxy chain, TLS)
+		// it owns; it must strip it before this call ever sees the config. If it
+		// shows up here, the host's boundary leaked it to the guest.
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(config, &raw); err == nil {
+			if _, leaked := raw["__opskat_connection"]; leaked {
+				return []opskat.ValidationError{{Field: "", Message: "host connection config leaked to guest"}}
+			}
+		}
+		return nil
+	})
+}
+
+func spin(ms int) map[string]any {
+	deadline := time.Now().Add(time.Duration(ms) * time.Millisecond)
+	iterations := 0
+	for time.Now().Before(deadline) {
+		iterations++
+	}
+	return map[string]any{"iterations": iterations}
+}
+
+func tcpEcho(addr string) (any, error) {
+	conn, err := opskat.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 16)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"echo": string(buf[:n])}, nil
+}

@@ -34,10 +34,6 @@ vi.mock("@/components/settings/CustomTypeEditorDialog", () => ({
     ) : null,
 }));
 
-vi.mock("@/extension", () => ({
-  useExtensionStore: (sel: (s: { extensions: Record<string, unknown> }) => unknown) => sel({ extensions: {} }),
-}));
-
 describe("AssetTypePicker", () => {
   it("shows the current type label on the trigger", () => {
     render(<AssetTypePicker value="redis" onChange={() => {}} />);

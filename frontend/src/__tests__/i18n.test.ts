@@ -4,7 +4,7 @@ import path from "node:path";
 
 import zhCommon from "@/i18n/locales/zh-CN/common.json";
 import enCommon from "@/i18n/locales/en/common.json";
-import { getBuiltinTypes } from "@/lib/assetTypes";
+import { getAllAssetTypes } from "@/lib/assetTypes";
 
 type LocaleTree = Record<string, unknown>;
 
@@ -103,14 +103,16 @@ describe("i18n resources", () => {
   });
 
   it("covers built-in asset type policy keys", () => {
-    const keys = getBuiltinTypes().flatMap((def) => {
+    // 只有内置类型的文案住在 common.json 里；扩展提供的类型带自己的 `ext-<name>` 命名空间，
+    // 而它们在这个测试进程里根本没注册（注册表此刻只有内置类型）。
+    const keys = getAllAssetTypes().flatMap((def) => {
       if (!def.policy) return [];
       return [
         def.policy.titleKey,
         def.policy.hintKey,
         def.policy.testPlaceholderKey,
         ...def.policy.fields.flatMap((field) => [field.labelKey, field.placeholderKey]),
-      ];
+      ].filter((key): key is string => !!key);
     });
 
     expect(keys.filter((key) => !hasLocaleKey(zhCommon, key))).toEqual([]);

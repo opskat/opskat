@@ -14,7 +14,7 @@ import (
 // 重建的，第 1 次 Send 恰好开着某个 Tab 就会让该类型此后永远不过门禁。
 //
 // prompt 里的类型清单保留，但只作为**发现**入口（让模型知道 help 存在、覆盖了哪些
-// 类型），不再满足门禁——见 internal/app/ai/chat.go 的 allBuiltinAssetTypeSkills。
+// 类型），不再满足门禁——见 internal/app/ai/chat.go 的 allAssetTypeSkills。
 //
 // 生命周期与会话一致，与 LocalToolGate 的 allow-list 相同。
 type DocGate struct {
