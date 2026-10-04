@@ -33,6 +33,7 @@ import {
   Puzzle,
 } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
+import { GENERIC_APPROVAL_TYPE, genericApprovalOp } from "./genericApprovalOp";
 
 interface ApprovalItemData {
   type: string;
@@ -98,7 +99,10 @@ const BATCH_COLLAPSE_THRESHOLD = 10;
 // React.FC，这张表按调用点唯一用到的形状（接收 className 的组件）收窄类型。
 type IconComponent = ComponentType<{ className?: string }>;
 
-function TypeBadge({ type }: { type: string }) {
+function TypeBadge({ type, command }: { type: string; command: string }) {
+  const { t } = useTranslation();
+  // 通用资产的操作类型(HTTP 请求 / 命令 / 取值)由匹配对象决定。
+  const op = type === GENERIC_APPROVAL_TYPE ? genericApprovalOp(command) : null;
   const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
@@ -113,11 +117,14 @@ function TypeBadge({ type }: { type: string }) {
     oss: S3Icon,
     ext_dev_install: Puzzle,
   };
-  const Icon = icons[type] || Terminal;
+  const Icon = op?.icon ?? icons[type] ?? Terminal;
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted">
+    <span
+      data-testid="approval-type-badge"
+      className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted"
+    >
       <Icon className="h-3 w-3" />
-      {type.toUpperCase()}
+      {op ? t(op.labelKey) : type.toUpperCase()}
     </span>
   );
 }
@@ -203,7 +210,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           command: i.command,
           // detail 是一条 cp 传输唯一携带"两端基点"的地方（"opsctl cp <src> → <dst>"）。
           // internal/app/opsctl/approval.go 的 handleBatchApproval 与 approval.BatchItem
-          // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
+          // 都带了它（batch verb 的混合批只给带 scope / 通用资产目标的条目逐条填），折叠摘要
           // 因此报得出两端基点，不止是条数。
           detail: i.detail,
         }));
@@ -256,13 +263,15 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
     ? current.items.map((item, i) => editState[current.id]?.[i] ?? rememberPrefill(item))
     : [];
   // detail 是 cp 每条共享的"两端基点"摘要（cp.go 给每条 BatchItem 都填了同一句
-  // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的 exec/sql/redis 混合批
-  // 不产出（item.Detail 留空）。折叠是为 cp 设计的，只对带 detail 的批生效——batch verb
-  // 的条目分属不同资产/类型，没有可摘要的共同点，硬折叠会藏起本该看见的差异。
+  // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的混合批只给带 scope 或审批
+  // 展示补充（通用资产的目标地址）的条目逐条填 Detail，各条不同。折叠是为 cp 设计的，只对
+  // 每条共享同一句非空 detail 的批生效——batch verb 的条目分属不同资产/类型，没有可摘要的
+  // 共同点，硬折叠会藏起本该看见的差异。
   const isBatchCollapsed =
     !!current &&
     current.kind === "batch" &&
     !!current.items[0]?.detail &&
+    current.items.every((item) => item.detail === current.items[0].detail) &&
     current.items.length > BATCH_COLLAPSE_THRESHOLD;
 
   // 折叠态与展开态共用同一份单条渲染，避免同一段 JSX 抄两份。cur 显式传参而不是闭包
@@ -275,7 +284,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           <ScopeBadge item={item} />
         ) : (
           <>
-            <TypeBadge type={item.type} />
+            <TypeBadge type={item.type} command={item.command} />
             {item.asset_name && (
               <span className="text-sm text-muted-foreground">
                 {item.asset_name}
@@ -374,7 +383,11 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
   );
 
   return (
-    <Dialog open={open && !suspended} onOpenChange={handleOpenChange}>
+    // key 按当前审批项切换：Radix 把 overlay 与 content 各包一层 Presence+Portal，退场时长不同。
+    // 队列清空后紧接着来第二条审批时，若复用同一个 Dialog，先退场完的 overlay 会重新挂载并追加到
+    // body 末尾，同为 z-50 却排在仍存活的 content 之后，盖住新弹窗的按钮。换 key 让 React 同步
+    // 拆掉旧的整棵 Dialog（overlay 与 content 一起），新审批总是全新且顺序正确的一对。
+    <Dialog key={current?.id ?? "idle"} open={open && !suspended} onOpenChange={handleOpenChange}>
       <DialogContent
         data-testid="opsctl-approval-dialog"
         className="sm:max-w-lg max-h-[80vh] flex flex-col"

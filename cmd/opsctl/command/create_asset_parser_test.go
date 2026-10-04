@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 type failingWriter struct{ err error }
@@ -228,6 +230,7 @@ func TestParseAssetCreateBarePasswordRefusesWithoutTerminal(t *testing.T) {
 
 // 交互提示排在其余校验之后：参数写错时不该先让用户白输一遍密码。
 func TestParseAssetCreateBarePasswordPromptsOnlyAfterOtherValidation(t *testing.T) {
+	setupGenericOpsctl(t) // 未注册的类型名要先经自定义类型表确认不是某个类型标识
 	tests := []struct {
 		name string
 		args []string
@@ -407,4 +410,80 @@ func TestParseAssetCreatePlaintextWarningsNeverEchoValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --type <slug> 解析成绑定该自定义类型的通用资产；--secret <字段> 在终端无回显读入。
+func TestParseAssetCreateCustomTypeSecretPromptsWithoutEcho(t *testing.T) {
+	setupGenericOpsctl(t)
+	var prompts int
+	request, stderr, err := parseAssetCreateForTest(t, []string{
+		"--type", "grafana", "--name", "g", "--config", `{"host":"grafana.internal"}`, "--secret", "token",
+	}, func() (string, error) {
+		prompts++
+		return "prompted-token", nil
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, prompts)
+	assert.Equal(t, asset_entity.AssetTypeGeneric, request.asset.Type)
+	cfg, err := request.asset.GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "grafana", cfg.CustomType)
+	assert.Equal(t, "prompted-token", request.config["token"])
+	assert.Equal(t, "grafana.internal", request.config["host"])
+	assert.Contains(t, stderr, "token", "the prompt names the field it reads")
+	assert.NotContains(t, stderr, "prompted-token")
+	assert.NotContains(t, stderr, "shell history", "a prompted secret never touches argv")
+}
+
+func TestParseAssetCreateCustomTypeSecretRefusesWithoutTerminal(t *testing.T) {
+	setupGenericOpsctl(t)
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--type", "grafana", "--name", "g", "--secret", "token"}, nil, nil)
+	require.Error(t, err)
+	var refusal *structuredRefusal
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, needsTTYMarker, refusal.marker)
+	assert.Contains(t, err.Error(), "--secret")
+	assert.Empty(t, stderr)
+}
+
+// --secret 的字段写错时在提示之前报错，用户不必白输一遍密钥。
+func TestParseAssetCreateCustomTypeSecretRejectsBadFieldsBeforePrompting(t *testing.T) {
+	setupGenericOpsctl(t)
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"non-secret field":    {args: []string{"--secret", "host"}, want: "host"},
+		"unknown field":       {args: []string{"--secret", "nope"}, want: "nope"},
+		"also set in config":  {args: []string{"--config", `{"token":"x"}`, "--secret", "token"}, want: "token"},
+		"given twice":         {args: []string{"--secret", "token", "--secret", "token"}, want: "token"},
+		"unknown custom type": {args: []string{"--type", "no-such-type", "--secret", "token"}, want: "no-such-type"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string{"--type", "grafana", "--name", "g"}, tc.args...)
+			_, _, err := parseAssetCreateForTest(t, args, func() (string, error) {
+				t.Fatal("the prompt must not run before the other validation passes")
+				return "", nil
+			}, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	_, _, err := parseAssetCreateForTest(t, []string{"--type", "grafana", "--name", "g", "--secret", "token"},
+		func() (string, error) { return "", nil }, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+}
+
+// 单凭据类型的「凭据来源互斥」规则不套用到通用资产：字段名恰好叫 password / private_key
+// 的两个密钥字段可以同时给出。
+func TestParseAssetCreateCustomTypeSkipsSingleCredentialExclusivity(t *testing.T) {
+	setupGenericOpsctl(t)
+	request, _, err := parseAssetCreateForTest(t, []string{
+		"--type", "legacy-app", "--name", "l", "--config", `{"password":"a","private_key":"b"}`,
+	}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "a", request.config["password"])
+	assert.Equal(t, "b", request.config["private_key"])
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/app/ai"
+	"github.com/opskat/opskat/internal/app/customtype"
 	"github.com/opskat/opskat/internal/app/etcd"
 	"github.com/opskat/opskat/internal/app/extension"
 	"github.com/opskat/opskat/internal/app/external_edit"
@@ -31,9 +32,10 @@ import (
 	"github.com/opskat/opskat/internal/app/system"
 	"github.com/opskat/opskat/internal/app/vnc"
 
+	aipermission "github.com/opskat/opskat/internal/ai/permission"
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/assetconn"
-	_ "github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/pkg/portable"
@@ -41,6 +43,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
 	"github.com/opskat/opskat/internal/service/localterm_svc"
@@ -206,6 +209,8 @@ func main() {
 
 	// 2. 构造 binder（system 先建，其它持有它做 LangProvider/WindowActivator）
 	sys := system.New(appCtx, skillContent)
+	// 测试连接经 SSH 隧道 / 代理链 SSH 层拨号时由 System 把连接池交给 tester。
+	sys.SetSSHPool(pool)
 	sshB := ssh.New(appCtx, sys, sshMgr, sftpSvc, pool)
 	queryB := query.New(appCtx, sys, pool)
 	redisB := redis.New(appCtx, sys, pool)
@@ -220,6 +225,7 @@ func main() {
 	aiB := ai.New(appCtx, sys, pool)
 	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
+	customtypeB := customtype.New(sys)
 	extB := extension.New(appCtx, sys, pool)
 	externalEditEmitter := external_edit.NewEventEmitter()
 	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
@@ -242,7 +248,10 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB}
+	// 保留类型名：自定义类型标识不能与内置类型、已加载扩展声明的类型重名。
+	registerReservedTypeNames()
+
+	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, customtypeB, extB, extEditB, ossB}
 	var forceQuit atomic.Bool
 	sys.SetConfirmQuitHandler(func() { forceQuit.Store(true) })
 
@@ -338,7 +347,7 @@ func main() {
 			go pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB,
+			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, customtypeB, extB, extEditB, ossB,
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,
@@ -450,6 +459,31 @@ func initExtensionSystem(
 		}
 		wailsRuntime.EventsEmit(wctx, "ext:ready", nil)
 	}()
+}
+
+// registerReservedTypeNames 装 custom_type_svc 的保留类型名来源（reservedTypeNames）。
+// custom_type_svc 不得 import internal/assettype（避免循环依赖），保留名只能由组合根注入；
+// 闭包在每次创建类型时才求值，扩展异步加载、装卸后都能看到最新集合。
+func registerReservedTypeNames() {
+	custom_type_svc.CustomType().SetReservedNames(reservedTypeNames)
+}
+
+// reservedTypeNames 是不能用作自定义类型标识的类型名：资产类型注册表里的全部类型（扩展加载时
+// 注册进同一张表，归属扩展的带上扩展名，重名时据此指出冲突对象），外加 --type / batch 前缀
+// 认的内置别名与驱动名 permission.BuiltinDeclaredTypeNames()——同名标识会被它们遮蔽。
+// 注册表名排在前面：custom_type_svc 取第一个命中，扩展类型的归属不会被同名别名盖掉。
+func reservedTypeNames() []custom_type_svc.ReservedName {
+	types := assettype.RegisteredTypes()
+	aliases := aipermission.BuiltinDeclaredTypeNames()
+	names := make([]custom_type_svc.ReservedName, 0, len(types)+len(aliases))
+	for _, t := range types {
+		ext, _ := assettype.ExtensionOwnerOf(t)
+		names = append(names, custom_type_svc.ReservedName{Name: t, Extension: ext})
+	}
+	for _, n := range aliases {
+		names = append(names, custom_type_svc.ReservedName{Name: n})
+	}
+	return names
 }
 
 // desktopExecExecutor 把统一 exec handler 交给 opsctl binder：opsctl 对扩展资产的命令

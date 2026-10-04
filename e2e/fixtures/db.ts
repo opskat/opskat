@@ -64,6 +64,17 @@ export interface AIProviderRow {
   is_active: number;
 }
 
+export interface CustomTypeRow {
+  id: number;
+  slug: string;
+  name: string;
+  exec_mode: string;
+  fields: string;
+  http_config: string;
+  command_config: string;
+  default_policy: string;
+}
+
 // Typed views over the shared statements. The row shapes are owned here (specs are
 // the only typed consumer; the CLI prints whatever comes back), the SQL is owned by
 // db-queries.js — so neither file can change a column without the other noticing.
@@ -83,6 +94,7 @@ export const findApprovedGrantItems = queries.findApprovedGrantItems as (
 export const findAIProviderByName = queries.findAIProviderByName as (
   name: string
 ) => AIProviderRow | undefined;
+export const findCustomTypeBySlug = queries.findCustomTypeBySlug as (slug: string) => CustomTypeRow | undefined;
 
 /**
  * 等审计行落库，返回满足断言的那一份快照。审计断言一律走这里。

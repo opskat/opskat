@@ -7,6 +7,7 @@ import (
 
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
@@ -53,6 +54,57 @@ func TestAssetSvc_Create(t *testing.T) {
 			err := Asset().Create(ctx, asset)
 			assert.Error(t, err)
 		})
+	})
+}
+
+// 默认策略由资产自身决定的类型（通用资产复制其自定义类型的默认规则）：Create 必须
+// 把资产配置交给按资产的提供者；找不到类型时创建失败，而不是写一个与类型无关的策略。
+func TestAssetSvc_CreateUsesAssetDefaultPolicy(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+	newGeneric := func() *asset_entity.Asset {
+		a := &asset_entity.Asset{Name: "grafana-prod", Type: asset_entity.AssetTypeGeneric}
+		require.NoError(t, a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}))
+		return a
+	}
+
+	t.Run("copies the provider's policy", func(t *testing.T) {
+		var seenConfig string
+		policy.RegisterAssetDefaultPolicy(asset_entity.AssetTypeGeneric, func(_ context.Context, cfg string) (any, error) {
+			seenConfig = cfg
+			return &policy.CommandPolicy{AllowList: []string{"GET *"}}, nil
+		})
+		t.Cleanup(func() { policy.UnregisterAssetDefaultPolicy(asset_entity.AssetTypeGeneric) })
+		a := newGeneric()
+		mockRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+		require.NoError(t, Asset().Create(ctx, a))
+		assert.JSONEq(t, `{"custom_type":"grafana"}`, seenConfig)
+		assert.JSONEq(t, `{"allow_list":["GET *"],"deny_list":null}`, a.CmdPolicy)
+	})
+
+	t.Run("an explicit policy is kept", func(t *testing.T) {
+		policy.RegisterAssetDefaultPolicy(asset_entity.AssetTypeGeneric, func(context.Context, string) (any, error) {
+			t.Fatal("the provider must not run when the caller supplied a policy")
+			return nil, nil
+		})
+		t.Cleanup(func() { policy.UnregisterAssetDefaultPolicy(asset_entity.AssetTypeGeneric) })
+		a := newGeneric()
+		a.CmdPolicy = `{"allow_list":["*"]}`
+		mockRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+		require.NoError(t, Asset().Create(ctx, a))
+		assert.Equal(t, `{"allow_list":["*"]}`, a.CmdPolicy)
+	})
+
+	t.Run("a provider error fails the create", func(t *testing.T) {
+		policy.RegisterAssetDefaultPolicy(asset_entity.AssetTypeGeneric, func(context.Context, string) (any, error) {
+			return nil, errors.New("custom type grafana not found")
+		})
+		t.Cleanup(func() { policy.UnregisterAssetDefaultPolicy(asset_entity.AssetTypeGeneric) })
+
+		err := Asset().Create(ctx, newGeneric())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "custom type grafana not found")
 	})
 }
 

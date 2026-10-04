@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cago-frame/cago/database/db"
@@ -19,7 +22,10 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/migrations"
 )
 
@@ -47,7 +53,7 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	t.Helper()
 
 	origExec, hadExec := permission.ExecutorFor(assetType)
-	origHelp, _ := permission.HelpFor(assetType)
+	origHelp, hadHelp := permission.HelpFor(assetType)
 	origCanon, hadCanon := permission.CanonicalizeFor(assetType)
 	origPrecheck, hadPrecheck := permission.PrecheckFor(assetType)
 
@@ -64,6 +70,14 @@ func replaceExecutorForTest(t *testing.T, assetType string, fake permission.Exec
 	t.Cleanup(func() {
 		permission.UnregisterExecutor(assetType)
 		if !hadExec {
+			// assetType had no executor before the swap — it was either unregistered
+			// (nothing to restore) or doc-only (generic, rdp, vnc, local, oss:
+			// RegisterHelpDoc, not RegisterExecutor). Restoring only the executor half
+			// of a doc-only type would leave it permanently promoted to exec-capable
+			// for every test that runs later in this binary.
+			if hadHelp {
+				permission.RegisterHelpDoc(assetType, origHelp)
+			}
 			return
 		}
 		if hadCanon {
@@ -558,4 +572,228 @@ func TestHandleBatch_AggregateOutcomeSemantics(t *testing.T) {
 				decision.Decision, decision.DecisionSource, aictx.SourceBatchFailed)
 		}
 	})
+}
+
+// TestHandleBatchCommand_GenericAssetGateKeyedByCustomTypeSlug locks that batch's doc gate
+// check uses assettype.TypeName — the custom type slug for a generic asset — the same key
+// handleHelp marks (see tool_handlers_unified.go and its TestHandleHelp_GenericAsset*
+// tests). Seeing help for one generic asset, or its type, must cover every other asset
+// built on the same custom type in batch too, not just in single exec. The item runs
+// through the real generic executor and canonicalizer, so "executed" means the HTTP
+// server behind the asset saw the request.
+func TestHandleBatchCommand_GenericAssetGateKeyedByCustomTypeSlug(t *testing.T) {
+	for _, helpRef := range []string{"metrics-a", "metrics"} {
+		t.Run("help "+helpRef, func(t *testing.T) {
+			hits := setupGenericBatch(t)
+			checker, _ := newRecordingChecker()
+			ctx := WithDocGate(context.Background(), NewDocGate())
+			ctx = permission.WithPolicyChecker(ctx, checker)
+			// help on another asset of the type, or on the type slug itself — never on
+			// metrics-b, and never on the static "generic" type.
+			if _, err := handleHelp(ctx, map[string]any{"asset": helpRef}); err != nil {
+				t.Fatalf("help %s: %v", helpRef, err)
+			}
+
+			out, err := handleBatchCommand(ctx, map[string]any{
+				"commands": `[{"asset":"metrics-b","command":"GET /"}]`,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := hits(); got != 1 {
+				t.Fatalf("metrics-b should have executed once (gate satisfied via the shared slug key), "+
+					"server saw %d requests; output: %s", got, out)
+			}
+		})
+	}
+}
+
+// setupGenericBatch creates, on real repositories (setupGenericPutDB), an HTTP custom type
+// "metrics" whose Base URL points at an httptest server, plus two assets metrics-a and
+// metrics-b of that type (put_asset copies the type's default `GET *` allow rule). It
+// returns a counter of the requests the server has received.
+func setupGenericBatch(t *testing.T) func() int32 {
+	t.Helper()
+	setupGenericPutDB(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	if err := custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Metrics", Slug: "metrics", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}},
+		HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "http://{{host}}"},
+	}); err != nil {
+		t.Fatalf("save custom type: %v", err)
+	}
+	host := strings.TrimPrefix(srv.URL, "http://")
+	for _, name := range []string{"metrics-a", "metrics-b"} {
+		if _, err := handlePutAsset(context.Background(), map[string]any{
+			"name": name, "type": "metrics", "config": map[string]any{"host": host},
+		}); err != nil {
+			t.Fatalf("put_asset %s: %v", name, err)
+		}
+	}
+	return hits.Load
+}
+
+// TestHandleBatchCommand_GenericApprovalItemCarriesRenderedTarget locks spec「策略、审批与
+// 审计」: the approval shows the rendered target address for an HTTP generic asset — in a
+// batch approval as well as a single exec one.
+func TestHandleBatchCommand_GenericApprovalItemCarriesRenderedTarget(t *testing.T) {
+	setupGenericBatch(t)
+	var got []permission.ApprovalItem
+	confirm := func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		got = items
+		return permission.ApprovalResponse{Decision: "deny"}
+	}
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, permission.NewCommandPolicyChecker(confirm))
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), "metrics")
+
+	if _, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"metrics-a","command":"POST /api/x?y=1"}]`,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want one approval item, got %d", len(got))
+	}
+	if got[0].Command != "POST /api/x" {
+		t.Fatalf("approval command = %q, want the match object %q", got[0].Command, "POST /api/x")
+	}
+	if !strings.HasPrefix(got[0].Detail, "HTTP request: POST http://127.0.0.1:") || !strings.HasSuffix(got[0].Detail, "/api/x?y=1") {
+		t.Fatalf("approval detail = %q, want the rendered target address", got[0].Detail)
+	}
+}
+
+// TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated is the converse of the test
+// above: marking only the static "generic" type (the old, wrong key) must not satisfy the
+// gate for a generic asset whose custom type slug was never documented.
+func TestHandleBatchCommand_GenericAssetUndocumentedTypeIsGated(t *testing.T) {
+	hits := setupGenericBatch(t)
+
+	checker, _ := newRecordingChecker()
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeGeneric)
+
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"metrics-b","command":"GET /"}]`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := hits(); got != 0 {
+		t.Fatalf("the item must stay gated — the static \"generic\" type was documented, not the "+
+			"\"metrics\" slug — server saw %d requests; output: %s", got, out)
+	}
+	if !strings.Contains(out, "call help") {
+		t.Fatalf("output should carry the gate guidance, got %s", out)
+	}
+}
+
+// TestHandleBatchCommand_GenericItemAuditStoresOnlySummary locks spec「策略、审批与审计」
+// for AI batch (V16b): a generic HTTP item whose response echoes the injected Authorization
+// header stores only its status line — in its batch_exec_item row and in the aggregated
+// batch_exec result — while the model still receives the full output. A non-generic item
+// in the same batch keeps its full output in both places.
+func TestHandleBatchCommand_GenericItemAuditStoresOnlySummary(t *testing.T) {
+	setupGenericPutDB(t)
+	auditRepo := setupFakeAuditRepo(t)
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	secret := "glsa_batch_echo_must_not_reach_audit"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "Authorization=%s", r.Header.Get("Authorization")) //nolint:gosec // test server echoes the injected header back for the assertion
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	if err := custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "Echo", Slug: "echo", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}, {Name: "token", Secret: true, Required: true}},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "http://{{host}}", Auth: []custom_type_entity.AuthBinding{
+			{Type: "header", Name: "Authorization", Values: []string{"Bearer {{token}}"}},
+		}},
+	}); err != nil {
+		t.Fatalf("save custom type: %v", err)
+	}
+	if _, err := handlePutAsset(ctx, map[string]any{
+		"name": "echo-a", "type": "echo",
+		"config": map[string]any{"host": strings.TrimPrefix(srv.URL, "http://"), "token": secret},
+	}); err != nil {
+		t.Fatalf("put_asset echo-a: %v", err)
+	}
+	cache := &asset_entity.Asset{Name: "cache-1", Type: asset_entity.AssetTypeRedis}
+	if err := asset_repo.Asset().Create(ctx, cache); err != nil {
+		t.Fatalf("create cache-1: %v", err)
+	}
+	replaceExecutorForTest(t, asset_entity.AssetTypeRedis,
+		func(context.Context, *asset_entity.Asset, string, string) (string, error) {
+			return "PONG-full-output", nil
+		})
+
+	checker, _ := newRecordingChecker()
+	ctx = WithDocGate(ctx, NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), "echo")
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeRedis)
+	ctx = aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
+
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"echo-a","command":"GET /x"},{"asset":"cache-1","command":"PING"}]`,
+	})
+	if err != nil {
+		t.Fatalf("handle batch: %v", err)
+	}
+	if !strings.Contains(out, "Bearer "+secret) || !strings.Contains(out, "PONG-full-output") {
+		t.Fatalf("the model must still receive every item's full output, got %s", out)
+	}
+
+	aggregate, ok := aictx.GetAuditResult(ctx)
+	if !ok {
+		t.Fatalf("a batch with a generic item must record its aggregated audit result")
+	}
+	if strings.Contains(aggregate, secret) || !strings.Contains(aggregate, "HTTP 200 OK") ||
+		!strings.Contains(aggregate, "PONG-full-output") {
+		t.Fatalf("aggregated audit result = %s, want the generic item's status line only and the redis output kept", aggregate)
+	}
+
+	rows := map[string]string{}
+	auditRepo.mu.Lock()
+	for _, row := range auditRepo.logs {
+		if row.ToolName == "batch_exec_item" {
+			rows[row.AssetName] = row.Result
+		}
+	}
+	auditRepo.mu.Unlock()
+	var genericItem, redisItem batchResultItem
+	if err := json.Unmarshal([]byte(rows["echo-a"]), &genericItem); err != nil {
+		t.Fatalf("generic item audit row %q: %v", rows["echo-a"], err)
+	}
+	if err := json.Unmarshal([]byte(rows["cache-1"]), &redisItem); err != nil {
+		t.Fatalf("redis item audit row %q: %v", rows["cache-1"], err)
+	}
+	if genericItem.Stdout != "HTTP 200 OK" || strings.Contains(rows["echo-a"], secret) {
+		t.Fatalf("generic batch_exec_item result = %s, want stdout to be the status line only", rows["echo-a"])
+	}
+	if redisItem.Stdout != "PONG-full-output" {
+		t.Fatalf("redis batch_exec_item result = %s, want its full output unchanged", rows["cache-1"])
+	}
+}
+
+// TestHandleBatchCommand_NonGenericBatchLeavesAggregateAuditRaw: without a generic item the
+// aggregated batch_exec row keeps the raw tool output (no override is recorded).
+func TestHandleBatchCommand_NonGenericBatchLeavesAggregateAuditRaw(t *testing.T) {
+	env := setupBatch(t)
+	ctx := aictx.WithAuditResultSlot(env.ctx, aictx.NewAuditResultSlot())
+	if _, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"cache-1","command":"PING"}]`,
+	}); err != nil {
+		t.Fatalf("handle batch: %v", err)
+	}
+	if got, ok := aictx.GetAuditResult(ctx); ok {
+		t.Fatalf("a batch without generic items must not override the audit result, got %q", got)
+	}
 }

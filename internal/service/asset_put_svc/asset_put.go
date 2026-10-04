@@ -49,10 +49,7 @@ type Result struct {
 // Prepared is a side-effect-free operation ready for approval and commit.
 type Prepared struct {
 	asset          *asset_entity.Asset
-	handler        assettype.AssetTypeHandler
-	config         map[string]any
-	approvalConfig map[string]any
-	credential     assettype.CredentialPlan
+	create         assettype.PreparedCreate
 	referencedType string
 	authentication *AuthenticationRef
 }
@@ -67,11 +64,11 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	var preparedCreate assettype.PreparedCreate
 	var err error
 	if asset.ID == 0 {
-		preparedCreate, err = assettype.PrepareCreate(asset.Type, config)
+		preparedCreate, err = assettype.PrepareCreate(ctx, &asset, config)
 	} else {
 		config, err = updateAutomationContext(&asset, config)
 		if err == nil {
-			preparedCreate, err = assettype.PrepareUpdate(asset.Type, config)
+			preparedCreate, err = assettype.PrepareUpdate(ctx, &asset, config)
 		}
 	}
 	if err != nil {
@@ -98,10 +95,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 
 	return &Prepared{
 		asset:          &asset,
-		handler:        preparedCreate.Handler,
-		config:         preparedCreate.Config,
-		approvalConfig: preparedCreate.Approval,
-		credential:     preparedCreate.Credential,
+		create:         preparedCreate,
 		referencedType: referencedType,
 		authentication: authentication,
 	}, nil
@@ -124,14 +118,14 @@ func Commit(ctx context.Context, prepared *Prepared) (*Result, error) {
 
 		asset := *prepared.asset
 		if asset.ID == 0 {
-			if err := prepared.handler.ApplyCreateArgs(txCtx, &asset, config); err != nil {
+			if err := prepared.create.Handler.ApplyCreateArgs(txCtx, &asset, config); err != nil {
 				return fmt.Errorf("apply create args: %w", err)
 			}
 			if err := asset_svc.Asset().Create(txCtx, &asset); err != nil {
 				return fmt.Errorf("create asset: %w", err)
 			}
 		} else {
-			if err := prepared.handler.ApplyUpdateArgs(txCtx, &asset, config); err != nil {
+			if err := prepared.create.Handler.ApplyUpdateArgs(txCtx, &asset, config); err != nil {
 				return fmt.Errorf("apply update args: %w", err)
 			}
 			if err := updateAsset(txCtx, &asset); err != nil {
@@ -183,7 +177,7 @@ func (p *Prepared) SafeApprovalDetail() map[string]any {
 	return map[string]any{
 		"name":   p.asset.Name,
 		"type":   p.asset.Type,
-		"config": cloneMap(p.approvalConfig),
+		"config": cloneMap(p.create.Approval),
 	}
 }
 
@@ -194,8 +188,8 @@ func (p *Prepared) SafeAuditArgs() map[string]any {
 	if p.asset.ID > 0 {
 		out["id"] = p.asset.ID
 	}
-	if p.credential.Kind == assettype.CredentialKindReference {
-		out["authentication"] = AuthenticationRef{Type: p.referencedType, Ref: p.credential.ReferenceID}
+	if p.create.Credential.Kind == assettype.CredentialKindReference {
+		out["authentication"] = AuthenticationRef{Type: p.referencedType, Ref: p.create.Credential.ReferenceID}
 	} else if p.authentication != nil {
 		out["authentication"] = *p.authentication
 	}
@@ -217,22 +211,22 @@ func (p *Prepared) SafeAuditArgsForResult(result *Result) map[string]any {
 }
 
 func (p *Prepared) resolveAuthentication(ctx context.Context) (map[string]any, *AuthenticationRef, error) {
-	switch p.credential.Kind {
+	switch p.create.Credential.Kind {
 	case assettype.CredentialKindNone:
-		return cloneMap(p.config), p.authentication, nil
+		return cloneMap(p.create.Config), p.authentication, nil
 	case assettype.CredentialKindReference:
-		cred, err := credential_mgr_svc.RequireType(ctx, p.credential.ReferenceID, p.credential.AcceptedTypes)
+		cred, err := credential_mgr_svc.RequireType(ctx, p.create.Credential.ReferenceID, p.create.Credential.AcceptedTypes)
 		if err != nil {
 			return nil, nil, err
 		}
 		return p.bind(cred)
 	default:
-		return nil, nil, fmt.Errorf("unsupported credential plan kind %q", p.credential.Kind)
+		return nil, nil, fmt.Errorf("unsupported credential plan kind %q", p.create.Credential.Kind)
 	}
 }
 
 func (p *Prepared) bind(cred *credential_entity.Credential) (map[string]any, *AuthenticationRef, error) {
-	config, err := (&assettype.PreparedCreate{Handler: p.handler, Config: p.config}).BindCredential(assettype.CredentialBinding{ID: cred.ID, Type: cred.Type})
+	config, err := p.create.BindCredential(assettype.CredentialBinding{ID: cred.ID, Type: cred.Type})
 	if err != nil {
 		return nil, nil, err
 	}

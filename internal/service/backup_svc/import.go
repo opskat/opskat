@@ -3,6 +3,7 @@ package backup_svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -11,7 +12,9 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/sshagent"
@@ -111,7 +114,54 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 4. 分组
+		// 4. 自定义类型。以标识（slug）而非自增 ID 跨库引用（Design decision 13），
+		// 不需要像其他实体那样维护 ID 重映射表：replace 模式用备份替换本地全部类型；
+		// merge 模式标识已存在时保留本地版本，备份中的资产按标识绑定到本地版本
+		// （因此出现的缺值按“新增必填字段”的规则展示，见 custom_type_svc.ResolveAsset）。
+		// localTypesBySlug 记下合并模式保留的本地版本：资产的值要按它的字段结构存储。
+		localTypesBySlug := make(map[string]*custom_type_entity.CustomType)
+		if opts.ImportAssets && len(data.CustomTypes) > 0 {
+			if isReplace {
+				if err := tx.Exec("DELETE FROM custom_types").Error; err != nil {
+					return fmt.Errorf("清除自定义类型失败: %w", err)
+				}
+			}
+			for _, ct := range data.CustomTypes {
+				// 备份是外部输入：类型定义过与保存类型相同的实体校验，执行器与权限判定
+				// 都以"保存时已校验"为前提。
+				if err := ct.Validate(); err != nil {
+					return fmt.Errorf("%s: %w", policy.PolicyFmt(ctx,
+						"custom type %s in the backup is invalid", "备份中的自定义类型 %s 无效", ct.Slug), err)
+				}
+				if !isReplace {
+					var existing custom_type_entity.CustomType
+					err := tx.Where("slug = ?", ct.Slug).First(&existing).Error
+					switch {
+					case err == nil:
+						localTypesBySlug[ct.Slug] = &existing
+						continue // 合并模式：标识已存在，保留本地版本
+					case !errors.Is(err, gorm.ErrRecordNotFound):
+						return fmt.Errorf("检查自定义类型 %s 是否存在失败: %w", ct.Slug, err)
+					}
+				}
+				newCT := *ct
+				newCT.ID = 0
+				if err := tx.Create(&newCT).Error; err != nil {
+					return fmt.Errorf("创建自定义类型 %s 失败: %w", ct.Slug, err)
+				}
+				result.CustomTypesImported++
+			}
+		}
+		// 备份里的值是什么形态（明文 / 已清空）按备份导出时的字段结构判定（见 export.go 的
+		// decryptGenericSecrets/stripGenericSecrets 同一约定），所以用 data.CustomTypes 里
+		// 随备份带的定义；值怎么存则按资产最终绑定的版本（合并模式保留的本地版本，见下面
+		// 资产一步的通用资产分支）。
+		customTypesBySlug := make(map[string]*custom_type_entity.CustomType, len(data.CustomTypes))
+		for _, ct := range data.CustomTypes {
+			customTypesBySlug[ct.Slug] = ct
+		}
+
+		// 5. 分组
 		groupIDMap := make(map[int64]int64)
 		if opts.ImportAssets && len(data.Groups) > 0 {
 			if isReplace {
@@ -138,7 +188,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 5. 资产
+		// 6. 资产
 		assetIDMap := make(map[int64]int64)
 		if opts.ImportAssets && len(data.Assets) > 0 {
 			if isReplace {
@@ -261,6 +311,60 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 							logger.Default().Warn("set redis config in import", zap.Error(err))
 						}
 					}
+				case a.IsGeneric() && a.Config != "":
+					cfg, err := a.GetGenericConfig()
+					if err == nil {
+						backupCT := customTypesBySlug[cfg.CustomType]
+						// 资产绑定的版本：合并模式保留的本地版本，否则是随备份导入的版本。
+						storeCT := backupCT
+						if local, ok := localTypesBySlug[cfg.CustomType]; ok {
+							storeCT = local
+						}
+						for name, v := range cfg.Values {
+							var storeField custom_type_entity.Field
+							if storeCT != nil {
+								f, ok := storeCT.FieldByName(name)
+								if !ok {
+									// 绑定的版本没有这个字段：值随之删除（与删除字段同一规则）。
+									delete(cfg.Values, name)
+									continue
+								}
+								storeField = f
+							}
+							if v.CredentialID > 0 {
+								// 托管凭据引用重映射：与 SSH 的 cfg.CredentialID 同一套机制。
+								if newID, ok := credIDMap[v.CredentialID]; ok {
+									v.CredentialID = newID
+								} else if !opts.ImportCredentials {
+									v.CredentialID = 0
+								}
+								cfg.Values[name] = v
+								continue
+							}
+							if backupCT == nil {
+								continue
+							}
+							backupField, ok := backupCT.FieldByName(name)
+							if !ok {
+								continue
+							}
+							// 备份里普通字段是明文；密钥字段含凭据时已解密为明文（export.go 的
+							// decryptGenericSecrets），不含凭据时已清空。绑定版本上是密钥的字段
+							// 重新加密，是普通字段的保持明文。
+							plain := !backupField.Secret || data.IncludesCredentials
+							if plain && storeField.Secret && v.Value != "" && crypto != nil {
+								encrypted, encErr := crypto.Encrypt(v.Value)
+								if encErr != nil {
+									logger.Default().Warn("re-encrypt generic secret", zap.String("field", name), zap.Error(encErr))
+								} else {
+									cfg.Values[name] = asset_entity.GenericValue{Value: encrypted}
+								}
+							}
+						}
+						if err := a.SetGenericConfig(cfg); err != nil {
+							logger.Default().Warn("set generic config in import", zap.Error(err))
+						}
+					}
 				}
 
 				if err := tx.Create(a).Error; err != nil {
@@ -324,7 +428,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 6. 端口转发
+		// 7. 端口转发
 		if opts.ImportForwards && len(data.Forwards) > 0 {
 			if isReplace {
 				if err := tx.Exec("DELETE FROM forward_rules").Error; err != nil {
@@ -363,7 +467,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 		return nil, err
 	}
 
-	// 6. 客户端设置透传
+	// 8. 客户端设置透传
 	if opts.ImportShortcuts && len(data.Shortcuts) > 0 {
 		result.Shortcuts = string(data.Shortcuts)
 	}

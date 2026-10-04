@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/policy"
@@ -35,7 +36,9 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	args, promptPassword, bareFollowedBy := splitPasswordPrompt(args)
 	fs := flag.NewFlagSet("create asset", flag.ContinueOnError)
 	fs.SetOutput(deps.stderr)
-	assetType := fs.String("type", "ssh", "Registered asset type")
+	assetType := fs.String("type", "ssh", "Registered asset type or custom type slug")
+	var secretFields stringSliceFlag
+	fs.Var(&secretFields, "secret", "Secret config field to type interactively, no echo (repeatable)")
 	name := fs.String("name", "", "Display name for the asset (required)")
 	configJSON := fs.String("config", "", "Generic asset config JSON object")
 	configFile := fs.String("config-file", "", "Path to generic asset config JSON object")
@@ -74,6 +77,16 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	if *name == "" {
 		return nil, fmt.Errorf("--name is required")
 	}
+	// --type 可以是内置类型名，也可以是自定义类型标识（落成绑定该类型的通用资产）；
+	// 字段契约随之按资产解析，下面的只写字段判定都以它为准。
+	asset, err := assettype.NewAsset(ctx, *assetType)
+	if err != nil {
+		return nil, err
+	}
+	_, contract, err := assettype.ContractOf(ctx, asset)
+	if err != nil {
+		return nil, err
+	}
 	visited := visitedFlags(fs)
 	if visited["config"] && visited["config-file"] {
 		return nil, fmt.Errorf("--config and --config-file are mutually exclusive")
@@ -98,7 +111,12 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		}
 	}
 
-	secretInConfig, configSecretSources := presentSecretFields(config)
+	// 凭据来源互斥只对单凭据类型（契约声明了 CredentialPlan）成立；通用资产每个密钥
+	// 字段各自独立，字段名碰巧叫 password / private_key 也不互斥。
+	secretInConfig, configSecretSources := "", 0
+	if contract.CredentialPlan != nil {
+		secretInConfig, configSecretSources = presentSecretFields(config)
+	}
 	if configSecretSources > 1 {
 		return nil, fmt.Errorf("credential and plaintext secret sources are mutually exclusive")
 	}
@@ -121,7 +139,7 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 
 	// 明文告警与 update 同源：凭据字段之外，类型声明的只写字段（如 Redis 的 sentinel_password）
 	// 同样算明文。--password 与 --config 同时带明文时 argv 告警只打一次。
-	configHasSecret := secretInConfig != "" || writeOnlyFieldPresent(*assetType, config)
+	configHasSecret := secretInConfig != "" || writeOnlyFieldPresent(contract, config)
 	if visited["password"] || (configSource == "--config" && configHasSecret) {
 		if err := warnArgvPlaintext(deps.stderr); err != nil {
 			return nil, err
@@ -136,7 +154,7 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	if visited["credential-id"] {
 		config["credential_id"] = *credentialID
 	}
-	plaintextField := plaintextConfigField(*assetType)
+	plaintextField := plaintextConfigField(contract)
 	if visited["password"] {
 		if *password == "" {
 			return nil, fmt.Errorf("--password must not be empty")
@@ -187,13 +205,16 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		config["kubeconfig"] = string(data)
 	}
 
-	// 交互提示排在最后：--name / 互斥 / JSON / --ssh-asset / --kubeconfig-file 全部
-	// 通过之后才问，参数写错时用户不必白输一遍密码。
+	// 交互提示排在最后：--name / 类型 / 互斥 / JSON / --ssh-asset / --kubeconfig-file /
+	// --secret 字段全部通过之后才问，参数写错时用户不必白输一遍密码。
+	promptedPassword := ""
 	if promptPassword {
-		if _, ok := assettype.Get(*assetType); !ok {
-			return nil, fmt.Errorf("unsupported asset type %q (registered types: %s)",
-				*assetType, strings.Join(assettype.RegisteredTypes(), ", "))
-		}
+		promptedPassword = plaintextField
+	}
+	if err := validateSecretFlags(secretFields, contract, config, promptedPassword); err != nil {
+		return nil, err
+	}
+	if promptPassword {
 		if deps.promptSecret == nil {
 			return nil, needsTerminalForPassword(ctx)
 		}
@@ -206,8 +227,11 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		}
 		config[plaintextField] = secret
 	}
+	if err := readSecretFlags(ctx, secretFields, config, deps.promptSecret); err != nil {
+		return nil, err
+	}
 
-	asset := &asset_entity.Asset{Name: *name, Type: *assetType}
+	asset.Name = *name
 	if visited["group-id"] {
 		asset.GroupID = *groupID
 	}
@@ -229,29 +253,95 @@ func passwordPrompt(ctx context.Context) string {
 // + stderr 首行 NEEDS TTY，与 policy 写类子命令同一形状——都是「只能由人在终端里
 // 做」。正文给出两条出路：改用 --password=<value>，或把原命令交给人自己执行。
 func needsTerminalForPassword(ctx context.Context) error {
+	return needsTerminal(ctx,
+		policy.PolicyMsg(ctx,
+			"a bare --password must be typed in an interactive terminal, but stdin or stderr is not one",
+			"不带值的 --password 需要交互式终端，但当前 stdin 或 stderr 不是终端"),
+		policy.PolicyMsg(ctx,
+			"Use --password=<value> instead, or run the command yourself in your terminal.",
+			"请改用 --password=<value>，或在你自己的终端里执行该命令。"))
+}
+
+// needsTerminalForSecret 是 --secret 在不可交互环境下的同一种结构化拒绝。
+func needsTerminalForSecret(ctx context.Context) error {
+	return needsTerminal(ctx,
+		policy.PolicyMsg(ctx,
+			"--secret reads the field value in an interactive terminal, but stdin or stderr is not one",
+			"--secret 需要在交互式终端里读入字段值，但当前 stdin 或 stderr 不是终端"),
+		policy.PolicyMsg(ctx,
+			`Put the value in --config-file (or reference a managed credential with {"credential_id": N}), or run the command yourself in your terminal.`,
+			`请把值写进 --config-file（或用 {"credential_id": N} 引用托管凭据），或在你自己的终端里执行该命令。`))
+}
+
+func needsTerminal(ctx context.Context, reason, remedy string) error {
 	var sb strings.Builder
-	sb.WriteString(policy.PolicyMsg(ctx,
-		"a bare --password must be typed in an interactive terminal, but stdin or stderr is not one",
-		"不带值的 --password 需要交互式终端，但当前 stdin 或 stderr 不是终端"))
+	sb.WriteString(reason)
 	sb.WriteString("\n")
-	sb.WriteString(policy.PolicyMsg(ctx,
-		"Use --password=<value> instead, or run the command yourself in your terminal.",
-		"请改用 --password=<value>，或在你自己的终端里执行该命令。"))
+	sb.WriteString(remedy)
 	if cmd := originCommandFromCtx(ctx); cmd != "" {
 		fmt.Fprintf(&sb, "\n  %s", cmd)
 	}
 	return &structuredRefusal{marker: needsTTYMarker, body: sb.String()}
 }
 
-func plaintextConfigField(assetType string) string {
-	if handler, ok := assettype.Get(assetType); ok {
-		for _, field := range handler.AutomationContract().ConfigFields {
-			if field == "password" || field == "secret_access_key" {
-				return field
-			}
+func plaintextConfigField(contract assettype.AutomationContract) string {
+	for _, field := range contract.ConfigFields {
+		if field == "password" || field == "secret_access_key" {
+			return field
 		}
 	}
 	return "password"
+}
+
+// writeOnlyFields 是类型契约接受、但不进审批的字段：password / credential_id、Redis 的
+// sentinel_password、通用资产的密钥字段等。
+func writeOnlyFields(contract assettype.AutomationContract) []string {
+	var out []string
+	for _, field := range contract.ConfigFields {
+		if !slices.Contains(contract.ApprovalFields, field) {
+			out = append(out, field)
+		}
+	}
+	return out
+}
+
+// validateSecretFlags 在任何提示之前确认每个 --secret 都是该类型的只写字段、只给了一次，
+// 且没有同时由 --config / 其他 flag（含待提示的 promptedPassword）提供。
+func validateSecretFlags(fields []string, contract assettype.AutomationContract, config map[string]any, promptedPassword string) error {
+	secretFields := writeOnlyFields(contract)
+	seen := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		if !slices.Contains(secretFields, field) {
+			return fmt.Errorf("--secret %s: not a secret field of this asset type (secret fields: %s)", field, strings.Join(secretFields, ", "))
+		}
+		if _, set := config[field]; set || seen[field] || field == promptedPassword {
+			return fmt.Errorf("--secret %s: the field is given more than once", field)
+		}
+		seen[field] = true
+	}
+	return nil
+}
+
+// readSecretFlags 逐个在终端无回显读入 --secret 字段；prompt 为 nil（不可交互）时给出
+// NEEDS TTY 结构化拒绝，不读取任何输入。
+func readSecretFlags(ctx context.Context, fields []string, config map[string]any, prompt func(string) (string, error)) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	if prompt == nil {
+		return needsTerminalForSecret(ctx)
+	}
+	for _, field := range fields {
+		value, err := prompt(policy.PolicyMsg(ctx, field+": ", field+"："))
+		if err != nil {
+			return fmt.Errorf("read --secret %s: %w", field, err)
+		}
+		if value == "" {
+			return fmt.Errorf("--secret %s must not be empty", field)
+		}
+		config[field] = value
+	}
+	return nil
 }
 
 func visitedFlags(fs *flag.FlagSet) map[string]bool {

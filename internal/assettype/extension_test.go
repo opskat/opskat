@@ -60,16 +60,16 @@ func TestExtensionTypeAutomationContract(t *testing.T) {
 	require.NoError(t, RegisterExtensionType(extSpec()))
 	t.Cleanup(func() { Unregister("acme-store") })
 
-	prepared, err := PrepareCreate("acme-store", map[string]any{"endpoint": "https://acme.test", "region": "cn"})
+	prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{"endpoint": "https://acme.test", "region": "cn"})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"endpoint": "https://acme.test", "region": "cn"}, prepared.Approval)
 	assert.Equal(t, CredentialKindNone, prepared.Credential.Kind)
 
-	_, err = PrepareCreate("acme-store", map[string]any{"endpoint": "https://acme.test", "nope": 1})
+	_, err = PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{"endpoint": "https://acme.test", "nope": 1})
 	require.Error(t, err, "fields outside configSchema must be rejected")
 	assert.Contains(t, err.Error(), "nope")
 
-	_, err = PrepareCreate("acme-store", map[string]any{"region": "cn"})
+	_, err = PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{"region": "cn"})
 	require.Error(t, err, "configSchema.required must be enforced")
 	assert.Contains(t, err.Error(), "endpoint")
 }

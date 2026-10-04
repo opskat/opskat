@@ -6,7 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,9 +20,14 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.uber.org/mock/gomock"
 )
@@ -626,4 +635,269 @@ func TestCmdExec_AuditArgsIncludeScope(t *testing.T) {
 	if args["scope"] != "3" {
 		t.Errorf("audit args[scope] = %v, want %q", args["scope"], "3")
 	}
+}
+
+// --- generic asset, HTTP exec mode (spec "HTTP 请求") ---
+
+// captureExecStdio runs f with os.Stdin fed from stdin and os.Stdout / os.Stderr captured.
+// cmdExec's streaming paths write to the process streams directly, like the ssh path.
+func captureExecStdio(t *testing.T, stdin string, f func()) (stdout, stderr string) {
+	t.Helper()
+	dir := t.TempDir()
+	in := filepath.Join(dir, "stdin")
+	require.NoError(t, os.WriteFile(in, []byte(stdin), 0o600))
+	inFile, err := os.Open(in) //nolint:gosec // test-owned temp file
+	require.NoError(t, err)
+	outFile, err := os.Create(filepath.Join(dir, "stdout")) //nolint:gosec // test-owned temp file
+	require.NoError(t, err)
+	errFile, err := os.Create(filepath.Join(dir, "stderr")) //nolint:gosec // test-owned temp file
+	require.NoError(t, err)
+	origIn, origOut, origErr := os.Stdin, os.Stdout, os.Stderr
+	os.Stdin, os.Stdout, os.Stderr = inFile, outFile, errFile
+	defer func() {
+		os.Stdin, os.Stdout, os.Stderr = origIn, origOut, origErr
+		for _, f := range []*os.File{inFile, outFile, errFile} {
+			_ = f.Close()
+		}
+	}()
+	f()
+	outBytes, err := os.ReadFile(outFile.Name())
+	require.NoError(t, err)
+	errBytes, err := os.ReadFile(errFile.Name())
+	require.NoError(t, err)
+	return string(outBytes), string(errBytes)
+}
+
+// setupGenericHTTPExec creates, on top of setupGenericOpsctl's real repositories, an HTTP
+// custom type echo-api (Base URL http://{{host}}, header auth X-Api-Key: {{token}}) and an
+// asset echo-prod pointing at an httptest server that echoes what it received.
+func setupGenericHTTPExec(t *testing.T, secret string) (context.Context, *httptest.Server) {
+	t.Helper()
+	ctx := setupGenericOpsctl(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path == "/missing" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message":"not found"}`)
+			return
+		}
+		_, _ = fmt.Fprintf(w, "%s %s\nX-Caller=%s\nX-Api-Key=%s\nbody=%s", r.Method, r.URL.Path, //nolint:gosec // test server echoes the request back for the assertion
+			r.Header.Get("X-Caller"), r.Header.Get("X-Api-Key"), body)
+	}))
+	t.Cleanup(srv.Close)
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "Echo API", Slug: "echo-api", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}, {Name: "token", Secret: true, Required: true}},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "http://{{host}}", Auth: []custom_type_entity.AuthBinding{
+			{Type: "header", Name: "X-Api-Key", Values: []string{"{{token}}"}},
+		}},
+	}))
+	cipher, err := credential_svc.Default().Encrypt(secret)
+	require.NoError(t, err)
+	asset := &asset_entity.Asset{Name: "echo-prod", Type: asset_entity.AssetTypeGeneric}
+	require.NoError(t, asset.SetGenericConfig(&asset_entity.GenericConfig{
+		CustomType: "echo-api",
+		Values: map[string]asset_entity.GenericValue{
+			"host":  {Value: strings.TrimPrefix(srv.URL, "http://")},
+			"token": {Value: cipher},
+		},
+	}))
+	require.NoError(t, asset_repo.Asset().Create(ctx, asset))
+
+	writer := &mockAuditWriter{}
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+	return ctx, srv
+}
+
+func TestCmdExec_GenericHTTPKeepsArgvBoundariesStreamsAndMapsExitCodes(t *testing.T) {
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	secret := "opsctl_injected_secret"
+	ctx, srv := setupGenericHTTPExec(t, secret)
+	var requests []approval.ApprovalRequest
+	origApproval := execApprovalFn
+	execApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		requests = append(requests, req)
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-generic"}, nil
+	}
+	t.Cleanup(func() { execApprovalFn = origApproval })
+	handlers := buildHandlerMap()
+
+	// argv boundaries: a header value with spaces stays one argument; stdin feeds -d @-.
+	var code int
+	stdout, stderr := captureExecStdio(t, `{"from":"stdin"}`, func() {
+		code = cmdExec(ctx, handlers, []string{"echo-prod", "--type", "echo-api", "--",
+			"post", "/api/items?dry=1", "-H", "X-Caller: two words", "-d", "@-"}, "")
+	})
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "POST /api/items\nX-Caller=two words\nX-Api-Key="+secret+"\nbody={\"from\":\"stdin\"}", stdout,
+		"stdout is exactly the response body")
+	assert.Equal(t, "HTTP 200 OK\n", stderr, "the status line goes to stderr")
+	require.Len(t, requests, 1)
+	assert.Equal(t, "POST /api/items", requests[0].Command, "approval matches `<METHOD> <path>`")
+	assert.Contains(t, requests[0].Detail, srv.URL+"/api/items?dry=1", "approval names the rendered target URL")
+	assert.NotContains(t, requests[0].Detail, secret)
+	call := opsctlAuditWriter.(*mockAuditWriter).lastCall()
+	assert.Equal(t, "POST /api/items", effectiveAuditCommand(t, call))
+	assert.Contains(t, call.Result, "HTTP 200 OK")
+	assert.NotContains(t, call.Result+call.ArgsJSON, secret)
+
+	// non-2xx: exit 1, body still on stdout, status in the audit.
+	stdout, stderr = captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"echo-prod", "--", "GET", "/missing"}, "")
+	})
+	assert.Equal(t, 1, code)
+	assert.Equal(t, `{"message":"not found"}`, stdout)
+	assert.Equal(t, "HTTP 404 Not Found\n", stderr)
+	call = opsctlAuditWriter.(*mockAuditWriter).lastCall()
+	assert.Equal(t, "GET /missing", effectiveAuditCommand(t, call))
+	assert.Contains(t, call.Result, "HTTP 404 Not Found")
+
+	// -i: status line and headers lead stdout.
+	stdout, _ = captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"echo-prod", "--", "GET", "/x", "-i"}, "")
+	})
+	assert.Equal(t, 0, code)
+	assert.True(t, strings.HasPrefix(stdout, "HTTP 200 OK\n"), "got %q", stdout)
+
+	// a request that does not complete: exit 1, nothing on stdout, the error on stderr.
+	srv.Close()
+	stdout, stderr = captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"echo-prod", "--", "GET", "/x"}, "")
+	})
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "Error:")
+	assert.NotContains(t, stderr, secret)
+
+	// an absolute URL is rejected before approval.
+	before := len(requests)
+	_, stderr = captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"echo-prod", "--", "GET", "https://evil.example/x"}, "")
+	})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "absolute URL")
+	assert.Len(t, requests, before, "a command that can never run must not ask for approval")
+}
+
+// --- generic asset, local command exec mode (spec "本地命令") ---
+
+// writeExecScript writes a tiny shell script that prints every argv element between
+// angle brackets (so argument boundaries are visible), prints the value of the named
+// environment variable if given, and exits with exitCode.
+func writeExecScript(t *testing.T, exitCode int, envName string) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString(`for a in "$@"; do printf '<%s>\n' "$a"; done` + "\n")
+	if envName != "" {
+		fmt.Fprintf(&b, `printf 'ENV %s=%%s\n' "$%s"`+"\n", envName, envName)
+	}
+	fmt.Fprintf(&b, "exit %d\n", exitCode)
+	path := filepath.Join(t.TempDir(), "exec-script.sh")
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o755))
+	return path
+}
+
+// setupGenericCommandExec creates, on top of setupGenericOpsctl's real repositories, a
+// command custom type (template mode, script + region argv + AWS_PROFILE env binding) and
+// a no-template ("shell") type, each with one asset.
+func setupGenericCommandExec(t *testing.T, templateExit int) context.Context {
+	t.Helper()
+	ctx := setupGenericOpsctl(t)
+	script := writeExecScript(t, templateExit, "AWS_PROFILE")
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "CLI", Slug: "cli", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields: []custom_type_entity.Field{{Name: "region"}, {Name: "profile"}},
+		Command: &custom_type_entity.CommandConfig{
+			Template: script + " --region {{region}}",
+			Env:      []custom_type_entity.EnvBinding{{Name: "AWS_PROFILE", Value: "{{profile}}"}},
+		},
+	}))
+	cliAsset := &asset_entity.Asset{Name: "cli-prod", Type: asset_entity.AssetTypeGeneric}
+	require.NoError(t, cliAsset.SetGenericConfig(&asset_entity.GenericConfig{
+		CustomType: "cli",
+		Values: map[string]asset_entity.GenericValue{
+			"region":  {Value: "ap east 1"},
+			"profile": {Value: "prod-profile"},
+		},
+	}))
+	require.NoError(t, asset_repo.Asset().Create(ctx, cliAsset))
+
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "Shell box", Slug: "shell-box", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "note"}},
+		Command: &custom_type_entity.CommandConfig{},
+	}))
+	shellAsset := &asset_entity.Asset{Name: "shell-prod", Type: asset_entity.AssetTypeGeneric}
+	require.NoError(t, shellAsset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "shell-box"}))
+	require.NoError(t, asset_repo.Asset().Create(ctx, shellAsset))
+
+	writer := &mockAuditWriter{}
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+	return ctx
+}
+
+func TestCmdExec_GenericCommandKeepsArgvBoundariesStreamsAndMapsExitCodes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("spawns a #!/bin/sh script fixture")
+	}
+	ctx := setupGenericCommandExec(t, 7)
+	var requests []approval.ApprovalRequest
+	origApproval := execApprovalFn
+	execApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		requests = append(requests, req)
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-generic-cmd"}, nil
+	}
+	t.Cleanup(func() { execApprovalFn = origApproval })
+	handlers := buildHandlerMap()
+
+	// Template mode: the field value's internal space stays one argv element (split
+	// happens before rendering), the exec args are appended literally, and the exit code
+	// (non-zero, but a completed run) passes through unchanged.
+	var code int
+	stdout, stderr := captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"cli-prod", "--type", "cli", "--", "s3", "ls", "s3://bucket"}, "")
+	})
+	assert.Equal(t, 7, code, stderr)
+	assert.Contains(t, stdout, "<--region>\n<ap east 1>\n",
+		"the region field's internal space must not become a new argv element")
+	assert.Contains(t, stdout, "<s3>\n<ls>\n<s3://bucket>\n", "exec args are appended literally")
+	assert.Contains(t, stdout, "ENV AWS_PROFILE=prod-profile")
+	require.Len(t, requests, 1)
+	assert.Equal(t, "s3 ls s3://bucket", requests[0].Command, "approval matches the exec args joined by single spaces")
+	assert.Contains(t, requests[0].Detail, "cli-prod", "approval names the asset")
+	call := opsctlAuditWriter.(*mockAuditWriter).lastCall()
+	assert.Equal(t, "s3 ls s3://bucket", effectiveAuditCommand(t, call))
+	assert.Contains(t, call.Result, "7", "audit records the exit code")
+	assert.NotContains(t, call.Result+call.ArgsJSON+requests[0].Detail, "prod-profile",
+		"rendered env values must never reach approval or audit")
+
+	// No template: the whole quoted command runs through the shell, so a pipe inside the
+	// single argv element is honored.
+	stdout, stderr = captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"shell-prod", "--", "printf 'a\\nb\\nc\\n' | wc -l"}, "")
+	})
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "3", strings.TrimSpace(stdout))
+
+	// Program not found: an error before/without ever producing a StreamResult, exit 1,
+	// nothing on stdout.
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "Missing bin", Slug: "missing-bin", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "note"}},
+		Command: &custom_type_entity.CommandConfig{Template: "/does/not/exist/on/this/machine"},
+	}))
+	missingAsset := &asset_entity.Asset{Name: "missing-bin-prod", Type: asset_entity.AssetTypeGeneric}
+	require.NoError(t, missingAsset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "missing-bin"}))
+	require.NoError(t, asset_repo.Asset().Create(ctx, missingAsset))
+	stdout, stderr = captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, handlers, []string{"missing-bin-prod", "--", "x"}, "")
+	})
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "Error:")
 }

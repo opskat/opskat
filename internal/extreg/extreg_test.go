@@ -223,7 +223,7 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 func TestConnTestRegistration(t *testing.T) {
 	t.Run("no handler declared: conntest has no tester for the type", func(t *testing.T) {
 		registerFake(t, &fakePlugin{})
-		_, ok := conntest.Lookup("acme-store")
+		_, ok := conntest.LookupDetailed("acme-store")
 		assert.False(t, ok)
 	})
 
@@ -235,15 +235,16 @@ func TestConnTestRegistration(t *testing.T) {
 		require.NoError(t, register(l, "help", "desc"))
 		t.Cleanup(func() { Unregister(m.Name) })
 
-		fn, ok := conntest.Lookup("acme-store")
+		fn, ok := conntest.LookupDetailed("acme-store")
 		require.True(t, ok)
 
-		require.NoError(t, fn(context.Background(), `{"endpoint":"http://x"}`, ""))
+		_, err := fn(context.Background(), `{"endpoint":"http://x"}`, "")
+		require.NoError(t, err)
 		assert.Equal(t, "acme-store", plugin.lastTestConnType)
 		assert.JSONEq(t, `{"endpoint":"http://x"}`, string(plugin.lastTestConnConfig.Config))
 
 		Unregister(m.Name)
-		_, ok = conntest.Lookup("acme-store")
+		_, ok = conntest.LookupDetailed("acme-store")
 		assert.False(t, ok, "unregister must drop the conntest tester too")
 	})
 
@@ -260,7 +261,7 @@ func TestConnTestRegistration(t *testing.T) {
 
 		_, ok := assettype.Get("acme-store")
 		assert.False(t, ok, "a failed registration must not leave the asset type reachable")
-		_, ok = conntest.Lookup("acme-store")
+		_, ok = conntest.LookupDetailed("acme-store")
 		assert.False(t, ok)
 	})
 }

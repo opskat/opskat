@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -87,6 +88,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		assetID      int64
 		assetName    string
 		checkCommand string // 权限检查用的（可能已规范化的）命令串
+		detail       string // 审批展示补充（permission.ApprovalDetailFor，如通用资产的目标地址）
 		decision     string // "allow" / "deny" / "needConfirm"
 		denyMsg      string
 		checkResult  aictx.CheckResult // 每项独立审计的授权/拒绝语义
@@ -145,9 +147,11 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		// 同一个位置（执行器查找之后、规范化之前）。没有这道检查，batch 就是绕过它的
 		// 通道：模型可以借 batch 执行一个从没查过语法的类型。deny 文案复用
 		// execGuidance，措辞与 handleExec 的引导语一致（点名资产与类型、指引先调 help）。
+		// 门禁键与 handleExec 同一约定（assettype.TypeName）：通用资产按自定义类型标识
+		// 记录，其余类型等于 asset.Type 本身——见 tool_handlers_unified.go 的注释。
 		if gate := GetDocGate(ctx); gate != nil {
 			convID := aictx.GetConversationID(ctx)
-			if !gate.IsDocumented(convID, asset.Type) {
+			if !gate.IsDocumented(convID, assettype.TypeName(asset)) {
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 					decision: "deny", denyMsg: execGuidance(asset),
@@ -192,6 +196,23 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			}
 		}
 
+		// 审批展示补充：与 handleExec 同一位置、同一理由——无副作用，失败说明命令必然执行
+		// 失败，在权限检查之前按单项 deny 处理。
+		var detail string
+		if describe, ok := permission.ApprovalDetailFor(asset.Type); ok {
+			d, err := describe(ctx, asset, cmd.Command)
+			if err != nil {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					checkCommand: checkCommand, decision: "deny", denyMsg: err.Error(),
+					checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecPrecheckFailed,
+						Message: err.Error()},
+				})
+				continue
+			}
+			detail = d
+		}
+
 		decision, denyMsg := "allow", ""
 		result := permission.CheckPermission(ctx, asset.Type, asset.ID, checkCommand)
 		switch result.Decision {
@@ -205,7 +226,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 
 		resolved = append(resolved, resolvedCmd{
 			item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
-			checkCommand: checkCommand, decision: decision, denyMsg: denyMsg, checkResult: result,
+			checkCommand: checkCommand, detail: detail, decision: decision, denyMsg: denyMsg, checkResult: result,
 		})
 	}
 
@@ -220,6 +241,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 					AssetID:   r.assetID,
 					AssetName: r.assetName,
 					Command:   r.checkCommand,
+					Detail:    r.detail,
 				})
 				needConfirmIndices = append(needConfirmIndices, i)
 			}
@@ -287,6 +309,10 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	sem := make(chan struct{}, maxConcurrency)
 	var mu sync.Mutex
 	results := make([]batchResultItem, 0, len(commands))
+	// auditResults 与 results 一一对应：条目的执行器记录了审计摘要（通用资产）时，该条目的
+	// Stdout 换成摘要，其余与 results 相同。summarized 标记是否有任何条目被替换。
+	auditResults := make([]batchResultItem, 0, len(commands))
+	summarized := false
 
 	for _, r := range denied {
 		// 已解析出资产的条目回显真实类型；解析本身失败的条目没有类型可回显。
@@ -299,6 +325,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			Type: resultType, Command: r.item.Command,
 			ExitCode: -1, Error: fmt.Sprintf("denied: %s", r.denyMsg),
 		})
+		auditResults = append(auditResults, results[len(results)-1])
 		writeBatchItemAudit(ctx, r.assetID, r.assetName, resultType, r.item.Command,
 			r.checkCommand, results[len(results)-1], r.checkResult)
 	}
@@ -311,11 +338,13 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			result := executeBatchItem(ctx, r.item, r.asset)
+			result, auditResult, hasSummary := executeBatchItem(ctx, r.item, r.asset)
 			writeBatchItemAudit(ctx, r.assetID, r.assetName, r.asset.Type, r.item.Command,
-				r.checkCommand, result, r.checkResult)
+				r.checkCommand, auditResult, r.checkResult)
 			mu.Lock()
 			results = append(results, result)
+			auditResults = append(auditResults, auditResult)
+			summarized = summarized || hasSummary
 			mu.Unlock()
 		}(r)
 	}
@@ -367,6 +396,15 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	if err != nil {
 		return "", err
 	}
+	// 聚合的 batch_exec 审计行同样只存通用资产条目的摘要：输出原样返回给模型，审计 result
+	// 换成同一结构、但这些条目的 Stdout 是摘要的版本。没有条目记录摘要时不覆盖。
+	if summarized {
+		auditOutput, err := json.MarshalIndent(map[string]any{"results": auditResults}, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		aictx.RecordAuditResult(ctx, string(auditOutput))
+	}
 	return string(output), nil
 }
 
@@ -398,8 +436,13 @@ func writeBatchItemAudit(ctx context.Context, assetID int64, assetName, assetTyp
 
 // executeBatchItem 把单条命令派发到资产真实类型对应的执行器（permission.ExecutorFor），
 // 覆盖面与统一 exec 工具一致——不再是写死的 exec/sql/redis 三路 switch。
-func executeBatchItem(ctx context.Context, item batchCommandItem, asset *asset_entity.Asset) batchResultItem {
-	result := batchResultItem{
+//
+// result 总是完整输出（返回给模型）；auditResult 是写审计用的版本。每个条目在自己的审计
+// 摘要槽里执行（条目并发执行，不能共用 batch_exec 调用本身的槽）：执行器记录了摘要（通用
+// 资产：HTTP 状态行 / exit N）时 auditResult 的 Stdout 换成摘要、hasSummary=true，否则
+// auditResult 就是 result。
+func executeBatchItem(ctx context.Context, item batchCommandItem, asset *asset_entity.Asset) (result, auditResult batchResultItem, hasSummary bool) {
+	result = batchResultItem{
 		AssetID: asset.ID, AssetName: asset.Name,
 		Type: asset.Type, Command: item.Command,
 	}
@@ -410,18 +453,24 @@ func executeBatchItem(ctx context.Context, item batchCommandItem, asset *asset_e
 		// 反注册（仅测试）时发生。
 		result.ExitCode = -1
 		result.Error = fmt.Sprintf("asset %q (type=%s) has no exec support yet", asset.Name, asset.Type)
-		return result
+		return result, result, false
 	}
 
 	// 执行用**原始**命令，不是规范化后的串——规范化结果是给策略/审批/审计看的展示形式，
 	// 喂给执行器是有损的（引号与内部空格会被吃掉）。与 handleExec 第 8 步同一理由。
-	output, err := exec(ctx, asset, item.Command, "")
+	itemCtx := aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
+	output, err := exec(itemCtx, asset, item.Command, "")
 	if err != nil {
 		result.ExitCode = -1
 		result.Error = err.Error()
-		return result
+		return result, result, false
 	}
 	result.ExitCode = 0
 	result.Stdout = output
-	return result
+	auditResult = result
+	if summary, ok := aictx.GetAuditResult(itemCtx); ok {
+		auditResult.Stdout = summary
+		hasSummary = true
+	}
+	return result, auditResult, hasSummary
 }

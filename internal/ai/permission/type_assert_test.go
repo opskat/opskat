@@ -7,6 +7,22 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
+// 自定义类型标识不能与内置类型重名（spec「自定义类型」）：凡是 resolveDeclaredType 不经
+// 自定义类型查找就能解析的名字，都会在 --type 断言与 batch 前缀里遮蔽同名标识，必须出现在
+// BuiltinDeclaredTypeNames 里；解析不了的名字不应被保留。
+func TestBuiltinDeclaredTypeNamesCoverEveryShadowingName(t *testing.T) {
+	reserved := make(map[string]bool)
+	for _, name := range BuiltinDeclaredTypeNames() {
+		reserved[name] = true
+	}
+	for _, probe := range []string{"ssh", "exec", "sql", "db", "mysql", "postgres", "sqlite3", "mongo", "kube", "kubernetes", "redis", "oss", "generic", "cp", "grafana", "aws-cli"} {
+		_, _, resolves := resolveDeclaredType(probe)
+		if resolves != reserved[probe] {
+			t.Errorf("%q: resolves as a built-in declared type = %v, reserved = %v", probe, resolves, reserved[probe])
+		}
+	}
+}
+
 func TestCanonicalTypeFor(t *testing.T) {
 	cases := []struct {
 		in   string

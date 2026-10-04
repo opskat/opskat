@@ -82,7 +82,9 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
 
   const handleResetPolicy = async () => {
     try {
-      const defaultJSON = await GetDefaultPolicy(asset.Type);
+      const defaultJSON = def?.policy?.loadDefault
+        ? await def.policy.loadDefault(asset)
+        : await GetDefaultPolicy(asset.Type);
       const parsed = JSON.parse(defaultJSON);
       const groups = parsed.groups || [];
       const fields: Record<string, string[]> = {};
@@ -94,6 +96,8 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       toast.error(String(e));
     }
   };
+
+  const Subtitle = def?.DetailSubtitle;
 
   const sshTunnelName = (id?: number) => {
     if (!id) return null;
@@ -109,7 +113,11 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           </div>
           <div>
             <h2 className="font-semibold leading-tight">{asset.Name}</h2>
-            <span className="text-xs text-muted-foreground uppercase">{asset.Type}</span>
+            {Subtitle ? (
+              <Subtitle asset={asset} />
+            ) : (
+              <span className="text-xs text-muted-foreground uppercase">{asset.Type}</span>
+            )}
           </div>
         </div>
         <div className="flex gap-1.5">
@@ -158,7 +166,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       />
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {/* 类型详情卡：内置类型手写，扩展类型由它的 configSchema 生成（同一个槽位） */}
-        {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} />}
+        {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} onEdit={onEdit} />}
 
         {/* 策略卡：内置类型与扩展类型走同一段渲染，差别只在定义里 */}
         {(() => {
@@ -193,6 +201,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                 })
               }
               hint={pol.hintKey ? t(pol.hintKey) : undefined}
+              testable={pol.testable}
               saving={savingPolicy}
               assetID={asset.ID}
               onReset={handleResetPolicy}

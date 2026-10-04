@@ -55,6 +55,8 @@ type safeAssetView struct {
 	K8sContext  string `json:"context,omitempty"`
 	SSHTunnelID int64  `json:"ssh_tunnel_id,omitempty"`
 	// Serial 专属（COM/TTY 类设备，没有 host/port 概念）
+	// 通用资产：所基于的自定义类型标识（字段值不在安全视图里，密钥更不会出现）
+	CustomType     string                                    `json:"custom_type,omitempty"`
 	PortPath       string                                    `json:"port_path,omitempty"`
 	BaudRate       int                                       `json:"baud_rate,omitempty"`
 	DataBits       int                                       `json:"data_bits,omitempty"`
@@ -151,6 +153,9 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			}
 			if val, ok := fields["ssh_tunnel_id"].(int64); ok {
 				v.SSHTunnelID = val
+			}
+			if val, ok := fields["custom_type"].(string); ok {
+				v.CustomType = val
 			}
 			if val, ok := fields["port_path"].(string); ok {
 				v.PortPath = val

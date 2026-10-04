@@ -2,18 +2,28 @@ package tool
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 )
 
@@ -57,6 +67,19 @@ func setupUnified(t *testing.T) *mock_asset_repo.MockAssetRepo {
 			asset_repo.RegisterAsset(orig)
 		}
 	})
+
+	// 没有自定义类型：helpForTypeName 在静态注册类型名不命中后，会把 ref 当自定义类型
+	// 标识查 custom_type_svc（本任务新增的回落，见 tool_handlers_unified.go）。在真实
+	// 运行环境里 custom_type_repo 总是由 bootstrap 注册好，这里同样注册一个总是报
+	// "未找到" 的假实现，让这批不关心自定义类型的测试保持原有行为（未命中任何静态类型
+	// 名 == 真的没有这个类型），而不是在 nil 的默认仓储上 panic。与 setupCRUD 的同一
+	// 处理一致（tool_handlers_crud_test.go）。
+	customTypes := mock_custom_type_repo.NewMockCustomTypeRepo(ctrl)
+	customTypes.EXPECT().FindBySlug(gomock.Any(), gomock.Any()).Return(nil, gorm.ErrRecordNotFound).AnyTimes()
+	origCustomType := custom_type_repo.CustomType()
+	custom_type_repo.RegisterCustomType(customTypes)
+	t.Cleanup(func() { custom_type_repo.RegisterCustomType(origCustomType) })
+
 	return m
 }
 
@@ -811,4 +834,348 @@ func TestHandleExec_MongoMissingDatabaseNeverReachesPermissionCheck(t *testing.T
 		t.Fatal("CheckForAsset ran for a write op with no resolvable database — an approval " +
 			"dialog must never appear for a command that is going to fail regardless")
 	}
+}
+
+// --- generic asset / custom type help & doc gate (spec "帮助、技能与门禁") ---
+
+// createGenericGrafanaAsset creates a generic asset on the "grafana" custom type
+// registered by setupGenericPutDB, via the real handlePutAsset path, and returns the
+// stored entity (so callers get the real ID assigned by the real asset_repo).
+func createGenericGrafanaAsset(t *testing.T, name string, config map[string]any, description string) *asset_entity.Asset {
+	t.Helper()
+	args := map[string]any{"name": name, "type": "grafana", "config": config}
+	if description != "" {
+		args["description"] = description
+	}
+	if _, err := handlePutAsset(context.Background(), args); err != nil {
+		t.Fatalf("handlePutAsset(%s): %v", name, err)
+	}
+	assets, err := asset_repo.Asset().FindByName(context.Background(), name)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("FindByName(%s) = %v, %v; want exactly one asset", name, assets, err)
+	}
+	return assets[0]
+}
+
+// TestHelpForTypeName_CustomTypeSlugReturnsGenericDocPlusStructure locks the type-level
+// half of spec §"帮助、技能与门禁": `help <slug>` must return the generic SKILL.md body
+// (put_asset / opsctl create asset syntax, common to every custom type) plus this type's
+// own structure — exec mode, Base URL / command template, auth binding, and the field
+// list with its secret/required/default attributes.
+func TestHelpForTypeName_CustomTypeSlugReturnsGenericDocPlusStructure(t *testing.T) {
+	setupGenericPutDB(t)
+	genericDoc, ok := permission.HelpFor(asset_entity.AssetTypeGeneric)
+	if !ok {
+		t.Fatal("generic SKILL.md must be registered as a doc-only type")
+	}
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": "grafana"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, genericDoc) {
+		t.Fatalf("help for a custom type slug must include the base generic SKILL.md body, got %q", out)
+	}
+	for _, want := range []string{"grafana", "http", "https://{{host}}", "host", "token", "secret", "required"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help should describe the type's structure (want %q), got %q", want, out)
+		}
+	}
+	if !GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), "grafana") {
+		t.Fatal("help on the type slug must mark the slug documented on the gate")
+	}
+}
+
+// TestHandleHelp_GenericAssetAddsInstanceValuesMaskedSecretAddressTunnelAndDescription
+// locks the asset-level half: `help <asset>` for a generic asset appends the type
+// structure plus this instance's field values — secret fields report only "set", never
+// the plaintext — the rendered actual HTTP address, the tunnel line, and the asset's
+// Description ("备注"). It also proves the doc gate for a generic asset is marked with
+// the custom type slug, not the static asset.Type="generic".
+func TestHandleHelp_GenericAssetAddsInstanceValuesMaskedSecretAddressTunnelAndDescription(t *testing.T) {
+	setupGenericPutDB(t)
+	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
+	secret := "glsa_ai_must_not_leak_in_help"
+	asset := createGenericGrafanaAsset(t, "grafana-prod",
+		map[string]any{"host": "grafana.internal", "token": secret}, "internal Grafana for team X")
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": asset.Name})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, secret) {
+		t.Fatalf("help must never include the secret field's plaintext value, got %q", out)
+	}
+	for _, want := range []string{
+		"grafana.internal",            // non-secret field value
+		"https://grafana.internal",    // rendered actual address
+		"internal Grafana for team X", // asset Description
+		"Tunnel: none",                // no SSH tunnel configured
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help should include %q, got %q", want, out)
+		}
+	}
+	if !GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), "grafana") {
+		t.Fatal("help on a generic asset must mark the custom type slug documented, not asset.Type")
+	}
+	if GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeGeneric) {
+		t.Fatal("help on a generic asset must not mark the static \"generic\" type documented — " +
+			"exec's gate check must key on the slug so a different custom type's assets stay gated")
+	}
+}
+
+// TestHandleHelp_GenericSecretInBaseURLMaskedAndAuthTemplatesShown: the rendered actual
+// address never carries a secret field's value even when the Base URL template references
+// it (Hard invariant: rendered credentials stay out of the AI context), and the type
+// structure shows each auth binding's value template alongside its type and name — the
+// same way env bindings are shown — since templates are type configuration, not values.
+func TestHandleHelp_GenericSecretInBaseURLMaskedAndAuthTemplatesShown(t *testing.T) {
+	setupGenericPutDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Hook", Slug: "hook", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{
+			{Name: "host", Required: true},
+			{Name: "token", Secret: true, Required: true},
+		},
+		HTTP: &custom_type_entity.HTTPConfig{
+			BaseURL: "https://{{host}}/robot/{{token}}",
+			Auth:    []custom_type_entity.AuthBinding{{Type: "header", Name: "X-Sign", Values: []string{"{{hex(sha256(token))}}"}}},
+		},
+	}))
+	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
+	secret := "hook_secret_must_not_leak"
+	_, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "hook-prod", "type": "hook", "config": map[string]any{"host": "hook.internal", "token": secret},
+	})
+	require.NoError(t, err)
+
+	out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": "hook-prod"})
+	require.NoError(t, err)
+	assert.NotContains(t, out, secret)
+	assert.Contains(t, out, "https://hook.internal/robot/****")
+	assert.Contains(t, out, "{{hex(sha256(token))}}")
+}
+
+// TestHandleHelp_GenericUnrenderableAddressIsReportedNotOmitted: when the instance's values
+// don't render to an absolute http(s) Base URL, exec will fail for exactly that reason —
+// help must say so on the address line instead of silently dropping it.
+func TestHandleHelp_GenericUnrenderableAddressIsReportedNotOmitted(t *testing.T) {
+	setupGenericPutDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Bare", Slug: "bare-host", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}},
+		HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "{{host}}"},
+	}))
+	_, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "bare-prod", "type": "bare-host", "config": map[string]any{"host": "bare.internal"},
+	})
+	require.NoError(t, err)
+
+	out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": "bare-prod"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Actual address: unavailable")
+	assert.Contains(t, out, "not an absolute http(s) URL")
+}
+
+// TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing locks that a required
+// field added to the custom type after the asset was created (Design decision 15) is
+// reported as missing on the asset's help, not silently rendered as an empty value.
+func TestHandleHelp_GenericAssetMissingRequiredFieldReportedAsMissing(t *testing.T) {
+	setupGenericPutDB(t)
+	asset := createGenericGrafanaAsset(t, "grafana-old",
+		map[string]any{"host": "grafana.internal", "token": "tok"}, "")
+
+	ct, err := custom_type_svc.CustomType().GetBySlug(context.Background(), "grafana")
+	if err != nil {
+		t.Fatalf("GetBySlug: %v", err)
+	}
+	ct.Fields = append(ct.Fields, custom_type_entity.Field{Name: "org", Required: true})
+	if err := custom_type_svc.CustomType().Save(context.Background(), ct); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": asset.Name})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "org") || !strings.Contains(out, "missing") {
+		t.Fatalf("help should mark the newly required field org as missing, got %q", out)
+	}
+}
+
+// TestHandleHelp_GenericOptionalSecretWithoutValueIsNotReportedAsSet: "set" tells the model
+// a secret has a value; an optional secret field the instance never filled must not claim
+// that (spec「帮助、技能与门禁」: 密钥只标注"已设置"，缺值的字段标明缺失).
+func TestHandleHelp_GenericOptionalSecretWithoutValueIsNotReportedAsSet(t *testing.T) {
+	setupGenericPutDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Opt", Slug: "opt-secret", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{
+			{Name: "host", Required: true},
+			{Name: "sign_key", Secret: true},
+		},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
+	}))
+	_, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "opt-prod", "type": "opt-secret", "config": map[string]any{"host": "opt.internal"},
+	})
+	require.NoError(t, err)
+
+	out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": "opt-prod"})
+	require.NoError(t, err)
+	assert.NotContains(t, out, "- sign_key: set")
+	assert.Contains(t, out, "- sign_key: not set")
+}
+
+// TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType locks the doc
+// gate requirement: help on one asset of a custom type marks that type's slug, which is
+// exactly the key exec's own gate check now reads (permission's ExecutorFor("generic")
+// doesn't exist yet for HTTP/command execution — tasks 5/6 — so this test observes the
+// shared mechanism, DocGate, directly rather than through a not-yet-implemented exec
+// dispatch).
+func TestHandleHelp_GenericAssetGateKeyedBySlugCoversOtherAssetsOfSameType(t *testing.T) {
+	setupGenericPutDB(t)
+	assetA := createGenericGrafanaAsset(t, "grafana-a", map[string]any{"host": "a.internal", "token": "a-tok"}, "")
+	createGenericGrafanaAsset(t, "grafana-b", map[string]any{"host": "b.internal", "token": "b-tok"}, "")
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	// Before help, exec's gate guidance names the same type help reports (the slug), not
+	// the stored asset.Type "generic".
+	guidance, err := handleExec(ctx, map[string]any{"asset": assetA.Name, "command": "GET /"})
+	require.NoError(t, err)
+	assert.Contains(t, guidance, "type=grafana")
+	if _, err := handleHelp(ctx, map[string]any{"asset": assetA.Name}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	convID := aictx.GetConversationID(ctx)
+	if !GetDocGate(ctx).IsDocumented(convID, "grafana") {
+		t.Fatal("calling help on one grafana asset must document the grafana slug for all grafana assets")
+	}
+}
+
+// --- generic asset HTTP exec (spec "HTTP 请求" / "策略、审批与审计") ---
+
+// TestHandleExec_GenericHTTPApprovalShowsTargetButNeverInjectedValues drives the unified
+// exec tool end to end against an httptest server: the slug is accepted as `type`, the
+// default `GET *` rule lets a GET through without a dialog, a POST asks for approval
+// whose match object is `<METHOD> <path>` and whose detail names the rendered target URL
+// — and neither the dialog nor the tool output ever carries the injected credential.
+func TestHandleExec_GenericHTTPApprovalShowsTargetButNeverInjectedValues(t *testing.T) {
+	setupGenericPutDB(t)
+	// #nosec G101 -- intentional test fixture used to verify that injected values never leak.
+	secret := "echo_api_injected_secret"
+	var seenKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenKey = r.Header.Get("X-Api-Key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"path":"`+r.URL.Path+`"}`) //nolint:gosec // test server echoes the path back for the assertion
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	if err := custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "Echo API", Slug: "echo-api", ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{{Name: "host", Required: true}, {Name: "token", Secret: true, Required: true}},
+		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "http://{{host}}", Auth: []custom_type_entity.AuthBinding{
+			{Type: "header", Name: "X-Api-Key", Values: []string{"{{token}}"}},
+		}},
+	}); err != nil {
+		t.Fatalf("save custom type: %v", err)
+	}
+	if _, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "echo-prod", "type": "echo-api", "config": map[string]any{"host": host, "token": secret},
+	}); err != nil {
+		t.Fatalf("handlePutAsset: %v", err)
+	}
+
+	var items []permission.ApprovalItem
+	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, got []permission.ApprovalItem) permission.ApprovalResponse {
+		items = append(items, got...)
+		return permission.ApprovalResponse{Decision: "allow"}
+	})
+	ctx := permission.WithPolicyChecker(context.Background(), checker)
+
+	out, err := handleExec(ctx, map[string]any{"asset": "echo-prod", "type": "echo-api", "command": "GET /api/health"})
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("the default GET * rule must allow a GET without approval, got %+v", items)
+	}
+	if out != "HTTP 200 OK\n\n{\"path\":\"/api/health\"}" {
+		t.Fatalf("exec must return the status line and body, got %q", out)
+	}
+	if seenKey != secret {
+		t.Fatalf("the host must inject the auth binding, server saw %q", seenKey)
+	}
+
+	out, err = handleExec(ctx, map[string]any{
+		"asset": "echo-prod", "command": `POST /api/items?dry=1 -H 'Content-Type: application/json' -d '{"a":1}'`,
+	})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("a POST is not covered by the default rules and must ask for approval, got %+v", items)
+	}
+	item := items[0]
+	if item.Command != "POST /api/items" {
+		t.Fatalf("the approval match object must be `<METHOD> <path>` without query, got %q", item.Command)
+	}
+	if !strings.Contains(item.Detail, srv.URL+"/api/items?dry=1") {
+		t.Fatalf("the approval detail must name the rendered target URL, got %q", item.Detail)
+	}
+	for _, s := range []string{item.Command, item.Detail, out} {
+		if strings.Contains(s, secret) {
+			t.Fatalf("injected values must never reach approval or output, got %q", s)
+		}
+	}
+}
+
+// TestHandleHelp_GenericAssetTunnelLineFollowsActualRoute: the Tunnel line must agree with
+// the route the HTTP transport really takes — proxy chain (naming its hops) over SSH
+// tunnel over direct (V17b: a chained asset used to print "none (direct connection)").
+func TestHandleHelp_GenericAssetTunnelLineFollowsActualRoute(t *testing.T) {
+	setupGenericPutDB(t)
+	ctx := context.Background()
+	jump := &asset_entity.Asset{Name: "jump-host", Type: asset_entity.AssetTypeSSH}
+	require.NoError(t, asset_repo.Asset().Create(ctx, jump))
+	tunnel := &asset_entity.Asset{Name: "tunnel-host", Type: asset_entity.AssetTypeSSH}
+	require.NoError(t, asset_repo.Asset().Create(ctx, tunnel))
+
+	asset := createGenericGrafanaAsset(t, "grafana-chain", map[string]any{"host": "grafana.internal", "token": "t"}, "")
+	cfg, err := asset.GetGenericConfig()
+	require.NoError(t, err)
+	enabled := true
+	cfg.ProxyChain = &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{
+		{Type: asset_entity.ProxyChainLayerSSH, Enabled: &enabled, Order: 1, SSHAssetID: jump.ID},
+		{Type: asset_entity.ProxyChainLayerSOCKS5, Enabled: &enabled, Order: 2, Host: "socks.example", Port: 1080},
+	}}
+	require.NoError(t, asset.SetGenericConfig(cfg))
+	asset.SSHTunnelID = tunnel.ID
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+
+	out, err := handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Tunnel: proxy chain jump-host -> socks5 socks.example:1080")
+	assert.NotContains(t, out, "direct connection")
+
+	// No chain: the SSH tunnel is reported by name.
+	cfg.ProxyChain = nil
+	require.NoError(t, asset.SetGenericConfig(cfg))
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+	out, err = handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Tunnel: tunnel-host\n")
+
+	// Neither: direct.
+	asset.SSHTunnelID = 0
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+	out, err = handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "Tunnel: none (direct connection)")
 }

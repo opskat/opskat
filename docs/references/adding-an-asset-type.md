@@ -25,7 +25,7 @@ Not every new type touches every item below. A minimal type such as `local` has 
 
 | Area | Registration-driven | Shared-code edit still required |
 | --- | --- | --- |
-| AI `put_asset` / opsctl generic create / get / list safe-view handlers | Yes, via `assettype.Get(type)` and the handler's `AutomationContract()` | Add the type's config contract to its `SKILL.md`; `put_asset.config` and `opsctl --config` deliberately have no central per-type union/list |
+| AI `put_asset` / opsctl generic create / get / list safe-view handlers | Yes, via `assettype.NewAsset(ctx, type)` and `assettype.ContractOf(ctx, asset)` (the handler's `AutomationContract()`, or its per-asset contract hook) | Add the type's config contract to its `SKILL.md`; `put_asset.config` and `opsctl --config` deliberately have no central per-type union/list |
 | AI / CLI command execution | Yes, via the executor registry | Add `SKILL.md` plus `RegisterExecutor`; doc-only types use `RegisterHelpDoc` |
 | File transfer (`cp`), for types that should support it | Yes, via `helper.RegisterTransferAdapter` | None — see [B8](#b8-file-transfer-cp); skip entirely for types with no meaningful transfer surface, which is the majority of types today |
 | Connection test button | Yes, once a binder calls `conntest.Register` from `New()` | None in `System.TestAssetConnection` |
@@ -120,7 +120,7 @@ func init() {
 
 `Register(h)` stores the handler and, when `h.PolicyKind() != ""`, calls `policy.RegisterAssetKind(h.Type(), h.PolicyKind())`. The asset-type-to-policy-kind mapping is automatic; do not maintain a separate central map.
 
-`policy.RegisterDefaultPolicy(...)` is a separate registry used by `System.GetDefaultPolicy`. Types without an exposed asset policy, such as `local`, can omit it even if the interface's `DefaultPolicy()` returns a value to satisfy the interface.
+`policy.RegisterDefaultPolicy(...)` is a separate registry used by `System.GetDefaultPolicy` and by `asset_svc.Create` when a new asset has no policy. Types without an exposed asset policy, such as `local`, can omit it even if the interface's `DefaultPolicy()` returns a value to satisfy the interface. A type whose default policy depends on the asset itself registers `policy.RegisterAssetDefaultPolicy(type, provider)` instead; `asset_svc.Create` prefers it (the `generic` handler copies the asset's custom-type default rules this way).
 
 Reuse shared argument parsing:
 
@@ -132,6 +132,8 @@ Reuse shared argument parsing:
 - `validateRemoteServerArgs` for the existing SSH/database/Redis/MongoDB host/port/username validation shape
 
 `AutomationContract.ConfigFields` is the executable source of truth: unknown generic keys are rejected by name instead of being silently discarded. `Normalize` owns create defaults; `CredentialPlan` declares existing-reference semantics and accepted credential kinds; `BindCredential` applies the validated ID without a type switch in shared code. Keep `ApprovalFields` to safe endpoint/account metadata only.
+
+A built-in type declares this contract statically and `Register` rejects an empty one. The `generic` handler is the exception: its fields come from the asset's custom type, so it returns an empty static contract and implements `AutomationContractFor(ctx, asset)` (resolved through `assettype.ContractOf`), using the contract's `ValidateCreate` / `Validate` hooks for the rules a static handler keeps in `ValidateCreateArgs` / `ValidateAutomationConfig`. It also serves caller-facing type names other than its own `Type()` — a custom-type slug passed as `put_asset type` / `opsctl --type` becomes a `generic` asset through `assettype.NewAsset`, and `assettype.TypeName(asset)` maps it back to the slug.
 
 `internal/service/asset_put_svc` owns the write boundary. Its side-effect-free `Prepare` consumes the contract, validates referenced credentials/Agent sources and produces safe approval/audit data. `Commit` calls `BindCredential` for an existing reference or lets the type handler encrypt supported asset-local plaintext, then writes the asset in one transaction. Asset automation must never create/import a managed credential; SSH private-key material is rejected and must be created through the desktop key manager first.
 

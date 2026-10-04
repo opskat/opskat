@@ -21,8 +21,9 @@ import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
+import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
-import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
+import { useAssetTypeOptions, getAssetTypeLabel, findAssetTypeOption } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import type {
   AssetFormHandle,
@@ -78,14 +79,21 @@ const DEFAULT_ICONS: Record<string, string> = {
   rdp: "monitor-up",
 };
 
+/** 表单给该类型资产预填的图标:类型定义声明了 formIcon 时用它(可为空串),否则取内置默认图标。 */
+function formIconFor(type: string): string {
+  return getAssetType(type)?.formIcon ?? (DEFAULT_ICONS[type] || "server");
+}
+
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
   const { t } = useTranslation();
   const { createAsset, updateAsset } = useAssetStore();
 
-  const assetTypeOptions = useAssetTypeOptions();
+  const customTypes = useCustomTypeStore((s) => s.types);
+  const assetTypeOptions = useAssetTypeOptions(customTypes);
 
-  // Asset type
+  // Asset type(+ 子类型:通用资产的自定义类型标识)
   const [assetType, setAssetType] = useState<AssetType>("ssh");
+  const [typeVariant, setTypeVariant] = useState<string | undefined>(undefined);
 
   // Basic fields
   const [name, setName] = useState("");
@@ -138,15 +146,17 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (editAsset) {
         const editType = (editAsset.Type || "ssh") as AssetType;
         setAssetType(editType);
+        setTypeVariant(getAssetType(editType)?.variantOf?.(editAsset));
         setName(editAsset.Name);
         setGroupId(editAsset.GroupID);
-        setIcon(editAsset.Icon || DEFAULT_ICONS[editType] || "server");
+        setIcon(editAsset.Icon || formIconFor(editType));
         setDescription(editAsset.Description);
 
         // config 回填一律由 ConfigSection 经 editAsset prop 完成——扩展类型的 section
         // 也是注册出来的（见 extension/assetTypes.ts），壳不再认识任何具体类型。
       } else {
         setAssetType("ssh");
+        setTypeVariant(undefined);
         setName("");
         setGroupId(defaultGroupId);
         setIcon("server");
@@ -156,10 +166,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   }
 
-  const handleTypeChange = (newType: AssetType) => {
-    if (newType === assetType) return;
+  const handleTypeChange = (newType: AssetType, variant?: string) => {
+    if (newType === assetType && variant === typeVariant) return;
     setAssetType(newType);
-    setIcon(newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server");
+    setTypeVariant(variant);
+    const option = findAssetTypeOption(assetTypeOptions, newType, variant);
+    setIcon(option?.defaultIcon ?? (newType === "database" ? "mysql" : formIconFor(newType)));
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -208,8 +220,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           const tc = await handle.buildTestConfig!(ctx);
           if (cancelled) return {};
           testStarted = true;
-          await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
-          return {};
+          const detail = await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
+          return detail ? { successDetail: detail } : {};
         })();
         attempt = {
           result,
@@ -287,10 +299,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     await persistAsset(asset);
   };
 
-  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
+  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions, typeVariant);
   const sectionDef = getAssetType(assetType);
 
-  const isTestableAssetType = !!sectionDef?.testable;
+  const isTestableAssetType = !!sectionDef?.testable && validity.testable !== false;
 
   const isTestConnectionDisabled = testing || !validity.canTest;
 
@@ -351,7 +363,15 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* Asset Type */}
             {!editAsset && (
               <Field label={t("asset.type")}>
-                <AssetTypePicker value={assetType} onChange={(v) => handleTypeChange(v as AssetType)} />
+                <AssetTypePicker
+                  value={assetType}
+                  variant={typeVariant}
+                  onChange={(v, variant) => handleTypeChange(v as AssetType, variant)}
+                  onLeave={() => {
+                    cancelActiveTest();
+                    onOpenChange(false);
+                  }}
+                />
               </Field>
             )}
 
@@ -390,12 +410,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
             {sectionDef?.ConfigSection && (
               <sectionDef.ConfigSection
-                key={assetType}
+                key={`${assetType}:${typeVariant ?? ""}`}
                 ref={sectionRef}
                 editAsset={editAsset ?? undefined}
                 ctx={ctx}
                 onValidityChange={setValidity}
                 onIconChange={setIcon}
+                variant={typeVariant}
               />
             )}
 

@@ -235,6 +235,58 @@ describe("OpsctlApprovalDialog", () => {
   });
 });
 
+// O3：Radix 把 Overlay 与 Content 各包一层 Presence+Portal，退场动画时长不同（overlay 先结束）。
+// 队列清空 → open=false → 紧接着第二条审批到达时，若 overlay 已卸载而 content 仍在退场，
+// 重新挂载的 overlay 会追加到 body 末尾，排在 content 之后（同为 z-50）盖住新弹窗按钮。
+// happy-dom 没有真实 CSS 动画，这里让 getComputedStyle 按 data-state 报告动画名，并手动派发
+// animationend，把两个 Presence 的退场时序固定下来。
+describe("OpsctlApprovalDialog 背靠背审批（O3）", () => {
+  it("overlay 先于 content 退场完毕时紧接第二条审批：overlay 仍在 content 之前，不盖住按钮", () => {
+    const realGetComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((el: Element, pseudo?: string | null) => {
+      const style = realGetComputedStyle(el, pseudo);
+      const slot = el.getAttribute("data-slot");
+      if (slot !== "dialog-overlay" && slot !== "dialog-content") return style;
+      // Presence 持有这个对象并在之后反复读取，所以动画名必须在读取时按 data-state 现算。
+      return new Proxy(style, {
+        get: (target, prop) => {
+          if (prop !== "animationName") return Reflect.get(target, prop);
+          const state = el.getAttribute("data-state");
+          return state === "closed" ? "test-out" : state === "open" ? "test-in" : "none";
+        },
+      });
+    }) as typeof window.getComputedStyle);
+
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    const overlay = () => document.body.querySelector('[data-slot="dialog-overlay"]');
+
+    fireSingleApproval(handlers, { confirm_id: "opsctl_1", command: "create asset" });
+    fireEvent.click(screen.getByTestId("opsctl-approval-allow"));
+    // overlay 的退场先结束（若实现让它还挂着退场）；第二条审批在 content 仍存活时到达
+    const leaving = overlay();
+    if (leaving) {
+      act(() => {
+        fireEvent.animationEnd(leaving, { animationName: "test-out" });
+      });
+    }
+
+    fireSingleApproval(handlers, { confirm_id: "opsctl_2", command: "exec ls" });
+
+    const nodes = Array.from(
+      document.body.querySelectorAll('[data-slot="dialog-overlay"],[data-slot="dialog-content"]')
+    );
+    const overlays = nodes.filter((n) => n.getAttribute("data-slot") === "dialog-overlay");
+    const contents = nodes.filter((n) => n.getAttribute("data-slot") === "dialog-content");
+    expect(overlays).toHaveLength(1);
+    expect(contents).toHaveLength(1);
+    // 后来的同级同 z-index 盖在前面的上方：overlay 必须排在 content 之前
+    expect(overlays[0].compareDocumentPosition(contents[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("exec ls")).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+});
+
 // 递归/通配 cp 一次性送来上百条 ApprovalItem，原样铺开没法读——超过 10 条时折叠为一行
 // 摘要，展开后仍是全部具体主体。折叠只是呈现，批的还是那 N 条主体（D17）。
 describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => {
@@ -338,5 +390,42 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
 
     expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
+  });
+
+  it.each([
+    ["DELETE /api/dashboards/uid/k8s", "opsctlApproval.genericHttp"],
+    ["secret:token", "opsctlApproval.genericSecret"],
+    ["aws s3 ls", "opsctlApproval.genericCommand"],
+  ])("通用资产审批按匹配对象标出操作类型：%s", (command, label) => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireSingleApproval(handlers, {
+      type: "generic",
+      asset_name: "grafana-prod",
+      command,
+      detail: "HTTP request: DELETE https://grafana.internal:3000/api/dashboards/uid/k8s",
+    });
+    expect(screen.getByTestId("approval-type-badge")).toHaveTextContent(label);
+    expect(screen.getByText(/https:\/\/grafana\.internal:3000/)).toBeInTheDocument();
+  });
+
+  // opsctl batch 给通用资产条目各自带上渲染后的目标地址（cmd/opsctl/command/batch.go 的
+  // batchItemApprovalDetail）；各条目标不同，不能当成 cp 那种共享摘要折叠起来。
+  it("批量审批里通用资产条目的目标各异时超过 10 条也不折叠，逐条显示目标", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: "generic",
+      asset_id: i + 1,
+      asset_name: `grafana-${i}`,
+      command: `GET /api/${i}`,
+      detail: `HTTP request: GET https://grafana-${i}.internal/api/${i}`,
+    }));
+    fireBatchApproval(handlers, items);
+
+    expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/grafana-0\.internal\/api\/0/)).toBeVisible();
+    expect(screen.getByText(/https:\/\/grafana-10\.internal\/api\/10/)).toBeVisible();
   });
 });

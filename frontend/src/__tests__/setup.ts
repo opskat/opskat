@@ -33,6 +33,7 @@ async function mockBinderModule(modulePath: string) {
   return mocked;
 }
 vi.mock("../../wailsjs/go/system/System", () => mockBinderModule("../../wailsjs/go/system/System"));
+vi.mock("../../wailsjs/go/customtype/CustomType", () => mockBinderModule("../../wailsjs/go/customtype/CustomType"));
 vi.mock("../../wailsjs/go/ssh/SSH", () => mockBinderModule("../../wailsjs/go/ssh/SSH"));
 vi.mock("../../wailsjs/go/query/Query", () => mockBinderModule("../../wailsjs/go/query/Query"));
 vi.mock("../../wailsjs/go/redis/Redis", () => mockBinderModule("../../wailsjs/go/redis/Redis"));

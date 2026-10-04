@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AssetForm } from "@/components/asset/AssetForm";
-import { asset_entity } from "../../../../wailsjs/go/models";
+import { asset_entity, custom_type_entity, customtype } from "../../../../wailsjs/go/models";
+import { GetCustomType, ListCustomTypes } from "../../../../wailsjs/go/customtype/CustomType";
+import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { CancelTest, TestAssetConnection } from "../../../../wailsjs/go/system/System";
+import { CreateAsset, UpdateAsset, ListAssets } from "../../../../wailsjs/go/system/System";
 import { ConnectVNCTemporary, DisconnectVNC } from "../../../../wailsjs/go/vnc/VNC";
 import { startVNCClient, VNCClientError, type VNCNegotiatedSecurity } from "@/lib/vncClient";
 import { notifySuccess } from "@/lib/notify";
@@ -176,6 +179,124 @@ describe("AssetForm custom test lifecycle", () => {
     );
     expect(ConnectVNCTemporary).not.toHaveBeenCalled();
     expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccess");
+  });
+});
+
+describe("AssetForm generic assets", () => {
+  const grafana = new custom_type_entity.CustomType({
+    id: 7,
+    slug: "grafana",
+    name: "Grafana",
+    icon: "boxes",
+    execMode: "http",
+    fields: [{ name: "host", label: "Host", secret: false, required: true }],
+    http: { base_url: "https://{{host}}" },
+    usage: "",
+  });
+  const awsCli = new custom_type_entity.CustomType({
+    id: 8,
+    slug: "aws-cli",
+    name: "AWS CLI",
+    icon: "",
+    execMode: "command",
+    fields: [{ name: "profile", label: "Profile", secret: false, required: false }],
+    command: { template: "aws" },
+    usage: "",
+  });
+
+  beforeEach(() => {
+    useCustomTypeStore.setState({ types: [], loaded: false, loading: false });
+    vi.mocked(ListCustomTypes).mockResolvedValue(
+      [grafana, awsCli].map(
+        (ct) =>
+          new customtype.Summary({
+            id: ct.id,
+            slug: ct.slug,
+            name: ct.name,
+            icon: ct.icon,
+            execMode: ct.execMode,
+            assetCount: 0,
+          })
+      )
+    );
+    vi.mocked(GetCustomType).mockImplementation(async (id: number) => (id === grafana.id ? grafana : awsCli));
+    vi.mocked(CreateAsset).mockResolvedValue(undefined as never);
+    vi.mocked(UpdateAsset).mockResolvedValue(undefined as never);
+    vi.mocked(ListAssets).mockResolvedValue([] as never);
+  });
+
+  it("creates from a picked custom type and shows the tester's status detail on success", async () => {
+    vi.mocked(TestAssetConnection).mockResolvedValue("HTTP 200 OK（经 SSH 隧道：bastion）");
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId("asset-type-picker"));
+    await userEvent.click(await screen.findByTestId("asset-type-option-generic:grafana"));
+    expect(screen.getByRole("heading")).toHaveTextContent("Grafana");
+
+    await userEvent.type(await screen.findByTestId("generic-field-host"), "g.example.com");
+    await userEvent.click(screen.getByTestId("asset-test-connection"));
+
+    await waitFor(() =>
+      expect(TestAssetConnection).toHaveBeenCalledWith(
+        expect.any(String),
+        "generic",
+        expect.stringContaining('"custom_type":"grafana"'),
+        ""
+      )
+    );
+    expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccessDetail");
+  });
+
+  it("offers no test connection for command types", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId("asset-type-picker"));
+    await userEvent.click(await screen.findByTestId("asset-type-option-generic:aws-cli"));
+    await screen.findByTestId("generic-field-profile");
+    expect(screen.queryByTestId("asset-test-connection")).toBeNull();
+  });
+
+  it("disables save while a required field is empty", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await userEvent.type(screen.getByTestId("asset-form-name-input"), "grafana-prod");
+    await userEvent.click(screen.getByTestId("asset-type-picker"));
+    await userEvent.click(await screen.findByTestId("asset-type-option-generic:grafana"));
+    const host = await screen.findByTestId("generic-field-host");
+    await waitFor(() => expect(screen.getByTestId("asset-form-submit")).toBeDisabled());
+    await userEvent.type(host, "g.example.com");
+    await waitFor(() => expect(screen.getByTestId("asset-form-submit")).toBeEnabled());
+  });
+
+  it("choosing an icon-less custom type and saving submits icon '' not 'boxes'", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await userEvent.type(screen.getByTestId("asset-form-name-input"), "aws-cli-test");
+    await userEvent.click(screen.getByTestId("asset-type-picker"));
+    await userEvent.click(await screen.findByTestId("asset-type-option-generic:aws-cli"));
+    await screen.findByTestId("generic-field-profile");
+
+    await userEvent.click(screen.getByTestId("asset-form-submit"));
+
+    await waitFor(() => expect(CreateAsset).toHaveBeenCalled());
+    const savedAsset = vi.mocked(CreateAsset).mock.calls[0][0];
+    expect(savedAsset.Icon).toBe("");
+  });
+
+  it("editing an icon-less custom type asset does not write 'boxes'", async () => {
+    const iconlessAsset = new asset_entity.Asset({
+      ID: 99,
+      Name: "aws-cli-prod",
+      Type: "generic",
+      Icon: "",
+      Config: JSON.stringify({ custom_type: "aws-cli", values: {} }),
+    });
+
+    render(<AssetForm open editAsset={iconlessAsset} onOpenChange={vi.fn()} />);
+    await screen.findByTestId("generic-field-profile");
+
+    await userEvent.click(screen.getByTestId("asset-form-submit"));
+
+    await waitFor(() => expect(UpdateAsset).toHaveBeenCalled());
+    const savedAsset = vi.mocked(UpdateAsset).mock.calls[0][0];
+    expect(savedAsset.Icon).toBe("");
   });
 });
 

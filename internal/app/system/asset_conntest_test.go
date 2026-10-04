@@ -24,7 +24,7 @@ func TestTestAssetConnectionDispatch(t *testing.T) {
 		gotCfg, gotPw = cfg, pw
 		return want
 	})
-	err := newTestSystem().TestAssetConnection("tid", "dummy", "CFG", "PW")
+	_, err := newTestSystem().TestAssetConnection("tid", "dummy", "CFG", "PW")
 	if err != want {
 		t.Fatalf("got %v, want %v", err, want)
 	}
@@ -34,7 +34,7 @@ func TestTestAssetConnectionDispatch(t *testing.T) {
 }
 
 func TestTestAssetConnectionUnknownType(t *testing.T) {
-	if err := newTestSystem().TestAssetConnection("tid", "nope", "{}", ""); err == nil {
+	if _, err := newTestSystem().TestAssetConnection("tid", "nope", "{}", ""); err == nil {
 		t.Fatal("expected error for unknown asset type")
 	}
 }
@@ -48,7 +48,10 @@ func TestTestAssetConnectionCancellable(t *testing.T) {
 		return ctx.Err()
 	})
 	done := make(chan error, 1)
-	go func() { done <- newTestSystem().TestAssetConnection("cancel-me", "blocker", "{}", "") }()
+	go func() {
+		_, err := newTestSystem().TestAssetConnection("cancel-me", "blocker", "{}", "")
+		done <- err
+	}()
 	<-started
 	testreg.Cancel("cancel-me")
 	select {

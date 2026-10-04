@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"testing"
 
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 )
 
@@ -18,5 +19,17 @@ func TestRegisterRepositoriesAgentSourceRepo(t *testing.T) {
 
 	if ssh_agent_source_repo.SSHAgentSource() == nil {
 		t.Fatal("registerRepositories 未注册 ssh_agent_source_repo：生产进程来源操作会 nil panic")
+	}
+}
+
+// TestRegisterRepositoriesCustomTypeRepo 同上：自定义类型仓储漏注册会让
+// custom_type_svc 在生产进程里 nil panic。
+func TestRegisterRepositoriesCustomTypeRepo(t *testing.T) {
+	custom_type_repo.RegisterCustomType(nil)
+
+	registerRepositories()
+
+	if custom_type_repo.CustomType() == nil {
+		t.Fatal("registerRepositories 未注册 custom_type_repo")
 	}
 }

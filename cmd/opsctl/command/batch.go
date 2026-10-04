@@ -36,7 +36,7 @@ type batchCommand struct {
 	Type    string `json:"type,omitempty"` // Optional canonical asset type or protocol alias.
 	Command string `json:"command"`
 	// Scope has the same semantics as opsctl exec's --scope (helpers.go's
-	// validateRedisScope / parseExecArgs doc comment): only meaningful for redis assets.
+	// validateRedisScope / parseExecArgv doc comment): only meaningful for redis assets.
 	// Only reachable through the JSON input mode — the positional `type:asset:command`
 	// grammar has no slot for a fourth field (spec opsctl 一节: "位置参数形式
 	// redis:<asset>:<command> 不变（无 scope）").
@@ -73,7 +73,10 @@ type resolvedBatchCmd struct {
 	// approval display — see prepareExecCommand's doc comment. Execution always
 	// uses command (raw), never this field.
 	checkCommand string
-	decision     *aictx.CheckResult // 策略预检结果，用于审计
+	// detail is the approval.BatchItem.Detail shown in the desktop batch dialog — see
+	// batchItemApprovalDetail.
+	detail   string
+	decision *aictx.CheckResult // 策略预检结果，用于审计
 }
 
 func isValidBatchType(name string) bool {
@@ -187,12 +190,20 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			continue
 		}
 
+		detail, detailErr := batchItemApprovalDetail(ctx, asset, cmd.Command, cmd.Scope)
+		if detailErr != nil {
+			results[i].Error = detailErr.Error()
+			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", detailErr, nil)
+			continue
+		}
+
 		resolved[i] = resolvedBatchCmd{
 			asset:        asset,
 			cmdType:      cmdType,
 			command:      cmd.Command,
 			scope:        cmd.Scope,
 			checkCommand: checkCommand,
+			detail:       detail,
 		}
 	}
 
@@ -253,10 +264,10 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				AssetID:   cmd.asset.ID,
 				AssetName: cmd.asset.Name,
 				Command:   cmd.checkCommand,
-				// Detail 单独带 scope，不掺进 Command：Command 驱动策略匹配与 grant
-				// pattern 落库，掺入节点地址会让同一条命令因 scope 不同匹配不上同一条
-				// 规则——同 exec.go 的 execApprovalDetail。
-				Detail: batchItemScopeDetail(cmd.scope),
+				// Detail 单独带 scope 与类型的审批展示补充，不掺进 Command：Command 驱动
+				// 策略匹配与 grant pattern 落库，掺入节点地址会让同一条命令因 scope 不同
+				// 匹配不上同一条规则——同 exec.go 的 execApprovalDetail。
+				Detail: cmd.detail,
 			})
 		}
 
@@ -364,12 +375,17 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 		Command:   cmd.command,
 	}
 
+	// Each item gets its own audit-result slot (items run concurrently). An executor that
+	// records a summary there — a generic asset: the HTTP status line / "exit N", the same
+	// summary opsctl exec's stream path audits — has it audited instead of its output, which
+	// can echo injected values; the caller's JSON output still carries the full output.
+	itemCtx := aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 	// cmdType is assertion metadata only. Dispatch always follows the resolved
 	// asset's real type, for canonical names, aliases, and the unprefixed form.
 	if cmd.asset.IsSSH() {
-		result = executeBatchExec(ctx, cmd)
+		result = executeBatchExec(itemCtx, cmd)
 	} else {
-		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+		result = executeBatchHandler(itemCtx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
 			"scope":   cmd.scope,
@@ -382,8 +398,12 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	if result.Error != "" {
 		execErr = fmt.Errorf("%s", result.Error)
 	}
+	auditResult := result.Stdout
+	if summary, ok := aictx.GetAuditResult(itemCtx); ok && execErr == nil {
+		auditResult = summary
+	}
 	auditCtx := withBatchAuditCommand(ctx, cmd.checkCommand)
-	writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, result.Stdout, execErr, cmd.decision)
+	writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, auditResult, execErr, cmd.decision)
 
 	return result
 }
@@ -626,6 +646,26 @@ const batchAuditTool = "exec"
 // executeBatchItem) instead of six near-identical fmt.Sprintf calls quietly drifting.
 func batchArgsJSON(assetID int64, command, scope string) string {
 	return fmt.Sprintf(`{"asset_id":%d,"command":%q,"scope":%q}`, assetID, truncateStr(command, 200), scope)
+}
+
+// batchItemApprovalDetail builds the approval.BatchItem.Detail: the asset type's registered
+// approval supplement (permission.ApprovalDetailFor — a generic asset's operation and
+// rendered target, never an injected value) followed by the scope, each only when present.
+// A supplement that cannot be built means the command is bound to fail, so the caller
+// reports it before any approval — same as exec.go's execApprovalDetailFor.
+func batchItemApprovalDetail(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
+	var parts []string
+	if describe, ok := permission.ApprovalDetailFor(asset.Type); ok {
+		extra, err := describe(ctx, asset, command)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, extra)
+	}
+	if scopeDetail := batchItemScopeDetail(scope); scopeDetail != "" {
+		parts = append(parts, scopeDetail)
+	}
+	return strings.Join(parts, "\n"), nil
 }
 
 // batchItemScopeDetail builds the approval.BatchItem.Detail shown in the desktop batch

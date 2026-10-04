@@ -60,6 +60,7 @@ func AllToolDefs() []ToolDef {
 		{"request_permission", handleRequestGrant},
 		{"exec", handleExec},
 		{"help", handleHelp},
+		{"get_asset_secret", handleGetAssetSecret},
 	}
 }
 

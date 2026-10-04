@@ -12,7 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// parseExecArgs 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [--] <command>。
+// parseExecArgv 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [--] <command>。
 // 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
 // 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的，--scope 同理）。命令之前的
 // 未知选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
@@ -22,18 +22,17 @@ import (
 // 节点 host:port。仅对 redis 资产有意义——cmdExec 在解析后用 validateRedisScope 对非
 // redis 资产报错，而不是这里静默忽略或直接执行。
 //
-// literalWords 选择多词 argv 重新拼接时的引号策略，见 joinCommandWords；调用方
-// （cmdExec）在解析参数前已经从资产类型拿到了这个答案（assettype.ExtensionOwnerOf），
-// 这里只是把那个已知的答案传下去，不重新判断资产类型。
-func parseExecArgs(args []string, literalWords bool) (declaredType, scope, command string, err error) {
+// 命令原样保留成 argv：注册了流式执行入口的类型（permission.StreamExecutorFor，如通用资产）
+// 按参数边界执行，`-H 'X-Caller: two words'` 必须仍是一个参数；其余类型由调用方用空格拼接。
+func parseExecArgv(args []string) (declaredType, scope string, argv []string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			command = joinCommandWords(args[i+1:], literalWords)
+			argv = args[i+1:]
 		case arg == "--type":
 			if i+1 >= len(args) {
-				return "", "", "", fmt.Errorf("--type requires a value")
+				return "", "", nil, fmt.Errorf("--type requires a value")
 			}
 			declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
@@ -43,7 +42,7 @@ func parseExecArgs(args []string, literalWords bool) (declaredType, scope, comma
 			continue
 		case arg == "--scope":
 			if i+1 >= len(args) {
-				return "", "", "", fmt.Errorf("--scope requires a value")
+				return "", "", nil, fmt.Errorf("--scope requires a value")
 			}
 			scope = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
@@ -52,16 +51,26 @@ func parseExecArgs(args []string, literalWords bool) (declaredType, scope, comma
 			scope = strings.TrimPrefix(arg, "--scope=")
 			continue
 		case strings.HasPrefix(arg, "-"):
-			return "", "", "", fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
+			return "", "", nil, fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
 		default:
-			command = joinCommandWords(args[i:], literalWords)
+			argv = args[i:]
 		}
 		break
 	}
-	if command == "" {
-		return "", "", "", fmt.Errorf("no command given")
+	if strings.Join(argv, " ") == "" {
+		return "", "", nil, fmt.Errorf("no command given")
 	}
-	return declaredType, scope, command, nil
+	return declaredType, scope, argv, nil
+}
+
+// quoteExecArgv 把 argv 逐个按需加引号拼成命令串，cmdline.Words 能把它原样切回 argv。
+// 流式执行的类型用它作为 canonicalize / 审批 / 审计看到的命令串，与 AI exec 的写法一致。
+func quoteExecArgv(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
+		quoted[i] = cmdline.QuoteIfNeeded(a)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // validateRedisScope 校验 --scope（opsctl exec）/ batch 条目的 scope 字段只用在 redis

@@ -385,6 +385,46 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.getByText("do something 10")).toBeVisible();
   });
 
+  it.each([
+    ["GET /api/search", "opsctlApproval.genericHttp"],
+    ["secret:token", "opsctlApproval.genericSecret"],
+    ["aws s3 ls", "opsctlApproval.genericCommand"],
+    // 只是以 "secret:" 开头的命令仍是命令（后端按执行方式判定），不能标成取值。
+    ["secret:x; rm -rf /", "opsctlApproval.genericCommand"],
+  ])("通用资产审批按匹配对象标出操作类型并常驻显示目标：%s", (command, label) => {
+    renderApproval({
+      approvalItems: [
+        {
+          type: "generic",
+          asset_id: 3,
+          asset_name: "grafana-prod",
+          command,
+          detail: "HTTP request: GET https://grafana.internal:3000/api/search",
+        },
+      ],
+    });
+    expect(screen.getByTestId("approval-type-badge")).toHaveTextContent(label);
+    expect(screen.getByText("ai.approvalGenericTarget")).toBeVisible();
+    expect(screen.getByText(/https:\/\/grafana\.internal:3000/)).toBeVisible();
+  });
+
+  // 通用资产的目标地址对批量审批同样必须可见（spec「策略、审批与审计」）；各条目标不同，
+  // 不能被当成 cp 那种"每条共享同一句摘要"折叠起来。
+  it("批量审批里通用资产条目常驻显示各自的目标，目标各异时超过 10 条也不折叠", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: "generic",
+      asset_id: i + 1,
+      asset_name: `grafana-${i}`,
+      command: `GET /api/${i}`,
+      detail: `HTTP request: GET https://grafana-${i}.internal/api/${i}`,
+    }));
+    renderApproval({ approvalKind: "batch", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/grafana-0\.internal\/api\/0/)).toBeVisible();
+    expect(screen.getByText(/https:\/\/grafana-10\.internal\/api\/10/)).toBeVisible();
+  });
+
   it("扩展审批列出动作与全部资源，记住预填取后端规则", () => {
     renderApproval({
       approvalItems: [

@@ -8,6 +8,7 @@ export type SettingsTab =
   | "terminal"
   | "external-edit"
   | "appearance"
+  | "custom-types"
   | "status"
   | "extensions"
   | "about";

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -77,18 +78,19 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	if assetType == "" {
 		assetType = asset_entity.AssetTypeSSH
 	}
-	if _, ok := assettype.Get(assetType); !ok {
-		return "", fmt.Errorf("unsupported asset type %q; supported: %s",
+	// type 可以是内置类型名，也可以是自定义类型标识（落成绑定该类型的通用资产）。
+	asset, err := assettype.NewAsset(ctx, assetType)
+	if errors.Is(err, assettype.ErrUnknownType) {
+		return "", fmt.Errorf("unsupported asset type %q; supported: %s, or a custom type slug",
 			assetType, strings.Join(permission.RegisteredHelpTypes(), ", "))
 	}
-
-	asset := &asset_entity.Asset{
-		Name:        name,
-		Type:        assetType,
-		Icon:        aictx.ArgString(args, "icon"),
-		GroupID:     aictx.ArgInt64(args, "group_id"),
-		Description: aictx.ArgString(args, "description"),
+	if err != nil {
+		return "", err
 	}
+	asset.Name = name
+	asset.Icon = aictx.ArgString(args, "icon")
+	asset.GroupID = aictx.ArgInt64(args, "group_id")
+	asset.Description = aictx.ArgString(args, "description")
 	req := asset_put_svc.Request{
 		Asset:  asset,
 		Config: config,
@@ -155,9 +157,10 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 	if err != nil {
 		return "", err
 	}
+	// 更新时给出的 type 与 exec 的 type 同语义：断言，不是改类型。
+	// 资产类型是不可变的——改类型等于换协议、换配置形状、换策略组。
+	// 通用资产对外的类型名是其自定义类型标识，与之相符即通过（AssertAssetType 负责）。
 	if declared := aictx.ArgString(args, "type"); declared != "" {
-		// 更新时给出的 type 与 exec 的 type 同语义：断言，不是改类型。
-		// 资产类型是不可变的——改类型等于换协议、换配置形状、换策略组。
 		if err := permission.AssertAssetType(asset, declared); err != nil {
 			return "", err
 		}

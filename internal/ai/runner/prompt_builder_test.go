@@ -147,3 +147,33 @@ func TestBuild_PrefersExecOverPerTypeTools(t *testing.T) {
 		t.Fatalf("prompt must keep the local_* vs remote warning, got:\n%s", got)
 	}
 }
+
+// TestBuild_ListsDefinedCustomTypes locks the skill-list requirement of spec "帮助、技能
+// 与门禁": the system prompt must list every defined custom type (slug + name) so the
+// model can discover `put_asset type=<slug>` targets it has never seen an asset of.
+func TestBuild_ListsDefinedCustomTypes(t *testing.T) {
+	b := NewPromptBuilder("en", AIContext{})
+	b.SetCustomTypes([]CustomTypeSummary{
+		{Slug: "grafana", Name: "Grafana"},
+		{Slug: "aws-cli", Name: "AWS CLI"},
+	})
+	got := b.Build()
+	for _, want := range []string{"grafana", "Grafana", "aws-cli", "AWS CLI"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt should list the defined custom type (want %q), got:\n%s", want, got)
+		}
+	}
+	// Sorted by slug regardless of the caller's order, so the prompt is deterministic.
+	if strings.Index(got, "- aws-cli: AWS CLI") > strings.Index(got, "- grafana: Grafana") {
+		t.Fatalf("custom types should be listed sorted by slug, got:\n%s", got)
+	}
+}
+
+// TestBuild_NoCustomTypesOmitsSection ensures an empty custom-type list (the common case
+// — most installs define none) does not render an empty/dangling heading.
+func TestBuild_NoCustomTypesOmitsSection(t *testing.T) {
+	got := NewPromptBuilder("en", AIContext{}).Build()
+	if strings.Contains(got, "Defined custom types") {
+		t.Fatalf("prompt should not mention custom types when none are defined, got:\n%s", got)
+	}
+}

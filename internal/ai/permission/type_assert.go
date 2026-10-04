@@ -2,6 +2,7 @@ package permission
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -41,6 +42,22 @@ func init() {
 	}
 }
 
+// BuiltinDeclaredTypeNames 返回调用方可以声明为类型的全部内置名字：权限类型与其别名
+// （exec / sql / db / mongo / kube …）以及驱动名（mysql / postgres …）。resolveDeclaredType
+// 先查这些名字、最后才查自定义类型标识，所以与它们同名的标识会在 --type 断言、batch 前缀里
+// 被内置类型遮蔽——自定义类型的保留类型名必须包含它们（组合根 main.go 注入）。
+func BuiltinDeclaredTypeNames() []string {
+	names := make([]string, 0, len(permissionTypes)+len(driverAliases))
+	for name := range permissionTypes {
+		names = append(names, name)
+	}
+	for name := range driverAliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // resolveDeclaredType 解析一个调用方声明的类型名，返回它断言的资产类型，以及——仅当
 // 声明的是驱动名时——它额外断言的驱动。driver 为空表示"只断言类型，不涉及方言"。
 func resolveDeclaredType(name string) (canonical string, driver asset_entity.DatabaseDriver, ok bool) {
@@ -52,6 +69,11 @@ func resolveDeclaredType(name string) (canonical string, driver asset_entity.Dat
 	}
 	if d, found := driverAliases[name]; found {
 		return asset_entity.AssetTypeDatabase, d, true
+	}
+	// 自定义类型标识（slug）是通用资产对外的类型名（--type、batch 前缀、exec 的 type 参数）；
+	// 它断言的资产类型是 generic，具体是哪个标识由 AssertAssetType 对着资产再核一次。
+	if customTypeSlugExists(name) {
+		return asset_entity.AssetTypeGeneric, "", true
 	}
 	return "", "", false
 }
@@ -102,14 +124,29 @@ func AssertAssetType(asset *asset_entity.Asset, declared string) error {
 	if declared == "" {
 		return nil
 	}
+	// 通用资产对外的类型名是它的自定义类型标识；声明的若正是这个标识，断言成立，
+	// 不必再查一次数据库。报错信息里同样用标识点名资产类型。
+	slug, generic, err := genericSlugOf(asset)
+	if err != nil {
+		return err
+	}
+	assetType := asset.Type
+	if generic {
+		if declared == slug {
+			return nil
+		}
+		assetType = slug
+	}
 	canonical, driver, ok := resolveDeclaredType(declared)
 	if !ok {
 		return fmt.Errorf("unknown type %q; asset %q is type=%s — call help(asset=%q) for its command syntax",
-			declared, asset.Name, asset.Type, asset.Name)
+			declared, asset.Name, assetType, asset.Name)
 	}
-	if canonical != asset.Type {
+	// 另一个自定义类型的标识同样解析为 generic，但它断言的是那个标识，不是"任意通用资产"：
+	// 通用资产上只有自身标识（上面已放行）与存储类型名 generic 本身能通过。
+	if canonical != asset.Type || (generic && declared != asset_entity.AssetTypeGeneric) {
 		return fmt.Errorf("asset %q is type=%s, but you passed type=%s — call help(asset=%q) for its command syntax",
-			asset.Name, asset.Type, declared, asset.Name)
+			asset.Name, assetType, declared, asset.Name)
 	}
 	if driver == "" {
 		return nil

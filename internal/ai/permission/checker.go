@@ -127,13 +127,6 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 	return aictx.CheckResult{Decision: aictx.Allow, Message: policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
 }
 
-// matchGrantPatterns 从 DB 中查找已批准 grant 的 items，用通配匹配命令
-// 返回首个匹配的 pattern，空字符串表示未匹配
-// groups 为资产所属的组链（组 → 父组 → ... → 根）
-func matchGrantPatterns(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string) string {
-	return matchGrantPatternsWith(ctx, assetID, groups, subCmds, "exec", policy.MatchCommandRule)
-}
-
 // grantItemAppliesTo 判断一条 grant item 是否属于当前检查的工具面。
 //
 // 只在 cp 与非 cp 之间划线，不是按 toolName 严格相等：存量行的 tool_name 一律被旧版

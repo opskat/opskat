@@ -5,7 +5,7 @@ description: "opskat CLI for asset management and remote operations (SSH, databa
 
 # opsctl CLI Tool
 
-Standalone CLI for asset management and remote operations without the GUI. All managed assets are stored in the desktop app — use `list`/`get` to discover targets and `help <asset-or-type>` for the registered type's current config/command contract. `create asset --help` discovers the registered built-in type set at runtime; do not maintain a separate supported-type list in automation.
+Standalone CLI for asset management and remote operations without the GUI. All managed assets are stored in the desktop app — use `list`/`get` to discover targets and `help <asset-or-type>` for the registered type's current config/command contract. `create asset --help` discovers the registered built-in type set at runtime; do not maintain a separate supported-type list in automation. Users can also define their own **custom types** in the desktop app (an internal HTTP API, a local CLI, …) and build assets on them — a custom type's slug works as `help <slug>`, as `create`/`update asset --type <slug>`, and as an `exec --type` assertion or batch type prefix, the same as a built-in type name. **Always run `opsctl help <asset-or-type>` before the first `create`/`update`/`exec` against a type in a session** — for a custom type there is no other way to learn its field names, secret/required attributes, or its exec syntax (HTTP types: `opsctl exec <asset> -- <METHOD> <PATH> [-H 'Name: value']... [-d <data> | -d @<file> | -d @-] [-i]`; command types: the arguments after `--`, or the whole shell command when the type has no command template).
 
 ## Global Flags
 
@@ -50,10 +50,27 @@ Minimize output to save context window:
 ## Generic Asset Creation and Credentials
 
 `opsctl create asset --name <name> --type <type> --config '<JSON object>'` accepts every
-registered built-in type. Use `--config-file <path>` instead for a JSON object file; the two
-inputs are mutually exclusive. Existing convenience flags (`--host`, `--port`, `--username`,
-`--driver`, K8s flags, etc.) remain compatible, and only explicitly supplied flags override
-non-secret config keys. Run `opsctl help <type>` for exact accepted fields and defaults.
+registered built-in type, and also a user-defined custom type's slug (e.g. `--type
+grafana`) — that creates a **generic asset**, stored as type `generic` but referenced
+everywhere by its custom type's slug. Use `--config-file <path>` instead for a JSON object
+file; the two inputs are mutually exclusive. Existing convenience flags (`--host`,
+`--port`, `--username`, `--driver`, K8s flags, etc.) remain compatible, and only explicitly
+supplied flags override non-secret config keys. Run `opsctl help <type>` for exact accepted
+fields and defaults — for a custom type, `--config`'s keys are exactly that type's field
+names, and there is no other way to learn them (custom types themselves are desktop-only;
+opsctl never lists or defines their structure on its own).
+
+`--secret <field>` (repeatable) types one write-only config field's value in the terminal
+without echo, instead of putting it in `--config` — useful for a custom type's secret
+fields, and for a built-in type's own (e.g. Redis's `sentinel_password`). Same TTY
+requirement as bare `--password` below; also available on `update asset`.
+
+`opsctl secret get <asset> <field>` reads a generic asset's field value back out (never a
+built-in type's own credentials). A non-secret field returns immediately; a secret field is
+checked against policy and, if it needs confirmation, the prompt says the plaintext will be
+output to you and — for an AI-driven call — enters the conversation and is sent to the model
+provider. Only call it when the value is actually needed. Run `opsctl help <asset-or-type>`
+first if you don't already know the field names.
 
 `--password` is the only plaintext flag. Written bare it reads the secret from an
 interactive terminal without echo — **you cannot use that form**, because an agent session
@@ -147,7 +164,7 @@ opsctl cp 'web-01:/var/log/*.log' ./logs/                   # remote glob: quote
 
 ## Commands
 
-Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `policy`, `ext`, `version`.
+Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `secret`, `batch`, `cp`, `policy`, `ext`, `version`.
 
 For full command reference with flags and examples, see [references/commands.md](references/commands.md).
 

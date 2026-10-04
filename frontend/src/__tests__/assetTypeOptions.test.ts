@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import { Server } from "lucide-react";
 import {
   getAssetTypeOptions,
   matchSelectedTypes,
@@ -27,6 +28,7 @@ const BUILTIN_VALUES = [
   "rdp",
   "etcd",
   "oss",
+  "generic",
 ];
 
 function manifest(name: string, assetTypes: { type: string; i18n: { name: string } }[]): ExtManifest {
@@ -53,6 +55,20 @@ describe("getAssetTypeOptions", () => {
   it("returns built-in options when no extension is installed", () => {
     expect(getAssetTypeOptions().map((o) => o.value)).toEqual(BUILTIN_VALUES);
     expect(getAssetTypeOptions().every((o) => o.group === "builtin")).toBe(true);
+  });
+
+  it("expands the custom group into one option per custom type when custom types are given", () => {
+    const opts = getAssetTypeOptions([
+      { slug: "grafana", name: "Grafana", icon: "boxes" },
+      { slug: "aws-cli", name: "AWS CLI", icon: "" },
+    ]);
+    const custom = opts.filter((o) => o.category === "custom");
+    expect(custom.map((o) => [o.value, o.variant, o.label, o.defaultIcon])).toEqual([
+      ["generic", "grafana", "Grafana", "boxes"],
+      ["generic", "aws-cli", "AWS CLI", undefined],
+    ]);
+    expect(custom.every((o) => o.group === "custom" && !o.labelIsI18nKey)).toBe(true);
+    expect(opts.some((o) => o.value === "generic" && !o.variant)).toBe(false);
   });
 
   it("aliases on database include mysql, postgresql, database", () => {
@@ -135,6 +151,7 @@ describe("category classification", () => {
       oss: "databases",
       kafka: "middleware",
       k8s: "middleware",
+      generic: "custom",
     });
   });
 
@@ -145,9 +162,9 @@ describe("category classification", () => {
 });
 
 describe("buildAssetTypeGroups", () => {
-  it("orders groups servers → databases → middleware → extension and drops empty groups", () => {
+  it("orders groups servers → databases → middleware → extension → custom and drops empty groups", () => {
     const groups = buildAssetTypeGroups(getAssetTypeOptions());
-    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware"]);
+    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware", "custom"]);
     expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local", "vnc", "rdp"]);
     expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd", "oss"]);
   });
@@ -155,7 +172,7 @@ describe("buildAssetTypeGroups", () => {
   it("adds the extension group once an extension is installed", () => {
     install(manifest("ext", [{ type: "foo", i18n: { name: "Foo" } }]));
     const groups = buildAssetTypeGroups(getAssetTypeOptions());
-    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware", "extension"]);
+    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware", "extension", "custom"]);
     expect(groups[3].options.map((o) => o.value)).toEqual(["foo"]);
   });
 });
@@ -234,5 +251,13 @@ describe("useAssetTypeOptions", () => {
     act(() => install(manifest("memo-ext", [{ type: "memo-ext-type", i18n: { name: "Memo" } }])));
     expect(result.current).not.toBe(first);
     expect(result.current.some((o) => o.value === "memo-ext-type")).toBe(true);
+  });
+});
+
+describe("icon-less custom type option", () => {
+  it("shows Server component for custom type with no icon", () => {
+    const opts = getAssetTypeOptions([{ slug: "aws-cli", name: "AWS CLI", icon: "" }]);
+    const awsCliOpt = opts.find((o) => o.variant === "aws-cli")!;
+    expect(awsCliOpt.icon).toBe(Server);
   });
 });

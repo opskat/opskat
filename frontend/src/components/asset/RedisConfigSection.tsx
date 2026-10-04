@@ -8,6 +8,7 @@ import { SecretInput } from "@/components/SecretInput";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential, type UseAssetCredential } from "./useAssetCredential";
+import { tlsToggleFields } from "./tlsFields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
@@ -516,42 +517,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       ],
     },
     { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
-    {
-      key: "tls",
-      label: "asset.tabTls",
-      fields: [
-        { kind: "switch", key: "tls", label: "asset.tls" },
-        { kind: "switch", key: "tlsInsecure", label: "asset.redisTlsInsecure", visibleWhen: (s) => s.tls },
-        {
-          kind: "text",
-          key: "tlsServerName",
-          label: "asset.redisTlsServerName",
-          placeholder: "redis.example.com",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsCAFile",
-          label: "asset.redisTlsCAFile",
-          placeholder: "/path/to/ca.pem",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsCertFile",
-          label: "asset.redisTlsCertFile",
-          placeholder: "/path/to/client.crt",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsKeyFile",
-          label: "asset.redisTlsKeyFile",
-          placeholder: "/path/to/client.key",
-          visibleWhen: (s) => s.tls,
-        },
-      ],
-    },
+    { key: "tls", label: "asset.tabTls", fields: tlsToggleFields<RedisFormState>("redis.example.com") },
     {
       key: "advanced",
       label: "asset.tabAdvanced",

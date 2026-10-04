@@ -25,6 +25,8 @@ interface CommandPolicyCardProps {
   lists: PolicyList[];
   buildPolicyJSON: () => string;
   hint?: string;
+  /** 是否显示规则测试面板;缺省显示。 */
+  testable?: boolean;
   saving?: boolean;
   assetID?: number;
   groupID?: number;
@@ -39,6 +41,7 @@ export function CommandPolicyCard({
   lists,
   buildPolicyJSON,
   hint,
+  testable = true,
   saving,
   assetID,
   groupID,
@@ -164,7 +167,14 @@ export function CommandPolicyCard({
       )}
 
       {/* Test panel */}
-      <PolicyTestPanel policyType={policyType} buildPolicyJSON={buildPolicyJSON} assetID={assetID} groupID={groupID} />
+      {testable && (
+        <PolicyTestPanel
+          policyType={policyType}
+          buildPolicyJSON={buildPolicyJSON}
+          assetID={assetID}
+          groupID={groupID}
+        />
+      )}
 
       {/* Policy Group Manager Dialog */}
       <PolicyGroupManager
