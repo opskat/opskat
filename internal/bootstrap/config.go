@@ -45,6 +45,14 @@ type AppConfig struct {
 	ExternalEditCustomEditors        []ExternalEditorConfig `json:"external_edit_custom_editors,omitempty"`
 	ExternalEditCleanupRetentionDays int                    `json:"external_edit_cleanup_retention_days,omitempty"`
 	ExternalEditMaxReadFileSizeMB    int                    `json:"external_edit_max_read_file_size_mb,omitempty"`
+
+	// 命令的模型审核（辅助审批 / Autopilot）。桌面端和 opsctl 读同一份。
+	// 数值为 0 / 空时用 command_review_svc 的默认值。
+	CommandReviewAPIKey    string  `json:"command_review_api_key,omitempty"`  // 加密后的 API key
+	CommandReviewBaseURL   string  `json:"command_review_base_url,omitempty"` // 兼容 TypeSafe System One API 的服务地址，空为官方地址
+	CommandReviewModel     string  `json:"command_review_model,omitempty"`
+	CommandReviewTimeoutMs int     `json:"command_review_timeout_ms,omitempty"`
+	CommandReviewThreshold float64 `json:"command_review_threshold,omitempty"`
 }
 
 // ExternalEditorConfig 是用户自定义外部编辑器配置。

@@ -16,6 +16,8 @@ import { LeftPanel } from "@/components/layout/LeftPanel";
 import { SideTabList } from "@/components/layout/SideTabList";
 import { PermissionDialog } from "@/components/ai/PermissionDialog";
 import { OpsctlApprovalDialog } from "@/components/approval/OpsctlApprovalDialog";
+import { CommandReviewConfigErrorListener } from "@/components/settings/CommandReviewConfigErrorListener";
+import { openGroupDetail, openInfoTab } from "@/lib/infoTab";
 import { OpsctlMFADialog } from "@/components/approval/OpsctlMFADialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ActiveTasksQuitDialog, type QuitActivity } from "@/components/ActiveTasksQuitDialog";
@@ -256,7 +258,7 @@ function App() {
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<group_entity.Group | null>(null);
 
-  const { selectAsset, selectGroup, deleteAsset, getAsset } = useAssetStore();
+  const { selectAsset, deleteAsset, getAsset } = useAssetStore();
   const { connect } = useTerminalStore();
 
   const handleAddAsset = (groupId?: number) => {
@@ -288,23 +290,6 @@ function App() {
   const handleSelectAsset = (asset: asset_entity.Asset) => {
     selectAsset(asset.ID);
   };
-
-  const handleOpenInfoTab = useCallback((type: "asset" | "group", id: number, name: string, icon?: string) => {
-    const tabStore = useTabStore.getState();
-    const infoTabId = `info-${type}-${id}`;
-    const existing = tabStore.tabs.find((t) => t.id === infoTabId);
-    if (existing) {
-      tabStore.activateTab(infoTabId);
-    } else {
-      tabStore.openTab({
-        id: infoTabId,
-        type: "info",
-        label: name,
-        icon,
-        meta: { type: "info", targetType: type, targetId: id, name, icon },
-      });
-    }
-  }, []);
 
   const handleDeleteAsset = async (id: number) => {
     await deleteAsset(id);
@@ -443,18 +428,14 @@ function App() {
                             setEditingGroup(group);
                             setGroupDialogOpen(true);
                           }}
-                          onGroupDetail={(group) => {
-                            selectGroup(group.ID);
-                            selectAsset(null);
-                            handleOpenInfoTab("group", group.ID, group.Name, group.Icon || undefined);
-                          }}
+                          onGroupDetail={openGroupDetail}
                           onEditAsset={handleEditAsset}
                           onCopyAsset={handleCopyAsset}
                           onConnectAsset={handleConnectAsset}
                           onConnectAssetInNewTab={handleConnectAssetInNewTab}
                           onOpenFileManager={handleOpenFileManager}
                           onSelectAsset={handleSelectAsset}
-                          onOpenInfoTab={handleOpenInfoTab}
+                          onOpenInfoTab={openInfoTab}
                         />
                       ) : (
                         <SideTabList />
@@ -488,18 +469,14 @@ function App() {
                         setEditingGroup(group);
                         setGroupDialogOpen(true);
                       }}
-                      onGroupDetail={(group) => {
-                        selectGroup(group.ID);
-                        selectAsset(null);
-                        handleOpenInfoTab("group", group.ID, group.Name, group.Icon || undefined);
-                      }}
+                      onGroupDetail={openGroupDetail}
                       onEditAsset={handleEditAsset}
                       onCopyAsset={handleCopyAsset}
                       onConnectAsset={handleConnectAsset}
                       onConnectAssetInNewTab={handleConnectAssetInNewTab}
                       onOpenFileManager={handleOpenFileManager}
                       onSelectAsset={handleSelectAsset}
-                      onOpenInfoTab={handleOpenInfoTab}
+                      onOpenInfoTab={openInfoTab}
                     />
                     {/* Resize handle */}
                     {!assetTreeCollapsed && (
@@ -537,6 +514,7 @@ function App() {
           </Suspense>
           <PermissionDialog suspended={quitActivities !== null} />
           <OpsctlApprovalDialog suspended={quitActivities !== null} />
+          <CommandReviewConfigErrorListener />
           <OpsctlMFADialog />
           <ActiveTasksQuitDialog
             open={quitActivities !== null}

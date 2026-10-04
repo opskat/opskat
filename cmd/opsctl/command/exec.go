@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
@@ -34,6 +35,10 @@ var execStdin io.Reader = os.Stdin
 // execSSHStreamFn 是 exec 对 ssh 资产的流式执行入口，同上一套路。测试只需要断言
 // "ssh 资产走了这条路径"，不需要真的起一个 SSH 会话。
 var execSSHStreamFn = execSSHStreaming
+
+// execStdinFn 判断 stdin 有没有要转发给 ssh 命令的内容（预读最多等 wait，见 inspectStdin），
+// 同上一套路：测试替换它来模拟管道输入。
+var execStdinFn = func(wait time.Duration) (io.Reader, bool) { return inspectStdin(os.Stdin, wait) }
 
 // cmdExec 按资产真实类型分派命令执行：ssh 走 execSSHStreaming 这条已文档化的流式
 // 通道（stdin 管道转发、stdout/stderr 直写、远端 exit code 透传——SKILL.md 里
@@ -124,6 +129,17 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 下一次同类命令上重新命中。
 	approvalType := permission.ApprovalTypeFor(asset.Type)
 	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q,"scope":%q}`, asset.ID, command, scope)
+	// 只有 ssh 资产会把 stdin 转发给远端命令。在审批之前判断：管道里的内容模型审核看不到，
+	// 有的话不能靠审核放行（PipedInput）。资产没开模型审核时不预读，和原来一样直接转发。
+	var stdin io.Reader
+	var pipedInput bool
+	if asset.IsSSH() {
+		var wait time.Duration
+		if permission.ReviewsCommands(ctx, asset.ID) {
+			wait = stdinPeekWait
+		}
+		stdin, pipedInput = execStdinFn(wait)
+	}
 	approvalResult, err := execApprovalFn(ctx, approval.ApprovalRequest{
 		Type:      approvalType,
 		AssetID:   asset.ID,
@@ -132,8 +148,9 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		// scope 不并进 Command/checkCommand：那两个字段驱动策略匹配与 grant pattern
 		// 落库（见上方注释），掺入节点地址会让同一条命令因 scope 不同而匹配不上同一条
 		// 规则。Detail 只是给审批人看的补充说明，同 cp 的 "src → dst" 用法。
-		Detail:    execApprovalDetail(args[0], scope, command),
-		SessionID: session,
+		Detail:     execApprovalDetail(args[0], scope, command),
+		SessionID:  session,
+		PipedInput: pipedInput,
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
@@ -152,7 +169,7 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	}
 
 	if asset.IsSSH() {
-		return execSSHStreamFn(ctx, auditCtx, asset, command, approvalResult)
+		return execSSHStreamFn(ctx, auditCtx, asset, command, stdin, approvalResult)
 	}
 	// 其余类型走统一 exec handler：opsctl 由此获得 database/redis/mongodb/etcd/kafka/k8s
 	// 的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它已经知道
@@ -175,20 +192,12 @@ func execApprovalDetail(assetRef, scope, command string) string {
 	return fmt.Sprintf("opsctl exec %s --scope %s -- %s", assetRef, scope, command)
 }
 
-// execSSHStreaming 是 ssh 资产的流式执行体：转发 stdin 管道、stdout/stderr 直写
-// 本地、透传远端 exit code，全程走 helper.ExecWithStdio 自行拨号。ctx 用于该调用；
-// auditCtx 已注入 approvalResult.SessionID，专供审计写入使用。
-func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, approvalResult ApprovalResult) int {
+// execSSHStreaming 是 ssh 资产的流式执行体：把 stdin（没有要转发的内容时为 nil）转发给
+// 远端命令、stdout/stderr 直写本地、透传远端 exit code，全程走 helper.ExecWithStdio 自行
+// 拨号。ctx 用于该调用；auditCtx 已注入 approvalResult.SessionID，专供审计写入使用。
+func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, stdin io.Reader, approvalResult ApprovalResult) int {
 	assetID := asset.ID
 	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, assetID, command)
-
-	// Detect if stdin is a pipe (not a terminal)
-	var stdin io.Reader
-	if stat, err := os.Stdin.Stat(); err == nil {
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
-			stdin = os.Stdin
-		}
-	}
 
 	// 捕获输出用于审计日志
 	outBuf := audit.NewLimitedBuffer(auditOutputLimit)

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
 import { AISettingsSection } from "@/components/settings/AISettingsSection";
+import { CommandReviewSection } from "@/components/settings/CommandReviewSection";
 import { ImportSection } from "@/components/settings/ImportSection";
 import { BackupSection } from "@/components/settings/BackupSection";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
@@ -96,6 +97,7 @@ export function SettingsPage() {
           {/* AI Provider */}
           <TabsContent value="ai" className="space-y-4">
             <AISettingsSection />
+            <CommandReviewSection />
           </TabsContent>
 
           {/* Import */}

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/localipc"
 	"go.uber.org/zap"
 )
@@ -25,6 +26,8 @@ type BatchItem struct {
 	// Detail 是这一条的补充说明，供折叠摘要展示"两端基点"一类信息（如 cp 的
 	// "opsctl cp <src> → <dst>"）；batch_exec 的命令条目不产出，留空。
 	Detail string `json:"detail"`
+	// Review 是这一条的模型审核结果（辅助审批下审核未通过或失败时才有）。
+	Review *aictx.ReviewInfo `json:"review,omitempty"`
 }
 
 // ApprovalRequest is sent from opsctl to the desktop app.
@@ -45,6 +48,11 @@ type ApprovalRequest struct {
 	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
 	Path        string          `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
 	MFA         *MFAChallenge   `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
+	// Review 是模型审核结果（辅助审批下审核未通过或失败时才有），审批提示据此说明为什么要确认。
+	Review *aictx.ReviewInfo `json:"review,omitempty"`
+	// PipedInput 表示命令执行时还会从管道读入内容（opsctl exec 转发 stdin），只在 opsctl
+	// 本地做权限检查时用（见 permission.PermissionRequest.PipedInput），不发给桌面端。
+	PipedInput bool `json:"-"`
 }
 
 // MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的

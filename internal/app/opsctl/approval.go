@@ -73,7 +73,7 @@ func (o *Opsctl) startApprovalServer() {
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	parsed, reason := o.awaitSingleApproval(o.ctx, permission.ApprovalItem{
 		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
-		Command: req.Command, Detail: req.Detail,
+		Command: req.Command, Detail: req.Detail, Review: req.Review,
 	}, req.SessionID)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
@@ -137,6 +137,7 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 		"resource":         item.Resource,
 		"resources":        item.Resources,
 		"remember_pattern": item.RememberPattern,
+		"review":           item.Review,
 		"session_id":       sessionID,
 	})
 
@@ -192,6 +193,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 	for _, item := range req.BatchItems {
 		expectedItems = append(expectedItems, permission.ApprovalItem{
 			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+			Review: item.Review,
 		})
 	}
 	// 批量事件发送原始 items，展示与执行逐字一致。
@@ -203,6 +205,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 			"asset_name": expectedItems[i].AssetName,
 			"command":    expectedItems[i].Command,
 			"detail":     expectedItems[i].Detail,
+			"review":     expectedItems[i].Review,
 		})
 	}
 

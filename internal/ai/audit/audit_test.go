@@ -231,3 +231,32 @@ func TestWriteGrantDiscardedAudit_PreservesRawCommand(t *testing.T) {
 		t.Fatalf("Command = %q, want raw %q", got, command)
 	}
 }
+
+func TestWriteToolCall_RecordsModelReview(t *testing.T) {
+	repo := setupAuditRepo(t)
+	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: `{"command":"systemctl restart nginx"}`,
+		Decision: &aictx.CheckResult{
+			Decision:       aictx.Allow,
+			DecisionSource: aictx.SourceUserAllow,
+			Review:         &aictx.ReviewInfo{Mode: "assisted", Outcome: "reject", Failed: []string{"disruptive"}, Model: "jev-1.13.0"},
+		},
+	})
+
+	assert.Len(t, repo.logs, 1)
+	assert.Equal(t, aictx.SourceUserAllow, repo.logs[0].DecisionSource)
+	assert.JSONEq(t, `{"mode":"assisted","outcome":"reject","failed":["disruptive"],"model":"jev-1.13.0"}`, repo.logs[0].Review)
+}
+
+func TestWriteToolCall_NoReviewLeavesColumnEmpty(t *testing.T) {
+	repo := setupAuditRepo(t)
+	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: `{"command":"ls"}`,
+		Decision: &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow},
+	})
+
+	assert.Len(t, repo.logs, 1)
+	assert.Empty(t, repo.logs[0].Review)
+}
