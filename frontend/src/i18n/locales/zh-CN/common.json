@@ -2822,6 +2822,50 @@
       "customPlaceholder": "主机名，可带端口，如 registry.example.com:5000",
       "hostRequired": "请填写主机名"
     },
+    "view": {
+      "installed": "已安装",
+      "store": "商店"
+    },
+    "store": {
+      "title": "扩展商店",
+      "description": "浏览并安装官方商店中的扩展，索引经签名校验后才会展示",
+      "searchPlaceholder": "搜索扩展名称或描述",
+      "refresh": "刷新",
+      "updatedAt": "索引更新于 {{time}}",
+      "verified": "已验证签名",
+      "install": "安装",
+      "updateTo": "更新到 {{version}}",
+      "installed": "已安装",
+      "unavailable": "无法安装",
+      "installedVersion": "已装 {{version}}",
+      "reason": {
+        "hostABI": "需要更新 OpsKat（需 hostABI {{hostABI}}）",
+        "minAppVersion": "需要 OpsKat {{version}} 及以上版本",
+        "source": "需要更新 OpsKat 才能下载此扩展包"
+      },
+      "empty": "商店里还没有扩展",
+      "noResults": "没有找到与“{{query}}”相关的扩展",
+      "fetchFailed": "无法获取扩展索引",
+      "fetchFailedDesc": "请检查网络，或更换下载镜像后重试。",
+      "signatureInvalid": "索引签名无效",
+      "signatureInvalidDesc": "索引未通过签名校验，商店不予展示。可能是镜像缓存过期或内容被篡改，可更换镜像后重试。",
+      "unknownFormat": "需要更新 OpsKat",
+      "unknownFormatDesc": "扩展索引使用了更新的格式，当前版本的 OpsKat 无法读取。",
+      "invalid": "扩展索引无法读取",
+      "invalidDesc": "索引签名有效，但内容有误，请稍后再试。",
+      "retry": "重试",
+      "changeMirror": "更换镜像",
+      "checkUpdate": "检查更新",
+      "installUnavailable": "当前版本暂不支持从商店安装"
+    },
+    "capability": {
+      "assetEndpoint": "访问资产地址",
+      "credentials": "读取凭据",
+      "fsRead": "读取本地文件",
+      "fsWrite": "写入本地文件",
+      "http": "访问网络",
+      "tunnel": "访问内网"
+    },
     "installed": "已安装扩展",
     "noExtensions": "未安装扩展",
     "noExtensionsDesc": "扩展安装到应用数据目录的 extensions/ 文件夹下",

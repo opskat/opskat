@@ -2822,6 +2822,50 @@
       "customPlaceholder": "Host name, optionally with a port, e.g. registry.example.com:5000",
       "hostRequired": "Enter a host name"
     },
+    "view": {
+      "installed": "Installed",
+      "store": "Store"
+    },
+    "store": {
+      "title": "Extension store",
+      "description": "Official extensions, checked against a signed index before anything is shown",
+      "searchPlaceholder": "Search by name or description",
+      "refresh": "Refresh",
+      "updatedAt": "Index updated {{time}}",
+      "verified": "signature verified",
+      "install": "Install",
+      "updateTo": "Update to {{version}}",
+      "installed": "Installed",
+      "unavailable": "Can't install",
+      "installedVersion": "{{version}} installed",
+      "reason": {
+        "hostABI": "Needs a newer OpsKat (hostABI {{hostABI}})",
+        "minAppVersion": "Needs OpsKat {{version}} or later",
+        "source": "Needs a newer OpsKat to download this package"
+      },
+      "empty": "No extensions in the store yet",
+      "noResults": "No extensions match \"{{query}}\"",
+      "fetchFailed": "Couldn't load the extension index",
+      "fetchFailedDesc": "Check your network, or switch to another download mirror and try again.",
+      "signatureInvalid": "The index signature is invalid",
+      "signatureInvalidDesc": "The index failed signature verification, so the store isn't shown. Your mirror may be serving a stale or altered copy — try another one.",
+      "unknownFormat": "Update OpsKat to use the store",
+      "unknownFormatDesc": "The extension index uses a newer format than this version of OpsKat can read.",
+      "invalid": "The extension index can't be read",
+      "invalidDesc": "The index is signed but malformed. Try again later.",
+      "retry": "Retry",
+      "changeMirror": "Change mirror",
+      "checkUpdate": "Check for updates",
+      "installUnavailable": "Installing from the store isn't available in this build yet"
+    },
+    "capability": {
+      "assetEndpoint": "Asset addresses",
+      "credentials": "Reads credentials",
+      "fsRead": "Reads local files",
+      "fsWrite": "Writes local files",
+      "http": "Internet access",
+      "tunnel": "Private network"
+    },
     "installed": "Installed Extensions",
     "noExtensions": "No extensions installed",
     "noExtensionsDesc": "Extensions are installed to the extensions/ folder in the app data directory",

@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/opskat/opskat/internal/service/extension_svc"
+	"github.com/opskat/opskat/internal/service/extstore_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -23,6 +24,8 @@ type Extension struct {
 	pool   *sshpool.Pool
 
 	service *extension_svc.Service
+	// store is the official extension store (SetStoreService).
+	store *extstore_svc.Service
 
 	// toolCalls are the page tool calls in flight, for CancelExtensionTool.
 	toolCalls toolCalls

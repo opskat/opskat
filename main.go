@@ -36,6 +36,7 @@ import (
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/extreg"
+	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -43,6 +44,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
+	"github.com/opskat/opskat/internal/service/extstore_svc"
 	"github.com/opskat/opskat/internal/service/localterm_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
@@ -221,6 +223,11 @@ func main() {
 	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
+	extB.SetStoreService(extstore_svc.New(extstore_svc.Options{
+		DownloadMirror:    sys.GetDownloadMirror,
+		InstalledVersions: func() map[string]string { return extension.InstalledVersions(extB) },
+		App:               appversion.Current,
+	}))
 	externalEditEmitter := external_edit.NewEventEmitter()
 	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
 		DataDir:        bootstrap.AppDataDir(),

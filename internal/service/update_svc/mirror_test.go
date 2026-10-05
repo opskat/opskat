@@ -10,27 +10,27 @@ import (
 func TestApplyMirror(t *testing.T) {
 	convey.Convey("镜像 URL 改写", t, func() {
 		convey.Convey("空镜像返回原始 URL", func() {
-			url := applyMirror("https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", "")
+			url := ApplyMirror("https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", "")
 			assert.Equal(t, "https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", url)
 		})
 
 		convey.Convey("带尾部斜杠的镜像前缀", func() {
-			url := applyMirror("https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", "https://ghfast.top/")
+			url := ApplyMirror("https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", "https://ghfast.top/")
 			assert.Equal(t, "https://ghfast.top/https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", url)
 		})
 
 		convey.Convey("不带尾部斜杠的镜像前缀自动补齐", func() {
-			url := applyMirror("https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", "https://ghfast.top")
+			url := ApplyMirror("https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", "https://ghfast.top")
 			assert.Equal(t, "https://ghfast.top/https://github.com/opskat/opskat/releases/download/v1.0.0/file.tar.gz", url)
 		})
 
 		convey.Convey("可改写 api.github.com URL", func() {
-			url := applyMirror("https://api.github.com/repos/opskat/opskat/releases/latest", "https://ghfast.top/")
+			url := ApplyMirror("https://api.github.com/repos/opskat/opskat/releases/latest", "https://ghfast.top/")
 			assert.Equal(t, "https://ghfast.top/https://api.github.com/repos/opskat/opskat/releases/latest", url)
 		})
 
 		convey.Convey("可改写 raw.githubusercontent.com URL", func() {
-			url := applyMirror("https://raw.githubusercontent.com/opskat/opskat/main/file.json", "https://ghfast.top/")
+			url := ApplyMirror("https://raw.githubusercontent.com/opskat/opskat/main/file.json", "https://ghfast.top/")
 			assert.Equal(t, "https://ghfast.top/https://raw.githubusercontent.com/opskat/opskat/main/file.json", url)
 		})
 	})

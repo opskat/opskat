@@ -35,6 +35,7 @@ import { Bug, Download, FolderOpen, Loader2, ExternalLink, RefreshCw } from "luc
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL, EventsOn } from "../../../wailsjs/runtime/runtime";
+import { DOWNLOAD_MIRROR_SETTING_ID } from "./downloadMirror";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const REPOSITORY_URL = "https://github.com/opskat/opskat";
@@ -249,7 +250,7 @@ export function UpdateSection() {
         {channel === "nightly" && <p className="text-xs text-muted-foreground">{t("appUpdate.nightlyWarning")}</p>}
         {channel === "beta" && <p className="text-xs text-muted-foreground">{t("appUpdate.betaWarning")}</p>}
 
-        <div className="flex justify-between items-center text-sm">
+        <div id={DOWNLOAD_MIRROR_SETTING_ID} className="flex justify-between items-center text-sm">
           <span className="text-muted-foreground">{t("appUpdate.downloadMirror")}</span>
           <Select
             value={mirror === "custom" ? "custom" : mirror || "__default__"}

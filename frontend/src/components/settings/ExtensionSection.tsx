@@ -51,6 +51,8 @@ import {
   GetExtensionDetail,
 } from "../../../wailsjs/go/extension/Extension";
 import { ExtensionMirrorSettings } from "./ExtensionMirrorSettings";
+import { ExtensionStore, type StoreCard } from "./ExtensionStore";
+import { Segmented } from "@/components/asset/fields";
 import type { ExtCapabilities } from "@/extension/types";
 
 interface ExtInfo {
@@ -76,8 +78,11 @@ interface ExtInfo {
   };
 }
 
+type ExtensionView = "installed" | "store";
+
 export function ExtensionSection() {
   const { t } = useTranslation();
+  const [view, setView] = useState<ExtensionView>("installed");
   const [extensions, setExtensions] = useState<ExtInfo[]>([]);
   const [reloading, setReloading] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -158,6 +163,12 @@ export function ExtensionSection() {
     }
   };
 
+  // Store install / update: the store-install flow (download → verify → confirm)
+  // connects here. Until it does, the click fails visibly instead of pretending.
+  const installFromStore = async (_card: StoreCard): Promise<void> => {
+    throw new Error(t("extension.store.installUnavailable"));
+  };
+
   const openDetail = async (name: string) => {
     try {
       const detail = await GetExtensionDetail(name);
@@ -171,103 +182,120 @@ export function ExtensionSection() {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-base">{t("extension.installed")}</CardTitle>
-            <CardDescription>
-              {extensions.length > 0
-                ? `${extensions.length} ${t("extension.title").toLowerCase()}`
-                : t("extension.noExtensionsDesc")}
-            </CardDescription>
-          </div>
-          <div className="flex gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" disabled={installing} className="gap-1">
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("extension.install")}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleInstall(false)}>
-                  <FileArchive className="h-4 w-4 mr-2" />
-                  {t("extension.installFromZip")}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleInstall(true)}>
-                  <FolderOpen className="h-4 w-4 mr-2" />
-                  {t("extension.installFromDir")}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button variant="outline" size="sm" onClick={handleReload} disabled={reloading} className="gap-1">
-              <RefreshCw className={`h-3.5 w-3.5 ${reloading ? "animate-spin" : ""}`} />
-              {t("extension.reload")}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {extensions.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">{t("extension.noExtensions")}</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {extensions.map((ext) => (
-                <div
-                  key={ext.name}
-                  className={`flex items-center justify-between p-3 border rounded-lg ${
-                    !ext.enabled ? "opacity-60" : ""
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-8 rounded bg-muted flex items-center justify-center">
-                      <Puzzle className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-sm">{ext.displayName || ext.name}</p>
-                        {!ext.enabled && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                            {t("extension.disabled")}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {ext.description && <span>{ext.description} · </span>}
-                        {t("extension.version")} {ext.version}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Switch checked={ext.enabled} onCheckedChange={() => handleToggle(ext)} />
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => openDetail(ext.name)}>
-                          <Info className="h-4 w-4 mr-2" />
-                          {t("extension.detail")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setUninstallTarget(ext)} className="text-destructive">
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          {t("extension.uninstall")}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <Segmented<ExtensionView>
+        aria-label={t("extension.title")}
+        className="w-56"
+        value={view}
+        onChange={setView}
+        options={[
+          { value: "installed", label: t("extension.view.installed"), testid: "ext-view-installed" },
+          { value: "store", label: t("extension.view.store"), testid: "ext-view-store" },
+        ]}
+      />
 
-      <ExtensionMirrorSettings />
+      {view === "store" ? (
+        <ExtensionStore onInstall={installFromStore} />
+      ) : (
+        <>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base">{t("extension.installed")}</CardTitle>
+                <CardDescription>
+                  {extensions.length > 0
+                    ? `${extensions.length} ${t("extension.title").toLowerCase()}`
+                    : t("extension.noExtensionsDesc")}
+                </CardDescription>
+              </div>
+              <div className="flex gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" disabled={installing} className="gap-1">
+                      <Plus className="h-3.5 w-3.5" />
+                      {t("extension.install")}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => handleInstall(false)}>
+                      <FileArchive className="h-4 w-4 mr-2" />
+                      {t("extension.installFromZip")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleInstall(true)}>
+                      <FolderOpen className="h-4 w-4 mr-2" />
+                      {t("extension.installFromDir")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button variant="outline" size="sm" onClick={handleReload} disabled={reloading} className="gap-1">
+                  <RefreshCw className={`h-3.5 w-3.5 ${reloading ? "animate-spin" : ""}`} />
+                  {t("extension.reload")}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {extensions.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">{t("extension.noExtensions")}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {extensions.map((ext) => (
+                    <div
+                      key={ext.name}
+                      className={`flex items-center justify-between p-3 border rounded-lg ${
+                        !ext.enabled ? "opacity-60" : ""
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded bg-muted flex items-center justify-center">
+                          <Puzzle className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-sm">{ext.displayName || ext.name}</p>
+                            {!ext.enabled && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                {t("extension.disabled")}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {ext.description && <span>{ext.description} · </span>}
+                            {t("extension.version")} {ext.version}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Switch checked={ext.enabled} onCheckedChange={() => handleToggle(ext)} />
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => openDetail(ext.name)}>
+                              <Info className="h-4 w-4 mr-2" />
+                              {t("extension.detail")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setUninstallTarget(ext)} className="text-destructive">
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              {t("extension.uninstall")}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <ExtensionMirrorSettings />
+        </>
+      )}
 
       {/* Uninstall Confirmation Dialog */}
       <AlertDialog
