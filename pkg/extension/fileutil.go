@@ -12,6 +12,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// Limits applied to every extension zip (local and store) while unpacking. Vars so
+// tests can lower them.
+var (
+	// maxZipExtractedBytes caps the total decompressed bytes of one archive.
+	maxZipExtractedBytes int64 = 512 << 20
+	// maxZipEntries caps the number of entries in one archive.
+	maxZipEntries = 5000
+)
+
 func extractZip(zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -23,6 +32,11 @@ func extractZip(zipPath, destDir string) error {
 		}
 	}()
 
+	if len(r.File) > maxZipEntries {
+		return fmt.Errorf("zip has too many entries: %d (limit %d)", len(r.File), maxZipEntries)
+	}
+
+	remaining := maxZipExtractedBytes
 	for _, f := range r.File {
 		name := f.Name
 		// Reject if not a local relative path (handles .., absolute, drive letters)
@@ -60,7 +74,12 @@ func extractZip(zipPath, destDir string) error {
 			return err
 		}
 
-		_, err = io.Copy(out, rc) //nolint:gosec // extensions are from trusted registry
+		// Bound by the bytes actually produced, not the sizes the headers declare.
+		n, err := io.Copy(out, io.LimitReader(rc, remaining+1)) //nolint:gosec // bounded by LimitReader
+		remaining -= n
+		if err == nil && remaining < 0 {
+			err = fmt.Errorf("zip extracts to more than %d bytes", maxZipExtractedBytes)
+		}
 		if closeErr := rc.Close(); closeErr != nil {
 			logger.Default().Warn("close zip entry reader", zap.Error(closeErr))
 		}
