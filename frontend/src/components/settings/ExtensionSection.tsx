@@ -50,6 +50,7 @@ import {
   DisableExtension,
   GetExtensionDetail,
 } from "../../../wailsjs/go/extension/Extension";
+import { ExtensionMirrorSettings } from "./ExtensionMirrorSettings";
 import type { ExtCapabilities } from "@/extension/types";
 
 interface ExtInfo {
@@ -169,7 +170,7 @@ export function ExtensionSection() {
   };
 
   return (
-    <>
+    <div className="space-y-4">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -266,6 +267,8 @@ export function ExtensionSection() {
         </CardContent>
       </Card>
 
+      <ExtensionMirrorSettings />
+
       {/* Uninstall Confirmation Dialog */}
       <AlertDialog
         open={!!uninstallTarget}
@@ -310,7 +313,7 @@ export function ExtensionSection() {
           {detailTarget && <ExtensionDetail ext={detailTarget} />}
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }
 

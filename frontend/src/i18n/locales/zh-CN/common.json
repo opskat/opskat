@@ -2813,6 +2813,15 @@
   },
   "extension": {
     "title": "扩展",
+    "mirror": {
+      "title": "扩展下载",
+      "hint": "扩展包从容器镜像仓库拉取；扩展索引沿用应用的“下载镜像”设置。无论选哪个镜像，都会校验签名和 sha256。",
+      "source": "拉取源",
+      "direct": "ghcr.io（直连）",
+      "custom": "自定义主机",
+      "customPlaceholder": "主机名，可带端口，如 registry.example.com:5000",
+      "hostRequired": "请填写主机名"
+    },
     "installed": "已安装扩展",
     "noExtensions": "未安装扩展",
     "noExtensionsDesc": "扩展安装到应用数据目录的 extensions/ 文件夹下",

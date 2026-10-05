@@ -11,6 +11,7 @@ import (
 type AppConfig struct {
 	UpdateChannel                   string `json:"update_channel,omitempty"`                    // stable, beta, nightly
 	DownloadMirror                  string `json:"download_mirror,omitempty"`                   // 下载镜像 URL 前缀，空表示直连 GitHub
+	ExtensionMirror                 string `json:"extension_mirror,omitempty"`                  // 扩展 OCI 拉取主机（host[:port]），空表示直连 ghcr.io
 	KDFSalt                         string `json:"kdf_salt,omitempty"`                          // base64 编码的 Argon2id salt
 	AIProviderType                  string `json:"ai_provider_type,omitempty"`                  // openai, local_cli
 	AIAPIBase                       string `json:"ai_api_base,omitempty"`                       // API base URL 或 CLI 路径
@@ -93,6 +94,18 @@ func LoadConfig(dataDir string) (*AppConfig, error) {
 // GetConfig 获取当前配置（LoadConfig 之后调用）
 func GetConfig() *AppConfig {
 	return appConfig
+}
+
+// DefaultExtensionRegistryHost 是扩展 OCI 制品的默认（直连）registry 主机。
+const DefaultExtensionRegistryHost = "ghcr.io"
+
+// ExtensionRegistryHost 返回扩展拉取实际使用的 registry 主机：配置的镜像主机，
+// 未配置时为 ghcr.io。
+func ExtensionRegistryHost() string {
+	if appConfig == nil || appConfig.ExtensionMirror == "" {
+		return DefaultExtensionRegistryHost
+	}
+	return appConfig.ExtensionMirror
 }
 
 // SaveConfig 保存配置到文件
