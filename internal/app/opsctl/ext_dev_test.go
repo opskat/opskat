@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -325,4 +326,50 @@ func TestHandleExtDevInstallLeadsWithCredentialsReadWarning(t *testing.T) {
 	require.Contains(t, withRead, "credentials: read")
 	require.Contains(t, withRead, "plaintext")
 	require.NotContains(t, approver.prompts[1].Detail, "plaintext")
+}
+
+// A build the app cannot run is refused before the user is even asked, and the
+// reason says to update OpsKat and what to update to.
+func TestHandleExtDevInstallRejectsIncompatibleExtension(t *testing.T) {
+	prev := currentApp
+	currentApp = func() appversion.Info { return appversion.Info{Version: "1.5.0", Kind: appversion.KindRelease} }
+	t.Cleanup(func() { currentApp = prev })
+
+	cases := map[string]struct{ manifest, want string }{
+		"hostABI":       {`{"name":"oss","version":"1.0.0","hostABI":"9.0"}`, "hostABI 9.0"},
+		"minAppVersion": {`{"name":"oss","version":"1.0.0","hostABI":"2.2","minAppVersion":"2.0.0"}`, "2.0.0"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			installer := &recordingDevInstaller{}
+			approver := &recordingApprover{approve: true}
+			o := newDevOpsctl(installer, approver)
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(tc.manifest), 0o600))
+
+			resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+
+			require.False(t, resp.Approved)
+			require.Contains(t, resp.Reason, "Update OpsKat")
+			require.Contains(t, resp.Reason, tc.want)
+			require.Empty(t, approver.prompts, "an incompatible build must be refused before asking the user")
+			require.Empty(t, installer.installs)
+		})
+	}
+}
+
+// nightly and dev builds have no trustworthy version number: minAppVersion is ignored.
+func TestHandleExtDevInstallIgnoresMinAppVersionOnDevBuild(t *testing.T) {
+	prev := currentApp
+	currentApp = func() appversion.Info { return appversion.Info{Version: "1.0.0", Kind: appversion.KindDev} }
+	t.Cleanup(func() { currentApp = prev })
+	approver := &recordingApprover{approve: true}
+	o := newDevOpsctl(&recordingDevInstaller{}, approver)
+	dir := t.TempDir()
+	manifest := `{"name":"oss","version":"1.0.0","hostABI":"2.0","minAppVersion":"9.0.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
+
+	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+
+	require.True(t, resp.Approved, resp.Reason)
 }

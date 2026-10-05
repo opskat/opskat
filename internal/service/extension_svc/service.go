@@ -2,12 +2,16 @@ package extension_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
+	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
@@ -15,6 +19,20 @@ import (
 	"github.com/opskat/opskat/pkg/extension"
 	"go.uber.org/zap"
 )
+
+// currentApp is the app version the install-time compatibility rule is judged
+// against; a variable so tests can stand in other builds.
+var currentApp = appversion.Current
+
+// localizedError carries a user-language message while keeping the typed cause
+// reachable through errors.As.
+type localizedError struct {
+	msg string
+	err error
+}
+
+func (e *localizedError) Error() string { return e.msg }
+func (e *localizedError) Unwrap() error { return e.err }
 
 // ExtensionInfo is the frontend-facing extension descriptor.
 type ExtensionInfo struct {
@@ -168,6 +186,16 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Judge compatibility from the source's manifest before staging: Stage loads the
+	// WASM and rejects a manifest this app cannot read with a bare validation error.
+	if err := extension.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
+		var inc *extension.IncompatibleError
+		if errors.As(err, &inc) {
+			return nil, &localizedError{msg: i18n.ExtensionIncompatible(aictx.GetPolicyLang(ctx), inc), err: inc}
+		}
+		return nil, fmt.Errorf("install extension: %w", err)
+	}
 
 	staged, err := s.manager.Stage(ctx, sourcePath)
 	if err != nil {

@@ -1,6 +1,7 @@
 package opsctl
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -18,6 +20,10 @@ import (
 // extDevApprovalType 是 ext dev 安装在 opsctl 审批弹窗里的类型；ApprovalKindFor 对它
 // 给出 once——安装只能逐次确认，不能落成常驻授权。
 const extDevApprovalType = "ext_dev_install"
+
+// currentApp is the app version the compatibility rule is judged against; a
+// variable so tests can stand in other builds.
+var currentApp = appversion.Current
 
 // handleExtDevInstall 处理 `opsctl ext dev <dir>`：经用户在桌面端确认后，把一个
 // 未打包的扩展目录装进当前进程。
@@ -67,6 +73,15 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 	if err != nil {
 		log.Warn("extension dev install refused", zap.Error(err))
 		return approval.ApprovalResponse{Approved: false, Reason: fmt.Sprintf("read manifest: %v", err)}
+	}
+	// 同一条兼容规则：不兼容的构建在弹窗之前就拒绝，并说明需要更新 OpsKat。
+	if err := extension.CheckManifestJSON(data, currentApp()); err != nil {
+		log.Warn("extension dev install refused", zap.Error(err))
+		var inc *extension.IncompatibleError
+		if errors.As(err, &inc) {
+			return approval.ApprovalResponse{Approved: false, Reason: i18n.ExtensionIncompatible(o.lang.Lang(), inc)}
+		}
+		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
 	}
 	manifest, err := extension.ParseManifest(data)
 	if err != nil {
