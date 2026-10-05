@@ -75,7 +75,7 @@ func extractZip(zipPath, destDir string) error {
 		}
 
 		// Bound by the bytes actually produced, not the sizes the headers declare.
-		n, err := io.Copy(out, io.LimitReader(rc, remaining+1)) //nolint:gosec // bounded by LimitReader
+		n, err := io.Copy(out, io.LimitReader(rc, remaining+1))
 		remaining -= n
 		if err == nil && remaining < 0 {
 			err = fmt.Errorf("zip extracts to more than %d bytes", maxZipExtractedBytes)
