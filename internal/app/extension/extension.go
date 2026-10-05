@@ -6,6 +6,8 @@ import (
 
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/sshpool"
+
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // LangProvider 由 system binder 实现。
@@ -24,11 +26,21 @@ type Extension struct {
 
 	// toolCalls are the page tool calls in flight, for CancelExtensionTool.
 	toolCalls toolCalls
+
+	// emit sends an event to the frontend; New wires it to Wails events, tests
+	// replace it.
+	emit func(name string, payload any)
+	// installConfirms are the install confirms waiting for the user.
+	installConfirms installConfirms
 }
 
 // New 构造 extension binder。
 func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Extension {
-	return &Extension{appCtx: appCtx, lang: lang, pool: pool}
+	e := &Extension{appCtx: appCtx, lang: lang, pool: pool}
+	e.emit = func(name string, payload any) {
+		wailsRuntime.EventsEmit(e.ctx, name, payload)
+	}
+	return e
 }
 
 // SetService main.go 在创建 extension_svc.Service 后注入。

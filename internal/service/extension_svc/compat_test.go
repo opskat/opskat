@@ -47,14 +47,14 @@ func TestInstallRejectsIncompatibleExtension(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := sourceWithManifest(t, tc.manifest)
 
-			_, err := svc.Install(aictx.WithPolicyLang(context.Background(), "zh-CN"), src)
+			_, err := svc.Install(aictx.WithPolicyLang(context.Background(), "zh-CN"), src, nil)
 			var inc *extension.IncompatibleError
 			require.True(t, errors.As(err, &inc), "typed reason must survive: %v", err)
 			assert.Equal(t, tc.reason, inc.Reason)
 			assert.Contains(t, err.Error(), "更新 OpsKat")
 			assert.Contains(t, err.Error(), tc.zh)
 
-			_, err = svc.Install(aictx.WithPolicyLang(context.Background(), "en"), src)
+			_, err = svc.Install(aictx.WithPolicyLang(context.Background(), "en"), src, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "Update OpsKat")
 			assert.Contains(t, err.Error(), tc.en)
