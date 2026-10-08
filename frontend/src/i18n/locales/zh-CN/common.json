@@ -2822,6 +2822,7 @@
       "customPlaceholder": "主机名，可带端口，如 registry.example.com:5000",
       "hostRequired": "请填写主机名"
     },
+    "updatesAvailable": "有 {{count}} 个扩展可更新",
     "view": {
       "installed": "已安装",
       "store": "商店"

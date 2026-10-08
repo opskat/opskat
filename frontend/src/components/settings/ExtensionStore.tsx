@@ -25,9 +25,10 @@ import { EntityIcon } from "@/components/asset/AssetIcon";
 import { formatBytes } from "@/lib/formatBytes";
 import { pinyinMatch } from "@/lib/pinyin";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
-import { useWailsEvent } from "@/hooks/useWailsEvent";
+import { useExtensionUpdates } from "./extensionUpdates";
 import { ListStore, RefreshStore } from "../../../wailsjs/go/extension/Extension";
 import type { extension, extstore_svc } from "../../../wailsjs/go/models";
+import { useStoreInstalls } from "./useStoreInstalls";
 import { revealDownloadMirrorSetting } from "./downloadMirror";
 
 export type StoreCard = extstore_svc.Card;
@@ -72,7 +73,7 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 /** The ext:store-progress payload (extstore_svc.Progress). */
-interface StoreProgress {
+export interface StoreProgress {
   name: string;
   phase: "downloading" | "verifying" | "installing";
   done: number;
@@ -83,7 +84,7 @@ interface StoreProgress {
  * A card's install: running (phase is unset until the confirm is accepted and
  * the download starts) or failed with the backend's reason.
  */
-type CardInstall =
+export type CardInstall =
   | { status: "running"; phase?: StoreProgress["phase"]; done: number; total: number }
   | { status: "failed"; error: extstore_svc.InstallFailure };
 
@@ -108,64 +109,38 @@ export function ExtensionStore({ onInstall, onChangeMirror }: ExtensionStoreProp
   const [state, setState] = useState<extstore_svc.State | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
-  const [installs, setInstalls] = useState<Record<string, CardInstall>>({});
-
-  const setInstall = useCallback((name: string, next: CardInstall | null) => {
-    setInstalls((prev) => {
-      const { [name]: _drop, ...rest } = prev;
-      return next ? { ...rest, [name]: next } : rest;
-    });
-  }, []);
-
-  useWailsEvent(
-    "ext:store-progress",
-    useCallback((p: StoreProgress) => {
-      setInstalls((prev) =>
-        prev[p.name]?.status === "running"
-          ? { ...prev, [p.name]: { status: "running", phase: p.phase, done: p.done, total: p.total } }
-          : prev
-      );
-    }, [])
+  const publish = useExtensionUpdates((u) => u.setFromState);
+  const show = useCallback(
+    (next: extstore_svc.State) => {
+      setState(next);
+      publish(next);
+    },
+    [publish]
   );
+  const { installs, install } = useStoreInstalls(onInstall, async () => show(await ListStore(lang)));
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      setState(await RefreshStore(lang));
+      show(await RefreshStore(lang));
     } catch (e) {
       toast.error(String(e));
     } finally {
       setRefreshing(false);
     }
-  }, [lang]);
+  }, [lang, show]);
 
   useEffect(() => {
     void (async () => {
       try {
-        setState(await ListStore(lang));
+        show(await ListStore(lang));
       } catch (e) {
         toast.error(String(e));
         return;
       }
       await refresh();
     })();
-  }, [lang, refresh]);
-
-  const install = async (card: StoreCard) => {
-    setInstall(card.name, { status: "running", done: 0, total: card.size });
-    try {
-      const result = await onInstall(card);
-      if (result.error) {
-        setInstall(card.name, { status: "failed", error: result.error });
-        return;
-      }
-      setInstall(card.name, null);
-      if (!result.canceled) setState(await ListStore(lang));
-    } catch (e) {
-      setInstall(card.name, null);
-      toast.error(`${t("extension.installError")}: ${String(e)}`);
-    }
-  };
+  }, [lang, refresh, show]);
 
   const cards = useMemo(() => {
     const all = state?.extensions ?? [];
@@ -306,7 +281,7 @@ function StoreCardView({
 }
 
 /** A running install: awaiting the confirm, download progress, then 校验中 / 安装中. */
-function InstallProgress({ install }: { install: Extract<CardInstall, { status: "running" }> }) {
+export function InstallProgress({ install }: { install: Extract<CardInstall, { status: "running" }> }) {
   const { t } = useTranslation();
   if (install.phase === "downloading") {
     const pct = install.total > 0 ? Math.min(100, Math.round((install.done / install.total) * 100)) : 0;
@@ -368,7 +343,7 @@ const INSTALL_FAILURE_TITLE: Record<string, string> = {
 const REGISTRY_FAILURES = new Set(["network", "auth", "registry"]);
 
 /** A failed install: what went wrong, with retry and — for registry trouble — a mirror change. */
-function InstallFailed({
+export function InstallFailed({
   error,
   onRetry,
   onChangeMirror,

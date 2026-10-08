@@ -35,6 +35,11 @@ type System struct {
 	githubAuthCancel context.CancelFunc
 	confirmQuit      func()
 	quitShownAckCh   chan struct{}
+
+	// storeRefresh refreshes the extension store index (SetExtensionStoreRefresher).
+	storeRefresh func(context.Context) error
+	// emit replaces the Wails event emit in tests.
+	emit func(event string, data ...any)
 }
 
 func (s *System) SetConfirmQuitHandler(handler func()) { s.confirmQuit = handler }
