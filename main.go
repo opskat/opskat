@@ -223,11 +223,13 @@ func main() {
 	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
-	extB.SetStoreService(extstore_svc.New(extstore_svc.Options{
+	extStore := extstore_svc.New(extstore_svc.Options{
 		DownloadMirror:    sys.GetDownloadMirror,
 		InstalledVersions: func() map[string]string { return extension.InstalledVersions(extB) },
 		App:               appversion.Current,
-	}))
+	})
+	extB.SetStoreService(extStore)
+	sys.SetExtensionStoreRefresher(extStore.Refresh)
 	externalEditEmitter := external_edit.NewEventEmitter()
 	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
 		DataDir:        bootstrap.AppDataDir(),
