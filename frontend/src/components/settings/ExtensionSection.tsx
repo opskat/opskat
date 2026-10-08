@@ -49,7 +49,10 @@ import {
   EnableExtension,
   DisableExtension,
   GetExtensionDetail,
+  InstallStoreExtension,
 } from "../../../wailsjs/go/extension/Extension";
+import type { extstore_svc } from "../../../wailsjs/go/models";
+import { EXTENSION_MIRROR_SETTING_ID } from "./downloadMirror";
 import { ExtensionMirrorSettings } from "./ExtensionMirrorSettings";
 import { ExtensionStore, type StoreCard } from "./ExtensionStore";
 import { Segmented } from "@/components/asset/fields";
@@ -163,10 +166,26 @@ export function ExtensionSection() {
     }
   };
 
-  // Store install / update: the store-install flow (download → verify → confirm)
-  // connects here. Until it does, the click fails visibly instead of pretending.
-  const installFromStore = async (_card: StoreCard): Promise<void> => {
-    throw new Error(t("extension.store.installUnavailable"));
+  // Store install / update: the backend confirms, downloads, verifies and
+  // installs; the store card shows the progress and any failure.
+  const installFromStore = async (card: StoreCard): Promise<extstore_svc.InstallResult> => {
+    const result = await InstallStoreExtension(card.name);
+    if (!result.canceled && !result.error) {
+      await loadExtensions();
+      notifySuccess(t("extension.installSuccess"));
+    }
+    return result;
+  };
+
+  // "Change mirror" on a failed store install: the Extension downloads setting
+  // lives under the installed view.
+  const revealExtensionMirror = () => {
+    setView("installed");
+    requestAnimationFrame(() => {
+      const card = document.getElementById(EXTENSION_MIRROR_SETTING_ID);
+      card?.scrollIntoView({ block: "center", behavior: "smooth" });
+      card?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    });
   };
 
   const openDetail = async (name: string) => {
@@ -194,7 +213,7 @@ export function ExtensionSection() {
       />
 
       {view === "store" ? (
-        <ExtensionStore onInstall={installFromStore} />
+        <ExtensionStore onInstall={installFromStore} onChangeMirror={revealExtensionMirror} />
       ) : (
         <>
           <Card>

@@ -19,7 +19,7 @@
 //
 // Conventions and rationale: docs/references/e2e-harness-guide.md
 const { execFileSync, spawn } = require("node:child_process");
-const { createHash } = require("node:crypto");
+const { createHash, createPrivateKey, createPublicKey } = require("node:crypto");
 const { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } = require("node:fs");
 const { homedir, tmpdir } = require("node:os");
 const { join } = require("node:path");
@@ -40,7 +40,7 @@ const registryFile = join(verifyRoot, "workspaces.json");
 // mistaken for ours. Each workspace owns one block:
 //
 //   +0 suite app   +1 redis mock   +2 ssh mock   +3 openai mock
-//   +4 sandbox app +5 sandbox CDP  +6/+7 spare
+//   +4 sandbox app +5 sandbox CDP  +6 extension-store mock  +7 spare
 //
 // The sandbox gets its own app port rather than sharing the suite's: the suite's
 // webServer entries run with `reuseExistingServer` locally, so sharing would let
@@ -95,6 +95,7 @@ function ports() {
     // its own browser, which is what lets each command be a separate short-lived
     // process while the page and its state persist.
     sandboxCdp: base + 5,
+    extStoreMock: base + 6,
   };
 }
 
@@ -353,6 +354,22 @@ function reapOrphanVite() {
   }
 }
 
+// The extension-store mock signs its index with a key derived from this fixed,
+// test-only seed; the app is told to trust the matching public key. Neither half
+// is trusted outside a run marked OPSKAT_E2E=1.
+const EXT_STORE_SEED = createHash("sha256").update("opskat-e2e-ext-store").digest();
+
+// The raw ed25519 public key for EXT_STORE_SEED, base64 (the form
+// OPSKAT_E2E_EXT_INDEX_KEYS takes). The PKCS#8 prefix wraps a bare 32-byte seed.
+function extStorePublicKey() {
+  const pkcs8 = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), EXT_STORE_SEED]);
+  const spki = createPublicKey(createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" })).export({
+    format: "der",
+    type: "spki",
+  });
+  return spki.subarray(-32).toString("base64");
+}
+
 // The protocol mocks, as Playwright `webServer` entries. Readiness is a raw TCP
 // `port`, not an HTTP `url`. The sandbox reuses the same list behind `--mocks` so an
 // interactive run can drive "Test Connection" without any real infrastructure.
@@ -383,6 +400,24 @@ function mockServers() {
       cwd: repoRoot,
       port: p.openaiMock,
       env: "OPENAI_MOCK_PORT",
+    },
+    {
+      // The official extension index and the OCI registry, both over plain http
+      // (fixtures/ext-store-mock). It builds and signs its package before it
+      // listens, so it gets a longer start timeout. `appEnv` is what the app needs
+      // to use it instead of the official store — overrides only a run marked
+      // OPSKAT_E2E=1 honors.
+      name: "ext-store-mock",
+      command: `go run ./e2e/fixtures/ext-store-mock ${p.extStoreMock} ${EXT_STORE_SEED.toString("base64")}`,
+      cwd: repoRoot,
+      port: p.extStoreMock,
+      env: "EXT_STORE_MOCK_PORT",
+      timeout: 180_000,
+      appEnv: {
+        OPSKAT_E2E_EXT_INDEX_URL: `http://127.0.0.1:${p.extStoreMock}/index.json`,
+        OPSKAT_E2E_EXT_INDEX_KEYS: extStorePublicKey(),
+        OPSKAT_E2E_EXT_REGISTRY: `http://127.0.0.1:${p.extStoreMock}`,
+      },
     },
   ];
 }

@@ -2856,7 +2856,30 @@
       "retry": "重试",
       "changeMirror": "更换镜像",
       "checkUpdate": "检查更新",
-      "installUnavailable": "当前版本暂不支持从商店安装"
+      "installing": "安装中…",
+      "progress": {
+        "confirming": "等待确认…",
+        "downloading": "下载中 {{done}} / {{total}}",
+        "verifying": "校验中…",
+        "installing": "安装中…"
+      },
+      "installFailed": {
+        "network": "无法连接镜像仓库",
+        "auth": "镜像仓库认证失败",
+        "registry": "镜像仓库未提供此扩展包",
+        "signature": "扩展索引未通过签名校验",
+        "index": "扩展索引无法读取",
+        "digest": "sha256 校验不符，已放弃安装",
+        "size": "扩展包大小超出索引记录",
+        "incompatible": "与当前版本的 OpsKat 不兼容",
+        "notFound": "商店中已没有这个扩展",
+        "installed": "已是最新版本",
+        "mismatch": "扩展包与确认时的内容不一致",
+        "busy": "该扩展正在安装中",
+        "install": "安装失败"
+      },
+      "digestExpected": "期望值",
+      "digestActual": "实际值"
     },
     "capability": {
       "assetEndpoint": "访问资产地址",

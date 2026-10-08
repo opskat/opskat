@@ -25,6 +25,7 @@ import { EntityIcon } from "@/components/asset/AssetIcon";
 import { formatBytes } from "@/lib/formatBytes";
 import { pinyinMatch } from "@/lib/pinyin";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
+import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { ListStore, RefreshStore } from "../../../wailsjs/go/extension/Extension";
 import type { extension, extstore_svc } from "../../../wailsjs/go/models";
 import { revealDownloadMirrorSetting } from "./downloadMirror";
@@ -70,26 +71,62 @@ const REASON_LABEL: Record<string, string> = {
   source: "extension.store.reason.source",
 };
 
+/** The ext:store-progress payload (extstore_svc.Progress). */
+interface StoreProgress {
+  name: string;
+  phase: "downloading" | "verifying" | "installing";
+  done: number;
+  total: number;
+}
+
+/**
+ * A card's install: running (phase is unset until the confirm is accepted and
+ * the download starts) or failed with the backend's reason.
+ */
+type CardInstall =
+  | { status: "running"; phase?: StoreProgress["phase"]; done: number; total: number }
+  | { status: "failed"; error: extstore_svc.InstallFailure };
+
 interface ExtensionStoreProps {
   /**
-   * Installs or updates the card's extension (store install flow). Resolves once
-   * it has landed — the store then reloads to show the new state — and rejects
-   * when it did not.
+   * Installs or updates the card's extension (store install flow: confirm →
+   * download → verify → install). Resolves with the outcome — landed (the store
+   * then reloads to show the new state), canceled, or failed with its reason.
    */
-  onInstall: (card: StoreCard) => Promise<void>;
+  onInstall: (card: StoreCard) => Promise<extstore_svc.InstallResult>;
+  /** Opens the "Extension downloads" (registry mirror) setting. */
+  onChangeMirror: () => void;
 }
 
 /**
  * Settings → Extensions → Store: the official index, verified, as a card grid.
  * Opening it shows the last index at once and refreshes it from the network.
  */
-export function ExtensionStore({ onInstall }: ExtensionStoreProps) {
+export function ExtensionStore({ onInstall, onChangeMirror }: ExtensionStoreProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
   const [state, setState] = useState<extstore_svc.State | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [installs, setInstalls] = useState<Record<string, CardInstall>>({});
+
+  const setInstall = useCallback((name: string, next: CardInstall | null) => {
+    setInstalls((prev) => {
+      const { [name]: _drop, ...rest } = prev;
+      return next ? { ...rest, [name]: next } : rest;
+    });
+  }, []);
+
+  useWailsEvent(
+    "ext:store-progress",
+    useCallback((p: StoreProgress) => {
+      setInstalls((prev) =>
+        prev[p.name]?.status === "running"
+          ? { ...prev, [p.name]: { status: "running", phase: p.phase, done: p.done, total: p.total } }
+          : prev
+      );
+    }, [])
+  );
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -115,14 +152,18 @@ export function ExtensionStore({ onInstall }: ExtensionStoreProps) {
   }, [lang, refresh]);
 
   const install = async (card: StoreCard) => {
-    setBusy(card.name);
+    setInstall(card.name, { status: "running", done: 0, total: card.size });
     try {
-      await onInstall(card);
-      setState(await ListStore(lang));
+      const result = await onInstall(card);
+      if (result.error) {
+        setInstall(card.name, { status: "failed", error: result.error });
+        return;
+      }
+      setInstall(card.name, null);
+      if (!result.canceled) setState(await ListStore(lang));
     } catch (e) {
+      setInstall(card.name, null);
       toast.error(`${t("extension.installError")}: ${String(e)}`);
-    } finally {
-      setBusy(null);
     }
   };
 
@@ -180,7 +221,13 @@ export function ExtensionStore({ onInstall }: ExtensionStoreProps) {
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(20rem,1fr))] gap-3">
             {cards.map((c) => (
-              <StoreCardView key={c.name} card={c} busy={busy === c.name} onInstall={() => void install(c)} />
+              <StoreCardView
+                key={c.name}
+                card={c}
+                install={installs[c.name]}
+                onInstall={() => void install(c)}
+                onChangeMirror={onChangeMirror}
+              />
             ))}
           </div>
         )}
@@ -189,10 +236,21 @@ export function ExtensionStore({ onInstall }: ExtensionStoreProps) {
   );
 }
 
-function StoreCardView({ card, busy, onInstall }: { card: StoreCard; busy: boolean; onInstall: () => void }) {
+function StoreCardView({
+  card,
+  install,
+  onInstall,
+  onChangeMirror,
+}: {
+  card: StoreCard;
+  install?: CardInstall;
+  onInstall: () => void;
+  onChangeMirror: () => void;
+}) {
   const { t } = useTranslation();
   const unavailable = card.action === "unavailable";
   const reason = card.unavailable;
+  const running = install?.status === "running" ? install : null;
 
   return (
     <div
@@ -217,7 +275,9 @@ function StoreCardView({ card, busy, onInstall }: { card: StoreCard; busy: boole
       <CapabilityTags capabilities={card.capabilities} dim={unavailable} />
 
       <div className="mt-auto flex items-center justify-between gap-2">
-        {unavailable && reason ? (
+        {running ? (
+          <InstallProgress install={running} />
+        ) : unavailable && reason ? (
           <p className="flex min-w-0 items-center gap-1 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
             <span className="truncate">
@@ -235,7 +295,121 @@ function StoreCardView({ card, busy, onInstall }: { card: StoreCard; busy: boole
               ` · ${t("extension.store.installedVersion", { version: card.installedVersion })}`}
           </p>
         )}
-        <StatusButton card={card} busy={busy} onInstall={onInstall} />
+        <StatusButton card={card} busy={!!running} onInstall={onInstall} />
+      </div>
+
+      {install?.status === "failed" && (
+        <InstallFailed error={install.error} onRetry={onInstall} onChangeMirror={onChangeMirror} />
+      )}
+    </div>
+  );
+}
+
+/** A running install: awaiting the confirm, download progress, then 校验中 / 安装中. */
+function InstallProgress({ install }: { install: Extract<CardInstall, { status: "running" }> }) {
+  const { t } = useTranslation();
+  if (install.phase === "downloading") {
+    const pct = install.total > 0 ? Math.min(100, Math.round((install.done / install.total) * 100)) : 0;
+    return (
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="truncate text-xs text-muted-foreground">
+          {t("extension.store.progress.downloading", {
+            done: formatBytes(install.done),
+            total: formatBytes(install.total),
+          })}
+        </p>
+        <div
+          role="progressbar"
+          aria-label={t("extension.store.progress.downloading", {
+            done: formatBytes(install.done),
+            total: formatBytes(install.total),
+          })}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          className="h-1 overflow-hidden rounded-full bg-muted"
+        >
+          <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <p className="truncate text-xs text-muted-foreground">
+      {t(
+        install.phase === "verifying"
+          ? "extension.store.progress.verifying"
+          : install.phase === "installing"
+            ? "extension.store.progress.installing"
+            : "extension.store.progress.confirming"
+      )}
+    </p>
+  );
+}
+
+/** Title per extstore_svc.InstallErrorKind. */
+const INSTALL_FAILURE_TITLE: Record<string, string> = {
+  network: "extension.store.installFailed.network",
+  auth: "extension.store.installFailed.auth",
+  registry: "extension.store.installFailed.registry",
+  signature: "extension.store.installFailed.signature",
+  index: "extension.store.installFailed.index",
+  digest: "extension.store.installFailed.digest",
+  size: "extension.store.installFailed.size",
+  incompatible: "extension.store.installFailed.incompatible",
+  notFound: "extension.store.installFailed.notFound",
+  installed: "extension.store.installFailed.installed",
+  mismatch: "extension.store.installFailed.mismatch",
+  busy: "extension.store.installFailed.busy",
+  install: "extension.store.installFailed.install",
+};
+
+/** Failures whose remedy is another registry mirror ("Extension downloads"). */
+const REGISTRY_FAILURES = new Set(["network", "auth", "registry"]);
+
+/** A failed install: what went wrong, with retry and — for registry trouble — a mirror change. */
+function InstallFailed({
+  error,
+  onRetry,
+  onChangeMirror,
+}: {
+  error: extstore_svc.InstallFailure;
+  onRetry: () => void;
+  onChangeMirror: () => void;
+}) {
+  const { t } = useTranslation();
+  const changeMirror = REGISTRY_FAILURES.has(error.kind)
+    ? onChangeMirror
+    : error.kind === "signature"
+      ? revealDownloadMirrorSetting
+      : null;
+  return (
+    <div role="alert" className="space-y-2 rounded-md border border-destructive/40 p-3 text-xs">
+      <p className="flex items-center gap-1.5 font-medium text-destructive">
+        <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {t(INSTALL_FAILURE_TITLE[error.kind])}
+      </p>
+      {error.kind === "digest" ? (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 font-mono text-muted-foreground">
+          <dt>{t("extension.store.digestExpected")}</dt>
+          <dd className="break-all select-text">{error.expected}</dd>
+          <dt>{t("extension.store.digestActual")}</dt>
+          <dd className="break-all select-text">{error.actual}</dd>
+        </dl>
+      ) : (
+        <p className="break-all rounded bg-muted px-2 py-1 font-mono text-muted-foreground select-text">
+          {error.message}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        {changeMirror && (
+          <Button variant="outline" size="sm" onClick={changeMirror}>
+            {t("extension.store.changeMirror")}
+          </Button>
+        )}
+        <Button size="sm" onClick={onRetry}>
+          {t("extension.store.retry")}
+        </Button>
       </div>
     </div>
   );
@@ -243,19 +417,26 @@ function StoreCardView({ card, busy, onInstall }: { card: StoreCard; busy: boole
 
 function StatusButton({ card, busy, onInstall }: { card: StoreCard; busy: boolean; onInstall: () => void }) {
   const { t } = useTranslation();
-  const spinner = <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />;
+  if (busy) {
+    return (
+      <Button variant="outline" size="sm" className="gap-1.5" disabled>
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+        {t("extension.store.installing")}
+      </Button>
+    );
+  }
   switch (card.action) {
     case "install":
       return (
-        <Button variant="outline" size="sm" className="gap-1.5" disabled={busy} onClick={onInstall}>
-          {busy ? spinner : <Download className="h-3.5 w-3.5" aria-hidden />}
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={onInstall}>
+          <Download className="h-3.5 w-3.5" aria-hidden />
           {t("extension.store.install")}
         </Button>
       );
     case "update":
       return (
-        <Button size="sm" className="gap-1.5" disabled={busy} onClick={onInstall}>
-          {busy ? spinner : <ArrowUpCircle className="h-3.5 w-3.5" aria-hidden />}
+        <Button size="sm" className="gap-1.5" onClick={onInstall}>
+          <ArrowUpCircle className="h-3.5 w-3.5" aria-hidden />
           {t("extension.store.updateTo", { version: card.version })}
         </Button>
       );

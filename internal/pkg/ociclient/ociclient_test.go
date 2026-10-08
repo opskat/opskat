@@ -258,3 +258,40 @@ func TestPullRejectsBadInput(t *testing.T) {
 		}
 	}
 }
+
+// newPlainMock 是不切换包级 scheme 的明文 registry：协议只能由 host 本身决定。
+func newPlainMock(t *testing.T, blob []byte) *mockRegistry {
+	t.Helper()
+	m := &mockRegistry{blob: blob, auth: true}
+	m.srv = httptest.NewServer(http.HandlerFunc(m.serve))
+	t.Cleanup(m.srv.Close)
+	return m
+}
+
+func TestPullExplicitHTTPHostUsesPlainHTTP(t *testing.T) {
+	blob := []byte("plain-http-package")
+	m := newPlainMock(t, blob)
+	dst := dstPath(t)
+	if err := Pull(context.Background(), "http://"+m.host(), testRef, sum(blob), 1<<20, dst, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dst) //nolint:gosec // test temp path
+	if string(got) != string(blob) {
+		t.Fatal("content mismatch")
+	}
+	if m.tokenCalls != 1 {
+		t.Fatalf("token calls = %d, want the challenge followed over http", m.tokenCalls)
+	}
+}
+
+func TestPullBareHostStaysHTTPS(t *testing.T) {
+	blob := []byte("plain-http-package")
+	m := newPlainMock(t, blob)
+	err := Pull(context.Background(), m.host(), testRef, sum(blob), 1<<20, dstPath(t), nil)
+	if !errors.Is(err, ErrNetwork) {
+		t.Fatalf("err = %v, want ErrNetwork from a TLS handshake against a plain-http server", err)
+	}
+	if m.tokenCalls != 0 {
+		t.Fatalf("token calls = %d, want no plain-http request", m.tokenCalls)
+	}
+}

@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from "@testing-library/react";
 import { ExtensionSection } from "../../../components/settings/ExtensionSection";
 import { ExtensionStore } from "../../../components/settings/ExtensionStore";
-import { ListStore, RefreshStore } from "../../../../wailsjs/go/extension/Extension";
+import { InstallStoreExtension, ListStore, RefreshStore } from "../../../../wailsjs/go/extension/Extension";
+import { EventsOn } from "../../../../wailsjs/runtime/runtime";
 import { useSettingsUiStore } from "../../../stores/settingsUiStore";
+import { toast } from "sonner";
+import { notifySuccess } from "../../../lib/notify";
+
+vi.mock("../../../lib/notify", () => ({ notifySuccess: vi.fn(), notifyCopied: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
 
 const caps = (over: Record<string, unknown> = {}) => ({
   fs: { read: [], write: [] },
@@ -63,9 +69,32 @@ function serve(state: unknown) {
   vi.mocked(RefreshStore).mockResolvedValue(state as never);
 }
 
-function renderStore(onInstall = vi.fn().mockResolvedValue(undefined)) {
-  render(<ExtensionStore onInstall={onInstall} />);
+const landed = (name: string, version = "1.0.0") => ({ name, version, canceled: false, error: null });
+
+function renderStore(onInstall = vi.fn().mockResolvedValue(landed("es")), onChangeMirror = vi.fn()) {
+  render(<ExtensionStore onInstall={onInstall} onChangeMirror={onChangeMirror} />);
   return onInstall;
+}
+
+// Captures the ext:store-progress handler the store subscribes with.
+function captureProgress() {
+  const handlers = new Map<string, (data: unknown) => void>();
+  vi.mocked(EventsOn).mockImplementation(((event: string, handler: (data: unknown) => void) => {
+    handlers.set(event, handler);
+    return vi.fn();
+  }) as never);
+  return (payload: Record<string, unknown>) => {
+    const handler = handlers.get("ext:store-progress");
+    if (!handler) throw new Error("ext:store-progress handler not registered");
+    act(() => handler(payload));
+  };
+}
+
+// An install the test settles by hand.
+function pendingInstall() {
+  let settle!: (v: unknown) => void;
+  const onInstall = vi.fn().mockReturnValue(new Promise((r) => (settle = r)));
+  return { onInstall, settle: (v: unknown) => act(async () => settle(v)) };
 }
 
 const cardEl = (name: string) => screen.getByTestId(`ext-store-card-${name}`);
@@ -218,5 +247,163 @@ describe("ExtensionStore", () => {
     serve(verified([]));
     renderStore();
     expect(await screen.findByText("extension.store.empty")).toBeInTheDocument();
+  });
+
+  it("an install shows download progress, then verifying, then installing", async () => {
+    const progress = captureProgress();
+    serve(verified(sample));
+    const { onInstall, settle } = pendingInstall();
+    renderStore(onInstall);
+    await screen.findByTestId("ext-store-card-es");
+
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+    const es = within(cardEl("es"));
+    expect(es.getByRole("button", { name: /extension\.store\.installing/ })).toBeDisabled();
+
+    progress({ name: "es", phase: "downloading", done: 1024, total: 4096 });
+    expect(es.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(es.getByText("extension.store.progress.downloading")).toBeInTheDocument();
+
+    progress({ name: "kafka", phase: "verifying", done: 1, total: 1 });
+    expect(within(cardEl("kafka")).queryByText("extension.store.progress.verifying")).not.toBeInTheDocument();
+
+    progress({ name: "es", phase: "verifying", done: 4096, total: 4096 });
+    expect(es.getByText("extension.store.progress.verifying")).toBeInTheDocument();
+    progress({ name: "es", phase: "installing", done: 4096, total: 4096 });
+    expect(es.getByText("extension.store.progress.installing")).toBeInTheDocument();
+
+    vi.mocked(ListStore).mockResolvedValue(verified(sample) as never);
+    await settle(landed("es", "0.2.0"));
+    expect(within(cardEl("es")).queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("a canceled install is silent", async () => {
+    serve(verified(sample));
+    const onInstall = renderStore(vi.fn().mockResolvedValue({ name: "", version: "", canceled: true, error: null }));
+    await screen.findByTestId("ext-store-card-es");
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+    await waitFor(() => expect(onInstall).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(within(cardEl("es")).getByRole("button", { name: "extension.store.install" })).toBeEnabled()
+    );
+    expect(within(cardEl("es")).queryByRole("alert")).not.toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a sha256 mismatch names the expected and actual digests and offers retry, not a mirror change", async () => {
+    serve(verified(sample));
+    const failure = {
+      name: "",
+      version: "",
+      canceled: false,
+      error: { kind: "digest", message: "sha256 mismatch", expected: "aa11", actual: "bb22" },
+    };
+    const onChangeMirror = vi.fn();
+    const onInstall = vi.fn().mockResolvedValueOnce(failure).mockResolvedValueOnce(landed("es"));
+    renderStore(onInstall, onChangeMirror);
+    await screen.findByTestId("ext-store-card-es");
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+
+    const alert = await within(cardEl("es")).findByRole("alert");
+    expect(alert).toHaveTextContent("extension.store.installFailed.digest");
+    expect(alert).toHaveTextContent("aa11");
+    expect(alert).toHaveTextContent("bb22");
+    expect(within(alert).queryByRole("button", { name: "extension.store.changeMirror" })).not.toBeInTheDocument();
+
+    vi.mocked(ListStore).mockResolvedValue(verified(sample) as never);
+    fireEvent.click(within(alert).getByRole("button", { name: "extension.store.retry" }));
+    await waitFor(() => expect(onInstall).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(cardEl("es")).queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it.each(["network", "auth", "registry"])("a %s failure offers retry and change mirror", async (kind) => {
+    serve(verified(sample));
+    const onChangeMirror = vi.fn();
+    renderStore(
+      vi.fn().mockResolvedValue({
+        name: "",
+        version: "",
+        canceled: false,
+        error: { kind, message: `${kind} detail`, expected: "", actual: "" },
+      }),
+      onChangeMirror
+    );
+    await screen.findByTestId("ext-store-card-es");
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+
+    const alert = await within(cardEl("es")).findByRole("alert");
+    expect(alert).toHaveTextContent(`extension.store.installFailed.${kind}`);
+    expect(alert).toHaveTextContent(`${kind} detail`);
+    expect(within(alert).getByRole("button", { name: "extension.store.retry" })).toBeInTheDocument();
+    fireEvent.click(within(alert).getByRole("button", { name: "extension.store.changeMirror" }));
+    expect(onChangeMirror).toHaveBeenCalled();
+  });
+
+  it.each(["signature", "size", "incompatible", "mismatch", "install"])(
+    "a %s failure is shown with its own title",
+    async (kind) => {
+      serve(verified(sample));
+      renderStore(
+        vi.fn().mockResolvedValue({
+          name: "",
+          version: "",
+          canceled: false,
+          error: { kind, message: "detail", expected: "", actual: "" },
+        })
+      );
+      await screen.findByTestId("ext-store-card-es");
+      fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+      expect(await within(cardEl("es")).findByRole("alert")).toHaveTextContent(`extension.store.installFailed.${kind}`);
+    }
+  );
+});
+
+describe("ExtensionSection store install", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(cleanup);
+
+  it("installs through InstallStoreExtension and reports success", async () => {
+    serve(verified(sample));
+    vi.mocked(InstallStoreExtension).mockResolvedValue(landed("es", "0.2.0") as never);
+    render(<ExtensionSection />);
+    fireEvent.click(screen.getByRole("radio", { name: "extension.view.store" }));
+    await screen.findByTestId("ext-store-card-es");
+
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+    await waitFor(() => expect(InstallStoreExtension).toHaveBeenCalledWith("es"));
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith("extension.installSuccess"));
+  });
+
+  it("a failed or canceled store install reports no success", async () => {
+    serve(verified(sample));
+    vi.mocked(InstallStoreExtension).mockResolvedValue({ name: "", version: "", canceled: true, error: null } as never);
+    render(<ExtensionSection />);
+    fireEvent.click(screen.getByRole("radio", { name: "extension.view.store" }));
+    await screen.findByTestId("ext-store-card-es");
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+    await waitFor(() => expect(InstallStoreExtension).toHaveBeenCalledWith("es"));
+    await waitFor(() =>
+      expect(within(cardEl("es")).getByRole("button", { name: "extension.store.install" })).toBeEnabled()
+    );
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it("change mirror opens the Extension downloads setting", async () => {
+    serve(verified(sample));
+    vi.mocked(InstallStoreExtension).mockResolvedValue({
+      name: "",
+      version: "",
+      canceled: false,
+      error: { kind: "network", message: "dial tcp: timeout", expected: "", actual: "" },
+    } as never);
+    render(<ExtensionSection />);
+    fireEvent.click(screen.getByRole("radio", { name: "extension.view.store" }));
+    await screen.findByTestId("ext-store-card-es");
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+    const alert = await within(cardEl("es")).findByRole("alert");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "extension.store.changeMirror" }));
+    expect(await screen.findByText("extension.mirror.title")).toBeInTheDocument();
+    expect(screen.queryByTestId("ext-store-card-es")).not.toBeInTheDocument();
   });
 });

@@ -60,7 +60,7 @@ if (flag("help")) {
   status    report what is running for this checkout
 
   --reset          wipe the sandbox data dir (with up: before starting)
-  --mocks          also start the in-harness redis / ssh / openai mocks
+  --mocks          also start the in-harness redis / ssh / openai / extension-store mocks
   --extensions     build the in-repo extensions into the sandbox and enable the
                    extension system (off by default: the wasm compile is slow)
   --headed         show the browser window (default: headless)
@@ -126,10 +126,11 @@ async function up() {
   if (flag("mocks")) {
     for (const mock of mockServers()) {
       pids[mock.name] = spawnDetached(mock.command, { cwd: mock.cwd });
-      if (!(await waitForTcp(mock.port, 60_000))) {
+      if (!(await waitForTcp(mock.port, mock.timeout ?? 60_000))) {
         return fail(`${mock.name} never opened :${mock.port}`, pids);
       }
       appEnv[mock.env] = String(mock.port);
+      Object.assign(appEnv, mock.appEnv);
       log(`${mock.name} on :${mock.port}`);
     }
   }

@@ -62,9 +62,15 @@ type manifest struct {
 }
 
 // Pull 从 host（主机名，可带端口）匿名拉取 ref（<repository>:<tag>）的唯一一层到 dst。
+// host 默认走 https；只有显式写成 `http://host[:port]` 时这一次拉取才用明文 http
+// （供验证运行接本地模拟 registry；用户的镜像设置不允许带协议）。
 // wantSHA256 是 zip 本身的摘要（来自已验签索引），下载超过 maxSize 或摘要不符时删除 dst 并返回对应类别的错误。
 // onProgress 可为 nil，参数为已下载 / 总大小。
 func Pull(ctx context.Context, host, ref, wantSHA256 string, maxSize int64, dst string, onProgress func(done, total int64)) error {
+	proto := scheme
+	if rest, ok := strings.CutPrefix(host, "http://"); ok {
+		proto, host = "http", rest
+	}
 	if host == "" || strings.ContainsAny(host, "/\\ @?#") {
 		return fmt.Errorf("invalid registry host %q", host)
 	}
@@ -73,7 +79,7 @@ func Pull(ctx context.Context, host, ref, wantSHA256 string, maxSize int64, dst 
 		return fmt.Errorf("invalid reference %q, want <repository>:<tag>", ref)
 	}
 	repo, tag := ref[:i], ref[i+1:]
-	base := scheme + "://" + host + "/v2/" + repo
+	base := proto + "://" + host + "/v2/" + repo
 
 	c := &session{ctx: ctx}
 	resp, err := c.get(base+"/manifests/"+tag, manifestAccept)

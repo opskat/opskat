@@ -27,7 +27,9 @@ const (
 	// base64 ed25519 public keys.
 	EnvPublicKeys = "OPSKAT_E2E_EXT_INDEX_KEYS"
 	// EnvRegistryHost replaces the "Extension downloads" registry host
-	// (host[:port]) that RegistryHost returns.
+	// (host[:port]) that RegistryHost returns. It is passed through verbatim, so
+	// it may be written http://host[:port] for a plain-http test registry —
+	// ociclient.Pull honors that prefix; the user's mirror setting rejects it.
 	EnvRegistryHost = "OPSKAT_E2E_EXT_REGISTRY"
 )
 

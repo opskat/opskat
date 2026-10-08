@@ -1,0 +1,6 @@
+{
+  "extension.displayName": "Store Demo",
+  "extension.description": "Installed from the e2e extension store",
+  "assetType.storedemo.name": "Store demo",
+  "config.label.title": "Label"
+}

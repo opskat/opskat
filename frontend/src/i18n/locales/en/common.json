@@ -2856,7 +2856,30 @@
       "retry": "Retry",
       "changeMirror": "Change mirror",
       "checkUpdate": "Check for updates",
-      "installUnavailable": "Installing from the store isn't available in this build yet"
+      "installing": "Installing…",
+      "progress": {
+        "confirming": "Waiting for confirmation…",
+        "downloading": "Downloading {{done}} / {{total}}",
+        "verifying": "Verifying…",
+        "installing": "Installing…"
+      },
+      "installFailed": {
+        "network": "Couldn't reach the registry",
+        "auth": "The registry refused anonymous access",
+        "registry": "The registry didn't serve this package",
+        "signature": "The extension index isn't verified",
+        "index": "The extension index can't be read",
+        "digest": "Checksum mismatch — the package was not installed",
+        "size": "The package is larger than the index says",
+        "incompatible": "Not compatible with this version of OpsKat",
+        "notFound": "This extension is no longer in the store",
+        "installed": "Already up to date",
+        "mismatch": "The package doesn't match what you confirmed",
+        "busy": "This extension is already being installed",
+        "install": "Install failed"
+      },
+      "digestExpected": "Expected",
+      "digestActual": "Actual"
     },
     "capability": {
       "assetEndpoint": "Asset addresses",

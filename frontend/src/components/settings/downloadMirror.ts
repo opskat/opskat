@@ -4,6 +4,12 @@ import { useSettingsUiStore } from "@/stores/settingsUiStore";
 export const DOWNLOAD_MIRROR_SETTING_ID = "settings-download-mirror";
 
 /**
+ * DOM id of the "Extension downloads" (registry mirror) card in Settings →
+ * Extensions (ExtensionMirrorSettings), where store installs pull packages from.
+ */
+export const EXTENSION_MIRROR_SETTING_ID = "settings-extension-mirror";
+
+/**
  * Opens Settings → About and brings the "Download mirror" setting into view with
  * its picker focused. The extension index is fetched through that mirror, so this
  * is where "Change mirror" goes when the index fails to load or verify.

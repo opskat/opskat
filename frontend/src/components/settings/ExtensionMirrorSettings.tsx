@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@opskat/ui";
 import { GetExtensionMirror, SetExtensionMirror } from "../../../wailsjs/go/system/System";
+import { EXTENSION_MIRROR_SETTING_ID } from "./downloadMirror";
 
 const PRESET_HOST = "ghcr.nju.edu.cn";
 type Mode = "direct" | "preset" | "custom";
@@ -65,7 +66,7 @@ export function ExtensionMirrorSettings() {
   };
 
   return (
-    <Card>
+    <Card id={EXTENSION_MIRROR_SETTING_ID}>
       <CardHeader>
         <CardTitle className="text-base">{t("extension.mirror.title")}</CardTitle>
         <CardDescription>{t("extension.mirror.hint")}</CardDescription>

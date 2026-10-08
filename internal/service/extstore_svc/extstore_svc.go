@@ -103,11 +103,13 @@ type Service struct {
 	fetchedAt time.Time
 	// lastErr is the latest refresh's failure; nil after a success.
 	lastErr *RefreshError
+	// installing are the extensions with a store install in flight.
+	installing map[string]struct{}
 }
 
 // New creates the store. Nothing is fetched until Refresh.
 func New(opts Options) *Service {
-	return &Service{opts: opts}
+	return &Service{opts: opts, installing: map[string]struct{}{}}
 }
 
 // Refresh downloads index.json and index.json.sig through the download mirror,
