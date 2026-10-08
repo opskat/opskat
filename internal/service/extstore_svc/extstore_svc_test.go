@@ -305,6 +305,20 @@ func TestRefreshFailures(t *testing.T) {
 		require.NoError(t, s.Refresh(context.Background()))
 		assert.Nil(t, s.State("en").Error, "a later success clears the failure")
 	})
+
+	t.Run("a failed refresh still reports the updates the verified index offers", func(t *testing.T) {
+		srv := newIndexServer(t, raw, extstore.Sign(raw, priv))
+		s := e2eStore(t, srv, key, "")
+		require.NoError(t, s.Refresh(context.Background()))
+		srv.status = http.StatusBadGateway
+		require.Error(t, s.Refresh(context.Background()))
+
+		st := s.State("en")
+		require.NotNil(t, st.Error)
+		require.Len(t, st.Updates, 1, "kafka 0.1.0 is installed and the verified index offers 0.4.1")
+		assert.Equal(t, "kafka", st.Updates[0].Name)
+		assert.Equal(t, "0.4.1", st.Updates[0].Version)
+	})
 }
 
 func TestE2EOverrides(t *testing.T) {

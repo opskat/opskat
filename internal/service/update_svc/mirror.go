@@ -34,8 +34,3 @@ func ApplyMirror(originalURL, mirrorPrefix string) string {
 	}
 	return mirrorPrefix + originalURL
 }
-
-// applyMirror 是本包内的调用名。
-func applyMirror(originalURL, mirrorPrefix string) string {
-	return ApplyMirror(originalURL, mirrorPrefix)
-}

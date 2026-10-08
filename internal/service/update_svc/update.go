@@ -165,7 +165,7 @@ func fetchReleaseFromMirror(channel, mirrorPrefix string) (*ReleaseInfo, error) 
 		return nil, fmt.Errorf("channel %s does not support mirror fallback", channel)
 	}
 
-	mirroredURL := applyMirror(infoURL, mirrorPrefix)
+	mirroredURL := ApplyMirror(infoURL, mirrorPrefix)
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(mirroredURL) //nolint:noctx // mirror URL constructed from constants
 	if err != nil {
@@ -298,7 +298,7 @@ func DownloadAndUpdate(channel, mirrorPrefix string, skipChecksum bool, onProgre
 	}
 
 	// 下载资产
-	actualDownloadURL := applyMirror(downloadURL, mirrorPrefix)
+	actualDownloadURL := ApplyMirror(downloadURL, mirrorPrefix)
 	dlClient := &http.Client{Timeout: 30 * time.Minute}
 	dlResp, err := dlClient.Get(actualDownloadURL)
 	if err != nil {

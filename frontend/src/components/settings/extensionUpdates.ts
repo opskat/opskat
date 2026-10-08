@@ -13,7 +13,10 @@ const STORE_REFRESHED_EVENT = "ext:store-refreshed";
 interface ExtensionUpdatesState {
   /** Installed extensions with a compatible newer version in the store, by name: the card to update with. */
   updates: Record<string, extstore_svc.Card>;
-  /** Replaces the available updates with those in a store state. */
+  /**
+   * Replaces the available updates with those in a store state: the updates the
+   * last verified index offers, kept through a failed refresh.
+   */
   setFromState: (state: extstore_svc.State) => void;
 }
 
@@ -26,7 +29,7 @@ export const useExtensionUpdates = create<ExtensionUpdatesState>((set) => ({
   updates: {},
   setFromState: (state) =>
     set({
-      updates: Object.fromEntries(state.extensions.filter((c) => c.action === "update").map((c) => [c.name, c])),
+      updates: Object.fromEntries(state.updates.map((c) => [c.name, c])),
     }),
 }));
 

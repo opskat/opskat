@@ -40,6 +40,7 @@ const verified = (extensions: ReturnType<typeof card>[]) => ({
   verified: true,
   error: null,
   extensions,
+  updates: extensions.filter((c) => c.action === "update"),
 });
 
 const failed = (kind: string) => ({
@@ -47,9 +48,10 @@ const failed = (kind: string) => ({
   verified: false,
   error: { kind, message: `${kind} detail` },
   extensions: [],
+  updates: [],
 });
 
-const notLoaded = { updatedAt: 0, verified: false, error: null, extensions: [] };
+const notLoaded = { updatedAt: 0, verified: false, error: null, extensions: [], updates: [] };
 
 const sample = [
   card("es", {

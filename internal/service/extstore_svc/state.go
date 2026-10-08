@@ -24,6 +24,10 @@ type State struct {
 	Error *StateError `json:"error"`
 	// Extensions are the store cards, in index order.
 	Extensions []Card `json:"extensions"`
+	// Updates are the cards of the installed extensions the last verified index
+	// offers an update for. Unlike Extensions they survive a failed refresh: that
+	// index was verified, and a store install still installs from it.
+	Updates []Card `json:"updates"`
 }
 
 // StateError is a refresh failure as the store shows it.
@@ -70,21 +74,30 @@ func (s *Service) State(lang string) State {
 	idx, fetchedAt, lastErr := s.index, s.fetchedAt, s.lastErr
 	s.mu.Unlock()
 
-	st := State{Extensions: []Card{}}
+	st := State{Extensions: []Card{}, Updates: []Card{}}
+	if fetchedAt.IsZero() {
+		if lastErr != nil {
+			st.Error = &StateError{Kind: lastErr.Kind, Message: lastErr.Err.Error()}
+		}
+		return st
+	}
+	app := s.opts.App()
+	installed := s.opts.InstalledVersions()
+	cards := make([]Card, 0, len(idx.Extensions))
+	for _, ext := range idx.Extensions {
+		c := card(ext, lang, app, installed[ext.Name])
+		cards = append(cards, c)
+		if c.Action == extstore.ActionUpdate {
+			st.Updates = append(st.Updates, c)
+		}
+	}
 	if lastErr != nil {
 		st.Error = &StateError{Kind: lastErr.Kind, Message: lastErr.Err.Error()}
 		return st
 	}
-	if fetchedAt.IsZero() {
-		return st
-	}
 	st.UpdatedAt = fetchedAt.UnixMilli()
 	st.Verified = true
-	app := s.opts.App()
-	installed := s.opts.InstalledVersions()
-	for _, ext := range idx.Extensions {
-		st.Extensions = append(st.Extensions, card(ext, lang, app, installed[ext.Name]))
-	}
+	st.Extensions = cards
 	return st
 }
 

@@ -57,6 +57,7 @@ const state = (...extensions: ReturnType<typeof card>[]) => ({
   verified: true,
   error: null,
   extensions,
+  updates: extensions.filter((c) => c.action === "update"),
 });
 
 const installedExt = (name: string, version = "0.1.0") => ({
@@ -192,6 +193,20 @@ describe("settings extensions tab badge", () => {
     // unmounting must remove only this listener, never every listener by name.
     unmount();
     expect(EventsOff).not.toHaveBeenCalledWith(event);
+  });
+
+  // A failed refresh hides the store cards, but the last verified index still
+  // offers the update (opsctl lists and installs it), so the badge stays.
+  it("keeps the badge when the latest refresh failed but the verified index offers an update", async () => {
+    vi.mocked(ListStore).mockResolvedValue({
+      updatedAt: 0,
+      verified: false,
+      error: { kind: "fetch", message: "dial tcp: timeout" },
+      extensions: [],
+      updates: [card("kafka")],
+    } as never);
+    render(<SettingsPage />);
+    expect(await screen.findByText("extension.updatesAvailable")).toBeInTheDocument();
   });
 
   it("drops a stale badge on mount when nothing can be updated any more", async () => {
