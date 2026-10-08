@@ -1,6 +1,6 @@
 import { createElement, type ComponentType, type CSSProperties } from "react";
 import { Server } from "lucide-react";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { findIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { getAssetType } from "@/lib/assetTypes";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
@@ -28,12 +28,9 @@ export function EntityIcon({
   "aria-hidden": ariaHidden,
   "data-testid": testId,
 }: EntityIconProps) {
-  const known = icon ? getIconComponent(icon) : undefined;
-  // getIconComponent answers Server for any unrecognized name; "server" is the only
-  // registered name that resolves to Server, so Server under another name means unknown.
-  const recognized = !!icon && (known !== Server || icon.split("#")[0] === "server");
-  const Icon = (recognized ? known : Fallback) as AssetIconComponent;
-  const color = recognized ? getIconColor(icon) : undefined;
+  const known = icon ? findIconComponent(icon) : undefined;
+  const Icon = (known ?? Fallback) as AssetIconComponent;
+  const color = known && icon ? getIconColor(icon) : undefined;
 
   return createElement(Icon, {
     className,

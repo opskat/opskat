@@ -612,11 +612,17 @@ export function IconPicker({ value, onChange, type = "asset", compact = false }:
   );
 }
 
-// Get icon component by name (supports "name#color" format)
+// Look up an icon by name (supports "name#color" format); undefined when the name
+// is not in the icon set, so a caller can choose its own fallback.
+// eslint-disable-next-line react-refresh/only-export-components
+export function findIconComponent(value: string): IconComponent | undefined {
+  return ALL_ICONS[parseIconValue(value).name];
+}
+
+// Get icon component by name (supports "name#color" format); Server when unknown
 // eslint-disable-next-line react-refresh/only-export-components
 export function getIconComponent(value: string): IconComponent {
-  const { name } = parseIconValue(value);
-  return ALL_ICONS[name] || Server;
+  return findIconComponent(value) || Server;
 }
 
 // Get color for an icon (supports "name#color" format, falls back to brand color)

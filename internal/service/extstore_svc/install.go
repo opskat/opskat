@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/pkg/ociclient"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
@@ -222,15 +221,15 @@ func (s *Service) offer(ctx context.Context, name string) (extstore.Extension, e
 		return ext, extstore.Version{}, installErr(InstallErrInstalled,
 			fmt.Errorf("extension %q %s is installed and the store offers nothing newer", name, installed))
 	default:
-		return ext, extstore.Version{}, installErr(InstallErrIncompatible, incompatible(aictx.GetPolicyLang(ctx), reason))
+		return ext, extstore.Version{}, installErr(InstallErrIncompatible, incompatible(ctx, reason))
 	}
 }
 
 // incompatible localizes SelectInstallable's reason where the app has copy for it.
-func incompatible(lang string, reason error) error {
+func incompatible(ctx context.Context, reason error) error {
 	var ie *extension.IncompatibleError
 	if errors.As(reason, &ie) {
-		return i18n.LocalizeIncompatible(lang, ie)
+		return extension_svc.LocalizeIncompatible(ctx, ie)
 	}
 	return reason
 }

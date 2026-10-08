@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/pkg/appversion"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -82,7 +83,7 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		log.Warn("extension dev install refused", zap.Error(err))
 		var inc *extension.IncompatibleError
 		if errors.As(err, &inc) {
-			return approval.ApprovalResponse{Approved: false, Reason: i18n.ExtensionIncompatible(o.lang.Lang(), inc)}
+			return approval.ApprovalResponse{Approved: false, Reason: extension_svc.IncompatibleMessage(i18n.Ctx(o.ctx, o.lang.Lang()), inc)}
 		}
 		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
 	}

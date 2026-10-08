@@ -66,10 +66,34 @@ type Registry struct {
 	PlainHTTP bool
 }
 
+// stallTimeout 是一次拉取允许 registry 一个字节都不发的最长时间（等响应头、等下一段
+// 正文都算）：卡住的镜像会让桌面端商店安装永远停在「下载中」——它没有别的取消途径。
+// 只计沉默，不限总时长，慢而不断的下载不受影响。变量是为了测试能缩短它。
+var stallTimeout = 60 * time.Second
+
+// errStalled 是 registry 超过 stallTimeout 不发数据时取消拉取的原因，归为 ErrNetwork。
+var errStalled = errors.New("registry stopped sending data")
+
 // Pull 从 reg 匿名拉取 ref（<repository>:<tag>）的唯一一层到 dst，默认走 https。
 // wantSHA256 是 zip 本身的摘要（来自已验签索引），下载超过 maxSize 或摘要不符时删除 dst 并返回对应类别的错误。
+// registry 超过 stallTimeout 不发数据时以 ErrNetwork 失败；调用方取消时原样返回 ctx 错误。
 // onProgress 可为 nil，参数为已下载 / 总大小。
 func Pull(ctx context.Context, reg Registry, ref, wantSHA256 string, maxSize int64, dst string, onProgress func(done, total int64)) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	watchdog := time.AfterFunc(stallTimeout, func() { cancel(errStalled) })
+	defer watchdog.Stop()
+	alive := func() { watchdog.Reset(stallTimeout) }
+
+	err := pull(ctx, alive, reg, ref, wantSHA256, maxSize, dst, onProgress)
+	if err != nil && ctx.Err() != nil {
+		// 无论哪一步先察觉到取消（发请求、读正文、解码清单），都按取消的原因报告。
+		return classify(ctx, err)
+	}
+	return err
+}
+
+func pull(ctx context.Context, alive func(), reg Registry, ref, wantSHA256 string, maxSize int64, dst string, onProgress func(done, total int64)) error {
 	host, proto := reg.Host, "https"
 	if reg.PlainHTTP {
 		proto = "http"
@@ -84,7 +108,7 @@ func Pull(ctx context.Context, reg Registry, ref, wantSHA256 string, maxSize int
 	repo, tag := ref[:i], ref[i+1:]
 	base := proto + "://" + host + "/v2/" + repo
 
-	c := &session{ctx: ctx}
+	c := &session{ctx: ctx, alive: alive}
 	resp, err := c.get(base+"/manifests/"+tag, manifestAccept)
 	if err != nil {
 		return err
@@ -117,7 +141,7 @@ func Pull(ctx context.Context, reg Registry, ref, wantSHA256 string, maxSize int
 	if total > maxSize {
 		return fmt.Errorf("%w: blob is %d bytes, limit %d", ErrSize, total, maxSize)
 	}
-	return save(ctx, resp.Body, dst, wantSHA256, maxSize, total, onProgress)
+	return save(ctx, alive, resp.Body, dst, wantSHA256, maxSize, total, onProgress)
 }
 
 func decodeManifest(resp *http.Response, m *manifest) error {
@@ -131,8 +155,8 @@ func decodeManifest(resp *http.Response, m *manifest) error {
 	return nil
 }
 
-// save 把 r 写入 dst，边写边算 sha256；任何失败都删除 dst。
-func save(ctx context.Context, r io.Reader, dst, want string, maxSize, total int64, onProgress func(done, total int64)) (err error) {
+// save 把 r 写入 dst，边写边算 sha256，每收到数据就调用 alive；任何失败都删除 dst。
+func save(ctx context.Context, alive func(), r io.Reader, dst, want string, maxSize, total int64, onProgress func(done, total int64)) (err error) {
 	f, err := os.Create(dst) //nolint:gosec // dst is chosen by the caller
 	if err != nil {
 		return err
@@ -151,6 +175,7 @@ func save(ctx context.Context, r io.Reader, dst, want string, maxSize, total int
 	for {
 		n, rerr := r.Read(buf)
 		if n > 0 {
+			alive()
 			done += int64(n)
 			if done > maxSize {
 				return fmt.Errorf("%w: download exceeds limit %d", ErrSize, maxSize)
@@ -177,9 +202,11 @@ func save(ctx context.Context, r io.Reader, dst, want string, maxSize, total int
 	return nil
 }
 
-// session 在一次拉取内保存质询得到的令牌。
+// session 在一次拉取内保存质询得到的令牌；每发一个请求就调用 alive，等响应的时间
+// 从这里起算。
 type session struct {
 	ctx   context.Context
+	alive func()
 	token string
 }
 
@@ -220,6 +247,7 @@ func (s *session) request(u, accept, token string) (*http.Response, error) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	s.alive()
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, classify(s.ctx, err)
@@ -268,9 +296,13 @@ func (s *session) fetchToken(challenge string) (string, error) {
 	return tok, nil
 }
 
-// classify 把传输层错误归为 ErrNetwork；调用方取消 / 超时原样返回 ctx 错误。
+// classify 把传输层错误归为 ErrNetwork；调用方取消 / 超时原样返回 ctx 错误，
+// registry 卡住（errStalled）归为 ErrNetwork。
 func classify(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
+		if cause := context.Cause(ctx); errors.Is(cause, errStalled) {
+			return fmt.Errorf("%w: %v", ErrNetwork, cause)
+		}
 		return ctx.Err()
 	}
 	return fmt.Errorf("%w: %v", ErrNetwork, err)

@@ -20,7 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/service/extension_svc"
@@ -474,7 +473,7 @@ func TestInstallFromStoreIncompatibleReasonIsLocalized(t *testing.T) {
 	_, _, err := f.svc.InstallFromStore(ctx, "demo", InstallOptions{Installer: f.installer, Confirm: accept, OnProgress: func(Progress) {}})
 	var inc *extension.IncompatibleError
 	require.ErrorAs(t, err, &inc)
-	assert.Equal(t, i18n.ExtensionIncompatible("zh-cn", inc), InstallOutcome("demo", "", err).Error.Message)
+	assert.Equal(t, extension_svc.IncompatibleMessage(ctx, inc), InstallOutcome("demo", "", err).Error.Message)
 }
 
 func TestInstallFromStoreOneInstallPerExtension(t *testing.T) {

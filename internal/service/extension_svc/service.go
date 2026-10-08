@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/pkg/appversion"
@@ -205,7 +204,7 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	if err := extension.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
 		var inc *extension.IncompatibleError
 		if errors.As(err, &inc) {
-			return nil, InstallConfirm{}, i18n.LocalizeIncompatible(aictx.GetPolicyLang(ctx), inc)
+			return nil, InstallConfirm{}, LocalizeIncompatible(ctx, inc)
 		}
 		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testRef = "opskat/extensions/demo:1.2.0"
@@ -298,5 +299,98 @@ func TestPullDefaultsToHTTPS(t *testing.T) {
 	}
 	if m.tokenCalls != 0 {
 		t.Fatalf("token calls = %d, want no plain-http request", m.tokenCalls)
+	}
+}
+
+// stallingRegistry answers like a registry until the step named by stallAt, where it
+// stops sending (headers never come, or the body stops midway) and holds the
+// connection open.
+func stallingRegistry(t *testing.T, blob []byte, stallAt string) Registry {
+	t.Helper()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifests/1.2.0"):
+			if stallAt == "manifest" {
+				<-release
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"layers": []map[string]any{{"digest": "sha256:" + sum(blob), "size": len(blob)}},
+			})
+		case strings.Contains(r.URL.Path, "/blobs/"):
+			w.Header().Set("Content-Length", fmt.Sprint(len(blob)))
+			_, _ = w.Write(blob[:len(blob)/2])
+			w.(http.Flusher).Flush()
+			<-release
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	return plain(srv.URL)
+}
+
+// A registry that stops answering must not hold an install forever: the desktop
+// store install has no other way to end it.
+func TestPullFailsWhenTheRegistryStalls(t *testing.T) {
+	old := stallTimeout
+	stallTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { stallTimeout = old })
+
+	blob := []byte("a package that never finishes downloading")
+	for _, at := range []string{"manifest", "blob"} {
+		t.Run("stalls at the "+at, func(t *testing.T) {
+			reg := stallingRegistry(t, blob, at)
+			dst := dstPath(t)
+			done := make(chan error, 1)
+			go func() { done <- Pull(context.Background(), reg, testRef, sum(blob), 1<<20, dst, nil) }()
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrNetwork) {
+					t.Fatalf("err = %v, want ErrNetwork", err)
+				}
+				if _, statErr := os.Stat(dst); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("partial download left behind: %v", statErr)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Pull is still waiting on a registry that stopped sending")
+			}
+		})
+	}
+}
+
+// The stall guard must not cut a pull that keeps receiving bytes, however long
+// it takes as a whole, nor turn a caller's cancel into a network failure.
+func TestPullStallGuardOnlyCountsSilence(t *testing.T) {
+	old := stallTimeout
+	stallTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { stallTimeout = old })
+
+	blob := []byte("0123456789")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifests/1.2.0"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"layers": []map[string]any{{"digest": "sha256:" + sum(blob), "size": len(blob)}},
+			})
+		case strings.Contains(r.URL.Path, "/blobs/"):
+			w.Header().Set("Content-Length", fmt.Sprint(len(blob)))
+			for i := range blob { // 10 × 100ms: longer than the guard, never silent for it
+				_, _ = w.Write(blob[i : i+1])
+				w.(http.Flusher).Flush()
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	if err := Pull(context.Background(), plain(srv.URL), testRef, sum(blob), 1<<20, dstPath(t), nil); err != nil {
+		t.Fatalf("a slow but steady download failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := Pull(ctx, plain(srv.URL), testRef, sum(blob), 1<<20, dstPath(t), nil)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrNetwork) {
+		t.Fatalf("err = %v, want the caller's cancel", err)
 	}
 }
