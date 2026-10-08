@@ -16,6 +16,7 @@ import (
 
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/appversion"
+	"github.com/opskat/opskat/internal/pkg/ociclient"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -178,6 +179,11 @@ func TestRefreshVerifiedIndex(t *testing.T) {
 		assert.Equal(t, "Elasticsearch", cardByName(t, s.State("fr"), "es").DisplayName)
 	})
 
+	t.Run("language tags match case-insensitively", func(t *testing.T) {
+		// The desktop's own language (System.Lang) is lowercased: "zh-cn".
+		assert.Equal(t, "Elasticsearch 工具", cardByName(t, s.State("zh-cn"), "es").DisplayName)
+	})
+
 	t.Run("an extension without display names shows its name", func(t *testing.T) {
 		assert.Equal(t, "notebook", cardByName(t, st, "notebook").DisplayName)
 	})
@@ -309,7 +315,7 @@ func TestE2EOverrides(t *testing.T) {
 		t.Setenv(EnvRegistryHost, "127.0.0.1:5000")
 		assert.Equal(t, OfficialIndexURL, indexURL())
 		assert.Equal(t, officialPublicKeys, trustedKeyText())
-		assert.Equal(t, bootstrap.ExtensionRegistryHost(), RegistryHost())
+		assert.Equal(t, ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}, PullRegistry())
 	})
 
 	t.Run("OPSKAT_E2E=1 honors each override", func(t *testing.T) {
@@ -319,7 +325,10 @@ func TestE2EOverrides(t *testing.T) {
 		t.Setenv(EnvRegistryHost, "127.0.0.1:5000")
 		assert.Equal(t, "http://127.0.0.1:1/index.json", indexURL())
 		assert.Equal(t, []string{"a2V5", "b3RoZXI="}, trustedKeyText())
-		assert.Equal(t, "127.0.0.1:5000", RegistryHost())
+		assert.Equal(t, ociclient.Registry{Host: "127.0.0.1:5000"}, PullRegistry())
+
+		t.Setenv(EnvRegistryHost, "http://127.0.0.1:5000")
+		assert.Equal(t, ociclient.Registry{Host: "127.0.0.1:5000", PlainHTTP: true}, PullRegistry())
 	})
 
 	t.Run("OPSKAT_E2E=1 without overrides uses the official values", func(t *testing.T) {
@@ -329,6 +338,6 @@ func TestE2EOverrides(t *testing.T) {
 		t.Setenv(EnvRegistryHost, "")
 		assert.Equal(t, OfficialIndexURL, indexURL())
 		assert.Equal(t, officialPublicKeys, trustedKeyText())
-		assert.Equal(t, bootstrap.ExtensionRegistryHost(), RegistryHost())
+		assert.Equal(t, ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}, PullRegistry())
 	})
 }

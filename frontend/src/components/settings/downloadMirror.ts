@@ -16,9 +16,16 @@ export const EXTENSION_MIRROR_SETTING_ID = "settings-extension-mirror";
  */
 export function revealDownloadMirrorSetting() {
   useSettingsUiStore.getState().setActiveTab("about");
-  // The About tab mounts on the next render; reach for the row after it.
+  revealSettingRow(DOWNLOAD_MIRROR_SETTING_ID);
+}
+
+/**
+ * Brings the setting row id into view with its picker focused, on the next frame:
+ * call it right after switching to the tab / view that mounts the row.
+ */
+export function revealSettingRow(id: string) {
   requestAnimationFrame(() => {
-    const row = document.getElementById(DOWNLOAD_MIRROR_SETTING_ID);
+    const row = document.getElementById(id);
     row?.scrollIntoView({ block: "center", behavior: "smooth" });
     row?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
   });

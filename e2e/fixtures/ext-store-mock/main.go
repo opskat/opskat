@@ -75,14 +75,19 @@ func main() {
 	digest := hex.EncodeToString(sum[:])
 
 	index := extstore.Index{Format: extstore.FormatVersion}
-	for _, e := range []struct{ name, sha, display string }{
-		{m.Name, digest, "Store Demo"},
-		{"store-tampered", strings.Repeat("0", 64), "Store Tampered"},
+	for _, e := range []struct{ name, sha, display, displayZh string }{
+		{m.Name, digest, "Store Demo", "商店示例"},
+		{"store-tampered", strings.Repeat("0", 64), "Store Tampered", ""},
 	} {
+		display := map[string]extstore.Display{"en": {Name: e.display, Description: "e2e store fixture"}}
+		if e.displayZh != "" {
+			// Keyed as the publisher writes it; the app's own language is "zh-cn".
+			display["zh-CN"] = extstore.Display{Name: e.displayZh}
+		}
 		index.Extensions = append(index.Extensions, extstore.Extension{
 			Name:    e.name,
 			Icon:    "package",
-			Display: map[string]extstore.Display{"en": {Name: e.display, Description: "e2e store fixture"}},
+			Display: display,
 			Versions: []extstore.Version{{
 				Version:      m.Version,
 				HostABI:      m.HostABI,

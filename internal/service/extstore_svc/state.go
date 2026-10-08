@@ -2,6 +2,7 @@ package extstore_svc
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/pkg/extension"
@@ -110,8 +111,10 @@ func card(ext extstore.Extension, lang string, app appversion.Info, installed st
 	return c
 }
 
+// display picks ext's text for lang. Language tags compare case-insensitively:
+// the index keys text by "zh-CN" while the desktop's own language is "zh-cn".
 func display(ext extstore.Extension, lang string) (name, description string) {
-	d, en := ext.Display[lang], ext.Display[fallbackLang]
+	d, en := displayFor(ext, lang), displayFor(ext, fallbackLang)
 	name, description = d.Name, d.Description
 	if name == "" {
 		name = en.Name
@@ -123,6 +126,18 @@ func display(ext extstore.Extension, lang string) (name, description string) {
 		description = en.Description
 	}
 	return name, description
+}
+
+func displayFor(ext extstore.Extension, lang string) extstore.Display {
+	if d, ok := ext.Display[lang]; ok {
+		return d
+	}
+	for tag, d := range ext.Display {
+		if strings.EqualFold(tag, lang) {
+			return d
+		}
+	}
+	return extstore.Display{}
 }
 
 func findVersion(ext extstore.Extension, version string) *extstore.Version {

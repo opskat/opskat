@@ -24,16 +24,6 @@ import (
 // against; a variable so tests can stand in other builds.
 var currentApp = appversion.Current
 
-// localizedError carries a user-language message while keeping the typed cause
-// reachable through errors.As.
-type localizedError struct {
-	msg string
-	err error
-}
-
-func (e *localizedError) Error() string { return e.msg }
-func (e *localizedError) Unwrap() error { return e.err }
-
 // ExtensionInfo is the frontend-facing extension descriptor.
 type ExtensionInfo struct {
 	Name        string              `json:"name"`
@@ -215,7 +205,7 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	if err := extension.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
 		var inc *extension.IncompatibleError
 		if errors.As(err, &inc) {
-			return nil, InstallConfirm{}, &localizedError{msg: i18n.ExtensionIncompatible(aictx.GetPolicyLang(ctx), inc), err: inc}
+			return nil, InstallConfirm{}, i18n.LocalizeIncompatible(aictx.GetPolicyLang(ctx), inc)
 		}
 		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
 	}

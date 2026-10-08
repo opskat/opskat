@@ -114,6 +114,22 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("a double-click answers only the confirm it was aimed at, not the queued one that replaces it", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", upgrade);
+    fire(handlers, "ext:install-confirm", { ...upgrade, id: "ext_install_2", displayName: "Second" });
+
+    // The two clicks of a double-click: detail counts the clicks in the series.
+    fireEvent.click(screen.getByTestId("ext-install-confirm"), { detail: 1 });
+    fireEvent.click(screen.getByTestId("ext-install-confirm"), { detail: 2 });
+    fireEvent.click(screen.getByTestId("ext-install-cancel"), { detail: 3 });
+
+    expect(RespondExtensionInstallConfirm).toHaveBeenCalledTimes(1);
+    expect(RespondExtensionInstallConfirm).toHaveBeenCalledWith("ext_install_1", true);
+    expect(within(screen.getByRole("dialog")).getByText("Second")).toBeInTheDocument();
+  });
+
   it("closes a confirm the backend stopped waiting for without answering it", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);

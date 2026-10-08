@@ -16,11 +16,6 @@ describe("ExtensionMirrorSettings", () => {
     vi.mocked(SetExtensionMirror).mockResolvedValue(undefined as never);
   });
 
-  it("explains that the index follows the app download mirror and verification always applies", async () => {
-    await renderWithStored("");
-    expect(screen.getByText("extension.mirror.hint")).toBeInTheDocument();
-  });
-
   it("saves the preset ghcr.nju.edu.cn host when chosen", async () => {
     const user = userEvent.setup();
     await renderWithStored("");

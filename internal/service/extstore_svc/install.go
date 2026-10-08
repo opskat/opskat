@@ -119,7 +119,7 @@ func installErr(kind InstallErrorKind, err error) *InstallError {
 //
 //  1. opts.Confirm shows the index's description of the change; nothing is
 //     downloaded unless the user accepts.
-//  2. The package is pulled from RegistryHost() — the ref's repository, not the
+//  2. The package is pulled from PullRegistry() — the ref's repository, not the
 //     host in the ref — bounded by the index size and checked against the
 //     index sha256 (the signed index is the trust root).
 //  3. opts.Installer.Install stages it (compatibility check included) and,
@@ -155,11 +155,11 @@ func (s *Service) InstallFromStore(ctx context.Context, name string, opts Instal
 		return "", "", err
 	}
 
-	host := RegistryHost()
+	reg := PullRegistry()
 	log := logger.Ctx(ctx).With(zap.String("extension", name), zap.String("version", v.Version),
-		zap.String("registry", host), zap.String("ref", v.Source.Ref))
+		zap.String("registry", reg.Host), zap.Bool("plainHTTP", reg.PlainHTTP), zap.String("ref", v.Source.Ref))
 	log.Info("extension store install started")
-	manifest, err := s.download(ctx, host, name, v, opts, func(path string) (*extension.Manifest, error) {
+	manifest, err := s.download(ctx, reg, name, v, opts, func(path string) (*extension.Manifest, error) {
 		return opts.Installer.Install(ctx, path, func(_ context.Context, staged extension_svc.InstallConfirm) error {
 			if err := sameChange(approved, staged); err != nil {
 				return err
@@ -230,14 +230,14 @@ func (s *Service) offer(ctx context.Context, name string) (extstore.Extension, e
 func incompatible(lang string, reason error) error {
 	var ie *extension.IncompatibleError
 	if errors.As(reason, &ie) {
-		return fmt.Errorf("%s: %w", i18n.ExtensionIncompatible(lang, ie), reason)
+		return i18n.LocalizeIncompatible(lang, ie)
 	}
 	return reason
 }
 
 // download pulls v into a temporary directory, hands the package to install and
 // removes the directory afterwards, whatever happened.
-func (s *Service) download(ctx context.Context, host, name string, v extstore.Version, opts InstallOptions,
+func (s *Service) download(ctx context.Context, reg ociclient.Registry, name string, v extstore.Version, opts InstallOptions,
 	install func(path string) (*extension.Manifest, error)) (*extension.Manifest, error) {
 	repo, err := repository(v.Source.Ref)
 	if err != nil {
@@ -253,7 +253,7 @@ func (s *Service) download(ctx context.Context, host, name string, v extstore.Ve
 
 	var last time.Time
 	opts.OnProgress(Progress{Name: name, Phase: PhaseDownloading, Total: v.Size})
-	err = ociclient.Pull(ctx, host, repo, v.Source.SHA256, v.Size, dst, func(done, total int64) {
+	err = ociclient.Pull(ctx, reg, repo, v.Source.SHA256, v.Size, dst, func(done, total int64) {
 		if done < total && time.Since(last) < progressInterval {
 			return
 		}

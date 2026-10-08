@@ -40,9 +40,6 @@ func (e *DigestError) Error() string {
 
 func (e *DigestError) Is(target error) bool { return target == ErrDigest }
 
-// scheme 是 registry 访问协议；仅测试改为 http 以接入 httptest。
-var scheme = "https"
-
 const manifestAccept = "application/vnd.oci.image.manifest.v1+json, " +
 	"application/vnd.docker.distribution.manifest.v2+json"
 
@@ -61,15 +58,21 @@ type manifest struct {
 	} `json:"layers"`
 }
 
-// Pull 从 host（主机名，可带端口）匿名拉取 ref（<repository>:<tag>）的唯一一层到 dst。
-// host 默认走 https；只有显式写成 `http://host[:port]` 时这一次拉取才用明文 http
-// （供验证运行接本地模拟 registry；用户的镜像设置不允许带协议）。
+// Registry 是拉取的 registry：Host 为主机名（可带端口），不含协议与路径。
+// PlainHTTP 让这次拉取走明文 http，只给验证运行接本地模拟 registry 用；
+// 调用方必须自己决定它，Host 里写的 "http://" 不会被当成协议。
+type Registry struct {
+	Host      string
+	PlainHTTP bool
+}
+
+// Pull 从 reg 匿名拉取 ref（<repository>:<tag>）的唯一一层到 dst，默认走 https。
 // wantSHA256 是 zip 本身的摘要（来自已验签索引），下载超过 maxSize 或摘要不符时删除 dst 并返回对应类别的错误。
 // onProgress 可为 nil，参数为已下载 / 总大小。
-func Pull(ctx context.Context, host, ref, wantSHA256 string, maxSize int64, dst string, onProgress func(done, total int64)) error {
-	proto := scheme
-	if rest, ok := strings.CutPrefix(host, "http://"); ok {
-		proto, host = "http", rest
+func Pull(ctx context.Context, reg Registry, ref, wantSHA256 string, maxSize int64, dst string, onProgress func(done, total int64)) error {
+	host, proto := reg.Host, "https"
+	if reg.PlainHTTP {
+		proto = "http"
 	}
 	if host == "" || strings.ContainsAny(host, "/\\ @?#") {
 		return fmt.Errorf("invalid registry host %q", host)

@@ -21,3 +21,17 @@ func ExtensionIncompatible(lang string, e *extension.IncompatibleError) string {
 		"This extension requires OpsKat %s or newer, but this is %s. Update OpsKat to install it."),
 		e.MinAppVersion, e.AppVersion)
 }
+
+// LocalizeIncompatible is e with ExtensionIncompatible as its message; errors.As
+// still finds e.
+func LocalizeIncompatible(lang string, e *extension.IncompatibleError) error {
+	return &localizedError{msg: ExtensionIncompatible(lang, e), err: e}
+}
+
+type localizedError struct {
+	msg string
+	err error
+}
+
+func (e *localizedError) Error() string { return e.msg }
+func (e *localizedError) Unwrap() error { return e.err }

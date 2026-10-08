@@ -4,6 +4,7 @@ import { ExtensionStore } from "../../../components/settings/ExtensionStore";
 import { SettingsPage } from "../../../components/settings/SettingsPage";
 import { ExtensionSection } from "../../../components/settings/ExtensionSection";
 import { useExtensionUpdates } from "../../../components/settings/extensionUpdates";
+import { useStoreInstallState } from "../../../components/settings/useStoreInstalls";
 import {
   InstallStoreExtension,
   ListInstalledExtensions,
@@ -73,6 +74,7 @@ const landed = (name: string) => ({ name, version: "0.4.1", canceled: false, err
 beforeEach(() => {
   vi.clearAllMocks();
   useExtensionUpdates.setState({ updates: {} });
+  useStoreInstallState.setState({ installs: {} });
   vi.mocked(ListInstalledExtensions).mockResolvedValue([installedExt("kafka"), installedExt("notebook")] as never);
   vi.mocked(ListStore).mockResolvedValue(state(card("kafka"), card("notebook", { action: "installed" })) as never);
 });
@@ -117,6 +119,44 @@ describe("installed list: update available", () => {
   });
 });
 
+describe("store installs are one set across the store page and the Installed list", () => {
+  it("an update started on the store page stays in progress in the Installed list, not offered again", async () => {
+    vi.mocked(InstallStoreExtension).mockReturnValue(new Promise(() => {}) as never);
+    vi.mocked(RefreshStore).mockResolvedValue(state(card("kafka"), card("notebook", { action: "installed" })) as never);
+    render(<ExtensionSection />);
+    await screen.findByText("notebook");
+
+    fireEvent.click(screen.getByTestId("ext-view-store"));
+    const kafka = await screen.findByTestId("ext-store-card-kafka");
+    fireEvent.click(within(kafka).getByRole("button", { name: /extension\.store\.updateTo/ }));
+    await waitFor(() => expect(InstallStoreExtension).toHaveBeenCalledWith("kafka"));
+
+    fireEvent.click(screen.getByTestId("ext-view-installed"));
+    await screen.findByText("notebook");
+    expect(screen.getByText("extension.store.progress.confirming")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /extension\.store\.updateTo/ })).toBeNull();
+  });
+
+  it("drops a failed update's retry once the update is no longer offered", async () => {
+    vi.mocked(InstallStoreExtension).mockResolvedValue({
+      name: "kafka",
+      version: "",
+      canceled: false,
+      error: { kind: "network", message: "dial tcp: timeout", expected: "", actual: "" },
+    } as never);
+    render(<ExtensionSection />);
+    await screen.findByText("notebook");
+    act(() => useExtensionUpdates.getState().setFromState(state(card("kafka")) as never));
+    fireEvent.click(screen.getByRole("button", { name: /extension\.store\.updateTo/ }));
+    await screen.findByRole("alert");
+
+    // Updated some other way (the store page, opsctl): nothing is offered any more.
+    act(() => useExtensionUpdates.getState().setFromState(state(card("kafka", { action: "installed" })) as never));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: /extension\.store\.retry/ })).toBeNull();
+  });
+});
+
 function emit(event: string) {
   const call = vi.mocked(EventsOn).mock.calls.find((c) => c[0] === event);
   if (!call) throw new Error(`${event} handler not registered`);
@@ -154,11 +194,12 @@ describe("settings extensions tab badge", () => {
     expect(EventsOff).not.toHaveBeenCalledWith(event);
   });
 
-  it("has no badge when nothing can be updated", async () => {
+  it("drops a stale badge on mount when nothing can be updated any more", async () => {
+    act(() => useExtensionUpdates.getState().setFromState(state(card("kafka")) as never));
     vi.mocked(ListStore).mockResolvedValue(state(card("kafka", { action: "installed" })) as never);
     render(<SettingsPage />);
     await waitFor(() => expect(ListStore).toHaveBeenCalled());
-    expect(screen.queryByText("extension.updatesAvailable")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("extension.updatesAvailable")).toBeNull());
   });
 });
 

@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/app/i18n"
+	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
@@ -267,7 +269,9 @@ func accept(context.Context, extension_svc.InstallConfirm) error { return nil }
 func TestInstallFromStoreConfirmsFromIndexBeforeDownloading(t *testing.T) {
 	f := newStoreFixture(t, fixtureOpts{installed: "1.0.0"})
 	var asked extension_svc.InstallConfirm
-	ctx := aictx.WithPolicyLang(context.Background(), "zh-CN")
+	// The desktop binder passes System.Lang, which is lowercased ("zh-cn"); the
+	// index keys display text by "zh-CN".
+	ctx := aictx.WithPolicyLang(context.Background(), "zh-cn")
 	name, version, progress, err := f.run(ctx, func(_ context.Context, c extension_svc.InstallConfirm) error {
 		asked = c
 		assert.Empty(t, f.reg.calls(), "nothing is downloaded before the user confirms")
@@ -462,6 +466,17 @@ func TestInstallFromStoreOnlyInstallsTheOffer(t *testing.T) {
 	}
 }
 
+// The reason reads in the user's language alone, as a local install's does —
+// not the localized sentence followed by the English one.
+func TestInstallFromStoreIncompatibleReasonIsLocalized(t *testing.T) {
+	f := newStoreFixture(t, fixtureOpts{hostABI: "9.0"})
+	ctx := aictx.WithPolicyLang(context.Background(), "zh-cn")
+	_, _, err := f.svc.InstallFromStore(ctx, "demo", InstallOptions{Installer: f.installer, Confirm: accept, OnProgress: func(Progress) {}})
+	var inc *extension.IncompatibleError
+	require.ErrorAs(t, err, &inc)
+	assert.Equal(t, i18n.ExtensionIncompatible("zh-cn", inc), InstallOutcome("demo", "", err).Error.Message)
+}
+
 func TestInstallFromStoreOneInstallPerExtension(t *testing.T) {
 	f := newStoreFixture(t, fixtureOpts{})
 	waiting, release := make(chan struct{}), make(chan struct{})
@@ -510,4 +525,23 @@ func TestInstallFromStoreNeedsAVerifiedIndex(t *testing.T) {
 	var ie *InstallError
 	require.ErrorAs(t, err, &ie)
 	assert.Equal(t, InstallErrSignature, ie.Kind)
+}
+
+// Plain http is a verification-run passthrough only: an "Extension downloads"
+// host written with http:// into config.json by hand (the settings page rejects
+// it) is not a registry host, so nothing is pulled over plain http.
+func TestInstallFromStoreNeverPullsPlainHTTPFromTheMirrorSetting(t *testing.T) {
+	f := newStoreFixture(t, fixtureOpts{})
+	_, err := bootstrap.LoadConfig(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, bootstrap.SaveConfig(&bootstrap.AppConfig{ExtensionMirror: f.reg.URL}))
+	t.Cleanup(func() { _ = bootstrap.SaveConfig(&bootstrap.AppConfig{}) })
+	t.Setenv(EnvRegistryHost, "")
+
+	_, _, _, err = f.run(context.Background(), accept)
+	var ie *InstallError
+	require.ErrorAs(t, err, &ie)
+	assert.Empty(t, f.reg.calls(), "no request reaches the plain-http registry")
+	assert.Empty(t, f.installer.installPath)
+	f.assertNoTempLeft(t)
 }

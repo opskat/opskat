@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Puzzle, ShieldAlert } from "lucide-react";
@@ -69,6 +69,13 @@ export function ExtensionInstallConfirmDialog() {
     if (!current) return;
     remove(current.id);
     RespondExtensionInstallConfirm(current.id, ok).catch((e) => toast.error(String(e)));
+  };
+
+  // Answering swaps the next queued confirm in under the same buttons, so the rest
+  // of a double-click (detail > 1) would answer one the user never saw.
+  const answer = (ok: boolean) => (e: MouseEvent) => {
+    if (e.detail > 1) return;
+    respond(ok);
   };
 
   const credentialsRead = current?.capabilities.some((c) => c.kind === "credentials" && c.value === "read");
@@ -154,10 +161,10 @@ export function ExtensionInstallConfirmDialog() {
             </div>
 
             <DialogFooter className="gap-2">
-              <Button variant="outline" data-testid="ext-install-cancel" onClick={() => respond(false)}>
+              <Button variant="outline" data-testid="ext-install-cancel" onClick={answer(false)}>
                 {t("action.cancel")}
               </Button>
-              <Button data-testid="ext-install-confirm" onClick={() => respond(true)}>
+              <Button data-testid="ext-install-confirm" onClick={answer(true)}>
                 {t(confirmLabel)}
               </Button>
             </DialogFooter>

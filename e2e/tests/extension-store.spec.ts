@@ -44,12 +44,14 @@ test("a store install confirms from the index first, cancels without downloading
 }) => {
   await openStore(page);
   const card = page.getByTestId("ext-store-card-store-demo");
-  await expect(card.getByText("Store Demo")).toBeVisible();
+  await expect(card.getByText("商店示例")).toBeVisible();
 
-  // Cancel: the confirm shows the index's description; declining lands nothing.
+  // Cancel: the confirm is built from the index (display name in the app's
+  // language, version, source, grants); declining lands nothing.
   await card.getByRole("button", { name: "安装" }).click();
   const dialog = page.getByTestId("ext-install-confirm-dialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("商店示例")).toBeVisible();
   await expect(dialog.getByTestId("ext-install-version")).toHaveText("1.0.0");
   await expect(dialog).toContainText("官方商店，签名已验证");
   await expect(dialog.getByTestId("ext-install-cap-http")).toContainText("https://example.com/");
@@ -84,8 +86,8 @@ test("a package whose sha256 differs from the signed index is refused with both 
   await expect(alert).toContainText("sha256 校验不符", { timeout: 60_000 });
   await expect(alert).toContainText("0".repeat(64));
   // The actual digest is the package the registry served: the same bytes
-  // store-demo installed from.
-  await expect(alert).toContainText(/[0-9a-f]{64}/);
+  // store-demo installed from, so not the expected all-zero one.
+  await expect(alert).toContainText(/\b(?!0{64}\b)[0-9a-f]{64}\b/);
   expect(existsSync(extensionDir("store-tampered"))).toBe(false);
   await expect(card.getByRole("button", { name: "安装" })).toBeEnabled();
   // Retry is offered; a mirror change is not — the registry answered, the bytes were wrong.

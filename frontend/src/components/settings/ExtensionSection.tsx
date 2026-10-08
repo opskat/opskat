@@ -54,7 +54,7 @@ import {
   InstallStoreExtension,
 } from "../../../wailsjs/go/extension/Extension";
 import type { extstore_svc } from "../../../wailsjs/go/models";
-import { EXTENSION_MIRROR_SETTING_ID } from "./downloadMirror";
+import { EXTENSION_MIRROR_SETTING_ID, revealSettingRow } from "./downloadMirror";
 import { ExtensionMirrorSettings } from "./ExtensionMirrorSettings";
 import { ExtensionStore, InstallFailed, InstallProgress, type CardInstall, type StoreCard } from "./ExtensionStore";
 import { useStoreInstalls } from "./useStoreInstalls";
@@ -191,11 +191,7 @@ export function ExtensionSection() {
   // lives under the installed view.
   const revealExtensionMirror = () => {
     setView("installed");
-    requestAnimationFrame(() => {
-      const card = document.getElementById(EXTENSION_MIRROR_SETTING_ID);
-      card?.scrollIntoView({ block: "center", behavior: "smooth" });
-      card?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
-    });
+    revealSettingRow(EXTENSION_MIRROR_SETTING_ID);
   };
 
   const openDetail = async (name: string) => {
@@ -322,7 +318,7 @@ export function ExtensionSection() {
                             </DropdownMenu>
                           </div>
                         </div>
-                        {updateInstall?.status === "failed" && (
+                        {update && updateInstall?.status === "failed" && (
                           <InstallFailed
                             error={updateInstall.error}
                             onRetry={() => void updateFromStore(update)}

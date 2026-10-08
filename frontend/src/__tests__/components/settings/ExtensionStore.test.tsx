@@ -5,6 +5,7 @@ import { ExtensionStore } from "../../../components/settings/ExtensionStore";
 import { InstallStoreExtension, ListStore, RefreshStore } from "../../../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../../../wailsjs/runtime/runtime";
 import { useSettingsUiStore } from "../../../stores/settingsUiStore";
+import { useStoreInstallState } from "../../../components/settings/useStoreInstalls";
 import { toast } from "sonner";
 import { notifySuccess } from "../../../lib/notify";
 
@@ -100,7 +101,10 @@ function pendingInstall() {
 const cardEl = (name: string) => screen.getByTestId(`ext-store-card-${name}`);
 
 describe("ExtensionStore", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useStoreInstallState.setState({ installs: {} });
+  });
   afterEach(cleanup);
 
   it("settings → extensions toggles between the installed list and the store, refreshing on open", async () => {
@@ -359,7 +363,10 @@ describe("ExtensionStore", () => {
 });
 
 describe("ExtensionSection store install", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useStoreInstallState.setState({ installs: {} });
+  });
   afterEach(cleanup);
 
   it("installs through InstallStoreExtension and reports success", async () => {
@@ -374,7 +381,21 @@ describe("ExtensionSection store install", () => {
     await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith("extension.installSuccess"));
   });
 
-  it("a failed or canceled store install reports no success", async () => {
+  it("a landed install is not reported as failed when re-reading the store afterwards fails", async () => {
+    serve(verified(sample));
+    vi.mocked(InstallStoreExtension).mockResolvedValue(landed("es", "0.2.0") as never);
+    render(<ExtensionSection />);
+    fireEvent.click(screen.getByRole("radio", { name: "extension.view.store" }));
+    await screen.findByTestId("ext-store-card-es");
+
+    vi.mocked(ListStore).mockRejectedValue("store unavailable");
+    fireEvent.click(within(cardEl("es")).getByRole("button", { name: "extension.store.install" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("store unavailable"));
+    expect(notifySuccess).toHaveBeenCalledWith("extension.installSuccess");
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining("extension.installError"));
+  });
+
+  it("a canceled store install reports no success", async () => {
     serve(verified(sample));
     vi.mocked(InstallStoreExtension).mockResolvedValue({ name: "", version: "", canceled: true, error: null } as never);
     render(<ExtensionSection />);

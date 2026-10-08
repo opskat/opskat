@@ -41,11 +41,16 @@ func newMock(t *testing.T, blob []byte, auth bool) *mockRegistry {
 	m := &mockRegistry{blob: blob, auth: auth}
 	m.srv = httptest.NewServer(http.HandlerFunc(m.serve))
 	t.Cleanup(m.srv.Close)
-	useHTTP(t)
 	return m
 }
 
-func (m *mockRegistry) host() string { return strings.TrimPrefix(m.srv.URL, "http://") }
+// registry 是 m 的明文 registry。
+func (m *mockRegistry) registry() Registry { return plain(m.srv.URL) }
+
+// plain 把 httptest 的 URL 变成明文 Registry。
+func plain(u string) Registry {
+	return Registry{Host: strings.TrimPrefix(u, "http://"), PlainHTTP: true}
+}
 
 func (m *mockRegistry) serve(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/token" {
@@ -99,7 +104,7 @@ func TestPullWithAuthChallenge(t *testing.T) {
 	m := newMock(t, blob, true)
 	dst := dstPath(t)
 	var lastDone, lastTotal int64
-	err := Pull(context.Background(), m.host(), testRef, sum(blob), 1<<20, dst, func(d, total int64) {
+	err := Pull(context.Background(), m.registry(), testRef, sum(blob), 1<<20, dst, func(d, total int64) {
 		lastDone, lastTotal = d, total
 	})
 	if err != nil {
@@ -123,11 +128,11 @@ func TestPullWithAuthChallenge(t *testing.T) {
 func TestPullNoAuthRegistryAndCustomHostPort(t *testing.T) {
 	blob := []byte("hello")
 	m := newMock(t, blob, false)
-	if !strings.Contains(m.host(), ":") {
+	if !strings.Contains(m.registry().Host, ":") {
 		t.Fatal("expected host:port")
 	}
 	dst := dstPath(t)
-	if err := Pull(context.Background(), m.host(), testRef, sum(blob), 1024, dst, nil); err != nil {
+	if err := Pull(context.Background(), m.registry(), testRef, sum(blob), 1024, dst, nil); err != nil {
 		t.Fatal(err)
 	}
 	if m.tokenCalls != 0 {
@@ -139,7 +144,7 @@ func TestPullOversizeAborts(t *testing.T) {
 	blob := []byte(strings.Repeat("x", 5000))
 	m := newMock(t, blob, false)
 	dst := dstPath(t)
-	err := Pull(context.Background(), m.host(), testRef, sum(blob), 1000, dst, nil)
+	err := Pull(context.Background(), m.registry(), testRef, sum(blob), 1000, dst, nil)
 	if !errors.Is(err, ErrSize) {
 		t.Fatalf("err = %v", err)
 	}
@@ -158,7 +163,7 @@ func TestPullOversizeStreamAborts(t *testing.T) {
 		}
 	}
 	dst := dstPath(t)
-	err := Pull(context.Background(), m.host(), testRef, sum(blob), 1000, dst, nil)
+	err := Pull(context.Background(), m.registry(), testRef, sum(blob), 1000, dst, nil)
 	if !errors.Is(err, ErrSize) {
 		t.Fatalf("err = %v", err)
 	}
@@ -172,7 +177,7 @@ func TestPullDigestMismatchDeletesFile(t *testing.T) {
 	m := newMock(t, blob, false)
 	dst := dstPath(t)
 	want := sum([]byte("other"))
-	err := Pull(context.Background(), m.host(), testRef, want, 1024, dst, nil)
+	err := Pull(context.Background(), m.registry(), testRef, want, 1024, dst, nil)
 	if !errors.Is(err, ErrDigest) {
 		t.Fatalf("err = %v", err)
 	}
@@ -192,7 +197,7 @@ func TestPullAuthFailures(t *testing.T) {
 	blob := []byte("x")
 	m := newMock(t, blob, true)
 	m.tokenStatus = http.StatusForbidden
-	err := Pull(context.Background(), m.host(), testRef, sum(blob), 10, dstPath(t), nil)
+	err := Pull(context.Background(), m.registry(), testRef, sum(blob), 10, dstPath(t), nil)
 	if !errors.Is(err, ErrAuth) {
 		t.Fatalf("token denied: %v", err)
 	}
@@ -202,7 +207,7 @@ func TestPullAuthFailures(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	err = Pull(context.Background(), strings.TrimPrefix(srv.URL, "http://"), testRef, sum(blob), 10, dstPath(t), nil)
+	err = Pull(context.Background(), plain(srv.URL), testRef, sum(blob), 10, dstPath(t), nil)
 	if !errors.Is(err, ErrAuth) {
 		t.Fatalf("no challenge: %v", err)
 	}
@@ -210,10 +215,9 @@ func TestPullAuthFailures(t *testing.T) {
 
 func TestPullNetworkFailure(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
-	host := strings.TrimPrefix(srv.URL, "http://")
+	reg := plain(srv.URL)
 	srv.Close()
-	useHTTP(t)
-	err := Pull(context.Background(), host, testRef, sum(nil), 10, dstPath(t), nil)
+	err := Pull(context.Background(), reg, testRef, sum(nil), 10, dstPath(t), nil)
 	if !errors.Is(err, ErrNetwork) {
 		t.Fatalf("err = %v", err)
 	}
@@ -238,7 +242,7 @@ func TestPullManifestErrors(t *testing.T) {
 	}
 	for name, fn := range cases {
 		m.manifest = fn
-		err := Pull(context.Background(), m.host(), testRef, sum(blob), 10, dstPath(t), nil)
+		err := Pull(context.Background(), m.registry(), testRef, sum(blob), 10, dstPath(t), nil)
 		if !errors.Is(err, ErrRegistry) {
 			t.Errorf("%s: err = %v", name, err)
 		}
@@ -246,20 +250,19 @@ func TestPullManifestErrors(t *testing.T) {
 }
 
 func TestPullRejectsBadInput(t *testing.T) {
-	useHTTP(t)
-	for _, host := range []string{"", "https://ghcr.io", "ghcr.io/x", "a b"} {
-		if err := Pull(context.Background(), host, testRef, sum(nil), 10, dstPath(t), nil); err == nil {
+	for _, host := range []string{"", "https://ghcr.io", "http://ghcr.io", "ghcr.io/x", "a b"} {
+		if err := Pull(context.Background(), Registry{Host: host}, testRef, sum(nil), 10, dstPath(t), nil); err == nil {
 			t.Errorf("host %q accepted", host)
 		}
 	}
 	for _, ref := range []string{"", "noversion", "a/b:", ":1"} {
-		if err := Pull(context.Background(), "h:1", ref, sum(nil), 10, dstPath(t), nil); err == nil {
+		if err := Pull(context.Background(), Registry{Host: "h:1"}, ref, sum(nil), 10, dstPath(t), nil); err == nil {
 			t.Errorf("ref %q accepted", ref)
 		}
 	}
 }
 
-// newPlainMock 是不切换包级 scheme 的明文 registry：协议只能由 host 本身决定。
+// newPlainMock 是要求 Bearer 质询的明文 registry。
 func newPlainMock(t *testing.T, blob []byte) *mockRegistry {
 	t.Helper()
 	m := &mockRegistry{blob: blob, auth: true}
@@ -268,11 +271,11 @@ func newPlainMock(t *testing.T, blob []byte) *mockRegistry {
 	return m
 }
 
-func TestPullExplicitHTTPHostUsesPlainHTTP(t *testing.T) {
+func TestPullPlainHTTPRegistry(t *testing.T) {
 	blob := []byte("plain-http-package")
 	m := newPlainMock(t, blob)
 	dst := dstPath(t)
-	if err := Pull(context.Background(), "http://"+m.host(), testRef, sum(blob), 1<<20, dst, nil); err != nil {
+	if err := Pull(context.Background(), m.registry(), testRef, sum(blob), 1<<20, dst, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(dst) //nolint:gosec // test temp path
@@ -284,10 +287,12 @@ func TestPullExplicitHTTPHostUsesPlainHTTP(t *testing.T) {
 	}
 }
 
-func TestPullBareHostStaysHTTPS(t *testing.T) {
+func TestPullDefaultsToHTTPS(t *testing.T) {
 	blob := []byte("plain-http-package")
 	m := newPlainMock(t, blob)
-	err := Pull(context.Background(), m.host(), testRef, sum(blob), 1<<20, dstPath(t), nil)
+	reg := m.registry()
+	reg.PlainHTTP = false
+	err := Pull(context.Background(), reg, testRef, sum(blob), 1<<20, dstPath(t), nil)
 	if !errors.Is(err, ErrNetwork) {
 		t.Fatalf("err = %v, want ErrNetwork from a TLS handshake against a plain-http server", err)
 	}

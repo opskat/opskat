@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/pkg/ociclient"
 )
 
 // OfficialIndexURL is the official index on the extensions repo's main branch;
@@ -27,9 +28,9 @@ const (
 	// base64 ed25519 public keys.
 	EnvPublicKeys = "OPSKAT_E2E_EXT_INDEX_KEYS"
 	// EnvRegistryHost replaces the "Extension downloads" registry host
-	// (host[:port]) that RegistryHost returns. It is passed through verbatim, so
-	// it may be written http://host[:port] for a plain-http test registry —
-	// ociclient.Pull honors that prefix; the user's mirror setting rejects it.
+	// (host[:port]) that PullRegistry returns. Written http://host[:port] it
+	// selects a plain-http test registry — the only way a pull goes over plain
+	// http; the user's mirror setting is always https.
 	EnvRegistryHost = "OPSKAT_E2E_EXT_REGISTRY"
 )
 
@@ -80,13 +81,16 @@ func trustedKeys() ([]ed25519.PublicKey, error) {
 	return keys, nil
 }
 
-// RegistryHost is the registry host (host[:port]) extension packages are pulled
-// from: the "Extension downloads" setting, or EnvRegistryHost in a verification
-// run. Package pulls must resolve their host here, never from bootstrap
+// PullRegistry is the registry extension packages are pulled from: the
+// "Extension downloads" host over https, or EnvRegistryHost in a verification
+// run. Package pulls must resolve their registry here, never from bootstrap
 // directly, so the override covers them too.
-func RegistryHost() string {
+func PullRegistry() ociclient.Registry {
 	if h := e2eOverride(EnvRegistryHost); h != "" {
-		return h
+		if rest, ok := strings.CutPrefix(h, "http://"); ok {
+			return ociclient.Registry{Host: rest, PlainHTTP: true}
+		}
+		return ociclient.Registry{Host: h}
 	}
-	return bootstrap.ExtensionRegistryHost()
+	return ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}
 }
