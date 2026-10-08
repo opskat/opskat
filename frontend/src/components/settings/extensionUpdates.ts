@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import i18n from "@/i18n";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { ListStore } from "../../../wailsjs/go/extension/Extension";
+import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import type { extstore_svc } from "../../../wailsjs/go/models";
 
 /** Fired by the backend once its daily background refresh updated the store index. */
@@ -34,11 +35,28 @@ export async function syncExtensionUpdates(): Promise<void> {
   useExtensionUpdates.getState().setFromState(await ListStore(i18n.language));
 }
 
-/** Keeps the updates store current while mounted: on mount and after each background refresh. */
+/**
+ * Fired by the backend whenever the installed set changes (install from any
+ * source, uninstall, enable / disable, reload) and once the startup load is done.
+ */
+const INSTALLED_CHANGED_EVENTS = ["ext:reload", "ext:ready"];
+
+/**
+ * Keeps the updates store current while mounted: on mount, after each background
+ * refresh, and whenever the installed set changes — an update is relative to
+ * what is installed, however it got there.
+ */
 export function useExtensionUpdateSync() {
   const sync = useCallback(() => {
     syncExtensionUpdates().catch((e) => toast.error(String(e)));
   }, []);
   useEffect(sync, [sync]);
   useWailsEvent(STORE_REFRESHED_EVENT, sync);
+  // The extension bundle loader listens to these events too, so unsubscribe with
+  // this listener's own cancel: EventsOff(name) — what useWailsEvent does — would
+  // drop the loader's listener as well.
+  useEffect(() => {
+    const offs = INSTALLED_CHANGED_EVENTS.map((event) => EventsOn(event, sync));
+    return () => offs.forEach((off) => off?.());
+  }, [sync]);
 }

@@ -10,7 +10,7 @@ import {
   ListStore,
   RefreshStore,
 } from "../../../../wailsjs/go/extension/Extension";
-import { EventsOn } from "../../../../wailsjs/runtime/runtime";
+import { EventsOff, EventsOn } from "../../../../wailsjs/runtime/runtime";
 
 vi.mock("../../../lib/notify", () => ({ notifySuccess: vi.fn(), notifyCopied: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
@@ -134,6 +134,24 @@ describe("settings extensions tab badge", () => {
     vi.mocked(ListStore).mockResolvedValue(state(card("kafka", { action: "installed" })) as never);
     await emit("ext:store-refreshed");
     await waitFor(() => expect(screen.queryByText("extension.updatesAvailable")).toBeNull());
+  });
+
+  // The installed set also changes outside the store flow — a local ZIP / directory
+  // install, an uninstall, `opsctl ext update`, the extension system finishing its
+  // startup load — and the badge must follow it, not keep a stale count.
+  it.each(["ext:reload", "ext:ready"])("re-reads the updates when the installed set changes (%s)", async (event) => {
+    vi.mocked(ListStore).mockResolvedValue(state(card("kafka")) as never);
+    const { unmount } = render(<SettingsPage />);
+    await screen.findByText("extension.updatesAvailable");
+
+    vi.mocked(ListStore).mockResolvedValue(state(card("kafka", { action: "installed" })) as never);
+    await emit(event);
+    await waitFor(() => expect(screen.queryByText("extension.updatesAvailable")).toBeNull());
+
+    // Other subscribers (the extension bundle loader) listen to the same event:
+    // unmounting must remove only this listener, never every listener by name.
+    unmount();
+    expect(EventsOff).not.toHaveBeenCalledWith(event);
   });
 
   it("has no badge when nothing can be updated", async () => {
