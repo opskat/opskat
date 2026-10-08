@@ -8,6 +8,24 @@ import { EntityIcon } from "@/components/asset/AssetIcon";
 import { formatBytes } from "@/lib/formatBytes";
 import { RespondExtensionInstallConfirm } from "../../wailsjs/go/extension/Extension";
 
+const INSTALL_MODE_KEYS = {
+  install: {
+    title: "extension.installConfirm.title",
+    description: "extension.installConfirm.description",
+    action: "extension.installConfirm.install",
+  },
+  update: {
+    title: "extension.installConfirm.titleUpdate",
+    description: "extension.installConfirm.descriptionUpdate",
+    action: "extension.installConfirm.update",
+  },
+  downgrade: {
+    title: "extension.installConfirm.titleDowngrade",
+    description: "extension.installConfirm.descriptionDowngrade",
+    action: "extension.installConfirm.downgradeAction",
+  },
+} as const;
+
 /** One grant an extension asks for (extension_svc.CapabilityGrant). */
 interface CapabilityGrant {
   kind: string;
@@ -79,11 +97,8 @@ export function ExtensionInstallConfirmDialog() {
   };
 
   const credentialsRead = current?.capabilities.some((c) => c.kind === "credentials" && c.value === "read");
-  const confirmLabel = !current?.from
-    ? "extension.installConfirm.install"
-    : current.downgrade
-      ? "extension.installConfirm.downgradeAction"
-      : "extension.installConfirm.update";
+  const mode = !current?.from ? "install" : current.downgrade ? "downgrade" : "update";
+  const confirmLabel = INSTALL_MODE_KEYS[mode].action;
 
   return (
     <Dialog open={!!current} onOpenChange={(open) => !open && respond(false)}>
@@ -91,8 +106,8 @@ export function ExtensionInstallConfirmDialog() {
         {current && (
           <>
             <DialogHeader>
-              <DialogTitle>{t("extension.installConfirm.title")}</DialogTitle>
-              <DialogDescription>{t("extension.installConfirm.description")}</DialogDescription>
+              <DialogTitle>{t(INSTALL_MODE_KEYS[mode].title)}</DialogTitle>
+              <DialogDescription>{t(INSTALL_MODE_KEYS[mode].description)}</DialogDescription>
             </DialogHeader>
 
             <div className="space-y-3 overflow-y-auto flex-1 min-h-0 text-sm">

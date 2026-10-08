@@ -2916,7 +2916,11 @@
     "credentialsReadWarning": "此扩展可以明文读取其资产中保存的全部密码（credentials: read），请确认你信任它的作者后再使用。",
     "installConfirm": {
       "title": "安装扩展？",
+      "titleUpdate": "更新扩展？",
+      "titleDowngrade": "降级扩展？",
       "description": "安装前请确认扩展的来历与它申请的能力。",
+      "descriptionUpdate": "更新前请确认新版本申请的能力有哪些变化。",
+      "descriptionDowngrade": "将用旧版本覆盖当前版本，继续前请确认它申请的能力。",
       "source": "来源",
       "sourceStore": "官方商店，签名已验证",
       "sourceFile": "本地文件",

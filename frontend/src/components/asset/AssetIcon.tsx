@@ -28,8 +28,12 @@ export function EntityIcon({
   "aria-hidden": ariaHidden,
   "data-testid": testId,
 }: EntityIconProps) {
-  const Icon = (icon ? getIconComponent(icon) : Fallback) as AssetIconComponent;
-  const color = icon ? getIconColor(icon) : undefined;
+  const known = icon ? getIconComponent(icon) : undefined;
+  // getIconComponent answers Server for any unrecognized name; "server" is the only
+  // registered name that resolves to Server, so Server under another name means unknown.
+  const recognized = !!icon && (known !== Server || icon.split("#")[0] === "server");
+  const Icon = (recognized ? known : Fallback) as AssetIconComponent;
+  const color = recognized ? getIconColor(icon) : undefined;
 
   return createElement(Icon, {
     className,

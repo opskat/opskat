@@ -2916,7 +2916,11 @@
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
     "installConfirm": {
       "title": "Install extension?",
+      "titleUpdate": "Update extension?",
+      "titleDowngrade": "Downgrade extension?",
       "description": "Check what this extension is and what it asks for before it is installed.",
+      "descriptionUpdate": "Check what changed and what this version asks for before it replaces the installed one.",
+      "descriptionDowngrade": "This installs an older version over the current one. Check what it asks for before you continue.",
       "source": "Source",
       "sourceStore": "Official store, signature verified",
       "sourceFile": "Local file",

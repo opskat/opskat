@@ -138,4 +138,15 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(RespondExtensionInstallConfirm).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["install", { from: "" }, "extension.installConfirm.title"],
+    ["update", {}, "extension.installConfirm.titleUpdate"],
+    ["downgrade", { from: "2.0.0", to: "1.0.0", downgrade: true }, "extension.installConfirm.titleDowngrade"],
+  ])("titles the dialog for %s", (_mode, patch, title) => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", { ...upgrade, ...patch });
+    expect(screen.getByRole("dialog").querySelector("[data-slot=dialog-title]")?.textContent).toBe(title);
+  });
 });
