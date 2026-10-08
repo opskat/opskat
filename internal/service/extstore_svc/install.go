@@ -194,22 +194,19 @@ func (s *Service) endInstall(name string) {
 
 // offer finds what the store offers for name in the verified index.
 func (s *Service) offer(ctx context.Context, name string) (extstore.Extension, extstore.Version, error) {
-	idx, _, ok := s.StoreIndex()
-	if !ok {
-		if err := s.Refresh(ctx); err != nil {
-			var re *RefreshError
-			errors.As(err, &re)
-			kind := InstallErrIndex
-			switch re.Kind {
-			case ErrorFetch:
-				kind = InstallErrNetwork
-			case ErrorSignature:
-				kind = InstallErrSignature
-			}
-			return extstore.Extension{}, extstore.Version{}, installErr(kind, err)
+	if err := s.ensureIndex(ctx); err != nil {
+		var re *RefreshError
+		errors.As(err, &re)
+		kind := InstallErrIndex
+		switch re.Kind {
+		case ErrorFetch:
+			kind = InstallErrNetwork
+		case ErrorSignature:
+			kind = InstallErrSignature
 		}
-		idx, _, _ = s.StoreIndex()
+		return extstore.Extension{}, extstore.Version{}, installErr(kind, err)
 	}
+	idx, _, _ := s.StoreIndex()
 	i := slices.IndexFunc(idx.Extensions, func(e extstore.Extension) bool { return e.Name == name })
 	if i < 0 {
 		return extstore.Extension{}, extstore.Version{}, installErr(InstallErrNotFound,

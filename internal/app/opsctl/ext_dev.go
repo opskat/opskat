@@ -28,9 +28,12 @@ var currentApp = appversion.Current
 // handleExtDevInstall 处理 `opsctl ext dev <dir>`：经用户在桌面端确认后，把一个
 // 未打包的扩展目录装进当前进程。
 //
-// 这条通道让扩展开发不需要第二套宿主：安装走的就是 ExtDevInstaller 背后那一个 extension_svc.Install，与用户在扩展页点"从目录
-// 安装"逐字相同，装完的扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。
-// 重装即热重载——Install 会先 Unload 再加载并通知前端刷新。
+// 这条通道让扩展开发不需要第二套宿主：安装走的就是 ExtDevInstaller 背后那一个
+// extension_svc.Install——扩展页"从目录安装"用的同一条暂存 → 校验 → 提交路径，装完的
+// 扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。唯一的差别是确认：按钮安装
+// 在提交前弹应用内的安装确认框，ext dev 不再弹它，因为下面已经在 opsctl 审批弹窗里问过
+// 用户（InstallExtensionDir 不传确认函数）。重装即热重载——Install 会先 Unload 再加载
+// 并通知前端刷新。
 //
 // 它装进来并启用的是未经审阅的 WASM，manifest 要什么能力就有什么能力，还能覆盖同名的
 // 已装扩展；而任何持有 socket token 的本地进程（包括经本地 shell 跑 opsctl 的 AI）
