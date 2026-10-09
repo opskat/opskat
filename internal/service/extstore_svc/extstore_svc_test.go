@@ -355,3 +355,10 @@ func TestE2EOverrides(t *testing.T) {
 		assert.Equal(t, ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}, PullRegistry())
 	})
 }
+
+func TestOfficialPublicKeys(t *testing.T) {
+	t.Setenv("OPSKAT_E2E", "")
+	keys, err := trustedKeys()
+	require.NoError(t, err)
+	assert.NotEmpty(t, keys, "a release must trust at least one official index key, or the store rejects every index")
+}
