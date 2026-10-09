@@ -36,6 +36,7 @@ import (
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/extreg"
+	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -43,6 +44,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
+	"github.com/opskat/opskat/internal/service/extstore_svc"
 	"github.com/opskat/opskat/internal/service/localterm_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
@@ -221,6 +223,14 @@ func main() {
 	opsctlB := opsctl.New(appCtx, sys, sys)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
+	extStore := extstore_svc.New(extstore_svc.Options{
+		DownloadMirror:    sys.GetDownloadMirror,
+		InstalledVersions: func() map[string]string { return extension.InstalledVersions(extB) },
+		App:               appversion.Current,
+	})
+	extB.SetStoreService(extStore)
+	sys.SetExtensionStoreRefresher(extStore.Refresh)
+	opsctlB.SetExtStore(desktopExtStore{ext: extB, store: extStore})
 	externalEditEmitter := external_edit.NewEventEmitter()
 	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
 		DataDir:        bootstrap.AppDataDir(),
@@ -470,6 +480,21 @@ func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, nam
 
 func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
 	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
+}
+
+// desktopExtStore 把 `opsctl ext search / install / update` 交给扩展商店：列表来自
+// extstore_svc，安装走商店页「安装」那一条 extension.InstallFromStore（含同一个安装确认）。
+type desktopExtStore struct {
+	ext   *extension.Extension
+	store *extstore_svc.Service
+}
+
+func (s desktopExtStore) ListStore(ctx context.Context, lang string) ([]extstore_svc.Listing, error) {
+	return s.store.List(ctx, lang)
+}
+
+func (s desktopExtStore) InstallFromStore(ctx context.Context, name string) (string, string, error) {
+	return extension.InstallFromStore(s.ext, ctx, name)
 }
 
 func initialWindowSize(cfg *bootstrap.AppConfig) (int, int) {

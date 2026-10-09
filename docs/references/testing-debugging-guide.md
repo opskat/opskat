@@ -288,6 +288,9 @@ opsctl exec cache -- "PING"                # Redis command
 opsctl cp ./file web-server:/tmp/          # scp-style transfer
 opsctl delete asset old-server             # always asks the desktop app for confirmation
 opsctl ext list                            # installed extensions (with enabled state)
+opsctl ext search                          # official store, via the running app (read-only)
+opsctl ext install es                      # store install: the app's install confirm asks;
+                                           # declined / failed / incompatible → exit 1 + reason
 opsctl exec my-bucket -- list_objects --bucket=logs   # extension tool: same exec verb,
                                            # executed by the running desktop app
 ```

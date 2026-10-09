@@ -29,7 +29,7 @@ var extregRegisterFn = extreg.RegisterDescribeOnly
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
 
-func cmdExt(args []string) int {
+func cmdExt(ctx context.Context, args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printExtUsage()
 		if len(args) > 0 {
@@ -46,6 +46,12 @@ func cmdExt(args []string) int {
 		return cmdExtList()
 	case "dev":
 		return cmdExtDev(args[1:])
+	case "search":
+		return cmdExtSearch(ctx, args[1:])
+	case "install":
+		return cmdExtInstall(ctx, args[1:])
+	case "update":
+		return cmdExtUpdate(ctx, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown ext subcommand %q\n\nRun 'opsctl ext --help' for usage.\n", args[0])
 		return 1
@@ -284,23 +290,33 @@ func cmdExtDev(args []string) int {
 // 与 delegateExtExec 同一条理由：注册表、WASM 运行时、能力面都只存在于桌面进程，
 // opsctl 自己装一份就等于第二套加载路径。
 func requestExtDevInstall(sourceDir string) (string, string, error) {
-	dataDir := bootstrap.ResolvedDataDir()
-	token, err := bootstrap.ReadAuthToken(dataDir)
-	if err != nil {
-		logger.Default().Warn("read auth token", zap.Error(err))
-	}
-
-	resp, err := approval.RequestApprovalWithToken(approval.SocketPath(dataDir), token, approval.ApprovalRequest{
+	resp, err := requestDesktop(approval.ApprovalRequest{
 		Type: "ext_dev_install",
 		Path: sourceDir,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("%w on data dir %s — start it with `make dev-sandbox` (docs/VERIFICATION.md)", err, dataDir)
+		return "", "", fmt.Errorf("%w — start it with `make dev-sandbox` (docs/VERIFICATION.md)", err)
 	}
 	if !resp.Approved {
 		return "", "", fmt.Errorf("%s", resp.Reason)
 	}
 	return resp.Extension, resp.Version, nil
+}
+
+// requestDesktop sends one request to the desktop app running on opsctl's data
+// dir; a failure to reach it names that data dir, the usual reason being an app
+// running on another one (or none at all).
+func requestDesktop(req approval.ApprovalRequest) (approval.ApprovalResponse, error) {
+	dataDir := bootstrap.ResolvedDataDir()
+	token, err := bootstrap.ReadAuthToken(dataDir)
+	if err != nil {
+		logger.Default().Warn("read auth token", zap.Error(err))
+	}
+	resp, err := approval.RequestApprovalWithToken(approval.SocketPath(dataDir), token, req)
+	if err != nil {
+		return approval.ApprovalResponse{}, fmt.Errorf("%w on data dir %s", err, dataDir)
+	}
+	return resp, nil
 }
 
 func printExtDevUsage() {
@@ -330,8 +346,11 @@ func printExtUsage() {
   opsctl ext <subcommand>
 
 Subcommands:
-  list    List installed extensions with their asset types, tools, and enabled state
-  dev     Install an unpacked extension directory into the running app (development)
+  list     List installed extensions with their asset types, tools, and enabled state
+  search   List the official store with each extension's status (no confirmation)
+  install  Install an extension from the official store (the app asks to confirm)
+  update   Update one extension, or --all, from the official store (the app asks to confirm)
+  dev      Install an unpacked extension directory into the running app (development)
 
 To run an extension tool, use exec against one of the extension's assets:
 
@@ -342,6 +361,9 @@ extension. Run 'opsctl help <asset>' to see the tool and flag reference.
 
 Examples:
   opsctl ext list
+  opsctl ext search elastic
+  opsctl ext install es
+  opsctl ext update --all
   opsctl ext dev "$PWD/extensions/notebook/dist"
   opsctl exec my-notes -- note_list
 `)

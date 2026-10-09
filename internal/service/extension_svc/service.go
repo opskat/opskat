@@ -2,12 +2,15 @@ package extension_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
+	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
@@ -15,6 +18,10 @@ import (
 	"github.com/opskat/opskat/pkg/extension"
 	"go.uber.org/zap"
 )
+
+// currentApp is the app version the install-time compatibility rule is judged
+// against; a variable so tests can stand in other builds.
+var currentApp = appversion.Current
 
 // ExtensionInfo is the frontend-facing extension descriptor.
 type ExtensionInfo struct {
@@ -159,21 +166,88 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 // intact. Hence the new version is staged beside the old one and only swapped in
 // once everything that can refuse it has accepted it:
 //
-//  1. manager.Stage copies + loads + describes the new version in a staging dir.
-//  2. Cross-extension snippet category id conflict check against the staged manifest.
-//  3. Swap the registrations: unregister the old version, register the new one; on
+//  1. Compatibility check on the source's manifest; manager.Stage copies + loads +
+//     describes the new version in a staging dir.
+//  2. confirm (when given) shows the user what the staged version is and asks;
+//     the service lock is released while the user decides. Any error from it —
+//     ErrInstallCanceled, a timeout, a canceled ctx — discards the staged files.
+//  3. Cross-extension snippet category id conflict check against the staged manifest.
+//  4. Swap the registrations: unregister the old version, register the new one; on
 //     refusal put the old registration back.
-//  4. staged.Commit moves the new version into place and closes the old module.
-//  5. snippet hook: RefreshCategories → SyncExtensionSeeds; persist enabled state.
-func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
+//  5. staged.Commit moves the new version into place and closes the old module.
+//  6. snippet hook: RefreshCategories → SyncExtensionSeeds; persist enabled state.
+//
+// A nil confirm installs without asking: the caller already has the user's
+// consent (`opsctl ext dev` asks in its own approval dialog).
+func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	staged, ask, err := s.stage(ctx, sourcePath)
+	if err != nil {
+		return nil, err
+	}
+	if confirm == nil {
+		return s.commit(ctx, staged, nil)
+	}
+	if err := confirm(ctx, ask); err != nil {
+		staged.Abort(ctx)
+		return nil, err
+	}
+	return s.commit(ctx, staged, &ask)
+}
+
+// stage runs step 1 of Install and describes the staged version for the confirm.
+func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.StagedInstall, InstallConfirm, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Judge compatibility from the source's manifest before staging: Stage loads the
+	// WASM and rejects a manifest this app cannot read with a bare validation error.
+	if err := extension.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
+		var inc *extension.IncompatibleError
+		if errors.As(err, &inc) {
+			return nil, InstallConfirm{}, LocalizeIncompatible(ctx, inc)
+		}
+		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
+	}
+	source, size, err := localPackage(sourcePath)
+	if err != nil {
+		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
+	}
+
 	staged, err := s.manager.Stage(ctx, sourcePath)
 	if err != nil {
-		return nil, fmt.Errorf("install extension: %w", err)
+		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
 	}
+	ext := staged.Extension()
 	manifest := staged.Manifest()
+	ask := s.NewInstallConfirm(InstallCandidate{
+		Name:         manifest.Name,
+		DisplayName:  ext.Translate(aictx.GetPolicyLang(ctx), manifest.I18n.DisplayName),
+		Icon:         manifest.Icon,
+		Version:      manifest.Version,
+		Capabilities: manifest.Capabilities,
+		Source:       source,
+		Size:         size,
+	})
+	return staged, ask, nil
+}
+
+// commit runs steps 3–6 of Install. approved is what the user confirmed, nil when
+// nobody was asked.
+func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved *InstallConfirm) (*extension.Manifest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	manifest := staged.Manifest()
+
+	// The user approved replacing From with To. Another install or an uninstall
+	// may have landed while the dialog was open; that approval then describes a
+	// different change, so it is not applied.
+	if approved != nil {
+		if now := s.installedVersion(manifest.Name); now != approved.From {
+			staged.Abort(ctx)
+			return nil, fmt.Errorf("cannot install %q: the installed version changed from %q to %q while awaiting confirmation",
+				manifest.Name, approved.From, now)
+		}
+	}
 
 	// Cross-extension category id dedup. Intra-manifest duplicates are already
 	// rejected by manifest.validate().

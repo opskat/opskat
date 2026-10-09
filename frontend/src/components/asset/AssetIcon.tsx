@@ -1,6 +1,6 @@
 import { createElement, type ComponentType, type CSSProperties } from "react";
 import { Server } from "lucide-react";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { findIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { getAssetType } from "@/lib/assetTypes";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
@@ -28,8 +28,9 @@ export function EntityIcon({
   "aria-hidden": ariaHidden,
   "data-testid": testId,
 }: EntityIconProps) {
-  const Icon = (icon ? getIconComponent(icon) : Fallback) as AssetIconComponent;
-  const color = icon ? getIconColor(icon) : undefined;
+  const known = icon ? findIconComponent(icon) : undefined;
+  const Icon = (known ?? Fallback) as AssetIconComponent;
+  const color = known && icon ? getIconColor(icon) : undefined;
 
   return createElement(Icon, {
     className,

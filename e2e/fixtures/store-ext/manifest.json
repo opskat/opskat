@@ -1,0 +1,14 @@
+{
+  "name": "store-demo",
+  "version": "1.0.0",
+  "hostABI": "2.2",
+  "backend": {
+    "runtime": "wasm",
+    "binary": "main.wasm"
+  },
+  "capabilities": {
+    "http": {
+      "allowlist": ["https://example.com/"]
+    }
+  }
+}

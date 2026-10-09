@@ -23,9 +23,9 @@ func GetAvailableMirrors() []MirrorInfo {
 	return result
 }
 
-// applyMirror 将镜像前缀应用到原始 URL
-// mirrorPrefix 为空时返回原始 URL
-func applyMirror(originalURL, mirrorPrefix string) string {
+// ApplyMirror 将下载镜像前缀应用到原始 GitHub URL（release 资产、raw 文件等）；
+// mirrorPrefix 为空时返回原始 URL。其它服务经用户的「下载镜像」取 GitHub 内容时用它。
+func ApplyMirror(originalURL, mirrorPrefix string) string {
 	if mirrorPrefix == "" {
 		return originalURL
 	}

@@ -139,7 +139,7 @@ func Execute() int {
 	case "policy":
 		return cmdPolicy(ctx, args, resolvedSession)
 	case "ext":
-		return cmdExt(args)
+		return cmdExt(ctx, args)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n\nRun 'opsctl help' for usage.\n", verb)
 		return 1
@@ -204,7 +204,7 @@ Commands:
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
-  ext       Manage extensions (list, dev)
+  ext       Manage extensions (list, search, install, update, dev)
   version   Print version information
 
 Note:
@@ -275,6 +275,9 @@ Examples:
   opsctl policy allow web-server -- 'systemctl restart *'   Pre-approve commands (terminal only)
   opsctl list audit --asset web-server --limit 50 Read stored audit rows (read-only)
   opsctl ext list                                 List installed extensions
+  opsctl ext search elastic                       Search the official extension store
+  opsctl ext install es                           Install from the store (the app asks to confirm)
+  opsctl ext update --all                         Update every store extension (confirmed one by one)
   opsctl ext dev ../extensions/.../dist           Install a local extension build into the running app
   opsctl exec my-bucket -- list_objects --bucket=logs   Run an extension tool on its asset
 `)

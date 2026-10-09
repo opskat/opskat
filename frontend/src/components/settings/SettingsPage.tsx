@@ -32,12 +32,15 @@ import { UpdateSection } from "@/components/settings/UpdateSection";
 import { SystemStatusSection } from "@/components/settings/SystemStatusSection";
 import { ExtensionSection } from "@/components/settings/ExtensionSection";
 import { ExternalEditSection } from "@/components/settings/ExternalEditSection";
+import { useExtensionUpdates, useExtensionUpdateSync } from "@/components/settings/extensionUpdates";
 import { useSettingsUiStore, type SettingsTab } from "@/stores/settingsUiStore";
 
 export function SettingsPage() {
   const { t } = useTranslation();
   const activeTab = useSettingsUiStore((s) => s.activeTab);
   const setActiveTab = useSettingsUiStore((s) => s.setActiveTab);
+  useExtensionUpdateSync();
+  const updateCount = useExtensionUpdates((s) => Object.keys(s.updates).length);
 
   return (
     <div className="flex flex-col h-full">
@@ -86,6 +89,12 @@ export function SettingsPage() {
             <TabsTrigger value="extensions" className="gap-1">
               <Puzzle className="h-3.5 w-3.5" />
               {t("extension.title")}
+              {updateCount > 0 && (
+                <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-medium leading-4 text-primary">
+                  <span aria-hidden>{updateCount}</span>
+                  <span className="sr-only">{t("extension.updatesAvailable", { count: updateCount })}</span>
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="about" className="gap-1">
               <Info className="h-3.5 w-3.5" />
