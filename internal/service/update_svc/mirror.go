@@ -12,8 +12,6 @@ type MirrorInfo struct {
 // availableMirrors 内置镜像列表
 var availableMirrors = []MirrorInfo{
 	{ID: "github", Name: "GitHub", URL: ""},
-	{ID: "ghfast", Name: "ghfast.top", URL: "https://ghfast.top/"},
-	{ID: "gh-proxy", Name: "gh-proxy.com", URL: "https://gh-proxy.com/"},
 	{ID: "katch", Name: "katch.ggnb.top", URL: "https://katch.ggnb.top/"},
 }
 

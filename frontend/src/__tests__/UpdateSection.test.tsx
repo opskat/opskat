@@ -47,6 +47,18 @@ describe("UpdateSection", () => {
     expect(BrowserOpenURL).toHaveBeenCalledWith(repositoryURL);
   });
 
+  it("keeps a saved mirror that is not in the built-in list as a custom prefix", async () => {
+    vi.mocked(GetDownloadMirror).mockResolvedValue("https://ghfast.top/");
+    vi.mocked(GetAvailableMirrors).mockResolvedValue([
+      { id: "github", name: "GitHub", url: "" },
+      { id: "katch", name: "katch.ggnb.top", url: "https://katch.ggnb.top/" },
+    ]);
+
+    render(<UpdateSection />);
+
+    expect(await screen.findByPlaceholderText("appUpdate.mirrorCustomPlaceholder")).toHaveValue("https://ghfast.top/");
+  });
+
   it("relaunches the app instead of only quitting after an update", async () => {
     vi.mocked(CheckForUpdate).mockResolvedValue({
       hasUpdate: true,

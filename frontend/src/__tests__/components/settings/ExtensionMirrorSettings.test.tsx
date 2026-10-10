@@ -6,23 +6,14 @@ import { GetExtensionMirror, SetExtensionMirror } from "../../../../wailsjs/go/s
 
 async function renderWithStored(stored: string) {
   vi.mocked(GetExtensionMirror).mockResolvedValue(stored);
-  const view = render(<ExtensionMirrorSettings />);
+  render(<ExtensionMirrorSettings />);
   await screen.findByRole("combobox");
-  return view;
 }
 
 describe("ExtensionMirrorSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(SetExtensionMirror).mockResolvedValue(undefined as never);
-  });
-
-  it("saves the preset ghcr.nju.edu.cn host when chosen", async () => {
-    const user = userEvent.setup();
-    await renderWithStored("");
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "ghcr.nju.edu.cn" }));
-    await waitFor(() => expect(SetExtensionMirror).toHaveBeenCalledWith("ghcr.nju.edu.cn"));
   });
 
   it("saves the preset katch.ggnb.top/ghcr.io mirror when chosen", async () => {
@@ -33,18 +24,20 @@ describe("ExtensionMirrorSettings", () => {
     await waitFor(() => expect(SetExtensionMirror).toHaveBeenCalledWith("katch.ggnb.top/ghcr.io"));
   });
 
-  it("shows each stored preset as its own option, not as a custom host", async () => {
-    for (const preset of ["ghcr.nju.edu.cn", "katch.ggnb.top/ghcr.io"]) {
-      const { unmount } = await renderWithStored(preset);
-      await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent(preset));
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-      unmount();
-    }
+  it("shows the stored preset as its own option, not as a custom host", async () => {
+    await renderWithStored("katch.ggnb.top/ghcr.io");
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("katch.ggnb.top/ghcr.io"));
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps a mirror that is no longer built in as a custom host", async () => {
+    await renderWithStored("ghcr.nju.edu.cn");
+    expect(await screen.findByRole("textbox")).toHaveValue("ghcr.nju.edu.cn");
   });
 
   it("saves an empty host when switching back to direct ghcr.io", async () => {
     const user = userEvent.setup();
-    await renderWithStored("ghcr.nju.edu.cn");
+    await renderWithStored("katch.ggnb.top/ghcr.io");
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByRole("option", { name: "extension.mirror.direct" }));
     await waitFor(() => expect(SetExtensionMirror).toHaveBeenCalledWith(""));

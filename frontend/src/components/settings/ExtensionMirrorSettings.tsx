@@ -17,7 +17,7 @@ import { GetExtensionMirror, SetExtensionMirror } from "../../../wailsjs/go/syst
 import { EXTENSION_MIRROR_SETTING_ID } from "./downloadMirror";
 
 // 预置镜像：保存值就是选项值本身，写法同自定义（主机，可带路径前缀）。
-const PRESETS = ["ghcr.nju.edu.cn", "katch.ggnb.top/ghcr.io"];
+const PRESETS = ["katch.ggnb.top/ghcr.io"];
 
 // 下拉的取值："direct"、"custom"，或 PRESETS 里的一项。
 const modeOf = (host: string): string => (host === "" ? "direct" : PRESETS.includes(host) ? host : "custom");

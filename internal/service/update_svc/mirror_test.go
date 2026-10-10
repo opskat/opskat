@@ -44,31 +44,5 @@ func TestGetAvailableMirrors(t *testing.T) {
 			assert.Equal(t, "github", mirrors[0].ID)
 			assert.Equal(t, "", mirrors[0].URL)
 		})
-
-		convey.Convey("包含 ghfast.top", func() {
-			found := false
-			for _, m := range mirrors {
-				if m.ID == "ghfast" {
-					assert.Equal(t, "https://ghfast.top/", m.URL)
-					found = true
-				}
-			}
-			assert.True(t, found)
-		})
-
-		convey.Convey("包含 gh-proxy.com", func() {
-			found := false
-			for _, m := range mirrors {
-				if m.ID == "gh-proxy" {
-					assert.Equal(t, "https://gh-proxy.com/", m.URL)
-					found = true
-				}
-			}
-			assert.True(t, found)
-		})
-
-		convey.Convey("至少有 3 个选项", func() {
-			assert.GreaterOrEqual(t, len(mirrors), 3)
-		})
 	})
 }
