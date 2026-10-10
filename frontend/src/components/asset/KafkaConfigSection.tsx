@@ -7,6 +7,7 @@ import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { useConfigSection } from "@/components/asset/useConfigSection";
+import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
@@ -299,7 +300,12 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         resolveSaveProxyPassword(s, ctx.encryptPassword),
         resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
       ]);
-      const cfg = buildKafkaBaseConfig(s, proxyPassword, proxyChainSecrets);
+      const cfg = buildKafkaBaseConfig(
+        s,
+        proxyPassword,
+        proxyChainSecrets,
+        await resolveTLSKey(s, ctx.encryptPassword)
+      );
       if (s.saslMechanism !== "none") {
         appendKafkaCredential(cfg, await resolveSaveCredential(cred.value, ctx.encryptPassword));
       }
@@ -312,14 +318,15 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
       };
     },
-    buildTest: async (s) => {
-      // 测试:proxy 密码仅明文(无加密)
+    buildTest: async (s, ctx) => {
+      // 测试:proxy 密码仅明文(无加密);TLS 私钥与保存一样是密文
       const cfg = buildKafkaBaseConfig(
         s,
         s.proxyPassword,
         Object.fromEntries(
           s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-        )
+        ),
+        await resolveTLSKey(s, ctx.encryptPassword)
       );
       if (s.saslMechanism !== "none") appendKafkaCredential(cfg, resolveTestCredential(cred.value));
       return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
@@ -361,25 +368,8 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       key: "tls",
       label: "asset.tabTls",
       fields: [
-        {
-          kind: "custom",
-          render: (s, p) => (
-            <div className="flex items-center justify-between">
-              <Label>{t("asset.tls")}</Label>
-              <Switch checked={s.tls} onCheckedChange={(v) => p({ tls: v })} />
-            </div>
-          ),
-        },
-        {
-          kind: "custom",
-          visibleWhen: (s) => s.tls,
-          render: (s, p) => (
-            <div className="flex items-center justify-between">
-              <Label>{t("asset.kafkaTlsInsecure")}</Label>
-              <Switch checked={s.tlsInsecure} onCheckedChange={(v) => p({ tlsInsecure: v })} />
-            </div>
-          ),
-        },
+        { kind: "switch", key: "tls", label: "asset.tls" },
+        { kind: "switch", key: "tlsInsecure", label: "asset.kafkaTlsInsecure", visibleWhen: (s) => s.tls },
         {
           kind: "text",
           key: "tlsServerName",
@@ -387,27 +377,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
           placeholder: "kafka.example.com",
           visibleWhen: (s) => s.tls,
         },
-        {
-          kind: "text",
-          key: "tlsCAFile",
-          label: "asset.kafkaTlsCAFile",
-          placeholder: "/path/to/ca.pem",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsCertFile",
-          label: "asset.kafkaTlsCertFile",
-          placeholder: "/path/to/client.crt",
-          visibleWhen: (s) => s.tls,
-        },
-        {
-          kind: "text",
-          key: "tlsKeyFile",
-          label: "asset.kafkaTlsKeyFile",
-          placeholder: "/path/to/client.key",
-          visibleWhen: (s) => s.tls,
-        },
+        ...tlsCertFields<KafkaFormState>((s) => s.tls),
       ],
     },
     {

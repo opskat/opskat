@@ -4,6 +4,8 @@
 // Go 侧读法（属性名 / 必填项 / format:"password" 字段），两侧都只读 manifest，不各自
 // 引入额外约定。
 
+import type { ExtAuth } from "./types";
+
 export interface ExtensionConfigProperty {
   type?: string;
   format?: string;
@@ -33,6 +35,24 @@ export function formFields(schema?: ExtensionConfigSchema): [string, ExtensionCo
   const order = schema?.propertyOrder;
   if (!order) return Object.entries(properties);
   return order.filter((k) => Object.prototype.hasOwnProperty.call(properties, k)).map((k) => [k, properties[k]]);
+}
+
+/**
+ * formFields 里当前该呈现的那些：属于某种认证方式的字段，只在 auth.selector 那个下拉选中
+ * 该方式时呈现；不属于任何认证方式的字段始终呈现。没有 selector 的类型只有一种认证方式，
+ * 字段全部呈现。
+ */
+export function visibleFields(
+  schema: ExtensionConfigSchema | undefined,
+  auth: ExtAuth | undefined,
+  config: Record<string, unknown>
+): [string, ExtensionConfigProperty][] {
+  const fields = formFields(schema);
+  if (!auth?.selector) return fields;
+  const selected = String(config[auth.selector] ?? "");
+  const ofAnyMethod = new Set(auth.groups.flatMap((g) => g.fields));
+  const ofSelected = new Set(auth.groups.filter((g) => g.when === selected).flatMap((g) => g.fields));
+  return fields.filter(([key]) => !ofAnyMethod.has(key) || ofSelected.has(key));
 }
 
 /** 返回 format:"password" 的属性名——它们保存前要经后端加密，展示时要打码。 */

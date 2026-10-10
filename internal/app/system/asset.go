@@ -323,6 +323,22 @@ func (s *System) DeleteGroup(id int64, deleteAssets bool) error {
 	return nil
 }
 
+// SelectTLSCertFile 打开原生文件对话框，返回选中的证书 / 私钥文件绝对路径。
+// 取消选择返回空字符串（不算错误）。前端用于 TLS 证书"文件路径"来源的"选择"按钮。
+func (s *System) SelectTLSCertFile() (string, error) {
+	path, err := wailsRuntime.OpenFileDialog(s.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "选择证书文件",
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "Certificate / Key (*.pem, *.crt, *.cer, *.key)", Pattern: "*.pem;*.crt;*.cer;*.key"},
+			{DisplayName: "All Files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("打开文件对话框失败: %w", err)
+	}
+	return path, nil
+}
+
 // SelectSQLiteFile 打开原生文件对话框，返回选中的 SQLite 文件绝对路径。
 // 取消选择返回空字符串（不算错误）。前端用于资产创建/编辑时的"浏览…"按钮。
 func (s *System) SelectSQLiteFile() (string, error) {

@@ -18,6 +18,7 @@ surface**: `exec` is not supported for this type, and there is nothing to script
 | `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `password` |
 | `file_ssh_asset_id` | number | no | SSH asset backing the SSH/SFTP file-transfer channel; omit to disable file transfer |
+| `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset |
 | `encryption` | string | no | `server` (default), `always_maximum`, `always_on`, `prefer_on`, or `prefer_off` |
 
 Plaintext is never returned, is encrypted in the asset, and never creates a managed credential.

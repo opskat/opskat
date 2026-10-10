@@ -8,16 +8,20 @@ import {
   type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
+import {
+  TLS_CERT_DEFAULTS,
+  tlsCertsFromJSON,
+  tlsCertsToJSON,
+  type TLSCertFormFields,
+  type TLSCertJSON,
+} from "./tlsCertConfig";
 
-export interface EtcdFormState extends ConnectionFormFields {
+export interface EtcdFormState extends ConnectionFormFields, TLSCertFormFields {
   endpoints: string;
   username: string;
   tls: boolean;
   tlsInsecure: boolean;
   tlsServerName: string;
-  tlsCAFile: string;
-  tlsCertFile: string;
-  tlsKeyFile: string;
   dialTimeoutSeconds: number;
   commandTimeoutSeconds: number;
 }
@@ -28,15 +32,13 @@ export const ETCD_DEFAULTS: EtcdFormState = {
   tls: false,
   tlsInsecure: false,
   tlsServerName: "",
-  tlsCAFile: "",
-  tlsCertFile: "",
-  tlsKeyFile: "",
   dialTimeoutSeconds: 5,
   commandTimeoutSeconds: 10,
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
 };
 
-interface EtcdConfig {
+interface EtcdConfig extends TLSCertJSON {
   endpoints?: string[];
   username?: string;
   credential_id?: number;
@@ -44,9 +46,6 @@ interface EtcdConfig {
   tls?: boolean;
   tls_insecure?: boolean;
   tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
   dial_timeout_seconds?: number;
   command_timeout_seconds?: number;
   ssh_asset_id?: number;
@@ -66,12 +65,14 @@ export function parseEtcdEndpoints(raw: string): string[] {
  * 保存/测试共用序列化(键序锁旧 save 分支,ssh_asset_id / proxy 均为尾键)。
  * cred 由 resolveSave/TestCredential 预解析;proxyPassword 由 resolveSaveProxyPassword
  * (save=密文)或 state.proxyPassword(test=明文)预解析。隧道与代理互斥,按 connectionType 二选一。
+ * tlsKey 是 resolveTLSKey 预解析出的 TLS 私钥密文(保存与测试相同)。
  */
 export function buildEtcdConfig(
   state: EtcdFormState,
   cred: CredentialFragment,
   proxyPassword = "",
-  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
+  tlsKey = ""
 ): string {
   const cfg: EtcdConfig = { endpoints: parseEtcdEndpoints(state.endpoints) };
   if (state.username) cfg.username = state.username;
@@ -80,9 +81,7 @@ export function buildEtcdConfig(
   if (state.tls) cfg.tls = true;
   if (state.tls && state.tlsInsecure) cfg.tls_insecure = true;
   if (state.tls && state.tlsServerName) cfg.tls_server_name = state.tlsServerName;
-  if (state.tls && state.tlsCAFile) cfg.tls_ca_file = state.tlsCAFile;
-  if (state.tls && state.tlsCertFile) cfg.tls_cert_file = state.tlsCertFile;
-  if (state.tls && state.tlsKeyFile) cfg.tls_key_file = state.tlsKeyFile;
+  if (state.tls) Object.assign(cfg, tlsCertsToJSON(state, tlsKey));
   if (state.dialTimeoutSeconds > 0) cfg.dial_timeout_seconds = state.dialTimeoutSeconds;
   if (state.commandTimeoutSeconds > 0) cfg.command_timeout_seconds = state.commandTimeoutSeconds;
   if (state.connectionType === "jumphost" && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
@@ -104,9 +103,7 @@ export function parseEtcdConfig(configJSON: string, assetTunnelId = 0): EtcdForm
       tls: cfg.tls || false,
       tlsInsecure: cfg.tls_insecure || false,
       tlsServerName: cfg.tls_server_name || "",
-      tlsCAFile: cfg.tls_ca_file || "",
-      tlsCertFile: cfg.tls_cert_file || "",
-      tlsKeyFile: cfg.tls_key_file || "",
+      ...tlsCertsFromJSON(cfg),
       dialTimeoutSeconds: cfg.dial_timeout_seconds || 5,
       commandTimeoutSeconds: cfg.command_timeout_seconds || 10,
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),

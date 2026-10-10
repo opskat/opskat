@@ -383,11 +383,6 @@ func TestPrepareCreateDoesNotAdvertiseUnappliedFields(t *testing.T) {
 			field:     "ssl_mode",
 		},
 		{
-			assetType: asset_entity.AssetTypeRedis,
-			args:      map[string]any{"host": "redis.example.com", "username": "default", "tls": true},
-			field:     "tls",
-		},
-		{
 			assetType: asset_entity.AssetTypeMongoDB,
 			args:      map[string]any{"connection_uri": "mongodb://mongo.example.com/app"},
 			field:     "connection_uri",

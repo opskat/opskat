@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Input, Label, Switch } from "@opskat/ui";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
+import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
+import { Fields, type FieldDesc } from "@/components/asset/configFields";
+import {
+  TLS_CERT_DEFAULTS,
+  buildTLSCerts,
+  parseTLSCerts,
+  resolveTLSKey,
+  tlsCertFields,
+  type TLSCertFormFields,
+} from "@/components/asset/tlsCertConfig";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import {
@@ -15,8 +24,8 @@ import {
 } from "@/components/asset/proxyConfig";
 import { GetDecryptedExtensionConfig, ValidateExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import type { AssetFormContext, AssetTestConfig, ConfigSectionProps } from "@/lib/assetTypes/formContract";
-import { defaultValues, formFields, passwordFields, type ExtensionConfigSchema } from "@/extension/configSchema";
-import type { ExtConnection } from "@/extension/types";
+import { defaultValues, passwordFields, visibleFields, type ExtensionConfigSchema } from "@/extension/configSchema";
+import type { ExtAuth, ExtConnection } from "@/extension/types";
 import {
   HOST_CONNECTION_CONFIG_KEY,
   type HostConnectionConfig,
@@ -29,27 +38,38 @@ interface Options {
   schema?: ExtensionConfigSchema;
   /** 资产类型在 describe() 声明的宿主连接配置；只渲染、保存声明了的项。 */
   connection?: ExtConnection;
+  /** 资产类型在 describe() 声明的认证方式；表单只呈现选中方式用到的字段。 */
+  auth?: ExtAuth;
   /** describe() 声明了测试连接处理器；决定"测试连接"按钮是否出现。 */
   testConnection?: boolean;
 }
 
-interface TLSFormState {
+interface TLSFormState extends TLSCertFormFields {
   enabled: boolean;
   insecure: boolean;
   serverName: string;
-  caFile: string;
-  certFile: string;
-  keyFile: string;
 }
 
 const TLS_DEFAULTS: TLSFormState = {
   enabled: false,
   insecure: false,
   serverName: "",
-  caFile: "",
-  certFile: "",
-  keyFile: "",
+  ...TLS_CERT_DEFAULTS,
 };
+
+// 与内置类型的 TLS 分组同一套字段渲染:开关、SNI、证书输入区。
+const TLS_FIELDS: FieldDesc<TLSFormState>[] = [
+  { kind: "switch", key: "enabled", label: "asset.tls" },
+  { kind: "switch", key: "insecure", label: "asset.tlsInsecure", visibleWhen: (s) => s.enabled },
+  {
+    kind: "text",
+    key: "serverName",
+    label: "asset.tlsServerName",
+    testid: "tls-server-name",
+    visibleWhen: (s) => s.enabled,
+  },
+  ...tlsCertFields<TLSFormState>((s) => s.enabled),
+];
 
 interface ExtensionFormState {
   config: Record<string, unknown>;
@@ -68,6 +88,9 @@ interface ExtensionFormState {
   /** TLS，宿主保留键，仅 connection.tls 声明时生效。 */
   tls: TLSFormState;
 }
+
+/** schema 字段所在的标签；宿主的连接方式与 TLS 各占其后的一个标签。 */
+const CONNECTION_TAB = "connection";
 
 const STATUS_REASON: Record<ExtensionFormState["status"], string> = {
   ready: "",
@@ -95,21 +118,31 @@ function parseTLS(raw?: HostTLSConfig): TLSFormState {
     enabled: !!raw?.enabled,
     insecure: !!raw?.insecure,
     serverName: raw?.serverName || "",
-    caFile: raw?.caFile || "",
-    certFile: raw?.certFile || "",
-    keyFile: raw?.keyFile || "",
+    ...parseTLSCerts({
+      caFile: raw?.caFile,
+      certFile: raw?.certFile,
+      keyFile: raw?.keyFile,
+      caPEM: raw?.caCert,
+      certPEM: raw?.clientCert,
+      keyPEM: raw?.clientKey,
+    }),
   };
 }
 
-function buildTLS(s: TLSFormState): HostTLSConfig | undefined {
+/** encryptedKey 由 resolveTLSKey 预解析：保存与测试连接送出的都是私钥密文。 */
+function buildTLS(s: TLSFormState, encryptedKey: string): HostTLSConfig | undefined {
   if (!s.enabled) return undefined;
+  const certs = buildTLSCerts(s, encryptedKey);
   return {
     enabled: true,
     insecure: s.insecure || undefined,
     serverName: s.serverName.trim() || undefined,
-    caFile: s.caFile.trim() || undefined,
-    certFile: s.certFile.trim() || undefined,
-    keyFile: s.keyFile.trim() || undefined,
+    caFile: certs.caFile,
+    certFile: certs.certFile,
+    keyFile: certs.keyFile,
+    caCert: certs.caPEM,
+    clientCert: certs.certPEM,
+    clientKey: certs.keyPEM,
   };
 }
 
@@ -166,6 +199,7 @@ export function makeExtensionConfigSection(opts: Options) {
     const initialSecretsRef = useRef<Record<string, string>>({});
     // 保存校验（扩展的 validate_config）返回的逐字段错误，显示在对应字段下；用户改动该字段即清除。
     const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+    const [activeTab, setActiveTab] = useState(CONNECTION_TAB);
     const { state, setState, patch } = useConfigSection<ExtensionFormState>({
       ref,
       editAsset,
@@ -220,14 +254,15 @@ export function makeExtensionConfigSection(opts: Options) {
           s,
           proxyChainEnabled
             ? await resolveSaveProxyChainSecrets(s.proxyChain.proxyChainLayers, buildCtx.encryptPassword)
-            : {}
+            : {},
+          await resolveTLSKey(s.tls, buildCtx.encryptPassword)
         );
         if (Object.keys(hostConnection).length > 0) {
           config[HOST_CONNECTION_CONFIG_KEY] = hostConnection;
         }
 
         const configJSON = JSON.stringify(config);
-        await checkConfig(configJSON);
+        await checkConfig(config, configJSON);
 
         return {
           configJSON,
@@ -240,14 +275,14 @@ export function makeExtensionConfigSection(opts: Options) {
 
     // 保存前跑扩展的校验器（保存入口还会再跑一遍同一个校验器，这里是它的结构化视图）：
     // 落在本表单字段上的错误显示在字段旁，其余的并进拒绝保存的错误里交给壳 toast。
-    async function checkConfig(configJSON: string) {
+    async function checkConfig(config: Record<string, unknown>, configJSON: string) {
       // A nil error list crosses IPC as null, which the host's save check also reads as valid.
       const errors = (await ValidateExtensionConfig(opts.extensionName, opts.assetType, configJSON)) ?? [];
       if (errors.length === 0) {
         setFieldErrors({});
         return;
       }
-      const shown = new Set(formFields(opts.schema).map(([key]) => key));
+      const shown = new Set(visibleFields(opts.schema, opts.auth, config).map(([key]) => key));
       const placed: Record<string, string> = {};
       const unplaced: string[] = [];
       for (const e of errors) {
@@ -255,14 +290,17 @@ export function makeExtensionConfigSection(opts: Options) {
         else unplaced.push(e.field ? `${e.field}: ${e.message}` : e.message);
       }
       setFieldErrors(placed);
+      // 字段错误画在"连接"标签里；停在别的标签上保存时把它切回来，错误才看得到。
+      if (Object.keys(placed).length > 0) setActiveTab(CONNECTION_TAB);
       throw new Error(unplaced.length > 0 ? unplaced.join("; ") : t("asset.extConfigInvalid"));
     }
 
     // 宿主保留键里的连接设置（代理链 / TLS），保存与测试连接共用；两者只差代理链各层
-    // 密钥的形态（保存时加密，测试时明文）。SSH 隧道存在资产列上，不在这里。
+    // 密钥的形态（保存时加密，测试时明文），TLS 私钥两边都是密文。SSH 隧道存在资产列上，不在这里。
     function hostConnectionOf(
       s: ExtensionFormState,
-      secretsByLayer: Parameters<typeof buildProxyChainJSON>[1]
+      secretsByLayer: Parameters<typeof buildProxyChainJSON>[1],
+      tlsKey: string
     ): HostConnectionConfig {
       const hostConnection: HostConnectionConfig = {};
       if (proxyChainEnabled) {
@@ -270,7 +308,7 @@ export function makeExtensionConfigSection(opts: Options) {
         if (chainJSON) hostConnection.proxyChain = chainJSON;
       }
       if (tlsEnabled) {
-        const tls = buildTLS(s.tls);
+        const tls = buildTLS(s.tls, tlsKey);
         if (tls) hostConnection.tls = tls;
       }
       return hostConnection;
@@ -279,7 +317,7 @@ export function makeExtensionConfigSection(opts: Options) {
     // 测试连接：表单当前值（含连接区）原样送出；未改动的密码字段整体去掉，宿主拿资产 id
     // （借道 AssetTestConfig.password——测试连接没有独立密码语义，这个类型专用的分发闭包
     // 把它当资产 id 解析）用已存密文补齐。新建资产没有资产 id，送空串。
-    async function buildTestConfig(s: ExtensionFormState): Promise<AssetTestConfig> {
+    async function buildTestConfig(s: ExtensionFormState, testCtx: AssetFormContext): Promise<AssetTestConfig> {
       if (s.status !== "ready") throw new Error(t(STATUS_REASON[s.status]));
       const config: Record<string, unknown> = { ...s.config };
       for (const field of secrets) {
@@ -298,7 +336,7 @@ export function makeExtensionConfigSection(opts: Options) {
       for (const layer of s.proxyChain.proxyChainLayers) {
         secretsByLayer[layer.id] = { password: layer.password || undefined, token: layer.token || undefined };
       }
-      const hostConnection = hostConnectionOf(s, secretsByLayer);
+      const hostConnection = hostConnectionOf(s, secretsByLayer, await resolveTLSKey(s.tls, testCtx.encryptPassword));
       if (sshTunnel && s.tunnel && s.sshTunnelId) {
         hostConnection.sshTunnelId = s.sshTunnelId;
       }
@@ -345,22 +383,36 @@ export function makeExtensionConfigSection(opts: Options) {
 
     // 未就绪时不渲染表单：原因已经由壳在保存按钮旁显示（saveDisabledReason），失败另有 toast。
     if (!opts.schema?.properties || state.status !== "ready") return null;
-    return (
-      <div className="flex flex-col gap-4">
-        <ExtensionConfigForm
-          configSchema={opts.schema}
-          value={state.config}
-          withheldSecrets={state.withheldSecrets}
-          fieldErrors={fieldErrors}
-          onChange={(config) => {
-            // 改动过的字段，其校验错误作废。
-            setFieldErrors((errs) =>
-              Object.fromEntries(Object.entries(errs).filter(([k]) => config[k] === state.config[k]))
-            );
-            patch({ config, status: "ready" });
-          }}
-        />
-        {(sshTunnel || proxyChainEnabled) && (
+    // 与内置类型同一套标签：只声明了 schema 字段的类型只有一组，ConfigTabs 退化成无标签面板。
+    const groups: ConfigGroup[] = [
+      {
+        key: CONNECTION_TAB,
+        label: "asset.tabConnection",
+        render: () => (
+          <div className="flex flex-col gap-4">
+            <ExtensionConfigForm
+              configSchema={opts.schema!}
+              auth={opts.auth}
+              value={state.config}
+              withheldSecrets={state.withheldSecrets}
+              fieldErrors={fieldErrors}
+              onChange={(config) => {
+                // 改动过的字段，其校验错误作废。
+                setFieldErrors((errs) =>
+                  Object.fromEntries(Object.entries(errs).filter(([k]) => config[k] === state.config[k]))
+                );
+                patch({ config, status: "ready" });
+              }}
+            />
+          </div>
+        ),
+      },
+    ];
+    if (sshTunnel || proxyChainEnabled) {
+      groups.push({
+        key: "tunnel",
+        label: "asset.tabTunnel",
+        render: () => (
           <ConnectionMethodFields
             value={state.proxyChain}
             onChange={(patchValue) => patch({ proxyChain: { ...state.proxyChain, ...patchValue } })}
@@ -378,68 +430,19 @@ export function makeExtensionConfigSection(opts: Options) {
                 : undefined
             }
           />
-        )}
-        {tlsEnabled && (
-          <div className="flex flex-col gap-3 rounded-lg border p-3">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="ext-tls-enabled">{t("asset.tls")}</Label>
-              <Switch
-                id="ext-tls-enabled"
-                checked={state.tls.enabled}
-                onCheckedChange={(enabled) => patch({ tls: { ...state.tls, enabled } })}
-              />
-            </div>
-            {state.tls.enabled && (
-              <>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="ext-tls-insecure">{t("asset.tlsInsecure")}</Label>
-                  <Switch
-                    id="ext-tls-insecure"
-                    checked={state.tls.insecure}
-                    onCheckedChange={(insecure) => patch({ tls: { ...state.tls, insecure } })}
-                  />
-                </div>
-                <div className="flex flex-col gap-[7px]">
-                  <Label htmlFor="ext-tls-server-name">{t("asset.tlsServerName")}</Label>
-                  <Input
-                    id="ext-tls-server-name"
-                    value={state.tls.serverName}
-                    onChange={(e) => patch({ tls: { ...state.tls, serverName: e.target.value } })}
-                  />
-                </div>
-                <div className="flex flex-col gap-[7px]">
-                  <Label htmlFor="ext-tls-ca-file">{t("asset.tlsCAFile")}</Label>
-                  <Input
-                    id="ext-tls-ca-file"
-                    value={state.tls.caFile}
-                    onChange={(e) => patch({ tls: { ...state.tls, caFile: e.target.value } })}
-                    placeholder="/path/to/ca.pem"
-                  />
-                </div>
-                <div className="flex flex-col gap-[7px]">
-                  <Label htmlFor="ext-tls-cert-file">{t("asset.tlsCertFile")}</Label>
-                  <Input
-                    id="ext-tls-cert-file"
-                    value={state.tls.certFile}
-                    onChange={(e) => patch({ tls: { ...state.tls, certFile: e.target.value } })}
-                    placeholder="/path/to/client.crt"
-                  />
-                </div>
-                <div className="flex flex-col gap-[7px]">
-                  <Label htmlFor="ext-tls-key-file">{t("asset.tlsKeyFile")}</Label>
-                  <Input
-                    id="ext-tls-key-file"
-                    value={state.tls.keyFile}
-                    onChange={(e) => patch({ tls: { ...state.tls, keyFile: e.target.value } })}
-                    placeholder="/path/to/client.key"
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    );
+        ),
+      });
+    }
+    if (tlsEnabled) {
+      groups.push({
+        key: "tls",
+        label: "asset.tabTls",
+        render: () => (
+          <Fields fields={TLS_FIELDS} state={state.tls} patch={(tls) => patch({ tls: { ...state.tls, ...tls } })} />
+        ),
+      });
+    }
+    return <ConfigTabs groups={groups} active={activeTab} onActiveChange={setActiveTab} />;
   }
   ExtensionConfigSection.displayName = `ExtensionConfigSection(${opts.assetType})`;
   return ExtensionConfigSection;

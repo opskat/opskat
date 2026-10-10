@@ -1,5 +1,6 @@
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
+import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
@@ -58,27 +59,7 @@ const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
         placeholder: "etcd.example.com",
         visibleWhen: (s) => s.tls,
       },
-      {
-        kind: "text",
-        key: "tlsCAFile",
-        label: "etcd.form.tlsCAFile",
-        placeholder: "/path/to/ca.pem",
-        visibleWhen: (s) => s.tls,
-      },
-      {
-        kind: "text",
-        key: "tlsCertFile",
-        label: "etcd.form.tlsCertFile",
-        placeholder: "/path/to/client.crt",
-        visibleWhen: (s) => s.tls,
-      },
-      {
-        kind: "text",
-        key: "tlsKeyFile",
-        label: "etcd.form.tlsKeyFile",
-        placeholder: "/path/to/client.key",
-        visibleWhen: (s) => s.tls,
-      },
+      ...tlsCertFields<EtcdFormState>((s) => s.tls),
     ],
   },
 ];
@@ -105,11 +86,12 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
         s,
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
         await resolveSaveProxyPassword(s, ctx.encryptPassword),
-        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
+        await resolveTLSKey(s, ctx.encryptPassword)
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
-    buildTest: async (s) => ({
+    buildTest: async (s, ctx) => ({
       assetType: "etcd",
       configJSON: buildEtcdConfig(
         s,
@@ -117,7 +99,8 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
         s.proxyPassword,
         Object.fromEntries(
           s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-        )
+        ),
+        await resolveTLSKey(s, ctx.encryptPassword)
       ),
       password: cred.value.password,
     }),

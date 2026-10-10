@@ -1,3 +1,4 @@
+import { TLS_CERT_DEFAULTS } from "@/components/asset/tlsCertConfig";
 import { describe, it, expect } from "vitest";
 import {
   buildEtcdConfig,
@@ -15,6 +16,8 @@ const FULL: EtcdFormState = {
   tls: true,
   tlsInsecure: true,
   tlsServerName: "etcd.x",
+  ...TLS_CERT_DEFAULTS,
+  tlsCertSource: "file",
   tlsCAFile: "/ca.pem",
   tlsCertFile: "/c.crt",
   tlsKeyFile: "/c.key",
@@ -117,6 +120,8 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
       tls: true,
       tlsInsecure: true,
       tlsServerName: "sn",
+      ...TLS_CERT_DEFAULTS,
+      tlsCertSource: "file",
       tlsCAFile: "/ca",
       tlsCertFile: "/cc",
       tlsKeyFile: "/ck",

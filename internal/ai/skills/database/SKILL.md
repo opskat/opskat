@@ -40,6 +40,7 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `read_only` | boolean | no | Connection-level read-only mode |
 | `query_timeout_seconds` | number | no | Per-query timeout override, seconds |
 | `ssh_asset_id` | number | no | SSH asset for remote connections; required by remote SQLite VFS |
+| `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain and the SSH tunnel, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset. Not together with `ssh_asset_id` |
 | `sqlite_source` | string | SQLite only | `"local"` (default) or `"remote_ssh_vfs"` |
 | `path` | string | SQLite only | Absolute database-file path |
 

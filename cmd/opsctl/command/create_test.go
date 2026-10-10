@@ -1052,6 +1052,16 @@ func TestCmdCreateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
 			wantWarning: "plaintext config files",
 		},
 		{
+			name:        "--config with a proxy chain layer password",
+			args:        []string{"--type", "redis", "--name", "rc-chain", "--config", `{"host":"localhost","proxy_chain":[{"type":"socks5","host":"10.0.0.5","port":1080,"password":"s3cret"}]}`},
+			wantWarning: "plaintext supplied in argv",
+		},
+		{
+			name:          "--config with a proxy chain that carries no secret",
+			args:          []string{"--type", "redis", "--name", "rc-chain", "--config", `{"host":"localhost","proxy_chain":[{"type":"socks5","host":"10.0.0.5","port":1080}]}`},
+			shouldNotWarn: true,
+		},
+		{
 			name:        "both --password and --config with sentinel_password should warn once",
 			args:        []string{"--type", "redis", "--name", "rc-sentinel", "--password", "nodepass", "--config", `{"mode":"sentinel","nodes":["10.0.0.1:26379"],"master_name":"mymaster","sentinel_password":"sentpass"}`},
 			wantWarning: "plaintext supplied in argv",

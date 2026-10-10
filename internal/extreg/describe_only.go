@@ -49,6 +49,21 @@ func extensionTypeSpec(extName string, m *extension.Manifest, at extension.Asset
 		SecretFields:        extension.PasswordFieldsFromSchema(at.ConfigSchema),
 		PolicyKind:          m.Policies.Type,
 		DefaultPolicyGroups: m.Policies.Default,
+		Connection:          connectionSpec(at),
+	}
+}
+
+// connectionSpec 翻译该类型交给宿主接管的连接项。没声明 connection 的类型一项都没有，
+// 自动化写入面也就不接受任何宿主连接字段。
+func connectionSpec(at extension.AssetTypeDef) assettype.ExtensionConnectionSpec {
+	if at.Connection == nil {
+		return assettype.ExtensionConnectionSpec{}
+	}
+	return assettype.ExtensionConnectionSpec{
+		ConfigKey:  extension.HostConnectionConfigKey,
+		SSHTunnel:  at.Connection.SSHTunnel,
+		ProxyChain: at.Connection.ProxyChain,
+		TLS:        at.Connection.TLS,
 	}
 }
 

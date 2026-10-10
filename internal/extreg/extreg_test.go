@@ -627,3 +627,43 @@ func TestExtensionGrantRequestRefusesCommandShapedPatterns(t *testing.T) {
 		})
 	}
 }
+
+// --- connection fields ---------------------------------------------------------
+
+func registerWithConnection(t *testing.T, conn *extension.ConnectionDef) {
+	t.Helper()
+	m := testManifest()
+	m.AssetTypes[0].Connection = conn
+	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
+	localized := m.Localized(func(k string) string { return k })
+	require.NoError(t, register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill"))
+	t.Cleanup(func() { Unregister(m.Name) })
+}
+
+func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {
+	registerWithConnection(t, &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true, TLS: true})
+
+	prepared, err := assettype.PrepareCreate("acme-store", map[string]any{
+		"endpoint": "https://acme.test", "ssh_asset_id": float64(3), "tls": true, "tls_ca_pem": "CA-PEM",
+	})
+	require.NoError(t, err)
+
+	asset := &asset_entity.Asset{Type: "acme-store"}
+	require.NoError(t, prepared.Handler.ApplyCreateArgs(context.Background(), asset, prepared.Config))
+	// The stored config is what the extension host's dialer reads: its reserved key.
+	var stored map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(asset.Config), &stored))
+	assert.JSONEq(t, `{"tls":{"enabled":true,"caCert":"CA-PEM"}}`, string(stored[extension.HostConnectionConfigKey]))
+	assert.Equal(t, int64(3), asset.SSHTunnelID)
+}
+
+func TestHelpListsTheConfigFieldsAnAssetAccepts(t *testing.T) {
+	registerWithConnection(t, &extension.ConnectionDef{SSHTunnel: true, TLS: true})
+
+	help, ok := permission.HelpFor("acme-store")
+	require.True(t, ok)
+	for _, field := range []string{"`endpoint`", "`token`", "`ssh_asset_id`", "`tls_ca_pem`", "`tls_key_pem`"} {
+		assert.Contains(t, help, field)
+	}
+	assert.NotContains(t, help, "`proxy_chain`", "a connection item the type did not declare is not offered")
+}

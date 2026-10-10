@@ -1,3 +1,4 @@
+import { TLS_CERT_DEFAULTS } from "@/components/asset/tlsCertConfig";
 import { describe, it, expect } from "vitest";
 import {
   buildRedisConfig,
@@ -37,6 +38,8 @@ const FULL: RedisFormState = {
   tls: true,
   tlsInsecure: true,
   tlsServerName: "redis.x",
+  ...TLS_CERT_DEFAULTS,
+  tlsCertSource: "file",
   tlsCAFile: "/ca.pem",
   tlsCertFile: "/c.crt",
   tlsKeyFile: "/c.key",
@@ -145,6 +148,8 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
       tls: true,
       tlsInsecure: true,
       tlsServerName: "sn",
+      ...TLS_CERT_DEFAULTS,
+      tlsCertSource: "file",
       tlsCAFile: "/ca",
       tlsCertFile: "/cc",
       tlsKeyFile: "/ck",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -31,6 +32,20 @@ type ExtensionTypeSpec struct {
 	PolicyKind string
 	// DefaultPolicyGroups 是 manifest policies.default 声明的默认权限组 ID。
 	DefaultPolicyGroups []string
+	// Connection 是该类型声明交给宿主接管的连接项。
+	Connection ExtensionConnectionSpec
+}
+
+// ExtensionConnectionSpec 是 manifest assetTypes[].connection 的翻译：声明了哪一项，
+// 自动化写入面（opsctl / put_asset）就多接受对应的宿主连接字段（见 connection_args.go），
+// 字段名与内置类型一致。
+type ExtensionConnectionSpec struct {
+	// ConfigKey 是资产 Config JSON 里宿主保留的那个键
+	// （pkg/extension.HostConnectionConfigKey），代理链与 TLS 存在它下面。
+	ConfigKey  string
+	SSHTunnel  bool
+	ProxyChain bool
+	TLS        bool
 }
 
 // RegisterExtensionType 按 spec 注册一个由 manifest 驱动的资产类型处理器。
@@ -42,15 +57,40 @@ func RegisterExtensionType(spec ExtensionTypeSpec) error {
 	if len(spec.ConfigFields) == 0 {
 		return fmt.Errorf("extension asset type %q declares no configSchema properties", spec.Type)
 	}
+	hostFields, _ := extensionConnectionFields(spec.Connection)
+	for _, field := range spec.ConfigFields {
+		if slices.Contains(hostFields, field) {
+			return fmt.Errorf("extension asset type %q declares configSchema property %q, which is the host's own connection field for a connection item the type opts into", spec.Type, field)
+		}
+	}
 	return RegisterDynamic(newExtensionHandler(spec))
 }
 
+// extensionConnectionFields 返回该类型声明的连接项换来的宿主连接字段：全部字段，以及其中
+// 可进审批视图的部分。
+func extensionConnectionFields(conn ExtensionConnectionSpec) (config, approval []string) {
+	if conn.SSHTunnel {
+		config = append(config, argSSHAsset)
+		approval = append(approval, argSSHAsset)
+	}
+	if conn.ProxyChain {
+		config = append(config, argProxyChain)
+		approval = append(approval, argProxyChain)
+	}
+	if conn.TLS {
+		config = append(config, tlsConfigArgs()...)
+		approval = append(approval, tlsApprovalArgs()...)
+	}
+	return config, approval
+}
+
 type extensionHandler struct {
-	spec     ExtensionTypeSpec
-	secrets  map[string]struct{}
-	required []string
-	config   []string
-	approval []string
+	spec       ExtensionTypeSpec
+	secrets    map[string]struct{}
+	required   []string
+	config     []string
+	approval   []string
+	connection map[string]struct{}
 }
 
 func newExtensionHandler(spec ExtensionTypeSpec) *extensionHandler {
@@ -64,12 +104,18 @@ func newExtensionHandler(spec ExtensionTypeSpec) *extensionHandler {
 			approval = append(approval, f)
 		}
 	}
+	hostConfig, hostApproval := extensionConnectionFields(spec.Connection)
+	connection := make(map[string]struct{}, len(hostConfig))
+	for _, f := range hostConfig {
+		connection[f] = struct{}{}
+	}
 	return &extensionHandler{
-		spec:     spec,
-		secrets:  secrets,
-		required: sortedUnique(spec.RequiredFields),
-		config:   sortedUnique(spec.ConfigFields),
-		approval: sortedUnique(approval),
+		spec:       spec,
+		secrets:    secrets,
+		required:   sortedUnique(spec.RequiredFields),
+		config:     sortedUnique(withFields(spec.ConfigFields, hostConfig...)),
+		approval:   sortedUnique(withFields(approval, hostApproval...)),
+		connection: connection,
 	}
 }
 
@@ -132,9 +178,10 @@ func (h *extensionHandler) DefaultPolicy() any {
 
 func (h *extensionHandler) PolicyKind() string { return h.spec.PolicyKind }
 
-// AutomationContract 是最小实现：只按 configSchema 校验字段名与必填项，不支持托管凭证
-// （CredentialPlan 恒为 None、BindCredential 为 nil，因此 put_asset 传 credential_id
-// 会被 rejectUnknownFields 挡在门外，除非 schema 自己声明了这个字段）。
+// AutomationContract 按 configSchema 校验字段名与必填项，外加该类型声明的连接项对应的
+// 宿主连接字段（ssh_asset_id / proxy_chain / tls*）。不支持托管凭证（CredentialPlan 恒为
+// None、BindCredential 为 nil，因此 put_asset 传 credential_id 会被 rejectUnknownFields
+// 挡在门外，除非 schema 自己声明了这个字段）。
 func (h *extensionHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(h.config, h.approval, nil, nil, nil)
 }
@@ -153,21 +200,96 @@ func (h *extensionHandler) ValidateCreateArgs(args map[string]any) error {
 }
 
 func (h *extensionHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
-	cfg, err := h.encodeConfig(map[string]any{}, args)
+	return h.apply(a, map[string]any{}, args)
+}
+
+func (h *extensionHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
+	return h.apply(a, h.decodeConfig(a), args)
+}
+
+// apply 把 args 分成两半落库：扩展自己的 configSchema 字段进 Config 顶层，宿主连接字段进
+// SSHTunnelID 列与 Config 的宿主保留键——扩展永远看不到后者。
+func (h *extensionHandler) apply(a *asset_entity.Asset, base, args map[string]any) error {
+	own := make(map[string]any, len(args))
+	conn := make(map[string]any)
+	for k, v := range args {
+		if _, ok := h.connection[k]; ok {
+			conn[k] = v
+			continue
+		}
+		own[k] = v
+	}
+	cfg, err := h.encodeConfig(base, own)
 	if err != nil {
+		return err
+	}
+	if err := h.applyConnection(a, cfg, conn); err != nil {
 		return err
 	}
 	a.ExtensionName = h.spec.ExtensionName
 	return h.storeConfig(a, cfg)
 }
 
-func (h *extensionHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
-	cfg, err := h.encodeConfig(h.decodeConfig(a), args)
-	if err != nil {
+// applyConnection 把宿主连接字段写成资产表单存的那份结构（asset_entity.ExtensionConnectionConfig），
+// 与已存的合并：只动本次给出的字段。
+func (h *extensionHandler) applyConnection(a *asset_entity.Asset, cfg, args map[string]any) error {
+	if len(args) == 0 {
+		return nil
+	}
+	key := h.spec.Connection.ConfigKey
+	var conn asset_entity.ExtensionConnectionConfig
+	if stored, ok := cfg[key]; ok {
+		raw, err := json.Marshal(stored)
+		if err != nil {
+			return fmt.Errorf("encode %s connection config: %w", h.spec.Type, err)
+		}
+		if err := json.Unmarshal(raw, &conn); err != nil {
+			return fmt.Errorf("parse %s connection config: %w", h.spec.Type, err)
+		}
+	}
+	if _, ok := args[argSSHAsset]; ok {
+		a.SSHTunnelID = ArgInt64(args, argSSHAsset)
+	}
+	if err := applyProxyChainArg(a, args, &conn.ProxyChain); err != nil {
 		return err
 	}
-	a.ExtensionName = h.spec.ExtensionName
-	return h.storeConfig(a, cfg)
+	if err := applyExtensionTLSArgs(args, &conn); err != nil {
+		return err
+	}
+	if conn.ProxyChain == nil && conn.TLS == nil {
+		delete(cfg, key)
+		return nil
+	}
+	cfg[key] = conn
+	return nil
+}
+
+func applyExtensionTLSArgs(args map[string]any, conn *asset_entity.ExtensionConnectionConfig) error {
+	tls := asset_entity.ExtensionTLSConfig{}
+	if conn.TLS != nil {
+		tls = *conn.TLS
+	}
+	if _, ok := args[argTLS]; ok {
+		tls.Enabled = ArgBool(args, argTLS)
+	}
+	if _, ok := args[argTLSInsec]; ok {
+		tls.Insecure = ArgBool(args, argTLSInsec)
+	}
+	if _, ok := args[argTLSServer]; ok {
+		tls.ServerName = ArgString(args, argTLSServer)
+	}
+	if err := applyTLSCertArgs(args, tlsCertStore{
+		caFile: &tls.CAFile, certFile: &tls.CertFile, keyFile: &tls.KeyFile,
+		caPEM: &tls.CACert, certPEM: &tls.ClientCert, keyPEM: &tls.ClientKey,
+	}); err != nil {
+		return err
+	}
+	if tls == (asset_entity.ExtensionTLSConfig{}) {
+		conn.TLS = nil
+		return nil
+	}
+	conn.TLS = &tls
+	return nil
 }
 
 // encodeConfig 把 args 合并进 base，并把 secret 字段加密。已加密的存量值不会被重复
