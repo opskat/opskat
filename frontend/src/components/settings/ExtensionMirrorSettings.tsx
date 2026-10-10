@@ -16,16 +16,17 @@ import {
 import { GetExtensionMirror, SetExtensionMirror } from "../../../wailsjs/go/system/System";
 import { EXTENSION_MIRROR_SETTING_ID } from "./downloadMirror";
 
-const PRESET_HOST = "ghcr.nju.edu.cn";
-type Mode = "direct" | "preset" | "custom";
+// 预置镜像：保存值就是选项值本身，写法同自定义（主机，可带路径前缀）。
+const PRESETS = ["ghcr.nju.edu.cn", "katch.ggnb.top/ghcr.io"];
 
-const modeOf = (host: string): Mode => (host === "" ? "direct" : host === PRESET_HOST ? "preset" : "custom");
+// 下拉的取值："direct"、"custom"，或 PRESETS 里的一项。
+const modeOf = (host: string): string => (host === "" ? "direct" : PRESETS.includes(host) ? host : "custom");
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 // 「扩展下载」设置：选择扩展 OCI 包的拉取主机。已保存值为主机名（空 = 直连 ghcr.io）。
 export function ExtensionMirrorSettings() {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<Mode>("direct");
+  const [mode, setMode] = useState("direct");
   const [customHost, setCustomHost] = useState("");
   const [error, setError] = useState("");
 
@@ -48,12 +49,11 @@ export function ExtensionMirrorSettings() {
     }
   };
 
-  const handleModeChange = (value: string) => {
-    const next = value as Mode;
+  const handleModeChange = (next: string) => {
     setMode(next);
     setError("");
     if (next === "direct") void save("");
-    else if (next === "preset") void save(PRESET_HOST);
+    else if (next !== "custom") void save(next);
   };
 
   const handleCustomSave = () => {
@@ -80,7 +80,11 @@ export function ExtensionMirrorSettings() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="direct">{t("extension.mirror.direct")}</SelectItem>
-              <SelectItem value="preset">{PRESET_HOST}</SelectItem>
+              {PRESETS.map((host) => (
+                <SelectItem key={host} value={host}>
+                  {host}
+                </SelectItem>
+              ))}
               <SelectItem value="custom">{t("extension.mirror.custom")}</SelectItem>
             </SelectContent>
           </Select>

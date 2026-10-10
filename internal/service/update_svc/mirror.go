@@ -14,6 +14,7 @@ var availableMirrors = []MirrorInfo{
 	{ID: "github", Name: "GitHub", URL: ""},
 	{ID: "ghfast", Name: "ghfast.top", URL: "https://ghfast.top/"},
 	{ID: "gh-proxy", Name: "gh-proxy.com", URL: "https://gh-proxy.com/"},
+	{ID: "katch", Name: "katch.ggnb.top", URL: "https://katch.ggnb.top/"},
 }
 
 // GetAvailableMirrors 返回可用的下载镜像列表
