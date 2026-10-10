@@ -2,8 +2,6 @@ package connpool
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -115,51 +113,21 @@ func (d forwardDialer) DialAsset(_ context.Context, _ int64) (*ssh.Client, []io.
 
 func startForwardRecorder(t *testing.T) (*forwardRecorder, *sshpool.Pool) {
 	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	signer, err := ssh.NewSignerFromKey(priv)
-	require.NoError(t, err)
-	cfg := &ssh.ServerConfig{NoClientAuth: true}
-	cfg.AddHostKey(signer)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
 	rec := &forwardRecorder{}
-	go func() {
-		for {
-			conn, err := ln.Accept()
+	addr := startSSHServer(t, func(chans <-chan ssh.NewChannel) {
+		for nc := range chans {
+			target, err := directTCPIPTarget(nc)
 			if err != nil {
-				return
+				_ = nc.Reject(ssh.ConnectionFailed, "bad payload")
+				continue
 			}
-			go func() {
-				sc, chans, reqs, err := ssh.NewServerConn(conn, cfg)
-				if err != nil {
-					return
-				}
-				defer func() { _ = sc.Close() }()
-				go ssh.DiscardRequests(reqs)
-				for nc := range chans {
-					var d struct {
-						DestAddr string
-						DestPort uint32
-						SrcAddr  string
-						SrcPort  uint32
-					}
-					if err := ssh.Unmarshal(nc.ExtraData(), &d); err != nil {
-						_ = nc.Reject(ssh.ConnectionFailed, "bad payload")
-						continue
-					}
-					target := net.JoinHostPort(d.DestAddr, strconv.Itoa(int(d.DestPort)))
-					rec.mu.Lock()
-					rec.targets = append(rec.targets, target)
-					rec.mu.Unlock()
-					_ = nc.Reject(ssh.ConnectionFailed, "recorded")
-				}
-			}()
+			rec.mu.Lock()
+			rec.targets = append(rec.targets, target)
+			rec.mu.Unlock()
+			_ = nc.Reject(ssh.ConnectionFailed, "recorded")
 		}
-	}()
-	pool := sshpool.NewPool(forwardDialer{addr: ln.Addr().String()}, time.Minute)
+	})
+	pool := sshpool.NewPool(forwardDialer{addr: addr}, time.Minute)
 	t.Cleanup(pool.Close)
 	return rec, pool
 }

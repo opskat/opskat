@@ -22,6 +22,7 @@ type poolEntry struct {
 	client   *ssh.Client
 	closers  []io.Closer // 跳板机等中间连接
 	assetID  int64
+	dialedAt time.Time
 	lastUsed time.Time
 	refCount int
 	mu       sync.Mutex
@@ -63,10 +64,28 @@ func (e *poolEntry) isAlive() bool {
 	return err == nil
 }
 
+// releaseRefused 减少引用计数；已无持有者且连接建立超过 minAge 时关闭它并返回 true。
+func (e *poolEntry) releaseRefused(minAge time.Duration) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.refCount--
+	e.lastUsed = time.Now()
+	if e.refCount > 0 || time.Since(e.dialedAt) < minAge {
+		return false
+	}
+	e.closeLocked()
+	return true
+}
+
 // close 关闭连接及所有中间连接
 func (e *poolEntry) close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.closeLocked()
+}
+
+// closeLocked 是 close 的实现，调用方须持有 e.mu。
+func (e *poolEntry) closeLocked() {
 	if e.closed {
 		return
 	}
@@ -98,15 +117,36 @@ type Pool struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+
+	// refusedRedialInterval 见 WithRefusedRedialInterval。
+	refusedRedialInterval time.Duration
+}
+
+// defaultRefusedRedialInterval 是 WithRefusedRedialInterval 的默认值。
+const defaultRefusedRedialInterval = 30 * time.Second
+
+// Option 调整连接池的行为。
+type Option func(*Pool)
+
+// WithRefusedRedialInterval 设置一条连接建立多久之后，才会因为拒绝转发而被弃用重拨
+// （见 ReleaseRefused）。它给重拨限速：服务器确实禁止转发时，驱动的重试循环每个间隔
+// 最多换来一次 SSH 登录，而不是每次失败都登录一次。
+func WithRefusedRedialInterval(d time.Duration) Option {
+	return func(p *Pool) { p.refusedRedialInterval = d }
 }
 
 // NewPool 创建连接池
-func NewPool(dialer PoolDialer, idleTimeout time.Duration) *Pool {
+func NewPool(dialer PoolDialer, idleTimeout time.Duration, opts ...Option) *Pool {
 	p := &Pool{
 		entries:  make(map[int64]*poolEntry),
 		dialer:   dialer,
 		idleTime: idleTimeout,
 		done:     make(chan struct{}),
+
+		refusedRedialInterval: defaultRefusedRedialInterval,
+	}
+	for _, opt := range opts {
+		opt(p)
 	}
 	p.wg.Add(1)
 	go p.cleanupLoop()
@@ -139,6 +179,7 @@ func (p *Pool) Get(ctx context.Context, assetID int64) (*ssh.Client, error) {
 		client:   client,
 		closers:  closers,
 		assetID:  assetID,
+		dialedAt: time.Now(),
 		lastUsed: time.Now(),
 		refCount: 1,
 	}
@@ -178,6 +219,28 @@ func (p *Pool) Release(assetID int64) {
 	if ok {
 		entry.release()
 	}
+}
+
+// ReleaseRefused 释放连接引用，并报告 client 刚以 ssh.Prohibited 拒绝了一次通道打开。
+//
+// sshd 的转发策略（AllowTcpForwarding / PermitOpen）在连接建立时就定下了，之后改配置
+// 再 reload 也只影响新连接，所以这条连接留在池里就会一直拒绝下去。它已无其他持有者、
+// 且建立已超过 refusedRedialInterval 时，把它移出池并关闭，返回 true：调用方重新 Get
+// 会得到一条按服务器当前策略建立的新连接。仍有持有者时不动它 —— 别的隧道还在用。
+func (p *Pool) ReleaseRefused(assetID int64, client *ssh.Client) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, ok := p.entries[assetID]
+	if !ok || entry.client != client {
+		// client 已被移出池（资产保存、连接断开），池里没有它的引用可释放；再 Get 就是另一条连接。
+		return true
+	}
+	if !entry.releaseRefused(p.refusedRedialInterval) {
+		return false
+	}
+	delete(p.entries, assetID)
+	logger.Default().Info("closed connection that refused forwarding", zap.Int64("assetID", assetID))
+	return true
 }
 
 // Remove 强制移除并关闭连接
