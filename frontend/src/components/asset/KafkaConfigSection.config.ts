@@ -8,9 +8,16 @@ import {
   type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
+import {
+  TLS_CERT_DEFAULTS,
+  tlsCertsFromJSON,
+  tlsCertsToJSON,
+  type TLSCertFormFields,
+  type TLSCertJSON,
+} from "./tlsCertConfig";
 
 /** 序列化后的 kafka config 形状(键序锁旧 save 分支)。 */
-export interface KafkaConfig {
+export interface KafkaConfig extends TLSCertJSON {
   brokers: string[];
   client_id?: string;
   sasl_mechanism?: string;
@@ -20,9 +27,6 @@ export interface KafkaConfig {
   tls?: boolean;
   tls_insecure?: boolean;
   tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
   request_timeout_seconds?: number;
   message_preview_bytes?: number;
   message_fetch_limit?: number;
@@ -67,7 +71,7 @@ export interface KafkaConnectClusterConfig {
 }
 
 /** kafka 主连接 + 选项的非凭据/非伴随子状态(伴随由 section 单独持有)。 */
-export interface KafkaFormState extends ConnectionFormFields {
+export interface KafkaFormState extends ConnectionFormFields, TLSCertFormFields {
   brokersText: string;
   clientId: string;
   saslMechanism: string;
@@ -76,9 +80,6 @@ export interface KafkaFormState extends ConnectionFormFields {
   tls: boolean;
   tlsInsecure: boolean;
   tlsServerName: string;
-  tlsCAFile: string;
-  tlsCertFile: string;
-  tlsKeyFile: string;
   requestTimeoutSeconds: number;
   messagePreviewBytes: number;
   messageFetchLimit: number;
@@ -92,13 +93,11 @@ export const KAFKA_DEFAULTS: KafkaFormState = {
   tls: false,
   tlsInsecure: false,
   tlsServerName: "",
-  tlsCAFile: "",
-  tlsCertFile: "",
-  tlsKeyFile: "",
   requestTimeoutSeconds: 30,
   messagePreviewBytes: 4096,
   messageFetchLimit: 50,
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
 };
 
 /** 把 brokers 文本拆为非空 broker 列表(逗号/换行分隔,各自 trim)。 */
@@ -110,11 +109,13 @@ export function kafkaBrokers(brokersText: string): string[] {
 }
 
 /** 主连接 base config(无凭据、无伴随;键序锁旧 buildKafkaConfig,末尾 ssh_asset_id|proxy 按 connectionType 二选一)。
- *  section 据此追加主凭据/伴随后再 stringify。proxyPassword / proxyChainSecrets 由调用方预解析。 */
+ *  section 据此追加主凭据/伴随后再 stringify。proxyPassword / proxyChainSecrets 由调用方预解析;
+ *  tlsKey 是 resolveTLSKey 预解析出的 TLS 私钥密文(保存与测试相同)。 */
 export function buildKafkaBaseConfig(
   state: KafkaFormState,
   proxyPassword = "",
-  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
+  tlsKey = ""
 ): KafkaConfig {
   const cfg: KafkaConfig = {
     brokers: kafkaBrokers(state.brokersText),
@@ -129,9 +130,7 @@ export function buildKafkaBaseConfig(
   if (state.tls) cfg.tls = true;
   if (state.tls && state.tlsInsecure) cfg.tls_insecure = true;
   if (state.tls && state.tlsServerName) cfg.tls_server_name = state.tlsServerName;
-  if (state.tls && state.tlsCAFile) cfg.tls_ca_file = state.tlsCAFile;
-  if (state.tls && state.tlsCertFile) cfg.tls_cert_file = state.tlsCertFile;
-  if (state.tls && state.tlsKeyFile) cfg.tls_key_file = state.tlsKeyFile;
+  if (state.tls) Object.assign(cfg, tlsCertsToJSON(state, tlsKey));
   if (state.requestTimeoutSeconds > 0) cfg.request_timeout_seconds = state.requestTimeoutSeconds;
   if (state.messagePreviewBytes > 0) cfg.message_preview_bytes = state.messagePreviewBytes;
   if (state.messageFetchLimit > 0) cfg.message_fetch_limit = state.messageFetchLimit;
@@ -177,9 +176,7 @@ export function parseKafkaConfig(configJSON: string, assetTunnelId = 0): KafkaFo
       tls: cfg.tls || false,
       tlsInsecure: cfg.tls_insecure || false,
       tlsServerName: cfg.tls_server_name || "",
-      tlsCAFile: cfg.tls_ca_file || "",
-      tlsCertFile: cfg.tls_cert_file || "",
-      tlsKeyFile: cfg.tls_key_file || "",
+      ...tlsCertsFromJSON(cfg),
       requestTimeoutSeconds: cfg.request_timeout_seconds || 30,
       messagePreviewBytes: cfg.message_preview_bytes || 4096,
       messageFetchLimit: cfg.message_fetch_limit || 50,

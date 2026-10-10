@@ -6,7 +6,7 @@ import { makeExtensionConfigSection } from "@/components/asset/ExtensionConfigSe
 import { makeExtensionDetailInfoCard } from "@/components/asset/detail/ExtensionDetailInfoCard";
 import type { AssetTypeDefinition, PolicyDefinition } from "@/lib/assetTypes/types";
 import type { ExtensionConfigSchema } from "./configSchema";
-import type { ExtConnection, ExtManifest } from "./types";
+import type { ExtAssetType, ExtManifest } from "./types";
 
 const registeredTypes = new Map<string, string[]>(); // extension name → asset types
 
@@ -20,9 +20,7 @@ export function registerExtensionAssetTypes(name: string, manifest: ExtManifest)
   unregisterExtensionAssetTypes(name);
   const types: string[] = [];
   for (const at of manifest.assetTypes ?? []) {
-    registerAssetType(
-      buildDefinition(name, manifest, at.type, at.i18n?.name, at.configSchema, at.connection, !!at.testConnection)
-    );
+    registerAssetType(buildDefinition(name, manifest, at));
     types.push(at.type);
   }
   if (types.length > 0) registeredTypes.set(name, types);
@@ -35,17 +33,12 @@ export function unregisterExtensionAssetTypes(name: string): void {
   registeredTypes.delete(name);
 }
 
-function buildDefinition(
-  extensionName: string,
-  manifest: ExtManifest,
-  type: string,
-  labelKey: string | undefined,
-  rawSchema: Record<string, unknown> | undefined,
-  connection: ExtConnection | undefined,
-  testConnection: boolean
-): AssetTypeDefinition {
+function buildDefinition(extensionName: string, manifest: ExtManifest, at: ExtAssetType): AssetTypeDefinition {
   const ns = `ext-${extensionName}`;
-  const schema = rawSchema as ExtensionConfigSchema | undefined;
+  const { type, connection, auth } = at;
+  const labelKey = at.i18n?.name;
+  const testConnection = !!at.testConnection;
+  const schema = at.configSchema as ExtensionConfigSchema | undefined;
   // slot="asset.connect" 是 manifest 里声明"双击这个资产打开哪个页面"的方式。
   const connectPage = manifest.frontend?.pages?.find((p) => p.slot === "asset.connect");
 
@@ -71,12 +64,14 @@ function buildDefinition(
       assetType: type,
       schema,
       connection,
+      auth,
     }),
     ConfigSection: makeExtensionConfigSection({
       extensionName,
       assetType: type,
       schema,
       connection,
+      auth,
       testConnection,
     }),
     // "测试连接"按钮只在 describe() 声明了处理器时出现；表单走与内置类型一样的

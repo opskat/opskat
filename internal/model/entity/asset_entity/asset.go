@@ -227,6 +227,9 @@ type RedisConfig struct {
 	TLSCAFile             string            `json:"tls_ca_file,omitempty"`             // CA 证书路径
 	TLSCertFile           string            `json:"tls_cert_file,omitempty"`           // 客户端证书路径
 	TLSKeyFile            string            `json:"tls_key_file,omitempty"`            // 客户端私钥路径
+	TLSCAPEM              string            `json:"tls_ca_pem,omitempty"`              // CA 证书内容（PEM），与路径二选一
+	TLSCertPEM            string            `json:"tls_cert_pem,omitempty"`            // 客户端证书内容（PEM），与路径二选一
+	TLSKeyPEM             string            `json:"tls_key_pem,omitempty"`             // 客户端私钥内容（PEM），加密存储，与路径二选一
 	CommandTimeoutSeconds int               `json:"command_timeout_seconds,omitempty"` // Redis 命令超时，0 使用默认值
 	ScanPageSize          int               `json:"scan_page_size,omitempty"`          // Key 扫描分页大小，0 使用默认值
 	KeySeparator          string            `json:"key_separator,omitempty"`           // 树形视图 key 分隔符，默认 ":"
@@ -259,6 +262,9 @@ type EtcdConfig struct {
 	TLSCAFile     string `json:"tls_ca_file,omitempty"`
 	TLSCertFile   string `json:"tls_cert_file,omitempty"`
 	TLSKeyFile    string `json:"tls_key_file,omitempty"`
+	TLSCAPEM      string `json:"tls_ca_pem,omitempty"`   // CA 证书内容（PEM），与路径二选一
+	TLSCertPEM    string `json:"tls_cert_pem,omitempty"` // 客户端证书内容（PEM），与路径二选一
+	TLSKeyPEM     string `json:"tls_key_pem,omitempty"`  // 客户端私钥内容（PEM），加密存储，与路径二选一
 
 	DialTimeoutSeconds    int `json:"dial_timeout_seconds,omitempty"`
 	CommandTimeoutSeconds int `json:"command_timeout_seconds,omitempty"`
@@ -304,6 +310,9 @@ type KafkaConfig struct {
 	TLSCAFile             string                    `json:"tls_ca_file,omitempty"`
 	TLSCertFile           string                    `json:"tls_cert_file,omitempty"`
 	TLSKeyFile            string                    `json:"tls_key_file,omitempty"`
+	TLSCAPEM              string                    `json:"tls_ca_pem,omitempty"`   // CA 证书内容（PEM），与路径二选一
+	TLSCertPEM            string                    `json:"tls_cert_pem,omitempty"` // 客户端证书内容（PEM），与路径二选一
+	TLSKeyPEM             string                    `json:"tls_key_pem,omitempty"`  // 客户端私钥内容（PEM），加密存储，与路径二选一
 	RequestTimeoutSeconds int                       `json:"request_timeout_seconds,omitempty"`
 	MessagePreviewBytes   int                       `json:"message_preview_bytes,omitempty"`
 	MessageFetchLimit     int                       `json:"message_fetch_limit,omitempty"`
@@ -1105,7 +1114,7 @@ func (a *Asset) validateKafka() error {
 	default:
 		return fmt.Errorf("不支持的Kafka SASL机制: %s", cfg.SASLMechanism)
 	}
-	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+	if (cfg.TLSCertFile == "" && cfg.TLSCertPEM == "") != (cfg.TLSKeyFile == "" && cfg.TLSKeyPEM == "") {
 		return errors.New("kafka TLS客户端证书和私钥必须同时配置")
 	}
 	if cfg.RequestTimeoutSeconds < 0 || cfg.RequestTimeoutSeconds > 300 {

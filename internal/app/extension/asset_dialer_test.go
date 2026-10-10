@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/internal/connpool/connpooltest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
@@ -275,10 +277,10 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 			So(tlsConfig, ShouldBeNil)
 		})
 
-		Convey("a TLS CA file that cannot be read fails the dial, with no fallback to unverified", func() {
+		Convey("a CA certificate that does not parse fails the dial, with no fallback to unverified", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(23)).Return(&asset_entity.Asset{
 				ID: 23, Name: "es-cluster", Type: "es-cluster",
-				Config: tlsConfigJSON(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}),
+				Config: tlsConfigJSON(map[string]any{"enabled": true, "caCert": "not a certificate"}),
 			}, nil)
 
 			dial, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 23)
@@ -286,6 +288,49 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 			So(tlsConfig, ShouldBeNil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "23")
+		})
+
+		Convey("a TLS CA file that cannot be read fails the dial, with no fallback to unverified", func() {
+			assets.EXPECT().Find(gomock.Any(), int64(26)).Return(&asset_entity.Asset{
+				ID: 26, Name: "es-cluster", Type: "es-cluster",
+				Config: tlsConfigJSON(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}),
+			}, nil)
+
+			_, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 26)
+			So(tlsConfig, ShouldBeNil)
+			So(err, ShouldNotBeNil)
+		})
+
+		Convey("certificates stored in the config are used as they are, the client key decrypted for the dial", func() {
+			credential_svc.SetDefault(credential_svc.New("dialer-test-key", []byte("0123456789abcdef")))
+			certPEM, keyPEM := connpooltest.SelfSignedPEM(t)
+			encryptedKey, err := credential_svc.Default().Encrypt(string(keyPEM))
+			So(err, ShouldBeNil)
+			assets.EXPECT().Find(gomock.Any(), int64(24)).Return(&asset_entity.Asset{
+				ID: 24, Name: "es-cluster", Type: "es-cluster",
+				Config: tlsConfigJSON(map[string]any{
+					"enabled": true, "caCert": string(certPEM), "clientCert": string(certPEM), "clientKey": encryptedKey,
+				}),
+			}, nil)
+
+			_, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 24)
+			So(err, ShouldBeNil)
+			So(tlsConfig.RootCAs, ShouldNotBeNil)
+			So(tlsConfig.Certificates, ShouldHaveLength, 1)
+		})
+
+		Convey("a stored client key that does not decrypt fails the dial", func() {
+			credential_svc.SetDefault(credential_svc.New("dialer-test-key", []byte("0123456789abcdef")))
+			certPEM, keyPEM := connpooltest.SelfSignedPEM(t)
+			assets.EXPECT().Find(gomock.Any(), int64(25)).Return(&asset_entity.Asset{
+				ID: 25, Name: "es-cluster", Type: "es-cluster",
+				// the key as typed, never encrypted: not something the form can store
+				Config: tlsConfigJSON(map[string]any{"enabled": true, "clientCert": string(certPEM), "clientKey": string(keyPEM)}),
+			}, nil)
+
+			_, tlsConfig, _, err := e.NewAssetDialer("es").DialContextFor(ctx, 25)
+			So(tlsConfig, ShouldBeNil)
+			So(err, ShouldNotBeNil)
 		})
 	})
 }

@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/internal/connpool/connpooltest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
@@ -138,14 +140,40 @@ func TestAssetDialerForConfig(t *testing.T) {
 			So(tlsConfig, ShouldBeNil)
 		})
 
-		Convey("a TLS CA file that cannot be read fails, with no fallback to unverified", func() {
-			tls, _ := json.Marshal(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"})
+		Convey("a CA certificate that does not parse fails, with no fallback to unverified", func() {
+			tls, _ := json.Marshal(map[string]any{"enabled": true, "caCert": "not a certificate"})
 			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				TLS: tls,
 			})
 			So(dial, ShouldBeNil)
 			So(tlsConfig, ShouldBeNil)
 			So(err, ShouldNotBeNil)
+		})
+
+		Convey("a TLS CA file that cannot be read fails, with no fallback to unverified", func() {
+			tls, _ := json.Marshal(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"})
+			_, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+				TLS: tls,
+			})
+			So(tlsConfig, ShouldBeNil)
+			So(err, ShouldNotBeNil)
+		})
+
+		// The form encrypts a client key before it leaves, for a test as for a save.
+		Convey("submitted certificate content is used as it is, the client key decrypted for the dial", func() {
+			credential_svc.SetDefault(credential_svc.New("dialer-test-key", []byte("0123456789abcdef")))
+			certPEM, keyPEM := connpooltest.SelfSignedPEM(t)
+			encryptedKey, err := credential_svc.Default().Encrypt(string(keyPEM))
+			So(err, ShouldBeNil)
+			tls, _ := json.Marshal(map[string]any{
+				"enabled": true, "caCert": string(certPEM), "clientCert": string(certPEM), "clientKey": encryptedKey,
+			})
+			_, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+				TLS: tls,
+			})
+			So(err, ShouldBeNil)
+			So(tlsConfig.RootCAs, ShouldNotBeNil)
+			So(tlsConfig.Certificates, ShouldHaveLength, 1)
 		})
 	})
 }

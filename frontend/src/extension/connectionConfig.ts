@@ -15,9 +15,14 @@ export interface HostTLSConfig {
   enabled?: boolean;
   insecure?: boolean;
   serverName?: string;
+  /** Each certificate is either a path on this machine (*File) or its PEM content. */
   caFile?: string;
   certFile?: string;
   keyFile?: string;
+  caCert?: string;
+  clientCert?: string;
+  /** The one secret here: always ciphertext, in a stored asset and a test-connection call alike. */
+  clientKey?: string;
 }
 
 export interface HostConnectionConfig {

@@ -311,14 +311,11 @@ type assetDialer struct {
 	extName string
 }
 
-// hostConnectionConfig is the shape stored under the asset's Config JSON at
-// extension.HostConnectionConfigKey — host-owned settings for the connection
-// items an asset type opts into via connection.proxyChain / connection.tls.
-// The extension never sees this key (stripped in GetAssetConfig above and in
-// Plugin.ValidateConfig); only DialContextFor reads it.
+// hostConnectionConfig is what the reserved key (extension.HostConnectionConfigKey)
+// of an asset's Config JSON holds. The extension never sees this key (stripped in
+// GetAssetConfig above and in Plugin.ValidateConfig); only DialContextFor reads it.
 type hostConnectionConfig struct {
-	ProxyChain *asset_entity.ProxyChainConfig `json:"proxyChain,omitempty"`
-	TLS        *hostTLSConfig                 `json:"tls,omitempty"`
+	asset_entity.ExtensionConnectionConfig
 	// SSHTunnelID is read only for an ad-hoc "test connection" call
 	// (DialContextForConfig): a saved asset's tunnel lives on its own
 	// SSHTunnelID column, never under this key, so this field is always
@@ -326,14 +323,7 @@ type hostConnectionConfig struct {
 	SSHTunnelID int64 `json:"sshTunnelId,omitempty"`
 }
 
-type hostTLSConfig struct {
-	Enabled    bool   `json:"enabled,omitempty"`
-	Insecure   bool   `json:"insecure,omitempty"`
-	ServerName string `json:"serverName,omitempty"`
-	CAFile     string `json:"caFile,omitempty"`
-	CertFile   string `json:"certFile,omitempty"`
-	KeyFile    string `json:"keyFile,omitempty"`
-}
+type hostTLSConfig = asset_entity.ExtensionTLSConfig
 
 // parseHostConnectionConfig reads the reserved key out of an asset's stored
 // Config JSON. A nil result (no error) means the asset has none configured.
@@ -361,7 +351,7 @@ func parseHostConnectionConfig(configJSON string) (*hostConnectionConfig, error)
 // chain, SSH tunnel or TLS config set on an asset whose type does not declare
 // the matching connection item is ignored. Proxy chain and SSH tunnel dial
 // through the same proxy-chain machinery built-in types use; TLS is built with
-// the same connpool helper, so a bad CA/cert file or a failed handshake fails
+// the same connpool helper, so a bad CA/client certificate or a failed handshake fails
 // exactly as it would for a built-in type — never falling back to a direct or
 // unverified connection.
 func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, *tls.Config, string, error) {
@@ -474,12 +464,15 @@ func resolveDialAndTLS(ctx context.Context, assetType string, chain *asset_entit
 
 	var tlsConfig *tls.Config
 	if tlsSettings != nil && tlsSettings.Enabled {
-		cfg, err := connpool.BuildTLSConfig(assetType, connpool.TLSFields{
+		cfg, err := connpool.BuildAssetTLSConfig(assetType, connpool.TLSFields{
 			ServerName: tlsSettings.ServerName,
 			Insecure:   tlsSettings.Insecure,
 			CAFile:     tlsSettings.CAFile,
 			CertFile:   tlsSettings.CertFile,
 			KeyFile:    tlsSettings.KeyFile,
+			CAPEM:      tlsSettings.CACert,
+			CertPEM:    tlsSettings.ClientCert,
+			KeyPEM:     tlsSettings.ClientKey,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("TLS config: %w", err)
