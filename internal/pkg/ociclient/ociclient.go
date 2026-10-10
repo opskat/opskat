@@ -59,10 +59,14 @@ type manifest struct {
 }
 
 // Registry 是拉取的 registry：Host 为主机名（可带端口），不含协议与路径。
+// Prefix 是拼在仓库名前面的路径前缀，首尾不带斜杠：镜像站把上游 registry 放在
+// 路径下（<镜像>/ghcr.io/<仓库>）时用，和 docker pull 里写在主机名后面的那一段
+// 是同一个东西；空表示仓库直接在 Host 的根下。
 // PlainHTTP 让这次拉取走明文 http，只给验证运行接本地模拟 registry 用；
 // 调用方必须自己决定它，Host 里写的 "http://" 不会被当成协议。
 type Registry struct {
 	Host      string
+	Prefix    string
 	PlainHTTP bool
 }
 
@@ -74,7 +78,8 @@ var stallTimeout = 60 * time.Second
 // errStalled 是 registry 超过 stallTimeout 不发数据时取消拉取的原因，归为 ErrNetwork。
 var errStalled = errors.New("registry stopped sending data")
 
-// Pull 从 reg 匿名拉取 ref（<repository>:<tag>）的唯一一层到 dst，默认走 https。
+// Pull 从 reg 匿名拉取 ref（<repository>:<tag>）的唯一一层到 dst，默认走 https；
+// reg.Prefix 非空时取的是 <前缀>/<repository>。
 // wantSHA256 是 zip 本身的摘要（来自已验签索引），下载超过 maxSize 或摘要不符时删除 dst 并返回对应类别的错误。
 // registry 超过 stallTimeout 不发数据时以 ErrNetwork 失败；调用方取消时原样返回 ctx 错误。
 // onProgress 可为 nil，参数为已下载 / 总大小。
@@ -106,6 +111,12 @@ func pull(ctx context.Context, alive func(), reg Registry, ref, wantSHA256 strin
 		return fmt.Errorf("invalid reference %q, want <repository>:<tag>", ref)
 	}
 	repo, tag := ref[:i], ref[i+1:]
+	if p := reg.Prefix; p != "" {
+		if strings.ContainsAny(p, "\\ @?#") || strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") {
+			return fmt.Errorf("invalid registry prefix %q", p)
+		}
+		repo = p + "/" + repo
+	}
 	base := proto + "://" + host + "/v2/" + repo
 
 	c := &session{ctx: ctx, alive: alive}

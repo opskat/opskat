@@ -250,10 +250,53 @@ func TestPullManifestErrors(t *testing.T) {
 	}
 }
 
+// 镜像站把上游 registry 放在路径下（<镜像>/ghcr.io/<仓库>）时，前缀是仓库名的
+// 一部分：清单与 blob 都从 /v2/<前缀>/<仓库> 取，和 docker pull 的写法一致。
+func TestPullPrefixedRegistryRequestsThePrefixedRepository(t *testing.T) {
+	blob := []byte("mirrored-package")
+	var mu sync.Mutex
+	var paths []string
+	m := &mockRegistry{blob: blob}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if !strings.HasPrefix(r.URL.Path, "/v2/ghcr.io/opskat/extensions/demo/") {
+			http.NotFound(w, r)
+			return
+		}
+		m.serve(w, r)
+	}))
+	t.Cleanup(m.srv.Close)
+
+	reg := m.registry()
+	reg.Prefix = "ghcr.io"
+	dst := dstPath(t)
+	if err := Pull(context.Background(), reg, testRef, sum(blob), 1<<20, dst, nil); err != nil {
+		t.Fatalf("Pull: %v (requested %v)", err, paths)
+	}
+	got, _ := os.ReadFile(dst) //nolint:gosec // test temp path
+	if string(got) != string(blob) {
+		t.Fatal("content mismatch")
+	}
+	want := []string{
+		"/v2/ghcr.io/opskat/extensions/demo/manifests/1.2.0",
+		"/v2/ghcr.io/opskat/extensions/demo/blobs/sha256:" + sum(blob),
+	}
+	if strings.Join(paths, " ") != strings.Join(want, " ") {
+		t.Fatalf("requested %v, want %v", paths, want)
+	}
+}
+
 func TestPullRejectsBadInput(t *testing.T) {
 	for _, host := range []string{"", "https://ghcr.io", "http://ghcr.io", "ghcr.io/x", "a b"} {
 		if err := Pull(context.Background(), Registry{Host: host}, testRef, sum(nil), 10, dstPath(t), nil); err == nil {
 			t.Errorf("host %q accepted", host)
+		}
+	}
+	for _, prefix := range []string{"/ghcr.io", "ghcr.io/", "a b", "a?b", "a#b", "a@b", `a\b`} {
+		if err := Pull(context.Background(), Registry{Host: "h:1", Prefix: prefix}, testRef, sum(nil), 10, dstPath(t), nil); err == nil {
+			t.Errorf("prefix %q accepted", prefix)
 		}
 	}
 	for _, ref := range []string{"", "noversion", "a/b:", ":1"} {

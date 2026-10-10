@@ -2818,8 +2818,8 @@
       "hint": "Extension packages are pulled from a container registry. The extension index follows the app's Download Mirror setting. Signatures and sha256 checksums are verified whichever mirror you use.",
       "source": "Registry",
       "direct": "ghcr.io (direct)",
-      "custom": "Custom host",
-      "customPlaceholder": "Host name, optionally with a port, e.g. registry.example.com:5000",
+      "custom": "Custom",
+      "customPlaceholder": "Host with an optional port and path, e.g. registry.example.com:5000 or mirror.example.com/ghcr.io",
       "hostRequired": "Enter a host name"
     },
     "updatesAvailable": "Extension updates available: {{count}}",

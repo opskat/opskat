@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -321,6 +322,30 @@ func TestRefreshFailures(t *testing.T) {
 	})
 }
 
+// The "Extension downloads" setting is a registry host, optionally followed by
+// the path a mirror keeps the upstream registry under.
+func TestPullRegistryFollowsTheMirrorSetting(t *testing.T) {
+	t.Setenv("OPSKAT_E2E", "")
+	// LoadConfig binds the config path once per process, so the directory has to
+	// outlive this test: later tests in the package save to it too.
+	dir, err := os.MkdirTemp("", "opskat-extstore-test-*")
+	require.NoError(t, err)
+	_, err = bootstrap.LoadConfig(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, bootstrap.SaveConfig(&bootstrap.AppConfig{})) })
+	for mirror, want := range map[string]ociclient.Registry{
+		"":                                 {Host: "ghcr.io"},
+		"ghcr.nju.edu.cn":                  {Host: "ghcr.nju.edu.cn"},
+		"registry.example.com:5000":        {Host: "registry.example.com:5000"},
+		"mirror.example.com/ghcr.io":       {Host: "mirror.example.com", Prefix: "ghcr.io"},
+		"harbor.example.com:8443/proxy/gh": {Host: "harbor.example.com:8443", Prefix: "proxy/gh"},
+		"[::1]:5000/ghcr.io":               {Host: "[::1]:5000", Prefix: "ghcr.io"},
+	} {
+		require.NoError(t, bootstrap.SaveConfig(&bootstrap.AppConfig{ExtensionMirror: mirror}))
+		assert.Equal(t, want, PullRegistry(), "mirror %q", mirror)
+	}
+}
+
 func TestE2EOverrides(t *testing.T) {
 	t.Run("ignored outside a verification run", func(t *testing.T) {
 		t.Setenv("OPSKAT_E2E", "")
@@ -329,7 +354,7 @@ func TestE2EOverrides(t *testing.T) {
 		t.Setenv(EnvRegistryHost, "127.0.0.1:5000")
 		assert.Equal(t, OfficialIndexURL, indexURL())
 		assert.Equal(t, officialPublicKeys, trustedKeyText())
-		assert.Equal(t, ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}, PullRegistry())
+		assert.Equal(t, ociclient.Registry{Host: bootstrap.DefaultExtensionRegistryHost}, PullRegistry())
 	})
 
 	t.Run("OPSKAT_E2E=1 honors each override", func(t *testing.T) {
@@ -352,7 +377,7 @@ func TestE2EOverrides(t *testing.T) {
 		t.Setenv(EnvRegistryHost, "")
 		assert.Equal(t, OfficialIndexURL, indexURL())
 		assert.Equal(t, officialPublicKeys, trustedKeyText())
-		assert.Equal(t, ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}, PullRegistry())
+		assert.Equal(t, ociclient.Registry{Host: bootstrap.DefaultExtensionRegistryHost}, PullRegistry())
 	})
 }
 

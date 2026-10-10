@@ -2818,8 +2818,8 @@
       "hint": "扩展包从容器镜像仓库拉取；扩展索引沿用应用的“下载镜像”设置。无论选哪个镜像，都会校验签名和 sha256。",
       "source": "拉取源",
       "direct": "ghcr.io（直连）",
-      "custom": "自定义主机",
-      "customPlaceholder": "主机名，可带端口，如 registry.example.com:5000",
+      "custom": "自定义",
+      "customPlaceholder": "主机名，可带端口和路径，如 registry.example.com:5000、mirror.example.com/ghcr.io",
       "hostRequired": "请填写主机名"
     },
     "updatesAvailable": "有 {{count}} 个扩展可更新",

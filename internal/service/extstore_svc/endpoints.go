@@ -82,9 +82,10 @@ func trustedKeys() ([]ed25519.PublicKey, error) {
 }
 
 // PullRegistry is the registry extension packages are pulled from: the
-// "Extension downloads" host over https, or EnvRegistryHost in a verification
-// run. Package pulls must resolve their registry here, never from bootstrap
-// directly, so the override covers them too.
+// "Extension downloads" setting over https — a host, optionally followed by the
+// path a mirror keeps the upstream registry under (mirror.example.com/ghcr.io) —
+// or EnvRegistryHost in a verification run. Package pulls must resolve their
+// registry here, never from bootstrap directly, so the override covers them too.
 func PullRegistry() ociclient.Registry {
 	if h := e2eOverride(EnvRegistryHost); h != "" {
 		if rest, ok := strings.CutPrefix(h, "http://"); ok {
@@ -92,5 +93,6 @@ func PullRegistry() ociclient.Registry {
 		}
 		return ociclient.Registry{Host: h}
 	}
-	return ociclient.Registry{Host: bootstrap.ExtensionRegistryHost()}
+	host, prefix, _ := strings.Cut(bootstrap.ExtensionRegistry(), "/")
+	return ociclient.Registry{Host: host, Prefix: prefix}
 }

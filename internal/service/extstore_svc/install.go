@@ -156,7 +156,7 @@ func (s *Service) InstallFromStore(ctx context.Context, name string, opts Instal
 
 	reg := PullRegistry()
 	log := logger.Ctx(ctx).With(zap.String("extension", name), zap.String("version", v.Version),
-		zap.String("registry", reg.Host), zap.Bool("plainHTTP", reg.PlainHTTP), zap.String("ref", v.Source.Ref))
+		zap.String("registry", reg.Host), zap.String("prefix", reg.Prefix), zap.Bool("plainHTTP", reg.PlainHTTP), zap.String("ref", v.Source.Ref))
 	log.Info("extension store install started")
 	manifest, err := s.download(ctx, reg, name, v, opts, func(path string) (*extension.Manifest, error) {
 		return opts.Installer.Install(ctx, path, func(_ context.Context, staged extension_svc.InstallConfirm) error {
@@ -272,7 +272,7 @@ func (s *Service) download(ctx context.Context, reg ociclient.Registry, name str
 }
 
 // repository is ref ("<registry host>/<repository>:<tag>") without its registry
-// host: packages are pulled from the configured host, whatever the publisher's.
+// host: packages are pulled from the configured registry, whatever the publisher's.
 func repository(ref string) (string, error) {
 	host, repo, ok := strings.Cut(ref, "/")
 	if !ok || !strings.ContainsAny(host, ".:") && host != "localhost" {
