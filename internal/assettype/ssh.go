@@ -189,6 +189,12 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 		cfg.Password = encrypted
 	}
 
+	if _, ok := args["ssh_asset_id"]; ok {
+		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.JumpHostID); err != nil {
+		return err
+	}
 	return a.SetSSHConfig(cfg)
 }
 
@@ -274,6 +280,12 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 	} else {
 		cfg.AgentSourceID = 0
 		cfg.AgentKeyFingerprint = ""
+	}
+	if _, ok := args["ssh_asset_id"]; ok {
+		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.JumpHostID); err != nil {
+		return err
 	}
 	return a.SetSSHConfig(cfg)
 }

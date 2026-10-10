@@ -35,7 +35,8 @@ Pass the shell command verbatim as `command`:
 | `credential_id` | number | no | Existing managed password or SSH-key credential ID; its type infers auth when `auth_type` is omitted and must match an explicit auth type |
 | `agent_source_id` | number | yes for Agent | Existing SSH Agent source ID; the source may be offline at save time |
 | `agent_key_fingerprint` | string | yes for Agent | Canonical SHA256 identity fingerprint; both Agent fields are required and infer Agent auth when `auth_type` is omitted |
-| `ssh_asset_id` | number | no | Accepted compatibility key; the current automation handler does not persist it |
+| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
+| `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain and the SSH tunnel, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset. Not together with `ssh_asset_id` |
 
 `password` and `credential_id` are mutually exclusive. Agent auth rejects both; non-Agent auth
 rejects Agent fields. `private_key` and `passphrase` are not accepted by asset automation:

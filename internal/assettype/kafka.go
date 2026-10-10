@@ -84,13 +84,13 @@ func (h *kafkaHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 		TLS:                   ArgBool(args, "tls"),
 		TLSInsecure:           ArgBool(args, "tls_insecure"),
 		TLSServerName:         ArgString(args, "tls_server_name"),
-		TLSCAFile:             ArgString(args, "tls_ca_file"),
-		TLSCertFile:           ArgString(args, "tls_cert_file"),
-		TLSKeyFile:            ArgString(args, "tls_key_file"),
 		RequestTimeoutSeconds: ArgInt(args, "request_timeout_seconds"),
 		MessagePreviewBytes:   ArgInt(args, "message_preview_bytes"),
 		MessageFetchLimit:     ArgInt(args, "message_fetch_limit"),
 		SSHAssetID:            a.SSHTunnelID,
+	}
+	if err := applyTLSCertArgs(args, kafkaTLSCertStore(cfg)); err != nil {
+		return err
 	}
 	if len(cfg.Brokers) == 0 {
 		host := ArgString(args, "host")
@@ -109,6 +109,9 @@ func (h *kafkaHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 		}
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
 	}
 	return a.SetKafkaConfig(cfg)
 }
@@ -143,14 +146,8 @@ func (h *kafkaHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 	if _, ok := args["tls_server_name"]; ok {
 		cfg.TLSServerName = ArgString(args, "tls_server_name")
 	}
-	if _, ok := args["tls_ca_file"]; ok {
-		cfg.TLSCAFile = ArgString(args, "tls_ca_file")
-	}
-	if _, ok := args["tls_cert_file"]; ok {
-		cfg.TLSCertFile = ArgString(args, "tls_cert_file")
-	}
-	if _, ok := args["tls_key_file"]; ok {
-		cfg.TLSKeyFile = ArgString(args, "tls_key_file")
+	if err := applyTLSCertArgs(args, kafkaTLSCertStore(cfg)); err != nil {
+		return err
 	}
 	if _, ok := args["request_timeout_seconds"]; ok {
 		cfg.RequestTimeoutSeconds = ArgInt(args, "request_timeout_seconds")
@@ -173,5 +170,15 @@ func (h *kafkaHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
 	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
+	}
 	return a.SetKafkaConfig(cfg)
+}
+
+func kafkaTLSCertStore(cfg *asset_entity.KafkaConfig) tlsCertStore {
+	return tlsCertStore{
+		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	}
 }

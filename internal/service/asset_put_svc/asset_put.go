@@ -85,6 +85,9 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		}
 		referencedType = cred.Type
 	}
+	if err := nameProxyChainHops(ctx, &preparedCreate); err != nil {
+		return nil, err
+	}
 	var authentication *AuthenticationRef
 	if authPreparer, ok := preparedCreate.Handler.(authenticationPreparer); ok {
 		authType, ref, applicable, err := authPreparer.PrepareAutomationAuthentication(ctx, preparedCreate.Config)
@@ -105,6 +108,29 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		referencedType: referencedType,
 		authentication: authentication,
 	}, nil
+}
+
+// nameProxyChainHops checks that every SSH layer of a requested proxy chain points at
+// an existing SSH asset, and rewrites the approval summary to show those assets by name:
+// the approver is agreeing to a path, and "asset #12" does not say where it leads.
+func nameProxyChainHops(ctx context.Context, prepared *assettype.PreparedCreate) error {
+	ids := assettype.ProxyChainSSHAssetIDs(prepared.ProxyChain)
+	if len(ids) == 0 {
+		return nil
+	}
+	names := make(map[int64]string, len(ids))
+	for _, id := range ids {
+		hop, err := asset_svc.Asset().Get(ctx, id)
+		if err != nil {
+			return fmt.Errorf("proxy_chain: SSH asset %d: %w", id, err)
+		}
+		if hop.Type != asset_entity.AssetTypeSSH {
+			return fmt.Errorf("proxy_chain: asset %d (%s) is not an SSH asset", id, hop.Name)
+		}
+		names[id] = hop.Name
+	}
+	prepared.NameProxyChainHops(func(id int64) string { return names[id] })
+	return nil
 }
 
 // Commit resolves any validated credential reference and performs the asset write

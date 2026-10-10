@@ -73,6 +73,9 @@ func (h *mongodbHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asse
 		}
 		cfg.Password = encrypted
 	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
+	}
 	return a.SetMongoDBConfig(cfg)
 }
 
@@ -110,6 +113,9 @@ func (h *mongodbHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asse
 		}
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
 	}
 	return a.SetMongoDBConfig(cfg)
 }

@@ -72,6 +72,7 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
 | `database` | string | no | Default database |
 | `legacy_compat` | boolean | no | Use the v1 driver for MongoDB 3.6–4.0; default `false` (v2 driver, 4.2+) |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
+| `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain and the SSH tunnel, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset. Not together with `ssh_asset_id` |
 
 `password` and `credential_id` are mutually exclusive. Plaintext is never returned, is
 encrypted in the asset, and never creates a managed credential. Auth source is

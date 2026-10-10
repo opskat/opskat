@@ -407,11 +407,15 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 
 // writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
 // AutomationContract 声明——接受（ConfigFields）但不进审批（ApprovalFields）的字段，
-// 如 password / credential_id / Redis 的 sentinel_password。
+// 如 password / credential_id / Redis 的 sentinel_password / tls_key_pem；外加 proxy_chain
+// 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。
 func writeOnlyFieldPresent(assetType string, config map[string]any) bool {
 	handler, ok := assettype.Get(assetType)
 	if !ok {
 		return false
+	}
+	if assettype.ProxyChainHasSecret(config) {
+		return true
 	}
 	contract := handler.AutomationContract()
 	for _, field := range contract.ConfigFields {

@@ -74,6 +74,9 @@ func (h *k8sHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 		}
 		cfg.Kubeconfig = encrypted
 	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain); err != nil {
+		return err
+	}
 	return a.SetK8sConfig(cfg)
 }
 
@@ -103,6 +106,9 @@ func (h *k8sHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	}
 	if _, ok := args["ssh_asset_id"]; ok {
 		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain); err != nil {
+		return err
 	}
 	return a.SetK8sConfig(cfg)
 }

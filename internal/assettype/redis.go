@@ -144,6 +144,9 @@ func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 		SentinelUsername: ArgString(args, "sentinel_username"),
 		NodeAddressMap:   ArgStringMap(args, "node_address_map"),
 	}
+	if err := applyRedisTLSArgs(cfg, args); err != nil {
+		return err
+	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
 		if err != nil {
@@ -159,6 +162,9 @@ func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 		cfg.SentinelPassword = encrypted
 	}
 	cfg.KeepModeFieldsOnly()
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
+	}
 	return a.SetRedisConfig(cfg)
 }
 
@@ -168,6 +174,9 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 		return err
 	}
 	applyRedisUpdateFields(cfg, args)
+	if err := applyRedisTLSArgs(cfg, args); err != nil {
+		return err
+	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
 		if err != nil {
@@ -184,7 +193,27 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 		cfg.SentinelPassword = encrypted
 	}
 	cfg.KeepModeFieldsOnly()
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
+	}
 	return a.SetRedisConfig(cfg)
+}
+
+// applyRedisTLSArgs 把请求里出现的 TLS 字段写进 cfg；单机、集群、哨兵共用这一套 TLS 设置。
+func applyRedisTLSArgs(cfg *asset_entity.RedisConfig, args map[string]any) error {
+	if _, ok := args["tls"]; ok {
+		cfg.TLS = ArgBool(args, "tls")
+	}
+	if _, ok := args["tls_insecure"]; ok {
+		cfg.TLSInsecure = ArgBool(args, "tls_insecure")
+	}
+	if _, ok := args["tls_server_name"]; ok {
+		cfg.TLSServerName = ArgString(args, "tls_server_name")
+	}
+	return applyTLSCertArgs(args, tlsCertStore{
+		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	})
 }
 
 // applyRedisUpdateFields 把部分更新中的非密钥字段叠加到 cfg 上(只改传入的字段);密钥加密

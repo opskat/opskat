@@ -303,9 +303,62 @@ func helpDocument(skillMD, extName string, localized *extension.Manifest) string
 		parts = append(parts, ref)
 	}
 	if len(parts) == 0 {
-		return fmt.Sprintf("Asset type provided by extension %q. It declares no tools.", extName)
+		parts = append(parts, fmt.Sprintf("Asset type provided by extension %q. It declares no tools.", extName))
+	}
+	if ref := configReference(localized); ref != "" {
+		parts = append(parts, ref)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// configReference 渲染每个资产类型在 create asset / update asset / put_asset 里接受的
+// config 字段：扩展自己的 configSchema 属性，加上该类型声明的连接项换来的宿主连接字段。
+//
+// SKILL.md 讲的是怎么**用**一个资产，建资产要填什么它通常不写；而字段契约
+// （assettype 的 AutomationContract）只在填错之后才以 "unknown config field" 的形式露面。
+// 两份都从契约的同一来源渲染——configSchema 与 assettype.ConnectionFieldDocs——所以不会
+// 列出一个实际不接受的字段。
+func configReference(localized *extension.Manifest) string {
+	var b strings.Builder
+	for _, at := range localized.AssetTypes {
+		props, _ := at.ConfigSchema["properties"].(map[string]any)
+		if len(props) == 0 {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString("## asset config\n\n")
+			b.WriteString("Fields accepted in `--config` / `--config-file` of `opsctl create asset` and `opsctl update asset`, and in put_asset's `config`.\n")
+		}
+		fmt.Fprintf(&b, "\n### %s\n\n", at.Type)
+		b.WriteString("| field | type | required | notes |\n| --- | --- | --- | --- |\n")
+		required := extension.ConfigSchemaRequired(at.ConfigSchema)
+		secret := extension.PasswordFieldsFromSchema(at.ConfigSchema)
+		for _, name := range extension.ConfigSchemaProperties(at.ConfigSchema) {
+			prop, _ := props[name].(map[string]any)
+			typ, _ := prop["type"].(string)
+			req := "no"
+			if slices.Contains(required, name) {
+				req = "yes"
+			}
+			notes, _ := prop["description"].(string)
+			if notes == "" {
+				notes, _ = prop["title"].(string)
+			}
+			if slices.Contains(secret, name) {
+				notes = strings.TrimSpace("**Write-only.** Encrypted in the asset. " + notes)
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", name, typ, req, tableCell(notes))
+		}
+		for _, doc := range assettype.ConnectionFieldDocs(connectionSpec(at)) {
+			fmt.Fprintf(&b, "| `%s` | %s | no | %s |\n", doc.Name, doc.Type, tableCell(doc.Notes))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// tableCell keeps a note containing "|" or a newline from breaking its markdown row.
+func tableCell(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "|", "\\|")
 }
 
 // canonicalize 是注册给 permission 的 CanonicalizeFunc：它在**权限检查之前**跑，因此

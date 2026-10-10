@@ -288,23 +288,37 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
+// normalizeJSONNumbers 把 UseNumber 解出来的 json.Number 换成 int64 / float64，嵌套的
+// 对象与数组一并处理（proxy_chain 的层里有端口、资产 ID）：类型 owner 的 Arg* 只认原生数值。
 func normalizeJSONNumbers(config map[string]any) map[string]any {
 	out := make(map[string]any, len(config))
 	for key, value := range config {
-		switch number := value.(type) {
-		case json.Number:
-			if integer, err := number.Int64(); err == nil {
-				out[key] = integer
-			} else if decimal, err := number.Float64(); err == nil {
-				out[key] = decimal
-			} else {
-				out[key] = value
-			}
-		default:
-			out[key] = value
-		}
+		out[key] = normalizeJSONValue(value)
 	}
 	return out
+}
+
+func normalizeJSONValue(value any) any {
+	switch typed := value.(type) {
+	case json.Number:
+		if integer, err := typed.Int64(); err == nil {
+			return integer
+		}
+		if decimal, err := typed.Float64(); err == nil {
+			return decimal
+		}
+		return value
+	case map[string]any:
+		return normalizeJSONNumbers(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = normalizeJSONValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func presentSecretFields(config map[string]any) (string, int) {

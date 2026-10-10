@@ -29,8 +29,8 @@ func normalizeDefaultPort(port int) func(map[string]any) error {
 
 func (*sshHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"host", "port", "username", "auth_type", "password", "credential_id", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id"},
-		[]string{"host", "port", "username", "auth_type", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id"},
+		[]string{"host", "port", "username", "auth_type", "password", "credential_id", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id", "proxy_chain"},
+		[]string{"host", "port", "username", "auth_type", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id", "proxy_chain"},
 		normalizeSSHAutomation,
 		sshCredentialPlan,
 		bindSSHCredential,
@@ -111,8 +111,8 @@ func bindSSHCredential(args map[string]any, binding CredentialBinding) (map[stri
 
 func (*databaseHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "sqlite_source", "path"},
-		[]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "sqlite_source", "path"},
+		[]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path"},
+		[]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path"},
 		normalizeDatabaseAutomation,
 		databaseCredentialPlan,
 		bindDatabaseCredential,
@@ -154,14 +154,14 @@ func bindDatabaseCredential(args map[string]any, binding CredentialBinding) (map
 
 func (*redisHandler) AutomationContract() AutomationContract {
 	contract := passwordAutomationContract(
-		[]string{
-			"host", "port", "username", "password", "credential_id", "redis_db", "ssh_asset_id",
+		withFields([]string{
+			"host", "port", "username", "password", "credential_id", "redis_db", "ssh_asset_id", "proxy_chain",
 			"mode", "nodes", "master_name", "sentinel_username", "sentinel_password", "node_address_map",
-		},
-		[]string{
-			"host", "port", "username", "redis_db", "ssh_asset_id",
+		}, tlsConfigArgs()...),
+		withFields([]string{
+			"host", "port", "username", "redis_db", "ssh_asset_id", "proxy_chain",
 			"mode", "nodes", "master_name", "sentinel_username", "node_address_map",
-		},
+		}, tlsApprovalArgs()...),
 		normalizeRedisAutomation,
 	)
 	// node_address_map 不含密钥(宣告地址 → 实际地址，都是 host:port)且已在 ApprovalFields
@@ -181,24 +181,24 @@ func normalizeRedisAutomation(args map[string]any) error {
 
 func (*mongodbHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"host", "port", "username", "password", "credential_id", "database", "legacy_compat", "ssh_asset_id"},
-		[]string{"host", "port", "username", "database", "legacy_compat", "ssh_asset_id"},
+		[]string{"host", "port", "username", "password", "credential_id", "database", "legacy_compat", "ssh_asset_id", "proxy_chain"},
+		[]string{"host", "port", "username", "database", "legacy_compat", "ssh_asset_id", "proxy_chain"},
 		normalizeDefaultPort(27017),
 	)
 }
 
 func (*etcdHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"endpoints", "username", "password", "credential_id", "ssh_asset_id", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "dial_timeout_seconds", "command_timeout_seconds"},
-		[]string{"endpoints", "username", "ssh_asset_id", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "dial_timeout_seconds", "command_timeout_seconds"},
+		withFields([]string{"endpoints", "username", "password", "credential_id", "ssh_asset_id", "proxy_chain", "dial_timeout_seconds", "command_timeout_seconds"}, tlsConfigArgs()...),
+		withFields([]string{"endpoints", "username", "ssh_asset_id", "proxy_chain", "dial_timeout_seconds", "command_timeout_seconds"}, tlsApprovalArgs()...),
 		nil,
 	)
 }
 
 func (*kafkaHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"brokers", "host", "port", "client_id", "sasl_mechanism", "username", "password", "credential_id", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "request_timeout_seconds", "message_preview_bytes", "message_fetch_limit", "ssh_asset_id"},
-		[]string{"brokers", "host", "port", "client_id", "sasl_mechanism", "username", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "request_timeout_seconds", "message_preview_bytes", "message_fetch_limit", "ssh_asset_id"},
+		withFields([]string{"brokers", "host", "port", "client_id", "sasl_mechanism", "username", "password", "credential_id", "request_timeout_seconds", "message_preview_bytes", "message_fetch_limit", "ssh_asset_id", "proxy_chain"}, tlsConfigArgs()...),
+		withFields([]string{"brokers", "host", "port", "client_id", "sasl_mechanism", "username", "request_timeout_seconds", "message_preview_bytes", "message_fetch_limit", "ssh_asset_id", "proxy_chain"}, tlsApprovalArgs()...),
 		normalizeKafkaAutomation,
 	)
 }
@@ -219,8 +219,8 @@ func normalizeKafkaAutomation(args map[string]any) error {
 
 func (*rdpHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"host", "port", "username", "password", "credential_id", "domain", "width", "height", "clipboard", "ssh_asset_id"},
-		[]string{"host", "port", "username", "domain", "width", "height", "clipboard", "ssh_asset_id"},
+		[]string{"host", "port", "username", "password", "credential_id", "domain", "width", "height", "clipboard", "ssh_asset_id", "proxy_chain"},
+		[]string{"host", "port", "username", "domain", "width", "height", "clipboard", "ssh_asset_id", "proxy_chain"},
 		normalizeRDPAutomation,
 	)
 }
@@ -243,8 +243,8 @@ func normalizeRDPAutomation(args map[string]any) error {
 
 func (*vncHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"host", "port", "username", "password", "credential_id", "file_ssh_asset_id", "encryption"},
-		[]string{"host", "port", "username", "file_ssh_asset_id", "encryption"},
+		[]string{"host", "port", "username", "password", "credential_id", "file_ssh_asset_id", "encryption", "proxy_chain"},
+		[]string{"host", "port", "username", "file_ssh_asset_id", "encryption", "proxy_chain"},
 		normalizeVNCAutomation,
 	)
 }
@@ -278,8 +278,8 @@ func (*ossHandler) AutomationContract() AutomationContract {
 
 func (*k8sHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"kubeconfig", "namespace", "context", "ssh_asset_id", "password", "credential_id"},
-		[]string{"namespace", "context", "ssh_asset_id"},
+		[]string{"kubeconfig", "namespace", "context", "ssh_asset_id", "proxy_chain", "password", "credential_id"},
+		[]string{"namespace", "context", "ssh_asset_id", "proxy_chain"},
 		nil, noCredentialPlan("password", "credential_id"), nil,
 	)
 }

@@ -71,7 +71,17 @@ switch databases.
 | `sentinel_password` | string | no | Sentinel only. **Write-only.** Encrypted in the asset; managed credentials are not supported |
 | `redis_db` | number | no | Default DB index (0-15). Standalone and sentinel; must be 0 in cluster mode |
 | `node_address_map` | object | no | Cluster and sentinel. Maps announced `host:port` → actual `host:port` to dial, for nodes that announce addresses unreachable from here (e.g. Docker bridge IPs) |
+| `tls` | bool | no | `true` to enable TLS. Applies to every node (and sentinel) connection |
+| `tls_insecure` | bool | no | `true` to skip TLS certificate verification |
+| `tls_server_name` | string | no | TLS SNI / server name override |
+| `tls_ca_file` | string | no | Path to a CA certificate file. The three certificates share one source: give them all as paths (`tls_*_file`) or all as content (`tls_*_pem`); switching source drops what was stored in the other |
+| `tls_ca_pem` | string | no | CA certificate as PEM content, stored in the asset |
+| `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |
+| `tls_cert_pem` | string | no | Client certificate as PEM content (mTLS) |
+| `tls_key_file` | string | no | Path to a client key file (mTLS) |
+| `tls_key_pem` | string | no | **Write-only.** Client key as PEM content (mTLS), encrypted in the asset |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches. Applies to every node connection |
+| `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain and the SSH tunnel, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset. Not together with `ssh_asset_id` |
 
 Only the fields of the chosen `mode` are stored. `password` and `credential_id` are
 mutually exclusive. Plaintext is never returned, is encrypted in the asset, and never
