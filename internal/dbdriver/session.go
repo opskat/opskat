@@ -90,6 +90,26 @@ type Session interface {
 	// （RowSet.Total）。怎么分页、怎么计数由驱动按自己的方言决定；不能分页的语句照
 	// Execute 执行，此时 RowSet.Total 为 nil。
 	ExecutePaged(ctx context.Context, statement string, page Page) (*Result, error)
+
+	// 以下是树的浏览：驱动在自己的连接上、按自己的方言完成，返回结构化结果。库名
+	// （database）的含义同 SessionPerDatabase：库名写进连接串的驱动里它就是会话所连的库，
+	// 会话覆盖整个资产的驱动里它是其中的名字空间；传空表示驱动的默认。驱动没提供的操作返回
+	// 包着 ErrUnsupported 的错误，且不执行任何语句。
+
+	// ListDatabases 列出资产上可浏览的库（驱动自己决定隐藏哪些系统库，没有任何库时给出的
+	// 默认名字空间）。
+	ListDatabases(ctx context.Context) ([]string, error)
+	// ListTables 列出库里的表与视图，按驱动的排序。有 schema 分组的驱动给 "schema.table"
+	// 形式的限定名。
+	ListTables(ctx context.Context, database string) ([]string, error)
+	// TableMetadata 返回一张表的列、索引与外键。table 用 ListTables 给出的形式。
+	TableMetadata(ctx context.Context, database, table string) (*TableMetadata, error)
+	// ListObjects 返回库里的视图 / 存储过程 / 函数 / 触发器；驱动没有声明的那几类为空。
+	ListObjects(ctx context.Context, database string) (*DatabaseObjects, error)
+	// ObjectSource 返回一个对象的只读定义。objType 是 Object* 常量之一，没有声明对应功能
+	// 的返回 ErrUnsupported。table 只有 ObjectMeta.Table 非空时才需要。
+	ObjectSource(ctx context.Context, database, objType, name, table string) (string, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }

@@ -2,29 +2,16 @@ package query
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/opskat/opskat/internal/app/i18n"
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/query_svc"
 )
-
-// objectConn bundles a live session with the resolved driver/database so the
-// object-browser bindings can call into query_svc uniformly.
-type objectConn struct {
-	conn     *sql.Conn
-	driver   string
-	database string
-}
-
-func (o objectConn) driverType() asset_entity.DatabaseDriver {
-	return asset_entity.DatabaseDriver(o.driver)
-}
 
 // defaultQueryTimeout 数据库元数据浏览 / SQL 查询在资产未配置 QueryTimeoutSeconds 时的默认超时。
 const defaultQueryTimeout = 30 * time.Second
@@ -37,10 +24,10 @@ func queryTimeout(cfg *asset_entity.DatabaseConfig) time.Duration {
 	return defaultQueryTimeout
 }
 
-// withDatabaseConn resolves a database asset, dials (or reuses) a panel
-// connection and runs fn on a fresh *sql.Conn, handling cleanup ordering.
+// withObjectSession resolves a database asset, dials (or reuses) the panel session and runs fn
+// on it. database 非空时覆盖资产配置的库；fn 拿到的 database 是最终生效的库名。
 // 超时取自资产的 QueryTimeoutSeconds（未配置回退 defaultQueryTimeout）。
-func (q *Query) withObjectConn(assetID int64, database string, fn func(ctx context.Context, conn objectConn) error) error {
+func (q *Query) withObjectSession(assetID int64, database string, fn func(ctx context.Context, session dbdriver.Session, database string) error) error {
 	ctx0 := i18n.Ctx(q.ctx, q.lang.Lang())
 	asset, err := asset_svc.Asset().Get(ctx0, assetID)
 	if err != nil {
@@ -64,30 +51,44 @@ func (q *Query) withObjectConn(assetID int64, database string, fn func(ctx conte
 	ctx, cancel := context.WithTimeout(ctx0, queryTimeout(cfg))
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelSQLDB(ctx, asset, cfg, password)
+	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return fmt.Errorf("连接数据库失败: %w", err)
 	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return finishPanelDBOperation(fmt.Errorf("打开数据库会话失败: %w", err), cleanup)
-	}
-	opErr := fn(ctx, objectConn{conn: conn, driver: string(cfg.Driver), database: cfg.Database})
-	if closeErr := conn.Close(); closeErr != nil && !isExpectedPanelCloseErr(closeErr) {
-		opErr = errors.Join(opErr, fmt.Errorf("关闭数据库会话失败: %w", closeErr))
-	}
-	return finishPanelDBOperation(opErr, cleanup)
+	return finishPanelDBOperation(fn(ctx, session, cfg.Database), cleanup)
+}
+
+// ListDatabases returns the databases the asset's driver offers for browsing.
+func (q *Query) ListDatabases(assetID int64) ([]string, error) {
+	var result []string
+	err := q.withObjectSession(assetID, "", func(ctx context.Context, session dbdriver.Session, _ string) error {
+		names, err := session.ListDatabases(ctx)
+		result = names
+		return err
+	})
+	return result, err
+}
+
+// ListTables returns the tables and views of a database (schema-qualified names where the driver groups by schema).
+func (q *Query) ListTables(assetID int64, database string) ([]string, error) {
+	var result []string
+	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
+		names, err := session.ListTables(ctx, database)
+		result = names
+		return err
+	})
+	return result, err
 }
 
 // GetTableMetadata returns columns / indexes / foreign keys for a table.
 func (q *Query) GetTableMetadata(assetID int64, database, table string) (*query_svc.TableMetadata, error) {
 	var result *query_svc.TableMetadata
-	err := q.withObjectConn(assetID, database, func(ctx context.Context, oc objectConn) error {
-		meta, err := query_svc.GetTableMetadata(ctx, oc.conn, oc.driverType(), oc.database, table)
+	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
+		meta, err := session.TableMetadata(ctx, database, table)
 		if err != nil {
 			return err
 		}
-		result = meta
+		result = query_svc.NewTableMetadata(meta)
 		return nil
 	})
 	return result, err
@@ -96,28 +97,25 @@ func (q *Query) GetTableMetadata(assetID int64, database, table string) (*query_
 // ListDatabaseObjects returns views / procedures / functions / triggers.
 func (q *Query) ListDatabaseObjects(assetID int64, database string) (*query_svc.DatabaseObjects, error) {
 	var result *query_svc.DatabaseObjects
-	err := q.withObjectConn(assetID, database, func(ctx context.Context, oc objectConn) error {
-		objs, err := query_svc.ListDatabaseObjects(ctx, oc.conn, oc.driverType(), oc.database)
+	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
+		objs, err := session.ListObjects(ctx, database)
 		if err != nil {
 			return err
 		}
-		result = objs
+		result = query_svc.NewDatabaseObjects(objs)
 		return nil
 	})
 	return result, err
 }
 
 // GetObjectSource returns the read-only definition of a view / routine / trigger.
-// table is only used for PostgreSQL triggers (see query_svc.ObjectMeta.Table).
+// table is only used where ObjectMeta.Table is set (PostgreSQL triggers).
 func (q *Query) GetObjectSource(assetID int64, database, objType, name, table string) (string, error) {
 	var result string
-	err := q.withObjectConn(assetID, database, func(ctx context.Context, oc objectConn) error {
-		src, err := query_svc.GetObjectSource(ctx, oc.conn, oc.driverType(), oc.database, objType, name, table)
-		if err != nil {
-			return err
-		}
+	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
+		src, err := session.ObjectSource(ctx, database, objType, name, table)
 		result = src
-		return nil
+		return err
 	})
 	return result, err
 }

@@ -1,6 +1,7 @@
 package dbdrivertest
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 func TestFakeDriverPassesConformance(t *testing.T) {
@@ -65,4 +67,29 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 
 func TestConformanceRequiresTheDriverToBeRegistered(t *testing.T) {
 	assert.NotEmpty(t, registrationProblems(NewFake()))
+}
+
+func TestFakeDriverPassesBrowseConformance(t *testing.T) {
+	fake := NewFake()
+	Register(t, fake)
+	RunBrowseConformance(t, fake, FakeSessions(fake))
+}
+
+// lenientSession 回答任何对象类型的源码查询，不管驱动声明了什么。
+type lenientSession struct{ dbdriver.Session }
+
+func (lenientSession) ObjectSource(context.Context, string, string, string, string) (string, error) {
+	return "", nil
+}
+
+// 浏览的一致性检查也得能失败：没声明的对象类型被放行时要点出来。
+func TestConformanceReportsAnUndeclaredObjectTypeBeingServed(t *testing.T) {
+	fake := NewFake() // 只声明了视图
+	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}})
+	require.NoError(t, err)
+
+	problems := sessionProblems(fake.Desc, lenientSession{session})
+	require.NotEmpty(t, problems)
+	assert.Contains(t, strings.Join(problems, "\n"), `ObjectSource("procedure")`)
+	assert.NotContains(t, strings.Join(problems, "\n"), `ObjectSource("view")`)
 }

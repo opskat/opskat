@@ -195,7 +195,7 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			tt.broken.Session = openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
-			problems := sessionProblems(tt.broken)
+			problems := sessionProblems(NewFake().Desc, tt.broken)
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
 		})

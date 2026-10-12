@@ -119,7 +119,7 @@ func TestPanelRejectsUnregisteredDriver(t *testing.T) {
 	assert.Contains(t, err.Error(), "oracle")
 }
 
-// 还没迁到驱动上的操作经过渡桥拿 *sql.DB：database/sql 之上的内置驱动照常工作……
+// 还没迁到驱动上的操作（打开表、XLSX 导出）经过渡桥拿 *sql.DB：database/sql 之上的内置驱动照常工作……
 func TestUnmigratedOperationsStillWorkForDatabaseSQLDrivers(t *testing.T) {
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
@@ -143,9 +143,7 @@ func TestUnmigratedOperationsAreUnsupportedForOtherSessions(t *testing.T) {
 	dbdrivertest.Register(t, dbdrivertest.NewFake())
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
 
-	_, err := q.GetTableMetadata(1, "", "users")
-	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
-	_, err = q.OpenTable(1, "", "users", 10)
+	_, err := q.OpenTable(1, "", "users", 10)
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	err = q.ExportTableToXlsx(1, "", "SELECT * FROM users", filepath.Join(t.TempDir(), "out.xlsx"))
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)

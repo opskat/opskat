@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ExecuteSQL, GetTableMetadata, ListDatabaseObjects } from "../../wailsjs/go/query/Query";
+import { GetTableMetadata, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
 import { RedisGetKeyDetail, RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
 import { ListMongoDatabases, ListMongoCollections } from "../../wailsjs/go/query/Query";
 import { asset_entity, query_svc } from "../../wailsjs/go/models";
@@ -252,13 +252,6 @@ export interface RedisStreamEntry {
   fields: Record<string, string>;
 }
 
-interface SQLResult {
-  columns?: string[];
-  rows?: Record<string, unknown>[];
-  count?: number;
-  affected_rows?: number;
-}
-
 interface RedisKeyDetailResult {
   key: string;
   type: string;
@@ -344,57 +337,6 @@ function getQueryTabFromTabStore(tabId: string): QueryTab | undefined {
     redisKeySeparator: m.redisKeySeparator,
     redisMode: m.redisMode,
   };
-}
-
-function buildLoadDatabasesSQL(driver?: string): string {
-  if (driver === "postgresql") {
-    return "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname";
-  }
-  if (driver === "sqlite") {
-    return "SELECT name FROM pragma_database_list ORDER BY seq";
-  }
-  if (driver === "mssql") {
-    // MSSQL 无 SHOW DATABASES；database_id > 4 跳过 master/tempdb/model/msdb 系统库。
-    return "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name";
-  }
-  return "SHOW DATABASES";
-}
-
-function parseDatabases(driver: string | undefined, rows: Record<string, unknown>[] | undefined): string[] {
-  const databases = (rows || [])
-    .map((r) => {
-      if (driver === "sqlite" && r.name != null) return String(r.name);
-      const vals = Object.values(r);
-      return String(vals[0] || "");
-    })
-    .filter(Boolean);
-  return driver === "sqlite" && databases.length === 0 ? ["main"] : databases;
-}
-
-function buildLoadTablesSQL(driver: string | undefined, database: string): string {
-  if (driver === "postgresql") {
-    return (
-      "SELECT table_schema || '.' || table_name AS name FROM information_schema.tables " +
-      "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') " +
-      "AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_schema, table_name"
-    );
-  }
-  if (driver === "sqlite") {
-    const schema = database ? quoteSQLiteIdent(database) : "main";
-    return `SELECT name FROM ${schema}.sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`;
-  }
-  if (driver === "mssql") {
-    // MSSQL 无 SHOW TABLES；列成 schema.table，与后端 OpenTable 的 schema 拆分对齐。
-    return (
-      "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES " +
-      "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME"
-    );
-  }
-  return `SHOW TABLES FROM \`${database}\``;
-}
-
-function quoteSQLiteIdent(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function isSchemaAwareDriver(driver: string | undefined): boolean {
@@ -529,10 +471,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
-      const sql = buildLoadDatabasesSQL(tab.driver);
-      const result = await ExecuteSQL(tab.assetId, sql, "");
-      const parsed: SQLResult = JSON.parse(result);
-      const databases = parseDatabases(tab.driver, parsed.rows);
+      const databases = await ListDatabases(tab.assetId);
 
       set((s) => ({
         dbStates: {
@@ -570,15 +509,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
-      const sql = buildLoadTablesSQL(tab.driver, database);
-      const result = await ExecuteSQL(tab.assetId, sql, database);
-      const parsed: SQLResult = JSON.parse(result);
-      const tables = (parsed.rows || [])
-        .map((r) => {
-          const vals = Object.values(r);
-          return String(vals[0] || "");
-        })
-        .filter(Boolean);
+      const tables = await ListTables(tab.assetId, database);
 
       set((s) => ({
         dbStates: {

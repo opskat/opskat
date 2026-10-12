@@ -26,7 +26,7 @@ func (driver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Sess
 	if err != nil {
 		return nil, err
 	}
-	return sqldb.NewSession(db, sqldb.LimitOffset{}), nil
+	return sqldb.NewSession(db, dialect{}), nil
 }
 
 // SessionPerDatabase：库就是那个文件，一条会话覆盖整个资产；调用方传来的库名只是其中的
@@ -83,7 +83,7 @@ func openRemote(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session
 	}
 	// 关闭顺序：*sql.DB → VFS（注销并释放文件锁）→ 远端文件系统。关闭 WAL 库时 SQLite 会
 	// 回调 VFS 删除 -wal/-shm，所以 VFS 与它底下的文件系统都必须活到 db.Close() 返回之后。
-	return sqldb.NewSession(db, sqldb.LimitOffset{}, vfsCloser, remote), nil
+	return sqldb.NewSession(db, dialect{}, vfsCloser, remote), nil
 }
 
 // vfsRemote 把传输层的远端文件系统接到 sqlitevfs 要的接口上。

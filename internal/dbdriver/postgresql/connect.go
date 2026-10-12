@@ -43,7 +43,7 @@ func (driver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Sess
 func (driver) SessionPerDatabase() bool { return true }
 
 func newSession(db *sql.DB) dbdriver.Session {
-	return sqldb.NewSession(db, sqldb.LimitOffset{})
+	return sqldb.NewSession(db, dialect{})
 }
 
 func dsn(cfg *asset_entity.DatabaseConfig, password string) string {

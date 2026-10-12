@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { DatabaseTree } from "../components/query/DatabaseTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { ExecuteSQL } from "../../wailsjs/go/query/Query";
+import { ExecuteSQL, ListTables } from "../../wailsjs/go/query/Query";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
@@ -316,9 +316,7 @@ describe("DatabaseTree — table multi-selection", () => {
   it("refreshing a database's tables drops its tables from the selection", async () => {
     // The reload brings the very same tables back, so a selection that merely hid
     // itself while loading would reappear here.
-    vi.mocked(ExecuteSQL).mockResolvedValue(
-      JSON.stringify({ rows: [{ name: "users" }, { name: "orders" }, { name: "logs" }] })
-    );
+    vi.mocked(ListTables).mockResolvedValue(["users", "orders", "logs"]);
     render(<DatabaseTree tabId="query-1" />);
     fireEvent.click(node("users"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });

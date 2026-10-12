@@ -29,8 +29,9 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //   - 描述：完整、自洽、只用共享代码与前端认识的 Tab / 字段 / 功能，注册表确实能按它声明
 //     的 id 与别名找到它。
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
-//     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝（目前会话层按声明取舍的只有连接级
-//     只读）。
+//     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，以及没有声明的对象类型
+//     的浏览（ObjectSource），且拒绝时不能执行任何语句。声明了的浏览操作能不能调用，要有数据
+//     才能验证，由 RunBrowseConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
 	for _, problem := range descriptorProblems(d.Descriptor()) {
@@ -42,7 +43,7 @@ func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) 
 	for _, problem := range readOnlyProblems(d) {
 		t.Errorf("read-only: %s", problem)
 	}
-	for _, problem := range sessionProblems(newSession(t)) {
+	for _, problem := range sessionProblems(d.Descriptor(), newSession(t)) {
 		t.Errorf("session: %s", problem)
 	}
 }
@@ -71,9 +72,12 @@ func readOnlyProblems(d dbdriver.Driver) []string {
 }
 
 // sessionProblems 在一条会话上跑每个驱动都必须支持的操作，最后关闭它。
-func sessionProblems(s dbdriver.Session) []string {
+func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	ctx := context.Background()
 	var problems []string
+
+	// 拒绝要在任何语句之前：基于桩连接的会话在见到未预期的语句时会失败。
+	problems = append(problems, undeclaredObjectProblems(ctx, desc, s)...)
 
 	res, err := s.Execute(ctx, ConformanceStatement)
 	problems = append(problems, resultProblems("Execute", res, err)...)
@@ -97,6 +101,96 @@ func sessionProblems(s dbdriver.Session) []string {
 
 	if err := s.Close(); err != nil {
 		problems = append(problems, fmt.Sprintf("Close: %v", err))
+	}
+	return problems
+}
+
+// undeclaredObjectProblems 检查没有声明的对象类型都被 ObjectSource 以 ErrUnsupported 拒绝。
+func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	var problems []string
+	for _, objType := range objectTypes {
+		capability, _ := dbdriver.ObjectCapability(objType)
+		if desc.Supports(capability) {
+			continue
+		}
+		if _, err := s.ObjectSource(ctx, "", objType, "x", ""); !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("ObjectSource(%q): the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", objType, capability, err))
+		}
+	}
+	return problems
+}
+
+var objectTypes = []string{dbdriver.ObjectView, dbdriver.ObjectProcedure, dbdriver.ObjectFunction, dbdriver.ObjectTrigger}
+
+// RunBrowseConformance 检查树的浏览：声明了的操作可以调用并给出成形的结果，没声明的对象
+// 类型不出现在对象列表里、查源码被 ErrUnsupported 拒绝。会话必须是能回答这些操作的（有库、
+// 有表可列），由测试关闭。
+func RunBrowseConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
+	t.Helper()
+	for _, problem := range browseProblems(d.Descriptor(), newSession(t)) {
+		t.Errorf("browse: %s", problem)
+	}
+}
+
+func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	ctx := context.Background()
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+
+	databases, err := s.ListDatabases(ctx)
+	if err != nil {
+		report("ListDatabases: %v", err)
+	}
+	database := ""
+	if len(databases) > 0 {
+		database = databases[0]
+	}
+	tables, err := s.ListTables(ctx, database)
+	if err != nil {
+		report("ListTables(%q): %v", database, err)
+	}
+	if len(tables) > 0 {
+		meta, err := s.TableMetadata(ctx, database, tables[0])
+		switch {
+		case err != nil:
+			report("TableMetadata(%q): %v", tables[0], err)
+		case meta == nil:
+			report("TableMetadata(%q): returned no metadata and no error", tables[0])
+		case meta.Columns == nil || meta.Indexes == nil || meta.ForeignKeys == nil:
+			report("TableMetadata(%q): columns, indexes and foreign keys must be empty lists, not nil (they serialize to null)", tables[0])
+		}
+	}
+
+	objects, err := s.ListObjects(ctx, database)
+	if err != nil {
+		report("ListObjects: %v", err)
+	} else if objects == nil {
+		report("ListObjects: returned no objects and no error")
+	} else {
+		groups := map[string][]dbdriver.ObjectMeta{
+			dbdriver.ObjectView: objects.Views, dbdriver.ObjectProcedure: objects.Procedures,
+			dbdriver.ObjectFunction: objects.Functions, dbdriver.ObjectTrigger: objects.Triggers,
+		}
+		for _, objType := range objectTypes {
+			if capability, _ := dbdriver.ObjectCapability(objType); !desc.Supports(capability) && len(groups[objType]) > 0 {
+				report("ListObjects lists %d %s objects, but the driver does not declare %q", len(groups[objType]), objType, capability)
+			}
+		}
+	}
+
+	for _, objType := range objectTypes {
+		capability, _ := dbdriver.ObjectCapability(objType)
+		_, err := s.ObjectSource(ctx, database, objType, "x", "")
+		switch declared := desc.Supports(capability); {
+		case declared && errors.Is(err, dbdriver.ErrUnsupported):
+			report("ObjectSource(%q): declared %q but refused with ErrUnsupported: %v", objType, capability, err)
+		case !declared && !errors.Is(err, dbdriver.ErrUnsupported):
+			report("ObjectSource(%q): not declared %q, so it must be refused with ErrUnsupported, got: %v", objType, capability, err)
+		}
+	}
+
+	if err := s.Close(); err != nil {
+		report("Close: %v", err)
 	}
 	return problems
 }

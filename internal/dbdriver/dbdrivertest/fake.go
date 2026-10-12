@@ -31,6 +31,15 @@ type Fake struct {
 	Rows    [][]any
 	// OpenErr 非 nil 时 Open 以它失败，模拟连不上。
 	OpenErr error
+	// Databases / Tables / Metadata / Objects / Sources 是假库在树的浏览里给出的内容：库名列表、
+	// 各库的表名（按库名取）、任何表的元数据、任何库的对象列表、对象源码（键为 "类型:名字"）。
+	Databases []string
+	Tables    map[string][]string
+	Metadata  *dbdriver.TableMetadata
+	Objects   *dbdriver.DatabaseObjects
+	Sources   map[string]string
+	// BrowseErr 非 nil 时树的浏览操作以它失败，模拟数据库返回的错误。
+	BrowseErr error
 	// SessionPerAsset 为 true 时声明一条会话覆盖整个资产（像 SQLite）；默认一个库一条。
 	SessionPerAsset bool
 
@@ -58,6 +67,21 @@ func NewFake() *Fake {
 		},
 		Columns: []string{"id", "name"},
 		Rows:    [][]any{{1, "alice"}, {2, "bob"}, {3, "carol"}},
+
+		Databases: []string{"app", "reporting"},
+		Tables:    map[string][]string{"app": {"users", "orders"}, "reporting": {"events", "v_users"}},
+		Metadata: &dbdriver.TableMetadata{
+			Columns: []dbdriver.ColumnMeta{
+				{Name: "id", Type: "int", PrimaryKey: true},
+				{Name: "name", Type: "text", Nullable: true},
+			},
+			Indexes:     []dbdriver.IndexMeta{{Name: "pk_users", Columns: []string{"id"}, Unique: true}},
+			ForeignKeys: []dbdriver.ForeignKeyMeta{},
+		},
+		Objects: &dbdriver.DatabaseObjects{
+			Views: []dbdriver.ObjectMeta{{Name: "v_users", Type: dbdriver.ObjectView}},
+		},
+		Sources: map[string]string{"view:v_users": "SELECT id FROM users"},
 	}
 }
 

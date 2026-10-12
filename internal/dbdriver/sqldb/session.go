@@ -212,7 +212,7 @@ func ParseParams(params string) map[string]string {
 
 // DB 返回会话底下的 *sql.DB。
 //
-// 这是一座过渡桥，只为还没有迁到驱动上的操作（表元数据、对象浏览、打开表、导入、XLSX
+// 这是一座过渡桥，只为还没有迁到驱动上的操作（打开表、导入、XLSX
 // 导出）而留：它们仍在共享代码里用 *sql.DB / *sql.Conn 自己拼 SQL。不在 database/sql 之上
 // 的会话没有这个句柄，返回 dbdriver.ErrUnsupported。那些操作迁完后删除本函数，不要给它
 // 添新的调用方。

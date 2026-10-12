@@ -3,7 +3,7 @@ import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
 import { useAssetStore } from "../stores/assetStore";
 import { asset_entity, query_svc } from "../../wailsjs/go/models";
-import { ExecuteSQL, ListDatabaseObjects } from "../../wailsjs/go/query/Query";
+import { ExecuteSQL, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
 import { RedisGetKeyDetail } from "../../wailsjs/go/redis/Redis";
 import { RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
 
@@ -532,42 +532,37 @@ describe("queryStore database actions", () => {
     useQueryStore.getState().openQueryTab(makeSQLiteAsset(30));
   });
 
-  it("loads SQLite schemas with PRAGMA database_list", async () => {
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
-      JSON.stringify({
-        rows: [{ seq: 0, name: "main", file: "/tmp/app.db" }],
-      })
-    );
+  it("lists SQLite databases through the structured binding and shows what the driver returns (main when nothing is attached)", async () => {
+    vi.mocked(ListDatabases).mockResolvedValueOnce(["main"]);
 
     await useQueryStore.getState().loadDatabases("query-30");
 
-    expect(ExecuteSQL).toHaveBeenCalledWith(30, "SELECT name FROM pragma_database_list ORDER BY seq", "");
+    expect(ListDatabases).toHaveBeenCalledWith(30);
+    expect(ExecuteSQL).not.toHaveBeenCalled();
     expect(useQueryStore.getState().dbStates["query-30"].databases).toEqual(["main"]);
   });
 
-  it("loads SQLite tables from sqlite_master instead of SHOW TABLES", async () => {
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
-      JSON.stringify({
-        rows: [{ name: "users" }, { name: "orders" }],
-      })
-    );
+  it("lists SQLite tables through the structured binding", async () => {
+    vi.mocked(ListTables).mockResolvedValueOnce(["users", "orders"]);
 
     await useQueryStore.getState().loadTables("query-30", "main");
 
-    expect(ExecuteSQL).toHaveBeenCalledWith(
-      30,
-      `SELECT name FROM "main".sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`,
-      "main"
-    );
+    expect(ListTables).toHaveBeenCalledWith(30, "main");
+    expect(ExecuteSQL).not.toHaveBeenCalled();
     expect(useQueryStore.getState().dbStates["query-30"].tables.main).toEqual(["users", "orders"]);
   });
 
+  it("reports a database listing failure in the same place as before", async () => {
+    vi.mocked(ListDatabases).mockRejectedValueOnce("boom");
+
+    await useQueryStore.getState().loadDatabases("query-30");
+
+    expect(useQueryStore.getState().dbStates["query-30"].error).toBe("boom");
+    expect(useQueryStore.getState().dbStates["query-30"].loadingDbs).toBe(false);
+  });
+
   it("refreshes SQLite object browser data with the table list", async () => {
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
-      JSON.stringify({
-        rows: [{ name: "users" }, { name: "orders" }],
-      })
-    );
+    vi.mocked(ListTables).mockResolvedValueOnce(["users", "orders"]);
     vi.mocked(ListDatabaseObjects).mockResolvedValueOnce({
       views: [{ name: "v_orders", type: "view" }],
       procedures: [],
@@ -597,19 +592,12 @@ describe("queryStore PostgreSQL database actions", () => {
   });
 
   it("loads PostgreSQL tables from non-system schemas as schema.table", async () => {
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
-      JSON.stringify({ rows: [{ name: "adm.ads_audit" }, { name: "public.users" }] })
-    );
+    vi.mocked(ListTables).mockResolvedValueOnce(["adm.ads_audit", "public.users"]);
 
     await useQueryStore.getState().loadTables("query-35", "admdb");
 
-    expect(ExecuteSQL).toHaveBeenCalledWith(
-      35,
-      "SELECT table_schema || '.' || table_name AS name FROM information_schema.tables " +
-        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') " +
-        "AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_schema, table_name",
-      "admdb"
-    );
+    expect(ListTables).toHaveBeenCalledWith(35, "admdb");
+    expect(ExecuteSQL).not.toHaveBeenCalled();
     expect(useQueryStore.getState().dbStates["query-35"].tables.admdb).toEqual(["adm.ads_audit", "public.users"]);
     expect(useQueryStore.getState().dbStates["query-35"].expandedSchemas.admdb).toEqual(["adm", "public"]);
   });
@@ -624,9 +612,7 @@ describe("queryStore PostgreSQL database actions", () => {
         },
       },
     }));
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
-      JSON.stringify({ rows: [{ name: "adm.ads_audit" }, { name: "reporting.events" }] })
-    );
+    vi.mocked(ListTables).mockResolvedValueOnce(["adm.ads_audit", "reporting.events"]);
 
     await useQueryStore.getState().loadTables("query-35", "admdb");
 
@@ -662,33 +648,50 @@ describe("queryStore MSSQL database actions", () => {
     useQueryStore.getState().openQueryTab(makeMSSQLAsset(40));
   });
 
-  it("loads MSSQL databases from sys.databases instead of SHOW DATABASES", async () => {
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(JSON.stringify({ rows: [{ name: "appdb" }] }));
+  it("lists MSSQL databases through the structured binding, showing the driver's list as-is", async () => {
+    vi.mocked(ListDatabases).mockResolvedValueOnce(["appdb"]);
 
     await useQueryStore.getState().loadDatabases("query-40");
 
-    expect(ExecuteSQL).toHaveBeenCalledWith(
-      40,
-      "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name",
-      ""
-    );
+    expect(ListDatabases).toHaveBeenCalledWith(40);
+    expect(ExecuteSQL).not.toHaveBeenCalled();
     expect(useQueryStore.getState().dbStates["query-40"].databases).toEqual(["appdb"]);
   });
 
-  it("loads MSSQL tables as schema.table from INFORMATION_SCHEMA instead of SHOW TABLES", async () => {
-    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
-      JSON.stringify({ rows: [{ name: "dbo.users" }, { name: "sales.orders" }] })
-    );
+  it("lists MSSQL tables as schema.table through the structured binding", async () => {
+    vi.mocked(ListTables).mockResolvedValueOnce(["dbo.users", "sales.orders"]);
 
     await useQueryStore.getState().loadTables("query-40", "appdb");
 
-    expect(ExecuteSQL).toHaveBeenCalledWith(
-      40,
-      "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES " +
-        "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME",
-      "appdb"
-    );
+    expect(ListTables).toHaveBeenCalledWith(40, "appdb");
+    expect(ExecuteSQL).not.toHaveBeenCalled();
     expect(useQueryStore.getState().dbStates["query-40"].tables.appdb).toEqual(["dbo.users", "sales.orders"]);
     expect(useQueryStore.getState().dbStates["query-40"].expandedSchemas.appdb).toEqual(["dbo", "sales"]);
+  });
+});
+
+describe("queryStore with a driver unknown to the frontend", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/FakeDB");
+    useQueryStore.getState().openQueryTab({
+      ...makeDatabaseAsset(50),
+      Config: JSON.stringify({ driver: "fakedb", host: "h", port: 7777 }),
+    } as asset_entity.Asset);
+  });
+
+  it("presents the databases and tables the driver returned, as-is", async () => {
+    vi.mocked(ListDatabases).mockResolvedValueOnce(["alpha", "beta"]);
+    vi.mocked(ListTables).mockResolvedValueOnce(["t1", "t2"]);
+
+    await useQueryStore.getState().loadDatabases("query-50");
+    await useQueryStore.getState().loadTables("query-50", "alpha");
+
+    const state = useQueryStore.getState().dbStates["query-50"];
+    expect(state.databases).toEqual(["alpha", "beta"]);
+    expect(state.tables.alpha).toEqual(["t1", "t2"]);
+    expect(ExecuteSQL).not.toHaveBeenCalled();
   });
 });

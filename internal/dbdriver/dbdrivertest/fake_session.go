@@ -118,6 +118,55 @@ func (s *FakeSession) ExecutePaged(_ context.Context, statement string, page dbd
 	}}, nil
 }
 
+// 树的浏览直接取自假库里放着的内容，不经过 Execute：Statements 因此不会有它们的记录。
+
+func (s *FakeSession) ListDatabases(context.Context) ([]string, error) {
+	if err := s.browse(); err != nil {
+		return nil, err
+	}
+	return s.fake.Databases, nil
+}
+
+func (s *FakeSession) ListTables(_ context.Context, database string) ([]string, error) {
+	if err := s.browse(); err != nil {
+		return nil, err
+	}
+	return s.fake.Tables[database], nil
+}
+
+func (s *FakeSession) TableMetadata(context.Context, string, string) (*dbdriver.TableMetadata, error) {
+	if err := s.browse(); err != nil {
+		return nil, err
+	}
+	return s.fake.Metadata, nil
+}
+
+func (s *FakeSession) ListObjects(context.Context, string) (*dbdriver.DatabaseObjects, error) {
+	if err := s.browse(); err != nil {
+		return nil, err
+	}
+	return s.fake.Objects, nil
+}
+
+func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string) (string, error) {
+	if err := s.fake.Desc.CheckObjectType(objType); err != nil {
+		return "", err
+	}
+	if err := s.browse(); err != nil {
+		return "", err
+	}
+	return s.fake.Sources[objType+":"+name], nil
+}
+
+func (s *FakeSession) browse() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrFakeSessionClosed
+	}
+	return s.fake.BrowseErr
+}
+
 func (s *FakeSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

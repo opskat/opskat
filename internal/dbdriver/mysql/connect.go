@@ -34,7 +34,7 @@ func (driver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Sess
 func (driver) SessionPerDatabase() bool { return true }
 
 func newSession(db *sql.DB) dbdriver.Session {
-	return sqldb.NewSession(db, sqldb.LimitOffset{})
+	return sqldb.NewSession(db, dialect{})
 }
 
 // dsn 生成连接串。dial 非 nil 时用它建立底层连接，否则用 go-sql-driver 默认的 TCP 拨号。
