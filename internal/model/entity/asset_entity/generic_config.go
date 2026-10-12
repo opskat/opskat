@@ -23,6 +23,11 @@ type GenericConfig struct {
 // decision 17：网络路径随实例而定，配在资产上，复用内置类型的代理链 / TLS 配置区；SSH 隧道
 // 走 Asset.SSHTunnelID）。命令执行方式忽略它们。拨号出错时原样报错，不会退回直连或跳过
 // 校验（connpool.NewHTTPTransport）。
+//
+// TLS 字段与内置类型同名同义（Design decision 20）：CA 证书、客户端证书、客户端私钥各有
+// 路径（*File）与内容（*PEM）两种给法，三份共用一个来源；以内容保存的私钥是密文
+// （connpool.BuildAssetTLSConfig 在拨号前解密）。没有 tls 开关——是否走 TLS 由 Base URL
+// 的协议决定。
 type GenericConnection struct {
 	ProxyChain    *ProxyChainConfig `json:"proxy_chain,omitempty"`
 	TLSInsecure   bool              `json:"tls_insecure,omitempty"`    // 跳过 TLS 证书校验（仅用户显式开启）
@@ -30,6 +35,9 @@ type GenericConnection struct {
 	TLSCAFile     string            `json:"tls_ca_file,omitempty"`     // CA 证书路径
 	TLSCertFile   string            `json:"tls_cert_file,omitempty"`   // 客户端证书路径
 	TLSKeyFile    string            `json:"tls_key_file,omitempty"`    // 客户端私钥路径
+	TLSCAPEM      string            `json:"tls_ca_pem,omitempty"`      // CA 证书内容（PEM），与路径二选一
+	TLSCertPEM    string            `json:"tls_cert_pem,omitempty"`    // 客户端证书内容（PEM），与路径二选一
+	TLSKeyPEM     string            `json:"tls_key_pem,omitempty"`     // 客户端私钥内容（PEM），加密存储，与路径二选一
 }
 
 // GenericValue 是一个字段的值。存储约定（由 custom_type_svc 维护）：

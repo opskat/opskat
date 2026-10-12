@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -119,6 +120,7 @@ const (
 	IssueFieldsRequired           = "fields_required"
 	IssueFieldNameInvalid         = "field_name_invalid"
 	IssueFieldNameDuplicate       = "field_name_duplicate"
+	IssueFieldNameReserved        = "field_name_reserved"
 	IssueSecretDefault            = "secret_default_not_allowed"
 	IssueHTTPConfigMissing        = "http_config_missing"
 	IssueBaseURLRequired          = "base_url_required"
@@ -244,6 +246,8 @@ func (c *CustomType) validateFields(l *issues) {
 		switch {
 		case !identPattern.MatchString(f.Name):
 			l.add(path+".name", IssueFieldNameInvalid, "name", f.Name)
+		case slices.Contains(HostConnectionFields(), f.Name):
+			l.add(path+".name", IssueFieldNameReserved, "name", f.Name)
 		case seen[f.Name]:
 			l.add(path+".name", IssueFieldNameDuplicate, "name", f.Name)
 		}

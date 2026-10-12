@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"io"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/connpool/connpooltest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
@@ -371,6 +374,58 @@ func TestGenericHTTP_TLSFromAssetConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.ExitCode)
 	assert.Contains(t, stdout, "GET /x")
+}
+
+// mutualTLSServer 是一个要求并校验客户端证书的 HTTPS 服务，连同连上它所需的三份 PEM
+// 材料：只有 CA、客户端证书、客户端私钥都生效，请求才到得了（hits 才会增加）。
+type mutualTLSServer struct {
+	*httptest.Server
+	hits                   atomic.Int32
+	caPEM, certPEM, keyPEM string
+}
+
+func newMutualTLSServer(t *testing.T) *mutualTLSServer {
+	t.Helper()
+	certPEM, keyPEM := connpooltest.SelfSignedPEM(t)
+	clientCAs := x509.NewCertPool()
+	require.True(t, clientCAs.AppendCertsFromPEM(certPEM))
+	m := &mutualTLSServer{certPEM: string(certPEM), keyPEM: string(keyPEM)}
+	m.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		m.hits.Add(1)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	m.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs, MinVersion: tls.VersionTLS12}
+	m.StartTLS()
+	t.Cleanup(m.Close)
+	m.caPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: m.Certificate().Raw}))
+	return m
+}
+
+func (m *mutualTLSServer) host() string { return strings.TrimPrefix(m.URL, "https://") }
+
+// 证书材料以内容保存在资产上时（Design decision 20），exec 直接用它们握手：客户端私钥是
+// 密文，拨号前解密；解不开就不发请求。
+func TestGenericHTTP_MutualTLSFromStoredCertContent(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newMutualTLSServer(t)
+	saveHTTPType(t, ctx, "mtls", "https://{{host}}")
+	withKey := func(key string) *asset_entity.Asset {
+		return genericAsset(t, "mtls", map[string]string{"host": srv.host(), "token": testSecret}, func(c *asset_entity.GenericConfig) {
+			c.TLSCAPEM, c.TLSCertPEM, c.TLSKeyPEM = srv.caPEM, srv.certPEM, key
+		})
+	}
+
+	encryptedKey, err := credential_svc.Default().Encrypt(srv.keyPEM)
+	require.NoError(t, err)
+	res, stdout, _, err := streamHTTP(t, ctx, withKey(encryptedKey), nil, "GET", "/x")
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.ExitCode)
+	assert.Equal(t, "ok", stdout)
+	assert.EqualValues(t, 1, srv.hits.Load())
+
+	_, _, _, err = streamHTTP(t, ctx, withKey(srv.keyPEM), nil, "GET", "/x")
+	require.Error(t, err, "a stored key that is not ciphertext is never used as a key")
+	assert.EqualValues(t, 1, srv.hits.Load(), "and no request goes out without the client certificate")
 }
 
 func TestGenericHTTP_AIExecOutput(t *testing.T) {

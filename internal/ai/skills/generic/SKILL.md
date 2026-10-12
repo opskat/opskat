@@ -23,7 +23,8 @@ slug or for any asset of that type. Read them before creating or updating an ass
 ## Asset config (for put_asset)
 
 The config keys are the custom type's **field names**; generic assets have no fixed field
-list of their own. The type's field structure is the only contract:
+list of their own. The type's field structure is the contract (an HTTP type also accepts the
+connection fields described below):
 
 - Unknown keys are rejected, naming the key; an unknown slug is rejected as an unknown type.
 - On create, every required field must be given, unless the type defines a default for it. A
@@ -41,6 +42,31 @@ Examples:
     put_asset(name="grafana-prod", type="grafana", config={"host":"grafana.internal","token":"glsa_example"})
     put_asset(name="grafana-prod", type="grafana", config={"host":"grafana.internal","token":{"credential_id":7}})
     put_asset(asset="grafana-prod", config={"host":"grafana2.internal"})
+
+## Connection fields (HTTP types only)
+
+A custom type whose exec mode is HTTP also accepts the host's connection fields in the same
+config object, next to its own fields. They mean the same as on built-in types; `help` for
+the slug or for an asset of that type lists them with their exact shapes.
+
+- `ssh_asset_id` — one SSH asset to tunnel through; `0` detaches it.
+- `proxy_chain` — an ordered list of hops that replaces the whole stored chain; `[]` clears
+  it. Not together with `ssh_asset_id` in one request: a chain replaces a stored tunnel, and
+  a tunnel replaces a stored chain.
+- `tls_insecure`, `tls_server_name` — skip certificate verification; override the name the
+  server certificate is checked against.
+- `tls_ca_file`, `tls_cert_file`, `tls_key_file` **or** `tls_ca_pem`, `tls_cert_pem`,
+  `tls_key_pem` — the CA certificate, client certificate and client key as paths on this
+  machine, or as PEM content stored in the asset. The three share one source: mixing paths
+  and content is rejected, and switching source drops what was stored in the other.
+  `tls_key_pem` is write-only and stored encrypted.
+
+There is no `tls` switch — whether TLS is used follows the scheme of the Base URL. A custom
+type whose exec mode is a local command accepts none of these fields; they are rejected as
+unknown keys. None of these names can be used as a field name of a custom type.
+
+    put_asset(asset="grafana-prod", config={"ssh_asset_id":12})
+    put_asset(asset="grafana-prod", config={"tls_ca_file":"/etc/ssl/internal-ca.pem","tls_server_name":"grafana.internal"})
 
 ## opsctl
 

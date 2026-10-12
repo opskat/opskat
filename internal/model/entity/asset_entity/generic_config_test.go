@@ -30,6 +30,19 @@ func TestGenericConfigRoundTrip(t *testing.T) {
 	assert.True(t, present, "显式空值与缺省（走默认值）必须可区分")
 }
 
+// 以内容保存的 TLS 证书材料与路径一样是资产配置的一部分（Design decision 20）：读出再
+// 写回不能丢，键名与内置类型一致。
+func TestGenericConfigKeepsTLSCertContent(t *testing.T) {
+	stored := `{"custom_type":"grafana","tls_ca_pem":"CA","tls_cert_pem":"CERT","tls_key_pem":"key-ciphertext"}`
+	a := &Asset{Type: AssetTypeGeneric, Config: stored}
+
+	cfg, err := a.GetGenericConfig()
+	require.NoError(t, err)
+	require.NoError(t, a.SetGenericConfig(cfg))
+
+	assert.JSONEq(t, stored, a.Config)
+}
+
 // 通用资产必须基于一个自定义类型（Design decision 2）。
 func TestValidateGenericRequiresCustomType(t *testing.T) {
 	a := &Asset{Name: "g", Type: AssetTypeGeneric}

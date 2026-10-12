@@ -18,7 +18,8 @@ type HTTPConnConfig struct {
 	TunnelID int64
 	// ProxyChain 解析出至少一层时优先于 TunnelID（与 Kafka / etcd 的 代理链 > 隧道 顺序一致）。
 	ProxyChain *asset_entity.ProxyChainConfig
-	TLS        TLSFields
+	// TLS 是资产配置里保存的 TLS 字段：以内容给出的客户端私钥（KeyPEM）是密文。
+	TLS TLSFields
 }
 
 // GenericHTTPConn 取通用资产的连接配置：隧道在 Asset.SSHTunnelID，代理链与 TLS 在 GenericConfig。
@@ -32,6 +33,9 @@ func GenericHTTPConn(asset *asset_entity.Asset, cfg *asset_entity.GenericConfig)
 			CAFile:     cfg.TLSCAFile,
 			CertFile:   cfg.TLSCertFile,
 			KeyFile:    cfg.TLSKeyFile,
+			CAPEM:      cfg.TLSCAPEM,
+			CertPEM:    cfg.TLSCertPEM,
+			KeyPEM:     cfg.TLSKeyPEM,
 		},
 	}
 }
@@ -62,11 +66,11 @@ func HTTPRouteFor(conn HTTPConnConfig) HTTPRoute {
 // TLS 握手由 transport 在拨出的连接上完成（ServerName 为空时取请求 URL 的 host），因此经
 // 隧道 / 代理远端解析时 SNI 与证书校验仍针对目标主机。
 //
-// 失败一律原样返回：代理链解析失败、配置了隧道却没有 SSH 连接池、TLS 证书读取失败都不会
+// 失败一律原样返回：代理链解析失败、配置了隧道却没有 SSH 连接池、TLS 证书读取或私钥解密失败都不会
 // 退回直连或跳过校验。调用方用完后应调用 CloseIdleConnections 释放连接（隧道连接关闭时
 // 归还 SSH 池引用）。
 func NewHTTPTransport(ctx context.Context, conn HTTPConnConfig, sshPool *sshpool.Pool) (*http.Transport, HTTPRoute, error) {
-	tlsConfig, err := BuildTLSConfig("HTTP", conn.TLS)
+	tlsConfig, err := BuildAssetTLSConfig("HTTP", conn.TLS)
 	if err != nil {
 		return nil, "", err
 	}

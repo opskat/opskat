@@ -7,42 +7,34 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 )
 
 // 连接字段：一个资产"怎么连过去"的那部分自动化参数——SSH 隧道、代理链、TLS。
-// 它们在所有类型里同名同义（内置类型各自存进自己的 config，扩展类型存进宿主保留键），
-// 所以解析、互斥校验、加密与审批摘要只在这里写一遍，各 handler 调用，不各自再实现。
+// 它们在所有类型里同名同义（内置类型各自存进自己的 config，扩展类型存进宿主保留键，
+// 通用资产存进 GenericConnection），所以解析、互斥校验、加密与审批摘要只在这里写一遍，
+// 各 handler 调用，不各自再实现。
+//
+// 字段名本身定义在 custom_type_entity（HostConnectionFields）：自定义类型不许把它们用作
+// 字段名，那份校验与这里的解析认的是同一份清单。
 const (
-	argSSHAsset   = "ssh_asset_id"
-	argProxyChain = "proxy_chain"
-	argTLS        = "tls"
-	argTLSInsec   = "tls_insecure"
-	argTLSServer  = "tls_server_name"
-	argTLSKeyPEM  = "tls_key_pem"
+	argSSHAsset   = custom_type_entity.ConnFieldSSHAsset
+	argProxyChain = custom_type_entity.ConnFieldProxyChain
+	argTLS        = custom_type_entity.ConnFieldTLS
+	argTLSInsec   = custom_type_entity.ConnFieldTLSInsecure
+	argTLSServer  = custom_type_entity.ConnFieldTLSServerName
+	argTLSKeyPEM  = custom_type_entity.ConnFieldTLSKeyPEM
 )
 
-// tlsCertArg 是一份证书材料的两种给法：本机路径，或 PEM 内容。三份材料（CA、客户端
-// 证书、客户端私钥）共用一个来源——资产表单只有一个来源开关，一个混着两种来源的资产它
-// 显示不了，保存时会丢掉没显示的那一半。
-type tlsCertArg struct{ file, pem string }
-
-var tlsCertArgs = []tlsCertArg{
-	{"tls_ca_file", "tls_ca_pem"},
-	{"tls_cert_file", "tls_cert_pem"},
-	{"tls_key_file", argTLSKeyPEM},
-}
+// tlsCertArgs 是三份证书材料（CA、客户端证书、客户端私钥）各自的两种给法：本机路径，或
+// PEM 内容。三份共用一个来源——资产表单只有一个来源开关，一个混着两种来源的资产它显示
+// 不了，保存时会丢掉没显示的那一半。
+var tlsCertArgs = custom_type_entity.TLSCertFields()
 
 // tlsConfigArgs 返回一个类型接受的全部 TLS 字段；tlsApprovalArgs 是其中可进审批视图的
 // 部分——客户端私钥内容是密文字段，write-only。
-func tlsConfigArgs() []string {
-	out := make([]string, 0, 3+2*len(tlsCertArgs))
-	out = append(out, argTLS, argTLSInsec, argTLSServer)
-	for _, cert := range tlsCertArgs {
-		out = append(out, cert.file, cert.pem)
-	}
-	return out
-}
+func tlsConfigArgs() []string { return custom_type_entity.TLSConnectionFields() }
 
 func tlsApprovalArgs() []string {
 	out := make([]string, 0, len(tlsConfigArgs()))
@@ -72,11 +64,11 @@ func validateConnectionArgs(args map[string]any) error {
 	}
 	var files, pems []string
 	for _, cert := range tlsCertArgs {
-		if ArgString(args, cert.file) != "" {
-			files = append(files, cert.file)
+		if ArgString(args, cert.File) != "" {
+			files = append(files, cert.File)
 		}
-		if ArgString(args, cert.pem) != "" {
-			pems = append(pems, cert.pem)
+		if ArgString(args, cert.PEM) != "" {
+			pems = append(pems, cert.PEM)
 		}
 	}
 	if len(files) > 0 && len(pems) > 0 {
@@ -303,14 +295,14 @@ func applyTLSCertArgs(args map[string]any, store tlsCertStore) error {
 	pems := []*string{store.caPEM, store.certPEM, store.keyPEM}
 	var fileGiven, pemGiven bool
 	for i, cert := range tlsCertArgs {
-		if _, ok := args[cert.file]; ok {
+		if _, ok := args[cert.File]; ok {
 			fileGiven = true
-			*files[i] = ArgString(args, cert.file)
+			*files[i] = ArgString(args, cert.File)
 		}
-		if _, ok := args[cert.pem]; ok {
+		if _, ok := args[cert.PEM]; ok {
 			pemGiven = true
-			content := ArgString(args, cert.pem)
-			if cert.pem == argTLSKeyPEM {
+			content := ArgString(args, cert.PEM)
+			if cert.PEM == argTLSKeyPEM {
 				encrypted, err := encryptArg(content)
 				if err != nil {
 					return fmt.Errorf("encrypt %s: %w", argTLSKeyPEM, err)

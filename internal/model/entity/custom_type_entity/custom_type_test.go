@@ -118,6 +118,35 @@ func TestValidate_Fields(t *testing.T) {
 	}
 }
 
+// 宿主连接字段名在自动化写入面（opsctl / put_asset）上对所有类型同义：同名的自定义字段
+// 会被当成连接参数解析，建资产直接失败。两种执行方式都不能用（Design decision 21）。
+func TestValidate_FieldNameReservedForHostConnection(t *testing.T) {
+	reserved := []string{
+		"ssh_asset_id", "proxy_chain", "tls", "tls_insecure", "tls_server_name",
+		"tls_ca_file", "tls_cert_file", "tls_key_file", "tls_ca_pem", "tls_cert_pem", "tls_key_pem",
+	}
+	for _, mode := range []struct {
+		name string
+		ct   func() *CustomType
+	}{{"http", httpType}, {"command", commandType}} {
+		for _, name := range reserved {
+			t.Run(mode.name+"/"+name, func(t *testing.T) {
+				ct := mode.ct()
+				ct.Fields = append(ct.Fields, Field{Name: name})
+				var verr *ValidationError
+				require.ErrorAs(t, ct.Validate(), &verr)
+				assert.Equal(t, []Issue{{
+					Path: "fields[2].name", Code: "field_name_reserved", Params: map[string]string{"name": name},
+				}}, verr.Issues)
+			})
+		}
+	}
+
+	near := httpType()
+	near.Fields = append(near.Fields, Field{Name: "tls_version"}, Field{Name: "ssh_asset"}, Field{Name: "TLS"})
+	assert.NoError(t, near.Validate(), "only the exact host connection field names are reserved")
+}
+
 func TestValidate_HTTP(t *testing.T) {
 	cases := []struct {
 		name   string

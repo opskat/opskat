@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -56,7 +57,7 @@ func (h *genericHandler) PolicyKind() string { return policy.PolicyKindCommand }
 func (h *genericHandler) AutomationContract() AutomationContract { return AutomationContract{} }
 
 // AutomationContractFor 由资产的自定义类型生成字段契约：键是字段名，非密钥字段进入
-// 审批，密钥字段只写。
+// 审批，密钥字段只写；HTTP 方式的类型再加上宿主连接字段（genericConnectionFields）。
 func (h *genericHandler) AutomationContractFor(ctx context.Context, a *asset_entity.Asset) (AutomationContract, error) {
 	ct, err := genericCustomType(ctx, a)
 	if err != nil {
@@ -68,9 +69,10 @@ func (h *genericHandler) AutomationContractFor(ctx context.Context, a *asset_ent
 			approval = append(approval, f.Name)
 		}
 	}
+	connConfig, connApproval := genericConnectionFields(ct)
 	return AutomationContract{
-		ConfigFields:   sortedUnique(ct.FieldNames()),
-		ApprovalFields: sortedUnique(approval),
+		ConfigFields:   sortedUnique(withFields(ct.FieldNames(), connConfig...)),
+		ApprovalFields: sortedUnique(withFields(approval, connApproval...)),
 		ValidateCreate: func(args map[string]any) error { return requireGenericFields(ct, args) },
 		Validate:       func(args map[string]any) error { return validateGenericValues(ctx, ct, args) },
 	}, nil
@@ -111,6 +113,9 @@ func (h *genericHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.As
 	if err := storeGenericValues(ctx, ct, cfg, args); err != nil {
 		return err
 	}
+	if err := applyGenericConnection(ct, a, cfg, args); err != nil {
+		return err
+	}
 	if err := a.SetGenericConfig(cfg); err != nil {
 		return err
 	}
@@ -137,7 +142,57 @@ func (h *genericHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.As
 	if err := storeGenericValues(ctx, ct, cfg, args); err != nil {
 		return err
 	}
+	if err := applyGenericConnection(ct, a, cfg, args); err != nil {
+		return err
+	}
 	return a.SetGenericConfig(cfg)
+}
+
+// genericConnectionFields 返回基于 ct 的通用资产接受的宿主连接字段：全部字段，以及其中
+// 可进审批视图的部分（Design decision 20）。只有 HTTP 方式有网络路径可配，命令方式一个
+// 都不接受；没有 tls 开关——是否走 TLS 由 Base URL 的协议决定。字段名不会与类型自己的
+// 字段撞车：自定义类型不许用这些名字（custom_type_entity.IssueFieldNameReserved）。
+func genericConnectionFields(ct *custom_type_entity.CustomType) (config, approval []string) {
+	if ct.ExecMode != custom_type_entity.ExecModeHTTP {
+		return nil, nil
+	}
+	isTLSSwitch := func(field string) bool { return field == argTLS }
+	config = slices.DeleteFunc(withFields([]string{argSSHAsset, argProxyChain}, tlsConfigArgs()...), isTLSSwitch)
+	approval = slices.DeleteFunc(withFields([]string{argSSHAsset, argProxyChain}, tlsApprovalArgs()...), isTLSSwitch)
+	return config, approval
+}
+
+// GenericConnectionFieldDocs 返回基于 ct 的通用资产接受的宿主连接字段的文档行，供 help
+// 列出；命令方式的类型一行都没有。文档行按 genericConnectionFields 过滤，help 因此列不出
+// 一个实际不被接受的字段。
+func GenericConnectionFieldDocs(ct *custom_type_entity.CustomType) []FieldDoc {
+	accepted, _ := genericConnectionFields(ct)
+	docs := ConnectionFieldDocs(ExtensionConnectionSpec{SSHTunnel: true, ProxyChain: true, TLS: true})
+	return slices.DeleteFunc(docs, func(doc FieldDoc) bool { return !slices.Contains(accepted, doc.Name) })
+}
+
+// applyGenericConnection 把请求里给出的宿主连接字段写进资产：单条 SSH 隧道在
+// Asset.SSHTunnelID，其余在 cfg.GenericConnection。只动本次给出的字段。
+func applyGenericConnection(ct *custom_type_entity.CustomType, a *asset_entity.Asset, cfg *asset_entity.GenericConfig, args map[string]any) error {
+	if accepted, _ := genericConnectionFields(ct); len(accepted) == 0 {
+		return nil
+	}
+	if _, ok := args[argSSHAsset]; ok {
+		a.SSHTunnelID = ArgInt64(args, argSSHAsset)
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain); err != nil {
+		return err
+	}
+	if _, ok := args[argTLSInsec]; ok {
+		cfg.TLSInsecure = ArgBool(args, argTLSInsec)
+	}
+	if _, ok := args[argTLSServer]; ok {
+		cfg.TLSServerName = ArgString(args, argTLSServer)
+	}
+	return applyTLSCertArgs(args, tlsCertStore{
+		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	})
 }
 
 // genericDefaultPolicy 是通用资产的按资产默认策略：复制其自定义类型上的默认规则

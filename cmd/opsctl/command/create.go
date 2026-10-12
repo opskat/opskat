@@ -573,7 +573,10 @@ Custom types (defined in the desktop app under Settings) are created with --type
 and stored as type generic. Their --config keys are the type's field names; a secret field
 takes a plaintext string or {"credential_id": N} to reference a managed credential, or use
 --secret <field> to type it. Like a bare --password, --secret needs an interactive terminal
-(otherwise exit code 3 with a NEEDS TTY marker).
+(otherwise exit code 3 with a NEEDS TTY marker). A custom type whose exec mode is HTTP also
+accepts the connection fields of built-in types in --config (ssh_asset_id, proxy_chain,
+tls_insecure, tls_server_name, tls_{ca,cert,key}_file or tls_{ca,cert,key}_pem; there is no
+tls switch); a local-command type rejects them. 'opsctl help <slug>' lists them.
 
 Authentication:
   --credential-id <id>       Reuse an existing managed credential
@@ -670,8 +673,8 @@ Flags (only provided fields are updated, others remain unchanged):
                           no terminal, opsctl exits with code 3 and a NEEDS TTY marker
 
 --config/--config-file is the only way to reach fields with no dedicated flag (e.g. a Redis
-asset's mode/nodes/master_name/sentinel_username/sentinel_password/node_address_map — see
-'opsctl create asset --help'). --host/--port/--username only override matching keys already
+asset's mode/nodes/master_name/sentinel_username/sentinel_password/node_address_map, or the
+connection fields of an asset on an HTTP custom type — see 'opsctl create asset --help'). --host/--port/--username only override matching keys already
 present in --config/--config-file. The change is merged onto the stored config and validated
 before approval; an invalid field is named and nothing is asked or written.
 

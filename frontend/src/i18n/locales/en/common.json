@@ -88,6 +88,7 @@
       "fields_required": "Add at least one field",
       "field_name_invalid": "\"{{name}}\" isn't a valid field name — start with a letter or underscore, then use letters, digits or underscores",
       "field_name_duplicate": "Field name \"{{name}}\" is already used",
+      "field_name_reserved": "\"{{name}}\" is reserved for connection settings (SSH tunnel, proxy chain, TLS) — use another field name",
       "secret_default_not_allowed": "Secret fields can't have a default value",
       "http_config_missing": "HTTP request settings are missing",
       "base_url_required": "Enter a base URL",

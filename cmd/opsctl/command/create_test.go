@@ -1306,3 +1306,71 @@ func TestCmdUpdateAssetCustomTypeMergesFieldsAndSecretNeedsTerminal(t *testing.T
 	assert.Contains(t, stderr.String(), needsTTYMarker)
 	assert.Contains(t, stderr.String(), "--secret")
 }
+
+// HTTP 方式的自定义类型与内置类型一样经 --config 接受宿主连接字段（Design decision 20）：
+// 走 opsctl 的真实解码路径（数字按 UseNumber 到达），私钥内容不进审批与审计；本地命令
+// 方式的类型把它们当未知字段拒绝。
+func TestCreateAndUpdateAssetCustomTypeHostConnectionFields(t *testing.T) {
+	ctx := setupGenericOpsctl(t)
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	writer := &mockAuditWriter{}
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	var approvalDetail string
+	allow := func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalDetail = req.Detail
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	requireCreateApproval, requireUpdateApproval = allow, allow
+	notifyAssetChanged = func() {}
+	stored := func() (*asset_entity.Asset, *asset_entity.GenericConfig) {
+		t.Helper()
+		assets, err := asset_repo.Asset().FindByName(ctx, "grafana-prod")
+		require.NoError(t, err)
+		require.Len(t, assets, 1)
+		cfg, err := assets[0].GetGenericConfig()
+		require.NoError(t, err)
+		return assets[0], cfg
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := createAsset(ctx, []string{"--type", "grafana", "--name", "grafana-prod", "--config", `{
+		"host":"grafana.internal","token":"t","ssh_asset_id":7,"tls_server_name":"grafana.example",
+		"tls_ca_pem":"CA-PEM","tls_cert_pem":"CERT-PEM","tls_key_pem":"KEY-PEM-SECRET"}`,
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	assert.Contains(t, approvalDetail, "grafana.example")
+	assert.Contains(t, approvalDetail, "CA-PEM")
+	for _, shown := range []string{approvalDetail, writer.lastCall().ArgsJSON, stdout.String(), stderr.String()} {
+		assert.NotContains(t, shown, "KEY-PEM-SECRET")
+	}
+	asset, cfg := stored()
+	assert.Equal(t, int64(7), asset.SSHTunnelID)
+	assert.Equal(t, "grafana.example", cfg.TLSServerName)
+	assert.Equal(t, "CERT-PEM", cfg.TLSCertPEM)
+	key, err := credential_svc.Default().Decrypt(cfg.TLSKeyPEM)
+	require.NoError(t, err)
+	assert.Equal(t, "KEY-PEM-SECRET", key)
+
+	stderr.Reset()
+	code = updateAsset(ctx, []string{"grafana-prod", "--config",
+		`{"proxy_chain":[{"type":"socks5","host":"10.0.0.5","port":1080}],"tls_insecure":true}`,
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, approvalDetail, "socks5: 10.0.0.5:1080")
+	asset, cfg = stored()
+	assert.Zero(t, asset.SSHTunnelID, "a proxy chain replaces the single SSH tunnel")
+	require.NotNil(t, cfg.ProxyChain)
+	require.Len(t, cfg.ProxyChain.Layers, 1)
+	assert.Equal(t, 1080, cfg.ProxyChain.Layers[0].Port)
+	assert.True(t, cfg.TLSInsecure)
+	assert.Equal(t, "grafana.example", cfg.TLSServerName, "a field that is not given keeps its stored value")
+
+	stderr.Reset()
+	code = createAsset(ctx, []string{"--type", "legacy-app", "--name", "legacy", "--config", `{"tls_insecure":true}`},
+		"session", commandIO{stdout: &stdout, stderr: &stderr})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "unknown config field(s): [tls_insecure]")
+}

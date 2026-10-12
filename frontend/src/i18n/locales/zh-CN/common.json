@@ -88,6 +88,7 @@
       "fields_required": "至少需要一个字段",
       "field_name_invalid": "字段名「{{name}}」不合法：须以字母或下划线开头，只能包含字母、数字和下划线",
       "field_name_duplicate": "字段名「{{name}}」重复",
+      "field_name_reserved": "字段名「{{name}}」是连接配置（SSH 隧道、代理链、TLS）的保留名，请换一个",
       "secret_default_not_allowed": "密钥字段不能设默认值",
       "http_config_missing": "缺少 HTTP 请求配置",
       "base_url_required": "请填写 Base URL",

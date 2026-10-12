@@ -887,6 +887,57 @@ func TestHelpForTypeName_CustomTypeSlugReturnsGenericDocPlusStructure(t *testing
 	}
 }
 
+// TestHandleHelp_GenericHTTPListsHostConnectionFieldsCommandDoesNot: an HTTP custom type
+// also accepts the host connection fields in put_asset / opsctl config (Design decision
+// 20), and help is the only place the model learns a config key — so both `help <slug>`
+// and `help <asset>` list them in the type's own section. There is no `tls` switch (TLS
+// follows the Base URL scheme), and a local-command type accepts none of them.
+func TestHandleHelp_GenericHTTPListsHostConnectionFieldsCommandDoesNot(t *testing.T) {
+	setupGenericPutDB(t)
+	if err := custom_type_svc.CustomType().Save(context.Background(), &custom_type_entity.CustomType{
+		Name: "AWS", Slug: "aws", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "region"}},
+		Command: &custom_type_entity.CommandConfig{Template: "aws --region {{region}}"},
+	}); err != nil {
+		t.Fatalf("save command type: %v", err)
+	}
+	asset := createGenericGrafanaAsset(t, "grafana-prod", map[string]any{"host": "grafana.internal", "token": "t"}, "")
+	genericDoc, _ := permission.HelpFor(asset_entity.AssetTypeGeneric)
+	// typeSection is what help adds for this type / asset on top of the SKILL.md body
+	// shared by every custom type.
+	typeSection := func(ref string) string {
+		t.Helper()
+		out, err := handleHelp(WithDocGate(context.Background(), NewDocGate()), map[string]any{"asset": ref})
+		if err != nil {
+			t.Fatalf("help(%s): %v", ref, err)
+		}
+		return strings.Replace(out, genericDoc, "", 1)
+	}
+	connectionFields := []string{
+		"ssh_asset_id", "proxy_chain", "tls_insecure", "tls_server_name",
+		"tls_ca_file", "tls_cert_file", "tls_key_file", "tls_ca_pem", "tls_cert_pem", "tls_key_pem",
+	}
+
+	for _, ref := range []string{"grafana", asset.Name} {
+		section := typeSection(ref)
+		for _, field := range connectionFields {
+			if !strings.Contains(section, "- "+field+" (") {
+				t.Errorf("help(%s) should list connection field %q, got %q", ref, field, section)
+			}
+		}
+		if strings.Contains(section, "- tls (") {
+			t.Errorf("help(%s) must not list a tls switch: generic assets have none, got %q", ref, section)
+		}
+	}
+
+	command := typeSection("aws")
+	for _, field := range connectionFields {
+		if strings.Contains(command, field) {
+			t.Errorf("help for a local-command type must not mention connection field %q, got %q", field, command)
+		}
+	}
+}
+
 // TestHandleHelp_GenericAssetAddsInstanceValuesMaskedSecretAddressTunnelAndDescription
 // locks the asset-level half: `help <asset>` for a generic asset appends the type
 // structure plus this instance's field values — secret fields report only "set", never

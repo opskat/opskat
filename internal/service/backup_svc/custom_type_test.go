@@ -1,6 +1,7 @@
 package backup_svc
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -299,4 +300,71 @@ func TestImport_CustomTypes_CredentialRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, restoredCreds[0].ID, cfg.Values["token"].CredentialID, "credential id must be remapped like SSH's cfg.CredentialID")
 	assert.Empty(t, cfg.Values["token"].Value)
+}
+
+// 通用资产的连接配置跟随内置类型（Design decision 20），备份也一样：以内容保存的 TLS 证书
+// 材料——尤其是加密保存的客户端私钥 tls_key_pem——导出（含 / 不含凭据）与导入之后，结果与
+// Redis 资产的同名字段逐步一致。
+func TestBackup_GenericTLSCertContentIsHandledLikeRedis(t *testing.T) {
+	type certContent struct{ CA, Cert, Key string }
+	source := taggedCredentialCrypto{tag: "src:"}
+	stored := certContent{CA: "CA-PEM", Cert: "CERT-PEM", Key: source.tag + "CLIENT-KEY-PEM"}
+
+	seed := func(t *testing.T) context.Context {
+		t.Helper()
+		ctx := setupBackupTest(t)
+		require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+		generic := createGenericAsset(t, "generic-mtls", "grafana", map[string]asset_entity.GenericValue{
+			"host":  {Value: "h1"},
+			"token": {Value: source.tag + "token"},
+		})
+		genericCfg, err := generic.GetGenericConfig()
+		require.NoError(t, err)
+		genericCfg.TLSCAPEM, genericCfg.TLSCertPEM, genericCfg.TLSKeyPEM = stored.CA, stored.Cert, stored.Key
+		require.NoError(t, generic.SetGenericConfig(genericCfg))
+		require.NoError(t, asset_repo.Asset().Create(ctx, generic))
+
+		redis := &asset_entity.Asset{Name: "redis-mtls", Type: asset_entity.AssetTypeRedis, Status: asset_entity.StatusActive}
+		require.NoError(t, redis.SetRedisConfig(&asset_entity.RedisConfig{
+			Host: "10.0.0.1", Port: 6379, Password: source.tag + "password", TLS: true,
+			TLSCAPEM: stored.CA, TLSCertPEM: stored.Cert, TLSKeyPEM: stored.Key,
+		}))
+		require.NoError(t, asset_repo.Asset().Create(ctx, redis))
+		return ctx
+	}
+	certContents := func(t *testing.T, assets []*asset_entity.Asset) (generic, redis certContent) {
+		t.Helper()
+		genericCfg := findGenericConfig(t, assets, "generic-mtls")
+		generic = certContent{genericCfg.TLSCAPEM, genericCfg.TLSCertPEM, genericCfg.TLSKeyPEM}
+		for _, a := range assets {
+			if a.Name == "redis-mtls" {
+				redisCfg, err := a.GetRedisConfig()
+				require.NoError(t, err)
+				return generic, certContent{redisCfg.TLSCAPEM, redisCfg.TLSCertPEM, redisCfg.TLSKeyPEM}
+			}
+		}
+		t.Fatal("asset redis-mtls not found")
+		return generic, redis
+	}
+
+	for name, includeCredentials := range map[string]bool{"with credentials": true, "without credentials": false} {
+		t.Run(name, func(t *testing.T) {
+			data, err := Export(seed(t), &ExportOptions{IncludeCredentials: includeCredentials}, source)
+			require.NoError(t, err)
+			generic, redis := certContents(t, data.Assets)
+			assert.Equal(t, redis, generic, "exported")
+
+			serialized, err := json.Marshal(data)
+			require.NoError(t, err)
+			var transported BackupData
+			require.NoError(t, json.Unmarshal(serialized, &transported))
+			ctx := setupBackupTest(t)
+			_, err = Import(ctx, &transported, &ImportOptions{ImportAssets: true, Mode: "replace"}, taggedCredentialCrypto{tag: "dst:"})
+			require.NoError(t, err)
+			restored, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+			require.NoError(t, err)
+			generic, redis = certContents(t, restored)
+			assert.Equal(t, redis, generic, "restored")
+		})
+	}
 }

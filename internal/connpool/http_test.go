@@ -2,7 +2,9 @@ package connpool
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"net"
@@ -16,8 +18,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/opskat/opskat/internal/connpool/connpooltest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/socksdial/socksdialtest"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 )
 
 // httpGet 发一次 GET 并返回状态码（响应体读完即关）。
@@ -71,6 +75,52 @@ func TestNewHTTPTransport_TLSUsesAssetCAAndNeverSkipsVerification(t *testing.T) 
 
 	_, _, err = NewHTTPTransport(context.Background(), HTTPConnConfig{TLS: TLSFields{CAFile: filepath.Join(t.TempDir(), "missing.pem")}}, nil)
 	assert.ErrorContains(t, err, "CA")
+}
+
+// 通用资产以内容保存的证书材料（CA、客户端证书、加密保存的客户端私钥）直接用于握手：
+// 服务端要求并校验客户端证书，只有三份材料都生效请求才到得了。
+func TestGenericHTTPConn_StoredCertContentCompletesMutualTLS(t *testing.T) {
+	oldCrypto := credential_svc.Default()
+	credential_svc.SetDefault(credential_svc.New("http-mtls-test-key", []byte("0123456789abcdef")))
+	t.Cleanup(func() { credential_svc.SetDefault(oldCrypto) })
+
+	clientCert, clientKey := connpooltest.SelfSignedPEM(t)
+	clientCAs := x509.NewCertPool()
+	require.True(t, clientCAs.AppendCertsFromPEM(clientCert))
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	srv.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	serverCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+
+	// 按资产落库的 JSON 构造：键名是与内置类型一致的 tls_*_pem。
+	storedAsset := func(keyPEM string) (*asset_entity.Asset, *asset_entity.GenericConfig) {
+		raw, err := json.Marshal(map[string]any{
+			"custom_type":  "grafana",
+			"tls_ca_pem":   string(serverCA),
+			"tls_cert_pem": string(clientCert),
+			"tls_key_pem":  keyPEM,
+		})
+		require.NoError(t, err)
+		asset := &asset_entity.Asset{Type: asset_entity.AssetTypeGeneric, Config: string(raw)}
+		cfg, err := asset.GetGenericConfig()
+		require.NoError(t, err)
+		return asset, cfg
+	}
+
+	encryptedKey, err := credential_svc.Default().Encrypt(string(clientKey))
+	require.NoError(t, err)
+	transport, _, err := NewHTTPTransport(context.Background(), GenericHTTPConn(storedAsset(encryptedKey)), nil)
+	require.NoError(t, err)
+	status, err := httpGet(t, transport, srv.URL)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, status)
+
+	// 存下来的私钥内容是密文：没加密过的不被当成密钥使用，也不会退回不带客户端证书去连。
+	_, _, err = NewHTTPTransport(context.Background(), GenericHTTPConn(storedAsset(string(clientKey))), nil)
+	require.Error(t, err)
 }
 
 func TestNewHTTPTransport_TunnelWithoutPoolFails(t *testing.T) {

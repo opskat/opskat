@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
 
@@ -130,6 +131,23 @@ func TestGenericConnTest_EditReusesUnchangedStoredSecrets(t *testing.T) {
 		"asset_id": stored.ID, "custom_type": "probe", "values": map[string]any{"host": host, "token": "typed-new"},
 	}), "")
 	assert.ErrorContains(t, err, "401", "a secret typed in the form replaces the stored one")
+}
+
+// 表单上以内容填写的证书材料（客户端私钥与已保存的资产一样是密文）直接用于测试连接。
+func TestGenericConnTest_UsesCertContentFromTheForm(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newMutualTLSServer(t)
+	saveHTTPType(t, ctx, "probe", "https://{{host}}")
+	encryptedKey, err := credential_svc.Default().Encrypt(srv.keyPEM)
+	require.NoError(t, err)
+
+	detail, err := ProbeGenericConnection(ctx, connTestJSON(t, map[string]any{
+		"custom_type": "probe", "values": map[string]any{"host": srv.host(), "token": testSecret},
+		"tls_ca_pem": srv.caPEM, "tls_cert_pem": srv.certPEM, "tls_key_pem": encryptedKey,
+	}), "")
+	require.NoError(t, err)
+	assert.Contains(t, detail, "HTTP 200")
+	assert.EqualValues(t, 1, srv.hits.Load())
 }
 
 func TestGenericConnTest_ConnectionErrorsSurfaceAndCommandTypesAreRejected(t *testing.T) {

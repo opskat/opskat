@@ -268,9 +268,9 @@ func helpForTypeName(ctx context.Context, ref string) (string, error) {
 }
 
 // renderCustomTypeStructure 渲染一个自定义类型的结构：执行方式、Base URL / 命令模板、
-// 认证 / 环境变量绑定，以及字段列表及其 secret/required/default 属性（spec 「帮助、
-// 技能与门禁」第 1 条）。类型层（help <slug>）与资产层（help <资产>）共用同一份渲染，
-// 避免两条路径各写一遍、内容跑偏。
+// 认证 / 环境变量绑定，字段列表及其 secret/required/default 属性（spec 「帮助、
+// 技能与门禁」第 1 条），以及 HTTP 方式下接受的宿主连接字段。类型层（help <slug>）
+// 与资产层（help <资产>）共用同一份渲染，避免两条路径各写一遍、内容跑偏。
 func renderCustomTypeStructure(ct *custom_type_entity.CustomType) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nCustom type %q (%s), exec mode=%s.\n", ct.Slug, ct.Name, ct.ExecMode)
@@ -315,6 +315,13 @@ func renderCustomTypeStructure(ct *custom_type_entity.CustomType) string {
 			fmt.Fprintf(&b, "- %s (%s)\n", f.Name, strings.Join(attrs, ", "))
 		} else {
 			fmt.Fprintf(&b, "- %s\n", f.Name)
+		}
+	}
+	// HTTP 方式的类型在字段之外还接受宿主连接字段（Design decision 20）；命令方式没有。
+	if docs := assettype.GenericConnectionFieldDocs(ct); len(docs) > 0 {
+		b.WriteString("\nConnection fields (config keys accepted next to the fields above; they set how the asset is reached):\n")
+		for _, doc := range docs {
+			fmt.Fprintf(&b, "- %s (%s): %s\n", doc.Name, doc.Type, doc.Notes)
 		}
 	}
 	if strings.TrimSpace(ct.Usage) != "" {
