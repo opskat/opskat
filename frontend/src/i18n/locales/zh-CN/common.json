@@ -977,9 +977,6 @@
     "addDescription": "添加备注",
     "tlsInsecure": "跳过证书校验",
     "tlsServerName": "TLS Server Name",
-    "tlsCAFile": "CA 证书路径",
-    "tlsCertFile": "客户端证书路径",
-    "tlsKeyFile": "客户端私钥路径",
     "generic": {
       "tabConfig": "配置",
       "required": "必填",

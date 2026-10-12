@@ -14,7 +14,7 @@ import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formC
 import type { asset_entity, custom_type_entity } from "../../../wailsjs/go/models";
 import { RevealGenericSecret } from "../../../wailsjs/go/customtype/CustomType";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyConfig";
-import { tlsFileFields } from "./tlsFields";
+import { tlsCertFields } from "./tlsCertConfig";
 import {
   EXEC_MODE_HTTP,
   buildGenericConfig,
@@ -140,7 +140,11 @@ function GenericTypeForm({ ref, ct, editAsset, editConfig, onValidityChange, onT
       sshTunnelId: genericTunnelId(ct, s),
     }),
     buildTest: isHttp
-      ? async (s) => ({ assetType: "generic", configJSON: buildGenericTestInput(ct, s, editAsset?.ID), password: "" })
+      ? async (s, c) => ({
+          assetType: "generic",
+          configJSON: await buildGenericTestInput(ct, s, c.encryptPassword, editAsset?.ID),
+          password: "",
+        })
       : undefined,
     deps: [ct],
     validityDeps: [ct],
@@ -241,7 +245,9 @@ function GenericTypeForm({ ref, ct, editAsset, editConfig, onValidityChange, onT
         </div>
       ),
     },
-    ...tlsFileFields<GenericFormState>({ serverNamePlaceholder: "" }),
+    { kind: "switch", key: "tlsInsecure", label: "asset.tlsInsecure" },
+    { kind: "text", key: "tlsServerName", label: "asset.tlsServerName", placeholder: "" },
+    ...tlsCertFields<GenericFormState>(),
   ];
 
   const groups: ConfigGroup[] = [{ key: "config", label: "asset.generic.tabConfig", render: renderFields }];

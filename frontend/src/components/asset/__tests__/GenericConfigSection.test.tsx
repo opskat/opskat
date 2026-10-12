@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { GenericConfigSection } from "@/components/asset/GenericConfigSection";
@@ -196,5 +196,68 @@ describe("GenericConfigSection", () => {
     expect(JSON.parse(built.configJSON).values.token).toEqual({ credential_id: 3 });
     const tc = await ref.current!.buildTestConfig!(ctx);
     expect(JSON.parse(tc.configJSON).values.token).toEqual({ credential_id: 3 });
+  });
+  describe("TLS certificate input on the connection tab", () => {
+    const CA = "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----";
+    const CERT = "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----";
+    const KEY = "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----";
+
+    async function renderEdit(tls: Record<string, unknown>) {
+      const editAsset = new asset_entity.Asset({
+        ID: 42,
+        Type: "generic",
+        Config: JSON.stringify({
+          custom_type: "grafana",
+          values: { host: { value: "g.example.com" }, token: { value: "CIPHER" } },
+          ...tls,
+        }),
+      });
+      const ref = createRef<AssetFormHandle>();
+      render(
+        <GenericConfigSection
+          ref={ref}
+          editAsset={editAsset}
+          ctx={{ ...ctx, isEdit: true }}
+          onValidityChange={() => {}}
+        />
+      );
+      await screen.findByTestId("generic-field-host");
+      fireEvent.click(screen.getByTestId("config-tab-connection"));
+      return ref;
+    }
+    const saved = async (ref: React.RefObject<AssetFormHandle | null>) =>
+      JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    const tested = async (ref: React.RefObject<AssetFormHandle | null>) =>
+      JSON.parse((await ref.current!.buildTestConfig!(ctx)).configJSON);
+
+    it("restores stored content without echoing the key, and keeps its ciphertext on save and test", async () => {
+      const ref = await renderEdit({ tls_ca_pem: CA, tls_cert_pem: CERT, tls_key_pem: "KEYCIPHER" });
+      expect(screen.getByTestId("tls-ca-pem")).toHaveValue(CA);
+      expect(screen.getByTestId("tls-key-pem")).toHaveValue("");
+      expect(await saved(ref)).toMatchObject({ tls_ca_pem: CA, tls_cert_pem: CERT, tls_key_pem: "KEYCIPHER" });
+      expect(await tested(ref)).toMatchObject({ tls_cert_pem: CERT, tls_key_pem: "KEYCIPHER" });
+    });
+
+    it("encrypts a typed key before save and before test-connection", async () => {
+      const ref = await renderEdit({ tls_cert_pem: CERT, tls_key_pem: "KEYCIPHER" });
+      fireEvent.change(screen.getByTestId("tls-key-pem"), { target: { value: KEY } });
+      expect((await saved(ref)).tls_key_pem).toBe(`enc(${KEY})`);
+      expect((await tested(ref)).tls_key_pem).toBe(`enc(${KEY})`);
+    });
+
+    it("restores the file source and writes only the current source's group", async () => {
+      const ref = await renderEdit({ tls_ca_file: "/ca.pem", tls_cert_file: "/c.crt", tls_key_file: "/c.key" });
+      expect(screen.getByTestId("tls-ca-file")).toHaveValue("/ca.pem");
+      const cfg = await saved(ref);
+      expect(cfg).toMatchObject({ tls_ca_file: "/ca.pem", tls_cert_file: "/c.crt", tls_key_file: "/c.key" });
+      expect(cfg.tls_ca_pem).toBeUndefined();
+
+      fireEvent.click(screen.getByTestId("tls-cert-source-pem"));
+      fireEvent.change(screen.getByTestId("tls-ca-pem"), { target: { value: CA } });
+      const switched = await saved(ref);
+      expect(switched.tls_ca_pem).toBe(CA);
+      expect(switched.tls_ca_file).toBeUndefined();
+      expect((await tested(ref)).tls_ca_file).toBeUndefined();
+    });
   });
 });

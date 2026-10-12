@@ -6,7 +6,14 @@ import {
   type ConnectionFormFields,
   type ProxyChainJSON,
 } from "./proxyConfig";
-import { TLS_FILE_DEFAULTS, type TlsFileFormFields } from "./tlsFields";
+import {
+  TLS_CERT_DEFAULTS,
+  resolveTLSKey,
+  tlsCertsFromJSON,
+  tlsCertsToJSON,
+  type TLSCertFormFields,
+  type TLSCertJSON,
+} from "./tlsCertConfig";
 
 /** 自定义类型的执行方式(与后端 custom_type_entity.ExecModeHTTP 的值一致)。 */
 export const EXEC_MODE_HTTP = "http";
@@ -18,15 +25,12 @@ export interface GenericValueJSON {
 }
 
 /** 通用资产 Asset.Config(后端 asset_entity.GenericConfig,GenericConnection 平铺)。 */
-export interface GenericConfigJSON {
+export interface GenericConfigJSON extends TLSCertJSON {
   custom_type?: string;
   values?: Record<string, GenericValueJSON>;
   proxy_chain?: ProxyChainJSON;
   tls_insecure?: boolean;
   tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
 }
 
 export interface GenericSecretState {
@@ -38,7 +42,9 @@ export interface GenericSecretState {
   storedCipher: string;
 }
 
-export interface GenericFormState extends ConnectionFormFields, TlsFileFormFields {
+export interface GenericFormState extends ConnectionFormFields, TLSCertFormFields {
+  tlsInsecure: boolean;
+  tlsServerName: string;
   /** 非密钥字段的当前值。 */
   values: Record<string, string>;
   /** 字段是否是显式填写的值(编辑态已存在,或用户改动过);未显式填写且等于默认值时不写入,解析时取默认值。 */
@@ -86,11 +92,9 @@ export function initGenericState(
     explicit,
     secrets,
     ...connection,
-    tlsInsecure: editConfig?.tls_insecure ?? TLS_FILE_DEFAULTS.tlsInsecure,
-    tlsServerName: editConfig?.tls_server_name ?? TLS_FILE_DEFAULTS.tlsServerName,
-    tlsCAFile: editConfig?.tls_ca_file ?? TLS_FILE_DEFAULTS.tlsCAFile,
-    tlsCertFile: editConfig?.tls_cert_file ?? TLS_FILE_DEFAULTS.tlsCertFile,
-    tlsKeyFile: editConfig?.tls_key_file ?? TLS_FILE_DEFAULTS.tlsKeyFile,
+    tlsInsecure: editConfig?.tls_insecure ?? false,
+    tlsServerName: editConfig?.tls_server_name ?? "",
+    ...(editConfig ? tlsCertsFromJSON(editConfig) : TLS_CERT_DEFAULTS),
   };
 }
 
@@ -113,7 +117,8 @@ function includePlain(f: custom_type_entity.Field, state: GenericFormState): boo
 function connectionJSON(
   ct: custom_type_entity.CustomType,
   state: GenericFormState,
-  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+  proxyChainSecrets: Record<string, { password?: string; token?: string }> | undefined,
+  tlsKey: string
 ): Omit<GenericConfigJSON, "custom_type" | "values"> {
   if (ct.execMode !== EXEC_MODE_HTTP) return {};
   const out: Omit<GenericConfigJSON, "custom_type" | "values"> = {};
@@ -121,10 +126,7 @@ function connectionJSON(
   if (chain) out.proxy_chain = chain;
   if (state.tlsInsecure) out.tls_insecure = true;
   if (state.tlsServerName.trim()) out.tls_server_name = state.tlsServerName.trim();
-  if (state.tlsCAFile.trim()) out.tls_ca_file = state.tlsCAFile.trim();
-  if (state.tlsCertFile.trim()) out.tls_cert_file = state.tlsCertFile.trim();
-  if (state.tlsKeyFile.trim()) out.tls_key_file = state.tlsKeyFile.trim();
-  return out;
+  return Object.assign(out, tlsCertsToJSON(state, tlsKey));
 }
 
 /** HTTP 方式按表单选的 SSH 隧道;命令方式不走网络,恒 0。 */
@@ -154,7 +156,11 @@ export async function buildGenericConfig(
       values[f.name] = { value: state.values[f.name] };
     }
   }
-  const cfg: GenericConfigJSON = { custom_type: ct.slug, values, ...connectionJSON(ct, state, proxyChainSecrets) };
+  const cfg: GenericConfigJSON = {
+    custom_type: ct.slug,
+    values,
+    ...connectionJSON(ct, state, proxyChainSecrets, await resolveTLSKey(state, encrypt)),
+  };
   return JSON.stringify(cfg);
 }
 
@@ -162,11 +168,12 @@ export async function buildGenericConfig(
  * 测试连接输入(后端 helper.GenericConnTestInput):值与 put_asset 同形,密钥给明文或
  * {credential_id};编辑态未改动的直接输入密钥不给出,由后端沿用已存的值。
  */
-export function buildGenericTestInput(
+export async function buildGenericTestInput(
   ct: custom_type_entity.CustomType,
   state: GenericFormState,
+  encrypt: (plain: string) => Promise<string>,
   assetId?: number
-): string {
+): Promise<string> {
   const values: Record<string, string | { credential_id: number }> = {};
   for (const f of ct.fields ?? []) {
     if (f.secret) {
@@ -189,7 +196,8 @@ export function buildGenericTestInput(
     connectionJSON(
       ct,
       state,
-      Object.fromEntries(state.proxyChainLayers.map((l) => [l.id, { password: l.password, token: l.token }]))
+      Object.fromEntries(state.proxyChainLayers.map((l) => [l.id, { password: l.password, token: l.token }])),
+      await resolveTLSKey(state, encrypt)
     )
   );
   return JSON.stringify(input);

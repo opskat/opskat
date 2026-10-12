@@ -977,9 +977,6 @@
     "addDescription": "Add description",
     "tlsInsecure": "Skip certificate verification",
     "tlsServerName": "TLS server name",
-    "tlsCAFile": "CA certificate path",
-    "tlsCertFile": "Client certificate path",
-    "tlsKeyFile": "Client key path",
     "generic": {
       "tabConfig": "Config",
       "required": "Required",
