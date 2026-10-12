@@ -1264,6 +1264,13 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           [tabId]: { ...s.mongoStates[tabId], databases, error: null },
         },
       }));
+
+      // Also refresh collections for already-loaded databases that still exist,
+      // otherwise the top-level refresh button leaves stale collection lists.
+      const loaded = Object.keys(get().mongoStates[tabId]?.collections ?? {});
+      await Promise.all(
+        loaded.filter((db) => databases.includes(db)).map((db) => get().loadMongoCollections(tabId, db))
+      );
     } catch (err) {
       set((s) => ({
         mongoStates: {
