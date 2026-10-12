@@ -104,6 +104,43 @@ func exprEnd(s string) int {
 	return strings.Index(s, "}}")
 }
 
+// SplitWords 按空白把模板源码拆成词，每个词本身仍是一段模板（命令模板据此先拆 argv 再
+// 逐词渲染，渲染出的空白因此不会拆出新参数）。`{{ 表达式 }}` 是不可再分的整体：内部的
+// 空白不是分隔符，表达式在哪里结束与 Parse 认的是同一条规则（exprEnd——字符串字面量里的
+// `}}` 不算结束）。没有闭合的 `{{` 把余下内容都归进当前词，由 Parse 报错。
+func SplitWords(src string) []string {
+	var words []string
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			words = append(words, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(src); {
+		if strings.HasPrefix(src[i:], "{{") {
+			end := exprEnd(src[i+2:])
+			if end < 0 {
+				cur.WriteString(src[i:])
+				break
+			}
+			stop := i + 2 + end + 2
+			cur.WriteString(src[i:stop])
+			i = stop
+			continue
+		}
+		switch src[i] {
+		case ' ', '\t', '\n', '\r':
+			flush()
+		default:
+			cur.WriteByte(src[i])
+		}
+		i++
+	}
+	flush()
+	return words
+}
+
 // Render 用 rc 携带的字段值 / 固定 now / 可选 request 信息对模板求值，
 // 返回渲染后的字符串。同一个 rc 内多次引用 now.unix / now.unix_ms
 // 得到的是同一个时刻（rc 构造时取的那一次）。

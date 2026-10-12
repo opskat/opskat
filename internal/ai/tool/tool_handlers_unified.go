@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
@@ -393,8 +396,10 @@ func renderGenericAssetHelp(ctx context.Context, asset *asset_entity.Asset) (str
 
 // renderGenericTunnelLine 显示 HTTP 方式实际使用的网络路径，路径判定与传输层共用
 // connpool.HTTPRouteFor（代理链 > SSH 隧道 > 直连；隧道在 Asset.SSHTunnelID，代理链在
-// GenericConfig，Design decision 17）。查不到隧道 / 代理链 SSH 层资产（如已被删除）时明确
-// 说明查不到，而不是静默显示成"无隧道"——那会把一个配置不一致的问题伪装成"直连"。
+// GenericConfig，Design decision 17）。代理链各跳的写法与新建 / 更新资产的审批摘要是同一份
+// （assettype.ProxyChainSummary：每跳只有类型与目标，不含密码、Token，HTTP 隧道 URL 去掉
+// userinfo / query）。查不到隧道 / 代理链 SSH 层资产（如已被删除）时仍照实列出那一跳的资产
+// ID，而不是静默显示成"无隧道"——那会把一个配置不一致的问题伪装成"直连"。
 func renderGenericTunnelLine(ctx context.Context, asset *asset_entity.Asset) (string, error) {
 	cfg, err := asset.GetGenericConfig()
 	if err != nil {
@@ -403,14 +408,14 @@ func renderGenericTunnelLine(ctx context.Context, asset *asset_entity.Asset) (st
 	conn := connpool.GenericHTTPConn(asset, cfg)
 	switch connpool.HTTPRouteFor(conn) {
 	case connpool.HTTPRouteProxyChain:
-		var hops []string
-		for _, layer := range asset_entity.NormalizeProxyChain(conn.ProxyChain).Layers {
-			if layer.Type == asset_entity.ProxyChainLayerSSH {
-				hops = append(hops, assetNameOrID(ctx, layer.SSHAssetID))
-			} else {
-				hops = append(hops, fmt.Sprintf("%s %s:%d", layer.Type, layer.Host, layer.Port))
+		hops := assettype.ProxyChainSummary(asset_entity.NormalizeProxyChain(conn.ProxyChain), func(id int64) string {
+			hop, err := asset_svc.Asset().Get(ctx, id)
+			if err != nil {
+				logger.Ctx(ctx).Warn("resolve proxy chain hop name for help", zap.Int64("assetID", id), zap.Error(err))
+				return ""
 			}
-		}
+			return hop.Name
+		})
 		return fmt.Sprintf("Tunnel: proxy chain %s\n", strings.Join(hops, " -> ")), nil
 	case connpool.HTTPRouteSSHTunnel:
 		return fmt.Sprintf("Tunnel: %s\n", assetNameOrID(ctx, conn.TunnelID)), nil

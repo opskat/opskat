@@ -3,6 +3,7 @@ package authtmpl_test
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"reflect"
 	"regexp"
 	"strconv"
 	"testing"
@@ -289,5 +290,32 @@ func TestAuthTypeFor_BuiltinsRegistered(t *testing.T) {
 	}
 	if _, ok := authtmpl.AuthTypeFor("nonexistent"); ok {
 		t.Fatalf("AuthTypeFor(nonexistent) unexpectedly found")
+	}
+}
+
+// SplitWords 是命令模板的拆词：只有 `{{ }}` 之外的空白才是分隔符，表达式边界与 Parse 相同。
+func TestSplitWords(t *testing.T) {
+	tests := []struct {
+		name, template string
+		want           []string
+	}{
+		{"simple", "aws --region {{region}} --output json", []string{"aws", "--region", "{{region}}", "--output", "json"}},
+		{"adjacent, no space", "--region={{region}}", []string{"--region={{region}}"}},
+		{"whitespace inside expr is not a delimiter",
+			`aws --tag {{ name + " " + env }}`, []string{"aws", "--tag", `{{ name + " " + env }}`}},
+		{"closing braces inside a string literal do not end the expr",
+			`echo {{"a }} b"}} tail`, []string{"echo", `{{"a }} b"}}`, "tail"}},
+		{"extra whitespace collapses", "  aws   s3  ", []string{"aws", "s3"}},
+		{"empty", "", nil},
+		{"whitespace only", "   ", nil},
+		{"unterminated expr swallows the rest, including whitespace", "aws {{unterminated rest", []string{"aws", "{{unterminated rest"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := authtmpl.SplitWords(tt.template)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("SplitWords(%q) = %q, want %q", tt.template, got, tt.want)
+			}
+		})
 	}
 }

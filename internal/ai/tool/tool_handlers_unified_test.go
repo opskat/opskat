@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1212,7 +1213,7 @@ func TestHandleHelp_GenericAssetTunnelLineFollowsActualRoute(t *testing.T) {
 
 	out, err := handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "Tunnel: proxy chain jump-host -> socks5 socks.example:1080")
+	assert.Contains(t, out, fmt.Sprintf("Tunnel: proxy chain ssh: jump-host (#%d) -> socks5: socks.example:1080", jump.ID))
 	assert.NotContains(t, out, "direct connection")
 
 	// No chain: the SSH tunnel is reported by name.
@@ -1229,4 +1230,36 @@ func TestHandleHelp_GenericAssetTunnelLineFollowsActualRoute(t *testing.T) {
 	out, err = handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-chain"})
 	require.NoError(t, err)
 	assert.Contains(t, out, "Tunnel: none (direct connection)")
+}
+
+// TestHandleHelp_GenericAssetTunnelLineNamesAnHTTPTunnelHop: an HTTP-tunnel layer has a URL,
+// not a host:port — the Tunnel line must say where that hop goes (it used to print
+// "http_tunnel :0"), without the URL's query or the layer's token.
+func TestHandleHelp_GenericAssetTunnelLineNamesAnHTTPTunnelHop(t *testing.T) {
+	setupGenericPutDB(t)
+	ctx := context.Background()
+	jump := &asset_entity.Asset{Name: "jump-host", Type: asset_entity.AssetTypeSSH}
+	require.NoError(t, asset_repo.Asset().Create(ctx, jump))
+
+	asset := createGenericGrafanaAsset(t, "grafana-relay", map[string]any{"host": "grafana.internal", "token": "t"}, "")
+	cfg, err := asset.GetGenericConfig()
+	require.NoError(t, err)
+	enabled := true
+	cfg.ProxyChain = &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{
+		{
+			Type: asset_entity.ProxyChainLayerHTTPTunnel, Enabled: &enabled, Order: 1,
+			URL: "https://relay.example/tunnel.php?key=url-secret", Token: "layer-token",
+		},
+		{Type: asset_entity.ProxyChainLayerSSH, Enabled: &enabled, Order: 2, SSHAssetID: jump.ID},
+	}}
+	require.NoError(t, asset.SetGenericConfig(cfg))
+	require.NoError(t, asset_repo.Asset().Update(ctx, asset))
+
+	out, err := handleHelp(WithDocGate(ctx, NewDocGate()), map[string]any{"asset": "grafana-relay"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "https://relay.example/tunnel.php")
+	assert.Contains(t, out, "jump-host")
+	for _, hidden := range []string{"http_tunnel :0", "url-secret", "layer-token"} {
+		assert.NotContains(t, out, hidden)
+	}
 }

@@ -65,6 +65,26 @@ func TestGenericCommand_TemplateSplitsArgvBeforeRenderingAndAppendsExecArgsLiter
 		"exec args are appended literally, verbatim, never template-rendered")
 }
 
+// 命令模板的拆词与模板语言认同一个表达式边界：字符串字面量里的 `}}` 不结束表达式（保存
+// 校验按这条规则放行），所以执行时它也必须留在同一个 argv 元素里，而不是保存通过、执行
+// 时才报语法错误。
+func TestGenericCommand_TemplateStringLiteralMayContainClosingBraces(t *testing.T) {
+	ctx := setupGenericDB(t)
+	script := writeArgvEnvScript(t, 0)
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "cli", Slug: "cli-braces", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "region"}},
+		Command: &custom_type_entity.CommandConfig{Template: script + ` {{"a }} b " + region}} tail`},
+	}))
+	asset := genericAsset(t, "cli-braces", map[string]string{"region": "ap-east-1"})
+
+	var stdout, stderr bytes.Buffer
+	res, err := StreamGenericOnAsset(ctx, asset, nil, permission.Stdio{Stdout: &stdout, Stderr: &stderr})
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.ExitCode)
+	assert.Contains(t, stdout.String(), "<a }} b ap-east-1>\n<tail>\n")
+}
+
 func TestGenericCommand_TemplateEnvBindingsAndWorkingDirectory(t *testing.T) {
 	ctx := setupGenericDB(t)
 	script := writeArgvEnvScript(t, 0, "AWS_PROFILE")

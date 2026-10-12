@@ -11,27 +11,6 @@ import (
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
 
-func TestSplitTemplateArgv(t *testing.T) {
-	tests := []struct {
-		name, template string
-		want           []string
-	}{
-		{"simple", "aws --region {{region}} --output json", []string{"aws", "--region", "{{region}}", "--output", "json"}},
-		{"adjacent, no space", "--region={{region}}", []string{"--region={{region}}"}},
-		{"whitespace inside expr is not a delimiter",
-			`aws --tag {{ name + " " + env }}`, []string{"aws", "--tag", `{{ name + " " + env }}`}},
-		{"extra whitespace collapses", "  aws   s3  ", []string{"aws", "s3"}},
-		{"empty", "", nil},
-		{"whitespace only", "   ", nil},
-		{"unterminated expr swallows the rest, including whitespace", "aws {{unterminated rest", []string{"aws", "{{unterminated rest"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, splitTemplateArgv(tt.template))
-		})
-	}
-}
-
 func TestBuildShellCommandArgv(t *testing.T) {
 	tests := []struct {
 		name, goos, shell, command string

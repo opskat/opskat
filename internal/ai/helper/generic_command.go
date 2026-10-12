@@ -23,7 +23,7 @@ import (
 // decision 6）：
 //
 //   - 类型上配了命令模板：先按空白（`{{ }}` 内部除外）把模板源码拆成 token，逐个渲染
-//     （splitTemplateArgv + renderCommandArgv），再把 exec 传入的参数按字面追加在后面
+//     （authtmpl.SplitWords + renderCommandArgv），再把 exec 传入的参数按字面追加在后面
 //     （不渲染），不经过 shell 直接用 os/exec 启动。拆分发生在渲染之前，字段值里的空格
 //     不会拆出新参数。
 //   - 类型上没配模板：exec 传入的就是整条 shell 命令，用系统默认 shell
@@ -71,7 +71,7 @@ func describeCommandMode(_ context.Context, t *GenericTarget, _ string) (string,
 	if ct.Command.Template == "" {
 		return "Local command via " + shellutil.DefaultShell(), nil
 	}
-	tokens := splitTemplateArgv(ct.Command.Template)
+	tokens := authtmpl.SplitWords(ct.Command.Template)
 	if len(tokens) == 0 || strings.Contains(tokens[0], "{{") {
 		return "Local command (templated program)", nil
 	}
@@ -180,12 +180,12 @@ func buildShellInvocation(ct *custom_type_entity.CustomType, values map[string]s
 	return &commandInvocation{argv: shellCommandArgv(rawCommand), env: append(os.Environ(), env...)}, nil
 }
 
-// renderCommandArgv 渲染命令模板：splitTemplateArgv 先按空白拆出 token（`{{ }}` 内部的
+// renderCommandArgv 渲染命令模板：authtmpl.SplitWords 先按空白拆出 token（`{{ }}` 内部的
 // 空白不算分隔符），再逐个 authtmpl.Parse + Render——分两步是因为渲染结果里的空格不该
 // 被当成新的分隔符，只有模板源码里的空白才该被当成分隔符（spec「本地命令」）。
 func renderCommandArgv(ct *custom_type_entity.CustomType, rc *authtmpl.RenderContext) ([]string, error) {
 	fields := ct.FieldNames()
-	tokens := splitTemplateArgv(ct.Command.Template)
+	tokens := authtmpl.SplitWords(ct.Command.Template)
 	argv := make([]string, 0, len(tokens))
 	for i, tok := range tokens {
 		tmpl, err := authtmpl.Parse(tok, authtmpl.ParseOptions{Fields: fields})
@@ -264,47 +264,6 @@ func runInvocationCmd(ctx context.Context, cmd *exec.Cmd) (int, error) {
 		return cmd.ProcessState.ExitCode(), nil
 	}
 	return 0, err
-}
-
-// splitTemplateArgv 按空白把命令模板源码拆成 token：`{{` 到匹配的 `}}` 之间的内容（哪怕
-// 含空白，例如字符串拼接 `{{ name + " " + env }}`）算一个不可再分的整体，其余部分按
-// 任意长度的空白分隔。拆分在渲染之前发生，所以字段值里渲染出的空格永远不会拆出新参数——
-// 只有模板源码里、`{{ }}` 之外的空白才是分隔符。
-func splitTemplateArgv(src string) []string {
-	var tokens []string
-	var cur strings.Builder
-	inExpr := false
-	flush := func() {
-		if cur.Len() > 0 {
-			tokens = append(tokens, cur.String())
-			cur.Reset()
-		}
-	}
-	runes := []rune(src)
-	for i := 0; i < len(runes); {
-		if !inExpr && i+1 < len(runes) && runes[i] == '{' && runes[i+1] == '{' {
-			inExpr = true
-			cur.WriteString("{{")
-			i += 2
-			continue
-		}
-		if inExpr && i+1 < len(runes) && runes[i] == '}' && runes[i+1] == '}' {
-			inExpr = false
-			cur.WriteString("}}")
-			i += 2
-			continue
-		}
-		c := runes[i]
-		if !inExpr && (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-			flush()
-			i++
-			continue
-		}
-		cur.WriteRune(c)
-		i++
-	}
-	flush()
-	return tokens
 }
 
 // shellCommandArgv 用系统默认 shell 执行一整条命令；实际的 goos/shell 由

@@ -279,8 +279,9 @@ opskat.AssetType[esConfig]("es").Auth(opskat.Auth{
 (no `Name`; `Value` renders `user:password` and is sent as `Authorization: Basic …`).
 `Value` is literal text with `{{expression}}` placeholders, written in the template
 language custom asset types use. An expression is a config field by name (letters,
-digits, `_` and `-`, starting with a letter or `_`), a double-quoted literal (escapes:
-`\n`, `\"`, `\\`), a `+` concatenation of those, or a function call: `base64(x, …)`
+digits, `_` and `-`, starting with a letter or `_`), a double-quoted literal (escapes
+as in a Go string literal: `\n`, `\"`, `\\`, `\t`, `\xNN`, `\uNNNN`, …), a `+`
+concatenation of those, or a function call: `base64(x, …)`
 (several arguments are joined, then encoded), `hex(x)`, `urlencode(x)`, `sha256(x)`,
 `hmac_sha256(key, msg)` — the two hashes return raw bytes, so wrap them in `base64` or
 `hex` — and `uuid()`. `now.unix` / `now.unix_ms` read the clock once per request, so

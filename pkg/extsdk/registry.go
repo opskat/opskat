@@ -467,7 +467,8 @@ type AuthGroup struct {
 //
 // An expression is written in the template language custom asset types use:
 //   - a config field by name (letters, digits, "_" and "-", starting with a
-//     letter or "_"), or a double-quoted literal (escapes: \n, \", \\);
+//     letter or "_"), or a double-quoted literal (escapes as in a Go string
+//     literal: \n, \", \\, \t, \xNN, \uNNNN, ...);
 //   - a + b, concatenation;
 //   - a function: base64(x, ...) (several arguments are joined, then encoded),
 //     hex(x), urlencode(x), sha256(x), hmac_sha256(key, msg), uuid(). sha256 and
