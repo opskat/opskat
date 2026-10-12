@@ -3,7 +3,6 @@ package migrations
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strconv"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -95,28 +94,23 @@ func ConvertLegacyPolicyGroupIDs(policyJSON string) (string, bool) {
 
 	newGroups := make([]string, 0, len(mixedGroups))
 	changed := false
-	// 数字 ID 的组在界面上不显示，用户会把同一个组再加一遍：转换后两者是同一个 ID，只留一份。
-	appendGroup := func(id string) {
-		if !slices.Contains(newGroups, id) {
-			newGroups = append(newGroups, id)
-		}
-	}
 	for _, item := range mixedGroups {
 		s := string(item)
 		// 尝试作为数字解析
 		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 			if newID, ok := oldIDToNewID[n]; ok {
-				appendGroup(newID)
+				newGroups = append(newGroups, newID)
+				changed = true
 			} else {
 				// 正数 ID（用户自定义组）转为字符串
-				appendGroup(strconv.FormatInt(n, 10))
+				newGroups = append(newGroups, strconv.FormatInt(n, 10))
+				changed = true
 			}
-			changed = true
 		} else {
 			// 已经是字符串（去除引号）
 			var str string
 			if err := json.Unmarshal(item, &str); err == nil {
-				appendGroup(str)
+				newGroups = append(newGroups, str)
 			}
 		}
 	}
