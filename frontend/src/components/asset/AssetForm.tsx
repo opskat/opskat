@@ -63,6 +63,7 @@ type AssetType =
 
 const DEFAULT_ICONS: Record<string, string> = {
   ssh: "server",
+  database: "database",
   mysql: "mysql",
   postgresql: "postgresql",
   mssql: "sqlserver",
@@ -159,7 +160,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
-    setIcon(newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server");
+    setIcon(DEFAULT_ICONS[newType] || "server");
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。

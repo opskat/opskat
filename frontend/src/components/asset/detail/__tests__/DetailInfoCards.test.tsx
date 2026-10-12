@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, within, screen } from "@testing-library/react";
 import { asset_entity, system } from "../../../../../wailsjs/go/models";
+import { ListDatabaseDrivers } from "../../../../../wailsjs/go/query/Query";
+import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
+import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
 import { SSHDetailInfoCard } from "../SSHDetailInfoCard";
 import { DatabaseDetailInfoCard } from "../DatabaseDetailInfoCard";
 import { RedisDetailInfoCard } from "../RedisDetailInfoCard";
@@ -188,7 +191,22 @@ describe("SSHDetailInfoCard Agent 认证", () => {
 });
 
 describe("DatabaseDetailInfoCard", () => {
-  it("renders database connection fields", () => {
+  beforeEach(() => {
+    resetDatabaseDriverCache();
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
+  });
+
+  it.each([
+    ["sqlite", "SQLite"],
+    ["mssql", "SQL Server"],
+    ["mysql", "MySQL"],
+  ])("driver row shows the descriptor display name for %s", async (id, name) => {
+    const asset = makeAsset("database", { driver: id, host: "h", port: 1, username: "u" });
+    const { findByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(await findByText(name)).toBeInTheDocument();
+  });
+
+  it("renders database connection fields", async () => {
     const asset = makeAsset("database", {
       driver: "postgresql",
       host: "db.example.com",
@@ -197,8 +215,8 @@ describe("DatabaseDetailInfoCard", () => {
       password: "secret",
       database: "mydb",
     });
-    const { getByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
-    expect(getByText("PostgreSQL")).toBeInTheDocument();
+    const { getByText, findByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(await findByText("PostgreSQL")).toBeInTheDocument();
     expect(getByText("db.example.com:5432")).toBeInTheDocument();
     expect(getByText("admin")).toBeInTheDocument();
     expect(getByText("mydb")).toBeInTheDocument();

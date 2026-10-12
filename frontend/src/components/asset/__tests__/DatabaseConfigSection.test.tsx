@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
 import { asset_entity } from "../../../../wailsjs/go/models";
+import { ListDatabaseDrivers } from "../../../../wailsjs/go/query/Query";
+import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
+import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
 
 vi.mock("../../../../wailsjs/go/system/System", () => ({
   ListCredentialsByType: () => Promise.resolve([]),
@@ -19,21 +22,28 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture = vi.fn();
 });
 
+beforeEach(() => {
+  resetDatabaseDriverCache();
+  vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
+});
+
 const ctx: AssetFormContext = { isEdit: false, encryptPassword: async (p) => `enc(${p})` };
 
 describe("DatabaseConfigSection ref 契约", () => {
-  it("创建态默认 mysql(network):无 host → canSave/canTest=false + asset.formMissingHost", () => {
+  it("创建态默认 mysql(network):无 host → canSave/canTest=false + asset.formMissingHost", async () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({
-      canTest: false,
-      canSave: false,
-      saveDisabledReason: "asset.formMissingHost",
-    });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({
+        canTest: false,
+        canSave: false,
+        saveDisabledReason: "asset.formMissingHost",
+      })
+    );
   });
 
-  it("编辑态(network 有 host):上报 canSave/canTest=true,无 reason", () => {
+  it("编辑态(network 有 host):上报 canSave/canTest=true,无 reason", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "database",
       Config: '{"driver":"mysql","host":"127.0.0.1","port":3306}',
@@ -41,10 +51,12 @@ describe("DatabaseConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" })
+    );
   });
 
-  it("编辑态(sqlite 无 path):上报 canSave/canTest=false + asset.formMissingPath", () => {
+  it("编辑态(sqlite 无 path):上报 canSave/canTest=false + asset.formMissingPath", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "database",
       Config: '{"driver":"sqlite"}',
@@ -52,14 +64,16 @@ describe("DatabaseConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({
-      canTest: false,
-      canSave: false,
-      saveDisabledReason: "asset.formMissingPath",
-    });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({
+        canTest: false,
+        canSave: false,
+        saveDisabledReason: "asset.formMissingPath",
+      })
+    );
   });
 
-  it("编辑态(sqlite 有 path):上报 canSave/canTest=true,无 reason", () => {
+  it("编辑态(sqlite 有 path):上报 canSave/canTest=true,无 reason", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "database",
       Config: '{"driver":"sqlite","path":"/tmp/x.db"}',
@@ -67,10 +81,12 @@ describe("DatabaseConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" })
+    );
   });
 
-  it("编辑态(remote sqlite 有 path 但无 SSH 资产):上报缺 SSH 资产", () => {
+  it("编辑态(remote sqlite 有 path 但无 SSH 资产):上报缺 SSH 资产", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "database",
       Config: '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","path":"/tmp/x.db"}',
@@ -78,11 +94,13 @@ describe("DatabaseConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({
-      canTest: false,
-      canSave: false,
-      saveDisabledReason: "asset.formMissingSQLiteSSH",
-    });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({
+        canTest: false,
+        canSave: false,
+        saveDisabledReason: "asset.formMissingSQLiteSSH",
+      })
+    );
   });
 
   it("编辑态(remote sqlite 有 SSH 资产):buildConfig 写 remote source 和顶层 sshTunnelId", async () => {
@@ -93,7 +111,9 @@ describe("DatabaseConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" })
+    );
 
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
@@ -113,6 +133,7 @@ describe("DatabaseConfigSection ref 契约", () => {
     });
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await waitFor(() => expect(ref.current).not.toBeNull());
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
       configJSON:
@@ -133,6 +154,7 @@ describe("DatabaseConfigSection ref 契约", () => {
     });
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await waitFor(() => expect(ref.current).not.toBeNull());
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
       configJSON:
@@ -148,6 +170,7 @@ describe("DatabaseConfigSection ref 契约", () => {
     });
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await waitFor(() => expect(ref.current).not.toBeNull());
     const built = await ref.current!.buildConfig(ctx);
     expect(built.configJSON).toContain('"credential_id":7');
     expect(built.configJSON).not.toContain('"password"');
@@ -159,15 +182,19 @@ describe("DatabaseConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<DatabaseConfigSection ref={ref} ctx={ctx} onValidityChange={onValidity} onIconChange={onIcon} />);
-    // 打开 driver Select(显示当前值 asset.driverMySQL;页面另有密码来源 combobox),选 SQLite。
-    const driverSelect = screen.getAllByRole("combobox").find((el) => el.textContent?.includes("asset.driverMySQL"));
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    // 打开 driver Select(显示当前值 MySQL;页面另有密码来源 combobox),选 SQLite。
+    await screen.findByTestId("database-driver-select");
+    const driverSelect = screen.getAllByRole("combobox").find((el) => el.textContent?.includes("MySQL"));
     await user.click(driverSelect!);
-    await user.click(await screen.findByText("asset.driverSQLite"));
+    await user.click(await screen.findByText("SQLite"));
     expect(onIcon).toHaveBeenCalledWith("sqlite");
-    expect(onValidity).toHaveBeenLastCalledWith({
-      canTest: false,
-      canSave: false,
-      saveDisabledReason: "asset.formMissingPath",
-    });
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({
+        canTest: false,
+        canSave: false,
+        saveDisabledReason: "asset.formMissingPath",
+      })
+    );
   });
 });

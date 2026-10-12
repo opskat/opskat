@@ -1,44 +1,75 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
-import { Field, Segmented } from "@/components/asset/fields";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Field } from "@/components/asset/fields";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
-import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
+import { buildConfigGroups } from "@/components/asset/configFields";
+import {
+  driverFormGroups,
+  driverUsesField,
+  findDatabaseDriver,
+  useDatabaseDrivers,
+  type DriverDescriptor,
+} from "@/lib/dbDrivers";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
-import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
 import {
   applyDriverChange,
   buildDatabaseConfig,
-  driverIcon,
   parseDatabaseConfig,
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "./DatabaseConfigSection.config";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
-export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChange, ref }: ConfigSectionProps) {
+/** 驱动描述从后端取;取到之前不渲染表单,取失败显示该错误,不使用任何内置驱动列表。 */
+export function DatabaseConfigSection(props: ConfigSectionProps) {
+  const loaded = useDatabaseDrivers();
+  if (loaded.status === "loading") return null;
+  if (loaded.status === "error") {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {loaded.error}
+      </p>
+    );
+  }
+  return <DatabaseConfigForm {...props} drivers={loaded.drivers} />;
+}
+
+function DatabaseConfigForm({
+  editAsset,
+  onValidityChange,
+  onIconChange,
+  ref,
+  drivers,
+}: ConfigSectionProps & { drivers: DriverDescriptor[] }) {
   const { t } = useTranslation();
   const cred = useAssetCredential(editAsset);
   const { state, setState, patch } = useConfigSection<DatabaseFormState>({
     ref,
     editAsset,
     onValidityChange,
-    init: (a) => (a ? parseDatabaseConfig(a.Config, a.sshTunnelId || 0) : { ...DATABASE_DEFAULTS }),
+    init: (a) =>
+      a ? parseDatabaseConfig(a.Config, a.sshTunnelId || 0) : applyDriverChange(DATABASE_DEFAULTS, drivers[0]),
     validate: (s) => {
-      const isSqlite = s.driver === "sqlite";
-      const isRemoteSqlite = isSqlite && s.sqliteSource === "remote_ssh_vfs";
+      const d = findDatabaseDriver(drivers, s.driver);
+      // 资产存的驱动不在注册表里:表单显示未知驱动错误,不放行保存。
+      if (!d) return { canTest: false, canSave: false, saveDisabledReason: "" };
+      const needsPath = driverUsesField(d, "path");
+      const needsHost = driverUsesField(d, "host");
+      const isRemote = driverUsesField(d, "sqlite_source") && s.sqliteSource === "remote_ssh_vfs";
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const baseOk = isSqlite ? !!s.path.trim() && (!isRemoteSqlite || s.sshTunnelId > 0) : !!s.host.trim();
+      const baseOk =
+        (!needsPath || !!s.path.trim()) && (!isRemote || s.sshTunnelId > 0) && (!needsHost || !!s.host.trim());
       const canSave = baseOk && !proxyChainError;
       let saveDisabledReason = "";
       if (!canSave) {
         if (proxyChainError) saveDisabledReason = proxyChainError;
-        else if (isRemoteSqlite && s.path.trim() && s.sshTunnelId <= 0) {
+        else if (isRemote && s.path.trim() && s.sshTunnelId <= 0) {
           saveDisabledReason = "asset.formMissingSQLiteSSH";
-        } else if (isSqlite) {
+        } else if (needsPath && !s.path.trim()) {
           saveDisabledReason = "asset.formMissingPath";
         } else {
           saveDisabledReason = "asset.formMissingHost";
@@ -49,6 +80,7 @@ export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChang
     build: async (s, ctx) => ({
       configJSON: buildDatabaseConfig(
         s,
+        driverOf(drivers, s.driver),
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
         await resolveSaveProxyPassword(s, ctx.encryptPassword),
         await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
@@ -59,6 +91,7 @@ export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChang
       assetType: "database",
       configJSON: buildDatabaseConfig(
         s,
+        driverOf(drivers, s.driver),
         resolveTestCredential(cred.value),
         s.proxyPassword,
         Object.fromEntries(
@@ -68,201 +101,62 @@ export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChang
       password: cred.value.password,
     }),
     deps: [cred.value],
+    validityDeps: [drivers],
   });
 
+  const driver = findDatabaseDriver(drivers, state.driver);
+
+  // 新建时壳的图标跟随默认选中的驱动;编辑态沿用资产自己的图标。
+  useEffect(() => {
+    if (!editAsset && driver) onIconChange?.(driver.icon);
+    // 只在挂载时同步一次,之后图标由用户切换驱动驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!driver) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {t("asset.driverUnknown", { driver: state.driver })}
+      </p>
+    );
+  }
+
   // driver 切换:section 自有字段复位(纯函数)+ 壳 icon 副作用(onIconChange)。
-  const handleDriverChange = (newDriver: string) => {
-    setState((s) => applyDriverChange(s, newDriver));
-    onIconChange?.(driverIcon(newDriver));
+  const handleDriverChange = (id: string) => {
+    const next = findDatabaseDriver(drivers, id);
+    if (!next) return;
+    setState((s) => applyDriverChange(s, next));
+    onIconChange?.(next.icon);
   };
 
-  const groups: ConfigGroupSchema<DatabaseFormState>[] = [
-    {
-      key: "connection",
-      label: "asset.tabConnection",
-      fields: [
-        {
-          kind: "custom",
-          render: () => (
-            <Field label={t("asset.driver")}>
-              <Select value={state.driver} onValueChange={handleDriverChange}>
-                <SelectTrigger data-testid="database-driver-select" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="mysql" data-testid="database-driver-option-mysql">
-                    {t("asset.driverMySQL")}
-                  </SelectItem>
-                  <SelectItem value="postgresql" data-testid="database-driver-option-postgresql">
-                    {t("asset.driverPostgreSQL")}
-                  </SelectItem>
-                  <SelectItem value="mssql" data-testid="database-driver-option-mssql">
-                    {t("asset.driverMSSQL")}
-                  </SelectItem>
-                  <SelectItem value="sqlite" data-testid="database-driver-option-sqlite">
-                    {t("asset.driverSQLite")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-          ),
-        },
-        {
-          kind: "custom",
-          visibleWhen: (s) => s.driver === "sqlite",
-          render: () => (
-            <Field label={t("asset.sqliteSource")}>
-              <Segmented
-                value={state.sqliteSource}
-                onChange={(v) => {
-                  if (v === "remote_ssh_vfs") {
-                    patch({ sqliteSource: "remote_ssh_vfs", connectionType: "jumphost" });
-                  } else {
-                    patch({ sqliteSource: "local", sshTunnelId: 0, connectionType: "direct" });
-                  }
-                }}
-                aria-label={t("asset.sqliteSource")}
-                options={[
-                  {
-                    value: "local",
-                    label: t("asset.sqliteSourceLocal"),
-                    testid: "database-sqlite-source-option-local",
-                  },
-                  {
-                    value: "remote_ssh_vfs",
-                    label: t("asset.sqliteSourceRemoteSSH"),
-                    testid: "database-sqlite-source-option-remote",
-                  },
-                ]}
-              />
-            </Field>
-          ),
-        },
-        {
-          kind: "custom",
-          visibleWhen: (s) => s.driver === "sqlite",
-          render: () => {
-            const isRemoteSqlite = state.sqliteSource === "remote_ssh_vfs";
-            return (
-              <Field label={t("asset.sqliteFilePath")}>
-                <div className="flex gap-2">
-                  <Input
-                    data-testid="database-sqlite-path-input"
-                    value={state.path}
-                    onChange={(e) => patch({ path: e.target.value })}
-                    placeholder={isRemoteSqlite ? "/var/lib/app/app.db" : t("asset.sqliteFilePathPlaceholder")}
-                  />
-                  {!isRemoteSqlite && (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={async () => {
-                        const selected = await SelectSQLiteFile();
-                        if (selected) patch({ path: selected });
-                      }}
-                    >
-                      {t("asset.sqliteFilePathBrowse")}
-                    </Button>
-                  )}
-                </div>
-              </Field>
-            );
-          },
-        },
-        {
-          kind: "custom",
-          visibleWhen: (s) => s.driver === "sqlite" && s.sqliteSource === "remote_ssh_vfs",
-          render: () => (
-            <Field label={t("asset.sqliteRemoteSSH")}>
-              <AssetSelect
-                value={state.sshTunnelId}
-                onValueChange={(v) => patch({ sshTunnelId: v, connectionType: "jumphost" })}
-                filterType="ssh"
-                placeholder={t("asset.jumpHostNone")}
-                testId="database-sqlite-ssh-select"
-              />
-            </Field>
-          ),
-        },
-        {
-          kind: "row",
-          visibleWhen: (s) => s.driver !== "sqlite",
-          fields: [
-            {
-              kind: "text",
-              key: "host",
-              label: "asset.host",
-              required: true,
-              placeholder: "example.com",
-              width: "flex-1",
-              testid: "database-host-input",
-            },
-            {
-              kind: "number",
-              key: "port",
-              label: "asset.port",
-              width: "w-[110px] shrink-0",
-              blankWhenZero: true,
-              testid: "database-port-input",
-            },
-          ],
-        },
-        {
-          kind: "text",
-          key: "username",
-          label: "asset.username",
-          testid: "database-username-input",
-          visibleWhen: (s) => s.driver !== "sqlite",
-        },
-        { kind: "password", visibleWhen: (s) => s.driver !== "sqlite" },
-        {
-          kind: "text",
-          key: "database",
-          label: "asset.database",
-          placeholder: "asset.databasePlaceholder",
-          testid: "database-name-input",
-          visibleWhen: (s) => s.driver !== "sqlite",
-        },
-      ],
-    },
-    { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
-    {
-      key: "tls",
-      label: "asset.tabTls",
-      fields: [
-        {
-          kind: "select",
-          key: "sslMode",
-          label: "asset.sslMode",
-          visibleWhen: (s) => s.driver === "postgresql",
-          options: [
-            { value: "disable", label: "disable" },
-            { value: "require", label: "require" },
-            { value: "verify-ca", label: "verify-ca" },
-            { value: "verify-full", label: "verify-full" },
-          ],
-        },
-        { kind: "switch", key: "tls", label: "TLS", visibleWhen: (s) => s.driver === "mysql" || s.driver === "mssql" },
-      ],
-    },
-    {
-      key: "advanced",
-      label: "asset.tabAdvanced",
-      fields: [
-        { kind: "text", key: "params", label: "asset.params", placeholder: "asset.paramsPlaceholder" },
-        { kind: "switch", key: "readOnly", label: "asset.readOnly" },
-        {
-          kind: "number",
-          key: "queryTimeoutSeconds",
-          label: "asset.queryTimeout",
-          min: 5,
-          max: 600,
-          width: "flex-1",
-          testid: "database-query-timeout-input",
-        },
-      ],
-    },
-  ];
+  const driverSelect = {
+    kind: "custom" as const,
+    render: () => (
+      <Field label={t("asset.driver")}>
+        <Select value={state.driver} onValueChange={handleDriverChange}>
+          <SelectTrigger data-testid="database-driver-select" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {drivers.map((d) => (
+              <SelectItem key={d.id} value={d.id} data-testid={`database-driver-option-${d.id}`}>
+                {d.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+    ),
+  };
+
+  const groups = driverFormGroups(driver, [driverSelect]);
 
   return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
+}
+
+/** 表单状态里的驱动一定来自注册表(新建取自列表、编辑在不认识时已停在错误提示),保存 / 测试时据此取描述。 */
+function driverOf(drivers: DriverDescriptor[], id: string): DriverDescriptor {
+  const d = findDatabaseDriver(drivers, id);
+  if (!d) throw new Error(`database driver ${id} is not registered`);
+  return d;
 }

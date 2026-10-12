@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
 import type { ProxyConfigJSON, ProxyChainJSON } from "../proxyConfig";
 import {
@@ -29,6 +30,7 @@ interface DatabaseConfig {
 
 export function DatabaseDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
   const { t } = useTranslation();
+  const loaded = useDatabaseDrivers();
 
   const cfg = parseDetailConfig<DatabaseConfig>(asset.Config);
   if (!cfg) return null;
@@ -38,7 +40,7 @@ export function DatabaseDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardP
     <>
       <DetailSection title={t("asset.typeDatabase")}>
         <DetailGrid>
-          <InfoItem label={t("asset.driver")} value={cfg.driver === "postgresql" ? "PostgreSQL" : "MySQL"} />
+          <InfoItem label={t("asset.driver")} value={driverLabel(loaded, cfg.driver)} />
           <InfoItem label={t("asset.host")} value={`${cfg.host}:${cfg.port}`} mono />
           <InfoItem label={t("asset.username")} value={cfg.username} mono />
           {cfg.database && <InfoItem label={t("asset.database")} value={cfg.database} mono />}
@@ -54,4 +56,10 @@ export function DatabaseDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardP
       <ProxyChainDetailSection chain={cfg.proxy_chain} resolveSshName={sshTunnelName} />
     </>
   );
+}
+
+/** 驱动行显示描述里的展示名;描述还没取到或取失败、或注册表不认识该驱动时,显示存下来的驱动 ID。 */
+function driverLabel(loaded: ReturnType<typeof useDatabaseDrivers>, id: string): string {
+  if (loaded.status !== "ready") return id;
+  return findDatabaseDriver(loaded.drivers, id)?.name ?? id;
 }
