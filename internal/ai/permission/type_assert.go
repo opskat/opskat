@@ -46,11 +46,16 @@ func init() {
 // （exec / sql / db / mongo / kube …）以及驱动名（mysql / postgres …）。resolveDeclaredType
 // 先查这些名字、最后才查自定义类型标识，所以与它们同名的标识会在 --type 断言、batch 前缀里
 // 被内置类型遮蔽——自定义类型的保留类型名必须包含它们（组合根 main.go 注入）。
+//
+// 调用发生在运行期（每次创建自定义类型），与扩展启用 / 停用时对 permissionTypes 的增删并发，
+// 所以在 registryMu 下读取。
 func BuiltinDeclaredTypeNames() []string {
+	registryMu.RLock()
 	names := make([]string, 0, len(permissionTypes)+len(driverAliases))
 	for name := range permissionTypes {
 		names = append(names, name)
 	}
+	registryMu.RUnlock()
 	for name := range driverAliases {
 		names = append(names, name)
 	}

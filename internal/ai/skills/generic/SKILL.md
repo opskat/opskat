@@ -107,7 +107,7 @@ command template is configured). The same syntax works in `exec` and after
 
 - METHOD is one of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS (any case). PATH must start
   with `/`, may carry a query string, and is appended to the asset's Base URL. Absolute URLs,
-  `.` / `..` segments and `#` fragments are rejected.
+  `.` / `..` segments, empty segments (`//`) and `#` fragments are rejected.
 - `-H` can repeat. `-d` sends a request body: literal data, `-d @<file>` for a local file, or
   `-d @-` for stdin. The two `@` forms read from the machine opsctl runs on and work only
   through `opsctl exec`; in `exec` pass the data inline. No header is added implicitly — pass

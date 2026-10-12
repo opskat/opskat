@@ -23,7 +23,7 @@ import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
-import { useAssetTypeOptions, getAssetTypeLabel, findAssetTypeOption } from "@/lib/assetTypes/options";
+import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import type {
   AssetFormHandle,
@@ -166,12 +166,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   }
 
-  const handleTypeChange = (newType: AssetType, variant?: string) => {
+  const handleTypeChange = (newType: AssetType, variant?: string, defaultIcon?: string) => {
     if (newType === assetType && variant === typeVariant) return;
     setAssetType(newType);
     setTypeVariant(variant);
-    const option = findAssetTypeOption(assetTypeOptions, newType, variant);
-    setIcon(option?.defaultIcon ?? (newType === "database" ? "mysql" : formIconFor(newType)));
+    setIcon(defaultIcon ?? (newType === "database" ? "mysql" : formIconFor(newType)));
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -366,7 +365,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 <AssetTypePicker
                   value={assetType}
                   variant={typeVariant}
-                  onChange={(v, variant) => handleTypeChange(v as AssetType, variant)}
+                  onChange={(v, variant, defaultIcon) => handleTypeChange(v as AssetType, variant, defaultIcon)}
                   onLeave={() => {
                     cancelActiveTest();
                     onOpenChange(false);

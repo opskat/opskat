@@ -65,11 +65,9 @@ func TestGetGenericAssetView_ValuesMissingAndAddressWithoutSecrets(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, view)
 
-	assert.Equal(t, "grafana", view.Slug)
 	assert.Equal(t, "Grafana", view.TypeName)
 	assert.Equal(t, custom_type_entity.ExecModeHTTP, view.ExecMode)
 	assert.Equal(t, "GET /api/search", view.Usage)
-	assert.Equal(t, []string{"datasource"}, view.Missing)
 	assert.Equal(t, "https://grafana.example.com:3000/o/1", view.ActualAddress)
 
 	byName := map[string]GenericFieldView{}

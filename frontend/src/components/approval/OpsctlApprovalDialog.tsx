@@ -33,7 +33,7 @@ import {
   Puzzle,
 } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
-import { GENERIC_APPROVAL_TYPE, genericApprovalOp } from "./genericApprovalOp";
+import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
 
 interface ApprovalItemData {
   type: string;
@@ -101,8 +101,8 @@ type IconComponent = ComponentType<{ className?: string }>;
 
 function TypeBadge({ type, command }: { type: string; command: string }) {
   const { t } = useTranslation();
-  // 通用资产的操作类型(HTTP 请求 / 命令 / 取值)由匹配对象决定。
-  const op = type === GENERIC_APPROVAL_TYPE ? genericApprovalOp(command) : null;
+  // 登记了操作类型的审批类型(通用资产:HTTP 请求 / 命令 / 取值)徽标显示操作而不是类型名。
+  const op = approvalTypePresentation(type).op?.(command);
   const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
@@ -264,14 +264,15 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
     : [];
   // detail 是 cp 每条共享的"两端基点"摘要（cp.go 给每条 BatchItem 都填了同一句
   // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的混合批只给带 scope 或审批
-  // 展示补充（通用资产的目标地址）的条目逐条填 Detail，各条不同。折叠是为 cp 设计的，只对
-  // 每条共享同一句非空 detail 的批生效——batch verb 的条目分属不同资产/类型，没有可摘要的
-  // 共同点，硬折叠会藏起本该看见的差异。
+  // 展示补充（通用资产）的条目逐条填 Detail——后者是每一条自己的说明（hasPinnedDetail），
+  // 即便各条恰好同一句（命令方式都是"用哪个 shell 执行"）也不是整批的摘要。折叠是为 cp
+  // 设计的，只对每条共享同一句摘要的批生效——batch verb 的条目分属不同资产/类型，没有可摘要
+  // 的共同点，硬折叠会藏起本该看见的差异。
   const isBatchCollapsed =
     !!current &&
     current.kind === "batch" &&
     !!current.items[0]?.detail &&
-    current.items.every((item) => item.detail === current.items[0].detail) &&
+    current.items.every((item) => item.detail === current.items[0].detail && !hasPinnedDetail(item)) &&
     current.items.length > BATCH_COLLAPSE_THRESHOLD;
 
   // 折叠态与展开态共用同一份单条渲染，避免同一段 JSX 抄两份。cur 显式传参而不是闭包

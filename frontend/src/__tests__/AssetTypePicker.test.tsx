@@ -22,7 +22,7 @@ vi.mock("@/components/settings/CustomTypeEditorDialog", () => ({
                 id: 9,
                 slug: "ding",
                 name: "DingTalk",
-                icon: "",
+                icon: "bell",
                 execMode: "http",
                 assetCount: 0,
               }),
@@ -100,7 +100,7 @@ describe("AssetTypePicker custom types", () => {
     expect(screen.getByTestId("asset-type-manage-custom")).toBeTruthy();
 
     await user.click(screen.getByText("Grafana"));
-    expect(onChange).toHaveBeenCalledWith("generic", "grafana");
+    expect(onChange).toHaveBeenCalledWith("generic", "grafana", undefined);
   });
 
   it("shows the selected custom type on the trigger", () => {
@@ -120,13 +120,15 @@ describe("AssetTypePicker custom types", () => {
     expect(onLeave).toHaveBeenCalled();
   });
 
-  it("selects a newly created custom type when the editor saves", async () => {
+  // 选中时把类型的图标一并交给表单:表单此刻手里的选项列表还是保存之前的那份(回调是保存前那次
+  // 渲染的闭包),自己按标识去查是查不到刚建的类型的。
+  it("selects a newly created custom type, with its icon, when the editor saves", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<AssetTypePicker value="ssh" onChange={onChange} />);
     await user.click(screen.getByRole("combobox"));
     await user.click(screen.getByTestId("asset-type-new-custom"));
     await user.click(screen.getByTestId("fake-editor-save"));
-    expect(onChange).toHaveBeenCalledWith("generic", "ding");
+    expect(onChange).toHaveBeenCalledWith("generic", "ding", "bell");
   });
 });

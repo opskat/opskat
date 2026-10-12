@@ -4,10 +4,17 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { GenericConfigSection } from "@/components/asset/GenericConfigSection";
 import type { AssetFormContext, AssetFormHandle } from "@/lib/assetTypes/formContract";
+import { useAssetStore } from "@/stores/assetStore";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { asset_entity, custom_type_entity, customtype } from "../../../../wailsjs/go/models";
 import { GetCustomType, ListCustomTypes } from "../../../../wailsjs/go/customtype/CustomType";
 import { ListCredentialsByType } from "../../../../wailsjs/go/system/System";
+
+// 类型编辑器本身有自己的测试;这里只需要它"保存成功"这一个出口。
+vi.mock("@/components/settings/CustomTypeEditorDialog", () => ({
+  CustomTypeEditorDialog: ({ open, onSaved }: { open: boolean; onSaved?: () => void }) =>
+    open ? <button type="button" data-testid="type-editor-saved" onClick={() => onSaved?.()} /> : null,
+}));
 
 const ctx: AssetFormContext = { isEdit: false, encryptPassword: async (p) => `enc(${p})` };
 
@@ -50,7 +57,7 @@ function summary(ct: custom_type_entity.CustomType) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useCustomTypeStore.setState({ types: [], loaded: false, loading: false });
+  useCustomTypeStore.setState({ types: [], loaded: false, loading: false, loadError: "" });
   vi.mocked(ListCustomTypes).mockResolvedValue([summary(grafana), summary(awsCli)]);
   vi.mocked(GetCustomType).mockImplementation(async (id: number) => (id === grafana.id ? grafana : awsCli));
   vi.mocked(ListCredentialsByType).mockResolvedValue([{ id: 3, name: "grafana-sa", type: "password" } as never]);
@@ -197,6 +204,82 @@ describe("GenericConfigSection", () => {
     const tc = await ref.current!.buildTestConfig!(ctx);
     expect(JSON.parse(tc.configJSON).values.token).toEqual({ credential_id: 3 });
   });
+
+  // 类型列表加载失败时配置区要把原因显示出来,而不是一直转圈(保存按钮同时是禁用的)。
+  it("shows why the type could not be loaded instead of spinning forever", async () => {
+    vi.mocked(ListCustomTypes).mockRejectedValue(new Error("database is locked"));
+    render(<GenericConfigSection ctx={ctx} variant="grafana" onValidityChange={() => {}} />);
+
+    expect(await screen.findByText(/database is locked/)).toBeInTheDocument();
+  });
+
+  describe("editing the type from inside the form", () => {
+    it("keeps what was typed and picks up the new structure", async () => {
+      const ref = createRef<AssetFormHandle>();
+      render(<GenericConfigSection ref={ref} ctx={ctx} variant="grafana" onValidityChange={() => {}} />);
+      await userEvent.type(await screen.findByTestId("generic-field-host"), "g.example.com");
+      await userEvent.type(screen.getByTestId("generic-secret-token").querySelector("input")!, "tok");
+
+      const withTeam = new custom_type_entity.CustomType({
+        ...grafana,
+        fields: [...grafana.fields, { name: "team", label: "Team", secret: false, required: false }],
+      });
+      vi.mocked(GetCustomType).mockImplementation(async () => withTeam);
+      fireEvent.click(screen.getByTestId("generic-edit-type"));
+      fireEvent.click(screen.getByTestId("type-editor-saved"));
+
+      await screen.findByTestId("generic-field-team");
+      expect(screen.getByTestId("generic-field-host")).toHaveValue("g.example.com");
+      const built = await ref.current!.buildConfig(ctx);
+      expect(JSON.parse(built.configJSON).values).toEqual({
+        host: { value: "g.example.com" },
+        token: { value: "enc(tok)" },
+      });
+    });
+
+    // 类型里把 org 改成密钥字段:后端已把资产上的 org 重存成密文。表单拿着打开时的旧配置重建,
+    // 保存就会把旧明文当成密文写回去。
+    it("rebuilds from the asset as the backend rewrote it, not from the config the form was opened with", async () => {
+      const stored = (org: string) =>
+        new asset_entity.Asset({
+          ID: 42,
+          Type: "generic",
+          Config: JSON.stringify({
+            custom_type: "grafana",
+            values: { host: { value: "g.example.com" }, token: { value: "CIPHER" }, org: { value: org } },
+          }),
+        });
+      const ref = createRef<AssetFormHandle>();
+      render(
+        <GenericConfigSection
+          ref={ref}
+          editAsset={stored("2")}
+          ctx={{ ...ctx, isEdit: true }}
+          onValidityChange={() => {}}
+        />
+      );
+      await userEvent.clear(await screen.findByTestId("generic-field-host"));
+      await userEvent.type(screen.getByTestId("generic-field-host"), "new.example.com");
+
+      const orgSecret = new custom_type_entity.CustomType({
+        ...grafana,
+        fields: grafana.fields.map((f) => (f.name === "org" ? { ...f, secret: true, default: "" } : f)),
+      });
+      vi.mocked(GetCustomType).mockImplementation(async () => orgSecret);
+      useAssetStore.setState({ assets: [stored("ORG-CIPHER")] });
+      fireEvent.click(screen.getByTestId("generic-edit-type"));
+      fireEvent.click(screen.getByTestId("type-editor-saved"));
+
+      await screen.findByTestId("generic-secret-org");
+      const built = await ref.current!.buildConfig(ctx);
+      expect(JSON.parse(built.configJSON).values).toEqual({
+        host: { value: "new.example.com" },
+        token: { value: "CIPHER" },
+        org: { value: "ORG-CIPHER" },
+      });
+    });
+  });
+
   describe("TLS certificate input on the connection tab", () => {
     const CA = "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----";
     const CERT = "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----";

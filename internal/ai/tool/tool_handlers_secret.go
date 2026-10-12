@@ -108,9 +108,8 @@ func LookupGenericSecretField(ctx context.Context, ref, fieldName string) (*asse
 	}
 	// 与 exec 同一规则（spec「自定义类型」修改已有类型："补填之前…取值同理"）：资产还缺必填
 	// 值时，不论读哪个字段都直接报缺少的字段。
-	if len(resolved.Missing) > 0 {
-		return nil, nil, nil, fmt.Errorf("asset %q is missing required field(s): %s — fill them in on the asset first",
-			asset.Name, strings.Join(resolved.Missing, ", "))
+	if err := resolved.MissingError(asset.Name); err != nil {
+		return nil, nil, nil, err
 	}
 	return asset, field, resolved, nil
 }

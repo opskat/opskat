@@ -33,6 +33,8 @@ func TestParse_ErrorCarriesCodeAndParams(t *testing.T) {
 		{"trailing token", `{{"a" "b"}}`, authtmpl.ParseOptions{}, "unexpected_token", map[string]string{"expr": `"a" "b"`}},
 		{"leading plus", `{{+ "a"}}`, authtmpl.ParseOptions{}, "unexpected_token", map[string]string{"expr": `+ "a"`}},
 		{"bad character", `{{a * b}}`, authtmpl.ParseOptions{Fields: []string{"a", "b"}}, "unexpected_character", map[string]string{"expr": "a * b", "char": "*"}},
+		// 中文输入法下很容易把括号、逗号打成全角：点名的必须是那个字符本身，而不是它的首字节。
+		{"non-ASCII character", `{{base64（token）}}`, authtmpl.ParseOptions{Fields: []string{"token"}}, "unexpected_character", map[string]string{"expr": "base64（token）", "char": "（"}},
 		{"bad escape", `{{"a\qb"}}`, authtmpl.ParseOptions{}, "invalid_escape", map[string]string{"expr": `"a\qb"`, "char": "q"}},
 		{"unterminated string", `{{"abc}}`, authtmpl.ParseOptions{}, "unterminated_string", map[string]string{"expr": `"abc`}},
 		{"unterminated escape", `{{"abc\}}`, authtmpl.ParseOptions{}, "unterminated_string", map[string]string{"expr": `"abc\`}},

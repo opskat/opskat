@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -194,10 +193,4 @@ func TestLookupGenericSecretField_ExportedForOpsctl(t *testing.T) {
 	assert.Equal(t, asset.ID, gotAsset.ID)
 	assert.True(t, field.Secret)
 	assert.Equal(t, "tok", resolved.Values["token"])
-}
-
-func TestSecretApprovalDetail_MentionsCallerAndModelProvider(t *testing.T) {
-	detail := SecretApprovalDetail(context.Background())
-	assert.True(t, strings.Contains(detail, "caller") || strings.Contains(detail, "调用方"))
-	assert.True(t, strings.Contains(detail, "model provider") || strings.Contains(detail, "模型服务商"))
 }

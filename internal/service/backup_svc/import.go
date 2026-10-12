@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/sshagent"
 )
 
@@ -143,6 +144,23 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 					case !errors.Is(err, gorm.ErrRecordNotFound):
 						return fmt.Errorf("检查自定义类型 %s 是否存在失败: %w", ct.Slug, err)
 					}
+				}
+				// 标识在这台机器上是否可用同样要查（另一台机器上合法的标识可能与这边某个扩展
+				// 声明的类型重名）：重名的标识会被那个类型遮蔽，扩展类型下次又因它注册失败。
+				reserved, taken, err := custom_type_svc.CustomType().ReservedSlug(ct.Slug)
+				if err != nil {
+					return fmt.Errorf("检查自定义类型 %s 的标识是否可用失败: %w", ct.Slug, err)
+				}
+				if taken {
+					if reserved.Extension != "" {
+						return errors.New(policy.PolicyFmt(ctx,
+							"custom type %s in the backup has the same identifier as an asset type of extension %s; uninstall that extension, or rename the type on the source machine and export again",
+							"备份中的自定义类型 %s 的标识与扩展 %s 声明的资产类型重名；请先卸载该扩展，或在来源机器上换一个标识后重新导出",
+							ct.Slug, reserved.Extension))
+					}
+					return errors.New(policy.PolicyFmt(ctx,
+						"custom type %s in the backup has the same identifier as a built-in asset type; rename the type on the source machine and export again",
+						"备份中的自定义类型 %s 的标识与内置类型重名；请在来源机器上换一个标识后重新导出", ct.Slug))
 				}
 				newCT := *ct
 				newCT.ID = 0
@@ -332,6 +350,12 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 								storeField = f
 							}
 							if v.CredentialID > 0 {
+								if storeCT != nil && !storeField.Secret {
+									// 绑定的版本把它定义成普通字段：普通字段只有明文一种形态
+									// （GenericValue 的存储约定），引用不能留在上面，值按缺值处理。
+									delete(cfg.Values, name)
+									continue
+								}
 								// 托管凭据引用重映射：与 SSH 的 cfg.CredentialID 同一套机制。
 								if newID, ok := credIDMap[v.CredentialID]; ok {
 									v.CredentialID = newID
@@ -353,16 +377,16 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 							// 重新加密，是普通字段的保持明文。
 							plain := !backupField.Secret || data.IncludesCredentials
 							if plain && storeField.Secret && v.Value != "" && crypto != nil {
+								// 加密失败不能继续：继续就是把明文写进密钥字段。
 								encrypted, encErr := crypto.Encrypt(v.Value)
 								if encErr != nil {
-									logger.Default().Warn("re-encrypt generic secret", zap.String("field", name), zap.Error(encErr))
-								} else {
-									cfg.Values[name] = asset_entity.GenericValue{Value: encrypted}
+									return fmt.Errorf("重新加密资产 %s 的密钥字段 %s 失败: %w", a.Name, name, encErr)
 								}
+								cfg.Values[name] = asset_entity.GenericValue{Value: encrypted}
 							}
 						}
 						if err := a.SetGenericConfig(cfg); err != nil {
-							logger.Default().Warn("set generic config in import", zap.Error(err))
+							return fmt.Errorf("写回资产 %s 的通用资产配置失败: %w", a.Name, err)
 						}
 					}
 				}

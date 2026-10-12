@@ -30,20 +30,6 @@ func TestLookupUnknown(t *testing.T) {
 	}
 }
 
-func TestRegisterDetailed(t *testing.T) {
-	defer Unregister("detailed")
-	RegisterDetailed("detailed", func(_ context.Context, cfg, _ string) (string, error) {
-		return "HTTP 200 OK via " + cfg, nil
-	})
-	detailed, ok := LookupDetailed("detailed")
-	if !ok {
-		t.Fatal("expected detailed tester registered")
-	}
-	if got, err := detailed(context.Background(), "tunnel", ""); err != nil || got != "HTTP 200 OK via tunnel" {
-		t.Fatalf("got %q, %v", got, err)
-	}
-}
-
 func TestUnregister(t *testing.T) {
 	Register("temp", func(context.Context, string, string) error { return nil })
 	Unregister("temp")

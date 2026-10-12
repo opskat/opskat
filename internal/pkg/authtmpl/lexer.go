@@ -3,6 +3,7 @@ package authtmpl
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type tokenKind int
@@ -64,7 +65,10 @@ func lexExpr(src string) ([]token, *ParseError) {
 			toks = append(toks, token{kind: tokIdent, text: src[i:j]})
 			i = j
 		default:
-			return nil, newParseError(CodeUnexpectedCharacter, "unexpected character "+strconv.Quote(string(c)), "char", string(c))
+			// 按码点而不是按字节点名：全角括号、逗号这类多字节字符要原样出现在报错里。
+			r, _ := utf8.DecodeRuneInString(src[i:])
+			ch := string(r)
+			return nil, newParseError(CodeUnexpectedCharacter, "unexpected character "+strconv.Quote(ch), "char", ch)
 		}
 	}
 	return toks, nil

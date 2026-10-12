@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { GenericDetailInfoCard } from "@/components/asset/detail/GenericDetailInfoCard";
 import { asset_entity, customtype } from "../../../../../wailsjs/go/models";
 import { GetGenericAssetView, RevealGenericSecret } from "../../../../../wailsjs/go/customtype/CustomType";
+import { MASKED_SECRET } from "../utils";
 
 const mocks = vi.hoisted(() => ({ notifyCopied: vi.fn() }));
 vi.mock("@/lib/notify", () => ({ notifyCopied: mocks.notifyCopied, notifySuccess: vi.fn() }));
@@ -18,20 +19,15 @@ const asset = new asset_entity.Asset({
 
 function view(overrides: Partial<customtype.GenericAssetView> = {}) {
   return new customtype.GenericAssetView({
-    typeId: 7,
-    slug: "grafana",
     typeName: "Grafana",
-    typeIcon: "",
     execMode: "http",
     usage: "Search dashboards with GET /api/search",
     actualAddress: "https://grafana.internal:3000",
-    missing: [],
     fields: [
       {
         name: "host",
         label: "主机",
         secret: false,
-        required: true,
         value: "grafana.internal:3000",
         set: true,
         missing: false,
@@ -40,13 +36,12 @@ function view(overrides: Partial<customtype.GenericAssetView> = {}) {
         name: "token",
         label: "Token",
         secret: true,
-        required: true,
         set: true,
         credentialId: 3,
         credentialName: "grafana-prod-sa",
         missing: false,
       },
-      { name: "webhook", label: "Webhook", secret: true, required: false, set: true, missing: false },
+      { name: "webhook", label: "Webhook", secret: true, set: true, missing: false },
     ],
     ...overrides,
   });
@@ -67,7 +62,7 @@ describe("GenericDetailInfoCard", () => {
 
     expect(await screen.findByText("grafana.internal:3000")).toBeInTheDocument();
     expect(screen.getByText("grafana-prod-sa")).toBeInTheDocument();
-    expect(screen.getByTestId("generic-secret-value-webhook")).not.toHaveTextContent("plain");
+    expect(screen.getByTestId("generic-secret-value-webhook")).toHaveTextContent(MASKED_SECRET);
     expect(screen.getByText("https://grafana.internal:3000")).toBeInTheDocument();
     expect(screen.getByText("bastion-prod")).toBeInTheDocument();
     expect(screen.queryByTestId("generic-missing-banner")).toBeNull();
@@ -84,13 +79,33 @@ describe("GenericDetailInfoCard", () => {
     expect(screen.queryByTestId("generic-reveal-token")).toBeNull();
   });
 
+  // 详情页切换资产时复用同一个组件实例:上一台资产的字段值和已查看的密钥明文不能留在页面上
+  // 等新资产的数据回来。
+  it("drops the previous asset's values and revealed secret as soon as another asset is shown", async () => {
+    vi.mocked(GetGenericAssetView).mockResolvedValueOnce(view());
+    vi.mocked(RevealGenericSecret).mockResolvedValue("plain-webhook");
+    const { rerender } = render(<GenericDetailInfoCard asset={asset} sshTunnelName={() => null} />);
+    await userEvent.click(await screen.findByTestId("generic-reveal-webhook"));
+    expect(await screen.findByText("plain-webhook")).toBeInTheDocument();
+
+    vi.mocked(GetGenericAssetView).mockReturnValueOnce(new Promise(() => {}));
+    rerender(
+      <GenericDetailInfoCard
+        asset={new asset_entity.Asset({ ...asset, ID: 43, Name: "grafana-staging" })}
+        sshTunnelName={() => null}
+      />
+    );
+
+    expect(screen.queryByText("plain-webhook")).toBeNull();
+    expect(screen.queryByText("grafana.internal:3000")).toBeNull();
+  });
+
   it("warns about missing required fields and offers to fill them in", async () => {
     vi.mocked(GetGenericAssetView).mockResolvedValue(
       view({
-        missing: ["datasource"],
         fields: [
           ...view().fields,
-          { name: "datasource", label: "数据源 UID", secret: false, required: true, set: false, missing: true },
+          { name: "datasource", label: "数据源 UID", secret: false, set: false, missing: true },
         ],
       })
     );

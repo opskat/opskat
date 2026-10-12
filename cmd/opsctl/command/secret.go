@@ -102,7 +102,9 @@ func cmdSecretGet(ctx context.Context, handlers map[string]tool.ToolHandlerFunc,
 		return 1
 	}
 	result, err := handler(ctx, handlerArgs)
-	writeOpsctlAudit(ctx, "get_asset_secret", string(argsJSON), result, err, decision)
+	// The value never goes to the audit writer: the row's result is the field name and the
+	// decision, which the writer's get_asset_secret projection builds from args and decision.
+	writeOpsctlAudit(ctx, "get_asset_secret", string(argsJSON), "", err, decision)
 	if err != nil {
 		return writeRemoteFailure(os.Stderr, err)
 	}

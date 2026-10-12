@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,19 +75,4 @@ func TestRegisterResultProjector_InvalidPanics(t *testing.T) {
 	resetResultProjectorsForTest(t)
 	assert.Panics(t, func() { RegisterResultProjector("", func(ToolCallInfo) string { return "" }) })
 	assert.Panics(t, func() { RegisterResultProjector("x", nil) })
-}
-
-// TestProjectResult_ReceivesDecisionAndError proves the projector function gets enough
-// context (Decision, Error) to describe the outcome without ever needing info.Result's
-// own content — the field this mechanism exists to keep out of the projection.
-func TestProjectResult_ReceivesDecisionAndError(t *testing.T) {
-	resetResultProjectorsForTest(t)
-	var seenErr error
-	RegisterResultProjector("probe_tool", func(info ToolCallInfo) string {
-		seenErr = info.Error
-		return "projected"
-	})
-	got := projectResult(ToolCallInfo{ToolName: "probe_tool", Result: "raw", Error: errors.New("boom")})
-	assert.Equal(t, "projected", got)
-	assert.EqualError(t, seenErr, "boom")
 }

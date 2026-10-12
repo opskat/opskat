@@ -152,7 +152,9 @@ test("command custom type: a harmless command needs approval and runs through th
   expect(rows[0]).toMatchObject({ command: "echo generic-cmd-ok", decision: "allow" });
 });
 
-test("export and import round-trip a custom type through the binder the settings UI already uses", async ({ page }) => {
+test("a custom type read back through the binder saves again under a new slug, and a taken slug is refused", async ({
+  page,
+}) => {
   // ExportCustomType / SelectImportTypeFile (internal/app/customtype/export_import.go)
   // go straight to Wails' native OS save/open dialogs — there is no web-page element
   // for Playwright/CDP to drive, and headlessly invoking them would hang waiting for
@@ -192,14 +194,8 @@ test("export and import round-trip a custom type through the binder the settings
     return api.GetCustomType(summary.id);
   }, slug);
 
-  // The exported shape carries the field/binding structure but no value: a secret
-  // field is rejected from ever having a default at save time (spec "自定义类型"
-  // validation: 密钥字段没有默认值), which is why a type export contains no values
-  // at all — there is nothing per-field to strip.
-  const exportedFields = exported as { fields: Array<{ name: string; secret: boolean; default?: string }> };
-  const secretField = exportedFields.fields.find((f) => f.name === "apiKey");
-  expect(secretField?.secret).toBe(true);
-  expect(secretField?.default ?? "").toBe("");
+  const exportedFields = exported as { fields: Array<{ name: string; secret: boolean }> };
+  expect(exportedFields.fields.find((f) => f.name === "apiKey")?.secret).toBe(true);
 
   // Re-"import" it: SaveCustomType with id reset to 0 under a new slug — exactly
   // what ImportCustomTypeDialog's confirm button does with the file's parsed type

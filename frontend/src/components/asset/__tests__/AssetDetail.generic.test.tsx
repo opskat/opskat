@@ -37,14 +37,10 @@ beforeEach(() => {
   vi.mocked(GetCustomType).mockResolvedValue(grafana);
   vi.mocked(GetGenericAssetView).mockResolvedValue(
     new customtype.GenericAssetView({
-      typeId: 7,
-      slug: "grafana",
       typeName: "Grafana",
-      typeIcon: "",
       execMode: "http",
       usage: "",
-      missing: [],
-      fields: [{ name: "host", label: "Host", secret: false, required: true, value: "g", set: true, missing: false }],
+      fields: [{ name: "host", label: "Host", secret: false, value: "g", set: true, missing: false }],
     })
   );
 });

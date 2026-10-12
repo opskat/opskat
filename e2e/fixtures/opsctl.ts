@@ -1,7 +1,5 @@
-// Runs the real opsctl CLI as a subprocess against the running e2e app, the same
-// shape as opsctl-approval.spec.ts's local `runOpsctl` — pulled out here because
-// generic-asset.spec.ts needs several invocations (HTTP GET/DELETE, command exec,
-// secret get) rather than the one call that spec makes.
+// Runs the real opsctl CLI as a subprocess against the running e2e app. Shared by the
+// specs that drive opsctl (opsctl-approval.spec.ts, generic-asset.spec.ts).
 import { spawn } from "node:child_process";
 
 export interface OpsctlResult {
@@ -22,6 +20,8 @@ export function runOpsctl(args: string[]): Promise<OpsctlResult> {
   child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
   return new Promise((resolve, reject) => {
     child.once("error", reject);
-    child.once("exit", (code) => resolve({ code, stdout, stderr }));
+    // "close", not "exit": the stdio streams are fully drained only then, and callers
+    // assert on stdout.
+    child.once("close", (code) => resolve({ code, stdout, stderr }));
   });
 }

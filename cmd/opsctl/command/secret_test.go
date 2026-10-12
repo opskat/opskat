@@ -133,6 +133,11 @@ func TestCmdSecretGet_SecretFieldAllowedPrintsRawValue(t *testing.T) {
 	require.NoError(t, createOpsctlGrafanaAsset(ctx, "grafana-prod", "grafana.internal", secret))
 	handlers := setupOpsctlSecretHandlers(t)
 
+	mockAudit := &mockAuditWriter{}
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = mockAudit
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
 	origApproval := secretApprovalFn
 	var gotReq approval.ApprovalRequest
 	secretApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
@@ -150,6 +155,15 @@ func TestCmdSecretGet_SecretFieldAllowedPrintsRawValue(t *testing.T) {
 	assert.Equal(t, "secret:token", gotReq.Command)
 	assert.Contains(t, gotReq.Detail, "model provider")
 	assert.NotContains(t, gotReq.Detail, secret)
+
+	// The value goes to stdout only: what opsctl hands the audit writer carries the field
+	// name and the decision, never the plaintext.
+	require.Len(t, mockAudit.calls, 1)
+	info := mockAudit.lastCall()
+	assert.Equal(t, "get_asset_secret", info.ToolName)
+	assert.NotContains(t, info.Result, secret)
+	assert.NotContains(t, info.ArgsJSON, secret)
+	assert.Contains(t, info.ArgsJSON, `"field":"token"`)
 }
 
 // TestCmdSecretGet_SecretFieldDeniedNeverPrintsValueAndAuditsWithoutIt locks the deny

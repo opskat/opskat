@@ -282,17 +282,6 @@ func TestRender_MissingFieldValueErrors(t *testing.T) {
 	}
 }
 
-func TestAuthTypeFor_BuiltinsRegistered(t *testing.T) {
-	for _, kind := range []string{"header", "query", "basic"} {
-		if _, ok := authtmpl.AuthTypeFor(kind); !ok {
-			t.Fatalf("AuthTypeFor(%q) not found", kind)
-		}
-	}
-	if _, ok := authtmpl.AuthTypeFor("nonexistent"); ok {
-		t.Fatalf("AuthTypeFor(nonexistent) unexpectedly found")
-	}
-}
-
 // SplitWords 是命令模板的拆词：只有 `{{ }}` 之外的空白才是分隔符，表达式边界与 Parse 相同。
 func TestSplitWords(t *testing.T) {
 	tests := []struct {

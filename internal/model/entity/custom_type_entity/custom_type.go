@@ -333,21 +333,17 @@ func (c *CustomType) Warnings() []Issue {
 	if c.ExecMode != ExecModeCommand || c.Command == nil || c.Command.Template == "" {
 		return nil
 	}
-	// authtmpl 只在 Parse 时报告引用的字段：只允许非密钥字段时解析失败、允许全部
-	// 字段时解析成功，说明模板引用了密钥字段。
-	var plain []string
-	for _, f := range c.Fields {
-		if !f.Secret {
-			plain = append(plain, f.Name)
+	tmpl, err := authtmpl.Parse(c.Command.Template, authtmpl.ParseOptions{Fields: c.FieldNames()})
+	if err != nil {
+		// 模板本身不合法由 Validate 报告，这里没有提示可给。
+		return nil
+	}
+	for _, name := range tmpl.Fields() {
+		if f, _ := c.FieldByName(name); f.Secret {
+			return []Issue{NewIssue("command.template", IssueCommandSecretInArgs)}
 		}
 	}
-	if _, err := authtmpl.Parse(c.Command.Template, authtmpl.ParseOptions{Fields: c.FieldNames()}); err != nil {
-		return nil
-	}
-	if _, err := authtmpl.Parse(c.Command.Template, authtmpl.ParseOptions{Fields: plain}); err == nil {
-		return nil
-	}
-	return []Issue{NewIssue("command.template", IssueCommandSecretInArgs)}
+	return nil
 }
 
 // DefaultPolicyFor 返回新建类型时按执行方式预填的默认规则（Design decision 9）：

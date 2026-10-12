@@ -98,6 +98,35 @@ export function initGenericState(
   };
 }
 
+/**
+ * 表单打开期间类型结构被改动后重建表单状态:fresh 是按新结构、按后端改写后的资产配置初始化的状态,
+ * carried 是改动前的表单状态。新结构里编辑前后同为密钥 / 同为非密钥的字段沿用 carried 里的输入
+ * (没保存的内容不能丢);新增字段与密钥属性变了的字段取 fresh——后者的已存值已由后端按新属性重存。
+ * 连接 / TLS 输入与字段结构无关,整体沿用。
+ */
+export function carryGenericState(
+  ct: custom_type_entity.CustomType,
+  fresh: GenericFormState,
+  carried: GenericFormState
+): GenericFormState {
+  const next: GenericFormState = {
+    ...carried,
+    values: { ...fresh.values },
+    explicit: { ...fresh.explicit },
+    secrets: { ...fresh.secrets },
+  };
+  for (const f of ct.fields ?? []) {
+    if (f.secret) {
+      if (carried.secrets[f.name]) next.secrets[f.name] = carried.secrets[f.name];
+    } else if (carried.explicit[f.name] && f.name in carried.values) {
+      // 没动过的字段(explicit 为假)不沿用:它当时显示的是旧默认值,新结构的默认值可能已经不同。
+      next.values[f.name] = carried.values[f.name];
+      next.explicit[f.name] = true;
+    }
+  }
+  return next;
+}
+
 function secretHasValue(s: GenericSecretState): boolean {
   return s.source === "managed" ? s.credentialId > 0 : !!s.password || !!s.storedCipher;
 }

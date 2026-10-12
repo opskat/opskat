@@ -158,6 +158,26 @@ func TestGenericCommand_NoTemplateRunsThroughTheShellAndSupportsPipes(t *testing
 	assert.Equal(t, "3", strings.TrimSpace(stdout.String()))
 }
 
+// 命令模板只有空白等于没配模板：exec 传入的仍是整条 shell 命令。否则它既不是"模板"
+// （没有程序可启动，exec 的第一个参数会被当成程序直接执行），策略也会按参数串而不是
+// shell 子命令匹配。
+func TestGenericCommand_WhitespaceOnlyTemplateIsNoTemplate(t *testing.T) {
+	ctx := setupGenericDB(t)
+	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{
+		Name: "shell-box", Slug: "shell-box-blank", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields:  []custom_type_entity.Field{{Name: "note"}},
+		Command: &custom_type_entity.CommandConfig{Template: " \t\n"},
+	}))
+	asset := genericAsset(t, "shell-box-blank", nil)
+
+	var stdout, stderr bytes.Buffer
+	res, err := StreamGenericOnAsset(ctx, asset, []string{"printf 'a\\nb\\n' | wc -l"},
+		permission.Stdio{Stdout: &stdout, Stderr: &stderr})
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.ExitCode)
+	assert.Equal(t, "2", strings.TrimSpace(stdout.String()))
+}
+
 func TestGenericCommand_NoTemplateEnvBindings(t *testing.T) {
 	ctx := setupGenericDB(t)
 	require.NoError(t, custom_type_svc.CustomType().Save(ctx, &custom_type_entity.CustomType{

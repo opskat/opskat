@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Globe, SquareTerminal, Plus, Trash2, Lock, LockOpen, Loader2, Info } from "lucide-react";
@@ -82,6 +82,8 @@ interface CustomTypeDraft {
   usage: string;
   allowList: string[];
   denyList: string[];
+  /** 默认策略引用的权限组:编辑器不提供编辑,原样带回保存(导入的类型可能带着)。 */
+  policyGroups: string[];
 }
 
 function emptyField(): FieldDraft {
@@ -105,6 +107,7 @@ function emptyDraft(): CustomTypeDraft {
     usage: "",
     allowList: defaultAllowFor("http"),
     denyList: [],
+    policyGroups: [],
   };
 }
 
@@ -130,6 +133,7 @@ function fromWire(ct: custom_type_entity.CustomType): CustomTypeDraft {
     usage: ct.usage ?? "",
     allowList: ct.defaultPolicy?.allow_list ?? [],
     denyList: ct.defaultPolicy?.deny_list ?? [],
+    policyGroups: ct.defaultPolicy?.groups ?? [],
   };
 }
 
@@ -167,13 +171,27 @@ function toWire(d: CustomTypeDraft): custom_type_entity.CustomType {
           }
         : undefined,
     usage: d.usage,
-    defaultPolicy: { allow_list: d.allowList, deny_list: d.denyList },
+    defaultPolicy: {
+      allow_list: d.allowList,
+      deny_list: d.denyList,
+      groups: d.policyGroups.length > 0 ? d.policyGroups : undefined,
+    },
   });
 }
 
 /** path 本身及其子路径(`a.b`、`a[0]`)是否落在 prefix 之下。 */
 function underPath(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`);
+}
+
+const TAB_FIELDS = "fields";
+const TAB_REQUEST = "request";
+
+/** 一条校验问题显示在哪个标签页里;名称 / 标识 / 执行方式在标签页之外,始终可见。 */
+function issueTab(path: string): string | undefined {
+  if (underPath(path, "fields")) return TAB_FIELDS;
+  if (underPath(path, "http") || underPath(path, "command")) return TAB_REQUEST;
+  return undefined;
 }
 
 function buildIssueMap(t: TFunction, issues: custom_type_entity.Issue[]): Map<string, string> {
@@ -243,35 +261,47 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   const [saving, setSaving] = useState(false);
   const [issues, setIssues] = useState<custom_type_entity.Issue[]>([]);
   const [usage, setUsage] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState(TAB_FIELDS);
 
-  // 打开(或切换编辑目标)时从后端回填;渲染期对比上次值,避免 effect 里 setState
+  // 打开(或切换编辑目标)时重置表单;渲染期对比上次值,避免 effect 里 setState
   // (AgentSourceDialog 同款模式,见 docs/DESIGN.md「Forms」)。
   const [prevSync, setPrevSync] = useState<{ open: boolean; typeId?: number }>({ open: false });
   if (open !== prevSync.open || typeId !== prevSync.typeId) {
     setPrevSync({ open, typeId });
     if (open) {
       setIssues([]);
-      if (typeId === undefined) {
-        setDraft(emptyDraft());
-        setUsage(null);
-      } else {
-        setLoading(true);
-        setUsage(null);
-        void (async () => {
-          try {
-            const [ct, usedBy] = await Promise.all([store.get(typeId), store.usage(typeId)]);
-            setDraft(fromWire(ct));
-            setUsage(usedBy.length);
-          } catch (e) {
-            toast.error(String(e));
-            onOpenChange(false);
-          } finally {
-            setLoading(false);
-          }
-        })();
-      }
+      setActiveTab(TAB_FIELDS);
+      setUsage(null);
+      setLoading(typeId !== undefined);
+      if (typeId === undefined) setDraft(emptyDraft());
     }
   }
+
+  // 编辑已有类型:从后端回填。目标一变(关闭、改成「新建」或另一个类型)清理函数就让还没回来的
+  // 结果作废——晚到的「类型 A」不能灌进别的表单(带着 A 的 id,一保存就覆盖 A)。
+  useEffect(() => {
+    if (!open || typeId === undefined) return;
+    let cancelled = false;
+    const { get, usage: usedByOf } = useCustomTypeStore.getState();
+    Promise.all([get(typeId), usedByOf(typeId)])
+      .then(([ct, usedBy]) => {
+        if (cancelled) return;
+        setDraft(fromWire(ct));
+        setUsage(usedBy.length);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setLoading(false);
+        toast.error(String(e));
+        onOpenChange(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // onOpenChange 只在加载失败时用来关闭对话框,不是重新加载的理由(调用方每次渲染都给新的函数)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, typeId]);
 
   const issueMap = buildIssueMap(t, issues);
   const isEdit = typeId !== undefined;
@@ -290,6 +320,9 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
       const res = await store.save(toWire(draft));
       if (res.issues && res.issues.length > 0) {
         setIssues(res.issues);
+        // 问题都在没打开的标签页里时切到第一个有问题的标签页,否则保存看起来毫无反应。
+        const tabs = res.issues.map((it) => issueTab(it.path)).filter((tab) => tab !== undefined);
+        if (tabs.length > 0 && !tabs.includes(activeTab)) setActiveTab(tabs[0]);
         return;
       }
       setIssues([]);
@@ -667,9 +700,9 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
   );
 
   const groups: ConfigGroup[] = [
-    { key: "fields", label: "customType.tabFields", render: () => fieldsTab },
+    { key: TAB_FIELDS, label: "customType.tabFields", render: () => fieldsTab },
     {
-      key: "request",
+      key: TAB_REQUEST,
       label: draft.execMode === "http" ? "customType.tabRequest" : "customType.tabCommand",
       render: () => (draft.execMode === "http" ? requestTab : commandTab),
     },
@@ -747,7 +780,7 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
               {issueMap.get("exec_mode") && <p className="text-xs text-destructive">{issueMap.get("exec_mode")}</p>}
             </Field>
 
-            <ConfigTabs groups={groups} />
+            <ConfigTabs groups={groups} active={activeTab} onActiveChange={setActiveTab} />
           </div>
         )}
 

@@ -1,9 +1,11 @@
 package permission
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -19,6 +21,32 @@ func TestBuiltinDeclaredTypeNamesCoverEveryShadowingName(t *testing.T) {
 		_, _, resolves := resolveDeclaredType(probe)
 		if resolves != reserved[probe] {
 			t.Errorf("%q: resolves as a built-in declared type = %v, reserved = %v", probe, resolves, reserved[probe])
+		}
+	}
+}
+
+// 保留名在用户保存自定义类型时读取（main.go 的 reservedTypeNames），而扩展可以在同一时刻
+// 被启用 / 停用，往同一张权限类型表里增删条目：读取必须与注册并发安全。
+func TestBuiltinDeclaredTypeNamesIsSafeAgainstConcurrentRegistration(t *testing.T) {
+	const name = "concurrent-registration-probe"
+	check := func(context.Context, int64, string) aictx.CheckResult { return aictx.CheckResult{} }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 2000 {
+			if err := RegisterPolicyCheck(name, check, nil); err != nil {
+				t.Errorf("RegisterPolicyCheck: %v", err)
+				return
+			}
+			UnregisterPolicyCheck(name)
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			BuiltinDeclaredTypeNames()
 		}
 	}
 }

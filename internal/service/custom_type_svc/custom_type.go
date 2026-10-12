@@ -38,6 +38,16 @@ type Resolved struct {
 	Missing []string
 }
 
+// MissingError 在资产还缺必填值时返回点名这些字段的错误，否则返回 nil。exec 与取值都以它
+// 拒绝对一台缺值资产的操作，报错文案只有这一份。
+func (r *Resolved) MissingError(assetName string) error {
+	if len(r.Missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("asset %q is missing required field(s): %s — fill them in on the asset first",
+		assetName, strings.Join(r.Missing, ", "))
+}
+
 // InUseError 表示类型还有资产在用，拒绝删除（Design decision 14）。
 type InUseError struct {
 	Slug   string
@@ -63,7 +73,8 @@ type CustomTypeSvc interface {
 	// Save 创建（ID == 0）或整体更新一个类型，会原地回填 ID、时间戳与默认策略。
 	// 校验失败返回 *custom_type_entity.ValidationError（含标识重名 / 被修改）。
 	// DefaultPolicy 为 nil 表示调用方没有编辑默认策略：创建时按执行方式预填，
-	// 更新时保留原策略。与执行方式不对应的那份配置（HTTP / Command）会被丢弃。
+	// 更新时保留原策略。与执行方式不对应的那份配置（HTTP / Command）会被丢弃，命令模板
+	// 去掉首尾空白（只有空白即没有模板）。
 	// 更新时在同一事务里改写该类型的全部资产：删除字段的值随之删除，密钥属性
 	// 变化的值改按新属性存储。新增必填字段不阻止保存，缺值由 ResolveAsset 报告。
 	Save(ctx context.Context, ct *custom_type_entity.CustomType) error
@@ -73,6 +84,9 @@ type CustomTypeSvc interface {
 	UsedBy(ctx context.Context, id int64) ([]string, error)
 	// ResolveAsset 解析一台通用资产：找到其类型并解出全部字段的明文值。
 	ResolveAsset(ctx context.Context, asset *asset_entity.Asset) (*Resolved, error)
+	// ReservedSlug 报告 slug 是否与内置 / 已加载扩展的类型名重名（比较不区分大小写）——即
+	// 不能用作新类型的标识。重名时返回与之冲突的保留名。创建类型（Save）与备份导入共用。
+	ReservedSlug(slug string) (ReservedName, bool, error)
 	// SetReservedNames 注入返回内置 + 已加载扩展类型名的函数；每次创建类型时调用
 	// （比较不区分大小写，另外总是保留 "generic"）。未注入时创建报错，以免产生与
 	// 内置类型重名的标识；更新不受影响（标识不可改）。
@@ -128,6 +142,19 @@ func (s *customTypeSvc) reservedNames() ([]ReservedName, error) {
 	return append(fn(), ReservedName{Name: asset_entity.AssetTypeGeneric}), nil
 }
 
+func (s *customTypeSvc) ReservedSlug(slug string) (ReservedName, bool, error) {
+	reserved, err := s.reservedNames()
+	if err != nil {
+		return ReservedName{}, false, err
+	}
+	for _, r := range reserved {
+		if strings.EqualFold(r.Name, slug) {
+			return r, true, nil
+		}
+	}
+	return ReservedName{}, false, nil
+}
+
 func (s *customTypeSvc) List(ctx context.Context) ([]*custom_type_entity.CustomType, error) {
 	return custom_type_repo.CustomType().List(ctx)
 }
@@ -162,6 +189,10 @@ func (s *customTypeSvc) Save(ctx context.Context, ct *custom_type_entity.CustomT
 		ct.Command = nil
 	case custom_type_entity.ExecModeCommand:
 		ct.HTTP = nil
+		// 只有空白的命令模板就是没配模板：执行与策略都按"模板是否为空"选分支，在这里归一。
+		if ct.Command != nil {
+			ct.Command.Template = strings.TrimSpace(ct.Command.Template)
+		}
 	}
 	if ct.DefaultPolicy == nil {
 		if existing != nil {
@@ -223,20 +254,15 @@ func (s *customTypeSvc) validate(ctx context.Context, ct, existing *custom_type_
 	case existing != nil && existing.Slug != ct.Slug:
 		slugIssue(custom_type_entity.IssueSlugImmutable, "original", existing.Slug)
 	case existing == nil:
-		reserved, err := s.reservedNames()
+		reserved, taken, err := s.ReservedSlug(ct.Slug)
 		if err != nil {
 			return err
 		}
-		for _, r := range reserved {
-			if !strings.EqualFold(r.Name, ct.Slug) {
-				continue
-			}
-			if r.Extension != "" {
-				slugIssue(custom_type_entity.IssueSlugReservedExtension, "slug", ct.Slug, "extension", r.Extension)
-			} else {
-				slugIssue(custom_type_entity.IssueSlugReserved, "slug", ct.Slug)
-			}
-			break
+		switch {
+		case taken && reserved.Extension != "":
+			slugIssue(custom_type_entity.IssueSlugReservedExtension, "slug", ct.Slug, "extension", reserved.Extension)
+		case taken:
+			slugIssue(custom_type_entity.IssueSlugReserved, "slug", ct.Slug)
 		}
 		other, err := custom_type_repo.CustomType().FindBySlug(ctx, ct.Slug)
 		switch {

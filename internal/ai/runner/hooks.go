@@ -69,9 +69,14 @@ func auditMiddleware(c *agent.ToolContext) {
 	}
 	// 审计 result 默认是返回给模型的完整输出。执行器（通用资产 exec、含通用资产条目的
 	// batch_exec）通过 aictx.RecordAuditResult 写了摘要时，审计改存摘要——输出可能回显
-	// 注入值；c.Output 不变，模型仍拿到完整输出。
-	if summary, ok := aictx.GetAuditResult(c.Context()); ok && errVal == nil {
-		result = summary
+	// 注入值；c.Output 不变，模型仍拿到完整输出。调用按失败记账时（batch_exec 部分失败：
+	// Deny 判定把输出文本变成了 errVal）同一段输出进的是审计 error 列，摘要替换的就是它。
+	if summary, ok := aictx.GetAuditResult(c.Context()); ok {
+		if errVal != nil {
+			errVal = errors.New(summary)
+		} else {
+			result = summary
+		}
 	}
 
 	info := audit.ToolCallInfo{

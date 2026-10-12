@@ -21,7 +21,11 @@ interface AssetTypePickerProps {
   value: string;
   /** 子类型(通用资产 = 自定义类型标识)。 */
   variant?: string;
-  onChange: (type: string, variant?: string) => void;
+  /**
+   * variant 给出时(自定义类型)第三个参数是该类型给资产预填的图标——选项列表归选择器所有,
+   * 外层不必(在新建类型的回调里也没法)再按标识查一遍。
+   */
+  onChange: (type: string, variant?: string, defaultIcon?: string) => void;
   /** 跳去别的页面(自定义类型管理)前调用,让外层表单关闭。 */
   onLeave?: () => void;
   disabled?: boolean;
@@ -51,7 +55,7 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
   // 没有搜索时「自定义」分组总是显示(至少有「新建自定义类型」入口)。
   const showCustomGroup = customOptions.length > 0 || !search.trim();
 
-  const select = (o: AssetTypeOption) => (o.variant ? onChange(o.value, o.variant) : onChange(o.value));
+  const select = (o: AssetTypeOption) => (o.variant ? onChange(o.value, o.variant, o.defaultIcon) : onChange(o.value));
 
   const handleSelect = (o: AssetTypeOption) => {
     select(o);

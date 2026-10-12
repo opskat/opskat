@@ -164,9 +164,17 @@ func (c *HTTPCommand) parsePath(raw string) error {
 	if err != nil {
 		return fmt.Errorf("invalid PATH %q: %w", raw, err)
 	}
-	for _, seg := range strings.Split(decoded, "/") {
+	// 策略按字面匹配这条路径，所以服务端会改写的写法一律不收：`.` / `..` 段，以及空段——
+	// 连续的 `/` 多数服务端与反向代理会合并（或重定向到合并后的路径，而同源重定向会被跟随），
+	// `//admin/x` 访问到的是 /admin/x，却匹配不上 `* /admin/*` 的 deny 规则。首尾的空段是
+	// 开头的 `/` 与结尾的 `/`，不算。
+	segs := strings.Split(decoded, "/")
+	for i, seg := range segs {
 		if seg == "." || seg == ".." {
 			return fmt.Errorf("PATH %q must not contain . or .. segments", raw)
+		}
+		if seg == "" && i > 0 && i < len(segs)-1 {
+			return fmt.Errorf("PATH %q must not contain empty segments (//)", raw)
 		}
 	}
 	c.path = decoded
@@ -424,7 +432,7 @@ func readHTTPBody(cmd *HTTPCommand, local *localInput) ([]byte, error) {
 		return data, nil
 	case httpBodyStdin:
 		if local == nil || local.stdin == nil {
-			return nil, errors.New("-d @- reads the request body from stdin, which is only available through opsctl; pass the data inline with -d")
+			return nil, errors.New("-d @- reads the request body from stdin, which is only available through opsctl exec; pass the data inline with -d")
 		}
 		data, err := io.ReadAll(local.stdin)
 		if err != nil {

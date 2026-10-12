@@ -50,6 +50,35 @@ describe("useCustomTypeStore", () => {
     expect(ListCustomTypes).toHaveBeenCalledTimes(1);
   });
 
+  // 更新类型时后端会改写该类型的资产(删除字段的值、密钥属性变了的值重存)。资产快照不跟着换,
+  // 下一次保存资产(如在详情页加一条策略规则)就会把旧 Config 整行写回去。
+  it("save() re-fetches assets on success, because the backend rewrites the type's assets", async () => {
+    const { SaveCustomType } = await import("../../wailsjs/go/customtype/CustomType");
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    useAssetStore.setState({ refresh });
+
+    vi.mocked(SaveCustomType).mockResolvedValueOnce({ issues: [{ path: "name", code: "name_required" }] } as any);
+    await useCustomTypeStore.getState().save({} as never);
+    expect(refresh).not.toHaveBeenCalled();
+
+    vi.mocked(SaveCustomType).mockResolvedValueOnce({ type: { id: 1, slug: "grafana" } } as any);
+    await useCustomTypeStore.getState().save({} as never);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // 类型已经存上了:之后刷新列表失败不是"保存失败",否则编辑器停在未保存状态,再点保存就是标识重名。
+  it("save() still resolves with the saved type when the follow-up reload fails, and toasts the reload error", async () => {
+    const { SaveCustomType, ListCustomTypes } = await import("../../wailsjs/go/customtype/CustomType");
+    useAssetStore.setState({ refresh: vi.fn().mockResolvedValue(undefined) });
+    vi.mocked(SaveCustomType).mockResolvedValueOnce({ type: { id: 1, slug: "grafana" } } as any);
+    vi.mocked(ListCustomTypes).mockRejectedValueOnce(new Error("list failed"));
+
+    const res = await useCustomTypeStore.getState().save({} as never);
+
+    expect(res.type).toMatchObject({ id: 1 });
+    expect(toastError).toHaveBeenCalledWith(expect.stringContaining("list failed"));
+  });
+
   it("remove() refreshes the list only when the type was actually deleted", async () => {
     const { DeleteCustomType, ListCustomTypes } = await import("../../wailsjs/go/customtype/CustomType");
 

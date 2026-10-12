@@ -17,10 +17,9 @@ import (
 // GenericFieldView 是通用资产详情页的一个字段。密钥字段从不携带明文：只报告是否已设置、
 // 是否托管凭据及凭据名；查看明文走 RevealGenericSecret。
 type GenericFieldView struct {
-	Name     string `json:"name"`
-	Label    string `json:"label"`
-	Secret   bool   `json:"secret"`
-	Required bool   `json:"required"`
+	Name   string `json:"name"`
+	Label  string `json:"label"`
+	Secret bool   `json:"secret"`
 	// Value 是非密钥字段的值（未填写时为默认值）；密钥字段恒为空。
 	Value string `json:"value,omitempty"`
 	// Set 表示字段有值（密钥：直接输入的密文或托管凭据引用）。
@@ -31,17 +30,13 @@ type GenericFieldView struct {
 	Missing bool `json:"missing"`
 }
 
-// GenericAssetView 是通用资产详情页所需的解析结果：所属类型、各字段值（不含密钥明文）、
-// 缺值的必填字段与渲染后的实际地址（HTTP 方式）。
+// GenericAssetView 是通用资产详情页所需的解析结果：所属类型、各字段值（不含密钥明文，缺值的
+// 必填字段逐个标 Missing）与渲染后的实际地址（HTTP 方式）。
 type GenericAssetView struct {
-	TypeID   int64              `json:"typeId"`
-	Slug     string             `json:"slug"`
 	TypeName string             `json:"typeName"`
-	TypeIcon string             `json:"typeIcon"`
 	ExecMode string             `json:"execMode"`
 	Usage    string             `json:"usage"`
 	Fields   []GenericFieldView `json:"fields"`
-	Missing  []string           `json:"missing"`
 	// ActualAddress 是 HTTP 方式渲染后的 Base URL（密钥位置以掩码代替）；渲染失败时为空。
 	ActualAddress string `json:"actualAddress,omitempty"`
 	// HasCommandTemplate 只对命令方式有意义：有命令模板时 exec 只传参数，没有时传整条
@@ -71,24 +66,19 @@ func (c *CustomType) GetGenericAssetView(assetID int64) (*GenericAssetView, erro
 	}
 
 	view := &GenericAssetView{
-		TypeID:   ct.ID,
-		Slug:     ct.Slug,
 		TypeName: ct.Name,
-		TypeIcon: ct.Icon,
 		ExecMode: ct.ExecMode,
 		Usage:    ct.Usage,
 		Fields:   make([]GenericFieldView, 0, len(ct.Fields)),
-		Missing:  append([]string{}, resolved.Missing...),
 	}
 	for _, f := range ct.Fields {
 		value := resolved.Values[f.Name]
 		fv := GenericFieldView{
-			Name:     f.Name,
-			Label:    f.Label,
-			Secret:   f.Secret,
-			Required: f.Required,
-			Set:      value != "",
-			Missing:  missing[f.Name],
+			Name:    f.Name,
+			Label:   f.Label,
+			Secret:  f.Secret,
+			Set:     value != "",
+			Missing: missing[f.Name],
 		}
 		if f.Secret {
 			if stored := cfg.Values[f.Name]; stored.CredentialID > 0 {

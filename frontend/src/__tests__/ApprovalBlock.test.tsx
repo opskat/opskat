@@ -425,6 +425,23 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.getByText(/https:\/\/grafana-10\.internal\/api\/10/)).toBeVisible();
   });
 
+  // 命令方式的通用资产每条的 detail 都是同一句（"Local command via <shell>"），但它说的是
+  // 这一条用什么执行，不是整批的摘要：各条命令不同，折叠了就是让人对着看不见的命令点批准。
+  it("批量审批里命令方式的通用资产条目 detail 相同也不折叠，逐条显示命令", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: "generic",
+      asset_id: 1,
+      asset_name: "runner",
+      command: `systemctl restart svc-${i}`,
+      detail: "Local command via /bin/zsh",
+    }));
+    renderApproval({ approvalKind: "batch", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("systemctl restart svc-0")).toBeVisible();
+    expect(screen.getByText("systemctl restart svc-10")).toBeVisible();
+  });
+
   it("扩展审批列出动作与全部资源，记住预填取后端规则", () => {
     renderApproval({
       approvalItems: [

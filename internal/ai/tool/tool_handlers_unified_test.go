@@ -70,7 +70,7 @@ func setupUnified(t *testing.T) *mock_asset_repo.MockAssetRepo {
 	})
 
 	// 没有自定义类型：helpForTypeName 在静态注册类型名不命中后，会把 ref 当自定义类型
-	// 标识查 custom_type_svc（本任务新增的回落，见 tool_handlers_unified.go）。在真实
+	// 标识查 custom_type_svc（customTypeSlugHelp，见 tool_help_generic.go）。在真实
 	// 运行环境里 custom_type_repo 总是由 bootstrap 注册好，这里同样注册一个总是报
 	// "未找到" 的假实现，让这批不关心自定义类型的测试保持原有行为（未命中任何静态类型
 	// 名 == 真的没有这个类型），而不是在 nil 的默认仓储上 panic。与 setupCRUD 的同一

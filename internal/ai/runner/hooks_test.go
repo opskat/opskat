@@ -90,6 +90,8 @@ type auditResultTool struct {
 	name    string
 	summary string
 	text    string
+	// deny 非 nil 时工具同时记录这条拒绝判定（batch_exec 部分失败就是这样：输出照常返回）。
+	deny *aictx.CheckResult
 }
 
 func (r *auditResultTool) Name() string         { return r.name }
@@ -98,6 +100,9 @@ func (r *auditResultTool) Schema() agent.Schema { return agent.Schema{Type: "obj
 func (r *auditResultTool) Call(ctx context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
 	if r.summary != "" {
 		aictx.RecordAuditResult(ctx, r.summary)
+	}
+	if r.deny != nil {
+		aictx.RecordDecision(ctx, *r.deny)
 	}
 	return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: r.text}}}, nil
 }
@@ -150,5 +155,29 @@ func TestAuditMiddleware_RecordedAuditResultReplacesOutputInAuditOnly(t *testing
 
 		entry := waitForAuditEntry(t, mockRepo, "exec", 12)
 		So(entry.Result, ShouldEqual, "uptime output")
+	})
+
+	// batch_exec 部分失败：成功条目的输出仍在返回文本里，而 Deny 判定让这次调用按失败记账，
+	// 文本进的是审计 error 列——那里同样只能出现摘要。
+	Convey("调用按失败记账时，摘要同样替换落进审计 error 的输出", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+		m := setupExecAssetRepo(t)
+		m.EXPECT().FindByName(gomock.Any(), "13").Return(nil, nil)
+		m.EXPECT().Find(gomock.Any(), int64(13)).Return(
+			&asset_entity.Asset{ID: 13, Name: "grafana-prod", Type: asset_entity.AssetTypeGeneric}, nil)
+
+		res := dispatchWithAudit(context.Background(),
+			&auditResultTool{name: "exec", summary: "HTTP 200 OK", text: body, deny: &aictx.CheckResult{
+				Decision: aictx.Deny, DecisionSource: aictx.SourceBatchPartialFailure, Message: "batch partially failed: 1 of 2 items succeeded",
+			}},
+			map[string]any{"asset": "13", "command": "GET /echo"})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 13)
+		So(entry.Error, ShouldNotContainSubstring, "glsa_echoed_must_not_reach_audit")
+		So(entry.Result, ShouldNotContainSubstring, "glsa_echoed_must_not_reach_audit")
+		So(entry.Error, ShouldEqual, "HTTP 200 OK")
+		_, err := extractAuditResult(res.Output)
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldEqual, body)
 	})
 }

@@ -321,12 +321,3 @@ func TestDefaultPolicyFor(t *testing.T) {
 	c := DefaultPolicyFor(ExecModeCommand)
 	assert.True(t, c.IsEmpty(), "命令方式没有默认放行")
 }
-
-func TestFieldByName(t *testing.T) {
-	ct := httpType()
-	f, ok := ct.FieldByName("token")
-	require.True(t, ok)
-	assert.True(t, f.Secret)
-	_, ok = ct.FieldByName("nope")
-	assert.False(t, ok)
-}

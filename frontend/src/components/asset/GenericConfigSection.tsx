@@ -9,6 +9,7 @@ import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { useAssetCredential } from "@/components/asset/useAssetCredential";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
+import { useAssetStore } from "@/stores/assetStore";
 import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import type { asset_entity, custom_type_entity } from "../../../wailsjs/go/models";
@@ -19,6 +20,7 @@ import {
   EXEC_MODE_HTTP,
   buildGenericConfig,
   buildGenericTestInput,
+  carryGenericState,
   genericMissingFields,
   genericTunnelId,
   initGenericState,
@@ -31,14 +33,20 @@ import {
 /** 通用资产的配置区:按所选自定义类型的字段结构生成输入;HTTP 方式另有连接页。 */
 export function GenericConfigSection({ ref, editAsset, variant, onValidityChange }: ConfigSectionProps) {
   const { t } = useTranslation();
-  const editConfig = useMemo(() => (editAsset ? parseGenericConfig(editAsset.Config) : undefined), [editAsset]);
+  // 在表单里编辑了类型之后的重建输入(见 onTypeEdited):carried 是编辑前的表单状态,config 是后端
+  // 按新结构改写后的资产配置——编辑态不能再用打开表单时拿到的那份 editAsset.Config。
+  const [typeEdit, setTypeEdit] = useState<{ key: number; carried?: GenericFormState; config?: string }>({ key: 0 });
+  const reloadKey = typeEdit.key;
+  const editConfig = useMemo(
+    () => (editAsset ? parseGenericConfig(typeEdit.config ?? editAsset.Config) : undefined),
+    [editAsset, typeEdit.config]
+  );
   const slug = editConfig?.custom_type ?? variant ?? "";
 
-  const { types, loaded } = useCustomTypeList();
+  const { types, loaded, loadError } = useCustomTypeList();
   const getType = useCustomTypeStore((s) => s.get);
 
   const summary = types.find((ct) => ct.slug === slug);
-  const [reloadKey, setReloadKey] = useState(0);
   const [fetched, setFetched] = useState<{ ct?: custom_type_entity.CustomType; error?: string; reloadKey: number }>();
 
   // 类型结构未就绪前壳不能保存 / 测试(切换类型时壳里还留着上一个 section 的有效性)。
@@ -66,6 +74,9 @@ export function GenericConfigSection({ ref, editAsset, variant, onValidityChange
   if (fetched?.error) {
     return <InlineError text={fetched.error} />;
   }
+  if (!loaded && loadError) {
+    return <InlineError text={loadError} />;
+  }
   if (loaded && !summary) {
     return <InlineError text={t("asset.generic.typeNotFound", { slug })} />;
   }
@@ -83,8 +94,16 @@ export function GenericConfigSection({ ref, editAsset, variant, onValidityChange
       ct={fetched.ct}
       editAsset={editAsset}
       editConfig={editConfig}
+      carried={typeEdit.carried}
       onValidityChange={onValidityChange}
-      onTypeEdited={() => setReloadKey((k) => k + 1)}
+      onTypeEdited={(carried) =>
+        // 类型保存时 customTypeStore 已刷新资产快照,这里读到的是后端改写后的配置。
+        setTypeEdit((prev) => ({
+          key: prev.key + 1,
+          carried,
+          config: editAsset && useAssetStore.getState().assets.find((a) => a.ID === editAsset.ID)?.Config,
+        }))
+      }
     />
   );
 }
@@ -103,11 +122,22 @@ interface GenericTypeFormProps {
   ct: custom_type_entity.CustomType;
   editAsset?: asset_entity.Asset;
   editConfig?: GenericConfigJSON;
+  /** 上一份表单状态:在表单里编辑类型后重建时带过来,没保存的输入由此保留。 */
+  carried?: GenericFormState;
   onValidityChange: ConfigSectionProps["onValidityChange"];
-  onTypeEdited: () => void;
+  /** 类型编辑器保存成功;参数是此刻的表单状态。 */
+  onTypeEdited: (state: GenericFormState) => void;
 }
 
-function GenericTypeForm({ ref, ct, editAsset, editConfig, onValidityChange, onTypeEdited }: GenericTypeFormProps) {
+function GenericTypeForm({
+  ref,
+  ct,
+  editAsset,
+  editConfig,
+  carried,
+  onValidityChange,
+  onTypeEdited,
+}: GenericTypeFormProps) {
   const { t } = useTranslation();
   const isHttp = ct.execMode === EXEC_MODE_HTTP;
   const { managedPasswords } = useAssetCredential();
@@ -118,7 +148,10 @@ function GenericTypeForm({ ref, ct, editAsset, editConfig, onValidityChange, onT
     ref,
     editAsset,
     onValidityChange,
-    init: () => initGenericState(ct, editConfig, editAsset?.sshTunnelId || 0),
+    init: () => {
+      const fresh = initGenericState(ct, editConfig, editAsset?.sshTunnelId || 0);
+      return carried ? carryGenericState(ct, fresh, carried) : fresh;
+    },
     validate: (s) => {
       const missing = genericMissingFields(ct, s);
       const chainError = isHttp ? proxyChainValidationKey(s.proxyChainLayers) : "";
@@ -262,7 +295,12 @@ function GenericTypeForm({ ref, ct, editAsset, editConfig, onValidityChange, onT
   return (
     <>
       <ConfigTabs groups={groups} />
-      <CustomTypeEditorDialog open={editorOpen} typeId={ct.id} onOpenChange={setEditorOpen} onSaved={onTypeEdited} />
+      <CustomTypeEditorDialog
+        open={editorOpen}
+        typeId={ct.id}
+        onOpenChange={setEditorOpen}
+        onSaved={() => onTypeEdited(state)}
+      />
     </>
   );
 }

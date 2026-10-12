@@ -3,7 +3,6 @@ package helper
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
@@ -89,9 +88,8 @@ func resolveGenericTarget(ctx context.Context, asset *asset_entity.Asset) (*Gene
 	if err != nil {
 		return nil, GenericMode{}, err
 	}
-	if len(resolved.Missing) > 0 {
-		return nil, GenericMode{}, fmt.Errorf("asset %q is missing required field(s): %s — fill them in on the asset first",
-			asset.Name, strings.Join(resolved.Missing, ", "))
+	if err := resolved.MissingError(asset.Name); err != nil {
+		return nil, GenericMode{}, err
 	}
 	cfg, err := asset.GetGenericConfig()
 	if err != nil {

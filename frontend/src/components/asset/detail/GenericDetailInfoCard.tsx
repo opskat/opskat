@@ -36,27 +36,33 @@ export function GenericDetailInfoCard({ asset, sshTunnelName, onEdit }: DetailIn
   const { t } = useTranslation();
   // 类型结构被编辑(列表重新加载)时同样要重新解析这台资产。
   const customTypes = useCustomTypeStore((s) => s.types);
-  const [result, setResult] = useState<{ view?: customtype.GenericAssetView; error?: string }>();
-  const [revealed, setRevealed] = useState<Record<string, string>>({});
+  // 状态按资产记:详情页切换资产时复用同一个组件实例,上一台资产的字段值与已查看的明文不能
+  // 留在页面上等新资产的数据回来(也不能让晚到的查看结果落到另一台资产上)。
+  const [loaded, setLoaded] = useState<{ assetId: number; view?: customtype.GenericAssetView; error?: string }>();
+  const [revealedFor, setRevealedFor] = useState<{ assetId: number; values: Record<string, string> }>();
   const [revealing, setRevealing] = useState<string>("");
   const [usageOpen, setUsageOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    GetGenericAssetView(asset.ID)
+    const assetId = asset.ID;
+    GetGenericAssetView(assetId)
       .then((view) => {
         if (!cancelled) {
-          setResult({ view });
-          setRevealed({});
+          setLoaded({ assetId, view });
+          setRevealedFor(undefined);
         }
       })
       .catch((e) => {
-        if (!cancelled) setResult({ error: String(e) });
+        if (!cancelled) setLoaded({ assetId, error: String(e) });
       });
     return () => {
       cancelled = true;
     };
   }, [asset.ID, asset.Config, asset.Updatetime, customTypes]);
+
+  const result = loaded?.assetId === asset.ID ? loaded : undefined;
+  const revealed = revealedFor?.assetId === asset.ID ? revealedFor.values : {};
 
   if (result?.error) {
     return (
@@ -82,14 +88,20 @@ export function GenericDetailInfoCard({ asset, sshTunnelName, onEdit }: DetailIn
   const proxyChain = isHttp ? parseGenericConfig(asset.Config).proxy_chain : undefined;
 
   const toggleReveal = async (field: string) => {
+    const assetId = asset.ID;
     if (revealed[field] !== undefined) {
-      setRevealed(({ [field]: _hidden, ...rest }) => rest);
+      const { [field]: _hidden, ...rest } = revealed;
+      setRevealedFor({ assetId, values: rest });
       return;
     }
     setRevealing(field);
     try {
-      const plain = await RevealGenericSecret(asset.ID, field);
-      setRevealed((m) => ({ ...m, [field]: plain }));
+      const plain = await RevealGenericSecret(assetId, field);
+      // 结果只记在它所属的资产名下:期间切到了别的资产,渲染时按 assetId 对不上,不会显示。
+      setRevealedFor((cur) => ({
+        assetId,
+        values: { ...(cur?.assetId === assetId ? cur.values : {}), [field]: plain },
+      }));
     } catch (e) {
       toast.error(String(e));
     } finally {

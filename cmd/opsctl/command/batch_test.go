@@ -938,6 +938,40 @@ func TestCmdBatch_GenericItemAuditStoresOnlyStatusLine(t *testing.T) {
 	}
 }
 
+// TestCmdBatch_GenericItemReportsTheSameExitCodeAsExec: a generic item is run the way
+// opsctl exec runs it (the type's stream executor), so its exit_code is the one exec would
+// return — 1 for a non-2xx response — with the body on stdout, the status line on stderr,
+// and only the status line in the audit row.
+func TestCmdBatch_GenericItemReportsTheSameExitCodeAsExec(t *testing.T) {
+	// #nosec G101 -- intentional test fixture.
+	ctx, _ := setupGenericHTTPExec(t, "batch_exit_code_secret")
+	writer := opsctlAuditWriter.(*mockAuditWriter)
+	origApproval := requireBatchApprovalFn
+	requireBatchApprovalFn = func(_ []approval.BatchItem, session string) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: session}, nil
+	}
+	t.Cleanup(func() { requireBatchApprovalFn = origApproval })
+
+	_, output := runBatchCapturingStdout(t, ctx, buildHandlerMap(), []string{"echo-prod:GET /missing"}, "")
+
+	if len(output.Results) != 1 {
+		t.Fatalf("results=%+v", output.Results)
+	}
+	got := output.Results[0]
+	if got.ExitCode != 1 || got.Error != "" {
+		t.Fatalf("exit_code=%d error=%q, want exit_code 1 for HTTP 404 and no error (the request completed)", got.ExitCode, got.Error)
+	}
+	if got.Stdout != `{"message":"not found"}` {
+		t.Fatalf("stdout = %q, want the response body", got.Stdout)
+	}
+	if !strings.Contains(got.Stderr, "HTTP 404") {
+		t.Fatalf("stderr = %q, want the status line", got.Stderr)
+	}
+	if audited := writer.lastCall().Result; audited != "HTTP 404 Not Found" {
+		t.Fatalf("audit result = %q, want only the status line", audited)
+	}
+}
+
 // TestExecuteBatchItem_NonGenericAuditKeepsOutput: an item whose executor records no audit
 // summary (every non-generic type) keeps its full output in the audit row.
 func TestExecuteBatchItem_NonGenericAuditKeepsOutput(t *testing.T) {

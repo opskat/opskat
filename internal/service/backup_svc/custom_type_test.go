@@ -3,6 +3,7 @@ package backup_svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +15,23 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
+
+// 保留类型名由组合根注入（main.go）；测试进程里没有内置 / 扩展类型需要保留，个别用例自己换。
+func init() {
+	custom_type_svc.CustomType().SetReservedNames(noReservedNames)
+}
+
+func noReservedNames() []custom_type_svc.ReservedName { return nil }
+
+// failingEncryptCrypto 的 Encrypt 总是失败，用来验证导入不会把没能加密的密钥原样落库。
+type failingEncryptCrypto struct{}
+
+func (failingEncryptCrypto) Encrypt(string) (string, error) {
+	return "", errors.New("keychain locked")
+}
+func (failingEncryptCrypto) Decrypt(s string) (string, error) { return s, nil }
 
 // grafanaCustomType 是一个 HTTP 执行方式、含一个必填明文字段与一个必填密钥字段的
 // 自定义类型，供备份导出 / 导入测试复用。
@@ -245,6 +262,81 @@ func TestImport_CustomTypes_RejectsInvalidTypeDefinition(t *testing.T) {
 	types, err := custom_type_repo.CustomType().List(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, types, "an invalid type definition must not be written")
+}
+
+// 备份可能来自另一台机器：那边合法的标识在这边可能与某个扩展声明的资产类型重名（保存
+// 类型时会被拒绝的那种）。导入同样要拒绝，否则该标识被扩展类型遮蔽，下次启动时扩展类型又
+// 因为与它重名而注册失败。拒绝发生在事务里，replace 模式清掉的本地类型随之回滚。
+func TestImport_CustomTypes_RejectsReservedSlug(t *testing.T) {
+	ctx := setupBackupTest(t)
+	custom_type_svc.CustomType().SetReservedNames(func() []custom_type_svc.ReservedName {
+		return []custom_type_svc.ReservedName{{Name: "elasticsearch", Extension: "es-ext"}}
+	})
+	t.Cleanup(func() { custom_type_svc.CustomType().SetReservedNames(noReservedNames) })
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("local-type")))
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{grafanaCustomType("elasticsearch")}}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "replace"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "elasticsearch")
+	assert.Contains(t, err.Error(), "es-ext", "the error names the extension that owns the type name")
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, types, 1, "nothing is written and the local types survive")
+	assert.Equal(t, "local-type", types[0].Slug)
+}
+
+// 密钥字段重新加密失败时导入整体失败：继续导入会把明文写进密钥字段——明文落库，且之后
+// 每次使用都按密文解密而失败。
+func TestImport_CustomTypes_ReencryptFailureAbortsImport(t *testing.T) {
+	ctx := setupBackupTest(t)
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {Value: "plaintext-from-backup"},
+	})
+	data := &BackupData{
+		IncludesCredentials: true,
+		CustomTypes:         []*custom_type_entity.CustomType{grafanaCustomType("grafana")},
+		Assets:              []*asset_entity.Asset{asset},
+	}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, failingEncryptCrypto{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token")
+	assert.NotContains(t, err.Error(), "plaintext-from-backup")
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, assets, "no asset is created with an unencrypted secret")
+}
+
+// 合并模式保留的本地版本把某个字段定义成普通字段，而备份里它是引用托管凭据的密钥字段：
+// 普通字段只有明文一种形态，引用不能原样留在上面，值随之丢弃（按缺值展示）。
+func TestImport_CustomTypes_Merge_DropsCredentialRefOnLocalPlainField(t *testing.T) {
+	ctx := setupBackupTest(t)
+	local := grafanaCustomType("grafana")
+	local.Fields = []custom_type_entity.Field{{Name: "host", Required: true}, {Name: "token"}}
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, local))
+
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {CredentialID: 7},
+	})
+	data := &BackupData{
+		CustomTypes: []*custom_type_entity.CustomType{grafanaCustomType("grafana")},
+		Assets:      []*asset_entity.Asset{asset},
+	}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, ImportCredentials: true, Mode: "merge"}, nil)
+	require.NoError(t, err)
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]asset_entity.GenericValue{"host": {Value: "h1"}}, cfg.Values)
 }
 
 func TestImport_CustomTypes_NotImportedWhenImportAssetsFalse(t *testing.T) {

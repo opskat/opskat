@@ -95,6 +95,28 @@ describe("custom type validation issues follow the UI language", () => {
     expect(msg.textContent).not.toMatch(HAN);
   });
 
+  it("type editor: the footer says how many assets use the type being edited", async () => {
+    const { GetCustomType, GetCustomTypeUsage } = await import("../../../../wailsjs/go/customtype/CustomType");
+    vi.mocked(GetCustomType).mockResolvedValue({
+      id: 3,
+      slug: "grafana",
+      name: "Grafana",
+      icon: "",
+      execMode: "http",
+      fields: [],
+      usage: "",
+    } as never);
+    vi.mocked(GetCustomTypeUsage).mockResolvedValue(["a", "b", "c", "d"]);
+
+    render(
+      <I18nextProvider i18n={instances.en}>
+        <CustomTypeEditorDialog open typeId={3} onOpenChange={vi.fn()} />
+      </I18nextProvider>
+    );
+
+    expect(await screen.findByText("Used by 4 asset(s)")).toBeInTheDocument();
+  });
+
   it("import preview: rejection reasons are translated", () => {
     const preview = new customtype.ImportPreview({
       issues: [{ path: "format", code: "version_unsupported", params: { version: "99", supported: "1" } }],

@@ -167,6 +167,11 @@ func TestParseHTTPCommand(t *testing.T) {
 	assert.Equal(t, "GET /api/search", cmd.PolicySubject(), "the match object is METHOD + path without query")
 	assert.True(t, cmd.Include)
 
+	for _, ok := range []string{"/", "/api/", "/api/v4/projects/group%2Fproject"} {
+		_, err := ParseHTTPCommand([]string{"GET", ok})
+		assert.NoError(t, err, "%q is a valid PATH", ok)
+	}
+
 	for _, bad := range [][]string{
 		{"GET"},
 		{"FETCH", "/x"},
@@ -174,6 +179,11 @@ func TestParseHTTPCommand(t *testing.T) {
 		{"GET", "api/x"},
 		{"GET", "/api/../admin"},
 		{"GET", "/api/%2e%2e/admin"},
+		// 连续的 / 多数服务端与反向代理会合并（或重定向到合并后的路径）：`//admin/x` 实际访问
+		// 的是 /admin/x，却匹配不上 `* /admin/*` 这样的 deny 规则。
+		{"GET", "//admin/x"},
+		{"GET", "/api//admin"},
+		{"GET", "/api/%2F/admin"},
 		{"GET", "/x#frag"},
 		{"GET", "/x", "-H", "no-colon"},
 		{"GET", "/x", "-H"},

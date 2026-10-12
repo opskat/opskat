@@ -15,6 +15,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
@@ -381,10 +382,16 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	// can echo injected values; the caller's JSON output still carries the full output.
 	itemCtx := aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 	// cmdType is assertion metadata only. Dispatch always follows the resolved
-	// asset's real type, for canonical names, aliases, and the unprefixed form.
-	if cmd.asset.IsSSH() {
+	// asset's real type, for canonical names, aliases, and the unprefixed form — the same
+	// three routes cmdExec takes: ssh's own channel, a registered stream executor (generic
+	// assets: the item's exit_code is then the one opsctl exec returns), the unified handler.
+	stream, streaming := permission.StreamExecutorFor(cmd.asset.Type)
+	switch {
+	case cmd.asset.IsSSH():
 		result = executeBatchExec(itemCtx, cmd)
-	} else {
+	case streaming:
+		result = executeBatchStream(itemCtx, cmd, stream)
+	default:
 		result = executeBatchHandler(itemCtx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
@@ -399,7 +406,7 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 		execErr = fmt.Errorf("%s", result.Error)
 	}
 	auditResult := result.Stdout
-	if summary, ok := aictx.GetAuditResult(itemCtx); ok && execErr == nil {
+	if summary, ok := aictx.GetAuditResult(itemCtx); ok {
 		auditResult = summary
 	}
 	auditCtx := withBatchAuditCommand(ctx, cmd.checkCommand)
@@ -435,6 +442,41 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 			}
 		}
 	}
+	return result
+}
+
+// executeBatchStream runs an item through its asset type's registered stream executor
+// (permission.StreamExecutorFor) with captured stdio and no stdin — what opsctl exec does
+// for the same asset (execRegisteredStream), so the item reports the same exit code. The
+// command string is split back into the argv the executor takes (cmdline.Words: the
+// writing permission.StreamExecFunc documents for a command string). The executor's audit
+// summary is recorded whether or not the run completed: a run that failed half-way may
+// already have written output, and the audit row must not carry it.
+func executeBatchStream(ctx context.Context, cmd resolvedBatchCmd, stream permission.StreamExecFunc) batchResult {
+	result := batchResult{
+		AssetID:   cmd.asset.ID,
+		AssetName: cmd.asset.Name,
+		Type:      cmd.cmdType,
+		Command:   cmd.command,
+	}
+	argv, err := cmdline.Words(cmd.command)
+	if err != nil {
+		result.ExitCode = -1
+		result.Error = err.Error()
+		return result
+	}
+	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
+	errBuf := audit.NewLimitedBuffer(auditOutputLimit)
+	res, err := stream(ctx, cmd.asset, argv, permission.Stdio{Stdout: outBuf, Stderr: errBuf})
+	aictx.RecordAuditResult(ctx, res.AuditResult)
+	result.Stdout = outBuf.String()
+	result.Stderr = errBuf.String()
+	if err != nil {
+		result.ExitCode = -1
+		result.Error = err.Error()
+		return result
+	}
+	result.ExitCode = res.ExitCode
 	return result
 }
 
