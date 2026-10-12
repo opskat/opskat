@@ -41,6 +41,10 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	if desc.Icon == "" {
 		report("icon is empty")
 	}
+	// 展示顺序必须由驱动自己声明：留着零值的驱动会不声不响地排到所有驱动前面。
+	if desc.Order <= 0 {
+		report("order %d is not declared; it must be positive", desc.Order)
+	}
 
 	// 切片必须非 nil：描述原样序列化给前端，nil 会变成 null 而不是空数组。
 	if desc.Aliases == nil {

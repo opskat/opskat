@@ -17,6 +17,9 @@ var ErrFakeHostRequired = errors.New("fakedb requires host")
 // FakeDefaultPort 是假驱动的默认端口，刻意不与任何内置驱动相同。
 const FakeDefaultPort = 7777
 
+// FakeOrder 是假驱动声明的展示顺序：排在所有内置驱动之后。
+const FakeOrder = 900
+
 // Fake 是一个不属于任何内置驱动的假驱动，用来证明加驱动只需要注册。它的规则刻意与内置
 // 驱动不同：只要求 host，不要求 username。
 type Fake struct {
@@ -29,6 +32,7 @@ func NewFake() *Fake {
 		ID:          "fakedb",
 		Name:        "FakeDB",
 		Icon:        "database",
+		Order:       FakeOrder,
 		Aliases:     []string{"fake"},
 		DefaultPort: FakeDefaultPort,
 		Form: []dbdriver.FormTabFields{

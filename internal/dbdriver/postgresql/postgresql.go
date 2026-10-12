@@ -10,6 +10,7 @@ var descriptor = dbdriver.Descriptor{
 	ID:          asset_entity.DriverPostgreSQL,
 	Name:        "PostgreSQL",
 	Icon:        "postgresql",
+	Order:       20,
 	Aliases:     []string{"postgres"},
 	DefaultPort: 5432,
 	Form: []dbdriver.FormTabFields{

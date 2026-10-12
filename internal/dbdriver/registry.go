@@ -89,7 +89,8 @@ func ByName(name string) (Driver, bool) {
 	return drivers[id], true
 }
 
-// List 返回全部已注册的驱动，按 id 排序。
+// List 返回全部已注册的驱动，按各自声明的 Descriptor.Order 排序（相同时按 id），与注册
+// 先后无关。
 func List() []Driver {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -97,11 +98,17 @@ func List() []Driver {
 	for _, d := range drivers {
 		out = append(out, d)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Descriptor().ID < out[j].Descriptor().ID })
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i].Descriptor(), out[j].Descriptor()
+		if a.Order != b.Order {
+			return a.Order < b.Order
+		}
+		return a.ID < b.ID
+	})
 	return out
 }
 
-// IDs 返回全部已注册的驱动 id，按字典序；给报错与帮助文本列出可用驱动用。
+// IDs 返回全部已注册的驱动 id，顺序同 List；给报错与帮助文本列出可用驱动用。
 func IDs() []string {
 	list := List()
 	out := make([]string, 0, len(list))

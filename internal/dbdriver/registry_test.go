@@ -68,19 +68,26 @@ func TestUnregisterFreesIDAndAliases(t *testing.T) {
 	dbdrivertest.Register(t, dbdrivertest.NewFake())
 }
 
-func TestListIsOrderedByID(t *testing.T) {
-	for _, id := range []asset_entity.DatabaseDriver{"zz", "aa", "mm"} {
+// 顺序由各驱动自己声明的 Order 决定，与注册先后无关；Order 相同的按 id 排。
+func TestListFollowsEachDriversDeclaredOrder(t *testing.T) {
+	for _, d := range []struct {
+		id    asset_entity.DatabaseDriver
+		order int
+	}{
+		{"zz", 10}, {"mm", 30}, {"bb", 20}, {"aa", 20},
+	} {
 		fake := dbdrivertest.NewFake()
-		fake.Desc.ID = id
+		fake.Desc.ID = d.id
+		fake.Desc.Order = d.order
 		fake.Desc.Aliases = nil
 		dbdrivertest.Register(t, fake)
 	}
-	ids := make([]asset_entity.DatabaseDriver, 0, 3)
+	ids := make([]asset_entity.DatabaseDriver, 0, 4)
 	for _, d := range dbdriver.List() {
 		ids = append(ids, d.Descriptor().ID)
 	}
-	assert.Equal(t, []asset_entity.DatabaseDriver{"aa", "mm", "zz"}, ids)
-	assert.Equal(t, []string{"aa", "mm", "zz"}, dbdriver.IDs())
+	assert.Equal(t, []asset_entity.DatabaseDriver{"zz", "aa", "bb", "mm"}, ids)
+	assert.Equal(t, []string{"zz", "aa", "bb", "mm"}, dbdriver.IDs())
 }
 
 // 实体层的 Validate 经注册表找到驱动：驱动自己的规则生效，未注册的驱动报「不可用」。

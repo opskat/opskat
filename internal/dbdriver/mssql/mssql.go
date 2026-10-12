@@ -10,6 +10,7 @@ var descriptor = dbdriver.Descriptor{
 	ID:          asset_entity.DriverMSSQL,
 	Name:        "SQL Server",
 	Icon:        "sqlserver",
+	Order:       30,
 	Aliases:     []string{"sqlserver"},
 	DefaultPort: 1433,
 	Form: []dbdriver.FormTabFields{

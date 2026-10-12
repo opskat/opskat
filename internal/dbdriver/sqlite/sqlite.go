@@ -15,6 +15,7 @@ var descriptor = dbdriver.Descriptor{
 	ID:          asset_entity.DriverSQLite,
 	Name:        "SQLite",
 	Icon:        "sqlite",
+	Order:       40,
 	Aliases:     []string{"sqlite3"},
 	DefaultPort: 0,
 	Form: []dbdriver.FormTabFields{

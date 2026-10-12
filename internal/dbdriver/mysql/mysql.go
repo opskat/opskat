@@ -10,6 +10,7 @@ var descriptor = dbdriver.Descriptor{
 	ID:          asset_entity.DriverMySQL,
 	Name:        "MySQL",
 	Icon:        "mysql",
+	Order:       10,
 	Aliases:     []string{},
 	DefaultPort: 3306,
 	Form: []dbdriver.FormTabFields{

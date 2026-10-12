@@ -24,6 +24,7 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 	}{
 		"missing display name": {func(d *dbdriver.Descriptor) { d.Name = "" }, "display name"},
 		"missing icon":         {func(d *dbdriver.Descriptor) { d.Icon = "" }, "icon"},
+		"undeclared order":     {func(d *dbdriver.Descriptor) { d.Order = 0 }, "order"},
 		"id not a plain word":  {func(d *dbdriver.Descriptor) { d.ID = "Fake DB" }, "id"},
 		"nil aliases":          {func(d *dbdriver.Descriptor) { d.Aliases = nil }, "aliases"},
 		"alias repeats the id": {func(d *dbdriver.Descriptor) { d.Aliases = []string{"fakedb"} }, "alias"},

@@ -14,6 +14,9 @@ type Descriptor struct {
 	Name string `json:"name"`
 	// Icon 是资产图标名。
 	Icon string `json:"icon"`
+	// Order 是驱动自己声明的展示顺序，小的在前：驱动下拉、报错与帮助里的驱动列表都按它排，
+	// 相同时按 ID。内置驱动占 10 / 20 / 30 / 40，中间留了空位。
+	Order int `json:"order"`
 	// Aliases 是 ID 之外可用于类型断言的名字（--type postgres）；ID 本身始终可用。
 	Aliases []string `json:"aliases"`
 	// DefaultPort 是默认端口；不走网络端口的驱动为 0。

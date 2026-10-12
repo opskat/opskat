@@ -229,10 +229,15 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 }
 
 func TestMissingDriverParameterListsRegisteredDrivers(t *testing.T) {
-	dbdrivertest.Register(t, dbdrivertest.NewFake())
 	h, ok := Get(asset_entity.AssetTypeDatabase)
 	require.True(t, ok)
 	args := map[string]any{"host": "db.internal", "username": "app"}
+
+	// 只有内置驱动时，文本与改动前逐字相同。
+	require.EqualError(t, h.ValidateCreateArgs(args), "database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
+
+	// 后注册的驱动按它自己声明的顺序排进来，而不是按注册先后或名字。
+	dbdrivertest.Register(t, dbdrivertest.NewFake())
 
 	_, prepareErr := PrepareCreate(asset_entity.AssetTypeDatabase, args)
 	for name, err := range map[string]error{
@@ -241,6 +246,6 @@ func TestMissingDriverParameterListsRegisteredDrivers(t *testing.T) {
 		"ApplyCreateArgs":    h.ApplyCreateArgs(t.Context(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args),
 	} {
 		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), "database type requires driver parameter (fakedb, mssql, mysql, postgresql, sqlite)", name)
+		assert.Contains(t, err.Error(), "database type requires driver parameter (mysql, postgresql, mssql, sqlite, fakedb)", name)
 	}
 }
