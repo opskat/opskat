@@ -40,6 +40,11 @@ function editAsset() {
 
 const ctx = { isEdit: true, encryptPassword: (p: string) => Promise.resolve(`ENC(${p})`) };
 
+// 宿主的连接方式与 TLS 各在自己的标签里，操作前先切过去。
+function openTab(key: "connection" | "tunnel" | "tls") {
+  fireEvent.click(screen.getByTestId(`config-tab-${key}`));
+}
+
 describe("ExtensionConfigSection edit mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -244,6 +249,7 @@ describe("ExtensionConfigSection connection settings", () => {
     const ref = createRef<AssetFormHandle>();
     render(<Tunneled ref={ref} editAsset={tunneledAsset(9)} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     expect(screen.getByTestId("extension-ssh-tunnel-select")).toBeInTheDocument();
     const built = await ref.current!.buildConfig(ctx);
@@ -256,6 +262,7 @@ describe("ExtensionConfigSection connection settings", () => {
     const ref = createRef<AssetFormHandle>();
     render(<Tunneled ref={ref} editAsset={tunneledAsset(9)} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     fireEvent.click(screen.getByRole("radio", { name: "asset.connectionDirect" }));
 
@@ -266,6 +273,7 @@ describe("ExtensionConfigSection connection settings", () => {
   it("choosing the tunnel without an SSH asset blocks saving", async () => {
     const onValidity = vi.fn();
     render(<Tunneled ctx={{ ...ctx, isEdit: false }} onValidityChange={onValidity} />);
+    openTab("tunnel");
 
     fireEvent.click(screen.getByRole("radio", { name: "asset.sshTunnel" }));
 
@@ -317,6 +325,7 @@ describe("ExtensionConfigSection proxy chain", () => {
     const ref = createRef<AssetFormHandle>();
     render(<Chained ref={ref} editAsset={chainAsset()} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     expect(screen.getByRole("radio", { name: "asset.connectionTunnelProxy" })).toBeInTheDocument();
     const built = await ref.current!.buildConfig(ctx);
@@ -343,6 +352,7 @@ describe("ExtensionConfigSection proxy chain", () => {
     const ref = createRef<AssetFormHandle>();
     render(<Chained ref={ref} editAsset={chainAsset(savedLayer)} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     expect(screen.getByText("Existing Hop")).toBeInTheDocument();
 
@@ -372,6 +382,7 @@ describe("ExtensionConfigSection proxy chain", () => {
     const ref = createRef<AssetFormHandle>();
     render(<Chained ref={ref} editAsset={chainAsset(savedLayer)} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     fireEvent.click(screen.getByRole("radio", { name: "asset.connectionDirect" }));
 
@@ -442,6 +453,7 @@ describe("ExtensionConfigSection proxy chain", () => {
     const onValidity = vi.fn();
     render(<Both ref={ref} editAsset={asset} ctx={ctx} onValidityChange={onValidity} />);
     await act(async () => {});
+    openTab("tunnel");
 
     // 先看到链路，再选隧道。
     fireEvent.click(screen.getByRole("radio", { name: "asset.connectionTunnelProxy" }));
@@ -498,6 +510,7 @@ describe("ExtensionConfigSection connection settings — unified selector", () =
   it("declaring both sshTunnel and proxyChain renders exactly one connection-method selector", async () => {
     render(<Both editAsset={assetWithTunnel(0)} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     expect(screen.getAllByRole("radiogroup", { name: "asset.connectionType" })).toHaveLength(1);
     expect(screen.getByRole("radio", { name: "asset.connectionDirect" })).toBeInTheDocument();
@@ -509,6 +522,7 @@ describe("ExtensionConfigSection connection settings — unified selector", () =
     const ref = createRef<AssetFormHandle>();
     render(<Tunneled ref={ref} editAsset={assetWithTunnel(9)} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tunnel");
 
     fireEvent.click(screen.getByRole("radio", { name: "asset.connectionDirect" }));
     fireEvent.click(screen.getByRole("radio", { name: "asset.sshTunnel" }));
@@ -538,11 +552,21 @@ describe("ExtensionConfigSection TLS", () => {
     schema,
     connection: { tls: true },
   });
+  const TLSTestable = makeExtensionConfigSection({
+    extensionName: "demo",
+    assetType: "demo-type",
+    schema,
+    connection: { tls: true },
+    testConnection: true,
+  });
   const Plain = makeExtensionConfigSection({
     extensionName: "demo",
     assetType: "demo-type",
     schema,
   });
+  const CA_PEM = "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----";
+  const CERT_PEM = "-----BEGIN CERTIFICATE-----\nclient\n-----END CERTIFICATE-----";
+  const KEY_PEM = "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----";
 
   function tlsAsset(tls?: Record<string, unknown>) {
     const config: Record<string, unknown> = { endpoint: "http://es.internal:9200" };
@@ -566,26 +590,144 @@ describe("ExtensionConfigSection TLS", () => {
     const ref = createRef<AssetFormHandle>();
     render(<TLSAware ref={ref} editAsset={tlsAsset()} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tls");
 
     expect(screen.getByRole("switch", { name: "asset.tls" })).toBeInTheDocument();
     const built = await ref.current!.buildConfig(ctx);
     expect(JSON.parse(built.configJSON)).toEqual({ endpoint: "http://es.internal:9200" });
   });
 
-  it("enabling TLS and filling fields saves them into the reserved key", async () => {
+  // 证书可以直接填内容（PEM），也可以给本机路径；私钥内容是其中唯一的密钥，加密后才落盘。
+  it("certificates entered as content are saved as content, the client key encrypted", async () => {
     const ref = createRef<AssetFormHandle>();
     render(<TLSAware ref={ref} editAsset={tlsAsset()} ctx={ctx} onValidityChange={() => {}} />);
     await act(async () => {});
+    openTab("tls");
 
     fireEvent.click(screen.getByRole("switch", { name: "asset.tls" }));
-    fireEvent.change(screen.getByLabelText("asset.tlsServerName"), { target: { value: "es.example.com" } });
-    fireEvent.change(screen.getByLabelText("asset.tlsCAFile"), { target: { value: "/etc/ca.pem" } });
+    fireEvent.change(screen.getByTestId("tls-server-name"), { target: { value: "es.example.com" } });
+    fireEvent.change(screen.getByTestId("tls-ca-pem"), { target: { value: CA_PEM } });
+    fireEvent.change(screen.getByTestId("tls-cert-pem"), { target: { value: `${CERT_PEM}\n` } });
+    fireEvent.change(screen.getByTestId("tls-key-pem"), { target: { value: KEY_PEM } });
 
     const built = await ref.current!.buildConfig(ctx);
-    const parsed = JSON.parse(built.configJSON);
-    expect(parsed[HOST_CONNECTION_CONFIG_KEY].tls).toEqual(
-      expect.objectContaining({ enabled: true, serverName: "es.example.com", caFile: "/etc/ca.pem" })
+    expect(JSON.parse(built.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls).toEqual({
+      enabled: true,
+      serverName: "es.example.com",
+      caCert: CA_PEM,
+      clientCert: CERT_PEM,
+      clientKey: `ENC(${KEY_PEM})`,
+    });
+  });
+
+  it("certificates given as paths are saved as paths", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<TLSAware ref={ref} editAsset={tlsAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+    openTab("tls");
+
+    fireEvent.click(screen.getByRole("switch", { name: "asset.tls" }));
+    fireEvent.click(screen.getByTestId("tls-cert-source-file"));
+    fireEvent.change(screen.getByTestId("tls-ca-file"), { target: { value: "/etc/ca.pem" } });
+    fireEvent.change(screen.getByTestId("tls-cert-file"), { target: { value: "/etc/client.crt" } });
+    fireEvent.change(screen.getByTestId("tls-key-file"), { target: { value: "/etc/client.key" } });
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls).toEqual({
+      enabled: true,
+      caFile: "/etc/ca.pem",
+      certFile: "/etc/client.crt",
+      keyFile: "/etc/client.key",
+    });
+  });
+
+  it("a config saved with paths opens on the path source", async () => {
+    const stored = { enabled: true, caFile: "/etc/ca.pem" };
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(
+      JSON.stringify({ endpoint: "http://es.internal:9200", [HOST_CONNECTION_CONFIG_KEY]: { tls: stored } })
     );
+    render(<TLSAware editAsset={tlsAsset(stored)} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+    openTab("tls");
+
+    expect(screen.getByTestId("tls-ca-file")).toHaveValue("/etc/ca.pem");
+    expect(screen.queryByTestId("tls-ca-pem")).not.toBeInTheDocument();
+  });
+
+  describe("with a client key already stored", () => {
+    const storedTLS = { enabled: true, clientCert: CERT_PEM, clientKey: CIPHERTEXT };
+
+    function renderStored(ref: React.RefObject<AssetFormHandle | null>, asset = tlsAsset(storedTLS)) {
+      vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(
+        JSON.stringify({ endpoint: "http://es.internal:9200", [HOST_CONNECTION_CONFIG_KEY]: { tls: storedTLS } })
+      );
+      render(<TLSTestable ref={ref} editAsset={asset} ctx={ctx} onValidityChange={() => {}} />);
+    }
+
+    it("the key is shown as set, never as its stored value, and saved untouched as it was stored", async () => {
+      const ref = createRef<AssetFormHandle>();
+      renderStored(ref);
+      await act(async () => {});
+      openTab("tls");
+
+      const key = screen.getByTestId("tls-key-pem");
+      expect(key).toHaveValue("");
+      expect(key).toHaveAttribute("placeholder", "asset.passwordUnchanged");
+      expect(screen.queryByDisplayValue(CIPHERTEXT)).not.toBeInTheDocument();
+
+      const built = await ref.current!.buildConfig(ctx);
+      expect(JSON.parse(built.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls).toEqual(storedTLS);
+    });
+
+    it("a retyped key replaces the stored one", async () => {
+      const ref = createRef<AssetFormHandle>();
+      renderStored(ref);
+      await act(async () => {});
+      openTab("tls");
+
+      fireEvent.change(screen.getByTestId("tls-key-pem"), { target: { value: KEY_PEM } });
+
+      const built = await ref.current!.buildConfig(ctx);
+      expect(JSON.parse(built.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls.clientKey).toBe(`ENC(${KEY_PEM})`);
+    });
+
+    it("removing the client certificate drops its stored key", async () => {
+      const ref = createRef<AssetFormHandle>();
+      renderStored(ref);
+      await act(async () => {});
+      openTab("tls");
+
+      fireEvent.change(screen.getByTestId("tls-cert-pem"), { target: { value: "" } });
+
+      const built = await ref.current!.buildConfig(ctx);
+      expect(JSON.parse(built.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls).toEqual({ enabled: true });
+    });
+
+    // 宿主只认私钥密文：测试连接送出的与保存的是同一份，没碰过就是已存密文，重填的先加密。
+    it("test connection sends the key as ciphertext: the stored one untouched, a retyped one encrypted", async () => {
+      const ref = createRef<AssetFormHandle>();
+      renderStored(ref);
+      await act(async () => {});
+      openTab("tls");
+
+      const untouched = await ref.current!.buildTestConfig!(ctx);
+      expect(JSON.parse(untouched.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls).toEqual(storedTLS);
+
+      fireEvent.change(screen.getByTestId("tls-key-pem"), { target: { value: KEY_PEM } });
+      const retyped = await ref.current!.buildTestConfig!(ctx);
+      expect(JSON.parse(retyped.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls.clientKey).toBe(`ENC(${KEY_PEM})`);
+    });
+
+    // 复制出来的资产带着源资产的私钥密文，测试连接照样用得上它。
+    it("test connection on a copy uses the key kept from the source asset", async () => {
+      const ref = createRef<AssetFormHandle>();
+      const copy = tlsAsset(storedTLS);
+      copy.ID = 0;
+      render(<TLSTestable ref={ref} editAsset={copy} ctx={ctx} onValidityChange={() => {}} />);
+
+      const tc = await ref.current!.buildTestConfig!(ctx);
+      expect(JSON.parse(tc.configJSON)[HOST_CONNECTION_CONFIG_KEY].tls.clientKey).toBe(CIPHERTEXT);
+    });
   });
 
   it("a saved TLS config loads into the UI", async () => {
@@ -603,6 +745,7 @@ describe("ExtensionConfigSection TLS", () => {
       />
     );
     await act(async () => {});
+    openTab("tls");
 
     expect(screen.getByRole("switch", { name: "asset.tls" })).toBeChecked();
     expect(screen.getByDisplayValue("es.example.com")).toBeInTheDocument();
@@ -756,6 +899,22 @@ describe("ExtensionConfigSection validation errors", () => {
   // A field the form does not show (left out of propertyOrder, or no declared field
   // at all, even one named like an Object.prototype member) has nowhere to show its
   // error, so the refusal carries it.
+  // 没选中的认证方式，其字段不在表单里：落在它上面的错误同样没处显示。
+  it("an error on a field of an auth method that is not selected is carried by the refusal", async () => {
+    const WithAuth = makeExtensionConfigSection({
+      extensionName: "demo",
+      assetType: "demo-type",
+      schema: authSchema,
+      auth: { selector: "auth", groups: [{ when: "basic", fields: ["username", "secret"] }] },
+    });
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([{ field: "username", message: "stale username" }] as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<WithAuth ref={ref} ctx={{ ...ctx, isEdit: false }} onValidityChange={() => {}} />);
+
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    await expect(ref.current!.buildConfig({ ...ctx, isEdit: false })).rejects.toThrow("username: stale username");
+  });
+
   it("an error on a field the form does not show is carried by the refusal", async () => {
     const Ordered = makeExtensionConfigSection({
       extensionName: "demo",
@@ -819,5 +978,93 @@ describe("ExtensionConfigSection validation errors", () => {
 
     const built = await ref.current!.buildConfig(ctx);
     expect(JSON.parse(built.configJSON)).toEqual({ username: "u", secret: CIPHERTEXT });
+  });
+});
+
+// 扩展类型与内置类型用同一套标签：schema 字段在"连接"，宿主的连接方式在"隧道/代理"，
+// 宿主的 TLS 在"TLS/证书"；只有 describe() 声明了的项才出标签。
+describe("ExtensionConfigSection tabs", () => {
+  const schema = {
+    type: "object",
+    properties: { endpoint: { type: "string", title: "Endpoint" } },
+  } as const;
+  const base = { extensionName: "demo", assetType: "demo-type", schema };
+  const Full = makeExtensionConfigSection({ ...base, connection: { sshTunnel: true, proxyChain: true, tls: true } });
+  const Tunneled = makeExtensionConfigSection({ ...base, connection: { sshTunnel: true } });
+  const Plain = makeExtensionConfigSection(base);
+  const createCtx = { ...ctx, isEdit: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([]);
+  });
+
+  it("splits the schema fields, the connection method and TLS into their own tabs", () => {
+    render(<Full ctx={createCtx} onValidityChange={() => {}} />);
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "asset.tabConnection",
+      "asset.tabTunnel",
+      "asset.tabTls",
+    ]);
+    expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "asset.connectionType" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "asset.tls" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("config-tab-tunnel"));
+    expect(screen.getByRole("radiogroup", { name: "asset.connectionType" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Endpoint")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("config-tab-tls"));
+    expect(screen.getByRole("switch", { name: "asset.tls" })).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "asset.connectionType" })).not.toBeInTheDocument();
+  });
+
+  it("gives a tab only to the connection settings the type declared", () => {
+    render(<Tunneled ctx={createCtx} onValidityChange={() => {}} />);
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "asset.tabConnection",
+      "asset.tabTunnel",
+    ]);
+  });
+
+  it("a type declaring no connection settings keeps a plain form without a tab bar", () => {
+    render(<Plain ctx={createCtx} onValidityChange={() => {}} />);
+
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
+  });
+
+  it("values typed on one tab survive visiting another and are saved", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<Full ref={ref} ctx={createCtx} onValidityChange={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("Endpoint"), { target: { value: "https://es.internal:9200" } });
+    fireEvent.click(screen.getByTestId("config-tab-tls"));
+    fireEvent.click(screen.getByRole("switch", { name: "asset.tls" }));
+    fireEvent.click(screen.getByTestId("config-tab-connection"));
+
+    expect(screen.getByLabelText("Endpoint")).toHaveValue("https://es.internal:9200");
+    const built = await ref.current!.buildConfig(createCtx);
+    expect(JSON.parse(built.configJSON)).toEqual({
+      endpoint: "https://es.internal:9200",
+      [HOST_CONNECTION_CONFIG_KEY]: { tls: { enabled: true } },
+    });
+  });
+
+  // 字段错误只画在"连接"标签里：停在别的标签上保存被拒时，得把用户带回能看到它的地方。
+  it("a save refused for a field error brings back the tab showing that field", async () => {
+    vi.mocked(ValidateExtensionConfig).mockResolvedValue([
+      { field: "endpoint", message: "endpoint must be a URL" },
+    ] as never);
+    const ref = createRef<AssetFormHandle>();
+    render(<Full ref={ref} ctx={createCtx} onValidityChange={() => {}} />);
+    fireEvent.click(screen.getByTestId("config-tab-tls"));
+
+    await expect(ref.current!.buildConfig(createCtx)).rejects.toThrow();
+
+    await screen.findByText("endpoint must be a URL");
+    expect(screen.getByTestId("config-tab-connection")).toHaveAttribute("aria-selected", "true");
   });
 });

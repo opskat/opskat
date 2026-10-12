@@ -351,6 +351,9 @@ func KafkaConfigFingerprint(asset *asset_entity.Asset, cfg *asset_entity.KafkaCo
 		cfg.TLSCAFile,
 		cfg.TLSCertFile,
 		cfg.TLSKeyFile,
+		hashString(cfg.TLSCAPEM),
+		hashString(cfg.TLSCertPEM),
+		hashString(cfg.TLSKeyPEM),
 		strconv.FormatInt(tunnelID, 10),
 		passwordRef,
 		proxyRef,
@@ -386,12 +389,15 @@ func splitKafkaAddr(addr string) (string, int, error) {
 }
 
 func buildKafkaTLSConfig(cfg *asset_entity.KafkaConfig) (*tls.Config, error) {
-	return BuildTLSConfig("Kafka", TLSFields{
+	return BuildAssetTLSConfig("Kafka", TLSFields{
 		ServerName: cfg.TLSServerName,
 		Insecure:   cfg.TLSInsecure,
 		CAFile:     cfg.TLSCAFile,
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,
+		CAPEM:      cfg.TLSCAPEM,
+		CertPEM:    cfg.TLSCertPEM,
+		KeyPEM:     cfg.TLSKeyPEM,
 	})
 }
 

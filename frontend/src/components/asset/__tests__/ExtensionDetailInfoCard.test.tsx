@@ -85,3 +85,41 @@ describe("ExtensionDetailInfoCard proxy chain and TLS", () => {
     expect(screen.queryByText("asset.tls")).not.toBeInTheDocument();
   });
 });
+
+// 详情卡与表单看同一份字段：换过认证方式后留在配置里的旧字段不再展示。
+describe("ExtensionDetailInfoCard auth method fields", () => {
+  it("shows only the fields of the asset's selected auth method", () => {
+    const Card = makeExtensionDetailInfoCard({
+      displayNameKey: "demo",
+      ns: "ext-demo",
+      assetType: "demo-type",
+      schema: {
+        type: "object",
+        properties: {
+          endpoint: { type: "string", title: "Endpoint" },
+          authType: { type: "string", title: "Auth", enum: ["basic", "apiKey"] },
+          username: { type: "string", title: "Username" },
+          apiKey: { type: "string", format: "password", title: "API key" },
+        },
+      },
+      auth: {
+        selector: "authType",
+        groups: [
+          { when: "basic", fields: ["username"] },
+          { when: "apiKey", fields: ["apiKey"] },
+        ],
+      },
+    });
+    const stale = new asset_entity.Asset({
+      ID: 5,
+      Name: "es",
+      Type: "demo-type",
+      Config: JSON.stringify({ endpoint: "http://es:9200", authType: "apiKey", username: "elastic", apiKey: "ENC" }),
+    });
+    render(<Card asset={stale} sshTunnelName={sshTunnelName} />);
+
+    expect(screen.getByText("API key")).toBeInTheDocument();
+    expect(screen.queryByText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByText("elastic")).not.toBeInTheDocument();
+  });
+});

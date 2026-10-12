@@ -28,7 +28,7 @@ func TestStripHostConnectionConfig(t *testing.T) {
 	}{
 		{
 			name: "removes the reserved key alongside guest fields",
-			in:   `{"endpoint":"es.internal:9200","` + HostConnectionConfigKey + `":{"tls":{"enabled":true,"caFile":"/etc/ca.pem"}}}`,
+			in:   `{"endpoint":"es.internal:9200","` + HostConnectionConfigKey + `":{"tls":{"enabled":true,"caCert":"ca-pem"}}}`,
 			want: `{"endpoint":"es.internal:9200"}`,
 		},
 		{

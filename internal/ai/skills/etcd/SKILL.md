@@ -62,12 +62,16 @@ description: "Read and write etcd keys via exec, using an etcdctl-like command s
 | `tls` | bool | no | `true` to enable TLS |
 | `tls_insecure` | bool | no | `true` to skip TLS certificate verification |
 | `tls_server_name` | string | no | TLS SNI / server name override |
-| `tls_ca_file` | string | no | Path to a CA certificate file |
+| `tls_ca_file` | string | no | Path to a CA certificate file. The three certificates share one source: give them all as paths (`tls_*_file`) or all as content (`tls_*_pem`); switching source drops what was stored in the other |
+| `tls_ca_pem` | string | no | CA certificate as PEM content, stored in the asset |
 | `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |
+| `tls_cert_pem` | string | no | Client certificate as PEM content (mTLS) |
 | `tls_key_file` | string | no | Path to a client key file (mTLS) |
+| `tls_key_pem` | string | no | **Write-only.** Client key as PEM content (mTLS), encrypted in the asset |
 | `dial_timeout_seconds` | number | no | Connection dial timeout override, in seconds |
 | `command_timeout_seconds` | number | no | Per-command timeout override, in seconds |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
+| `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain and the SSH tunnel, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset. Not together with `ssh_asset_id` |
 
 `password` and `credential_id` are mutually exclusive. Plaintext is never returned, is
 encrypted in the asset, and never creates a managed credential.

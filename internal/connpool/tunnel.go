@@ -2,10 +2,13 @@ package connpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/opskat/opskat/internal/sshpool"
 )
@@ -54,16 +57,31 @@ func (t *SSHTunnel) Dial(ctx context.Context) (net.Conn, error) {
 // (Redis 集群自动发现的节点、哨兵返回的主节点)。
 // 每条连接独立持有 SSH 池引用，连接关闭时自动释放。
 func (t *SSHTunnel) DialAddr(ctx context.Context, addr string) (net.Conn, error) {
+	conn, redial, err := t.dialOnce(ctx, addr)
+	if redial {
+		conn, _, err = t.dialOnce(ctx, addr)
+	}
+	return conn, err
+}
+
+// dialOnce 在池里的 SSH 连接上打开一条到 addr 的转发通道。服务器以"管理策略禁止"拒绝、
+// 且连接池因此弃用了这条连接时 redial 为 true：换一条新连接再试才可能成功。
+func (t *SSHTunnel) dialOnce(ctx context.Context, addr string) (conn net.Conn, redial bool, err error) {
 	sshClient, err := t.pool.Get(ctx, t.sshAssetID)
 	if err != nil {
-		return nil, fmt.Errorf("SSH 连接失败: %w", err)
+		return nil, false, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	conn, err := sshClient.Dial("tcp", addr)
+	conn, err = sshClient.Dial("tcp", addr)
 	if err != nil {
-		t.pool.Release(t.sshAssetID)
-		return nil, fmt.Errorf("SSH 隧道建立失败: %w", err)
+		var openErr *ssh.OpenChannelError
+		if errors.As(err, &openErr) && openErr.Reason == ssh.Prohibited {
+			redial = t.pool.ReleaseRefused(t.sshAssetID, sshClient)
+		} else {
+			t.pool.Release(t.sshAssetID)
+		}
+		return nil, redial, fmt.Errorf("SSH 隧道建立失败: %w", err)
 	}
-	return &tunnelConn{Conn: conn, pool: t.pool, assetID: t.sshAssetID}, nil
+	return &tunnelConn{Conn: conn, pool: t.pool, assetID: t.sshAssetID}, false, nil
 }
 
 // Close 是一个空操作。每条通过 Dial 创建的连接会在自身关闭时释放 SSH 池引用，

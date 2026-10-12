@@ -330,11 +330,11 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-upgrade").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"))
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), nil)
 			So(err, ShouldBeNil)
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-upgrade"})
 
-			m, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"))
+			m, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), nil)
 			So(err, ShouldBeNil)
 			So(m.Name, ShouldEqual, "ext-upgrade")
 			// Still registered exactly once, and still reachable.
@@ -353,12 +353,12 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldBeNil)
 			old := svc.Manager().GetExtension("ext-hot")
 
 			So(os.WriteFile(filepath.Join(sourceDir, "ext-hot", "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldNotBeNil)
 
 			assertOldVersionIntact(svc, stub, dir, "ext-hot", old)
@@ -373,9 +373,9 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldBeNil)
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-other"))
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-other"), nil)
 			So(err, ShouldBeNil)
 			old := svc.Manager().GetExtension("ext-hot")
 
@@ -387,7 +387,7 @@ func TestService(t *testing.T) {
 				},
 				"policies": map[string]any{"type": "ext-hot"},
 			})
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldNotBeNil)
 
 			assertOldVersionIntact(svc, stub, dir, "ext-hot", old)
@@ -402,7 +402,7 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldBeNil)
 			old := svc.Manager().GetExtension("ext-hot")
 
@@ -413,7 +413,7 @@ func TestService(t *testing.T) {
 				},
 				"policies": map[string]any{"type": "ext-hot"},
 			})
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"))
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldBeNil)
 
 			cur := svc.Manager().GetExtension("ext-hot")
@@ -538,7 +538,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "kafka-ext").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
-			m, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-ext"))
+			m, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-ext"), nil)
 			So(err, ShouldBeNil)
 			So(m.Name, ShouldEqual, "kafka-ext")
 			So(len(hook.syncCalls), ShouldEqual, 1)
@@ -570,7 +570,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			sourceDir := t.TempDir()
 			writeTestExtensionWithSnippets(stub, sourceDir, "kafka-b", "kafka-b", "k2")
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-b"))
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-b"), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "already registered")
 
@@ -624,7 +624,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "simple").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "simple"))
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "simple"), nil)
 			So(err, ShouldBeNil)
 		})
 	})

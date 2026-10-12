@@ -35,6 +35,18 @@ type AuthGroup struct {
 	Bindings []AuthBinding `json:"bindings"`
 }
 
+// MarshalJSON adds the config fields the group's bindings reference. It is how
+// the asset form — which receives the manifest, not this package — shows only
+// the selected group's fields; derived here so the template grammar has one
+// reader. Output only: a declaration carrying "fields" is refused on the way in.
+func (g AuthGroup) MarshalJSON() ([]byte, error) {
+	type plain AuthGroup
+	return json.Marshal(struct {
+		plain
+		Fields []string `json:"fields"`
+	}{plain(g), g.fields()})
+}
+
 // AuthBinding injects one rendered value template into a request.
 //
 // In is where: "header" (Name is the header), "query" (Name is the parameter),
@@ -161,7 +173,7 @@ func (a *AuthDef) activeGroup(selectorValue string) *AuthGroup {
 
 // fields returns the config fields the group's templates reference.
 func (g *AuthGroup) fields() []string {
-	var out []string
+	out := []string{}
 	seen := map[string]bool{}
 	for _, b := range g.Bindings {
 		tmpl, _ := parseAuthTemplate(b.Value) // validated at describe()

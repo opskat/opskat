@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/opskat/opskat/internal/app/i18n"
@@ -290,8 +291,14 @@ func (e *Extension) InstallExtensionFromDirectory() (*extension_svc.ExtensionInf
 	return e.installExtensionFromPath(selected)
 }
 
+// installExtensionFromPath installs a ZIP / directory the user picked, after they
+// confirm what it is in the install confirm dialog. Declining is the same quiet
+// no-op as closing the file dialog: nil, nil.
 func (e *Extension) installExtensionFromPath(sourcePath string) (*extension_svc.ExtensionInfo, error) {
-	manifest, err := e.service.Install(i18n.Ctx(e.ctx, e.lang.Lang()), sourcePath)
+	manifest, err := e.service.Install(i18n.Ctx(e.ctx, e.lang.Lang()), sourcePath, e.confirmInstall)
+	if errors.Is(err, extension_svc.ErrInstallCanceled) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -369,12 +376,13 @@ func (e *Extension) ReloadExtensions() error {
 //
 // The path itself is deliberately the same one the "install from directory"
 // button takes — one install implementation, so a dev build cannot load through
-// a laxer route than a shipped one.
+// a laxer route than a shipped one. Only the install confirm is skipped: `opsctl
+// ext dev` has already asked the user in its own approval dialog.
 func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string) (string, string, error) {
 	if e.service == nil {
 		return "", "", fmt.Errorf("extension system not initialized")
 	}
-	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir)
+	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, nil)
 	if err != nil {
 		return "", "", err
 	}

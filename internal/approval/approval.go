@@ -30,7 +30,7 @@ type BatchItem struct {
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
 	Token       string          `json:"token,omitempty"`      // 认证 token
-	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"|"ext_dev_install"
+	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"|"ext_dev_install"|"ext_store_search"|"ext_store_install"
 	CheckType   string          `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
 	AssetID     int64           `json:"asset_id,omitempty"`
 	AssetName   string          `json:"asset_name,omitempty"`
@@ -40,11 +40,12 @@ type ApprovalRequest struct {
 	GrantItems  []GrantItem     `json:"grant_items,omitempty"` // type="grant" 时使用
 	BatchItems  []BatchItem     `json:"batch_items,omitempty"` // type="batch" 时使用
 	Description string          `json:"description,omitempty"` // 授权描述
-	Extension   string          `json:"extension,omitempty"`   // type="ext_tool": extension name
+	Extension   string          `json:"extension,omitempty"`   // type="ext_tool" / "ext_store_install": extension name
 	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
 	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
 	Path        string          `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
 	MFA         *MFAChallenge   `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
+	Lang        string          `json:"lang,omitempty"`        // type="ext_store_search": index language tag ("en", "zh-CN") for display text
 }
 
 // MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的
@@ -81,10 +82,60 @@ type ApprovalResponse struct {
 	EditedItems    []GrantItem `json:"edited_items,omitempty"`    // 用户编辑后的 grant items
 	ToolResult     string      `json:"tool_result,omitempty"`     // type="ext_tool": execution result (JSON)
 	ToolError      string      `json:"tool_error,omitempty"`      // type="ext_tool": execution error message
-	Extension      string      `json:"extension,omitempty"`       // type="ext_dev_install": installed extension name
-	Version        string      `json:"version,omitempty"`         // type="ext_dev_install": installed extension version
+	Extension      string      `json:"extension,omitempty"`       // type="ext_dev_install" / "ext_store_install": installed extension name
+	Version        string      `json:"version,omitempty"`         // type="ext_dev_install" / "ext_store_install": installed extension version
 	MFAAnswers     []string    `json:"mfa_answers,omitempty"`     // type="mfa": answers in prompt order; never logged
+	// type="ext_store_search": the store's extensions, in index order.
+	StoreExtensions []ExtStoreEntry `json:"store_extensions,omitempty"`
+	// type="ext_store_install": why nothing was installed — ExtStoreInstallCanceled,
+	// ExtStoreInstallUpToDate, or the store's failure kind (network, digest, …).
+	ErrorKind string `json:"error_kind,omitempty"`
 }
+
+// Request types of the official extension store (opsctl ext search / install /
+// update).
+const (
+	// TypeExtStoreSearch lists the store; read-only, no dialog.
+	TypeExtStoreSearch = "ext_store_search"
+	// TypeExtStoreInstall installs one extension from the store through the
+	// app's install confirm, which is the user's approval.
+	TypeExtStoreInstall = "ext_store_install"
+)
+
+// ExtStoreEntry is one extension of the official store as `opsctl ext search`
+// lists it.
+type ExtStoreEntry struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+	// Latest is the newest version this app can install; "" when none can.
+	Latest string `json:"latest"`
+	// Installed is the installed version; "" when not installed.
+	Installed string `json:"installed"`
+	// Status is one of the ExtStoreStatus* values.
+	Status string `json:"status"`
+	// Reason says, for ExtStoreStatusUnavailable, what this OpsKat lacks.
+	Reason string `json:"reason,omitempty"`
+}
+
+// ExtStoreEntry.Status values.
+const (
+	ExtStoreStatusInstall     = "install"     // not installed; Latest can be installed
+	ExtStoreStatusUpdate      = "update"      // Installed is older than Latest
+	ExtStoreStatusInstalled   = "installed"   // installed, nothing newer this app can run
+	ExtStoreStatusUnavailable = "unavailable" // not installed and no version runs here
+)
+
+// ApprovalResponse.ErrorKind values of an ext_store_install that opsctl treats
+// specially; any other kind is a failure.
+const (
+	// ExtStoreInstallCanceled: the user declined the install confirm, or it was
+	// abandoned.
+	ExtStoreInstallCanceled = "canceled"
+	// ExtStoreInstallUpToDate: the installed version is already the newest the
+	// store offers, so nothing was installed.
+	ExtStoreInstallUpToDate = "installed"
+)
 
 // SocketPath returns the approval socket path for the given data directory.
 func SocketPath(dataDir string) string {

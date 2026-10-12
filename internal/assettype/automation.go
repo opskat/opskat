@@ -142,6 +142,16 @@ type PreparedCreate struct {
 	Approval   map[string]any
 	Credential CredentialPlan
 	contract   AutomationContract
+	// ProxyChain is the request's parsed proxy_chain, nil when it carries none (or an
+	// empty one). Its layers still hold plaintext secrets: it exists so the caller can
+	// check the SSH assets it references, never to be shown or logged.
+	ProxyChain *asset_entity.ProxyChainConfig
+}
+
+// NameProxyChainHops rewrites the approval summary of the requested proxy chain so its
+// SSH layers show the asset name sshName resolves, not just the ID.
+func (p *PreparedCreate) NameProxyChainHops(sshName func(id int64) string) {
+	p.Approval[argProxyChain] = ProxyChainSummary(p.ProxyChain, sshName)
 }
 
 // BindCredential applies a validated existing credential through the selected type owner.
@@ -234,6 +244,17 @@ func validateAutomation(prepared PreparedCreate) error {
 func finalizeAutomation(prepared PreparedCreate) (PreparedCreate, error) {
 	contract := prepared.contract
 	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields, contract.FlatMapFields)
+	// A proxy chain is a list of objects, which approvalView drops wholesale (a nested
+	// value could hide a secret). The approver still has to see the path, so it goes in
+	// as one summary line per hop.
+	chain, supplied, err := proxyChainArg(prepared.Config)
+	if err != nil {
+		return PreparedCreate{}, err
+	}
+	if supplied {
+		prepared.ProxyChain = chain
+		prepared.Approval[argProxyChain] = ProxyChainSummary(chain, nil)
+	}
 	credential, err := credentialPlan(contract, prepared.Config)
 	if err != nil {
 		return PreparedCreate{}, err
@@ -252,6 +273,9 @@ func prepareAutomation(ctx context.Context, a *asset_entity.Asset, args map[stri
 	}
 	config := cloneArgs(args)
 	if err := rejectUnknownFields(config, contract.ConfigFields); err != nil {
+		return PreparedCreate{}, fmt.Errorf("invalid %s config: %w", TypeName(a), err)
+	}
+	if err := validateConnectionArgs(config); err != nil {
 		return PreparedCreate{}, fmt.Errorf("invalid %s config: %w", TypeName(a), err)
 	}
 	return PreparedCreate{Handler: h, Config: config, contract: contract}, nil

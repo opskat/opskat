@@ -59,29 +59,52 @@ test("a non-interactive opsctl command is approved by the desktop and audited", 
   });
 });
 
-test("a second approval arriving right after the first is answered stays clickable", async ({ page }) => {
-  test.setTimeout(120_000);
+// A scripted `opsctl a && opsctl b` raises the second approval a moment after the first
+// is answered — while the first dialog is still animating out. The dialog has to come
+// back clickable: if the backdrop is re-mounted above the still-mounted panel, the
+// buttons are there but no mouse can reach them, and the CLI hangs until it times out.
+test("an approval arriving while the previous dialog is closing can still be clicked", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("app-root")).toBeVisible();
 
-  const asset = `e2e-opsctl-b2b-${Date.now()}`;
-  await createRedisAssetViaUI(page, { name: asset, host: "127.0.0.1", port: MOCK_REDIS_PORT });
+  // Sweep the whole exit animation: which moment is fragile depends on how the panel's
+  // and the backdrop's exit timings relate, and that is exactly what must not matter.
+  for (const delay of [40, 90, 130, 160, 175, 190, 205, 240]) {
+    // Raise one approval; once it is up, answer it and raise the next `delay` ms later.
+    // The gap is timed inside the page, where the animation runs.
+    await page.evaluate(
+      ([ms, tag]) => {
+        const raise = (id: string) =>
+          (
+            window as unknown as { runtime: { EventsEmit: (name: string, data: unknown) => void } }
+          ).runtime.EventsEmit("opsctl:approval", {
+            confirm_id: id,
+            kind: "once",
+            type: "exec",
+            asset_id: 1,
+            asset_name: "e2e",
+            command: `echo ${id}`,
+            session_id: "e2e",
+          });
+        const deny = () => document.querySelector<HTMLElement>('[data-testid="opsctl-approval-deny"]');
+        raise(`first-${tag}`);
+        const waitForFirst = setInterval(() => {
+          const button = deny();
+          if (!button) return;
+          clearInterval(waitForFirst);
+          // Let the opening animation finish before answering.
+          setTimeout(() => {
+            button.click();
+            setTimeout(() => raise(`second-${tag}`), ms);
+          }, 400);
+        }, 20);
+      },
+      [delay, String(delay)] as const
+    );
 
-  const run = (key: string) =>
-    runOpsctl(["--data-dir", process.env.OPSKAT_DATA_DIR!, "exec", asset, "--type", "redis", "--", "SET", key, "v"]);
-
-  const first = run(`e2e:b2b:1:${Date.now()}`);
-  await expect(page.getByTestId("opsctl-approval-dialog")).toBeVisible({ timeout: 60_000 });
-  await page.getByTestId("opsctl-approval-allow").click();
-  // 不等第一个弹窗退场完毕就启动第二条：队列清空后紧接着又来一条审批。
-  const second = run(`e2e:b2b:2:${Date.now()}`);
-
-  await expect(page.getByTestId("opsctl-approval-dialog")).toBeVisible({ timeout: 60_000 });
-  // 不用 force：被盖在上方的遮罩拦截时，点击会超时失败。
-  await page.getByTestId("opsctl-approval-allow").click({ timeout: 10_000 });
-
-  for (const pending of [first, second]) {
-    const result = await pending;
-    expect(result, result.stderr).toMatchObject({ code: 0 });
+    await expect(page.getByTestId("approval-command-text")).toContainText(`second-${delay}`);
+    // A real pointer click: Playwright refuses it when another element would receive it.
+    await page.getByTestId("opsctl-approval-deny").click({ timeout: 3_000 });
+    await expect(page.getByTestId("opsctl-approval-dialog")).toBeHidden();
   }
 });

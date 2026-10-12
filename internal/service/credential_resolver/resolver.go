@@ -8,11 +8,14 @@ import (
 	"os"
 	"sort"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
+	"github.com/opskat/opskat/internal/pkg/sshtuning"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -31,6 +34,13 @@ func Default() *Resolver {
 	return defaultResolver
 }
 
+// ResolveProxyChain 把资产配置里的代理链解析成可拨号的各层（凭据已解密），顺序是离本机
+// 最近的一跳在前。
+//
+// 第一跳如果是 SSH 资产，要从本机拨出去，所以先展开那台资产自己的连接路径（它的代理链，
+// 或 SSH 隧道 / SOCKS5 字段）再接上它本身：一台机器怎么到达只在它自己身上配一次，引用它
+// 的资产都跟着走。第二跳起由前一跳到达，链上写的就是完整路径，不再套用它们自己的路径。
+// maxDepth 限制展开的层数，连接路径互相引用时报错。
 func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.ProxyChainConfig, maxDepth int) ([]proxychain.Layer, error) {
 	if maxDepth <= 0 {
 		return nil, fmt.Errorf("代理链过深，可能存在循环引用")
@@ -49,8 +59,11 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 		}
 		return layers[i].Order < layers[j].Order
 	})
+	// 链上的 SSH 握手、通道打开和 SOCKS5 握手本身都没有时限；经 http.Transport 拨号时
+	// ctx 也不带期限，卡住的一跳会一直占着连接。
+	stepTimeout := sshtuning.Get().DialTimeoutOrDefault()
 	resolved := make([]proxychain.Layer, 0, len(layers))
-	for _, layer := range layers {
+	for i, layer := range layers {
 		switch layer.Type {
 		case asset_entity.ProxyChainLayerSSH:
 			asset, err := asset_svc.Asset().Get(ctx, layer.SSHAssetID)
@@ -61,6 +74,15 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 			if err != nil {
 				return nil, err
 			}
+			if own := sshAssetChain(asset, cfg); i == 0 && own != nil {
+				upstream, err := r.ResolveProxyChain(ctx, own, maxDepth-1)
+				if err != nil {
+					return nil, fmt.Errorf("解析 SSH 资产 %q 自身的连接路径失败: %w", asset.Name, err)
+				}
+				logger.Ctx(ctx).Debug("proxy chain first hop reached through its own connection path",
+					zap.Int64("assetID", asset.ID), zap.Int("upstreamHops", len(upstream)))
+				resolved = append(resolved, upstream...)
+			}
 			// Agent 层：不解析密码/密钥材料，经同一认证工厂在真正拨号时完成握手。
 			if cfg.AuthType == asset_entity.AuthTypeAgent {
 				agentCfg, err := r.ResolveAgentAuthConfig(cfg)
@@ -68,12 +90,13 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 					return nil, err
 				}
 				resolved = append(resolved, proxychain.Layer{
-					Type:      proxychain.LayerSSH,
-					Name:      layer.Name,
-					Host:      cfg.Host,
-					Port:      cfg.Port,
-					Username:  cfg.Username,
-					Handshake: r.agentHandshakeLayer(agentCfg, cfg.Username, cfg.Host, cfg.Port),
+					Type:             proxychain.LayerSSH,
+					Name:             layer.Name,
+					Host:             cfg.Host,
+					Port:             cfg.Port,
+					Username:         cfg.Username,
+					Handshake:        r.agentHandshakeLayer(agentCfg, cfg.Username, cfg.Host, cfg.Port),
+					EstablishTimeout: stepTimeout,
 				})
 				break
 			}
@@ -96,6 +119,7 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 					Auth:            auth,
 					HostKeyCallback: ssh_svc.MakeHostKeyCallback(cfg.Host, cfg.Port, ssh_svc.AutoTrustFirstRejectChangeVerifyFunc()),
 				},
+				EstablishTimeout: stepTimeout,
 			})
 		case asset_entity.ProxyChainLayerSOCKS5:
 			cp := asset_entity.ProxyConfig{
@@ -105,6 +129,7 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 			resolved = append(resolved, proxychain.Layer{
 				Type: proxychain.LayerSOCKS5, Name: layer.Name, Host: proxy.Host, Port: proxy.Port,
 				Username: proxy.Username, Password: proxy.Password,
+				EstablishTimeout: stepTimeout,
 			})
 		case asset_entity.ProxyChainLayerHTTPTunnel:
 			resolved = append(resolved, proxychain.Layer{
@@ -114,6 +139,16 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 		}
 	}
 	return resolved, nil
+}
+
+// sshAssetChain 是到达一台 SSH 资产要走的连接路径：它自己的代理链，或还没迁成代理链的
+// SSH 隧道 / SOCKS5 代理字段。
+func sshAssetChain(asset *asset_entity.Asset, cfg *asset_entity.SSHConfig) *asset_entity.ProxyChainConfig {
+	jumpHostID := asset.SSHTunnelID
+	if jumpHostID == 0 {
+		jumpHostID = cfg.JumpHostID // backward compat
+	}
+	return asset_entity.EffectiveProxyChain(cfg.ProxyChain, jumpHostID, cfg.Proxy)
 }
 
 // ResolveSSHCredentials 从 SSHConfig 解析明文密码/密钥/passphrase

@@ -38,8 +38,9 @@ type Settings struct {
 	// heartbeats (the empty packets that keep a session alive through idle
 	// NAT/firewall timeouts). A value <= 0 disables the heartbeat.
 	KeepAliveInterval time.Duration
-	// DialTimeout caps the TCP connect phase. A value <= 0 means
-	// DefaultDialTimeout.
+	// DialTimeout caps the TCP connect phase, and each step of bringing up a
+	// proxy-chain layer (SSH handshake, opening the channel to the next address,
+	// SOCKS5 handshake). A value <= 0 means DefaultDialTimeout.
 	DialTimeout time.Duration
 }
 

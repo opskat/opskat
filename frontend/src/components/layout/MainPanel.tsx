@@ -116,6 +116,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
   const remotePaneTabs = tabs.filter(
     (tab) => tab.type === "page" && REMOTE_PANE_PAGE_IDS.has((tab.meta as PageTabMeta).pageId)
   );
+  const extensionPageTabs = tabs.filter((tab) => tab.type === "page" && !!(tab.meta as PageTabMeta).extensionName);
 
   function renderActiveContent() {
     if (!activeTab) return null;
@@ -167,9 +168,6 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
             return <K8sClusterPage asset={k8sAsset} />;
           }
           default:
-            if (meta.extensionName) {
-              return <ExtensionPage extensionName={meta.extensionName} pageId={meta.pageId} assetId={meta.assetId} />;
-            }
             return null;
         }
       }
@@ -312,11 +310,31 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
           );
         })}
 
+        {/* Extension page tabs: display-based, like query tabs. A page keeps what the user
+            did in it (opened tabs, a query and its results) in its own component state, so
+            unmounting it on a tab switch would drop that and load the asset's data again. */}
+        {extensionPageTabs.map((tab) => {
+          const isActive = activeTabId === tab.id;
+          const meta = tab.meta as PageTabMeta;
+          return (
+            <div
+              key={tab.id}
+              className="absolute inset-0 bg-background"
+              style={{ display: isActive ? "block" : "none" }}
+            >
+              <LazySurface>
+                <ExtensionPage extensionName={meta.extensionName!} pageId={meta.pageId} assetId={meta.assetId} />
+              </LazySurface>
+            </div>
+          );
+        })}
+
         {activeTab &&
           activeTab.type === "page" &&
+          !(activeTab.meta as PageTabMeta).extensionName &&
           !REMOTE_PANE_PAGE_IDS.has((activeTab.meta as PageTabMeta).pageId) && (
             // key: every page tab renders at this one spot, so without it switching between two
-            // tabs of the same page (two assets' extension pages) would hand the second tab the
+            // tabs of the same page (two assets' cluster pages) would hand the second tab the
             // first one's component instance and state.
             <div key={activeTab.id} className="absolute inset-0 bg-background">
               <LazySurface>{renderActiveContent()}</LazySurface>

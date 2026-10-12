@@ -1,21 +1,15 @@
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Switch,
-  Textarea,
-} from "@opskat/ui";
+import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Textarea } from "@opskat/ui";
 import { SecretInput } from "@/components/SecretInput";
-import { formFields, type ExtensionConfigProperty, type ExtensionConfigSchema } from "@/extension/configSchema";
+import { FieldLabel } from "@/components/asset/fields";
+import { visibleFields, type ExtensionConfigProperty, type ExtensionConfigSchema } from "@/extension/configSchema";
+import type { ExtAuth } from "@/extension/types";
 
 interface ExtensionConfigFormProps {
   configSchema: ExtensionConfigSchema;
+  /** 类型声明的认证方式：只呈现当前选中方式用到的字段。 */
+  auth?: ExtAuth;
   value: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
   /** 有已存值、但宿主没把明文交给表单的密码字段（按字段名取）：呈现为"已设置，留空则不修改"。 */
@@ -26,6 +20,7 @@ interface ExtensionConfigFormProps {
 
 export function ExtensionConfigForm({
   configSchema,
+  auth,
   value,
   onChange,
   withheldSecrets,
@@ -33,7 +28,7 @@ export function ExtensionConfigForm({
 }: ExtensionConfigFormProps) {
   const { t } = useTranslation();
   const required = useMemo(() => new Set(configSchema.required ?? []), [configSchema.required]);
-  const fields = formFields(configSchema);
+  const fields = visibleFields(configSchema, auth, value);
 
   const updateField = useCallback(
     (key: string, fieldValue: unknown) => {
@@ -65,11 +60,8 @@ export function ExtensionConfigForm({
       // Enum → Select
       if (prop.enum && prop.enum.length > 0) {
         return (
-          <div key={key} className="grid gap-2">
-            <Label>
-              {label}
-              {isRequired && <span className="text-destructive ml-0.5">*</span>}
-            </Label>
+          <div key={key} className="flex flex-col gap-[7px]">
+            <FieldLabel required={isRequired}>{label}</FieldLabel>
             <Select value={String(value[key] ?? "")} onValueChange={(v) => updateField(key, v)}>
               <SelectTrigger className="w-full" {...errorProps(key)}>
                 <SelectValue placeholder={placeholder} />
@@ -83,7 +75,7 @@ export function ExtensionConfigForm({
               </SelectContent>
             </Select>
             {errorText(key)}
-            {description && <p className="text-xs text-muted-foreground">{description}</p>}
+            {description && <p className="text-[11px] leading-snug text-muted-foreground/70">{description}</p>}
           </div>
         );
       }
@@ -91,10 +83,10 @@ export function ExtensionConfigForm({
       // Boolean → Switch
       if (prop.type === "boolean") {
         return (
-          <div key={key} className="flex items-center justify-between">
-            <div>
-              <Label>{label}</Label>
-              {description && <p className="text-xs text-muted-foreground">{description}</p>}
+          <div key={key} className="flex items-center justify-between gap-4">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <FieldLabel>{label}</FieldLabel>
+              {description && <span className="text-[11px] leading-snug text-muted-foreground/70">{description}</span>}
             </div>
             <Switch checked={!!value[key]} onCheckedChange={(v) => updateField(key, v)} />
           </div>
@@ -107,11 +99,10 @@ export function ExtensionConfigForm({
       // `cannot unmarshal string into Go struct field ... of type int`.
       if (prop.type === "integer" || prop.type === "number") {
         return (
-          <div key={key} className="grid gap-2">
-            <Label htmlFor={key}>
+          <div key={key} className="flex flex-col gap-[7px]">
+            <FieldLabel htmlFor={key} required={isRequired}>
               {label}
-              {isRequired && <span className="text-destructive ml-0.5">*</span>}
-            </Label>
+            </FieldLabel>
             <Input
               id={key}
               type="number"
@@ -123,7 +114,7 @@ export function ExtensionConfigForm({
               {...errorProps(key)}
             />
             {errorText(key)}
-            {description && <p className="text-xs text-muted-foreground">{description}</p>}
+            {description && <p className="text-[11px] leading-snug text-muted-foreground/70">{description}</p>}
           </div>
         );
       }
@@ -131,11 +122,10 @@ export function ExtensionConfigForm({
       // Textarea (multi-line text; PEM, JSON blobs, etc.)
       if (prop.format === "textarea") {
         return (
-          <div key={key} className="grid gap-2">
-            <Label htmlFor={key}>
+          <div key={key} className="flex flex-col gap-[7px]">
+            <FieldLabel htmlFor={key} required={isRequired}>
               {label}
-              {isRequired && <span className="text-destructive ml-0.5">*</span>}
-            </Label>
+            </FieldLabel>
             <Textarea
               id={key}
               value={String(value[key] ?? "")}
@@ -146,18 +136,17 @@ export function ExtensionConfigForm({
               {...errorProps(key)}
             />
             {errorText(key)}
-            {description && <p className="text-xs text-muted-foreground">{description}</p>}
+            {description && <p className="text-[11px] leading-snug text-muted-foreground/70">{description}</p>}
           </div>
         );
       }
 
       // String (password or normal)
       return (
-        <div key={key} className="grid gap-2">
-          <Label htmlFor={key}>
+        <div key={key} className="flex flex-col gap-[7px]">
+          <FieldLabel htmlFor={key} required={isRequired}>
             {label}
-            {isRequired && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          </FieldLabel>
           {prop.format === "password" ? (
             <SecretInput
               id={key}
@@ -176,7 +165,7 @@ export function ExtensionConfigForm({
             />
           )}
           {errorText(key)}
-          {description && <p className="text-xs text-muted-foreground">{description}</p>}
+          {description && <p className="text-[11px] leading-snug text-muted-foreground/70">{description}</p>}
         </div>
       );
     },

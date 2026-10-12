@@ -1,8 +1,8 @@
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
+import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
-import { tlsToggleFields } from "./tlsFields";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
@@ -41,7 +41,27 @@ const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
     ],
   },
   { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
-  { key: "tls", label: "asset.tabTls", fields: tlsToggleFields<EtcdFormState>("etcd.example.com") },
+  {
+    key: "tls",
+    label: "asset.tabTls",
+    fields: [
+      { kind: "switch", key: "tls", label: "asset.tls" },
+      {
+        kind: "switch",
+        key: "tlsInsecure",
+        label: "etcd.form.tlsInsecure",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsServerName",
+        label: "etcd.form.tlsServerName",
+        placeholder: "etcd.example.com",
+        visibleWhen: (s) => s.tls,
+      },
+      ...tlsCertFields<EtcdFormState>((s) => s.tls),
+    ],
+  },
 ];
 
 export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
@@ -66,11 +86,12 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
         s,
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
         await resolveSaveProxyPassword(s, ctx.encryptPassword),
-        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
+        await resolveTLSKey(s, ctx.encryptPassword)
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
-    buildTest: async (s) => ({
+    buildTest: async (s, ctx) => ({
       assetType: "etcd",
       configJSON: buildEtcdConfig(
         s,
@@ -78,7 +99,8 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
         s.proxyPassword,
         Object.fromEntries(
           s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-        )
+        ),
+        await resolveTLSKey(s, ctx.encryptPassword)
       ),
       password: cred.value.password,
     }),

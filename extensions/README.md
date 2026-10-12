@@ -235,7 +235,9 @@ through the declared tunnel/chain and wrapped in the declared TLS, and an endpoi
 hostname is resolved on the far side of a tunnel; anything else the same call reaches
 (an allowlisted public API) is dialed directly. Since these settings apply only to the
 endpoint, declaring any of them needs `network.assetEndpoint` and a `format:"endpoint"`
-config field — the host refuses the extension at load otherwise. A cert file that cannot be read, a
+config field — the host refuses the extension at load otherwise. The user gives the CA and client
+certificates either as file paths or as PEM content (a client key given as content is stored
+encrypted). A certificate that cannot be read or does not parse, a
 failed TLS handshake, or a chain hop that cannot be reached all fail the open with
 the host's error; there is no fallback to a direct or unverified connection — with TLS
 enabled, a plain `http://` request to the endpoint is refused, and the process's
@@ -244,6 +246,14 @@ enabled, a plain `http://` request to the endpoint is refused, and the process's
 goes into the chain as a hop — and one that sets both is refused rather than dialed
 without the tunnel. An item left undeclared is neither shown nor applied, and the host
 refuses a `connection` item it does not know.
+
+The same declaration opens these settings to `opsctl create asset` / `update asset` and the
+assistant's `put_asset`, under the field names built-in types use: `ssh_asset_id` for
+`SSHTunnel`, `proxy_chain` for `ProxyChain`, and `tls`, `tls_insecure`, `tls_server_name`,
+`tls_{ca,cert,key}_file` / `tls_{ca,cert,key}_pem` for `TLS`. They are host fields, not yours:
+the host stores them where the form does, lists them in the type's `help` document, and
+refuses at load an asset type whose `configSchema` declares a property with one of the
+names its own `connection` items claim.
 
 ### Credentials are injected by the host
 

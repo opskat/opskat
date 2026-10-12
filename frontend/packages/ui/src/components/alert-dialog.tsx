@@ -18,12 +18,17 @@ function AlertDialogPortal({ ...props }: React.ComponentProps<typeof AlertDialog
   return <AlertDialogPrimitive.Portal data-slot="alert-dialog-portal" {...props} />;
 }
 
+// The backdrop and the panel are separate portal nodes at the same z-index, so the panel
+// is on top only because it is mounted later. Each unmounts when its own exit animation
+// ends: `duration-200` here must match the panel's. A shorter backdrop exit leaves a
+// window where it is gone and the panel is not — reopen in it and the backdrop is
+// mounted again *after* the panel, covering it: buttons visible, nothing clickable.
 function AlertDialogOverlay({ className, ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Overlay>) {
   return (
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-50 bg-black/50 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className
       )}
       {...props}

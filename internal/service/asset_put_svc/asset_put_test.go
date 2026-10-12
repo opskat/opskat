@@ -710,3 +710,45 @@ func TestPrepareSafeViewsOmitCompositeNestedSecretsAndKeepFlatArrays(t *testing.
 		assert.Equal(t, []string{"kafka-1:9092", "kafka-2:9092"}, brokers)
 	})
 }
+
+func TestProxyChainSSHLayersMustBeExistingSSHAssetsAndAreShownByName(t *testing.T) {
+	env := setupPutTest(t)
+	jump, err := Put(env.ctx, Request{
+		Asset:  &asset_entity.Asset{Name: "jump", Type: asset_entity.AssetTypeSSH},
+		Config: map[string]any{"host": "jump.example.com", "username": "root", "password": "ssh-secret"},
+	})
+	require.NoError(t, err)
+
+	chain := func(sshAssetID int64) map[string]any {
+		return map[string]any{
+			"driver": "mysql", "host": "db.internal", "username": "app",
+			"proxy_chain": []any{
+				map[string]any{"type": "ssh", "ssh_asset_id": float64(sshAssetID)},
+				map[string]any{"type": "socks5", "host": "10.0.0.5", "port": float64(1080), "password": "proxy-secret"},
+			},
+		}
+	}
+	prepared, err := Prepare(env.ctx, Request{
+		Asset: &asset_entity.Asset{Name: "db", Type: asset_entity.AssetTypeDatabase}, Config: chain(jump.ID),
+	})
+	require.NoError(t, err)
+	approval := prepared.SafeApprovalDetail()["config"].(map[string]any)
+	assert.Equal(t, []string{fmt.Sprintf("ssh: jump (#%d)", jump.ID), "socks5: 10.0.0.5:1080"}, approval["proxy_chain"])
+	audit, err := json.Marshal(prepared.SafeAuditArgs())
+	require.NoError(t, err)
+	assert.NotContains(t, string(audit), "proxy-secret")
+
+	_, err = Prepare(env.ctx, Request{
+		Asset: &asset_entity.Asset{Name: "db", Type: asset_entity.AssetTypeDatabase}, Config: chain(jump.ID + 100),
+	})
+	require.Error(t, err, "a layer pointing at no asset is refused before anything is written")
+	assert.Contains(t, err.Error(), "proxy_chain")
+
+	result, err := Commit(env.ctx, prepared)
+	require.NoError(t, err)
+	_, err = Prepare(env.ctx, Request{
+		Asset: &asset_entity.Asset{Name: "db2", Type: asset_entity.AssetTypeDatabase}, Config: chain(result.ID),
+	})
+	require.Error(t, err, "a layer pointing at a non-SSH asset is refused")
+	assert.Contains(t, err.Error(), "not an SSH asset")
+}

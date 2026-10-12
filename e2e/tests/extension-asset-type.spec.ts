@@ -69,9 +69,10 @@ test("an extension's asset type reaches the picker and its form is generated fro
     "placeholder",
     CONFIG.requiredPlaceholder
   );
-  // …and `required` shows up as the marker on that field's label, and only there.
+  // …and `required` shows up as the marker on that field's label, and only there
+  // (the same " *" marker the built-in forms' labels carry).
   await expect(dialog.locator(`label[for="${CONFIG.requiredField}"]`)).toHaveText(
-    `${CONFIG.requiredLabel}*`
+    `${CONFIG.requiredLabel} *`
   );
   await expect(dialog.locator(`label[for="${CONFIG.optionalField}"]`)).toHaveText(CONFIG.optionalLabel);
 
@@ -113,12 +114,15 @@ test("an extension asset type declaring an SSH tunnel and a test-connection hand
   const dialog = page.getByTestId("asset-form-dialog");
 
   // connection.sshTunnel adds an SSH tunnel choice to the host's one connection-method
-  // selector; proxyChain is not declared, so the chain choice is absent.
+  // selector, on the form's tunnel tab; proxyChain is not declared, so the chain choice
+  // is absent.
+  await dialog.getByTestId("config-tab-tunnel").click();
   const method = dialog.getByRole("radiogroup", { name: "连接方式" });
   await expect(method.getByRole("radio")).toHaveText(["直连", "SSH 隧道"]);
   await method.getByRole("radio", { name: "SSH 隧道" }).click();
   await expect(dialog.getByTestId("extension-ssh-tunnel-select")).toBeVisible();
   await method.getByRole("radio", { name: "直连" }).click();
+  await dialog.getByTestId("config-tab-connection").click();
 
   // The endpoint is the app's own dev server: the host dials it (a loopback address,
   // admitted because it is the asset's endpoint) and the handler sees its 200.

@@ -17,6 +17,7 @@ import { SideTabList } from "@/components/layout/SideTabList";
 import { PermissionDialog } from "@/components/ai/PermissionDialog";
 import { OpsctlApprovalDialog } from "@/components/approval/OpsctlApprovalDialog";
 import { OpsctlMFADialog } from "@/components/approval/OpsctlMFADialog";
+import { ExtensionInstallConfirmDialog } from "@/extension";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ActiveTasksQuitDialog, type QuitActivity } from "@/components/ActiveTasksQuitDialog";
 
@@ -538,6 +539,7 @@ function App() {
           <PermissionDialog suspended={quitActivities !== null} />
           <OpsctlApprovalDialog suspended={quitActivities !== null} />
           <OpsctlMFADialog />
+          <ExtensionInstallConfirmDialog />
           <ActiveTasksQuitDialog
             open={quitActivities !== null}
             activities={quitActivities ?? []}

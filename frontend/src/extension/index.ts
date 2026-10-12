@@ -7,3 +7,4 @@ export { createExtensionAPI } from "./api";
 export { bootstrapExtensions, subscribeExtensionReload } from "./init";
 export type { ExtManifest, ExtPage, ExtFrontend, LoadedExtension, ExtAPI, ExtCallOptions, ExtEvent } from "./types";
 export { ExtensionPage } from "./ExtensionPage";
+export { ExtensionInstallConfirmDialog } from "./InstallConfirmDialog";

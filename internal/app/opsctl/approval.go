@@ -20,46 +20,56 @@ import (
 	"go.uber.org/zap"
 )
 
-// startApprovalServer 启动 opsctl 审批 本地 IPC 服务
-func (o *Opsctl) startApprovalServer() {
-	handler := func(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
-		// 数据变更通知：opsctl 通知前端刷新
-		if req.Type == "notify" {
-			wailsRuntime.EventsEmit(o.ctx, "data:changed", map[string]any{
-				"resource": req.Detail,
-			})
-			return approval.ApprovalResponse{Approved: true}
-		}
-
-		// 授权审批
-		if req.Type == "grant" {
-			return o.handleGrantApproval(req)
-		}
-
-		// 批量执行审批
-		if req.Type == "batch" {
-			return o.handleBatchApproval(req)
-		}
-
-		// SSH MFA 挑战：opsctl 不可交互时请桌面端代答；请求方断开即关闭对话框
-		if req.Type == "mfa" {
-			return o.mfa.challenge(ctx, req)
-		}
-
-		// 扩展工具执行
-		if req.Type == "ext_tool" {
-			return o.handleExtToolExec(req)
-		}
-
-		// 扩展开发安装（opsctl ext dev）
-		if req.Type == "ext_dev_install" {
-			return o.handleExtDevInstall(req)
-		}
-
-		return o.requestSingleApproval(req)
+// handleRequest 是 opsctl 本地 IPC 上每个请求的分发入口。ctx 在请求方断开或服务
+// 停止时结束。
+func (o *Opsctl) handleRequest(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
+	// 数据变更通知：opsctl 通知前端刷新
+	if req.Type == "notify" {
+		wailsRuntime.EventsEmit(o.ctx, "data:changed", map[string]any{
+			"resource": req.Detail,
+		})
+		return approval.ApprovalResponse{Approved: true}
 	}
 
-	srv := approval.NewServer(handler, o.authToken)
+	// 授权审批
+	if req.Type == "grant" {
+		return o.handleGrantApproval(req)
+	}
+
+	// 批量执行审批
+	if req.Type == "batch" {
+		return o.handleBatchApproval(req)
+	}
+
+	// SSH MFA 挑战：opsctl 不可交互时请桌面端代答；请求方断开即关闭对话框
+	if req.Type == "mfa" {
+		return o.mfa.challenge(ctx, req)
+	}
+
+	// 扩展工具执行
+	if req.Type == "ext_tool" {
+		return o.handleExtToolExec(req)
+	}
+
+	// 扩展开发安装（opsctl ext dev）
+	if req.Type == "ext_dev_install" {
+		return o.handleExtDevInstall(req)
+	}
+
+	// 扩展商店（opsctl ext search / install / update）
+	if req.Type == approval.TypeExtStoreSearch {
+		return o.handleExtStoreSearch(ctx, req)
+	}
+	if req.Type == approval.TypeExtStoreInstall {
+		return o.handleExtStoreInstall(ctx, req)
+	}
+
+	return o.requestSingleApproval(req)
+}
+
+// startApprovalServer 启动 opsctl 审批 本地 IPC 服务
+func (o *Opsctl) startApprovalServer() {
+	srv := approval.NewServer(o.handleRequest, o.authToken)
 	sockPath := approval.SocketPath(bootstrap.ResolvedDataDir())
 	if err := srv.Start(sockPath); err != nil {
 		logger.Ctx(o.ctx).Error("approval server failed to start", zap.String("socket", sockPath), zap.Error(err))

@@ -8,8 +8,8 @@ import { SecretInput } from "@/components/SecretInput";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential, type UseAssetCredential } from "./useAssetCredential";
-import { tlsToggleFields } from "./tlsFields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
+import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
@@ -50,7 +50,11 @@ class RedisSentinelAuthRequiredError extends Error {}
 
 /** 组装一次探测请求(测试连接 / 从哨兵读取 / 补全均复用):复用表单当前认证、隧道、TLS 配置。
  *  哨兵密码走 plainSentinelPassword 单独传,configJSON 只带既有密文(镜像数据节点密码 test 路径)。 */
-function buildProbeRequest(state: RedisFormState, cred: UseAssetCredential) {
+async function buildProbeRequest(
+  state: RedisFormState,
+  cred: UseAssetCredential,
+  encrypt: (plain: string) => Promise<string>
+) {
   const configJSON = buildRedisConfig(
     state,
     resolveTestCredential(cred.value),
@@ -59,7 +63,8 @@ function buildProbeRequest(state: RedisFormState, cred: UseAssetCredential) {
     Object.fromEntries(
       state.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
     ),
-    resolveTestSentinelPassword(state)
+    resolveTestSentinelPassword(state),
+    await resolveTLSKey(state, encrypt)
   );
   return { configJSON, password: cred.value.password, sentinelPassword: state.sentinelPassword };
 }
@@ -93,7 +98,8 @@ function redisTestSuccessText(
   return undefined;
 }
 
-export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
+export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: ConfigSectionProps) {
+  const { encryptPassword } = ctx;
   const { t } = useTranslation();
   const cred = useAssetCredential(editAsset);
   const baseHandleRef = useRef<AssetFormHandle>(null);
@@ -140,12 +146,13 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         false,
         await resolveSaveProxyPassword(s, ctx.encryptPassword),
         await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
-        await resolveSaveSentinelPassword(s, ctx.encryptPassword)
+        await resolveSaveSentinelPassword(s, ctx.encryptPassword),
+        await resolveTLSKey(s, ctx.encryptPassword)
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
-    buildTest: async (s) => {
-      const req = buildProbeRequest(s, cred);
+    buildTest: async (s, ctx) => {
+      const req = await buildProbeRequest(s, cred, ctx.encryptPassword);
       return { assetType: "redis", configJSON: req.configJSON, password: req.password };
     },
     deps: [cred.value],
@@ -161,7 +168,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       const isCurrent = () => mountedRef.current && recognitionProbeRef.current === probe;
       setReadingSentinel(true);
       try {
-        const req = buildProbeRequest(formState, cred);
+        const req = await buildProbeRequest(formState, cred, encryptPassword);
         const result = await RedisProbe(probe.testID, req.configJSON, req.password, req.sentinelPassword);
         if (!isCurrent()) return;
         setLastProbe(result);
@@ -180,7 +187,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
         }
       }
     },
-    [cred, patch, flagSentinelAuthRequired]
+    [cred, patch, flagSentinelAuthRequired, encryptPassword]
   );
 
   const readSentinelGroups = useCallback(() => {
@@ -225,7 +232,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     let testStarted = false;
 
     const run = async (): Promise<AssetTestResult> => {
-      const req = buildProbeRequest(state, cred);
+      const req = await buildProbeRequest(state, cred, encryptPassword);
       testStarted = true;
       const result = await RedisProbe(testID, req.configJSON, req.password, req.sentinelPassword);
       if (!active) throw new Error("cancelled");
@@ -257,7 +264,7 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     activeAttemptRef.current = attempt;
     activeAttemptTokenRef.current = token;
     return attempt;
-  }, [state, cred, t, flagSentinelAuthRequired]);
+  }, [state, cred, t, flagSentinelAuthRequired, encryptPassword]);
 
   useImperativeHandle(
     ref,
@@ -517,7 +524,22 @@ export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       ],
     },
     { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
-    { key: "tls", label: "asset.tabTls", fields: tlsToggleFields<RedisFormState>("redis.example.com") },
+    {
+      key: "tls",
+      label: "asset.tabTls",
+      fields: [
+        { kind: "switch", key: "tls", label: "asset.tls" },
+        { kind: "switch", key: "tlsInsecure", label: "asset.redisTlsInsecure", visibleWhen: (s) => s.tls },
+        {
+          kind: "text",
+          key: "tlsServerName",
+          label: "asset.redisTlsServerName",
+          placeholder: "redis.example.com",
+          visibleWhen: (s) => s.tls,
+        },
+        ...tlsCertFields<RedisFormState>((s) => s.tls),
+      ],
+    },
     {
       key: "advanced",
       label: "asset.tabAdvanced",

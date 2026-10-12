@@ -191,12 +191,15 @@ func buildRedisOptions(cfg *asset_entity.RedisConfig, password string) (*redis.U
 }
 
 func buildRedisTLSConfig(cfg *asset_entity.RedisConfig) (*tls.Config, error) {
-	return BuildTLSConfig("Redis", TLSFields{
+	return BuildAssetTLSConfig("Redis", TLSFields{
 		ServerName: cfg.TLSServerName,
 		Insecure:   cfg.TLSInsecure,
 		CAFile:     cfg.TLSCAFile,
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,
+		CAPEM:      cfg.TLSCAPEM,
+		CertPEM:    cfg.TLSCertPEM,
+		KeyPEM:     cfg.TLSKeyPEM,
 	})
 }
 

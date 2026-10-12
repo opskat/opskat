@@ -8,10 +8,17 @@ import {
   type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
+import {
+  TLS_CERT_DEFAULTS,
+  tlsCertsFromJSON,
+  tlsCertsToJSON,
+  type TLSCertFormFields,
+  type TLSCertJSON,
+} from "./tlsCertConfig";
 
 export type RedisMode = "standalone" | "cluster" | "sentinel";
 
-export interface RedisFormState extends ConnectionFormFields {
+export interface RedisFormState extends ConnectionFormFields, TLSCertFormFields {
   host: string;
   port: number;
   username: string;
@@ -22,9 +29,6 @@ export interface RedisFormState extends ConnectionFormFields {
   tls: boolean;
   tlsInsecure: boolean;
   tlsServerName: string;
-  tlsCAFile: string;
-  tlsCertFile: string;
-  tlsKeyFile: string;
   /** 部署模式;standalone 时不写入 config(旧资产无此字段按单机处理)。 */
   mode: RedisMode;
   /** 集群种子节点 / 哨兵节点原始多行文本,每行一个 host:port。 */
@@ -51,9 +55,6 @@ export const REDIS_DEFAULTS: RedisFormState = {
   tls: false,
   tlsInsecure: false,
   tlsServerName: "",
-  tlsCAFile: "",
-  tlsCertFile: "",
-  tlsKeyFile: "",
   mode: "standalone",
   nodes: "",
   masterName: "",
@@ -62,9 +63,10 @@ export const REDIS_DEFAULTS: RedisFormState = {
   encryptedSentinelPassword: "",
   nodeAddressMap: "",
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
 };
 
-interface RedisConfig {
+interface RedisConfig extends TLSCertJSON {
   host?: string;
   port?: number;
   username?: string;
@@ -74,9 +76,6 @@ interface RedisConfig {
   tls?: boolean;
   tls_insecure?: boolean;
   tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
   command_timeout_seconds?: number;
   scan_page_size?: number;
   key_separator?: string;
@@ -198,6 +197,7 @@ export async function resolveSaveSentinelPassword(
  * 测试无 asset 行,buildTestConfig 传 includeSshAssetId=true 把隧道塞进 config(锁旧 handleTestRedisConnection)。
  * proxyPassword 由 resolveSaveProxyPassword(save=密文)或 state.proxyPassword(test=明文)预解析;
  * 隧道与代理互斥,按 connectionType 二选一。sentinelPassword 由 resolveSave/TestSentinelPassword 预解析。
+ * tlsKey 是 resolveTLSKey 预解析出的 TLS 私钥密文(保存与测试相同)。
  */
 export function buildRedisConfig(
   state: RedisFormState,
@@ -205,7 +205,8 @@ export function buildRedisConfig(
   includeSshAssetId = false,
   proxyPassword = "",
   proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
-  sentinelPassword: SentinelPasswordFragment = {}
+  sentinelPassword: SentinelPasswordFragment = {},
+  tlsKey = ""
 ): string {
   const cfg: RedisConfig = {};
   if (state.mode === "standalone") {
@@ -220,9 +221,7 @@ export function buildRedisConfig(
   if (state.tls) cfg.tls = true;
   if (state.tls && state.tlsInsecure) cfg.tls_insecure = true;
   if (state.tls && state.tlsServerName) cfg.tls_server_name = state.tlsServerName;
-  if (state.tls && state.tlsCAFile) cfg.tls_ca_file = state.tlsCAFile;
-  if (state.tls && state.tlsCertFile) cfg.tls_cert_file = state.tlsCertFile;
-  if (state.tls && state.tlsKeyFile) cfg.tls_key_file = state.tlsKeyFile;
+  if (state.tls) Object.assign(cfg, tlsCertsToJSON(state, tlsKey));
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
   const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
@@ -264,9 +263,7 @@ export function parseRedisConfig(configJSON: string, assetTunnelId = 0): RedisFo
       tls: cfg.tls || false,
       tlsInsecure: cfg.tls_insecure || false,
       tlsServerName: cfg.tls_server_name || "",
-      tlsCAFile: cfg.tls_ca_file || "",
-      tlsCertFile: cfg.tls_cert_file || "",
-      tlsKeyFile: cfg.tls_key_file || "",
+      ...tlsCertsFromJSON(cfg),
       mode,
       nodes: (cfg.nodes || []).join("\n"),
       masterName: cfg.master_name || "",

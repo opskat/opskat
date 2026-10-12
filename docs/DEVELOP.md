@@ -35,6 +35,9 @@ cd frontend && pnpm lint / pnpm lint:fix
 # Extensions / plugin
 opsctl ext dev <dir>                     # Install a local extension build into the running app
                                          # (app asks to confirm; re-run after each build = reload)
+opsctl ext search [keyword]              # List the official store with each extension's status
+opsctl ext install <name>                # Install / update from the store through the running app
+opsctl ext update <name> | --all         # (the app's install confirm asks for each one)
 make install-skill                       # Register opsctl plugin marketplace
 ```
 

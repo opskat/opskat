@@ -1,6 +1,6 @@
 import type { FieldDesc } from "@/components/asset/configFields";
 
-/** TLS 证书相关的共享表单字段(Redis / etcd / Kafka / 通用资产 HTTP 连接共用)。 */
+/** 通用资产 HTTP 连接的 TLS 表单字段(证书按本机文件路径给出)。 */
 export interface TlsFileFormFields {
   tlsInsecure: boolean;
   tlsServerName: string;
@@ -41,15 +41,5 @@ export function tlsFileFields<S extends TlsFileFormFields>(opts: {
       visibleWhen,
     },
     { kind: "text", key: "tlsKeyFile", label: "asset.tlsKeyFile", placeholder: "/path/to/client.key", visibleWhen },
-  ];
-}
-
-/** 带「TLS 加密」开关的一组:开关打开后才显示证书字段(Redis / etcd / Kafka 的 TLS 标签页)。 */
-export function tlsToggleFields<S extends TlsFileFormFields & { tls: boolean }>(
-  serverNamePlaceholder: string
-): FieldDesc<S>[] {
-  return [
-    { kind: "switch", key: "tls", label: "asset.tls" },
-    ...tlsFileFields<S>({ serverNamePlaceholder, visibleWhen: (s) => s.tls }),
   ];
 }

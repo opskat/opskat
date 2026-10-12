@@ -8,8 +8,8 @@ import {
 } from "@/components/asset/detail/InfoItem";
 import { DISABLED_VALUE, ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "@/components/asset/detail/utils";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
-import type { ExtensionConfigSchema } from "@/extension/configSchema";
-import type { ExtConnection } from "@/extension/types";
+import { visibleFields, type ExtensionConfigSchema } from "@/extension/configSchema";
+import type { ExtAuth, ExtConnection } from "@/extension/types";
 import { HOST_CONNECTION_CONFIG_KEY, type HostConnectionConfig } from "@/extension/connectionConfig";
 
 interface Options {
@@ -20,6 +20,8 @@ interface Options {
   schema?: ExtensionConfigSchema;
   /** 资产类型声明的宿主连接配置；未声明的项即使资产上有值也不展示（宿主同样不应用）。 */
   connection?: ExtConnection;
+  /** 资产类型声明的认证方式；与表单一样只展示选中方式用到的字段。 */
+  auth?: ExtAuth;
 }
 
 /**
@@ -32,27 +34,23 @@ interface Options {
 export function makeExtensionDetailInfoCard(opts: Options) {
   function ExtensionDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
     const { t } = useTranslation();
-    const props = opts.schema?.properties ?? {};
-    const order = opts.schema?.propertyOrder;
-    const keys = order ? order.filter((k) => k in props) : Object.keys(props);
+    const parsed = parseDetailConfig<Record<string, unknown>>(asset.Config) ?? {};
+    const fields = visibleFields(opts.schema, opts.auth, parsed);
     const tunnelName = opts.connection?.sshTunnel ? sshTunnelName(asset.sshTunnelId) : "";
 
-    const parsed = parseDetailConfig<Record<string, unknown>>(asset.Config) ?? {};
     // 宿主保留键：与 SSH 隧道一样只展示声明了的项，未声明即使资产上有值也不展示。
     const hostConn = parsed[HOST_CONNECTION_CONFIG_KEY] as HostConnectionConfig | undefined;
     const chain = opts.connection?.proxyChain ? hostConn?.proxyChain : undefined;
     const tls = opts.connection?.tls ? hostConn?.tls : undefined;
     const hasChain = !!chain?.layers?.length;
     const hasTLS = !!tls?.enabled;
-    if (keys.length === 0 && !tunnelName && !hasChain && !hasTLS) return null;
+    if (fields.length === 0 && !tunnelName && !hasChain && !hasTLS) return null;
 
     return (
       <>
         <DetailSection title={t(opts.displayNameKey, { ns: opts.ns, defaultValue: opts.assetType })}>
           <DetailGrid>
-            {keys.map((key) => {
-              const prop = props[key];
-              if (!prop) return null;
+            {fields.map(([key, prop]) => {
               const val = parsed[key];
               if (val === undefined || val === null || val === "") return null;
               return (

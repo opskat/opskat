@@ -1,0 +1,6 @@
+{
+  "extension.displayName": "商店演示扩展",
+  "extension.description": "从 e2e 扩展商店安装",
+  "assetType.storedemo.name": "商店演示",
+  "config.label.title": "标签"
+}

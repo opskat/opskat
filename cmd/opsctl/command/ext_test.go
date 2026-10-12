@@ -353,7 +353,7 @@ func TestExtRoutesDevToTheDevSubcommand(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
 	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
 
-	require.Equal(t, 0, cmdExt([]string{"dev", dir}))
+	require.Equal(t, 0, cmdExt(context.Background(), []string{"dev", dir}))
 	assert.Equal(t, dir, *sent)
 }
 

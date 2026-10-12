@@ -87,6 +87,12 @@ func (h *rdpHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 		}
 		cfg.Password = encrypted
 	}
+	if _, ok := args["ssh_asset_id"]; ok {
+		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
+	}
 	return a.SetRDPConfig(cfg)
 }
 
@@ -130,6 +136,12 @@ func (h *rdpHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 		}
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
+	}
+	if _, ok := args["ssh_asset_id"]; ok {
+		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
 	}
 	return a.SetRDPConfig(cfg)
 }

@@ -116,7 +116,7 @@ func TestAssetConfigGetterStripsHostConnectionConfig(t *testing.T) {
 		cfg, err := json.Marshal(map[string]any{
 			"host": "h",
 			extension.HostConnectionConfigKey: map[string]any{
-				"tls": map[string]any{"enabled": true, "caFile": "/etc/ca.pem"},
+				"tls": map[string]any{"enabled": true, "caCert": "ca-pem"},
 			},
 		})
 		So(err, ShouldBeNil)

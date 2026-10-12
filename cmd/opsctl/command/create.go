@@ -427,8 +427,12 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 	return 0
 }
 
-// writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段（见 writeOnlyFields）。
+// writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段（见 writeOnlyFields），
+// 或 proxy_chain 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。
 func writeOnlyFieldPresent(contract assettype.AutomationContract, config map[string]any) bool {
+	if assettype.ProxyChainHasSecret(config) {
+		return true
+	}
 	return slices.ContainsFunc(writeOnlyFields(contract), func(field string) bool {
 		return configValuePresent(config[field])
 	})

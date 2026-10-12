@@ -77,6 +77,7 @@ export default defineConfig({
       command: mock.command,
       cwd: mock.cwd,
       port: mock.port,
+      ...(mock.timeout ? { timeout: mock.timeout } : {}),
       // Protocol fixtures are executable test code and may change with a spec.
       // Never adopt an older process left on the port: that can make a local run
       // exercise stale mock behaviour while reporting against the current tree.
@@ -104,6 +105,9 @@ export default defineConfig({
         OPSKAT_MASTER_KEY: SUITE_MASTER_KEY,
         OPSKAT_E2E: "1",
         OPSKAT_EXTENSIONS: "1",
+        // Mocks that stand in for an external service the app reaches by URL
+        // (the extension store) say how to point the app at them.
+        ...Object.assign({}, ...mocks.map((mock) => mock.appEnv ?? {})),
       },
     },
   ],

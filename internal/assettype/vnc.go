@@ -99,6 +99,9 @@ func (h *vncHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 		}
 		cfg.Password = encrypted
 	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain); err != nil {
+		return err
+	}
 	return a.SetVNCConfig(cfg)
 }
 
@@ -136,6 +139,9 @@ func (h *vncHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 		}
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain); err != nil {
+		return err
 	}
 	return a.SetVNCConfig(cfg)
 }

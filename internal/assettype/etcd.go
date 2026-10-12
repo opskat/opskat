@@ -78,11 +78,11 @@ func (h *etcdHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, 
 		TLS:                   ArgBool(args, "tls"),
 		TLSInsecure:           ArgBool(args, "tls_insecure"),
 		TLSServerName:         ArgString(args, "tls_server_name"),
-		TLSCAFile:             ArgString(args, "tls_ca_file"),
-		TLSCertFile:           ArgString(args, "tls_cert_file"),
-		TLSKeyFile:            ArgString(args, "tls_key_file"),
 		DialTimeoutSeconds:    ArgInt(args, "dial_timeout_seconds"),
 		CommandTimeoutSeconds: ArgInt(args, "command_timeout_seconds"),
+	}
+	if err := applyTLSCertArgs(args, etcdTLSCertStore(cfg)); err != nil {
+		return err
 	}
 	a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
 	if password := ArgString(args, "password"); password != "" {
@@ -91,6 +91,9 @@ func (h *etcdHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, 
 			return fmt.Errorf("encrypt etcd password: %w", err)
 		}
 		cfg.Password = encrypted
+	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
 	}
 	return a.SetEtcdConfig(cfg)
 }
@@ -115,14 +118,8 @@ func (h *etcdHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, 
 	if v := ArgString(args, "tls_server_name"); v != "" {
 		cfg.TLSServerName = v
 	}
-	if v := ArgString(args, "tls_ca_file"); v != "" {
-		cfg.TLSCAFile = v
-	}
-	if v := ArgString(args, "tls_cert_file"); v != "" {
-		cfg.TLSCertFile = v
-	}
-	if v := ArgString(args, "tls_key_file"); v != "" {
-		cfg.TLSKeyFile = v
+	if err := applyTLSCertArgs(args, etcdTLSCertStore(cfg)); err != nil {
+		return err
 	}
 	if v := ArgInt(args, "dial_timeout_seconds"); v > 0 {
 		cfg.DialTimeoutSeconds = v
@@ -145,8 +142,18 @@ func (h *etcdHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, 
 		cfg.Password = encrypted
 		cfg.CredentialID = 0
 	}
+	if err := applyProxyChainArg(a, args, &cfg.ProxyChain, &cfg.SSHAssetID); err != nil {
+		return err
+	}
 	if err := a.SetEtcdConfig(cfg); err != nil {
 		return err
 	}
 	return nil
+}
+
+func etcdTLSCertStore(cfg *asset_entity.EtcdConfig) tlsCertStore {
+	return tlsCertStore{
+		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	}
 }

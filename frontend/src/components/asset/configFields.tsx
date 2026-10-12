@@ -150,7 +150,11 @@ function FieldNode<S>({
               <span className="text-[11px] leading-snug text-muted-foreground/70">{t(field.description)}</span>
             )}
           </div>
-          <Switch checked={!!state[field.key]} onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)} />
+          <Switch
+            aria-label={t(field.label)}
+            checked={!!state[field.key]}
+            onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)}
+          />
         </div>
       );
 

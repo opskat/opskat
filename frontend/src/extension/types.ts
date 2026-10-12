@@ -32,8 +32,21 @@ export interface ExtAssetType {
   configSchema?: Record<string, unknown>;
   /** Host-owned connection settings the type supports; absent means none. */
   connection?: ExtConnection;
+  /** Host-side credential injection the type declares; absent means none. */
+  auth?: ExtAuth;
   /** The type registers a test-connection handler; the asset form shows "Test connection" only when true. */
   testConnection?: boolean;
+}
+
+/**
+ * The credential injection an asset type declares in describe(), as far as a form
+ * needs it: `selector` is the config field (a dropdown) that picks the auth method,
+ * and each group lists the config fields its method uses — derived by the backend
+ * from the group's bindings (pkg/extension AuthGroup.MarshalJSON).
+ */
+export interface ExtAuth {
+  selector?: string;
+  groups: { when?: string; fields: string[] }[];
 }
 
 /**

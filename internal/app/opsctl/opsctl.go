@@ -38,8 +38,9 @@ type ExtToolExecutor interface {
 //
 // 与 ExtToolExecutor 同一条理由——位置而非语义：安装要落 enabled 状态、经 extreg
 // 注册资产类型/策略/技能、刷新前端，这些注册表只存在于桌面进程。因此这里跑的就是
-// 扩展页"从目录安装"按钮跑的那一个 extension_svc.Install，dev 与 prod 的加载路径
-// 由构造相同，而不是靠两套宿主维持一致。
+// 扩展页"从目录安装"按钮跑的那一个 extension_svc.Install（只是不弹安装确认框——
+// ext dev 自己的审批弹窗已经问过），dev 与 prod 的加载路径由构造相同，而不是靠两套
+// 宿主维持一致。
 type ExtDevInstaller interface {
 	// InstalledExtensionVersion 报告同名扩展是否已安装（启用或停用）及其版本，
 	// 供确认弹窗说明这次安装会不会覆盖它。
@@ -58,6 +59,7 @@ type Opsctl struct {
 	authToken       string
 	extExecutor     ExtToolExecutor
 	extDevInstaller ExtDevInstaller
+	extStore        ExtStore
 	// extDevApprove 把一次 ext dev 安装交给用户确认；New 接到 requestSingleApproval
 	// （既有的 opsctl 审批弹窗），测试替换它以免触达 Wails 事件。
 	extDevApprove   func(approval.ApprovalRequest) approval.ApprovalResponse

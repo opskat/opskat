@@ -54,12 +54,15 @@ func buildEtcdClientConfig(cfg *asset_entity.EtcdConfig, password string) (clien
 }
 
 func buildEtcdTLSConfig(cfg *asset_entity.EtcdConfig) (*tls.Config, error) {
-	return BuildTLSConfig("etcd", TLSFields{
+	return BuildAssetTLSConfig("etcd", TLSFields{
 		ServerName: cfg.TLSServerName,
 		Insecure:   cfg.TLSInsecure,
 		CAFile:     cfg.TLSCAFile,
 		CertFile:   cfg.TLSCertFile,
 		KeyFile:    cfg.TLSKeyFile,
+		CAPEM:      cfg.TLSCAPEM,
+		CertPEM:    cfg.TLSCertPEM,
+		KeyPEM:     cfg.TLSKeyPEM,
 	})
 }
 
