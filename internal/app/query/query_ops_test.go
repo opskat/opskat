@@ -12,8 +12,8 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
-	_ "github.com/opskat/opskat/internal/dbdriver/sqlite"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
@@ -167,23 +167,72 @@ func TestQueryTimeout(t *testing.T) {
 }
 
 func TestPanelDBCacheKey(t *testing.T) {
+	key := func(t *testing.T, cfg *asset_entity.DatabaseConfig) string {
+		t.Helper()
+		got, err := panelDBCacheKey(7, cfg)
+		require.NoError(t, err)
+		return got
+	}
+
 	t.Run("SQLite reuses one panel connection across schema names", func(t *testing.T) {
 		cfg := &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Database: "main"}
-		if got := panelDBCacheKey(7, cfg); got != "7" {
+		if got := key(t, cfg); got != "7" {
 			t.Fatalf("panelDBCacheKey() = %q, want %q", got, "7")
 		}
 		cfg.Database = ""
-		if got := panelDBCacheKey(7, cfg); got != "7" {
+		if got := key(t, cfg); got != "7" {
 			t.Fatalf("panelDBCacheKey() = %q, want %q", got, "7")
 		}
 	})
 
 	t.Run("network databases keep database in the cache key", func(t *testing.T) {
-		cfg := &asset_entity.DatabaseConfig{Driver: asset_entity.DriverMySQL, Database: "app"}
-		if got := panelDBCacheKey(7, cfg); got != "7:app" {
-			t.Fatalf("panelDBCacheKey() = %q, want %q", got, "7:app")
+		for _, driver := range []asset_entity.DatabaseDriver{
+			asset_entity.DriverMySQL, asset_entity.DriverPostgreSQL, asset_entity.DriverMSSQL,
+		} {
+			cfg := &asset_entity.DatabaseConfig{Driver: driver, Database: "app"}
+			if got := key(t, cfg); got != "7:app" {
+				t.Fatalf("panelDBCacheKey(%s) = %q, want %q", driver, got, "7:app")
+			}
+			cfg.Database = ""
+			if got := key(t, cfg); got != "7:" {
+				t.Fatalf("panelDBCacheKey(%s) = %q, want %q", driver, got, "7:")
+			}
 		}
 	})
+
+	// 粒度是驱动声明的，不是按驱动名判断的：同一个假驱动改一下声明，键就跟着变。
+	t.Run("a driver declares whether its sessions are per database", func(t *testing.T) {
+		fake := dbdrivertest.NewFake()
+		dbdrivertest.Register(t, fake)
+		cfg := &asset_entity.DatabaseConfig{Driver: "fakedb", Database: "app"}
+		assert.Equal(t, "7:app", key(t, cfg))
+
+		fake.SessionPerAsset = true
+		assert.Equal(t, "7", key(t, cfg))
+	})
+
+	t.Run("an unregistered driver has no key", func(t *testing.T) {
+		_, err := panelDBCacheKey(7, &asset_entity.DatabaseConfig{Driver: "oracle", Database: "app"})
+		require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	})
+}
+
+// 声明「一个资产一条会话」的驱动：面板换 schema 名执行仍共用同一条会话（远端 SQLite 只抢
+// 一次文件锁靠的就是这个）。
+func TestPanelSharesOneSessionAcrossDatabasesWhenTheDriverSaysSo(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.SessionPerAsset = true
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.ExecuteSQL(1, "SELECT * FROM t", "main")
+	require.NoError(t, err)
+	_, err = q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 0, 10)
+	require.NoError(t, err)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []string{"SELECT * FROM t", "SELECT * FROM t"}, sessions[0].Statements())
 }
 
 func TestFinishPanelDBOperation(t *testing.T) {

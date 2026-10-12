@@ -31,6 +31,8 @@ type Fake struct {
 	Rows    [][]any
 	// OpenErr 非 nil 时 Open 以它失败，模拟连不上。
 	OpenErr error
+	// SessionPerAsset 为 true 时声明一条会话覆盖整个资产（像 SQLite）；默认一个库一条。
+	SessionPerAsset bool
 
 	mu       sync.Mutex
 	sessions []*FakeSession

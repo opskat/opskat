@@ -21,6 +21,12 @@ type Connector interface {
 	// 配置要求连接级只读（Config.ReadOnly）时由驱动落实。没有声明 CapReadOnly 的驱动必须
 	// 以 ErrUnsupported 拒绝，而不是悄悄打开一条可写的会话。
 	Open(ctx context.Context, req OpenRequest) (Session, error)
+	// SessionPerDatabase 声明一条会话对应什么：true 表示它只连着 Config.Database 指定的那
+	// 一个库，换库要另开一条（库名写进连接串的驱动）；false 表示一条会话覆盖整个资产，
+	// 调用方传来的库名只是会话里的一个名字空间（SQLite：库就是那个文件）。
+	//
+	// 共享代码据此决定复用会话的粒度（按资产，还是按资产 + 库），自己不按驱动名判断。
+	SessionPerDatabase() bool
 }
 
 // OpenRequest 是打开一条会话所需的全部输入。

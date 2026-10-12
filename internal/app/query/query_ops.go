@@ -33,7 +33,10 @@ import (
 // 远端 SQLite 在会话内只抢一次 .opskat.lock,由缓存的空闲驱逐/关闭统一释放;其会话底下的
 // 连接数上限为 1,让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
 func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (dbdriver.Session, func() error, error) {
-	key := panelDBCacheKey(asset.ID, cfg)
+	key, err := panelDBCacheKey(asset.ID, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	// 会话自己释放它占用的一切,没有单独的隧道 closer 要交给缓存。
 	session, _, err := q.dbPanelCache.GetOrDial(asset.ID, key, func() (dbdriver.Session, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
@@ -62,11 +65,18 @@ func (q *Query) getOrDialPanelSQLDB(ctx context.Context, asset *asset_entity.Ass
 	return db, cleanup, nil
 }
 
-func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) string {
-	if cfg.Driver == asset_entity.DriverSQLite {
-		return fmt.Sprintf("%d", assetID)
+// panelDBCacheKey 返回面板缓存里这条会话的键。粒度由驱动声明：一条会话只连一个库的驱动
+// 按「资产 + 库」缓存，一条会话覆盖整个资产的驱动（SQLite）按资产缓存。驱动未注册时返回
+// 点名该驱动的 dbdriver.ErrDriverUnavailable。
+func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) (string, error) {
+	driver, err := dbdriver.Lookup(cfg.Driver)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%d:%s", assetID, cfg.Database)
+	if !driver.SessionPerDatabase() {
+		return fmt.Sprintf("%d", assetID), nil
+	}
+	return fmt.Sprintf("%d:%s", assetID, cfg.Database), nil
 }
 
 func finishPanelDBOperation(opErr error, cleanup func() error) error {

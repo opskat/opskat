@@ -29,6 +29,10 @@ func (driver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Sess
 	return sqldb.NewSession(db, sqldb.LimitOffset{}), nil
 }
 
+// SessionPerDatabase：库就是那个文件，一条会话覆盖整个资产；调用方传来的库名只是其中的
+// schema 名。远端文件因此在一个资产上只开一条会话、只抢一次文件锁。
+func (driver) SessionPerDatabase() bool { return false }
+
 // openLocal 打开本地文件。只读已经由 dsn 用 _pragma=query_only(1) 写进连接串（对每条
 // 连接生效），这里不需要再单独设置。
 func openLocal(ctx context.Context, cfg *asset_entity.DatabaseConfig) (*sql.DB, error) {

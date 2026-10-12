@@ -39,6 +39,9 @@ func (driver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Sess
 	return newSession(db), nil
 }
 
+// SessionPerDatabase：库名写进连接串，一条会话只连着一个库。
+func (driver) SessionPerDatabase() bool { return true }
+
 func newSession(db *sql.DB) dbdriver.Session {
 	return sqldb.NewSession(db, sqldb.LimitOffset{})
 }

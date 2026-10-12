@@ -38,6 +38,9 @@ func (f *Fake) Open(_ context.Context, req dbdriver.OpenRequest) (dbdriver.Sessi
 	return session, nil
 }
 
+// SessionPerDatabase 照 SessionPerAsset 的声明回答。
+func (f *Fake) SessionPerDatabase() bool { return !f.SessionPerAsset }
+
 // Sessions 返回这个假驱动打开过的全部会话，按打开的先后。
 func (f *Fake) Sessions() []*FakeSession {
 	f.mu.Lock()
