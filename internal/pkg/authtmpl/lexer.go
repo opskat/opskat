@@ -74,8 +74,10 @@ func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
+// isIdentPart 允许 `-`：扩展 configSchema 的属性名可以含它。语言里没有减法，
+// 所以 `-` 只会是标识符的一部分，且不能开头。
 func isIdentPart(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9')
+	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '-'
 }
 
 // lexString 解码从 s[0]=='"' 开始的一个字符串字面量，返回解码后的值、

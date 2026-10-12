@@ -23,8 +23,9 @@ func (n literalNode) eval(*RenderContext) ([]byte, error) {
 }
 
 // fieldNode 引用资产上的一个字段值。Parse 阶段已确认字段名在
-// ParseOptions.Fields 里；Render 阶段若 RenderContext 没有提供该字段的值，
-// 说明调用方没有按契约填充渲染上下文，这里直接报错而不是当作空串。
+// ParseOptions.Fields 里（AnyField 时由调用方对照 Template.Fields() 确认）；
+// Render 阶段若 RenderContext 没有提供该字段的值，说明调用方没有按契约填充
+// 渲染上下文，这里直接报错而不是当作空串。
 type fieldNode struct {
 	name string
 }

@@ -170,14 +170,22 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.String("selector", selected))
 		return nil, nil
 	}
-	values, err := h.credentialValues(ctx, asset, group.fields())
+	tmpls, err := group.templates()
+	if err != nil {
+		return fail(err)
+	}
+	values, err := h.credentialValues(ctx, asset, tmpls.fields())
+	if err != nil {
+		return fail(err)
+	}
+	bindings, err := tmpls.render(values)
 	if err != nil {
 		return fail(err)
 	}
 	logger.Ctx(ctx).Debug("extension credentials injected for endpoint request",
 		zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID),
 		zap.String("group", group.When), zap.Int("bindings", len(group.Bindings)))
-	return &requestAuth{bindings: group.render(values), isEndpoint: auth.IsEndpoint}, nil
+	return &requestAuth{bindings: bindings, isEndpoint: auth.IsEndpoint}, nil
 }
 
 // credentialValues resolves the named config fields of asset as strings: from

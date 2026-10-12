@@ -7,15 +7,49 @@ import "strconv"
 //	expr     := term ('+' term)*
 //	term     := STRING | IDENT | IDENT '.' IDENT | IDENT '(' (expr (',' expr)*)? ')'
 type parser struct {
-	toks         []token
-	pos          int
+	toks []token
+	pos  int
+	sc   *scope
+}
+
+// scope 是一次 Parse 的静态校验上下文，模板里的各个表达式共用一份；它同时
+// 记下模板引用到的字段。
+type scope struct {
 	fields       map[string]struct{}
+	anyField     bool
 	allowRequest bool
+	refs         []string // 引用到的字段，按首次出现的顺序，不重复
+	referenced   map[string]struct{}
+}
+
+func newScope(opts ParseOptions) *scope {
+	fields := make(map[string]struct{}, len(opts.Fields))
+	for _, f := range opts.Fields {
+		fields[f] = struct{}{}
+	}
+	return &scope{
+		fields:       fields,
+		anyField:     opts.AnyField,
+		allowRequest: opts.AllowRequest,
+		referenced:   map[string]struct{}{},
+	}
+}
+
+// field 校验一次字段引用并记下它。
+func (sc *scope) field(name string) (exprNode, *ParseError) {
+	if _, ok := sc.fields[name]; !ok && !sc.anyField {
+		return nil, newParseError(CodeUnknownField, "unknown field "+strconv.Quote(name), "name", name)
+	}
+	if _, seen := sc.referenced[name]; !seen {
+		sc.referenced[name] = struct{}{}
+		sc.refs = append(sc.refs, name)
+	}
+	return fieldNode{name: name}, nil
 }
 
 // parseExpr 解析一个 `{{ }}` 内部的表达式源码，同时完成所有静态校验：
 // 未知字段、未知函数、参数个数、request.* 是否允许、语法错误。
-func parseExpr(src string, fields map[string]struct{}, allowRequest bool) (exprNode, *ParseError) {
+func parseExpr(src string, sc *scope) (exprNode, *ParseError) {
 	toks, err := lexExpr(src)
 	if err != nil {
 		return nil, err
@@ -23,7 +57,7 @@ func parseExpr(src string, fields map[string]struct{}, allowRequest bool) (exprN
 	if len(toks) == 0 {
 		return nil, newParseError(CodeEmptyExpression, "empty expression")
 	}
-	p := &parser{toks: toks, fields: fields, allowRequest: allowRequest}
+	p := &parser{toks: toks, sc: sc}
 	node, err := p.parseAddExpr()
 	if err != nil {
 		return nil, err
@@ -91,10 +125,7 @@ func (p *parser) parseTerm() (exprNode, *ParseError) {
 			p.next()
 			return p.parseFuncCall(name)
 		default:
-			if _, ok := p.fields[name]; !ok {
-				return nil, newParseError(CodeUnknownField, "unknown field "+strconv.Quote(name), "name", name)
-			}
-			return fieldNode{name: name}, nil
+			return p.sc.field(name)
 		}
 	default:
 		return nil, newParseError(CodeUnexpectedToken, "unexpected token in expression")
@@ -112,7 +143,7 @@ func (p *parser) buildContextNode(root, attr string) (exprNode, *ParseError) {
 			return nil, newParseError(CodeUnknownReference, "unknown now attribute "+strconv.Quote(attr), "ref", ref)
 		}
 	case "request":
-		if !p.allowRequest {
+		if !p.sc.allowRequest {
 			return nil, newParseError(CodeRequestNotAllowed, "request.* is not allowed in this context")
 		}
 		switch attr {
@@ -151,9 +182,13 @@ func (p *parser) parseFuncCall(name string) (exprNode, *ParseError) {
 	if !ok {
 		return nil, newParseError(CodeUnknownFunction, "unknown function "+strconv.Quote(name), "name", name)
 	}
-	if spec.arity != len(args) {
+	if !spec.accepts(len(args)) {
 		want, got := strconv.Itoa(spec.arity), strconv.Itoa(len(args))
-		return nil, newParseError(CodeWrongArgCount, "function "+strconv.Quote(name)+" expects "+want+" argument(s), got "+got,
+		expects := " expects "
+		if spec.variadic {
+			expects = " expects at least "
+		}
+		return nil, newParseError(CodeWrongArgCount, "function "+strconv.Quote(name)+expects+want+" argument(s), got "+got,
 			"name", name, "want", want, "got", got)
 	}
 	return funcCallNode{name: name, args: args, spec: spec}, nil
