@@ -82,7 +82,8 @@ func isIdentPart(c byte) bool {
 
 // lexString 解码从 s[0]=='"' 开始的一个字符串字面量，返回解码后的值、
 // 消耗掉的字节数（含首尾引号），以及遇到未识别转义 / 未闭合引号时的错误。
-// 只由 lexExpr 在遇到 '"' 时调用。
+// 转义与 Go 的双引号字符串字面量相同（扩展 auth 绑定原先用 strconv.Unquote
+// 解码字面量，渲染出的字节不能变），其余转义报错。只由 lexExpr 在遇到 '"' 时调用。
 func lexString(s string) (string, int, *ParseError) {
 	var b strings.Builder
 	i := 1
@@ -96,17 +97,18 @@ func lexString(s string) (string, int, *ParseError) {
 			if i+1 >= n {
 				return "", 0, newParseError(CodeUnterminatedString, "unterminated escape sequence in string literal")
 			}
-			switch s[i+1] {
-			case 'n':
-				b.WriteByte('\n')
-			case '"':
-				b.WriteByte('"')
-			case '\\':
-				b.WriteByte('\\')
-			default:
+			r, multibyte, tail, err := strconv.UnquoteChar(s[i:], '"')
+			if err != nil {
 				return "", 0, newParseError(CodeInvalidEscape, "invalid escape sequence \\"+string(s[i+1])+" in string literal", "char", string(s[i+1]))
 			}
-			i += 2
+			// 与 strconv.Unquote 一致：\xNN 与八进制转义是一个原始字节，
+			// \u / \U 是码点的 UTF-8 编码。
+			if multibyte {
+				b.WriteRune(r)
+			} else {
+				b.WriteByte(byte(r))
+			}
+			i = n - len(tail)
 			continue
 		}
 		b.WriteByte(c)

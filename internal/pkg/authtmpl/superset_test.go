@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/opskat/opskat/internal/pkg/authtmpl"
@@ -100,6 +101,60 @@ func TestParse_AnyFieldKeepsTheOtherChecks(t *testing.T) {
 		var perr *authtmpl.ParseError
 		if !errors.As(err, &perr) || perr.Code != code {
 			t.Errorf("Parse(%q) error = %v, want code %q", src, err, code)
+		}
+	}
+}
+
+// 字符串字面量的转义与 Go 的双引号字符串字面量相同：扩展原先用 strconv.Unquote
+// 解码字面量，已发布的模板渲染出的字节不能变。
+func TestParseAndRender_StringLiteralTakesGoEscapes(t *testing.T) {
+	cases := map[string]string{
+		`"a\tb\rc"`:           "a\tb\rc",
+		`"\a\b\f\v"`:          "\a\b\f\v",
+		`"\x41\x00\xff"`:      "A\x00\xff",
+		`"\101\000\377"`:      "A\x00\xff",
+		`"\u00e9\u4e2d"`:      "é中",
+		`"\U0001F600"`:        "😀",
+		`"é\n\"\\ \t}}\x7d"`:  "é\n\"\\ \t}}}",
+		`"\\x41 \\t \\u00e9"`: `\x41 \t \u00e9`,
+	}
+	for lit, want := range cases {
+		unquoted, err := strconv.Unquote(lit)
+		if err != nil || unquoted != want {
+			t.Fatalf("test case %s: strconv.Unquote = %q, %v, want %q", lit, unquoted, err, want)
+		}
+		if got := render(t, mustParse(t, "{{"+lit+"}}", authtmpl.ParseOptions{}), nil); got != want {
+			t.Errorf("Render({{%s}}) = %q, want %q", lit, got, want)
+		}
+		joined := render(t, mustParse(t, "{{base64("+lit+`, "|")}}`, authtmpl.ParseOptions{}), nil)
+		if wantJoined := base64.StdEncoding.EncodeToString([]byte(want + "|")); joined != wantJoined {
+			t.Errorf("Render({{base64(%s, \"|\")}}) = %q, want %q", lit, joined, wantJoined)
+		}
+	}
+}
+
+// Go 字符串字面量不接受的转义仍是 invalid_escape，char 是反斜杠后面的那个字符。
+func TestParse_EscapesGoRejectsAreInvalid(t *testing.T) {
+	cases := map[string]string{
+		`"\q"`:         "q",
+		`"\'"`:         "'",
+		`"\8"`:         "8",
+		`"\x4"`:        "x",
+		`"\xzz"`:       "x",
+		`"\400"`:       "4",
+		`"\12"`:        "1",
+		`"\u12"`:       "u",
+		`"\ud800"`:     "u",
+		`"\U00110000"`: "U",
+	}
+	for lit, char := range cases {
+		if _, err := strconv.Unquote(lit); err == nil {
+			t.Fatalf("test case %s: strconv.Unquote accepts it", lit)
+		}
+		_, err := authtmpl.Parse("{{"+lit+"}}", authtmpl.ParseOptions{})
+		var perr *authtmpl.ParseError
+		if !errors.As(err, &perr) || perr.Code != authtmpl.CodeInvalidEscape || perr.Params["char"] != char {
+			t.Errorf("Parse({{%s}}) error = %v, want code %q with char %q", lit, err, authtmpl.CodeInvalidEscape, char)
 		}
 	}
 }

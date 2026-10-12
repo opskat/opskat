@@ -109,7 +109,7 @@
         "unexpected_token": "无法解析表达式「{{expr}}」",
         "unexpected_character": "表达式「{{expr}}」里有无法识别的字符「{{char}}」",
         "unterminated_string": "表达式「{{expr}}」里的字符串缺少结尾引号",
-        "invalid_escape": "表达式「{{expr}}」里的转义 \\{{char}} 不受支持，只能用 \\n、\\\" 或 \\\\",
+        "invalid_escape": "表达式「{{expr}}」里的转义 \\{{char}} 无效，可以用 \\n、\\\"、\\\\，以及 \\t、\\xNN 等 Go 字符串转义",
         "expected_identifier": "「{{after}}」后面要跟名称，例如 now.unix",
         "unknown_field": "没有名为「{{name}}」的字段（位于「{{expr}}」）",
         "unknown_reference": "未知引用「{{ref}}」",

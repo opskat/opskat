@@ -53,9 +53,11 @@ func TestAuthTemplateRendersThePublishedGrammarUnchanged(t *testing.T) {
 		`{{key-id}} {{base64( key-id , ":" , api_key )}}`: "k1 " + b64("k1:v1"),
 		`{{base64("a\"b\\c\n", password)}}`:               b64("a\"b\\c\ns3cret"),
 		`{{base64("}}", password)}} }} {{username}}`:      b64("}}s3cret") + " }} elastic",
-		"no placeholders":                                 "no placeholders",
-		"[{{unset}}] {{base64(unset, \":\", unset)}}":     "[] " + b64(":"),
-		"{{username}}{{username}} {{base64(username)}}":   "elasticelastic " + b64("elastic"),
+		// a literal is decoded as a Go string literal, as strconv.Unquote did
+		`{{base64(username, "\t\r\x00\101\u00e9", password)}}`: b64("elastic\t\r\x00A\u00e9s3cret"),
+		"no placeholders": "no placeholders",
+		"[{{unset}}] {{base64(unset, \":\", unset)}}":   "[] " + b64(":"),
+		"{{username}}{{username}} {{base64(username)}}": "elasticelastic " + b64("elastic"),
 	} {
 		assert.Equal(t, want, renderValue(t, value, config), "template %q", value)
 	}

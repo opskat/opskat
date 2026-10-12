@@ -109,7 +109,7 @@
         "unexpected_token": "Couldn't parse the expression \"{{expr}}\"",
         "unexpected_character": "Unexpected character \"{{char}}\" in \"{{expr}}\"",
         "unterminated_string": "A quoted string isn't closed in \"{{expr}}\"",
-        "invalid_escape": "\\{{char}} isn't a supported escape in \"{{expr}}\" — use \\n, \\\" or \\\\",
+        "invalid_escape": "\\{{char}} isn't a valid escape in \"{{expr}}\" — use \\n, \\\", \\\\ or another Go string escape such as \\t or \\xNN",
         "expected_identifier": "\"{{after}}\" must be followed by a name, e.g. now.unix",
         "unknown_field": "There's no field named \"{{name}}\" (in \"{{expr}}\")",
         "unknown_reference": "Unknown reference \"{{ref}}\"",
