@@ -4,6 +4,7 @@ package dbdrivertest
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/opskat/opskat/internal/dbdriver"
@@ -21,28 +22,41 @@ const FakeDefaultPort = 7777
 const FakeOrder = 900
 
 // Fake 是一个不属于任何内置驱动的假驱动，用来证明加驱动只需要注册。它的规则刻意与内置
-// 驱动不同：只要求 host，不要求 username。
+// 驱动不同：只要求 host，不要求 username；它的会话（FakeSession）也不是 database/sql 的
+// 句柄，而是一张放在内存里的表——就像会话活在扩展里、宿主拿不到任何连接的驱动。
 type Fake struct {
 	Desc dbdriver.Descriptor
+	// Columns / Rows 是假库里唯一的一张表：任何 SELECT 都返回它。
+	Columns []string
+	Rows    [][]any
+	// OpenErr 非 nil 时 Open 以它失败，模拟连不上。
+	OpenErr error
+
+	mu       sync.Mutex
+	sessions []*FakeSession
 }
 
 // NewFake 返回 id 为 "fakedb"、别名 "fake" 的假驱动。
 func NewFake() *Fake {
-	return &Fake{Desc: dbdriver.Descriptor{
-		ID:          "fakedb",
-		Name:        "FakeDB",
-		Icon:        "database",
-		Order:       FakeOrder,
-		Aliases:     []string{"fake"},
-		DefaultPort: FakeDefaultPort,
-		Form: []dbdriver.FormTabFields{
-			{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
-				dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldPassword, dbdriver.FieldDatabase,
-			}},
-			{Tab: dbdriver.TabAdvanced, Fields: []dbdriver.FormField{dbdriver.FieldReadOnly}},
+	return &Fake{
+		Desc: dbdriver.Descriptor{
+			ID:          "fakedb",
+			Name:        "FakeDB",
+			Icon:        "database",
+			Order:       FakeOrder,
+			Aliases:     []string{"fake"},
+			DefaultPort: FakeDefaultPort,
+			Form: []dbdriver.FormTabFields{
+				{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
+					dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldPassword, dbdriver.FieldDatabase,
+				}},
+				{Tab: dbdriver.TabAdvanced, Fields: []dbdriver.FormField{dbdriver.FieldReadOnly}},
+			},
+			Capabilities: []dbdriver.Capability{dbdriver.CapViews, dbdriver.CapReadOnly},
 		},
-		Capabilities: []dbdriver.Capability{dbdriver.CapViews, dbdriver.CapReadOnly},
-	}}
+		Columns: []string{"id", "name"},
+		Rows:    [][]any{{1, "alice"}, {2, "bob"}, {3, "carol"}},
+	}
 }
 
 // Register 注册驱动，并在测试结束时注销。

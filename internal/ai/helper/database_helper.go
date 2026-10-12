@@ -2,16 +2,15 @@ package helper
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -21,12 +20,12 @@ import (
 
 type dbCacheKeyType struct{}
 
-// DatabaseClientCache 在同一次 AI Send 中复用数据库连接
-type DatabaseClientCache = ConnCache[*sql.DB]
+// DatabaseClientCache 在同一次 AI Send 中复用数据库会话
+type DatabaseClientCache = ConnCache[dbdriver.Session]
 
-// NewDatabaseClientCache 创建数据库连接缓存
+// NewDatabaseClientCache 创建数据库会话缓存
 func NewDatabaseClientCache() *DatabaseClientCache {
-	return NewConnCache[*sql.DB]("database")
+	return NewConnCache[dbdriver.Session]("database")
 }
 
 // WithDatabaseCache 将数据库缓存注入 context
@@ -60,8 +59,8 @@ func getSSHPool(ctx context.Context) *sshpool.Pool {
 // --- Executor ---
 
 // ExecSQLOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
-// handleExec、batch_exec 的预检）在调用之前完成，这里只负责连接与执行。
-// scope 非空时覆盖资产默认配置的数据库名。
+// handleExec、batch_exec 的预检）在调用之前完成，这里只负责连接与执行——两者都经资产
+// 配置的驱动。scope 非空时覆盖资产默认配置的数据库名。
 func ExecSQLOnAsset(ctx context.Context, asset *asset_entity.Asset, sqlText, scope string) (string, error) {
 	cfg, err := asset.GetDatabaseConfig()
 	if err != nil {
@@ -73,310 +72,91 @@ func ExecSQLOnAsset(ctx context.Context, asset *asset_entity.Asset, sqlText, sco
 		cfg.Database = scope
 	}
 
-	db, closer, err := getOrDialDatabase(ctx, asset, cfg)
+	session, err := getOrOpenDatabase(ctx, asset, cfg)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to database: %w", err)
 	}
-	// 如果不是缓存连接，使用后关闭
+	// 如果不是缓存会话，使用后关闭
 	if getDatabaseCache(ctx) == nil {
-		defer closeDatabaseConn(db, closer)
-	}
-
-	return ExecuteSQL(ctx, db, sqlText)
-}
-
-// closeDatabaseConn 按 SQLite 要求的顺序关闭一条即开即用的数据库连接：先 *sql.DB，
-// 再传输层 closer。关闭 WAL 数据库时 SQLite 会回调远端 VFS 删除 -wal/-shm，而 closer
-// 正是注销该 VFS（并关闭 SFTP）的地方，必须等 db.Close() 返回后才能执行——否则回调会
-// 命中已注销的 VFS 而 panic。db 形参用 io.Closer 是为了让关闭顺序可被单测验证。
-func closeDatabaseConn(db, closer io.Closer) {
-	if db != nil {
-		if err := db.Close(); err != nil {
-			logger.Default().Warn("close database connection", zap.Error(err))
-		}
-	}
-	if closer != nil {
-		if err := closer.Close(); err != nil {
-			logger.Default().Warn("close database tunnel", zap.Error(err))
-		}
-	}
-}
-
-func getOrDialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) (*sql.DB, io.Closer, error) {
-	dialFn := func() (*sql.DB, io.Closer, error) {
-		password, err := credential_resolver.Default().ResolveDatabasePassword(ctx, cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
-		}
-		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		return connpool.DialDatabase(ctx, asset, cfg, password, getSSHPool(ctx))
-	}
-	if cache := getDatabaseCache(ctx); cache != nil {
-		return cache.GetOrDial(asset.ID, dialFn)
-	}
-	return dialFn()
-}
-
-// ExecuteSQL 执行 SQL 并返回 JSON 结果
-func ExecuteSQL(ctx context.Context, db *sql.DB, sqlText string) (string, error) {
-	trimmed := strings.TrimSpace(strings.ToUpper(sqlText))
-	if isQueryStatement(trimmed) {
-		rows, err := db.QueryContext(ctx, sqlText)
-		if err != nil {
-			return "", fmt.Errorf("SQL query failed: %w", err)
-		}
 		defer func() {
-			if err := rows.Close(); err != nil {
-				logger.Default().Warn("close SQL rows", zap.Error(err))
+			if err := session.Close(); err != nil {
+				logger.Ctx(ctx).Warn("close database session", zap.Int64("assetID", asset.ID), zap.Error(err))
 			}
 		}()
-		return formatRowsJSON(rows)
 	}
 
-	result, err := db.ExecContext(ctx, sqlText)
-	if err != nil {
-		return "", fmt.Errorf("SQL execution failed: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		logger.Default().Warn("get rows affected", zap.Error(err))
-	}
-	return fmt.Sprintf(`{"affected_rows":%d}`, affected), nil
+	return ExecuteSQL(ctx, session, sqlText)
 }
 
-// isPageableQuery 判断是否可以用子查询包装分页（仅 SELECT / WITH）
-func isPageableQuery(upper string) bool {
-	return strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "WITH")
-}
-
-// stripTrailingSemicolon 去掉末尾分号，避免子查询包装出错
-func stripTrailingSemicolon(s string) string {
-	return strings.TrimRight(strings.TrimSpace(s), ";")
-}
-
-// ExecuteSQLPaged 对 SELECT/WITH 语句进行子查询包装分页，其他语句走 ExecuteSQL
-func ExecuteSQLPaged(ctx context.Context, db *sql.DB, sqlText string, page, pageSize int, driver asset_entity.DatabaseDriver) (string, error) {
-	trimmed := strings.TrimSpace(strings.ToUpper(sqlText))
-
-	// 非查询语句或不可分页的查询（SHOW/DESCRIBE/EXPLAIN）走原逻辑
-	if !isQueryStatement(trimmed) || !isPageableQuery(trimmed) {
-		return ExecuteSQL(ctx, db, sqlText)
-	}
-
-	cleanSQL := stripTrailingSemicolon(sqlText)
-	offset := page * pageSize
-
-	countSourceSQL := cleanSQL
-	if driver == asset_entity.DriverMSSQL {
-		countSourceSQL = stripTopLevelOrderBy(cleanSQL)
-	}
-
-	// 1. 获取总行数
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS _t", countSourceSQL) //nolint:gosec // SQL is user-provided and intentionally executed
-	var totalCount int
-	if err := db.QueryRowContext(ctx, countSQL).Scan(&totalCount); err != nil {
-		return "", fmt.Errorf("count query failed: %w", err)
-	}
-
-	// 2. 分页查询：MSSQL 无 LIMIT，用 OFFSET/FETCH（需 ORDER BY，用 (SELECT NULL) 占位）
-	pagedSQL := pagedQuerySQL(cleanSQL, offset, pageSize, driver)
-	rows, err := db.QueryContext(ctx, pagedSQL)
-	if err != nil {
-		return "", fmt.Errorf("SQL query failed: %w", err)
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			logger.Default().Warn("close SQL rows", zap.Error(err))
+func getOrOpenDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) (dbdriver.Session, error) {
+	open := func() (dbdriver.Session, error) {
+		password, err := credential_resolver.Default().ResolveDatabasePassword(ctx, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve credentials: %w", err)
 		}
-	}()
-
-	return formatRowsPagedJSON(rows, totalCount)
-}
-
-// pagedQuerySQL 把已去分号的查询包成分页子查询。MSSQL 不支持 LIMIT/OFFSET，
-// 必须用 OFFSET ... ROWS FETCH NEXT ... ROWS ONLY，且该语法要求 ORDER BY，
-// 这里用 ORDER BY (SELECT NULL) 占位（不强加排序键）。其他 driver 保持 LIMIT/OFFSET。
-func pagedQuerySQL(cleanSQL string, offset, pageSize int, driver asset_entity.DatabaseDriver) string {
-	if driver == asset_entity.DriverMSSQL {
-		if hasTopLevelOrderBy(cleanSQL) {
-			return fmt.Sprintf("%s OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", cleanSQL, offset, pageSize)
-		}
-		return fmt.Sprintf(
-			"SELECT * FROM (%s) AS _t ORDER BY (SELECT NULL) OFFSET %d ROWS FETCH NEXT %d ROWS ONLY",
-			cleanSQL, offset, pageSize)
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+		return connpool.OpenDatabase(ctx, asset, cfg, password, getSSHPool(ctx))
 	}
-	return fmt.Sprintf("SELECT * FROM (%s) AS _t LIMIT %d OFFSET %d", cleanSQL, pageSize, offset)
-}
-
-func stripTopLevelOrderBy(sqlText string) string {
-	if idx := topLevelOrderByIndex(sqlText); idx >= 0 {
-		return strings.TrimSpace(sqlText[:idx])
+	cache := getDatabaseCache(ctx)
+	if cache == nil {
+		return open()
 	}
-	return sqlText
+	// 会话自己释放它占用的一切，没有单独的隧道 closer 要交给缓存。
+	session, _, err := cache.GetOrDial(asset.ID, func() (dbdriver.Session, io.Closer, error) {
+		session, err := open()
+		return session, nil, err
+	})
+	return session, err
 }
 
-func hasTopLevelOrderBy(sqlText string) bool {
-	return topLevelOrderByIndex(sqlText) >= 0
-}
-
-func topLevelOrderByIndex(sqlText string) int {
-	upper := strings.ToUpper(sqlText)
-	depth := 0
-	inSingleQuote := false
-	inDoubleQuote := false
-	inBracketQuote := false
-
-	for i := 0; i < len(sqlText); i++ {
-		ch := sqlText[i]
-		if inSingleQuote {
-			if ch == '\'' {
-				if i+1 < len(sqlText) && sqlText[i+1] == '\'' {
-					i++
-					continue
-				}
-				inSingleQuote = false
-			}
-			continue
-		}
-		if inDoubleQuote {
-			if ch == '"' {
-				if i+1 < len(sqlText) && sqlText[i+1] == '"' {
-					i++
-					continue
-				}
-				inDoubleQuote = false
-			}
-			continue
-		}
-		if inBracketQuote {
-			if ch == ']' {
-				if i+1 < len(sqlText) && sqlText[i+1] == ']' {
-					i++
-					continue
-				}
-				inBracketQuote = false
-			}
-			continue
-		}
-
-		switch ch {
-		case '\'':
-			inSingleQuote = true
-		case '"':
-			inDoubleQuote = true
-		case '[':
-			inBracketQuote = true
-		case '(':
-			depth++
-		case ')':
-			if depth > 0 {
-				depth--
-			}
-		default:
-			if depth == 0 && strings.HasPrefix(upper[i:], "ORDER") && isSQLWordBoundary(sqlText, i-1) {
-				afterOrder := i + len("ORDER")
-				if afterOrder < len(sqlText) && isSQLSpace(sqlText[afterOrder]) {
-					j := afterOrder
-					for j < len(sqlText) && isSQLSpace(sqlText[j]) {
-						j++
-					}
-					if strings.HasPrefix(upper[j:], "BY") && isSQLWordBoundary(sqlText, j+len("BY")) {
-						return i
-					}
-				}
-			}
-		}
-	}
-	return -1
-}
-
-func isSQLWordBoundary(sqlText string, idx int) bool {
-	if idx < 0 || idx >= len(sqlText) {
-		return true
-	}
-	ch := sqlText[idx]
-	return ch != '_' && (ch < '0' || ch > '9') && (ch < 'A' || ch > 'Z') && (ch < 'a' || ch > 'z')
-}
-
-func isSQLSpace(ch byte) bool {
-	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '\f'
-}
-
-func formatRowsPagedJSON(rows *sql.Rows, totalCount int) (string, error) {
-	columns, resultRows, err := scanRows(rows)
+// ExecuteSQL 在会话上执行 SQL 并返回 JSON 结果。执行失败时原样返回驱动的错误。
+func ExecuteSQL(ctx context.Context, session dbdriver.Session, sqlText string) (string, error) {
+	result, err := session.Execute(ctx, sqlText)
 	if err != nil {
 		return "", err
 	}
-
-	data, err := json.Marshal(map[string]any{
-		"columns":     columns,
-		"rows":        resultRows,
-		"count":       len(resultRows),
-		"total_count": totalCount,
-	})
-	if err != nil {
-		logger.Default().Error("marshal query result", zap.Error(err))
-		return "", fmt.Errorf("failed to marshal query result: %w", err)
-	}
-	return string(data), nil
+	return formatSQLResult(ctx, result)
 }
 
-func isQueryStatement(upper string) bool {
-	return strings.HasPrefix(upper, "SELECT") ||
-		strings.HasPrefix(upper, "SHOW") ||
-		strings.HasPrefix(upper, "DESCRIBE") ||
-		strings.HasPrefix(upper, "DESC ") ||
-		strings.HasPrefix(upper, "EXPLAIN") ||
-		strings.HasPrefix(upper, "PRAGMA") ||
-		strings.HasPrefix(upper, "WITH") // CTE
-}
-
-func formatRowsJSON(rows *sql.Rows) (string, error) {
-	columns, resultRows, err := scanRows(rows)
+// ExecuteSQLPaged 在会话上分页执行 SQL 并返回 JSON 结果。page 从 0 起。怎么分页、怎么
+// 计数由驱动决定；驱动没有分页的语句（非查询等）结果里不带 total_count。
+func ExecuteSQLPaged(ctx context.Context, session dbdriver.Session, sqlText string, page, pageSize int) (string, error) {
+	result, err := session.ExecutePaged(ctx, sqlText, dbdriver.Page{Index: page, Size: pageSize})
 	if err != nil {
 		return "", err
 	}
+	return formatSQLResult(ctx, result)
+}
 
-	data, err := json.Marshal(map[string]any{
-		"columns": columns,
-		"rows":    resultRows,
-		"count":   len(resultRows),
-	})
+// formatSQLResult 把驱动给的结构化结果排成对外的 JSON：
+//
+//	结果集   {"columns":[...],"rows":[{列名:值,...},...],"count":N}，分页时多一个 "total_count"
+//	无结果集 {"affected_rows":N}
+func formatSQLResult(ctx context.Context, result *dbdriver.Result) (string, error) {
+	if result.Rows == nil {
+		return fmt.Sprintf(`{"affected_rows":%d}`, result.AffectedRows), nil
+	}
+	rowSet := result.Rows
+	var rows []map[string]any
+	for _, values := range rowSet.Rows {
+		row := make(map[string]any, len(rowSet.Columns))
+		for i, col := range rowSet.Columns {
+			row[col] = values[i]
+		}
+		rows = append(rows, row)
+	}
+	payload := map[string]any{
+		"columns": rowSet.Columns,
+		"rows":    rows,
+		"count":   len(rows),
+	}
+	if rowSet.Total != nil {
+		payload["total_count"] = *rowSet.Total
+	}
+	data, err := json.Marshal(payload)
 	if err != nil {
-		logger.Default().Error("marshal query result", zap.Error(err))
+		logger.Ctx(ctx).Error("marshal query result", zap.Error(err))
 		return "", fmt.Errorf("failed to marshal query result: %w", err)
 	}
 	return string(data), nil
-}
-
-func scanRows(rows *sql.Rows) ([]string, []map[string]any, error) {
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var resultRows []map[string]any
-	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, nil, err
-		}
-		row := make(map[string]any, len(columns))
-		for i, col := range columns {
-			val := values[i]
-			if b, ok := val.([]byte); ok {
-				val = string(b)
-			}
-			row[col] = val
-		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return columns, resultRows, nil
 }

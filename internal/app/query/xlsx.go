@@ -50,7 +50,7 @@ func (q *Query) ExportTableToXlsx(assetID int64, database, selectSQL, filePath s
 	ctx, cancel := context.WithTimeout(ctx0, 30*time.Minute)
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelSQLDB(ctx, asset, cfg, password)
 	if err != nil {
 		return fmt.Errorf("连接数据库失败: %w", err)
 	}

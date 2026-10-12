@@ -12,6 +12,8 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -26,19 +28,38 @@ import (
 
 // --- panel 连接缓存助手 ---
 
-// getOrDialPanelDB 从面板缓存取 *sql.DB,所有数据库类型(含远端 SQLite VFS)统一缓存。
-// 远端 SQLite 在会话内只抢一次 .opskat.lock,由缓存的空闲驱逐/关闭统一释放;其 *sql.DB
-// 的 MaxOpenConns=1 让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
-func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func() error, error) {
+// getOrDialPanelDB 从面板缓存取数据库会话,所有驱动(含远端 SQLite VFS)统一缓存。会话由资产
+// 配置的驱动打开并持有,这里拿不到也不需要它底下的连接。
+// 远端 SQLite 在会话内只抢一次 .opskat.lock,由缓存的空闲驱逐/关闭统一释放;其会话底下的
+// 连接数上限为 1,让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
+func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (dbdriver.Session, func() error, error) {
 	key := panelDBCacheKey(asset.ID, cfg)
-	db, _, err := q.dbPanelCache.GetOrDial(asset.ID, key, func() (*sql.DB, io.Closer, error) {
+	// 会话自己释放它占用的一切,没有单独的隧道 closer 要交给缓存。
+	session, _, err := q.dbPanelCache.GetOrDial(asset.ID, key, func() (dbdriver.Session, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		return connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
+		session, err := connpool.OpenDatabase(ctx, asset, cfg, password, q.pool)
+		return session, nil, err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return db, func() error { return nil }, nil
+	return session, func() error { return nil }, nil
+}
+
+// getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(表元数据、对象浏览、打开表、
+// 导入、XLSX 导出)仍在共享代码里用 *sql.DB / *sql.Conn 自己拼 SQL,经它从会话里取出句柄。
+// 会话不在 database/sql 之上的驱动没有这个句柄,返回 dbdriver.ErrUnsupported。
+// 这些操作逐个迁成会话上的方法后删除本函数与 sqldb.DB,不要给它添新的调用方。
+func (q *Query) getOrDialPanelSQLDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func() error, error) {
+	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := sqldb.DB(session)
+	if err != nil {
+		return nil, nil, finishPanelDBOperation(err, cleanup)
+	}
+	return db, cleanup, nil
 }
 
 func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) string {
@@ -108,20 +129,13 @@ func (q *Query) testDatabaseConnection(ctx context.Context, configJSON string, p
 
 	testAsset := &asset_entity.Asset{}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-	db, tunnel, err := connpool.DialDatabase(ctx, testAsset, &cfg, password, q.pool)
+	session, err := connpool.OpenDatabase(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			logger.Default().Warn("close db failed", zap.Error(err))
-		}
-		if tunnel != nil {
-			if err := tunnel.Close(); err != nil {
-				logger.Default().Warn("close tunnel failed", zap.Error(err))
-			}
-		}
-	}()
+	if err := session.Close(); err != nil {
+		logger.Ctx(ctx).Warn("close database session failed", zap.Error(err))
+	}
 	return nil
 }
 
@@ -219,11 +233,11 @@ func (q *Query) ExecuteSQL(assetID int64, sqlText string, database string) (stri
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
-	result, err := helper.ExecuteSQL(ctx, db, sqlText)
+	result, err := helper.ExecuteSQL(ctx, session, sqlText)
 	if err := finishPanelDBOperation(err, cleanup); err != nil {
 		return "", err
 	}
@@ -258,7 +272,7 @@ func (q *Query) ExecuteTableImport(
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Minute)
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelSQLDB(ctx, asset, cfg, password)
 	if err != nil {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
@@ -305,7 +319,7 @@ func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelSQLDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
@@ -323,7 +337,7 @@ func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (
 	return string(payload), nil
 }
 
-// ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询（SELECT/WITH 子查询包装）
+// ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询；怎么分页与计数由资产的驱动决定
 func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, page int, pageSize int) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
@@ -347,11 +361,11 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
-	result, err := helper.ExecuteSQLPaged(ctx, db, sqlText, page, pageSize, cfg.Driver)
+	result, err := helper.ExecuteSQLPaged(ctx, session, sqlText, page, pageSize)
 	if err := finishPanelDBOperation(err, cleanup); err != nil {
 		return "", err
 	}

@@ -3,11 +3,11 @@ package query
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -33,7 +33,7 @@ type Query struct {
 
 	pool *sshpool.Pool
 
-	dbPanelCache    *panelConnCache[*sql.DB]
+	dbPanelCache    *panelConnCache[dbdriver.Session]
 	redisPanelCache *panelConnCache[redis.UniversalClient]
 	mongoPanelCache *panelConnCache[*connpool.MongoClientCloser]
 
@@ -53,7 +53,7 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Query {
 // Startup 初始化三个面板连接缓存 + 各自的 evictor 协程。
 func (q *Query) Startup(ctx context.Context) {
 	q.ctx = ctx
-	q.dbPanelCache = newPanelConnCache[*sql.DB]("database", panelConnIdleTTL)
+	q.dbPanelCache = newPanelConnCache[dbdriver.Session]("database", panelConnIdleTTL)
 	q.redisPanelCache = newPanelConnCache[redis.UniversalClient]("redis", panelConnIdleTTL)
 	q.mongoPanelCache = newPanelConnCache[*connpool.MongoClientCloser]("mongodb", panelConnIdleTTL)
 	q.evictCtx, q.evictCxl = context.WithCancel(ctx)

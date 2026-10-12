@@ -123,6 +123,11 @@ func (d Descriptor) Names() []string {
 	return append([]string{string(d.ID)}, d.Aliases...)
 }
 
+// Supports 报告驱动是否声明了这项功能。
+func (d Descriptor) Supports(c Capability) bool {
+	return slices.Contains(d.Capabilities, c)
+}
+
 // UsesField 报告驱动是否在表单的任一 Tab 中使用该字段。
 func (d Descriptor) UsesField(field FormField) bool {
 	for _, tab := range d.Form {

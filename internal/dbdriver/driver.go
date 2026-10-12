@@ -1,6 +1,9 @@
 // Package dbdriver 是数据库驱动的注册表：每个驱动注册一份实现（Driver）和一份描述
 // （Descriptor），共享代码按存进资产配置的驱动 id 取用，不再按驱动名分支。
 //
+// 驱动的实现分三部分：描述、资产配置规则（ConfigRules）、建立会话（Connector）。连接归
+// 驱动所有，共享代码只拿到一条 Session，经它执行并取回结构化结果（见 session.go）。
+//
 // 本包只依赖实体层，内置驱动是它的子包（mysql / postgresql / mssql / sqlite），在各自的
 // init() 里 Register；新增驱动 = 新增一个注册，不改这里也不改调用方。
 package dbdriver
@@ -14,6 +17,7 @@ type Driver interface {
 	// Descriptor 返回驱动描述：共享代码与前端据此决定名字、别名、表单字段与功能入口。
 	Descriptor() Descriptor
 	ConfigRules
+	Connector
 }
 
 // ConfigRules 是驱动对资产配置的全部规则：落库前校验，以及 opsctl / AI 创建、更新资产时

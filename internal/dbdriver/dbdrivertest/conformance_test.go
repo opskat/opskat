@@ -13,7 +13,7 @@ import (
 func TestFakeDriverPassesConformance(t *testing.T) {
 	fake := NewFake()
 	Register(t, fake)
-	RunConformance(t, fake)
+	RunConformance(t, fake, FakeSessions(fake))
 }
 
 // 一致性测试自己也得能失败：每种不完整的描述都要被点出来。

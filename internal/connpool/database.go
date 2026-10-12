@@ -2,399 +2,141 @@ package connpool
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/url"
 	"os"
-	"strings"
-	"sync/atomic"
+	"sync"
 
-	"github.com/opskat/opskat/internal/connpool/sqlitevfs"
+	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/pkg/sftp"
+	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/sshpool"
-
-	"github.com/cago-frame/cago/pkg/logger"
-	_ "github.com/glebarez/go-sqlite" // SQLite driver（与 cago bootstrap 同源，避免 sql.Register 重复 panic）
-	"github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
-	mssql "github.com/microsoft/go-mssqldb"
-	"github.com/microsoft/go-mssqldb/msdsn"
-	"github.com/pkg/sftp"
-	"go.uber.org/zap"
 )
 
-// DialDatabase 创建数据库连接（直连、SSH 隧道或 SOCKS5 代理,隧道优先）
-// password 为已解析的明文密码，cfg.Proxy.Password 为明文,均由调用方负责解密
-func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string, sshPool *sshpool.Pool) (*sql.DB, io.Closer, error) {
+// OpenDatabase 经配置里的驱动打开一条数据库会话。
+//
+// 这里只做所有驱动共用的两件事：按 cfg.Driver 在注册表里找到驱动（没注册就返回点名该驱动
+// 的 dbdriver.ErrDriverUnavailable，不把它当成别的驱动去连），以及把直连 / SSH 隧道 /
+// SOCKS5 代理 / 代理链解析成驱动可以直接用的传输层。连接怎么建、连接级只读怎么落实、
+// 连不上报什么错，都是驱动的事；返回的会话归调用方，用完 Close。
+//
+// password 为已解析的明文密码，cfg.Proxy.Password 为明文，均由调用方负责解密。
+func OpenDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string, sshPool *sshpool.Pool) (dbdriver.Session, error) {
+	sshAssetID := asset.SSHTunnelID
+	if sshAssetID == 0 {
+		sshAssetID = cfg.SSHAssetID // backward compat
+	}
+	logFields := []zap.Field{
+		zap.Int64("assetID", asset.ID),
+		zap.String("driver", string(cfg.Driver)),
+		zap.Int64("sshAssetID", sshAssetID),
+		zap.Bool("readOnly", cfg.ReadOnly),
+	}
+	logger.Ctx(ctx).Info("open database session start", logFields...)
 
-	var db *sql.DB
-	var tunnel *SSHTunnel
-	var err error
+	session, err := openDatabase(ctx, cfg, password, sshAssetID, sshPool)
+	if err != nil {
+		logger.Ctx(ctx).Error("open database session failed", append(logFields, zap.Error(err))...)
+		return nil, err
+	}
+	logger.Ctx(ctx).Info("open database session done", logFields...)
+	return session, nil
+}
 
-	if cfg.Driver == asset_entity.DriverSQLite {
-		if cfg.SQLiteSource == asset_entity.SQLiteSourceRemoteSSHVFS {
-			return openRemoteSQLite(ctx, asset, cfg, sshPool)
+func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, password string, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.Session, error) {
+	driver, err := dbdriver.Lookup(cfg.Driver)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := databaseTransport(ctx, cfg, sshAssetID, sshPool)
+	if err != nil {
+		return nil, err
+	}
+	return driver.Open(ctx, dbdriver.OpenRequest{Config: cfg, Password: password, Transport: transport})
+}
+
+// databaseTransport 把配置解析成到达数据库的途径。网络连接的优先级：代理链 > SSH 隧道 >
+// SOCKS5 代理 > 直连；直连 .local 主机时经统一拨号器（绕过系统解析器的 mDNS；零值参数，
+// 超时仍由驱动经 ctx 控制），其余直连留给驱动默认的拨号。
+//
+// 配置了 SSH 资产时还给出那台主机的文件系统：数据库是主机上一个文件的驱动（远端 SQLite）
+// 用它，按网络连接的驱动用 Dial——两者都是惰性的，用哪个由驱动决定。
+func databaseTransport(ctx context.Context, cfg *asset_entity.DatabaseConfig, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.Transport, error) {
+	var transport dbdriver.Transport
+	if sshAssetID > 0 {
+		transport.RemoteFS = func(ctx context.Context) (dbdriver.RemoteFS, error) {
+			return openSFTPRemoteFS(ctx, sshAssetID, sshPool)
 		}
-		// SQLite 本地文件,不走隧道。只读已在 buildDSN 里通过 _pragma=query_only(1)
-		// 写进 DSN（对每条连接生效），这里无需再单独 setReadOnly。
-		db, err = openDirect(cfg, password)
-		if err != nil {
-			return nil, nil, err
-		}
-		if pingErr := db.PingContext(ctx); pingErr != nil {
-			if cerr := db.Close(); cerr != nil {
-				logger.Default().Warn("close db", zap.Error(cerr))
-			}
-			return nil, nil, fmt.Errorf("数据库连接失败: %w", pingErr)
-		}
-		return db, nil, nil
 	}
 
-	tunnelID := asset.SSHTunnelID
-	if tunnelID == 0 {
-		tunnelID = cfg.SSHAssetID // backward compat
-	}
 	switch {
 	case cfg.ProxyChain != nil:
-		dial, dialErr := chainDialFunc(ctx, cfg.ProxyChain)
-		if dialErr != nil {
-			return nil, nil, dialErr
+		dial, err := chainDialFunc(ctx, cfg.ProxyChain)
+		if err != nil {
+			return dbdriver.Transport{}, err
 		}
-		if dial == nil { // 代理链解析为空层即直连
-			db, err = openDirect(cfg, password)
-		} else {
-			db, err = openWithDialer(cfg, password, dial.ignoreNetwork())
+		if dial != nil { // 代理链解析为空层即直连
+			transport.Dial = dbdriver.DialFunc(dial.ignoreNetwork())
 		}
-	case tunnelID > 0 && sshPool != nil:
-		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
-		db, err = openWithDialer(cfg, password, tunnelDialFunc(tunnel).ignoreNetwork())
+	case sshAssetID > 0 && sshPool != nil:
+		tunnel := NewSSHTunnel(sshAssetID, cfg.Host, cfg.Port, sshPool)
+		transport.Dial = dbdriver.DialFunc(tunnelDialFunc(tunnel).ignoreNetwork())
 	case cfg.Proxy != nil:
-		db, err = openWithDialer(cfg, password, proxyDialFunc(cfg.Proxy).ignoreNetwork())
-	default:
-		db, err = openDirect(cfg, password)
+		transport.Dial = dbdriver.DialFunc(proxyDialFunc(cfg.Proxy).ignoreNetwork())
 	}
-	if err != nil {
-		if tunnel != nil {
-			if err := tunnel.Close(); err != nil {
-				logger.Default().Warn("close ssh tunnel", zap.Error(err))
-			}
-		}
-		return nil, nil, err
+	if transport.Dial == nil && netdial.IsLocalAddr(cfg.Host) {
+		transport.Dial = (&netdial.Dialer{}).DialContext
 	}
-
-	// 测试连接（必须在 setReadOnly 之前，确保连接性检查受 ctx 超时保护）
-	if pingErr := db.PingContext(ctx); pingErr != nil {
-		if err := db.Close(); err != nil {
-			logger.Default().Warn("close db", zap.Error(err))
-		}
-		if tunnel != nil {
-			if err := tunnel.Close(); err != nil {
-				logger.Default().Warn("close ssh tunnel", zap.Error(err))
-			}
-		}
-		return nil, nil, fmt.Errorf("数据库连接失败: %w", pingErr)
-	}
-
-	// 连接级只读
-	if cfg.ReadOnly {
-		if roErr := setReadOnly(ctx, db, cfg.Driver); roErr != nil {
-			if err := db.Close(); err != nil {
-				logger.Default().Warn("close db", zap.Error(err))
-			}
-			if tunnel != nil {
-				if err := tunnel.Close(); err != nil {
-					logger.Default().Warn("close ssh tunnel", zap.Error(err))
-				}
-			}
-			return nil, nil, fmt.Errorf("设置只读模式失败: %w", roErr)
-		}
-	}
-
-	// 直连时 tunnel 为 *SSHTunnel 的 nil，直接返回会变成 typed-nil 接口，
-	// 调用方 `if closer != nil` 会误判为真并在 Close() 里 nil deref panic。
-	if tunnel == nil {
-		return db, nil, nil
-	}
-	return db, tunnel, nil
+	return transport, nil
 }
 
-func openRemoteSQLite(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, sshPool *sshpool.Pool) (*sql.DB, io.Closer, error) {
-	tunnelID := asset.SSHTunnelID
-	if tunnelID == 0 {
-		tunnelID = cfg.SSHAssetID
-	}
-	logger.Ctx(ctx).Info("open remote SQLite start",
-		zap.Int64("assetID", asset.ID),
-		zap.Int64("sshAssetID", tunnelID),
-		zap.String("path", cfg.Path),
-		zap.Bool("readOnly", cfg.ReadOnly),
-	)
-	if tunnelID == 0 {
-		err := fmt.Errorf("远端 SQLite 必须指定 SSH 资产")
-		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Error(err))
-		return nil, nil, err
-	}
+// openSFTPRemoteFS 在 SSH 资产上打开文件系统：从连接池借一条 SSH 连接，在其上开 SFTP。
+func openSFTPRemoteFS(ctx context.Context, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.RemoteFS, error) {
 	if sshPool == nil {
-		err := fmt.Errorf("远端 SQLite 需要 SSH 连接池")
-		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
-		return nil, nil, err
+		return nil, errors.New("远端 SQLite 需要 SSH 连接池")
 	}
-
-	client, err := sshPool.Get(ctx, tunnelID)
+	client, err := sshPool.Get(ctx, sshAssetID)
 	if err != nil {
-		err = fmt.Errorf("get ssh connection for remote SQLite: %w", err)
-		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
-		return nil, nil, err
+		return nil, fmt.Errorf("get ssh connection for remote SQLite: %w", err)
 	}
-	releasePool := true
-	defer func() {
-		if releasePool {
-			sshPool.Release(tunnelID)
-		}
-	}()
-
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
-		err = fmt.Errorf("create SFTP client for remote SQLite: %w", err)
-		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
-		return nil, nil, err
+		sshPool.Release(sshAssetID)
+		return nil, fmt.Errorf("create SFTP client for remote SQLite: %w", err)
 	}
-
-	db, sqliteCloser, err := sqlitevfs.Open(ctx, sftpRemoteFS{client: sftpClient}, cfg.Path, sqlitevfs.Options{
-		ReadOnly: cfg.ReadOnly,
-	})
-	if err != nil {
-		if closeErr := sftpClient.Close(); closeErr != nil {
-			logger.Ctx(ctx).Warn("close remote SQLite SFTP client", zap.Error(closeErr))
-		}
-		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
-		return nil, nil, err
-	}
-	releasePool = false
-	logger.Ctx(ctx).Info("open remote SQLite done",
-		zap.Int64("assetID", asset.ID),
-		zap.Int64("sshAssetID", tunnelID),
-		zap.Bool("readOnly", cfg.ReadOnly),
-	)
-	return db, &remoteSQLiteCloser{
-		sqlite:   sqliteCloser,
-		sftp:     sftpClient,
-		pool:     sshPool,
-		assetID:  tunnelID,
-		released: false,
-	}, nil
+	return &sftpRemoteFS{client: sftpClient, pool: sshPool, sshAssetID: sshAssetID}, nil
 }
 
+// sftpRemoteFS 是 SSH 资产上的文件系统。Close 关闭 SFTP 并把 SSH 连接还给连接池。
 type sftpRemoteFS struct {
-	client *sftp.Client
+	client     *sftp.Client
+	pool       *sshpool.Pool
+	sshAssetID int64
+	release    sync.Once
 }
 
-func (fs sftpRemoteFS) OpenFile(name string, flag int) (sqlitevfs.RemoteFile, error) {
-	return fs.client.OpenFile(name, flag)
+func (fs *sftpRemoteFS) OpenFile(name string, flag int) (dbdriver.RemoteFile, error) {
+	f, err := fs.client.OpenFile(name, flag)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
-func (fs sftpRemoteFS) Remove(name string) error {
+func (fs *sftpRemoteFS) Remove(name string) error {
 	return fs.client.Remove(name)
 }
 
-func (fs sftpRemoteFS) Stat(name string) (os.FileInfo, error) {
+func (fs *sftpRemoteFS) Stat(name string) (os.FileInfo, error) {
 	return fs.client.Stat(name)
 }
 
-type remoteSQLiteCloser struct {
-	sqlite   io.Closer
-	sftp     io.Closer
-	pool     *sshpool.Pool
-	assetID  int64
-	released bool
-}
-
-func (c *remoteSQLiteCloser) Close() error {
-	var err error
-	if c.sqlite != nil {
-		err = c.sqlite.Close()
-	}
-	if c.sftp != nil {
-		if sftpErr := c.sftp.Close(); err == nil {
-			err = sftpErr
-		}
-	}
-	if !c.released {
-		c.pool.Release(c.assetID)
-		c.released = true
-	}
+func (fs *sftpRemoteFS) Close() error {
+	err := fs.client.Close()
+	fs.release.Do(func() { fs.pool.Release(fs.sshAssetID) })
 	return err
-}
-
-// openDirect 直连:主机名为 .local 时经统一拨号器(绕过系统解析器的 mDNS;零值参数,超时仍由驱动经 ctx 控制),
-// 否则保留驱动默认拨号。
-func openDirect(cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, error) {
-	if netdial.IsLocalAddr(cfg.Host) {
-		return openWithDialer(cfg, password, (&netdial.Dialer{}).DialContext)
-	}
-	driverName, dsn := buildDSN(cfg, password)
-	return sql.Open(driverName, dsn)
-}
-
-func openWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
-	switch cfg.Driver {
-	case asset_entity.DriverMySQL:
-		return openMySQLWithDialer(cfg, password, dial)
-	case asset_entity.DriverPostgreSQL:
-		return openPgWithDialer(cfg, password, dial)
-	case asset_entity.DriverMSSQL:
-		return openMSSQLWithDialer(cfg, password, dial)
-	default:
-		return nil, fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
-	}
-}
-
-// mysqlDialerSeq 为 mysql 自定义 dialer 生成唯一注册名。
-// mysql.RegisterDialContext 的注册表是全局的且同名覆盖,若名字复用,
-// 后注册者会劫持先前连接池的重拨,因此每次 open 都用独立的名字。
-var mysqlDialerSeq atomic.Int64
-
-func registerMySQLDialer(dial networkDialFunc) string {
-	name := fmt.Sprintf("opskat-dialer-%d", mysqlDialerSeq.Add(1))
-	mysql.RegisterDialContext(name, func(ctx context.Context, addr string) (net.Conn, error) {
-		return dial(ctx, "tcp", addr)
-	})
-	return name
-}
-
-func openMySQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
-	mysqlCfg := mysql.NewConfig()
-	mysqlCfg.User = cfg.Username
-	mysqlCfg.Passwd = password
-	mysqlCfg.Net = registerMySQLDialer(dial)
-	mysqlCfg.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	mysqlCfg.DBName = cfg.Database
-	if cfg.TLS {
-		mysqlCfg.TLSConfig = "skip-verify"
-	}
-	if cfg.Params != "" {
-		mysqlCfg.Params = parseParams(cfg.Params)
-	}
-	return sql.Open("mysql", mysqlCfg.FormatDSN())
-}
-
-func openPgWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
-	// pgx 支持通过 DialFunc 自定义连接方式,使用 connector API
-	_, dsn := buildDSN(cfg, password)
-	db := sql.OpenDB(newPgDialConnector(dsn, dial))
-	return db, nil
-}
-
-func openMSSQLWithDialer(cfg *asset_entity.DatabaseConfig, password string, dial networkDialFunc) (*sql.DB, error) {
-	_, dsn := buildDSN(cfg, password)
-	msdsnCfg, err := msdsn.Parse(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("parse mssql dsn: %w", err)
-	}
-	connector := mssql.NewConnectorConfig(msdsnCfg)
-	connector.Dialer = dial
-	return sql.OpenDB(connector), nil
-}
-
-func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName string, dsn string) {
-	switch cfg.Driver {
-	case asset_entity.DriverMySQL:
-		mysqlCfg := mysql.NewConfig()
-		mysqlCfg.User = cfg.Username
-		mysqlCfg.Passwd = password
-		mysqlCfg.Net = "tcp"
-		mysqlCfg.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-		mysqlCfg.DBName = cfg.Database
-		if cfg.TLS {
-			mysqlCfg.TLSConfig = "skip-verify"
-		}
-		if cfg.Params != "" {
-			mysqlCfg.Params = parseParams(cfg.Params)
-		}
-		return "mysql", mysqlCfg.FormatDSN()
-	case asset_entity.DriverPostgreSQL:
-		sslMode := cfg.SSLMode
-		if sslMode == "" {
-			sslMode = "disable"
-		}
-		dsn = fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			url.QueryEscape(cfg.Username), url.QueryEscape(password),
-			cfg.Host, cfg.Port, url.PathEscape(cfg.Database), sslMode)
-		if cfg.Params != "" {
-			dsn += "&" + cfg.Params
-		}
-		return "pgx", dsn
-	case asset_entity.DriverMSSQL:
-		q := url.Values{}
-		if cfg.Database != "" {
-			q.Set("database", cfg.Database)
-		}
-		if cfg.TLS {
-			q.Set("encrypt", "true")
-			q.Set("trustservercertificate", "true")
-		} else {
-			q.Set("encrypt", "disable")
-		}
-		if cfg.Params != "" {
-			for k, v := range parseParams(cfg.Params) {
-				q.Set(k, v)
-			}
-		}
-		u := &url.URL{
-			Scheme:   "sqlserver",
-			User:     url.UserPassword(cfg.Username, password),
-			Host:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-			RawQuery: q.Encode(),
-		}
-		return "sqlserver", u.String()
-	case asset_entity.DriverSQLite:
-		dsn := "file:" + cfg.Path
-		var query []string
-		if cfg.Params != "" {
-			query = append(query, cfg.Params)
-		}
-		// 只读用 _pragma 写进 DSN，保证连接池里"每一条"新建连接都带 query_only，
-		// 而不是只在初次 dial 用过的那一条上设 PRAGMA（那样池里别的连接仍可写）。
-		if cfg.ReadOnly {
-			query = append(query, "_pragma=query_only(1)")
-		}
-		if len(query) > 0 {
-			dsn += "?" + strings.Join(query, "&")
-		}
-		return "sqlite", dsn
-	default:
-		return "", ""
-	}
-}
-
-func setReadOnly(ctx context.Context, db *sql.DB, driver asset_entity.DatabaseDriver) error {
-	switch driver {
-	case asset_entity.DriverMySQL:
-		_, err := db.ExecContext(ctx, "SET SESSION TRANSACTION READ ONLY")
-		return err
-	case asset_entity.DriverPostgreSQL:
-		_, err := db.ExecContext(ctx, "SET default_transaction_read_only = on")
-		return err
-	case asset_entity.DriverMSSQL:
-		logger.Ctx(ctx).Info("MSSQL connection-level read-only not supported, relying on policy")
-		return nil
-	}
-	return nil
-}
-
-func parseParams(params string) map[string]string {
-	m := make(map[string]string)
-	values, err := url.ParseQuery(params)
-	if err != nil {
-		return m
-	}
-	for k, v := range values {
-		if len(v) > 0 {
-			m[k] = v[0]
-		}
-	}
-	return m
 }
