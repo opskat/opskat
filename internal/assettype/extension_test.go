@@ -97,3 +97,42 @@ func TestExtensionTypeApplyUpdateMergesExistingConfig(t *testing.T) {
 	assert.JSONEq(t, `{"endpoint":"https://acme.test","region":"us"}`, asset.Config)
 	assert.Equal(t, "acme", asset.ExtensionName)
 }
+
+// 决定 22：扩展类型与已有自定义类型标识重名时注册失败，错误指出冲突的自定义类型；
+// 自定义类型及其资产照常解析。检查由组合根注入，未注入时不查（不带数据库的注册测试不受影响）。
+func TestRegisterExtensionTypeRefusesACustomTypeSlug(t *testing.T) {
+	env := setupGeneric(t)
+	SetCustomTypeSlugLookup(CustomTypeSlugExists)
+	t.Cleanup(func() { SetCustomTypeSlugLookup(nil) })
+
+	spec := extSpec()
+	spec.Type = "grafana"
+	err := RegisterExtensionType(spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"grafana"`, "the error must name the custom type to rename or remove")
+	_, registered := Get("grafana")
+	assert.False(t, registered, "a refused type must not enter the registry")
+
+	a, err := NewAsset(env.ctx, "grafana")
+	require.NoError(t, err, "the custom type keeps serving its slug after the refused registration")
+	assert.Equal(t, "grafana", TypeName(a))
+
+	other := extSpec()
+	require.NoError(t, RegisterExtensionType(other), "a type with no custom-type namesake still registers")
+	Unregister(other.Type)
+}
+
+func TestRegisterExtensionTypeSurfacesALookupFailure(t *testing.T) {
+	SetCustomTypeSlugLookup(func(context.Context, string) (bool, error) { return false, assert.AnError })
+	t.Cleanup(func() { SetCustomTypeSlugLookup(nil) })
+
+	require.ErrorIs(t, RegisterExtensionType(extSpec()), assert.AnError)
+	_, registered := Get("acme-store")
+	assert.False(t, registered)
+}
+
+func TestRegisterExtensionTypeSkipsTheCustomTypeCheckWhenNothingIsInjected(t *testing.T) {
+	SetCustomTypeSlugLookup(nil)
+	require.NoError(t, RegisterExtensionType(extSpec()))
+	Unregister("acme-store")
+}

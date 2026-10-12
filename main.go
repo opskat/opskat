@@ -476,6 +476,8 @@ func initExtensionSystem(
 // 闭包在每次创建类型时才求值，扩展异步加载、装卸后都能看到最新集合。
 func registerReservedTypeNames() {
 	custom_type_svc.CustomType().SetReservedNames(reservedTypeNames)
+	// 反方向：扩展声明的类型与已有自定义类型标识重名时，该扩展类型注册失败。
+	assettype.SetCustomTypeSlugLookup(assettype.CustomTypeSlugExists)
 }
 
 // reservedTypeNames 是不能用作自定义类型标识的类型名：资产类型注册表里的全部类型（扩展加载时

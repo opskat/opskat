@@ -668,3 +668,23 @@ func TestHelpListsTheConfigFieldsAnAssetAccepts(t *testing.T) {
 	}
 	assert.NotContains(t, help, "`proxy_chain`", "a connection item the type did not declare is not offered")
 }
+
+// 决定 22：扩展加载（桌面路径）遇到与已有自定义类型标识重名的类型，整个扩展注册失败，
+// 错误指出扩展与冲突的类型，且不留下任何半截登记。
+func TestRegisterRefusesATypeThatShadowsACustomType(t *testing.T) {
+	assettype.SetCustomTypeSlugLookup(func(_ context.Context, slug string) (bool, error) { return slug == "acme-store", nil })
+	t.Cleanup(func() { assettype.SetCustomTypeSlugLookup(nil) })
+
+	m := testManifest()
+	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
+	localized := m.Localized(func(k string) string { return k })
+	err := register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"acme"`)
+	assert.Contains(t, err.Error(), `"acme-store"`)
+	_, ok := assettype.Get("acme-store")
+	assert.False(t, ok)
+	_, ok = permission.ExecutorFor("acme-store")
+	assert.False(t, ok)
+}
