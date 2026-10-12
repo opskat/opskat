@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
@@ -238,6 +239,15 @@ func buildExecAuditResult(exitCode int, stdout, stderr string) string {
 	return fmt.Sprintf("exit_code: %d\n%s", exitCode, output)
 }
 
+// driverTypeNames 列出可作 --type 值的数据库驱动名：注册表里每个驱动的 id 与别名。
+func driverTypeNames() string {
+	var names []string
+	for _, d := range dbdriver.List() {
+		names = append(names, d.Descriptor().Names()...)
+	}
+	return strings.Join(names, ", ")
+}
+
 func printExecUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
   opsctl exec <asset> [--type <type>] [--scope <db|host:port>] [--] <command>
@@ -278,9 +288,10 @@ Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this
                   type. Accepts protocol aliases ("sql"/"db" for database,
                   "exec" for ssh, "mongo", "kubernetes"/"kube" for k8s), and
-                  database driver names ("mysql", "postgres", "mssql",
-                  "sqlite"), which additionally assert the asset's driver —
-                  "--type mysql" fails on a PostgreSQL asset.
+                  database driver names, which additionally assert the
+                  asset's driver — "--type mysql" fails on a PostgreSQL
+                  asset. Driver names:
+                    `+driverTypeNames()+`
                   Does not select dispatch — that always comes from the
                   asset's real type.
   --scope <s>     Only meaningful for redis assets (fails with exit code 1 on

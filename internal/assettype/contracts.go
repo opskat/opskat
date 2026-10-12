@@ -2,6 +2,7 @@ package assettype
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
@@ -120,34 +121,38 @@ func (*databaseHandler) AutomationContract() AutomationContract {
 }
 
 func normalizeDatabaseAutomation(args map[string]any) error {
-	driver := asset_entity.DatabaseDriver(ArgString(args, "driver"))
-	if driver == "" {
-		return fmt.Errorf("database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
+	drv, err := requestedDriver(args)
+	if err != nil {
+		return err
 	}
-	if driver == asset_entity.DriverSQLite {
-		if ArgString(args, "sqlite_source") == "" {
-			args["sqlite_source"] = string(asset_entity.SQLiteSourceLocal)
-		}
-		return nil
-	}
-	if ArgInt(args, "port") == 0 {
-		if port := driver.DefaultPort(); port > 0 {
-			args["port"] = port
-		}
-	}
+	maps.Copy(args, drv.CreateDefaults(driverArgs(args)))
 	return nil
 }
 
+// 入参不带 driver 只出现在局部更新里，这时口令规则照常适用：带凭据的局部更新会先经
+// AutomationUpdateContext 补上资产现有的 driver，到这里已经能判断驱动用不用口令。
 func databaseCredentialPlan(args map[string]any) (CredentialPlan, error) {
-	if asset_entity.DatabaseDriver(ArgString(args, "driver")) == asset_entity.DriverSQLite {
-		return noCredentialPlan("password", "credential_id")(args)
+	if ArgString(args, "driver") != "" {
+		drv, err := requestedDriver(args)
+		if err != nil {
+			return CredentialPlan{}, err
+		}
+		if !usesPassword(drv) {
+			return noCredentialPlan("password", "credential_id")(args)
+		}
 	}
 	return passwordReferencePlan(args, "password")
 }
 
 func bindDatabaseCredential(args map[string]any, binding CredentialBinding) (map[string]any, error) {
-	if asset_entity.DatabaseDriver(ArgString(args, "driver")) == asset_entity.DriverSQLite {
-		return nil, fmt.Errorf("credential_id is not applicable to SQLite")
+	if ArgString(args, "driver") != "" {
+		drv, err := requestedDriver(args)
+		if err != nil {
+			return nil, err
+		}
+		if !usesPassword(drv) {
+			return nil, fmt.Errorf("credential_id is not applicable to %s", drv.Descriptor().Name)
+		}
 	}
 	return bindPasswordCredential(args, binding)
 }

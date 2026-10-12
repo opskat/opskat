@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opskat/opskat/internal/dbdriver"
+	// The permission package only knows the registry; its tests need the built-in drivers.
+	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -166,6 +170,53 @@ func TestDriverAliasStaysOutOfPermissionRegistry(t *testing.T) {
 		}
 		if got := ApprovalTypeFor(name); got != name {
 			t.Errorf("ApprovalTypeFor(%q) = %q, want passthrough %q", name, got, name)
+		}
+	}
+}
+
+// A driver's names come from its descriptor: registering a driver is all it takes for
+// its id and aliases to work as --type values, and nothing else knows the word.
+func TestAssertAssetType_NamesOfADriverAddedByRegistrationAlone(t *testing.T) {
+	if _, ok := CanonicalTypeFor("fake"); ok {
+		t.Fatal(`"fake" must not resolve before its driver is registered`)
+	}
+	dbdrivertest.Register(t, dbdrivertest.NewFake())
+
+	fakeAsset := newDBAsset(t, "fake-db", "fakedb")
+	mysqlAsset := newDBAsset(t, "prod-db", asset_entity.DriverMySQL)
+
+	for _, name := range []string{"fakedb", "fake"} {
+		if canonical, ok := CanonicalTypeFor(name); !ok || canonical != asset_entity.AssetTypeDatabase {
+			t.Errorf("CanonicalTypeFor(%q) = (%q, %v), want the database type", name, canonical, ok)
+		}
+		if err := AssertAssetType(fakeAsset, name); err != nil {
+			t.Errorf("AssertAssetType(fake asset, %q) must pass, got %v", name, err)
+		}
+	}
+
+	err := AssertAssetType(mysqlAsset, "fake")
+	if err == nil {
+		t.Fatal("the alias must fail on an asset with a different driver")
+	}
+	for _, want := range []string{"driver=mysql", "type=fake"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must contain %q", err.Error(), want)
+		}
+	}
+	err = AssertAssetType(fakeAsset, "mysql")
+	if err == nil || !strings.Contains(err.Error(), "driver=fakedb") {
+		t.Errorf("a built-in driver name must fail on the fake driver's asset and name its driver, got %v", err)
+	}
+}
+
+// resolveDeclaredType looks a name up in permissionTypes first, so a driver name that is
+// also a permission type would lose its driver constraint without anyone noticing.
+func TestDriverNamesDoNotCollideWithPermissionTypes(t *testing.T) {
+	for _, d := range dbdriver.List() {
+		for _, name := range d.Descriptor().Names() {
+			if _, exists := permissionTypeFor(name); exists {
+				t.Errorf("driver name %q is also a registered permission type", name)
+			}
 		}
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -45,22 +43,6 @@ const (
 	SQLiteSourceLocal        SQLiteSource = "local"
 	SQLiteSourceRemoteSSHVFS SQLiteSource = "remote_ssh_vfs"
 )
-
-// DefaultPort 返回驱动默认端口
-func (d DatabaseDriver) DefaultPort() int {
-	switch d {
-	case DriverMySQL:
-		return 3306
-	case DriverPostgreSQL:
-		return 5432
-	case DriverMSSQL:
-		return 1433
-	case DriverSQLite:
-		return 0
-	default:
-		return 0
-	}
-}
 
 // 认证方式常量
 const (
@@ -1003,51 +985,12 @@ func (a *Asset) validateDatabase() error {
 	if cfg.Driver == "" {
 		return errors.New("数据库驱动不能为空")
 	}
-	switch cfg.Driver {
-	case DriverMySQL, DriverPostgreSQL, DriverMSSQL:
-		if cfg.Host == "" {
-			return errors.New("数据库主机地址不能为空")
-		}
-		if cfg.Port <= 0 {
-			return errors.New("数据库端口无效")
-		}
-		if cfg.Username == "" {
-			return errors.New("数据库用户名不能为空")
-		}
-	case DriverSQLite:
-		if cfg.Path == "" {
-			return errors.New("SQLite 必须指定 path")
-		}
-		source := cfg.SQLiteSource
-		if source == "" {
-			source = SQLiteSourceLocal
-		}
-		switch source {
-		case SQLiteSourceLocal:
-			if !filepath.IsAbs(cfg.Path) && !path.IsAbs(cfg.Path) {
-				return errors.New("SQLite path 必须为绝对路径")
-			}
-			if a.SSHTunnelID > 0 || cfg.SSHAssetID > 0 {
-				return errors.New("SQLite 本地文件不支持 SSH 隧道")
-			}
-		case SQLiteSourceRemoteSSHVFS:
-			if !path.IsAbs(cfg.Path) {
-				return errors.New("SQLite path 必须为绝对路径")
-			}
-			if a.SSHTunnelID == 0 && cfg.SSHAssetID == 0 {
-				return errors.New("远端 SQLite 必须指定 SSH 资产")
-			}
-		default:
-			return fmt.Errorf("不支持的 SQLite source: %s", source)
-		}
-		if cfg.Proxy != nil {
-			return errors.New("SQLite 不支持代理")
-		}
-		if cfg.ProxyChain != nil && len(cfg.ProxyChain.Layers) > 0 {
-			return errors.New("SQLite 本地文件不支持代理链")
-		}
-	default:
-		return fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
+	if databaseDriverConfigValidator == nil {
+		// 没有链接驱动注册表（internal/dbdriver）的二进制里没有任何驱动可用。
+		return fmt.Errorf("数据库驱动 %s 不可用：未链接驱动注册表", cfg.Driver)
+	}
+	if err := databaseDriverConfigValidator(a, cfg); err != nil {
+		return err
 	}
 	// 0 表示使用默认值（30s）；显式配置时限定 5~600s。
 	if cfg.QueryTimeoutSeconds != 0 && (cfg.QueryTimeoutSeconds < 5 || cfg.QueryTimeoutSeconds > 600) {
