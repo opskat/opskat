@@ -932,6 +932,9 @@ func (a *Asset) Validate() error {
 	if a.Type == "" {
 		return errors.New("资产类型不能为空")
 	}
+	if err := policy.ValidateStored(a.CmdPolicy); err != nil {
+		return err
+	}
 
 	// 校验类型是否合法
 	switch a.Type {

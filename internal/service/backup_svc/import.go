@@ -15,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/sshagent"
+	"github.com/opskat/opskat/migrations"
 )
 
 // Import 导入备份数据
@@ -433,8 +434,11 @@ func remapAssetPolicyGroupIDs(a *asset_entity.Asset, pgIDMap map[int64]int64) {
 	a.CmdPolicy = remapPolicyGroupRefs(a.CmdPolicy, pgIDMap)
 }
 
-// remapPolicyGroupRefs 替换策略 JSON 中的 groups ID 引用
+// remapPolicyGroupRefs 替换策略 JSON 中的 groups ID 引用。
+// v1.1.1 及更早版本导出的备份里 groups 是数字 ID，先升成现行的字符串 ID：一次性迁移
+// 管不到之后才导入的数据，原样落库的策略整条解析不了。
 func remapPolicyGroupRefs(policyJSON string, pgIDMap map[int64]int64) string {
+	policyJSON, _ = migrations.ConvertLegacyPolicyGroupIDs(policyJSON)
 	if policyJSON == "" || len(pgIDMap) == 0 {
 		return policyJSON
 	}

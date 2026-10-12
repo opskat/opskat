@@ -3,6 +3,7 @@ package migrations
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -58,7 +59,7 @@ func migratePolicyColumn(tx *gorm.DB, table, column string) error {
 	}
 
 	for _, r := range rows {
-		newPolicy, changed := convertGroupIDs(r.Policy)
+		newPolicy, changed := ConvertLegacyPolicyGroupIDs(r.Policy)
 		if !changed {
 			continue
 		}
@@ -73,8 +74,10 @@ func migratePolicyColumn(tx *gorm.DB, table, column string) error {
 	return nil
 }
 
-// convertGroupIDs 将 JSON 中 groups 数组的 int64 元素转为 string
-func convertGroupIDs(policyJSON string) (string, bool) {
+// ConvertLegacyPolicyGroupIDs 将策略 JSON 中 groups 数组的 int64 元素转为 string ID，
+// 返回转换后的 JSON 与是否有改动。v1.1.1 及更早版本写的是数字 ID（内置组为负数），
+// 现行结构只认字符串；除了本迁移，导入旧版本导出的备份时也要过这一道。
+func ConvertLegacyPolicyGroupIDs(policyJSON string) (string, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(policyJSON), &raw); err != nil {
 		return policyJSON, false
@@ -92,23 +95,28 @@ func convertGroupIDs(policyJSON string) (string, bool) {
 
 	newGroups := make([]string, 0, len(mixedGroups))
 	changed := false
+	// 数字 ID 的组在界面上不显示，用户会把同一个组再加一遍：转换后两者是同一个 ID，只留一份。
+	appendGroup := func(id string) {
+		if !slices.Contains(newGroups, id) {
+			newGroups = append(newGroups, id)
+		}
+	}
 	for _, item := range mixedGroups {
 		s := string(item)
 		// 尝试作为数字解析
 		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 			if newID, ok := oldIDToNewID[n]; ok {
-				newGroups = append(newGroups, newID)
-				changed = true
+				appendGroup(newID)
 			} else {
 				// 正数 ID（用户自定义组）转为字符串
-				newGroups = append(newGroups, strconv.FormatInt(n, 10))
-				changed = true
+				appendGroup(strconv.FormatInt(n, 10))
 			}
+			changed = true
 		} else {
 			// 已经是字符串（去除引号）
 			var str string
 			if err := json.Unmarshal(item, &str); err == nil {
-				newGroups = append(newGroups, str)
+				appendGroup(str)
 			}
 		}
 	}

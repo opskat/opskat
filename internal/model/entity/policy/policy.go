@@ -1,5 +1,24 @@
 package policy
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// ValidateStored 校验一列落库的策略 JSON：空串（未设置），或"字段名 → 字符串数组"的对象。
+// CommandPolicy / QueryPolicy / … 各类型的策略结构都是这个形状，所以写入边界不必知道这一列
+// 属于哪种类型，就能挡住权限检查读不出来的值。
+func ValidateStored(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	var fields map[string][]string
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return fmt.Errorf("权限策略格式无效: %w", err)
+	}
+	return nil
+}
+
 // CommandPolicy 命令权限策略
 type CommandPolicy struct {
 	AllowList []string `json:"allow_list"`       // 直接执行的命令规则

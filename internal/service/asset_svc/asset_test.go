@@ -293,3 +293,29 @@ func TestAssetSvc_RunsRegisteredConfigValidator(t *testing.T) {
 	assert.Equal(t, []string{`{"notebook":"BAD"}`, `{"notebook":"BAD"}`, `{"notebook":"ok"}`}, seen,
 		"the validator sees the config exactly as it is stored")
 }
+
+// 资产表单把策略整列当 JSON 字符串交上来，它自己的解析比后端宽松：看不懂的条目照旧原样
+// 写回。后端若照单全收，落库的就是一条权限检查读不出来的策略。
+func TestAssetSvc_RejectsUnreadablePolicy(t *testing.T) {
+	ctx, _ := setupTest(t)
+
+	newAsset := func(cmdPolicy string) *asset_entity.Asset {
+		asset := &asset_entity.Asset{ID: 31, Name: "web-01", Type: asset_entity.AssetTypeSSH, CmdPolicy: cmdPolicy}
+		require.NoError(t, asset.SetSSHConfig(&asset_entity.SSHConfig{
+			Host: "10.0.0.1", Port: 22, Username: "root", AuthType: asset_entity.AuthTypePassword,
+		}))
+		return asset
+	}
+
+	for name, cmdPolicy := range map[string]string{
+		"groups 里是数字 ID": `{"allow_list":["*"],"groups":[-1,-4,"builtin:linux-readonly"]}`,
+		"规则不是字符串":        `{"allow_list":[1]}`,
+		"不是 JSON 对象":     `["*"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// mock 上没有任何 EXPECT：走到 repo 就是测试失败
+			assert.Error(t, Asset().Update(ctx, newAsset(cmdPolicy)))
+			assert.Error(t, Asset().Create(ctx, newAsset(cmdPolicy)))
+		})
+	}
+}

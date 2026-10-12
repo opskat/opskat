@@ -31,12 +31,26 @@ const (
 
 // CheckPermission 统一权限检查（策略 + DB Grant 匹配）。
 // 不包含用户确认逻辑 — aictx.NeedConfirm 时由调用方处理。
+// 判定要读的策略列里有一处解析失败就直接拒绝（见 unreadablePolicy）。
 // assetType: "ssh" | "serial" | "database" | "redis" | "mongodb" | "kafka" | "k8s" |
 // "exec"（exec 等同于 ssh）| "sql"（sql 等同于 database）| "mongo"（mongo 等同于 mongodb）
 func CheckPermission(ctx context.Context, assetType string, assetID int64, command string) aictx.CheckResult {
 	handler, ok := permissionTypeFor(assetType)
 	if !ok {
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+	if holder, err := unreadablePolicy(ctx, handler.canonical, assetID); err != nil {
+		logger.Ctx(ctx).Error("permission policy unreadable, execution denied",
+			zap.String("assetType", handler.canonical), zap.Int64("assetID", assetID),
+			zap.String("holder", holder), zap.Error(err))
+		return aictx.CheckResult{
+			Decision:       aictx.Deny,
+			DecisionSource: aictx.SourcePolicyDeny,
+			Message: policy.PolicyFmt(ctx,
+				"the permission policy of %s cannot be read, execution denied: %v. Fix that policy and retry",
+				"%s的权限策略无法解析，拒绝执行: %v。请修复该策略后重试",
+				holder, err),
+		}
 	}
 	return handler.check(ctx, assetID, command)
 }

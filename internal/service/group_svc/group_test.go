@@ -356,3 +356,22 @@ func TestGroupSvc_Reorder(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// 与资产同理：分组的每一列策略都由前端整列交上来，读不出来的不能落库。
+func TestGroupSvc_RejectsUnreadablePolicy(t *testing.T) {
+	ctx, _, _ := setupTest(t)
+
+	const numericGroups = `{"allow_list":["*"],"groups":[-1]}`
+	for name, group := range map[string]*group_entity.Group{
+		"命令策略":   {ID: 5, Name: "prod", CmdPolicy: numericGroups},
+		"查询策略":   {ID: 5, Name: "prod", QryPolicy: numericGroups},
+		"OSS 策略": {ID: 5, Name: "prod", OssPolicy: numericGroups},
+		"扩展策略":   {ID: 5, Name: "prod", ExtPolicy: `{"es":` + numericGroups + `}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// mock 上没有任何 EXPECT：走到 repo 就是测试失败
+			assert.Error(t, Group().Update(ctx, group))
+			assert.Error(t, Group().Create(ctx, group))
+		})
+	}
+}

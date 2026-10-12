@@ -40,7 +40,15 @@ func (g *Group) Validate() error {
 	if g.Name == "" {
 		return errors.New("分组名称不能为空")
 	}
-	return nil
+	for _, column := range []string{
+		g.CmdPolicy, g.QryPolicy, g.RdsPolicy, g.MgoPolicy, g.KfkPolicy, g.K8sPol, g.EtdPolicy, g.OssPolicy,
+	} {
+		if err := policy.ValidateStored(column); err != nil {
+			return err
+		}
+	}
+	_, err := g.extensionPolicies()
+	return err
 }
 
 // IsRoot 是否为顶层分组

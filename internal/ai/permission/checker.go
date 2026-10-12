@@ -543,6 +543,41 @@ func collectPoliciesFromChain[T any](holders []policyent.Holder, getter func(pol
 	return policies
 }
 
+// unreadablePolicy 沿资产的 holder 链（资产 → 组链）把该类型判定要读的策略列各解析一遍，
+// 返回第一处解析失败及其 holder 的称呼。读哪几列与 collectRules 同源：类型自己的形状列，
+// 外加组链上的组通用 CommandPolicy 层。没有注册落点的类型（方向未定的 cp）不读策略列。
+//
+// 它在 CheckPermission 入口挡住的是下面这些收集函数的同一个缺口：collectPoliciesFromChain
+// 与 policy.CheckGroupGenericPolicy 遇到解析失败会跳过那条策略，而跳过不是收紧——里面的
+// deny 规则跟着消失，组上一条 `*` 就能放行资产本该拒绝的命令；里面的 allow 规则消失则让
+// 配了 `*` 的资产每条命令都要审批。两种情况界面都照常显示着那些规则。
+func unreadablePolicy(ctx context.Context, canonicalType string, assetID int64) (holder string, err error) {
+	landing, ok := ruleLandingFor(canonicalType)
+	if !ok {
+		return "", nil
+	}
+	asset := resolveAssetForPolicy(ctx, assetID)
+	if asset == nil {
+		return "", nil
+	}
+	if _, _, _, err := landing.shape.ownSides(asset); err != nil {
+		return policy.PolicyFmt(ctx, "asset %q (ID %d)", "资产「%s」(ID %d) ", asset.Name, asset.ID), err
+	}
+	if asset.GroupID == 0 {
+		return "", nil
+	}
+	for _, g := range policy.ResolveGroupChain(ctx, asset.GroupID) {
+		_, _, _, err := landing.shape.ownSides(g)
+		if err == nil && landing.generic != nil {
+			_, err = g.GetCommandPolicy()
+		}
+		if err != nil {
+			return policy.PolicyFmt(ctx, "group %q (ID %d)", "分组「%s」(ID %d) ", g.Name, g.ID), err
+		}
+	}
+	return "", nil
+}
+
 func policyHoldersForAsset(ctx context.Context, asset *asset_entity.Asset) []policyent.Holder {
 	if asset == nil {
 		return nil
