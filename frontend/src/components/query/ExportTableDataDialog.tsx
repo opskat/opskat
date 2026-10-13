@@ -61,6 +61,8 @@ interface ExportTableDataDialogProps {
   filters: dbdriver.FilterItem[];
   sorts: TableSortRequestItem[];
   initialFormat: TableExportFormat;
+  /** 驱动声明了导出为 SQL 语句:格式下拉里才有 SQL。 */
+  sqlFormatAvailable?: boolean;
   onFormatChange: (format: TableExportFormat) => void;
 }
 
@@ -149,6 +151,7 @@ export function ExportTableDataDialog({
   filters,
   sorts,
   initialFormat,
+  sqlFormatAvailable = true,
   onFormatChange,
 }: ExportTableDataDialogProps) {
   const { t } = useTranslation();
@@ -444,9 +447,11 @@ export function ExportTableDataDialog({
                   <SelectItem value="tsv" className="text-xs">
                     TSV
                   </SelectItem>
-                  <SelectItem value="sql" className="text-xs">
-                    SQL
-                  </SelectItem>
+                  {sqlFormatAvailable && (
+                    <SelectItem value="sql" className="text-xs">
+                      SQL
+                    </SelectItem>
+                  )}
                   <SelectItem value="xlsx" className="text-xs">
                     Excel
                   </SelectItem>

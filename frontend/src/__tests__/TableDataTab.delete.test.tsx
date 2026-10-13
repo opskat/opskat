@@ -6,6 +6,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 function openTablePayload(rows: Record<string, unknown>[]) {
   return JSON.stringify({
@@ -77,6 +78,7 @@ async function renderLoaded(rows = ROWS) {
 
 describe("TableDataTab multi-row delete", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
     vi.mocked(QueryTableRows).mockReset();

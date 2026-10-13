@@ -6,6 +6,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
 import type { query_svc } from "../../wailsjs/go/models";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 // 构造 OpenTable 返回的 JSON 字符串(与后端 query_svc.OpenTableResult 对齐)。
 function openTablePayload(opts: {
@@ -71,6 +72,7 @@ function setupStores(driver = "mysql", table = "users") {
 
 describe("TableDataTab loading cancellation", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
     vi.mocked(QueryTableRows).mockReset();

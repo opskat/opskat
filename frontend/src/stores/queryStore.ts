@@ -5,6 +5,7 @@ import { ListMongoDatabases, ListMongoCollections } from "../../wailsjs/go/query
 import { asset_entity, query_svc } from "../../wailsjs/go/models";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type QueryTabMeta } from "./tabStore";
 import { useAssetStore } from "./assetStore";
+import { driverHasCapability, findDatabaseDriver, loadDatabaseDrivers } from "../lib/dbDrivers";
 
 // --- Types ---
 
@@ -339,9 +340,14 @@ function getQueryTabFromTabStore(tabId: string): QueryTab | undefined {
   };
 }
 
-function isSchemaAwareDriver(driver: string | undefined): boolean {
-  return driver === "postgresql" || driver === "mssql";
+/** 资产所用驱动的描述;驱动没有注册时为 undefined。描述加载失败则抛出,由调用方当作该次加载的失败。 */
+async function describeTabDriver(tab: QueryTab) {
+  const drivers = await loadDatabaseDrivers();
+  return tab.driver ? findDatabaseDriver(drivers, tab.driver) : undefined;
 }
+
+/** 对象浏览的四类对象;各类的名字就是驱动要声明的功能名。 */
+const OBJECT_GROUPS = ["views", "procedures", "functions", "triggers"] as const;
 
 function schemaNamesFromTables(tables: string[]): string[] {
   const seen = new Set<string>();
@@ -509,6 +515,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
+      const descriptor = await describeTabDriver(tab);
       const tables = await ListTables(tab.assetId, database);
 
       set((s) => ({
@@ -520,7 +527,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             const nextExpanded = reconcileExpandedSchemas(
               state.expandedSchemas[database],
               schemas,
-              isSchemaAwareDriver(tab.driver)
+              driverHasCapability(descriptor, "schemas")
             );
             return {
               ...state,
@@ -742,7 +749,13 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const tab = getQueryTabFromTabStore(tabId);
     if (!tab) return;
     try {
-      const objects = await ListDatabaseObjects(tab.assetId, database);
+      const descriptor = await describeTabDriver(tab);
+      const listed = await ListDatabaseObjects(tab.assetId, database);
+      // 驱动没有声明的那类对象不显示。
+      const objects = new query_svc.DatabaseObjects(listed);
+      for (const group of OBJECT_GROUPS) {
+        if (!driverHasCapability(descriptor, group)) objects[group] = [];
+      }
       set((s) => ({
         dbStates: {
           ...s.dbStates,

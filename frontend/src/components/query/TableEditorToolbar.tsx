@@ -47,6 +47,12 @@ interface TableEditorToolbarProps {
   submitting: boolean;
   canExport: boolean;
   canImport?: boolean;
+  /** 驱动声明了表格编辑:提交 / 放弃 / 预览 SQL 才出现。 */
+  gridEdit?: boolean;
+  /** 驱动声明了导入。 */
+  importAvailable?: boolean;
+  /** 驱动声明了导出为 SQL 语句:导出格式里才有 SQL。 */
+  sqlExportAvailable?: boolean;
   columns?: string[];
   visibleColumns?: string[];
   rowDensity?: RowDensity;
@@ -69,6 +75,9 @@ export function TableEditorToolbar({
   submitting,
   canExport,
   canImport = false,
+  gridEdit = true,
+  importAvailable = true,
+  sqlExportAvailable = true,
   columns = [],
   visibleColumns = columns,
   rowDensity = "default",
@@ -101,37 +110,43 @@ export function TableEditorToolbar({
         <ListFilter className="h-3.5 w-3.5" />
       </Button>
       <div className="mx-0.5 h-5 w-px bg-border" />
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        title={t("query.submitEdits")}
-        onClick={onSubmit}
-        disabled={editActionDisabled}
-      >
-        {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        title={t("query.discardEdits")}
-        onClick={onDiscard}
-        disabled={editActionDisabled}
-      >
-        <Undo2 className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        title={t("query.previewSql")}
-        onClick={onPreviewSql}
-        disabled={editActionDisabled}
-      >
-        <Eye className="h-3.5 w-3.5" />
-      </Button>
-      <div className="mx-0.5 h-5 w-px bg-border" />
-      <Button variant="ghost" size="icon-xs" title={t("query.importData")} onClick={onImport} disabled={!canImport}>
-        <Upload className="h-3.5 w-3.5" />
-      </Button>
+      {gridEdit && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("query.submitEdits")}
+            onClick={onSubmit}
+            disabled={editActionDisabled}
+          >
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("query.discardEdits")}
+            onClick={onDiscard}
+            disabled={editActionDisabled}
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("query.previewSql")}
+            onClick={onPreviewSql}
+            disabled={editActionDisabled}
+          >
+            <Eye className="h-3.5 w-3.5" />
+          </Button>
+          <div className="mx-0.5 h-5 w-px bg-border" />
+        </>
+      )}
+      {importAvailable && (
+        <Button variant="ghost" size="icon-xs" title={t("query.importData")} onClick={onImport} disabled={!canImport}>
+          <Upload className="h-3.5 w-3.5" />
+        </Button>
+      )}
       <Select value={exportFormat} onValueChange={(value) => onExportFormatChange?.(value as TableExportFormat)}>
         <SelectTrigger size="sm" className="h-6 w-[74px] text-xs" title={t("query.exportFormat")} disabled={!canExport}>
           <SelectValue />
@@ -143,9 +158,11 @@ export function TableEditorToolbar({
           <SelectItem value="tsv" className="text-xs">
             TSV
           </SelectItem>
-          <SelectItem value="sql" className="text-xs">
-            SQL
-          </SelectItem>
+          {sqlExportAvailable && (
+            <SelectItem value="sql" className="text-xs">
+              SQL
+            </SelectItem>
+          )}
           <SelectItem value="xlsx" className="text-xs">
             Excel
           </SelectItem>
@@ -197,6 +214,8 @@ export function TableEditorToolbar({
 }
 
 interface TableDataStatusBarProps {
+  /** 驱动声明了表格编辑:新增 / 删除 / 应用 / 放弃修改才出现。 */
+  gridEdit?: boolean;
   pendingEditCount: number;
   sqlSummary: string;
   totalRows: number | null;
@@ -226,6 +245,7 @@ interface TableDataStatusBarProps {
 }
 
 export function TableDataStatusBar({
+  gridEdit = true,
   pendingEditCount,
   sqlSummary,
   totalRows,
@@ -279,46 +299,52 @@ export function TableDataStatusBar({
   return (
     <div className="flex h-9 items-center gap-2 border-t border-border bg-muted/30 px-2 shrink-0">
       <div className="flex items-center gap-0.5 shrink-0">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onAddRow}
-          disabled={loading || submitting}
-          title={t("query.addRow")}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onDeleteRows}
-          disabled={selectedRowCount === 0 || loading || submitting}
-          title={selectedRowCount > 1 ? t("query.deleteRecords", { count: selectedRowCount }) : t("query.deleteRecord")}
-        >
-          <Minus className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onApplyChanges}
-          disabled={!hasPendingEdits || loading || submitting}
-          title={t("query.applyChanges")}
-        >
-          <Check className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onDiscardChanges}
-          disabled={!hasPendingEdits || loading || submitting}
-          title={t("query.discardChanges")}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        {gridEdit && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onAddRow}
+              disabled={loading || submitting}
+              title={t("query.addRow")}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onDeleteRows}
+              disabled={selectedRowCount === 0 || loading || submitting}
+              title={
+                selectedRowCount > 1 ? t("query.deleteRecords", { count: selectedRowCount }) : t("query.deleteRecord")
+              }
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onApplyChanges}
+              disabled={!hasPendingEdits || loading || submitting}
+              title={t("query.applyChanges")}
+            >
+              <Check className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onDiscardChanges}
+              disabled={!hasPendingEdits || loading || submitting}
+              title={t("query.discardChanges")}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        )}
         <Button
           variant="ghost"
           size="icon-xs"

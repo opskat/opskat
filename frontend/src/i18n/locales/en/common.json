@@ -2264,6 +2264,7 @@
     "tables": "Tables",
     "databases": "Databases",
     "refreshTree": "Refresh",
+    "driverUnavailable": "Driver unavailable: the database driver \"{{driver}}\" is not registered in this app. You can still edit or delete this asset.",
     "createDatabase": "Create Database",
     "createDatabaseDialogTitle": "Create Database",
     "createDatabaseDialogDesc": "Create a new database",

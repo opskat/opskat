@@ -2264,6 +2264,7 @@
     "tables": "表",
     "databases": "数据库",
     "refreshTree": "刷新",
+    "driverUnavailable": "驱动不可用：当前应用中没有注册数据库驱动“{{driver}}”。仍可编辑或删除该资产。",
     "createDatabase": "新建数据库",
     "createDatabaseDialogTitle": "新建数据库",
     "createDatabaseDialogDesc": "创建一个新的数据库",

@@ -4,6 +4,7 @@ import { useQueryStore } from "../stores/queryStore";
 import { useAssetStore } from "../stores/assetStore";
 import { asset_entity, query_svc } from "../../wailsjs/go/models";
 import { ExecuteSQL, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, FAKE_DRIVER, provideDrivers } from "./dbDriverFixtures";
 import { RedisGetKeyDetail } from "../../wailsjs/go/redis/Redis";
 import { RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
 
@@ -526,6 +527,7 @@ describe("queryStore redis actions", () => {
 describe("queryStore database actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
     useTabStore.setState({ tabs: [], activeTabId: null });
     useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
     vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/SQLite");
@@ -585,6 +587,7 @@ describe("queryStore database actions", () => {
 describe("queryStore PostgreSQL database actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
     useTabStore.setState({ tabs: [], activeTabId: null });
     useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
     vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/PostgreSQL");
@@ -642,6 +645,7 @@ describe("queryStore PostgreSQL database actions", () => {
 describe("queryStore MSSQL database actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
     useTabStore.setState({ tabs: [], activeTabId: null });
     useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
     vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/MSSQL");
@@ -673,6 +677,7 @@ describe("queryStore MSSQL database actions", () => {
 describe("queryStore with a driver unknown to the frontend", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    provideDrivers([FAKE_DRIVER]);
     useTabStore.setState({ tabs: [], activeTabId: null });
     useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
     vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/FakeDB");

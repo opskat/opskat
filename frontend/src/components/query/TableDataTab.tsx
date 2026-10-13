@@ -26,6 +26,7 @@ import {
   type RowDensity,
 } from "./QueryResultTable";
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
+import { driverHasCapability, findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import { ImportTableDataDialog } from "./ImportTableDataDialog";
 import { ExportTableDataDialog } from "./ExportTableDataDialog";
 import { TableFilterBuilder } from "./TableFilterBuilder";
@@ -194,6 +195,12 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
   const driver = queryMeta?.driver;
   const assetId = queryMeta?.assetId ?? 0;
+  // 入口按资产驱动声明的功能显隐;描述未就绪或驱动未注册时,这些入口都不出现。
+  const driversState = useDatabaseDrivers();
+  const driverDescriptor =
+    driversState.status === "ready" && driver ? findDatabaseDriver(driversState.drivers, driver) : undefined;
+  const can = (capability: string) => driverHasCapability(driverDescriptor, capability);
+  const canGridEdit = can("grid_edit");
 
   const totalPages = totalRows != null ? Math.max(1, Math.ceil(totalRows / pageSize)) : null;
   const nextRequestId = useCallback(() => {
@@ -952,10 +959,12 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 shrink-0">
-        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 shrink-0" onClick={handleViewDDL}>
-          <FileCode2 className="h-3.5 w-3.5" />
-          {t("query.viewDDL")}
-        </Button>
+        {can("view_ddl") && (
+          <Button variant="outline" size="sm" className="h-7 text-xs gap-1 shrink-0" onClick={handleViewDDL}>
+            <FileCode2 className="h-3.5 w-3.5" />
+            {t("query.viewDDL")}
+          </Button>
+        )}
         <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
         <Button
           variant={rowDetailOpen ? "secondary" : "ghost"}
@@ -971,6 +980,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           submitting={submitting || deleting}
           canExport={rows.length > 0}
           canImport={columns.length > 0}
+          gridEdit={canGridEdit}
+          importAvailable={can("import")}
+          sqlExportAvailable={can("export_sql")}
           columns={columns}
           visibleColumns={effectiveVisibleColumns}
           rowDensity={rowDensity}
@@ -987,7 +999,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           onExport={handleExport}
           onPreviewSql={() => openSqlDialog("preview")}
         />
-        {driver !== "postgresql" && pkLoaded && primaryKeys.length === 0 && columns.length > 0 && (
+        {canGridEdit && driver !== "postgresql" && pkLoaded && primaryKeys.length === 0 && columns.length > 0 && (
           <span
             className="flex items-center gap-1 text-[11px] text-warning shrink-0"
             title={t("query.noPrimaryKeyTooltip")}
@@ -1027,14 +1039,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               rows={tableRows}
               loading={loading || importing}
               error={error ?? undefined}
-              editable
+              editable={canGridEdit}
               edits={edits}
               onCellEdit={handleCellEdit}
               onSetCellValue={handleCellEdit}
               onPasteCell={handleCellEdit}
               onPasteBlock={handlePasteBlock}
               onGenerateUuid={handleCellEdit}
-              onCopyAs={handleCopyAs}
+              onCopyAs={can("copy_sql") ? handleCopyAs : undefined}
               onFilterByCellValue={handleFilterByCellValue}
               onSortByColumn={handleSortByColumn}
               onClearFilterSort={handleClearFilterSort}
@@ -1075,6 +1087,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
       {/* Footer bar */}
       <TableDataStatusBar
+        gridEdit={canGridEdit}
         pendingEditCount={pendingEditCount}
         sqlSummary={pendingSqlSummary}
         totalRows={totalRows}
@@ -1173,6 +1186,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         sorts={sortRequest}
         driver={driver}
         initialFormat={exportFormat}
+        sqlFormatAvailable={can("export_sql")}
         onFormatChange={setExportFormat}
       />
 

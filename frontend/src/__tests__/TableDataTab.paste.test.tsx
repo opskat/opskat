@@ -5,6 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQL, OpenTable } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 // Pasting a copied row into an editable table is the flow the report names: copy a row in
 // one table, add a blank row here, paste. These tests drive the real tab, so the row-index
@@ -80,6 +81,7 @@ async function renderLoaded() {
 
 describe("TableDataTab keyboard paste", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     readText.mockReset();
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();

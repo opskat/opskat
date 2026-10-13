@@ -5,7 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQL, ExecuteSQLPaged, GetTableDDL, OpenTable } from "../../wailsjs/go/query/Query";
-import { FAKE_DRIVER } from "./dbDriverFixtures";
+import { FAKE_DRIVER, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
@@ -59,6 +59,7 @@ async function openDDL(table: string) {
 
 describe("TableDataTab view DDL", () => {
   beforeEach(() => {
+    provideDrivers([fakeDriverWith(["view_ddl"])]);
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(ExecuteSQLPaged).mockReset();
     vi.mocked(GetTableDDL).mockReset();

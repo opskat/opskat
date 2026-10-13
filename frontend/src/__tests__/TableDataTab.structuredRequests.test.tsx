@@ -5,7 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, ExecuteSQLPaged, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
-import { FAKE_DRIVER } from "./dbDriverFixtures";
+import { FAKE_DRIVER, provideDrivers } from "./dbDriverFixtures";
 
 // 表浏览(打开、翻页、改每页行数、计数、筛选、排序)发给后端的是结构化请求,由资产的驱动
 // 回答。这里用一个前端一无所知的驱动名:任何一步都不该、也没法为它拼 SQL。
@@ -66,6 +66,7 @@ function expectNoSqlSent() {
 
 describe("TableDataTab structured table requests", () => {
   beforeEach(() => {
+    provideDrivers([FAKE_DRIVER]);
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(ExecuteSQLPaged).mockReset();
     vi.mocked(OpenTable).mockReset();

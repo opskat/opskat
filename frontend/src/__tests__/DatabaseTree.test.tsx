@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { DatabaseTree } from "../components/query/DatabaseTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { ExecuteSQL, GetStarterQuery, ListTables } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, FAKE_DRIVER, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
@@ -31,8 +32,16 @@ function makeDatabaseTab(id = "query-1", driver = "mysql"): void {
   });
 }
 
+// 入口与分组由资产驱动的描述决定;描述异步到达,渲染后等它落地。
+async function renderTree() {
+  await act(async () => {
+    render(<DatabaseTree tabId="query-1" />);
+  });
+}
+
 describe("DatabaseTree", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     useQueryStore.setState({
       dbStates: {
         "query-1": {
@@ -54,7 +63,7 @@ describe("DatabaseTree", () => {
     vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
   });
 
-  it("renders PostgreSQL tables grouped by schema and opens qualified table names", () => {
+  it("renders PostgreSQL tables grouped by schema and opens qualified table names", async () => {
     makeDatabaseTab("query-1", "postgresql");
     useQueryStore.setState({
       dbStates: {
@@ -74,7 +83,7 @@ describe("DatabaseTree", () => {
       mongoStates: {},
     });
 
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     expect(screen.getByText("adm")).toBeInTheDocument();
     expect(screen.getByText("ads_audit")).toBeInTheDocument();
@@ -89,7 +98,7 @@ describe("DatabaseTree", () => {
     ]);
   });
 
-  it("renders MSSQL tables grouped by schema", () => {
+  it("renders MSSQL tables grouped by schema", async () => {
     makeDatabaseTab("query-1", "mssql");
     useQueryStore.setState({
       dbStates: {
@@ -109,7 +118,7 @@ describe("DatabaseTree", () => {
       mongoStates: {},
     });
 
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     expect(screen.getByText("dbo")).toBeInTheDocument();
     expect(screen.getByText("users")).toBeInTheDocument();
@@ -118,7 +127,7 @@ describe("DatabaseTree", () => {
     expect(screen.queryByText("dbo.users")).not.toBeInTheDocument();
   });
 
-  it("filters PostgreSQL schema groups by qualified table names", () => {
+  it("filters PostgreSQL schema groups by qualified table names", async () => {
     makeDatabaseTab("query-1", "postgresql");
     useQueryStore.setState({
       dbStates: {
@@ -138,7 +147,7 @@ describe("DatabaseTree", () => {
       mongoStates: {},
     });
 
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     fireEvent.click(screen.getByTitle("query.filterTables"));
     fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "adm.ads" } });
@@ -150,7 +159,7 @@ describe("DatabaseTree", () => {
     expect(screen.queryByText("users")).not.toBeInTheDocument();
   });
 
-  it("does not invent a default schema for unqualified schema-aware table names", () => {
+  it("does not invent a default schema for unqualified schema-aware table names", async () => {
     makeDatabaseTab("query-1", "postgresql");
     useQueryStore.setState({
       dbStates: {
@@ -170,13 +179,13 @@ describe("DatabaseTree", () => {
       mongoStates: {},
     });
 
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     expect(screen.getByText("users")).toBeInTheDocument();
     expect(screen.queryByText("public")).not.toBeInTheDocument();
   });
 
-  it("does not show a loading spinner for filtered unloaded databases", () => {
+  it("does not show a loading spinner for filtered unloaded databases", async () => {
     useQueryStore.setState({
       dbStates: {
         "query-1": {
@@ -195,7 +204,7 @@ describe("DatabaseTree", () => {
       mongoStates: {},
     });
 
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     fireEvent.click(screen.getByTitle("query.filterTables"));
     fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "app" } });
@@ -205,7 +214,7 @@ describe("DatabaseTree", () => {
   });
 
   it("opens create database dialog from toolbar", async () => {
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     fireEvent.click(screen.getByLabelText("query.createDatabase"));
     expect(screen.getByText("query.createDatabaseDialogTitle")).toBeInTheDocument();
@@ -239,6 +248,7 @@ describe("DatabaseTree", () => {
 
 describe("DatabaseTree — table multi-selection", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     makeDatabaseTab();
     useQueryStore.setState({
       dbStates: {
@@ -267,8 +277,8 @@ describe("DatabaseTree — table multi-selection", () => {
       el.getAttribute("data-table-node")
     );
 
-  it("ctrl-clicking selects tables across databases", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("ctrl-clicking selects tables across databases", async () => {
+    await renderTree();
 
     fireEvent.click(node("orders"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });
@@ -276,8 +286,8 @@ describe("DatabaseTree — table multi-selection", () => {
     expect(selectedTables()).toEqual(["appdb.orders", "archivedb.logs_2024"]);
   });
 
-  it("shift-clicking selects the visible range within a database", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("shift-clicking selects the visible range within a database", async () => {
+    await renderTree();
 
     fireEvent.click(node("users"));
     fireEvent.click(node("logs"), { shiftKey: true });
@@ -285,8 +295,8 @@ describe("DatabaseTree — table multi-selection", () => {
     expect(selectedTables()).toEqual(["appdb.users", "appdb.orders", "appdb.logs"]);
   });
 
-  it("a filter change drops tables that are no longer visible", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("a filter change drops tables that are no longer visible", async () => {
+    await renderTree();
     fireEvent.click(node("users"));
     fireEvent.click(node("orders"), { ctrlKey: true });
 
@@ -302,8 +312,8 @@ describe("DatabaseTree — table multi-selection", () => {
     expect(selectedTables()).toEqual(["appdb.orders"]);
   });
 
-  it("collapsing a database drops its tables from the selection", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("collapsing a database drops its tables from the selection", async () => {
+    await renderTree();
     fireEvent.click(node("users"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });
 
@@ -317,7 +327,7 @@ describe("DatabaseTree — table multi-selection", () => {
     // The reload brings the very same tables back, so a selection that merely hid
     // itself while loading would reappear here.
     vi.mocked(ListTables).mockResolvedValue(["users", "orders", "logs"]);
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
     fireEvent.click(node("users"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });
 
@@ -328,8 +338,8 @@ describe("DatabaseTree — table multi-selection", () => {
     expect(selectedTables()).toEqual(["archivedb.logs_2024"]);
   });
 
-  it("opens every selected table from the context menu", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("opens every selected table from the context menu", async () => {
+    await renderTree();
     fireEvent.click(node("users"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });
 
@@ -342,8 +352,8 @@ describe("DatabaseTree — table multi-selection", () => {
     ]);
   });
 
-  it("right-clicking outside the selection resets it to that table", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("right-clicking outside the selection resets it to that table", async () => {
+    await renderTree();
     fireEvent.click(node("users"));
 
     fireEvent.contextMenu(node("orders"));
@@ -353,8 +363,8 @@ describe("DatabaseTree — table multi-selection", () => {
     expect(screen.getByText("query.viewStructure")).toBeInTheDocument();
   });
 
-  it("disables single-table actions while several tables are selected", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("disables single-table actions while several tables are selected", async () => {
+    await renderTree();
     fireEvent.click(node("users"));
     fireEvent.click(node("orders"), { ctrlKey: true });
 
@@ -365,7 +375,7 @@ describe("DatabaseTree — table multi-selection", () => {
   });
 
   it("drops each selected table against its own database", async () => {
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
     fireEvent.click(node("logs"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });
 
@@ -391,7 +401,7 @@ describe("DatabaseTree — table multi-selection", () => {
       if (String(sql).includes("logs_2024")) throw new Error("permission denied");
       return JSON.stringify({ rows: [] });
     });
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
     fireEvent.click(node("logs"));
     fireEvent.click(node("logs_2024"), { ctrlKey: true });
 
@@ -408,6 +418,7 @@ describe("DatabaseTree — table multi-selection", () => {
 
 describe("DatabaseTree — schema-aware selection", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     makeDatabaseTab("query-1", "postgresql");
     useQueryStore.setState({
       dbStates: {
@@ -435,8 +446,8 @@ describe("DatabaseTree — schema-aware selection", () => {
       el.getAttribute("data-table-node")
     );
 
-  it("collapsing a schema drops its tables from the selection", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("collapsing a schema drops its tables from the selection", async () => {
+    await renderTree();
     fireEvent.click(screen.getByText("a1"));
     fireEvent.click(screen.getByText("b1"), { ctrlKey: true });
 
@@ -449,8 +460,8 @@ describe("DatabaseTree — schema-aware selection", () => {
     expect(selectedTables()).toEqual(["appdb.alpha.a1"]);
   });
 
-  it("a shift range skips tables hidden inside a collapsed schema", () => {
-    render(<DatabaseTree tabId="query-1" />);
+  it("a shift range skips tables hidden inside a collapsed schema", async () => {
+    await renderTree();
     fireEvent.click(screen.getByText("beta"));
 
     fireEvent.click(screen.getByText("a1"));
@@ -471,6 +482,7 @@ describe("DatabaseTree — schema-aware selection", () => {
 
 describe("DatabaseTree — starter query", () => {
   beforeEach(() => {
+    provideDrivers([FAKE_DRIVER]);
     makeDatabaseTab("query-1", "fakedb");
     useQueryStore.setState({
       dbStates: {
@@ -497,7 +509,7 @@ describe("DatabaseTree — starter query", () => {
     vi.mocked(GetStarterQuery).mockResolvedValue("FAKE SELECT FIRST 100 FROM appdb.users");
     const openSqlTab = vi.fn();
     useQueryStore.setState({ openSqlTab });
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     fireEvent.contextMenu(screen.getByText("users"));
     fireEvent.click(screen.getByText("query.newSql"));
@@ -513,7 +525,7 @@ describe("DatabaseTree — starter query", () => {
     vi.mocked(GetStarterQuery).mockRejectedValue("operation not supported by database driver");
     const openSqlTab = vi.fn();
     useQueryStore.setState({ openSqlTab });
-    render(<DatabaseTree tabId="query-1" />);
+    await renderTree();
 
     fireEvent.contextMenu(screen.getByText("users"));
     fireEvent.click(screen.getByText("query.newSql"));
