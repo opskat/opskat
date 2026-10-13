@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { DatabaseTree } from "../components/query/DatabaseTree";
+import { DatabasePanel } from "../components/query/DatabasePanel";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { ListDatabaseDrivers, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
@@ -241,5 +242,32 @@ describe("DatabaseTree 在资产的驱动没有注册时", () => {
     await screen.findByText(/^query\.objTables/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await waitFor(() => expect(hasToolbarCreateDatabase()).toBe(true));
+  });
+});
+
+describe("DatabasePanel 在资产的驱动没有注册时", () => {
+  it("右侧区域显示指明驱动名的「驱动不可用」,而不是「打开表」的占位", async () => {
+    provideDrivers(BUILTIN_DRIVERS);
+    openTab("ghostdb");
+    render(<DatabasePanel tabId="query-1" />);
+
+    const notices = await screen.findAllByRole("alert");
+    // 侧栏与右侧各一份。
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+    for (const notice of notices) expect(notice).toHaveTextContent("ghostdb");
+    expect(screen.queryByText("query.openTable")).not.toBeInTheDocument();
+  });
+
+  it("描述加载期间不显示「驱动不可用」,已注册时仍是「打开表」的占位", async () => {
+    let resolve!: (v: typeof BUILTIN_DRIVERS) => void;
+    provideDrivers([]);
+    vi.mocked(ListDatabaseDrivers).mockReturnValue(new Promise((r) => (resolve = r)));
+    openTab("mysql");
+    render(<DatabasePanel tabId="query-1" />);
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    resolve(BUILTIN_DRIVERS);
+    expect(await screen.findByText("query.openTable")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

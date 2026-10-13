@@ -1046,7 +1046,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               onPasteCell={handleCellEdit}
               onPasteBlock={handlePasteBlock}
               onGenerateUuid={handleCellEdit}
-              onCopyAs={can("copy_sql") ? handleCopyAs : undefined}
+              onCopyAs={handleCopyAs}
+              copyAsSql={can("copy_sql")}
               onFilterByCellValue={handleFilterByCellValue}
               onSortByColumn={handleSortByColumn}
               onClearFilterSort={handleClearFilterSort}

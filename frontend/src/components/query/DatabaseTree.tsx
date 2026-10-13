@@ -112,6 +112,20 @@ function buildUngroupedTables(tables: string[], filterLower: string, dbMatch: bo
   });
 }
 
+/** 资产的驱动没有注册时的提示(侧栏与右侧内容区共用)。 */
+export function DriverUnavailableNotice({ driver }: { driver: string | undefined }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive"
+    >
+      <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+      <span className="break-all">{t("query.driverUnavailable", { driver: driver ?? "" })}</span>
+    </div>
+  );
+}
+
 export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const { t } = useTranslation();
   const { dbStates, loadDatabases, toggleDbExpand, toggleSchemaExpand, openTableTab, openSqlTab, refreshTables } =
@@ -346,13 +360,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             {t("query.databases")}
           </span>
         </div>
-        <div
-          role="alert"
-          className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive"
-        >
-          <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-          <span className="break-all">{t("query.driverUnavailable", { driver: driver ?? "" })}</span>
-        </div>
+        <DriverUnavailableNotice driver={driver} />
       </div>
     );
   }

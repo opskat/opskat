@@ -81,6 +81,8 @@ interface QueryResultTableProps {
   onPasteBlock?: (block: { edits: CellEdit[]; newRowCount: number }) => void;
   onGenerateUuid?: (edit: CellEdit) => void;
   onCopyAs?: (format: CopyAsFormat, ctx: CellActionContext) => void;
+  /** 「复制为」里的 INSERT / UPDATE 语句条目是否出现(驱动声明了复制为 SQL);TSV 条目不受影响。 */
+  copyAsSql?: boolean;
   onFilterByCellValue?: (ctx: CellActionContext) => void;
   onSortByColumn?: (col: string, dir: Exclude<SortDir, null>) => void;
   onClearFilterSort?: () => void;
@@ -307,6 +309,7 @@ function QueryResultTableImpl({
   onPasteBlock,
   onGenerateUuid,
   onCopyAs,
+  copyAsSql = true,
   onFilterByCellValue,
   onSortByColumn,
   onClearFilterSort,
@@ -1915,24 +1918,28 @@ function QueryResultTableImpl({
                         copyAsSubSide === "left" ? "right-full mr-1" : "left-full ml-1"
                       } ${copyAsSubOpen ? "block" : "hidden"}`}
                     >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
-                        onClick={() => handleCopyAs("insert")}
-                      >
-                        <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsInsert")}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
-                        onClick={() => handleCopyAs("update")}
-                      >
-                        <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsUpdate")}
-                      </button>
+                      {copyAsSql && (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={CONTEXT_MENU_ITEM_CLASS}
+                            onClick={() => handleCopyAs("insert")}
+                          >
+                            <ClipboardList className="h-3.5 w-3.5" />
+                            {t("query.copyAsInsert")}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={CONTEXT_MENU_ITEM_CLASS}
+                            onClick={() => handleCopyAs("update")}
+                          >
+                            <ClipboardList className="h-3.5 w-3.5" />
+                            {t("query.copyAsUpdate")}
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         role="menuitem"

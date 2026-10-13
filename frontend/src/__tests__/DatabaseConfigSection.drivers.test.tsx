@@ -88,7 +88,7 @@ describe("DatabaseConfigSection 跟随后端驱动描述", () => {
     expect(onValidityChange).not.toHaveBeenCalledWith(expect.objectContaining({ canSave: true }));
   });
 
-  it("编辑态的驱动不在注册表里:显示未知驱动错误且不可保存", async () => {
+  it("编辑态的驱动不在注册表里:显示未知驱动错误,配置原样保留,仍可保存与测试", async () => {
     vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
     const { asset_entity } = await import("../../wailsjs/go/models");
     const editAsset = new asset_entity.Asset({ Type: "database", Config: '{"driver":"gone","host":"h","port":1}' });
@@ -97,6 +97,6 @@ describe("DatabaseConfigSection 跟随后端驱动描述", () => {
 
     expect(await screen.findByText("asset.driverUnknown")).toBeInTheDocument();
     await waitFor(() => expect(onValidityChange).toHaveBeenCalled());
-    expect(onValidityChange).toHaveBeenLastCalledWith({ canTest: false, canSave: false, saveDisabledReason: "" });
+    expect(onValidityChange).toHaveBeenLastCalledWith({ canTest: true, canSave: true });
   });
 });

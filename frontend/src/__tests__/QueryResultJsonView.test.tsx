@@ -9,6 +9,7 @@ import { CELL_DISPLAY_MAX_CHARS } from "@/lib/cellValue";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQL, OpenTable } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value, language, readOnly }: { value: string; language?: string; readOnly?: boolean }) => (
@@ -130,6 +131,7 @@ function setupStores() {
 
 describe("TableDataTab JSON view", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
     setupStores();

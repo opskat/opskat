@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { X, Table2, Code2, Database } from "lucide-react";
 import { useQueryStore } from "@/stores/queryStore";
 import { useResizeHandle } from "@opskat/ui";
-import { DatabaseTree } from "./DatabaseTree";
+import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
+import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
+import { DatabaseTree, DriverUnavailableNotice } from "./DatabaseTree";
 import { TableDataTab } from "./TableDataTab";
 import { SqlEditorTab } from "./SqlEditorTab";
 
@@ -16,6 +18,10 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
   const dbState = useQueryStore((s) => s.dbStates[tabId]);
   const closeInnerTab = useQueryStore((s) => s.closeInnerTab);
   const setActiveInnerTab = useQueryStore((s) => s.setActiveInnerTab);
+
+  const driver = useTabStore((s) => (s.tabs.find((tab) => tab.id === tabId)?.meta as QueryTabMeta | undefined)?.driver);
+  const driversState = useDatabaseDrivers();
+  const driverUnavailable = driversState.status === "ready" && !findDatabaseDriver(driversState.drivers, driver ?? "");
 
   const sidebarRef = useRef<HTMLDivElement>(null);
   const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
@@ -48,8 +54,9 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
 
       {/* Right content area */}
       <div className="flex-1 min-w-0 flex flex-col h-full">
+        {driverUnavailable && <DriverUnavailableNotice driver={driver} />}
         {/* Inner tab bar */}
-        {innerTabs.length > 0 && (
+        {!driverUnavailable && innerTabs.length > 0 && (
           <div className="flex items-center border-b border-border bg-muted/30 shrink-0 overflow-x-auto">
             {innerTabs.map((tab) => {
               const isActive = tab.id === activeInnerTabId;
@@ -88,13 +95,13 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
 
         {/* Tab content — render all, hide inactive to preserve state */}
         <div className="flex-1 min-h-0 relative">
-          {innerTabs.length === 0 && (
+          {!driverUnavailable && innerTabs.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
               <Database className="h-10 w-10 opacity-30" />
               <p className="text-xs">{t("query.openTable")}</p>
             </div>
           )}
-          {innerTabs.map((tab) => {
+          {(driverUnavailable ? [] : innerTabs).map((tab) => {
             const isActive = tab.id === activeInnerTabId;
             return (
               <div key={tab.id} className="absolute inset-0" style={{ display: isActive ? "block" : "none" }}>

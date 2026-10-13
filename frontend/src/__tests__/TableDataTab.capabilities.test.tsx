@@ -81,10 +81,15 @@ async function sqlExportOptionShown(): Promise<boolean> {
   return screen.queryAllByText("SQL").length > 0;
 }
 
-function copyAsShown(): boolean {
+/** 「复制为」子菜单里出现的条目(右键单元格后读 DOM)。 */
+function copyAsItems(): string[] {
   fireEvent.contextMenu(screen.getByText("alice"));
-  return screen.queryByText("query.copyAs") !== null;
+  return ["copyAsInsert", "copyAsUpdate", "copyAsTsvData", "copyAsTsvFields", "copyAsTsvFieldsAndData"].filter(
+    (key) => screen.queryByText(`query.${key}`) !== null
+  );
 }
+const ALL_COPY_AS = ["copyAsInsert", "copyAsUpdate", "copyAsTsvData", "copyAsTsvFields", "copyAsTsvFieldsAndData"];
+const TSV_ONLY = ["copyAsTsvData", "copyAsTsvFields", "copyAsTsvFieldsAndData"];
 
 describe("TableDataTab 的功能入口", () => {
   beforeEach(() => {
@@ -119,7 +124,7 @@ describe("TableDataTab 的功能入口", () => {
       });
       expect(present("query.importData")).toBe(true);
       expect(await sqlExportOptionShown()).toBe(true);
-      expect(copyAsShown()).toBe(true);
+      expect(copyAsItems()).toEqual(ALL_COPY_AS);
     });
   }
 
@@ -132,7 +137,7 @@ describe("TableDataTab 的功能入口", () => {
     expect(present("query.importData")).toBe(false);
     expect(present("query.exportData")).toBe(true);
     expect(await sqlExportOptionShown()).toBe(false);
-    expect(copyAsShown()).toBe(false);
+    expect(copyAsItems()).toEqual(TSV_ONLY);
     // 翻页、刷新仍然可用。
     expect(present("query.nextPage")).toBe(true);
   });
@@ -172,11 +177,11 @@ describe("TableDataTab 的功能入口", () => {
     expect(present("query.importData")).toBe(false);
   });
 
-  it("copy_sql 只管「复制为」", async () => {
+  it("copy_sql 只管「复制为」里的 SQL 条目,TSV 条目始终在", async () => {
     provideDrivers([fakeDriverWith(["copy_sql"])]);
     await renderOpened("fakedb");
 
-    expect(copyAsShown()).toBe(true);
+    expect(copyAsItems()).toEqual(ALL_COPY_AS);
     expect(await sqlExportOptionShown()).toBe(false);
   });
 });

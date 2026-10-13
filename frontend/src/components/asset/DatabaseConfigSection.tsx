@@ -55,8 +55,9 @@ function DatabaseConfigForm({
       a ? parseDatabaseConfig(a.Config, a.sshTunnelId || 0) : applyDriverChange(DATABASE_DEFAULTS, drivers[0]),
     validate: (s) => {
       const d = findDatabaseDriver(drivers, s.driver);
-      // 资产存的驱动不在注册表里:表单显示未知驱动错误,不放行保存。
-      if (!d) return { canTest: false, canSave: false, saveDisabledReason: "" };
+      // 资产存的驱动不在注册表里:表单显示未知驱动错误,配置原样保留,仍可保存通用字段;
+      // 测试连接交给后端,由它回答「驱动不可用」。
+      if (!d) return { canTest: true, canSave: true };
       const needsPath = driverUsesField(d, "path");
       const needsHost = driverUsesField(d, "host");
       const isRemote = driverUsesField(d, "sqlite_source") && s.sqliteSource === "remote_ssh_vfs";
@@ -77,29 +78,42 @@ function DatabaseConfigForm({
       }
       return { canTest: canSave, canSave, saveDisabledReason };
     },
-    build: async (s, ctx) => ({
-      configJSON: buildDatabaseConfig(
-        s,
-        driverOf(drivers, s.driver),
-        await resolveSaveCredential(cred.value, ctx.encryptPassword),
-        await resolveSaveProxyPassword(s, ctx.encryptPassword),
-        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
-      ),
-      sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
-    }),
-    buildTest: async (s) => ({
-      assetType: "database",
-      configJSON: buildDatabaseConfig(
-        s,
-        driverOf(drivers, s.driver),
-        resolveTestCredential(cred.value),
-        s.proxyPassword,
-        Object.fromEntries(
-          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-        )
-      ),
-      password: cred.value.password,
-    }),
+    build: async (s, ctx) => {
+      const d = findDatabaseDriver(drivers, s.driver);
+      if (!d) return storedConfigOf(editAsset);
+      return {
+        configJSON: buildDatabaseConfig(
+          s,
+          d,
+          await resolveSaveCredential(cred.value, ctx.encryptPassword),
+          await resolveSaveProxyPassword(s, ctx.encryptPassword),
+          await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+        ),
+        sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
+      };
+    },
+    buildTest: async (s) => {
+      const d = findDatabaseDriver(drivers, s.driver);
+      if (!d)
+        return {
+          assetType: "database",
+          configJSON: storedConfigOf(editAsset).configJSON,
+          password: cred.value.password,
+        };
+      return {
+        assetType: "database",
+        configJSON: buildDatabaseConfig(
+          s,
+          d,
+          resolveTestCredential(cred.value),
+          s.proxyPassword,
+          Object.fromEntries(
+            s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+          )
+        ),
+        password: cred.value.password,
+      };
+    },
     deps: [cred.value],
     validityDeps: [drivers],
   });
@@ -154,9 +168,8 @@ function DatabaseConfigForm({
   return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
 }
 
-/** 表单状态里的驱动一定来自注册表(新建取自列表、编辑在不认识时已停在错误提示),保存 / 测试时据此取描述。 */
-function driverOf(drivers: DriverDescriptor[], id: string): DriverDescriptor {
-  const d = findDatabaseDriver(drivers, id);
-  if (!d) throw new Error(`database driver ${id} is not registered`);
-  return d;
+/** 驱动未注册的资产没有可用的描述来重新序列化:保存与测试都沿用库里存的配置原文。 */
+function storedConfigOf(editAsset: ConfigSectionProps["editAsset"]) {
+  if (!editAsset) throw new Error("an unregistered database driver can only come from an existing asset");
+  return { configJSON: editAsset.Config, sshTunnelId: editAsset.sshTunnelId || 0 };
 }
