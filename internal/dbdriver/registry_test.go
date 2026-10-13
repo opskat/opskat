@@ -106,7 +106,8 @@ func TestAssetValidationUsesTheRegisteredDriver(t *testing.T) {
 	err := asset(&asset_entity.DatabaseConfig{Driver: "fakedb"}).Validate()
 	require.ErrorIs(t, err, dbdrivertest.ErrFakeHostRequired)
 
-	err = asset(&asset_entity.DatabaseConfig{Driver: "oracle", Host: "h", Port: 1521, Username: "u"}).Validate()
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
-	assert.Contains(t, err.Error(), "oracle")
+	// 没注册的驱动没有规则可跑：资产仍然通过校验（它连不上，但要能改名、保存），驱动无关的
+	// 规则照常生效。
+	require.NoError(t, asset(&asset_entity.DatabaseConfig{Driver: "oracle"}).Validate())
+	require.Error(t, asset(&asset_entity.DatabaseConfig{Driver: "oracle", QueryTimeoutSeconds: 3}).Validate())
 }

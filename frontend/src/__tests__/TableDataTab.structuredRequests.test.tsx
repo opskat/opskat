@@ -5,7 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, ExecuteSQLPaged, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
-import { FAKE_DRIVER, provideDrivers } from "./dbDriverFixtures";
+import { FAKE_DRIVER, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
 
 // 表浏览(打开、翻页、改每页行数、计数、筛选、排序)发给后端的是结构化请求,由资产的驱动
 // 回答。这里用一个前端一无所知的驱动名:任何一步都不该、也没法为它拼 SQL。
@@ -186,6 +186,34 @@ describe("TableDataTab structured table requests", () => {
         "appdb",
         "users",
         [{ kind: "condition", join: "and", disabled: false, column: "id", operator: "between", value: [1, 1] }],
+      ])
+    );
+    expectNoSqlSent();
+  });
+
+  // 尚未提交的新增行里,单元格还没有值:按「介于」筛选时区间两端都缺,条件不产生任何限制
+  // (照旧返回全部行),而不是变成 BETWEEN NULL AND NULL 把所有行筛掉。
+  it("filters by an unfilled cell with a between operator as a condition that restricts nothing", async () => {
+    const user = userEvent.setup();
+    provideDrivers([fakeDriverWith(["grid_edit"])]);
+    await renderOpened();
+
+    await user.click(await screen.findByTitle("query.addRow"));
+    const cell = await waitFor(() => {
+      const el = document.querySelector('[data-cell-key="2:id"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
+    await user.hover(screen.getByText("query.filter"));
+    await user.click(screen.getByText("query.filterOperatorIsBetween"));
+
+    await waitFor(() =>
+      expect(lastCountCall()).toEqual([
+        1,
+        "appdb",
+        "users",
+        [{ kind: "condition", join: "and", disabled: false, column: "id", operator: "between", unset: true }],
       ])
     );
     expectNoSqlSent();

@@ -464,6 +464,13 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 		}
 		seenCaps[c] = true
 	}
+
+	// 没有声明的功能不能有入口：表单上的只读开关就是连接级只读的入口，会话打开时没声明
+	// CapReadOnly 的驱动会拒绝只读配置。
+	if desc.UsesField(dbdriver.FieldReadOnly) && !desc.Supports(dbdriver.CapReadOnly) {
+		report("form field %q is declared without capability %q; the switch would offer what Open refuses",
+			dbdriver.FieldReadOnly, dbdriver.CapReadOnly)
+	}
 	return problems
 }
 

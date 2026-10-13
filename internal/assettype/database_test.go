@@ -215,17 +215,22 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 	err = h.ApplyCreateArgs(t.Context(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
 
-	// 已经存着一个不可用驱动的资产（例如提供它的扩展没加载）：更新同样报错，而不是按网络驱动合并字段。
+	// 已经存着一个不可用驱动的资产（例如提供它的扩展没加载）：带连接配置的更新同样报错，而
+	// 不是按网络驱动合并字段。
 	stored := &asset_entity.Asset{Name: "ora", Type: asset_entity.AssetTypeDatabase}
 	require.NoError(t, stored.SetDatabaseConfig(&asset_entity.DatabaseConfig{
 		Driver: "oracle", Host: "ora.internal", Port: 1521, Username: "system",
 	}))
+	storedConfig := stored.Config
 	err = h.ApplyUpdateArgs(t.Context(), stored, map[string]any{"host": "ora-2.internal"})
 	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
-	err = stored.Validate()
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
-	assert.Contains(t, err.Error(), "oracle")
+	assert.Equal(t, storedConfig, stored.Config)
+
+	// 资产本身仍可编辑：不带连接配置的更新（改名、分组）不动配置，落库前的校验也放行。
+	require.NoError(t, h.ApplyUpdateArgs(t.Context(), stored, map[string]any{}))
+	assert.Equal(t, storedConfig, stored.Config)
+	require.NoError(t, stored.Validate())
 }
 
 func TestMissingDriverParameterListsRegisteredDrivers(t *testing.T) {

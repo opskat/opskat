@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
@@ -407,6 +408,56 @@ func TestPutDatabaseUpdatePasswordRetainsExistingDriverContext(t *testing.T) {
 	plaintext, err := credential_svc.Default().Decrypt(config.Password)
 	require.NoError(t, err)
 	assert.Equal(t, "replacement-secret", plaintext)
+}
+
+// 资产配置里的驱动不在注册表里（例如提供它的扩展没有加载）：AI / opsctl 仍能改它的名字、
+// 描述、分组——这些不碰连接配置；带连接配置的更新没有驱动可以解释，报「驱动不可用」并点名。
+func TestPutUpdateKeepsAnAssetWithAnUnregisteredDatabaseDriverEditable(t *testing.T) {
+	const driver = "asset_put_test_ghostdb"
+	const storedConfig = `{"driver":"asset_put_test_ghostdb","host":"10.0.0.5","port":1521,"username":"app"}`
+	seed := func(t *testing.T, env *putTestEnv) *asset_entity.Asset {
+		t.Helper()
+		_, err := dbdriver.Lookup(driver)
+		require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable, "the test needs a driver id that is not registered")
+		asset := &asset_entity.Asset{
+			Name: "orders-db", Type: asset_entity.AssetTypeDatabase, Status: asset_entity.StatusActive, Config: storedConfig,
+		}
+		require.NoError(t, asset_repo.Asset().Create(env.ctx, asset))
+		return asset
+	}
+
+	t.Run("an update without connection config is written and leaves the stored config untouched", func(t *testing.T) {
+		env := setupPutTest(t)
+		asset := seed(t, env)
+
+		candidate := *asset
+		candidate.Name = "orders-db-renamed"
+		candidate.Description = "owned by the billing team"
+		_, err := Put(env.ctx, Request{Asset: &candidate})
+		require.NoError(t, err)
+
+		stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "orders-db-renamed", stored.Name)
+		assert.Equal(t, "owned by the billing team", stored.Description)
+		assert.Equal(t, storedConfig, stored.Config)
+	})
+
+	t.Run("an update carrying connection config is refused, naming the driver, and writes nothing", func(t *testing.T) {
+		env := setupPutTest(t)
+		asset := seed(t, env)
+
+		candidate := *asset
+		candidate.Name = "orders-db-renamed"
+		_, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{"host": "10.0.0.6"}})
+		require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+		assert.Contains(t, err.Error(), driver)
+
+		stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "orders-db", stored.Name)
+		assert.Equal(t, storedConfig, stored.Config)
+	})
 }
 
 func TestPutUpdatePlaintextStoresInlineWithExistingAssetContext(t *testing.T) {

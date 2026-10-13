@@ -51,6 +51,9 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 		"default port without port field": {func(d *dbdriver.Descriptor) {
 			d.Form[0].Fields = []dbdriver.FormField{dbdriver.FieldHost}
 		}, "default port"},
+		"read-only switch without the capability": {func(d *dbdriver.Descriptor) {
+			d.Capabilities = []dbdriver.Capability{dbdriver.CapViews}
+		}, "read_only"},
 		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
 		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
 		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},

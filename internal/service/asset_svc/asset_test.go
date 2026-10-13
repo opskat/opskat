@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/assetconn"
+	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -256,6 +257,33 @@ func TestAssetSvc_Update_InvalidatesConnections(t *testing.T) {
 			assert.Error(t, Asset().Update(ctx, asset))
 			assert.Empty(t, invalidated)
 		})
+	})
+}
+
+// 资产配置里的驱动不在注册表里（例如提供它的扩展没有加载）：连接与查询报「驱动不可用」，
+// 但资产本身仍要能保存——桌面表单把库里的配置原样交回来，只改了名字、分组这些与驱动无关的
+// 属性。驱动自己的规则没有谁能代为检查，与驱动无关的规则照常把关。
+func TestAssetSvc_Update_KeepsAnAssetWithAnUnregisteredDatabaseDriverEditable(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+	const driver = "asset_svc_test_ghostdb"
+	_, err := dbdriver.Lookup(driver)
+	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable, "the test needs a driver id that is not registered")
+
+	t.Run("renaming it is written with the stored config untouched", func(t *testing.T) {
+		const stored = `{"driver":"asset_svc_test_ghostdb","host":"10.0.0.5","port":1521,"username":"app"}`
+		asset := &asset_entity.Asset{ID: 7, Name: "orders-db-renamed", Type: asset_entity.AssetTypeDatabase, Config: stored}
+		mockRepo.EXPECT().Update(gomock.Any(), asset).Return(nil)
+
+		require.NoError(t, Asset().Update(ctx, asset))
+		assert.Equal(t, stored, asset.Config)
+	})
+
+	t.Run("driver-independent rules still refuse the write", func(t *testing.T) {
+		asset := &asset_entity.Asset{
+			ID: 7, Name: "orders-db", Type: asset_entity.AssetTypeDatabase,
+			Config: `{"driver":"asset_svc_test_ghostdb","host":"10.0.0.5","port":1521,"username":"app","query_timeout_seconds":3}`,
+		}
+		require.Error(t, Asset().Update(ctx, asset))
 	})
 }
 

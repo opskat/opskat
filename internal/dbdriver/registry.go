@@ -26,10 +26,15 @@ func init() {
 	asset_entity.SetDatabaseDriverConfigValidator(validateConfig)
 }
 
+// validateConfig 跑配置所属驱动自己的规则。驱动没有注册时没有规则可跑，直接通过：这样的
+// 资产连不上、查不了（Lookup 处报 ErrDriverUnavailable），但仍要能改名、移动、保存——与扩展
+// 资产类型在扩展没加载时的做法一致（asset_entity.ValidateRegisteredConfig）。
 func validateConfig(a *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) error {
-	d, err := Lookup(cfg.Driver)
-	if err != nil {
-		return err
+	mu.RLock()
+	d, ok := drivers[cfg.Driver]
+	mu.RUnlock()
+	if !ok {
+		return nil
 	}
 	return d.ValidateConfig(a, cfg)
 }

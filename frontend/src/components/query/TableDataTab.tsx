@@ -686,8 +686,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         });
       setFilters([condition(value)]);
       setShowFilterSort(true);
-      // 没有值的单元格(尚未提交的新增行)按 NULL 筛选,而不是当作还没填值的条件被略过。
-      setAppliedFilters([condition(value === undefined ? null : value)]);
+      // 没有值的单元格(尚未提交的新增行)按 NULL 筛选,而不是当作还没填值的条件被略过;
+      // 区间运算符两端都缺,条件照旧不产生限制。
+      const unfilledRange = value === undefined && filterOperatorNeedsRange(operator);
+      setAppliedFilters([
+        unfilledRange
+          ? createFilterCondition(`cell-${col}`, col, { operator })
+          : condition(value === undefined ? null : value),
+      ]);
       setPage(0);
       setEdits(new Map());
       setNewRows([]);

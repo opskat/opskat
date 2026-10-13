@@ -96,6 +96,8 @@ func TestFakeOpenReturnsItsConnectionError(t *testing.T) {
 func TestFakeWithoutReadOnlyRefusesReadOnlyConfig(t *testing.T) {
 	fake := NewFake()
 	fake.Desc.Capabilities = []dbdriver.Capability{dbdriver.CapViews}
+	// 不支持连接级只读，表单上也就没有只读开关：只留连接 Tab。
+	fake.Desc.Form = fake.Desc.Form[:1]
 
 	_, err := fake.Open(context.Background(), dbdriver.OpenRequest{
 		Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", ReadOnly: true},

@@ -153,6 +153,11 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	}
 	drv, err := dbdriver.Lookup(cfg.Driver)
 	if err != nil {
+		// 驱动不可用的资产仍可编辑：不带任何连接配置的更新（改名、描述、分组）没有东西要
+		// 合并，配置原样保留。带了连接配置就没有驱动能解释它，报「驱动不可用」。
+		if len(args) == 0 {
+			return nil
+		}
 		return err
 	}
 	if _, ok := args["database"]; ok {
