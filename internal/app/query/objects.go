@@ -34,34 +34,60 @@ func (q *Query) withObjectSession(assetID int64, database string, fn func(ctx co
 // withPanelSession 同 withObjectSession，超时由 timeout 按资产配置给出（导出整张表这类长操作
 // 不受查询超时限制）。
 func (q *Query) withPanelSession(assetID int64, database string, timeout func(*asset_entity.DatabaseConfig) time.Duration, fn func(ctx context.Context, session dbdriver.Session, database string) error) error {
+	panel, err := q.acquirePanelSession(assetID, database, timeout)
+	if err != nil {
+		return err
+	}
+	return panel.finish(fn(panel.ctx, panel.session, panel.database))
+}
+
+// panelSession 是一次占用中的面板会话：解析好的资产、带时限的 ctx，以及用完要调的 finish。
+// 一次调用内用完的操作经 withPanelSession；要跨多次调用持有会话的（导出游标）自己调
+// acquirePanelSession，并负责 finish。
+type panelSession struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	session  dbdriver.Session
+	database string
+	cleanup  func() error
+}
+
+// finish 以操作的结果 opErr 结束这次占用：释放连接并撤销 ctx，释放失败与 opErr 一并返回。
+func (p *panelSession) finish(opErr error) error {
+	defer p.cancel()
+	return finishPanelDBOperation(opErr, p.cleanup)
+}
+
+// acquirePanelSession 解析数据库资产，拨号（或复用）面板会话。database 非空时覆盖资产配置的
+// 库；返回的 database 是最终生效的库名。
+func (q *Query) acquirePanelSession(assetID int64, database string, timeout func(*asset_entity.DatabaseConfig) time.Duration) (*panelSession, error) {
 	ctx0 := i18n.Ctx(q.ctx, q.lang.Lang())
 	asset, err := asset_svc.Asset().Get(ctx0, assetID)
 	if err != nil {
-		return fmt.Errorf("资产不存在: %w", err)
+		return nil, fmt.Errorf("资产不存在: %w", err)
 	}
 	if !asset.IsDatabase() {
-		return fmt.Errorf("资产不是数据库类型")
+		return nil, fmt.Errorf("资产不是数据库类型")
 	}
 	cfg, err := asset.GetDatabaseConfig()
 	if err != nil {
-		return fmt.Errorf("获取数据库配置失败: %w", err)
+		return nil, fmt.Errorf("获取数据库配置失败: %w", err)
 	}
 	if database != "" {
 		cfg.Database = database
 	}
 	password, err := credential_resolver.Default().ResolveDatabasePassword(ctx0, cfg)
 	if err != nil {
-		return fmt.Errorf("解析凭据失败: %w", err)
+		return nil, fmt.Errorf("解析凭据失败: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx0, timeout(cfg))
-	defer cancel()
-
 	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
-		return fmt.Errorf("连接数据库失败: %w", err)
+		cancel()
+		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
-	return finishPanelDBOperation(fn(ctx, session, cfg.Database), cleanup)
+	return &panelSession{ctx: ctx, cancel: cancel, session: session, database: cfg.Database, cleanup: cleanup}, nil
 }
 
 // ListDatabases returns the databases the asset's driver offers for browsing.

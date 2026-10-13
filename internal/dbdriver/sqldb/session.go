@@ -148,18 +148,9 @@ func scanRows(rows *sql.Rows) (*dbdriver.RowSet, error) {
 	}
 	rowSet := &dbdriver.RowSet{Columns: columns}
 	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
+		values, err := scanRow(rows, len(columns))
+		if err != nil {
 			return nil, err
-		}
-		for i, val := range values {
-			if b, ok := val.([]byte); ok {
-				values[i] = string(b)
-			}
 		}
 		rowSet.Rows = append(rowSet.Rows, values)
 	}
@@ -167,6 +158,24 @@ func scanRows(rows *sql.Rows) (*dbdriver.RowSet, error) {
 		return nil, err
 	}
 	return rowSet, nil
+}
+
+// scanRow 取出游标当前行；[]byte 转成字符串，值才能直接序列化成 JSON。
+func scanRow(rows *sql.Rows, width int) ([]any, error) {
+	values := make([]any, width)
+	ptrs := make([]any, width)
+	for i := range values {
+		ptrs[i] = &values[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return nil, err
+	}
+	for i, val := range values {
+		if b, ok := val.([]byte); ok {
+			values[i] = string(b)
+		}
+	}
+	return values, nil
 }
 
 func normalize(statement string) string {

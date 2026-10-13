@@ -217,3 +217,44 @@ func TestQuoteQualified(t *testing.T) {
 		assert.Equal(t, want, QuoteQualified(name, angle), "name %q", name)
 	}
 }
+
+// 整表读取只发一条语句：不带 LIMIT / OFFSET，行从同一个游标里逐行取出。
+func TestStreamTableRowsIsOneStatementWithoutPaging(t *testing.T) {
+	session, mock := newTablesSession(t)
+	rows := sqlmock.NewRows([]string{"id", "name"})
+	for i := 0; i < 2500; i++ {
+		rows.AddRow(i, []byte("n"))
+	}
+	mock.ExpectQuery("SELECT * FROM <db>.<t> WHERE <name> = 'A' ORDER BY <id> DESC").WillReturnRows(rows)
+
+	stream, err := session.StreamTableRows(context.Background(), "db", "t", dbdriver.TableQuery{
+		Filters: []dbdriver.FilterItem{{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpEqual, Value: "A"}},
+		Sorts:   []dbdriver.SortItem{{Column: "id", Direction: dbdriver.SortDescending}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id", "name"}, stream.Columns())
+	count := 0
+	for stream.Next() {
+		if count == 0 {
+			assert.Equal(t, []any{int64(0), "n"}, stream.Row())
+		}
+		count++
+	}
+	require.NoError(t, stream.Err())
+	require.NoError(t, stream.Close())
+	assert.Equal(t, 2500, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestStreamTableRowsReturnsTheDatabaseErrorAndRejectsMissingTables(t *testing.T) {
+	session, mock := newTablesSession(t)
+	boom := errors.New("column does not exist")
+	mock.ExpectQuery("SELECT * FROM <db>.<t>").WillReturnError(boom)
+	_, err := session.StreamTableRows(context.Background(), "db", "t", dbdriver.TableQuery{})
+	require.ErrorIs(t, err, boom)
+
+	plain, plainMock := newMockSession(t)
+	_, err = plain.StreamTableRows(context.Background(), "db", "t", dbdriver.TableQuery{})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	require.NoError(t, plainMock.ExpectationsWereMet())
+}

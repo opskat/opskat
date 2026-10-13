@@ -279,6 +279,31 @@ func tableProblems(s dbdriver.Session, database, table string) []string {
 		report("CountTableRows: the unfiltered count is %d, but OpenTable reported a total of %d", total, opened.TotalCount)
 	}
 
+	stream, err := s.StreamTableRows(ctx, database, table, dbdriver.TableQuery{})
+	switch {
+	case err != nil:
+		report("StreamTableRows(%q): %v", table, err)
+	case stream == nil:
+		report("StreamTableRows(%q): returned no stream and no error", table)
+	default:
+		streamed := int64(0)
+		for stream.Next() {
+			if len(stream.Row()) != len(stream.Columns()) {
+				report("StreamTableRows: row %d has %d values for %d columns", streamed, len(stream.Row()), len(stream.Columns()))
+			}
+			streamed++
+		}
+		if err := stream.Err(); err != nil {
+			report("StreamTableRows: reading rows: %v", err)
+		}
+		if err := stream.Close(); err != nil {
+			report("StreamTableRows: close: %v", err)
+		}
+		if opened != nil && streamed != opened.TotalCount {
+			report("StreamTableRows: streamed %d rows, but OpenTable reported a total of %d", streamed, opened.TotalCount)
+		}
+	}
+
 	if err := s.Close(); err != nil {
 		report("Close: %v", err)
 	}

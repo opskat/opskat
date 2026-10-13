@@ -2,9 +2,16 @@ package query
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/text/encoding"
@@ -14,6 +21,11 @@ import (
 	"golang.org/x/text/encoding/traditionalchinese"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
+
+	"github.com/opskat/opskat/internal/app/i18n"
+	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/query_svc"
 )
 
 // TableExportWriteOptions controls how exported table data is written to disk.
@@ -134,4 +146,143 @@ func tableExportTextEncoding(charset string) (encoding.Encoding, []byte) {
 	default:
 		return nil, nil
 	}
+}
+
+// 整表导出 CSV / TSV：行的格式化（日期、编码、分隔符……）在前端，所以后端把对驱动的那一次读取
+// 做成一个游标，分批交给前端。取数始终只有一次（StreamTableRows），不会因为分批而变成多条
+// 带偏移的语句。
+
+// TableExportStreamRequest 是整表导出取数的请求：结构化的筛选条件与排序项，没有 SQL。
+type TableExportStreamRequest struct {
+	Filters []dbdriver.FilterItem `json:"filters"`
+	Sorts   []dbdriver.SortItem   `json:"sorts"`
+}
+
+// TableExportCursor 是打开的导出游标。
+type TableExportCursor struct {
+	ID      string   `json:"id"`
+	Columns []string `json:"columns"`
+}
+
+// TableExportChunk 是游标读出的一批行；Done 表示游标已读完。
+type TableExportChunk struct {
+	Rows []map[string]any `json:"rows"`
+	Done bool             `json:"done"`
+}
+
+// tableExportTimeout 是一个导出游标的存活时限：到时即使前端没有关闭也会被收回。
+const tableExportTimeout = 30 * time.Minute
+
+type exportCursor struct {
+	mu     sync.Mutex
+	stream dbdriver.RowStream
+	panel  *panelSession
+	stop   func() bool
+	closed bool
+}
+
+var (
+	exportCursorsMu sync.Mutex
+	exportCursors   = map[string]*exportCursor{}
+)
+
+func (c *exportCursor) close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	c.stop()
+	err := c.stream.Close()
+	return c.panel.finish(err)
+}
+
+// OpenTableExport 经资产的驱动打开整张表的读取游标（一次查询，不分页）。用完必须
+// CloseTableExport；前端不关闭时到时限自动收回。
+func (q *Query) OpenTableExport(assetID int64, database, table string, request TableExportStreamRequest) (*TableExportCursor, error) {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.String("op", "export-stream"), zap.Int64("assetID", assetID), zap.String("database", database), zap.String("table", table))
+	log.Debug("table export open")
+	panel, err := q.acquirePanelSession(assetID, database,
+		func(*asset_entity.DatabaseConfig) time.Duration { return tableExportTimeout })
+	if err != nil {
+		log.Error("table export open failed", zap.Error(err))
+		return nil, err
+	}
+	stream, err := panel.session.StreamTableRows(panel.ctx, panel.database, table,
+		dbdriver.TableQuery{Filters: request.Filters, Sorts: request.Sorts})
+	if err != nil {
+		err = panel.finish(err)
+		log.Error("table export open failed", zap.Error(err))
+		return nil, err
+	}
+
+	id := uuid.NewString()
+	cursor := &exportCursor{stream: stream, panel: panel}
+	cursor.stop = context.AfterFunc(panel.ctx, func() {
+		exportCursorsMu.Lock()
+		delete(exportCursors, id)
+		exportCursorsMu.Unlock()
+		if err := cursor.close(); err != nil {
+			log.Warn("table export expired", zap.Error(err))
+		}
+	})
+	exportCursorsMu.Lock()
+	exportCursors[id] = cursor
+	exportCursorsMu.Unlock()
+	return &TableExportCursor{ID: id, Columns: stream.Columns()}, nil
+}
+
+func lookupExportCursor(id string) (*exportCursor, error) {
+	exportCursorsMu.Lock()
+	defer exportCursorsMu.Unlock()
+	cursor, ok := exportCursors[id]
+	if !ok {
+		return nil, fmt.Errorf("导出游标不存在或已关闭")
+	}
+	return cursor, nil
+}
+
+// ReadTableExport 从游标读出至多 maxRows 行；游标读完时 Done 为 true。读取出错时错误原样返回，
+// 游标仍须 CloseTableExport。
+func (q *Query) ReadTableExport(id string, maxRows int) (*TableExportChunk, error) {
+	if maxRows <= 0 {
+		return nil, fmt.Errorf("每批行数必须为正数")
+	}
+	cursor, err := lookupExportCursor(id)
+	if err != nil {
+		return nil, err
+	}
+	cursor.mu.Lock()
+	defer cursor.mu.Unlock()
+	if cursor.closed {
+		return nil, fmt.Errorf("导出游标不存在或已关闭")
+	}
+	rowSet := &dbdriver.RowSet{Columns: cursor.stream.Columns()}
+	done := false
+	for len(rowSet.Rows) < maxRows {
+		if !cursor.stream.Next() {
+			if err := cursor.stream.Err(); err != nil {
+				logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).Error("table export read failed", zap.Error(err))
+				return nil, err
+			}
+			done = true
+			break
+		}
+		rowSet.Rows = append(rowSet.Rows, cursor.stream.Row())
+	}
+	return &TableExportChunk{Rows: query_svc.NewTableRows(rowSet).Rows, Done: done}, nil
+}
+
+// CloseTableExport 关闭导出游标并释放它占用的连接；已关闭的游标再关是空操作。
+func (q *Query) CloseTableExport(id string) error {
+	exportCursorsMu.Lock()
+	cursor, ok := exportCursors[id]
+	delete(exportCursors, id)
+	exportCursorsMu.Unlock()
+	if !ok {
+		return nil
+	}
+	return cursor.close()
 }

@@ -29,9 +29,19 @@ const baseProps = {
   onFormatChange: vi.fn(),
 };
 
+function mockCursor(chunks: { rows: Record<string, unknown>[]; done: boolean }[]) {
+  vi.mocked(App.OpenTableExport).mockResolvedValue({ id: "cursor-1", columns: ["id", "name"] });
+  vi.mocked(App.CloseTableExport).mockResolvedValue(undefined);
+  const read = vi.mocked(App.ReadTableExport);
+  for (const chunk of chunks) read.mockResolvedValueOnce(chunk);
+}
+
 describe("ExportTableDataDialog", () => {
   afterEach(() => {
     vi.mocked(App.SelectTableExportFile).mockReset();
+    vi.mocked(App.OpenTableExport).mockReset();
+    vi.mocked(App.ReadTableExport).mockReset();
+    vi.mocked(App.CloseTableExport).mockReset();
     vi.mocked(App.QueryTableRows).mockReset();
     vi.mocked(App.ExportTableToXlsx).mockReset();
     vi.mocked(App.ExecuteSQL).mockReset();
@@ -42,7 +52,7 @@ describe("ExportTableDataDialog", () => {
   it("opens the exported file or its containing folder after a successful export", async () => {
     const user = userEvent.setup();
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.csv");
-    vi.mocked(App.QueryTableRows).mockResolvedValue({ columns: ["id", "name"], rows: baseProps.rows });
+    mockCursor([{ rows: baseProps.rows, done: true }]);
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, {
       go: {
@@ -75,9 +85,10 @@ describe("ExportTableDataDialog", () => {
     const firstChunk = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `User ${index + 1}` }));
     const secondChunk = [{ id: 1001, name: "Last User" }];
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.csv");
-    vi.mocked(App.QueryTableRows)
-      .mockResolvedValueOnce({ columns: ["id", "name"], rows: firstChunk })
-      .mockResolvedValueOnce({ columns: ["id", "name"], rows: secondChunk });
+    mockCursor([
+      { rows: firstChunk, done: false },
+      { rows: secondChunk, done: true },
+    ]);
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, {
       go: {
@@ -96,18 +107,13 @@ describe("ExportTableDataDialog", () => {
     await user.click(screen.getByRole("button", { name: /query.exportStart/ }));
 
     await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));
-    expect(App.QueryTableRows).toHaveBeenNthCalledWith(1, 1, "appdb", "users", {
-      filters: [],
-      sorts: [],
-      page: 0,
-      pageSize: 1000,
-    });
-    expect(App.QueryTableRows).toHaveBeenNthCalledWith(2, 1, "appdb", "users", {
-      filters: [],
-      sorts: [],
-      page: 1,
-      pageSize: 1000,
-    });
+    // 整表只打开一个游标(一次取数),再按批读出;不再按页码发多次查询。
+    expect(App.OpenTableExport).toHaveBeenCalledTimes(1);
+    expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", { filters: [], sorts: [] });
+    expect(App.ReadTableExport).toHaveBeenNthCalledWith(1, "cursor-1", 1000);
+    expect(App.ReadTableExport).toHaveBeenNthCalledWith(2, "cursor-1", 1000);
+    expect(App.CloseTableExport).toHaveBeenCalledWith("cursor-1");
+    expect(App.QueryTableRows).not.toHaveBeenCalled();
     expect(App.ExecuteSQL).not.toHaveBeenCalled();
     expect(writeFile).toHaveBeenNthCalledWith(
       1,
@@ -137,19 +143,15 @@ describe("ExportTableDataDialog", () => {
     async (format) => {
       const user = userEvent.setup();
       vi.mocked(App.SelectTableExportFile).mockResolvedValue(`/tmp/opskat/users.${format}`);
-      vi.mocked(App.QueryTableRows).mockResolvedValue({ columns: ["id", "name"], rows: baseProps.rows });
+      mockCursor([{ rows: baseProps.rows, done: true }]);
       Object.assign(window, { go: { app: { App: { WriteTableExportFile: vi.fn().mockResolvedValue(undefined) } } } });
 
       render(<ExportTableDataDialog {...baseProps} initialFormat={format} filters={filters} sorts={sorts} />);
       await startExport(user, `/tmp/opskat/users.${format}`);
 
-      await waitFor(() => expect(App.QueryTableRows).toHaveBeenCalled());
-      expect(App.QueryTableRows).toHaveBeenCalledWith(1, "appdb", "users", {
-        filters,
-        sorts,
-        page: 0,
-        pageSize: 1000,
-      });
+      await waitFor(() => expect(App.CloseTableExport).toHaveBeenCalled());
+      expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", { filters, sorts });
+      expect(App.QueryTableRows).not.toHaveBeenCalled();
       expect(App.ExecuteSQL).not.toHaveBeenCalled();
     }
   );

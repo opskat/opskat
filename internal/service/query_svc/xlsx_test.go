@@ -49,9 +49,8 @@ func TestExportTableRowsToXlsxWritesTheDriversRows(t *testing.T) {
 	calls := session.TableCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, dbdrivertest.TableCall{
-		Op: "rows", Database: "reporting", Table: "users",
+		Op: "stream", Database: "reporting", Table: "users",
 		Query: dbdriver.TableQuery{Filters: filters, Sorts: sorts},
-		Page:  dbdriver.Page{Index: 0, Size: exportChunkRows},
 	}, calls[0])
 	assert.Empty(t, session.Statements())
 }
@@ -67,12 +66,12 @@ func TestExportTableRowsToXlsxPageScope(t *testing.T) {
 	assert.Equal(t, dbdriver.Page{Index: 1, Size: 2}, session.TableCalls()[0].Page)
 }
 
-// 整表按块翻页取完：最后一块不满即止。
-func TestExportTableRowsToXlsxAllScopeReadsEveryChunk(t *testing.T) {
+// 整表是对驱动的一次读取（一个游标），而不是分成多页的多次查询：没有稳定顺序时分页会重复或漏行。
+func TestExportTableRowsToXlsxAllScopeReadsTheTableInOneCall(t *testing.T) {
 	fake := dbdrivertest.NewFake()
 	fake.Columns = []string{"id"}
 	fake.Rows = nil
-	total := exportChunkRows*2 + 5
+	total := 2005
 	for i := 0; i < total; i++ {
 		fake.Rows = append(fake.Rows, []any{i})
 	}
@@ -83,7 +82,8 @@ func TestExportTableRowsToXlsxAllScopeReadsEveryChunk(t *testing.T) {
 	require.Len(t, parsed.Rows, total)
 	assert.Equal(t, []string{"0"}, parsed.Rows[0])
 	assert.Equal(t, []string{fmt.Sprint(total - 1)}, parsed.Rows[total-1])
-	assert.Len(t, session.TableCalls(), 3)
+	require.Len(t, session.TableCalls(), 1)
+	assert.Equal(t, "stream", session.TableCalls()[0].Op)
 }
 
 // 选了列：只写这些列，按选的顺序；没有行时表头仍在。

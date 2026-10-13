@@ -122,6 +122,10 @@ type Session interface {
 	TableRows(ctx context.Context, database, table string, query TableQuery, page Page) (*RowSet, error)
 	// CountTableRows 返回表里符合筛选条件的行数；没有条件时是表的总行数。
 	CountTableRows(ctx context.Context, database, table string, filters []FilterItem) (int64, error)
+	// StreamTableRows 用一次查询取出表里符合筛选条件的全部行（按排序项排序，不分页），
+	// 以游标交给调用方逐行读取：导出整张表用它，行不会整个攒在内存里，也不会因为分成
+	// 多条语句而在没有稳定顺序时重复或漏行。调用方读完或放弃都必须 Close 返回的游标。
+	StreamTableRows(ctx context.Context, database, table string, query TableQuery) (RowStream, error)
 
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
@@ -152,4 +156,19 @@ type RowSet struct {
 	Rows [][]any
 	// Total 是不分页时的总行数；只有 ExecutePaged 确实对语句分了页才非 nil。
 	Total *int64
+}
+
+// RowStream 是一次查询的结果游标。读取方式同 database/sql 的 Rows：Next 前进，Row 给出当前行，
+// Next 返回 false 后用 Err 区分读完与出错。
+type RowStream interface {
+	// Columns 是列名，按结果集里的顺序。
+	Columns() []string
+	// Next 前进到下一行；没有更多行（或出错）时返回 false。
+	Next() bool
+	// Row 是当前行，按 Columns 的顺序给值，值的要求同 RowSet.Rows。
+	Row() []any
+	// Err 是读取过程中遇到的错误；正常读完为 nil。
+	Err() error
+	// Close 释放游标占用的连接。
+	io.Closer
 }

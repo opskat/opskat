@@ -148,6 +148,61 @@ func (s *Session) TableRows(ctx context.Context, database, table string, query d
 	}))
 }
 
+// StreamTableRows 用一条不分页的查询取表里的全部行，把游标交给调用方。
+func (s *Session) StreamTableRows(ctx context.Context, database, table string, query dbdriver.TableQuery) (dbdriver.RowStream, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	where, err := FilterWhere(query.Filters, tables.QuoteIdent)
+	if err != nil {
+		return nil, err
+	}
+	orderBy, err := SortOrderBy(query.Sorts, tables.QuoteIdent)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, streamSQL(tables.TableRef(database, table), where, orderBy)) //nolint:rowserrcheck // sqlRowStream.Err reports rows.Err
+	if err != nil {
+		return nil, fmt.Errorf("SQL query failed: %w", err)
+	}
+	columns, err := rows.Columns()
+	if err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	return &sqlRowStream{rows: rows, columns: columns}, nil
+}
+
+// sqlRowStream 是 *sql.Rows 上的 dbdriver.RowStream。
+type sqlRowStream struct {
+	rows    *sql.Rows
+	columns []string
+	row     []any
+	err     error
+}
+
+func (r *sqlRowStream) Columns() []string { return r.columns }
+
+func (r *sqlRowStream) Next() bool {
+	if r.err != nil || !r.rows.Next() {
+		return false
+	}
+	r.row, r.err = scanRow(r.rows, len(r.columns))
+	return r.err == nil
+}
+
+func (r *sqlRowStream) Row() []any { return r.row }
+
+func (r *sqlRowStream) Err() error {
+	if r.err != nil {
+		return r.err
+	}
+	return r.rows.Err()
+}
+
+func (r *sqlRowStream) Close() error { return r.rows.Close() }
+
 // CountTableRows 统计符合筛选条件的行数。
 func (s *Session) CountTableRows(ctx context.Context, database, table string, filters []dbdriver.FilterItem) (int64, error) {
 	tables, err := s.tables()
@@ -163,6 +218,15 @@ func (s *Session) CountTableRows(ctx context.Context, database, table string, fi
 		return 0, fmt.Errorf("count query failed: %w", err)
 	}
 	return total, nil
+}
+
+// streamSQL 是整表读取的语句：只有筛选与排序，没有分页。
+func streamSQL(tableRef, where, orderBy string) string {
+	statement := "SELECT * FROM " + tableRef + WhereClause(where)
+	if orderBy != "" {
+		statement += " ORDER BY " + orderBy
+	}
+	return statement
 }
 
 func countSQL(tableRef, where string) string {

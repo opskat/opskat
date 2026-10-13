@@ -2,6 +2,7 @@ package query_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -20,9 +21,6 @@ const (
 	ExportScopeAll  = "all"
 )
 
-// exportChunkRows 是导出整张表时每次向驱动取的行数。
-const exportChunkRows = 1000
-
 // TableExportRequest 是导出一张表的请求：结构化的筛选条件与排序项，范围，以及要写哪些列。
 // 里面没有 SQL：怎么取数由资产的驱动决定。
 type TableExportRequest struct {
@@ -38,60 +36,59 @@ type TableExportRequest struct {
 }
 
 // ExportTableRowsToXlsx 经驱动的会话按请求取出表里的行，流式写成一个 XLSX 工作簿到 w。
-// 用 excelize 的 StreamWriter 边取边写，大表导出时内存不随行数增长。第一行是列名。
-func ExportTableRowsToXlsx(ctx context.Context, session dbdriver.Session, database, table string, request TableExportRequest, w io.Writer) error {
-	if request.Scope != ExportScopePage && request.Scope != ExportScopeAll {
+// 当前页取一页；整张表是对驱动的一次读取（一个游标），边读边写，内存不随行数增长，也不会因为
+// 分成多条语句而在没有稳定顺序时重复或漏行。第一行是列名。
+func ExportTableRowsToXlsx(ctx context.Context, session dbdriver.Session, database, table string, request TableExportRequest, w io.Writer) (err error) {
+	query := dbdriver.TableQuery{Filters: request.Filters, Sorts: request.Sorts}
+	var source dbdriver.RowStream
+	switch request.Scope {
+	case ExportScopeAll:
+		source, err = session.StreamTableRows(ctx, database, table, query)
+		if err != nil {
+			return err
+		}
+	case ExportScopePage:
+		rowSet, pageErr := session.TableRows(ctx, database, table, query, dbdriver.Page{Index: request.Page, Size: request.PageSize})
+		if pageErr != nil {
+			return pageErr
+		}
+		source = &rowSetStream{rowSet: rowSet, next: -1}
+	default:
 		return fmt.Errorf("unknown export scope %q", request.Scope)
 	}
-	query := dbdriver.TableQuery{Filters: request.Filters, Sorts: request.Sorts}
-	fetch := func(page dbdriver.Page) (*dbdriver.RowSet, error) {
-		return session.TableRows(ctx, database, table, query, page)
-	}
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close rows: %w", closeErr))
+		}
+	}()
 
+	indexes, header, err := projectColumns(source.Columns(), request.Columns)
+	if err != nil {
+		return err
+	}
 	f := excelize.NewFile()
 	defer func() { _ = f.Close() }()
 	sw, err := f.NewStreamWriter(xlsxSheetName)
 	if err != nil {
 		return fmt.Errorf("create stream writer: %w", err)
 	}
-
-	pageSize := exportChunkRows
-	pageIndex := 0
-	if request.Scope == ExportScopePage {
-		pageSize, pageIndex = request.PageSize, request.Page
+	if err := setXlsxRow(sw, 1, header); err != nil {
+		return fmt.Errorf("write header: %w", err)
 	}
-
-	var indexes []int
-	rowIdx := 1
-	for {
-		rowSet, err := fetch(dbdriver.Page{Index: pageIndex, Size: pageSize})
-		if err != nil {
-			return err
+	rowIdx := 2
+	for source.Next() {
+		values := source.Row()
+		record := make([]any, len(indexes))
+		for i, index := range indexes {
+			record[i] = xlsxCellValue(values[index])
 		}
-		if rowIdx == 1 {
-			var header []any
-			if indexes, header, err = projectColumns(rowSet.Columns, request.Columns); err != nil {
-				return err
-			}
-			if err := setXlsxRow(sw, rowIdx, header); err != nil {
-				return fmt.Errorf("write header: %w", err)
-			}
-			rowIdx++
+		if err := setXlsxRow(sw, rowIdx, record); err != nil {
+			return fmt.Errorf("write row %d: %w", rowIdx, err)
 		}
-		for _, values := range rowSet.Rows {
-			record := make([]any, len(indexes))
-			for i, index := range indexes {
-				record[i] = xlsxCellValue(values[index])
-			}
-			if err := setXlsxRow(sw, rowIdx, record); err != nil {
-				return fmt.Errorf("write row %d: %w", rowIdx, err)
-			}
-			rowIdx++
-		}
-		if request.Scope == ExportScopePage || len(rowSet.Rows) < pageSize {
-			break
-		}
-		pageIndex++
+		rowIdx++
+	}
+	if err := source.Err(); err != nil {
+		return fmt.Errorf("read rows: %w", err)
 	}
 
 	if err := sw.Flush(); err != nil {
@@ -102,6 +99,21 @@ func ExportTableRowsToXlsx(ctx context.Context, session dbdriver.Session, databa
 	}
 	return nil
 }
+
+// rowSetStream 把一页已取出的行当作游标读。
+type rowSetStream struct {
+	rowSet *dbdriver.RowSet
+	next   int
+}
+
+func (r *rowSetStream) Columns() []string { return r.rowSet.Columns }
+func (r *rowSetStream) Next() bool {
+	r.next++
+	return r.next < len(r.rowSet.Rows)
+}
+func (r *rowSetStream) Row() []any   { return r.rowSet.Rows[r.next] }
+func (r *rowSetStream) Err() error   { return nil }
+func (r *rowSetStream) Close() error { return nil }
 
 // projectColumns 决定写哪些列：selected 为空是 available 的全部；否则按 selected 的顺序，
 // 每一列都必须在 available 里。返回各列在结果集里的下标与表头。

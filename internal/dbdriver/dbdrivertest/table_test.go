@@ -175,3 +175,27 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 		})
 	}
 }
+
+// 整表读取是一次对会话的调用，行原样交出，不经过任何语句。
+func TestFakeSessionStreamsItsTableInOneCall(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	query := dbdriver.TableQuery{Sorts: []dbdriver.SortItem{{Column: "id", Direction: dbdriver.SortDescending}}}
+
+	stream, err := session.StreamTableRows(context.Background(), "app", "users", query)
+	require.NoError(t, err)
+	assert.Equal(t, fake.Columns, stream.Columns())
+	var got [][]any
+	for stream.Next() {
+		got = append(got, stream.Row())
+	}
+	require.NoError(t, stream.Err())
+	require.NoError(t, stream.Close())
+	assert.Equal(t, fake.Rows, got)
+	assert.Equal(t, []TableCall{{Op: "stream", Database: "app", Table: "users", Query: query}}, session.TableCalls())
+	assert.Empty(t, session.Statements())
+
+	fake.TableErr = errors.New("fakedb: no such table")
+	_, err = session.StreamTableRows(context.Background(), "app", "users", query)
+	require.ErrorIs(t, err, fake.TableErr)
+}

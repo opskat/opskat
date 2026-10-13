@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count"。
+	// Op 是 "open" / "rows" / "count" / "stream"。
 	Op       string
 	Database string
 	Table    string
@@ -209,6 +209,29 @@ func (s *FakeSession) CountTableRows(_ context.Context, database, table string, 
 	}
 	return int64(len(s.fake.Rows)), nil
 }
+
+// StreamTableRows 记下收到的请求（Op "stream"），把整张表交给一个内存游标。
+func (s *FakeSession) StreamTableRows(_ context.Context, database, table string, query dbdriver.TableQuery) (dbdriver.RowStream, error) {
+	if err := s.tableCall(TableCall{Op: "stream", Database: database, Table: table, Query: query}); err != nil {
+		return nil, err
+	}
+	return &fakeStream{columns: s.fake.Columns, rows: s.fake.Rows, next: -1}, nil
+}
+
+type fakeStream struct {
+	columns []string
+	rows    [][]any
+	next    int
+}
+
+func (f *fakeStream) Columns() []string { return f.columns }
+func (f *fakeStream) Next() bool {
+	f.next++
+	return f.next < len(f.rows)
+}
+func (f *fakeStream) Row() []any   { return f.rows[f.next] }
+func (f *fakeStream) Err() error   { return nil }
+func (f *fakeStream) Close() error { return nil }
 
 func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {
 	start := min(page.Index*page.Size, len(s.fake.Rows))

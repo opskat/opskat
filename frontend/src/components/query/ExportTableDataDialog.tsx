@@ -27,13 +27,15 @@ import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { OpenDirectory } from "../../../wailsjs/go/system/System";
 import {
+  CloseTableExport,
   ExportTableToXlsx,
-  QueryTableRows,
+  OpenTableExport,
+  ReadTableExport,
   SelectTableExportFile,
   WriteTableExportFile,
 } from "../../../wailsjs/go/query/Query";
 import type { dbdriver } from "../../../wailsjs/go/models";
-import { query_svc } from "../../../wailsjs/go/models";
+import { query, query_svc } from "../../../wailsjs/go/models";
 import type { TableSortRequestItem } from "@/lib/tableFilter";
 import {
   buildTableExportContent,
@@ -292,35 +294,42 @@ export function ExportTableDataDialog({
         appendLog("[EXP] Getting all data ...");
         let chunkIndex = 0;
         let wroteChunk = false;
-        while (true) {
-          const result = await QueryTableRows(
-            assetId,
-            database,
-            table,
-            query_svc.TableRowsRequest.createFrom({ filters, sorts, page: chunkIndex, pageSize: EXPORT_ALL_CHUNK_SIZE })
-          );
-          const chunkRows = result.rows ?? [];
-          const content = buildTableExportContent({
-            format,
-            columns: selectedColumns,
-            rows: chunkRows,
-            tableName,
-            driver,
-            includeHeaders: includeHeaders && chunkIndex === 0,
-            options: exportOptions,
-          });
-          const chunkContent =
-            wroteChunk && content ? `${exportChunkSeparator(format, exportOptions)}${content}` : content;
-          if (chunkIndex === 0 || chunkContent) {
-            await writeTableExportFile(filePath, chunkContent, {
-              encoding,
-              append: wroteChunk || !!exportOptions.append,
+        // 整表是后端对驱动的一次读取(一个游标),这里分批取出格式化写盘:不分页,
+        // 没有稳定顺序时也不会重复或漏行。
+        const cursor = await OpenTableExport(
+          assetId,
+          database,
+          table,
+          query.TableExportStreamRequest.createFrom({ filters, sorts })
+        );
+        try {
+          while (true) {
+            const chunk = await ReadTableExport(cursor.id, EXPORT_ALL_CHUNK_SIZE);
+            const chunkRows = chunk.rows ?? [];
+            const content = buildTableExportContent({
+              format,
+              columns: selectedColumns,
+              rows: chunkRows,
+              tableName,
+              driver,
+              includeHeaders: includeHeaders && chunkIndex === 0,
+              options: exportOptions,
             });
-            wroteChunk = true;
+            const chunkContent =
+              wroteChunk && content ? `${exportChunkSeparator(format, exportOptions)}${content}` : content;
+            if (chunkIndex === 0 || chunkContent) {
+              await writeTableExportFile(filePath, chunkContent, {
+                encoding,
+                append: wroteChunk || !!exportOptions.append,
+              });
+              wroteChunk = true;
+            }
+            processedRows += chunkRows.length;
+            if (chunk.done) break;
+            chunkIndex += 1;
           }
-          processedRows += chunkRows.length;
-          if (chunkRows.length < EXPORT_ALL_CHUNK_SIZE) break;
-          chunkIndex += 1;
+        } finally {
+          await CloseTableExport(cursor.id);
         }
       } else {
         appendLog("[EXP] Getting current page data ...");
