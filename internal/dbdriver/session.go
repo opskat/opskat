@@ -110,6 +110,19 @@ type Session interface {
 	// 的返回 ErrUnsupported。table 只有 ObjectMeta.Table 非空时才需要。
 	ObjectSource(ctx context.Context, database, objType, name, table string) (string, error)
 
+	// 以下是表浏览：同样由驱动在自己的连接上完成。table 用 ListTables 给出的形式；筛选与
+	// 排序是结构化的（见 TableQuery），驱动据此生成自己方言的查询。驱动没提供的返回包着
+	// ErrUnsupported 的错误，且不执行任何语句。
+
+	// OpenTable 一次给出打开一张表所需的首屏：列与类型、列约束、主键、总行数，以及不带
+	// 筛选与排序的第一页（pageSize 行）。
+	OpenTable(ctx context.Context, database, table string, pageSize int) (*OpenedTable, error)
+	// TableRows 按筛选与排序取表里的一页。结果不带总行数（RowSet.Total 为 nil），总行数
+	// 另由 CountTableRows 给出。
+	TableRows(ctx context.Context, database, table string, query TableQuery, page Page) (*RowSet, error)
+	// CountTableRows 返回表里符合筛选条件的行数；没有条件时是表的总行数。
+	CountTableRows(ctx context.Context, database, table string, filters []FilterItem) (int64, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }

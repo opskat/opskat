@@ -190,8 +190,60 @@ function buildItemsWhere(items: TableFilterItem[], driver?: string): string {
   }, "");
 }
 
+// buildFilterWhereClause / buildSortOrderByClause 只剩导出对话框在用(它仍自己拼取数语句);
+// 表浏览的翻页、计数、筛选、排序发的是下面的结构化请求,语义由后端的驱动实现。
 export function buildFilterWhereClause(items: TableFilterItem[], driver?: string): string {
   return buildItemsWhere(items, driver);
+}
+
+/**
+ * 发给驱动的一个筛选项,与后端 dbdriver.FilterItem 对齐:只有条件本身,没有 SQL。
+ * 一个条件怎么变成查询、哪些条件不产生限制(停用、没填值、区间缺一端……)由驱动决定。
+ */
+export interface TableFilterRequestItem {
+  kind: "condition" | "group";
+  join: TableFilterJoin;
+  disabled: boolean;
+  column?: string;
+  operator?: TableFilterOperator;
+  /** null 表示 NULL。 */
+  value?: unknown;
+  /** 还没有填值(不同于填了 NULL)。 */
+  unset?: boolean;
+  negated?: boolean;
+  items?: TableFilterRequestItem[];
+}
+
+export function toFilterRequest(items: TableFilterItem[]): TableFilterRequestItem[] {
+  return items.map((item) => {
+    if (item.kind === "group") {
+      return {
+        kind: "group",
+        join: item.join,
+        disabled: item.enabled === false,
+        negated: item.negated === true,
+        items: toFilterRequest(item.items),
+      };
+    }
+    const condition = {
+      kind: "condition" as const,
+      join: item.join,
+      disabled: !item.enabled,
+      column: item.column,
+      operator: item.operator,
+    };
+    return item.value === undefined ? { ...condition, unset: true } : { ...condition, value: item.value };
+  });
+}
+
+/** 发给驱动的一个排序项,与后端 dbdriver.SortItem 对齐。 */
+export interface TableSortRequestItem {
+  column: string;
+  dir: TableSortDir;
+}
+
+export function toSortRequest(items: TableSortItem[]): TableSortRequestItem[] {
+  return items.map((item) => ({ column: item.column, dir: item.dir }));
 }
 
 export function updateFilterItem(

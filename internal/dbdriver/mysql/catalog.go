@@ -37,12 +37,11 @@ func (dialect) ListTables(ctx context.Context, conn *sql.Conn, database string) 
 }
 
 func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, table string) (*dbdriver.TableMetadata, error) {
-	tableRef := quoteTableRef(database, table)
-	columns, err := sqldb.QueryColumns(ctx, conn, "SHOW COLUMNS FROM "+tableRef)
+	columns, err := d.TableColumns(ctx, conn, database, table)
 	if err != nil {
 		return nil, sqldb.Wrap("columns", err)
 	}
-	primaryKeys, err := sqldb.QueryPrimaryKeys(ctx, conn, "Column_name", "SHOW KEYS FROM "+tableRef+" WHERE Key_name = 'PRIMARY'")
+	primaryKeys, err := d.PrimaryKeys(ctx, conn, database, table)
 	if err != nil {
 		return nil, sqldb.Wrap("primary keys", err)
 	}
@@ -54,7 +53,7 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, ta
 	if err != nil {
 		return nil, sqldb.Wrap("foreign keys", err)
 	}
-	return sqldb.AssembleMetadata(columns, primaryKeys, indexes, foreignKeys), nil
+	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, table string) ([]dbdriver.IndexMeta, error) {

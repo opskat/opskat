@@ -29,23 +29,13 @@ func (dialect) ListTables(ctx context.Context, conn *sql.Conn, _ string) ([]stri
 			"WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME")
 }
 
-func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, _, table string) (*dbdriver.TableMetadata, error) {
+func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, table string) (*dbdriver.TableMetadata, error) {
 	schema, tbl := splitSchemaTable(table)
-	columns, err := sqldb.QueryColumns(ctx, conn,
-		"SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT "+
-			"FROM INFORMATION_SCHEMA.COLUMNS "+
-			"WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 "+
-			"ORDER BY ORDINAL_POSITION", sql.Named("p1", schema), sql.Named("p2", tbl))
+	columns, err := d.TableColumns(ctx, conn, database, table)
 	if err != nil {
 		return nil, sqldb.Wrap("columns", err)
 	}
-	primaryKeys, err := sqldb.QueryPrimaryKeys(ctx, conn, "COLUMN_NAME",
-		"SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "+
-			"JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu "+
-			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA "+
-			"WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' "+
-			"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 "+
-			"ORDER BY kcu.ORDINAL_POSITION", sql.Named("p1", schema), sql.Named("p2", tbl))
+	primaryKeys, err := d.PrimaryKeys(ctx, conn, database, table)
 	if err != nil {
 		return nil, sqldb.Wrap("primary keys", err)
 	}
@@ -57,7 +47,7 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, _, table str
 	if err != nil {
 		return nil, sqldb.Wrap("foreign keys", err)
 	}
-	return sqldb.AssembleMetadata(columns, primaryKeys, indexes, foreignKeys), nil
+	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, schema, table string) ([]dbdriver.IndexMeta, error) {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDeleteStatement,
-  buildFilterByCellValueClause,
   buildPagedSelect,
   buildSingleRowUpdate,
   buildStarterSelectSql,
@@ -119,21 +118,6 @@ describe("table SQL helpers", () => {
         driver: "mssql",
       }).sql
     ).toBe("DELETE TOP (1) FROM [users] WHERE [id] = '7' AND [name] = 'alice';");
-  });
-
-  it("builds filter clauses for NULL and quoted values", () => {
-    expect(buildFilterByCellValueClause("deleted_at", null)).toBe("`deleted_at` IS NULL");
-    expect(buildFilterByCellValueClause("name", "O'Reilly")).toBe("`name` = 'O''Reilly'");
-    expect(buildFilterByCellValueClause("age", 42)).toBe("`age` = '42'");
-    expect(buildFilterByCellValueClause("name", "bob", "mysql", "!=")).toBe("`name` <> 'bob'");
-    expect(buildFilterByCellValueClause("name", "bob", "mysql", "like")).toBe("`name` LIKE '%bob%'");
-    expect(buildFilterByCellValueClause("name", "bob", "mysql", "not_like")).toBe("`name` NOT LIKE '%bob%'");
-    expect(buildFilterByCellValueClause("name", "Al", "mysql", "begins_with")).toBe("`name` LIKE 'Al%'");
-    expect(buildFilterByCellValueClause("name", "ce", "mysql", "not_ends_with")).toBe("`name` NOT LIKE '%ce'");
-    expect(buildFilterByCellValueClause("deleted_at", "ignored", "mysql", "is_null")).toBe("`deleted_at` IS NULL");
-    expect(buildFilterByCellValueClause("deleted_at", "ignored", "mysql", "is_not_null")).toBe(
-      "`deleted_at` IS NOT NULL"
-    );
   });
 
   it("builds DELETE SQL using primary keys when available", () => {

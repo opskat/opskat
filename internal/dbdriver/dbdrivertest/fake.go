@@ -40,6 +40,15 @@ type Fake struct {
 	Sources   map[string]string
 	// BrowseErr 非 nil 时树的浏览操作以它失败，模拟数据库返回的错误。
 	BrowseErr error
+	// ColumnTypes / ColumnRules / PrimaryKeys 是那张表在打开时给出的列类型、列约束与主键。
+	// 表浏览（打开、翻页、计数）不看筛选与排序，只把收到的请求记下来（FakeSession.TableCalls），
+	// 照 Columns / Rows 原样分页返回。
+	ColumnTypes map[string]string
+	ColumnRules []dbdriver.TableColumnRule
+	PrimaryKeys []string
+	// TableErr 非 nil 时表浏览操作以它失败：模拟数据库返回的错误，或（包着
+	// dbdriver.ErrUnsupported 时）一个不提供表浏览的驱动。
+	TableErr error
 	// SessionPerAsset 为 true 时声明一条会话覆盖整个资产（像 SQLite）；默认一个库一条。
 	SessionPerAsset bool
 
@@ -82,6 +91,13 @@ func NewFake() *Fake {
 			Views: []dbdriver.ObjectMeta{{Name: "v_users", Type: dbdriver.ObjectView}},
 		},
 		Sources: map[string]string{"view:v_users": "SELECT id FROM users"},
+
+		ColumnTypes: map[string]string{"id": "int", "name": "text"},
+		ColumnRules: []dbdriver.TableColumnRule{
+			{Name: "id", AutoIncrement: true},
+			{Name: "name", Nullable: true},
+		},
+		PrimaryKeys: []string{"id"},
 	}
 }
 

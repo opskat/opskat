@@ -51,9 +51,13 @@ func (dialect) ListTables(ctx context.Context, conn *sql.Conn, database string) 
 }
 
 func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, table string) (*dbdriver.TableMetadata, error) {
-	columns, primaryKeys, err := d.columns(ctx, conn, database, table)
+	columns, err := d.TableColumns(ctx, conn, database, table)
 	if err != nil {
-		return nil, err
+		return nil, sqldb.Wrap("columns", err)
+	}
+	primaryKeys, err := d.PrimaryKeys(ctx, conn, database, table)
+	if err != nil {
+		return nil, sqldb.Wrap("primary keys", err)
 	}
 	indexes, err := d.indexes(ctx, conn, database, table)
 	if err != nil {
@@ -63,21 +67,7 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, ta
 	if err != nil {
 		return nil, sqldb.Wrap("foreign keys", err)
 	}
-	return sqldb.AssembleMetadata(columns, primaryKeys, indexes, foreignKeys), nil
-}
-
-func (dialect) columns(ctx context.Context, conn *sql.Conn, database, table string) ([]dbdriver.ColumnMeta, []string, error) {
-	info := qualify(database, "pragma_table_info(?)")
-	columns, err := sqldb.QueryColumns(ctx, conn,
-		`SELECT name, type, CASE "notnull" WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM `+info, table)
-	if err != nil {
-		return nil, nil, sqldb.Wrap("columns", err)
-	}
-	primaryKeys, err := sqldb.QueryPrimaryKeys(ctx, conn, "name", "SELECT name FROM "+info+" WHERE pk > 0 ORDER BY pk", table)
-	if err != nil {
-		return nil, nil, sqldb.Wrap("primary keys", err)
-	}
-	return columns, primaryKeys, nil
+	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, database, table string) ([]dbdriver.IndexMeta, error) {

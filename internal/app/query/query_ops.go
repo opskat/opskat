@@ -49,8 +49,8 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 	return session, func() error { return nil }, nil
 }
 
-// getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(打开表、
-// 导入、XLSX 导出)仍在共享代码里用 *sql.DB / *sql.Conn 自己拼 SQL,经它从会话里取出句柄。
+// getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(导入、XLSX 导出)
+// 仍在共享代码里用 *sql.DB / *sql.Conn 自己拼 SQL,经它从会话里取出句柄。
 // 会话不在 database/sql 之上的驱动没有这个句柄,返回 dbdriver.ErrUnsupported。
 // 这些操作逐个迁成会话上的方法后删除本函数与 sqldb.DB,不要给它添新的调用方。
 func (q *Query) getOrDialPanelSQLDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func() error, error) {
@@ -305,46 +305,74 @@ func (q *Query) ExecuteTableImport(
 	return result, nil
 }
 
-// OpenTable 一次性返回打开数据表所需的首屏数据。
+// defaultTablePageSize 是打开表时没有给出每页行数（<= 0）时用的行数。
+const defaultTablePageSize = 1000
+
+// withTableSession 在资产的驱动会话上运行一次表浏览（打开表 / 取一页 / 计数），并记录它的
+// 开始、结束与失败。筛选条件里有用户的数据，不进日志。
+func (q *Query) withTableSession(op string, assetID int64, database, table string, fn func(ctx context.Context, session dbdriver.Session, database string) error) error {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.String("op", op), zap.Int64("assetID", assetID), zap.String("database", database), zap.String("table", table))
+	log.Debug("table browse start")
+	start := time.Now()
+	if err := q.withObjectSession(assetID, database, fn); err != nil {
+		log.Error("table browse failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return err
+	}
+	log.Debug("table browse done", zap.Duration("elapsed", time.Since(start)))
+	return nil
+}
+
+// OpenTable 一次性返回打开数据表所需的首屏数据：列、类型、列约束、主键、总行数与第一页。
+// 由资产的驱动在自己的会话上完成。
 func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (string, error) {
-	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
-	if err != nil {
-		return "", fmt.Errorf("资产不存在: %w", err)
+	if pageSize <= 0 {
+		pageSize = defaultTablePageSize
 	}
-	if !asset.IsDatabase() {
-		return "", fmt.Errorf("资产不是数据库类型")
-	}
-	cfg, err := asset.GetDatabaseConfig()
-	if err != nil {
-		return "", fmt.Errorf("获取数据库配置失败: %w", err)
-	}
-	if database != "" {
-		cfg.Database = database
-	}
-	password, err := credential_resolver.Default().ResolveDatabasePassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return "", fmt.Errorf("解析凭据失败: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
-	defer cancel()
-
-	db, cleanup, err := q.getOrDialPanelSQLDB(ctx, asset, cfg, password)
-	if err != nil {
-		return "", fmt.Errorf("连接数据库失败: %w", err)
-	}
-	result, opErr := query_svc.OpenTable(ctx, db, cfg.Driver, cfg.Database, table, pageSize)
 	var payload []byte
-	if opErr == nil {
-		payload, err = json.Marshal(result)
+	err := q.withTableSession("open", assetID, database, table, func(ctx context.Context, session dbdriver.Session, database string) error {
+		opened, err := session.OpenTable(ctx, database, table, pageSize)
 		if err != nil {
-			opErr = fmt.Errorf("序列化结果失败: %w", err)
+			return err
 		}
-	}
-	if err := finishPanelDBOperation(opErr, cleanup); err != nil {
+		payload, err = json.Marshal(query_svc.NewOpenTableResult(opened, pageSize))
+		if err != nil {
+			return fmt.Errorf("序列化结果失败: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
 	return string(payload), nil
+}
+
+// QueryTableRows 按结构化的筛选条件与排序项取表里的一页。请求里没有 SQL：怎么把条件变成
+// 查询由资产的驱动决定。
+func (q *Query) QueryTableRows(assetID int64, database, table string, request query_svc.TableRowsRequest) (*query_svc.TableRows, error) {
+	var result *query_svc.TableRows
+	err := q.withTableSession("rows", assetID, database, table, func(ctx context.Context, session dbdriver.Session, database string) error {
+		rowSet, err := session.TableRows(ctx, database, table,
+			dbdriver.TableQuery{Filters: request.Filters, Sorts: request.Sorts},
+			dbdriver.Page{Index: request.Page, Size: request.PageSize})
+		if err != nil {
+			return err
+		}
+		result = query_svc.NewTableRows(rowSet)
+		return nil
+	})
+	return result, err
+}
+
+// CountTableRows 返回表里符合筛选条件的行数；没有条件时是表的总行数。
+func (q *Query) CountTableRows(assetID int64, database, table string, filters []dbdriver.FilterItem) (int64, error) {
+	var total int64
+	err := q.withTableSession("count", assetID, database, table, func(ctx context.Context, session dbdriver.Session, database string) error {
+		count, err := session.CountTableRows(ctx, database, table, filters)
+		total = count
+		return err
+	})
+	return total, err
 }
 
 // ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询；怎么分页与计数由资产的驱动决定

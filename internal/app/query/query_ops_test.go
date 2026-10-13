@@ -2,7 +2,9 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/service/query_svc"
 )
 
 type stubLang struct{}
@@ -119,13 +122,28 @@ func TestPanelRejectsUnregisteredDriver(t *testing.T) {
 	assert.Contains(t, err.Error(), "oracle")
 }
 
-// 还没迁到驱动上的操作（打开表、XLSX 导出）经过渡桥拿 *sql.DB：database/sql 之上的内置驱动照常工作……
-func TestUnmigratedOperationsStillWorkForDatabaseSQLDrivers(t *testing.T) {
+// 还没迁到驱动上的操作（XLSX 导出）经过渡桥拿 *sql.DB，会话不是 *sql.DB 的驱动明确报
+// 「不支持」，不会 panic，也不会被当成别的驱动。
+func TestUnmigratedOperationsAreUnsupportedForOtherSessions(t *testing.T) {
+	dbdrivertest.Register(t, dbdrivertest.NewFake())
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	err := q.ExportTableToXlsx(1, "", "SELECT * FROM users", filepath.Join(t.TempDir(), "out.xlsx"))
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+}
+
+// 内置驱动走的是同一条路：SQLite 的真库上读表元数据、打开表、带筛选与排序翻页、计数。
+func TestBrowsingWorksForABuiltInDriver(t *testing.T) {
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
 	})
-	_, err := q.ExecuteSQL(1, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", "")
-	require.NoError(t, err)
+	for _, statement := range []string{
+		"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
+		"INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')",
+	} {
+		_, err := q.ExecuteSQL(1, statement, "")
+		require.NoError(t, err)
+	}
 
 	meta, err := q.GetTableMetadata(1, "", "users")
 	require.NoError(t, err)
@@ -133,20 +151,137 @@ func TestUnmigratedOperationsStillWorkForDatabaseSQLDrivers(t *testing.T) {
 	assert.Equal(t, "id", meta.Columns[0].Name)
 	assert.True(t, meta.Columns[0].PrimaryKey)
 
-	opened, err := q.OpenTable(1, "", "users", 10)
+	opened, err := q.OpenTable(1, "", "users", 2)
 	require.NoError(t, err)
-	assert.Contains(t, opened, `"name"`)
+	assert.JSONEq(t, `{
+		"columns": ["id", "name"],
+		"columnTypes": {"id": "INTEGER", "name": "TEXT"},
+		"columnRules": [
+			{"name": "id", "nullable": true, "hasDefault": false, "autoIncrement": false},
+			{"name": "name", "nullable": true, "hasDefault": false, "autoIncrement": false}
+		],
+		"primaryKeys": ["id"],
+		"totalCount": 3,
+		"firstPage": [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}],
+		"pageSize": 2
+	}`, opened)
+
+	notAlice := []dbdriver.FilterItem{{
+		Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpNotEqual, Value: "alice",
+	}}
+	rows, err := q.QueryTableRows(1, "", "users", query_svc.TableRowsRequest{
+		Filters:  notAlice,
+		Sorts:    []dbdriver.SortItem{{Column: "id", Direction: dbdriver.SortDescending}},
+		Page:     0,
+		PageSize: 10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id", "name"}, rows.Columns)
+	assert.Equal(t, []map[string]any{{"id": int64(3), "name": "carol"}, {"id": int64(2), "name": "bob"}}, rows.Rows)
+
+	total, err := q.CountTableRows(1, "", "users", notAlice)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total)
 }
 
-// ……而会话不是 *sql.DB 的驱动明确报「不支持」，不会 panic，也不会被当成别的驱动。
-func TestUnmigratedOperationsAreUnsupportedForOtherSessions(t *testing.T) {
+// 表浏览（打开表、翻页、计数）由驱动在自己的会话上完成：假驱动的会话不是 *sql.DB，到它
+// 手里的是结构化的筛选条件与排序项，没有任何语句；它给出的结果原样呈现。
+func TestTableBrowsingRunsOnTheDriverSession(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	opened, err := q.OpenTable(1, "reporting", "users", 2)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"columns": ["id", "name"],
+		"columnTypes": {"id": "int", "name": "text"},
+		"columnRules": [
+			{"name": "id", "nullable": false, "hasDefault": false, "autoIncrement": true},
+			{"name": "name", "nullable": true, "hasDefault": false, "autoIncrement": false}
+		],
+		"primaryKeys": ["id"],
+		"totalCount": 3,
+		"firstPage": [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}],
+		"pageSize": 2
+	}`, opened)
+
+	filters := []dbdriver.FilterItem{
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinOr, Column: "name", Operator: dbdriver.OpContains, Value: "a"},
+		{Kind: dbdriver.FilterGroup, Join: dbdriver.JoinAnd, Negated: true, Items: []dbdriver.FilterItem{
+			{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "id", Operator: dbdriver.OpBetween, Value: []any{1, 2}},
+		}},
+	}
+	sorts := []dbdriver.SortItem{{Column: "name", Direction: dbdriver.SortDescending}}
+
+	rows, err := q.QueryTableRows(1, "reporting", "users", query_svc.TableRowsRequest{Filters: filters, Sorts: sorts, Page: 1, PageSize: 2})
+	require.NoError(t, err)
+	assert.Equal(t, fake.Columns, rows.Columns)
+	assert.Equal(t, []map[string]any{{"id": 3, "name": "carol"}}, rows.Rows, "the second page of two holds the third row")
+
+	total, err := q.CountTableRows(1, "reporting", "users", filters)
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(fake.Rows)), total)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{
+		{Op: "open", Database: "reporting", Table: "users", Page: dbdriver.Page{Index: 0, Size: 2}},
+		{Op: "rows", Database: "reporting", Table: "users", Query: dbdriver.TableQuery{Filters: filters, Sorts: sorts}, Page: dbdriver.Page{Index: 1, Size: 2}},
+		{Op: "count", Database: "reporting", Table: "users", Query: dbdriver.TableQuery{Filters: filters}},
+	}, sessions[0].TableCalls())
+	assert.Empty(t, sessions[0].Statements(), "the driver answers table browsing itself; no statement goes through Execute")
+}
+
+// 一页没有行时返回的是空列表，不是 null：前端直接取它的长度。
+func TestQueryTableRowsReturnsAnEmptyListPastTheLastPage(t *testing.T) {
 	dbdrivertest.Register(t, dbdrivertest.NewFake())
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
 
-	_, err := q.OpenTable(1, "", "users", 10)
-	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
-	err = q.ExportTableToXlsx(1, "", "SELECT * FROM users", filepath.Join(t.TempDir(), "out.xlsx"))
-	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	rows, err := q.QueryTableRows(1, "", "users", query_svc.TableRowsRequest{Page: 9, PageSize: 2})
+	require.NoError(t, err)
+	payload, err := json.Marshal(rows)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":[]}`, string(payload))
+}
+
+// 打开表时没有给出每页行数（<= 0）：按 1000 行取第一页。
+func TestOpenTableDefaultsThePageSize(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	opened, err := q.OpenTable(1, "", "users", 0)
+	require.NoError(t, err)
+	assert.Contains(t, opened, `"pageSize":1000`)
+	assert.Equal(t, dbdriver.Page{Index: 0, Size: 1000}, fake.Sessions()[0].TableCalls()[0].Page)
+}
+
+// 驱动返回的错误原样到达调用方：数据库的错误，以及驱动不提供表浏览时的「不支持」——后者
+// 没有执行任何语句。
+func TestTableBrowsingReturnsTheDriversError(t *testing.T) {
+	for name, tableErr := range map[string]error{
+		"a database error":            errors.New("fakedb: relation \"users\" does not exist"),
+		"a driver without table rows": fmt.Errorf("%w: fakedb does not browse tables", dbdriver.ErrUnsupported),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := dbdrivertest.NewFake()
+			fake.TableErr = tableErr
+			dbdrivertest.Register(t, fake)
+			q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+			_, err := q.OpenTable(1, "", "users", 10)
+			require.ErrorIs(t, err, tableErr)
+			_, err = q.QueryTableRows(1, "", "users", query_svc.TableRowsRequest{PageSize: 10})
+			require.ErrorIs(t, err, tableErr)
+			_, err = q.CountTableRows(1, "", "users", nil)
+			require.ErrorIs(t, err, tableErr)
+
+			for _, s := range fake.Sessions() {
+				assert.Empty(t, s.Statements())
+			}
+		})
+	}
 }
 
 func TestQueryTimeout(t *testing.T) {

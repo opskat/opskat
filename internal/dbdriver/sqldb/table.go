@@ -1,0 +1,247 @@
+package sqldb
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/opskat/opskat/internal/dbdriver"
+)
+
+// Tables 是方言里「怎么浏览一张表的数据」的那一半：标识符与表引用怎么写、主键与列定义
+// 怎么查、分页用什么语法。筛选条件与排序项怎么变成表达式各方言相同（FilterWhere /
+// SortOrderBy），Session 用这里给的引号生成。
+//
+// 实现 Dialect 的类型同时实现 Tables 才提供表浏览；没实现的方言，Session 的表浏览方法
+// 一律返回 dbdriver.ErrUnsupported。
+type Tables interface {
+	// QuoteIdent 给一个标识符（列名）加引号。
+	QuoteIdent(name string) string
+	// TableRef 是 FROM 里引用这张表的写法。database / table 的含义同 dbdriver.Session。
+	TableRef(database, table string) string
+	// PrimaryKeys 返回主键列，按它们在主键里的次序。
+	PrimaryKeys(ctx context.Context, conn *sql.Conn, database, table string) ([]string, error)
+	// TableColumns 返回列定义，按列在表里的次序。
+	TableColumns(ctx context.Context, conn *sql.Conn, database, table string) ([]TableColumn, error)
+	// FirstPageSQL 是打开表时取前 limit 行的语句，不带筛选与排序。
+	FirstPageSQL(tableRef string, limit int) string
+	// TablePageSQL 是按筛选与排序取一页的语句。
+	TablePageSQL(sel TableSelect) string
+}
+
+// TableSelect 是取表里一页数据的各个部分，都已按方言写好。
+type TableSelect struct {
+	TableRef string
+	// Where / OrderBy 是表达式本身（不含关键字），可以为空。
+	Where   string
+	OrderBy string
+	Offset  int
+	Limit   int
+}
+
+// TableColumn 是一列的定义。
+type TableColumn struct {
+	Name          string
+	Type          string
+	Nullable      bool
+	HasDefault    bool
+	AutoIncrement bool
+}
+
+func (LimitOffset) FirstPageSQL(tableRef string, limit int) string {
+	return fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET 0", tableRef, limit)
+}
+
+func (LimitOffset) TablePageSQL(sel TableSelect) string {
+	query := "SELECT * FROM " + sel.TableRef + WhereClause(sel.Where)
+	if sel.OrderBy != "" {
+		query += " ORDER BY " + sel.OrderBy
+	}
+	return fmt.Sprintf("%s LIMIT %d OFFSET %d", query, sel.Limit, sel.Offset)
+}
+
+// WhereClause 给非空的筛选表达式接上 " WHERE "；表达式为空时返回空串。
+func WhereClause(where string) string {
+	if where == "" {
+		return ""
+	}
+	return " WHERE " + where
+}
+
+func (s *Session) tables() (Tables, error) {
+	tables, ok := s.dialect.(Tables)
+	if !ok {
+		return nil, fmt.Errorf("%w: this driver does not provide table browsing", dbdriver.ErrUnsupported)
+	}
+	return tables, nil
+}
+
+// OpenTable 在同一条连接上依次查主键、列定义、总行数、第一页；任何一步失败整次失败。
+func (s *Session) OpenTable(ctx context.Context, database, table string, pageSize int) (*dbdriver.OpenedTable, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	return onConn(ctx, s, func(conn *sql.Conn) (*dbdriver.OpenedTable, error) {
+		primaryKeys, err := tables.PrimaryKeys(ctx, conn, database, table)
+		if err != nil {
+			return nil, fmt.Errorf("query primary keys: %w", err)
+		}
+		columns, err := tables.TableColumns(ctx, conn, database, table)
+		if err != nil {
+			return nil, fmt.Errorf("query columns: %w", err)
+		}
+		tableRef := tables.TableRef(database, table)
+
+		var total int64
+		if err := conn.QueryRowContext(ctx, countSQL(tableRef, "")).Scan(&total); err != nil {
+			return nil, fmt.Errorf("count: %w", err)
+		}
+		firstPage, err := queryRows(ctx, conn, tables.FirstPageSQL(tableRef, pageSize))
+		if err != nil {
+			return nil, fmt.Errorf("first page: %w", err)
+		}
+
+		opened := &dbdriver.OpenedTable{
+			ColumnTypes: make(map[string]string, len(columns)),
+			ColumnRules: make([]dbdriver.TableColumnRule, 0, len(columns)),
+			PrimaryKeys: primaryKeys,
+			TotalCount:  total,
+			FirstPage:   firstPage,
+		}
+		for _, column := range columns {
+			if column.Type != "" {
+				opened.ColumnTypes[column.Name] = column.Type
+			}
+			opened.ColumnRules = append(opened.ColumnRules, dbdriver.TableColumnRule{
+				Name:          column.Name,
+				Nullable:      column.Nullable,
+				HasDefault:    column.HasDefault,
+				AutoIncrement: column.AutoIncrement,
+			})
+		}
+		return opened, nil
+	})
+}
+
+// TableRows 按方言生成带筛选、排序与分页的查询并执行。
+func (s *Session) TableRows(ctx context.Context, database, table string, query dbdriver.TableQuery, page dbdriver.Page) (*dbdriver.RowSet, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	where, err := FilterWhere(query.Filters, tables.QuoteIdent)
+	if err != nil {
+		return nil, err
+	}
+	orderBy, err := SortOrderBy(query.Sorts, tables.QuoteIdent)
+	if err != nil {
+		return nil, err
+	}
+	return s.query(ctx, tables.TablePageSQL(TableSelect{
+		TableRef: tables.TableRef(database, table),
+		Where:    where,
+		OrderBy:  orderBy,
+		Offset:   page.Index * page.Size,
+		Limit:    page.Size,
+	}))
+}
+
+// CountTableRows 统计符合筛选条件的行数。
+func (s *Session) CountTableRows(ctx context.Context, database, table string, filters []dbdriver.FilterItem) (int64, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return 0, err
+	}
+	where, err := FilterWhere(filters, tables.QuoteIdent)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	if err := s.db.QueryRowContext(ctx, countSQL(tables.TableRef(database, table), where)).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count query failed: %w", err)
+	}
+	return total, nil
+}
+
+func countSQL(tableRef, where string) string {
+	return "SELECT COUNT(*) FROM " + tableRef + WhereClause(where)
+}
+
+// queryRows 在一条连接上执行查询并取成结果集。
+func queryRows(ctx context.Context, conn *sql.Conn, statement string) (*dbdriver.RowSet, error) {
+	rows, err := conn.QueryContext(ctx, statement)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	return scanRows(rows)
+}
+
+// QuoteQualified 给可能带 schema 前缀的名字逐段加引号："reporting.events" 的两段各自加，
+// 空段略过。
+func QuoteQualified(name string, quote func(string) string) string {
+	parts := make([]string, 0, 2)
+	for _, part := range strings.Split(name, ".") {
+		if part != "" {
+			parts = append(parts, quote(part))
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+// QueryTableColumns 执行一条列定义查询。结果集里列名的叫法随方言不同
+// （column_name / name / Field / COLUMN_NAME，Type / data_type / udt_name，Null / is_nullable，
+// Default / column_default / dflt_value，Extra），这里按这些叫法取值。
+func QueryTableColumns(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]TableColumn, error) {
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TableColumn, 0)
+	for rows.Next() {
+		values := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		row := ZipRow(cols, values)
+		name := PickString(row, "column_name", "name", "Field", "field", "COLUMN_NAME")
+		if name == "" {
+			continue
+		}
+		hasDefault := false
+		for _, key := range []string{"column_default", "Default", "default", "COLUMN_DEFAULT", "dflt_value"} {
+			if row[key] != nil {
+				hasDefault = true
+				break
+			}
+		}
+		out = append(out, TableColumn{
+			Name:          name,
+			Type:          PickString(row, "data_type", "Type", "type", "udt_name", "DATA_TYPE"),
+			Nullable:      strings.ToUpper(PickString(row, "is_nullable", "Null", "null", "IS_NULLABLE")) == "YES",
+			HasDefault:    hasDefault,
+			AutoIncrement: strings.Contains(strings.ToLower(PickString(row, "Extra", "extra")), "auto_increment"),
+		})
+	}
+	return out, rows.Err()
+}
+
+// ColumnMetas 把列定义转成对象浏览里的列描述（主键标记由 AssembleMetadata 补上）。
+func ColumnMetas(columns []TableColumn) []dbdriver.ColumnMeta {
+	out := make([]dbdriver.ColumnMeta, 0, len(columns))
+	for _, column := range columns {
+		out = append(out, dbdriver.ColumnMeta{Name: column.Name, Type: column.Type, Nullable: column.Nullable})
+	}
+	return out
+}

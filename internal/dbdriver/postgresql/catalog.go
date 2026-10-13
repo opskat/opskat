@@ -35,22 +35,13 @@ func (dialect) ListTables(ctx context.Context, conn *sql.Conn, _ string) ([]stri
 			"AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_schema, table_name")
 }
 
-func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, _, table string) (*dbdriver.TableMetadata, error) {
+func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, table string) (*dbdriver.TableMetadata, error) {
 	schema, tbl := splitSchemaTable(table)
-	columns, err := sqldb.QueryColumns(ctx, conn,
-		"SELECT column_name, data_type, udt_name, is_nullable, column_default "+
-			"FROM information_schema.columns WHERE table_schema = $1"+
-			" AND table_name = $2 ORDER BY ordinal_position", schema, tbl)
+	columns, err := d.TableColumns(ctx, conn, database, table)
 	if err != nil {
 		return nil, sqldb.Wrap("columns", err)
 	}
-	primaryKeys, err := sqldb.QueryPrimaryKeys(ctx, conn, "column_name",
-		"SELECT kcu.column_name FROM information_schema.table_constraints tc "+
-			"JOIN information_schema.key_column_usage kcu "+
-			"ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "+
-			"WHERE tc.table_schema = $1"+
-			" AND tc.table_name = $2"+
-			" AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position", schema, tbl)
+	primaryKeys, err := d.PrimaryKeys(ctx, conn, database, table)
 	if err != nil {
 		return nil, sqldb.Wrap("primary keys", err)
 	}
@@ -62,7 +53,7 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, _, table str
 	if err != nil {
 		return nil, sqldb.Wrap("foreign keys", err)
 	}
-	return sqldb.AssembleMetadata(columns, primaryKeys, indexes, foreignKeys), nil
+	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, schema, table string) ([]dbdriver.IndexMeta, error) {

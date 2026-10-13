@@ -35,12 +35,18 @@ func (s *Session) catalog() (Catalog, error) {
 	return catalog, nil
 }
 
-// withConn 在会话的一条独立连接上运行 fn，之后归还；归还失败与 fn 的错误一并返回。
-func withConn[T any](ctx context.Context, s *Session, fn func(Catalog, *sql.Conn) (T, error)) (result T, err error) {
+// withConn 在会话的一条独立连接上对方言的目录运行 fn。
+func withConn[T any](ctx context.Context, s *Session, fn func(Catalog, *sql.Conn) (T, error)) (T, error) {
 	catalog, err := s.catalog()
 	if err != nil {
-		return result, err
+		var zero T
+		return zero, err
 	}
+	return onConn(ctx, s, func(conn *sql.Conn) (T, error) { return fn(catalog, conn) })
+}
+
+// onConn 在会话的一条独立连接上运行 fn，之后归还；归还失败与 fn 的错误一并返回。
+func onConn[T any](ctx context.Context, s *Session, fn func(*sql.Conn) (T, error)) (result T, err error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return result, fmt.Errorf("打开数据库会话失败: %w", err)
@@ -50,7 +56,7 @@ func withConn[T any](ctx context.Context, s *Session, fn func(Catalog, *sql.Conn
 			err = errors.Join(err, fmt.Errorf("关闭数据库会话失败: %w", closeErr))
 		}
 	}()
-	return fn(catalog, conn)
+	return fn(conn)
 }
 
 func (s *Session) ListDatabases(ctx context.Context) ([]string, error) {
@@ -192,43 +198,6 @@ func (b *IndexBuilder) Indexes() []dbdriver.IndexMeta {
 		out = append(out, *b.byName[name])
 	}
 	return out
-}
-
-// QueryColumns 执行一条列定义查询。结果集里列名的叫法随方言不同
-// （column_name / name / Field / COLUMN_NAME，Type / data_type / udt_name，Null / is_nullable），
-// 这里按这些叫法取值。
-func QueryColumns(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]dbdriver.ColumnMeta, error) {
-	rows, err := conn.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]dbdriver.ColumnMeta, 0)
-	for rows.Next() {
-		values := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		row := ZipRow(cols, values)
-		name := PickString(row, "column_name", "name", "Field", "field", "COLUMN_NAME")
-		if name == "" {
-			continue
-		}
-		out = append(out, dbdriver.ColumnMeta{
-			Name:     name,
-			Type:     PickString(row, "data_type", "Type", "type", "udt_name", "DATA_TYPE"),
-			Nullable: strings.ToUpper(PickString(row, "is_nullable", "Null", "null", "IS_NULLABLE")) == "YES",
-		})
-	}
-	return out, rows.Err()
 }
 
 // QueryPrimaryKeys 执行一条主键查询。nameColumn 是方言里主键列名所在的结果列（也认其他

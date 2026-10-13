@@ -30,8 +30,9 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     的 id 与别名找到它。
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，以及没有声明的对象类型
-//     的浏览（ObjectSource），且拒绝时不能执行任何语句。声明了的浏览操作能不能调用，要有数据
-//     才能验证，由 RunBrowseConformance 在能提供数据的会话上检查。
+//     的浏览（ObjectSource），且拒绝时不能执行任何语句。声明了的浏览操作与表浏览能不能
+//     调用，要有数据才能验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的
+//     会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
 	for _, problem := range descriptorProblems(d.Descriptor()) {
@@ -195,6 +196,95 @@ func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	return problems
 }
 
+// RunTableConformance 检查表浏览：打开表、取一页、计数都可以调用，给出成形且彼此一致的结果。
+// 会话必须是能回答这些操作的（database 里有 table 这张表），由测试关闭。筛选条件与排序项
+// 的语义随驱动的查询方式而定，由各驱动自己的测试固定。
+func RunTableConformance(t *testing.T, newSession SessionFactory, database, table string) {
+	t.Helper()
+	for _, problem := range tableProblems(newSession(t), database, table) {
+		t.Errorf("table: %s", problem)
+	}
+}
+
+func tableProblems(s dbdriver.Session, database, table string) []string {
+	ctx := context.Background()
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	page := dbdriver.Page{Index: 0, Size: ConformancePageSize}
+
+	opened, err := s.OpenTable(ctx, database, table, page.Size)
+	switch {
+	case err != nil:
+		report("OpenTable(%q): %v", table, err)
+	case opened == nil:
+		report("OpenTable(%q): returned no result and no error", table)
+	case opened.FirstPage == nil:
+		report("OpenTable(%q): the result has no first page", table)
+	default:
+		first := opened.FirstPage
+		problems = append(problems, rowSetProblems("OpenTable", first)...)
+		if len(first.Rows) > page.Size {
+			report("OpenTable: the first page holds %d rows, more than the %d asked for", len(first.Rows), page.Size)
+		}
+		if opened.TotalCount < int64(len(first.Rows)) {
+			report("OpenTable: total %d is smaller than the %d rows of the first page", opened.TotalCount, len(first.Rows))
+		}
+		// 类型、约束、主键说的都必须是表格里有的列：前端按列名把它们对到表格上。
+		for name := range opened.ColumnTypes {
+			if !slices.Contains(first.Columns, name) {
+				report("OpenTable: column types name %q, which is not a column of the first page", name)
+			}
+		}
+		for _, rule := range opened.ColumnRules {
+			if !slices.Contains(first.Columns, rule.Name) {
+				report("OpenTable: column rules name %q, which is not a column of the first page", rule.Name)
+			}
+		}
+		for _, name := range opened.PrimaryKeys {
+			if !slices.Contains(first.Columns, name) {
+				report("OpenTable: primary keys name %q, which is not a column of the first page", name)
+			}
+		}
+	}
+
+	rows, err := s.TableRows(ctx, database, table, dbdriver.TableQuery{}, page)
+	switch {
+	case err != nil:
+		report("TableRows(%q): %v", table, err)
+	case rows == nil:
+		report("TableRows(%q): returned no row set and no error", table)
+	default:
+		problems = append(problems, rowSetProblems("TableRows", rows)...)
+		if len(rows.Rows) > page.Size {
+			report("TableRows: the page holds %d rows, more than the %d asked for", len(rows.Rows), page.Size)
+		}
+		if rows.Total != nil {
+			report("TableRows: a table page must not report a total; CountTableRows does")
+		}
+		if opened != nil && opened.FirstPage != nil {
+			if !slices.Equal(rows.Columns, opened.FirstPage.Columns) {
+				report("TableRows: columns %v differ from the %v OpenTable gave", rows.Columns, opened.FirstPage.Columns)
+			}
+			if len(rows.Rows) != len(opened.FirstPage.Rows) {
+				report("TableRows: the unfiltered first page holds %d rows, OpenTable's first page %d", len(rows.Rows), len(opened.FirstPage.Rows))
+			}
+		}
+	}
+
+	total, err := s.CountTableRows(ctx, database, table, nil)
+	switch {
+	case err != nil:
+		report("CountTableRows(%q): %v", table, err)
+	case opened != nil && total != opened.TotalCount:
+		report("CountTableRows: the unfiltered count is %d, but OpenTable reported a total of %d", total, opened.TotalCount)
+	}
+
+	if err := s.Close(); err != nil {
+		report("Close: %v", err)
+	}
+	return problems
+}
+
 // resultProblems 检查 ConformanceStatement 的执行结果：必须成功，并返回成形的结果集。
 func resultProblems(op string, res *dbdriver.Result, err error) []string {
 	if errors.Is(err, dbdriver.ErrUnsupported) {
@@ -209,13 +299,18 @@ func resultProblems(op string, res *dbdriver.Result, err error) []string {
 	if res.Rows == nil {
 		return []string{fmt.Sprintf("%s(%q): a query must return a row set", op, ConformanceStatement)}
 	}
+	return rowSetProblems(op, res.Rows)
+}
+
+// rowSetProblems 检查一个结果集成形：有列，每行的值与列一一对应，且能序列化成 JSON。
+func rowSetProblems(op string, rows *dbdriver.RowSet) []string {
 	var problems []string
-	if len(res.Rows.Columns) == 0 {
+	if len(rows.Columns) == 0 {
 		problems = append(problems, fmt.Sprintf("%s: the row set has no columns", op))
 	}
-	for i, row := range res.Rows.Rows {
-		if len(row) != len(res.Rows.Columns) {
-			problems = append(problems, fmt.Sprintf("%s: row %d has %d values for %d columns", op, i, len(row), len(res.Rows.Columns)))
+	for i, row := range rows.Rows {
+		if len(row) != len(rows.Columns) {
+			problems = append(problems, fmt.Sprintf("%s: row %d has %d values for %d columns", op, i, len(row), len(rows.Columns)))
 		}
 		if _, jsonErr := json.Marshal(row); jsonErr != nil {
 			problems = append(problems, fmt.Sprintf("%s: row %d cannot be serialized to JSON: %v", op, i, jsonErr))

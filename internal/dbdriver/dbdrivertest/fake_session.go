@@ -70,6 +70,7 @@ type FakeSession struct {
 	fake       *Fake
 	mu         sync.Mutex
 	statements []string
+	tableCalls []TableCall
 	closed     bool
 }
 
@@ -156,6 +157,76 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 		return "", err
 	}
 	return s.fake.Sources[objType+":"+name], nil
+}
+
+// 表浏览同样直接取自内存里的那张表，不经过 Execute。假驱动不解释筛选与排序：它把收到的
+// 结构化请求原样记下（TableCalls），证明到它手里的不是 SQL 文本。
+
+// TableCall 是假会话收到的一次表浏览请求。
+type TableCall struct {
+	// Op 是 "open" / "rows" / "count"。
+	Op       string
+	Database string
+	Table    string
+	// Query 是 rows 的筛选与排序；count 只有其中的筛选。
+	Query dbdriver.TableQuery
+	// Page 是 open / rows 要的那一页。
+	Page dbdriver.Page
+}
+
+// TableCalls 返回这条会话收到的表浏览请求，按先后。
+func (s *FakeSession) TableCalls() []TableCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.tableCalls)
+}
+
+func (s *FakeSession) OpenTable(_ context.Context, database, table string, pageSize int) (*dbdriver.OpenedTable, error) {
+	page := dbdriver.Page{Index: 0, Size: pageSize}
+	if err := s.tableCall(TableCall{Op: "open", Database: database, Table: table, Page: page}); err != nil {
+		return nil, err
+	}
+	return &dbdriver.OpenedTable{
+		ColumnTypes: s.fake.ColumnTypes,
+		ColumnRules: s.fake.ColumnRules,
+		PrimaryKeys: s.fake.PrimaryKeys,
+		TotalCount:  int64(len(s.fake.Rows)),
+		FirstPage:   s.page(page),
+	}, nil
+}
+
+func (s *FakeSession) TableRows(_ context.Context, database, table string, query dbdriver.TableQuery, page dbdriver.Page) (*dbdriver.RowSet, error) {
+	if err := s.tableCall(TableCall{Op: "rows", Database: database, Table: table, Query: query, Page: page}); err != nil {
+		return nil, err
+	}
+	return s.page(page), nil
+}
+
+func (s *FakeSession) CountTableRows(_ context.Context, database, table string, filters []dbdriver.FilterItem) (int64, error) {
+	call := TableCall{Op: "count", Database: database, Table: table, Query: dbdriver.TableQuery{Filters: filters}}
+	if err := s.tableCall(call); err != nil {
+		return 0, err
+	}
+	return int64(len(s.fake.Rows)), nil
+}
+
+func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {
+	start := min(page.Index*page.Size, len(s.fake.Rows))
+	end := min(start+page.Size, len(s.fake.Rows))
+	return &dbdriver.RowSet{Columns: s.fake.Columns, Rows: s.fake.Rows[start:end]}
+}
+
+func (s *FakeSession) tableCall(call TableCall) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrFakeSessionClosed
+	}
+	if s.fake.TableErr != nil {
+		return s.fake.TableErr
+	}
+	s.tableCalls = append(s.tableCalls, call)
+	return nil
 }
 
 func (s *FakeSession) browse() error {
