@@ -21,7 +21,7 @@ Frontend registration is enumerated from the side-effect imports in `frontend/sr
 
 ## Integration Surface Depends on Capabilities
 
-Not every new type touches every item below. A minimal type such as `local` has no credentials, no connection pool, and no dedicated policy kind, so it touches relatively little. Query-surface types are heavier because query routing, panel selection, tab state, and persistence are not yet registry-driven; see [section 7](#7-shared-code-coupling-points-that-are-still-not-registered).
+A new SQL database (Oracle, ...) is not a new asset type: it is a driver of the existing `database` type and is added by registering a driver, see [adding-a-database-driver.md](./adding-a-database-driver.md). Not every new type touches every item below. A minimal type such as `local` has no credentials, no connection pool, and no dedicated policy kind, so it touches relatively little. Query-surface types are heavier because query routing, panel selection, tab state, and persistence are not yet registry-driven; see [section 7](#7-shared-code-coupling-points-that-are-still-not-registered).
 
 | Area | Registration-driven | Shared-code edit still required |
 | --- | --- | --- |
@@ -129,7 +129,7 @@ Reuse shared argument parsing:
 - `ArgInt64`
 - `ArgBool`
 - `ArgStringSlice`
-- `validateRemoteServerArgs` for the existing SSH/database/Redis/MongoDB host/port/username validation shape
+- `validateRemoteServerArgs` for the existing SSH/Redis/MongoDB host/port/username validation shape (the `database` type delegates its per-driver required arguments to the driver's `ConfigRules`)
 
 `AutomationContract.ConfigFields` is the executable source of truth: unknown generic keys are rejected by name instead of being silently discarded. `Normalize` owns create defaults; `CredentialPlan` declares existing-reference semantics and accepted credential kinds; `BindCredential` applies the validated ID without a type switch in shared code. Keep `ApprovalFields` to safe endpoint/account metadata only.
 
@@ -391,7 +391,7 @@ Useful patterns:
 - `serial.ts`: terminal transport type, `testable: true`, command-policy UI through `policyType: "ssh"`.
 - `local.ts`: no exposed policy and no Test button.
 - `k8s.ts`: aliases `["k8s", "kubernetes"]`, no Test button, opens a bespoke page through `openAsset.ts`.
-- `database.ts`: aliases `["database", "mysql", "postgresql"]`; driver differences fold into the single `database` type.
+- `database.ts`: aliases `["database", "mysql", "postgresql"]`; every SQL driver folds into the single `database` type, and the driver differences (display name, icon, default port, form fields, features) come from the driver registry's descriptors, not from this file — see [adding-a-database-driver.md](./adding-a-database-driver.md).
 - `rdp.ts`: `connectAction: "page"` plus `pageId: "rdp"`; the generic open-asset path creates an asset-scoped page tab.
 
 The unavoidable shared edit is the side-effect import. `registerAssetType` only runs when the module is imported, so add this line to `src/lib/assetTypes/index.ts`:
