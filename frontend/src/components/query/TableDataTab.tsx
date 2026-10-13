@@ -15,7 +15,7 @@ import { CodeEditor } from "@/components/CodeEditor";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { isMac, formatModKey } from "@/stores/shortcutStore";
-import { CountTableRows, ExecuteSQL, OpenTable, QueryTableRows } from "../../../wailsjs/go/query/Query";
+import { CountTableRows, ExecuteSQL, GetTableDDL, OpenTable, QueryTableRows } from "../../../wailsjs/go/query/Query";
 import { dbdriver, query_svc } from "../../../wailsjs/go/models";
 import {
   QueryResultTable,
@@ -897,117 +897,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setDdlLoading(true);
 
     try {
-      let ddl = "";
-
-      if (driver === "postgresql") {
-        const tableLiteral = sqlQuote(table);
-        const columnsSql = `SELECT column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${tableLiteral} ORDER BY ordinal_position`;
-        const primaryKeySql = `SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_schema = 'public' AND tc.table_name = ${tableLiteral} AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position`;
-
-        const columnsResult = await ExecuteSQL(assetId, columnsSql, database);
-        const primaryKeyResult = await ExecuteSQL(assetId, primaryKeySql, database);
-        const columnsParsed: SQLResult = JSON.parse(columnsResult);
-        const primaryKeyParsed: SQLResult = JSON.parse(primaryKeyResult);
-
-        const columns = columnsParsed.rows || [];
-        const primaryKeyColumns = (primaryKeyParsed.rows || [])
-          .map((r) => String(Object.values(r)[0] ?? ""))
-          .filter(Boolean);
-
-        if (columns.length > 0) {
-          const defs = columns.map((col) => {
-            const name = String(col.column_name ?? "");
-            const dataType = String(col.data_type ?? "");
-            const udtName = String(col.udt_name ?? "");
-            const columnDefault = col.column_default == null ? "" : String(col.column_default);
-            const type = dataType === "USER-DEFINED" && udtName ? udtName : dataType;
-            const nullable = String(col.is_nullable ?? "").toUpperCase() === "YES";
-
-            let line = `${quoteIdent(name, driver)} ${type}`;
-            if (!nullable) line += " NOT NULL";
-            if (columnDefault) line += ` DEFAULT ${columnDefault}`;
-            return line;
-          });
-
-          if (primaryKeyColumns.length > 0) {
-            defs.push(`PRIMARY KEY (${primaryKeyColumns.map((c) => quoteIdent(c, driver)).join(", ")})`);
-          }
-
-          ddl = `CREATE TABLE ${quoteIdent("public", driver)}.${quoteIdent(table, driver)} (\n  ${defs.join(",\n  ")}\n);`;
-        }
-      } else if (driver === "sqlite") {
-        const schema = database ? `${quoteIdent(database, driver)}.` : "";
-        const result = await ExecuteSQL(
-          assetId,
-          `SELECT sql FROM ${schema}sqlite_master WHERE type IN ('table', 'view') AND name = ${sqlQuote(table)} LIMIT 1`,
-          database
-        );
-        const parsed: SQLResult = JSON.parse(result);
-        const row = parsed.rows?.[0];
-        if (row) {
-          ddl = String(row.sql ?? Object.values(row)[0] ?? "");
-        }
-      } else if (driver === "mssql") {
-        // MSSQL 无 SHOW CREATE TABLE，从 INFORMATION_SCHEMA 重建（table 为 schema.table）。
-        const dot = table.indexOf(".");
-        const schemaLit = sqlQuote(dot >= 0 ? table.slice(0, dot) : "dbo");
-        const tableLit = sqlQuote(dot >= 0 ? table.slice(dot + 1) : table);
-        const columnsSql =
-          `SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT ` +
-          `FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ${schemaLit} AND TABLE_NAME = ${tableLit} ORDER BY ORDINAL_POSITION`;
-        const primaryKeySql =
-          `SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc ` +
-          `JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA ` +
-          `WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND tc.TABLE_SCHEMA = ${schemaLit} AND tc.TABLE_NAME = ${tableLit} ORDER BY kcu.ORDINAL_POSITION`;
-
-        const [columnsResult, primaryKeyResult] = await Promise.all([
-          ExecuteSQL(assetId, columnsSql, database),
-          ExecuteSQL(assetId, primaryKeySql, database),
-        ]);
-        const columnsParsed: SQLResult = JSON.parse(columnsResult);
-        const primaryKeyParsed: SQLResult = JSON.parse(primaryKeyResult);
-        const cols = columnsParsed.rows || [];
-        const pkColumns = (primaryKeyParsed.rows || []).map((r) => String(Object.values(r)[0] ?? "")).filter(Boolean);
-
-        if (cols.length > 0) {
-          const defs = cols.map((col) => {
-            const name = String(col.COLUMN_NAME ?? col.column_name ?? "");
-            const dataType = String(col.DATA_TYPE ?? col.data_type ?? "");
-            const maxLenRaw = col.CHARACTER_MAXIMUM_LENGTH ?? col.character_maximum_length;
-            const maxLen = maxLenRaw == null ? null : Number(maxLenRaw);
-            const type =
-              maxLen === -1 ? `${dataType}(max)` : maxLen && maxLen > 0 ? `${dataType}(${maxLen})` : dataType;
-            const nullable = String(col.IS_NULLABLE ?? col.is_nullable ?? "").toUpperCase() === "YES";
-            const colDefault = col.COLUMN_DEFAULT == null ? "" : String(col.COLUMN_DEFAULT);
-            let line = `${quoteIdent(name, driver)} ${type}`;
-            if (!nullable) line += " NOT NULL";
-            if (colDefault) line += ` DEFAULT ${colDefault}`;
-            return line;
-          });
-          if (pkColumns.length > 0) {
-            defs.push(`PRIMARY KEY (${pkColumns.map((c) => quoteIdent(c, driver)).join(", ")})`);
-          }
-          ddl = `CREATE TABLE ${quoteTableRef(database, table, driver)} (\n  ${defs.join(",\n  ")}\n);`;
-        }
-      } else {
-        const quotedTable = quoteIdent(table, driver);
-        const result = await ExecuteSQL(assetId, `SHOW CREATE TABLE ${quotedTable}`, database);
-        const parsed: SQLResult = JSON.parse(result);
-        const row = parsed.rows?.[0];
-        if (row) {
-          const values = Object.values(row);
-          const createSQL = values.find((v) => typeof v === "string" && /CREATE\s+(TABLE|VIEW)/i.test(String(v)));
-          ddl = String(createSQL ?? values[1] ?? values[0] ?? "");
-        }
-      }
-
+      const ddl = await GetTableDDL(assetId, database, table);
       setDdlSQL(ddl || t("query.ddlEmpty"));
     } catch (e) {
       setDdlSQL(String(e));
     } finally {
       setDdlLoading(false);
     }
-  }, [assetId, driver, table, database, t]);
+  }, [assetId, table, database, t]);
 
   const handleCopyDDL = useCallback(async () => {
     const text = ddlLoading ? "" : ddlSQL;

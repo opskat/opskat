@@ -127,6 +127,16 @@ type Session interface {
 	// 多条语句而在没有稳定顺序时重复或漏行。调用方读完或放弃都必须 Close 返回的游标。
 	StreamTableRows(ctx context.Context, database, table string, query TableQuery) (RowStream, error)
 
+	// 以下是表的两项文本产出：同样由驱动按自己的方言生成，共享代码和前端都不拼方言 SQL。
+
+	// TableDDL 返回一张表（或视图）的建表语句；表不存在或驱动给不出时返回空串。表名用
+	// ListTables 给出的形式，带 schema 的驱动按表真正所在的 schema 解析。没有声明 CapViewDDL
+	// 的驱动返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	TableDDL(ctx context.Context, database, table string) (string, error)
+	// StarterQuery 返回 SQL 编辑器的起始查询语句：取这张表前 limit 行，表引用与取前几行的
+	// 写法都是驱动自己的方言。驱动没提供时返回包着 ErrUnsupported 的错误。
+	StarterQuery(ctx context.Context, database, table string, limit int) (string, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }

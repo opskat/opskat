@@ -47,6 +47,11 @@ func (dialect) FirstPageSQL(tableRef string, limit int) string {
 	return fmt.Sprintf("SELECT TOP %d * FROM %s", limit, tableRef)
 }
 
+// StarterSQL：起始查询语句同样用 TOP。
+func (dialect) StarterSQL(tableRef string, limit int) string {
+	return fmt.Sprintf("SELECT TOP %d * FROM %s", limit, tableRef)
+}
+
 // TablePageSQL：OFFSET / FETCH 要求 ORDER BY，没有排序键时用 (SELECT NULL) 占位。
 func (dialect) TablePageSQL(sel sqldb.TableSelect) string {
 	orderBy := sel.OrderBy

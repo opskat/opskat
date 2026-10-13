@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildDeleteStatement,
-  buildSingleRowUpdate,
-  buildStarterSelectSql,
-  quoteIdent,
-  quoteTableRef,
-} from "@/lib/tableSql";
+import { buildDeleteStatement, buildSingleRowUpdate, quoteIdent, quoteTableRef } from "@/lib/tableSql";
 
 describe("table SQL helpers", () => {
   it("escapes embedded quotes in identifiers", () => {
@@ -23,11 +17,6 @@ describe("table SQL helpers", () => {
     // 不能拼成两段式 [appdb].[users]——MSSQL 会把它当成 schema.object
     expect(quoteTableRef("appdb", "users", "mssql")).toBe("[users]");
     expect(quoteTableRef("appdb", "dbo.users", "mssql")).toBe("[dbo].[users]");
-  });
-
-  it("builds starter SELECT per dialect", () => {
-    expect(buildStarterSelectSql("`appdb`.`users`", "mysql", 100)).toBe("SELECT * FROM `appdb`.`users` LIMIT 100");
-    expect(buildStarterSelectSql("[dbo].[users]", "mssql", 100)).toBe("SELECT TOP 100 * FROM [dbo].[users]");
   });
 
   it("assembles single-row UPDATE per dialect (locks existing behavior + MSSQL TOP)", () => {

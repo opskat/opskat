@@ -93,3 +93,41 @@ func TestConformanceReportsAnUndeclaredObjectTypeBeingServed(t *testing.T) {
 	assert.Contains(t, strings.Join(problems, "\n"), `ObjectSource("procedure")`)
 	assert.NotContains(t, strings.Join(problems, "\n"), `ObjectSource("view")`)
 }
+
+// 建表语句的声明与行为必须一致：声明了查看建表语句的驱动不能拒绝它，没声明的不能放行。
+func TestConformanceChecksTableDDLAgainstTheDeclaration(t *testing.T) {
+	open := func(t *testing.T, fake *Fake) dbdriver.Session {
+		t.Helper()
+		session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}})
+		require.NoError(t, err)
+		return session
+	}
+
+	declared := NewFake()
+	declared.Desc.Capabilities = append(declared.Desc.Capabilities, dbdriver.CapViewDDL)
+	assert.Empty(t, browseProblems(declared.Desc, open(t, declared)), "a declared and served feature is conforming")
+
+	// 声明了却被拒绝。
+	refusing := NewFake()
+	refusing.Desc.Capabilities = append(refusing.Desc.Capabilities, dbdriver.CapViewDDL)
+	problems := browseProblems(refusing.Desc, ddlSession{Session: open(t, refusing), err: dbdriver.ErrUnsupported})
+	assert.Contains(t, strings.Join(problems, "\n"), "TableDDL")
+
+	// 声明了，表在，却给不出语句。
+	problems = browseProblems(refusing.Desc, ddlSession{Session: open(t, refusing)})
+	assert.Contains(t, strings.Join(problems, "\n"), "no statement")
+
+	// 没声明却被放行。
+	undeclared := NewFake()
+	problems = sessionProblems(undeclared.Desc, ddlSession{Session: open(t, undeclared), ddl: "CREATE TABLE x ()"})
+	assert.Contains(t, strings.Join(problems, "\n"), "TableDDL")
+}
+
+// ddlSession 让 TableDDL 的回答由测试决定，不管驱动声明了什么。
+type ddlSession struct {
+	dbdriver.Session
+	ddl string
+	err error
+}
+
+func (s ddlSession) TableDDL(context.Context, string, string) (string, error) { return s.ddl, s.err }

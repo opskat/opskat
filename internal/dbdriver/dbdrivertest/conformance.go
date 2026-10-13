@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/opskat/opskat/internal/dbdriver"
@@ -106,7 +107,8 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	return problems
 }
 
-// undeclaredObjectProblems 检查没有声明的对象类型都被 ObjectSource 以 ErrUnsupported 拒绝。
+// undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
+// ObjectSource，以及查看建表语句。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -116,6 +118,11 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 		}
 		if _, err := s.ObjectSource(ctx, "", objType, "x", ""); !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("ObjectSource(%q): the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", objType, capability, err))
+		}
+	}
+	if !desc.Supports(dbdriver.CapViewDDL) {
+		if _, err := s.TableDDL(ctx, "", "x"); !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("TableDDL: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapViewDDL, err))
 		}
 	}
 	return problems
@@ -176,6 +183,24 @@ func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 			if capability, _ := dbdriver.ObjectCapability(objType); !desc.Supports(capability) && len(groups[objType]) > 0 {
 				report("ListObjects lists %d %s objects, but the driver does not declare %q", len(groups[objType]), objType, capability)
 			}
+		}
+	}
+
+	// 查看建表语句同样单独声明：声明了的可以调用（表存在，所以有内容）；没声明的被拒绝由
+	// sessionProblems 在任何语句之前检查。
+	if desc.Supports(dbdriver.CapViewDDL) {
+		ddlTable := "x"
+		if len(tables) > 0 {
+			ddlTable = tables[0]
+		}
+		ddl, err := s.TableDDL(ctx, database, ddlTable)
+		switch {
+		case errors.Is(err, dbdriver.ErrUnsupported):
+			report("TableDDL(%q): declared %q but refused with ErrUnsupported: %v", ddlTable, dbdriver.CapViewDDL, err)
+		case err != nil:
+			report("TableDDL(%q): %v", ddlTable, err)
+		case len(tables) > 0 && ddl == "":
+			report("TableDDL(%q): returned no statement for a table that exists", ddlTable)
 		}
 	}
 
@@ -302,6 +327,14 @@ func tableProblems(s dbdriver.Session, database, table string) []string {
 		if opened != nil && streamed != opened.TotalCount {
 			report("StreamTableRows: streamed %d rows, but OpenTable reported a total of %d", streamed, opened.TotalCount)
 		}
+	}
+
+	starter, err := s.StarterQuery(ctx, database, table, ConformancePageSize)
+	switch {
+	case err != nil:
+		report("StarterQuery(%q): %v", table, err)
+	case !strings.Contains(starter, table):
+		report("StarterQuery(%q): the statement %q does not reference the table", table, starter)
 	}
 
 	if err := s.Close(); err != nil {

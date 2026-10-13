@@ -312,13 +312,6 @@ export function buildAlterStatements(params: {
 
 export type CellValueFilterOperator = TableFilterOperator;
 
-export function buildStarterSelectSql(tableRef: string, driver?: string, limit = 100): string {
-  if (driver === "mssql") {
-    return `SELECT TOP ${limit} * FROM ${tableRef}`;
-  }
-  return `SELECT * FROM ${tableRef} LIMIT ${limit}`;
-}
-
 export interface BuildSingleRowUpdateArgs {
   tableRef: string; // 已 quote 的表引用
   setSql: string; // 已拼好的 SET 子句

@@ -199,3 +199,29 @@ func TestFakeSessionStreamsItsTableInOneCall(t *testing.T) {
 	_, err = session.StreamTableRows(context.Background(), "app", "users", query)
 	require.ErrorIs(t, err, fake.TableErr)
 }
+
+// 建表语句与起始查询语句都由假会话直接回答，不经过任何语句；没声明 CapViewDDL 的假驱动
+// 拒绝查看建表语句，且什么也没记下。
+func TestFakeSessionServesDDLAndStarterQueryWithoutStatements(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	ctx := context.Background()
+
+	_, err := session.TableDDL(ctx, "app", "users")
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapViewDDL)
+	ddl, err := session.TableDDL(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, fake.DDL, ddl)
+
+	starter, err := session.StarterQuery(ctx, "app", "users", 50)
+	require.NoError(t, err)
+	assert.Equal(t, "FAKE SELECT FIRST 50 FROM app.users", starter)
+
+	assert.Equal(t, []TableCall{
+		{Op: "ddl", Database: "app", Table: "users"},
+		{Op: "starter", Database: "app", Table: "users", Page: dbdriver.Page{Size: 50}},
+	}, session.TableCalls())
+	assert.Empty(t, session.Statements())
+}

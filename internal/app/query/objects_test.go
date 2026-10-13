@@ -2,6 +2,7 @@ package query
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -80,4 +81,48 @@ func assertSameJSON(t *testing.T, want, got any) {
 	gotJSON, err := json.Marshal(got)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(wantJSON), string(gotJSON))
+}
+
+// 查看建表语句与起始查询语句由驱动在自己的会话上生成：假驱动的会话不是 *sql.DB，到它手里的是
+// 库名、表名与行数，没有任何语句。
+func TestTableTextsAreProducedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapViewDDL)
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	ddl, err := q.GetTableDDL(1, "reporting", "events")
+	require.NoError(t, err)
+	assert.Equal(t, fake.DDL, ddl)
+
+	starter, err := q.GetStarterQuery(1, "reporting", "events", 100)
+	require.NoError(t, err)
+	assert.Equal(t, "FAKE SELECT FIRST 100 FROM reporting.events", starter)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{
+		{Op: "ddl", Database: "reporting", Table: "events"},
+		{Op: "starter", Database: "reporting", Table: "events", Page: dbdriver.Page{Size: 100}},
+	}, sessions[0].TableCalls())
+	assert.Empty(t, sessions[0].Statements())
+}
+
+// 没有声明查看建表语句的驱动明确报「不支持」，且不执行任何语句；数据库的错误原样到达调用方。
+func TestTableDDLRefusalAndErrors(t *testing.T) {
+	fake := dbdrivertest.NewFake() // 没有声明 view_ddl
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.GetTableDDL(1, "", "events")
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	for _, s := range fake.Sessions() {
+		assert.Empty(t, s.Statements())
+		assert.Empty(t, s.TableCalls())
+	}
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapViewDDL)
+	fake.TableErr = errors.New(`fakedb: permission denied for table "events"`)
+	_, err = q.GetTableDDL(1, "", "events")
+	require.ErrorIs(t, err, fake.TableErr)
 }

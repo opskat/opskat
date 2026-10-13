@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter"。
 	Op       string
 	Database string
 	Table    string
@@ -232,6 +232,27 @@ func (f *fakeStream) Next() bool {
 func (f *fakeStream) Row() []any   { return f.rows[f.next] }
 func (f *fakeStream) Err() error   { return nil }
 func (f *fakeStream) Close() error { return nil }
+
+// TableDDL 记下收到的请求（Op "ddl"）。驱动没有声明 CapViewDDL 时以 ErrUnsupported 拒绝，
+// 什么也不记、不执行。
+func (s *FakeSession) TableDDL(_ context.Context, database, table string) (string, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapViewDDL) {
+		return "", fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapViewDDL)
+	}
+	if err := s.tableCall(TableCall{Op: "ddl", Database: database, Table: table}); err != nil {
+		return "", err
+	}
+	return s.fake.DDL, nil
+}
+
+// StarterQuery 记下收到的请求（Op "starter"，Page.Size 为 limit），给出一条一眼能与任何真实
+// 方言区分的语句。
+func (s *FakeSession) StarterQuery(_ context.Context, database, table string, limit int) (string, error) {
+	if err := s.tableCall(TableCall{Op: "starter", Database: database, Table: table, Page: dbdriver.Page{Size: limit}}); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("FAKE SELECT FIRST %d FROM %s.%s", limit, database, table), nil
+}
 
 func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {
 	start := min(page.Index*page.Size, len(s.fake.Rows))

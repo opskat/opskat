@@ -151,3 +151,27 @@ func (q *Query) GetObjectSource(assetID int64, database, objType, name, table st
 	})
 	return result, err
 }
+
+// GetTableDDL returns the CREATE statement of a table (empty when the table does not exist).
+// 驱动没有声明查看建表语句时返回 dbdriver.ErrUnsupported。
+func (q *Query) GetTableDDL(assetID int64, database, table string) (string, error) {
+	var result string
+	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
+		ddl, err := session.TableDDL(ctx, database, table)
+		result = ddl
+		return err
+	})
+	return result, err
+}
+
+// GetStarterQuery returns the SQL editor's starter statement for a table (its first limit rows),
+// written in the asset's dialect by the driver.
+func (q *Query) GetStarterQuery(assetID int64, database, table string, limit int) (string, error) {
+	var result string
+	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
+		statement, err := session.StarterQuery(ctx, database, table, limit)
+		result = statement
+		return err
+	})
+	return result, err
+}

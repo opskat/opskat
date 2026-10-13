@@ -49,6 +49,9 @@ type Fake struct {
 	// TableErr 非 nil 时表浏览操作以它失败：模拟数据库返回的错误，或（包着
 	// dbdriver.ErrUnsupported 时）一个不提供表浏览的驱动。
 	TableErr error
+	// DDL 是假库给任何表的建表语句。会话只在驱动声明了 CapViewDDL 时给出它，否则以
+	// ErrUnsupported 拒绝；TableErr 同样作用于它。
+	DDL string
 	// SessionPerAsset 为 true 时声明一条会话覆盖整个资产（像 SQLite）；默认一个库一条。
 	SessionPerAsset bool
 
@@ -98,6 +101,7 @@ func NewFake() *Fake {
 			{Name: "name", Nullable: true},
 		},
 		PrimaryKeys: []string{"id"},
+		DDL:         "CREATE TABLE users (id int, name text)",
 	}
 }
 

@@ -28,6 +28,8 @@ type Tables interface {
 	FirstPageSQL(tableRef string, limit int) string
 	// TablePageSQL 是按筛选与排序取一页的语句。
 	TablePageSQL(sel TableSelect) string
+	// StarterSQL 是 SQL 编辑器的起始查询语句：取前 limit 行，不带 OFFSET。
+	StarterSQL(tableRef string, limit int) string
 }
 
 // TableSelect 是取表里一页数据的各个部分，都已按方言写好。
@@ -51,6 +53,10 @@ type TableColumn struct {
 
 func (LimitOffset) FirstPageSQL(tableRef string, limit int) string {
 	return fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET 0", tableRef, limit)
+}
+
+func (LimitOffset) StarterSQL(tableRef string, limit int) string {
+	return fmt.Sprintf("SELECT * FROM %s LIMIT %d", tableRef, limit)
 }
 
 func (LimitOffset) TablePageSQL(sel TableSelect) string {

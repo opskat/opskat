@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { DatabaseTree } from "../components/query/DatabaseTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { ExecuteSQL, ListTables } from "../../wailsjs/go/query/Query";
+import { ExecuteSQL, GetStarterQuery, ListTables } from "../../wailsjs/go/query/Query";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
@@ -466,5 +466,59 @@ describe("DatabaseTree — schema-aware selection", () => {
       "table:appdb.alpha.a1",
       "table:appdb.gamma.g1",
     ]);
+  });
+});
+
+describe("DatabaseTree — starter query", () => {
+  beforeEach(() => {
+    makeDatabaseTab("query-1", "fakedb");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["users"] },
+          loadingTables: {},
+          expandedDbs: ["appdb"],
+          expandedSchemas: {},
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+    vi.mocked(ExecuteSQL).mockReset();
+    vi.mocked(GetStarterQuery).mockReset();
+  });
+
+  it("opens the SQL editor with the statement the driver wrote, asked for with a structured request", async () => {
+    vi.mocked(GetStarterQuery).mockResolvedValue("FAKE SELECT FIRST 100 FROM appdb.users");
+    const openSqlTab = vi.fn();
+    useQueryStore.setState({ openSqlTab });
+    render(<DatabaseTree tabId="query-1" />);
+
+    fireEvent.contextMenu(screen.getByText("users"));
+    fireEvent.click(screen.getByText("query.newSql"));
+
+    await waitFor(() =>
+      expect(openSqlTab).toHaveBeenCalledWith("query-1", "appdb", "FAKE SELECT FIRST 100 FROM appdb.users")
+    );
+    expect(vi.mocked(GetStarterQuery).mock.calls).toEqual([[1, "appdb", "users", 100]]);
+    expect(ExecuteSQL).not.toHaveBeenCalled();
+  });
+
+  it("opens no editor and reports the error when the driver cannot write the statement", async () => {
+    vi.mocked(GetStarterQuery).mockRejectedValue("operation not supported by database driver");
+    const openSqlTab = vi.fn();
+    useQueryStore.setState({ openSqlTab });
+    render(<DatabaseTree tabId="query-1" />);
+
+    fireEvent.contextMenu(screen.getByText("users"));
+    fireEvent.click(screen.getByText("query.newSql"));
+
+    await waitFor(() => expect(GetStarterQuery).toHaveBeenCalled());
+    expect(openSqlTab).not.toHaveBeenCalled();
   });
 });

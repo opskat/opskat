@@ -30,7 +30,7 @@ import {
   ContextMenuSeparator,
   ConfirmDialog,
 } from "@opskat/ui";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, GetStarterQuery } from "../../../wailsjs/go/query/Query";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
@@ -38,7 +38,7 @@ import { CreateTableDialog } from "./CreateTableDialog";
 import { AlterTableDialog } from "./AlterTableDialog";
 import { TableStructureDialog } from "./TableStructureDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
-import { buildStarterSelectSql, quoteTableRef } from "@/lib/tableSql";
+import { quoteTableRef } from "@/lib/tableSql";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -387,8 +387,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           <ContextMenuItem
             disabled={isBatch}
             onClick={() => {
-              const tableName = quoteTableRef(db, tbl, driver);
-              openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
+              if (!tabMeta?.assetId) return;
+              GetStarterQuery(tabMeta.assetId, db, tbl, 100).then(
+                (starter) => openSqlTab(tabId, db, starter),
+                (e) => toast.error(String(e))
+              );
             }}
           >
             <Search className="h-3.5 w-3.5" />
