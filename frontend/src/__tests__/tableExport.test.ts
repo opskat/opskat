@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTableExportContent,
-  buildTableExportSelectSql,
   toCsv,
   toInsertSql,
   toTsv,
@@ -113,75 +112,5 @@ describe("table export helpers", () => {
         },
       })
     ).toBe(',03/04/2026 05.06.07,"12,5",deadbeef');
-  });
-
-  it("builds all-data export SQL without pagination while preserving filters and sorting", () => {
-    expect(
-      buildTableExportSelectSql({
-        database: "appdb",
-        table: "users",
-        driver: "mysql",
-        scope: "all",
-        whereClause: "amount > 10",
-        orderByClause: "created_at DESC",
-        sortColumn: null,
-        sortDir: null,
-        page: 2,
-        pageSize: 100,
-      })
-    ).toBe("SELECT * FROM `appdb`.`users` WHERE amount > 10 ORDER BY created_at DESC");
-  });
-
-  it("builds current-page export SQL with pagination and header-click sort precedence", () => {
-    expect(
-      buildTableExportSelectSql({
-        database: "appdb",
-        table: "users",
-        driver: "mysql",
-        scope: "page",
-        whereClause: "",
-        orderByClause: "created_at DESC",
-        sortColumn: "name",
-        sortDir: "asc",
-        page: 1,
-        pageSize: 50,
-      })
-    ).toBe("SELECT * FROM `appdb`.`users` ORDER BY `name` ASC LIMIT 50 OFFSET 50");
-  });
-
-  it("builds MSSQL current-page export SQL with OFFSET/FETCH", () => {
-    expect(
-      buildTableExportSelectSql({
-        database: "appdb",
-        table: "dbo.users",
-        driver: "mssql",
-        scope: "page",
-        whereClause: "[active] = '1'",
-        orderByClause: "",
-        sortColumn: "name",
-        sortDir: "desc",
-        page: 2,
-        pageSize: 100,
-      })
-    ).toBe(
-      "SELECT * FROM [dbo].[users] WHERE [active] = '1' ORDER BY [name] DESC OFFSET 200 ROWS FETCH NEXT 100 ROWS ONLY"
-    );
-  });
-
-  it("builds MSSQL current-page export SQL with a fallback ORDER BY", () => {
-    expect(
-      buildTableExportSelectSql({
-        database: "appdb",
-        table: "dbo.users",
-        driver: "mssql",
-        scope: "page",
-        whereClause: "",
-        orderByClause: "",
-        sortColumn: null,
-        sortDir: null,
-        page: 0,
-        pageSize: 100,
-      })
-    ).toBe("SELECT * FROM [dbo].[users] ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY");
   });
 });

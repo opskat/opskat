@@ -1,9 +1,8 @@
-import { buildPagedSelect, quoteIdent, quoteQualifiedIdent, quoteTableRef, sqlQuote } from "./tableSql";
+import { quoteIdent, quoteQualifiedIdent, sqlQuote } from "./tableSql";
 
 type TableRow = Record<string, unknown>;
 export type TableExportFormat = "csv" | "tsv" | "sql" | "xlsx";
 export type TableExportScope = "page" | "all";
-export type TableExportSortDir = "asc" | "desc" | null;
 export type TableExportRecordDelimiter = "lf" | "crlf";
 export type TableExportFieldDelimiter = "comma" | "tab" | "semicolon" | "pipe";
 export type TableExportTextQualifier = "double" | "single" | "none";
@@ -25,20 +24,6 @@ export interface TableExportOptions {
   decimalSymbol?: "." | ",";
   binaryDataEncoding?: TableExportBinaryEncoding;
   nullValue?: string;
-}
-
-interface BuildTableExportSelectSqlInput {
-  database: string;
-  table: string;
-  driver?: string;
-  scope: TableExportScope;
-  whereClause: string;
-  orderByClause: string;
-  sortColumn: string | null;
-  sortDir: TableExportSortDir;
-  page: number;
-  pageSize: number;
-  columns?: string[]; // 投影列；省略则 SELECT *
 }
 
 interface BuildTableExportContentInput {
@@ -240,41 +225,4 @@ export function buildTableExportContent({
 
 export function safeTableExportFilenamePart(value: string): string {
   return value.replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "") || "table";
-}
-
-export function buildTableExportSelectSql({
-  database,
-  table,
-  driver,
-  scope,
-  whereClause,
-  orderByClause,
-  sortColumn,
-  sortDir,
-  page,
-  pageSize,
-  columns,
-}: BuildTableExportSelectSqlInput): string {
-  const tableName = quoteTableRef(database, table, driver);
-  const selectExpr = columns && columns.length ? columns.map((col) => quoteIdent(col, driver)).join(", ") : "*";
-  const where = whereClause.trim();
-  const orderBy =
-    sortColumn && sortDir
-      ? `${quoteIdent(sortColumn, driver)} ${sortDir === "asc" ? "ASC" : "DESC"}`
-      : orderByClause.trim();
-  const wherePart = where ? ` WHERE ${where}` : "";
-  const orderByPart = orderBy ? ` ORDER BY ${orderBy}` : "";
-  if (scope === "page" && driver === "mssql") {
-    return buildPagedSelect({
-      tableRef: tableName,
-      wherePart,
-      orderByExpr: orderBy,
-      pageSize,
-      offset: page * pageSize,
-      driver,
-      selectExpr,
-    });
-  }
-  const pagePart = scope === "page" ? ` LIMIT ${pageSize} OFFSET ${page * pageSize}` : "";
-  return `SELECT ${selectExpr} FROM ${tableName}${wherePart}${orderByPart}${pagePart}`;
 }

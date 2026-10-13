@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDeleteStatement,
-  buildPagedSelect,
   buildSingleRowUpdate,
   buildStarterSelectSql,
   quoteIdent,
@@ -24,44 +23,6 @@ describe("table SQL helpers", () => {
     // 不能拼成两段式 [appdb].[users]——MSSQL 会把它当成 schema.object
     expect(quoteTableRef("appdb", "users", "mssql")).toBe("[users]");
     expect(quoteTableRef("appdb", "dbo.users", "mssql")).toBe("[dbo].[users]");
-  });
-
-  it("builds paged SELECT per dialect (MSSQL OFFSET/FETCH, others LIMIT)", () => {
-    // 其它 driver 行为不变
-    expect(
-      buildPagedSelect({ tableRef: "`t`", wherePart: "", orderByExpr: "", pageSize: 50, offset: 100, driver: "mysql" })
-    ).toBe("SELECT * FROM `t` LIMIT 50 OFFSET 100");
-    expect(
-      buildPagedSelect({
-        tableRef: '"main"."t"',
-        wherePart: " WHERE \"a\" = '1'",
-        orderByExpr: '"id" ASC',
-        pageSize: 50,
-        offset: 0,
-        driver: "sqlite",
-      })
-    ).toBe('SELECT * FROM "main"."t" WHERE "a" = \'1\' ORDER BY "id" ASC LIMIT 50 OFFSET 0');
-    // MSSQL：OFFSET/FETCH，需要 ORDER BY；无排序键时用 (SELECT NULL) 占位
-    expect(
-      buildPagedSelect({
-        tableRef: "[dbo].[t]",
-        wherePart: " WHERE [a] = '1'",
-        orderByExpr: "[id] ASC",
-        pageSize: 50,
-        offset: 100,
-        driver: "mssql",
-      })
-    ).toBe("SELECT * FROM [dbo].[t] WHERE [a] = '1' ORDER BY [id] ASC OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY");
-    expect(
-      buildPagedSelect({
-        tableRef: "[dbo].[t]",
-        wherePart: "",
-        orderByExpr: "",
-        pageSize: 50,
-        offset: 0,
-        driver: "mssql",
-      })
-    ).toBe("SELECT * FROM [dbo].[t] ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY");
   });
 
   it("builds starter SELECT per dialect", () => {

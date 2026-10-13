@@ -1,4 +1,3 @@
-import { quoteIdent, sqlQuote } from "./tableSql";
 import type { TableFilterOperator } from "./tableFilterOperators";
 export type { TableFilterOperator } from "./tableFilterOperators";
 
@@ -105,95 +104,6 @@ export function toggleFilterJoin(items: TableFilterItem[], id: string): TableFil
     if (item.kind === "group") return { ...item, items: toggleFilterJoin(item.items, id) };
     return item;
   });
-}
-
-function hasValue(value: unknown): boolean {
-  return value !== undefined;
-}
-
-function toRangeValues(value: unknown): [unknown, unknown] | null {
-  if (!Array.isArray(value) || value.length < 2) return null;
-  if (!hasValue(value[0]) || !hasValue(value[1])) return null;
-  return [value[0], value[1]];
-}
-
-function toListValues(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value.filter(hasValue);
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-  }
-  return hasValue(value) ? [value] : [];
-}
-
-function conditionSql(condition: TableFilterCondition, driver?: string): string {
-  if (!condition.enabled) return "";
-  const column = quoteIdent(condition.column, driver);
-  const operator = condition.operator ?? "=";
-
-  if (operator === "is_null") return `${column} IS NULL`;
-  if (operator === "is_not_null") return `${column} IS NOT NULL`;
-  if (operator === "is_empty") return `(${column} IS NULL OR ${column} = '')`;
-  if (operator === "is_not_empty") return `(${column} IS NOT NULL AND ${column} <> '')`;
-
-  if (!hasValue(condition.value)) return "";
-  if (condition.value == null) {
-    if (operator === "!=") return `${column} IS NOT NULL`;
-    if (operator === "=") return `${column} IS NULL`;
-    return "";
-  }
-
-  if (operator === "contains" || operator === "like") {
-    return `${column} LIKE ${sqlQuote(`%${String(condition.value)}%`)}`;
-  }
-  if (operator === "not_contains" || operator === "not_like") {
-    return `${column} NOT LIKE ${sqlQuote(`%${String(condition.value)}%`)}`;
-  }
-  if (operator === "begins_with") return `${column} LIKE ${sqlQuote(`${String(condition.value)}%`)}`;
-  if (operator === "not_begins_with") return `${column} NOT LIKE ${sqlQuote(`${String(condition.value)}%`)}`;
-  if (operator === "ends_with") return `${column} LIKE ${sqlQuote(`%${String(condition.value)}`)}`;
-  if (operator === "not_ends_with") return `${column} NOT LIKE ${sqlQuote(`%${String(condition.value)}`)}`;
-  if (operator === "between" || operator === "not_between") {
-    const rangeValues = toRangeValues(condition.value);
-    if (!rangeValues) return "";
-    return `${column} ${operator === "not_between" ? "NOT " : ""}BETWEEN ${sqlQuote(rangeValues[0])} AND ${sqlQuote(rangeValues[1])}`;
-  }
-  if (operator === "in_list" || operator === "not_in_list") {
-    const listValues = toListValues(condition.value);
-    if (listValues.length === 0) return "";
-    return `${column} ${operator === "not_in_list" ? "NOT " : ""}IN (${listValues.map(sqlQuote).join(", ")})`;
-  }
-
-  const sqlOperator = operator === "!=" ? "<>" : operator;
-  return `${column} ${sqlOperator} ${sqlQuote(condition.value)}`;
-}
-
-function buildItemsWhere(items: TableFilterItem[], driver?: string): string {
-  const parts: { sql: string; join: TableFilterJoin }[] = [];
-  for (const item of items) {
-    const sql =
-      item.kind === "condition"
-        ? conditionSql(item, driver)
-        : item.enabled === false
-          ? ""
-          : buildItemsWhere(item.items, driver);
-    if (!sql) continue;
-    const groupedSql = item.kind === "group" ? `${item.negated ? "NOT " : ""}(${sql})` : sql;
-    parts.push({ sql: groupedSql, join: item.join });
-  }
-
-  return parts.reduce((acc, part, index) => {
-    if (index === 0) return part.sql;
-    return `${acc} ${parts[index - 1].join.toUpperCase()} ${part.sql}`;
-  }, "");
-}
-
-// buildFilterWhereClause / buildSortOrderByClause 只剩导出对话框在用(它仍自己拼取数语句);
-// 表浏览的翻页、计数、筛选、排序发的是下面的结构化请求,语义由后端的驱动实现。
-export function buildFilterWhereClause(items: TableFilterItem[], driver?: string): string {
-  return buildItemsWhere(items, driver);
 }
 
 /**
@@ -442,8 +352,4 @@ export function updateSortCriterion(
   patch: Partial<TableSortItem>
 ): TableSortItem[] {
   return items.map((item) => (item.id === id ? { ...item, ...patch } : item));
-}
-
-export function buildSortOrderByClause(items: TableSortItem[], driver?: string): string {
-  return items.map((item) => `${quoteIdent(item.column, driver)} ${item.dir.toUpperCase()}`).join(", ");
 }

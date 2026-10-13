@@ -312,37 +312,6 @@ export function buildAlterStatements(params: {
 
 export type CellValueFilterOperator = TableFilterOperator;
 
-export interface BuildPagedSelectArgs {
-  tableRef: string; // 已 quote 的表引用
-  wherePart: string; // 已拼好的 " WHERE ..." 或 ""
-  orderByExpr: string; // ORDER BY 表达式（不含 "ORDER BY"），可为 ""
-  pageSize: number;
-  offset: number;
-  driver?: string;
-  selectExpr?: string; // 投影列（已 quote），默认 "*"
-}
-
-// buildPagedSelect 按方言拼分页查询。MSSQL 无 LIMIT，用 OFFSET ... ROWS FETCH
-// NEXT ... ROWS ONLY，且该语法要求 ORDER BY，没有排序键时用 (SELECT NULL) 占位。
-// 其它 driver 维持 LIMIT/OFFSET。
-export function buildPagedSelect({
-  tableRef,
-  wherePart,
-  orderByExpr,
-  pageSize,
-  offset,
-  driver,
-  selectExpr = "*",
-}: BuildPagedSelectArgs): string {
-  const base = `SELECT ${selectExpr} FROM ${tableRef}${wherePart}`;
-  if (driver === "mssql") {
-    const order = orderByExpr.trim() ? orderByExpr.trim() : "(SELECT NULL)";
-    return `${base} ORDER BY ${order} OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`;
-  }
-  const orderByPart = orderByExpr.trim() ? ` ORDER BY ${orderByExpr.trim()}` : "";
-  return `${base}${orderByPart} LIMIT ${pageSize} OFFSET ${offset}`;
-}
-
 export function buildStarterSelectSql(tableRef: string, driver?: string, limit = 100): string {
   if (driver === "mssql") {
     return `SELECT TOP ${limit} * FROM ${tableRef}`;

@@ -46,8 +46,6 @@ import {
   type CellValueFilterOperator,
 } from "@/lib/tableSql";
 import {
-  buildFilterWhereClause,
-  buildSortOrderByClause,
   createFilterCondition,
   removeFilterItemsByColumn,
   toFilterRequest,
@@ -1046,12 +1044,13 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     () => (visibleColumns.length > 0 ? visibleColumns : columns),
     [visibleColumns, columns]
   );
-  // 导出对话框仍自己拼取数语句;在它改为向驱动发结构化请求之前,把已生效的筛选与排序折成
-  // 它要的两段文本。表浏览自己的请求不用它们。
-  const exportWhereClause = useMemo(() => buildFilterWhereClause(appliedFilters, driver), [appliedFilters, driver]);
-  const exportOrderByClause = useMemo(() => buildSortOrderByClause(appliedSorts, driver), [appliedSorts, driver]);
   const hasActiveFilterSort =
-    filters.length > 0 || sorts.length > 0 || !!exportWhereClause || !!exportOrderByClause || !!sortColumn || !!sortDir;
+    filters.length > 0 ||
+    sorts.length > 0 ||
+    filterRequest.length > 0 ||
+    sortRequest.length > 0 ||
+    !!sortColumn ||
+    !!sortDir;
 
   return (
     <div className="flex flex-col h-full">
@@ -1273,10 +1272,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         totalRows={totalRows}
         page={page}
         pageSize={pageSize}
-        whereClause={exportWhereClause}
-        orderByClause={exportOrderByClause}
-        sortColumn={sortColumn}
-        sortDir={sortDir}
+        filters={filterRequest}
+        sorts={sortRequest}
         driver={driver}
         initialFormat={exportFormat}
         onFormatChange={setExportFormat}

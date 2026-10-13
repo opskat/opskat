@@ -23,10 +23,8 @@ const baseProps = {
   totalRows: 1,
   page: 0,
   pageSize: 50,
-  whereClause: "",
-  orderByClause: "",
-  sortColumn: null,
-  sortDir: null,
+  filters: [] as never[],
+  sorts: [] as { column: string; dir: "asc" | "desc" }[],
   initialFormat: "csv" as const,
   onFormatChange: vi.fn(),
 };
@@ -34,6 +32,8 @@ const baseProps = {
 describe("ExportTableDataDialog", () => {
   afterEach(() => {
     vi.mocked(App.SelectTableExportFile).mockReset();
+    vi.mocked(App.QueryTableRows).mockReset();
+    vi.mocked(App.ExportTableToXlsx).mockReset();
     vi.mocked(App.ExecuteSQL).mockReset();
     vi.mocked(App.OpenDirectory).mockReset();
     delete (window as unknown as { go?: unknown }).go;
@@ -42,7 +42,7 @@ describe("ExportTableDataDialog", () => {
   it("opens the exported file or its containing folder after a successful export", async () => {
     const user = userEvent.setup();
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.csv");
-    vi.mocked(App.ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: baseProps.rows }));
+    vi.mocked(App.QueryTableRows).mockResolvedValue({ columns: ["id", "name"], rows: baseProps.rows });
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, {
       go: {
@@ -75,9 +75,9 @@ describe("ExportTableDataDialog", () => {
     const firstChunk = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `User ${index + 1}` }));
     const secondChunk = [{ id: 1001, name: "Last User" }];
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.csv");
-    vi.mocked(App.ExecuteSQL)
-      .mockResolvedValueOnce(JSON.stringify({ rows: firstChunk }))
-      .mockResolvedValueOnce(JSON.stringify({ rows: secondChunk }));
+    vi.mocked(App.QueryTableRows)
+      .mockResolvedValueOnce({ columns: ["id", "name"], rows: firstChunk })
+      .mockResolvedValueOnce({ columns: ["id", "name"], rows: secondChunk });
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, {
       go: {
@@ -96,13 +96,19 @@ describe("ExportTableDataDialog", () => {
     await user.click(screen.getByRole("button", { name: /query.exportStart/ }));
 
     await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));
-    expect(App.ExecuteSQL).toHaveBeenNthCalledWith(1, 1, "SELECT * FROM `appdb`.`users` LIMIT 1000 OFFSET 0", "appdb");
-    expect(App.ExecuteSQL).toHaveBeenNthCalledWith(
-      2,
-      1,
-      "SELECT * FROM `appdb`.`users` LIMIT 1000 OFFSET 1000",
-      "appdb"
-    );
+    expect(App.QueryTableRows).toHaveBeenNthCalledWith(1, 1, "appdb", "users", {
+      filters: [],
+      sorts: [],
+      page: 0,
+      pageSize: 1000,
+    });
+    expect(App.QueryTableRows).toHaveBeenNthCalledWith(2, 1, "appdb", "users", {
+      filters: [],
+      sorts: [],
+      page: 1,
+      pageSize: 1000,
+    });
+    expect(App.ExecuteSQL).not.toHaveBeenCalled();
     expect(writeFile).toHaveBeenNthCalledWith(
       1,
       "/tmp/opskat/users.csv",
@@ -113,5 +119,78 @@ describe("ExportTableDataDialog", () => {
       encoding: "utf-8",
       append: true,
     });
+  });
+
+  const filters = [
+    { kind: "condition", join: "and", disabled: false, column: "name", operator: "contains", value: "a" },
+  ] as never[];
+  const sorts = [{ column: "id", dir: "desc" as const }];
+
+  async function startExport(user: ReturnType<typeof userEvent.setup>, path: string) {
+    await user.click(screen.getByRole("button", { name: /query.exportChooseFile/ }));
+    await screen.findByText(path);
+    await user.click(screen.getByRole("button", { name: /query.exportStart/ }));
+  }
+
+  it.each(["csv", "tsv"] as const)(
+    "fetches %s data with the structured filter and sort, never SQL text",
+    async (format) => {
+      const user = userEvent.setup();
+      vi.mocked(App.SelectTableExportFile).mockResolvedValue(`/tmp/opskat/users.${format}`);
+      vi.mocked(App.QueryTableRows).mockResolvedValue({ columns: ["id", "name"], rows: baseProps.rows });
+      Object.assign(window, { go: { app: { App: { WriteTableExportFile: vi.fn().mockResolvedValue(undefined) } } } });
+
+      render(<ExportTableDataDialog {...baseProps} initialFormat={format} filters={filters} sorts={sorts} />);
+      await startExport(user, `/tmp/opskat/users.${format}`);
+
+      await waitFor(() => expect(App.QueryTableRows).toHaveBeenCalled());
+      expect(App.QueryTableRows).toHaveBeenCalledWith(1, "appdb", "users", {
+        filters,
+        sorts,
+        page: 0,
+        pageSize: 1000,
+      });
+      expect(App.ExecuteSQL).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["all", { scope: "all" }],
+    ["page", { scope: "page" }],
+  ] as const)("hands the %s-scope XLSX export to the backend as a structured request", async (_name, expected) => {
+    const user = userEvent.setup();
+    vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.xlsx");
+    vi.mocked(App.ExportTableToXlsx).mockResolvedValue(undefined);
+
+    render(
+      <ExportTableDataDialog
+        {...baseProps}
+        initialFormat="xlsx"
+        filters={filters}
+        sorts={sorts}
+        page={2}
+        pageSize={50}
+      />
+    );
+    if (expected.scope === "page") {
+      const scopeSelect = screen.getAllByRole("combobox").find((el) => el.textContent?.includes("query.exportAllData"));
+      expect(scopeSelect).toBeDefined();
+      await user.click(scopeSelect!);
+      await user.click(await screen.findByRole("option", { name: "query.exportPageData" }));
+    }
+    await startExport(user, "/tmp/opskat/users.xlsx");
+
+    await waitFor(() => expect(App.ExportTableToXlsx).toHaveBeenCalled());
+    const [assetId, database, table, request, filePath] = vi.mocked(App.ExportTableToXlsx).mock.calls[0];
+    expect([assetId, database, table, filePath]).toEqual([1, "appdb", "users", "/tmp/opskat/users.xlsx"]);
+    expect(request).toEqual({
+      filters,
+      sorts,
+      columns: ["id", "name"],
+      scope: expected.scope,
+      page: 2,
+      pageSize: 50,
+    });
+    expect(App.ExecuteSQL).not.toHaveBeenCalled();
   });
 });

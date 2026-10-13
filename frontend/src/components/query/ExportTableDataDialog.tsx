@@ -25,23 +25,23 @@ import {
 import { Check, ChevronDown, Download, ExternalLink, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
 import { OpenDirectory } from "../../../wailsjs/go/system/System";
-import { ExportTableToXlsx, SelectTableExportFile, WriteTableExportFile } from "../../../wailsjs/go/query/Query";
+import {
+  ExportTableToXlsx,
+  QueryTableRows,
+  SelectTableExportFile,
+  WriteTableExportFile,
+} from "../../../wailsjs/go/query/Query";
+import type { dbdriver } from "../../../wailsjs/go/models";
+import { query_svc } from "../../../wailsjs/go/models";
+import type { TableSortRequestItem } from "@/lib/tableFilter";
 import {
   buildTableExportContent,
-  buildTableExportSelectSql,
   safeTableExportFilenamePart,
   type TableExportFormat,
   type TableExportOptions,
   type TableExportScope,
-  type TableExportSortDir,
 } from "@/lib/tableExport";
-
-interface SQLResult {
-  columns?: string[];
-  rows?: Record<string, unknown>[];
-}
 
 interface ExportTableDataDialogProps {
   open: boolean;
@@ -55,10 +55,9 @@ interface ExportTableDataDialogProps {
   totalRows: number | null;
   page: number;
   pageSize: number;
-  whereClause: string;
-  orderByClause: string;
-  sortColumn: string | null;
-  sortDir: TableExportSortDir;
+  /** 当前已生效的结构化筛选条件与排序项(表格头点击排序已并入 sorts);导出取数只发它们,不发 SQL。 */
+  filters: dbdriver.FilterItem[];
+  sorts: TableSortRequestItem[];
   initialFormat: TableExportFormat;
   onFormatChange: (format: TableExportFormat) => void;
 }
@@ -145,10 +144,8 @@ export function ExportTableDataDialog({
   totalRows,
   page,
   pageSize,
-  whereClause,
-  orderByClause,
-  sortColumn,
-  sortDir,
+  filters,
+  sorts,
   initialFormat,
   onFormatChange,
 }: ExportTableDataDialogProps) {
@@ -268,20 +265,20 @@ export function ExportTableDataDialog({
       // SELECT and let the Go side write the workbook directly to filePath.
       if (format === "xlsx") {
         appendLog("[EXP] Streaming workbook ...");
-        const selectSql = buildTableExportSelectSql({
+        await ExportTableToXlsx(
+          assetId,
           database,
           table,
-          driver,
-          scope,
-          whereClause,
-          orderByClause,
-          sortColumn,
-          sortDir,
-          page,
-          pageSize,
-          columns: selectedColumns,
-        });
-        await ExportTableToXlsx(assetId, database, selectSql, filePath);
+          query_svc.TableExportRequest.createFrom({
+            filters,
+            sorts,
+            columns: selectedColumns,
+            scope,
+            page,
+            pageSize,
+          }),
+          filePath
+        );
         processedRows = estimatedRows;
         const elapsed = ((performance.now() - startedAt) / 1000).toFixed(3);
         appendLog(`[EXP] Processed ~${processedRows} row(s) in ${elapsed}s`);
@@ -296,21 +293,13 @@ export function ExportTableDataDialog({
         let chunkIndex = 0;
         let wroteChunk = false;
         while (true) {
-          const sql = buildTableExportSelectSql({
+          const result = await QueryTableRows(
+            assetId,
             database,
             table,
-            driver,
-            scope: "page",
-            whereClause,
-            orderByClause,
-            sortColumn,
-            sortDir,
-            page: chunkIndex,
-            pageSize: EXPORT_ALL_CHUNK_SIZE,
-          });
-          const result = await ExecuteSQL(assetId, sql, database);
-          const parsed = JSON.parse(result || "{}") as SQLResult;
-          const chunkRows = parsed.rows ?? [];
+            query_svc.TableRowsRequest.createFrom({ filters, sorts, page: chunkIndex, pageSize: EXPORT_ALL_CHUNK_SIZE })
+          );
+          const chunkRows = result.rows ?? [];
           const content = buildTableExportContent({
             format,
             columns: selectedColumns,
@@ -361,6 +350,8 @@ export function ExportTableDataDialog({
     }
   }, [
     appendLog,
+    filters,
+    sorts,
     assetId,
     canStart,
     database,
@@ -372,18 +363,14 @@ export function ExportTableDataDialog({
     format,
     includeHeaders,
     meta.label,
-    orderByClause,
     page,
     pageSize,
     rows,
     scope,
     selectedColumns,
-    sortColumn,
-    sortDir,
     table,
     tableName,
     t,
-    whereClause,
   ]);
 
   const handleOpenExportFile = useCallback(async () => {

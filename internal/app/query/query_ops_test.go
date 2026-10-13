@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -122,14 +123,87 @@ func TestPanelRejectsUnregisteredDriver(t *testing.T) {
 	assert.Contains(t, err.Error(), "oracle")
 }
 
-// 还没迁到驱动上的操作（XLSX 导出）经过渡桥拿 *sql.DB，会话不是 *sql.DB 的驱动明确报
-// 「不支持」，不会 panic，也不会被当成别的驱动。
-func TestUnmigratedOperationsAreUnsupportedForOtherSessions(t *testing.T) {
-	dbdrivertest.Register(t, dbdrivertest.NewFake())
-	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+// XLSX 导出由驱动在自己的会话上取数：假驱动的会话不是 *sql.DB，到它手里的是结构化的筛选
+// 条件与排序项；它给出的行原样写进工作簿，没有任何语句。
+func TestExportTableToXlsxRunsOnTheDriverSession(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+	filters := []dbdriver.FilterItem{{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpContains, Value: "a"}}
+	sorts := []dbdriver.SortItem{{Column: "name", Direction: dbdriver.SortDescending}}
 
-	err := q.ExportTableToXlsx(1, "", "SELECT * FROM users", filepath.Join(t.TempDir(), "out.xlsx"))
-	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	path := filepath.Join(t.TempDir(), "out.xlsx")
+	err := q.ExportTableToXlsx(1, "reporting", "users", query_svc.TableExportRequest{
+		Filters: filters, Sorts: sorts, Scope: query_svc.ExportScopePage, Page: 0, PageSize: 2,
+	}, path)
+	require.NoError(t, err)
+
+	file, err := os.Open(path) //nolint:gosec // test temp file
+	require.NoError(t, err)
+	defer func() { _ = file.Close() }()
+	parsed, err := query_svc.ParseXlsx(file, "")
+	require.NoError(t, err)
+	assert.Equal(t, fake.Columns, parsed.Headers)
+	assert.Equal(t, [][]string{{"1", "alice"}, {"2", "bob"}}, parsed.Rows)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{
+		{Op: "rows", Database: "reporting", Table: "users", Query: dbdriver.TableQuery{Filters: filters, Sorts: sorts}, Page: dbdriver.Page{Index: 0, Size: 2}},
+	}, sessions[0].TableCalls())
+	assert.Empty(t, sessions[0].Statements())
+}
+
+// 导出时驱动返回的错误（数据库错误、不支持）原样到达调用方，不执行任何语句。
+func TestExportTableToXlsxReturnsTheDriversError(t *testing.T) {
+	for name, tableErr := range map[string]error{
+		"a database error":            errors.New("fakedb: relation \"users\" does not exist"),
+		"a driver without table rows": fmt.Errorf("%w: fakedb does not browse tables", dbdriver.ErrUnsupported),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := dbdrivertest.NewFake()
+			fake.TableErr = tableErr
+			dbdrivertest.Register(t, fake)
+			q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+			err := q.ExportTableToXlsx(1, "", "users", query_svc.TableExportRequest{Scope: query_svc.ExportScopeAll}, filepath.Join(t.TempDir(), "out.xlsx"))
+			require.ErrorIs(t, err, tableErr)
+			for _, s := range fake.Sessions() {
+				assert.Empty(t, s.Statements())
+			}
+		})
+	}
+}
+
+// 内置驱动导出的行与列：SQLite 真库上带筛选与排序，只写选中的列。
+func TestExportTableToXlsxWorksForABuiltInDriver(t *testing.T) {
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{
+		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
+	})
+	for _, statement := range []string{
+		"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
+		"INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')",
+	} {
+		_, err := q.ExecuteSQL(1, statement, "")
+		require.NoError(t, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "out.xlsx")
+	err := q.ExportTableToXlsx(1, "", "users", query_svc.TableExportRequest{
+		Filters: []dbdriver.FilterItem{{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpNotEqual, Value: "alice"}},
+		Sorts:   []dbdriver.SortItem{{Column: "id", Direction: dbdriver.SortDescending}},
+		Columns: []string{"name", "id"},
+		Scope:   query_svc.ExportScopeAll,
+	}, path)
+	require.NoError(t, err)
+
+	file, err := os.Open(path) //nolint:gosec // test temp file
+	require.NoError(t, err)
+	defer func() { _ = file.Close() }()
+	parsed, err := query_svc.ParseXlsx(file, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"name", "id"}, parsed.Headers)
+	assert.Equal(t, [][]string{{"carol", "3"}, {"bob", "2"}}, parsed.Rows)
 }
 
 // 内置驱动走的是同一条路：SQLite 的真库上读表元数据、打开表、带筛选与排序翻页、计数。

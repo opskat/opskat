@@ -49,7 +49,7 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 	return session, func() error { return nil }, nil
 }
 
-// getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(导入、XLSX 导出)
+// getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(表数据导入)
 // 仍在共享代码里用 *sql.DB / *sql.Conn 自己拼 SQL,经它从会话里取出句柄。
 // 会话不在 database/sql 之上的驱动没有这个句柄,返回 dbdriver.ErrUnsupported。
 // 这些操作逐个迁成会话上的方法后删除本函数与 sqldb.DB,不要给它添新的调用方。

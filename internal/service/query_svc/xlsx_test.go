@@ -3,67 +3,130 @@ package query_svc
 import (
 	"bytes"
 	"context"
-	"database/sql"
+	"errors"
+	"fmt"
 	"testing"
 
-	_ "github.com/glebarez/go-sqlite"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
-func TestExportRowsToXlsx_RoundTrip(t *testing.T) {
-	Convey("ExportRowsToXlsx 导出的工作簿可被 ParseXlsx 原样读回", t, func() {
-		db, err := sql.Open("sqlite", ":memory:")
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
-		db.SetMaxOpenConns(1)
-
-		ctx := context.Background()
-		_, err = db.ExecContext(ctx, `CREATE TABLE t (id INTEGER, name TEXT, note TEXT)`)
-		So(err, ShouldBeNil)
-		_, err = db.ExecContext(ctx, `INSERT INTO t (id, name, note) VALUES (1, 'alice', 'hi'), (2, 'bob', NULL)`)
-		So(err, ShouldBeNil)
-
-		conn, err := db.Conn(ctx)
-		So(err, ShouldBeNil)
-		defer func() { _ = conn.Close() }()
-
-		var buf bytes.Buffer
-		err = ExportRowsToXlsx(ctx, conn, "SELECT id, name, note FROM t ORDER BY id", &buf)
-		So(err, ShouldBeNil)
-		So(buf.Len(), ShouldBeGreaterThan, 0)
-
-		parsed, err := ParseXlsx(bytes.NewReader(buf.Bytes()), "")
-		So(err, ShouldBeNil)
-		So(parsed.Headers, ShouldResemble, []string{"id", "name", "note"})
-		So(parsed.Rows, ShouldHaveLength, 2)
-		// Numbers come back as their formatted string; a NULL cell pads to "".
-		So(parsed.Rows[0], ShouldResemble, []string{"1", "alice", "hi"})
-		So(parsed.Rows[1], ShouldResemble, []string{"2", "bob", ""})
-	})
+// fakeSession 打开假驱动的一条会话：它不是 *sql.DB，导出只能经会话的表浏览方法取数。
+func fakeSession(t *testing.T, fake *dbdrivertest.Fake) *dbdrivertest.FakeSession {
+	t.Helper()
+	session := dbdrivertest.FakeSessions(fake)(t)
+	t.Cleanup(func() { _ = session.Close() })
+	return session.(*dbdrivertest.FakeSession)
 }
 
-func TestParseXlsx_EmptySheet(t *testing.T) {
-	Convey("ParseXlsx 处理空结果集时返回空表而非报错", t, func() {
-		db, err := sql.Open("sqlite", ":memory:")
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
-		db.SetMaxOpenConns(1)
+func exportToXlsx(t *testing.T, session dbdriver.Session, request TableExportRequest) (*ParsedXlsxTable, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := ExportTableRowsToXlsx(context.Background(), session, "reporting", "users", request, &buf); err != nil {
+		return nil, err
+	}
+	return ParseXlsx(bytes.NewReader(buf.Bytes()), "")
+}
 
-		ctx := context.Background()
-		_, err = db.ExecContext(ctx, `CREATE TABLE t (id INTEGER, name TEXT)`)
-		So(err, ShouldBeNil)
+// 驱动给出的行原样写进工作簿；取数是带结构化筛选与排序的表浏览请求，没有任何语句。
+func TestExportTableRowsToXlsxWritesTheDriversRows(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"id", "name", "note"}
+	fake.Rows = [][]any{{1, "alice", "hi"}, {2, "bob", nil}, {3, "carol", "x"}}
+	session := fakeSession(t, fake)
+	filters := []dbdriver.FilterItem{{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpContains, Value: "a"}}
+	sorts := []dbdriver.SortItem{{Column: "id", Direction: dbdriver.SortDescending}}
 
-		conn, err := db.Conn(ctx)
-		So(err, ShouldBeNil)
-		defer func() { _ = conn.Close() }()
+	parsed, err := exportToXlsx(t, session, TableExportRequest{Filters: filters, Sorts: sorts, Scope: ExportScopeAll})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id", "name", "note"}, parsed.Headers)
+	// 数字读回来是格式化后的文本；NULL 是空单元格。
+	assert.Equal(t, [][]string{{"1", "alice", "hi"}, {"2", "bob", ""}, {"3", "carol", "x"}}, parsed.Rows)
 
-		var buf bytes.Buffer
-		err = ExportRowsToXlsx(ctx, conn, "SELECT id, name FROM t", &buf)
-		So(err, ShouldBeNil)
+	calls := session.TableCalls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, dbdrivertest.TableCall{
+		Op: "rows", Database: "reporting", Table: "users",
+		Query: dbdriver.TableQuery{Filters: filters, Sorts: sorts},
+		Page:  dbdriver.Page{Index: 0, Size: exportChunkRows},
+	}, calls[0])
+	assert.Empty(t, session.Statements())
+}
 
-		parsed, err := ParseXlsx(bytes.NewReader(buf.Bytes()), "")
-		So(err, ShouldBeNil)
-		So(parsed.Headers, ShouldResemble, []string{"id", "name"})
-		So(parsed.Rows, ShouldHaveLength, 0)
-	})
+// 当前页：只取请求里的那一页。
+func TestExportTableRowsToXlsxPageScope(t *testing.T) {
+	session := fakeSession(t, dbdrivertest.NewFake())
+
+	parsed, err := exportToXlsx(t, session, TableExportRequest{Scope: ExportScopePage, Page: 1, PageSize: 2})
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"3", "carol"}}, parsed.Rows)
+	require.Len(t, session.TableCalls(), 1)
+	assert.Equal(t, dbdriver.Page{Index: 1, Size: 2}, session.TableCalls()[0].Page)
+}
+
+// 整表按块翻页取完：最后一块不满即止。
+func TestExportTableRowsToXlsxAllScopeReadsEveryChunk(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"id"}
+	fake.Rows = nil
+	total := exportChunkRows*2 + 5
+	for i := 0; i < total; i++ {
+		fake.Rows = append(fake.Rows, []any{i})
+	}
+	session := fakeSession(t, fake)
+
+	parsed, err := exportToXlsx(t, session, TableExportRequest{Scope: ExportScopeAll})
+	require.NoError(t, err)
+	require.Len(t, parsed.Rows, total)
+	assert.Equal(t, []string{"0"}, parsed.Rows[0])
+	assert.Equal(t, []string{fmt.Sprint(total - 1)}, parsed.Rows[total-1])
+	assert.Len(t, session.TableCalls(), 3)
+}
+
+// 选了列：只写这些列，按选的顺序；没有行时表头仍在。
+func TestExportTableRowsToXlsxProjectsSelectedColumns(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	session := fakeSession(t, fake)
+
+	parsed, err := exportToXlsx(t, session, TableExportRequest{Scope: ExportScopeAll, Columns: []string{"name", "id"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"name", "id"}, parsed.Headers)
+	assert.Equal(t, []string{"alice", "1"}, parsed.Rows[0])
+
+	_, err = exportToXlsx(t, session, TableExportRequest{Scope: ExportScopeAll, Columns: []string{"nope"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nope")
+
+	fake.Rows = nil
+	parsed, err = exportToXlsx(t, session, TableExportRequest{Scope: ExportScopeAll})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id", "name"}, parsed.Headers)
+	assert.Empty(t, parsed.Rows)
+}
+
+func TestExportTableRowsToXlsxRejectsAnUnknownScope(t *testing.T) {
+	session := fakeSession(t, dbdrivertest.NewFake())
+	_, err := exportToXlsx(t, session, TableExportRequest{Scope: "everything"})
+	require.Error(t, err)
+	assert.Empty(t, session.TableCalls())
+}
+
+// 驱动的错误（数据库错误，或驱动不提供表浏览的「不支持」）原样返回，不执行任何语句。
+func TestExportTableRowsToXlsxReturnsTheDriversError(t *testing.T) {
+	for name, tableErr := range map[string]error{
+		"database error": errors.New("fakedb: relation does not exist"),
+		"unsupported":    fmt.Errorf("%w: no table rows", dbdriver.ErrUnsupported),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := dbdrivertest.NewFake()
+			fake.TableErr = tableErr
+			session := fakeSession(t, fake)
+			_, err := exportToXlsx(t, session, TableExportRequest{Scope: ExportScopeAll})
+			require.ErrorIs(t, err, tableErr)
+			assert.Empty(t, session.Statements())
+		})
+	}
 }

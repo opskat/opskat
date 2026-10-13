@@ -28,6 +28,12 @@ func queryTimeout(cfg *asset_entity.DatabaseConfig) time.Duration {
 // on it. database 非空时覆盖资产配置的库；fn 拿到的 database 是最终生效的库名。
 // 超时取自资产的 QueryTimeoutSeconds（未配置回退 defaultQueryTimeout）。
 func (q *Query) withObjectSession(assetID int64, database string, fn func(ctx context.Context, session dbdriver.Session, database string) error) error {
+	return q.withPanelSession(assetID, database, queryTimeout, fn)
+}
+
+// withPanelSession 同 withObjectSession，超时由 timeout 按资产配置给出（导出整张表这类长操作
+// 不受查询超时限制）。
+func (q *Query) withPanelSession(assetID int64, database string, timeout func(*asset_entity.DatabaseConfig) time.Duration, fn func(ctx context.Context, session dbdriver.Session, database string) error) error {
 	ctx0 := i18n.Ctx(q.ctx, q.lang.Lang())
 	asset, err := asset_svc.Asset().Get(ctx0, assetID)
 	if err != nil {
@@ -48,7 +54,7 @@ func (q *Query) withObjectSession(assetID int64, database string, fn func(ctx co
 		return fmt.Errorf("解析凭据失败: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx0, queryTimeout(cfg))
+	ctx, cancel := context.WithTimeout(ctx0, timeout(cfg))
 	defer cancel()
 
 	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
