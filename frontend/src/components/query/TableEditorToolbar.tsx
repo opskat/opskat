@@ -48,11 +48,11 @@ interface TableEditorToolbarProps {
   canExport: boolean;
   canImport?: boolean;
   /** 驱动声明了表格编辑:提交 / 放弃 / 预览 SQL 才出现。 */
-  gridEdit?: boolean;
+  gridEdit: boolean;
   /** 驱动声明了导入。 */
-  importAvailable?: boolean;
+  importAvailable: boolean;
   /** 驱动声明了导出为 SQL 语句:导出格式里才有 SQL。 */
-  sqlExportAvailable?: boolean;
+  sqlExportAvailable: boolean;
   columns?: string[];
   visibleColumns?: string[];
   rowDensity?: RowDensity;
@@ -75,9 +75,9 @@ export function TableEditorToolbar({
   submitting,
   canExport,
   canImport = false,
-  gridEdit = true,
-  importAvailable = true,
-  sqlExportAvailable = true,
+  gridEdit,
+  importAvailable,
+  sqlExportAvailable,
   columns = [],
   visibleColumns = columns,
   rowDensity = "default",
@@ -215,7 +215,7 @@ export function TableEditorToolbar({
 
 interface TableDataStatusBarProps {
   /** 驱动声明了表格编辑:新增 / 删除 / 应用 / 放弃修改才出现。 */
-  gridEdit?: boolean;
+  gridEdit: boolean;
   pendingEditCount: number;
   sqlSummary: string;
   totalRows: number | null;
@@ -245,7 +245,7 @@ interface TableDataStatusBarProps {
 }
 
 export function TableDataStatusBar({
-  gridEdit = true,
+  gridEdit,
   pendingEditCount,
   sqlSummary,
   totalRows,

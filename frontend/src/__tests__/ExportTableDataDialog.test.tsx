@@ -26,6 +26,7 @@ const baseProps = {
   filters: [] as never[],
   sorts: [] as { column: string; dir: "asc" | "desc" }[],
   initialFormat: "csv" as const,
+  sqlFormatAvailable: true,
   onFormatChange: vi.fn(),
 };
 
@@ -155,6 +156,23 @@ describe("ExportTableDataDialog", () => {
       expect(App.ExecuteSQL).not.toHaveBeenCalled();
     }
   );
+
+  it("reports the read failure, not the failure to close the cursor after it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.csv");
+    vi.mocked(App.OpenTableExport).mockResolvedValue({ id: "cursor-1", columns: ["id", "name"] });
+    vi.mocked(App.ReadTableExport).mockRejectedValue(new Error('relation "users" does not exist'));
+    vi.mocked(App.CloseTableExport).mockRejectedValue(new Error("context canceled"));
+    Object.assign(window, { go: { app: { App: { WriteTableExportFile: vi.fn().mockResolvedValue(undefined) } } } });
+
+    render(<ExportTableDataDialog {...baseProps} />);
+    await startExport(user, "/tmp/opskat/users.csv");
+
+    const log = await screen.findByText(/\[EXP\] Failed - /);
+    expect(log.textContent).toContain('[EXP] Failed - Error: relation "users" does not exist');
+    expect(log.textContent).toContain("context canceled");
+    expect(App.CloseTableExport).toHaveBeenCalledWith("cursor-1");
+  });
 
   it.each([
     ["all", { scope: "all" }],

@@ -53,17 +53,6 @@ const (
 	OpNotInList FilterOperator = "not_in_list"
 )
 
-// FilterOperators 是全部已知的运算符。
-func FilterOperators() []FilterOperator {
-	return []FilterOperator{
-		OpEqual, OpNotEqual, OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual,
-		OpContains, OpNotContains, OpBeginsWith, OpNotBeginsWith, OpEndsWith, OpNotEndsWith,
-		OpLike, OpNotLike,
-		OpIsNull, OpIsNotNull, OpIsEmpty, OpIsNotEmpty,
-		OpBetween, OpNotBetween, OpInList, OpNotInList,
-	}
-}
-
 // FilterItem 是筛选条件树里的一项：一个条件，或一组条件。
 //
 // 不产生任何限制的项被整个略过，连同它的 Join：停用的项、还没给值的条件、区间缺了一端、

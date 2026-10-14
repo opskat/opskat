@@ -534,7 +534,7 @@ describe("queryStore database actions", () => {
     useQueryStore.getState().openQueryTab(makeSQLiteAsset(30));
   });
 
-  it("lists SQLite databases through the structured binding and shows what the driver returns (main when nothing is attached)", async () => {
+  it("lists SQLite databases through the structured binding and shows what the driver returns", async () => {
     vi.mocked(ListDatabases).mockResolvedValueOnce(["main"]);
 
     await useQueryStore.getState().loadDatabases("query-30");

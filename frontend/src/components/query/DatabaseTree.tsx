@@ -39,9 +39,12 @@ import { AlterTableDialog } from "./AlterTableDialog";
 import { TableStructureDialog } from "./TableStructureDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
 import { quoteTableRef } from "@/lib/tableSql";
-import { driverHasCapability, findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
-
-const OBJECT_BROWSER_CAPABILITIES = ["views", "procedures", "functions", "triggers"];
+import {
+  OBJECT_BROWSER_CAPABILITIES,
+  driverHasCapability,
+  findDatabaseDriver,
+  useDatabaseDrivers,
+} from "@/lib/dbDrivers";
 
 interface DatabaseTreeProps {
   tabId: string;

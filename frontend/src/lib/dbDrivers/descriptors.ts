@@ -50,6 +50,9 @@ export function findDatabaseDriver(drivers: DriverDescriptor[], id: string): Dri
   return drivers.find((d) => d.id === id);
 }
 
+/** 对象浏览的四类对象。各类的名字既是驱动要声明的功能名,也是后端对象列表里的分组键。 */
+export const OBJECT_BROWSER_CAPABILITIES = ["views", "procedures", "functions", "triggers"] as const;
+
 /** 驱动是否声明了某项功能(Go 侧 dbdriver.Capability 的取值,如 "view_ddl");未声明即不支持。 */
 export function driverHasCapability(driver: DriverDescriptor | undefined, capability: string): boolean {
   return !!driver && driver.capabilities.includes(capability);

@@ -2,11 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@opskat/ui";
+import { toast } from "sonner";
 import { AssetDetail } from "@/components/asset/AssetDetail";
 import { AssetForm } from "@/components/asset/AssetForm";
+import { notifySuccess } from "@/lib/notify";
 import { asset_entity } from "../../wailsjs/go/models";
 import { TestAssetConnection, UpdateAsset } from "../../wailsjs/go/system/System";
 import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/lib/notify", () => ({ notifySuccess: vi.fn(), notifyCopied: vi.fn() }));
 
 // 资产配置里的驱动不在驱动注册表里(例如提供它的扩展被卸载):查询面板报「驱动不可用」,
 // 资产本身仍然要能删除。
@@ -69,5 +74,7 @@ describe("驱动未注册的数据库资产", () => {
 
     await waitFor(() => expect(TestAssetConnection).toHaveBeenCalledTimes(1));
     expect(vi.mocked(TestAssetConnection).mock.calls[0][2]).toBe(ghostAsset.Config);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("ghostdb")));
+    expect(notifySuccess).not.toHaveBeenCalled();
   });
 });

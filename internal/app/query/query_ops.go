@@ -32,6 +32,9 @@ import (
 // 配置的驱动打开并持有,这里拿不到也不需要它底下的连接。
 // 远端 SQLite 在会话内只抢一次 .opskat.lock,由缓存的空闲驱逐/关闭统一释放;其会话底下的
 // 连接数上限为 1,让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
+//
+// 返回的 cleanup 结束这次占用,操作用完会话后必须调用:在那之前缓存不会把会话当空闲的收走
+// (一次操作可以比空闲时限长,见 panelConnCache.Hold)。
 func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (dbdriver.Session, func() error, error) {
 	key, err := panelDBCacheKey(asset.ID, cfg)
 	if err != nil {
@@ -46,7 +49,8 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 	if err != nil {
 		return nil, nil, err
 	}
-	return session, func() error { return nil }, nil
+	release := q.dbPanelCache.Hold(key)
+	return session, func() error { release(); return nil }, nil
 }
 
 // getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(表数据导入)

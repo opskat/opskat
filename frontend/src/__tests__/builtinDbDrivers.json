@@ -1,0 +1,227 @@
+[
+  {
+    "id": "mysql",
+    "name": "MySQL",
+    "icon": "mysql",
+    "order": 10,
+    "aliases": [],
+    "defaultPort": 3306,
+    "form": [
+      {
+        "tab": "connection",
+        "fields": [
+          "host",
+          "port",
+          "username",
+          "password",
+          "database"
+        ]
+      },
+      {
+        "tab": "tunnel",
+        "fields": [
+          "tunnel"
+        ]
+      },
+      {
+        "tab": "tls",
+        "fields": [
+          "tls"
+        ]
+      },
+      {
+        "tab": "advanced",
+        "fields": [
+          "params",
+          "read_only",
+          "query_timeout_seconds"
+        ]
+      }
+    ],
+    "capabilities": [
+      "create_database",
+      "view_ddl",
+      "views",
+      "procedures",
+      "functions",
+      "triggers",
+      "grid_edit",
+      "create_table",
+      "alter_table",
+      "drop_table",
+      "truncate_table",
+      "import",
+      "export_sql",
+      "copy_sql",
+      "read_only"
+    ]
+  },
+  {
+    "id": "postgresql",
+    "name": "PostgreSQL",
+    "icon": "postgresql",
+    "order": 20,
+    "aliases": [
+      "postgres"
+    ],
+    "defaultPort": 5432,
+    "form": [
+      {
+        "tab": "connection",
+        "fields": [
+          "host",
+          "port",
+          "username",
+          "password",
+          "database"
+        ]
+      },
+      {
+        "tab": "tunnel",
+        "fields": [
+          "tunnel"
+        ]
+      },
+      {
+        "tab": "tls",
+        "fields": [
+          "ssl_mode"
+        ]
+      },
+      {
+        "tab": "advanced",
+        "fields": [
+          "params",
+          "read_only",
+          "query_timeout_seconds"
+        ]
+      }
+    ],
+    "capabilities": [
+      "schemas",
+      "create_database",
+      "view_ddl",
+      "views",
+      "procedures",
+      "functions",
+      "triggers",
+      "grid_edit",
+      "create_table",
+      "alter_table",
+      "drop_table",
+      "truncate_table",
+      "import",
+      "export_sql",
+      "copy_sql",
+      "read_only"
+    ]
+  },
+  {
+    "id": "mssql",
+    "name": "SQL Server",
+    "icon": "sqlserver",
+    "order": 30,
+    "aliases": [
+      "sqlserver"
+    ],
+    "defaultPort": 1433,
+    "form": [
+      {
+        "tab": "connection",
+        "fields": [
+          "host",
+          "port",
+          "username",
+          "password",
+          "database"
+        ]
+      },
+      {
+        "tab": "tunnel",
+        "fields": [
+          "tunnel"
+        ]
+      },
+      {
+        "tab": "tls",
+        "fields": [
+          "tls"
+        ]
+      },
+      {
+        "tab": "advanced",
+        "fields": [
+          "params",
+          "read_only",
+          "query_timeout_seconds"
+        ]
+      }
+    ],
+    "capabilities": [
+      "schemas",
+      "create_database",
+      "view_ddl",
+      "views",
+      "procedures",
+      "functions",
+      "triggers",
+      "grid_edit",
+      "create_table",
+      "alter_table",
+      "drop_table",
+      "truncate_table",
+      "import",
+      "export_sql",
+      "copy_sql",
+      "read_only"
+    ]
+  },
+  {
+    "id": "sqlite",
+    "name": "SQLite",
+    "icon": "sqlite",
+    "order": 40,
+    "aliases": [
+      "sqlite3"
+    ],
+    "defaultPort": 0,
+    "form": [
+      {
+        "tab": "connection",
+        "fields": [
+          "sqlite_source",
+          "path",
+          "ssh_asset_id"
+        ]
+      },
+      {
+        "tab": "tunnel",
+        "fields": [
+          "tunnel"
+        ]
+      },
+      {
+        "tab": "advanced",
+        "fields": [
+          "params",
+          "read_only",
+          "query_timeout_seconds"
+        ]
+      }
+    ],
+    "capabilities": [
+      "view_ddl",
+      "views",
+      "triggers",
+      "grid_edit",
+      "create_table",
+      "alter_table",
+      "drop_table",
+      "truncate_table",
+      "import",
+      "export_sql",
+      "copy_sql",
+      "read_only"
+    ]
+  }
+]

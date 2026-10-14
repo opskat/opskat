@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import { dbdriver } from "../../wailsjs/go/models";
 import { ListDatabaseDrivers } from "../../wailsjs/go/query/Query";
 import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
+import builtinDrivers from "./builtinDbDrivers.json";
 
 type FormSpec = Record<string, string[]>;
 
@@ -26,61 +27,12 @@ function driver(d: {
   });
 }
 
-const NETWORK_CONNECTION = ["host", "port", "username", "password", "database"];
-const OBJECTS = ["views", "procedures", "functions", "triggers"];
-const WRITES = [
-  "grid_edit",
-  "create_table",
-  "alter_table",
-  "drop_table",
-  "truncate_table",
-  "import",
-  "export_sql",
-  "copy_sql",
-  "read_only",
-];
-const ADVANCED = ["params", "read_only", "query_timeout_seconds"];
-
-/** 后端内置四个驱动描述的镜像(internal/dbdriver/{mysql,postgresql,mssql,sqlite}),供前端测试当作后端返回值。 */
-export const BUILTIN_DRIVERS: dbdriver.Descriptor[] = [
-  driver({
-    id: "mysql",
-    name: "MySQL",
-    icon: "mysql",
-    order: 10,
-    defaultPort: 3306,
-    form: { connection: NETWORK_CONNECTION, tunnel: ["tunnel"], tls: ["tls"], advanced: ADVANCED },
-    capabilities: ["create_database", "view_ddl", ...OBJECTS, ...WRITES],
-  }),
-  driver({
-    id: "postgresql",
-    name: "PostgreSQL",
-    icon: "postgresql",
-    order: 20,
-    defaultPort: 5432,
-    form: { connection: NETWORK_CONNECTION, tunnel: ["tunnel"], tls: ["ssl_mode"], advanced: ADVANCED },
-    capabilities: ["schemas", "create_database", "view_ddl", ...OBJECTS, ...WRITES],
-  }),
-  driver({
-    id: "mssql",
-    name: "SQL Server",
-    icon: "sqlserver",
-    order: 30,
-    defaultPort: 1433,
-    form: { connection: NETWORK_CONNECTION, tunnel: ["tunnel"], tls: ["tls"], advanced: ADVANCED },
-    capabilities: ["schemas", "create_database", "view_ddl", ...OBJECTS, ...WRITES],
-  }),
-  driver({
-    id: "sqlite",
-    name: "SQLite",
-    icon: "sqlite",
-    order: 40,
-    defaultPort: 0,
-    form: { connection: ["sqlite_source", "path", "ssh_asset_id"], tunnel: ["tunnel"], advanced: ADVANCED },
-    // SQLite 没有存储过程、函数,也没有「新建数据库」。
-    capabilities: ["view_ddl", "views", "triggers", ...WRITES],
-  }),
-];
+/**
+ * 后端内置四个驱动的描述,供前端测试当作 Query.ListDatabaseDrivers 的返回值。
+ * 内容就是注册表序列化出来的 JSON,由 Go 侧 internal/archtest 的
+ * TestFrontendBuiltinDriverFixtureMatchesRegistry 核对:驱动描述变了而它没跟着改,那条测试先红。
+ */
+export const BUILTIN_DRIVERS: dbdriver.Descriptor[] = builtinDrivers.map((d) => new dbdriver.Descriptor(d));
 
 /** 前端从未听说过的驱动:带用户名/库名、TLS 与 SSL 模式,不用口令认证。 */
 export const FAKE_DRIVER: dbdriver.Descriptor = driver({

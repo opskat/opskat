@@ -90,13 +90,25 @@ func (q *Query) acquirePanelSession(assetID int64, database string, timeout func
 	return &panelSession{ctx: ctx, cancel: cancel, session: session, database: cfg.Database, cleanup: cleanup}, nil
 }
 
+// nameList 是交给前端的名字列表：驱动一个名字也没给时是空列表（序列化成 []，不是 null），
+// 前端直接遍历它。
+func nameList(names []string) []string {
+	if names == nil {
+		return []string{}
+	}
+	return names
+}
+
 // ListDatabases returns the databases the asset's driver offers for browsing.
 func (q *Query) ListDatabases(assetID int64) ([]string, error) {
 	var result []string
 	err := q.withObjectSession(assetID, "", func(ctx context.Context, session dbdriver.Session, _ string) error {
 		names, err := session.ListDatabases(ctx)
-		result = names
-		return err
+		if err != nil {
+			return err
+		}
+		result = nameList(names)
+		return nil
 	})
 	return result, err
 }
@@ -106,8 +118,11 @@ func (q *Query) ListTables(assetID int64, database string) ([]string, error) {
 	var result []string
 	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
 		names, err := session.ListTables(ctx, database)
-		result = names
-		return err
+		if err != nil {
+			return err
+		}
+		result = nameList(names)
+		return nil
 	})
 	return result, err
 }

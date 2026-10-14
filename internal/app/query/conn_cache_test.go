@@ -215,6 +215,48 @@ func TestPanelConnCache_Evictor_EvictsIdle(t *testing.T) {
 	})
 }
 
+func TestPanelConnCache_Hold_KeepsAnEntryInUseFromIdleEviction(t *testing.T) {
+	Convey("被占用的连接不算空闲", t, func() {
+		c := newPanelConnCache[*fakeClient]("test", 50*time.Millisecond)
+		defer func() { _ = c.Close() }()
+		client := &fakeClient{id: 1}
+		_, _, _ = c.GetOrDial(1, "1:db", func() (*fakeClient, io.Closer, error) {
+			return client, nil, nil
+		})
+		later := func() time.Time { return time.Now().Add(time.Second) }
+
+		Convey("两次占用都放开之前不被驱逐,重复放开同一次占用不抵掉另一次", func() {
+			releaseFirst := c.Hold("1:db")
+			releaseSecond := c.Hold("1:db")
+
+			c.evictOnce(later())
+			So(client.closed.Load(), ShouldBeFalse)
+
+			releaseFirst()
+			releaseFirst()
+			c.evictOnce(later())
+			So(client.closed.Load(), ShouldBeFalse)
+
+			releaseSecond()
+			c.evictOnce(later())
+			So(client.closed.Load(), ShouldBeTrue)
+			So(c.size(), ShouldEqual, 0)
+		})
+
+		Convey("显式失效不看占用", func() {
+			release := c.Hold("1:db")
+			c.DropAsset(1)
+			So(client.closed.Load(), ShouldBeTrue)
+			release()
+		})
+
+		Convey("key 不在缓存里时放开是空操作", func() {
+			c.Hold("9:missing")()
+			So(c.size(), ShouldEqual, 1)
+		})
+	})
+}
+
 func TestPanelConnCache_DropAsset(t *testing.T) {
 	Convey("DropAsset 关掉该资产的全部连接,不误伤其它资产", t, func() {
 		c := newPanelConnCache[*fakeClient]("test", time.Minute)

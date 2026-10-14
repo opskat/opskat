@@ -120,9 +120,9 @@ func (r driverBranchRule) isDriverLiteral(e ast.Expr) bool {
 	return err == nil && r.literals[v]
 }
 
-// isDriverOperand 判断表达式是不是「一个驱动」：名字里带 driver 的变量或字段，
-// 允许被类型转换包着（string(c.Driver)）。字面量只在对面是它时才算按驱动分支，
-// 否则 name == "sqlite" 这类与驱动无关的比较会误报。
+// isDriverOperand 判断表达式是不是「一个驱动」：名字就是 driver（不分大小写）的变量或字段，
+// 允许被类型转换包着（string(c.Driver)）；DriverVersion 这类只是带着这个词的名字不算。
+// 字面量只在对面是它时才算按驱动分支，否则 name == "sqlite" 这类与驱动无关的比较会误报。
 func isDriverOperand(e ast.Expr) bool {
 	if call, ok := e.(*ast.CallExpr); ok && len(call.Args) == 1 {
 		return isDriverOperand(call.Args[0])

@@ -3,6 +3,7 @@ package query
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,38 @@ func TestBrowsingReturnsTheDriversError(t *testing.T) {
 	require.ErrorIs(t, err, fake.BrowseErr)
 	_, err = q.ListTables(1, "x")
 	require.ErrorIs(t, err, fake.BrowseErr)
+}
+
+// 库里一张表也没有、资产上没有可浏览的库：交给前端的是空列表，不是 null——它直接遍历结果。
+func TestBrowsingReturnsEmptyListsNotNull(t *testing.T) {
+	requireEmptyJSONList := func(t *testing.T, names []string, err error) {
+		t.Helper()
+		require.NoError(t, err)
+		payload, err := json.Marshal(names)
+		require.NoError(t, err)
+		assert.Equal(t, "[]", string(payload))
+	}
+
+	t.Run("a built-in driver's database without tables", func(t *testing.T) {
+		q := newPanelQuery(t, &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "empty.db"),
+		})
+		tables, err := q.ListTables(1, "")
+		requireEmptyJSONList(t, tables, err)
+	})
+
+	t.Run("a driver that lists nothing", func(t *testing.T) {
+		fake := dbdrivertest.NewFake()
+		fake.Databases = nil
+		fake.Tables = nil
+		dbdrivertest.Register(t, fake)
+		q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+		databases, err := q.ListDatabases(1)
+		requireEmptyJSONList(t, databases, err)
+		tables, err := q.ListTables(1, "reporting")
+		requireEmptyJSONList(t, tables, err)
+	})
 }
 
 // 绑定返回的类型与驱动的类型是两套定义；它们序列化给前端的 JSON 必须一致。

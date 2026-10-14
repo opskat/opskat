@@ -2,6 +2,7 @@ import "./genericFields";
 import "./sqliteFields";
 
 export {
+  OBJECT_BROWSER_CAPABILITIES,
   driverHasCapability,
   driverUsesField,
   findDatabaseDriver,

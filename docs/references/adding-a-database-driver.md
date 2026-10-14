@@ -125,6 +125,7 @@ Also outside this seam for now (the spec's out-of-scope list): parsing the AI SQ
 
 - Go: `TestNoDriverBranchInSharedCode` in `internal/archtest/driver_branch_test.go` fails on a comparison or `switch` against `asset_entity.DriverMySQL` / `DriverPostgreSQL` / `DriverMSSQL` / `DriverSQLite`, or against a registered driver id or alias string where the other side is a driver value, in any production Go file outside `internal/dbdriver/`. `TestCheckDriverBranch` pins the detection on sample sources (violations reported; driver packages, exempted files and test files not). `TestDriverBranchExemptionsStillNeeded` fails when an exempted file no longer branches, so the list can only shrink.
 - TypeScript: the `no-restricted-syntax` selectors in `frontend/eslint.config.js` reject comparing against a driver-name literal (`===`, `!==`, `==`, `!=`, `case`) under `src/`, except in `src/lib/dbDrivers/`, test files and the exemption list; `frontend/src/__tests__/eslint-harness.test.ts` covers both directions.
+- Frontend test fixture: the built-in descriptors that frontend tests feed to `Query.ListDatabaseDrivers` are `frontend/src/__tests__/builtinDbDrivers.json` (loaded as `BUILTIN_DRIVERS` in `dbDriverFixtures.ts`). `TestFrontendBuiltinDriverFixtureMatchesRegistry` in `internal/archtest/driver_fixture_test.go` compares it with the registry and prints the expected JSON when a descriptor changed.
 - Hand-written driver lists: `opsctl exec --help` and the missing-`driver` errors are generated from the registry. Two static texts cannot be generated, so `internal/archtest/driver_text_test.go` compares them with the registry (ids, aliases, default ports): `internal/ai/skills/database/SKILL.md` and `plugin/opsctl/skills/opsctl/references/commands.md`. Adding a driver or alias fails those tests until the texts are updated.
 
 ## Checklist
@@ -134,5 +135,5 @@ Also outside this seam for now (the spec's out-of-scope list): parsing the AI SQ
 3. A `connect_test.go` that calls `dbdrivertest.RunConformance`, plus tests for the driver's own SQL text.
 4. Declare only the capabilities the driver actually supports; write-path ones only together with their dialect in the exempted files.
 5. A new form field with no existing control: `registerDriverFormField` in `src/lib/dbDrivers/`, and its i18n keys in both locales.
-6. Update the driver names in `internal/ai/skills/database/SKILL.md` and `plugin/opsctl/skills/opsctl/references/commands.md` (the archtest fails until you do).
+6. Update the driver names in `internal/ai/skills/database/SKILL.md` and `plugin/opsctl/skills/opsctl/references/commands.md`, and the descriptors in `frontend/src/__tests__/builtinDbDrivers.json` (the archtest fails until you do).
 7. `go test ./internal/dbdriver/... ./internal/archtest/...`, then from `frontend/`: `pnpm run lint` and the related vitest files.

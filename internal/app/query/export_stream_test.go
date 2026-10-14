@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,4 +102,27 @@ func TestTableExportCursorWorksForABuiltInDriver(t *testing.T) {
 	assert.Equal(t, []map[string]any{{"id": int64(1), "name": "alice"}}, chunk.Rows)
 	assert.True(t, chunk.Done)
 	require.NoError(t, q.CloseTableExport(cursor.ID))
+}
+
+// 整表导出可以比面板缓存的空闲时限长：游标读着的时候，它底下的会话不能被当成空闲的收走
+// （远端 SQLite 的会话一关，文件系统就跟着关了，导出读到一半失败）。游标关了才重新算空闲。
+func TestTableExportCursorKeepsItsSessionFromIdleEviction(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	cursor, err := q.OpenTableExport(1, "", "users", TableExportStreamRequest{})
+	require.NoError(t, err)
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+
+	q.dbPanelCache.evictOnce(time.Now().Add(time.Hour))
+	assert.False(t, sessions[0].Closed(), "a session an export cursor is reading from is not idle")
+	chunk, err := q.ReadTableExport(cursor.ID, 10)
+	require.NoError(t, err)
+	assert.Len(t, chunk.Rows, len(fake.Rows))
+
+	require.NoError(t, q.CloseTableExport(cursor.ID))
+	q.dbPanelCache.evictOnce(time.Now().Add(time.Hour))
+	assert.True(t, sessions[0].Closed(), "once the cursor is closed the session idles out as before")
 }

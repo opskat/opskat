@@ -62,7 +62,7 @@ interface ExportTableDataDialogProps {
   sorts: TableSortRequestItem[];
   initialFormat: TableExportFormat;
   /** 驱动声明了导出为 SQL 语句:格式下拉里才有 SQL。 */
-  sqlFormatAvailable?: boolean;
+  sqlFormatAvailable: boolean;
   onFormatChange: (format: TableExportFormat) => void;
 }
 
@@ -151,7 +151,7 @@ export function ExportTableDataDialog({
   filters,
   sorts,
   initialFormat,
-  sqlFormatAvailable = true,
+  sqlFormatAvailable,
   onFormatChange,
 }: ExportTableDataDialogProps) {
   const { t } = useTranslation();
@@ -266,8 +266,9 @@ export function ExportTableDataDialog({
       appendLog(`[EXP] Export table [${table}]`);
       appendLog(`[EXP] Export to - ${filePath}`);
 
-      // XLSX is binary and streamed server-side: build the scope/column-aware
-      // SELECT and let the Go side write the workbook directly to filePath.
+      // XLSX is binary and streamed server-side: send the structured request
+      // (filters, sorts, scope, columns) and let the Go side write the workbook
+      // directly to filePath.
       if (format === "xlsx") {
         appendLog("[EXP] Streaming workbook ...");
         await ExportTableToXlsx(
@@ -332,7 +333,13 @@ export function ExportTableDataDialog({
             chunkIndex += 1;
           }
         } finally {
-          await CloseTableExport(cursor.id);
+          // 关游标失败不改写导出的结果:读取已经失败时,要报的是读取的错误;已经读完写完时,
+          // 文件是完整的。失败本身记进导出日志。
+          try {
+            await CloseTableExport(cursor.id);
+          } catch (closeErr) {
+            appendLog(`[EXP] Closing the export cursor failed - ${String(closeErr)}`);
+          }
         }
       } else {
         appendLog("[EXP] Getting current page data ...");

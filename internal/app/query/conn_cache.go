@@ -37,6 +37,8 @@ type panelConnEntry[C io.Closer] struct {
 	// 拿 "1:" 去匹配会把 "12:xxx" 一起误伤,所以单独存一份。
 	assetID  int64
 	lastUsed atomic.Int64 // unix nano
+	// holds 是正在占用这条连接的操作数(见 Hold)。非零时它不算空闲。
+	holds atomic.Int64
 }
 
 func newPanelConnCache[C io.Closer](name string, idleTTL time.Duration) *panelConnCache[C] {
@@ -87,6 +89,30 @@ func (c *panelConnCache[C]) GetOrDial(assetID int64, key string, dial func() (C,
 	return v.(C), nil, nil
 }
 
+// Hold 标记 key 的连接正被一次操作占用,直到调用返回的 release:占用期间空闲驱逐不收它。
+// 一次操作可以比 idleTTL 长(整表导出的游标跨多次调用读同一条会话),只在取连接时记一次
+// lastUsed 会让它读到一半被当成空闲的关掉。release 把 lastUsed 记到操作结束的时刻,只生效一次。
+// 显式失效(Drop / DropAsset / Close)不看占用,照样关闭。key 不在缓存里时 release 是空操作。
+func (c *panelConnCache[C]) Hold(key string) (release func()) {
+	c.mu.Lock()
+	e, ok := c.entries[key]
+	if ok {
+		e.holds.Add(1)
+	}
+	c.mu.Unlock()
+	if !ok {
+		return func() {}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// 先记时刻再放开占用:驱逐扫描看到占用归零时,lastUsed 已经是新的。
+			e.lastUsed.Store(time.Now().UnixNano())
+			e.holds.Add(-1)
+		})
+	}
+}
+
 // Drop 关闭并移除指定 key 的连接。
 func (c *panelConnCache[C]) Drop(key string) {
 	c.mu.Lock()
@@ -131,7 +157,7 @@ func (c *panelConnCache[C]) Close() error {
 }
 
 // startEvictor 启动周期驱逐 goroutine。每 evictInterval 扫一次,
-// 把超过 idleTTL 未使用的项关闭并移除。ctx 取消时退出。
+// 把超过 idleTTL 未使用、且当前没有被占用的项关闭并移除。ctx 取消时退出。
 func (c *panelConnCache[C]) startEvictor(ctx context.Context, evictInterval time.Duration) {
 	ticker := time.NewTicker(evictInterval)
 	defer ticker.Stop()
@@ -145,13 +171,13 @@ func (c *panelConnCache[C]) startEvictor(ctx context.Context, evictInterval time
 	}
 }
 
-// evictOnce 扫一次缓存,把 lastUsed 早于 (now - idleTTL) 的项目驱逐。
+// evictOnce 扫一次缓存,把 lastUsed 早于 (now - idleTTL) 且没有被占用(Hold)的项目驱逐。
 func (c *panelConnCache[C]) evictOnce(now time.Time) {
 	threshold := now.Add(-c.idleTTL).UnixNano()
 	c.mu.Lock()
 	var stale map[string]*panelConnEntry[C]
 	for key, e := range c.entries {
-		if e.lastUsed.Load() < threshold {
+		if e.holds.Load() == 0 && e.lastUsed.Load() < threshold {
 			if stale == nil {
 				stale = make(map[string]*panelConnEntry[C])
 			}
