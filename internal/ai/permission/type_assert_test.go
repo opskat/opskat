@@ -1,11 +1,55 @@
 package permission
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
+
+// 自定义类型标识不能与内置类型重名（spec「自定义类型」）：凡是 resolveDeclaredType 不经
+// 自定义类型查找就能解析的名字，都会在 --type 断言与 batch 前缀里遮蔽同名标识，必须出现在
+// BuiltinDeclaredTypeNames 里；解析不了的名字不应被保留。
+func TestBuiltinDeclaredTypeNamesCoverEveryShadowingName(t *testing.T) {
+	reserved := make(map[string]bool)
+	for _, name := range BuiltinDeclaredTypeNames() {
+		reserved[name] = true
+	}
+	for _, probe := range []string{"ssh", "exec", "sql", "db", "mysql", "postgres", "sqlite3", "mongo", "kube", "kubernetes", "redis", "oss", "generic", "cp", "grafana", "aws-cli"} {
+		_, _, resolves := resolveDeclaredType(probe)
+		if resolves != reserved[probe] {
+			t.Errorf("%q: resolves as a built-in declared type = %v, reserved = %v", probe, resolves, reserved[probe])
+		}
+	}
+}
+
+// 保留名在用户保存自定义类型时读取（main.go 的 reservedTypeNames），而扩展可以在同一时刻
+// 被启用 / 停用，往同一张权限类型表里增删条目：读取必须与注册并发安全。
+func TestBuiltinDeclaredTypeNamesIsSafeAgainstConcurrentRegistration(t *testing.T) {
+	const name = "concurrent-registration-probe"
+	check := func(context.Context, int64, string) aictx.CheckResult { return aictx.CheckResult{} }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 2000 {
+			if err := RegisterPolicyCheck(name, check, nil); err != nil {
+				t.Errorf("RegisterPolicyCheck: %v", err)
+				return
+			}
+			UnregisterPolicyCheck(name)
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			BuiltinDeclaredTypeNames()
+		}
+	}
+}
 
 func TestCanonicalTypeFor(t *testing.T) {
 	cases := []struct {

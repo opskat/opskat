@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 )
 
 func init() {
@@ -80,6 +81,21 @@ func init() {
 		return c.PolicyStrings()
 	})
 
+	// 通用资产只有一个执行器：按自定义类型的执行方式在 helper 里分派（helper.RegisterGenericMode），
+	// 这里不按执行方式分支。precheck 把缺值 / 解密失败 / 执行方式不支持挪到审批之前；审批
+	// 展示补充给出渲染后的目标地址；流式入口让 opsctl 保留 argv 边界并透传 stdio 与退出码。
+	permission.RegisterExecutor(asset_entity.AssetTypeGeneric,
+		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
+			return helper.ExecGenericOnAsset(ctx, asset, command, scope)
+		}, mustSkillDoc(asset_entity.AssetTypeGeneric), helper.CanonicalizeGenericCommand)
+	permission.RegisterPrecheck(asset_entity.AssetTypeGeneric, helper.PrecheckGeneric)
+	permission.RegisterApprovalDetail(asset_entity.AssetTypeGeneric, helper.DescribeGenericCommand)
+	permission.RegisterStreamExecutor(asset_entity.AssetTypeGeneric, helper.StreamGenericOnAsset)
+	// 资产表单的「测试连接」（仅 HTTP 执行方式）：与 exec 同一套拨号与注入，不经过策略。
+	// 与执行器登记在一处，通用资产的全部接线一目了然；它不需要 binder 持有的 live 连接池——
+	// SSH 隧道所需的连接池从 ctx 取（helper.WithSSHPool）。
+	conntest.RegisterDetailed(asset_entity.AssetTypeGeneric, helper.ProbeGenericConnection)
+
 	// 没有命令面、但可以被 put_asset 创建/更新的类型：只注册文档。
 	// exec 对它们仍然报 "no exec support yet"（RegisteredExecTypes 会跳过 exec == nil 的条目）。
 	for _, docOnly := range []string{
@@ -93,7 +109,7 @@ func init() {
 
 // mustSkillDoc 返回某资产类型内嵌的 SKILL.md 正文，缺失时直接 panic。
 //
-// 这是本文件所有 12 处注册（9 个 exec 类型 + 3 个 doc-only 类型）取 help 文档的唯一
+// 这是本文件所有 13 处注册（10 个 exec 类型 + 3 个 doc-only 类型）取 help 文档的唯一
 // 入口，取代了曾经的 `doc, _ := skills.Get(assetType)`——当时 8 处 exec 类型全部丢弃了
 // skills.Get 的第二个返回值，SKILL.md 缺失时会静默把一个空字符串喂给
 // permission.RegisterExecutor：HelpFor 依然返回 ("", true)（entry 存在，只是内容为

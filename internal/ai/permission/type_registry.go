@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 
@@ -190,6 +191,9 @@ func init() {
 	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, checkKafkaPermission)
 	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, checkK8sPermission, "kubernetes", "kube")
 	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, checkOSSPermission)
+	// 通用资产：匹配对象按自定义类型的执行方式决定（HTTP 为 `<METHOD> <path>`），判定见
+	// generic_policy.go。
+	registerPermissionType(asset_entity.AssetTypeGeneric, "generic", genericGrantPatterns, checkGenericPermission)
 	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，主体是远端路径
 	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
 	// 主体转义成"只匹配它自己"的规则（决策 D21），因为路径里的 `* ? [` 可以是字面文件名。
@@ -293,6 +297,9 @@ func init() {
 	registerRuleSink(asset_entity.AssetTypeOSS, &ruleLanding{
 		shape: ossShape, refPolicyType: policyKindOSS, land: identityLand,
 		match: policy.MatchOSSRule, generic: policy.MatchOSSRule})
+	// 通用资产的规则落在 CommandPolicy 列，遮蔽判定用与运行时相同的普通 glob。
+	registerRuleSink(asset_entity.AssetTypeGeneric, &ruleLanding{
+		shape: commandShape, refPolicyType: policyKindCommand, land: identityLand, match: MatchPlainGlob})
 	// cp 面：规则落在 CommandPolicy 列、带方向前缀（matchCpPolicyRule 的规则语法）。
 	// 无方向的 GrantToolCp（"cp"）不注册——落点与遮蔽都需要方向，绝不猜默认形状。
 	registerRuleSink(GrantToolCpRead, &ruleLanding{
@@ -361,6 +368,36 @@ func policyStringsFor(canonical string) (PolicyStringsFunc, bool) {
 // 批准之后命令才因为这个检查而失败。仅当某类型有这类检查时才需要注册（目前只有
 // serial：会话不存在）。与 CanonicalizeFunc 不同的是它不改写命令，只返回错误。
 type PrecheckFunc func(ctx context.Context, asset *asset_entity.Asset) error
+
+// ApprovalDetailFunc 给审批弹窗生成一条展示补充（ApprovalItem.Detail），只影响呈现、
+// 不参与任何匹配。仅当某类型的审批人需要看到命令本身之外的信息时才注册（目前是通用资产：
+// 渲染后的目标地址与操作类型）。返回的内容会进审批弹窗与 opsctl 终端审批提示，不得含
+// 任何注入值（认证渲染结果、密钥）。
+type ApprovalDetailFunc func(ctx context.Context, asset *asset_entity.Asset, command string) (string, error)
+
+// Stdio 是流式执行使用的本地标准流。
+type Stdio struct {
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// StreamResult 是一次已完成的流式执行的结果。
+type StreamResult struct {
+	// ExitCode 是 opsctl 的退出码（HTTP：2xx 为 0，其余为 1）。
+	ExitCode int
+	// AuditResult 是写进审计 result 列的摘要（HTTP：状态行），不得含注入值。
+	AuditResult string
+}
+
+// StreamExecFunc 是 opsctl exec 的流式执行入口：argv 保留调用方给出的参数边界，输出
+// 直接写到 stdio。返回 error 表示请求没有完成（校验、连接、TLS、渲染失败等）——此时
+// 实现不得向 stdio.Stdout 写任何内容，由调用方把错误写到 stderr 并以 1 退出。
+//
+// 注册了流式入口的类型，opsctl 把 argv 按 shell 规则逐个加引号（cmdline.QuoteIfNeeded）
+// 拼成 command 串交给 CanonicalizeFunc / 审批 / 审计，因此 cmdline.Words(command) 能
+// 原样还原 argv；AI exec 传入的 command 串用同一套写法。
+type StreamExecFunc func(ctx context.Context, asset *asset_entity.Asset, argv []string, stdio Stdio) (StreamResult, error)
 
 type execEntry struct {
 	exec         ExecFunc
@@ -499,6 +536,52 @@ func PrecheckFor(assetType string) (PrecheckFunc, bool) {
 		return nil, false
 	}
 	return entry.precheck, true
+}
+
+// 审批展示补充与流式执行入口是只有个别类型才有的可选钩子，与 RegisterPolicyStrings 一样
+// 各存一张表，不挂在 execEntry 上：测试替换某类型执行器（UnregisterExecutor +
+// RegisterExecutor）时不会连带丢掉它们。
+var (
+	approvalDetailFuncs = make(map[string]ApprovalDetailFunc)
+	streamExecFuncs     = make(map[string]StreamExecFunc)
+)
+
+// RegisterApprovalDetail 注册某资产类型的审批展示补充。重复/空注册 panic，与
+// RegisterPolicyStrings 同一原则：注册冲突是启动期的编程错误。
+func RegisterApprovalDetail(canonical string, fn ApprovalDetailFunc) {
+	if canonical == "" || fn == nil {
+		panic("permission: invalid approval detail registration")
+	}
+	if _, exists := approvalDetailFuncs[canonical]; exists {
+		panic(fmt.Sprintf("permission: duplicate approval detail registration %q", canonical))
+	}
+	approvalDetailFuncs[canonical] = fn
+}
+
+// ApprovalDetailFor 返回该资产类型注册的审批展示补充（如有）。
+func ApprovalDetailFor(assetType string) (ApprovalDetailFunc, bool) {
+	fn, ok := approvalDetailFuncs[assetType]
+	return fn, ok
+}
+
+// RegisterStreamExecutor 注册某资产类型的 opsctl 流式执行入口（该类型同时要有
+// RegisterExecutor 注册的执行器，调用方先按 ExecutorFor 判定是否支持 exec）。重复/空注册
+// panic。ssh 的流式通道早于本注册表、按命令串而不是 argv 执行，仍由 opsctl 自己走
+// helper.ExecWithStdio。
+func RegisterStreamExecutor(canonical string, fn StreamExecFunc) {
+	if canonical == "" || fn == nil {
+		panic("permission: invalid stream executor registration")
+	}
+	if _, exists := streamExecFuncs[canonical]; exists {
+		panic(fmt.Sprintf("permission: duplicate stream executor registration %q", canonical))
+	}
+	streamExecFuncs[canonical] = fn
+}
+
+// StreamExecutorFor 返回该资产类型注册的流式执行入口（如有）。
+func StreamExecutorFor(assetType string) (StreamExecFunc, bool) {
+	fn, ok := streamExecFuncs[assetType]
+	return fn, ok
 }
 
 // UnregisterExecutor 移除一个已注册的执行器或用法文档。

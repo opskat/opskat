@@ -294,7 +294,7 @@ func TestRedisHandler(t *testing.T) {
 		})
 
 		convey.Convey("集群模式的完整创建通过 validateRedis 校验（走自动化契约）", func() {
-			prepared, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 				"mode": "cluster", "nodes": []any{"10.0.0.1:6379"}, "username": "default",
 			})
 			convey.So(err, convey.ShouldBeNil)
@@ -304,7 +304,7 @@ func TestRedisHandler(t *testing.T) {
 		})
 
 		convey.Convey("集群模式缺 nodes 时 validateRedis 报错并在自动化契约里可见", func() {
-			_, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}, map[string]any{
 				"mode": "cluster", "username": "default",
 			})
 			convey.So(err, convey.ShouldNotBeNil)

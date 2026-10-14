@@ -11,7 +11,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
-	_ "github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/buildinfo"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -89,6 +89,7 @@ func Execute() int {
 	// 扩展提供的资产类型：内置类型由 assettype 的 init() 注册，扩展的那份接线在桌面
 	// 进程里随 WASM 加载发生，opsctl 只能自己按缓存的 describe() 再接一次。必须早于
 	// buildHandlerMap —— 工具描述里的类型清单是那时候取的。
+	assettype.SetCustomTypeSlugLookup(assettype.CustomTypeSlugExists)
 	registerExtensionAssetTypes()
 
 	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
@@ -132,6 +133,8 @@ func Execute() int {
 		return cmdDelete(ctx, handlers, args, resolvedSession)
 	case "cp":
 		return cmdCp(ctx, handlers, args, resolvedSession)
+	case "secret":
+		return cmdSecret(ctx, handlers, args, resolvedSession)
 	case "ssh":
 		return cmdSSH(ctx, args)
 	case "batch":
@@ -202,6 +205,8 @@ Commands:
   update    Update an existing resource (asset or group)
   delete    Delete an asset or group (always requires human confirmation)
   cp        Copy files between local and remote servers (scp-style)
+  secret    Read a generic asset's field value ('secret get <asset> <field>'); a
+            secret field requires approval and never appears in logs
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage extensions (list, search, install, update, dev)

@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_describe_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
@@ -168,6 +169,7 @@ func registerRepositories() {
 	// (and resolving their asset types from opsctl) off that path.
 	extension.SetDescribeCache(extensionDescribeCache{})
 	snippet_repo.RegisterSnippet(snippet_repo.NewSnippet())
+	custom_type_repo.RegisterCustomType(custom_type_repo.New())
 }
 
 // resolveKDFSalt 从 config.json 获取 salt，不存在则生成并持久化

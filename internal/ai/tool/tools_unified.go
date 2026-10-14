@@ -70,5 +70,31 @@ func unifiedTools() []tool.Tool {
 				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: out}}}, nil
 			},
 		},
+		&tool.RawTool{
+			NameStr: "get_asset_secret",
+			DescStr: "Read one field's value back out of a generic asset (a custom-type asset — see help). " +
+				"Only generic assets are supported; built-in typed assets (ssh, database, redis, ...) are rejected. " +
+				"A non-secret field is returned immediately, the same value help already shows. " +
+				"A secret field is checked against policy (match object \"secret:<field>\"), and if it needs " +
+				"confirmation the plaintext value entering this conversation and being sent to the model provider " +
+				"is disclosed in the approval prompt — only call this when the value is actually needed, not to " +
+				"preemptively inspect every field. An unknown field name fails with the type's available field names.",
+			SchemaVal: agent.Schema{
+				Type: "object",
+				Properties: map[string]*agent.Property{
+					"asset": {Type: "string", Description: "Target generic asset id or name. Use list_assets to find it."},
+					"field": {Type: "string", Description: "The custom type's field name to read — see help for the field list."},
+				},
+				Required: []string{"asset", "field"},
+			},
+			IsSerial: true,
+			Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
+				out, err := handleGetAssetSecret(ctx, in)
+				if err != nil {
+					return nil, err
+				}
+				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: out}}}, nil
+			},
+		},
 	}
 }

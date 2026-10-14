@@ -439,3 +439,28 @@ func TestExecViaDesktopExpandsFileFlagsBeforeSending(t *testing.T) {
 		assert.Contains(t, stderr, "missing")
 	})
 }
+
+func TestRegisterExtensionAssetTypesRefusesATypeThatShadowsACustomType(t *testing.T) {
+	dir := withExtensionDir(t)
+	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
+	forgetExtension(t, "acme")
+	assettype.SetCustomTypeSlugLookup(func(_ context.Context, slug string) (bool, error) { return slug == "acme-store", nil })
+	t.Cleanup(func() { assettype.SetCustomTypeSlugLookup(nil) })
+
+	var reported []error
+	orig := extregRegisterFn
+	extregRegisterFn = func(info *extension.ManifestInfo) error {
+		err := orig(info)
+		reported = append(reported, err)
+		return err
+	}
+	t.Cleanup(func() { extregRegisterFn = orig })
+
+	registerExtensionAssetTypes()
+
+	require.Len(t, reported, 1)
+	require.Error(t, reported[0])
+	assert.Contains(t, reported[0].Error(), "acme-store")
+	_, registered := assettype.Get("acme-store")
+	assert.False(t, registered, "the custom type keeps the name for --type and help")
+}

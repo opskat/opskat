@@ -79,9 +79,14 @@ func (s *assetSvc) Create(ctx context.Context, asset *asset_entity.Asset) error 
 	asset.Createtime = now
 	asset.Updatetime = now
 	asset.Status = asset_entity.StatusActive
-	// 未设置命令策略时，根据资产类型应用默认拒绝列表
+	// 未设置命令策略时写入默认策略：按类型的默认拒绝列表，或由资产自身决定的默认
+	// 策略（通用资产复制其自定义类型的默认规则）。
 	if asset.CmdPolicy == "" {
-		if p, ok := policy.GetDefaultPolicyOf(asset.Type); ok {
+		p, ok, err := policy.DefaultPolicyForAsset(ctx, asset.Type, asset.Config)
+		if err != nil {
+			return err
+		}
+		if ok {
 			data, err := json.Marshal(p)
 			if err != nil {
 				logger.Default().Error("marshal default policy", zap.Error(err))

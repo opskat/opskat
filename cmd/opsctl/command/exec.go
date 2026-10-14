@@ -64,7 +64,7 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 归属直接问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
 	// 接线）：内置类型天然报 ("", false)，因为注册表拒绝让扩展占用一个内置类型名——
 	// 与桌面端的冲突规则同一条，opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。
-	// 提前拿到这个答案，同时喂给 parseExecArgs（多词 argv 的引号策略——扩展的 flag
+	// 提前拿到这个答案，同时喂给 joinCommandWords（多词 argv 的引号策略——扩展的 flag
 	// DSL 没有远端 shell，元字符必须逐词保真；ssh 等类型的多词语义不变）和下面的派发
 	// 判断，避免同一个"是不是扩展资产"的问题被问两次、答案还可能不一致。
 	extName, isExtensionAsset := assettype.ExtensionOwnerOf(asset.Type)
@@ -72,11 +72,19 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
 	// 用户不该为一条注定失败的命令点头。
-	declaredType, scope, command, err := parseExecArgs(args[1:], isExtensionAsset)
+	declaredType, scope, argv, err := parseExecArgv(args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		printExecUsage()
 		return 1
+	}
+	// 注册了流式执行入口的类型（如通用资产）按 argv 执行：command 串逐个加引号拼成（单个词
+	// 也加），canonicalize / 审批 / 审计看到的与 AI exec 写法一致、且能原样切回 argv。其余类型
+	// 拼成一整条命令（joinCommandWords：单个词原样，多词按类型决定引号策略）。
+	stream, streaming := permission.StreamExecutorFor(asset.Type)
+	command := joinCommandWords(argv, isExtensionAsset)
+	if streaming {
+		command = quoteExecArgv(argv)
 	}
 	if err := permission.AssertAssetType(asset, declaredType); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -107,6 +115,11 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
+	detail, err := execApprovalDetailFor(ctx, asset, args[0], scope, command)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 
 	// Require approval. Type 用 asset 真实类型对应的审批类型（ApprovalTypeFor），
 	// 不能写死 "exec"：requireApproval 内部拿它去 permission.CheckPermission 做
@@ -132,7 +145,7 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		// scope 不并进 Command/checkCommand：那两个字段驱动策略匹配与 grant pattern
 		// 落库（见上方注释），掺入节点地址会让同一条命令因 scope 不同而匹配不上同一条
 		// 规则。Detail 只是给审批人看的补充说明，同 cp 的 "src → dst" 用法。
-		Detail:    execApprovalDetail(args[0], scope, command),
+		Detail:    detail,
 		SessionID: session,
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
@@ -154,6 +167,9 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	if asset.IsSSH() {
 		return execSSHStreamFn(ctx, auditCtx, asset, command, approvalResult)
 	}
+	if streaming {
+		return execRegisteredStream(ctx, auditCtx, asset, stream, argv, argsJSON, approvalResult)
+	}
 	// 其余类型走统一 exec handler：opsctl 由此获得 database/redis/mongodb/etcd/kafka/k8s
 	// 的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它已经知道
 	// 按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面 validateRedisScope
@@ -173,6 +189,36 @@ func execApprovalDetail(assetRef, scope, command string) string {
 		return fmt.Sprintf("opsctl exec %s -- %s", assetRef, command)
 	}
 	return fmt.Sprintf("opsctl exec %s --scope %s -- %s", assetRef, scope, command)
+}
+
+// execApprovalDetailFor 是审批弹窗的补充说明：opsctl 调用原文（execApprovalDetail），
+// 该类型注册了审批展示补充（permission.ApprovalDetailFor，如通用资产的操作类型与渲染后的
+// 目标地址）时放在它前面。补充生成失败说明命令必然执行失败，调用方在审批之前报错。
+func execApprovalDetailFor(ctx context.Context, asset *asset_entity.Asset, assetRef, scope, command string) (string, error) {
+	detail := execApprovalDetail(assetRef, scope, command)
+	describe, ok := permission.ApprovalDetailFor(asset.Type)
+	if !ok {
+		return detail, nil
+	}
+	extra, err := describe(ctx, asset, command)
+	if err != nil {
+		return "", err
+	}
+	return extra + "\n" + detail, nil
+}
+
+// execRegisteredStream 执行注册了流式入口的类型（permission.StreamExecutorFor）：argv 保留
+// 调用方的参数边界，stdin / stdout / stderr 直接透传，退出码取自执行结果。请求没有完成时
+// 执行器保证 stdout 为空，这里把错误写到 stderr 并以 1 退出。审计 result 用执行器给出的
+// 摘要（HTTP：状态行），不捕获输出——响应体不进审计。
+func execRegisteredStream(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, stream permission.StreamExecFunc, argv []string, argsJSON string, approvalResult ApprovalResult) int {
+	res, err := stream(ctx, asset, argv, permission.Stdio{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+	writeOpsctlAudit(auditCtx, "exec", argsJSON, res.AuditResult, err, approvalResult.ToCheckResult())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	return res.ExitCode
 }
 
 // execSSHStreaming 是 ssh 资产的流式执行体：转发 stdin 管道、stdout/stderr 直写
@@ -263,8 +309,12 @@ Arguments:
               like --path='/x?a=1&b=2' must reach it as that exact literal,
               not as shell operators:
                 opsctl exec my-store -- request --path='/x?a=1&b=2'
+              A custom-type (generic) asset is the exception: it keeps each
+              argument as given, so -H 'X-Caller: two words' stays one
+              argument (see "Custom types" below).
               Dispatched by the asset's real type: ssh keeps its streaming
-              channel (pipes, exit code); the other built-in types (database,
+              channel (pipes, exit code); generic assets stream too (see
+              below); the other built-in types (database,
               redis, mongodb, etcd, kafka, k8s, oss) run through the unified
               exec handler; an extension-provided type is executed by the
               running desktop app, which owns the WASM runtime.
@@ -302,6 +352,14 @@ Pipe Support (ssh assets only):
 
   The exit code of the remote command is propagated as opsctl's exit code.
 
+Custom types, HTTP exec mode (--type accepts the custom type slug):
+  <METHOD> <PATH> [-H 'Name: value']... [-d <data> | -d @<file> | -d @-] [-i]
+  PATH starts with / and is appended to the asset's Base URL; the host injects
+  the type's authentication. The response body goes to stdout, the status line
+  to stderr (-i also puts the status line and headers on stdout). Exit code 0
+  for 2xx, 1 for any other status (the body is still written), 1 with nothing
+  on stdout when the request did not complete. Run 'opsctl help <asset>' first.
+
 Approval:
   This command requires approval. Commands matching the asset's allow list
   execute without approval; commands matching the deny list are rejected
@@ -326,6 +384,8 @@ Examples:
   opsctl exec cache --type redis --scope 1 -- "GET session:abc123"
   opsctl exec cache-cluster --type redis --scope 10.0.0.1:6379 -- DBSIZE
   opsctl exec my-bucket -- list_objects --bucket=logs --maxKeys=100
+  opsctl exec grafana-prod --type grafana -- GET '/api/search?query=cpu'
+  cat dash.json | opsctl exec grafana-prod -- POST /api/dashboards/db -H 'Content-Type: application/json' -d @-
 `)
 }
 

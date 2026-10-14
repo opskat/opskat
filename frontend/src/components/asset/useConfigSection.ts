@@ -37,6 +37,7 @@ function sameValidity(a: SectionValidity | null, b: SectionValidity): boolean {
     a !== null &&
     a.canTest === b.canTest &&
     a.canSave === b.canSave &&
+    a.testable === b.testable &&
     (a.saveDisabledReason ?? "") === (b.saveDisabledReason ?? "")
   );
 }

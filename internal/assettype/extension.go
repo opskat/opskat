@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
 )
 
 // ExtensionTypeSpec 是一个扩展提供的资产类型的声明，由 manifest 推导而来。
@@ -48,8 +50,34 @@ type ExtensionConnectionSpec struct {
 	TLS        bool
 }
 
+// CustomTypeSlugLookup 回答"这个标识是不是一个已有的自定义类型"。
+type CustomTypeSlugLookup func(ctx context.Context, slug string) (bool, error)
+
+var (
+	customTypeSlugMu     sync.RWMutex
+	customTypeSlugLookup CustomTypeSlugLookup
+)
+
+// SetCustomTypeSlugLookup 由组合根（桌面 main、opsctl root）在数据库就绪后注入，让
+// RegisterExtensionType 拒绝与已有自定义类型标识重名的扩展类型——否则它会遮蔽该标识
+// （--type、help、新建资产都先查注册表）。本包不依赖数据库就绪，未注入（nil）时不检查。
+func SetCustomTypeSlugLookup(fn CustomTypeSlugLookup) {
+	customTypeSlugMu.Lock()
+	customTypeSlugLookup = fn
+	customTypeSlugMu.Unlock()
+}
+
+// CustomTypeSlugExists 是按自定义类型服务回答的 CustomTypeSlugLookup，供组合根注入。
+func CustomTypeSlugExists(ctx context.Context, slug string) (bool, error) {
+	_, err := custom_type_svc.CustomType().GetBySlug(ctx, slug)
+	if custom_type_svc.IsNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // RegisterExtensionType 按 spec 注册一个由 manifest 驱动的资产类型处理器。
-// 类型名冲突（另一个扩展或某个内置类型已经占用了它）返回错误。
+// 类型名冲突（另一个扩展、某个内置类型或已有的自定义类型标识已经占用了它）返回错误。
 func RegisterExtensionType(spec ExtensionTypeSpec) error {
 	if spec.Type == "" {
 		return fmt.Errorf("extension asset type requires a type name")
@@ -61,6 +89,19 @@ func RegisterExtensionType(spec ExtensionTypeSpec) error {
 	for _, field := range spec.ConfigFields {
 		if slices.Contains(hostFields, field) {
 			return fmt.Errorf("extension asset type %q declares configSchema property %q, which is the host's own connection field for a connection item the type opts into", spec.Type, field)
+		}
+	}
+	customTypeSlugMu.RLock()
+	lookup := customTypeSlugLookup
+	customTypeSlugMu.RUnlock()
+	if lookup != nil {
+		taken, err := lookup(context.Background(), spec.Type)
+		if err != nil {
+			return fmt.Errorf("check extension asset type %q against custom types: %w", spec.Type, err)
+		}
+		if taken {
+			return fmt.Errorf("extension %q asset type %q has the same name as the existing custom type %q: rename or remove the custom type first",
+				spec.ExtensionName, spec.Type, spec.Type)
 		}
 	}
 	return RegisterDynamic(newExtensionHandler(spec))

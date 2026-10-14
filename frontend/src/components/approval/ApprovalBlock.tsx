@@ -25,6 +25,7 @@ import { ExtensionRequestDetail } from "./ExtensionRequestDetail";
 import { TruncatedText } from "./TruncatedText";
 import { RememberPatternEditor } from "./RememberPatternEditor";
 import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
+import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
 
 interface ApprovalBlockProps {
   block: ContentBlock;
@@ -66,17 +67,22 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
 
   // detail 是这次传输唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句
   // "cp src → dst"，哪怕批量只有一条也不为空）；batch_exec 的批量项没有这个概念——
-  // tool_handler_batch.go 建 item 时压根不设 Detail，因此永远是空串。detail 是否非空
-  // 因此是 payload 里现成的、可靠的判据：折叠是为 cp 这种"每条共享同一句摘要"的批设计的，
-  // batch_exec 的条目分属不同资产/工具，没有可摘要的共同点——折叠了只会把 Approve 按钮
-  // 架在一句读不出内容的"N 项已折叠"上面，比展示全部异构命令更危险。
+  // tool_handler_batch.go 只给注册了审批展示补充的类型（通用资产）逐条填 Detail，那是每一条
+  // 自己的说明（hasPinnedDetail），即便各条恰好同一句（命令方式都是"用哪个 shell 执行"）也
+  // 不是整批的摘要。折叠是为 cp 这种"每条共享同一句摘要"的批设计的，batch_exec 的条目分属
+  // 不同资产/工具，没有可摘要的共同点——折叠了只会把 Approve 按钮架在一句读不出内容的
+  // "N 项已折叠"上面，比展示全部异构命令更危险。
   const batchDetail = items[0]?.detail;
-  const isBatchCollapsed = kind === "batch" && !!batchDetail && items.length > BATCH_COLLAPSE_THRESHOLD;
+  const isBatchCollapsed =
+    kind === "batch" &&
+    !!batchDetail &&
+    items.every((item) => item.detail === batchDetail && !hasPinnedDetail(item)) &&
+    items.length > BATCH_COLLAPSE_THRESHOLD;
 
   const renderBatchItem = (item: (typeof items)[number], i: number) => (
     <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">
       <div className="flex items-center gap-1.5">
-        <TypeBadge type={item.type} compact />
+        <TypeBadge type={item.type} command={item.command} compact />
         {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
       </div>
       <div className="rounded bg-warning/5 px-2 py-[5px]">
@@ -84,6 +90,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           {item.command}
         </code>
       </div>
+      {hasPinnedDetail(item) && (
+        // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，与单条审批一样常驻。
+        <div className="text-[10px] text-muted-foreground/80">
+          <div className="select-none">{t(detailSummaryKey(item))}</div>
+          <DetailPre text={item.detail} structured={!!item.action} />
+        </div>
+      )}
     </div>
   );
 
@@ -171,7 +184,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     <ScopeBadge item={item} />
                   ) : (
                     <>
-                      <TypeBadge type={item.type} />
+                      <TypeBadge type={item.type} command={item.command} />
                       {scopeName(item) && <span className="text-xs text-warning">{scopeName(item)}</span>}
                     </>
                   )}
@@ -201,8 +214,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   </div>
                 )}
                 {item.detail &&
-                  (kind === "delete" ? (
+                  (kind === "delete" || hasPinnedDetail(item) ? (
                     // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
+                    // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，同样常驻。
                     <div className="text-[10px] text-muted-foreground/80">
                       <div className="select-none">{t(detailSummaryKey(item))}</div>
                       <DetailPre text={item.detail} structured={!!item.action} />
@@ -358,7 +372,7 @@ function detailSummaryKey(item: { type: string; action?: string }): string {
     case "delete":
       return "ai.approvalDeleteDetail";
     default:
-      return "ai.approvalTransferDetail";
+      return approvalTypePresentation(item.type).pinnedDetailLabelKey ?? "ai.approvalTransferDetail";
   }
 }
 
@@ -389,7 +403,10 @@ function scopeName(item: { asset_id: number; asset_name: string; group_id?: numb
 // 收窄类型，而不是逼 S3Icon 伪装成 lucide 的 ref-forwarding 形状。
 type IconComponent = ComponentType<{ className?: string }>;
 
-function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
+function TypeBadge({ type, command, compact }: { type: string; command: string; compact?: boolean }) {
+  const { t } = useTranslation();
+  // 登记了操作类型的审批类型(通用资产:HTTP 请求 / 命令 / 取值)徽标显示操作而不是类型名。
+  const op = approvalTypePresentation(type).op?.(command);
   const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
@@ -407,19 +424,26 @@ function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
     k8s: Boxes,
     oss: S3Icon,
   };
-  const Icon = icons[type] || Terminal;
+  const Icon = op?.icon ?? icons[type] ?? Terminal;
+  const label = op ? t(op.labelKey) : type.toUpperCase();
   if (compact) {
     return (
-      <span className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-bold text-warning bg-background">
+      <span
+        data-testid="approval-type-badge"
+        className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-bold text-warning bg-background"
+      >
         <Icon className="h-[11px] w-[11px]" />
-        {type.toUpperCase()}
+        {label}
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[9px] font-bold text-warning bg-background">
+    <span
+      data-testid="approval-type-badge"
+      className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[9px] font-bold text-warning bg-background"
+    >
       <Icon className="h-3 w-3" />
-      {type.toUpperCase()}
+      {label}
     </span>
   );
 }

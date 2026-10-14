@@ -3,19 +3,23 @@ package backup_svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/policy_group_repo"
@@ -123,12 +127,14 @@ func Export(ctx context.Context, opts *ExportOptions, crypto CredentialCrypto) (
 		}
 		data.Credentials = creds
 		// 解密资产内联密码
-		if err := decryptAssetPasswords(data.Assets, crypto); err != nil {
+		if err := decryptAssetPasswords(ctx, data.Assets, crypto); err != nil {
 			return nil, fmt.Errorf("解密资产密码失败: %w", err)
 		}
 	} else {
 		// 不含凭据：清除敏感字段
-		stripAssetSecrets(data.Assets)
+		if err := stripAssetSecrets(ctx, data.Assets); err != nil {
+			return nil, fmt.Errorf("清除资产密钥字段失败: %w", err)
+		}
 	}
 
 	// 端口转发
@@ -148,6 +154,14 @@ func Export(ctx context.Context, opts *ExportOptions, crypto CredentialCrypto) (
 		return nil, fmt.Errorf("导出 SSH Agent 来源失败: %w", err)
 	}
 	data.AgentSources = agentSources
+
+	// 通用资产用到的自定义类型：与 Agent 来源同一约定，部分导出只含被选中资产
+	// 引用的类型，全量导出含全部类型（含未使用）。
+	customTypes, err := exportCustomTypes(ctx, selectedAssets, len(opts.AssetIDs) > 0)
+	if err != nil {
+		return nil, fmt.Errorf("导出自定义类型失败: %w", err)
+	}
+	data.CustomTypes = customTypes
 
 	return data, nil
 }
@@ -244,6 +258,16 @@ func exportCredentials(ctx context.Context, assets []*asset_entity.Asset, crypto
 				credIDs[cfg.CredentialID] = true
 			}
 		}
+		if a.IsGeneric() && a.Config != "" {
+			cfg, err := a.GetGenericConfig()
+			if err == nil {
+				for _, v := range cfg.Values {
+					if v.CredentialID > 0 {
+						credIDs[v.CredentialID] = true
+					}
+				}
+			}
+		}
 	}
 	if len(credIDs) == 0 {
 		return nil, nil
@@ -287,7 +311,8 @@ func exportCredentials(ctx context.Context, assets []*asset_entity.Asset, crypto
 }
 
 // decryptAssetPasswords 解密资产 Config 中的内联密码为明文
-func decryptAssetPasswords(assets []*asset_entity.Asset, crypto CredentialCrypto) error {
+func decryptAssetPasswords(ctx context.Context, assets []*asset_entity.Asset, crypto CredentialCrypto) error {
+	types := make(map[string]*custom_type_entity.CustomType)
 	for _, a := range assets {
 		switch {
 		case a.IsSSH() && a.Config != "":
@@ -359,13 +384,74 @@ func decryptAssetPasswords(assets []*asset_entity.Asset, crypto CredentialCrypto
 					return err
 				}
 			}
+		case a.IsGeneric() && a.Config != "":
+			if err := decryptGenericSecrets(ctx, a, crypto, types); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
+// lookupCustomType 按标识查找自定义类型，在一次导出内缓存结果（同类型的多个资产
+// 只查一次）。类型不存在（已被删除但资产未清理等异常情况）时返回 nil, nil，调用方
+// 按“无法确定字段是否为密钥”处理，不阻塞整体导出。
+func lookupCustomType(ctx context.Context, cache map[string]*custom_type_entity.CustomType, slug string) (*custom_type_entity.CustomType, error) {
+	if slug == "" {
+		return nil, nil
+	}
+	if ct, ok := cache[slug]; ok {
+		return ct, nil
+	}
+	ct, err := custom_type_repo.CustomType().FindBySlug(ctx, slug)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			cache[slug] = nil
+			return nil, nil
+		}
+		return nil, err
+	}
+	cache[slug] = ct
+	return ct, nil
+}
+
+// decryptGenericSecrets 解密通用资产密钥字段的内联值为明文（导出含凭据时使用）。
+// 托管凭据引用（CredentialID > 0）不在这里处理：它们和 SSH 的 cfg.CredentialID
+// 走同一套凭据收集 / 重映射机制（exportCredentials / import.go）。
+func decryptGenericSecrets(ctx context.Context, a *asset_entity.Asset, crypto CredentialCrypto, cache map[string]*custom_type_entity.CustomType) error {
+	cfg, err := a.GetGenericConfig()
+	if err != nil {
+		return nil //nolint:nilerr // 无法解析的配置沿用既有宽松导出行为，不阻塞整体导出
+	}
+	ct, err := lookupCustomType(ctx, cache, cfg.CustomType)
+	if err != nil {
+		return fmt.Errorf("资产 %s 引用的自定义类型 %q: %w", a.Name, cfg.CustomType, err)
+	}
+	if ct == nil {
+		return nil
+	}
+	changed := false
+	for name, v := range cfg.Values {
+		f, ok := ct.FieldByName(name)
+		if !ok || !f.Secret || v.CredentialID > 0 || v.Value == "" {
+			continue
+		}
+		plain, err := crypto.Decrypt(v.Value)
+		if err != nil {
+			return fmt.Errorf("解密资产 %s 字段 %s 失败: %w", a.Name, name, err)
+		}
+		cfg.Values[name] = asset_entity.GenericValue{Value: plain}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return a.SetGenericConfig(cfg)
+}
+
 // stripAssetSecrets 清除资产配置中的敏感字段
-func stripAssetSecrets(assets []*asset_entity.Asset) {
+func stripAssetSecrets(ctx context.Context, assets []*asset_entity.Asset) error {
+	types := make(map[string]*custom_type_entity.CustomType)
 	for _, a := range assets {
 		switch {
 		case a.IsSSH() && a.Config != "":
@@ -401,8 +487,82 @@ func stripAssetSecrets(assets []*asset_entity.Asset) {
 			if err := a.SetRedisConfig(cfg); err != nil {
 				logger.Default().Warn("strip redis secrets", zap.Error(err))
 			}
+		case a.IsGeneric() && a.Config != "":
+			if err := stripGenericSecrets(ctx, a, types); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
+}
+
+// stripGenericSecrets 清除通用资产密钥字段的值（导出不含凭据时使用）：托管凭据引用
+// 与内联密文一并清空，非密钥字段的值原样保留（它们不是敏感数据，且导出没有它们
+// 就没有意义，如 Base URL 的 host 字段）。
+func stripGenericSecrets(ctx context.Context, a *asset_entity.Asset, cache map[string]*custom_type_entity.CustomType) error {
+	cfg, err := a.GetGenericConfig()
+	if err != nil {
+		return nil //nolint:nilerr // 无法解析的配置沿用既有宽松导出行为，不阻塞整体导出
+	}
+	ct, err := lookupCustomType(ctx, cache, cfg.CustomType)
+	if err != nil {
+		return fmt.Errorf("资产 %s 引用的自定义类型 %q: %w", a.Name, cfg.CustomType, err)
+	}
+	if ct == nil {
+		return nil
+	}
+	changed := false
+	for _, f := range ct.Fields {
+		if !f.Secret {
+			continue
+		}
+		if v, ok := cfg.Values[f.Name]; ok && (v.Value != "" || v.CredentialID > 0) {
+			cfg.Values[f.Name] = asset_entity.GenericValue{}
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := a.SetGenericConfig(cfg); err != nil {
+		logger.Default().Warn("strip generic secrets", zap.Error(err))
+	}
+	return nil
+}
+
+// exportCustomTypes 导出通用资产引用的自定义类型定义。
+//
+// partial=true 时只导出被选中通用资产引用的类型；partial=false（全量）时导出
+// 全部类型，包括当前未被任何资产引用的（与 exportAgentSources 同一约定）。
+func exportCustomTypes(ctx context.Context, assets []*asset_entity.Asset, partial bool) ([]*custom_type_entity.CustomType, error) {
+	if !partial {
+		return custom_type_repo.CustomType().List(ctx)
+	}
+
+	// 与密钥解密 / 清除共用 lookupCustomType：同一个类型只查一次，只有"类型不存在"被
+	// 容忍（资产引用了已不存在的类型时没有定义可导出），其余查询错误原样返回。
+	cache := make(map[string]*custom_type_entity.CustomType)
+	var result []*custom_type_entity.CustomType
+	for _, a := range assets {
+		if !a.IsGeneric() || a.Config == "" {
+			continue
+		}
+		cfg, err := a.GetGenericConfig()
+		if err != nil {
+			continue
+		}
+		if _, seen := cache[cfg.CustomType]; seen {
+			continue
+		}
+		ct, err := lookupCustomType(ctx, cache, cfg.CustomType)
+		if err != nil {
+			return nil, fmt.Errorf("资产 %s 引用的自定义类型 %q: %w", a.Name, cfg.CustomType, err)
+		}
+		if ct != nil {
+			result = append(result, ct)
+		}
+	}
+	return result, nil
 }
 
 // exportAgentSources 导出 SSH Agent 来源定义。

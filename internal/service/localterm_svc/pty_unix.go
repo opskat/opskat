@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/opskat/opskat/internal/pkg/shellutil"
 )
 
 type unixPTY struct {
@@ -16,17 +18,10 @@ type unixPTY struct {
 	cmd *exec.Cmd
 }
 
-func defaultShell() string {
-	if s := os.Getenv("SHELL"); s != "" {
-		return s
-	}
-	return "/bin/sh"
-}
-
 func startPTY(spec ptySpec) (ptyProcess, error) {
 	shell := spec.Shell
 	if shell == "" {
-		shell = defaultShell()
+		shell = shellutil.DefaultShell()
 	}
 	cwd, err := expandHomeDir(spec.Cwd)
 	if err != nil {

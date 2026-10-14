@@ -277,9 +277,18 @@ opskat.AssetType[esConfig]("es").Auth(opskat.Auth{
 
 `In` is `header` (`Name` is the header), `query` (`Name` is the parameter) or `basic`
 (no `Name`; `Value` renders `user:password` and is sent as `Authorization: Basic …`).
-`Value` is literal text with `{{field}}` and `{{base64(part, …)}}` placeholders, each
-part a config field or a double-quoted literal; a field the config leaves unset renders
-empty. A `Selector` value no group names injects nothing (e.g. `authType: "none"`).
+`Value` is literal text with `{{expression}}` placeholders, written in the template
+language custom asset types use. An expression is a config field by name (letters,
+digits, `_` and `-`, starting with a letter or `_`), a double-quoted literal (escapes
+as in a Go string literal: `\n`, `\"`, `\\`, `\t`, `\xNN`, `\uNNNN`, …), a `+`
+concatenation of those, or a function call: `base64(x, …)`
+(several arguments are joined, then encoded), `hex(x)`, `urlencode(x)`, `sha256(x)`,
+`hmac_sha256(key, msg)` — the two hashes return raw bytes, so wrap them in `base64` or
+`hex` — and `uuid()`. `now.unix` / `now.unix_ms` read the clock once per request, so
+a signature and the timestamp it covers agree across the group's bindings, e.g.
+`{{hex(hmac_sha256(secret, now.unix_ms + "\n" + accessKey))}}`. A field the config
+leaves unset renders empty. A `Selector` value no group names injects nothing (e.g.
+`authType: "none"`).
 The host refuses the extension at load when a template references a field the config
 does not declare, the selector is a `format:"password"` field, or a group cannot be
 selected unambiguously, and — like

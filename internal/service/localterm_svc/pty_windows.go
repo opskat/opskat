@@ -3,27 +3,12 @@
 package localterm_svc
 
 import (
-	"os"
-	"os/exec"
-
+	"github.com/opskat/opskat/internal/pkg/shellutil"
 	"github.com/opskat/opskat/internal/pkg/winconpty"
 )
 
 type winPTY struct {
 	cpty *winconpty.ConPty
-}
-
-// windowsDefaultShell 按 pwsh → powershell → cmd 兜底。
-func windowsDefaultShell() string {
-	for _, name := range []string{"pwsh.exe", "powershell.exe"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p
-		}
-	}
-	if c := os.Getenv("COMSPEC"); c != "" {
-		return c
-	}
-	return "cmd.exe"
 }
 
 func startPTY(spec ptySpec) (ptyProcess, error) {
@@ -32,7 +17,7 @@ func startPTY(spec ptySpec) (ptyProcess, error) {
 	}
 	shell := spec.Shell
 	if shell == "" {
-		shell = windowsDefaultShell()
+		shell = shellutil.DefaultShell()
 	}
 	cmdline := windowsCommandLine(shell, spec.Args)
 	cwd, err := expandHomeDir(spec.Cwd)

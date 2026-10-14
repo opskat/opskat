@@ -321,6 +321,9 @@ func (r *windTermAssetRepo) CountAgentAuthBySourceIDGroupByFingerprint(context.C
 func (r *windTermAssetRepo) ListAgentAuthBySourceID(context.Context, int64) ([]*asset_entity.Asset, error) {
 	return nil, nil
 }
+func (r *windTermAssetRepo) ListByCustomType(context.Context, string) ([]*asset_entity.Asset, error) {
+	return nil, nil
+}
 
 type windTermGroupRepo struct {
 	groups []*group_entity.Group

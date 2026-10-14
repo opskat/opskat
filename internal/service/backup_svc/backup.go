@@ -5,6 +5,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/forward_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
@@ -46,6 +47,10 @@ type BackupData struct {
 	Forwards     []*BackupForward                          `json:"forwards,omitempty"`
 	Shortcuts    json.RawMessage                           `json:"shortcuts,omitempty"`
 	CustomThemes json.RawMessage                           `json:"custom_themes,omitempty"`
+	// CustomTypes 是通用资产用到的自定义类型定义（docs/specs/2026-09-28-generic-asset.md
+	// 「导入、导出与备份」）。以标识（slug）而非自增 ID 跨库引用，见
+	// asset_entity.GenericConfig.CustomType；导入时不需要像其他实体那样重映射 ID。
+	CustomTypes []*custom_type_entity.CustomType `json:"custom_types,omitempty"`
 }
 
 // BackupSummary 备份概览信息（用于导入前预览）
@@ -62,6 +67,7 @@ type BackupSummary struct {
 	ForwardCount        int    `json:"forward_count"`
 	HasShortcuts        bool   `json:"has_shortcuts"`
 	HasCustomThemes     bool   `json:"has_custom_themes"`
+	CustomTypeCount     int    `json:"custom_type_count"`
 }
 
 // Summary 返回备份概览
@@ -78,6 +84,7 @@ func (d *BackupData) Summary() *BackupSummary {
 		ForwardCount:        len(d.Forwards),
 		HasShortcuts:        len(d.Shortcuts) > 0,
 		HasCustomThemes:     len(d.CustomThemes) > 0,
+		CustomTypeCount:     len(d.CustomTypes),
 	}
 }
 
@@ -114,4 +121,5 @@ type ImportResult struct {
 	ForwardsImported     int    `json:"forwards_imported"`
 	Shortcuts            string `json:"shortcuts,omitempty"` // JSON 字符串，前端处理
 	CustomThemes         string `json:"custom_themes,omitempty"`
+	CustomTypesImported  int    `json:"custom_types_imported"`
 }

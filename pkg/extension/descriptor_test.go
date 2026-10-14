@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -447,6 +448,30 @@ func TestParseDescriptorAuth(t *testing.T) {
 		Convey("a template referencing a field the configSchema does not declare is refused", func() {
 			refused(`{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"Bearer {{token}}"}]}]}`, `"token"`)
 			refused(`{"groups":[{"bindings":[{"in":"basic","value":"{{base64(username, apiKey)}}"}]}]}`, `"apiKey"`)
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"X-Sign","value":"{{hex(sha256(password + token))}}"}]}]}`, `"token"`)
+		})
+
+		// A value template is written in the template language custom types use
+		// (internal/pkg/authtmpl): its functions and now.* are available.
+		Convey("the template language's functions and now.* are accepted", func() {
+			_, err := ParseDescriptor(withAuth(`{"groups":[{"bindings":[` +
+				`{"in":"header","name":"X-Timestamp","value":"{{now.unix_ms}}"},` +
+				`{"in":"header","name":"X-Sign","value":"{{hex(hmac_sha256(password, username + \"\\n\" + now.unix_ms))}}"},` +
+				`{"in":"query","name":"nonce","value":"{{urlencode(uuid())}}.{{base64(sha256(password))}}"}]}]}`))
+			So(err, ShouldBeNil)
+		})
+
+		Convey("a configSchema property named with a hyphen can be referenced", func() {
+			schema := bytes.Replace(withAuth(`{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"ApiKey {{base64(key-id, \":\", password)}}"}]}]}`),
+				[]byte(`"username":{`), []byte(`"key-id":{"type":"string"},"username":{`), 1)
+			_, err := ParseDescriptor(schema)
+			So(err, ShouldBeNil)
+		})
+
+		// request.* describes the request a custom type's HTTP auth signs; an
+		// extension binding is rendered without one.
+		Convey("request.* is not available to a binding", func() {
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"X-Sign","value":"{{hex(hmac_sha256(password, request.method))}}"}]}]}`, "request.*")
 		})
 
 		Convey("a selector the configSchema does not declare is refused", func() {
@@ -461,7 +486,7 @@ func TestParseDescriptorAuth(t *testing.T) {
 		})
 
 		Convey("a malformed template is refused", func() {
-			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{password"}]}]}`, "unclosed")
+			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{password"}]}]}`, "unterminated")
 			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{md5(password)}}"}]}]}`, "md5(password)")
 			refused(`{"groups":[{"bindings":[{"in":"header","name":"A","value":"{{base64()}}"}]}]}`, "base64")
 		})

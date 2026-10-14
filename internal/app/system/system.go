@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"github.com/opskat/opskat/internal/sshpool"
 )
 
 // SkillContent 内嵌的 skill/plugin 文件内容（由 main.go 通过 go:embed 注入）
@@ -31,6 +33,9 @@ type System struct {
 
 	mu   sync.RWMutex
 	lang string
+
+	// sshPool 由 main.go 经 SetSSHPool 注入；测试连接经 SSH 隧道拨号时交给 tester。
+	sshPool *sshpool.Pool
 
 	githubAuthCancel context.CancelFunc
 	confirmQuit      func()

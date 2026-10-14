@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { Shield, Server, Network, Settings2, Keyboard, Palette, Loader2, Lock } from "lucide-react";
+import { Shield, Server, Network, Settings2, Keyboard, Palette, Loader2, Lock, Blocks } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -119,6 +119,7 @@ export function BackupImportDialog({
       if (result.credentials_imported > 0) parts.push(`${result.credentials_imported} credentials`);
       if (result.policy_groups_imported > 0) parts.push(`${result.policy_groups_imported} policy groups`);
       if (result.forwards_imported > 0) parts.push(`${result.forwards_imported} forwards`);
+      if (result.custom_types_imported > 0) parts.push(`${result.custom_types_imported} custom types`);
       notifySuccess(t("backup.importSuccess") + (parts.length > 0 ? `: ${parts.join(", ")}` : ""));
 
       onOpenChange(false);
@@ -223,6 +224,20 @@ export function BackupImportDialog({
                     </Label>
                   </div>
                   <Switch checked={importForwards} onCheckedChange={setImportForwards} />
+                </div>
+              )}
+
+              {/* Custom types — tied to importAssets, not a separate toggle: the types
+                  used by imported assets come along automatically. */}
+              {summary.custom_type_count > 0 && (
+                <div className="flex items-center justify-between" data-testid="backup-summary-custom-types">
+                  <div className="flex items-center gap-2">
+                    <Blocks className="h-4 w-4 text-muted-foreground" />
+                    <Label className="text-sm">
+                      {t("backup.importCustomTypes")}
+                      <span className="ml-1 text-xs text-muted-foreground">({summary.custom_type_count} types)</span>
+                    </Label>
+                  </div>
                 </div>
               )}
 

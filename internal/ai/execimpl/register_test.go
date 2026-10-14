@@ -5,6 +5,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 )
 
 // M5 regression lock: the empty-kubeconfig check must live in canonicalizeK8sCommand, not
@@ -50,5 +51,14 @@ func TestCanonicalizeK8sCommand_NonEmptyKubeconfigSucceeds(t *testing.T) {
 	want := "kubectl --context prod-ctx --namespace prod-ns get pods"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// The asset form's "test connection" for generic assets is dispatched through conntest by
+// asset type; without this registration System.TestAssetConnection reports "unsupported
+// asset type: generic" and nothing else in the suite would notice.
+func TestGenericConnectionTesterIsRegistered(t *testing.T) {
+	if _, ok := conntest.LookupDetailed(asset_entity.AssetTypeGeneric); !ok {
+		t.Fatal("generic assets must register a connection tester")
 	}
 }

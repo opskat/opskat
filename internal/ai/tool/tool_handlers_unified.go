@@ -10,6 +10,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -72,9 +73,14 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		return "", unsupportedTypeError(asset)
 	}
 
+	// 门禁按 assettype.TypeName 记录：普通类型等于 asset.Type，通用资产则是它的自定义
+	// 类型标识（slug）——一个自定义类型下的所有实例语法相同（spec 「帮助、技能与门禁」，
+	// Design decision 12），看过一次类型或任一实例的 help 就该覆盖同类型的其余实例；
+	// 按 asset.Type="generic" 记录会把所有自定义类型混成一把钥匙，按资产 id 记录则
+	// 要求模型对每个实例都重复调一次 help。
 	if gate := GetDocGate(ctx); gate != nil {
 		convID := aictx.GetConversationID(ctx)
-		if !gate.IsDocumented(convID, asset.Type) {
+		if !gate.IsDocumented(convID, assettype.TypeName(asset)) {
 			recordShortCircuit(ctx, aictx.SourceExecGateBlocked)
 			return execGuidance(asset), nil
 		}
@@ -90,7 +96,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 			// 清单里，却不在可执行的 mongoOps 里）。不记的话，一条被挡下的高危尝试
 			// 连 decision 都不落，比策略拒绝还难查。
 			recordShortCircuit(ctx, aictx.SourceExecCanonicalizeError)
-			return "", fmt.Errorf("asset %q is type=%s; invalid command: %w", asset.Name, asset.Type, err)
+			return "", fmt.Errorf("asset %q is type=%s; invalid command: %w", asset.Name, assettype.TypeName(asset), err)
 		}
 		checkCommand = canonicalCommand
 	}
@@ -102,6 +108,18 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		}
 	}
 
+	// 审批展示补充（如通用资产渲染后的目标地址）同样无副作用，失败说明命令必然执行失败，
+	// 与 precheck 同样在权限检查之前短路。
+	var detail []string
+	if describe, ok := permission.ApprovalDetailFor(asset.Type); ok {
+		d, err := describe(ctx, asset, command)
+		if err != nil {
+			recordShortCircuit(ctx, aictx.SourceExecPrecheckFailed)
+			return "", err
+		}
+		detail = append(detail, d)
+	}
+
 	scope := aictx.ArgString(args, "scope")
 
 	// checker 为 nil 只在 opsctl 那条已预检的路径上合法（permission.WithPreapproved），
@@ -111,7 +129,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 	if checker != nil {
-		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, checkCommand)
+		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, checkCommand, detail...)
 		aictx.RecordDecision(ctx, result)
 		if result.Decision != aictx.Allow {
 			return result.Message, nil
@@ -144,11 +162,12 @@ func recordShortCircuit(ctx context.Context, source string) {
 
 // execGuidance 门禁未满足时返回的引导文本：点名资产与解析出的类型，指引模型
 // 先调 help 再重试 exec（spec §4.6 第 1 条给出的措辞）。返回值而非 error——
-// 模型看到这段文本后能在同一轮内自纠。
+// 模型看到这段文本后能在同一轮内自纠。类型用 assettype.TypeName（与 help 的
+// "type=" 行、门禁键一致：通用资产报它的自定义类型标识）。
 func execGuidance(asset *asset_entity.Asset) string {
 	return fmt.Sprintf(
 		"asset %q is type=%s — call help(asset=%q) for its command syntax before using exec.",
-		asset.Name, asset.Type, asset.Name)
+		asset.Name, assettype.TypeName(asset), asset.Name)
 }
 
 // unsupportedTypeError 类型未注册执行器（只注册了 help 文档的 doc-only 类型，
@@ -157,6 +176,18 @@ func unsupportedTypeError(asset *asset_entity.Asset) error {
 	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
 		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
 }
+
+// assetHelpExtensions 按资产类型登记 help(<资产>) 在类型文档之后追加的实例详情（通用资产：
+// 所属自定义类型的结构、字段值、实际地址与网络路径）。登记而不是在 handleHelp 里按类型分支；
+// 各类型在自己的文件 init 里登记（通用资产见 tool_help_generic.go）。
+var assetHelpExtensions = map[string]func(ctx context.Context, asset *asset_entity.Asset) (string, error){}
+
+// typeNameHelp 回答"这个名字是不是某个资产类型对外的类型名，它的文档是什么"——给静态
+// 文档表（permission.HelpFor）查不到的名字用。ok=false 表示这个名字不归它管。
+type typeNameHelp func(ctx context.Context, typeName string) (doc string, ok bool, err error)
+
+// typeNameHelps 是按登记顺序询问的 typeNameHelp（通用资产：自定义类型标识）。只在 init 期写入。
+var typeNameHelps []typeNameHelp
 
 // handleHelp 返回资产类型的用法文档，并把该类型标记为"该会话已知晓"，供 exec 的
 // 门禁检查使用。
@@ -183,28 +214,47 @@ func handleHelp(ctx context.Context, args map[string]any) (string, error) {
 			asset.Name, asset.Type, strings.Join(permission.RegisteredHelpTypes(), ", "))
 	}
 
-	if gate := GetDocGate(ctx); gate != nil {
-		gate.MarkDocumented(aictx.GetConversationID(ctx), asset.Type)
+	// typeKey is what callers must actually use as `type` (put_asset / opsctl / policy) and
+	// what the doc gate is keyed by: for a generic asset that's its custom type's slug, for
+	// every other asset it's asset.Type itself (assettype.TypeName is the identity there).
+	typeKey := assettype.TypeName(asset)
+	if extend, ok := assetHelpExtensions[asset.Type]; ok {
+		extended, err := extend(ctx, asset)
+		if err != nil {
+			return "", err
+		}
+		doc += extended
 	}
 
-	return fmt.Sprintf("Asset %q is type=%s.\n\n%s", asset.Name, asset.Type, doc), nil
+	if gate := GetDocGate(ctx); gate != nil {
+		gate.MarkDocumented(aictx.GetConversationID(ctx), typeKey)
+	}
+
+	return fmt.Sprintf("Asset %q is type=%s.\n\n%s", asset.Name, typeKey, doc), nil
 }
 
-// helpForTypeName 是 ref 不匹配任何已有资产时的回落：把 ref 当资产类型名直接查
-// help 文档表。命中就按类型返回文档并标记门禁；两边都不命中则报错并列出可用类型——
-// 错误信息不能再暗示"只认资产"，那正是 C1 让模型走投无路的措辞。
+// helpForTypeName 是 ref 不匹配任何已有资产时的回落：先把 ref 当静态注册的资产类型名
+// （ssh/redis/generic/...）查 help 文档表；不命中再问登记的 typeNameHelps（自定义类型标识
+// 由此解析——这是一个自定义类型一个资产都还没有时，模型唯一能学到该类型字段结构的办法，
+// 与 C1 对"资产类型"的诉求同理，见 handleHelp 的注释）。命中其一就返回文档并标记门禁；
+// 都不命中则报错并列出可用类型——错误信息不能再暗示"只认资产"，那正是 C1 让模型走投无路
+// 的措辞。
 func helpForTypeName(ctx context.Context, ref string) (string, error) {
 	typeName := strings.TrimSpace(ref)
 	doc, ok := permission.HelpFor(typeName)
+	for i := 0; !ok && i < len(typeNameHelps); i++ {
+		var err error
+		if doc, ok, err = typeNameHelps[i](ctx, typeName); err != nil {
+			return "", err
+		}
+	}
 	if !ok {
 		return "", fmt.Errorf("%q is neither an existing asset nor a known asset type; documented types: %s",
 			ref, strings.Join(permission.RegisteredHelpTypes(), ", "))
 	}
-
 	if gate := GetDocGate(ctx); gate != nil {
 		gate.MarkDocumented(aictx.GetConversationID(ctx), typeName)
 	}
-
 	return fmt.Sprintf("Type %q.\n\n%s", typeName, doc), nil
 }
 

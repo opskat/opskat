@@ -463,8 +463,18 @@ type AuthGroup struct {
 // AuthBinding injects one value. In is "header" (Name = header name), "query"
 // (Name = parameter name) or "basic" (no Name; Value renders "user:password"
 // and is sent as Authorization: Basic). Value is a template: literal text with
-// {{field}} and {{base64(part, ...)}} placeholders, each part a config field or
-// a double-quoted literal — e.g. `ApiKey {{base64(apiKeyId, ":", apiKey)}}`.
+// {{expression}} placeholders — e.g. `ApiKey {{base64(apiKeyId, ":", apiKey)}}`.
+//
+// An expression is written in the template language custom asset types use:
+//   - a config field by name (letters, digits, "_" and "-", starting with a
+//     letter or "_"), or a double-quoted literal (escapes as in a Go string
+//     literal: \n, \", \\, \t, \xNN, \uNNNN, ...);
+//   - a + b, concatenation;
+//   - a function: base64(x, ...) (several arguments are joined, then encoded),
+//     hex(x), urlencode(x), sha256(x), hmac_sha256(key, msg), uuid(). sha256 and
+//     hmac_sha256 return raw bytes — wrap them in base64 or hex;
+//   - now.unix / now.unix_ms, read once per request: every binding of the group
+//     sees the same instant.
 type AuthBinding struct {
 	In    string `json:"in"`
 	Name  string `json:"name,omitempty"`

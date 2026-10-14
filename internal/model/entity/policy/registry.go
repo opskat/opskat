@@ -1,6 +1,9 @@
 package policy
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // PolicyKind* 是 policy 逻辑的规范化种类词表,是资产轴与 policy 轴的唯一映射目标。
 // ai/policy.PolicyKind* 与 policy_group_entity.PolicyType* alias 到这里。
@@ -78,6 +81,50 @@ func GetDefaultPolicyOf(assetType string) (any, bool) {
 		return nil, false
 	}
 	return fn(), true
+}
+
+// AssetDefaultPolicyProvider 按资产自身的配置给出默认策略，用于默认策略不由类型
+// 单独决定的资产（通用资产复制其自定义类型上的默认规则）。assetConfig 是资产的
+// Config JSON。
+type AssetDefaultPolicyProvider func(ctx context.Context, assetConfig string) (any, error)
+
+var assetDefaultPolicyRegistry = struct {
+	sync.RWMutex
+	providers map[string]AssetDefaultPolicyProvider
+}{
+	providers: make(map[string]AssetDefaultPolicyProvider),
+}
+
+// RegisterAssetDefaultPolicy 注册资产类型的按资产默认策略提供者。
+func RegisterAssetDefaultPolicy(assetType string, provider AssetDefaultPolicyProvider) {
+	assetDefaultPolicyRegistry.Lock()
+	defer assetDefaultPolicyRegistry.Unlock()
+	assetDefaultPolicyRegistry.providers[assetType] = provider
+}
+
+// UnregisterAssetDefaultPolicy 注销资产类型的按资产默认策略提供者（测试用）。
+func UnregisterAssetDefaultPolicy(assetType string) {
+	assetDefaultPolicyRegistry.Lock()
+	defer assetDefaultPolicyRegistry.Unlock()
+	delete(assetDefaultPolicyRegistry.providers, assetType)
+}
+
+// DefaultPolicyForAsset 返回新建资产时应写入的默认策略：有按资产的提供者时用它
+// （错误原样返回），否则用 GetDefaultPolicyOf 的按类型默认策略。ok 为 false 表示
+// 该类型没有默认策略。
+func DefaultPolicyForAsset(ctx context.Context, assetType, assetConfig string) (p any, ok bool, err error) {
+	assetDefaultPolicyRegistry.RLock()
+	provider, found := assetDefaultPolicyRegistry.providers[assetType]
+	assetDefaultPolicyRegistry.RUnlock()
+	if !found {
+		p, ok = GetDefaultPolicyOf(assetType)
+		return p, ok, nil
+	}
+	p, err = provider(ctx, assetConfig)
+	if err != nil {
+		return nil, false, err
+	}
+	return p, true, nil
 }
 
 func init() {

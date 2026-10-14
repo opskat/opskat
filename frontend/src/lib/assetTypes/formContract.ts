@@ -50,6 +50,8 @@ export interface AssetFormHandle {
 export interface SectionValidity {
   canTest: boolean;
   canSave: boolean;
+  /** section 按当前内容决定是否提供「测试连接」(如通用资产只有 HTTP 方式可测);缺省沿用类型定义的 testable。 */
+  testable?: boolean;
   /** 保存禁用原因的 i18n key;空/缺省 = 可保存(壳据此显示提示)。 */
   saveDisabledReason?: string;
 }
@@ -64,6 +66,8 @@ export interface ConfigSectionProps {
   onValidityChange: (v: SectionValidity) => void;
   /** 仅 database 用:driver 变化时驱动壳 icon(其它 section 忽略)。 */
   onIconChange?: (icon: string) => void;
+  /** 类型选择器里选中的子类型(通用资产 = 自定义类型标识);编辑态由 section 从 editAsset 自取。 */
+  variant?: string;
 }
 
 export type ConfigSectionComponent = ComponentType<ConfigSectionProps>;

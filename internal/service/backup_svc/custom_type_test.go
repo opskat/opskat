@@ -1,0 +1,462 @@
+package backup_svc
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/service/custom_type_svc"
+)
+
+// 保留类型名由组合根注入（main.go）；测试进程里没有内置 / 扩展类型需要保留，个别用例自己换。
+func init() {
+	custom_type_svc.CustomType().SetReservedNames(noReservedNames)
+}
+
+func noReservedNames() []custom_type_svc.ReservedName { return nil }
+
+// failingEncryptCrypto 的 Encrypt 总是失败，用来验证导入不会把没能加密的密钥原样落库。
+type failingEncryptCrypto struct{}
+
+func (failingEncryptCrypto) Encrypt(string) (string, error) {
+	return "", errors.New("keychain locked")
+}
+func (failingEncryptCrypto) Decrypt(s string) (string, error) { return s, nil }
+
+// grafanaCustomType 是一个 HTTP 执行方式、含一个必填明文字段与一个必填密钥字段的
+// 自定义类型，供备份导出 / 导入测试复用。
+func grafanaCustomType(slug string) *custom_type_entity.CustomType {
+	return &custom_type_entity.CustomType{
+		Slug:     slug,
+		Name:     "Grafana",
+		ExecMode: custom_type_entity.ExecModeHTTP,
+		Fields: []custom_type_entity.Field{
+			{Name: "host", Required: true},
+			{Name: "token", Secret: true, Required: true},
+		},
+		HTTP: &custom_type_entity.HTTPConfig{
+			BaseURL: "https://{{host}}",
+			Auth:    []custom_type_entity.AuthBinding{{Type: "header", Name: "Authorization", Values: []string{`{{"Bearer " + token}}`}}},
+		},
+		Createtime: 1,
+		Updatetime: 1,
+	}
+}
+
+func createGenericAsset(t *testing.T, name, slug string, values map[string]asset_entity.GenericValue) *asset_entity.Asset {
+	t.Helper()
+	a := &asset_entity.Asset{Name: name, Type: asset_entity.AssetTypeGeneric, Status: asset_entity.StatusActive}
+	require.NoError(t, a.SetGenericConfig(&asset_entity.GenericConfig{CustomType: slug, Values: values}))
+	return a
+}
+
+// findGenericConfig 按名称查找资产并解析通用资产配置。
+func findGenericConfig(t *testing.T, assets []*asset_entity.Asset, name string) *asset_entity.GenericConfig {
+	t.Helper()
+	for _, a := range assets {
+		if a.Name == name {
+			cfg, err := a.GetGenericConfig()
+			require.NoError(t, err)
+			return cfg
+		}
+	}
+	t.Fatalf("asset %s not found", name)
+	return nil
+}
+
+func TestExport_CustomTypes_Partial(t *testing.T) {
+	ctx := setupBackupTest(t)
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("unused")))
+
+	a := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{"host": {Value: "h1"}})
+	require.NoError(t, asset_repo.Asset().Create(ctx, a))
+
+	data, err := Export(ctx, &ExportOptions{AssetIDs: []int64{a.ID}}, nil)
+	require.NoError(t, err)
+	require.Len(t, data.CustomTypes, 1)
+	assert.Equal(t, "grafana", data.CustomTypes[0].Slug)
+}
+
+func TestExport_CustomTypes_Full(t *testing.T) {
+	ctx := setupBackupTest(t)
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("unused")))
+
+	data, err := Export(ctx, &ExportOptions{}, nil)
+	require.NoError(t, err)
+	require.Len(t, data.CustomTypes, 2)
+	assert.Equal(t, 2, data.Summary().CustomTypeCount)
+}
+
+func TestExport_CustomTypes_WithoutCredentials_StripsSecretFieldKeepsPlainField(t *testing.T) {
+	ctx := setupBackupTest(t)
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+
+	a := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {Value: "ciphertext-of-secret"},
+	})
+	require.NoError(t, asset_repo.Asset().Create(ctx, a))
+
+	data, err := Export(ctx, &ExportOptions{}, nil)
+	require.NoError(t, err)
+	cfg := findGenericConfig(t, data.Assets, "g1")
+	assert.Equal(t, "h1", cfg.Values["host"].Value, "non-secret field must survive export without credentials")
+	tokenVal := cfg.Values["token"]
+	assert.Empty(t, tokenVal.Value, "secret field value must be stripped when credentials are not exported")
+	assert.Zero(t, tokenVal.CredentialID)
+}
+
+func TestExport_CustomTypes_WithCredentials_DecryptsSecretFieldToPlain(t *testing.T) {
+	ctx := setupBackupTest(t)
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+
+	crypto := taggedCredentialCrypto{tag: "src:"}
+	a := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {Value: "src:my-secret-token"},
+	})
+	require.NoError(t, asset_repo.Asset().Create(ctx, a))
+
+	data, err := Export(ctx, &ExportOptions{IncludeCredentials: true}, crypto)
+	require.NoError(t, err)
+	cfg := findGenericConfig(t, data.Assets, "g1")
+	assert.Equal(t, "my-secret-token", cfg.Values["token"].Value, "secret field must be decrypted to plaintext for backup")
+	assert.Equal(t, "h1", cfg.Values["host"].Value)
+}
+
+func TestImport_CustomTypes_Replace(t *testing.T) {
+	ctx := setupBackupTest(t)
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("type-a")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("type-b")))
+
+	backupType := grafanaCustomType("type-a")
+	backupType.Name = "Grafana From Backup"
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{backupType}}
+
+	result, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "replace"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.CustomTypesImported)
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, types, 1, "replace mode must remove local types not present in the backup")
+	assert.Equal(t, "type-a", types[0].Slug)
+	assert.Equal(t, "Grafana From Backup", types[0].Name)
+}
+
+func TestImport_CustomTypes_Merge_KeepsLocalOnSlugConflict(t *testing.T) {
+	ctx := setupBackupTest(t)
+	local := grafanaCustomType("grafana")
+	local.Name = "Local Grafana"
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, local))
+
+	backupType := grafanaCustomType("grafana")
+	backupType.Name = "Backup Grafana"
+	newType := grafanaCustomType("newtype")
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{"host": {Value: "h1"}})
+	data := &BackupData{
+		CustomTypes: []*custom_type_entity.CustomType{backupType, newType},
+		Assets:      []*asset_entity.Asset{asset},
+	}
+
+	result, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.CustomTypesImported, "conflicting slug is skipped, only the new type is imported")
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, types, 2)
+	var gotLocal, gotNew *custom_type_entity.CustomType
+	for _, ct := range types {
+		switch ct.Slug {
+		case "grafana":
+			gotLocal = ct
+		case "newtype":
+			gotNew = ct
+		}
+	}
+	require.NotNil(t, gotLocal)
+	require.NotNil(t, gotNew)
+	assert.Equal(t, "Local Grafana", gotLocal.Name, "merge mode keeps the local type on slug conflict")
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "grafana", cfg.CustomType, "the imported asset binds to the local type by slug")
+}
+
+// 合并模式下备份资产绑定到本地版本：值按本地版本的字段结构存储——本地是密钥的字段加密、
+// 本地是普通字段的保持明文、本地没有的字段随之删除（与修改类型结构时的规则一致）。
+func TestImport_CustomTypes_Merge_ValuesStoredPerLocalVersion(t *testing.T) {
+	ctx := setupBackupTest(t)
+	local := grafanaCustomType("grafana")
+	local.Fields = []custom_type_entity.Field{
+		{Name: "host", Required: true},
+		{Name: "token", Secret: true, Required: true},
+		{Name: "org"},
+	}
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, local))
+
+	backupType := grafanaCustomType("grafana")
+	backupType.Fields = []custom_type_entity.Field{
+		{Name: "host", Secret: true},
+		{Name: "token"},
+		{Name: "org"},
+		{Name: "legacy"},
+	}
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":   {Value: "grafana.internal"},
+		"token":  {Value: "tok"},
+		"org":    {Value: "main"},
+		"legacy": {Value: "old"},
+	})
+	data := &BackupData{
+		IncludesCredentials: true,
+		CustomTypes:         []*custom_type_entity.CustomType{backupType},
+		Assets:              []*asset_entity.Asset{asset},
+	}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, taggedCredentialCrypto{tag: "dst:"})
+	require.NoError(t, err)
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]asset_entity.GenericValue{
+		"host":  {Value: "grafana.internal"},
+		"token": {Value: "dst:tok"},
+		"org":   {Value: "main"},
+	}, cfg.Values)
+}
+
+// 备份文件是外部输入：其中的类型定义要过与保存类型相同的校验，否则一个缺了命令配置的
+// 「本地命令」类型会被原样写库，之后执行器 / 权限判定按"保存时已校验"的约定解引用而崩溃。
+func TestImport_CustomTypes_RejectsInvalidTypeDefinition(t *testing.T) {
+	ctx := setupBackupTest(t)
+	broken := &custom_type_entity.CustomType{
+		Slug: "broken", Name: "Broken", ExecMode: custom_type_entity.ExecModeCommand,
+		Fields: []custom_type_entity.Field{{Name: "note"}},
+	}
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{broken}}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broken")
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, types, "an invalid type definition must not be written")
+}
+
+// 备份可能来自另一台机器：那边合法的标识在这边可能与某个扩展声明的资产类型重名（保存
+// 类型时会被拒绝的那种）。导入同样要拒绝，否则该标识被扩展类型遮蔽，下次启动时扩展类型又
+// 因为与它重名而注册失败。拒绝发生在事务里，replace 模式清掉的本地类型随之回滚。
+func TestImport_CustomTypes_RejectsReservedSlug(t *testing.T) {
+	ctx := setupBackupTest(t)
+	custom_type_svc.CustomType().SetReservedNames(func() []custom_type_svc.ReservedName {
+		return []custom_type_svc.ReservedName{{Name: "elasticsearch", Extension: "es-ext"}}
+	})
+	t.Cleanup(func() { custom_type_svc.CustomType().SetReservedNames(noReservedNames) })
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("local-type")))
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{grafanaCustomType("elasticsearch")}}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "replace"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "elasticsearch")
+	assert.Contains(t, err.Error(), "es-ext", "the error names the extension that owns the type name")
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, types, 1, "nothing is written and the local types survive")
+	assert.Equal(t, "local-type", types[0].Slug)
+}
+
+// 密钥字段重新加密失败时导入整体失败：继续导入会把明文写进密钥字段——明文落库，且之后
+// 每次使用都按密文解密而失败。
+func TestImport_CustomTypes_ReencryptFailureAbortsImport(t *testing.T) {
+	ctx := setupBackupTest(t)
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {Value: "plaintext-from-backup"},
+	})
+	data := &BackupData{
+		IncludesCredentials: true,
+		CustomTypes:         []*custom_type_entity.CustomType{grafanaCustomType("grafana")},
+		Assets:              []*asset_entity.Asset{asset},
+	}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "merge"}, failingEncryptCrypto{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token")
+	assert.NotContains(t, err.Error(), "plaintext-from-backup")
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, assets, "no asset is created with an unencrypted secret")
+}
+
+// 合并模式保留的本地版本把某个字段定义成普通字段，而备份里它是引用托管凭据的密钥字段：
+// 普通字段只有明文一种形态，引用不能原样留在上面，值随之丢弃（按缺值展示）。
+func TestImport_CustomTypes_Merge_DropsCredentialRefOnLocalPlainField(t *testing.T) {
+	ctx := setupBackupTest(t)
+	local := grafanaCustomType("grafana")
+	local.Fields = []custom_type_entity.Field{{Name: "host", Required: true}, {Name: "token"}}
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, local))
+
+	asset := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {CredentialID: 7},
+	})
+	data := &BackupData{
+		CustomTypes: []*custom_type_entity.CustomType{grafanaCustomType("grafana")},
+		Assets:      []*asset_entity.Asset{asset},
+	}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, ImportCredentials: true, Mode: "merge"}, nil)
+	require.NoError(t, err)
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]asset_entity.GenericValue{"host": {Value: "h1"}}, cfg.Values)
+}
+
+func TestImport_CustomTypes_NotImportedWhenImportAssetsFalse(t *testing.T) {
+	ctx := setupBackupTest(t)
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{grafanaCustomType("grafana")}}
+
+	result, err := Import(ctx, data, &ImportOptions{ImportAssets: false, Mode: "merge"}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.CustomTypesImported)
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, types)
+}
+
+func TestImport_CustomTypes_CredentialRoundTrip(t *testing.T) {
+	setupCredentialBackupTest(t)
+	ctx := t.Context()
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+
+	cred := &credential_entity.Credential{Name: "grafana-token", Type: credential_entity.TypePassword}
+	require.NoError(t, credential_repo.Credential().Create(ctx, cred))
+	a := createGenericAsset(t, "g1", "grafana", map[string]asset_entity.GenericValue{
+		"host":  {Value: "h1"},
+		"token": {CredentialID: cred.ID},
+	})
+	require.NoError(t, asset_repo.Asset().Create(ctx, a))
+
+	data, err := Export(ctx, &ExportOptions{IncludeCredentials: true}, taggedCredentialCrypto{tag: "src:"})
+	require.NoError(t, err)
+	serialized, err := json.Marshal(data)
+	require.NoError(t, err)
+	var transported BackupData
+	require.NoError(t, json.Unmarshal(serialized, &transported))
+
+	setupCredentialBackupTest(t)
+	ctx = t.Context()
+	result, err := Import(ctx, &transported, &ImportOptions{
+		ImportAssets: true, ImportCredentials: true, Mode: "merge",
+	}, taggedCredentialCrypto{tag: "dst:"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.CredentialsImported)
+	assert.Equal(t, 1, result.CustomTypesImported)
+
+	restoredCreds, err := credential_repo.Credential().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, restoredCreds, 1)
+
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	cfg, err := assets[0].GetGenericConfig()
+	require.NoError(t, err)
+	assert.Equal(t, restoredCreds[0].ID, cfg.Values["token"].CredentialID, "credential id must be remapped like SSH's cfg.CredentialID")
+	assert.Empty(t, cfg.Values["token"].Value)
+}
+
+// 通用资产的连接配置跟随内置类型（Design decision 20），备份也一样：以内容保存的 TLS 证书
+// 材料——尤其是加密保存的客户端私钥 tls_key_pem——导出（含 / 不含凭据）与导入之后，结果与
+// Redis 资产的同名字段逐步一致。
+func TestBackup_GenericTLSCertContentIsHandledLikeRedis(t *testing.T) {
+	type certContent struct{ CA, Cert, Key string }
+	source := taggedCredentialCrypto{tag: "src:"}
+	stored := certContent{CA: "CA-PEM", Cert: "CERT-PEM", Key: source.tag + "CLIENT-KEY-PEM"}
+
+	seed := func(t *testing.T) context.Context {
+		t.Helper()
+		ctx := setupBackupTest(t)
+		require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("grafana")))
+		generic := createGenericAsset(t, "generic-mtls", "grafana", map[string]asset_entity.GenericValue{
+			"host":  {Value: "h1"},
+			"token": {Value: source.tag + "token"},
+		})
+		genericCfg, err := generic.GetGenericConfig()
+		require.NoError(t, err)
+		genericCfg.TLSCAPEM, genericCfg.TLSCertPEM, genericCfg.TLSKeyPEM = stored.CA, stored.Cert, stored.Key
+		require.NoError(t, generic.SetGenericConfig(genericCfg))
+		require.NoError(t, asset_repo.Asset().Create(ctx, generic))
+
+		redis := &asset_entity.Asset{Name: "redis-mtls", Type: asset_entity.AssetTypeRedis, Status: asset_entity.StatusActive}
+		require.NoError(t, redis.SetRedisConfig(&asset_entity.RedisConfig{
+			Host: "10.0.0.1", Port: 6379, Password: source.tag + "password", TLS: true,
+			TLSCAPEM: stored.CA, TLSCertPEM: stored.Cert, TLSKeyPEM: stored.Key,
+		}))
+		require.NoError(t, asset_repo.Asset().Create(ctx, redis))
+		return ctx
+	}
+	certContents := func(t *testing.T, assets []*asset_entity.Asset) (generic, redis certContent) {
+		t.Helper()
+		genericCfg := findGenericConfig(t, assets, "generic-mtls")
+		generic = certContent{genericCfg.TLSCAPEM, genericCfg.TLSCertPEM, genericCfg.TLSKeyPEM}
+		for _, a := range assets {
+			if a.Name == "redis-mtls" {
+				redisCfg, err := a.GetRedisConfig()
+				require.NoError(t, err)
+				return generic, certContent{redisCfg.TLSCAPEM, redisCfg.TLSCertPEM, redisCfg.TLSKeyPEM}
+			}
+		}
+		t.Fatal("asset redis-mtls not found")
+		return generic, redis
+	}
+
+	for name, includeCredentials := range map[string]bool{"with credentials": true, "without credentials": false} {
+		t.Run(name, func(t *testing.T) {
+			data, err := Export(seed(t), &ExportOptions{IncludeCredentials: includeCredentials}, source)
+			require.NoError(t, err)
+			generic, redis := certContents(t, data.Assets)
+			assert.Equal(t, redis, generic, "exported")
+
+			serialized, err := json.Marshal(data)
+			require.NoError(t, err)
+			var transported BackupData
+			require.NoError(t, json.Unmarshal(serialized, &transported))
+			ctx := setupBackupTest(t)
+			_, err = Import(ctx, &transported, &ImportOptions{ImportAssets: true, Mode: "replace"}, taggedCredentialCrypto{tag: "dst:"})
+			require.NoError(t, err)
+			restored, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{})
+			require.NoError(t, err)
+			generic, redis = certContents(t, restored)
+			assert.Equal(t, redis, generic, "restored")
+		})
+	}
+}

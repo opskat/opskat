@@ -339,4 +339,61 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
   });
+
+  it.each([
+    ["DELETE /api/dashboards/uid/k8s", "opsctlApproval.genericHttp"],
+    ["secret:token", "opsctlApproval.genericSecret"],
+    ["aws s3 ls", "opsctlApproval.genericCommand"],
+  ])("通用资产审批按匹配对象标出操作类型：%s", (command, label) => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireSingleApproval(handlers, {
+      type: "generic",
+      asset_name: "grafana-prod",
+      command,
+      detail: "HTTP request: DELETE https://grafana.internal:3000/api/dashboards/uid/k8s",
+    });
+    expect(screen.getByTestId("approval-type-badge")).toHaveTextContent(label);
+    expect(screen.getByText(/https:\/\/grafana\.internal:3000/)).toBeInTheDocument();
+  });
+
+  // opsctl batch 给通用资产条目各自带上渲染后的目标地址（cmd/opsctl/command/batch.go 的
+  // batchItemApprovalDetail）；各条目标不同，不能当成 cp 那种共享摘要折叠起来。
+  it("批量审批里通用资产条目的目标各异时超过 10 条也不折叠，逐条显示目标", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: "generic",
+      asset_id: i + 1,
+      asset_name: `grafana-${i}`,
+      command: `GET /api/${i}`,
+      detail: `HTTP request: GET https://grafana-${i}.internal/api/${i}`,
+    }));
+    fireBatchApproval(handlers, items);
+
+    expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/grafana-0\.internal\/api\/0/)).toBeVisible();
+    expect(screen.getByText(/https:\/\/grafana-10\.internal\/api\/10/)).toBeVisible();
+  });
+
+  // 命令方式的通用资产每条的 detail 都是同一句（"Local command via <shell>"），但它说的是
+  // 这一条用什么执行，不是整批的摘要：各条命令不同，折叠了就是让人对着看不见的命令点批准。
+  it("批量审批里命令方式的通用资产条目 detail 相同也不折叠，逐条显示命令", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: "generic",
+      asset_id: 1,
+      asset_name: "runner",
+      command: `systemctl restart svc-${i}`,
+      detail: "Local command via /bin/zsh",
+    }));
+    fireBatchApproval(handlers, items);
+
+    expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("systemctl restart svc-0")).toBeVisible();
+    expect(screen.getByText("systemctl restart svc-10")).toBeVisible();
+  });
 });
