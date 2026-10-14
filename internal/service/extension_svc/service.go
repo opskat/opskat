@@ -45,6 +45,8 @@ type Service struct {
 	logger      *zap.Logger
 
 	onReload func()
+	// reviewerLoader 非空时，ActiveCommandReviewer 会在审核器尚未加载时用它加载（见 LoadReviewersOnDemand）。
+	reviewerLoader func(ctx context.Context, dir string) error
 
 	mu       sync.Mutex
 	initDone atomic.Bool
@@ -180,18 +182,28 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 // A nil confirm installs without asking: the caller already has the user's
 // consent (`opsctl ext dev` asks in its own approval dialog).
 func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, confirm, false)
+}
+
+// InstallDev 与 Install 相同，但把来源记为 dev。只给 opsctl ext dev 用。
+func (s *Service) InstallDev(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, nil, true)
+}
+
+func (s *Service) install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc, dev bool) (*extension.Manifest, error) {
 	staged, ask, err := s.stage(ctx, sourcePath)
 	if err != nil {
 		return nil, err
 	}
+	origin := installOriginOf(ask.Source, dev)
 	if confirm == nil {
-		return s.commit(ctx, staged, nil)
+		return s.commit(ctx, staged, nil, origin)
 	}
 	if err := confirm(ctx, ask); err != nil {
 		staged.Abort(ctx)
 		return nil, err
 	}
-	return s.commit(ctx, staged, &ask)
+	return s.commit(ctx, staged, &ask, origin)
 }
 
 // stage runs step 1 of Install and describes the staged version for the confirm.
@@ -233,7 +245,7 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 
 // commit runs steps 3–6 of Install. approved is what the user confirmed, nil when
 // nobody was asked.
-func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved *InstallConfirm) (*extension.Manifest, error) {
+func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved *InstallConfirm, origin string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	manifest := staged.Manifest()
@@ -288,7 +300,13 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		}
 	}
 
-	s.ensureState(ctx, manifest.Name, true)
+	sum, err := extension.PackageSHA256(staged.Extension().Dir, manifest.Backend.Binary)
+	if err != nil {
+		return nil, fmt.Errorf("install extension: %w", err)
+	}
+	if err := s.recordProvenance(ctx, manifest.Name, origin, sum, true); err != nil {
+		return nil, fmt.Errorf("install extension: %w", err)
+	}
 	s.notifyReload()
 	return manifest, nil
 }

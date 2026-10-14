@@ -1,11 +1,17 @@
 // eslint.config.js 中约定类规则的守护测试：通过真实配置跑 ESLint，
 // 双向断言（违规被报 / 豁免路径与合规写法不被误报），防止规则被静默删除或缩权。
 import path from "path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { ESLint } from "eslint";
 
 const frontendRoot = path.resolve(__dirname, "../..");
 const eslint = new ESLint({ cwd: frontendRoot });
+
+// 第一次 lint 要加载整套配置和 TypeScript 解析器，全量并发跑时会超过单个测试默认的 5 秒；
+// 在这里单独预热，后面每个测试只量自己的那次 lint。
+beforeAll(async () => {
+  await eslint.lintText("", { filePath: path.join(frontendRoot, "src/warmup.ts") });
+}, 60_000);
 
 async function ruleIds(relativePath: string, code: string): Promise<(string | null)[]> {
   const [result] = await eslint.lintText(code, { filePath: path.join(frontendRoot, relativePath) });

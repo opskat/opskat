@@ -22,6 +22,28 @@ import (
 
 func main() {}
 
+// reviewCommands 按关键词回答，供宿主端到端观察 review_commands。
+// "panic" 触发 panic，由运行时恢复；"error" 返回 error 结果；其余按是否含 "rm" 判断。
+func reviewCommands(_ *opskat.ReviewContext, items []opskat.ReviewItem) ([]opskat.ReviewResult, error) {
+	out := make([]opskat.ReviewResult, len(items))
+	for i, item := range items {
+		switch item.Command {
+		case "panic":
+			panic("review panicked")
+		case "error":
+			out[i] = opskat.ReviewResult{Outcome: opskat.ReviewError, Reason: "unavailable"}
+		default:
+			if strings.Contains(item.Command, "rm") {
+				score := 0.9
+				out[i] = opskat.ReviewResult{Outcome: opskat.ReviewReject, Failed: []string{"destructive"}, Score: &score}
+				continue
+			}
+			out[i] = opskat.ReviewResult{Outcome: opskat.ReviewPass}
+		}
+	}
+	return out, nil
+}
+
 var callSeq int
 
 type noArgs struct{}
@@ -87,6 +109,10 @@ type fixtureConfig struct {
 }
 
 func init() {
+	opskat.CommandReviewer([]opskat.ReviewQuestion{{
+		ID:   "destructive",
+		Name: map[string]string{"en": "Destroys data", "zh-CN": "破坏数据"},
+	}}, 8, 4000, reviewCommands)
 	opskat.Extension(opskat.Meta{
 		DisplayName: "Fixture Extension",
 		Description: "Minimal extension used by pkg/extension end-to-end tests",

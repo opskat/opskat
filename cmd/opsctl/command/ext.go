@@ -11,7 +11,10 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/extreg"
+	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -153,6 +156,12 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // is reported the same way — it is a real, fixable degradation ("load it once in the
 // desktop app"), not something to swallow into a later "unknown asset type".
 func registerExtensionAssetTypes() {
+	// 审核器的来源与摘要检查、设置读取都走这个服务。WASM 只在真正要审核时编译选中的那一个。
+	mgr := extension.NewManager(extensionsDirFn(), opsctlReviewerHost, logger.Default())
+	svc := extension_svc.New(mgr, extension_state_repo.ExtensionState(), extension_data_repo.ExtensionData(), nil, logger.Default(), nil, nil)
+	svc.LoadReviewersOnDemand()
+	bootstrap.SetExtensionService(svc)
+	opsctlReviewerService = svc
 	scanned, err := scanExtensionDirs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -167,6 +176,31 @@ func registerExtensionAssetTypes() {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
 	}
+}
+
+// opsctlReviewerService 是 opsctl 进程里的扩展服务，只为按需加载选中的审核器。
+// registerExtensionAssetTypes 先设置它，审核器的 host 在之后加载时才会读它。
+var opsctlReviewerService *extension_svc.Service
+
+// opsctlReviewerHost 是审核器在 opsctl 里的 host：设置与密钥读共享数据库，HTTP 走 netdial。
+// 没有资产配置、文件对话框和动作事件，审核器也不使用它们。
+func opsctlReviewerHost(extName string) extension.HostProvider {
+	return extension.NewDefaultHostProvider(extension.DefaultHostConfig{
+		Logger:        logger.Default(),
+		Settings:      &opsctlSettings{name: extName},
+		ExtensionName: extName,
+	})
+}
+
+// opsctlSettings 用 opsctl 进程里的扩展服务读设置。密钥用本进程的 credential_svc 解密。
+type opsctlSettings struct{ name string }
+
+func (s *opsctlSettings) Get() (map[string]string, error) {
+	return opsctlReviewerService.PublicSettings(context.Background(), s.name)
+}
+
+func (s *opsctlSettings) Secrets(fields []string) (map[string]string, error) {
+	return opsctlReviewerService.SettingSecrets(context.Background(), s.name, fields, credential_svc.Default().Decrypt)
 }
 
 // disabledExtensionNames reads the persisted enabled/disabled state. An unreadable DB

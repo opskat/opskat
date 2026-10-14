@@ -121,6 +121,10 @@ func setupBatchMFAAssets(t *testing.T, srvs ...*otpExecServer) []*asset_entity.A
 	t.Cleanup(func() { dialApprovalSocket = origDial })
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "opskat.db")), &gorm.Config{})
 	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	// 在 TempDir 清理之前关掉连接：Windows 上打开着的 SQLite 文件删不掉。
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &host_key_entity.HostKey{}))
 	db.SetDefault(gdb)
 	origAsset := asset_repo.Asset()

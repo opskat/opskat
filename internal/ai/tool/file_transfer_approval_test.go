@@ -28,6 +28,9 @@ import (
 // 目的路径的拼装（dst 基点 + RelPath，拼错就是把文件落到别处）与汇总输出因此可被断言。
 const cpTestAssetType = "cptest"
 
+// cpMissingLocal 是一个不存在的本地绝对路径（Windows 上 "/tmp/..." 不是绝对路径，会先被拒）。
+var cpMissingLocal = filepath.Join(os.TempDir(), "opskat-cp-does-not-exist")
+
 type cpTestAdapter struct {
 	entries   []helper.Entry    // List 交出的展开结果
 	contents  map[string][]byte // OpenRead 的内容
@@ -145,7 +148,7 @@ func TestCpUploadRequiresApproval(t *testing.T) {
 		// 源文件**故意不存在**：审批排在展开与读取之前，所以被拒时的错误必须是拒绝，
 		// 而不是一句"文件不存在"——后者会说明 handleCp 先去碰了磁盘。
 		_, err := handleCp(ctx, map[string]any{
-			"src": "/tmp/opskat-cp-does-not-exist",
+			"src": cpMissingLocal,
 			"dst": "web-01:/etc/cron.d/backup",
 		})
 
@@ -156,7 +159,7 @@ func TestCpUploadRequiresApproval(t *testing.T) {
 		// 审批主体是远端路径：grant 按资产存，本地路径不属于任何资产
 		So((*seen)[0].Command, ShouldEqual, "/etc/cron.d/backup")
 		// 本地端不产生审批项，用户能看见"另一头是哪里"的唯一位置就是 detail
-		So((*seen)[0].Detail, ShouldContainSubstring, "/tmp/opskat-cp-does-not-exist")
+		So((*seen)[0].Detail, ShouldContainSubstring, cpMissingLocal)
 	})
 }
 
@@ -188,7 +191,7 @@ func TestCpOSSEndpointUsesOSSPolicySubject(t *testing.T) {
 		Convey("目的端是写", func() {
 			ctx, seen := setupCp(t, "deny")
 			_, err := handleCp(ctx, map[string]any{
-				"src": "/tmp/opskat-cp-does-not-exist",
+				"src": cpMissingLocal,
 				"dst": "s3-prod:/mybucket/logs/app.log",
 			})
 			So(err, ShouldNotBeNil)
@@ -221,7 +224,7 @@ func TestCpMalformedDestinationFailsBeforeAnyApproval(t *testing.T) {
 		ctx, seen := setupCp(t, "deny")
 
 		_, err := handleCp(ctx, map[string]any{
-			"src": "/tmp/opskat-cp-does-not-exist",
+			"src": cpMissingLocal,
 			"dst": "s3-prod:/mybucket",
 		})
 
@@ -312,7 +315,7 @@ func TestCpMultiSourceRequiresTrailingSlash(t *testing.T) {
 		ctx, seen := setupCp(t, "allow")
 
 		_, err := handleCp(ctx, map[string]any{
-			"src": "/tmp/logs", "dst": "sink-01:/backup", "recursive": true,
+			"src": filepath.Join(os.TempDir(), "logs"), "dst": "sink-01:/backup", "recursive": true,
 		})
 
 		So(err, ShouldNotBeNil)

@@ -83,6 +83,10 @@ func (m *mockHostCaller) KVSet(key string, value []byte) error {
 	return fmt.Errorf("not implemented")
 }
 
+func (m *mockHostCaller) SettingsGet() (map[string]string, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *mockHostCaller) ActionEvent(eventType string, data []byte) {
 }
 

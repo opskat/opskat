@@ -2815,6 +2815,13 @@
     "count": "{{count}} issue(s)"
   },
   "extension": {
+    "settings": {
+      "required": "Required",
+      "title": "Settings",
+      "save": "Save settings",
+      "saved": "Extension settings saved",
+      "saveAndTest": "Save and test"
+    },
     "title": "Extensions",
     "mirror": {
       "title": "Extension Downloads",
@@ -2917,6 +2924,7 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
+    "commandReviewWarning": "This extension can let commands run without asking: under Assisted approval and Autopilot, a command it passes is executed directly. Only install review extensions you trust.",
     "installConfirm": {
       "title": "Install extension?",
       "titleUpdate": "Update extension?",
@@ -2946,16 +2954,14 @@
     "pages": "Pages",
     "pageName": "Page Name",
     "pageSlot": "Slot",
-    "noTools": "No tools",
-    "noPolicies": "No policy groups",
-    "noPages": "No pages",
     "loadError": "Failed to load extensions",
     "pageDisabled": "Extension \"{{name}}\" is disabled. Re-enable it in Settings → Extensions to use this page.",
     "hostUi": {
       "jsonTreeExpand": "Expand",
       "jsonTreeCollapse": "Collapse",
       "jsonTreeEmpty": "No data"
-    }
+    },
+    "reviewQuestions": "What it reviews"
   },
   "snippet": {
     "title": "Snippets",
@@ -3305,6 +3311,98 @@
       "connected": "Connected",
       "error": "Error",
       "closed": "Closed"
+    }
+  },
+  "commandReview": {
+    "withMode": "{{mode}} · {{summary}}",
+    "auditLabel": "Model review",
+    "listSeparator": ", ",
+    "summary": {
+      "pass": "Model review passed",
+      "reject": "Model review did not pass ({{detail}})",
+      "fail": "Model review failed ({{detail}})"
+    },
+    "question": {
+      "destructive": "may destroy or irreversibly change data",
+      "disruptive": "may interrupt services",
+      "remote_code": "downloads and runs code"
+    },
+    "reason": {
+      "not_configured": "the command review extension is not configured",
+      "api_key_unreadable": "the saved command review API key cannot be read",
+      "invalid_api_key": "the command review API key is invalid",
+      "timeout": "timed out",
+      "too_long": "command too long",
+      "unparseable": "the command cannot be parsed",
+      "undecodable": "the command hides the code it runs behind decoding",
+      "unavailable": "service unavailable",
+      "invalid_result": "the review extension returned an invalid result",
+      "reviewer_unavailable": "the command review extension in use is unavailable",
+      "no_reviewer": "no command review extension is available"
+    },
+    "settings": {
+      "title": "Command review",
+      "desc": "When an asset or group uses Assisted approval or Autopilot, a command the rules cannot decide is first judged by a command review extension, which stops only clearly dangerous operations. Decoded scripts are expanded and passwords and other secrets are masked before review.",
+      "timeout": "Review timeout (ms)",
+      "timeoutHint": "Timeout for each call to the review extension; a timed-out call is retried once",
+      "timeoutRange": "Timeout must be between {{min}} and {{max}} ms",
+      "reviewer": "Review extension",
+      "unsigned": "unsigned",
+      "reviewerUnusable": "{{name}} can't be used right now: {{reason}}",
+      "reviewerSaved": "Review service switched",
+      "save": "Save",
+      "saved": "Command review settings saved",
+      "lastFail": "Last review failure: {{reason}} ({{time}})",
+      "notice": "This saves effort; it is not a security boundary. Misleading text written into a command can sway the model. Deny rules remain the real safeguard.",
+      "noReviewer": "No command review extension is available. Install and enable one under Settings › Extensions (for example \"Command Review (Jev)\"); until then Assisted approval asks you about every such command and Autopilot refuses them.",
+      "selectReviewer": "Several command review extensions are enabled; select one.",
+      "configureReviewer": "Configure in extension details"
+    },
+    "mode": {
+      "title": "Permission mode",
+      "desc": "What happens to commands that no rule decides and would ask you",
+      "inheritOption": {
+        "asset": "Inherit from group",
+        "group": "Inherit from parent"
+      },
+      "inheritFrom": {
+        "asset": "Currently {{mode}}, set on group",
+        "group": "Currently {{mode}}, set on parent group"
+      },
+      "inheritNone": {
+        "ungrouped": "The asset is not in a group, so Default applies",
+        "asset": "Neither its group nor any parent group sets a mode, so Default applies. Its group:",
+        "top": "Top-level group with nothing to inherit, so Default applies",
+        "group": "No parent group sets a mode, so Default applies. Parent group:"
+      },
+      "default": "Default",
+      "assisted": "Assisted",
+      "autopilot": "Autopilot",
+      "defaultDesc": "Ask you, as before",
+      "assistedDesc": "Run automatically when model review passes; otherwise ask you",
+      "autopilotDesc": "Run automatically when model review passes; otherwise reject and tell the caller why, without waiting",
+      "confirmTitle": "Turn on {{mode}}?",
+      "confirmAssisted": "Commands that no rule decides will first be reviewed by the review model and run without asking you when the review passes. If the review does not pass or fails, you are still asked. Commands (with sensitive values replaced) are sent to the review service in Settings.",
+      "confirmAutopilot": "Commands that no rule decides will first be reviewed by the review model. They run when the review passes and are rejected without waiting for you when judged clearly dangerous or when the review fails. Meant for unattended use. Commands (with sensitive values replaced) are sent to the review service in Settings.",
+      "confirm": "Turn on",
+      "saved": "Permission mode saved",
+      "noReviewer": "No command review extension is available: Assisted approval asks you about every such command and Autopilot refuses them."
+    },
+    "configError": {
+      "not_configured": "The command review extension is not configured yet (for example, no API key), so every review fails.",
+      "invalid_api_key": "The command review extension's API key is invalid, so every review fails.",
+      "openSettings": "Open settings",
+      "no_reviewer": "Some assets use Assisted approval or Autopilot, but no command review extension is available, so every review fails.",
+      "reviewer_unavailable": "The command review extension in use is unavailable (it may be disabled, or its package was changed), so every review fails."
+    },
+    "scores": "Scores",
+    "scoreThreshold": "threshold {{threshold}}",
+    "retried": "Retried automatically: {{attempts}} requests in total",
+    "reviewedBy": "Judged by review extension {{name}} {{version}}",
+    "scoreName": {
+      "destructive": "Destroys data",
+      "disruptive": "Interrupts services",
+      "remote_code": "Runs downloaded code"
     }
   }
 }

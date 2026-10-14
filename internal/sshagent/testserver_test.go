@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -22,6 +23,9 @@ type testAgentServer struct {
 // a goroutine for each one. The listener is closed on test cleanup.
 func newUnixAgentServer(t *testing.T, handler func(net.Conn)) *testAgentServer {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-socket SSH agents are not supported on Windows (OpenSSH there uses a named pipe)")
+	}
 	// Keep the socket name short: macOS limits unix socket paths to 104 bytes
 	// and t.TempDir() names can be long.
 	path := filepath.Join(t.TempDir(), "a")

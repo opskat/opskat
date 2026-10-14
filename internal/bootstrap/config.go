@@ -46,6 +46,12 @@ type AppConfig struct {
 	ExternalEditCustomEditors        []ExternalEditorConfig `json:"external_edit_custom_editors,omitempty"`
 	ExternalEditCleanupRetentionDays int                    `json:"external_edit_cleanup_retention_days,omitempty"`
 	ExternalEditMaxReadFileSizeMB    int                    `json:"external_edit_max_read_file_size_mb,omitempty"`
+
+	// 命令的模型审核（辅助审批 / Autopilot）。桌面端和 opsctl 读同一份。
+	// CommandReviewTimeoutMs 是每次调用审核扩展的超时，0 为默认值。
+	CommandReviewTimeoutMs int `json:"command_review_timeout_ms,omitempty"`
+	// CommandReviewExtension 是选用的审核扩展名。空表示启用中的审核扩展只有一个时用它。
+	CommandReviewExtension string `json:"command_review_extension,omitempty"`
 }
 
 // ExternalEditorConfig 是用户自定义外部编辑器配置。

@@ -33,6 +33,8 @@ import {
   Puzzle,
 } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
+import type { ReviewInfo } from "@/lib/commandReview";
+import { ReviewNotice } from "./ReviewNotice";
 
 interface ApprovalItemData {
   type: string;
@@ -48,6 +50,8 @@ interface ApprovalItemData {
   resource?: string;
   resources?: string[];
   remember_pattern?: string;
+  // 模型审核结果：辅助审批下审核未通过或审核失败时才有，说明为什么要人确认。
+  review?: ReviewInfo;
 }
 
 interface SingleApprovalEvent {
@@ -62,6 +66,7 @@ interface SingleApprovalEvent {
   resource?: string;
   resources?: string[];
   remember_pattern?: string;
+  review?: ReviewInfo;
   session_id: string;
 }
 
@@ -182,6 +187,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               resource: data.resource,
               resources: data.resources,
               remember_pattern: data.remember_pattern,
+              review: data.review,
             },
           ],
           sessionID: data.session_id,
@@ -206,6 +212,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
           // 因此报得出两端基点，不止是条数。
           detail: i.detail,
+          review: i.review,
         }));
         enqueue({
           id: data.confirm_id,
@@ -292,6 +299,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
         className="text-xs"
         labelClassName="text-foreground"
       />
+      {item.review && <ReviewNotice review={item.review} />}
       {cur.editable ? (
         <Textarea
           value={editState[cur.id]?.[i] ?? item.command}

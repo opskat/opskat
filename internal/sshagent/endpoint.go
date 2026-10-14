@@ -2,6 +2,7 @@ package sshagent
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -41,7 +42,7 @@ func (s Source) Validate() error {
 			return newError(CodeEndpointUnavailable, "saved environment variable name is invalid")
 		}
 	case EndpointTypeUnixSocket:
-		if _, err := expandAndCleanUnixPath(s.Value); err != nil {
+		if !validUnixSocketPath(s.Value) {
 			return newError(CodeEndpointUnavailable, "saved unix socket path is not absolute")
 		}
 	case EndpointTypeWindowsNamedPipe:
@@ -52,6 +53,15 @@ func (s Source) Validate() error {
 		return newError(CodeEndpointUnavailable, "unknown agent endpoint type")
 	}
 	return nil
+}
+
+// validUnixSocketPath is the structural, platform-independent check of a saved unix
+// socket path: a POSIX absolute path or a home path ("~" / "~/..."). It applies POSIX
+// rules on every platform, so a source saved on macOS stays valid (and merely
+// unsupported) on Windows, just as a named pipe stays valid on unix;
+// expandAndCleanUnixPath resolves it only where unix sockets can be served.
+func validUnixSocketPath(p string) bool {
+	return p == "~" || strings.HasPrefix(p, "~/") || path.IsAbs(p)
 }
 
 // platformSupported reports whether the current platform can serve this type.

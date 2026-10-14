@@ -8,6 +8,8 @@
 
 **Hard invariant:** 一条授权规则只能由坐在交互式终端前的人让它生效。非交互调用（AI 的工具调用、CI、shell 管道）既不能创建规则，也不能绕过规则，全程没有任何免审批开关。既有权限判定语义不得放宽：`ApprovalKind` 与 `ParseApprovalResponse` 的决策白名单、grant 的 `cp` 与非 `cp` 面隔离、`NormalizeGrantPatterns` 的来源区分，全部照旧生效。
 
+> **例外（2026-09-30，维护者同意，#327）：** 资产或分组的权限模式设为辅助审批或 Autopilot 时，原本要问人的命令先由模型审核，审核通过就自动执行。模式只能由人在桌面端设置，不提供命令行参数或环境变量；现有规则的判断顺序和结果不变；审核未通过或审核失败时不会多执行任何命令。见 [辅助审批与 Autopilot](2026-09-29-assisted-approval-autopilot.md)。
+
 ## Problem
 
 1. **审批人只能是桌面 GUI，这是 opsctl 独立使用的唯一硬阻塞。** `requireApproval` 在策略判定为 `NeedConfirm` 后无条件去连 `approval.sock`（`cmd/opsctl/command/approval.go:89`）。连不上时分两种结局：`exec` / `sql` / `redis` / `mongo` 拒绝并附上可用规则提示（同文件 `:95`），`cp` / `create` / `update` / `delete` 直接抛 `desktop app is not running -- write operations require approval from the running desktop app`（同文件 `:103`）；`grant` 同样硬失败（`cmd/opsctl/command/grant.go:231`）。面向 AI 的技能文档整篇以此为前提：`plugin/opsctl/skills/opsctl/SKILL.md:85` 写 "Most write operations require desktop app approval"，`:90` 写 create/update「always need the desktop app」、delete「always needs desktop app too, and cannot be pre-approved」。

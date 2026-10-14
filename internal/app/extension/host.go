@@ -168,6 +168,25 @@ func (s *kvStore) Set(key string, value []byte) error {
 	return s.ext.service.SetHostKV(ctx, s.extName, key, value)
 }
 
+// settingsStore implements extension.SettingsStore, scoped to one extension.
+// 密钥字段在保存时已加密；Get 不返回它们，Secrets 解密后只给请求头替换。
+type settingsStore struct {
+	ext     *Extension
+	extName string
+}
+
+func (s *settingsStore) Get() (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.ext.service.PublicSettings(ctx, s.extName)
+}
+
+func (s *settingsStore) Secrets(fields []string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.ext.service.SettingSecrets(ctx, s.extName, fields, credential_svc.Default().Decrypt)
+}
+
 // actionEventHandler implements extension.ActionEventHandler
 type actionEventHandler struct {
 	ctx     context.Context // Wails app context

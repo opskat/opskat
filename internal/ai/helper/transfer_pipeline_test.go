@@ -40,7 +40,7 @@ func TestSSHTransferWritePipelinesRequests(t *testing.T) {
 	ctx, gate := newGatedCache(t, root, sftpiotest.PacketWrite)
 	body := pipelineBody()
 
-	err := sshTransfer.Write(ctx, &asset_entity.Asset{ID: 1}, filepath.Join(root, "app.bin"),
+	err := sshTransfer.Write(ctx, &asset_entity.Asset{ID: 1}, sftpiotest.RemotePath(filepath.Join(root, "app.bin")),
 		bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -68,7 +68,7 @@ func TestSSHTransferOpenReadPipelinesRequests(t *testing.T) {
 	}
 	ctx, gate := newGatedCache(t, root, sftpiotest.PacketRead)
 
-	rc, size, err := sshTransfer.OpenRead(ctx, &asset_entity.Asset{ID: 1}, filepath.Join(root, "app.bin"))
+	rc, size, err := sshTransfer.OpenRead(ctx, &asset_entity.Asset{ID: 1}, sftpiotest.RemotePath(filepath.Join(root, "app.bin")))
 	if err != nil {
 		t.Fatalf("OpenRead: %v", err)
 	}

@@ -47,22 +47,46 @@ func effectiveAuditCommand(t *testing.T, info audit.ToolCallInfo) string {
 // different failure causes (see TestCmdExec_KafkaDenyRuleEnforcedViaCanonicalCommand).
 func captureStderr(t *testing.T, f func()) string {
 	t.Helper()
+	return captureFile(t, &os.Stderr, f)
+}
+
+// captureStdout is captureStderr for os.Stdout.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	return captureFile(t, &os.Stdout, f)
+}
+
+// captureFile points *target at a pipe while f runs and returns what f wrote to it.
+// The pipe is drained while f runs, not after: a pipe buffer is only a few KB (4 KB on
+// Windows), so an f that writes more — the top-level usage text does — would block on
+// its own write forever if nothing read until it returned.
+func captureFile(t *testing.T, target **os.File, f func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	orig := os.Stderr
-	os.Stderr = w
+	type result struct {
+		data []byte
+		err  error
+	}
+	read := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		read <- result{data, err}
+	}()
+	orig := *target
+	*target = w
+	defer func() { *target = orig }()
 	f()
 	if err := w.Close(); err != nil {
 		t.Fatalf("close pipe writer: %v", err)
 	}
-	os.Stderr = orig
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read pipe: %v", err)
+	got := <-read
+	if got.err != nil {
+		t.Fatalf("read pipe: %v", got.err)
 	}
-	return string(data)
+	return string(got.data)
 }
 
 // noSessionSerialManager is the minimal serial_svc.CommandManager fake that always
@@ -154,7 +178,7 @@ func setupOpsctlExecAssets(t *testing.T) *opsctlExecTestEnv {
 	}
 
 	origStream := execSSHStreamFn
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ io.Reader, _ ApprovalResult) int {
 		env.sshStreamCalls++
 		env.sshAuditSources = append(env.sshAuditSources, aictx.GetAuditSource(auditCtx))
 		return 0
@@ -245,7 +269,7 @@ func TestCmdExec_DeniedApprovalAuditSourceIsOpsctl(t *testing.T) {
 func TestCmdExec_SSHRemoteFailureAuditSourceIsOpsctl(t *testing.T) {
 	env := setupOpsctlExec(t)
 	env.approvalDecision = "allow"
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, _ io.Reader, result ApprovalResult) int {
 		writeOpsctlAudit(auditCtx, "exec", `{"asset_id":2,"command":"review"}`, "", errors.New("remote failure"), result.ToCheckResult())
 		return 1
 	}
@@ -517,7 +541,7 @@ func TestCmdExec_OSSDeniedAuditCommandIsCanonical(t *testing.T) {
 func TestCmdExec_SSHAuditCommandStaysRaw(t *testing.T) {
 	env := setupOpsctlExec(t)
 	env.approvalDecision = "allow"
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, _ io.Reader, result ApprovalResult) int {
 		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, command)
 		writeOpsctlAudit(auditCtx, "exec", argsJSON, `{"exit_code":0}`, nil, result.ToCheckResult())
 		return 0

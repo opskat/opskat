@@ -79,6 +79,11 @@ func (e *Extension) NewFileDialogOpener() *fileDialogOpener { return &fileDialog
 // NewKVStore 为指定扩展返回 kvStore 实例。
 func (e *Extension) NewKVStore(extName string) *kvStore { return &kvStore{ext: e, extName: extName} }
 
+// NewSettingsStore 为指定扩展返回设置存储。
+func (e *Extension) NewSettingsStore(extName string) *settingsStore {
+	return &settingsStore{ext: e, extName: extName}
+}
+
 // NewActionEventHandler 为指定扩展返回 actionEventHandler 实例。
 func (e *Extension) NewActionEventHandler(extName string) *actionEventHandler {
 	return &actionEventHandler{ctx: e.ctx, extName: extName}

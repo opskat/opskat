@@ -27,6 +27,10 @@ type Descriptor struct {
 	Policies   PoliciesDef    `json:"policies"`
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
+	// Reviewer is present only when the guest registered a command reviewer.
+	Reviewer *ReviewerDef `json:"reviewer,omitempty"`
+	// SettingsSchema 是扩展级设置的 JSON Schema。空表示该扩展没有设置。
+	SettingsSchema map[string]any `json:"settingsSchema,omitempty"`
 }
 
 // ParseDescriptor decodes and validates a describe() payload.
@@ -55,7 +59,10 @@ func (d *Descriptor) validate() error {
 	if err := d.validatePolicyGroups(); err != nil {
 		return err
 	}
-	return d.validateSnippets()
+	if err := d.validateSnippets(); err != nil {
+		return err
+	}
+	return d.validateReviewer()
 }
 
 // validateAssetScope enforces "an extension belongs to an asset type".
@@ -63,7 +70,17 @@ func (d *Descriptor) validate() error {
 // Extension tools travel the same exec / help / policy / grant path built-in types
 // do, and the entry to that path is an *asset*. A missing declaration is therefore not "an optional field left out"
 // but "this extension has no reachable entry point", and must be said at load time.
+//
+// The one exception is a reviewer-only extension: its entry point is review_commands,
+// which the host calls itself, so it needs no asset type and no policy face — and having
+// no asset, it can declare no tools either.
 func (d *Descriptor) validateAssetScope() error {
+	if len(d.AssetTypes) == 0 && d.Reviewer != nil {
+		if len(d.Tools) > 0 {
+			return fmt.Errorf("describe(): tools need assetTypes — extension tools are reached through exec on an asset, and a reviewer-only extension has none")
+		}
+		return nil
+	}
 	if len(d.AssetTypes) == 0 {
 		return fmt.Errorf("describe(): assetTypes must declare at least one asset type — extension tools are reached through exec on an asset")
 	}
@@ -347,6 +364,8 @@ func (m *Manifest) apply(d *Descriptor) {
 	m.Policies.Actions = policyActions(d.Tools)
 	m.Frontend = d.Frontend
 	m.Snippets = d.Snippets
+	m.Reviewer = d.Reviewer
+	m.SettingsSchema = d.SettingsSchema
 }
 
 func policyActions(tools []ToolDef) []string {

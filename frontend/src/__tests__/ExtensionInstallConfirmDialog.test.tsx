@@ -72,6 +72,20 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(within(creds).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
+  // 审核扩展返回"通过"就能让 Autopilot 直接执行命令，安装前要单独说清楚。
+  it("warns that a command-review extension can let commands run without asking", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "commandReview", value: "" }],
+      added: [],
+    });
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("extension.commandReviewWarning");
+  });
+
   it("flags a downgrade, names a fresh install's version alone and labels each source", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);

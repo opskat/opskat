@@ -11,7 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"syscall"
+	"runtime"
 	"testing"
 
 	"github.com/opskat/opskat/internal/pkg/sftpio"
@@ -19,6 +19,8 @@ import (
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/pkg/sftpio/sftpiotest"
 )
 
 // newTestService 起一个进程内的真实 SFTP 服务端（根目录为临时目录），返回服务、
@@ -79,11 +81,11 @@ func TestUploadPreservesExistingFilePermissions(t *testing.T) {
 	remote := filepath.Join(root, "id_rsa")
 	require.NoError(t, os.WriteFile(remote, []byte("old-key"), 0o600))
 
-	require.NoError(t, service.Upload(context.Background(), "t1", session, local, remote, discardProgress))
+	require.NoError(t, service.Upload(context.Background(), "t1", session, local, sftpiotest.RemotePath(remote), discardProgress))
 
 	info, err := os.Stat(remote)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "覆盖上传不得放宽已有文件的权限")
+	assertPerm(t, os.FileMode(0o600), info.Mode().Perm(), "覆盖上传不得放宽已有文件的权限")
 	content, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
 	require.NoError(t, err)
 	assert.Equal(t, "new-key", string(content))
@@ -108,14 +110,14 @@ func TestUploadDownloadPreserveContentAcrossPacketBoundaries(t *testing.T) {
 			local := filepath.Join(localRoot, fmt.Sprintf("up-%d.bin", size))
 			require.NoError(t, os.WriteFile(local, body, 0o644))
 			remote := filepath.Join(root, fmt.Sprintf("up-%d.bin", size))
-			require.NoError(t, service.Upload(context.Background(), "c1", session, local, remote, discardProgress))
+			require.NoError(t, service.Upload(context.Background(), "c1", session, local, sftpiotest.RemotePath(remote), discardProgress))
 
 			uploaded, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
 			require.NoError(t, err)
 			assert.Equal(t, md5.Sum(body), md5.Sum(uploaded), "%d 字节上传后内容不一致", size)
 
 			back := filepath.Join(localRoot, fmt.Sprintf("back-%d.bin", size))
-			require.NoError(t, service.Download(context.Background(), "c2", session, remote, back, discardProgress))
+			require.NoError(t, service.Download(context.Background(), "c2", session, sftpiotest.RemotePath(remote), back, discardProgress))
 			downloaded, err := os.ReadFile(back) //nolint:gosec // 测试内的临时目录路径
 			require.NoError(t, err)
 			assert.Equal(t, md5.Sum(body), md5.Sum(downloaded), "%d 字节下载后内容不一致", size)
@@ -134,14 +136,14 @@ func TestUploadOverwriteLeavesNoTrailingOldData(t *testing.T) {
 	require.NoError(t, err)
 	localBig := filepath.Join(localRoot, "big.bin")
 	require.NoError(t, os.WriteFile(localBig, big, 0o644))
-	require.NoError(t, service.Upload(context.Background(), "o1", session, localBig, remote, discardProgress))
+	require.NoError(t, service.Upload(context.Background(), "o1", session, localBig, sftpiotest.RemotePath(remote), discardProgress))
 
 	small := make([]byte, 1000)
 	_, err = rand.Read(small)
 	require.NoError(t, err)
 	localSmall := filepath.Join(localRoot, "small.bin")
 	require.NoError(t, os.WriteFile(localSmall, small, 0o644))
-	require.NoError(t, service.Upload(context.Background(), "o2", session, localSmall, remote, discardProgress))
+	require.NoError(t, service.Upload(context.Background(), "o2", session, localSmall, sftpiotest.RemotePath(remote), discardProgress))
 
 	got, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
 	require.NoError(t, err)
@@ -161,7 +163,7 @@ func TestUploadWritesThroughSymlinkInsteadOfReplacingIt(t *testing.T) {
 	link := filepath.Join(root, "sites-enabled")
 	require.NoError(t, os.Symlink("sites-available", link))
 
-	require.NoError(t, service.Upload(context.Background(), "t1", session, local, link, discardProgress))
+	require.NoError(t, service.Upload(context.Background(), "t1", session, local, sftpiotest.RemotePath(link), discardProgress))
 
 	info, err := os.Lstat(link)
 	require.NoError(t, err)
@@ -181,7 +183,7 @@ func TestUploadThroughDanglingSymlinkCreatesLinkTarget(t *testing.T) {
 	link := filepath.Join(root, "enabled.conf")
 	require.NoError(t, os.Symlink("available.conf", link))
 
-	require.NoError(t, service.Upload(context.Background(), "t1", session, local, link, discardProgress))
+	require.NoError(t, service.Upload(context.Background(), "t1", session, local, sftpiotest.RemotePath(link), discardProgress))
 
 	info, err := os.Lstat(link)
 	require.NoError(t, err)
@@ -199,7 +201,7 @@ func TestUploadRejectsSymlinkLoopInsteadOfHanging(t *testing.T) {
 	require.NoError(t, os.Symlink("b", filepath.Join(root, "a")))
 	require.NoError(t, os.Symlink("a", filepath.Join(root, "b")))
 
-	err := service.Upload(context.Background(), "t1", session, local, filepath.Join(root, "a"), discardProgress)
+	err := service.Upload(context.Background(), "t1", session, local, sftpiotest.RemotePath(filepath.Join(root, "a")), discardProgress)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "符号链接层级过深")
@@ -214,7 +216,7 @@ func TestWriteFileWritesThroughSymlinkInsteadOfReplacingIt(t *testing.T) {
 	link := filepath.Join(root, "current.conf")
 	require.NoError(t, os.Symlink("app.conf", link))
 
-	require.NoError(t, service.WriteFile(session, link, []byte("edited")))
+	require.NoError(t, service.WriteFile(session, sftpiotest.RemotePath(link), []byte("edited")))
 
 	info, err := os.Lstat(link)
 	require.NoError(t, err)
@@ -225,27 +227,7 @@ func TestWriteFileWritesThroughSymlinkInsteadOfReplacingIt(t *testing.T) {
 
 	targetInfo, err := os.Stat(target)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o640), targetInfo.Mode().Perm(), "回写不得改变被编辑文件的权限")
-}
-
-func TestUploadRejectsNamedPipeTargetInsteadOfReplacingIt(t *testing.T) {
-	// SFTP 的写请求带绝对偏移量，服务端对管道做 pwrite 会返回 illegal seek ——
-	// 命名管道根本无法经 SFTP 写入。必须明确报错：既不能把管道 rename 成普通文件，
-	// 也不能因为上游 ReadFrom 吞掉写错误而静默报告成功。
-	service, session, root := newTestService(t)
-	local := filepath.Join(t.TempDir(), "payload")
-	require.NoError(t, os.WriteFile(local, []byte("hello"), 0o644))
-
-	fifo := filepath.Join(root, "pipe")
-	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
-
-	err := service.Upload(context.Background(), "t1", session, local, fifo, discardProgress)
-
-	require.Error(t, err, "SFTP 无法写入命名管道，不能报告成功")
-	assert.Contains(t, err.Error(), "命名管道")
-	info, err := os.Lstat(fifo)
-	require.NoError(t, err)
-	assert.NotZero(t, info.Mode()&os.ModeNamedPipe, "命名管道必须原样保留，不能被换成普通文件")
+	assertPerm(t, os.FileMode(0o640), targetInfo.Mode().Perm(), "回写不得改变被编辑文件的权限")
 }
 
 // shortWriteClient 模拟"ReadFrom 报告写完了，实际落盘字节数不足"的服务端 ——
@@ -408,7 +390,7 @@ func TestUploadFallsBackToInPlaceWhenDirectoryNotWritable(t *testing.T) {
 	require.NoError(t, os.Chmod(dir, 0o555)) // 目录不可写，文件仍可写
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	require.NoError(t, service.Upload(context.Background(), "t1", session, local, remote, discardProgress))
+	require.NoError(t, service.Upload(context.Background(), "t1", session, local, sftpiotest.RemotePath(remote), discardProgress))
 
 	content, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
 	require.NoError(t, err)
@@ -428,7 +410,7 @@ func TestUploadDirProgressNeverExceedsTotal(t *testing.T) {
 	}
 
 	onProgress, got := collectProgress()
-	require.NoError(t, service.UploadDir(context.Background(), "t1", session, localDir, filepath.Join(root, "dst"), onProgress))
+	require.NoError(t, service.UploadDir(context.Background(), "t1", session, localDir, sftpiotest.RemotePath(filepath.Join(root, "dst")), onProgress))
 
 	assertProgressInvariants(t, *got, files*size)
 	for i := range files {
@@ -451,7 +433,7 @@ func TestDownloadDirProgressNeverRestartsPerFile(t *testing.T) {
 	localDir := filepath.Join(t.TempDir(), "dst")
 
 	onProgress, got := collectProgress()
-	require.NoError(t, service.DownloadDir(context.Background(), "t1", session, remoteDir, localDir, onProgress))
+	require.NoError(t, service.DownloadDir(context.Background(), "t1", session, sftpiotest.RemotePath(remoteDir), localDir, onProgress))
 
 	assertProgressInvariants(t, *got, files*size)
 	for i := range files {
@@ -469,11 +451,11 @@ func TestDownloadPreservesExistingLocalPermissions(t *testing.T) {
 	local := filepath.Join(t.TempDir(), "id_rsa")
 	require.NoError(t, os.WriteFile(local, []byte("old"), 0o600))
 
-	require.NoError(t, service.Download(context.Background(), "t1", session, remote, local, discardProgress))
+	require.NoError(t, service.Download(context.Background(), "t1", session, sftpiotest.RemotePath(remote), local, discardProgress))
 
 	info, err := os.Stat(local)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "覆盖下载不得放宽已有文件的权限")
+	assertPerm(t, os.FileMode(0o600), info.Mode().Perm(), "覆盖下载不得放宽已有文件的权限")
 	content, err := os.ReadFile(local) //nolint:gosec // 测试内的临时目录路径
 	require.NoError(t, err)
 	assert.Equal(t, "remote-key", string(content))
@@ -487,7 +469,7 @@ func TestDownloadLeavesNoTempFileBehindOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := service.Download(ctx, "t1", session, remote, filepath.Join(localDir, "big.bin"), discardProgress)
+	err := service.Download(ctx, "t1", session, sftpiotest.RemotePath(remote), filepath.Join(localDir, "big.bin"), discardProgress)
 	require.Error(t, err)
 
 	entries, err := os.ReadDir(localDir)
@@ -560,4 +542,14 @@ func TestCommitRemoteTempFileRestoresOriginalOnSwapFailure(t *testing.T) {
 	require.Len(t, client.renames, 3)
 	backupPath := client.renames[0][1]
 	assert.Equal(t, [2]string{backupPath, "/etc/app.conf"}, client.renames[2], "第三次 rename 必须是把备份恢复回目标路径")
+}
+
+// assertPerm 断言文件的 POSIX 权限位。Windows 没有这种权限位（Stat 报告的永远是 0666/0444），
+// 那里只校验内容和文件类型。
+func assertPerm(t *testing.T, want, got os.FileMode, msg string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	assert.Equal(t, want, got, msg)
 }

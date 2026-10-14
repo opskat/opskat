@@ -411,6 +411,7 @@ func initExtensionSystem(
 			AssetConfigs:  extB.NewAssetConfigGetter(extName),
 			FileDialogs:   extB.NewFileDialogOpener(),
 			KV:            extB.NewKVStore(extName),
+			Settings:      extB.NewSettingsStore(extName),
 			ActionEvents:  extB.NewActionEventHandler(extName),
 			AssetDialer:   extB.NewAssetDialer(extName),
 			ExtensionName: extName,
@@ -438,6 +439,7 @@ func initExtensionSystem(
 	)
 
 	extB.SetService(extSvc)
+	bootstrap.SetExtensionService(extSvc)
 	aiB.SetExtensionService(extSvc)
 	opsctlB.SetExtToolExecutor(desktopExecExecutor{})
 	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})

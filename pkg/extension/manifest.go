@@ -34,13 +34,18 @@ import (
 // extension that uses it declares 2.2 and an older app refuses to load it. 2.2
 // also lets check_policy answer {"reject":"<reason>"} (the SDK's RejectArgs): the
 // tool refusing the call's arguments, which the host denies without asking.
-const HostABIVersion = "2.2"
+//
+// 2.3 adds the command-review guest entry review_commands and the describe()
+// reviewer section. An older host cannot read either, so a reviewer extension
+// declares 2.3 and an older app refuses to load it instead of installing an
+// extension whose reviewer it would silently ignore.
+const HostABIVersion = "2.3"
 
-// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 and 2.1
-// stay listed so extensions built before host-ui or multi-resource classification
-// keep loading unchanged; only a hostABI newer than everything here (e.g. an
-// extension declaring 2.3 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2"}
+// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0, 2.1 and
+// 2.2 stay listed so extensions built before command review keep loading unchanged;
+// only a hostABI newer than everything here (e.g. an extension declaring 2.4 or
+// 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -95,6 +100,12 @@ type Manifest struct {
 	Policies   PoliciesDef    `json:"policies"`
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
+	// Reviewer is the command-review face from describe(). It is set only when the
+	// guest reports one; together with Capabilities.CommandReview it makes the
+	// extension a reviewer (see validateReviewer).
+	Reviewer *ReviewerDef `json:"reviewer,omitempty"`
+	// SettingsSchema 是扩展级设置，来自 describe()。
+	SettingsSchema map[string]any `json:"settingsSchema,omitempty"`
 }
 
 // manifestFile is what manifest.json is allowed to say.
@@ -159,8 +170,13 @@ type Capabilities struct {
 	// Tunnel lets an allowlisted (non-endpoint) HTTP target resolve to a private
 	// address. Routing through an asset's SSH tunnel is an asset type's
 	// connection.sshTunnel declaration, not this capability.
-	Tunnel  bool              `json:"tunnel"`
-	Network NetworkCapability `json:"network"`
+	Tunnel bool `json:"tunnel"`
+	// CommandReview lets the extension register a command reviewer. A "pass" from
+	// that reviewer can auto-allow a command under assisted approval and Autopilot,
+	// so the grant is shown on its own in the install confirm. It takes effect only
+	// together with a reviewer section from describe() (see validateReviewer).
+	CommandReview bool              `json:"commandReview"`
+	Network       NetworkCapability `json:"network"`
 }
 
 // NetworkCapability grants network reach that is decided per call rather than by
@@ -252,6 +268,16 @@ func (at AssetTypeDef) bindsEndpoint() bool {
 // asset's endpoints, and an extension without network.assetEndpoint has none. It
 // runs once describe() is merged in, since the declaration comes from the guest
 // and the capability from manifest.json.
+// validateDescribed checks the face describe() just merged against the security
+// contract: endpoint bindings need network.assetEndpoint, and a reviewer needs
+// both the capability and the reviewer section.
+func (m *Manifest) validateDescribed() error {
+	if err := m.validateEndpointBindings(); err != nil {
+		return err
+	}
+	return m.validateReviewer()
+}
+
 func (m *Manifest) validateEndpointBindings() error {
 	if m.Capabilities.Network.AssetEndpoint {
 		return nil
@@ -393,6 +419,10 @@ func (m *Manifest) Localized(tr func(key string) string) *Manifest {
 			at.ConfigSchema = localizeConfigSchema(at.ConfigSchema, tr)
 			out.AssetTypes[i] = at
 		}
+	}
+
+	if m.SettingsSchema != nil {
+		out.SettingsSchema = localizeConfigSchema(m.SettingsSchema, tr)
 	}
 
 	if len(m.Tools) > 0 {

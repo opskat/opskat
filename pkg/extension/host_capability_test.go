@@ -24,6 +24,14 @@ func (r *recordingHost) OpenIO(_ context.Context, _ *AssetRef, params IOOpenPara
 	return &IOResource{}, nil
 }
 
+func (r *recordingHost) SettingsGet() (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (r *recordingHost) SettingSecrets([]string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 // TestCapHostTCPPassthrough pins that an extension which does not declare
 // network.assetEndpoint keeps today's ungated TCP (first-party Kafka builds on
 // it); declaring the capability puts TCP under the endpoint gate below.
@@ -184,5 +192,50 @@ func TestEndpointFieldsFromSchema(t *testing.T) {
 		}}
 		So(EndpointFieldsFromSchema(schema), ShouldResemble, []string{"a", "z"})
 		So(EndpointFieldsFromSchema(nil), ShouldBeEmpty)
+	})
+}
+
+// settingsHost serves extension settings and records what capHost hands to OpenIO.
+type settingsHost struct {
+	recordingHost
+	public  map[string]string
+	secrets map[string]string
+}
+
+func (h *settingsHost) SettingsGet() (map[string]string, error) { return h.public, nil }
+func (h *settingsHost) SettingSecrets([]string) (map[string]string, error) {
+	return h.secrets, nil
+}
+
+// TestCapHostSettingSecretStaysOnDeclaredEndpoint pins that a request carrying a
+// substituted secret header may not be redirected off the declared endpoint:
+// net/http forwards custom headers such as X-API-Key across hosts on redirect.
+func TestCapHostSettingSecretStaysOnDeclaredEndpoint(t *testing.T) {
+	Convey("Given a reviewer whose settings declare an endpoint and a secret", t, func() {
+		inner := &settingsHost{
+			public:  map[string]string{"endpoint": "https://review.example.com"},
+			secrets: map[string]string{"token": "s3cret"},
+		}
+		manifest := &Manifest{Name: "rev", Version: "1.0.0", SettingsSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"endpoint": map[string]any{"type": "string", "format": "endpoint"},
+				"token":    map[string]any{"type": "string", "format": "password"},
+			},
+		}}
+		ch := NewCapabilityHost(inner, manifest, "/tmp/ext")
+
+		Convey("a request with the secret only follows redirects within the endpoint", func() {
+			_, err := ch.OpenIO(context.Background(), nil, IOOpenParams{
+				Type: "http", URL: "https://review.example.com/v1",
+				Headers: map[string]string{"X-API-Key": "{{setting.token}}"},
+			})
+			So(err, ShouldBeNil)
+			So(inner.lastParams.Headers["X-API-Key"], ShouldEqual, "s3cret")
+			guard := inner.lastParams.RedirectGuard
+			So(guard, ShouldNotBeNil)
+			So(guard(&url.URL{Scheme: "https", Host: "review.example.com", Path: "/v2"}), ShouldBeNil)
+			So(guard(&url.URL{Scheme: "https", Host: "evil.example.com"}), ShouldNotBeNil)
+		})
 	})
 }

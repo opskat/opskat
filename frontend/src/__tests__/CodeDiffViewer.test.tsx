@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { buildTextDiffBlocks } from "../lib/textDiffBlocks";
 
@@ -45,6 +45,11 @@ vi.mock("@monaco-editor/react", () => ({
 }));
 
 describe("CodeDiffViewer", () => {
+  // 第一次动态加载组件要编译整棵依赖，全量并发跑时会超过单个测试默认的 5 秒；单独预热。
+  beforeAll(async () => {
+    await import("../components/CodeDiffViewer");
+  }, 60_000);
+
   it("forces side-by-side diff mode without inline fallback", async () => {
     const { CodeDiffViewer } = await import("../components/CodeDiffViewer");
     render(<CodeDiffViewer original="remote" modified="local" />);

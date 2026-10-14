@@ -48,7 +48,7 @@ func runRemoteCopy(t *testing.T, src, dst *sftp.Client, srcRoot, dstRoot string,
 	t.Helper()
 	err := copyRemoteFile(context.Background(),
 		sftpCopyClient{client: src}, sftpCopyClient{client: dst},
-		filepath.Join(srcRoot, "app.bin"), filepath.Join(dstRoot, "app.bin"))
+		sftpiotest.RemotePath(filepath.Join(srcRoot, "app.bin")), sftpiotest.RemotePath(filepath.Join(dstRoot, "app.bin")))
 	require.NoError(t, err)
 
 	got, err := os.ReadFile(filepath.Join(dstRoot, "app.bin")) //nolint:gosec // 测试自己建的临时目录
