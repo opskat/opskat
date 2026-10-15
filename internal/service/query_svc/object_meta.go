@@ -7,10 +7,12 @@ import "github.com/opskat/opskat/internal/dbdriver"
 
 // ColumnMeta describes one column for the object browser.
 type ColumnMeta struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Nullable   bool   `json:"nullable"`
-	PrimaryKey bool   `json:"primaryKey"`
+	Name       string  `json:"name"`
+	Type       string  `json:"type"`
+	Nullable   bool    `json:"nullable"`
+	PrimaryKey bool    `json:"primaryKey"`
+	Comment    string  `json:"comment"`
+	Default    *string `json:"default"`
 }
 
 // IndexMeta describes one index.

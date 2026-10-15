@@ -51,15 +51,21 @@ func TestListTablesQualifiesWithSchema(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+var zeroDefault = "((0))"
+
 func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	session, mock := newMock(t)
 
-	mock.ExpectQuery("SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
-		"FROM INFORMATION_SCHEMA.COLUMNS " +
-		"WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 " +
-		"ORDER BY ORDINAL_POSITION").
-		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT"}).
-			AddRow("id", "int", "NO", nil).AddRow("note", "nvarchar", "YES", nil))
+	mock.ExpectQuery("SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, " +
+		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT " +
+		"FROM INFORMATION_SCHEMA.COLUMNS c " +
+		"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' " +
+		"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) " +
+		"AND ep.minor_id = c.ORDINAL_POSITION " +
+		"WHERE c.TABLE_SCHEMA = @p1 AND c.TABLE_NAME = @p2 " +
+		"ORDER BY c.ORDINAL_POSITION").
+		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "COLUMN_COMMENT"}).
+			AddRow("id", "int", "NO", "((0))", "event id").AddRow("note", "nvarchar", "YES", nil, nil))
 	mock.ExpectQuery("SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
 		"JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu " +
 		"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA " +
@@ -90,7 +96,7 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	meta, err := session.TableMetadata(context.Background(), "appdb", "sales.orders")
 	require.NoError(t, err)
 	assert.Equal(t, []dbdriver.ColumnMeta{
-		{Name: "id", Type: "int", PrimaryKey: true},
+		{Name: "id", Type: "int", PrimaryKey: true, Comment: "event id", Default: &zeroDefault},
 		{Name: "note", Type: "nvarchar", Nullable: true},
 	}, meta.Columns)
 	assert.Equal(t, []dbdriver.IndexMeta{{Name: "PK_orders", Columns: []string{"id"}, Unique: true}}, meta.Indexes)

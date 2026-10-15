@@ -84,8 +84,8 @@ func NewFake() *Fake {
 		Tables:    map[string][]string{"app": {"users", "orders"}, "reporting": {"events", "v_users"}},
 		Metadata: &dbdriver.TableMetadata{
 			Columns: []dbdriver.ColumnMeta{
-				{Name: "id", Type: "int", PrimaryKey: true},
-				{Name: "name", Type: "text", Nullable: true},
+				{Name: "id", Type: "int", PrimaryKey: true, Comment: "primary key"},
+				{Name: "name", Type: "text", Nullable: true, Default: new("anon")},
 			},
 			Indexes:     []dbdriver.IndexMeta{{Name: "pk_users", Columns: []string{"id"}, Unique: true}},
 			ForeignKeys: []dbdriver.ForeignKeyMeta{},

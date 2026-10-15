@@ -19,10 +19,14 @@ const (
 		"WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' " +
 		"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 " +
 		"ORDER BY kcu.ORDINAL_POSITION"
-	columnsSQL = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
-		"FROM INFORMATION_SCHEMA.COLUMNS " +
-		"WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 " +
-		"ORDER BY ORDINAL_POSITION"
+	columnsSQL = "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, " +
+		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT " +
+		"FROM INFORMATION_SCHEMA.COLUMNS c " +
+		"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' " +
+		"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) " +
+		"AND ep.minor_id = c.ORDINAL_POSITION " +
+		"WHERE c.TABLE_SCHEMA = @p1 AND c.TABLE_NAME = @p2 " +
+		"ORDER BY c.ORDINAL_POSITION"
 )
 
 // 表标识来自侧边栏的 schema.table（如 "dbo.users"）：按 schema + table 两段过滤

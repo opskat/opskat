@@ -7,7 +7,7 @@ import (
 	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 )
 
-// 表浏览：表以 `db`.`table` 引用，主键与列定义用 SHOW KEYS / SHOW COLUMNS，分页用共用的
+// 表浏览：表以 `db`.`table` 引用，主键与列定义用 SHOW KEYS / SHOW FULL COLUMNS（带列注释），分页用共用的
 // LIMIT / OFFSET。
 var _ sqldb.Tables = dialect{}
 
@@ -21,5 +21,5 @@ func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, database, table 
 }
 
 func (dialect) TableColumns(ctx context.Context, conn *sql.Conn, database, table string) ([]sqldb.TableColumn, error) {
-	return sqldb.QueryTableColumns(ctx, conn, "SHOW COLUMNS FROM "+quoteTableRef(database, table))
+	return sqldb.QueryTableColumns(ctx, conn, "SHOW FULL COLUMNS FROM "+quoteTableRef(database, table))
 }

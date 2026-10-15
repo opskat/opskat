@@ -128,6 +128,28 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 	return problems
 }
 
+// columnShapeProblems 检查序列化后的一列：前端读 comment（字符串，没有注释是空串）与
+// default（字符串，没有默认值是 null）两个键，缺了或类型不对都不行。
+func columnShapeProblems(raw []byte) []string {
+	var column map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &column); err != nil {
+		return []string{fmt.Sprintf("not a JSON object: %v", err)}
+	}
+	var problems []string
+	var s string
+	if v, ok := column["comment"]; !ok {
+		problems = append(problems, `missing "comment" (a string, empty when the column has no comment)`)
+	} else if json.Unmarshal(v, &s) != nil || string(v) == "null" {
+		problems = append(problems, `"comment" must be a string, empty when the column has no comment`)
+	}
+	if v, ok := column["default"]; !ok {
+		problems = append(problems, `missing "default" (a string, or null when the column has no default)`)
+	} else if json.Unmarshal(v, &s) != nil {
+		problems = append(problems, `"default" must be a string, or null when the column has no default`)
+	}
+	return problems
+}
+
 var objectTypes = []string{dbdriver.ObjectView, dbdriver.ObjectProcedure, dbdriver.ObjectFunction, dbdriver.ObjectTrigger}
 
 // RunBrowseConformance 检查树的浏览：声明了的操作可以调用并给出成形的结果，没声明的对象
@@ -166,6 +188,17 @@ func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 			report("TableMetadata(%q): returned no metadata and no error", tables[0])
 		case meta.Columns == nil || meta.Indexes == nil || meta.ForeignKeys == nil:
 			report("TableMetadata(%q): columns, indexes and foreign keys must be empty lists, not nil (they serialize to null)", tables[0])
+		default:
+			for _, column := range meta.Columns {
+				raw, err := json.Marshal(column)
+				if err != nil {
+					report("TableMetadata(%q): column %q does not serialize: %v", tables[0], column.Name, err)
+					continue
+				}
+				for _, problem := range columnShapeProblems(raw) {
+					report("TableMetadata(%q): column %q: %s", tables[0], column.Name, problem)
+				}
+			}
 		}
 	}
 

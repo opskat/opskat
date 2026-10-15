@@ -18,7 +18,8 @@ const (
 		"ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " +
 		"WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY' " +
 		"ORDER BY kcu.ordinal_position"
-	columnsSQL = "SELECT column_name, data_type, udt_name, is_nullable, column_default " +
+	columnsSQL = "SELECT column_name, data_type, udt_name, is_nullable, column_default, " +
+		"col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position::int) AS column_comment " +
 		"FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position"
 )
 

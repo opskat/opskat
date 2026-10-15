@@ -18,7 +18,7 @@ func TestOpenTable(t *testing.T) {
 
 	mock.ExpectQuery("SHOW KEYS FROM `mydb`.`users` WHERE Key_name = 'PRIMARY'").
 		WillReturnRows(sqlmock.NewRows([]string{"Table", "Column_name"}).AddRow("users", "id"))
-	mock.ExpectQuery("SHOW COLUMNS FROM `mydb`.`users`").
+	mock.ExpectQuery("SHOW FULL COLUMNS FROM `mydb`.`users`").
 		WillReturnRows(sqlmock.NewRows([]string{"Field", "Type", "Null", "Key", "Default", "Extra"}).
 			AddRow("id", "int", "NO", "PRI", nil, "auto_increment").
 			AddRow("name", "varchar(255)", "YES", "", "anon", ""))

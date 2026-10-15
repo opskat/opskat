@@ -49,6 +49,10 @@ type TableColumn struct {
 	Nullable      bool
 	HasDefault    bool
 	AutoIncrement bool
+	// Comment 是列注释，没有时为空串。
+	Comment string
+	// Default 是默认值；nil 表示没有默认值，与默认值为空串区分。
+	Default *string
 }
 
 func (LimitOffset) FirstPageSQL(tableRef string, limit int) string {
@@ -263,7 +267,7 @@ func QuoteQualified(name string, quote func(string) string) string {
 
 // QueryTableColumns 执行一条列定义查询。结果集里列名的叫法随方言不同
 // （column_name / name / Field / COLUMN_NAME，Type / data_type / udt_name，Null / is_nullable，
-// Default / column_default / dflt_value，Extra），这里按这些叫法取值。
+// Default / column_default / dflt_value，Comment / column_comment，Extra），这里按这些叫法取值。
 func QueryTableColumns(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]TableColumn, error) {
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -289,29 +293,35 @@ func QueryTableColumns(ctx context.Context, conn *sql.Conn, query string, args .
 		if name == "" {
 			continue
 		}
-		hasDefault := false
-		for _, key := range []string{"column_default", "Default", "default", "COLUMN_DEFAULT", "dflt_value"} {
-			if row[key] != nil {
-				hasDefault = true
-				break
-			}
-		}
+		defaultValue := pickDefault(row)
 		out = append(out, TableColumn{
 			Name:          name,
 			Type:          PickString(row, "data_type", "Type", "type", "udt_name", "DATA_TYPE"),
 			Nullable:      strings.ToUpper(PickString(row, "is_nullable", "Null", "null", "IS_NULLABLE")) == "YES",
-			HasDefault:    hasDefault,
+			HasDefault:    defaultValue != nil,
+			Default:       defaultValue,
+			Comment:       PickString(row, "column_comment", "Comment", "comment", "COLUMN_COMMENT"),
 			AutoIncrement: strings.Contains(strings.ToLower(PickString(row, "Extra", "extra")), "auto_increment"),
 		})
 	}
 	return out, rows.Err()
 }
 
+// pickDefault 取默认值；NULL（没有默认值）返回 nil，空串默认值返回指向空串的指针。
+func pickDefault(row map[string]any) *string {
+	for _, key := range []string{"column_default", "Default", "default", "COLUMN_DEFAULT", "dflt_value"} {
+		if row[key] != nil {
+			return new(PickString(row, key))
+		}
+	}
+	return nil
+}
+
 // ColumnMetas 把列定义转成对象浏览里的列描述（主键标记由 AssembleMetadata 补上）。
 func ColumnMetas(columns []TableColumn) []dbdriver.ColumnMeta {
 	out := make([]dbdriver.ColumnMeta, 0, len(columns))
 	for _, column := range columns {
-		out = append(out, dbdriver.ColumnMeta{Name: column.Name, Type: column.Type, Nullable: column.Nullable})
+		out = append(out, dbdriver.ColumnMeta{Name: column.Name, Type: column.Type, Nullable: column.Nullable, Comment: column.Comment, Default: column.Default})
 	}
 	return out
 }

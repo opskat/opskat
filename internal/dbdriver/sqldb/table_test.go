@@ -258,3 +258,29 @@ func TestStreamTableRowsReturnsTheDatabaseErrorAndRejectsMissingTables(t *testin
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	require.NoError(t, plainMock.ExpectationsWereMet())
 }
+
+// 列注释取自结果集的注释列，没有就是空串；默认值 NULL（没有默认值）与空串默认值可区分。
+func TestColumnMetasCarryCommentAndDefault(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery("COLUMNS").WillReturnRows(
+		sqlmock.NewRows([]string{"name", "type", "is_nullable", "dflt_value", "column_comment"}).
+			AddRow("id", "int", "NO", nil, "primary id").
+			AddRow("tag", "text", "YES", "", nil).
+			AddRow("name", "text", "YES", []byte("anon"), ""))
+	conn, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	columns, err := QueryTableColumns(context.Background(), conn, "COLUMNS")
+	require.NoError(t, err)
+	metas := ColumnMetas(columns)
+
+	empty, anon := "", "anon"
+	assert.Equal(t, "primary id", metas[0].Comment)
+	assert.Nil(t, metas[0].Default)
+	assert.Equal(t, "", metas[1].Comment)
+	assert.Equal(t, &empty, metas[1].Default)
+	assert.Equal(t, &anon, metas[2].Default)
+}

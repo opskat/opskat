@@ -52,14 +52,17 @@ func TestListTablesQualifiesWithSchema(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+var seqDefault = "nextval('events_id_seq'::regclass)"
+
 func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	session, mock := newMock(t)
 
-	mock.ExpectQuery("SELECT column_name, data_type, udt_name, is_nullable, column_default "+
+	mock.ExpectQuery("SELECT column_name, data_type, udt_name, is_nullable, column_default, "+
+		"col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position::int) AS column_comment "+
 		"FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position").
 		WithArgs("reporting", "events").WillReturnRows(
-		sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default"}).
-			AddRow("id", "integer", "int4", "NO", nil).AddRow("note", "text", "text", "YES", nil))
+		sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default", "column_comment"}).
+			AddRow("id", "integer", "int4", "NO", "nextval('events_id_seq'::regclass)", "event id").AddRow("note", "text", "text", "YES", nil, nil))
 	mock.ExpectQuery("SELECT kcu.column_name FROM information_schema.table_constraints tc "+
 		"JOIN information_schema.key_column_usage kcu "+
 		"ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "+
@@ -86,7 +89,7 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	meta, err := session.TableMetadata(context.Background(), "admdb", "reporting.events")
 	require.NoError(t, err)
 	assert.Equal(t, []dbdriver.ColumnMeta{
-		{Name: "id", Type: "integer", PrimaryKey: true},
+		{Name: "id", Type: "integer", PrimaryKey: true, Comment: "event id", Default: &seqDefault},
 		{Name: "note", Type: "text", Nullable: true},
 	}, meta.Columns)
 	assert.Equal(t, []dbdriver.IndexMeta{{Name: "events_pkey", Columns: []string{"id"}, Unique: true}}, meta.Indexes)

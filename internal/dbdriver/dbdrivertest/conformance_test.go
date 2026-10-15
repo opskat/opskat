@@ -134,3 +134,17 @@ type ddlSession struct {
 }
 
 func (s ddlSession) TableDDL(context.Context, string, string) (string, error) { return s.ddl, s.err }
+
+// 列元数据必须带 comment（字符串）与 default（字符串或 null）两个键；缺了或类型不对要点出来。
+func TestConformanceChecksColumnCommentAndDefaultShape(t *testing.T) {
+	assert.Empty(t, columnShapeProblems([]byte(`{"name":"id","comment":"","default":null}`)))
+	assert.Empty(t, columnShapeProblems([]byte(`{"name":"id","comment":"c","default":""}`)))
+
+	problems := strings.Join(columnShapeProblems([]byte(`{"name":"id"}`)), "\n")
+	assert.Contains(t, problems, "comment")
+	assert.Contains(t, problems, "default")
+
+	problems = strings.Join(columnShapeProblems([]byte(`{"comment":null,"default":1}`)), "\n")
+	assert.Contains(t, problems, "comment")
+	assert.Contains(t, problems, "default")
+}

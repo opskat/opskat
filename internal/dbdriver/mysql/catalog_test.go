@@ -44,13 +44,15 @@ func TestListDatabasesAndTables(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+var emptyDefault = ""
+
 func TestTableMetadata(t *testing.T) {
 	session, mock := newMock(t)
 
-	mock.ExpectQuery("SHOW COLUMNS FROM `app`.`orders`").WillReturnRows(
-		sqlmock.NewRows([]string{"Field", "Type", "Null", "Key", "Default", "Extra"}).
-			AddRow("id", "int", "NO", "PRI", nil, "auto_increment").
-			AddRow("code", "varchar(20)", "YES", "", nil, ""))
+	mock.ExpectQuery("SHOW FULL COLUMNS FROM `app`.`orders`").WillReturnRows(
+		sqlmock.NewRows([]string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}).
+			AddRow("id", "int", nil, "NO", "PRI", nil, "auto_increment", "select", "order id").
+			AddRow("code", "varchar(20)", "utf8mb4_bin", "YES", "", "", "", "select", ""))
 	mock.ExpectQuery("SHOW KEYS FROM `app`.`orders` WHERE Key_name = 'PRIMARY'").WillReturnRows(
 		sqlmock.NewRows([]string{"Table", "Non_unique", "Key_name", "Seq_in_index", "Column_name"}).AddRow("orders", 0, "PRIMARY", 1, "id"))
 	mock.ExpectQuery("SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME FROM information_schema.STATISTICS " +
@@ -67,8 +69,8 @@ func TestTableMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []dbdriver.ColumnMeta{
-		{Name: "id", Type: "int", PrimaryKey: true},
-		{Name: "code", Type: "varchar(20)", Nullable: true},
+		{Name: "id", Type: "int", PrimaryKey: true, Comment: "order id"},
+		{Name: "code", Type: "varchar(20)", Nullable: true, Default: &emptyDefault},
 	}, meta.Columns)
 	assert.Equal(t, []dbdriver.IndexMeta{
 		{Name: "PRIMARY", Columns: []string{"id"}, Unique: true},

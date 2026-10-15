@@ -45,6 +45,10 @@ type ColumnMeta struct {
 	Type       string `json:"type"`
 	Nullable   bool   `json:"nullable"`
 	PrimaryKey bool   `json:"primaryKey"`
+	// Comment 是列注释，没有（或驱动不支持）时为空串。
+	Comment string `json:"comment"`
+	// Default 是列的默认值表达式；nil（序列化为 null）表示没有默认值，与默认值为空串区分。
+	Default *string `json:"default"`
 }
 
 // IndexMeta 是一个索引。

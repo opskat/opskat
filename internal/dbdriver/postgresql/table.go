@@ -38,5 +38,6 @@ func (dialect) TableColumns(ctx context.Context, conn *sql.Conn, _, table string
 }
 
 // columnsQuery 按 schema 与表名读列定义。
-const columnsQuery = "SELECT column_name, data_type, udt_name, is_nullable, column_default " +
+const columnsQuery = "SELECT column_name, data_type, udt_name, is_nullable, column_default, " +
+	"col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position::int) AS column_comment " +
 	"FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position"

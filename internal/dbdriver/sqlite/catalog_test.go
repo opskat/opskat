@@ -92,6 +92,25 @@ func TestTableMetadata(t *testing.T) {
 	assert.Equal(t, []dbdriver.ForeignKeyMeta{{Column: "user_id", ReferencedTable: "users", ReferencedColumn: "id"}}, meta.ForeignKeys)
 }
 
+// SQLite 没有列注释（恒为空串）；默认值 NULL（没有默认值）与空串默认值可区分。
+func TestTableMetadataCommentAndDefault(t *testing.T) {
+	session := newDatabase(t, `CREATE TABLE d (id INTEGER PRIMARY KEY, a TEXT, b TEXT DEFAULT '', c TEXT DEFAULT 'x')`)
+
+	meta, err := session.TableMetadata(context.Background(), "main", "d")
+	require.NoError(t, err)
+
+	byName := map[string]dbdriver.ColumnMeta{}
+	for _, c := range meta.Columns {
+		assert.Equal(t, "", c.Comment, c.Name)
+		byName[c.Name] = c
+	}
+	assert.Nil(t, byName["a"].Default)
+	require.NotNil(t, byName["b"].Default)
+	assert.Equal(t, "''", *byName["b"].Default)
+	require.NotNil(t, byName["c"].Default)
+	assert.Equal(t, "'x'", *byName["c"].Default)
+}
+
 // 无外键的表，foreignKeys 序列化为 [] 而非 null：前端直接取 length。
 func TestTableMetadataSerializesEmptyListsAsArrays(t *testing.T) {
 	session := newDatabase(t, `CREATE TABLE plain (id INTEGER PRIMARY KEY, name TEXT)`)
