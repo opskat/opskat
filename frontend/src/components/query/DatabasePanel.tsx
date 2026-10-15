@@ -15,6 +15,7 @@ import {
   TooltipTrigger,
   useResizeHandle,
 } from "@opskat/ui";
+import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
@@ -155,9 +156,10 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                     <ContextMenuSeparator />
                     <ContextMenuItem
                       onClick={() => {
-                        void navigator.clipboard
-                          .writeText(fullName)
-                          .then(() => notifyCopied(t("query.innerTab.copied")));
+                        void navigator.clipboard.writeText(fullName).then(
+                          () => notifyCopied(t("query.innerTab.copied")),
+                          (e: unknown) => toast.error(String(e))
+                        );
                       }}
                     >
                       {t("query.innerTab.copyName")}

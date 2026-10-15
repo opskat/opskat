@@ -567,6 +567,8 @@ function QueryResultTableImpl({
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
+    // 展开编辑浮层按行下标记修改:换了一批行后下标指向别的记录,一并关掉。
+    setExpandEdit(null);
   }, [rows, onSelectedCellChange, onSelectedRowsChange]);
 
   useEffect(() => {

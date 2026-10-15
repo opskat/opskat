@@ -762,7 +762,7 @@ describe("queryStore.revealTable", () => {
     useQueryStore.getState().openQueryTab(makeSQLiteAsset(30));
   });
 
-  it("expands the database, loads its tables when missing and issues a fresh request each call", async () => {
+  it("expands the database once and loads its tables when missing", async () => {
     vi.mocked(ListTables).mockResolvedValue(["users"]);
 
     useQueryStore.getState().revealTable("query-30", "main", "users");
@@ -774,7 +774,6 @@ describe("queryStore.revealTable", () => {
     useQueryStore.getState().revealTable("query-30", "main", "users");
     const second = useQueryStore.getState().dbStates["query-30"];
     expect(second.expandedDbs.filter((d) => d === "main")).toHaveLength(1);
-    expect(second.revealRequest!.nonce).toBeGreaterThan(first.revealRequest!.nonce);
   });
 });
 
@@ -929,12 +928,22 @@ describe("queryStore SQL numbering across persist and restore", () => {
     );
   });
 
-  it("writes the counter into the persisted state", async () => {
-    const store = await restore({ ...base, innerTabs: [], sqlTabSeq: 3 });
+  it("keeps a closed number retired across a persist and restore round trip", async () => {
+    const store = await restore({ ...base, innerTabs: [sqlTab(1)], sqlTabSeq: 3 });
     store.getState().openSqlTab("query-50");
+    // 关掉全部 SQL 标签:恢复后若按现存标题推算会回到 SQL 1,保留序号才是 SQL 5。
+    store.getState().closeOtherInnerTabs("query-50", "sql:1");
+    store.getState().closeInnerTab("query-50", "sql:1");
     await vi.waitFor(() => {
       const saved = JSON.parse(localStorage.getItem("query_store_v1")!);
-      expect(saved.dbStates["query-50"].sqlTabSeq).toBe(4);
+      expect(saved.dbStates["query-50"].innerTabs).toEqual([]);
     });
+
+    const saved = JSON.parse(localStorage.getItem("query_store_v1")!);
+    const restored = await restore(saved.dbStates["query-50"]);
+    restored.getState().openSqlTab("query-50");
+    expect(restored.getState().dbStates["query-50"].innerTabs.map((t) => (t.type === "sql" ? t.title : ""))).toEqual([
+      "SQL 5",
+    ]);
   });
 });

@@ -172,6 +172,20 @@ describe("QueryResultTable expand editor", () => {
     expect(onCellEdit).not.toHaveBeenCalled();
   });
 
+  // 刷新 / 翻页换了一批行时,浮层绑定的行下标已指向别的记录:浮层随之关闭,不把修改记到新行上。
+  it("closes when the row set is replaced, so a commit cannot land on a different record", () => {
+    const onCellEdit = vi.fn<(edit: CellEdit) => void>();
+    const props = { columns, showRowNumber: true, editable: true, onCellEdit };
+    const { rerender } = render(<QueryResultTable {...props} rows={rows} />);
+    openWithShiftEnter("0:name");
+    fireEvent.change(textarea(), { target: { value: "typed before refresh" } });
+
+    rerender(<QueryResultTable {...props} rows={[{ id: 9, name: "zed", doc: "" }, ...rows]} />);
+
+    expect(screen.queryByRole("textbox", { name: "query.expandEdit.title" })).toBeNull();
+    expect(onCellEdit).not.toHaveBeenCalled();
+  });
+
   it("copies the text and confirms through notifyCopied", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

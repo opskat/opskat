@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Popover, PopoverAnchor, PopoverContent } from "@opskat/ui";
+import { Button, Popover, PopoverAnchor, PopoverContent } from "@opskat/ui";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { formatModKey } from "@/stores/shortcutStore";
 import { cellValueToText } from "@/lib/cellValue";
+import { Segmented } from "@/components/asset/fields";
 
 export interface CellExpandEditorProps {
   /** 浮层锚点(视口坐标,通常是被编辑单元格的左下角)。 */
@@ -38,9 +39,6 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
 function isJsonContainer(value: unknown): boolean {
   return typeof value === "object" && value !== null;
 }
-
-const BUTTON_CLASS =
-  "rounded-md border px-2 py-1 text-xs hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50";
 
 export function CellExpandEditor({
   anchor,
@@ -107,20 +105,15 @@ export function CellExpandEditor({
               {t("query.expandEdit.row", { n: rowNumber })}
             </span>
           </div>
-          <div role="radiogroup" className="flex shrink-0 overflow-hidden rounded-md border text-xs">
-            {(["text", "json"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="radio"
-                aria-checked={mode === m}
-                className={`px-2 py-1 ${mode === m ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-                onClick={() => setMode(m)}
-              >
-                {t(`query.expandEdit.${m}`)}
-              </button>
-            ))}
-          </div>
+          <Segmented<Mode>
+            value={mode}
+            onChange={setMode}
+            className="h-6 w-[112px] shrink-0 rounded-md p-0.5"
+            options={[
+              { value: "text", label: t("query.expandEdit.text") },
+              { value: "json", label: t("query.expandEdit.json") },
+            ]}
+          />
         </div>
         <textarea
           autoFocus
@@ -140,24 +133,24 @@ export function CellExpandEditor({
         <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
           {!readOnly && (
             <>
-              <button type="button" className={BUTTON_CLASS} disabled={notNull} onClick={() => setValue(null)}>
+              <Button variant="outline" size="xs" disabled={notNull} onClick={() => setValue(null)}>
                 {t("query.setNull")}
-              </button>
-              <button type="button" className={BUTTON_CLASS} onClick={() => setValue("")}>
+              </Button>
+              <Button variant="outline" size="xs" onClick={() => setValue("")}>
                 {t("query.setEmptyString")}
-              </button>
+              </Button>
             </>
           )}
           {mode === "json" && (
             <>
               {!readOnly && (
                 <>
-                  <button type="button" className={BUTTON_CLASS} disabled={!parsed?.ok} onClick={() => rewrite(2)}>
+                  <Button variant="outline" size="xs" disabled={!parsed?.ok} onClick={() => rewrite(2)}>
                     {t("query.expandEdit.format")}
-                  </button>
-                  <button type="button" className={BUTTON_CLASS} disabled={!parsed?.ok} onClick={() => rewrite()}>
+                  </Button>
+                  <Button variant="outline" size="xs" disabled={!parsed?.ok} onClick={() => rewrite()}>
                     {t("query.expandEdit.compact")}
-                  </button>
+                  </Button>
                 </>
               )}
               <span className={`text-xs ${parsed?.ok ? "text-muted-foreground" : "text-warning"}`}>
@@ -169,21 +162,17 @@ export function CellExpandEditor({
             <span className="text-xs text-muted-foreground">{t("query.expandEdit.notNullHint")}</span>
           )}
           <div className="ml-auto flex items-center gap-2">
-            <button type="button" className={BUTTON_CLASS} onClick={() => void copy()}>
+            <Button variant="outline" size="xs" onClick={() => void copy()}>
               {t("action.copy")}
-            </button>
-            <button type="button" className={BUTTON_CLASS} onClick={onClose}>
+            </Button>
+            <Button variant="outline" size="xs" onClick={onClose}>
               {t("action.cancel")}
-            </button>
+            </Button>
             {!readOnly && (
-              <button
-                type="button"
-                className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90"
-                onClick={commit}
-              >
+              <Button size="xs" onClick={commit}>
                 {t("query.expandEdit.ok")}
-                <span className="ml-1 opacity-70">{formatModKey("Enter")}</span>
-              </button>
+                <span className="opacity-70">{formatModKey("Enter")}</span>
+              </Button>
             )}
           </div>
         </div>

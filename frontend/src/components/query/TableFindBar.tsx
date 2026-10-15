@@ -85,9 +85,8 @@ export function TableFindBar({
           aria-invalid={invalid || undefined}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={(e) => {
+            // IME 合成中的 Enter 已由 Input 吞掉,这里只会收到真正的 Enter。
             if (e.key === "Enter") {
-              // IME 合成中的 Enter 用于确认候选词
-              if (e.nativeEvent.isComposing) return;
               e.preventDefault();
               if (e.shiftKey) onPrevious();
               else onNext();

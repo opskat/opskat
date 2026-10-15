@@ -61,7 +61,7 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 		"FROM INFORMATION_SCHEMA.COLUMNS c " +
 		"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' " +
 		"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) " +
-		"AND ep.minor_id = c.ORDINAL_POSITION " +
+		"AND ep.minor_id = COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'ColumnId') " +
 		"WHERE c.TABLE_SCHEMA = @p1 AND c.TABLE_NAME = @p2 " +
 		"ORDER BY c.ORDINAL_POSITION").
 		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "COLUMN_COMMENT"}).

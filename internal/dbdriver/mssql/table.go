@@ -33,6 +33,8 @@ func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, _, table string)
 			"ORDER BY kcu.ORDINAL_POSITION", sql.Named("p1", schema), sql.Named("p2", tbl))
 }
 
+// 列注释存在 sys.extended_properties，minor_id 是 column_id；ORDINAL_POSITION 在删过列后会与它错开，
+// 所以按列名取 ColumnId 来对。
 func (dialect) TableColumns(ctx context.Context, conn *sql.Conn, _, table string) ([]sqldb.TableColumn, error) {
 	schema, tbl := splitSchemaTable(table)
 	return sqldb.QueryTableColumns(ctx, conn,
@@ -41,7 +43,7 @@ func (dialect) TableColumns(ctx context.Context, conn *sql.Conn, _, table string
 			"FROM INFORMATION_SCHEMA.COLUMNS c "+
 			"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' "+
 			"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) "+
-			"AND ep.minor_id = c.ORDINAL_POSITION "+
+			"AND ep.minor_id = COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'ColumnId') "+
 			"WHERE c.TABLE_SCHEMA = @p1 AND c.TABLE_NAME = @p2 "+
 			"ORDER BY c.ORDINAL_POSITION", sql.Named("p1", schema), sql.Named("p2", tbl))
 }

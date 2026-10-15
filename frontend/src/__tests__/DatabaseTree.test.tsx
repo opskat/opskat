@@ -591,6 +591,21 @@ describe("DatabaseTree — tables group and reveal", () => {
     expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(node);
   });
 
+  it("reveals the same table again after the user scrolled or clicked elsewhere", async () => {
+    makeDatabaseTab("query-1", "mysql");
+    seed(["users", "orders"], ["appdb"]);
+    await renderTree();
+    act(() => useQueryStore.getState().revealTable("query-1", "appdb", "orders"));
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByText("users"));
+    expect(document.querySelector('[data-table-node="appdb.orders"]')!.getAttribute("data-selected")).not.toBe("true");
+
+    act(() => useQueryStore.getState().revealTable("query-1", "appdb", "orders"));
+
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(2));
+    expect(document.querySelector('[data-table-node="appdb.orders"]')!.getAttribute("data-selected")).toBe("true");
+  });
+
   it("reveals through a collapsed tables group", async () => {
     makeDatabaseTab("query-1", "mysql");
     seed(["users", "orders"], ["appdb"]);

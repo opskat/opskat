@@ -15,6 +15,8 @@ vi.mock("@/components/query/DatabaseTree", () => ({
 vi.mock("@/components/query/TableDataTab", () => ({ TableDataTab: () => null }));
 vi.mock("@/components/query/SqlEditorTab", () => ({ SqlEditorTab: () => null }));
 vi.mock("@/lib/notify", () => ({ notifyCopied: vi.fn(), notifySuccess: vi.fn() }));
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { error: toastError } }));
 
 const TAB = "query-1";
 const tabs: InnerTab[] = [
@@ -84,7 +86,7 @@ describe("DatabasePanel inner tab bar", () => {
     expect(innerIds()).toEqual(["table:app.users", "table:app.orders"]);
   });
 
-  it("menu: close, close others, close right", async () => {
+  it("menu: close others keeps only this tab", async () => {
     setup();
     fireEvent.contextMenu(tabEl("SQL 1"));
     fireEvent.click(await screen.findByText("query.innerTab.closeOthers"));
@@ -103,6 +105,15 @@ describe("DatabasePanel inner tab bar", () => {
     fireEvent.contextMenu(tabEl("app.orders"));
     fireEvent.click(await screen.findByText("query.innerTab.close"));
     expect(innerIds()).toEqual(["table:app.users", "sql:1"]);
+  });
+
+  it("menu: copy name reports a clipboard failure instead of confirming", async () => {
+    setup();
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error("clipboard denied"));
+    fireEvent.contextMenu(tabEl("app.users"));
+    fireEvent.click(await screen.findByText("query.innerTab.copyName"));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Error: clipboard denied"));
+    expect(notifyCopied).not.toHaveBeenCalled();
   });
 
   it("menu: copy name copies db.table for tables and the title for SQL tabs", async () => {
