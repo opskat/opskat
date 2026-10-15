@@ -9,17 +9,25 @@ import (
 
 // 建表语句：PostgreSQL 不存原文，从系统目录重建。表名是 "schema.table"（裸名按 public），
 // 列与主键都按表真正所在的 schema 查，语句里的表名也带这个 schema。列类型用 format_type
-// 取数据库自己的完整写法（长度、精度、不在 search_path 内的自定义类型带 schema）。
-// 视图输出其定义（CREATE VIEW），物化视图输出 CREATE MATERIALIZED VIEW。
+// 取数据库自己的完整写法（长度、精度），pg_catalog 之外的类型一律带它所在的 schema——
+// format_type 只给 search_path 外的类型加 schema，在 search_path 内的由这里补上，结果不随
+// 会话的 search_path 变化。默认值取 information_schema（生成列没有默认值），各版本通用。
+// 视图输出其定义（CREATE VIEW）。
 var _ sqldb.DDL = dialect{}
 
-const ddlColumnsQuery = "SELECT a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, " +
-	"CASE WHEN a.attgenerated = '' THEN pg_get_expr(d.adbin, d.adrelid) END, c.relkind::text " +
+const ddlColumnsQuery = "SELECT a.attname, " +
+	"CASE WHEN tn.nspname = 'pg_catalog' OR NOT pg_type_is_visible(a.atttypid) " +
+	"THEN format_type(a.atttypid, a.atttypmod) " +
+	"ELSE quote_ident(tn.nspname) || '.' || format_type(a.atttypid, a.atttypmod) END, " +
+	"NOT a.attnotnull, col.column_default, c.relkind::text " +
 	"FROM pg_class c " +
 	"JOIN pg_namespace n ON n.oid = c.relnamespace " +
 	"JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped " +
-	"LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " +
-	"WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm') " +
+	"JOIN pg_type t ON t.oid = a.atttypid " +
+	"JOIN pg_namespace tn ON tn.oid = t.typnamespace " +
+	"LEFT JOIN information_schema.columns col " +
+	"ON col.table_schema = n.nspname AND col.table_name = c.relname AND col.column_name = a.attname " +
+	"WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v') " +
 	"ORDER BY a.attnum"
 
 const viewDefQuery = "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)"
@@ -34,16 +42,12 @@ func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, database, table s
 		return "", nil
 	}
 	tableRef := quoteIdent(schema) + "." + quoteIdent(tbl)
-	if relkind == "v" || relkind == "m" {
+	if relkind == "v" {
 		var def string
 		if err := conn.QueryRowContext(ctx, viewDefQuery, schema, tbl).Scan(&def); err != nil {
 			return "", err
 		}
-		keyword := "VIEW"
-		if relkind == "m" {
-			keyword = "MATERIALIZED VIEW"
-		}
-		return "CREATE " + keyword + " " + tableRef + " AS " + def, nil
+		return "CREATE VIEW " + tableRef + " AS " + def, nil
 	}
 	primaryKeys, err := d.PrimaryKeys(ctx, conn, database, table)
 	if err != nil {

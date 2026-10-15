@@ -37,6 +37,6 @@ func (dialect) TableColumns(ctx context.Context, conn *sql.Conn, _, table string
 	return sqldb.QueryTableColumns(ctx, conn, columnsQuery, schema, tbl)
 }
 
-// columnsQuery 按 schema 与表名读列定义，TableColumns 与建表语句共用。
+// columnsQuery 按 schema 与表名读列定义。
 const columnsQuery = "SELECT column_name, data_type, udt_name, is_nullable, column_default " +
 	"FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position"

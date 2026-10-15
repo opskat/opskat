@@ -9,14 +9,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 建表语句的列查询：类型由 format_type 给出（PostgreSQL 自己的完整写法），relkind 区分表与视图。
-const ddlColumnsSQL = "SELECT a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, " +
-	"CASE WHEN a.attgenerated = '' THEN pg_get_expr(d.adbin, d.adrelid) END, c.relkind::text " +
+// 建表语句的列查询：类型由 format_type 给出（PostgreSQL 自己的完整写法，pg_catalog 之外的类型
+// 带 schema），relkind 区分表与视图。
+const ddlColumnsSQL = "SELECT a.attname, " +
+	"CASE WHEN tn.nspname = 'pg_catalog' OR NOT pg_type_is_visible(a.atttypid) " +
+	"THEN format_type(a.atttypid, a.atttypmod) " +
+	"ELSE quote_ident(tn.nspname) || '.' || format_type(a.atttypid, a.atttypmod) END, " +
+	"NOT a.attnotnull, col.column_default, c.relkind::text " +
 	"FROM pg_class c " +
 	"JOIN pg_namespace n ON n.oid = c.relnamespace " +
 	"JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped " +
-	"LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " +
-	"WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm') " +
+	"JOIN pg_type t ON t.oid = a.atttypid " +
+	"JOIN pg_namespace tn ON tn.oid = t.typnamespace " +
+	"LEFT JOIN information_schema.columns col " +
+	"ON col.table_schema = n.nspname AND col.table_name = c.relname AND col.column_name = a.attname " +
+	"WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v') " +
 	"ORDER BY a.attnum"
 
 const viewDefSQL = "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)"
@@ -103,19 +110,6 @@ func TestTableDDLOfAViewIsItsDefinition(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
-}
-
-// 物化视图沿用 PostgreSQL 自己的语义：CREATE MATERIALIZED VIEW。
-func TestTableDDLOfAMaterializedView(t *testing.T) {
-	session, mock := newMock(t)
-	mock.ExpectQuery(ddlColumnsSQL).WithArgs("public", "mv").
-		WillReturnRows(ddlColumnRows().AddRow("n", "bigint", true, nil, "m"))
-	mock.ExpectQuery(viewDefSQL).WithArgs("public", "mv").WillReturnRows(names("def", " SELECT 1;"))
-
-	ddl, err := session.TableDDL(context.Background(), "appdb", "public.mv")
-	require.NoError(t, err)
-	assert.Equal(t, `CREATE MATERIALIZED VIEW "public"."mv" AS  SELECT 1;`, ddl)
-	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTableDDLOfAMissingTableIsEmpty(t *testing.T) {
