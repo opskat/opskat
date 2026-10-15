@@ -207,6 +207,8 @@ describe("TableDataTab structured table requests", () => {
     fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
     await user.hover(screen.getByText("query.filter"));
     await user.click(screen.getByText("query.filterOperatorIsBetween"));
+    // 新增行是未提交的修改,筛选会丢弃它:先确认放弃再继续。
+    await user.click(await screen.findByText("query.unsavedEditsDiscard"));
 
     await waitFor(() =>
       expect(lastCountCall()).toEqual([
