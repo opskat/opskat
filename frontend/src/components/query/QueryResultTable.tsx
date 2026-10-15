@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { eventMatchesBinding, formatBinding, formatModKey, useShortcutStore } from "@/stores/shortcutStore";
 import { CellExpandEditor } from "./CellExpandEditor";
+import { ColumnHeaderCard, type ColumnInfo } from "./ColumnHeaderCard";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
@@ -145,6 +146,9 @@ interface QueryResultTableProps {
   // 已知为 NOT NULL 的列名:Delete / Backspace 设 NULL 时据此拒绝。不传(SQL 结果等不知道约束的场景)
   // 表示未知,此时只读表格上的 Delete 本来就不生效。
   notNullColumns?: ReadonlySet<string>;
+  // 表数据标签的列元数据(注释、默认值、索引等)。传入才有「显示注释」开关、注释行与表头悬停信息卡;
+  // SQL 结果与元数据加载失败时不传。
+  columnMeta?: Record<string, ColumnInfo>;
 }
 
 // Sentinel key used to represent NULL / undefined values in the column-filter
@@ -373,6 +377,7 @@ function QueryResultTableImpl({
   findEnabled,
   findScope,
   notNullColumns,
+  columnMeta,
 }: QueryResultTableProps) {
   const { t } = useTranslation();
 
@@ -1862,7 +1867,9 @@ function QueryResultTableImpl({
                     <div className="flex items-start gap-1">
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-1">
-                          <span className="truncate text-sm text-foreground">{col}</span>
+                          <ColumnHeaderCard name={col} info={columnMeta?.[col]}>
+                            <span className="truncate text-sm text-foreground">{col}</span>
+                          </ColumnHeaderCard>
                           {canSort &&
                             (isSorted && sortDir === "asc" ? (
                               <ArrowUp className="h-3 w-3 shrink-0" />
@@ -1876,9 +1883,9 @@ function QueryResultTableImpl({
                             <span className="truncate">{typeText}</span>
                           </div>
                         )}
-                        {showColumnComments && (
+                        {columnMeta && showColumnComments && (
                           <div className="mt-1 truncate text-xs font-normal text-muted-foreground">
-                            {t("query.noComment")}
+                            {columnMeta[col]?.comment || "—"}
                           </div>
                         )}
                       </div>
@@ -2422,15 +2429,17 @@ function QueryResultTableImpl({
                       <span className="w-3.5 text-center">{showFieldTypes ? "✓" : ""}</span>
                       {t("query.showFieldType")}
                     </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={CONTEXT_MENU_ITEM_CLASS}
-                      onClick={handleToggleColumnComments}
-                    >
-                      <span className="w-3.5 text-center">{showColumnComments ? "✓" : ""}</span>
-                      {t("query.showComment")}
-                    </button>
+                    {columnMeta && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={CONTEXT_MENU_ITEM_CLASS}
+                        onClick={handleToggleColumnComments}
+                      >
+                        <span className="w-3.5 text-center">{showColumnComments ? "✓" : ""}</span>
+                        {t("query.showComment")}
+                      </button>
+                    )}
                   </>
                 )}
                 {ctxMenu.kind === "cell" &&

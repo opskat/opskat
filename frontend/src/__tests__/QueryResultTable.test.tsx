@@ -246,7 +246,8 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.getByText("query.sizeColumnToFit")).toBeInTheDocument();
     expect(screen.getByText("query.sizeAllColumnsToFit")).toBeInTheDocument();
     expect(screen.getByText("query.showFieldType")).toBeInTheDocument();
-    expect(screen.getByText("query.showComment")).toBeInTheDocument();
+    // 没有列元数据(SQL 结果)就没有「显示注释」开关。
+    expect(screen.queryByText("query.showComment")).not.toBeInTheDocument();
     expect(screen.queryByText("query.setNull")).not.toBeInTheDocument();
     expect(screen.queryByText("query.pasteValue")).not.toBeInTheDocument();
     expect(screen.queryByText("query.filterByCellValue")).not.toBeInTheDocument();

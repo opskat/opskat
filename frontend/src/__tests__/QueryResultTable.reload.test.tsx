@@ -22,6 +22,10 @@ function renderGrid(props: Partial<GridProps> = {}) {
     columns: ["id", "name"],
     rows: rowsPage1,
     columnTypes: { id: "int", name: "varchar(64)" },
+    columnMeta: {
+      id: { comment: "", type: "int", nullable: false, primaryKey: true, indexes: [] },
+      name: { comment: "", type: "varchar(64)", nullable: true, primaryKey: false, indexes: [] },
+    },
     showRowNumber: true,
     keepShapeWhileLoading: true,
     ...props,
@@ -155,14 +159,14 @@ describe("QueryResultTable — column state follows the ordered column names", (
     columnMenu("id", "query.showComment");
     expect(frozen("id")).toBe(true);
     expect(typeShown()).toBe(false);
-    expect(screen.getAllByText("query.noComment")).toHaveLength(2);
+    expect(screen.getAllByText("—")).toHaveLength(2);
 
     rerender({ rows: rowsPage2 });
 
     expect(header("name")!.style.width).toBe("220px");
     expect(frozen("id")).toBe(true);
     expect(typeShown()).toBe(false);
-    expect(screen.getAllByText("query.noComment")).toHaveLength(2);
+    expect(screen.getAllByText("—")).toHaveLength(2);
   });
 
   it("resets them when the ordered column names change", () => {
@@ -177,6 +181,6 @@ describe("QueryResultTable — column state follows the ordered column names", (
     expect(header("name")!.style.width).toBe("160px");
     expect(frozen("id")).toBe(false);
     expect(typeShown()).toBe(true);
-    expect(screen.queryByText("query.noComment")).toBeNull();
+    expect(screen.queryByText("—")).toBeNull();
   });
 });

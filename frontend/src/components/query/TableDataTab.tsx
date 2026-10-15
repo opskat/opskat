@@ -15,7 +15,14 @@ import { CodeEditor } from "@/components/CodeEditor";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { isMac, formatModKey } from "@/stores/shortcutStore";
-import { CountTableRows, ExecuteSQL, GetTableDDL, OpenTable, QueryTableRows } from "../../../wailsjs/go/query/Query";
+import {
+  CountTableRows,
+  ExecuteSQL,
+  GetTableDDL,
+  GetTableMetadata,
+  OpenTable,
+  QueryTableRows,
+} from "../../../wailsjs/go/query/Query";
 import { dbdriver, query_svc } from "../../../wailsjs/go/models";
 import {
   QueryResultTable,
@@ -172,6 +179,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [sortDir, setSortDir] = useState<SortDir>(null);
   const [applyVersion, setApplyVersion] = useState(0);
   const [primaryKeys, setPrimaryKeys] = useState<string[]>([]);
+  // 列注释 / 默认值 / 索引,只供「显示注释」与表头信息卡。undefined = 未加载或加载失败(两者都不影响表格)。
+  const [tableMeta, setTableMeta] = useState<query_svc.TableMetadata | undefined>(undefined);
   const [pkLoaded, setPkLoaded] = useState(false);
   const [deletePreview, setDeletePreview] = useState<{
     statements: string[];
@@ -285,6 +294,46 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     // 用户改 pageSize 由下方 fetchData 的 useEffect 处理。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assetId, database, table, openAttempt, nextRequestId, isCancelled]);
+
+  // 直接调绑定而不走 queryStore.loadTableMeta:后者失败会写整个面板的 dbState.error,
+  // 而元数据只是增强信息,拿不到时仅少了注释与信息卡。
+  useEffect(() => {
+    if (!assetId) return;
+    let stale = false;
+    GetTableMetadata(assetId, database, table).then(
+      (meta) => {
+        if (!stale) setTableMeta(meta);
+      },
+      () => {
+        // 失败:表格不显示注释开关与信息卡,也不写面板错误。
+        if (!stale) setTableMeta(undefined);
+      }
+    );
+    return () => {
+      stale = true;
+    };
+  }, [assetId, database, table, openAttempt]);
+  const columnMeta = useMemo(() => {
+    if (!tableMeta) return undefined;
+    const indexesByColumn = new Map<string, string[]>();
+    for (const index of tableMeta.indexes ?? []) {
+      for (const col of index.columns ?? [])
+        indexesByColumn.set(col, [...(indexesByColumn.get(col) ?? []), index.name]);
+    }
+    return Object.fromEntries(
+      (tableMeta.columns ?? []).map((col) => [
+        col.name,
+        {
+          comment: col.comment,
+          default: col.default,
+          type: col.type,
+          nullable: col.nullable,
+          primaryKey: col.primaryKey,
+          indexes: indexesByColumn.get(col.name) ?? [],
+        },
+      ])
+    );
+  }, [tableMeta]);
 
   // 翻页、计数发给驱动的是结构化的筛选条件与排序项,不是 SQL:怎么变成查询由驱动决定。
   const notNullColumns = useMemo(
@@ -1198,6 +1247,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               findEnabled
               findScope={findScope}
               notNullColumns={notNullColumns}
+              columnMeta={columnMeta}
             />
           )}
         </div>
