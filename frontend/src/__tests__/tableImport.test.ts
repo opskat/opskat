@@ -151,14 +151,17 @@ describe("table import helpers", () => {
   describe("MSSQL import", () => {
     // 期望的包装：同一批里由数据库判断映射列是否含自增列，含则临时 IDENTITY_INSERT ON，
     // 语句失败时也要 OFF 并原样 THROW；不含则不触碰 IDENTITY_INSERT。
-    const wrapped = (core: string, columns: string[], table = "[dbo].[users]", objectName = "[dbo].[users]") =>
-      "DECLARE @opskat_identity BIT = CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns " +
-      `WHERE object_id = OBJECT_ID(N'${objectName}') AND name IN (${columns.map((c) => `N'${c}'`).join(", ")})) ` +
-      "THEN 1 ELSE 0 END; " +
-      `IF @opskat_identity = 1 SET IDENTITY_INSERT ${table} ON; ` +
-      `BEGIN TRY ${core} END TRY ` +
-      `BEGIN CATCH IF @opskat_identity = 1 SET IDENTITY_INSERT ${table} OFF; THROW; END CATCH; ` +
-      `IF @opskat_identity = 1 SET IDENTITY_INSERT ${table} OFF;`;
+    const wrapped = (core: string, columns: string[], table = "[dbo].[users]") => {
+      const hasIdentity =
+        "EXISTS (SELECT 1 FROM sys.identity_columns " +
+        `WHERE object_id = OBJECT_ID(N'${table}') AND name IN (${columns.map((c) => `N'${c}'`).join(", ")}))`;
+      return (
+        `IF ${hasIdentity} SET IDENTITY_INSERT ${table} ON; ` +
+        `BEGIN TRY ${core} END TRY ` +
+        `BEGIN CATCH IF ${hasIdentity} SET IDENTITY_INSERT ${table} OFF; THROW; END CATCH; ` +
+        `IF ${hasIdentity} SET IDENTITY_INSERT ${table} OFF;`
+      );
+    };
 
     const base = {
       tableName: "dbo.users",
@@ -214,6 +217,17 @@ describe("table import helpers", () => {
       expect(out).toEqual([
         wrapped("INSERT INTO [dbo].[users] ([id], [name], [email]) VALUES ('1', 'A', 'a@x'), ('2', 'B', 'b@x');", cols),
       ]);
+    });
+
+    it("adds no row count of its own around the import statement", () => {
+      // 导入摘要的「新增 / 更新」取自每个元素的受影响行数（go-mssqldb 把一批里所有带计数的
+      // DONE 相加）。SQL Server 把变量赋值（DECLARE @x = … / SET @x = … / SELECT @x = …）
+      // 计为 1 行，真库上每条包装后的语句会多算 1 行，没有自增列的表也一样。
+      for (const mode of ["append", "append-update", "append-skip", "copy"] as const) {
+        for (const statement of buildImportInsertSql({ ...base, mode })) {
+          expect(statement).not.toMatch(/\bDECLARE\b|\b(SET|SELECT)\s+@/i);
+        }
+      }
     });
 
     it("escapes quotes in the object name and column names inside N'' literals", () => {
