@@ -21,12 +21,14 @@ import {
   MoreHorizontal,
   Hash,
   ChevronRight,
+  Maximize2,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } from "@opskat/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import { eventMatchesBinding, formatModKey, useShortcutStore } from "@/stores/shortcutStore";
+import { eventMatchesBinding, formatBinding, formatModKey, useShortcutStore } from "@/stores/shortcutStore";
+import { CellExpandEditor } from "./CellExpandEditor";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
@@ -382,6 +384,14 @@ function QueryResultTableImpl({
   const columnsKey = useMemo(() => JSON.stringify(columns), [columns]);
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
+  // 展开编辑浮层(⇧↵ / 右键「展开编辑」):锚点取单元格左下角,值取打开瞬间的当前显示值(含未提交修改)。
+  const [expandEdit, setExpandEdit] = useState<{
+    rowIdx: number;
+    col: string;
+    value: unknown;
+    x: number;
+    y: number;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Sort state — controlled if onSortChange is provided, otherwise local
@@ -1153,6 +1163,21 @@ function QueryResultTableImpl({
     [ctxMenu, displayColumns, onCopyAs, rows, selectedColumns, selectedRowIdxs, sortedIndices]
   );
 
+  const openExpandEdit = useCallback((rowIdx: number, col: string, value: unknown) => {
+    const el = containerRef.current?.querySelector<HTMLElement>(`[data-cell-key="${cellKey(rowIdx, col)}"]`);
+    const rect = el?.getBoundingClientRect();
+    // 先把焦点放回表格:浮层关闭后 Radix 把焦点还给打开前的元素,右键菜单的按钮此时已卸载。
+    containerRef.current?.focus();
+    setCtxMenu(null);
+    setCtxMenuPosition(null);
+    setExpandEdit({ rowIdx, col, value, x: rect?.left ?? 0, y: rect?.bottom ?? 0 });
+  }, []);
+
+  const closeExpandEdit = useCallback(() => {
+    setExpandEdit(null);
+    containerRef.current?.focus();
+  }, []);
+
   const handleOpenDateEditor = useCallback(() => {
     if (!ctxMenu || ctxMenu.kind !== "cell") return;
     const mode = getDateEditMode(ctxMenu.col, columnTypes?.[ctxMenu.col], ctxMenu.value);
@@ -1577,6 +1602,16 @@ function QueryResultTableImpl({
         }
         case "Enter":
         case "F2":
+          if (e.key === "Enter" && e.shiftKey) {
+            e.preventDefault();
+            const ck = cellKey(selectedCell.origIdx, selectedCell.col);
+            openExpandEdit(
+              selectedCell.origIdx,
+              selectedCell.col,
+              edits?.has(ck) ? edits.get(ck) : rows[selectedCell.origIdx]?.[selectedCell.col]
+            );
+            return;
+          }
           if (editable) {
             e.preventDefault();
             setEditingCell(cellKey(selectedCell.origIdx, selectedCell.col));
@@ -1614,6 +1649,9 @@ function QueryResultTableImpl({
       canSetCellValue,
       setCellValueHandler,
       notNullColumns,
+      openExpandEdit,
+      edits,
+      rows,
       t,
     ]
   );
@@ -2188,6 +2226,23 @@ function QueryResultTableImpl({
                     )}
                   </>
                 )}
+                {ctxMenu.kind === "cell" && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={() => {
+                      const ck = cellKey(ctxMenu.rowIdx, ctxMenu.col);
+                      openExpandEdit(ctxMenu.rowIdx, ctxMenu.col, edits?.has(ck) ? edits.get(ck) : ctxMenu.value);
+                    }}
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    {t("query.expandEdit.menu")}
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {formatBinding({ code: "Enter", mod: false, ctrl: false, shift: true, alt: false })}
+                    </span>
+                  </button>
+                )}
                 <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyCell}>
                   <Copy className="h-3.5 w-3.5" />
                   {t("query.copyValue")}
@@ -2542,6 +2597,19 @@ function QueryResultTableImpl({
           </div>,
           document.body
         )}
+      {expandEdit && (
+        <CellExpandEditor
+          anchor={{ x: expandEdit.x, y: expandEdit.y }}
+          column={expandEdit.col}
+          columnType={columnTypes?.[expandEdit.col]}
+          rowNumber={rowNumberOffset + sortedIndices.indexOf(expandEdit.rowIdx) + 1}
+          value={expandEdit.value}
+          readOnly={!editable || !onCellEdit}
+          notNull={!!notNullColumns?.has(expandEdit.col)}
+          onCommit={(value) => onCellEdit?.({ rowIdx: expandEdit.rowIdx, col: expandEdit.col, value })}
+          onClose={closeExpandEdit}
+        />
+      )}
       {dateEditor &&
         createPortal(
           <div
