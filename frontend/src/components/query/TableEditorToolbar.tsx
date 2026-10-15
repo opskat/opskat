@@ -228,6 +228,10 @@ interface TableDataStatusBarProps {
   selectedRowCount: number;
   submitting: boolean;
   loading: boolean;
+  /** 正在取的页(从 0 起,与 page 相同);有值时中部显示「正在加载第 N 页…」。 */
+  loadingPage?: number | null;
+  /** 最近一次取数耗时(毫秒),跟在行数与页码之后。 */
+  elapsedMs?: number | null;
   refreshTitle: string;
   onRefresh: () => void;
   onStopLoading: () => void;
@@ -258,6 +262,8 @@ export function TableDataStatusBar({
   selectedRowCount,
   submitting,
   loading,
+  loadingPage,
+  elapsedMs,
   refreshTitle,
   onRefresh,
   onStopLoading,
@@ -368,16 +374,19 @@ export function TableDataStatusBar({
       </div>
 
       <div className="min-w-0 flex-1 text-center">
-        {sqlSummary ? (
+        {loadingPage != null ? (
+          <span className="text-xs text-muted-foreground">{t("query.loadingPage", { page: loadingPage + 1 })}</span>
+        ) : sqlSummary ? (
           <span className="block truncate font-mono text-[11px] text-foreground" title={sqlSummary}>
             {sqlSummary}
           </span>
-        ) : totalRows != null ? (
-          <span className="text-xs text-muted-foreground">
-            {t("query.recordsInPage", { count: totalRows, page: page + 1 })}
-          </span>
         ) : (
-          <span className="text-xs text-muted-foreground">{t("query.pageNumber", { page: page + 1 })}</span>
+          <span className="text-xs text-muted-foreground">
+            {totalRows != null
+              ? t("query.recordsInPage", { count: totalRows, page: page + 1 })
+              : t("query.pageNumber", { page: page + 1 })}
+            {elapsedMs != null && ` · ${t("query.elapsedMs", { ms: elapsedMs })}`}
+          </span>
         )}
       </div>
 

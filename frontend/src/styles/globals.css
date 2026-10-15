@@ -149,6 +149,21 @@
   --radius-2xl: calc(var(--radius) * 1.8);
 }
 
+/* 共享动效：不确定进度条（如结果表格刷新时表头下的细条）。用法 animate-indeterminate-progress，
+   宽度取父容器的 1/3，从左外滑到右外；减少动效时由调用方配 motion-reduce:animate-none。 */
+@theme {
+  --animate-indeterminate-progress: indeterminate-progress 1.2s ease-in-out infinite;
+
+  @keyframes indeterminate-progress {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

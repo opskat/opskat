@@ -115,4 +115,23 @@ describe("SqlEditorTab result views", () => {
     await user.click(screen.getByRole("radio", { name: "query.jsonView" }));
     expect(screen.queryByPlaceholderText("query.find.placeholder")).toBeNull();
   });
+
+  it("keeps the result grid and its pager in place while the query re-runs or pages", async () => {
+    const user = await renderExecuted();
+    const grid = document.querySelector(".query-table-scroll");
+    let finish!: (raw: string) => void;
+    vi.mocked(ExecuteSQLPaged).mockReturnValue(new Promise<string>((resolve) => (finish = resolve)));
+
+    await user.click(screen.getByText("query.execute"));
+
+    expect(document.querySelector(".query-table-scroll")).toBe(grid);
+    expect(document.querySelector('[data-cell-key="1:name"]')?.textContent).toBe("bob");
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    expect(screen.getByTitle("query.nextPage")).toBeDisabled();
+
+    finish(JSON.stringify({ columns: ["id", "name"], rows: [{ id: 3, name: "cy" }], total_count: 1 }));
+    await waitFor(() => expect(document.querySelector('[data-cell-key="0:name"]')?.textContent).toBe("cy"));
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(document.querySelector(".query-table-scroll")).toBe(grid);
+  });
 });

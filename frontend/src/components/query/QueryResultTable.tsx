@@ -78,6 +78,9 @@ interface QueryResultTableProps {
   columns: string[];
   rows: Record<string, unknown>[];
   loading?: boolean;
+  // 已有列时的 loading 保留表格(旧数据变淡只读 + 表头下进度条)而不是整块转圈。
+  // 关系型表数据与 SQL 结果开启;MongoDB 不传,行为不变。
+  keepShapeWhileLoading?: boolean;
   error?: string;
   editable?: boolean;
   edits?: Map<string, unknown>; // key: "rowIdx:col"
@@ -315,8 +318,9 @@ function QueryResultTableImpl({
   columns,
   rows,
   loading,
+  keepShapeWhileLoading,
   error,
-  editable,
+  editable: editableProp,
   edits,
   onCellEdit,
   onSetCellValue,
@@ -352,6 +356,13 @@ function QueryResultTableImpl({
   findScope,
 }: QueryResultTableProps) {
   const { t } = useTranslation();
+
+  // 已有表头时的加载(刷新 / 翻页 / 排序 / 筛选 / 重新执行)保留表格形状:旧数据变淡、只读,
+  // 表头下方显示进度条;还没有列时(首次加载)才整块转圈。
+  const reloading = !!loading && !!keepShapeWhileLoading && columns.length > 0;
+  const editable = !!editableProp && !reloading;
+  // 列状态(宽度、冻结、类型 / 注释开关、本地排序)按有序列名保留:取数每次给新数组,名字不变就不重置。
+  const columnsKey = useMemo(() => JSON.stringify(columns), [columns]);
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -488,11 +499,14 @@ function QueryResultTableImpl({
   const filterSubTriggerRef = useRef<HTMLDivElement>(null);
   const filterSubMenuRef = useRef<HTMLDivElement>(null);
 
-  // Reset local sort and column widths when columns change
+  // Reset local sort and column state when the ordered column names change
   useEffect(() => {
     setLocalSortCol(null);
     setLocalSortDir(null);
     setColWidths({});
+    setFrozenColumns(new Set());
+    setShowFieldTypes(true);
+    setShowColumnComments(false);
     setSelectedCell(null);
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
@@ -501,7 +515,7 @@ function QueryResultTableImpl({
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
-  }, [columns, onSelectedCellChange, onSelectedRowsChange]);
+  }, [columnsKey, onSelectedCellChange, onSelectedRowsChange]);
 
   // Reset selection / editing when row set changes (paging, refresh, filter)
   useEffect(() => {
@@ -716,7 +730,7 @@ function QueryResultTableImpl({
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
-  const canSort = isControlledSort || !editable;
+  const canSort = isControlledSort || !editableProp;
 
   // Column resize handler — 拖拽期间只改 DOM（rAF 合批），松手一次性 setState，避免整表 60Hz 重渲
   const handleResizeStart = useCallback((e: React.MouseEvent, col: string) => {
@@ -1605,6 +1619,17 @@ function QueryResultTableImpl({
     return () => cancelAnimationFrame(rafId);
   }, [selectedCell, sortedIndices, rowVirtualizer]);
 
+  // 进度条贴在表头下沿(查找条在上方时一并让开):表头高度随类型 / 注释行、行密度变化,
+  // 加载期间每次渲染按实际位置定位。
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const progressRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const bar = progressRef.current;
+    const container = containerRef.current;
+    const head = theadRef.current;
+    if (bar && container && head) bar.style.top = `${container.offsetTop + head.offsetHeight}px`;
+  });
+
   const findBar = findActive ? (
     <TableFindBar
       inputRef={findInputRef}
@@ -1632,7 +1657,7 @@ function QueryResultTableImpl({
       body
     );
 
-  if (loading) {
+  if (loading && !reloading) {
     return withFindScope(
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -1653,16 +1678,17 @@ function QueryResultTableImpl({
   }
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col" {...findScopeProps}>
+    <div className="relative flex-1 min-h-0 flex flex-col" {...findScopeProps}>
       {findBar}
       <div
         ref={containerRef}
         tabIndex={0}
         onKeyDown={handleKeyDown}
+        aria-busy={reloading || undefined}
         className="flex-1 overflow-auto min-h-0 query-table-scroll outline-none"
       >
         <table className="border-separate border-spacing-0 text-xs font-mono">
-          <thead className="bg-muted sticky top-0">
+          <thead ref={theadRef} className="bg-muted sticky top-0">
             <tr>
               {showRowNumber && (
                 <th
@@ -1927,7 +1953,7 @@ function QueryResultTableImpl({
                             }}
                           />
                         ) : (
-                          <div className="flex min-w-0 items-center gap-1">
+                          <div className={`flex min-w-0 items-center gap-1 ${reloading ? "opacity-50" : ""}`}>
                             <div className="min-w-0 flex-1">
                               {findHit ? (
                                 <TableFindHighlight
@@ -1972,6 +1998,16 @@ function QueryResultTableImpl({
           </tbody>
         </table>
       </div>
+      {reloading && (
+        <div
+          ref={progressRef}
+          role="progressbar"
+          aria-label={t("query.reloadingResults")}
+          className="pointer-events-none absolute inset-x-0 z-50 h-0.5 overflow-hidden bg-primary/15"
+        >
+          <div className="h-full w-1/3 bg-primary animate-indeterminate-progress motion-reduce:w-full motion-reduce:animate-none" />
+        </div>
+      )}
 
       {/* Cell context menu */}
       {ctxMenu &&

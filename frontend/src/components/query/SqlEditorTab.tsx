@@ -390,7 +390,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const hasNext = totalPages != null ? page < totalPages - 1 : rows.length === pageSize;
   const hasPrev = page > 0;
   const findScope = useMemo(() => ({ rowCount: rows.length, page: page + 1 }), [rows.length, page]);
-  const showPagination = columns.length > 0 && !loading && !error && lastExecSql;
+  // 重新执行 / 翻页期间分页条保留(按钮随 loading 禁用),结果区不跳动。
+  const showPagination = columns.length > 0 && !error && lastExecSql;
 
   return (
     <div className="flex flex-col h-full">
@@ -601,6 +602,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
                 columns={columns}
                 rows={rows}
                 loading={loading}
+                keepShapeWhileLoading
                 error={error ?? undefined}
                 showRowNumber
                 rowNumberOffset={page * pageSize}

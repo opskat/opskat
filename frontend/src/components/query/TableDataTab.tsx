@@ -148,6 +148,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [pageInput, setPageInput] = useState("1");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 最近一次成功取数(打开表 / 翻页 / 刷新)的耗时,显示在状态栏。
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [edits, setEdits] = useState<Map<string, unknown>>(new Map());
   const [submitting, setSubmitting] = useState(false);
   // `preview` = read-only view (opened by the "Preview SQL" button).
@@ -232,6 +234,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       setPkLoaded(false);
       setLoading(true);
       setError(null);
+      setElapsedMs(null);
     }
   }
 
@@ -246,10 +249,12 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     latestCountRequest.current = requestId;
     openedRef.current = false;
     (async () => {
+      const startedAt = performance.now();
       try {
         const raw = await OpenTable(assetId, database, table, pageSize);
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
         const parsed = JSON.parse(raw) as OpenTableResult;
+        setElapsedMs(Math.round(performance.now() - startedAt));
         setPrimaryKeys(parsed.primaryKeys ?? []);
         setColumnTypes(parsed.columnTypes ?? {});
         setColumnRules(parsed.columnRules ?? []);
@@ -309,6 +314,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       setLoading(true);
       setError(null);
 
+      const startedAt = performance.now();
       try {
         const result = await QueryTableRows(
           assetId,
@@ -322,11 +328,13 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           })
         );
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
+        setElapsedMs(Math.round(performance.now() - startedAt));
         setColumns(result.columns);
         setRows(result.rows);
         setSelectedRowIdx(null);
       } catch (e) {
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
+        setElapsedMs(null);
         setError(String(e));
         setColumns([]);
         setRows([]);
@@ -368,14 +376,13 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setNewRows([]);
   }
 
-  // 列集合变化时收敛可见列:渲染期对比上次值(含首次渲染,对齐原 effect 挂载即跑)。
-  const [prevColumnsKey, setPrevColumnsKey] = useState<string[] | null>(null);
-  if (columns !== prevColumnsKey) {
-    setPrevColumnsKey(columns);
-    setVisibleColumns((prev) => {
-      const retained = prev.filter((col) => columns.includes(col));
-      return retained.length > 0 ? retained : columns;
-    });
+  // 隐藏列只在有序列名变化时重置(刷新 / 翻页 / 排序 / 筛选每次给新数组,名字不变就保留):
+  // 渲染期对比上次值(含首次渲染,对齐原 effect 挂载即跑)。
+  const columnsKey = JSON.stringify(columns);
+  const [prevColumnsKey, setPrevColumnsKey] = useState<string | null>(null);
+  if (columnsKey !== prevColumnsKey) {
+    setPrevColumnsKey(columnsKey);
+    setVisibleColumns(columns);
   }
 
   const handleCellEdit = useCallback((edit: CellEdit) => {
@@ -1045,6 +1052,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               columns={columns}
               rows={tableRows}
               loading={loading || importing}
+              keepShapeWhileLoading
               error={error ?? undefined}
               editable={canGridEdit}
               edits={edits}
@@ -1110,6 +1118,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         selectedRowCount={deletableRowCount}
         submitting={submitting || deleting}
         loading={loading || importing}
+        loadingPage={loading ? page : null}
+        elapsedMs={elapsedMs}
         refreshTitle={`${t("query.refreshTable")} (${REFRESH_SHORTCUT_LABEL})`}
         onRefresh={handleRefresh}
         onStopLoading={handleStopLoading}
