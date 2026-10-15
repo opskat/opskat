@@ -30,6 +30,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../wailsjs/go/query/Query";
 import { QueryResultTable } from "./QueryResultTable";
+import { QueryErrorPanel } from "./QueryErrorPanel";
 import { QueryResultJsonView } from "./QueryResultJsonView";
 import { QueryRowDetailPanel } from "./QueryRowDetailPanel";
 import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
@@ -392,6 +393,9 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const findScope = useMemo(() => ({ rowCount: rows.length, page: page + 1 }), [rows.length, page]);
   // 重新执行 / 翻页期间分页条保留(按钮随 loading 禁用),结果区不跳动。
   const showPagination = columns.length > 0 && !error && lastExecSql;
+  const errorPanel = error ? (
+    <QueryErrorPanel title={t("query.executeFailed")} error={error} onRetry={() => void fetchPage(lastExecSql, page)} />
+  ) : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -595,8 +599,10 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
         )}
         <div className="flex min-h-0 flex-1">
           <div className="flex min-w-0 flex-1 flex-col">
-            {viewMode === "json" ? (
-              <QueryResultJsonView rows={rows} columns={columns} error={error ?? undefined} />
+            {viewMode === "json" && error ? (
+              errorPanel
+            ) : viewMode === "json" ? (
+              <QueryResultJsonView rows={rows} columns={columns} />
             ) : (
               <QueryResultTable
                 columns={columns}
@@ -604,6 +610,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
                 loading={loading}
                 keepShapeWhileLoading
                 error={error ?? undefined}
+                errorPanel={errorPanel}
                 showRowNumber
                 rowNumberOffset={page * pageSize}
                 onSelectedCellChange={handleSelectedCellChange}

@@ -31,6 +31,7 @@ import { ImportTableDataDialog } from "./ImportTableDataDialog";
 import { ExportTableDataDialog } from "./ExportTableDataDialog";
 import { TableFilterBuilder } from "./TableFilterBuilder";
 import { TableDataStatusBar, TableEditorToolbar, type TableExportFormat } from "./TableEditorToolbar";
+import { QueryErrorPanel } from "./QueryErrorPanel";
 import { QueryResultJsonView } from "./QueryResultJsonView";
 import { QueryRowDetailPanel } from "./QueryRowDetailPanel";
 import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
@@ -148,6 +149,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [pageInput, setPageInput] = useState("1");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 首次打开(OpenTable)失败后重试要重跑打开流程:主键 / 列类型只有它会填。
+  const [openAttempt, setOpenAttempt] = useState(0);
   // 最近一次成功取数(打开表 / 翻页 / 刷新)的耗时,显示在状态栏。
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [edits, setEdits] = useState<Map<string, unknown>>(new Map());
@@ -276,7 +279,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     // pageSize 故意不在 deps 里:OpenTable 只在切换表时跑一次,
     // 用户改 pageSize 由下方 fetchData 的 useEffect 处理。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetId, database, table, nextRequestId, isCancelled]);
+  }, [assetId, database, table, openAttempt, nextRequestId, isCancelled]);
 
   // 翻页、计数发给驱动的是结构化的筛选条件与排序项,不是 SQL:怎么变成查询由驱动决定。
   const filterRequest = useMemo(
@@ -336,7 +339,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
         setElapsedMs(null);
         setError(String(e));
-        setColumns([]);
+        // 列保留:筛选器与列状态在重试 / 改筛选后仍沿用,错误卡片取代的只是表体。
         setRows([]);
         setSelectedRowIdx(null);
       } finally {
@@ -633,6 +636,16 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     fetchData(page);
     fetchCount();
   }, [fetchData, fetchCount, page]);
+
+  const handleRetry = useCallback(() => {
+    if (!openedRef.current) {
+      setError(null);
+      setLoading(true);
+      setOpenAttempt((n) => n + 1);
+      return;
+    }
+    handleRefresh();
+  }, [handleRefresh]);
 
   const handleStopLoading = useCallback(() => {
     if (!loading && !importing) return;
@@ -970,6 +983,15 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     !!sortColumn ||
     !!sortDir;
 
+  const errorPanel = error ? (
+    <QueryErrorPanel
+      title={t("query.loadTableFailed", { table: `${database}.${table}` })}
+      error={error}
+      onRetry={handleRetry}
+      onEditFilter={filterRequest.length > 0 ? () => setShowFilterSort(true) : undefined}
+    />
+  ) : null;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 shrink-0">
@@ -1040,13 +1062,10 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       {/* Table content */}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {viewMode === "json" ? (
-            <QueryResultJsonView
-              rows={tableRows}
-              columns={effectiveVisibleColumns}
-              edits={edits}
-              error={error ?? undefined}
-            />
+          {viewMode === "json" && error ? (
+            errorPanel
+          ) : viewMode === "json" ? (
+            <QueryResultJsonView rows={tableRows} columns={effectiveVisibleColumns} edits={edits} />
           ) : (
             <QueryResultTable
               columns={columns}
@@ -1054,6 +1073,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               loading={loading || importing}
               keepShapeWhileLoading
               error={error ?? undefined}
+              errorPanel={errorPanel}
               editable={canGridEdit}
               edits={edits}
               onCellEdit={handleCellEdit}
@@ -1119,6 +1139,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         submitting={submitting || deleting}
         loading={loading || importing}
         loadingPage={loading ? page : null}
+        failed={!!error}
         elapsedMs={elapsedMs}
         refreshTitle={`${t("query.refreshTable")} (${REFRESH_SHORTCUT_LABEL})`}
         onRefresh={handleRefresh}

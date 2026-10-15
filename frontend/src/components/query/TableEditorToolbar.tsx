@@ -230,6 +230,8 @@ interface TableDataStatusBarProps {
   loading: boolean;
   /** 正在取的页(从 0 起,与 page 相同);有值时中部显示「正在加载第 N 页…」。 */
   loadingPage?: number | null;
+  /** 最近一次取数失败:中部显示「加载失败」,错误详情在结果区的卡片里。 */
+  failed?: boolean;
   /** 最近一次取数耗时(毫秒),跟在行数与页码之后。 */
   elapsedMs?: number | null;
   refreshTitle: string;
@@ -263,6 +265,7 @@ export function TableDataStatusBar({
   submitting,
   loading,
   loadingPage,
+  failed,
   elapsedMs,
   refreshTitle,
   onRefresh,
@@ -376,6 +379,8 @@ export function TableDataStatusBar({
       <div className="min-w-0 flex-1 text-center">
         {loadingPage != null ? (
           <span className="text-xs text-muted-foreground">{t("query.loadingPage", { page: loadingPage + 1 })}</span>
+        ) : failed ? (
+          <span className="text-xs text-destructive">{t("query.loadFailed")}</span>
         ) : sqlSummary ? (
           <span className="block truncate font-mono text-[11px] text-foreground" title={sqlSummary}>
             {sqlSummary}

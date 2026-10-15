@@ -134,4 +134,47 @@ describe("SqlEditorTab result views", () => {
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(document.querySelector(".query-table-scroll")).toBe(grid);
   });
+
+  it("shows an execution failure card whose retry re-runs the last SQL and page, and whose copy takes the raw error", async () => {
+    const user = await renderExecuted();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(ExecuteSQLPaged).mockRejectedValueOnce("syntax error near 'FORM'");
+
+    await user.click(screen.getByText("query.execute"));
+
+    await screen.findByText("syntax error near 'FORM'");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("query.executeFailed")).toBeInTheDocument();
+    expect(screen.getByText("syntax error near 'FORM'").className).toContain("select-text");
+    expect(screen.queryByRole("button", { name: "query.editFilter" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "query.copyError" }));
+    expect(writeText).toHaveBeenCalledWith("syntax error near 'FORM'");
+
+    vi.mocked(ExecuteSQLPaged).mockRejectedValueOnce("second failure");
+    await user.click(screen.getByRole("button", { name: "query.retry" }));
+    await screen.findByText("second failure");
+    expect(screen.queryByText("syntax error near 'FORM'")).toBeNull();
+    const calls = vi.mocked(ExecuteSQLPaged).mock.calls;
+    expect(calls.at(-1)).toEqual(calls.at(-2));
+
+    vi.mocked(ExecuteSQLPaged).mockResolvedValueOnce(
+      JSON.stringify({ columns: ["id", "name"], rows: [{ id: 9, name: "zed" }], total_count: 1 })
+    );
+    await user.click(screen.getByRole("button", { name: "query.retry" }));
+    await waitFor(() => expect(document.querySelector('[data-cell-key="0:name"]')?.textContent).toBe("zed"));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the failure card in the JSON view too", async () => {
+    const user = await renderExecuted();
+    await user.click(screen.getByRole("radio", { name: "query.jsonView" }));
+    vi.mocked(ExecuteSQLPaged).mockRejectedValueOnce("json failure");
+
+    await user.click(screen.getByText("query.execute"));
+
+    await screen.findByText("json failure");
+    expect(screen.getByText("query.executeFailed")).toBeInTheDocument();
+  });
 });

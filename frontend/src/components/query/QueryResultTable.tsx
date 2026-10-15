@@ -82,6 +82,8 @@ interface QueryResultTableProps {
   // 关系型表数据与 SQL 结果开启;MongoDB 不传,行为不变。
   keepShapeWhileLoading?: boolean;
   error?: string;
+  /** 有 error 时代替默认的纯文本错误,表格自身状态(列宽等)不因出错被卸载。 */
+  errorPanel?: React.ReactNode;
   editable?: boolean;
   edits?: Map<string, unknown>; // key: "rowIdx:col"
   onCellEdit?: (edit: CellEdit) => void;
@@ -320,6 +322,7 @@ function QueryResultTableImpl({
   loading,
   keepShapeWhileLoading,
   error,
+  errorPanel,
   editable: editableProp,
   edits,
   onCellEdit,
@@ -1667,7 +1670,7 @@ function QueryResultTableImpl({
 
   if (error) {
     return withFindScope(
-      <div className="px-3 py-4 text-xs text-destructive whitespace-pre-wrap font-mono">{error}</div>
+      errorPanel ?? <div className="px-3 py-4 text-xs text-destructive whitespace-pre-wrap font-mono">{error}</div>
     );
   }
 
