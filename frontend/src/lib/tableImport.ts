@@ -642,17 +642,19 @@ export function buildImportInsertSql({
     return rowValuesSql.map((values) => `${insertKeyword} ${quotedTable} (${columnSql}) VALUES ${values}${suffix};`);
   };
 
-  // MSSQL 往 IDENTITY 列写显式值需要 SET IDENTITY_INSERT ON，但表没有自增列（或映射里没有它）时
-  // ON 本身会报错，所以由数据库在同一批里判断；失败时也要 OFF 并原样 THROW。
-  // 每个元素是一次独立的 ExecuteSQL（一个批），不能依赖会话状态跨元素保留。
+  // MSSQL 往 IDENTITY 列写显式值需要 SET IDENTITY_INSERT ON，但表没有自增列时 ON 本身报错，
+  // 自增列不在映射里时 ON 之后的 INSERT 又因缺自增值报错，所以由数据库在同一批里判断映射列
+  // 是否含自增列；失败时也要 OFF 并原样 THROW。只认用户表（OBJECT_ID 的 'U'）：视图的列也在
+  // sys.identity_columns 里，对视图 SET IDENTITY_INSERT 却会中止整批、掩盖原本的错误。
+  // 每个元素单独执行（一个批），不能依赖会话状态跨元素保留。
   // 条件每次重算而不存进变量：SQL Server 把变量赋值计为 1 行受影响，会让导入摘要的
   // 「新增 / 更新」每条多算 1。
   const wrapMssqlIdentityInsert = (statement: string): string => {
-    const nStr = (value: string) => `N'${value.replace(/'/g, "''")}'`;
+    const nStr = (value: string) => `N${sqlQuote(value)}`;
     const names = mapped.map((item) => nStr(item.target)).join(", ");
     const hasIdentity =
       `EXISTS (SELECT 1 FROM sys.identity_columns ` +
-      `WHERE object_id = OBJECT_ID(${nStr(quotedTable)}) AND name IN (${names}))`;
+      `WHERE object_id = OBJECT_ID(${nStr(quotedTable)}, N'U') AND name IN (${names}))`;
     return (
       `IF ${hasIdentity} SET IDENTITY_INSERT ${quotedTable} ON; ` +
       `BEGIN TRY ${statement} END TRY ` +

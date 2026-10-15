@@ -154,7 +154,7 @@ describe("table import helpers", () => {
     const wrapped = (core: string, columns: string[], table = "[dbo].[users]") => {
       const hasIdentity =
         "EXISTS (SELECT 1 FROM sys.identity_columns " +
-        `WHERE object_id = OBJECT_ID(N'${table}') AND name IN (${columns.map((c) => `N'${c}'`).join(", ")}))`;
+        `WHERE object_id = OBJECT_ID(N'${table}', N'U') AND name IN (${columns.map((c) => `N'${c}'`).join(", ")}))`;
       return (
         `IF ${hasIdentity} SET IDENTITY_INSERT ${table} ON; ` +
         `BEGIN TRY ${core} END TRY ` +
@@ -240,8 +240,16 @@ describe("table import helpers", () => {
         mode: "append",
         driver: "mssql",
       });
-      expect(sql).toContain("OBJECT_ID(N'[dbo].[o''brien]')");
+      expect(sql).toContain("OBJECT_ID(N'[dbo].[o''brien]', N'U')");
       expect(sql).toContain("name IN (N'i''d')");
+    });
+
+    it("only looks up identity columns of user tables, so a view keeps its original error", () => {
+      // 视图的列也出现在 sys.identity_columns 里，但对视图 SET IDENTITY_INSERT 报 8105 并中止整批，
+      // 掩盖原本的「Cannot insert explicit value for identity column」。
+      for (const statement of buildImportInsertSql({ ...base, mode: "append" })) {
+        expect(statement.match(/OBJECT_ID\([^)]*\)/g)).toEqual(Array(3).fill("OBJECT_ID(N'[dbo].[users]', N'U')"));
+      }
     });
 
     it("leaves update and delete untouched (they do not insert)", () => {
