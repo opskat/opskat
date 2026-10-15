@@ -532,8 +532,10 @@ describe("QueryResultTable — cell context actions", () => {
     fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
 
     await user.click(screen.getByText("query.setDateTime"));
-    const dateInput = screen.getByLabelText("Date");
-    const timeInput = screen.getByLabelText("Time");
+    expect(screen.getByText("query.dateLabel")).toBeInTheDocument();
+    expect(screen.getByText("query.timeLabel")).toBeInTheDocument();
+    const dateInput = screen.getByLabelText("query.dateLabel");
+    const timeInput = screen.getByLabelText("query.timeLabel");
     fireEvent.change(dateInput, { target: { value: "2026-04-27" } });
     fireEvent.change(timeInput, { target: { value: "08:09:10" } });
     await user.click(screen.getByText("action.ok"));
@@ -560,8 +562,8 @@ describe("QueryResultTable — cell context actions", () => {
 
     await user.click(screen.getByText("2026-04-26 10:13:43"));
     await user.click(screen.getByTitle("query.openDateTimePicker"));
-    const dateInput = screen.getByLabelText("Date");
-    const timeInput = screen.getByLabelText("Time");
+    const dateInput = screen.getByLabelText("query.dateLabel");
+    const timeInput = screen.getByLabelText("query.timeLabel");
     fireEvent.change(dateInput, { target: { value: "2026-04-28" } });
     fireEvent.change(timeInput, { target: { value: "11:12:13" } });
     await user.click(screen.getByText("action.ok"));
@@ -1483,5 +1485,25 @@ describe("QueryResultTable — row context menu", () => {
     await user.click(screen.getByText("query.deleteRecord"));
 
     expect(onDeleteRows).toHaveBeenCalledWith([1]);
+  });
+});
+
+describe("QueryResultTable — i18n literals", () => {
+  it("renders NULL cells and their tooltip through the NULL i18n key", () => {
+    render(<QueryResultTable columns={["name"]} rows={[{ name: null }]} />);
+    const cell = document.querySelector('td[data-cell-key="0:name"]') as HTMLElement;
+
+    expect(within(cell).getByText("query.nullValue")).toBeInTheDocument();
+    expect(cell).toHaveAttribute("title", "query.nullValue");
+  });
+
+  it("labels the empty-string filter entry tooltip through i18n", async () => {
+    const user = userEvent.setup();
+    render(<QueryResultTable columns={["name"]} rows={[{ name: "" }, { name: "x" }]} enableColumnFilter />);
+
+    await user.click(screen.getAllByTitle("query.filterColumn")[0]);
+    const popover = await screen.findByRole("dialog");
+
+    expect(within(popover).getByTitle("query.emptyStringTooltip")).toBeInTheDocument();
   });
 });

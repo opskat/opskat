@@ -81,7 +81,7 @@ interface TableFilterBuilderProps {
   driver?: string;
   onChange: (items: TableFilterItem[]) => void;
   onSortsChange: (items: TableSortItem[]) => void;
-  onApply: () => void;
+  onApply: (nextFilters?: TableFilterItem[]) => void;
 }
 
 interface DistinctValue {
@@ -319,6 +319,7 @@ export function TableFilterBuilder({
               selectedId={selectedFilterId}
               onSelect={setSelectedFilterId}
               onContextMenu={openContextMenu}
+              onApply={onApply}
             />
           )}
         </div>
@@ -334,7 +335,7 @@ export function TableFilterBuilder({
         {sorts.length === 0 && <span className="text-xs text-muted-foreground">{t("query.sortBuilderEmpty")}</span>}
       </div>
       <div className="px-3 pb-2">
-        <Button size="sm" className="h-8 text-xs" onClick={onApply}>
+        <Button size="sm" className="h-8 text-xs" onClick={() => onApply()}>
           {t("query.applyFilterSort")}
         </Button>
       </div>
@@ -543,6 +544,7 @@ interface FilterItemsProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onContextMenu: (target: FilterContextTarget) => void;
+  onApply: (nextFilters?: TableFilterItem[]) => void;
 }
 
 function FilterItems({
@@ -556,6 +558,7 @@ function FilterItems({
   selectedId,
   onSelect,
   onContextMenu,
+  onApply,
 }: FilterItemsProps) {
   const { t } = useTranslation();
 
@@ -624,6 +627,7 @@ function FilterItems({
             onChange={onChange}
             onAddAfter={addSibling}
             onAddGroupAfter={addSiblingGroup}
+            onApply={onApply}
             selected={selectedId === item.id}
             onSelect={() => onSelect(item.id)}
             onContextMenu={(event) => {
@@ -652,7 +656,9 @@ function FilterItems({
                 aria-label={t("query.filterEnabled")}
               />
               {item.negated && (
-                <span className="rounded bg-destructive/10 px-1 text-xs font-medium text-destructive">not</span>
+                <span className="rounded bg-destructive/10 px-1 text-xs font-medium text-destructive">
+                  {t("query.negatedFilterLabel")}
+                </span>
               )}
               <span data-testid={`filter-item-${item.id}`} className="font-mono">
                 (
@@ -671,6 +677,7 @@ function FilterItems({
                   selectedId={selectedId}
                   onSelect={onSelect}
                   onContextMenu={onContextMenu}
+                  onApply={onApply}
                 />
               </div>
             </div>
@@ -735,6 +742,7 @@ interface FilterConditionRowProps {
   onChange: (items: TableFilterItem[]) => void;
   onAddAfter: () => void;
   onAddGroupAfter: () => void;
+  onApply: (nextFilters?: TableFilterItem[]) => void;
   selected: boolean;
   onSelect: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -749,6 +757,7 @@ function FilterConditionRow({
   onChange,
   onAddAfter,
   onAddGroupAfter,
+  onApply,
   selected,
   onSelect,
   onContextMenu,
@@ -762,6 +771,13 @@ function FilterConditionRow({
   const operator = item.operator ?? "=";
   const operatorNeedsValue = filterOperatorNeedsValue(operator);
   const operatorNeedsRange = filterOperatorNeedsRange(operator);
+  // Enter in a value input commits the value and applies in one step; the parent's
+  // filters are stale until the next render, so the new tree is passed explicitly.
+  const applyValue = (value: unknown) => {
+    const next = updateFilterItem(rootItems, item.id, { value });
+    onChange(next);
+    onApply(next);
+  };
 
   return (
     <div
@@ -819,13 +835,15 @@ function FilterConditionRow({
         </SelectContent>
       </Select>
       {operatorNeedsRange ? (
-        <FilterRangePicker value={item.value} onChange={(value) => setItem({ value })} />
+        <FilterRangePicker value={item.value} onChange={(value) => setItem({ value })} onEnter={() => onApply()} />
       ) : operatorNeedsValue ? (
         <FilterValuePicker
           value={item.value}
           rows={rows}
           column={item.column}
           onChange={(value) => setItem({ value })}
+          onCommit={applyValue}
+          onApply={() => onApply()}
         />
       ) : null}
       {isLast && (
@@ -870,11 +888,14 @@ interface FilterValuePickerProps {
   rows: Record<string, unknown>[];
   column: string;
   onChange: (value: unknown) => void;
+  onCommit: (value: unknown) => void;
+  onApply: () => void;
 }
 
 interface FilterRangePickerProps {
   value: unknown;
   onChange: (value: unknown[]) => void;
+  onEnter: () => void;
 }
 
 function rangePart(value: unknown, index: number): string {
@@ -883,7 +904,7 @@ function rangePart(value: unknown, index: number): string {
   return part == null ? "" : cellValueToText(part);
 }
 
-function FilterRangePicker({ value, onChange }: FilterRangePickerProps) {
+function FilterRangePicker({ value, onChange, onEnter }: FilterRangePickerProps) {
   const { t } = useTranslation();
   const start = rangePart(value, 0);
   const end = rangePart(value, 1);
@@ -894,6 +915,9 @@ function FilterRangePicker({ value, onChange }: FilterRangePickerProps) {
         value={start}
         onChange={(event) => onChange([event.target.value, end])}
         placeholder={t("query.filterRangeStart")}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") onEnter();
+        }}
         className="h-7 w-24 px-2 py-0 text-xs"
       />
       <span className="text-xs text-muted-foreground">-</span>
@@ -901,13 +925,16 @@ function FilterRangePicker({ value, onChange }: FilterRangePickerProps) {
         value={end}
         onChange={(event) => onChange([start, event.target.value])}
         placeholder={t("query.filterRangeEnd")}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") onEnter();
+        }}
         className="h-7 w-24 px-2 py-0 text-xs"
       />
     </div>
   );
 }
 
-function FilterValuePicker({ value, rows, column, onChange }: FilterValuePickerProps) {
+function FilterValuePicker({ value, rows, column, onChange, onCommit, onApply }: FilterValuePickerProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [customValue, setCustomValue] = useState("");
@@ -923,11 +950,14 @@ function FilterValuePicker({ value, rows, column, onChange }: FilterValuePickerP
   }, [search, suggestions]);
 
   const commitCustomValue = useCallback(() => {
-    if (!customValue.trim()) return;
-    onChange(customValue);
+    if (!customValue.trim()) {
+      onApply();
+      return;
+    }
+    onCommit(customValue);
     setOpen(false);
     setCustomValue("");
-  }, [customValue, onChange]);
+  }, [customValue, onApply, onCommit]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -987,6 +1017,9 @@ function FilterValuePicker({ value, rows, column, onChange }: FilterValuePickerP
               placeholder={t("query.search")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onApply();
+              }}
             />
           </div>
         </div>

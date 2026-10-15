@@ -2050,7 +2050,7 @@ function QueryResultTableImpl({
                           maxWidth: `${width}px`,
                           ...(isFrozen ? { left: `${frozenLeft}px` } : {}),
                         }}
-                        title={displayValue == null ? "NULL" : cellValueToDisplayText(displayValue)}
+                        title={displayValue == null ? t("query.nullValue") : cellValueToDisplayText(displayValue)}
                         onClick={() => handleCellClick(origIdx, col)}
                         onDoubleClick={() => {
                           if (!editable) return;
@@ -2088,7 +2088,7 @@ function QueryResultTableImpl({
                               ) : renderCell ? (
                                 renderCell(displayValue, { rowIdx: origIdx, col })
                               ) : displayValue == null ? (
-                                <span className="text-muted-foreground italic">NULL</span>
+                                <span className="text-muted-foreground italic">{t("query.nullValue")}</span>
                               ) : (
                                 <span className="truncate block">{cellValueToDisplayText(displayValue)}</span>
                               )}
@@ -2634,9 +2634,9 @@ function QueryResultTableImpl({
             <div className="mb-2 text-sm font-medium">{t("query.dateTimeDialogTitle")}</div>
             <div className="flex gap-2">
               <label className="flex-1">
-                <span className="mb-1 block text-xs text-muted-foreground">Date</span>
+                <span className="mb-1 block text-xs text-muted-foreground">{t("query.dateLabel")}</span>
                 <input
-                  aria-label="Date"
+                  aria-label={t("query.dateLabel")}
                   type="date"
                   className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/45"
                   value={dateEditor.date}
@@ -2649,9 +2649,9 @@ function QueryResultTableImpl({
                 />
               </label>
               <label className="w-28">
-                <span className="mb-1 block text-xs text-muted-foreground">Time</span>
+                <span className="mb-1 block text-xs text-muted-foreground">{t("query.timeLabel")}</span>
                 <input
-                  aria-label="Time"
+                  aria-label={t("query.timeLabel")}
                   type="time"
                   step={1}
                   className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/45"
@@ -2818,13 +2818,14 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
             const text = entry.text;
             const label =
               entry.value == null ? (
-                <span className="text-muted-foreground italic">NULL</span>
+                <span className="text-muted-foreground italic">{t("query.nullValue")}</span>
               ) : entry.value === "" ? (
                 <span className="text-muted-foreground italic">{t("query.filterEmptyString")}</span>
               ) : (
                 text
               );
-            const tooltip = entry.value == null ? "NULL" : entry.value === "" ? "(empty)" : text;
+            const tooltip =
+              entry.value == null ? t("query.nullValue") : entry.value === "" ? t("query.emptyStringTooltip") : text;
             return (
               <label
                 key={entry.key}

@@ -379,3 +379,80 @@ describe("TableFilterBuilder — very large values", () => {
     ]);
   });
 });
+
+describe("TableFilterBuilder — Enter applies the filter", () => {
+  function renderBuilder(filters: TableFilterItem[]) {
+    const onChange = vi.fn();
+    const onApply = vi.fn();
+    render(
+      <TableFilterBuilder
+        columns={["id", "email"]}
+        rows={[{ id: 1, email: "a@example.com" }]}
+        filters={filters}
+        sorts={[]}
+        driver="mysql"
+        onChange={onChange}
+        onSortsChange={vi.fn()}
+        onApply={onApply}
+      />
+    );
+    return { onChange, onApply };
+  }
+
+  it("applies the filter when Enter is pressed in a range bound", () => {
+    const { onApply } = renderBuilder([
+      createFilterCondition("f-id", "id", { operator: "between", value: ["1", "9"] }),
+    ]);
+
+    fireEvent.keyDown(screen.getByPlaceholderText("query.filterRangeEnd"), { key: "Enter" });
+
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the typed value when Enter is pressed in the custom value input", async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderBuilder([createFilterCondition("f-email", "email")]);
+
+    await user.click(screen.getByTitle("query.chooseFilterValue"));
+    const panel = await screen.findByRole("dialog");
+    const input = within(panel).getAllByRole("textbox")[0];
+    fireEvent.change(input, { target: { value: "b@example.com" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onApply).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "condition", column: "email", value: "b@example.com" }),
+    ]);
+  });
+
+  it("applies the filter when Enter is pressed in the value search box", async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderBuilder([createFilterCondition("f-email", "email")]);
+
+    await user.click(screen.getByTitle("query.chooseFilterValue"));
+    const panel = await screen.findByRole("dialog");
+    fireEvent.keyDown(within(panel).getByPlaceholderText("query.search"), { key: "Enter" });
+
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TableFilterBuilder — translated labels", () => {
+  it("labels a negated group with the translated negation marker", () => {
+    render(
+      <TableFilterBuilder
+        columns={["id"]}
+        rows={[]}
+        filters={[
+          { kind: "group", id: "g-1", join: "and", negated: true, items: [createFilterCondition("f-id", "id")] },
+        ]}
+        sorts={[]}
+        driver="mysql"
+        onChange={vi.fn()}
+        onSortsChange={vi.fn()}
+        onApply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("query.negatedFilterLabel")).toBeInTheDocument();
+  });
+});

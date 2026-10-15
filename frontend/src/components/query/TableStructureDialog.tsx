@@ -70,7 +70,7 @@ export function TableStructureDialog({ open, onOpenChange, tabId, database, tabl
                     {meta.indexes.map((idx) => (
                       <li key={idx.name} className="text-muted-foreground">
                         <span className="text-foreground">{idx.name}</span>
-                        {idx.unique ? " (UNIQUE)" : ""} — {idx.columns.join(", ")}
+                        {idx.unique ? ` ${t("query.uniqueIndexLabel")}` : ""} — {idx.columns.join(", ")}
                       </li>
                     ))}
                   </ul>

@@ -750,19 +750,23 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     return () => window.removeEventListener("keydown", handler);
   }, [isOuterActive, isInnerActive, handleRefresh]);
 
-  const handleApplyQuery = useCallback(() => {
-    guardEdits(() => {
-      setAppliedFilters(filters);
-      setAppliedSorts(sorts);
-      // Builder sort criteria override the header-click sort state.
-      if (sorts.length > 0) {
-        setSortColumn(null);
-        setSortDir(null);
-      }
-      setPage(0);
-      setApplyVersion((v) => v + 1);
-    }, t("query.unsavedEditsDescFilter"));
-  }, [filters, guardEdits, sorts, t]);
+  const handleApplyQuery = useCallback(
+    (nextFilters?: TableFilterItem[]) => {
+      const applied = nextFilters ?? filters;
+      guardEdits(() => {
+        setAppliedFilters(applied);
+        setAppliedSorts(sorts);
+        // Builder sort criteria override the header-click sort state.
+        if (sorts.length > 0) {
+          setSortColumn(null);
+          setSortDir(null);
+        }
+        setPage(0);
+        setApplyVersion((v) => v + 1);
+      }, t("query.unsavedEditsDescFilter"));
+    },
+    [filters, guardEdits, sorts, t]
+  );
 
   const handleSortChange = useCallback(
     (col: string | null, dir: SortDir) => {
@@ -1086,17 +1090,17 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   }, [ddlLoading, ddlSQL, t]);
 
   // 提到顶层走 useCallback,使 QueryResultTable 的 memo 浅比较生效;
-  // 只依赖 rows.length —— 新增行用它来判断"(Default)"占位。
+  // 只依赖 rows.length 与 t —— 新增行用它来判断默认值占位。
   const rowsLength = rows.length;
   const renderCell = useCallback(
     (value: unknown, ctx: { rowIdx: number; col: string }) => {
       if (ctx.rowIdx >= rowsLength && value == null) {
-        return <span className="text-muted-foreground/70 italic">(Default)</span>;
+        return <span className="text-muted-foreground/70 italic">{t("query.defaultValuePlaceholder")}</span>;
       }
       if (value == null) return <span className="text-muted-foreground italic">NULL</span>;
       return <span className="truncate block">{cellValueToDisplayText(value)}</span>;
     },
-    [rowsLength]
+    [rowsLength, t]
   );
 
   const hasNext = totalPages != null ? page < totalPages - 1 : rows.length === pageSize;
