@@ -1,20 +1,10 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Play,
-  Loader2,
-  History,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  FileCode,
-  PanelRight,
-} from "lucide-react";
+import { Play, Loader2, History, FileCode, PanelRight } from "lucide-react";
+import { toast } from "sonner";
 import type * as MonacoNS from "monaco-editor";
 import {
   Button,
-  Input,
   Select,
   SelectContent,
   SelectItem,
@@ -29,6 +19,7 @@ import {
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../wailsjs/go/query/Query";
+import { TableDataStatusBar } from "./TableEditorToolbar";
 import { QueryResultTable } from "./QueryResultTable";
 import { QueryErrorPanel } from "./QueryErrorPanel";
 import { QueryResultJsonView } from "./QueryResultJsonView";
@@ -52,8 +43,10 @@ interface SQLPagedResult {
   affected_rows?: number;
 }
 
-const PAGE_SIZES = [50, 100, 200, 500];
+// 页大小可输入范围:SQL 结果整页进内存,上限沿用原下拉的最大档 500。
+const SQL_PAGE_SIZE_RANGE = { min: 50, max: 500 };
 const DEFAULT_PAGE_SIZE = 100;
+const noop = () => {};
 
 // props 为稳定字符串 —— memo 可阻止父组件的 innerTabs 结构变化传导进来
 export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
@@ -101,6 +94,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const [totalRows, setTotalRows] = useState<number | null>(null);
   const [affectedRows, setAffectedRows] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const latestRequest = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [showDangerConfirm, setShowDangerConfirm] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -184,15 +179,19 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   }, []);
 
   const fetchPage = useCallback(
-    async (execSql: string, pageNum: number) => {
+    async (execSql: string, pageNum: number, size = pageSize) => {
       if (!execSql || !assetId) return;
 
+      const requestId = ++latestRequest.current;
       setLoading(true);
       setError(null);
 
+      const startedAt = performance.now();
       try {
-        const result = await ExecuteSQLPaged(assetId, execSql, selectedDb, pageNum, pageSize);
+        const result = await ExecuteSQLPaged(assetId, execSql, selectedDb, pageNum, size);
+        if (latestRequest.current !== requestId) return;
         const parsed: SQLPagedResult = JSON.parse(result);
+        setElapsedMs(Math.round(performance.now() - startedAt));
 
         if (parsed.affected_rows !== undefined) {
           setAffectedRows(parsed.affected_rows);
@@ -206,12 +205,14 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
           setTotalRows(parsed.total_count ?? null);
         }
       } catch (e) {
+        if (latestRequest.current !== requestId) return;
+        setElapsedMs(null);
         setError(String(e));
         setColumns([]);
         setRows([]);
         setTotalRows(null);
       } finally {
-        setLoading(false);
+        if (latestRequest.current === requestId) setLoading(false);
       }
     },
     [assetId, selectedDb, pageSize]
@@ -228,22 +229,29 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     await fetchPage(execSql, 0);
   }, [getExecutableSQL, assetId, fetchPage, addSqlHistory, tabId, innerTabId]);
 
-  // Re-fetch when page changes (but not on initial execute)
-  useEffect(() => {
-    if (lastExecSql && page > 0) {
-      fetchPage(lastExecSql, page);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  // 翻页 / 改页大小都在事件里直接取数:page 与取数同步更新,回到第 1 页也会重新取。
+  const goToPage = useCallback(
+    (target: number) => {
+      setPage(target);
+      void fetchPage(lastExecSql, target);
+    },
+    [fetchPage, lastExecSql]
+  );
 
-  // Re-fetch from page 0 when pageSize changes (only if we have a previous query)
-  useEffect(() => {
-    if (lastExecSql) {
+  const handlePageSizeChange = useCallback(
+    (size: number) => {
+      setPageSize(size);
       setPage(0);
-      fetchPage(lastExecSql, 0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageSize]);
+      void fetchPage(lastExecSql, 0, size);
+    },
+    [fetchPage, lastExecSql]
+  );
+
+  const handleStopLoading = useCallback(() => {
+    latestRequest.current += 1;
+    setLoading(false);
+    toast.info(t("query.stopLoadingToast"));
+  }, [t]);
 
   const execute = useCallback(() => {
     const execSql = getExecutableSQL();
@@ -385,14 +393,13 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
       return;
     }
     const target = totalPages ? Math.min(num, totalPages) - 1 : num - 1;
-    setPage(target);
-  }, [pageInput, page, totalPages]);
+    if (target !== page) goToPage(target);
+    else setPageInput(String(page + 1));
+  }, [pageInput, page, totalPages, goToPage]);
 
   const hasNext = totalPages != null ? page < totalPages - 1 : rows.length === pageSize;
   const hasPrev = page > 0;
   const findScope = useMemo(() => ({ rowCount: rows.length, page: page + 1 }), [rows.length, page]);
-  // 重新执行 / 翻页期间分页条保留(按钮随 loading 禁用),结果区不跳动。
-  const showPagination = columns.length > 0 && !error && lastExecSql;
   const errorPanel = error ? (
     <QueryErrorPanel title={t("query.executeFailed")} error={error} onRetry={() => void fetchPage(lastExecSql, page)} />
   ) : null;
@@ -510,93 +517,6 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             </Button>
           </div>
         )}
-        {showPagination && (
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30 shrink-0">
-            {totalRows != null && (
-              <span className="text-xs text-muted-foreground">{t("query.totalRows", { count: totalRows })}</span>
-            )}
-            <div className="ml-auto flex items-center gap-1">
-              {/* Page size selector */}
-              <Select
-                value={String(pageSize)}
-                onValueChange={(v) => {
-                  setPageSize(Number(v));
-                }}
-              >
-                <SelectTrigger size="sm" className="h-6 w-[80px] text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAGE_SIZES.map((s) => (
-                    <SelectItem key={s} value={String(s)} className="text-xs">
-                      {t("query.perPage", { count: s })}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* First page */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                disabled={!hasPrev || loading}
-                onClick={() => setPage(0)}
-                title={t("query.firstPage")}
-              >
-                <ChevronsLeft className="h-3.5 w-3.5" />
-              </Button>
-              {/* Previous page */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                disabled={!hasPrev || loading}
-                onClick={() => setPage((p) => p - 1)}
-                title={t("query.prevPage")}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-              {/* Page input */}
-              <Input
-                className="h-6 w-[48px] text-xs text-center px-1"
-                value={pageInput}
-                onChange={(e) => setPageInput(e.target.value)}
-                onBlur={handlePageInputConfirm}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handlePageInputConfirm();
-                }}
-              />
-              {totalPages != null && (
-                <span className="text-xs text-muted-foreground whitespace-nowrap">/ {totalPages}</span>
-              )}
-              {/* Next page */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                disabled={!hasNext || loading}
-                onClick={() => setPage((p) => p + 1)}
-                title={t("query.nextPage")}
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-              {/* Last page */}
-              {totalPages != null && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  disabled={!hasNext || loading}
-                  onClick={() => setPage(totalPages - 1)}
-                  title={t("query.lastPage")}
-                >
-                  <ChevronsRight className="h-3.5 w-3.5" />
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
         <div className="flex min-h-0 flex-1">
           <div className="flex min-w-0 flex-1 flex-col">
             {viewMode === "json" && error ? (
@@ -630,6 +550,44 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             />
           )}
         </div>
+        {lastExecSql && affectedRows === null && (
+          <TableDataStatusBar
+            gridEdit={false}
+            pendingEditCount={0}
+            sqlSummary=""
+            totalRows={totalRows}
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            pageInput={pageInput}
+            hasPrev={hasPrev}
+            hasNext={hasNext}
+            selectedRowCount={0}
+            submitting={false}
+            loading={loading}
+            loadingPage={loading ? page : null}
+            failed={!!error}
+            elapsedMs={elapsedMs}
+            rowCount={rows.length}
+            pageSizeRange={SQL_PAGE_SIZE_RANGE}
+            refreshTitle={t("query.refreshTable")}
+            onRefresh={() => void fetchPage(lastExecSql, page)}
+            onStopLoading={handleStopLoading}
+            onPageInputChange={setPageInput}
+            onPageInputConfirm={handlePageInputConfirm}
+            onPageSizeChange={handlePageSizeChange}
+            onFirstPage={() => goToPage(0)}
+            onPreviousPage={() => goToPage(page - 1)}
+            onNextPage={() => goToPage(page + 1)}
+            onLastPage={() => {
+              if (totalPages != null) goToPage(totalPages - 1);
+            }}
+            onAddRow={noop}
+            onDeleteRows={noop}
+            onApplyChanges={noop}
+            onDiscardChanges={noop}
+          />
+        )}
       </div>
 
       {/* Dangerous SQL confirmation */}

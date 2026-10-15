@@ -177,4 +177,80 @@ describe("SqlEditorTab result views", () => {
     await screen.findByText("json failure");
     expect(screen.getByText("query.executeFailed")).toBeInTheDocument();
   });
+  describe("shared bottom status bar", () => {
+    const pageOf = (n: number, total: number | undefined) =>
+      JSON.stringify({
+        columns: ["id", "name"],
+        rows: Array.from({ length: n }, (_, i) => ({ id: i, name: `n${i}` })),
+        ...(total === undefined ? {} : { total_count: total }),
+      });
+
+    async function executeWith(raw: string) {
+      const user = userEvent.setup();
+      vi.mocked(ExecuteSQLPaged).mockResolvedValue(raw);
+      render(<SqlEditorTab tabId="query-1" innerTabId="sql-1" />);
+      await user.click(screen.getByText("query.execute"));
+      await waitFor(() => expect(document.querySelector('[data-cell-key="0:name"]')).toBeTruthy());
+      return user;
+    }
+    const lastArgs = () => vi.mocked(ExecuteSQLPaged).mock.calls.at(-1)!;
+
+    it("shows the row count and elapsed time in the centre and drops the old top pager", async () => {
+      await executeWith(pageOf(3, 3));
+
+      expect(screen.getByText(/query\.rows/)).toHaveTextContent("query.rows · query.elapsedMs");
+      expect(screen.queryByText("query.totalRows")).toBeNull();
+      expect(screen.getAllByTitle("query.firstPage")).toHaveLength(1);
+      expect(screen.getByTitle("query.refreshTable")).toBeInTheDocument();
+    });
+
+    it("offers a last-page button only when the result has a total", async () => {
+      await executeWith(pageOf(100, 250));
+      expect(screen.getByTitle("query.lastPage")).toBeInTheDocument();
+    });
+
+    it("has no last-page button without a total", async () => {
+      await executeWith(pageOf(100, undefined));
+      expect(screen.queryByTitle("query.lastPage")).toBeNull();
+      expect(screen.getByTitle("query.nextPage")).toBeEnabled();
+    });
+
+    it("refetches page 1 from page 2 via first page, previous page and typing 1", async () => {
+      const user = await executeWith(pageOf(100, 300));
+
+      for (const go of [
+        () => user.click(screen.getByTitle("query.firstPage")),
+        () => user.click(screen.getByTitle("query.prevPage")),
+        async () => {
+          const input = screen.getByLabelText("query.pageNumber");
+          await user.clear(input);
+          await user.type(input, "1{Enter}");
+        },
+      ]) {
+        await user.click(screen.getByTitle("query.nextPage"));
+        await waitFor(() => expect(lastArgs()[3]).toBe(1));
+        await waitFor(() => expect(screen.getByTitle("query.nextPage")).toBeEnabled());
+        const before = vi.mocked(ExecuteSQLPaged).mock.calls.length;
+        await go();
+        await waitFor(() => expect(vi.mocked(ExecuteSQLPaged).mock.calls.length).toBe(before + 1));
+        expect(lastArgs()[3]).toBe(0);
+        await waitFor(() => expect(screen.getByTitle("query.nextPage")).toBeEnabled());
+      }
+    });
+
+    it("changes the page size from the settings popover within the allowed range and restarts at page 1", async () => {
+      const user = await executeWith(pageOf(100, 1000));
+      await user.click(screen.getByTitle("query.tableFooterSettings"));
+      const input = await screen.findByLabelText("query.pageSize");
+
+      await user.clear(input);
+      await user.type(input, "20000{Enter}");
+      await waitFor(() => expect(lastArgs()[4]).toBe(500));
+      expect(lastArgs()[3]).toBe(0);
+
+      await user.clear(input);
+      await user.type(input, "10{Enter}");
+      await waitFor(() => expect(lastArgs()[4]).toBe(50));
+    });
+  });
 });

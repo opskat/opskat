@@ -213,6 +213,8 @@ export function TableEditorToolbar({
   );
 }
 
+const DEFAULT_PAGE_SIZE_RANGE = { min: 1, max: 100000 };
+
 interface TableDataStatusBarProps {
   /** 驱动声明了表格编辑:新增 / 删除 / 应用 / 放弃修改才出现。 */
   gridEdit: boolean;
@@ -234,6 +236,10 @@ interface TableDataStatusBarProps {
   failed?: boolean;
   /** 最近一次取数耗时(毫秒),跟在行数与页码之后。 */
   elapsedMs?: number | null;
+  /** 当前页行数:有值时中部显示「N 行」,取代页码 / 记录数文案(无总数的 SQL 结果用)。 */
+  rowCount?: number | null;
+  /** 页大小可输入的范围,缺省 1–100000。 */
+  pageSizeRange?: { min: number; max: number };
   refreshTitle: string;
   onRefresh: () => void;
   onStopLoading: () => void;
@@ -267,6 +273,8 @@ export function TableDataStatusBar({
   loadingPage,
   failed,
   elapsedMs,
+  rowCount,
+  pageSizeRange = DEFAULT_PAGE_SIZE_RANGE,
   refreshTitle,
   onRefresh,
   onStopLoading,
@@ -294,7 +302,7 @@ export function TableDataStatusBar({
   }
 
   const commitPageSize = () => {
-    const next = Math.max(1, Math.min(100000, Math.floor(Number(pageSizeDraft))));
+    const next = Math.max(pageSizeRange.min, Math.min(pageSizeRange.max, Math.floor(Number(pageSizeDraft))));
     if (!Number.isFinite(next)) {
       setPageSizeDraft(String(pageSize));
       return;
@@ -387,9 +395,11 @@ export function TableDataStatusBar({
           </span>
         ) : (
           <span className="text-xs text-muted-foreground">
-            {totalRows != null
-              ? t("query.recordsInPage", { count: totalRows, page: page + 1 })
-              : t("query.pageNumber", { page: page + 1 })}
+            {rowCount != null
+              ? t("query.rows", { count: rowCount })
+              : totalRows != null
+                ? t("query.recordsInPage", { count: totalRows, page: page + 1 })
+                : t("query.pageNumber", { page: page + 1 })}
             {elapsedMs != null && ` · ${t("query.elapsedMs", { ms: elapsedMs })}`}
           </span>
         )}
