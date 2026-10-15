@@ -74,6 +74,16 @@ export interface RenderCellContext {
   col: string;
 }
 
+function isTextEntryTarget(target: EventTarget): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT" ||
+    target.isContentEditable
+  );
+}
+
 interface QueryResultTableProps {
   columns: string[];
   rows: Record<string, unknown>[];
@@ -130,6 +140,9 @@ interface QueryResultTableProps {
   findEnabled?: boolean;
   // 查找条的范围说明：当前页已加载的行数与页码（从 1 开始）。
   findScope?: { rowCount: number; page: number };
+  // 已知为 NOT NULL 的列名:Delete / Backspace 设 NULL 时据此拒绝。不传(SQL 结果等不知道约束的场景)
+  // 表示未知,此时只读表格上的 Delete 本来就不生效。
+  notNullColumns?: ReadonlySet<string>;
 }
 
 // Sentinel key used to represent NULL / undefined values in the column-filter
@@ -357,6 +370,7 @@ function QueryResultTableImpl({
   renderCell,
   findEnabled,
   findScope,
+  notNullColumns,
 }: QueryResultTableProps) {
   const { t } = useTranslation();
 
@@ -1449,12 +1463,24 @@ function QueryResultTableImpl({
     [selectCell]
   );
 
+  // PageUp / PageDown 的步长:容器当前能容纳的整行数(扣掉粘性表头),至少 1 行。
+  const visibleRowCount = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return 1;
+    const headHeight = container.querySelector<HTMLElement>("thead")?.offsetHeight ?? 0;
+    const measured = container.querySelector<HTMLElement>("tbody tr[data-index]")?.offsetHeight ?? 0;
+    const rowHeight = measured > 0 ? measured : rowEstimateSize;
+    return Math.max(1, Math.floor((container.clientHeight - headHeight) / rowHeight));
+  }, [rowEstimateSize]);
+
   // Arrow key navigation + Enter/F2 to edit + Escape to deselect/cancel
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // When editing, the input owns key events — only Escape handled here already
       // (the input's onKeyDown calls setEditingCell(null) on Escape).
       if (editingCell) return;
+      // 查找条、列宽输入等容器内的其他输入框自己处理按键,表格键盘不插手。
+      if (e.target !== e.currentTarget && isTextEntryTarget(e.target)) return;
 
       // Keyboard copy: the browser keeps the key while the user has page text selected.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
@@ -1470,6 +1496,12 @@ function QueryResultTableImpl({
         if (!editable || !onPasteBlock || (!selectedCell && selectedRowIdxs.size === 0)) return;
         e.preventDefault();
         void pasteClipboardBlock();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        if (!allRowsSelected) toggleSelectAllRows();
         return;
       }
 
@@ -1506,6 +1538,43 @@ function QueryResultTableImpl({
         case "ArrowRight":
           nextColIdx = Math.min(displayColumns.length - 1, colIdx + 1);
           break;
+        case "Tab": {
+          // 行末 Tab / 行首 ⇧Tab 换行;整张表的最后 / 第一格不拦截,让焦点按浏览器默认移出表格。
+          const step = e.shiftKey ? -1 : 1;
+          const flat = displayIdx * displayColumns.length + colIdx + step;
+          if (flat < 0 || flat >= sortedIndices.length * displayColumns.length) return;
+          nextDisplayIdx = Math.floor(flat / displayColumns.length);
+          nextColIdx = flat % displayColumns.length;
+          break;
+        }
+        case "Home":
+          nextColIdx = 0;
+          if (e.ctrlKey || e.metaKey) nextDisplayIdx = 0;
+          break;
+        case "End":
+          nextColIdx = displayColumns.length - 1;
+          if (e.ctrlKey || e.metaKey) nextDisplayIdx = sortedIndices.length - 1;
+          break;
+        case "PageUp":
+        case "PageDown": {
+          const rowsPerPage = visibleRowCount();
+          nextDisplayIdx =
+            e.key === "PageUp"
+              ? Math.max(0, displayIdx - rowsPerPage)
+              : Math.min(sortedIndices.length - 1, displayIdx + rowsPerPage);
+          break;
+        }
+        case "Delete":
+        case "Backspace": {
+          if (!canSetCellValue) return;
+          e.preventDefault();
+          if (notNullColumns?.has(selectedCell.col)) {
+            toast.warning(t("query.cannotSetNullNotNull", { column: selectedCell.col }));
+            return;
+          }
+          setCellValueHandler?.({ rowIdx: selectedCell.origIdx, col: selectedCell.col, value: null });
+          return;
+        }
         case "Enter":
         case "F2":
           if (editable) {
@@ -1539,6 +1608,13 @@ function QueryResultTableImpl({
       selectCell,
       copySelectionToClipboard,
       pasteClipboardBlock,
+      allRowsSelected,
+      toggleSelectAllRows,
+      visibleRowCount,
+      canSetCellValue,
+      setCellValueHandler,
+      notNullColumns,
+      t,
     ]
   );
 
@@ -2097,6 +2173,7 @@ function QueryResultTableImpl({
                     >
                       <CircleSlash className="h-3.5 w-3.5" />
                       {t("query.setNull")}
+                      <span className="ml-auto text-xs text-muted-foreground">Delete</span>
                     </button>
                     {canSetDateTime && (
                       <button

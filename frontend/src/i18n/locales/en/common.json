@@ -2353,6 +2353,7 @@
     "noMatch": "No match",
     "setEmptyString": "Set to Empty String",
     "setNull": "Set to NULL",
+    "cannotSetNullNotNull": "Column \"{{column}}\" is NOT NULL and cannot be set to NULL",
     "setDateTime": "Set Date/Time...",
     "dateTimeDialogTitle": "Set Date/Time",
     "dateTimeValue": "Date/Time value",

@@ -287,6 +287,10 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   }, [assetId, database, table, openAttempt, nextRequestId, isCancelled]);
 
   // 翻页、计数发给驱动的是结构化的筛选条件与排序项,不是 SQL:怎么变成查询由驱动决定。
+  const notNullColumns = useMemo(
+    () => new Set(columnRules.filter((rule) => !rule.nullable).map((rule) => rule.name)),
+    [columnRules]
+  );
   const filterRequest = useMemo(
     () => toFilterRequest(appliedFilters).map((item) => dbdriver.FilterItem.createFrom(item)),
     [appliedFilters]
@@ -1193,6 +1197,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               renderCell={renderCell}
               findEnabled
               findScope={findScope}
+              notNullColumns={notNullColumns}
             />
           )}
         </div>

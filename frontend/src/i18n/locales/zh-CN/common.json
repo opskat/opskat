@@ -2353,6 +2353,7 @@
     "noMatch": "无匹配",
     "setEmptyString": "设为空字符串",
     "setNull": "设为 NULL",
+    "cannotSetNullNotNull": "列「{{column}}」不允许为 NULL，无法设为 NULL",
     "setDateTime": "设置日期/时间...",
     "dateTimeDialogTitle": "设置日期/时间",
     "dateTimeValue": "日期/时间值",
