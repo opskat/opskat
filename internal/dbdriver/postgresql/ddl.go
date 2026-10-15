@@ -32,8 +32,9 @@ const ddlColumnsQuery = "SELECT a.attname, " +
 	"ORDER BY a.attnum"
 
 // viewDefQuery 取视图定义：建表语句与对象源码共用。format('%I.%I', ...) 给标识符加引号，
-// 混合大小写或带特殊字符的视图名才能解析到正确的 regclass。
-const viewDefQuery = "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)"
+// 混合大小写或带特殊字符的视图名才能解析到正确的 regclass。format 的参数是 variadic "any"，
+// 占位符必须显式 ::text，否则服务端报 could not determine data type of parameter（42P18）。
+const viewDefQuery = "SELECT pg_get_viewdef(format('%I.%I', $1::text, $2::text)::regclass, true)"
 
 func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, database, table string) (string, error) {
 	schema, tbl := splitSchemaTable(table)

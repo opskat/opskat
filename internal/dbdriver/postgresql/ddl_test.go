@@ -26,7 +26,10 @@ const ddlColumnsSQL = "SELECT a.attname, " +
 	"WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v') " +
 	"ORDER BY a.attnum"
 
-const viewDefSQL = "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)"
+// viewDefSQL 是发给服务端的视图定义语句。format() 的参数是 variadic "any"，PostgreSQL 推不出
+// 占位符类型（SQLSTATE 42P18），所以必须显式 ::text。sqlmock 不会做服务端类型推断，
+// 这里只能通过精确匹配语句文本来守住这一约束。
+const viewDefSQL = "SELECT pg_get_viewdef(format('%I.%I', $1::text, $2::text)::regclass, true)"
 
 func ddlColumnRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"attname", "format_type", "nullable", "default", "relkind"})
