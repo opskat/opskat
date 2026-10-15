@@ -2087,7 +2087,7 @@
     "filterSearchPlaceholder": "搜索值…",
     "filterNoMatch": "无匹配值",
     "filterEmptyString": "(空字符串)",
-    "defaultValuePlaceholder": "(默认值)",
+    "newRowDefaultPlaceholder": "(默认值)",
     "dateLabel": "日期",
     "timeLabel": "时间",
     "nullValue": "NULL",

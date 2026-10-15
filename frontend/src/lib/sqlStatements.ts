@@ -31,8 +31,9 @@ function dollarTagAt(sql: string, i: number): string | null {
  * 返回与原文等长的掩码：注释变空白，引号 / 标识符 / `$$` 块的内容变 `q`，
  * 其余（含分号）原样保留。分号与关键字判断都在掩码上做，所以不会被字符串或注释干扰。
  * 未闭合的引号、注释一直延伸到文本末尾。
+ * backslashEscapes：引号内的 `\` 是否转义下一个字符（MySQL 是，PostgreSQL / SQLite / SQL Server 不是）。
  */
-function maskNonCode(sql: string): string {
+function maskNonCode(sql: string, backslashEscapes = true): string {
   let out = "";
   let i = 0;
   const n = sql.length;
@@ -52,7 +53,7 @@ function maskNonCode(sql: string): string {
     } else if (c === "'" || c === '"' || c === "`") {
       end = i + 1;
       while (end < n) {
-        if (c !== "`" && sql[end] === "\\") {
+        if (backslashEscapes && c !== "`" && sql[end] === "\\") {
           end += 2;
         } else if (sql[end] === c) {
           if (sql[end + 1] === c) end += 2;
@@ -137,12 +138,18 @@ export function statementAt(sql: string, offset: number): SqlStatement | null {
   return hit;
 }
 
-/** 任一语句以 DELETE / DROP / TRUNCATE / ALTER 开头，或是不含 WHERE 的 UPDATE。 */
+/**
+ * 任一语句以 DELETE / DROP / TRUNCATE / ALTER 开头，或是不含 WHERE 的 UPDATE。
+ * 反斜杠是否转义因方言而异，两种读法都判断一次，任一读法危险即危险：
+ * 否则 `SELECT 'C:\'; DROP TABLE x` 在 PostgreSQL 上会被当成一条未闭合的字符串而漏掉 DROP。
+ */
 export function isDangerousSql(sql: string): boolean {
-  const masked = maskNonCode(sql);
-  return fragments(masked).some(({ start, end }) => {
-    const stmt = masked.slice(start, end).toUpperCase();
-    if (/^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(stmt)) return true;
-    return /^UPDATE\b/.test(stmt) && !/\bWHERE\b/.test(stmt);
+  return [true, false].some((backslashEscapes) => {
+    const masked = maskNonCode(sql, backslashEscapes);
+    return fragments(masked).some(({ start, end }) => {
+      const stmt = masked.slice(start, end).toUpperCase();
+      if (/^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(stmt)) return true;
+      return /^UPDATE\b/.test(stmt) && !/\bWHERE\b/.test(stmt);
+    });
   });
 }

@@ -2087,7 +2087,7 @@
     "filterSearchPlaceholder": "Search values…",
     "filterNoMatch": "No matching value",
     "filterEmptyString": "(empty string)",
-    "defaultValuePlaceholder": "(Default)",
+    "newRowDefaultPlaceholder": "(Default)",
     "dateLabel": "Date",
     "timeLabel": "Time",
     "nullValue": "NULL",

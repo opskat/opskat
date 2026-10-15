@@ -163,6 +163,37 @@ describe("SqlEditorTab result views", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("shows 加载失败 in the status bar when a query fails right after a DML statement", async () => {
+    const user = userEvent.setup();
+    vi.mocked(ExecuteSQLPaged).mockResolvedValueOnce(JSON.stringify({ affected_rows: 3 }));
+    render(<SqlEditorTab tabId="query-1" innerTabId="sql-1" />);
+    await user.click(screen.getByText("query.execute"));
+    await screen.findByText(/query\.affectedRows/);
+    vi.mocked(ExecuteSQLPaged).mockRejectedValueOnce("table users is locked");
+
+    await user.click(screen.getByText("query.execute"));
+
+    await screen.findByText("table users is locked");
+    expect(screen.getByText("query.loadFailed")).toBeInTheDocument();
+  });
+
+  it("keeps a resized column width when a retry after a failure returns the same columns", async () => {
+    const user = await renderExecuted();
+    const header = () => document.querySelector('[data-column-header-key="name"]') as HTMLElement;
+    Object.defineProperty(window, "prompt", { configurable: true, value: vi.fn().mockReturnValue("240") });
+    fireEvent.contextMenu(header(), { clientX: 40, clientY: 20 });
+    fireEvent.click(screen.getByText("query.setColumnWidth"));
+    expect(header().style.width).toBe("240px");
+    vi.mocked(ExecuteSQLPaged).mockRejectedValueOnce("connection reset");
+
+    await user.click(screen.getByText("query.execute"));
+    await screen.findByText("connection reset");
+    await user.click(screen.getByRole("button", { name: "query.retry" }));
+
+    await waitFor(() => expect(document.querySelector('[data-cell-key="0:name"]')).toBeTruthy());
+    expect(header().style.width).toBe("240px");
+  });
+
   it("shows the failure card in the JSON view too", async () => {
     const user = await renderExecuted();
     await user.click(screen.getByRole("radio", { name: "query.jsonView" }));

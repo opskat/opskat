@@ -139,11 +139,10 @@ export const TableDataTab = memo(function TableDataTab(props: TableDataTabProps)
   return <TableDataTabContent {...props} />;
 });
 
-/** 有未提交修改时被拦下的操作;discardLabel 缺省为「放弃并继续」。 */
+/** 有未提交修改时被拦下的操作。 */
 interface GuardedAction {
   run: () => void;
   description: string;
-  discardLabel?: string;
 }
 
 function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTabProps) {
@@ -332,7 +331,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         col.name,
         {
           comment: col.comment,
-          default: col.default,
+          // 后端以 JSON null 表示「没有默认值」(生成的类型只写了 string | undefined),在这里统一成 undefined。
+          default: col.default ?? undefined,
           type: col.type,
           nullable: col.nullable,
           primaryKey: col.primaryKey,
@@ -489,7 +489,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     return {
       run: () => forceCloseInnerTabs(tabId, ids, closeOuter),
       description: t("query.unsavedEditsDescClose"),
-      discardLabel: t("query.unsavedEditsDiscardClose"),
     };
   }, [closeRequest, forceCloseInnerTabs, innerTabId, t, tabId]);
   const pendingGuard = closeGuard ?? guardedAction;
@@ -1128,9 +1127,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const renderCell = useCallback(
     (value: unknown, ctx: { rowIdx: number; col: string }) => {
       if (ctx.rowIdx >= rowsLength && value == null) {
-        return <span className="text-muted-foreground/70 italic">{t("query.defaultValuePlaceholder")}</span>;
+        return <span className="text-muted-foreground/70 italic">{t("query.newRowDefaultPlaceholder")}</span>;
       }
-      if (value == null) return <span className="text-muted-foreground italic">NULL</span>;
+      if (value == null) return <span className="text-muted-foreground italic">{t("query.nullValue")}</span>;
       return <span className="truncate block">{cellValueToDisplayText(value)}</span>;
     },
     [rowsLength, t]
@@ -1425,7 +1424,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         open={pendingGuard !== null}
         summary={unsavedSummary}
         description={pendingGuard?.description}
-        discardLabel={pendingGuard?.discardLabel}
         onStay={handleGuardStay}
         onDiscard={handleGuardDiscard}
         onSubmit={handleGuardSubmit}

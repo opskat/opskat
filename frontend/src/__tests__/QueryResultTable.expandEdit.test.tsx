@@ -56,6 +56,16 @@ describe("QueryResultTable expand editor", () => {
     expect(screen.queryByRole("textbox", { name: "query.expandEdit.title" })).toBeNull();
   });
 
+  it("opens for a column whose name contains a quote", () => {
+    renderGrid({ columns: ['say "hi"'], rows: [{ 'say "hi"': "hello" }], columnTypes: {} });
+    const target = Array.from(document.querySelectorAll<HTMLElement>("td[data-cell-key]")).find(
+      (td) => td.dataset.cellKey === '0:say "hi"'
+    )!;
+    fireEvent.click(target);
+    fireEvent.keyDown(grid(), { key: "Enter", shiftKey: true });
+    expect(textarea().value).toBe("hello");
+  });
+
   it("opens from the context menu item showing the shortcut hint", () => {
     renderGrid();
     fireEvent.contextMenu(cell("1:doc"), { clientX: 10, clientY: 10 });

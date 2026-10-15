@@ -347,12 +347,12 @@ describe("TableDataTab unsaved edits guard", () => {
       expect(useQueryStore.getState().dbStates["query-1"].closeRequest).toBeUndefined();
     });
 
-    it("discard and close closes the tab without submitting", async () => {
+    it("「放弃并继续」 closes the tab without submitting", async () => {
       const user = await renderLoaded();
       editCell("0:status", "paid");
       requestClose();
 
-      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscardClose"));
+      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscard"));
 
       expect(innerIds()).toEqual([]);
       expect(vi.mocked(ExecuteSQL)).not.toHaveBeenCalled();
@@ -392,7 +392,7 @@ describe("TableDataTab unsaved edits guard", () => {
       editCell("0:status", "paid");
       act(() => useQueryStore.getState().requestCloseInnerTabs("query-1", ["table-1"], { closeOuter: true }));
 
-      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscardClose"));
+      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscard"));
 
       expect(useTabStore.getState().tabs).toEqual([]);
     });

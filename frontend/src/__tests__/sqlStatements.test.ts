@@ -132,4 +132,12 @@ describe("isDangerousSql", () => {
     expect(isDangerousSql("UPDATE a SET x = 1 WHERE id = 1; UPDATE b SET y = 2")).toBe(true);
     expect(isDangerousSql("SELECT 1; -- DROP TABLE x\nSELECT 2")).toBe(false);
   });
+
+  it("is not blinded by a string ending in a backslash, which closes the string outside MySQL", () => {
+    // PostgreSQL / SQLite / SQL Server: 'C:\' is a complete string, so the DROP is a real second statement.
+    expect(isDangerousSql("SELECT 'C:\\'; DROP TABLE x;")).toBe(true);
+    expect(isDangerousSql('SELECT "C:\\"; DROP TABLE x;')).toBe(true);
+    // MySQL-style escaped quotes inside an ordinary string stay harmless.
+    expect(isDangerousSql("SELECT 'it\\'s fine'")).toBe(false);
+  });
 });

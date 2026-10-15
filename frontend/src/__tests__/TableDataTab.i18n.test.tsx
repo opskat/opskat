@@ -68,6 +68,6 @@ describe("TableDataTab — new row placeholder", () => {
 
     await user.click(screen.getByTitle("query.addRow"));
 
-    expect(screen.getByText("query.defaultValuePlaceholder")).toBeInTheDocument();
+    expect(screen.getByText("query.newRowDefaultPlaceholder")).toBeInTheDocument();
   });
 });

@@ -399,7 +399,7 @@ export function TableDataStatusBar({
               ? t("query.rows", { count: rowCount })
               : totalRows != null
                 ? t("query.recordsInPage", { count: totalRows, page: page + 1 })
-                : t("query.pageNumber", { page: page + 1 })}
+                : t("query.page", { page: page + 1 })}
             {elapsedMs != null && ` · ${t("query.elapsedMs", { ms: elapsedMs })}`}
           </span>
         )}

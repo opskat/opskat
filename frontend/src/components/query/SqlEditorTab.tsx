@@ -218,7 +218,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
         if (latestRequest.current !== requestId) return;
         setElapsedMs(null);
         setError(String(e));
-        setColumns([]);
+        // 失败不再是 DML 结果:底部状态条要显示「加载失败」。列保留:重试拿到同样的列时列宽、冻结等不重置。
+        setAffectedRows(null);
         setRows([]);
         setTotalRows(null);
       } finally {

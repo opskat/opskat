@@ -64,7 +64,16 @@ export function TableFindBar({
   ];
 
   return (
-    <div className="flex items-center gap-1 px-2 py-1.5 border-b bg-background/95 backdrop-blur-sm shrink-0">
+    <div
+      className="flex items-center gap-1 px-2 py-1.5 border-b bg-background/95 backdrop-blur-sm shrink-0"
+      onKeyDown={(e) => {
+        // 焦点在输入框或任一开关 / 按钮上时，Esc 都关闭查找条
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }}
+    >
       <div className="relative w-80 shrink-0">
         <Search
           aria-hidden="true"
@@ -82,9 +91,6 @@ export function TableFindBar({
               e.preventDefault();
               if (e.shiftKey) onPrevious();
               else onNext();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              onClose();
             }
           }}
           placeholder={t("query.find.placeholder")}

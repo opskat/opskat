@@ -213,4 +213,15 @@ describe("QueryResultTable keyboard — context menu hints", () => {
     const copyItem = screen.getByText("query.copyValue").closest("button")!;
     expect(copyItem.textContent).toContain(formatModKey("KeyC"));
   });
+
+  it("the Set NULL item refuses a NOT NULL column the same way its Delete shortcut does", () => {
+    toastWarning.mockReset();
+    const g = renderGrid({ editable: true, notNullColumns: new Set(["name"]) });
+    fireEvent.contextMenu(cell("1:name"), { clientX: 40, clientY: 50 });
+
+    fireEvent.click(screen.getByText("query.setNull"));
+
+    expect(g.onCellEdit).not.toHaveBeenCalled();
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+  });
 });

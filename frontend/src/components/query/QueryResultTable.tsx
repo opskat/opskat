@@ -179,6 +179,14 @@ function cellKey(rowIdx: number, col: string) {
   return `${rowIdx}:${col}`;
 }
 
+// 按单元格 key 找已渲染的格子。列名可以含引号等任意字符,逐个比 dataset 而不是拼属性选择器。
+function findCellElement(container: HTMLElement | null, key: string): HTMLElement | undefined {
+  if (!container) return undefined;
+  return Array.from(container.querySelectorAll<HTMLElement>("td[data-cell-key]")).find(
+    (el) => el.dataset.cellKey === key
+  );
+}
+
 type DateEditMode = "date" | "datetime";
 
 type CellContextMenu = {
@@ -908,6 +916,17 @@ function QueryResultTableImpl({
   const pasteCellHandler = onPasteCell ?? onSetCellValue ?? onCellEdit;
   const uuidCellHandler = onGenerateUuid ?? onSetCellValue ?? onCellEdit;
   const canSetCellValue = !!editable && !!setCellValueHandler;
+  // 设为 NULL(Delete / Backspace 与右键「设为 NULL」共用):列已知为 NOT NULL 时不改动,只提示。
+  const setCellNull = useCallback(
+    (rowIdx: number, col: string) => {
+      if (notNullColumns?.has(col)) {
+        toast.warning(t("query.cannotSetNullNotNull", { column: col }));
+        return;
+      }
+      setCellValueHandler?.({ rowIdx, col, value: null });
+    },
+    [notNullColumns, setCellValueHandler, t]
+  );
   const canPasteCell = !!editable && !!pasteCellHandler;
   const canGenerateUuid = !!editable && !!uuidCellHandler;
   const dateEditMode =
@@ -1169,7 +1188,7 @@ function QueryResultTableImpl({
   );
 
   const openExpandEdit = useCallback((rowIdx: number, col: string, value: unknown) => {
-    const el = containerRef.current?.querySelector<HTMLElement>(`[data-cell-key="${cellKey(rowIdx, col)}"]`);
+    const el = findCellElement(containerRef.current, cellKey(rowIdx, col));
     const rect = el?.getBoundingClientRect();
     // 先把焦点放回表格:浮层关闭后 Radix 把焦点还给打开前的元素,右键菜单的按钮此时已卸载。
     containerRef.current?.focus();
@@ -1598,11 +1617,7 @@ function QueryResultTableImpl({
         case "Backspace": {
           if (!canSetCellValue) return;
           e.preventDefault();
-          if (notNullColumns?.has(selectedCell.col)) {
-            toast.warning(t("query.cannotSetNullNotNull", { column: selectedCell.col }));
-            return;
-          }
-          setCellValueHandler?.({ rowIdx: selectedCell.origIdx, col: selectedCell.col, value: null });
+          setCellNull(selectedCell.origIdx, selectedCell.col);
           return;
         }
         case "Enter":
@@ -1652,12 +1667,10 @@ function QueryResultTableImpl({
       toggleSelectAllRows,
       visibleRowCount,
       canSetCellValue,
-      setCellValueHandler,
-      notNullColumns,
+      setCellNull,
       openExpandEdit,
       edits,
       rows,
-      t,
     ]
   );
 
@@ -1723,7 +1736,7 @@ function QueryResultTableImpl({
     const rafId = requestAnimationFrame(() => {
       const container = containerRef.current;
       const key = cellKey(selectedCell.origIdx, selectedCell.col);
-      const el = container?.querySelector<HTMLElement>(`[data-cell-key="${CSS.escape(key)}"]`);
+      const el = findCellElement(container, key);
       if (!container || !el) return;
       el.scrollIntoView({ block: "nearest", inline: "nearest" });
       const frozen = frozenGeometryRef.current;
@@ -2214,7 +2227,10 @@ function QueryResultTableImpl({
                       type="button"
                       role="menuitem"
                       className={CONTEXT_MENU_ITEM_CLASS}
-                      onClick={() => handleSetCellValue(null)}
+                      onClick={() => {
+                        setCellNull(ctxMenu.rowIdx, ctxMenu.col);
+                        setCtxMenu(null);
+                      }}
                     >
                       <CircleSlash className="h-3.5 w-3.5" />
                       {t("query.setNull")}

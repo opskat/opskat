@@ -21,8 +21,6 @@ interface UnsavedEditsDialogProps {
   summary: UnsavedEditSummaryItem[];
   /** What continuing would do, e.g. "Going to page 2 will discard them." Defaults to a generic wording. */
   description?: string;
-  /** Label of the discard button; defaults to 「放弃并继续」. */
-  discardLabel?: string;
   onStay: () => void;
   onDiscard: () => void;
   onSubmit: () => void;
@@ -30,20 +28,16 @@ interface UnsavedEditsDialogProps {
 
 const MAX_SUMMARY_LINES = 10;
 
-function displayValue(value: unknown): string {
-  return value == null ? "NULL" : cellValueToDisplayText(value);
-}
-
 export function UnsavedEditsDialog({
   open,
   summary,
   description,
-  discardLabel,
   onStay,
   onDiscard,
   onSubmit,
 }: UnsavedEditsDialogProps) {
   const { t } = useTranslation();
+  const displayValue = (value: unknown) => (value == null ? t("query.nullValue") : cellValueToDisplayText(value));
   const shown = summary.slice(0, MAX_SUMMARY_LINES);
   const hidden = summary.length - shown.length;
 
@@ -92,7 +86,7 @@ export function UnsavedEditsDialog({
             {t("query.unsavedEditsStay")}
           </Button>
           <Button variant="outline" className="text-destructive hover:text-destructive" onClick={onDiscard}>
-            {discardLabel ?? t("query.unsavedEditsDiscard")}
+            {t("query.unsavedEditsDiscard")}
           </Button>
           <Button onClick={onSubmit}>{t("query.unsavedEditsSubmit")}</Button>
         </AlertDialogFooter>

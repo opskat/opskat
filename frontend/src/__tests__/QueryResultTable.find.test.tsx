@@ -207,6 +207,18 @@ describe("QueryResultTable — find in page", () => {
     expect(lastSelected(onSelectedCellChange)).toEqual({ rowIdx: 1, col: "customer" });
   });
 
+  it("Escape closes the bar while one of its toggle buttons has focus", async () => {
+    renderGrid();
+    await openAndSearch("北岭");
+    const toggle = screen.getByRole("button", { name: "query.find.caseSensitive" });
+    toggle.focus();
+
+    fireEvent.keyDown(toggle, { key: "Escape" });
+
+    expect(findInput()).toBeNull();
+    expect(document.activeElement).toBe(grid());
+  });
+
   it("reopening keeps the keyword and selects it", async () => {
     renderGrid();
     const input = await openAndSearch("北岭");
