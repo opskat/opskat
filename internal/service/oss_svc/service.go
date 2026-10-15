@@ -39,23 +39,29 @@ func (s *Service) lookup(ctx context.Context, assetID int64) (*asset_entity.Asse
 }
 
 func (s *Service) connect(ctx context.Context, assetID int64) (Client, error) {
+	c, _, err := s.connectWithConfig(ctx, assetID)
+	return c, err
+}
+
+func (s *Service) connectWithConfig(ctx context.Context, assetID int64) (Client, *asset_entity.OSSConfig, error) {
 	asset, cfg, secret, err := s.lookup(ctx, assetID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mc, transport, err := connpool.GetOrDialOSSWithTransport(ctx, asset.ID, cfg, secret)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return newMinioAdapterWithHTTP(mc, &http.Client{Transport: transport}, cfg.PartSizeMB), nil
+	return newMinioAdapterWithHTTP(mc, &http.Client{Transport: transport}, cfg.PartSizeMB), cfg, nil
 }
 
+// ListBuckets 返回资产可见的桶:配了默认桶时只有它,否则是账号下的全部桶。
 func (s *Service) ListBuckets(ctx context.Context, assetID int64) ([]BucketItem, error) {
-	c, err := s.connect(ctx, assetID)
+	c, cfg, err := s.connectWithConfig(ctx, assetID)
 	if err != nil {
 		return nil, err
 	}
-	return c.ListBuckets(ctx)
+	return listBucketsWith(ctx, c, cfg.Bucket)
 }
 
 func (s *Service) ListObjects(ctx context.Context, req *ListObjectsRequest) (*ListObjectsResult, error) {
@@ -152,14 +158,13 @@ func (s *Service) PresignPut(ctx context.Context, req *PresignRequest) (string, 
 	return c.PresignPut(ctx, req.Bucket, req.Key, presignExpiry(req.ExpirySecs))
 }
 
-// TestConnection 用已保存的资产拨号并列 Bucket 以验证凭证。
+// TestConnection 用已保存的资产拨号并验证凭证(探测方式见 probeWith)。
 func (s *Service) TestConnection(ctx context.Context, assetID int64) error {
-	c, err := s.connect(ctx, assetID)
+	c, cfg, err := s.connectWithConfig(ctx, assetID)
 	if err != nil {
 		return err
 	}
-	_, err = c.ListBuckets(ctx)
-	return err
+	return probeWith(ctx, c, cfg.Bucket)
 }
 
 // TestConfig 验证一份未保存的配置(表单"测试连接")。
@@ -168,8 +173,7 @@ func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.OSSConfig, s
 	if err != nil {
 		return err
 	}
-	_, err = newMinioAdapter(mc).ListBuckets(ctx)
-	return err
+	return probeWith(ctx, newMinioAdapter(mc), cfg.Bucket)
 }
 
 func presignExpiry(secs int) time.Duration {

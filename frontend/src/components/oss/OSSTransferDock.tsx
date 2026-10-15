@@ -58,6 +58,11 @@ export function OSSTransferDock({ transfers, onCancel, onClear, onClearCompleted
               <span className="min-w-0 flex-1 truncate" title={tr.error ?? tr.name}>
                 {tr.name}
               </span>
+              {tr.files && tr.files.total > 0 && (
+                <span className="shrink-0 text-muted-foreground" data-testid={`oss-transfer-files-${tr.transferId}`}>
+                  {tr.files.done}/{tr.files.total}
+                </span>
+              )}
               <div
                 className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-muted"
                 role="progressbar"

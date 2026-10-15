@@ -145,7 +145,7 @@ func TestCpAutoAllowedRecursiveGatesEveryLandingPathAtOnce(t *testing.T) {
 		So(err, ShouldNotBeNil)
 		So(*seen, ShouldHaveLength, 0)
 		So(*reqs, ShouldHaveLength, 1)
-		So((*reqs)[0].SubCommands, ShouldResemble, []string{dir + "/"})
+		So((*reqs)[0].SubCommands, ShouldResemble, []string{dir + string(filepath.Separator)})
 		So(cpFake.written, ShouldBeEmpty)
 		_, statErr := os.Stat(filepath.Join(dir, "a.log"))
 		So(os.IsNotExist(statErr), ShouldBeTrue)

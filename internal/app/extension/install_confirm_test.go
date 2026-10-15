@@ -59,7 +59,7 @@ func (r *eventRecorder) next(t *testing.T) emitted {
 	select {
 	case ev := <-r.ch:
 		return ev
-	case <-time.After(5 * time.Second):
+	case <-time.After(installWait):
 		t.Fatal("no event emitted")
 		return emitted{}
 	}
@@ -95,7 +95,7 @@ func result(t *testing.T, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(installWait):
 		t.Fatal("confirmInstall did not return")
 		return nil
 	}
@@ -255,7 +255,7 @@ func TestInstallFromPath_AsksFirst(t *testing.T) {
 		select {
 		case o := <-done:
 			return o.info, o.err
-		case <-time.After(5 * time.Second):
+		case <-time.After(installWait):
 			t.Fatal("install did not return")
 			return nil, nil
 		}
@@ -274,3 +274,7 @@ func TestInstallFromPath_AsksFirst(t *testing.T) {
 	assert.Equal(t, "ext-ask", info.Name)
 	assert.NotNil(t, svc.Manager().GetExtension("ext-ask"))
 }
+
+// installWait 只是"安装卡死了"的保护时间，不是在测安装有多快：确认之后要编译扩展的 WASM，
+// 全量测试时许多包同时编译，Windows 上一次编译可能就要好几秒。
+const installWait = time.Minute

@@ -132,3 +132,44 @@ func writeListV2Page(
 	body.WriteString("</ListBucketResult>")
 	_, _ = w.Write([]byte(body.String()))
 }
+
+// TestMinioAdapterDecodesURLEncodedListing 复现 Cloudflare R2 上的真实缺陷:请求带了
+// encoding-type=url,R2 连 "/" 也编码成 %2F(AWS / MinIO 不编码 "/",所以那边只有带空格或
+// 非 ASCII 的 key 受影响)。不解码的话,文件夹显示成 "users%2F",点进去是按字面
+// "users%2F" 当前缀再列一次,永远是空的。
+func TestMinioAdapterDecodesURLEncodedListing(t *testing.T) {
+	list := func(t *testing.T, encodingType, key, prefix string) *ListObjectsResult {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "url", r.URL.Query().Get("encoding-type"))
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+				`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name>%s`+
+				`<IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>1</Size></Contents>`+
+				`<CommonPrefixes><Prefix>%s</Prefix></CommonPrefixes></ListBucketResult>`, encodingType, key, prefix)
+		}))
+		defer server.Close()
+		endpoint, err := url.Parse(server.URL)
+		require.NoError(t, err)
+		mc, err := minio.New(endpoint.Host, &minio.Options{
+			Creds: credentials.NewStaticV4("access", "secret", ""), Secure: false, Region: "us-east-1",
+		})
+		require.NoError(t, err)
+		res, err := ListObjectsWith(context.Background(), newMinioAdapter(mc), "bucket", "", 200, "")
+		require.NoError(t, err)
+		return res
+	}
+
+	t.Run("响应声明 EncodingType=url 时解码 key 与前缀", func(t *testing.T) {
+		res := list(t, "<EncodingType>url</EncodingType>", "%E6%8A%A5%E5%91%8A+2026%2B.txt", "users%2F")
+		require.Equal(t, []string{"users/"}, res.Prefixes)
+		require.Len(t, res.Objects, 1)
+		require.Equal(t, "报告 2026+.txt", res.Objects[0].Key)
+	})
+
+	t.Run("响应未声明编码时 key 按字面保留", func(t *testing.T) {
+		res := list(t, "", "100%25.txt", "a%2Fb/")
+		require.Equal(t, []string{"a%2Fb/"}, res.Prefixes)
+		require.Len(t, res.Objects, 1)
+		require.Equal(t, "100%25.txt", res.Objects[0].Key)
+	})
+}

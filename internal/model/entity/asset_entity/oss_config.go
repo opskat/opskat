@@ -11,6 +11,7 @@ type OSSConfig struct {
 	Provider        string            `json:"provider"` // UI provider preset; connection behavior is determined by endpoint/region/addressing fields
 	Endpoint        string            `json:"endpoint"` // host 或 scheme://host[:port]
 	Region          string            `json:"region"`
+	Bucket          string            `json:"bucket"` // 默认桶;非空时只用这一个桶,不向存储端列桶(限定到桶的令牌没有 ListBuckets 权限)
 	AccessKeyID     string            `json:"access_key_id"`
 	SecretAccessKey string            `json:"secret_access_key"` // 内联时为 AES-256-GCM 密文;托管时为空
 	CredentialID    int64             `json:"credential_id"`     // >0 表示引用托管密码凭证

@@ -70,3 +70,16 @@ func TestOSSDownloadObjectValidatesInput(t *testing.T) {
 	_, err = o.OSSDownloadObject(1, "b", "")
 	require.Error(t, err)
 }
+
+// 文件夹下载只认"文件夹"前缀:空前缀等于整桶,不以 "/" 收尾的是对象 key。
+func TestOSSDownloadFolderValidatesInput(t *testing.T) {
+	o := &OSS{service: oss_svc.New()}
+	_, err := o.OSSDownloadFolder(0, "b", "logs/")
+	require.Error(t, err)
+	_, err = o.OSSDownloadFolder(1, "", "logs/")
+	require.Error(t, err)
+	_, err = o.OSSDownloadFolder(1, "b", "")
+	require.Error(t, err)
+	_, err = o.OSSDownloadFolder(1, "b", "logs/app.log")
+	require.Error(t, err)
+}

@@ -3,7 +3,14 @@ import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
 import { useAssetStore } from "../stores/assetStore";
 import { asset_entity, query_svc } from "../../wailsjs/go/models";
-import { ExecuteSQL, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
+import {
+  ExecuteSQL,
+  ListDatabaseObjects,
+  ListDatabases,
+  ListMongoCollections,
+  ListMongoDatabases,
+  ListTables,
+} from "../../wailsjs/go/query/Query";
 import { BUILTIN_DRIVERS, FAKE_DRIVER, provideDrivers } from "./dbDriverFixtures";
 import { RedisGetKeyDetail } from "../../wailsjs/go/redis/Redis";
 import { RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
@@ -698,5 +705,49 @@ describe("queryStore with a driver unknown to the frontend", () => {
     expect(state.databases).toEqual(["alpha", "beta"]);
     expect(state.tables.alpha).toEqual(["t1", "t2"]);
     expect(ExecuteSQL).not.toHaveBeenCalled();
+  });
+});
+
+describe("queryStore MongoDB actions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/Mongo");
+    useQueryStore.getState().openQueryTab(makeMongoAsset(20));
+  });
+
+  function seedLoadedCollections(collections: Record<string, string[]>, expandedDbs: string[]) {
+    useQueryStore.setState((s) => ({
+      mongoStates: {
+        ...s.mongoStates,
+        "query-20": { ...s.mongoStates["query-20"], databases: Object.keys(collections), collections, expandedDbs },
+      },
+    }));
+  }
+
+  it("refreshes the collection lists of already-loaded databases when databases are reloaded", async () => {
+    seedLoadedCollections({ app: ["users"], logs: ["audit"] }, ["app"]);
+    vi.mocked(ListMongoDatabases).mockResolvedValueOnce(JSON.stringify(["app", "logs"]));
+    const fresh: Record<string, string[]> = { app: ["users", "associated_vulnerability"], logs: ["audit", "access"] };
+    vi.mocked(ListMongoCollections).mockImplementation(async (_assetId, db) => JSON.stringify(fresh[db]));
+
+    await useQueryStore.getState().loadMongoDatabases("query-20");
+
+    const state = useQueryStore.getState().mongoStates["query-20"];
+    expect(state.collections.app).toEqual(["users", "associated_vulnerability"]);
+    expect(state.collections.logs).toEqual(["audit", "access"]);
+  });
+
+  it("only reloads collections for loaded databases that still exist", async () => {
+    seedLoadedCollections({ app: ["users"], dropped: ["tmp"] }, ["app", "dropped"]);
+    vi.mocked(ListMongoDatabases).mockResolvedValueOnce(JSON.stringify(["app", "neverOpened"]));
+    vi.mocked(ListMongoCollections).mockResolvedValue(JSON.stringify(["users", "orders"]));
+
+    await useQueryStore.getState().loadMongoDatabases("query-20");
+
+    expect(ListMongoCollections).toHaveBeenCalledTimes(1);
+    expect(ListMongoCollections).toHaveBeenCalledWith(20, "app");
+    expect(useQueryStore.getState().mongoStates["query-20"].collections.neverOpened).toBeUndefined();
   });
 });

@@ -117,6 +117,26 @@ func (mr *MockKVMockRecorder) Get(ctx, key any, opts ...any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockKV)(nil).Get), varargs...)
 }
 
+// GetStream mocks base method.
+func (m *MockKV) GetStream(ctx context.Context, key string, opts ...clientv3.OpOption) (clientv3.GetStreamChan, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, key}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetStream", varargs...)
+	ret0, _ := ret[0].(clientv3.GetStreamChan)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetStream indicates an expected call of GetStream.
+func (mr *MockKVMockRecorder) GetStream(ctx, key any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, key}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStream", reflect.TypeOf((*MockKV)(nil).GetStream), varargs...)
+}
+
 // Put mocks base method.
 func (m *MockKV) Put(ctx context.Context, key, val string, opts ...clientv3.OpOption) (*clientv3.PutResponse, error) {
 	m.ctrl.T.Helper()
@@ -339,18 +359,23 @@ func (mr *MockClusterMockRecorder) MemberAddAsLearner(ctx, peerAddrs any) *gomoc
 }
 
 // MemberList mocks base method.
-func (m *MockCluster) MemberList(ctx context.Context) (*clientv3.MemberListResponse, error) {
+func (m *MockCluster) MemberList(ctx context.Context, opts ...clientv3.OpOption) (*clientv3.MemberListResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MemberList", ctx)
+	varargs := []any{ctx}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "MemberList", varargs...)
 	ret0, _ := ret[0].(*clientv3.MemberListResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // MemberList indicates an expected call of MemberList.
-func (mr *MockClusterMockRecorder) MemberList(ctx any) *gomock.Call {
+func (mr *MockClusterMockRecorder) MemberList(ctx any, opts ...any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MemberList", reflect.TypeOf((*MockCluster)(nil).MemberList), ctx)
+	varargs := append([]any{ctx}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MemberList", reflect.TypeOf((*MockCluster)(nil).MemberList), varargs...)
 }
 
 // MemberPromote mocks base method.
@@ -467,6 +492,21 @@ func (mr *MockMaintenanceMockRecorder) Defragment(ctx, endpoint any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Defragment", reflect.TypeOf((*MockMaintenance)(nil).Defragment), ctx, endpoint)
 }
 
+// Downgrade mocks base method.
+func (m *MockMaintenance) Downgrade(ctx context.Context, action clientv3.DowngradeAction, version string) (*clientv3.DowngradeResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Downgrade", ctx, action, version)
+	ret0, _ := ret[0].(*clientv3.DowngradeResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Downgrade indicates an expected call of Downgrade.
+func (mr *MockMaintenanceMockRecorder) Downgrade(ctx, action, version any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Downgrade", reflect.TypeOf((*MockMaintenance)(nil).Downgrade), ctx, action, version)
+}
+
 // HashKV mocks base method.
 func (m *MockMaintenance) HashKV(ctx context.Context, endpoint string, rev int64) (*clientv3.HashKVResponse, error) {
 	m.ctrl.T.Helper()
@@ -510,6 +550,21 @@ func (m *MockMaintenance) Snapshot(ctx context.Context) (io.ReadCloser, error) {
 func (mr *MockMaintenanceMockRecorder) Snapshot(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Snapshot", reflect.TypeOf((*MockMaintenance)(nil).Snapshot), ctx)
+}
+
+// SnapshotWithVersion mocks base method.
+func (m *MockMaintenance) SnapshotWithVersion(ctx context.Context) (*clientv3.SnapshotResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SnapshotWithVersion", ctx)
+	ret0, _ := ret[0].(*clientv3.SnapshotResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SnapshotWithVersion indicates an expected call of SnapshotWithVersion.
+func (mr *MockMaintenanceMockRecorder) SnapshotWithVersion(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SnapshotWithVersion", reflect.TypeOf((*MockMaintenance)(nil).SnapshotWithVersion), ctx)
 }
 
 // Status mocks base method.

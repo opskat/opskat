@@ -44,6 +44,26 @@ func ListObjectsWith(ctx context.Context, c Client, bucket, prefix string, maxKe
 	return res, nil
 }
 
+// listBucketsWith 返回资产可见的桶。配了默认桶时它就是全部:限定到桶的令牌(如 R2 的
+// 对象级令牌)没有 ListBuckets 权限,此时列桶只会得到 Access Denied。
+func listBucketsWith(ctx context.Context, c Client, defaultBucket string) ([]BucketItem, error) {
+	if defaultBucket != "" {
+		return []BucketItem{{Name: defaultBucket}}, nil
+	}
+	return c.ListBuckets(ctx)
+}
+
+// probeWith 用一次最小的读请求验证端点与凭证:配了默认桶就列它的一个对象,否则列桶。
+// 默认桶的错误原样返回,不回退去列桶。
+func probeWith(ctx context.Context, c Client, defaultBucket string) error {
+	if defaultBucket != "" {
+		_, err := c.ListObjects(ctx, defaultBucket, "", 1, "")
+		return err
+	}
+	_, err := c.ListBuckets(ctx)
+	return err
+}
+
 func copyObjectWith(ctx context.Context, c Client, srcBucket, srcKey, dstBucket, dstKey string) error {
 	return c.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
 }

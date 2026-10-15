@@ -62,9 +62,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/go/bin/wails
-          key: wails-cli-${{ runner.os }}-v2.12.0
+          key: wails-cli-${{ runner.os }}-v2.16.0
       - name: Install Wails CLI
-        run: command -v wails || go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        run: command -v wails || go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
       - name: Install frontend dependencies
         run: cd frontend && pnpm install --frozen-lockfile
       - name: Cache Playwright browsers
@@ -127,9 +127,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/go/bin/wails
-          key: wails-cli-${{ runner.os }}-v2.12.0
+          key: wails-cli-${{ runner.os }}-v2.16.0
       - name: Install Wails CLI
-        run: command -v wails || go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        run: command -v wails || go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
       - name: Create frontend dist placeholder
         run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
       - name: Generate Wails bindings

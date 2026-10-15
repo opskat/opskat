@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -350,9 +351,12 @@ func TestExportSSHPrivateKey(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, privateKey, string(data))
 
-			info, err := os.Stat(target)
-			assert.NoError(t, err)
-			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			// Windows 没有 POSIX 权限位，Stat 报告的永远是 0666/0444。
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(target)
+				assert.NoError(t, err)
+				assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			}
 		})
 
 		Convey("非 SSH 密钥凭证不能导出", func() {

@@ -3,6 +3,7 @@ package assettype
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -26,6 +27,7 @@ func (h *ossHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		"provider":       cfg.Provider,
 		"endpoint":       cfg.Endpoint,
 		"region":         cfg.Region,
+		"bucket":         cfg.Bucket,
 		"access_key_id":  cfg.AccessKeyID,
 		"use_path_style": cfg.UsePathStyle,
 		"use_ssl":        cfg.UseSSL,
@@ -59,14 +61,29 @@ func (h *ossHandler) ValidateCreateArgs(args map[string]any) error {
 	if ArgString(args, "access_key_id") == "" {
 		return fmt.Errorf("missing required parameter: access_key_id")
 	}
-	return nil
+	_, err := ossBucketArg(args)
+	return err
+}
+
+// ossBucketArg 取默认桶:去首尾空格;只接受桶名,带 "/" 的预设子路径不受支持。
+func ossBucketArg(args map[string]any) (string, error) {
+	bucket := strings.TrimSpace(ArgString(args, "bucket"))
+	if strings.Contains(bucket, "/") {
+		return "", fmt.Errorf("invalid parameter: bucket must be a bucket name without \"/\"")
+	}
+	return bucket, nil
 }
 
 func (h *ossHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
+	bucket, err := ossBucketArg(args)
+	if err != nil {
+		return err
+	}
 	cfg := &asset_entity.OSSConfig{
 		Provider:       ArgString(args, "provider"),
 		Endpoint:       ArgString(args, "endpoint"),
 		Region:         ArgString(args, "region"),
+		Bucket:         bucket,
 		AccessKeyID:    ArgString(args, "access_key_id"),
 		CredentialID:   ArgInt64(args, "credential_id"),
 		UsePathStyle:   ArgBool(args, "use_path_style"),
@@ -97,6 +114,13 @@ func (h *ossHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	}
 	if _, ok := args["region"]; ok {
 		cfg.Region = ArgString(args, "region")
+	}
+	if _, ok := args["bucket"]; ok {
+		bucket, err := ossBucketArg(args)
+		if err != nil {
+			return err
+		}
+		cfg.Bucket = bucket
 	}
 	if _, ok := args["access_key_id"]; ok {
 		cfg.AccessKeyID = ArgString(args, "access_key_id")

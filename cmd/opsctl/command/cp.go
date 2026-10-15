@@ -90,7 +90,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		sourcePaths = append(sourcePaths, src.path)
 	}
 
-	plan, err := helper.PlanTransfer(sourcePaths, dst.path, recursive)
+	plan, err := helper.PlanTransfer(sourcePaths, dst.path, !dst.isRemote(), recursive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1

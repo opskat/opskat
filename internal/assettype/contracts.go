@@ -269,8 +269,8 @@ func normalizeVNCAutomation(args map[string]any) error {
 
 func (*ossHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"provider", "endpoint", "region", "access_key_id", "secret_access_key", "credential_id", "use_path_style", "use_ssl", "connect_timeout"},
-		[]string{"provider", "endpoint", "region", "access_key_id", "use_path_style", "use_ssl", "connect_timeout"},
+		[]string{"provider", "endpoint", "region", "bucket", "access_key_id", "secret_access_key", "credential_id", "use_path_style", "use_ssl", "connect_timeout"},
+		[]string{"provider", "endpoint", "region", "bucket", "access_key_id", "use_path_style", "use_ssl", "connect_timeout"},
 		nil,
 		func(args map[string]any) (CredentialPlan, error) {
 			return passwordReferencePlan(args, "secret_access_key")

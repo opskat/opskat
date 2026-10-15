@@ -58,3 +58,53 @@ test("a non-interactive opsctl command is approved by the desktop and audited", 
     decision: "allow",
   });
 });
+
+// A scripted `opsctl a && opsctl b` raises the second approval a moment after the first
+// is answered — while the first dialog is still animating out. The dialog has to come
+// back clickable: if the backdrop is re-mounted above the still-mounted panel, the
+// buttons are there but no mouse can reach them, and the CLI hangs until it times out.
+test("an approval arriving while the previous dialog is closing can still be clicked", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("app-root")).toBeVisible();
+
+  // Sweep the whole exit animation: which moment is fragile depends on how the panel's
+  // and the backdrop's exit timings relate, and that is exactly what must not matter.
+  for (const delay of [40, 90, 130, 160, 175, 190, 205, 240]) {
+    // Raise one approval; once it is up, answer it and raise the next `delay` ms later.
+    // The gap is timed inside the page, where the animation runs.
+    await page.evaluate(
+      ([ms, tag]) => {
+        const raise = (id: string) =>
+          (
+            window as unknown as { runtime: { EventsEmit: (name: string, data: unknown) => void } }
+          ).runtime.EventsEmit("opsctl:approval", {
+            confirm_id: id,
+            kind: "once",
+            type: "exec",
+            asset_id: 1,
+            asset_name: "e2e",
+            command: `echo ${id}`,
+            session_id: "e2e",
+          });
+        const deny = () => document.querySelector<HTMLElement>('[data-testid="opsctl-approval-deny"]');
+        raise(`first-${tag}`);
+        const waitForFirst = setInterval(() => {
+          const button = deny();
+          if (!button) return;
+          clearInterval(waitForFirst);
+          // Let the opening animation finish before answering.
+          setTimeout(() => {
+            button.click();
+            setTimeout(() => raise(`second-${tag}`), ms);
+          }, 400);
+        }, 20);
+      },
+      [delay, String(delay)] as const
+    );
+
+    await expect(page.getByTestId("approval-command-text")).toContainText(`second-${delay}`);
+    // A real pointer click: Playwright refuses it when another element would receive it.
+    await page.getByTestId("opsctl-approval-deny").click({ timeout: 3_000 });
+    await expect(page.getByTestId("opsctl-approval-dialog")).toBeHidden();
+  }
+});

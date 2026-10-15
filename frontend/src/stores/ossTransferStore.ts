@@ -5,6 +5,7 @@ import {
   OSSUploadObject,
   OSSUploadObjectPath,
   OSSDownloadObject,
+  OSSDownloadFolder,
   OSSStartTransfer,
   OSSCancelTransfer,
 } from "../../wailsjs/go/oss/OSS";
@@ -22,6 +23,8 @@ export interface OssTransfer {
   direction: "upload" | "download";
   name: string;
   targetPrefix?: string;
+  /** 文件夹下载才有:整次传输的文件计数。有它时 name 是文件夹名,不随当前文件变。 */
+  files?: { done: number; total: number };
   bytesDone: number;
   bytesTotal: number;
   speed: number;
@@ -50,6 +53,7 @@ interface OssTransferState {
   startUpload: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<void>;
   startUploadPath: (tabId: string, assetId: number, bucket: string, prefix: string, localPath: string) => Promise<void>;
   startDownload: (tabId: string, assetId: number, bucket: string, key: string) => Promise<void>;
+  startDownloadFolder: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<void>;
   cancel: (transferId: string) => void;
   clear: (tabId: string, transferId: string) => void;
   clearCompleted: (tabId: string) => void;
@@ -106,14 +110,20 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         case "progress":
           patchTransfer(tabId, transferId, (t) => ({
             ...t,
-            name: e.currentFile ? basename(e.currentFile) : t.name,
+            name: !t.files && e.currentFile ? basename(e.currentFile) : t.name,
+            files: t.files && { done: e.filesCompleted, total: e.filesTotal },
             bytesDone: e.bytesDone,
             bytesTotal: e.bytesTotal,
             speed: e.speed,
           }));
           break;
         case "done": {
-          patchTransfer(tabId, transferId, (t) => ({ ...t, status: "done", bytesDone: t.bytesTotal || t.bytesDone }));
+          patchTransfer(tabId, transferId, (t) => ({
+            ...t,
+            status: "done",
+            files: t.files && { done: t.files.total, total: t.files.total },
+            bytesDone: t.bytesTotal || t.bytesDone,
+          }));
           EventsOff(eventName);
           const done = get().tabs[tabId]?.transfers[transferId];
           if (done?.direction === "upload") maybeRefreshAfterUpload(tabId, done.targetPrefix);
@@ -184,6 +194,24 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         tabId,
         direction: "download",
         name: basename(key),
+        bytesDone: 0,
+        bytesTotal: 0,
+        speed: 0,
+        status: "active",
+      });
+      subscribeProgress(tabId, id);
+      await OSSStartTransfer(id);
+    },
+
+    startDownloadFolder: async (tabId, assetId, bucket, prefix) => {
+      const id = await OSSDownloadFolder(assetId, bucket, prefix);
+      if (!id) return; // 空串 = 用户取消目录对话框
+      addTransfer({
+        transferId: id,
+        tabId,
+        direction: "download",
+        name: basename(prefix),
+        files: { done: 0, total: 0 },
         bytesDone: 0,
         bytesTotal: 0,
         speed: 0,

@@ -55,6 +55,7 @@ const OSS_GROUPS: ConfigGroupSchema<OSSFormState>[] = [
         placeholder: "oss.form.endpointPlaceholder",
       },
       { kind: "text", key: "region", label: "oss.form.region", placeholder: "oss.form.regionPlaceholder" },
+      { kind: "text", key: "bucket", label: "oss.form.bucket", placeholder: "oss.form.bucketPlaceholder" },
       { kind: "text", key: "accessKeyId", label: "oss.form.accessKeyId" },
       { kind: "password", usernameKey: "accessKeyId", secretLabel: "oss.form.secretAccessKey" },
     ],
@@ -83,9 +84,14 @@ export function OSSConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     init: (a) => (a ? parseOSSConfig(a.Config) : { ...OSS_DEFAULTS }),
     validate: (s) => {
       const ok = s.endpoint.trim() !== "" && s.accessKeyId.trim() !== "";
+      const bucketError = s.bucket.includes("/") ? "oss.error.bucketName" : "";
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const canUse = ok && !proxyChainError;
-      return { canTest: canUse, canSave: canUse, saveDisabledReason: ok ? proxyChainError : "oss.error.required" };
+      const canUse = ok && !bucketError && !proxyChainError;
+      return {
+        canTest: canUse,
+        canSave: canUse,
+        saveDisabledReason: ok ? bucketError || proxyChainError : "oss.error.required",
+      };
     },
     build: async (s, ctx) => ({
       configJSON: buildOSSConfig(

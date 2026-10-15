@@ -7,8 +7,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -19,6 +21,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/sftpio/sftpiotest"
 )
 
 func writeTempFile(t *testing.T, p, content string) {
@@ -464,7 +467,7 @@ func TestSSHTransferResolvesRemoteHomeBeforeApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveTransferPath: %v", err)
 	}
-	want := filepath.ToSlash(filepath.Join(home, "project")) + "/"
+	want := sftpiotest.RemotePath(filepath.Join(home, "project")) + "/"
 	if got != want {
 		t.Fatalf("ResolveTransferPath = %q, want %q", got, want)
 	}
@@ -484,7 +487,8 @@ func TestSSHTransferReusesOneSFTPSessionPerAsset(t *testing.T) {
 	ctx := WithSFTPClientCache(context.Background(), cache)
 	asset := &asset_entity.Asset{ID: 7, Type: asset_entity.AssetTypeSSH}
 
-	listing, err := sshTransfer.List(ctx, asset, root, true)
+	remote := sftpiotest.RemotePath(root)
+	listing, err := sshTransfer.List(ctx, asset, remote, true)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -493,7 +497,7 @@ func TestSSHTransferReusesOneSFTPSessionPerAsset(t *testing.T) {
 		if openErr != nil {
 			t.Fatalf("OpenRead(%q): %v", entry.Path, openErr)
 		}
-		dst := filepath.Join(root, "copied", entry.RelPath)
+		dst := path.Join(remote, "copied", entry.RelPath)
 		if writeErr := sshTransfer.Write(ctx, asset, dst, r, entry.Size); writeErr != nil {
 			t.Fatalf("Write(%q): %v", dst, writeErr)
 		}
@@ -534,7 +538,7 @@ func sshTestTree(t *testing.T) string {
 
 // glob 的基点是通配前的最后一层目录；命中的符号链接同样是"展开途中"，跳过并计数。
 func TestListSFTP_Glob(t *testing.T) {
-	root := sshTestTree(t)
+	root := sftpiotest.RemotePath(sshTestTree(t))
 
 	got, err := listSFTP(newTestSFTP(t), root+"/*.log", false)
 	if err != nil {
@@ -631,7 +635,7 @@ func TestTransferList_GlobMatchingDirsWithoutRecursiveErrors(t *testing.T) {
 	root, pattern := globDirTree(t)
 
 	localRes, localErr := localTransfer.List(context.Background(), nil, pattern, false)
-	sftpRes, sftpErr := listSFTP(newTestSFTP(t), pattern, false)
+	sftpRes, sftpErr := listSFTP(newTestSFTP(t), sftpiotest.RemotePath(pattern), false)
 
 	for _, c := range []struct {
 		endpoint string
@@ -645,6 +649,9 @@ func TestTransferList_GlobMatchingDirsWithoutRecursiveErrors(t *testing.T) {
 			t.Errorf("%s: result = %+v, want nil：报错就不能同时交出半份清单", c.endpoint, c.res)
 		}
 		for _, dir := range []string{filepath.Join(root, "old.log"), filepath.Join(root, "sub.log")} {
+			if c.endpoint == "sftp" {
+				dir = sftpiotest.RemotePath(dir)
+			}
 			if !strings.Contains(c.err.Error(), dir) {
 				t.Errorf("%s: error %q should name the matched directory %q", c.endpoint, c.err, dir)
 			}
@@ -653,7 +660,8 @@ func TestTransferList_GlobMatchingDirsWithoutRecursiveErrors(t *testing.T) {
 			t.Errorf("%s: error %q should point at recursive", c.endpoint, c.err)
 		}
 	}
-	if localErr.Error() != sftpErr.Error() {
+	// Windows 上两端的路径写法不同（C:\... 与 /C:/...），报错只能各自点名，逐字节相同只在其他系统上成立。
+	if runtime.GOOS != "windows" && localErr.Error() != sftpErr.Error() {
 		t.Errorf("两端答案分叉：\n local = %q\n  sftp = %q", localErr, sftpErr)
 	}
 }
@@ -672,7 +680,7 @@ func TestTransferList_GlobMatchingDirsWithRecursiveDescends(t *testing.T) {
 		t.Errorf("local RelPaths = %v, want %q", relPaths(localRes.Entries), want)
 	}
 
-	sftpRes, err := listSFTP(newTestSFTP(t), pattern, true)
+	sftpRes, err := listSFTP(newTestSFTP(t), sftpiotest.RemotePath(pattern), true)
 	if err != nil {
 		t.Fatalf("listSFTP: %v", err)
 	}
@@ -684,7 +692,7 @@ func TestTransferList_GlobMatchingDirsWithRecursiveDescends(t *testing.T) {
 // SSH 端的流式往返：写入时按需建父目录，读回的字节与 size 一致，Close 拆连接恰好一次。
 func TestSFTPWriteCreatesParentsAndReadRoundTrips(t *testing.T) {
 	client := newTestSFTP(t)
-	dst := filepath.Join(t.TempDir(), "new", "deep", "f.txt")
+	dst := sftpiotest.RemotePath(filepath.Join(t.TempDir(), "new", "deep", "f.txt"))
 
 	if err := writeSFTP(context.Background(), client, dst, strings.NewReader("payload")); err != nil {
 		t.Fatalf("writeSFTP: %v", err)

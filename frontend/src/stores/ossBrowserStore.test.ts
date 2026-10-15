@@ -71,6 +71,38 @@ describe("loadBuckets", () => {
     expect(s.loading.buckets).toBe(false);
   });
 
+  it("enters the asset's default bucket right after loading", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "ootd", creationDate: 0 }] as any);
+    vi.mocked(OSSListObjects).mockResolvedValue({
+      prefixes: ["users/"],
+      objects: [],
+      nextContinuationToken: "",
+      isTruncated: false,
+    } as any);
+    await useOssBrowserStore.getState().loadBuckets(TAB, 7, "ootd");
+    const s = useOssBrowserStore.getState().tabs[TAB];
+    expect(s.currentBucket).toBe("ootd");
+    expect(s.listing?.prefixes).toEqual(["users/"]);
+    expect(OSSListObjects).toHaveBeenCalledWith(expect.objectContaining({ assetId: 7, bucket: "ootd", prefix: "" }));
+  });
+
+  it("without a default bucket leaves the choice to the user", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as any);
+    await useOssBrowserStore.getState().loadBuckets(TAB, 7);
+    expect(useOssBrowserStore.getState().tabs[TAB].currentBucket).toBe("");
+    expect(OSSListObjects).not.toHaveBeenCalled();
+  });
+
+  it("reloading buckets keeps the bucket the user is already in", async () => {
+    useOssBrowserStore.setState({ tabs: { [TAB]: baseState({ currentPrefix: "docs/" }) } });
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "ootd", creationDate: 0 }] as any);
+    await useOssBrowserStore.getState().loadBuckets(TAB, 7, "ootd");
+    const s = useOssBrowserStore.getState().tabs[TAB];
+    expect(s.currentBucket).toBe("b1");
+    expect(s.currentPrefix).toBe("docs/");
+    expect(OSSListObjects).not.toHaveBeenCalled();
+  });
+
   it("records error and rethrows on binder failure", async () => {
     vi.mocked(OSSListBuckets).mockRejectedValue(new Error("boom"));
     await expect(useOssBrowserStore.getState().loadBuckets(TAB, 7)).rejects.toThrow("boom");

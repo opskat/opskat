@@ -92,8 +92,28 @@ describe("OSSObjectList", () => {
     );
     fireEvent.click(screen.getByTestId("oss-download-docs/a.txt"));
     expect(onDownload).toHaveBeenCalledWith("docs/a.txt");
-    // folders get no download button
+    // without a folder handler, folders get no download button
     expect(screen.queryByTestId("oss-download-docs/sub/")).toBeNull();
+  });
+
+  it("shows a download button on folder rows that downloads the folder without entering it", () => {
+    const onDownloadFolder = vi.fn();
+    const onNavigatePrefix = vi.fn();
+    render(
+      <OSSObjectList
+        {...base}
+        onDownloadFolder={onDownloadFolder}
+        onNavigatePrefix={onNavigatePrefix}
+        prefixes={["docs/sub/"]}
+        objects={[]}
+      />
+    );
+    const button = screen.getByTestId("oss-download-docs/sub/");
+    fireEvent.click(button);
+    fireEvent.doubleClick(button);
+    fireEvent.keyDown(button, { key: "Enter" });
+    expect(onDownloadFolder).toHaveBeenCalledWith("docs/sub/");
+    expect(onNavigatePrefix).not.toHaveBeenCalled();
   });
 
   it("single-click an object row focuses it; the focused row is marked; clicking the checkbox does NOT focus", () => {

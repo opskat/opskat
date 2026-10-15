@@ -1,4 +1,5 @@
-import { Folder } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Folder, Download } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
@@ -14,6 +15,7 @@ export interface OSSObjectGridProps {
   truncated: boolean;
   thumbnails: Record<string, string>;
   onNavigatePrefix: (prefix: string) => void;
+  onDownloadFolder?: (prefix: string) => void;
   onFocusObject: (key: string) => void;
   onEnsureThumbnail: (key: string) => void;
   onScrollNearBottom: () => void;
@@ -28,10 +30,12 @@ export function OSSObjectGrid({
   truncated,
   thumbnails,
   onNavigatePrefix,
+  onDownloadFolder,
   onFocusObject,
   onEnsureThumbnail,
   onScrollNearBottom,
 }: OSSObjectGridProps) {
+  const { t } = useTranslation();
   const tile =
     "flex w-[150px] cursor-pointer flex-col gap-1 rounded border p-1.5 text-left outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring/45";
 
@@ -48,23 +52,35 @@ export function OSSObjectGrid({
     >
       <div className="flex flex-wrap gap-3">
         {prefixes.map((p) => (
-          <button
-            type="button"
-            key={p}
-            className={`${tile} items-center justify-center`}
-            onDoubleClick={() => onNavigatePrefix(p)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onNavigatePrefix(p);
-            }}
-            data-testid={`oss-grid-folder-${p}`}
-          >
-            <div className="flex aspect-square w-full items-center justify-center">
-              <Folder className="size-8 text-warning" />
-            </div>
-            <span className="w-full truncate text-center text-xs" title={p}>
-              {prefixLeafName(p)}
-            </span>
-          </button>
+          <div key={p} className="group relative">
+            <button
+              type="button"
+              className={`${tile} items-center justify-center`}
+              onDoubleClick={() => onNavigatePrefix(p)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onNavigatePrefix(p);
+              }}
+              data-testid={`oss-grid-folder-${p}`}
+            >
+              <div className="flex aspect-square w-full items-center justify-center">
+                <Folder className="size-8 text-warning" />
+              </div>
+              <span className="w-full truncate text-center text-xs" title={p}>
+                {prefixLeafName(p)}
+              </span>
+            </button>
+            {onDownloadFolder && (
+              <button
+                type="button"
+                className="absolute right-1.5 top-1.5 cursor-pointer rounded-sm bg-background/80 p-1 opacity-0 outline-none hover:bg-accent group-hover:opacity-100 focus:opacity-100 focus-visible:ring-1 focus-visible:ring-ring/45"
+                onClick={() => onDownloadFolder(p)}
+                title={t("oss.transfer.download")}
+                data-testid={`oss-grid-download-${p}`}
+              >
+                <Download className="size-3.5" />
+              </button>
+            )}
+          </div>
         ))}
         {objects.map((o) => (
           <button

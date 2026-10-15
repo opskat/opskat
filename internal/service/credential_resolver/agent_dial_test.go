@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -123,6 +124,9 @@ func (s *dialTestSSHServer) hostPort() (string, int) {
 
 func newDialTestAgent(t *testing.T, keys ...agent.AddedKey) (string, chan struct{}) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-socket SSH agents are not supported on Windows (OpenSSH there uses a named pipe)")
+	}
 	kr := agent.NewKeyring()
 	for _, k := range keys {
 		require.NoError(t, kr.Add(k))

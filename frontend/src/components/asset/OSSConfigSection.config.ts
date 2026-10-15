@@ -12,6 +12,7 @@ interface OSSConfigJSON {
   provider?: string;
   endpoint?: string;
   region?: string;
+  bucket?: string;
   access_key_id?: string;
   secret_access_key?: string;
   credential_id?: number;
@@ -28,6 +29,8 @@ export interface OSSFormState extends ConnectionFormFields {
   provider: string;
   endpoint: string;
   region: string;
+  /** 默认桶:非空时只用这一个桶,不列桶(限定到桶的令牌没有列桶权限)。 */
+  bucket: string;
   accessKeyId: string;
   usePathStyle: boolean;
   useSSL: boolean;
@@ -40,6 +43,7 @@ export const OSS_DEFAULTS: OSSFormState = {
   provider: "s3",
   endpoint: "",
   region: "",
+  bucket: "",
   accessKeyId: "",
   usePathStyle: false,
   useSSL: true,
@@ -152,6 +156,8 @@ export function buildOSSConfig(
   if (state.provider) cfg.provider = state.provider;
   if (state.endpoint) cfg.endpoint = state.endpoint;
   if (state.region) cfg.region = state.region;
+  const bucket = state.bucket.trim();
+  if (bucket) cfg.bucket = bucket;
   if (state.accessKeyId) cfg.access_key_id = state.accessKeyId;
   if (cred.credential_id) cfg.credential_id = cred.credential_id;
   else if (cred.password) cfg.secret_access_key = cred.password;
@@ -173,6 +179,7 @@ export function parseOSSConfig(configJSON: string): OSSFormState {
       provider: cfg.provider || "s3",
       endpoint: cfg.endpoint || "",
       region: cfg.region || "",
+      bucket: cfg.bucket || "",
       accessKeyId: cfg.access_key_id || "",
       usePathStyle: cfg.use_path_style || false,
       useSSL: cfg.use_ssl ?? true,

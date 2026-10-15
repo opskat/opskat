@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { act, render, screen } from "@testing-library/react";
+import { useEffect, useState } from "react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MainPanel } from "@/components/layout/MainPanel";
 import { useExtensionStore } from "@/extension";
@@ -16,6 +16,25 @@ function AssetPage({ assetId }: { assetId?: number }) {
   return <div data-testid="ext-page">{`mounted for ${mountedFor}, showing ${assetId}`}</div>;
 }
 
+/** Asset ids a WorkPage loaded its data for, one entry per load. */
+const loads: (number | undefined)[] = [];
+
+/**
+ * A page that, like the ES page, loads its asset's data when it mounts and keeps
+ * what the user did since (opened tabs, a query and its results) in its own state.
+ */
+function WorkPage({ assetId }: { assetId?: number }) {
+  const [opened, setOpened] = useState(0);
+  useEffect(() => {
+    loads.push(assetId);
+  }, [assetId]);
+  return (
+    <button data-testid="ext-page" onClick={() => setOpened((n) => n + 1)}>
+      {`asset ${assetId}, opened ${opened}`}
+    </button>
+  );
+}
+
 const manifest: ExtManifest = {
   name: "demo",
   version: "1.0.0",
@@ -24,17 +43,29 @@ const manifest: ExtManifest = {
   frontend: {
     entry: "index.js",
     styles: "",
-    pages: [{ id: "main", slot: "asset.connect", i18n: { name: "Main" }, component: "AssetPage" }],
+    pages: [
+      { id: "main", slot: "asset.connect", i18n: { name: "Main" }, component: "AssetPage" },
+      { id: "work", slot: "asset.connect", i18n: { name: "Work" }, component: "WorkPage" },
+    ],
   },
 };
 
-function pageTab(id: string, assetId: number) {
+function pageTab(id: string, assetId: number, pageId = "main") {
   return {
     id,
     type: "page" as const,
     label: id,
-    meta: { type: "page" as const, pageId: "main", extensionName: "demo", assetId },
+    meta: { type: "page" as const, pageId, extensionName: "demo", assetId },
   };
+}
+
+/** The page the user is looking at: the one in the active tab. */
+function shownPage() {
+  const shown = screen
+    .getAllByTestId("ext-page")
+    .filter((el) => el.closest<HTMLElement>("[style]")?.style.display !== "none");
+  expect(shown).toHaveLength(1);
+  return shown[0];
 }
 
 describe("MainPanel extension page tabs", () => {
@@ -44,20 +75,40 @@ describe("MainPanel extension page tabs", () => {
       ready: true,
       disabled: {},
       extensions: {
-        demo: { manifest, loaded: { name: "demo", manifest, components: { AssetPage } } },
+        demo: { manifest, loaded: { name: "demo", manifest, components: { AssetPage, WorkPage } } },
       },
     });
     useTabStore.setState({ tabs: [pageTab("page-a", 1), pageTab("page-b", 2)], activeTabId: "page-a" });
+    loads.length = 0;
   });
 
   it("gives each asset's page tab its own page instance", async () => {
     render(<MainPanel onEditAsset={vi.fn()} onDeleteAsset={vi.fn()} onConnectAsset={vi.fn()} />);
-    expect(await screen.findByTestId("ext-page")).toHaveTextContent("mounted for 1, showing 1");
+    await screen.findAllByTestId("ext-page");
+    expect(shownPage()).toHaveTextContent("mounted for 1, showing 1");
 
     act(() => useTabStore.getState().activateTab("page-b"));
-    expect(screen.getByTestId("ext-page")).toHaveTextContent("mounted for 2, showing 2");
+    expect(shownPage()).toHaveTextContent("mounted for 2, showing 2");
 
     act(() => useTabStore.getState().activateTab("page-a"));
-    expect(screen.getByTestId("ext-page")).toHaveTextContent("mounted for 1, showing 1");
+    expect(shownPage()).toHaveTextContent("mounted for 1, showing 1");
+  });
+
+  it("keeps a page as the user left it while another tab is active, without loading it again", async () => {
+    useTabStore.setState({
+      tabs: [pageTab("work-a", 1, "work"), pageTab("work-b", 2, "work")],
+      activeTabId: "work-a",
+    });
+    render(<MainPanel onEditAsset={vi.fn()} onDeleteAsset={vi.fn()} onConnectAsset={vi.fn()} />);
+    await screen.findAllByTestId("ext-page");
+    fireEvent.click(shownPage());
+    expect(shownPage()).toHaveTextContent("asset 1, opened 1");
+
+    act(() => useTabStore.getState().activateTab("work-b"));
+    expect(shownPage()).toHaveTextContent("asset 2, opened 0");
+
+    act(() => useTabStore.getState().activateTab("work-a"));
+    expect(shownPage()).toHaveTextContent("asset 1, opened 1");
+    expect(loads).toEqual([1, 2]);
   });
 });

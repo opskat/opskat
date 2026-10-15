@@ -3049,6 +3049,8 @@
       "endpointPlaceholder": "host 或 scheme://host:port",
       "region": "地域(Region)",
       "regionPlaceholder": "如 us-east-1",
+      "bucket": "默认桶",
+      "bucketPlaceholder": "留空则列出全部桶",
       "accessKeyId": "Access Key ID",
       "secretAccessKey": "Secret Access Key",
       "usePathStyle": "路径寻址(Path-style)",
@@ -3058,7 +3060,8 @@
       "partSizeMB": "分片大小(MB)"
     },
     "error": {
-      "required": "Endpoint 和 Access Key ID 必填"
+      "required": "Endpoint 和 Access Key ID 必填",
+      "bucketName": "默认桶只能填桶名，不能包含 /"
     },
     "browser": {
       "refresh": "刷新",

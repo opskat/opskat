@@ -83,15 +83,35 @@ func (a *minioAdapter) ListObjects(
 	}
 	items := make([]ObjectItem, 0, len(result.Contents)+len(result.CommonPrefixes))
 	for _, obj := range result.Contents {
+		if obj.Key, err = decodeListedName(obj.Key, result.EncodingType); err != nil {
+			return nil, err
+		}
 		items = append(items, toObjectItem(obj))
 	}
 	for _, p := range result.CommonPrefixes {
-		items = append(items, ObjectItem{Key: p.Prefix, IsPrefix: true})
+		name, err := decodeListedName(p.Prefix, result.EncodingType)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, ObjectItem{Key: name, IsPrefix: true})
 	}
 	return &ListObjectsPage{
 		Items: items, IsTruncated: result.IsTruncated,
 		NextContinuationToken: result.NextContinuationToken,
 	}, nil
+}
+
+// decodeListedName 还原列表响应里的 key / 前缀。请求带了 encoding-type=url,服务端在响应里
+// 以 EncodingType 声明它确实编码了;各家编码范围不同(R2 连 "/" 也编码成 %2F),只按声明解码。
+func decodeListedName(name, encodingType string) (string, error) {
+	if encodingType != "url" {
+		return name, nil
+	}
+	decoded, err := url.QueryUnescape(name)
+	if err != nil {
+		return "", fmt.Errorf("list objects: decode %q: %w", name, err)
+	}
+	return decoded, nil
 }
 
 func (a *minioAdapter) StatObject(ctx context.Context, bucket, key string) (ObjectItem, error) {

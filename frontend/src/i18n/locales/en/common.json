@@ -3049,6 +3049,8 @@
       "endpointPlaceholder": "host or scheme://host:port",
       "region": "Region",
       "regionPlaceholder": "e.g. us-east-1",
+      "bucket": "Default bucket",
+      "bucketPlaceholder": "Leave empty to list all buckets",
       "accessKeyId": "Access Key ID",
       "secretAccessKey": "Secret Access Key",
       "usePathStyle": "Path-style addressing",
@@ -3058,7 +3060,8 @@
       "partSizeMB": "Multipart size (MB)"
     },
     "error": {
-      "required": "Endpoint and Access Key ID are required"
+      "required": "Endpoint and Access Key ID are required",
+      "bucketName": "Default bucket must be a bucket name without \"/\""
     },
     "browser": {
       "refresh": "Refresh",

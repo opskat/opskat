@@ -117,7 +117,7 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 
-	plan, err := helper.PlanTransfer([]string{src.path}, dst.path, recursive)
+	plan, err := helper.PlanTransfer([]string{src.path}, dst.path, !dst.isRemote(), recursive)
 	if err != nil {
 		return "", err
 	}

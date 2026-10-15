@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cago-frame/cago/database/db"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -19,6 +20,10 @@ func TestResolvedDataDir(t *testing.T) {
 		tmp := t.TempDir()
 		err := Init(context.Background(), Options{DataDir: tmp, MasterKey: "test-master-key"})
 		So(err, ShouldBeNil)
+		// 在 TempDir 清理之前关掉 Init 打开的数据库：Windows 上打开着的 SQLite 文件删不掉。
+		sqlDB, err := db.Default().DB()
+		So(err, ShouldBeNil)
+		t.Cleanup(func() { _ = sqlDB.Close() })
 
 		So(ResolvedDataDir(), ShouldEqual, tmp)
 		So(GetLogsDir(), ShouldEqual, filepath.Join(tmp, "logs"))

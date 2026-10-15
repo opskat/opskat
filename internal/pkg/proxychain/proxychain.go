@@ -47,6 +47,9 @@ type Layer struct {
 	URL            string
 	Token          string
 	TimeoutSeconds int
+	// EstablishTimeout 是建立这一层时单个步骤的时限：SSH 层的握手认证、经它打开到下一
+	// 地址的通道，SOCKS5 层的握手。0 表示只受调用方 ctx 约束。
+	EstablishTimeout time.Duration
 	// Handshake 覆盖该 SSH 层的握手（SSH Agent 认证需要持有 Agent 传输走完整握手）。
 	// 为 nil 时使用标准 ssh.NewClientConn。调用方负责在握手前关闭 conn 的失败路径。
 	Handshake func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error)
@@ -71,22 +74,33 @@ func (c Chain) Dial(ctx context.Context, targetAddr string) (net.Conn, error) {
 				if err != nil {
 					return nil, err
 				}
-				conn, err := client.Dial("tcp", addr)
+				// client.Dial 不看 ctx：跳板机连不上下一地址时要等它那边的 TCP 超时才返回。
+				openCtx, cancel := stepContext(ctx, layer.EstablishTimeout)
+				defer cancel()
+				conn, err := client.DialContext(openCtx, "tcp", addr)
 				if err != nil {
 					_ = client.Close()
-					return nil, err
+					return nil, fmt.Errorf("经 SSH 代理层 %s 连接 %s 失败: %w", layerAddr(layer), addr, err)
 				}
 				return &connWithClosers{Conn: deadlineIgnoredConn{Conn: conn}, closers: []io.Closer{client}}, nil
 			}
 		case LayerSOCKS5:
 			layer := layer
 			dial = func(ctx context.Context, addr string) (net.Conn, error) {
-				proxyAddr := net.JoinHostPort(layer.Host, strconv.Itoa(layer.Port))
+				proxyAddr := layerAddr(layer)
 				conn, err := prior(ctx, proxyAddr)
 				if err != nil {
 					return nil, err
 				}
-				if err := socks5Connect(conn, addr, layer.Username, layer.Password); err != nil {
+				// socks5Connect 是阻塞读写，靠关闭连接来响应 ctx 结束。
+				hsCtx, cancel := stepContext(ctx, layer.EstablishTimeout)
+				defer cancel()
+				stop := context.AfterFunc(hsCtx, func() { _ = conn.Close() })
+				err = socks5Connect(conn, addr, layer.Username, layer.Password)
+				if !stop() {
+					return nil, fmt.Errorf("SOCKS5 代理层 %s 握手未完成: %w", proxyAddr, hsCtx.Err())
+				}
+				if err != nil {
 					_ = conn.Close()
 					return nil, err
 				}
@@ -112,6 +126,18 @@ func (c Chain) Dial(ctx context.Context, targetAddr string) (net.Conn, error) {
 	return conn, nil
 }
 
+// stepContext 给建立某一层的一个步骤套上该层的时限。
+func stepContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func layerAddr(layer Layer) string {
+	return net.JoinHostPort(layer.Host, strconv.Itoa(layer.Port))
+}
+
 func normalizeLayers(layers []Layer) []Layer {
 	out := make([]Layer, 0, len(layers))
 	for _, layer := range layers {
@@ -126,18 +152,22 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 	if layer.SSHConfig == nil && layer.Handshake == nil {
 		return nil, fmt.Errorf("SSH 代理层缺少认证配置")
 	}
-	addr := net.JoinHostPort(layer.Host, strconv.Itoa(layer.Port))
+	addr := layerAddr(layer)
 	conn, err := dial(ctx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("连接 SSH 代理层失败: %w", err)
 	}
+	// ssh.NewClientConn 自己没有握手时限（ClientConfig.Timeout 只管 ssh.Dial 的 TCP 连接），
+	// 对端连上后不再应答就会一直等下去。
+	hsCtx, cancel := stepContext(ctx, layer.EstablishTimeout)
+	defer cancel()
 	done := make(chan struct{})
 	var client *ssh.Client
 	var hsErr error
 	go func() {
 		defer close(done)
 		if layer.Handshake != nil {
-			client, hsErr = layer.Handshake(ctx, conn, addr)
+			client, hsErr = layer.Handshake(hsCtx, conn, addr)
 			return
 		}
 		c, chans, reqs, err := ssh.NewClientConn(conn, addr, layer.SSHConfig)
@@ -148,9 +178,9 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 		client = ssh.NewClient(c, chans, reqs)
 	}()
 	select {
-	case <-ctx.Done():
+	case <-hsCtx.Done():
 		_ = conn.Close()
-		return nil, ctx.Err()
+		return nil, fmt.Errorf("SSH 代理层 %s 握手未完成: %w", addr, hsCtx.Err())
 	case <-done:
 	}
 	if hsErr != nil {

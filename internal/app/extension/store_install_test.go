@@ -174,7 +174,7 @@ func (w *storeWorld) install(t *testing.T, name string, answer bool) (extstore_s
 		w.rec.mu.Lock()
 		defer w.rec.mu.Unlock()
 		return res, append([]emitted(nil), w.rec.events...)
-	case <-time.After(10 * time.Second):
+	case <-time.After(installWait):
 		t.Fatal("store install did not return")
 		return extstore_svc.InstallResult{}, nil
 	}

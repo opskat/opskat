@@ -7,6 +7,7 @@ import { useResizeHandle, ConfirmDialog, Button } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
 import { useOssTransferStore } from "@/stores/ossTransferStore";
+import { useAssetStore } from "@/stores/assetStore";
 import { flattenPrefixTree } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
 import { notifySuccess } from "@/lib/notify";
@@ -18,6 +19,7 @@ import { OSSObjectDetail } from "@/components/oss/OSSObjectDetail";
 import { OSSPresignDialog } from "@/components/oss/OSSPresignDialog";
 import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
+import { parseOSSConfig } from "@/components/asset/OSSConfigSection.config";
 import { NameDialog } from "@/components/common/NameDialog";
 
 export interface OSSBrowserPanelProps {
@@ -50,6 +52,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const transferTab = useOssTransferStore((s) => s.tabs[tabId]);
   const startUpload = useOssTransferStore((s) => s.startUpload);
   const startDownload = useOssTransferStore((s) => s.startDownload);
+  const startDownloadFolder = useOssTransferStore((s) => s.startDownloadFolder);
   const cancelTransfer = useOssTransferStore((s) => s.cancel);
   const clearTransfer = useOssTransferStore((s) => s.clear);
   const clearCompleted = useOssTransferStore((s) => s.clearCompleted);
@@ -62,9 +65,12 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
 
   const fail = useCallback((e: unknown) => toast.error(`${t("oss.browser.loadFailed")}: ${String(e)}`), [t]);
 
+  const assetConfig = useAssetStore((s) => s.assets.find((a) => a.ID === assetId)?.Config);
+  const defaultBucket = useMemo(() => parseOSSConfig(assetConfig ?? "").bucket, [assetConfig]);
+
   useEffect(() => {
-    if (assetId) void loadBuckets(tabId, assetId).catch(fail);
-  }, [assetId, tabId, loadBuckets, fail]);
+    if (assetId) void loadBuckets(tabId, assetId, defaultBucket).catch(fail);
+  }, [assetId, tabId, defaultBucket, loadBuckets, fail]);
 
   const rows = useMemo(() => (state ? flattenPrefixTree(state.tree, state.expanded, "") : []), [state]);
 
@@ -162,6 +168,16 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     [assetId, state, startDownload, tabId, t]
   );
 
+  const onDownloadFolder = useCallback(
+    (prefix: string) => {
+      if (!assetId || !state?.currentBucket) return;
+      void startDownloadFolder(tabId, assetId, state.currentBucket, prefix).catch(() =>
+        toast.error(t("oss.transfer.downloadFailed"))
+      );
+    },
+    [assetId, state, startDownloadFolder, tabId, t]
+  );
+
   const confirmDelete = async () => {
     setConfirmOpen(false);
     try {
@@ -248,6 +264,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   truncated={state.listing?.truncated ?? false}
                   thumbnails={state.thumbnails}
                   onNavigatePrefix={onNavigate}
+                  onDownloadFolder={onDownloadFolder}
                   onFocusObject={(key) => focusObject(tabId, key)}
                   onEnsureThumbnail={(key) => void ensureThumbnail(tabId, key)}
                   onScrollNearBottom={() => void loadNextPage(tabId).catch(fail)}
@@ -266,6 +283,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   onFocusObject={(key) => focusObject(tabId, key)}
                   onScrollNearBottom={() => void loadNextPage(tabId).catch(fail)}
                   onDownload={onDownload}
+                  onDownloadFolder={onDownloadFolder}
                 />
               )}
               {transfers.length > 0 && (

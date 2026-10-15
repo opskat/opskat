@@ -21,6 +21,7 @@ export interface OSSObjectListProps {
   onToggleSelect: (key: string) => void;
   onScrollNearBottom: () => void;
   onDownload?: (key: string) => void;
+  onDownloadFolder?: (prefix: string) => void;
   focusedKey?: string | null;
   onFocusObject?: (key: string) => void;
 }
@@ -36,6 +37,7 @@ export function OSSObjectList({
   onToggleSelect,
   onScrollNearBottom,
   onDownload,
+  onDownloadFolder,
   focusedKey,
   onFocusObject,
 }: OSSObjectListProps) {
@@ -87,7 +89,7 @@ export function OSSObjectList({
           {prefixes.map((p) => (
             <tr
               key={p}
-              className="cursor-pointer outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/45"
+              className="group cursor-pointer outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/45"
               role="button"
               tabIndex={0}
               onDoubleClick={() => onNavigatePrefix(p)}
@@ -108,7 +110,22 @@ export function OSSObjectList({
               <td className="px-2 py-1 text-muted-foreground">—</td>
               <td className="px-2 py-1 text-muted-foreground">—</td>
               <td className="px-2 py-1 text-muted-foreground">—</td>
-              <td className="px-2 py-1" />
+              <td className="px-2 py-1 text-right">
+                {onDownloadFolder && (
+                  <button
+                    type="button"
+                    className="cursor-pointer rounded-sm p-0.5 opacity-0 outline-none group-hover:opacity-100 focus:opacity-100 focus-visible:ring-1 focus-visible:ring-ring/45"
+                    onClick={() => onDownloadFolder(p)}
+                    // The row itself opens the folder on double-click / Enter; the button must not.
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    title={t("oss.transfer.download")}
+                    data-testid={`oss-download-${p}`}
+                  >
+                    <Download className="size-3" />
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
           {objects.map((o) => (

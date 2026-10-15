@@ -40,7 +40,8 @@ export interface OssBrowserTabState {
 
 interface OssBrowserState {
   tabs: Record<string, OssBrowserTabState>;
-  loadBuckets: (tabId: string, assetId: number) => Promise<void>;
+  /** defaultBucket:资产配置的默认桶;非空且该 tab 还没进入任何桶时,加载后直接进入它。 */
+  loadBuckets: (tabId: string, assetId: number, defaultBucket?: string) => Promise<void>;
   selectBucket: (tabId: string, bucket: string) => Promise<void>;
   navigateToPrefix: (tabId: string, prefix: string) => Promise<void>;
   expandNode: (tabId: string, prefix: string) => Promise<void>;
@@ -104,7 +105,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
   return {
     tabs: {},
 
-    loadBuckets: async (tabId, assetId) => {
+    loadBuckets: async (tabId, assetId, defaultBucket = "") => {
       set((s) => ({
         tabs: {
           ...s.tabs,
@@ -123,6 +124,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         patch(tabId, (t) => ({ ...t, loading: { ...t.loading, buckets: false }, error: String(err) }));
         throw err;
       }
+      if (defaultBucket && get().tabs[tabId]?.currentBucket === "") await get().selectBucket(tabId, defaultBucket);
     },
 
     selectBucket: async (tabId, bucket) => {

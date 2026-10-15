@@ -135,51 +135,24 @@ func (a ossAdapter) listGlob(
 }
 
 // walkPrefix 把 prefix 之下**任意深度**的对象逐页拉全，每个对象交给 visit 恰好一次。
+// 下钻与分页是 oss_svc.WalkObjects 的事；传输只搬对象，所以它顺带交出的子前缀在这里滤掉。
 //
-// 列举是分层的（一次调用只看一层，下层作为公共前缀单独返回），所以下钻在这里。分页使用
-// S3 返回的 opaque continuation token；它不是对象 key，不能比较或自行解释。
-//
-// 页大小不指定，用服务端默认值：分页策略只该有 oss_svc 一处真相。展开顺序是
-// "本层对象、再逐个子树"，服务端每一页内按 key 字典序——同一份桶内容展开出的顺序固定，
+// 页大小不指定，用服务端默认值：分页策略只该有 oss_svc 一处真相。展开顺序固定——
 // 审批弹窗里的条目顺序不会抖动（与 walkSFTP 排序是同一条理由）。
 func (a ossAdapter) walkPrefix(
 	ctx context.Context, assetID int64, bucket, prefix string, visit func(oss_svc.ObjectItem) error,
 ) error {
-	token := ""
-	seenTokens := map[string]bool{"": true}
-	for {
-		res, err := a.svc.ListObjects(ctx, &oss_svc.ListObjectsRequest{
-			AssetID: assetID, Bucket: bucket, Prefix: prefix, ContinuationToken: token,
+	list := func(ctx context.Context, p, token string) (*oss_svc.ListObjectsResult, error) {
+		return a.svc.ListObjects(ctx, &oss_svc.ListObjectsRequest{
+			AssetID: assetID, Bucket: bucket, Prefix: p, ContinuationToken: token,
 		})
-		if err != nil {
-			return err
-		}
-		for _, obj := range res.Objects {
-			if !strings.HasPrefix(obj.Key, prefix) {
-				return fmt.Errorf("oss list for prefix %q returned object %q outside the approved prefix", prefix, obj.Key)
-			}
-			if err := visit(obj); err != nil {
-				return err
-			}
-		}
-		for _, sub := range res.Prefixes {
-			if !strings.HasPrefix(sub, prefix) || len(sub) <= len(prefix) {
-				return fmt.Errorf("oss list for prefix %q returned non-child prefix %q", prefix, sub)
-			}
-			if err := a.walkPrefix(ctx, assetID, bucket, sub, visit); err != nil {
-				return err
-			}
-		}
-		if !res.IsTruncated {
+	}
+	return oss_svc.WalkObjects(ctx, list, prefix, func(item oss_svc.ObjectItem) error {
+		if item.IsPrefix {
 			return nil
 		}
-		next := res.NextContinuationToken
-		if next == "" || seenTokens[next] {
-			return fmt.Errorf("oss list for prefix %q returned a non-advancing continuation token", prefix)
-		}
-		seenTokens[next] = true
-		token = next
-	}
+		return visit(item)
+	})
 }
 
 // matchedOSSAncestor 返回 key 最浅的一个匹配通配的祖先前缀，没有则返回空串。

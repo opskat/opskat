@@ -77,6 +77,5 @@ func NewRedisClusterNodeClient(c *redis.ClusterClient, addr string) *redis.Clien
 		DisableIdentity:            opt.DisableIdentity,
 		IdentitySuffix:             opt.IdentitySuffix,
 		TLSConfig:                  opt.TLSConfig,
-		UnstableResp3:              opt.UnstableResp3,
 	})
 }

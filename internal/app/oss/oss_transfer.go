@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/pkg/transfer"
+	"github.com/opskat/opskat/internal/service/oss_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -112,15 +113,15 @@ func (o *OSS) OSSStartTransfer(transferID string) error {
 	return nil
 }
 
-// uploadObject 单文件流式上传:注册取消 → 打开文件 → 包进度 reader → service.PutObject → emit 终态。
-// 运行在独立 goroutine 中,recover 是这条 goroutine 的边界防线:任何未预料的 panic 都不能打垮整个应用,
+// runTransfer 是一路传输的 goroutine 外壳:注册取消 → 跑 run → emit 终态。what 是给用户看的动作名。
+// recover 是这条 goroutine 的边界防线:任何未预料的 panic 都不能打垮整个应用,
 // 必须记录日志并把这路传输标记为 error 终态,而不是让前端的进度条永远悬空。
-func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localPath string) {
+func (o *OSS) runTransfer(transferID, what string, run func(ctx context.Context) error) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Ctx(o.ctx).Error("oss upload panic recovered",
+			logger.Ctx(o.ctx).Error("oss transfer panic recovered",
 				zap.String("transferId", transferID), zap.Any("panic", r), zap.Stack("stack"))
-			o.emitTerminal(transferID, fmt.Errorf("上传发生意外错误: %v", r))
+			o.emitTerminal(transferID, fmt.Errorf("%s发生意外错误: %v", what, r))
 		}
 	}()
 
@@ -131,24 +132,28 @@ func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localP
 		cancel()
 	}()
 
-	f, err := os.Open(localPath) //nolint:gosec // path 来自用户文件对话框/拖拽
-	if err != nil {
-		o.emitTerminal(transferID, fmt.Errorf("打开本地文件失败: %w", err))
-		return
-	}
-	defer func() { _ = f.Close() }()
+	o.emitTerminal(transferID, run(ctx))
+}
 
-	info, err := f.Stat()
-	if err != nil {
-		o.emitTerminal(transferID, fmt.Errorf("获取文件信息失败: %w", err))
-		return
-	}
+// uploadObject 单文件流式上传:打开文件 → 包进度 reader → service.PutObject。
+func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localPath string) {
+	o.runTransfer(transferID, "上传", func(ctx context.Context) error {
+		f, err := os.Open(localPath) //nolint:gosec // path 来自用户文件对话框/拖拽
+		if err != nil {
+			return fmt.Errorf("打开本地文件失败: %w", err)
+		}
+		defer func() { _ = f.Close() }()
 
-	pr := transfer.NewProgressReader(ctx, transferID, filepath.Base(localPath), f, info.Size(), func(p transfer.Progress) {
-		o.emitProgress(transferID, p)
+		info, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("获取文件信息失败: %w", err)
+		}
+
+		pr := transfer.NewProgressReader(ctx, transferID, filepath.Base(localPath), f, info.Size(), func(p transfer.Progress) {
+			o.emitProgress(transferID, p)
+		})
+		return o.service.PutObject(ctx, assetID, bucket, key, pr, info.Size(), contentTypeFor(localPath))
 	})
-	err = o.service.PutObject(ctx, assetID, bucket, key, pr, info.Size(), contentTypeFor(localPath))
-	o.emitTerminal(transferID, err)
 }
 
 // OSSDownloadObject 弹原生保存对话框(默认名 = key 末段),流式下载并报进度,返回 transferID。
@@ -172,42 +177,54 @@ func (o *OSS) OSSDownloadObject(assetID int64, bucket, key string) (string, erro
 	return transferID, nil
 }
 
-// downloadObject 单对象流式下载:注册取消 → GetObject 拿流 → 建本地文件 → transfer.Copy → emit 终态。
-// 运行在独立 goroutine 中,recover 语义同 uploadObject:边界防线,记录日志并把这路传输标记为 error 终态。
+// downloadObject 单对象流式下载:GetObject 拿流 → 建本地文件 → transfer.Copy。
 func (o *OSS) downloadObject(transferID string, assetID int64, bucket, key, localPath string) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Ctx(o.ctx).Error("oss download panic recovered",
-				zap.String("transferId", transferID), zap.Any("panic", r), zap.Stack("stack"))
-			o.emitTerminal(transferID, fmt.Errorf("下载发生意外错误: %v", r))
+	o.runTransfer(transferID, "下载", func(ctx context.Context) error {
+		rc, size, err := o.service.GetObject(ctx, assetID, bucket, key)
+		if err != nil {
+			return err
 		}
-	}()
+		defer func() { _ = rc.Close() }()
 
-	ctx, cancel := context.WithCancel(o.ctx)
-	o.cancels.Store(transferID, cancel)
-	defer func() {
-		o.cancels.Delete(transferID)
-		cancel()
-	}()
+		f, err := os.Create(localPath) //nolint:gosec // path 来自保存对话框
+		if err != nil {
+			return fmt.Errorf("创建本地文件失败: %w", err)
+		}
+		defer func() { _ = f.Close() }()
 
-	rc, size, err := o.service.GetObject(ctx, assetID, bucket, key)
-	if err != nil {
-		o.emitTerminal(transferID, err)
-		return
-	}
-	defer func() { _ = rc.Close() }()
-
-	f, err := os.Create(localPath) //nolint:gosec // path 来自保存对话框
-	if err != nil {
-		o.emitTerminal(transferID, fmt.Errorf("创建本地文件失败: %w", err))
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	err = transfer.Copy(ctx, transferID, f, rc, size, path.Base(key), func(p transfer.Progress) {
-		o.emitProgress(transferID, p)
+		return transfer.Copy(ctx, transferID, f, rc, size, path.Base(key), func(p transfer.Progress) {
+			o.emitProgress(transferID, p)
+		})
 	})
-	o.emitTerminal(transferID, err)
+}
+
+// OSSDownloadFolder 弹原生目录选择框,把 prefix("文件夹")之下的全部对象递归下载到
+// <所选目录>/<文件夹名>/ 下,整次传输一条进度,返回 transferID。用户取消对话框 → 返回空串。
+func (o *OSS) OSSDownloadFolder(assetID int64, bucket, prefix string) (string, error) {
+	if assetID <= 0 || bucket == "" || !strings.HasSuffix(prefix, "/") {
+		return "", fmt.Errorf("invalid request: assetID, bucket and a folder prefix ending in \"/\" are required")
+	}
+	localDir, err := wailsRuntime.OpenDirectoryDialog(o.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "选择保存目录",
+	})
+	if err != nil {
+		return "", fmt.Errorf("打开目录对话框失败: %w", err)
+	}
+	if localDir == "" {
+		return "", nil // 用户取消
+	}
+	transferID := transfer.GenerateID("oss")
+	logger.Ctx(o.i18nCtx()).Info("oss folder download prepared", zap.String("transferId", transferID),
+		zap.Int64("assetId", assetID), zap.String("bucket", bucket), zap.String("prefix", prefix))
+	o.pending.Store(transferID, func() {
+		o.runTransfer(transferID, "下载", func(ctx context.Context) error {
+			return o.service.DownloadPrefix(ctx, &oss_svc.DownloadPrefixRequest{
+				AssetID: assetID, Bucket: bucket, Prefix: prefix, DestDir: localDir, TransferID: transferID,
+				OnProgress: func(p transfer.Progress) { o.emitProgress(transferID, p) },
+			})
+		})
+	})
+	return transferID, nil
 }
 
 // OSSCancelTransfer 经注册表取消在途上传/下载(命中即调用其 CancelFunc,ctx 取消触发取消终态);

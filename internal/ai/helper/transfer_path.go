@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -20,9 +21,10 @@ type ResolveAssetFunc func(ctx context.Context, ref string) (*asset_entity.Asset
 // 只按第一个冒号切，其后整段都是该资产上的路径（路径里可以再有冒号）。
 //
 // 无冒号、或冒号前为空（":foo"）一律是本地路径：asset 为 nil、path 是原串，且不做任何资产
-// 查询。否则冒号后必须以 "/" 开头，或是 SSH 支持的 "~" / "~/..."，才算远端路径——
-// 这正是 "C:\windows" 仍判为本地的原因（下面的 D15 守卫仍会查一次前缀以决定要不要报错，
-// 查不到就还是本地）。home 语法在适配器接线后解析，解析出的绝对路径才进入审批与 I/O。
+// 查询。Windows 上带盘符的路径（"C:\windows"、"C:/Users/me"）同样是本地路径、不查资产：
+// 盘符和单字母资产名写法相同，本地路径优先，单字母名称的资产在 Windows 上要用资产 ID 指定。
+// 否则冒号后必须以 "/" 开头，或是 SSH 支持的 "~" / "~/..."，才算远端路径。
+// home 语法在适配器接线后解析，解析出的绝对路径才进入审批与 I/O。
 //
 // D15 守卫（spec §6.2 / §11）：冒号后不以 "/" 开头、但前缀确实解析成了一个资产时报错，
 // 明示正确写法 "<asset>:/<path>"，而不是静默回落成本地路径——写错的远端路径不该变成一句
@@ -31,7 +33,7 @@ func ParseTransferEndpoint(
 	ctx context.Context, s string, resolve ResolveAssetFunc,
 ) (asset *asset_entity.Asset, path string, err error) {
 	idx := strings.Index(s, ":")
-	if idx <= 0 {
+	if idx <= 0 || isWindowsDrive(s[:idx]) {
 		return nil, s, nil
 	}
 	prefix := s[:idx]
@@ -53,4 +55,15 @@ func ParseTransferEndpoint(
 			prefix, prefix, s)
 	}
 	return nil, s, nil
+}
+
+// isWindowsDrive 报告 prefix 在本机是不是盘符：只在 Windows 上，且恰好是一个英文字母。
+// 不用 filepath.VolumeName：它把任意单个字符加冒号都当成盘符，"7:/etc/hosts"（资产 ID 7）
+// 也会被认成本地路径。
+func isWindowsDrive(prefix string) bool {
+	if runtime.GOOS != "windows" || len(prefix) != 1 {
+		return false
+	}
+	c := prefix[0]
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,6 +54,9 @@ func TestDialConnectorPassesAddr(t *testing.T) {
 		So(gotAddr, ShouldEqual, "pg.internal:5433")
 	})
 
+	if runtime.GOOS == "windows" {
+		return // Unix socket 主机只在 Unix 客户端上有意义，pgx 在 Windows 上不把 /tmp 当 socket 目录
+	}
 	Convey("dialConnector 对 unix socket 主机透传 unix 网络(直连本机 PG)", t, func() {
 		connStr := dsn(&asset_entity.DatabaseConfig{
 			Driver: asset_entity.DriverPostgreSQL, Host: "localhost", Port: 5432,

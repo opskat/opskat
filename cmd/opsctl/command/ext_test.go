@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,19 +276,14 @@ func TestExecViaDesktopPolicyDenialExitsNonZeroOnStderr(t *testing.T) {
 	}
 	t.Cleanup(func() { delegateExtExecFn = orig })
 
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
-	origStdout := os.Stdout
-	os.Stdout = outW
 	var code int
-	stderr := captureStderr(t, func() {
-		code = execViaDesktop(&asset_entity.Asset{ID: 7, Name: "my-bucket", Type: "acme-store"},
-			"acme", "delete_bucket --bucket=logs", "sess")
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			code = execViaDesktop(&asset_entity.Asset{ID: 7, Name: "my-bucket", Type: "acme-store"},
+				"acme", "delete_bucket --bucket=logs", "sess")
+		})
 	})
-	os.Stdout = origStdout
-	require.NoError(t, outW.Close())
-	stdout, err := io.ReadAll(outR)
-	require.NoError(t, err)
 
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr, refusal)
