@@ -7,12 +7,8 @@ import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../wailsjs/go/query/Query";
 import { isMac } from "@/stores/shortcutStore";
 
-vi.mock("@/components/CodeEditor", () => ({
-  CodeEditor: ({ value, language, readOnly }: { value?: string; language?: string; readOnly?: boolean }) => (
-    <pre data-testid="code-editor" data-language={language} data-readonly={String(!!readOnly)}>
-      {value}
-    </pre>
-  ),
+vi.mock("@/components/CodeEditor", async () => ({
+  CodeEditor: (await import("../components/query/__tests__/FakeCodeEditor")).FakeCodeEditor,
 }));
 
 function setupStores() {

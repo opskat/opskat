@@ -1,13 +1,14 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { SqlEditorTab } from "@/components/query/SqlEditorTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../../wailsjs/go/query/Query";
+import { act } from "@testing-library/react";
+import { mounted } from "./fakeSqlEditor";
 
-vi.mock("@/components/CodeEditor", () => ({
-  CodeEditor: ({ value }: { value?: string }) => <pre data-testid="code-editor">{value}</pre>,
+vi.mock("@/components/CodeEditor", async () => ({
+  CodeEditor: (await import("./FakeCodeEditor")).FakeCodeEditor,
 }));
 
 function setup(sql: string) {
@@ -43,7 +44,8 @@ async function clickExecute(sql: string) {
   setup(sql);
   vi.mocked(ExecuteSQLPaged).mockResolvedValue(JSON.stringify({ columns: ["id"], rows: [{ id: 1 }], total_count: 1 }));
   render(<SqlEditorTab tabId="query-1" innerTabId="sql-1" />);
-  await userEvent.setup().click(screen.getByText("query.execute"));
+  // run everything (⇧⌘↵) so every statement is subject to the danger check
+  act(() => mounted.current!.runModShift());
 }
 
 describe("SqlEditorTab dangerous SQL confirmation", () => {
