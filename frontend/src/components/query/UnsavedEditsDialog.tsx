@@ -21,6 +21,8 @@ interface UnsavedEditsDialogProps {
   summary: UnsavedEditSummaryItem[];
   /** What continuing would do, e.g. "Going to page 2 will discard them." Defaults to a generic wording. */
   description?: string;
+  /** Label of the discard button; defaults to 「放弃并继续」. */
+  discardLabel?: string;
   onStay: () => void;
   onDiscard: () => void;
   onSubmit: () => void;
@@ -36,6 +38,7 @@ export function UnsavedEditsDialog({
   open,
   summary,
   description,
+  discardLabel,
   onStay,
   onDiscard,
   onSubmit,
@@ -89,7 +92,7 @@ export function UnsavedEditsDialog({
             {t("query.unsavedEditsStay")}
           </Button>
           <Button variant="outline" className="text-destructive hover:text-destructive" onClick={onDiscard}>
-            {t("query.unsavedEditsDiscard")}
+            {discardLabel ?? t("query.unsavedEditsDiscard")}
           </Button>
           <Button onClick={onSubmit}>{t("query.unsavedEditsSubmit")}</Button>
         </AlertDialogFooter>

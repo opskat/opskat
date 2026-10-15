@@ -56,6 +56,20 @@ export interface DatabaseTabState {
   revealRequest?: { nonce: number; db: string; table: string };
   /** 已分配过的最大 SQL 标签序号;只增不减,关闭标签后序号不复用。 */
   sqlTabSeq?: number;
+  /** 有未提交修改的内层标签(由各 TableDataTab 上报)。不持久化。 */
+  dirtyInnerTabIds?: string[];
+  /**
+   * 涉及有未提交修改的标签、等待用户决定的关闭请求。不持久化。
+   * 只有一个脏标签时由该 TableDataTab 弹三选项对话框(可提交后再关),多个时由 DatabasePanel 弹批量对话框;
+   * 决定前一个都不关,确认后 forceCloseInnerTabs 关掉 ids 全部(closeOuter 时连外层数据库标签一起关)。
+   */
+  closeRequest?: InnerTabCloseRequest;
+}
+
+export interface InnerTabCloseRequest {
+  ids: string[];
+  dirtyIds: string[];
+  closeOuter: boolean;
 }
 
 const REDIS_PAGE_SIZE = 100;
@@ -157,6 +171,11 @@ interface QueryState {
   closeInnerTab: (tabId: string, innerTabId: string) => void;
   closeOtherInnerTabs: (tabId: string, innerTabId: string) => void;
   closeRightInnerTabs: (tabId: string, innerTabId: string) => void;
+  setInnerTabDirty: (tabId: string, innerTabId: string, dirty: boolean) => void;
+  /** 关闭内层标签的唯一入口:都没有未提交修改时直接关,否则挂起 closeRequest 等用户决定。 */
+  requestCloseInnerTabs: (tabId: string, ids: string[], opts?: { closeOuter?: boolean }) => void;
+  forceCloseInnerTabs: (tabId: string, ids: string[], closeOuter?: boolean) => void;
+  cancelCloseRequest: (tabId: string) => void;
   setActiveInnerTab: (tabId: string, innerTabId: string) => void;
   updateInnerTab: (tabId: string, innerTabId: string, patch: Record<string, unknown>) => void;
   markTableTabLoaded: (tabId: string, innerTabId: string) => void;
@@ -674,33 +693,14 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   },
 
   closeInnerTab: (tabId, innerTabId) => {
-    const state = get().dbStates[tabId];
-    if (!state) return;
-    const idx = state.innerTabs.findIndex((t) => t.id === innerTabId);
-    const newTabs = state.innerTabs.filter((t) => t.id !== innerTabId);
-    let newActive = state.activeInnerTabId;
-    if (newActive === innerTabId) {
-      const neighbor = state.innerTabs[idx + 1] || state.innerTabs[idx - 1];
-      newActive = neighbor?.id || null;
-    }
-    set((s) => ({
-      dbStates: {
-        ...s.dbStates,
-        [tabId]: { ...state, innerTabs: newTabs, activeInnerTabId: newActive },
-      },
-    }));
+    get().requestCloseInnerTabs(tabId, [innerTabId]);
   },
 
   closeOtherInnerTabs: (tabId, innerTabId) => {
     const state = get().dbStates[tabId];
     if (!state) return;
-    const keep = state.innerTabs.filter((t) => t.id === innerTabId);
-    set((s) => ({
-      dbStates: {
-        ...s.dbStates,
-        [tabId]: { ...state, innerTabs: keep, activeInnerTabId: keep[0]?.id ?? null },
-      },
-    }));
+    const ids = state.innerTabs.filter((t) => t.id !== innerTabId).map((t) => t.id);
+    get().requestCloseInnerTabs(tabId, ids);
   },
 
   closeRightInnerTabs: (tabId, innerTabId) => {
@@ -708,14 +708,77 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     if (!state) return;
     const idx = state.innerTabs.findIndex((t) => t.id === innerTabId);
     if (idx < 0) return;
-    const keep = state.innerTabs.slice(0, idx + 1);
-    const activeSurvives = keep.some((t) => t.id === state.activeInnerTabId);
+    const ids = state.innerTabs.slice(idx + 1).map((t) => t.id);
+    get().requestCloseInnerTabs(tabId, ids);
+  },
+
+  setInnerTabDirty: (tabId, innerTabId, dirty) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const current = state.dirtyInnerTabIds ?? [];
+    if (current.includes(innerTabId) === dirty) return;
+    const next = dirty ? [...current, innerTabId] : current.filter((id) => id !== innerTabId);
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: { ...state, dirtyInnerTabIds: next } } }));
+    // 外层数据库标签借 tabStore 的未保存守卫:有脏内层标签时关外层会挂起 pendingCloseTabId,由 DatabasePanel 接管。
+    useTabStore.getState().setTabUnsaved(tabId, next.length > 0);
+  },
+
+  requestCloseInnerTabs: (tabId, ids, opts) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const closeOuter = opts?.closeOuter ?? false;
+    const dirtyIds = ids.filter((id) => state.dirtyInnerTabIds?.includes(id));
+    if (dirtyIds.length === 0) {
+      get().forceCloseInnerTabs(tabId, ids, closeOuter);
+      return;
+    }
     set((s) => ({
       dbStates: {
         ...s.dbStates,
-        [tabId]: { ...state, innerTabs: keep, activeInnerTabId: activeSurvives ? state.activeInnerTabId : innerTabId },
+        [tabId]: {
+          ...state,
+          closeRequest: { ids, dirtyIds, closeOuter },
+          // 单个脏标签就地决定:切到它,让用户看着那页修改做选择。
+          activeInnerTabId: dirtyIds.length === 1 ? dirtyIds[0] : state.activeInnerTabId,
+        },
       },
     }));
+  },
+
+  forceCloseInnerTabs: (tabId, ids, closeOuter = false) => {
+    if (closeOuter) {
+      useTabStore.getState().forceCloseTab(tabId);
+      return;
+    }
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const closing = new Set(ids);
+    const innerTabs = state.innerTabs.filter((t) => !closing.has(t.id));
+    let activeInnerTabId = state.activeInnerTabId;
+    if (activeInnerTabId && closing.has(activeInnerTabId)) {
+      // 当前标签被关:优先落到它右侧最近的幸存标签,没有再找左侧。
+      const idx = state.innerTabs.findIndex((t) => t.id === activeInnerTabId);
+      const right = state.innerTabs.slice(idx + 1).find((t) => !closing.has(t.id));
+      const left = state.innerTabs
+        .slice(0, idx)
+        .reverse()
+        .find((t) => !closing.has(t.id));
+      activeInnerTabId = (right ?? left)?.id ?? null;
+    }
+    const dirtyInnerTabIds = (state.dirtyInnerTabIds ?? []).filter((id) => !closing.has(id));
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: { ...state, innerTabs, activeInnerTabId, dirtyInnerTabIds, closeRequest: undefined },
+      },
+    }));
+    useTabStore.getState().setTabUnsaved(tabId, dirtyInnerTabIds.length > 0);
+  },
+
+  cancelCloseRequest: (tabId) => {
+    const state = get().dbStates[tabId];
+    if (!state?.closeRequest) return;
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: { ...state, closeRequest: undefined } } }));
   },
 
   setActiveInnerTab: (tabId, innerTabId) => {

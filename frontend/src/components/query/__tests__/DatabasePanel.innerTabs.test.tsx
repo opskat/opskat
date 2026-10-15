@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@opskat/ui";
 import { DatabasePanel } from "@/components/query/DatabasePanel";
@@ -35,6 +35,8 @@ function setup(active = "sql:1") {
       },
     ],
     activeTabId: TAB,
+    unsavedTabIds: [],
+    pendingCloseTabId: null,
   });
   useQueryStore.setState({
     dbStates: {
@@ -114,6 +116,72 @@ describe("DatabasePanel inner tab bar", () => {
     fireEvent.contextMenu(tabEl("SQL 1"));
     fireEvent.click(await screen.findByText("query.innerTab.copyName"));
     expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith("SQL 1");
+  });
+
+  it("middle click on a tab with unsaved edits hands the decision to that tab instead of closing", () => {
+    setup();
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.users", true);
+    fireEvent(tabEl("app.users"), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+    expect(innerIds()).toEqual(["table:app.users", "sql:1", "table:app.orders"]);
+    expect(useQueryStore.getState().dbStates[TAB].closeRequest?.dirtyIds).toEqual(["table:app.users"]);
+    // 单个目标由 TableDataTab 自己的三选项对话框接管,面板不弹批量框。
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("closing others with several edited tabs lists them; cancel keeps every tab", async () => {
+    setup();
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.users", true);
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.orders", true);
+    fireEvent.contextMenu(tabEl("SQL 1"));
+    fireEvent.click(await screen.findByText("query.innerTab.closeOthers"));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("app.users")).toBeInTheDocument();
+    expect(within(dialog).getByText("app.orders")).toBeInTheDocument();
+    expect(within(dialog).queryByText("query.unsavedEditsSubmit")).toBeNull();
+
+    fireEvent.click(within(dialog).getByText("action.cancel"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(innerIds()).toEqual(["table:app.users", "sql:1", "table:app.orders"]);
+    expect(useQueryStore.getState().dbStates[TAB].closeRequest).toBeUndefined();
+  });
+
+  it("closing others with several edited tabs: discard and close closes them", async () => {
+    setup();
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.users", true);
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.orders", true);
+    fireEvent.contextMenu(tabEl("SQL 1"));
+    fireEvent.click(await screen.findByText("query.innerTab.closeOthers"));
+
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscardClose"));
+    expect(innerIds()).toEqual(["sql:1"]);
+  });
+
+  it("closing the database tab with several edited tabs asks once and closes it on discard", async () => {
+    setup();
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.users", true);
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.orders", true);
+    act(() => useTabStore.getState().closeTab(TAB));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("app.users")).toBeInTheDocument();
+    expect(useTabStore.getState().tabs.map((t) => t.id)).toEqual([TAB]);
+
+    fireEvent.click(within(dialog).getByText("query.unsavedEditsDiscardClose"));
+    expect(useTabStore.getState().tabs).toEqual([]);
+  });
+
+  it("closing the database tab with one edited tab hands the decision to that tab", () => {
+    setup();
+    useQueryStore.getState().setInnerTabDirty(TAB, "table:app.orders", true);
+    act(() => useTabStore.getState().closeTab(TAB));
+    expect(useTabStore.getState().tabs.map((t) => t.id)).toEqual([TAB]);
+    expect(useQueryStore.getState().dbStates[TAB].closeRequest).toMatchObject({
+      dirtyIds: ["table:app.orders"],
+      closeOuter: true,
+    });
+    expect(useQueryStore.getState().dbStates[TAB].activeInnerTabId).toBe("table:app.orders");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("menu: reveal in tree is offered for table tabs only and reveals that table", async () => {

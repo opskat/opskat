@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
@@ -26,6 +26,8 @@ function setupStores() {
       },
     ],
     activeTabId: "query-1",
+    unsavedTabIds: [],
+    pendingCloseTabId: null,
   });
   useQueryStore.setState({
     dbStates: {
@@ -310,5 +312,89 @@ describe("TableDataTab unsaved edits guard", () => {
     expect(line).toHaveTextContent("query.unsavedEditsNewRow");
     expect(line).toHaveTextContent("id");
     expect(line).toHaveTextContent("99");
+  });
+
+  describe("closing the tab", () => {
+    const innerIds = () => useQueryStore.getState().dbStates["query-1"]?.innerTabs.map((it) => it.id);
+    const requestClose = () => act(() => useQueryStore.getState().closeInnerTab("query-1", "table-1"));
+
+    it("closes directly when nothing is pending", async () => {
+      await renderLoaded();
+      requestClose();
+      expect(innerIds()).toEqual([]);
+      expect(dialog()).toBeNull();
+    });
+
+    it("an edit marks the database tab as unsaved", async () => {
+      await renderLoaded();
+      editCell("0:status", "paid");
+      await waitFor(() => expect(useTabStore.getState().unsavedTabIds).toContain("query-1"));
+    });
+
+    it("asks before closing an edited tab; stay keeps the tab and the edit", async () => {
+      const user = await renderLoaded();
+      editCell("0:status", "paid");
+      requestClose();
+
+      const guard = await screen.findByRole("alertdialog");
+      expect(within(guard).getByText("query.unsavedEditsDescClose")).toBeInTheDocument();
+      expect(within(guard).getByText('query.unsavedEditsTitle({"count":1})')).toBeInTheDocument();
+      await user.click(within(guard).getByText("query.unsavedEditsStay"));
+
+      await waitFor(() => expect(dialog()).toBeNull());
+      expect(innerIds()).toEqual(["table-1"]);
+      expect(cell("0:status")).toHaveTextContent("paid");
+      expect(useQueryStore.getState().dbStates["query-1"].closeRequest).toBeUndefined();
+    });
+
+    it("discard and close closes the tab without submitting", async () => {
+      const user = await renderLoaded();
+      editCell("0:status", "paid");
+      requestClose();
+
+      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscardClose"));
+
+      expect(innerIds()).toEqual([]);
+      expect(vi.mocked(ExecuteSQL)).not.toHaveBeenCalled();
+    });
+
+    it("submit closes the tab only after the submit succeeds", async () => {
+      vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
+      const user = await renderLoaded();
+      editCell("0:status", "paid");
+      requestClose();
+
+      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsSubmit"));
+      await screen.findByText("query.confirmExecute");
+      expect(innerIds()).toEqual(["table-1"]);
+      await user.click(screen.getByText("query.confirmExecute"));
+
+      await waitFor(() => expect(innerIds()).toEqual([]));
+      expect(vi.mocked(ExecuteSQL)).toHaveBeenCalledOnce();
+    });
+
+    it("a failed submit keeps the tab open with the edit", async () => {
+      vi.mocked(ExecuteSQL).mockRejectedValue(new Error("lock wait timeout"));
+      const user = await renderLoaded();
+      editCell("0:status", "paid");
+      requestClose();
+
+      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsSubmit"));
+      await user.click(await screen.findByText("query.confirmExecute"));
+
+      await waitFor(() => expect(screen.queryByText("query.confirmExecute")).toBeNull());
+      expect(innerIds()).toEqual(["table-1"]);
+      expect(cell("0:status")).toHaveTextContent("paid");
+    });
+
+    it("closing the database tab with this as the only edited tab closes it after discarding", async () => {
+      const user = await renderLoaded();
+      editCell("0:status", "paid");
+      act(() => useQueryStore.getState().requestCloseInnerTabs("query-1", ["table-1"], { closeOuter: true }));
+
+      await user.click(within(await screen.findByRole("alertdialog")).getByText("query.unsavedEditsDiscardClose"));
+
+      expect(useTabStore.getState().tabs).toEqual([]);
+    });
   });
 });

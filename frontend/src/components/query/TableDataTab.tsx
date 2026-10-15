@@ -139,6 +139,13 @@ export const TableDataTab = memo(function TableDataTab(props: TableDataTabProps)
   return <TableDataTabContent {...props} />;
 });
 
+/** 有未提交修改时被拦下的操作;discardLabel 缺省为「放弃并继续」。 */
+interface GuardedAction {
+  run: () => void;
+  description: string;
+  discardLabel?: string;
+}
+
 function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTabProps) {
   const { t } = useTranslation();
   const tab = useTabStore((s) => s.tabs.find((t) => t.id === tabId));
@@ -200,7 +207,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [rowDetailOpen, setRowDetailOpen] = useState(false);
   const [focusCellRequest, setFocusCellRequest] = useState<FocusCellRequest | null>(null);
   // 有未提交修改时被拦下的操作:对话框打开期间挂在这里,按用户选择丢弃或执行。
-  const [guardedAction, setGuardedAction] = useState<{ run: () => void; description: string } | null>(null);
+  const [guardedAction, setGuardedAction] = useState<GuardedAction | null>(null);
   // 选「提交修改…」后,被拦下的操作等提交成功才执行;预览取消或提交失败时清掉。
   const continueAfterSubmit = useRef<(() => void) | null>(null);
   const requestSeq = useRef(0);
@@ -464,6 +471,28 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     },
     [hasEdits]
   );
+
+  // 有无修改上报给 queryStore:关闭本标签、关闭外层数据库标签、⌘W 据此决定是否先拦下来问。
+  const setInnerTabDirty = useQueryStore((s) => s.setInnerTabDirty);
+  useEffect(() => {
+    setInnerTabDirty(tabId, innerTabId, hasEdits);
+    return () => setInnerTabDirty(tabId, innerTabId, false);
+  }, [hasEdits, innerTabId, setInnerTabDirty, tabId]);
+
+  // 关闭请求只涉及本标签这一个脏标签时,由这里的三选项对话框决定(多个时 DatabasePanel 弹批量框)。
+  const closeRequest = useQueryStore((s) => s.dbStates[tabId]?.closeRequest);
+  const forceCloseInnerTabs = useQueryStore((s) => s.forceCloseInnerTabs);
+  const cancelCloseRequest = useQueryStore((s) => s.cancelCloseRequest);
+  const closeGuard = useMemo((): GuardedAction | null => {
+    if (closeRequest?.dirtyIds.length !== 1 || closeRequest.dirtyIds[0] !== innerTabId) return null;
+    const { ids, closeOuter } = closeRequest;
+    return {
+      run: () => forceCloseInnerTabs(tabId, ids, closeOuter),
+      description: t("query.unsavedEditsDescClose"),
+      discardLabel: t("query.unsavedEditsDiscardClose"),
+    };
+  }, [closeRequest, forceCloseInnerTabs, innerTabId, t, tabId]);
+  const pendingGuard = closeGuard ?? guardedAction;
 
   const handleAddInlineRow = useCallback(() => {
     const firstVisibleColumn = visibleColumns.find((column) => columns.includes(column)) ?? columns[0];
@@ -886,20 +915,24 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     return [...updates.map((u) => u.item), ...inserts];
   }, [columns, edits, newRows, page, pageSize, rows]);
 
-  const handleGuardStay = useCallback(() => setGuardedAction(null), []);
+  // 只收起当前显示的那一个:关闭请求优先显示,收起后被它盖住的翻页等拦截照旧。
+  const handleGuardStay = useCallback(() => {
+    if (closeGuard) cancelCloseRequest(tabId);
+    else setGuardedAction(null);
+  }, [cancelCloseRequest, closeGuard, tabId]);
 
   const handleGuardDiscard = useCallback(() => {
-    if (!guardedAction) return;
-    setGuardedAction(null);
+    if (!pendingGuard) return;
+    handleGuardStay();
     handleDiscard();
-    guardedAction.run();
-  }, [guardedAction, handleDiscard]);
+    pendingGuard.run();
+  }, [handleDiscard, handleGuardStay, pendingGuard]);
 
   const handleGuardSubmit = useCallback(() => {
-    if (!guardedAction) return;
-    setGuardedAction(null);
-    if (openSqlDialog("confirm")) continueAfterSubmit.current = guardedAction.run;
-  }, [guardedAction, openSqlDialog]);
+    if (!pendingGuard) return;
+    handleGuardStay();
+    if (openSqlDialog("confirm")) continueAfterSubmit.current = pendingGuard.run;
+  }, [handleGuardStay, openSqlDialog, pendingGuard]);
 
   const handleConfirmSubmit = useCallback(async () => {
     const next = continueAfterSubmit.current;
@@ -1389,9 +1422,10 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       />
 
       <UnsavedEditsDialog
-        open={guardedAction !== null}
+        open={pendingGuard !== null}
         summary={unsavedSummary}
-        description={guardedAction?.description}
+        description={pendingGuard?.description}
+        discardLabel={pendingGuard?.discardLabel}
         onStay={handleGuardStay}
         onDiscard={handleGuardDiscard}
         onSubmit={handleGuardSubmit}

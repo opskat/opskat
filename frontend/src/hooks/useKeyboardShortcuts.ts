@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useTabStore } from "@/stores/tabStore";
+import { useQueryStore } from "@/stores/queryStore";
 import { useShortcutStore, eventMatchesBinding, matchShortcut } from "@/stores/shortcutStore";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { copySelectedAssetMarkdownRef, shouldCopyAssetRef } from "@/lib/assetRef";
@@ -95,7 +96,11 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
                 termStore.closePane(activeTabId, data.activePaneId);
               }
             } else {
-              tabStore.closeTab(activeTabId);
+              // 关系型数据库标签(有 dbStates)先关当前内层标签,内层全关完才关外层;关闭都受未提交修改拦截。
+              const query = useQueryStore.getState();
+              const innerId = query.dbStates[activeTabId]?.activeInnerTabId;
+              if (innerId) query.closeInnerTab(activeTabId, innerId);
+              else tabStore.closeTab(activeTabId);
             }
           }
           break;

@@ -833,6 +833,60 @@ describe("queryStore inner tab closing and SQL numbering", () => {
     expect(innerIds()).toEqual(["table:main.a", "table:main.b"]);
     expect(useQueryStore.getState().dbStates["query-40"].activeInnerTabId).toBe("table:main.a");
   });
+
+  describe("with unsaved edits", () => {
+    const db = () => useQueryStore.getState().dbStates["query-40"];
+
+    it("marks the outer tab unsaved while any inner tab has edits", () => {
+      seed();
+      const s = useQueryStore.getState();
+      s.setInnerTabDirty("query-40", "table:main.a", true);
+      s.setInnerTabDirty("query-40", "table:main.b", true);
+      s.setInnerTabDirty("query-40", "table:main.a", false);
+      expect(useTabStore.getState().unsavedTabIds).toContain("query-40");
+      s.setInnerTabDirty("query-40", "table:main.b", false);
+      expect(useTabStore.getState().unsavedTabIds).not.toContain("query-40");
+    });
+
+    it("holds the close of an edited tab for a decision and brings it to the front", () => {
+      seed();
+      useQueryStore.getState().setInnerTabDirty("query-40", "table:main.a", true);
+      useQueryStore.getState().closeInnerTab("query-40", "table:main.a");
+      expect(innerIds()).toEqual(["table:main.a", "table:main.b", "table:main.c"]);
+      expect(db().activeInnerTabId).toBe("table:main.a");
+      expect(db().closeRequest).toEqual({ ids: ["table:main.a"], dirtyIds: ["table:main.a"], closeOuter: false });
+    });
+
+    it("a batch close with edits closes nothing until decided; cancel keeps every tab", () => {
+      seed();
+      useQueryStore.getState().setInnerTabDirty("query-40", "table:main.b", true);
+      useQueryStore.getState().closeOtherInnerTabs("query-40", "table:main.c");
+      expect(innerIds()).toEqual(["table:main.a", "table:main.b", "table:main.c"]);
+      useQueryStore.getState().cancelCloseRequest("query-40");
+      expect(db().closeRequest).toBeUndefined();
+      expect(innerIds()).toEqual(["table:main.a", "table:main.b", "table:main.c"]);
+    });
+
+    it("forceCloseInnerTabs closes the requested tabs and forgets their edits", () => {
+      seed();
+      useQueryStore.getState().setInnerTabDirty("query-40", "table:main.b", true);
+      useQueryStore.getState().closeOtherInnerTabs("query-40", "table:main.c");
+      const { ids, closeOuter } = db().closeRequest!;
+      useQueryStore.getState().forceCloseInnerTabs("query-40", ids, closeOuter);
+      expect(innerIds()).toEqual(["table:main.c"]);
+      expect(db().activeInnerTabId).toBe("table:main.c");
+      expect(db().closeRequest).toBeUndefined();
+      expect(useTabStore.getState().unsavedTabIds).not.toContain("query-40");
+    });
+
+    it("forceCloseInnerTabs with closeOuter closes the database tab itself", () => {
+      seed();
+      useQueryStore.getState().setInnerTabDirty("query-40", "table:main.b", true);
+      useQueryStore.getState().forceCloseInnerTabs("query-40", ["table:main.b"], true);
+      expect(useTabStore.getState().tabs.map((t) => t.id)).not.toContain("query-40");
+      expect(useQueryStore.getState().dbStates["query-40"]).toBeUndefined();
+    });
+  });
 });
 
 describe("queryStore SQL numbering across persist and restore", () => {
