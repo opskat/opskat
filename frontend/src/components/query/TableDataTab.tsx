@@ -954,6 +954,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     () => (visibleColumns.length > 0 ? visibleColumns : columns),
     [visibleColumns, columns]
   );
+  const findScope = useMemo(() => ({ rowCount: rows.length, page: page + 1 }), [rows.length, page]);
   const hasActiveFilterSort =
     filters.length > 0 ||
     sorts.length > 0 ||
@@ -1077,6 +1078,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
               rowDensity={rowDensity}
               focusCellRequest={focusCellRequest}
               renderCell={renderCell}
+              findEnabled
+              findScope={findScope}
             />
           )}
         </div>

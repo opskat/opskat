@@ -4,6 +4,7 @@ import { useTabStore } from "@/stores/tabStore";
 import { useShortcutStore, eventMatchesBinding, matchShortcut } from "@/stores/shortcutStore";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { copySelectedAssetMarkdownRef, shouldCopyAssetRef } from "@/lib/assetRef";
+import { TABLE_FIND_SCOPE_ATTR } from "@/lib/tableFind";
 
 interface ShortcutHandlers {
   onToggleAIPanel: () => void;
@@ -56,10 +57,10 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
         return;
       }
 
-      // panel.filter 特殊处理：xterm 聚焦时透传，否则通过 store 触发 filter 面板
+      // panel.filter 特殊处理：xterm / 数据库结果表格聚焦时透传（各自打开查找条），否则通过 store 触发 filter 面板
       if (action === "panel.filter") {
         const el = document.activeElement as HTMLElement | null;
-        if (el?.closest(".xterm")) return;
+        if (el?.closest(`.xterm, [${TABLE_FIND_SCOPE_ATTR}]`)) return;
         e.preventDefault();
         e.stopPropagation();
         useLayoutStore.getState().requestOpenFilter();

@@ -5,6 +5,7 @@ import { SqlEditorTab } from "@/components/query/SqlEditorTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../wailsjs/go/query/Query";
+import { isMac } from "@/stores/shortcutStore";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value, language, readOnly }: { value?: string; language?: string; readOnly?: boolean }) => (
@@ -98,5 +99,20 @@ describe("SqlEditorTab result views", () => {
       { id: 2, name: "bob" },
     ]);
     expect(vi.mocked(ExecuteSQLPaged).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("finds within the result page and closes the find bar when switching to JSON", async () => {
+    const user = await renderExecuted();
+    await user.click(screen.getByTitle("query.rowDetail"));
+    const grid = document.querySelector(".query-table-scroll") as HTMLElement;
+
+    fireEvent.keyDown(grid, { key: "f", code: "KeyF", metaKey: isMac, ctrlKey: !isMac });
+    fireEvent.change(screen.getByPlaceholderText("query.find.placeholder"), { target: { value: "bob" } });
+
+    await waitFor(() => expect(JSON.parse(resultEditor()!.textContent!)).toEqual({ id: 2, name: "bob" }));
+    expect(screen.getByText("1 / 1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "query.jsonView" }));
+    expect(screen.queryByPlaceholderText("query.find.placeholder")).toBeNull();
   });
 });

@@ -389,6 +389,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
 
   const hasNext = totalPages != null ? page < totalPages - 1 : rows.length === pageSize;
   const hasPrev = page > 0;
+  const findScope = useMemo(() => ({ rowCount: rows.length, page: page + 1 }), [rows.length, page]);
   const showPagination = columns.length > 0 && !loading && !error && lastExecSql;
 
   return (
@@ -605,6 +606,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
                 rowNumberOffset={page * pageSize}
                 onSelectedCellChange={handleSelectedCellChange}
                 onSelectedRowsChange={handleSelectedRowsChange}
+                findEnabled
+                findScope={findScope}
               />
             )}
           </div>

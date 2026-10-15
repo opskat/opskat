@@ -2061,6 +2061,18 @@
     "redisPlaceholder": "输入命令按 Enter 执行",
     "affectedRows": "影响行数",
     "noResult": "无结果",
+    "find": {
+      "placeholder": "在当前页查找",
+      "caseSensitive": "区分大小写",
+      "wholeCell": "整格匹配",
+      "regex": "正则表达式",
+      "previous": "上一个",
+      "next": "下一个",
+      "close": "关闭查找",
+      "noResults": "无结果",
+      "invalidRegex": "正则无效",
+      "scope": "仅查找已加载的 {{rows}} 行（第 {{page}} 页），含未提交修改"
+    },
     "sortColumn": "点击排序",
     "filterColumn": "按此列筛选",
     "filterByValue": "点击以此值筛选",

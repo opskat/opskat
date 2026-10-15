@@ -26,11 +26,20 @@ import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } f
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import { formatModKey } from "@/stores/shortcutStore";
+import { eventMatchesBinding, formatModKey, useShortcutStore } from "@/stores/shortcutStore";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
+import {
+  TABLE_FIND_SCOPE_ATTR,
+  findMatches,
+  revealDelta,
+  type TableFindOptions,
+  type TableFindRange,
+  type TableFindResult,
+} from "@/lib/tableFind";
+import { TableFindBar, TableFindHighlight, type TableFindStatus } from "./TableFindBar";
 
 export interface CellEdit {
   rowIdx: number;
@@ -112,6 +121,10 @@ interface QueryResultTableProps {
   // Override the display-mode cell rendering. Does not affect edit-mode (input).
   // When provided, the returned node replaces the default NULL / String(value) span.
   renderCell?: (value: unknown, ctx: RenderCellContext) => React.ReactNode;
+  // 表格内查找（⌘F）：只有关系型表数据与 SQL 结果开启，其余使用方（MongoDB）不传则不受影响。
+  findEnabled?: boolean;
+  // 查找条的范围说明：当前页已加载的行数与页码（从 1 开始）。
+  findScope?: { rowCount: number; page: number };
 }
 
 // Sentinel key used to represent NULL / undefined values in the column-filter
@@ -121,6 +134,8 @@ const DEFAULT_COLUMN_WIDTH = 160;
 const ROW_NUMBER_MIN_WIDTH = 44;
 const ROW_NUMBER_PADDING = 24;
 const ROW_NUMBER_CHAR_WIDTH = 8;
+const FIND_DEBOUNCE_MS = 120;
+const NO_FIND_RESULT: TableFindResult = { matches: [] };
 
 const CONTEXT_MENU_ITEM_CLASS =
   "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
@@ -333,6 +348,8 @@ function QueryResultTableImpl({
   rowDensity = "default",
   focusCellRequest,
   renderCell,
+  findEnabled,
+  findScope,
 }: QueryResultTableProps) {
   const { t } = useTranslation();
 
@@ -572,7 +589,8 @@ function QueryResultTableImpl({
     return Math.max(ROW_NUMBER_MIN_WIDTH, ROW_NUMBER_PADDING + String(largest).length * ROW_NUMBER_CHAR_WIDTH);
   }, [rowNumberOffset, showRowNumber, sortedIndices.length]);
 
-  const frozenColumnOffsets = useMemo(() => {
+  // frozenAreaRight:行号列 + 冻结列占据的粘性区域右沿,落在它左边的普通格会被遮住。
+  const { frozenColumnOffsets, frozenAreaRight } = useMemo(() => {
     const offsets: Record<string, number> = {};
     // 冻结列停在行号列右侧,而不是容器左沿 —— 否则第一列会盖住行号。
     let left = rowNumberWidth;
@@ -581,8 +599,120 @@ function QueryResultTableImpl({
       offsets[col] = left;
       left += colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
     }
-    return offsets;
+    return { frozenColumnOffsets: offsets, frozenAreaRight: left };
   }, [colWidths, displayColumns, frozenColumns, rowNumberWidth]);
+  // 滚动定位只在选中格变化时触发,读取最新的冻结几何即可 —— 拖列宽 / 冻结列不该把视图拽回选中格。
+  const frozenGeometryRef = useRef({ frozenColumnOffsets, frozenAreaRight });
+  useEffect(() => {
+    frozenGeometryRef.current = { frozenColumnOffsets, frozenAreaRight };
+  }, [frozenColumnOffsets, frozenAreaRight]);
+
+  // ---- 表格内查找（#328）：只查当前页已加载的行；当前命中即选中单元格 ----
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findFocusRequest, setFindFocusRequest] = useState(0);
+  const [findQuery, setFindQuery] = useState("");
+  // 防抖后的关键词：匹配只在它变化时同步重算，输入本身不卡。
+  const [findTerm, setFindTerm] = useState("");
+  const [findOptions, setFindOptions] = useState<TableFindOptions>({
+    caseSensitive: false,
+    wholeCell: false,
+    regex: false,
+  });
+  const findActive = !!findEnabled && findOpen;
+
+  useEffect(() => {
+    if (findQuery === findTerm) return;
+    const timer = setTimeout(() => setFindTerm(findQuery), FIND_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [findQuery, findTerm]);
+
+  const findResult = useMemo(
+    () =>
+      findActive ? findMatches(rows, displayColumns, edits, findTerm, findOptions, sortedIndices) : NO_FIND_RESULT,
+    [displayColumns, edits, findActive, findOptions, findTerm, rows, sortedIndices]
+  );
+  const findHits = useMemo(() => {
+    const map = new Map<string, { index: number; ranges: TableFindRange[] }>();
+    findResult.matches.forEach((m, index) => map.set(cellKey(m.rowIdx, m.col), { index, ranges: m.ranges }));
+    return map;
+  }, [findResult]);
+  const currentFindIndex = selectedCell
+    ? findHits.get(cellKey(selectedCell.origIdx, selectedCell.col))?.index
+    : undefined;
+  const findStatus: TableFindStatus = !findTerm
+    ? { kind: "idle" }
+    : findResult.error
+      ? { kind: "invalidRegex" }
+      : findResult.matches.length === 0
+        ? { kind: "none" }
+        : {
+            kind: "count",
+            current: currentFindIndex == null ? null : currentFindIndex + 1,
+            total: findResult.matches.length,
+          };
+
+  // 命中成为选中单元格（行详情、⌘C 随之跟随）；焦点留在查找框里。
+  const selectFindMatch = useCallback(
+    (rowIdx: number, col: string) => {
+      setSelectedCell({ origIdx: rowIdx, col });
+      setSelectedRowIdxs(new Set());
+      setSelectedColumns(new Set());
+      columnSelectionAnchorRef.current = null;
+      rowSelectionAnchorRef.current = null;
+      onSelectedCellChange?.({ rowIdx, col });
+      onSelectedRowsChange?.([]);
+    },
+    [onSelectedCellChange, onSelectedRowsChange]
+  );
+
+  // 关键词、选项、翻页 / 刷新（rows）、排序筛选（sortedIndices）、列变化时回到第一个命中；
+  // 只有单元格修改（edits）变化时只更新计数，不挪动当前命中。
+  const findJumpKeyRef = useRef<readonly unknown[] | null>(null);
+  useEffect(() => {
+    const key = [findActive, findTerm, findOptions, rows, sortedIndices, displayColumns];
+    const prev = findJumpKeyRef.current;
+    findJumpKeyRef.current = key;
+    if (prev && key.every((v, i) => Object.is(v, prev[i]))) return;
+    const first = findResult.matches[0];
+    if (findActive && first) selectFindMatch(first.rowIdx, first.col);
+  }, [displayColumns, findActive, findOptions, findResult, findTerm, rows, selectFindMatch, sortedIndices]);
+
+  const stepFind = useCallback(
+    (direction: 1 | -1) => {
+      const { matches } = findResult;
+      if (matches.length === 0) return;
+      const next =
+        currentFindIndex == null
+          ? direction === 1
+            ? 0
+            : matches.length - 1
+          : (currentFindIndex + direction + matches.length) % matches.length;
+      selectFindMatch(matches[next].rowIdx, matches[next].col);
+    },
+    [currentFindIndex, findResult, selectFindMatch]
+  );
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    setFindFocusRequest((n) => n + 1);
+  }, []);
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    containerRef.current?.focus();
+  }, []);
+
+  // ⌘F（与标签过滤共用 panel.filter 绑定）：全局处理器在结果区内让路，这里打开查找条。
+  const handleFindShortcut = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!eventMatchesBinding(e.nativeEvent, useShortcutStore.getState().shortcuts["panel.filter"])) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openFind();
+    },
+    [openFind]
+  );
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
@@ -1448,20 +1578,62 @@ function QueryResultTableImpl({
   // Scroll the selected cell into view when navigating.
   // 虚拟化后,目标行可能根本不在 DOM 里,scrollIntoView 找不到 td。先用 virtualizer
   // 把目标行索引滚进视口(只动垂直方向),再下一帧用 scrollIntoView 处理水平方向。
+  // scrollIntoView 不知道粘性的行号列 / 冻结列:格子落在它们下面时仍算"可见",
+  // 所以再按粘性区域右沿把水平位置校正一次。
   useEffect(() => {
     if (!selectedCell || !containerRef.current) return;
     const displayIdx = sortedIndices.indexOf(selectedCell.origIdx);
     if (displayIdx >= 0) rowVirtualizer.scrollToIndex(displayIdx, { align: "auto" });
     const rafId = requestAnimationFrame(() => {
+      const container = containerRef.current;
       const key = cellKey(selectedCell.origIdx, selectedCell.col);
-      const el = containerRef.current?.querySelector<HTMLElement>(`[data-cell-key="${CSS.escape(key)}"]`);
-      el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const el = container?.querySelector<HTMLElement>(`[data-cell-key="${CSS.escape(key)}"]`);
+      if (!container || !el) return;
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const frozen = frozenGeometryRef.current;
+      if (frozen.frozenColumnOffsets[selectedCell.col] != null) return;
+      const cellRect = el.getBoundingClientRect();
+      const viewLeft = container.getBoundingClientRect().left;
+      const dx = revealDelta(
+        cellRect.left,
+        cellRect.right,
+        viewLeft + frozen.frozenAreaRight,
+        viewLeft + container.clientWidth
+      );
+      if (dx !== 0) container.scrollLeft += dx;
     });
     return () => cancelAnimationFrame(rafId);
   }, [selectedCell, sortedIndices, rowVirtualizer]);
 
+  const findBar = findActive ? (
+    <TableFindBar
+      inputRef={findInputRef}
+      focusRequest={findFocusRequest}
+      query={findQuery}
+      onQueryChange={setFindQuery}
+      options={findOptions}
+      onOptionsChange={setFindOptions}
+      status={findStatus}
+      scope={findScope}
+      onNext={() => stepFind(1)}
+      onPrevious={() => stepFind(-1)}
+      onClose={closeFind}
+    />
+  ) : null;
+  // 结果区根节点:带上标记,全局 ⌘F 在此让路;查找条在加载 / 出错时也保留,关键词不丢。
+  const findScopeProps = findEnabled ? { [TABLE_FIND_SCOPE_ATTR]: "", onKeyDown: handleFindShortcut } : {};
+  const withFindScope = (body: React.ReactNode) =>
+    findEnabled ? (
+      <div className="flex-1 min-h-0 flex flex-col" {...findScopeProps}>
+        {findBar}
+        {body}
+      </div>
+    ) : (
+      body
+    );
+
   if (loading) {
-    return (
+    return withFindScope(
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
@@ -1469,17 +1641,20 @@ function QueryResultTableImpl({
   }
 
   if (error) {
-    return <div className="px-3 py-4 text-xs text-destructive whitespace-pre-wrap font-mono">{error}</div>;
+    return withFindScope(
+      <div className="px-3 py-4 text-xs text-destructive whitespace-pre-wrap font-mono">{error}</div>
+    );
   }
 
   if (columns.length === 0) {
-    return (
+    return withFindScope(
       <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">{t("query.noResult")}</div>
     );
   }
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col" {...findScopeProps}>
+      {findBar}
       <div
         ref={containerRef}
         tabIndex={0}
@@ -1686,6 +1861,7 @@ function QueryResultTableImpl({
                     const displayValue = isEdited ? edits!.get(ck) : row[col];
                     const isEditing = editingCell === ck;
                     const isSelected = selectedCell?.origIdx === origIdx && selectedCell?.col === col;
+                    const findHit = findHits.get(ck);
                     const width = colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
                     const frozenLeft = frozenColumnOffsets[col];
                     const isFrozen = frozenLeft != null;
@@ -1753,7 +1929,13 @@ function QueryResultTableImpl({
                         ) : (
                           <div className="flex min-w-0 items-center gap-1">
                             <div className="min-w-0 flex-1">
-                              {renderCell ? (
+                              {findHit ? (
+                                <TableFindHighlight
+                                  text={cellValueToDisplayText(displayValue)}
+                                  ranges={findHit.ranges}
+                                  current={isSelected}
+                                />
+                              ) : renderCell ? (
                                 renderCell(displayValue, { rowIdx: origIdx, col })
                               ) : displayValue == null ? (
                                 <span className="text-muted-foreground italic">NULL</span>

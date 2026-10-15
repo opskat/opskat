@@ -2061,6 +2061,18 @@
     "redisPlaceholder": "Enter command, press Enter to execute",
     "affectedRows": "Affected Rows",
     "noResult": "No results",
+    "find": {
+      "placeholder": "Find in this page",
+      "caseSensitive": "Match case",
+      "wholeCell": "Match entire cell",
+      "regex": "Use regular expression",
+      "previous": "Previous match",
+      "next": "Next match",
+      "close": "Close find",
+      "noResults": "No results",
+      "invalidRegex": "Invalid regex",
+      "scope": "Loaded rows only: {{rows}} (page {{page}}), unsaved changes included"
+    },
     "sortColumn": "Click to sort",
     "filterColumn": "Filter by column",
     "filterByValue": "Click to filter by this value",
