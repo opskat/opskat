@@ -52,6 +52,8 @@ export interface DatabaseTabState {
   error: string | null;
   tableMeta?: Record<string, query_svc.TableMetadata>; // "db.table" -> metadata
   objects?: Record<string, query_svc.DatabaseObjects>; // db -> objects
+  /** 「在左侧树中定位」请求;nonce 递增让同一张表的重复请求也能再次触发树的响应。不持久化。 */
+  revealRequest?: { nonce: number; db: string; table: string };
 }
 
 const REDIS_PAGE_SIZE = 100;
@@ -147,6 +149,7 @@ interface QueryState {
   refreshTables: (tabId: string, database: string) => Promise<void>;
   toggleDbExpand: (tabId: string, database: string) => void;
   toggleSchemaExpand: (tabId: string, database: string, schema: string) => void;
+  revealTable: (tabId: string, database: string, table: string) => void;
   openTableTab: (tabId: string, database: string, table: string) => void;
   openSqlTab: (tabId: string, database?: string, sql?: string) => void;
   closeInnerTab: (tabId: string, innerTabId: string) => void;
@@ -599,6 +602,27 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         },
       },
     }));
+  },
+
+  revealTable: (tabId, database, table) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    if (!state.tables[database] && !state.loadingTables[database]) {
+      get().loadTables(tabId, database);
+    }
+    set((s) => {
+      const cur = s.dbStates[tabId];
+      return {
+        dbStates: {
+          ...s.dbStates,
+          [tabId]: {
+            ...cur,
+            expandedDbs: cur.expandedDbs.includes(database) ? cur.expandedDbs : [...cur.expandedDbs, database],
+            revealRequest: { nonce: (cur.revealRequest?.nonce ?? 0) + 1, db: database, table },
+          },
+        },
+      };
+    });
   },
 
   openTableTab: (tabId, database, table) => {

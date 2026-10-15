@@ -534,3 +534,116 @@ describe("DatabaseTree — starter query", () => {
     expect(openSqlTab).not.toHaveBeenCalled();
   });
 });
+
+describe("DatabaseTree — tables group and reveal", () => {
+  const seed = (tables: string[], expandedDbs: string[], expandedSchemas: Record<string, string[]> = {}) =>
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: tables },
+          loadingTables: {},
+          expandedDbs,
+          expandedSchemas,
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+
+  beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  it("collapses the tables group on the first click and expands it on the next", async () => {
+    makeDatabaseTab("query-1", "mysql");
+    seed(["users", "orders"], ["appdb"]);
+    await renderTree();
+    expect(screen.getByText("users")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/query\.objTables/));
+    expect(screen.queryByText("users")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/query\.objTables/));
+    expect(screen.getByText("users")).toBeInTheDocument();
+  });
+
+  it("reveals a table in a collapsed database: expands it, selects the table and scrolls to it", async () => {
+    makeDatabaseTab("query-1", "mysql");
+    seed(["users", "orders"], []);
+    await renderTree();
+    expect(screen.queryByText("orders")).not.toBeInTheDocument();
+
+    act(() => useQueryStore.getState().revealTable("query-1", "appdb", "orders"));
+
+    const node = await waitFor(() => {
+      const el = document.querySelector('[data-table-node="appdb.orders"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(node.getAttribute("data-selected")).toBe("true");
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(node);
+  });
+
+  it("reveals through a collapsed tables group", async () => {
+    makeDatabaseTab("query-1", "mysql");
+    seed(["users", "orders"], ["appdb"]);
+    await renderTree();
+    fireEvent.click(screen.getByText(/query\.objTables/));
+    expect(screen.queryByText("orders")).not.toBeInTheDocument();
+
+    act(() => useQueryStore.getState().revealTable("query-1", "appdb", "orders"));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-table-node="appdb.orders"]')?.getAttribute("data-selected")).toBe("true")
+    );
+  });
+
+  it("reveals a schema-qualified table by expanding its schema", async () => {
+    makeDatabaseTab("query-1", "postgresql");
+    seed(["alpha.a1", "beta.b1"], ["appdb"], { appdb: ["alpha"] });
+    await renderTree();
+    expect(document.querySelector('[data-table-node="appdb.beta.b1"]')).toBeNull();
+
+    act(() => useQueryStore.getState().revealTable("query-1", "appdb", "beta.b1"));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-table-node="appdb.beta.b1"]')?.getAttribute("data-selected")).toBe("true")
+    );
+  });
+
+  it("waits for tables that are not loaded yet, then reveals", async () => {
+    makeDatabaseTab("query-1", "mysql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: {},
+          loadingTables: {},
+          expandedDbs: [],
+          expandedSchemas: {},
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+    vi.mocked(ListTables).mockResolvedValueOnce(["users", "orders"]);
+    await renderTree();
+
+    await act(async () => useQueryStore.getState().revealTable("query-1", "appdb", "orders"));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-table-node="appdb.orders"]')?.getAttribute("data-selected")).toBe("true")
+    );
+  });
+});

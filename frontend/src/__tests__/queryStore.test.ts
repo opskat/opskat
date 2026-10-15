@@ -751,3 +751,29 @@ describe("queryStore MongoDB actions", () => {
     expect(useQueryStore.getState().mongoStates["query-20"].collections.neverOpened).toBeUndefined();
   });
 });
+
+describe("queryStore.revealTable", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/SQLite");
+    useQueryStore.getState().openQueryTab(makeSQLiteAsset(30));
+  });
+
+  it("expands the database, loads its tables when missing and issues a fresh request each call", async () => {
+    vi.mocked(ListTables).mockResolvedValue(["users"]);
+
+    useQueryStore.getState().revealTable("query-30", "main", "users");
+    const first = useQueryStore.getState().dbStates["query-30"];
+    expect(first.expandedDbs).toContain("main");
+    expect(first.revealRequest).toMatchObject({ db: "main", table: "users" });
+    await vi.waitFor(() => expect(ListTables).toHaveBeenCalledWith(30, "main"));
+
+    useQueryStore.getState().revealTable("query-30", "main", "users");
+    const second = useQueryStore.getState().dbStates["query-30"];
+    expect(second.expandedDbs.filter((d) => d === "main")).toHaveLength(1);
+    expect(second.revealRequest!.nonce).toBeGreaterThan(first.revealRequest!.nonce);
+  });
+});

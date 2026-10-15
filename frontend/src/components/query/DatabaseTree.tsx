@@ -133,6 +133,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const { t } = useTranslation();
   const { dbStates, loadDatabases, toggleDbExpand, toggleSchemaExpand, openTableTab, openSqlTab, refreshTables } =
     useQueryStore();
+  const treeRef = useRef<HTMLDivElement>(null);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
   const [showCreateTable, setShowCreateTable] = useState(false);
   const [createTableDatabase, setCreateTableDatabase] = useState("");
@@ -294,6 +295,42 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     },
     [visibleKeys]
   );
+
+  // 「在左侧树中定位」:表列表到位后(未加载的库由 revealTable 触发加载)在渲染期同步本地状态 ——
+  // 清筛选、展开表分组、单选该表;schema 展开(store 动作)与滚动在 effect 里做。
+  const revealRequest = dbState?.revealRequest;
+  const [handledNonce, setHandledNonce] = useState(revealRequest?.nonce ?? 0);
+  const [reveal, setReveal] = useState<{ nonce: number; db: string; table: string } | null>(null);
+  if (revealRequest && revealRequest.nonce !== handledNonce && dbState?.tables[revealRequest.db]) {
+    setHandledNonce(revealRequest.nonce);
+    setReveal(revealRequest);
+    setFilter("");
+    setOpenTables((prev) => ({ ...prev, [revealRequest.db]: true }));
+    setSelectedKeys([tableKey(revealRequest.db, revealRequest.table)]);
+  }
+  const revealSchema = reveal
+    ? visibleDbs
+        .find((entry) => entry.db === reveal.db)
+        ?.schemas?.find((g) => g.tables.some((node) => node.qualifiedName === reveal.table))?.schema
+    : undefined;
+  const revealSchemaOpen = !!reveal && (dbState?.expandedSchemas[reveal.db] ?? []).includes(revealSchema ?? "");
+  useEffect(() => {
+    if (!reveal) return;
+    selectionAnchorRef.current = tableKey(reveal.db, reveal.table);
+    if (revealSchema && !revealSchemaOpen) toggleSchemaExpand(tabId, reveal.db, revealSchema);
+  }, [reveal, revealSchema, revealSchemaOpen, toggleSchemaExpand, tabId]);
+
+  const scrolledNonceRef = useRef(0);
+  useEffect(() => {
+    if (!reveal || reveal.nonce === scrolledNonceRef.current) return;
+    const key = tableKey(reveal.db, reveal.table);
+    if (!visibleKeys.includes(key)) return;
+    const node = Array.from(treeRef.current?.querySelectorAll<HTMLElement>("[data-table-node]") ?? []).find(
+      (el) => el.dataset.tableNode === key
+    );
+    scrolledNonceRef.current = reveal.nonce;
+    node?.scrollIntoView({ block: "nearest" });
+  }, [reveal, visibleKeys]);
 
   /** 右键命中选中集则整集生效,否则先重置为单选该表(与结果网格同语义)。 */
   const contextTargets = useCallback(
@@ -545,7 +582,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
 
       {/* Tree */}
       <ScrollArea className="flex-1 min-h-0">
-        <div className="p-1 space-y-0.5">
+        <div ref={treeRef} className="p-1 space-y-0.5">
           {loadingDbs ? (
             <div className="flex items-center justify-center py-4">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -629,7 +666,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                             onClick={() => {
                               if (filterLower) return;
                               if (isTablesOpen) dropSelectionUnder(`${db}.`);
-                              setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? false) }));
+                              setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? true) }));
                             }}
                           >
                             {isTablesOpen ? (
