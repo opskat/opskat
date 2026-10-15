@@ -2285,6 +2285,14 @@
     "kafkaSendMessage": "发送",
     "kafkaTruncated": "截断",
     "noKeySelected": "选择一个 key 查看详情",
+    "innerTab": {
+      "close": "关闭",
+      "closeOthers": "关闭其他标签",
+      "closeRight": "关闭右侧标签",
+      "copyName": "复制名称",
+      "copied": "已复制",
+      "reveal": "在左侧树中定位"
+    },
     "openTable": "打开表",
     "tables": "表",
     "databases": "数据库",

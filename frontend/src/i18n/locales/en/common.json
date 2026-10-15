@@ -2285,6 +2285,14 @@
     "kafkaSendMessage": "Send",
     "kafkaTruncated": "truncated",
     "noKeySelected": "Select a key to view details",
+    "innerTab": {
+      "close": "Close",
+      "closeOthers": "Close Other Tabs",
+      "closeRight": "Close Tabs to the Right",
+      "copyName": "Copy Name",
+      "copied": "Copied",
+      "reveal": "Reveal in Tree"
+    },
     "openTable": "Open Table",
     "tables": "Tables",
     "databases": "Databases",

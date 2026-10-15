@@ -2,7 +2,20 @@ import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X, Table2, Code2, Database } from "lucide-react";
 import { useQueryStore } from "@/stores/queryStore";
-import { useResizeHandle } from "@opskat/ui";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  useResizeHandle,
+} from "@opskat/ui";
+import { notifyCopied } from "@/lib/notify";
+import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import { DatabaseTree, DriverUnavailableNotice } from "./DatabaseTree";
@@ -17,7 +30,11 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
   const { t } = useTranslation();
   const dbState = useQueryStore((s) => s.dbStates[tabId]);
   const closeInnerTab = useQueryStore((s) => s.closeInnerTab);
+  const closeOtherInnerTabs = useQueryStore((s) => s.closeOtherInnerTabs);
+  const closeRightInnerTabs = useQueryStore((s) => s.closeRightInnerTabs);
+  const revealTable = useQueryStore((s) => s.revealTable);
   const setActiveInnerTab = useQueryStore((s) => s.setActiveInnerTab);
+  const closeBinding = useShortcutStore((s) => s.shortcuts["tab.close"]);
 
   const driver = useTabStore((s) => (s.tabs.find((tab) => tab.id === tabId)?.meta as QueryTabMeta | undefined)?.driver);
   const driversState = useDatabaseDrivers();
@@ -58,36 +75,82 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
         {/* Inner tab bar */}
         {!driverUnavailable && innerTabs.length > 0 && (
           <div className="flex items-center border-b border-border bg-muted/30 shrink-0 overflow-x-auto">
-            {innerTabs.map((tab) => {
+            {innerTabs.map((tab, index) => {
               const isActive = tab.id === activeInnerTabId;
+              const fullName = tab.type === "table" ? `${tab.database}.${tab.table}` : tab.title;
               return (
-                <div
-                  key={tab.id}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer border-r border-border whitespace-nowrap select-none transition-colors duration-150 ${
-                    isActive
-                      ? "bg-background text-foreground"
-                      : "text-muted-foreground hover:bg-background/50 hover:text-foreground"
-                  }`}
-                  onClick={() => setActiveInnerTab(tabId, tab.id)}
-                >
-                  {tab.type === "table" ? (
-                    <Table2 className="h-3 w-3 shrink-0" />
-                  ) : (
-                    <Code2 className="h-3 w-3 shrink-0" />
-                  )}
-                  <span className="truncate max-w-[120px]">
-                    {tab.type === "table" ? `${tab.database}.${tab.table}` : tab.title}
-                  </span>
-                  <button
-                    className="ml-1 rounded-sm p-0.5 hover:bg-muted transition-colors"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeInnerTab(tabId, tab.id);
-                    }}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
+                <ContextMenu key={tab.id}>
+                  <Tooltip>
+                    <ContextMenuTrigger asChild>
+                      <TooltipTrigger asChild>
+                        <div
+                          data-inner-tab
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer border-r border-border whitespace-nowrap select-none transition-colors duration-150 ${
+                            isActive
+                              ? "bg-background text-foreground"
+                              : "text-muted-foreground hover:bg-background/50 hover:text-foreground"
+                          }`}
+                          onClick={() => setActiveInnerTab(tabId, tab.id)}
+                          onAuxClick={(e) => {
+                            if (e.button !== 1) return;
+                            e.preventDefault();
+                            closeInnerTab(tabId, tab.id);
+                          }}
+                        >
+                          {tab.type === "table" ? (
+                            <Table2 className="h-3 w-3 shrink-0" />
+                          ) : (
+                            <Code2 className="h-3 w-3 shrink-0" />
+                          )}
+                          <span className="truncate max-w-[120px]">{fullName}</span>
+                          <button
+                            className="ml-1 rounded-sm p-0.5 hover:bg-muted transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              closeInnerTab(tabId, tab.id);
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </TooltipTrigger>
+                    </ContextMenuTrigger>
+                    <TooltipContent>{fullName}</TooltipContent>
+                  </Tooltip>
+                  <ContextMenuContent>
+                    <ContextMenuItem onClick={() => closeInnerTab(tabId, tab.id)}>
+                      {t("query.innerTab.close")}
+                      <ContextMenuShortcut>{formatBinding(closeBinding)}</ContextMenuShortcut>
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onClick={() => closeOtherInnerTabs(tabId, tab.id)}
+                      disabled={innerTabs.length <= 1}
+                    >
+                      {t("query.innerTab.closeOthers")}
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onClick={() => closeRightInnerTabs(tabId, tab.id)}
+                      disabled={index >= innerTabs.length - 1}
+                    >
+                      {t("query.innerTab.closeRight")}
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      onClick={() => {
+                        void navigator.clipboard
+                          .writeText(fullName)
+                          .then(() => notifyCopied(t("query.innerTab.copied")));
+                      }}
+                    >
+                      {t("query.innerTab.copyName")}
+                    </ContextMenuItem>
+                    {tab.type === "table" && (
+                      <ContextMenuItem onClick={() => revealTable(tabId, tab.database, tab.table)}>
+                        {t("query.innerTab.reveal")}
+                      </ContextMenuItem>
+                    )}
+                  </ContextMenuContent>
+                </ContextMenu>
               );
             })}
           </div>

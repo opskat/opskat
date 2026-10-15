@@ -54,6 +54,8 @@ export interface DatabaseTabState {
   objects?: Record<string, query_svc.DatabaseObjects>; // db -> objects
   /** 「在左侧树中定位」请求;nonce 递增让同一张表的重复请求也能再次触发树的响应。不持久化。 */
   revealRequest?: { nonce: number; db: string; table: string };
+  /** 已分配过的最大 SQL 标签序号;只增不减,关闭标签后序号不复用。 */
+  sqlTabSeq?: number;
 }
 
 const REDIS_PAGE_SIZE = 100;
@@ -153,6 +155,8 @@ interface QueryState {
   openTableTab: (tabId: string, database: string, table: string) => void;
   openSqlTab: (tabId: string, database?: string, sql?: string) => void;
   closeInnerTab: (tabId: string, innerTabId: string) => void;
+  closeOtherInnerTabs: (tabId: string, innerTabId: string) => void;
+  closeRightInnerTabs: (tabId: string, innerTabId: string) => void;
   setActiveInnerTab: (tabId: string, innerTabId: string) => void;
   updateInnerTab: (tabId: string, innerTabId: string, patch: Record<string, unknown>) => void;
   markTableTabLoaded: (tabId: string, innerTabId: string) => void;
@@ -205,6 +209,7 @@ function defaultDbState(): DatabaseTabState {
     error: null,
     tableMeta: {},
     objects: {},
+    sqlTabSeq: 0,
   };
 }
 
@@ -650,13 +655,14 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   openSqlTab: (tabId, database?, sql?) => {
     const state = get().dbStates[tabId];
     if (!state) return;
-    const count = state.innerTabs.filter((t) => t.type === "sql").length + 1;
+    const count = (state.sqlTabSeq ?? 0) + 1;
     const innerId = `sql:${Date.now()}`;
     set((s) => ({
       dbStates: {
         ...s.dbStates,
         [tabId]: {
           ...state,
+          sqlTabSeq: count,
           innerTabs: [
             ...state.innerTabs,
             { id: innerId, type: "sql", title: `SQL ${count}`, sql, selectedDb: database },
@@ -681,6 +687,33 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       dbStates: {
         ...s.dbStates,
         [tabId]: { ...state, innerTabs: newTabs, activeInnerTabId: newActive },
+      },
+    }));
+  },
+
+  closeOtherInnerTabs: (tabId, innerTabId) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const keep = state.innerTabs.filter((t) => t.id === innerTabId);
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: { ...state, innerTabs: keep, activeInnerTabId: keep[0]?.id ?? null },
+      },
+    }));
+  },
+
+  closeRightInnerTabs: (tabId, innerTabId) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const idx = state.innerTabs.findIndex((t) => t.id === innerTabId);
+    if (idx < 0) return;
+    const keep = state.innerTabs.slice(0, idx + 1);
+    const activeSurvives = keep.some((t) => t.id === state.activeInnerTabId);
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: { ...state, innerTabs: keep, activeInnerTabId: activeSurvives ? state.activeInnerTabId : innerTabId },
       },
     }));
   },
@@ -1430,6 +1463,7 @@ interface PersistedDbState {
   expandedSchemas?: Record<string, string[]>;
   innerTabs: InnerTab[];
   activeInnerTabId: string | null;
+  sqlTabSeq?: number;
 }
 
 interface PersistedMongoState {
@@ -1453,6 +1487,7 @@ function stripDbState(s: DatabaseTabState): PersistedDbState {
     expandedSchemas: s.expandedSchemas,
     innerTabs: s.innerTabs,
     activeInnerTabId: s.activeInnerTabId,
+    sqlTabSeq: s.sqlTabSeq,
   };
 }
 
@@ -1530,6 +1565,16 @@ registerTabCloseHook((tab) => {
 
 // === Restore Hook: initialize query tab states ===
 
+/** 持久化状态缺少序号计数时,按现存「SQL N」标签的最大 N 初始化,避免与它们重号。 */
+function maxSqlTitleNumber(innerTabs: InnerTab[]): number {
+  let max = 0;
+  for (const t of innerTabs) {
+    const m = t.type === "sql" ? /^SQL (\d+)$/.exec(t.title) : null;
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max;
+}
+
 registerTabRestoreHook("query", (tabs) => {
   const persisted = loadPersistedQueryStore();
   // Drop persisted entries whose tab is no longer open
@@ -1552,6 +1597,7 @@ registerTabRestoreHook("query", (tabs) => {
           expandedSchemas: saved.expandedSchemas || {},
           innerTabs: (saved.innerTabs || []).map((it) => (it.type === "table" ? { ...it, pendingLoad: true } : it)),
           activeInnerTabId: saved.activeInnerTabId ?? null,
+          sqlTabSeq: saved.sqlTabSeq ?? maxSqlTitleNumber(saved.innerTabs || []),
         };
       } else {
         dbStates[tab.id] = defaultDbState();

@@ -777,3 +777,110 @@ describe("queryStore.revealTable", () => {
     expect(second.revealRequest!.nonce).toBeGreaterThan(first.revealRequest!.nonce);
   });
 });
+
+describe("queryStore inner tab closing and SQL numbering", () => {
+  const innerIds = () => useQueryStore.getState().dbStates["query-40"].innerTabs.map((t) => t.id);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/SQLite");
+    useQueryStore.getState().openQueryTab(makeSQLiteAsset(40));
+  });
+
+  function seed() {
+    const s = useQueryStore.getState();
+    s.openTableTab("query-40", "main", "a");
+    s.openTableTab("query-40", "main", "b");
+    s.openTableTab("query-40", "main", "c");
+  }
+
+  it("never reuses an SQL tab number after closing tabs", () => {
+    const s = useQueryStore.getState();
+    s.openSqlTab("query-40");
+    s.openSqlTab("query-40");
+    const [first, second] = useQueryStore.getState().dbStates["query-40"].innerTabs;
+    s.closeInnerTab("query-40", second.id);
+    s.closeInnerTab("query-40", first.id);
+    s.openSqlTab("query-40");
+    const titles = useQueryStore
+      .getState()
+      .dbStates["query-40"].innerTabs.map((t) => (t.type === "sql" ? t.title : ""));
+    expect(titles).toEqual(["SQL 3"]);
+  });
+
+  it("closeOtherInnerTabs keeps only the given tab and activates it", () => {
+    seed();
+    useQueryStore.getState().closeOtherInnerTabs("query-40", "table:main.b");
+    expect(innerIds()).toEqual(["table:main.b"]);
+    expect(useQueryStore.getState().dbStates["query-40"].activeInnerTabId).toBe("table:main.b");
+  });
+
+  it("closeRightInnerTabs drops tabs to the right and moves active onto the anchor if it was closed", () => {
+    seed();
+    expect(useQueryStore.getState().dbStates["query-40"].activeInnerTabId).toBe("table:main.c");
+    useQueryStore.getState().closeRightInnerTabs("query-40", "table:main.a");
+    expect(innerIds()).toEqual(["table:main.a"]);
+    expect(useQueryStore.getState().dbStates["query-40"].activeInnerTabId).toBe("table:main.a");
+  });
+
+  it("closeRightInnerTabs keeps the active tab when it survives", () => {
+    seed();
+    useQueryStore.getState().setActiveInnerTab("query-40", "table:main.a");
+    useQueryStore.getState().closeRightInnerTabs("query-40", "table:main.b");
+    expect(innerIds()).toEqual(["table:main.a", "table:main.b"]);
+    expect(useQueryStore.getState().dbStates["query-40"].activeInnerTabId).toBe("table:main.a");
+  });
+});
+
+describe("queryStore SQL numbering across persist and restore", () => {
+  const sqlTab = (n: number) => ({ id: `sql:${n}`, type: "sql", title: `SQL ${n}` });
+  const tabsJson = JSON.stringify({
+    tabs: [
+      {
+        id: "query-50",
+        type: "query",
+        label: "db",
+        meta: { type: "query", assetId: 50, assetName: "db", assetIcon: "", assetType: "database", driver: "sqlite" },
+      },
+    ],
+    activeTabId: "query-50",
+  });
+
+  async function restore(persisted: object) {
+    vi.resetModules();
+    localStorage.clear();
+    localStorage.setItem("tab_store", tabsJson);
+    localStorage.setItem("query_store_v1", JSON.stringify({ dbStates: { "query-50": persisted }, mongoStates: {} }));
+    const mod = await import("../stores/queryStore");
+    return mod.useQueryStore;
+  }
+  const base = { databases: [], tables: {}, expandedDbs: [], activeInnerTabId: null };
+
+  it("restores the persisted counter so closed numbers stay retired", async () => {
+    const store = await restore({ ...base, innerTabs: [sqlTab(1)], sqlTabSeq: 5 });
+    store.getState().openSqlTab("query-50");
+    expect(store.getState().dbStates["query-50"].innerTabs.map((t) => (t.type === "sql" ? t.title : ""))).toContain(
+      "SQL 6"
+    );
+  });
+
+  it("derives the counter from existing titles when an old persisted state has none", async () => {
+    const store = await restore({ ...base, innerTabs: [sqlTab(2), sqlTab(7)] });
+    store.getState().openSqlTab("query-50");
+    expect(store.getState().dbStates["query-50"].innerTabs.map((t) => (t.type === "sql" ? t.title : ""))).toContain(
+      "SQL 8"
+    );
+  });
+
+  it("writes the counter into the persisted state", async () => {
+    const store = await restore({ ...base, innerTabs: [], sqlTabSeq: 3 });
+    store.getState().openSqlTab("query-50");
+    await vi.waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("query_store_v1")!);
+      expect(saved.dbStates["query-50"].sqlTabSeq).toBe(4);
+    });
+  });
+});
