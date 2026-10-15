@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 )
@@ -30,6 +31,8 @@ const ddlColumnsQuery = "SELECT a.attname, " +
 	"WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v') " +
 	"ORDER BY a.attnum"
 
+// viewDefQuery 取视图定义：建表语句与对象源码共用。format('%I.%I', ...) 给标识符加引号，
+// 混合大小写或带特殊字符的视图名才能解析到正确的 regclass。
 const viewDefQuery = "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)"
 
 func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, database, table string) (string, error) {
@@ -47,7 +50,8 @@ func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, database, table s
 		if err := conn.QueryRowContext(ctx, viewDefQuery, schema, tbl).Scan(&def); err != nil {
 			return "", err
 		}
-		return "CREATE VIEW " + tableRef + " AS " + def, nil
+		// 美化输出的定义以空白开头，去掉后接在 AS 之后。
+		return "CREATE VIEW " + tableRef + " AS " + strings.TrimLeft(def, " \t\n"), nil
 	}
 	primaryKeys, err := d.PrimaryKeys(ctx, conn, database, table)
 	if err != nil {

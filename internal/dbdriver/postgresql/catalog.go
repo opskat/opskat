@@ -144,8 +144,7 @@ func (dialect) ObjectSource(ctx context.Context, conn *sql.Conn, _, objType, nam
 	var err error
 	switch strings.ToLower(objType) {
 	case dbdriver.ObjectView:
-		// format('%I.%I', ...) 给标识符加引号，混合大小写或带特殊字符的视图名才能解析到正确的 regclass。
-		err = conn.QueryRowContext(ctx, "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)", schema, obj).Scan(&src)
+		err = conn.QueryRowContext(ctx, viewDefQuery, schema, obj).Scan(&src)
 	case dbdriver.ObjectTrigger:
 		// 触发器在 pg_trigger 而不是 pg_proc 里，由（schema、表、名字）确定；obj 是触发器名，
 		// table 是它所属的表。

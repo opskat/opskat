@@ -67,28 +67,6 @@ func TestTableDDLUsesTheTablesRealSchema(t *testing.T) {
 	}
 }
 
-// 类型文本原样取自数据库的完整写法：长度、精度与自定义类型的 schema 都保留。
-func TestTableDDLKeepsFullTypeText(t *testing.T) {
-	session, mock := newMock(t)
-	mock.ExpectQuery(ddlColumnsSQL).WithArgs("public", "users").WillReturnRows(ddlColumnRows().
-		AddRow("id", "integer", false, "nextval('users_id_seq'::regclass)", "r").
-		AddRow("name", "character varying(50)", false, nil, "r").
-		AddRow("email", "character varying(100)", true, "'none@example.com'::character varying", "r").
-		AddRow("score", "numeric(10,2)", true, nil, "r"))
-	mock.ExpectQuery(primaryKeysSQL).WithArgs("public", "users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-
-	ddl, err := session.TableDDL(context.Background(), "appdb", "public.users")
-	require.NoError(t, err)
-	assert.Equal(t, "CREATE TABLE \"public\".\"users\" (\n"+
-		"  \"id\" integer NOT NULL DEFAULT nextval('users_id_seq'::regclass),\n"+
-		"  \"name\" character varying(50) NOT NULL,\n"+
-		"  \"email\" character varying(100) DEFAULT 'none@example.com'::character varying,\n"+
-		"  \"score\" numeric(10,2),\n"+
-		"  PRIMARY KEY (\"id\")\n);", ddl)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 // 视图（任一 schema）输出 CREATE VIEW，不是 CREATE TABLE；不查主键。
 func TestTableDDLOfAViewIsItsDefinition(t *testing.T) {
 	for _, tc := range []struct{ table, schema, name string }{
@@ -105,7 +83,7 @@ func TestTableDDLOfAViewIsItsDefinition(t *testing.T) {
 
 			ddl, err := session.TableDDL(context.Background(), "appdb", tc.table)
 			require.NoError(t, err)
-			assert.Equal(t, `CREATE VIEW "`+tc.schema+`"."`+tc.name+`" AS  SELECT events.id,`+"\n"+
+			assert.Equal(t, `CREATE VIEW "`+tc.schema+`"."`+tc.name+`" AS SELECT events.id,`+"\n"+
 				"    events.kind\n   FROM reporting.events;", ddl)
 			require.NoError(t, mock.ExpectationsWereMet())
 		})

@@ -131,7 +131,7 @@ func TestObjectSource(t *testing.T) {
 	session, mock := newMock(t)
 	ctx := context.Background()
 
-	mock.ExpectQuery("SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)").
+	mock.ExpectQuery(viewDefSQL).
 		WithArgs("public", "v_users").WillReturnRows(names("def", "SELECT 1"))
 	source, err := session.ObjectSource(ctx, "admdb", "view", "public.v_users", "")
 	require.NoError(t, err)
