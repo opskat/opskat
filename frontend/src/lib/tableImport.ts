@@ -642,6 +642,22 @@ export function buildImportInsertSql({
     return rowValuesSql.map((values) => `${insertKeyword} ${quotedTable} (${columnSql}) VALUES ${values}${suffix};`);
   };
 
+  // MSSQL 往 IDENTITY 列写显式值需要 SET IDENTITY_INSERT ON，但表没有自增列（或映射里没有它）时
+  // ON 本身会报错，所以由数据库在同一批里判断；失败时也要 OFF 并原样 THROW。
+  // 每个元素是一次独立的 ExecuteSQL（一个批），不能依赖会话状态跨元素保留。
+  const wrapMssqlIdentityInsert = (statement: string): string => {
+    const nStr = (value: string) => `N'${value.replace(/'/g, "''")}'`;
+    const names = mapped.map((item) => nStr(item.target)).join(", ");
+    return (
+      `DECLARE @opskat_identity BIT = CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns ` +
+      `WHERE object_id = OBJECT_ID(${nStr(quotedTable)}) AND name IN (${names})) THEN 1 ELSE 0 END; ` +
+      `IF @opskat_identity = 1 SET IDENTITY_INSERT ${quotedTable} ON; ` +
+      `BEGIN TRY ${statement} END TRY ` +
+      `BEGIN CATCH IF @opskat_identity = 1 SET IDENTITY_INSERT ${quotedTable} OFF; THROW; END CATCH; ` +
+      `IF @opskat_identity = 1 SET IDENTITY_INSERT ${quotedTable} OFF;`
+    );
+  };
+
   // MSSQL 没有 INSERT IGNORE / ON CONFLICT / ON DUPLICATE KEY，用 MERGE 实现
   // upsert（includeUpdate=true）与"重复即跳过"（includeUpdate=false，仅 NOT MATCHED 插入）。
   const buildMssqlMergeStatements = (includeUpdate: boolean): string[] =>
@@ -659,9 +675,9 @@ export function buildImportInsertSql({
               .map((item) => `t.${quoteIdent(item.target, driver)} = s.${quoteIdent(item.target, driver)}`)
               .join(", ")} `
           : "";
-      return (
+      return wrapMssqlIdentityInsert(
         `MERGE ${quotedTable} AS t USING (SELECT ${source}) AS s ON (${onClause}) ` +
-        `${matched}WHEN NOT MATCHED THEN INSERT (${columnSql}) VALUES (${insertVals});`
+          `${matched}WHEN NOT MATCHED THEN INSERT (${columnSql}) VALUES (${insertVals});`
       );
     });
 
@@ -717,6 +733,7 @@ export function buildImportInsertSql({
     );
   } else {
     statements = buildInsertStatements("INSERT INTO");
+    if (driver === "mssql") statements = statements.map(wrapMssqlIdentityInsert);
     if (mode === "copy") statements = [`DELETE FROM ${quotedTable};`, ...statements];
   }
 
