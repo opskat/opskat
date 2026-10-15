@@ -29,6 +29,7 @@ import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
 import { buildSqlCompletions, resolveScopeTables, type SqlColumn } from "@/lib/sql-context";
+import { isDangerousSql } from "@/lib/sqlStatements";
 
 interface SqlEditorTabProps {
   tabId: string;
@@ -159,11 +160,6 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     if (rowIdxs.length > 0) setDetailRowIdx(rowIdxs.length === 1 ? rowIdxs[0] : null);
   }, []);
 
-  const isDangerousSQL = useCallback((text: string) => {
-    const upper = text.toUpperCase().replace(/\s+/g, " ").trim();
-    return /^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(upper);
-  }, []);
-
   // Get the SQL text to execute: selected text if any, otherwise full text
   const getExecutableSQL = useCallback(() => {
     const editor = editorRef.current;
@@ -256,12 +252,12 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const execute = useCallback(() => {
     const execSql = getExecutableSQL();
     if (!execSql || !assetId) return;
-    if (isDangerousSQL(execSql)) {
+    if (isDangerousSql(execSql)) {
       setShowDangerConfirm(true);
     } else {
       doExecute();
     }
-  }, [getExecutableSQL, assetId, isDangerousSQL, doExecute]);
+  }, [getExecutableSQL, assetId, doExecute]);
 
   // Monaco 命令是在 onMount 时一次性注册的，闭包里拿到的 execute 会过期；
   // 用 ref 桥接到最新版。
