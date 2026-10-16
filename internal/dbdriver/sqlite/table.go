@@ -7,17 +7,14 @@ import (
 	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 )
 
-// 表浏览：库名是 schema 名，有值时表以 "schema"."table" 引用；主键与列定义用
-// pragma_table_info，分页用共用的 LIMIT / OFFSET。
+// 表浏览：库名是 schema 名，有值时表以 "schema"."table" 引用，为空时只引用表名（没有 schema
+// 分组，带点的名字整体是表名）；主键与列定义用 pragma_table_info，分页用共用的 LIMIT / OFFSET。
 var _ sqldb.Tables = dialect{}
 
 func (dialect) QuoteIdent(name string) string { return quoteIdent(name) }
 
 func (dialect) TableRef(database, table string) string {
-	if database == "" {
-		return sqldb.QuoteQualified(table, quoteIdent)
-	}
-	return quoteIdent(database) + "." + quoteIdent(table)
+	return qualify(database, quoteIdent(table))
 }
 
 func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, database, table string) ([]string, error) {

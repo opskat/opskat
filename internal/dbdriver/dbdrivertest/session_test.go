@@ -119,6 +119,15 @@ type brokenSession struct {
 	execute      alterResult
 	executePaged alterResult
 	closeErr     error
+	// generates 为真时不管声明与否都给出行语句。
+	generates bool
+}
+
+func (b brokenSession) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+	if b.generates {
+		return []string{"INSERT"}, nil
+	}
+	return b.Session.RowStatements(ctx, database, table, req)
 }
 
 func (b brokenSession) Execute(ctx context.Context, statement string) (*dbdriver.Result, error) {
@@ -193,7 +202,8 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 			}
 			return withTotal(int64(len(res.Rows.Rows)))(res, err)
 		}}, "page"},
-		"close fails": {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
+		"close fails":                         {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
+		"undeclared row statements generated": {brokenSession{generates: true}, "RowStatements"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tt.broken.Session = openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})

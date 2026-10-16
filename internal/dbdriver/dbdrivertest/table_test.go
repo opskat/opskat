@@ -16,7 +16,11 @@ import (
 
 func TestFakeDriverPassesTableConformance(t *testing.T) {
 	fake := NewFake()
-	RunTableConformance(t, FakeSessions(fake), "app", "users")
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+
+	// 声明了复制为 SQL：行语句也要能生成。
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapCopySQL)
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
 }
 
 // 假驱动的表浏览不经过任何语句：结果直接来自内存里的表，收到的结构化请求原样记下。
@@ -76,6 +80,15 @@ type brokenTables struct {
 	open  func(*dbdriver.OpenedTable, error) (*dbdriver.OpenedTable, error)
 	rows  func(*dbdriver.RowSet, error) (*dbdriver.RowSet, error)
 	count func(int64, error) (int64, error)
+	stmts func([]string, error) ([]string, error)
+}
+
+func (b brokenTables) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+	statements, err := b.Session.RowStatements(ctx, database, table, req)
+	if b.stmts != nil {
+		return b.stmts(statements, err)
+	}
+	return statements, err
 }
 
 func (b brokenTables) OpenTable(ctx context.Context, database, table string, pageSize int) (*dbdriver.OpenedTable, error) {
@@ -166,10 +179,30 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 		})}, "first page"},
 		"count fails":                           {brokenTables{count: func(int64, error) (int64, error) { return 0, unsupported }}, "CountTableRows"},
 		"count disagrees with the opened table": {brokenTables{count: func(int64, error) (int64, error) { return 99, nil }}, "99"},
+		"declared row statements refused": {brokenTables{stmts: func([]string, error) ([]string, error) {
+			return nil, unsupported
+		}}, "RowStatements"},
+		"row statements fail": {brokenTables{stmts: func([]string, error) ([]string, error) {
+			return nil, errors.New("boom")
+		}}, "boom"},
+		"a statement short": {brokenTables{stmts: func(statements []string, err error) ([]string, error) {
+			if len(statements) == 0 {
+				return statements, err
+			}
+			return statements[1:], err
+		}}, "one per row"},
+		"row statements without rows are null": {brokenTables{stmts: func(statements []string, err error) ([]string, error) {
+			if len(statements) == 0 {
+				return nil, err
+			}
+			return statements, err
+		}}, "null"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			tt.broken.Session = openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
-			problems := tableProblems(tt.broken, "app", "users")
+			fake := NewFake()
+			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapExportSQL)
+			tt.broken.Session = openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+			problems := tableProblems(fake.Desc, tt.broken, "app", "users")
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
 		})
@@ -223,5 +256,30 @@ func TestFakeSessionServesDDLAndStarterQueryWithoutStatements(t *testing.T) {
 		{Op: "ddl", Database: "app", Table: "users"},
 		{Op: "starter", Database: "app", Table: "users", Page: dbdriver.Page{Size: 50}},
 	}, session.TableCalls())
+	assert.Empty(t, session.Statements())
+}
+
+// 行语句由假会话直接给出：每行一条一眼能与真实方言区分的语句，收到的请求原样记下，不执行任何
+// 语句；没声明复制 / 导出为 SQL 的假驱动拒绝，且什么也没记下。
+func TestFakeSessionGeneratesRowStatementsWithoutExecuting(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	ctx := context.Background()
+	request := dbdriver.RowStatementsRequest{
+		Kind:        dbdriver.RowUpdate,
+		Columns:     []string{"name"},
+		Rows:        []map[string]any{{"id": float64(1), "name": "alice"}, {"id": float64(2), "name": "bob"}},
+		PrimaryKeys: []string{"id"},
+	}
+
+	_, err := session.RowStatements(ctx, "app", "users", request)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Empty(t, session.TableCalls())
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapCopySQL)
+	statements, err := session.RowStatements(ctx, "app", "users", request)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE UPDATE ROW 1 OF app.users", "FAKE UPDATE ROW 2 OF app.users"}, statements)
+	assert.Equal(t, []TableCall{{Op: "row_statements", Database: "app", Table: "users", RowStatements: &request}}, session.TableCalls())
 	assert.Empty(t, session.Statements())
 }

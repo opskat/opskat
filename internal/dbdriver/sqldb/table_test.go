@@ -166,7 +166,7 @@ func TestMalformedTableQueriesAreRejectedBeforeAnyStatement(t *testing.T) {
 		"unknown kind":     {dbdriver.TableQuery{Filters: with(func(i *dbdriver.FilterItem) { i.Kind = "raw" })}, `unknown filter item kind "raw"`},
 		"unknown join":     {dbdriver.TableQuery{Filters: with(func(i *dbdriver.FilterItem) { i.Join = "xor" })}, `unknown filter join "xor"`},
 		"a value that is not a scalar or a list": {
-			dbdriver.TableQuery{Filters: with(func(i *dbdriver.FilterItem) { i.Value = map[string]any{"a": 1} })}, "unsupported filter value"},
+			dbdriver.TableQuery{Filters: with(func(i *dbdriver.FilterItem) { i.Value = map[string]any{"a": 1} })}, "unsupported value"},
 		"unknown sort direction": {
 			dbdriver.TableQuery{Sorts: []dbdriver.SortItem{{Column: "id", Direction: "sideways"}}}, `unknown sort direction "sideways"`},
 	} {
@@ -203,18 +203,6 @@ func TestFilterNumbersAreWrittenAsTheGridShowsThem(t *testing.T) {
 		}, angle)
 		require.NoError(t, err)
 		assert.Equal(t, "<n> = "+want, where)
-	}
-}
-
-func TestQuoteQualified(t *testing.T) {
-	for name, want := range map[string]string{
-		"users":            "<users>",
-		"reporting.events": "<reporting>.<events>",
-		".events":          "<events>",
-		"a.b.c":            "<a>.<b>.<c>",
-		"":                 "",
-	} {
-		assert.Equal(t, want, QuoteQualified(name, angle), "name %q", name)
 	}
 }
 

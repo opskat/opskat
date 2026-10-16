@@ -242,23 +242,14 @@ func AssembleMetadata(columns []dbdriver.ColumnMeta, primaryKeys []string, index
 	return &dbdriver.TableMetadata{Columns: columns, Indexes: indexes, ForeignKeys: foreignKeys}
 }
 
-// SplitSchemaTable 把可能带 schema 前缀的表名拆成（schema, table）：
-// "events" → (defaultSchema, "events")；"reporting.events" → ("reporting", "events")。
+// SplitSchemaTable 把列表给出的表名拆成（schema, table），只在第一个点处拆：
+// "events" → (defaultSchema, "events")；"reporting.events" → ("reporting", "events")；
+// "public.a.b" → ("public", "a.b")（名字带点的表作为一个整体，schema 名本身带点的不在此列）。
 func SplitSchemaTable(table, defaultSchema string) (string, string) {
-	parts := make([]string, 0, 2)
-	for _, p := range strings.Split(table, ".") {
-		if p != "" {
-			parts = append(parts, p)
-		}
+	if schema, name, qualified := strings.Cut(table, "."); qualified {
+		return schema, name
 	}
-	switch {
-	case len(parts) >= 2:
-		return parts[0], parts[len(parts)-1]
-	case len(parts) == 1:
-		return defaultSchema, parts[0]
-	default:
-		return defaultSchema, ""
-	}
+	return defaultSchema, table
 }
 
 // ZipRow 把一行的值按列名组成 map，[]byte 转成字符串。

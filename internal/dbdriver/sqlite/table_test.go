@@ -31,7 +31,7 @@ func TestSQLitePassesTableConformance(t *testing.T) {
 	d, err := dbdriver.Lookup(asset_entity.DriverSQLite)
 	require.NoError(t, err)
 
-	dbdrivertest.RunTableConformance(t, func(t *testing.T) dbdriver.Session {
+	dbdrivertest.RunTableConformance(t, d, func(t *testing.T) dbdriver.Session {
 		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{
 			Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "table.db"),
 		}})
@@ -90,8 +90,8 @@ func TestOpenTableOnARealDatabase(t *testing.T) {
 	assert.Equal(t, [][]any{{int64(1), "alice", nil}, {int64(2), "bob", nil}}, opened.FirstPage.Rows)
 }
 
-// 翻页的语句：库名有值时表以 "schema"."table" 引用，为空时只引用表名（带点的名字逐段加
-// 引号）；标识符加双引号，分页用 LIMIT / OFFSET。
+// 翻页的语句：库名有值时表以 "schema"."table" 引用，为空时只引用表名（SQLite 没有 schema
+// 分组，带点的名字整体是表名）；标识符加双引号，分页用 LIMIT / OFFSET。
 func TestTableRowsStatements(t *testing.T) {
 	session, mock := newMock(t)
 	ctx := context.Background()
@@ -110,7 +110,7 @@ func TestTableRowsStatements(t *testing.T) {
 	_, err = session.TableRows(ctx, "main", "a.b", dbdriver.TableQuery{}, dbdriver.Page{Index: 2, Size: 50})
 	require.NoError(t, err)
 
-	mock.ExpectQuery(`SELECT * FROM "aux"."t" LIMIT 50 OFFSET 0`).WillReturnRows(row())
+	mock.ExpectQuery(`SELECT * FROM "aux.t" LIMIT 50 OFFSET 0`).WillReturnRows(row())
 	_, err = session.TableRows(ctx, "", "aux.t", dbdriver.TableQuery{}, dbdriver.Page{Index: 0, Size: 50})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

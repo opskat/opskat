@@ -17,7 +17,6 @@ const baseProps = {
   assetId: 1,
   database: "appdb",
   table: "users",
-  driver: "mysql",
   columns: ["id", "name"],
   rows: [{ id: 1, name: "Alice" }],
   totalRows: 1,
@@ -45,6 +44,7 @@ describe("ExportTableDataDialog", () => {
     vi.mocked(App.CloseTableExport).mockReset();
     vi.mocked(App.QueryTableRows).mockReset();
     vi.mocked(App.ExportTableToXlsx).mockReset();
+    vi.mocked(App.GetRowStatements).mockReset();
     vi.mocked(App.ExecuteSQL).mockReset();
     vi.mocked(App.OpenDirectory).mockReset();
     delete (window as unknown as { go?: unknown }).go;
@@ -212,5 +212,84 @@ describe("ExportTableDataDialog", () => {
       pageSize: 50,
     });
     expect(App.ExecuteSQL).not.toHaveBeenCalled();
+  });
+
+  // SQL 由驱动生成:对话框把每批行交给 GetRowStatements,写进文件的正是它返回的语句(每行一条,
+  // 以换行相接),自己不拼任何 SQL。
+  it("writes the current page as exactly the statements the driver generated", async () => {
+    const user = userEvent.setup();
+    vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.sql");
+    vi.mocked(App.GetRowStatements).mockResolvedValue(["DRIVER INSERT 1;", "DRIVER INSERT 2;"]);
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window, { go: { app: { App: { WriteTableExportFile: writeFile } } } });
+    const rows = [
+      { id: 1, name: "Alice" },
+      { id: 2, name: null },
+    ];
+
+    render(<ExportTableDataDialog {...baseProps} rows={rows} initialFormat="sql" />);
+    const scopeSelect = screen.getAllByRole("combobox").find((el) => el.textContent?.includes("query.exportAllData"));
+    await user.click(scopeSelect!);
+    await user.click(await screen.findByRole("option", { name: "query.exportPageData" }));
+    await startExport(user, "/tmp/opskat/users.sql");
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(App.GetRowStatements).toHaveBeenCalledTimes(1);
+    expect(App.GetRowStatements).toHaveBeenCalledWith(1, "appdb", "users", {
+      kind: "insert",
+      columns: ["id", "name"],
+      rows,
+      primaryKeys: [],
+    });
+    expect(writeFile).toHaveBeenCalledWith("/tmp/opskat/users.sql", "DRIVER INSERT 1;\nDRIVER INSERT 2;", {
+      encoding: "utf-8",
+      append: false,
+    });
+    expect(App.ExecuteSQL).not.toHaveBeenCalled();
+  });
+
+  it("asks the driver for each streamed chunk and appends its statements chunk by chunk", async () => {
+    const user = userEvent.setup();
+    const firstChunk = [{ id: 1, name: "Alice" }];
+    const secondChunk = [{ id: 2, name: "Bob" }];
+    vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.sql");
+    mockCursor([
+      { rows: firstChunk, done: false },
+      { rows: secondChunk, done: true },
+    ]);
+    vi.mocked(App.GetRowStatements).mockResolvedValueOnce(["CHUNK ONE;"]).mockResolvedValueOnce(["CHUNK TWO;"]);
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window, { go: { app: { App: { WriteTableExportFile: writeFile } } } });
+
+    render(<ExportTableDataDialog {...baseProps} initialFormat="sql" />);
+    await startExport(user, "/tmp/opskat/users.sql");
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(App.GetRowStatements).mock.calls.map((call) => call[3].rows)).toEqual([firstChunk, secondChunk]);
+    expect(writeFile).toHaveBeenNthCalledWith(1, "/tmp/opskat/users.sql", "CHUNK ONE;", {
+      encoding: "utf-8",
+      append: false,
+    });
+    expect(writeFile).toHaveBeenNthCalledWith(2, "/tmp/opskat/users.sql", "\nCHUNK TWO;", {
+      encoding: "utf-8",
+      append: true,
+    });
+  });
+
+  it("reports the driver's refusal and writes nothing", async () => {
+    const user = userEvent.setup();
+    vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.sql");
+    mockCursor([{ rows: baseProps.rows, done: true }]);
+    vi.mocked(App.GetRowStatements).mockRejectedValue(new Error("operation not supported by database driver"));
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window, { go: { app: { App: { WriteTableExportFile: writeFile } } } });
+
+    render(<ExportTableDataDialog {...baseProps} initialFormat="sql" />);
+    await startExport(user, "/tmp/opskat/users.sql");
+
+    const log = await screen.findByText(/\[EXP\] Failed - /);
+    expect(log.textContent).toContain("operation not supported by database driver");
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(App.CloseTableExport).toHaveBeenCalledWith("cursor-1");
   });
 });

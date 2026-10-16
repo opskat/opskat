@@ -257,16 +257,15 @@ func queryRows(ctx context.Context, conn *sql.Conn, statement string) (*dbdriver
 	return scanRows(rows)
 }
 
-// QuoteQualified 给可能带 schema 前缀的名字逐段加引号："reporting.events" 的两段各自加，
-// 空段略过。
-func QuoteQualified(name string, quote func(string) string) string {
-	parts := make([]string, 0, 2)
-	for _, part := range strings.Split(name, ".") {
-		if part != "" {
-			parts = append(parts, quote(part))
-		}
+// QuoteSchemaTable 是带 schema 分组的驱动引用一张表的写法：列表给出的 "schema.table" 只在
+// 第一个点处拆开，两段各自加引号（"public.a.b" → "public"."a.b"，名字带点的表作为一个整体）；
+// 没有点的裸名整体加引号，由数据库按默认 schema 解析。
+func QuoteSchemaTable(table string, quote func(string) string) string {
+	schema, name, qualified := strings.Cut(table, ".")
+	if !qualified {
+		return quote(table)
 	}
-	return strings.Join(parts, ".")
+	return quote(schema) + "." + quote(name)
 }
 
 // QueryTableColumns 执行一条列定义查询。结果集里列名的叫法随方言不同

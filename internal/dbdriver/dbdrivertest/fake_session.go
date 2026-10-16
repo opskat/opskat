@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements"。
 	Op       string
 	Database string
 	Table    string
@@ -172,6 +172,8 @@ type TableCall struct {
 	Query dbdriver.TableQuery
 	// Page 是 open / rows 要的那一页。
 	Page dbdriver.Page
+	// RowStatements 是 row_statements 收到的请求。
+	RowStatements *dbdriver.RowStatementsRequest
 }
 
 // TableCalls 返回这条会话收到的表浏览请求，按先后。
@@ -252,6 +254,22 @@ func (s *FakeSession) StarterQuery(_ context.Context, database, table string, li
 		return "", err
 	}
 	return fmt.Sprintf("FAKE SELECT FIRST %d FROM %s.%s", limit, database, table), nil
+}
+
+// RowStatements 记下收到的请求（Op "row_statements"），每行给出一条一眼能与任何真实方言区分
+// 的语句。驱动没有声明导出 / 复制为 SQL 时以 ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) RowStatements(_ context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+	if !s.fake.Desc.GeneratesRowStatements() {
+		return nil, fmt.Errorf("%w: %s declares neither %s nor %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapExportSQL, dbdriver.CapCopySQL)
+	}
+	if err := s.tableCall(TableCall{Op: "row_statements", Database: database, Table: table, RowStatements: &req}); err != nil {
+		return nil, err
+	}
+	statements := make([]string, 0, len(req.Rows))
+	for i := range req.Rows {
+		statements = append(statements, fmt.Sprintf("FAKE %s ROW %d OF %s.%s", strings.ToUpper(string(req.Kind)), i+1, database, table))
+	}
+	return statements, nil
 }
 
 func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {

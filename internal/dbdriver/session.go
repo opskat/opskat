@@ -137,8 +137,41 @@ type Session interface {
 	// 写法都是驱动自己的方言。驱动没提供时返回包着 ErrUnsupported 的错误。
 	StarterQuery(ctx context.Context, database, table string, limit int) (string, error)
 
+	// 以下是写路径的语句生成：驱动在自己的会话上、按自己的方言生成语句并返回，只生成、不执行；
+	// 调用方展示后再经 Execute 执行的正是这些语句。生成时驱动可以先查表的元数据（列类型等）
+	// 来决定写法。table 用 ListTables 给出的形式。
+
+	// RowStatements 生成把若干行写进表的语句，每行一条，按 req.Rows 的次序：RowInsert 是 INSERT，
+	// RowUpdate 是只改那一行的 UPDATE（见 RowStatementsRequest）。没有行时返回空列表。驱动没有
+	// 声明用到它的功能（Descriptor.GeneratesRowStatements）时返回包着 ErrUnsupported 的错误，
+	// 且不执行任何语句。
+	RowStatements(ctx context.Context, database, table string, req RowStatementsRequest) ([]string, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
+}
+
+// RowStatementKind 是行语句的种类。
+type RowStatementKind string
+
+const (
+	// RowInsert：每行一条 INSERT，写入 Columns 列。
+	RowInsert RowStatementKind = "insert"
+	// RowUpdate：每行一条只改那一行的 UPDATE，把 Columns 列设为行里的值。
+	RowUpdate RowStatementKind = "update"
+)
+
+// RowStatementsRequest 是 Session.RowStatements 要生成的语句。
+type RowStatementsRequest struct {
+	Kind RowStatementKind `json:"kind"`
+	// Columns 是 INSERT 写入、UPDATE 设置的列，按语句里的次序。
+	Columns []string `json:"columns"`
+	// Rows 是各行的值，按列名取：表格里读到的值经前端原样带回（nil、字符串、数字、布尔），
+	// 行里没有的列按 NULL 写。
+	Rows []map[string]any `json:"rows"`
+	// PrimaryKeys 是 UPDATE 定位那一行的列（值取自同一行）；为空时按全部 Columns 定位。
+	// INSERT 不用它。
+	PrimaryKeys []string `json:"primaryKeys"`
 }
 
 // Page 指定分页执行要取的那一页。

@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildTableExportContent,
-  toCsv,
-  toInsertSql,
-  toTsv,
-  toTsvData,
-  toTsvFields,
-  toUpdateSql,
-} from "@/lib/tableExport";
+import { buildTableExportContent, toCsv, toTsv, toTsvData, toTsvFields } from "@/lib/tableExport";
 
 const columns = ["id", "name", "note", "missing"];
 const rows = [
@@ -37,32 +29,10 @@ describe("table export helpers", () => {
     ).toBe(["id\tnote", '1\t"tab\tvalue"', '2\t"line\nbreak"'].join("\n"));
   });
 
-  it("exports INSERT SQL with identifier quoting, value quoting, and SQL NULL", () => {
-    expect(toInsertSql("appdb.users", ["id", "name", "missing"], rows, "mysql")).toBe(
-      [
-        "INSERT INTO `appdb`.`users` (`id`, `name`, `missing`) VALUES ('1', 'Alice', NULL);",
-        "INSERT INTO `appdb`.`users` (`id`, `name`, `missing`) VALUES ('2', 'O''Reilly', '');",
-        "INSERT INTO `appdb`.`users` (`id`, `name`, `missing`) VALUES ('3', '中文', NULL);",
-      ].join("\n")
-    );
-  });
-
   it("exports Copy As TSV variants", () => {
     expect(toTsvData(["id", "name"], [rows[0]])).toBe("1\tAlice");
     expect(toTsvFields(["id", "name"])).toBe("id\tname");
     expect(toTsv(["id", "name"], [rows[0]])).toBe("id\tname\n1\tAlice");
-  });
-
-  it("exports UPDATE SQL using primary keys when available", () => {
-    expect(toUpdateSql("appdb.users", ["id", "name"], rows[1], ["id"], "mysql")).toBe(
-      "UPDATE `appdb`.`users` SET `id` = '2', `name` = 'O''Reilly' WHERE `id` = '2' LIMIT 1;"
-    );
-    expect(toUpdateSql("main.users", ["id", "name"], rows[1], ["id"], "sqlite")).toBe(
-      'UPDATE "main"."users" SET "id" = \'2\', "name" = \'O\'\'Reilly\' WHERE "id" = \'2\';'
-    );
-    expect(toUpdateSql("dbo.users", ["id", "name"], rows[1], ["id"], "mssql")).toBe(
-      "UPDATE TOP (1) [dbo].[users] SET [id] = '2', [name] = 'O''Reilly' WHERE [id] = '2';"
-    );
   });
 
   it("can omit column titles for delimited exports", () => {
@@ -76,7 +46,6 @@ describe("table export helpers", () => {
         format: "csv",
         columns: ["id", "name", "note"],
         rows: [{ id: 1, name: "Alice", note: "left;right" }],
-        tableName: "appdb.users",
         includeHeaders: true,
         options: {
           fieldDelimiter: "semicolon",
@@ -100,7 +69,6 @@ describe("table export helpers", () => {
             payload: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
           },
         ],
-        tableName: "appdb.users",
         includeHeaders: false,
         options: {
           blankIfZero: true,

@@ -261,7 +261,7 @@ func valueText(value any) (string, error) {
 		}
 		return strings.Join(parts, ","), nil
 	default:
-		return "", fmt.Errorf("unsupported filter value of type %T", value)
+		return "", fmt.Errorf("unsupported value of type %T", value)
 	}
 }
 

@@ -20,7 +20,7 @@ func quoteIdent(name string) string {
 
 func (dialect) QuoteIdent(name string) string { return quoteIdent(name) }
 
-func (dialect) TableRef(_, table string) string { return sqldb.QuoteQualified(table, quoteIdent) }
+func (dialect) TableRef(_, table string) string { return sqldb.QuoteSchemaTable(table, quoteIdent) }
 
 func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, _, table string) ([]string, error) {
 	schema, tbl := splitSchemaTable(table)

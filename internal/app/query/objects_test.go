@@ -159,3 +159,46 @@ func TestTableDDLRefusalAndErrors(t *testing.T) {
 	_, err = q.GetTableDDL(1, "", "events")
 	require.ErrorIs(t, err, fake.TableErr)
 }
+
+// 复制 / 导出为 SQL 的语句由驱动在自己的会话上生成：前端发来的请求（JSON，键名与前端一致）
+// 原样到达驱动，驱动给的语句原样返回，没有任何语句被执行。
+func TestRowStatementsAreProducedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapExportSQL)
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	var request dbdriver.RowStatementsRequest
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"kind":"insert","columns":["id","name"],"rows":[{"id":1,"name":"alice"},{"id":2,"name":null}],"primaryKeys":["id"]}`,
+	), &request))
+	statements, err := q.GetRowStatements(1, "reporting", "events", request)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE INSERT ROW 1 OF reporting.events", "FAKE INSERT ROW 2 OF reporting.events"}, statements)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{{Op: "row_statements", Database: "reporting", Table: "events", RowStatements: &dbdriver.RowStatementsRequest{
+		Kind:        dbdriver.RowInsert,
+		Columns:     []string{"id", "name"},
+		Rows:        []map[string]any{{"id": float64(1), "name": "alice"}, {"id": float64(2), "name": nil}},
+		PrimaryKeys: []string{"id"},
+	}}}, sessions[0].TableCalls())
+	assert.Empty(t, sessions[0].Statements())
+}
+
+// 没有声明复制 / 导出为 SQL 的驱动明确报「不支持」，且不执行任何语句。
+func TestRowStatementsRefusedWhenTheDriverDoesNotDeclareThem(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.GetRowStatements(1, "", "events", dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": float64(1)}},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	for _, s := range fake.Sessions() {
+		assert.Empty(t, s.Statements())
+		assert.Empty(t, s.TableCalls())
+	}
+}

@@ -18,6 +18,7 @@ import { isMac, formatModKey } from "@/stores/shortcutStore";
 import {
   CountTableRows,
   ExecuteSQL,
+  GetRowStatements,
   GetTableDDL,
   GetTableMetadata,
   OpenTable,
@@ -45,7 +46,7 @@ import { QueryRowDetailPanel } from "./QueryRowDetailPanel";
 import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
-import { toInsertSql, toTsv, toTsvData, toTsvFields, toUpdateSql } from "@/lib/tableExport";
+import { toTsv, toTsvData, toTsvFields } from "@/lib/tableExport";
 import { buildInsertStatement, validateInsertRow, type TableColumnRule } from "@/lib/tableEdit";
 import {
   buildDeleteStatement,
@@ -1033,19 +1034,31 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         ? ctx.selectedRowIndices.map((i) => rows[i]).filter(Boolean)
         : [rows[ctx.rowIdx]];
       if (activeRows.length === 0) return;
-      // MSSQL 与 PG 一样按 schema.table 引用，不带 database 前缀（避免两段式被当成 schema.object）
-      const tableName = driver === "postgresql" || driver === "mssql" ? table : `${database}.${table}`;
-      const contentByFormat: Record<CopyAsFormat, string> = {
-        insert: toInsertSql(tableName, activeColumns, activeRows, driver),
-        update: toUpdateSql(tableName, activeColumns, activeRows[0], primaryKeys, driver),
-        "tsv-data": toTsvData(activeColumns, activeRows),
-        "tsv-fields": toTsvFields(activeColumns),
-        "tsv-fields-data": toTsv(activeColumns, activeRows),
+      // INSERT / UPDATE 由驱动按自己的方言生成（每行一条 INSERT；UPDATE 只取第一行），TSV 在这里拼。
+      const rowStatements = async (kind: "insert" | "update", statementRows: Record<string, unknown>[]) => {
+        const statements = await GetRowStatements(
+          assetId,
+          database,
+          table,
+          dbdriver.RowStatementsRequest.createFrom({ kind, columns: activeColumns, rows: statementRows, primaryKeys })
+        );
+        return statements.join("\n");
       };
-      await navigator.clipboard.writeText(contentByFormat[format]);
-      notifyCopied(t("query.copied"));
+      const contentByFormat: Record<CopyAsFormat, () => string | Promise<string>> = {
+        insert: () => rowStatements("insert", activeRows),
+        update: () => rowStatements("update", activeRows.slice(0, 1)),
+        "tsv-data": () => toTsvData(activeColumns, activeRows),
+        "tsv-fields": () => toTsvFields(activeColumns),
+        "tsv-fields-data": () => toTsv(activeColumns, activeRows),
+      };
+      try {
+        await navigator.clipboard.writeText(await contentByFormat[format]());
+        notifyCopied(t("query.copied"));
+      } catch (e) {
+        toast.error(String(e));
+      }
     },
-    [columns, database, driver, primaryKeys, rows, table, t]
+    [assetId, columns, database, primaryKeys, rows, table, t]
   );
 
   const handleImportSuccess = useCallback(async () => {
@@ -1401,7 +1414,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         pageSize={pageSize}
         filters={filterRequest}
         sorts={sortRequest}
-        driver={driver}
         initialFormat={exportFormat}
         sqlFormatAvailable={can("export_sql")}
         onFormatChange={setExportFormat}

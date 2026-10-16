@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
@@ -26,17 +25,4 @@ func TestBrowsingWithoutACatalogIsUnsupported(t *testing.T) {
 	_, err = session.ObjectSource(ctx, "db", "view", "v", "")
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSplitSchemaTable(t *testing.T) {
-	for table, want := range map[string][2]string{
-		"events":           {"public", "events"},
-		"reporting.events": {"reporting", "events"},
-		".events":          {"public", "events"},
-		"a.b.events":       {"a", "events"},
-		"":                 {"public", ""},
-	} {
-		schema, name := SplitSchemaTable(table, "public")
-		assert.Equal(t, want, [2]string{schema, name}, "table %q", table)
-	}
 }

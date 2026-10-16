@@ -1,5 +1,3 @@
-import { quoteIdent, quoteQualifiedIdent, sqlQuote } from "./tableSql";
-
 type TableRow = Record<string, unknown>;
 export type TableExportFormat = "csv" | "tsv" | "sql" | "xlsx";
 export type TableExportScope = "page" | "all";
@@ -26,12 +24,13 @@ export interface TableExportOptions {
   nullValue?: string;
 }
 
+/** SQL 语句由驱动生成（Query.GetRowStatements），XLSX 由后端写盘；这里只拼分隔文本。 */
+export type DelimitedExportFormat = Extract<TableExportFormat, "csv" | "tsv">;
+
 interface BuildTableExportContentInput {
-  format: TableExportFormat;
+  format: DelimitedExportFormat;
   columns: string[];
   rows: TableRow[];
-  tableName: string;
-  driver?: string;
   includeHeaders?: boolean;
   options?: TableExportOptions;
 }
@@ -173,54 +172,16 @@ export function toTsvFields(columns: string[]): string {
   return columns.map((col) => escapeDelimited(col, "\t")).join("\t");
 }
 
-export function toInsertSql(tableName: string, columns: string[], rows: TableRow[], driver?: string): string {
-  const quotedTable = quoteQualifiedIdent(tableName, driver);
-  const columnSql = columns.map((col) => quoteIdent(col, driver)).join(", ");
-  return rows
-    .map((row) => {
-      const values = columns.map((col) => sqlQuote(row[col])).join(", ");
-      return `INSERT INTO ${quotedTable} (${columnSql}) VALUES (${values});`;
-    })
-    .join("\n");
-}
-
-export function toUpdateSql(
-  tableName: string,
-  columns: string[],
-  row: TableRow,
-  primaryKeys: string[],
-  driver?: string
-): string {
-  const quotedTable = quoteQualifiedIdent(tableName, driver);
-  const setSql = columns.map((col) => `${quoteIdent(col, driver)} = ${sqlQuote(row[col])}`).join(", ");
-  const whereColumns = primaryKeys.length > 0 ? primaryKeys : columns;
-  const whereSql = whereColumns
-    .map((col) => {
-      const value = row[col];
-      if (value == null) return `${quoteIdent(col, driver)} IS NULL`;
-      return `${quoteIdent(col, driver)} = ${sqlQuote(value)}`;
-    })
-    .join(" AND ");
-
-  if (driver === "postgresql" || driver === "sqlite") return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
-  // MSSQL 无 LIMIT，用 UPDATE TOP (1) 限制单行更新（对齐 MySQL 的 LIMIT 1 安全语义）。
-  if (driver === "mssql") return `UPDATE TOP (1) ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
-  return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql} LIMIT 1;`;
-}
-
 export function buildTableExportContent({
   format,
   columns,
   rows,
-  tableName,
-  driver,
   includeHeaders = true,
   options = {},
 }: BuildTableExportContentInput): string {
   const mergedOptions = { ...options, includeHeaders };
   if (format === "csv") return toCsv(columns, rows, mergedOptions);
-  if (format === "tsv") return toTsv(columns, rows, mergedOptions);
-  return toInsertSql(tableName, columns, rows, driver);
+  return toTsv(columns, rows, mergedOptions);
 }
 
 export function safeTableExportFilenamePart(value: string): string {

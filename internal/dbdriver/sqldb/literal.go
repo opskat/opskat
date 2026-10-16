@@ -1,0 +1,53 @@
+package sqldb
+
+import (
+	"encoding/hex"
+	"strings"
+)
+
+// Literals 是方言按目标列的类型写字面量的规则。写进表里的值（行语句等写路径生成的语句）都
+// 经它写成字面量；筛选条件里的值与列类型无关，不经过它。零值是没有任何方言规则：所有非
+// NULL 的值都写成单引号成对转义的字符串字面量。
+type Literals struct {
+	// BackslashEscapes 为真表示文本字面量里的反斜杠是转义符（MySQL 会话的 sql_mode 不含
+	// NO_BACKSLASH_ESCAPES）：反斜杠要成对写，存进去的才是原文。
+	BackslashEscapes bool
+	// UnicodeText 报告这种列类型的文本要加 N 前缀（SQL Server 的 nchar / nvarchar / ntext）；
+	// nil 表示方言没有这种写法。
+	UnicodeText func(columnType string) bool
+	// Binary 报告这种列类型是二进制，并给出十六进制字面量的前后缀（0x… / X'…' / '\x…'::bytea）；
+	// nil 表示方言照文本写二进制列。
+	Binary func(columnType string) (prefix, suffix string, ok bool)
+}
+
+// Literal 把要写进 columnType 列的值写成字面量。nil 是 NULL；二进制列写成方言的十六进制字面量
+// （文本按它的字节）；其余写成字符串字面量——数字、布尔、日期文本也一样，由数据库按列的类型
+// 转换，数字照表格显示它的样子（见 valueText）。列类型是驱动目录里给出的写法；不认识的
+// 类型（包括空串）照文本写。
+func (l Literals) Literal(value any, columnType string) (string, error) {
+	if value == nil {
+		return "NULL", nil
+	}
+	var text string
+	if b, ok := value.([]byte); ok {
+		text = string(b)
+	} else {
+		var err error
+		if text, err = valueText(value); err != nil {
+			return "", err
+		}
+	}
+	if l.Binary != nil {
+		if prefix, suffix, ok := l.Binary(columnType); ok {
+			return prefix + hex.EncodeToString([]byte(text)) + suffix, nil
+		}
+	}
+	if l.BackslashEscapes {
+		text = strings.ReplaceAll(text, `\`, `\\`)
+	}
+	quoted := quoteString(text)
+	if l.UnicodeText != nil && l.UnicodeText(columnType) {
+		return "N" + quoted, nil
+	}
+	return quoted, nil
+}

@@ -30,10 +30,10 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //   - 描述：完整、自洽、只用共享代码与前端认识的 Tab / 字段 / 功能，注册表确实能按它声明
 //     的 id 与别名找到它。
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
-//     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，以及没有声明的对象类型
-//     的浏览（ObjectSource），且拒绝时不能执行任何语句。声明了的浏览操作与表浏览能不能
-//     调用，要有数据才能验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的
-//     会话上检查。
+//     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
+//     的浏览（ObjectSource），以及没有声明导出 / 复制为 SQL 时的行语句（RowStatements），且
+//     拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
+//     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
 	for _, problem := range descriptorProblems(d.Descriptor()) {
@@ -108,7 +108,7 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 }
 
 // undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
-// ObjectSource，以及查看建表语句。
+// ObjectSource、查看建表语句，以及行语句。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -123,6 +123,15 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 	if !desc.Supports(dbdriver.CapViewDDL) {
 		if _, err := s.TableDDL(ctx, "", "x"); !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("TableDDL: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapViewDDL, err))
+		}
+	}
+	if !desc.GeneratesRowStatements() {
+		_, err := s.RowStatements(ctx, "", "x", dbdriver.RowStatementsRequest{
+			Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": float64(1)}},
+		})
+		if !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("RowStatements: the driver declares neither %q nor %q, so it must be refused with ErrUnsupported, got: %v",
+				dbdriver.CapExportSQL, dbdriver.CapCopySQL, err))
 		}
 	}
 	return problems
@@ -254,17 +263,18 @@ func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	return problems
 }
 
-// RunTableConformance 检查表浏览：打开表、取一页、计数都可以调用，给出成形且彼此一致的结果。
-// 会话必须是能回答这些操作的（database 里有 table 这张表），由测试关闭。筛选条件与排序项
-// 的语义随驱动的查询方式而定，由各驱动自己的测试固定。
-func RunTableConformance(t *testing.T, newSession SessionFactory, database, table string) {
+// RunTableConformance 检查表浏览：打开表、取一页、计数都可以调用，给出成形且彼此一致的结果；
+// 声明了导出 / 复制为 SQL 的驱动还要能为表里的行生成语句。会话必须是能回答这些操作的
+// （database 里有 table 这张表，最好有行），由测试关闭。筛选条件与排序项的语义、语句的写法
+// 随驱动的方言而定，由各驱动自己的测试固定。
+func RunTableConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory, database, table string) {
 	t.Helper()
-	for _, problem := range tableProblems(newSession(t), database, table) {
+	for _, problem := range tableProblems(d.Descriptor(), newSession(t), database, table) {
 		t.Errorf("table: %s", problem)
 	}
 }
 
-func tableProblems(s dbdriver.Session, database, table string) []string {
+func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table string) []string {
 	ctx := context.Background()
 	var problems []string
 	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -362,6 +372,10 @@ func tableProblems(s dbdriver.Session, database, table string) []string {
 		}
 	}
 
+	if desc.GeneratesRowStatements() && opened != nil && opened.FirstPage != nil {
+		problems = append(problems, rowStatementProblems(ctx, s, database, table, opened)...)
+	}
+
 	starter, err := s.StarterQuery(ctx, database, table, ConformancePageSize)
 	switch {
 	case err != nil:
@@ -372,6 +386,48 @@ func tableProblems(s dbdriver.Session, database, table string) []string {
 
 	if err := s.Close(); err != nil {
 		report("Close: %v", err)
+	}
+	return problems
+}
+
+// rowStatementProblems 用打开表时的第一页检查行语句：每行一条 INSERT、每行一条 UPDATE，没有行
+// 时是空列表（序列化成 []，不是 null）。语句只生成，这里不执行。
+func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, table string, opened *dbdriver.OpenedTable) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	first := opened.FirstPage
+	rows := make([]map[string]any, 0, len(first.Rows))
+	for _, row := range first.Rows {
+		record := make(map[string]any, len(first.Columns))
+		for i, column := range first.Columns {
+			if i < len(row) {
+				record[column] = row[i]
+			}
+		}
+		rows = append(rows, record)
+	}
+	for _, kind := range []dbdriver.RowStatementKind{dbdriver.RowInsert, dbdriver.RowUpdate} {
+		statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{
+			Kind: kind, Columns: first.Columns, Rows: rows, PrimaryKeys: opened.PrimaryKeys,
+		})
+		switch {
+		case errors.Is(err, dbdriver.ErrUnsupported):
+			report("RowStatements(%s): declared %q or %q but refused with ErrUnsupported: %v", kind, dbdriver.CapExportSQL, dbdriver.CapCopySQL, err)
+		case err != nil:
+			report("RowStatements(%s): %v", kind, err)
+		case len(statements) != len(rows):
+			report("RowStatements(%s): %d statement(s) for %d row(s); there must be one per row", kind, len(statements), len(rows))
+		default:
+			for i, statement := range statements {
+				if strings.TrimSpace(statement) == "" {
+					report("RowStatements(%s): statement %d is empty", kind, i)
+				}
+			}
+		}
+	}
+	statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: first.Columns})
+	if err == nil && statements == nil {
+		report("RowStatements without rows: returned null; it must be an empty list")
 	}
 	return problems
 }
