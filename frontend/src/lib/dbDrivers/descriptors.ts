@@ -25,9 +25,7 @@ export function resetDatabaseDriverCache(): void {
 }
 
 export type DatabaseDriversState =
-  | { status: "loading" }
-  | { status: "ready"; drivers: DriverDescriptor[] }
-  | { status: "error"; error: string };
+  { status: "loading" } | { status: "ready"; drivers: DriverDescriptor[] } | { status: "error"; error: string };
 
 /** 加载驱动描述;加载失败时给出错误文案,不提供任何替代列表。 */
 export function useDatabaseDrivers(): DatabaseDriversState {
