@@ -2,6 +2,9 @@ import { create } from "zustand";
 
 export const isMac = /Macintosh|Mac OS/.test(navigator.userAgent);
 
+/** 区域标记：焦点在其内时全局 ⌘F（panel.filter）让路，由区域内的控件自己打开查找（如 SQL 编辑器里 Monaco 的查找）。 */
+export const NATIVE_FIND_SCOPE_ATTR = "data-native-find-scope";
+
 export interface ShortcutBinding {
   code: string; // KeyboardEvent.code, e.g. "Digit1", "KeyW", "BracketLeft"
   mod: boolean; // primary modifier: Cmd (Mac) / Ctrl (Win)

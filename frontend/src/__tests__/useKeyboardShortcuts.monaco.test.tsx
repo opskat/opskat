@@ -1,8 +1,15 @@
-import { renderHook } from "@testing-library/react";
+import { render, renderHook, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useShortcutStore, DEFAULT_SHORTCUTS, isMac } from "../stores/shortcutStore";
 import { useLayoutStore } from "../stores/layoutStore";
+import { useQueryStore } from "../stores/queryStore";
+import { useTabStore } from "../stores/tabStore";
+import { SqlEditorTab } from "../components/query/SqlEditorTab";
+
+vi.mock("@/components/CodeEditor", async () => ({
+  CodeEditor: (await import("../components/query/__tests__/FakeCodeEditor")).FakeCodeEditor,
+}));
 
 function press(action: "panel.filter" | "tab.close", target: HTMLElement): KeyboardEvent {
   const binding = DEFAULT_SHORTCUTS[action];
@@ -22,15 +29,48 @@ function press(action: "panel.filter" | "tab.close", target: HTMLElement): Keybo
 
 // 真实结构：Monaco 的焦点元素是 EditContext 的 div.native-edit-context，
 // 既不是 input/textarea，也不是 contenteditable。
-function monacoFocusTarget(): HTMLElement {
+function monacoFocusTarget(parent: HTMLElement = document.body): HTMLElement {
   const editor = document.createElement("div");
   editor.className = "monaco-editor";
   const ctx = document.createElement("div");
   ctx.className = "native-edit-context";
   ctx.tabIndex = 0;
   editor.appendChild(ctx);
-  document.body.appendChild(editor);
+  parent.appendChild(editor);
   return ctx;
+}
+
+function renderSqlEditorTab() {
+  useTabStore.setState({
+    tabs: [
+      {
+        id: "query-1",
+        type: "query",
+        label: "db",
+        meta: { type: "query", assetId: 1, assetName: "db", assetIcon: "", assetType: "database", driver: "mysql" },
+      },
+    ],
+    activeTabId: "query-1",
+  });
+  useQueryStore.setState({
+    dbStates: {
+      "query-1": {
+        databases: ["appdb"],
+        tables: { appdb: ["users"] },
+        loadingTables: {},
+        expandedDbs: ["appdb"],
+        expandedSchemas: {},
+        loadingDbs: false,
+        innerTabs: [{ id: "sql-1", type: "sql", title: "SQL", sql: "SELECT 1", selectedDb: "appdb" }],
+        activeInnerTabId: "sql-1",
+        error: null,
+      },
+    },
+  });
+  render(<SqlEditorTab tabId="query-1" innerTabId="sql-1" />);
+  // FakeCodeEditor 渲染的是 <pre>，让它像 Monaco 的焦点元素一样可聚焦。
+  const editor = screen.getByTestId("code-editor");
+  return monacoFocusTarget(editor);
 }
 
 describe("useKeyboardShortcuts — Monaco editor focus", () => {
@@ -50,11 +90,18 @@ describe("useKeyboardShortcuts — Monaco editor focus", () => {
     );
   });
 
-  it("leaves Cmd/Ctrl+F to Monaco so its find widget opens instead of the tab filter", () => {
-    const ev = press("panel.filter", monacoFocusTarget());
+  it("leaves Cmd/Ctrl+F to the SQL editor so Monaco's find widget opens instead of the tab filter", () => {
+    const ev = press("panel.filter", renderSqlEditorTab());
 
     expect(requestOpenFilter).not.toHaveBeenCalled();
     expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it("still opens the tab filter from a Monaco editor outside the SQL editor (e.g. Mongo / remote file editor)", () => {
+    const ev = press("panel.filter", monacoFocusTarget());
+
+    expect(requestOpenFilter).toHaveBeenCalledTimes(1);
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it("still opens the tab filter when focus is outside any editor", () => {
@@ -68,8 +115,8 @@ describe("useKeyboardShortcuts — Monaco editor focus", () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it("keeps handling other global shortcuts inside Monaco (Cmd/Ctrl+W)", () => {
-    const ev = press("tab.close", monacoFocusTarget());
+  it("keeps handling other global shortcuts inside the SQL editor (Cmd/Ctrl+W)", () => {
+    const ev = press("tab.close", renderSqlEditorTab());
 
     expect(ev.defaultPrevented).toBe(true);
   });
