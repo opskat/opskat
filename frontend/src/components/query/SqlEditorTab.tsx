@@ -35,7 +35,7 @@ import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
 import { buildSqlCompletions, resolveScopeTables, type SqlColumn } from "@/lib/sql-context";
 import { isDangerousSql, statementAt } from "@/lib/sqlStatements";
-import { FIND_SCOPE_ATTR, formatModKey } from "@/stores/shortcutStore";
+import { formatModKey } from "@/stores/shortcutStore";
 
 interface SqlEditorTabProps {
   tabId: string;
@@ -568,9 +568,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             </Popover>
           )}
         </div>
-        {/* Monaco editor; automaticLayout lets it reflow when the splitter changes height.
-            ⌘F inside it opens Monaco's own find instead of the tab filter. */}
-        <div className="flex-1 min-h-0 w-full overflow-hidden bg-background" {...{ [FIND_SCOPE_ATTR]: "" }}>
+        {/* Monaco editor; automaticLayout lets it reflow when the splitter changes height. */}
+        <div className="flex-1 min-h-0 w-full overflow-hidden bg-background">
           <CodeEditor
             testId="sql-editor"
             defaultValue={persistedSql || ""}

@@ -112,11 +112,11 @@ describe("useKeyboardShortcuts — Cmd/Ctrl+F dispatch by focus", () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 
-  it("still opens the tab filter from a Monaco editor outside the SQL editor (e.g. Mongo / remote file editor)", () => {
+  it("leaves Cmd/Ctrl+F to any other Monaco editor too (e.g. Mongo / remote file editor)", () => {
     const ev = press("panel.filter", monacoFocusTarget());
 
-    expect(requestOpenFilter).toHaveBeenCalledTimes(1);
-    expect(ev.defaultPrevented).toBe(true);
+    expect(requestOpenFilter).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(false);
   });
 
   it("still opens the tab filter when focus is anywhere else", () => {

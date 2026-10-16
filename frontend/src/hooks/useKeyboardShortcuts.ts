@@ -57,10 +57,11 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
         return;
       }
 
-      // panel.filter 特殊处理：xterm / SQL 编辑器 / 数据库结果表格聚焦时透传（各自打开查找），否则通过 store 触发 filter 面板
+      // panel.filter 特殊处理：xterm / Monaco 编辑器 / 数据库结果表格聚焦时透传（各自打开查找），否则通过 store 触发 filter 面板。
+      // Monaco 的焦点元素是 EditContext 的 div，上面的输入框判断拦不到，按 .monaco-editor 祖先识别。
       if (action === "panel.filter") {
         const el = document.activeElement as HTMLElement | null;
-        if (el?.closest(`.xterm, [${FIND_SCOPE_ATTR}]`)) return;
+        if (el?.closest(`.xterm, .monaco-editor, [${FIND_SCOPE_ATTR}]`)) return;
         e.preventDefault();
         e.stopPropagation();
         useLayoutStore.getState().requestOpenFilter();

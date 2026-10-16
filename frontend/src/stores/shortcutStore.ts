@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export const isMac = /Macintosh|Mac OS/.test(navigator.userAgent);
 
-/** 区域标记：焦点在其内时全局 ⌘F（panel.filter）让路，由区域自己打开查找（SQL 编辑器里 Monaco 的查找、数据库结果表格的查找条）。 */
+/** 区域标记：焦点在其内时全局 ⌘F（panel.filter）让路，由区域自己打开查找（如数据库结果表格的查找条；Monaco 编辑器由 .monaco-editor 识别，无需此标记）。 */
 export const FIND_SCOPE_ATTR = "data-find-scope";
 
 export interface ShortcutBinding {
