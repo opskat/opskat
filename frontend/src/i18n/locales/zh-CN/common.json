@@ -2577,7 +2577,7 @@
     "deselectAll": "取消全选",
     "recordsInPage": "第 {{page}} 页，共 {{count}} 条记录",
     "tableFooterSettings": "表格设置",
-    "pageSize": "Limit",
+    "pageSize": "每页行数",
     "filterBuilderTitle": "筛选",
     "filterBuilderEmpty": "点击 “+” 添加筛选条件",
     "filterEnabled": "启用筛选条件",
