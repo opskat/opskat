@@ -55,9 +55,12 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 			d.Capabilities = []dbdriver.Capability{dbdriver.CapViews}
 		}, "read_only"},
 		"foreign key toggle without import": {func(d *dbdriver.Descriptor) { d.CanDisableForeignKeyChecks = true }, "canDisableForeignKeyChecks"},
-		"nil capabilities":                  {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
-		"unknown capability":                {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
-		"duplicate capability":              {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},
+		"exact row location without grid edit": {func(d *dbdriver.Descriptor) {
+			d.LocatesRowWithoutPrimaryKey = true
+		}, "locatesRowWithoutPrimaryKey"},
+		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
+		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
+		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := NewFake()

@@ -35,6 +35,8 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
 	},
 	CanDisableForeignKeyChecks: true,
+	// 没有主键的表按 rowid 定位单行。
+	LocatesRowWithoutPrimaryKey: true,
 }
 
 type driver struct{}

@@ -104,6 +104,15 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 	if len(keys) == 0 {
 		keys = req.Columns
 	}
+	where, err := w.where(keys, row)
+	if err != nil {
+		return "", err
+	}
+	return w.update(w.tableRef, strings.Join(set, ", "), where), nil
+}
+
+// where 是按 keys 列的值定位 row 的条件（不含关键字）：NULL 写成 IS NULL。
+func (w rowSQL) where(keys []string, row map[string]any) (string, error) {
 	where := make([]string, len(keys))
 	for i, column := range keys {
 		if row[column] == nil {
@@ -116,5 +125,5 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 		}
 		where[i] = w.quote(column) + " = " + value
 	}
-	return w.update(w.tableRef, strings.Join(set, ", "), strings.Join(where, " AND ")), nil
+	return strings.Join(where, " AND "), nil
 }

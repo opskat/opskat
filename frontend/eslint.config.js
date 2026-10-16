@@ -44,8 +44,6 @@ const driverBranchExempt = [
   "src/components/query/CreateDatabaseDialog.tsx", // 建库：字符集 / 排序规则默认值与 CREATE DATABASE 语法
   "src/components/query/DatabaseTree.tsx", // 清空表：SQLite 没有 TRUNCATE，改发 DELETE FROM
   "src/components/query/ImportTableDataDialog.tsx", // 导入：表名限定形式与外键检查开关
-  "src/components/query/TableDataTab.tsx", // 表格编辑的无主键提示
-  "src/lib/tableEdit.ts", // 表格编辑：空行 INSERT 写法
   "src/lib/tableImport.ts", // 导入：二进制字面量与 upsert 写法
   "src/lib/tableSql.ts", // 引号规则与建表 / 改表 / 删表 / 清空的方言 SQL
 ];

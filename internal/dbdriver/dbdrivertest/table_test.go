@@ -389,6 +389,89 @@ func TestTableConformanceReportsBrokenBatches(t *testing.T) {
 	}
 }
 
+// 表格编辑的语句由假会话直接给出：新增、改动、删除各一组，每个一条一眼能与真实方言区分的语句，
+// 收到的请求原样记下，不执行任何语句；没声明 grid_edit 的假驱动拒绝，且什么也没记下。
+func TestFakeSessionGeneratesGridEditStatementsWithoutExecuting(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	ctx := context.Background()
+	request := dbdriver.GridEditRequest{
+		Columns:     []string{"id", "name"},
+		PrimaryKeys: []string{"id"},
+		Inserts:     []dbdriver.GridInsert{{Values: []dbdriver.ColumnValue{{Column: "name", Value: "dan"}}}, {}},
+		Updates:     []dbdriver.GridUpdate{{Row: map[string]any{"id": float64(1), "name": "alice"}, Set: []dbdriver.ColumnValue{{Column: "name", Value: "ally"}}}},
+		Deletes:     []map[string]any{{"id": float64(2), "name": "bob"}},
+	}
+
+	_, err := session.GridEditStatements(ctx, "app", "users", request)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Empty(t, session.TableCalls())
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapGridEdit)
+	statements, err := session.GridEditStatements(ctx, "app", "users", request)
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.GridEditStatements{
+		Inserts: []string{"FAKE INSERT ROW 1 OF app.users", "FAKE INSERT ROW 2 OF app.users"},
+		Updates: []string{"FAKE UPDATE ROW 1 OF app.users"},
+		Deletes: []string{"FAKE DELETE ROW 1 OF app.users"},
+	}, statements)
+	assert.Equal(t, []TableCall{{Op: "grid_edit", Database: "app", Table: "users", GridEdit: &request}}, session.TableCalls())
+	assert.Empty(t, session.Statements())
+}
+
+// brokenGridEdit 让表格编辑语句的回答由测试改坏。
+type brokenGridEdit struct {
+	dbdriver.Session
+	grid func(*dbdriver.GridEditStatements, error) (*dbdriver.GridEditStatements, error)
+}
+
+func (b brokenGridEdit) GridEditStatements(ctx context.Context, database, table string, req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
+	return b.grid(b.Session.GridEditStatements(ctx, database, table, req))
+}
+
+// 表格编辑的一致性检查也得能失败：声明了却拒绝、生成失败、少给一条、空请求给出 null。
+func TestTableConformanceReportsBrokenGridEdits(t *testing.T) {
+	for name, tt := range map[string]struct {
+		grid func(*dbdriver.GridEditStatements, error) (*dbdriver.GridEditStatements, error)
+		want string
+	}{
+		"declared grid edit refused": {func(*dbdriver.GridEditStatements, error) (*dbdriver.GridEditStatements, error) {
+			return nil, fmt.Errorf("%w: no", dbdriver.ErrUnsupported)
+		}, "GridEditStatements"},
+		"grid edit fails": {func(*dbdriver.GridEditStatements, error) (*dbdriver.GridEditStatements, error) {
+			return nil, errors.New("boom")
+		}, "boom"},
+		"an update short": {func(s *dbdriver.GridEditStatements, err error) (*dbdriver.GridEditStatements, error) {
+			if s != nil && len(s.Updates) > 0 {
+				s.Updates = s.Updates[1:]
+			}
+			return s, err
+		}, "updates"},
+		"empty request gives null": {func(s *dbdriver.GridEditStatements, err error) (*dbdriver.GridEditStatements, error) {
+			if s != nil && len(s.Deletes) == 0 {
+				s.Deletes = nil
+			}
+			return s, err
+		}, "null"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := NewFake()
+			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapGridEdit)
+			session := brokenGridEdit{Session: openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}), grid: tt.grid}
+			problems := tableProblems(fake.Desc, session, "app", "users")
+			require.NotEmpty(t, problems)
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+}
+
+func TestFakeDriverWithGridEditPassesTableConformance(t *testing.T) {
+	fake := NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapGridEdit)
+	fake.Desc.LocatesRowWithoutPrimaryKey = true
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+}
+
 func TestFakeDriverWithForeignKeyTogglePassesTableConformance(t *testing.T) {
 	fake := NewFake()
 	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)

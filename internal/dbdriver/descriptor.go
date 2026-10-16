@@ -32,6 +32,10 @@ type Descriptor struct {
 	// （Session.ExecuteBatch 的 BatchRequest.DisableForeignKeyChecks）。没声明时导入不显示
 	// 「忽略外键」，会话以 ErrUnsupported 拒绝关闭外键检查。
 	CanDisableForeignKeyChecks bool `json:"canDisableForeignKeyChecks"`
+	// LocatesRowWithoutPrimaryKey 声明表格编辑（CapGridEdit）在表没有主键时也能精确定位要改 / 删
+	// 的那一行（PostgreSQL 的 ctid、SQLite 的 rowid），而不只是在原值相同的几行里取一行。声明了，
+	// 表格不显示「无主键」提示。
+	LocatesRowWithoutPrimaryKey bool `json:"locatesRowWithoutPrimaryKey"`
 }
 
 // FormTab 是资产表单的一个 Tab。

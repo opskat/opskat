@@ -147,6 +147,13 @@ type Session interface {
 	// 且不执行任何语句。
 	RowStatements(ctx context.Context, database, table string, req RowStatementsRequest) ([]string, error)
 
+	// GridEditStatements 生成表格编辑要执行的语句：每个新增行一条 INSERT、每个改动的行一条只改
+	// 那一行的 UPDATE、每个要删除的行一条只删那一行的 DELETE，各自按请求里的次序（见
+	// GridEditRequest）。定位已有行、没有主键时怎么收敛到一行、整行取默认值的写法、往自增列写值
+	// 时要的开关都由驱动决定。请求里的列不在表中（或表已不存在）时返回 error。驱动没有声明
+	// CapGridEdit 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	GridEditStatements(ctx context.Context, database, table string, req GridEditRequest) (*GridEditStatements, error)
+
 	// ExecuteBatch 在会话的一条连接上按次序执行一批语句（导入的整批执行用它），见 BatchRequest。
 	// 空白语句跳过、不执行。语句本身的失败记在结果里，不作为 error 返回。
 	//
@@ -183,6 +190,47 @@ type RowStatementsRequest struct {
 	// PrimaryKeys 是 UPDATE 定位那一行的列（值取自同一行）；为空时按全部 Columns 定位。
 	// INSERT 不用它。
 	PrimaryKeys []string `json:"primaryKeys"`
+}
+
+// GridEditRequest 是 Session.GridEditStatements 要生成的语句：表格里新增、改动与删除的行。
+type GridEditRequest struct {
+	// Columns 是表格里的全部列，按表格的次序：表没有主键时按它们的原值定位已有的行。
+	Columns []string `json:"columns"`
+	// PrimaryKeys 是定位已有行的主键列，按主键里的次序；为空表示表没有主键。
+	PrimaryKeys []string `json:"primaryKeys"`
+	// Inserts 是新增的行。
+	Inserts []GridInsert `json:"inserts"`
+	// Updates 是改动的已有行。
+	Updates []GridUpdate `json:"updates"`
+	// Deletes 是要删除的已有行：表格里读到的整行（按列名取值），用来定位。
+	Deletes []map[string]any `json:"deletes"`
+}
+
+// GridInsert 是一个新增行。
+type GridInsert struct {
+	// Values 是填写过的列与值，按语句里的次序；为空表示整行取默认值。
+	Values []ColumnValue `json:"values"`
+}
+
+// GridUpdate 是一个改动的已有行。
+type GridUpdate struct {
+	// Row 是表格里读到的这一行（按列名取值，改动前的原值），用来定位。
+	Row map[string]any `json:"row"`
+	// Set 是改动的列与新值，按语句里的次序。
+	Set []ColumnValue `json:"set"`
+}
+
+// ColumnValue 是一列与它的值。值是表格里的值，经前端原样带回（nil、字符串、数字、布尔）。
+type ColumnValue struct {
+	Column string `json:"column"`
+	Value  any    `json:"value"`
+}
+
+// GridEditStatements 是表格编辑的语句，与 GridEditRequest 的三组逐一对应（同样长、同样的次序）。
+type GridEditStatements struct {
+	Inserts []string `json:"inserts"`
+	Updates []string `json:"updates"`
+	Deletes []string `json:"deletes"`
 }
 
 // BatchRequest 是 Session.ExecuteBatch 要在一条连接上执行的一批语句。

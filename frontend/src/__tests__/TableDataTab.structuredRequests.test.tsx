@@ -5,7 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, ExecuteSQLPaged, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
-import { FAKE_DRIVER, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
+import { FAKE_DRIVER, fakeDriverWith, mockGridEditStatements, provideDrivers } from "./dbDriverFixtures";
 
 // 表浏览(打开、翻页、改每页行数、计数、筛选、排序)发给后端的是结构化请求,由资产的驱动
 // 回答。这里用一个前端一无所知的驱动名:任何一步都不该、也没法为它拼 SQL。
@@ -196,6 +196,7 @@ describe("TableDataTab structured table requests", () => {
   it("filters by an unfilled cell with a between operator as a condition that restricts nothing", async () => {
     const user = userEvent.setup();
     provideDrivers([fakeDriverWith(["grid_edit"])]);
+    mockGridEditStatements();
     await renderOpened();
 
     await user.click(await screen.findByTitle("query.addRow"));

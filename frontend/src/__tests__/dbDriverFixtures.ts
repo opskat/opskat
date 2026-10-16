@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { dbdriver } from "../../wailsjs/go/models";
-import { ListDatabaseDrivers } from "../../wailsjs/go/query/Query";
+import { GetGridEditStatements, ListDatabaseDrivers } from "../../wailsjs/go/query/Query";
 import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
 import builtinDrivers from "./builtinDbDrivers.json";
 
@@ -51,6 +51,27 @@ export const FAKE_DRIVER: dbdriver.Descriptor = driver({
 /** 一个只在测试里存在的驱动,功能集合由测试指定,用来证明界面入口跟随驱动的声明。 */
 export function fakeDriverWith(capabilities: string[], id = FAKE_DRIVER.id): dbdriver.Descriptor {
   return new dbdriver.Descriptor({ ...FAKE_DRIVER, id, name: "FakeDB", capabilities });
+}
+
+/**
+ * 让 Query.GetGridEditStatements 像驱动一样给出表格编辑的语句:每个新增 / 改动 / 删除的行各一条,
+ * 内容是请求本身(值按 JSON 写),一眼能与任何真实方言区分,测试据此断言前端发出的意图与执行的语句。
+ * 定位条件按主键取值,没有主键时是整行。
+ */
+export function mockGridEditStatements(): void {
+  const json = (pairs: { column: string; value: unknown }[]) =>
+    JSON.stringify(Object.fromEntries(pairs.map(({ column, value }) => [column, value])));
+  vi.mocked(GetGridEditStatements).mockImplementation(async (_assetId, _database, table, req) => {
+    const locate = (row: Record<string, unknown>) =>
+      JSON.stringify(
+        req.primaryKeys.length > 0 ? Object.fromEntries(req.primaryKeys.map((key) => [key, row[key]])) : row
+      );
+    return dbdriver.GridEditStatements.createFrom({
+      inserts: req.inserts.map((insert) => `INSERT ${table} ${json(insert.values)}`),
+      updates: req.updates.map((update) => `UPDATE ${table} SET ${json(update.set)} WHERE ${locate(update.row)}`),
+      deletes: req.deletes.map((row) => `DELETE ${table} WHERE ${locate(row)}`),
+    });
+  });
 }
 
 /** 让 Query.ListDatabaseDrivers 返回给定的描述列表,并丢弃进程内缓存。 */

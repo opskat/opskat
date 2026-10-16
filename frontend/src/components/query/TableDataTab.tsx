@@ -18,6 +18,7 @@ import { isMac, formatModKey } from "@/stores/shortcutStore";
 import {
   CountTableRows,
   ExecuteSQL,
+  GetGridEditStatements,
   GetRowStatements,
   GetTableDDL,
   GetTableMetadata,
@@ -47,15 +48,14 @@ import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { toTsv, toTsvData, toTsvFields } from "@/lib/tableExport";
-import { buildInsertStatement, validateInsertRow, type TableColumnRule } from "@/lib/tableEdit";
 import {
-  buildDeleteStatement,
-  buildSingleRowUpdate,
-  quoteIdent,
-  quoteTableRef,
-  sqlQuote,
-  type CellValueFilterOperator,
-} from "@/lib/tableSql";
+  collectGridEdits,
+  dropRowEdits,
+  rebaseNewRowEdits,
+  type PendingGridEdits,
+  type TableColumnRule,
+} from "@/lib/tableEdit";
+import type { CellValueFilterOperator } from "@/lib/tableSql";
 import {
   createFilterCondition,
   removeFilterItemsByColumn,
@@ -146,6 +146,16 @@ interface GuardedAction {
   description: string;
 }
 
+/**
+ * 一次提交要执行的语句：由驱动生成，预览里展示、确认后逐条执行的正是这些（新增在前、改动在后）。
+ * rowIdxs[i] 是第 i 条语句来自的表格行，行号基于当时的已保存行数 rowsLength。
+ */
+interface GridEditPlan {
+  statements: string[];
+  rowIdxs: number[];
+  rowsLength: number;
+}
+
 function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTabProps) {
   const { t } = useTranslation();
   const tab = useTabStore((s) => s.tabs.find((t) => t.id === tabId));
@@ -172,7 +182,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [submitting, setSubmitting] = useState(false);
   // `preview` = read-only view (opened by the "Preview SQL" button).
   // `confirm` = confirmation before submit (opened by the "Submit" button).
-  const [dialogMode, setDialogMode] = useState<"preview" | "confirm" | null>(null);
+  const [sqlDialog, setSqlDialog] = useState<{ mode: "preview" | "confirm"; plan: GridEditPlan } | null>(null);
+  // 状态栏的语句摘要:驱动为哪一份修改生成的第一条语句(修改变了就不再显示旧的)。
+  const [sqlSummary, setSqlSummary] = useState<{ source: PendingGridEdits; statement: string } | null>(null);
   const [showDDLDialog, setShowDDLDialog] = useState(false);
   const [ddlLoading, setDdlLoading] = useState(false);
   const [ddlSQL, setDdlSQL] = useState("");
@@ -358,6 +370,18 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     [appliedSorts, sortColumn, sortDir]
   );
 
+  // 修改按 "行号:列名" 记,新增行排在已保存的行之后:重新取到的页长度变了(提交后只清掉成功的修改,
+  // 失败的新增行还在),新增行的修改跟着移到新的行号上。rowsLengthRef 是修改当前所基于的已保存行数。
+  const rowsLengthRef = useRef(0);
+  useEffect(() => {
+    rowsLengthRef.current = rows.length;
+  }, [rows.length]);
+  const replaceRows = useCallback((next: Record<string, unknown>[]) => {
+    const previous = rowsLengthRef.current;
+    setRows(next);
+    setEdits((prev) => rebaseNewRowEdits(prev, previous, next.length));
+  }, []);
+
   // Fetch total count
   const fetchCount = useCallback(async () => {
     if (!assetId) return;
@@ -399,21 +423,21 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
         setElapsedMs(Math.round(performance.now() - startedAt));
         setColumns(result.columns);
-        setRows(result.rows);
+        replaceRows(result.rows);
         setSelectedRowIdx(null);
       } catch (e) {
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
         setElapsedMs(null);
         setError(String(e));
         // 列保留:筛选器与列状态在重试 / 改筛选后仍沿用,错误卡片取代的只是表体。
-        setRows([]);
+        replaceRows([]);
         setSelectedRowIdx(null);
       } finally {
         if (!isCancelled(requestId) && latestDataRequest.current === requestId) setLoading(false);
         cancelledRequests.current.delete(requestId);
       }
     },
-    [assetId, database, table, pageSize, filterRequest, sortRequest, nextRequestId, isCancelled]
+    [assetId, database, table, pageSize, filterRequest, sortRequest, nextRequestId, isCancelled, replaceRows]
   );
 
   useEffect(() => {
@@ -522,102 +546,53 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       const newRowIdx = rowIdx - rows.length;
       if (newRowIdx < 0 || newRowIdx >= newRows.length) return;
       setNewRows((prev) => prev.filter((_, idx) => idx !== newRowIdx));
-      setEdits((prev) => {
-        const next = new Map<string, unknown>();
-        for (const [key, value] of prev) {
-          const sep = key.indexOf(":");
-          const currentRowIdx = Number(key.substring(0, sep));
-          const column = key.substring(sep + 1);
-          if (currentRowIdx === rowIdx) continue;
-          const shiftedRowIdx = currentRowIdx > rowIdx ? currentRowIdx - 1 : currentRowIdx;
-          next.set(`${shiftedRowIdx}:${column}`, value);
-        }
-        return next;
-      });
+      setEdits((prev) => dropRowEdits(prev, rows.length, new Set([rowIdx])));
       setSelectedRowIdx(null);
     },
     [newRows.length, rows.length]
   );
 
-  // Build SQL statements for preview
-  const buildUpdateStatements = useCallback((): string[] => {
-    if (edits.size === 0) return [];
+  // 表格里的修改整理成发给驱动的意图;语句由驱动生成(GetGridEditStatements)。
+  const pendingEdits = useMemo(
+    () => collectGridEdits({ rows, newRowCount: newRows.length, columns, primaryKeys, columnRules, edits }),
+    [rows, newRows.length, columns, primaryKeys, columnRules, edits]
+  );
+  // 生成要等后端:等回来时修改若已变了,这次的结果就不再对应表格里的修改。
+  const latestPendingEdits = useRef(pendingEdits);
+  useEffect(() => {
+    latestPendingEdits.current = pendingEdits;
+  }, [pendingEdits]);
+  const hasPendingStatements = pendingEdits.intent.inserts.length + pendingEdits.intent.updates.length > 0;
 
-    const rowEdits = new Map<number, Map<string, unknown>>();
-    for (const [key, value] of edits) {
-      const [rowIdxStr, col] = [key.substring(0, key.indexOf(":")), key.substring(key.indexOf(":") + 1)];
-      const rowIdx = Number(rowIdxStr);
-      if (!rowEdits.has(rowIdx)) rowEdits.set(rowIdx, new Map());
-      rowEdits.get(rowIdx)!.set(col, value);
-    }
+  const generateGridEdits = useCallback(
+    (intent: Partial<PendingGridEdits["intent"]>) =>
+      GetGridEditStatements(
+        assetId,
+        database,
+        table,
+        dbdriver.GridEditRequest.createFrom({ columns, primaryKeys, inserts: [], updates: [], deletes: [], ...intent })
+      ),
+    [assetId, columns, database, primaryKeys, table]
+  );
 
-    const statements: string[] = [];
-    for (const [rowIdx, colEdits] of rowEdits) {
-      if (rowIdx >= rows.length) continue;
-      const row = rows[rowIdx];
-      if (!row) continue;
-
-      const setClauses: string[] = [];
-      for (const [col, value] of colEdits) {
-        setClauses.push(`${quoteIdent(col, driver)} = ${sqlQuote(value)}`);
+  // 状态栏摘要:驱动为当前修改生成的第一条语句(新增在前)。生成失败时不显示摘要,失败原因在
+  // 预览 / 提交时显示。
+  useEffect(() => {
+    if (!canGridEdit || !assetId || !hasPendingStatements || pendingEdits.missingFields.length > 0) return;
+    let stale = false;
+    generateGridEdits(pendingEdits.intent).then(
+      (generated) => {
+        if (!stale) setSqlSummary({ source: pendingEdits, statement: [...generated.inserts, ...generated.updates][0] });
+      },
+      () => {
+        if (!stale) setSqlSummary({ source: pendingEdits, statement: "" });
       }
-
-      // 优先用主键定位：WHERE 短、避免 TEXT/BLOB 模糊匹配，也能处理 PG 浮点等列等值不稳的情况。
-      // 没主键时退回全列匹配；PG 还要用 ctid 包一层把"匹配到的多行"收敛为物理一行。
-      const hasPK = primaryKeys.length > 0;
-      const whereCols = hasPK ? primaryKeys : columns;
-      const whereClauses: string[] = [];
-      for (const col of whereCols) {
-        const origVal = row[col];
-        if (origVal == null) {
-          whereClauses.push(`${quoteIdent(col, driver)} IS NULL`);
-        } else {
-          whereClauses.push(`${quoteIdent(col, driver)} = ${sqlQuote(origVal)}`);
-        }
-      }
-
-      const tableName = quoteTableRef(database, table, driver);
-      const whereSQL = whereClauses.join(" AND ");
-
-      statements.push(
-        buildSingleRowUpdate({
-          tableRef: tableName,
-          setSql: setClauses.join(", "),
-          whereSql: whereSQL,
-          hasPrimaryKey: hasPK,
-          driver,
-        })
-      );
-    }
-    return statements;
-  }, [edits, rows, columns, driver, database, table, primaryKeys]);
-
-  const buildInsertStatements = useCallback((): { statements: string[]; missingFields: string[] } => {
-    const statements: string[] = [];
-    const missingFields = new Set<string>();
-
-    newRows.forEach((_, newRowIdx) => {
-      const rowIdx = rows.length + newRowIdx;
-      const values: Record<string, unknown> = {};
-      for (const column of columns) {
-        const key = `${rowIdx}:${column}`;
-        if (edits.has(key)) values[column] = edits.get(key);
-      }
-
-      for (const field of validateInsertRow(columnRules, values)) {
-        missingFields.add(field);
-      }
-      statements.push(buildInsertStatement({ database, table, driver, values }));
-    });
-
-    return { statements: missingFields.size > 0 ? [] : statements, missingFields: Array.from(missingFields) };
-  }, [columnRules, columns, database, driver, edits, newRows, rows.length, table]);
-
-  const buildChangeStatements = useCallback((): { statements: string[]; missingFields: string[] } => {
-    const insertResult = buildInsertStatements();
-    if (insertResult.missingFields.length > 0) return insertResult;
-    return { statements: [...insertResult.statements, ...buildUpdateStatements()], missingFields: [] };
-  }, [buildInsertStatements, buildUpdateStatements]);
+    );
+    return () => {
+      stale = true;
+    };
+  }, [assetId, canGridEdit, generateGridEdits, hasPendingStatements, pendingEdits]);
+  const pendingSqlSummary = sqlSummary?.source === pendingEdits ? sqlSummary.statement : "";
 
   const showInsertValidationError = useCallback(
     (fields: string[]) => {
@@ -626,89 +601,80 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     [t]
   );
 
+  // 让驱动为当前修改生成语句并打开预览 / 确认;返回是否打开了。生成失败时显示错误,不打开预览。
   const openSqlDialog = useCallback(
-    (mode: "preview" | "confirm"): boolean => {
-      const result = buildChangeStatements();
-      if (result.missingFields.length > 0) {
-        showInsertValidationError(result.missingFields);
+    async (mode: "preview" | "confirm"): Promise<boolean> => {
+      const source = pendingEdits;
+      if (source.missingFields.length > 0) {
+        showInsertValidationError(source.missingFields);
         return false;
       }
-      if (result.statements.length === 0) return false;
-      setDialogMode(mode);
+      if (!hasPendingStatements) return false;
+      let generated: dbdriver.GridEditStatements;
+      try {
+        generated = await generateGridEdits(source.intent);
+      } catch (e) {
+        toast.error(String(e));
+        return false;
+      }
+      if (latestPendingEdits.current !== source) return false;
+      setSqlDialog({
+        mode,
+        plan: {
+          statements: [...generated.inserts, ...generated.updates],
+          rowIdxs: [...source.insertRowIdxs, ...source.updateRowIdxs],
+          rowsLength: rows.length,
+        },
+      });
       return true;
     },
-    [buildChangeStatements, showInsertValidationError]
+    [generateGridEdits, hasPendingStatements, pendingEdits, rows.length, showInsertValidationError]
   );
 
-  const previewStatements = useMemo(() => {
-    if (dialogMode === null) return [];
-    return buildChangeStatements().statements;
-  }, [dialogMode, buildChangeStatements]);
+  // 逐条执行预览里的语句(不包事务,单条失败不影响其余)。返回是否全部成功(每条都执行成功且命中了
+  // 行),拦截后的「提交后继续」靠它决定是否继续。成功的修改与新增行清掉并刷新,其余留在表格里。
+  const handleSubmit = useCallback(
+    async (plan: GridEditPlan): Promise<boolean> => {
+      setSubmitting(true);
+      let affectedTotal = 0;
+      let zeroAffected = 0;
+      let errorMsg = "";
+      const succeeded = new Set<number>();
 
-  const pendingSqlSummary = useMemo(() => {
-    if (edits.size === 0 && newRows.length === 0) return "";
-    const result = buildChangeStatements();
-    return result.missingFields.length === 0 ? (result.statements[0] ?? "") : "";
-  }, [buildChangeStatements, edits.size, newRows.length]);
-
-  // 返回是否全部提交成功(每条语句都执行成功且命中了行),拦截后的「提交后继续」靠它决定是否继续。
-  const handleSubmit = useCallback(async (): Promise<boolean> => {
-    if ((edits.size === 0 && newRows.length === 0) || !assetId) return false;
-
-    const changeResult = buildChangeStatements();
-    if (changeResult.missingFields.length > 0) {
-      showInsertValidationError(changeResult.missingFields);
-      return false;
-    }
-
-    const statements = changeResult.statements;
-    if (statements.length === 0) return false;
-    setSubmitting(true);
-    let affectedTotal = 0;
-    let zeroAffected = 0;
-    let errorMsg = "";
-
-    for (const sql of statements) {
-      try {
-        const result = await ExecuteSQL(assetId, sql, database);
-        const parsed: SQLResult = JSON.parse(result);
-        const affected = Number(parsed.affected_rows ?? 0);
-        if (affected > 0) affectedTotal += affected;
-        else zeroAffected++;
-      } catch (e) {
-        errorMsg += String(e) + "\n";
+      for (const [index, sql] of plan.statements.entries()) {
+        try {
+          const result = await ExecuteSQL(assetId, sql, database);
+          const parsed: SQLResult = JSON.parse(result);
+          const affected = Number(parsed.affected_rows ?? 0);
+          if (affected > 0) {
+            affectedTotal += affected;
+            succeeded.add(plan.rowIdxs[index]);
+          } else zeroAffected++;
+        } catch (e) {
+          errorMsg += String(e) + "\n";
+        }
       }
-    }
 
-    setSubmitting(false);
-    setDialogMode(null);
+      setSubmitting(false);
+      setSqlDialog(null);
 
-    if (affectedTotal > 0) {
-      notifySuccess(t("query.updateSuccessAffected", { affected: affectedTotal }));
-      setEdits(new Map());
-      setNewRows([]);
-      fetchData(page);
-      fetchCount();
-    }
-    if (zeroAffected > 0) {
-      toast.warning(t("query.updateMismatch", { count: zeroAffected }));
-    }
-    if (errorMsg) {
-      toast.error(errorMsg.trim());
-    }
-    return !errorMsg && zeroAffected === 0;
-  }, [
-    edits.size,
-    newRows.length,
-    assetId,
-    database,
-    buildChangeStatements,
-    showInsertValidationError,
-    page,
-    fetchData,
-    fetchCount,
-    t,
-  ]);
+      if (affectedTotal > 0) {
+        notifySuccess(t("query.updateSuccessAffected", { affected: affectedTotal }));
+        setNewRows((prev) => prev.filter((_, newRowIdx) => !succeeded.has(plan.rowsLength + newRowIdx)));
+        setEdits((prev) => dropRowEdits(prev, plan.rowsLength, succeeded));
+        fetchData(page);
+        fetchCount();
+      }
+      if (zeroAffected > 0) {
+        toast.warning(t("query.updateMismatch", { count: zeroAffected }));
+      }
+      if (errorMsg) {
+        toast.error(errorMsg.trim());
+      }
+      return !errorMsg && zeroAffected === 0;
+    },
+    [assetId, database, page, fetchData, fetchCount, t]
+  );
 
   const goToPage = useCallback(
     (target: number) => {
@@ -928,20 +894,21 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     pendingGuard.run();
   }, [handleDiscard, handleGuardStay, pendingGuard]);
 
-  const handleGuardSubmit = useCallback(() => {
+  const handleGuardSubmit = useCallback(async () => {
     if (!pendingGuard) return;
     handleGuardStay();
-    if (openSqlDialog("confirm")) continueAfterSubmit.current = pendingGuard.run;
+    if (await openSqlDialog("confirm")) continueAfterSubmit.current = pendingGuard.run;
   }, [handleGuardStay, openSqlDialog, pendingGuard]);
 
   const handleConfirmSubmit = useCallback(async () => {
+    if (!sqlDialog) return;
     const next = continueAfterSubmit.current;
     continueAfterSubmit.current = null;
-    if ((await handleSubmit()) && next) next();
-  }, [handleSubmit]);
+    if ((await handleSubmit(sqlDialog.plan)) && next) next();
+  }, [handleSubmit, sqlDialog]);
 
   const handleDeleteRows = useCallback(
-    (rowIdxs: number[]) => {
+    async (rowIdxs: number[]) => {
       // rows 之后的下标是尚未提交的新增行:它们只存在于客户端,没有可删的记录。
       // 从大到小移除,避免前一次移除把后面的下标往前挪。
       const unsaved = rowIdxs.filter((idx) => idx >= rows.length).sort((a, b) => b - a);
@@ -949,15 +916,15 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
       const persisted = rowIdxs.filter((idx) => idx < rows.length);
       if (persisted.length === 0) return;
-      const statements = persisted.map((idx) =>
-        buildDeleteStatement({ database, table, columns, row: rows[idx], primaryKeys, driver })
-      );
-      setDeletePreview({
-        statements: statements.map((statement) => statement.sql),
-        usesPrimaryKey: statements[0].usesPrimaryKey,
-      });
+      // DELETE 由驱动生成;生成失败时显示错误,不打开预览。
+      try {
+        const generated = await generateGridEdits({ deletes: persisted.map((idx) => rows[idx]) });
+        setDeletePreview({ statements: generated.deletes, usesPrimaryKey: primaryKeys.length > 0 });
+      } catch (e) {
+        toast.error(String(e));
+      }
     },
-    [columns, database, driver, primaryKeys, removeNewRow, rows, table]
+    [generateGridEdits, primaryKeys.length, removeNewRow, rows]
   );
 
   const handleConfirmDelete = useCallback(async () => {
@@ -1222,15 +1189,19 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           onExport={handleExport}
           onPreviewSql={() => openSqlDialog("preview")}
         />
-        {canGridEdit && driver !== "postgresql" && pkLoaded && primaryKeys.length === 0 && columns.length > 0 && (
-          <span
-            className="flex items-center gap-1 text-[11px] text-warning shrink-0"
-            title={t("query.noPrimaryKeyTooltip")}
-          >
-            <TriangleAlert className="h-3.5 w-3.5" />
-            {t("query.noPrimaryKey")}
-          </span>
-        )}
+        {canGridEdit &&
+          !driverDescriptor?.locatesRowWithoutPrimaryKey &&
+          pkLoaded &&
+          primaryKeys.length === 0 &&
+          columns.length > 0 && (
+            <span
+              className="flex items-center gap-1 text-[11px] text-warning shrink-0"
+              title={t("query.noPrimaryKeyTooltip")}
+            >
+              <TriangleAlert className="h-3.5 w-3.5" />
+              {t("query.noPrimaryKey")}
+            </span>
+          )}
       </div>
 
       {showFilterSort && (
@@ -1421,14 +1392,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
       {/* SQL preview / submit confirmation */}
       <SqlPreviewDialog
-        open={dialogMode !== null}
+        open={sqlDialog !== null}
         onOpenChange={(open) => {
           if (open || submitting) return;
-          setDialogMode(null);
+          setSqlDialog(null);
           continueAfterSubmit.current = null;
         }}
-        statements={previewStatements}
-        onConfirm={dialogMode === "confirm" ? handleConfirmSubmit : undefined}
+        statements={sqlDialog?.plan.statements ?? []}
+        onConfirm={sqlDialog?.mode === "confirm" ? handleConfirmSubmit : undefined}
         submitting={submitting}
       />
 

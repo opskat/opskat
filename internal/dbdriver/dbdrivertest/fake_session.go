@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "batch"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "batch"。
 	Op       string
 	Database string
 	Table    string
@@ -174,6 +174,8 @@ type TableCall struct {
 	Page dbdriver.Page
 	// RowStatements 是 row_statements 收到的请求。
 	RowStatements *dbdriver.RowStatementsRequest
+	// GridEdit 是 grid_edit 收到的请求。
+	GridEdit *dbdriver.GridEditRequest
 	// Batch 是 batch 收到的请求。
 	Batch *dbdriver.BatchRequest
 }
@@ -272,6 +274,29 @@ func (s *FakeSession) RowStatements(_ context.Context, database, table string, r
 		statements = append(statements, fmt.Sprintf("FAKE %s ROW %d OF %s.%s", strings.ToUpper(string(req.Kind)), i+1, database, table))
 	}
 	return statements, nil
+}
+
+// GridEditStatements 记下收到的请求（Op "grid_edit"），新增、改动、删除的每一行各给出一条一眼能
+// 与任何真实方言区分的语句。驱动没有声明表格编辑时以 ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) GridEditStatements(_ context.Context, database, table string, req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapGridEdit) {
+		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapGridEdit)
+	}
+	if err := s.tableCall(TableCall{Op: "grid_edit", Database: database, Table: table, GridEdit: &req}); err != nil {
+		return nil, err
+	}
+	statements := func(kind string, n int) []string {
+		out := make([]string, 0, n)
+		for i := range n {
+			out = append(out, fmt.Sprintf("FAKE %s ROW %d OF %s.%s", kind, i+1, database, table))
+		}
+		return out
+	}
+	return &dbdriver.GridEditStatements{
+		Inserts: statements("INSERT", len(req.Inserts)),
+		Updates: statements("UPDATE", len(req.Updates)),
+		Deletes: statements("DELETE", len(req.Deletes)),
+	}, nil
 }
 
 // ExecuteBatch 记下收到的请求（Op "batch"），按次序执行每条非空白语句（记进 Statements，每条

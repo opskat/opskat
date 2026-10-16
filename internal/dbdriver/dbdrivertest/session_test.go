@@ -119,8 +119,16 @@ type brokenSession struct {
 	execute      alterResult
 	executePaged alterResult
 	closeErr     error
-	// generates 为真时不管声明与否都给出行语句。
+	// generates 为真时不管声明与否都给出行语句；gridEdits 为真时不管声明与否都给出表格编辑语句。
 	generates bool
+	gridEdits bool
+}
+
+func (b brokenSession) GridEditStatements(ctx context.Context, database, table string, req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
+	if b.gridEdits {
+		return &dbdriver.GridEditStatements{Inserts: []string{"INSERT"}}, nil
+	}
+	return b.Session.GridEditStatements(ctx, database, table, req)
 }
 
 func (b brokenSession) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
@@ -204,6 +212,7 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 		}}, "page"},
 		"close fails":                         {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
 		"undeclared row statements generated": {brokenSession{generates: true}, "RowStatements"},
+		"undeclared grid edit generated":      {brokenSession{gridEdits: true}, "GridEditStatements"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tt.broken.Session = openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})

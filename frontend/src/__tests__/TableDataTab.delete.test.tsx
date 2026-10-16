@@ -6,7 +6,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
-import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
+import { BUILTIN_DRIVERS, mockGridEditStatements, provideDrivers } from "./dbDriverFixtures";
 
 function openTablePayload(rows: Record<string, unknown>[]) {
   return JSON.stringify({
@@ -79,6 +79,7 @@ async function renderLoaded(rows = ROWS) {
 describe("TableDataTab multi-row delete", () => {
   beforeEach(() => {
     provideDrivers(BUILTIN_DRIVERS);
+    mockGridEditStatements();
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
     vi.mocked(QueryTableRows).mockReset();
@@ -104,14 +105,14 @@ describe("TableDataTab multi-row delete", () => {
     await user.click(screen.getByText("query.confirmExecute"));
 
     await waitFor(() => expect(deleteCalls()).toHaveLength(2));
-    expect(deleteCalls()[0]).toContain("`id` = '1'");
-    expect(deleteCalls()[1]).toContain("`id` = '3'");
+    expect(deleteCalls()[0]).toContain('{"id":1}');
+    expect(deleteCalls()[1]).toContain('{"id":3}');
   });
 
   it("surfaces per-statement failures without dropping the rest", async () => {
     const user = userEvent.setup();
     vi.mocked(ExecuteSQL).mockImplementation(async (_id, sql) => {
-      if (String(sql).includes("`id` = '1'")) throw new Error("lock wait timeout");
+      if (String(sql).includes('{"id":1}')) throw new Error("lock wait timeout");
       return JSON.stringify({ affected_rows: 1 });
     });
     await renderLoaded();

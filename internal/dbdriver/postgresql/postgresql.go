@@ -29,6 +29,8 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
 	},
+	// 没有主键的表按 ctid 定位单行。
+	LocatesRowWithoutPrimaryKey: true,
 }
 
 type driver struct {

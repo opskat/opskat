@@ -35,3 +35,26 @@ func (dialect) Literals(context.Context, *sql.Conn) (sqldb.Literals, error) { re
 func (dialect) UpdateRowSQL(tableRef, set, where string) string {
 	return fmt.Sprintf("UPDATE TOP (1) %s SET %s WHERE %s;", tableRef, set, where)
 }
+
+// 表格编辑：一列都没填的新增行写 DEFAULT VALUES；给 IDENTITY 列写值要临时打开这张表的
+// IDENTITY_INSERT，写完关闭，出错也关闭并原样抛出（都在同一条语句里，不留会话状态）；只删一行用
+// DELETE TOP (1)。SQL Server 没有物理行标识，没有主键时只能在原值相同的几行里改 / 删其中一行。
+var _ sqldb.RowEditor = dialect{}
+
+func (dialect) InsertRowSQL(tableRef, columns, values string, identity bool) string {
+	if columns == "" {
+		return fmt.Sprintf("INSERT INTO %s DEFAULT VALUES;", tableRef)
+	}
+	insert := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);", tableRef, columns, values)
+	if !identity {
+		return insert
+	}
+	return fmt.Sprintf("SET IDENTITY_INSERT %[1]s ON; BEGIN TRY %[2]s END TRY "+
+		"BEGIN CATCH SET IDENTITY_INSERT %[1]s OFF; THROW; END CATCH; SET IDENTITY_INSERT %[1]s OFF;", tableRef, insert)
+}
+
+func (dialect) DeleteRowSQL(tableRef, where string) string {
+	return fmt.Sprintf("DELETE TOP (1) FROM %s WHERE %s;", tableRef, where)
+}
+
+func (dialect) ExactRow(string, string) (string, bool) { return "", false }

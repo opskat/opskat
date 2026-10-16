@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildDeleteStatement, buildSingleRowUpdate, quoteIdent, quoteTableRef } from "@/lib/tableSql";
+import { quoteIdent, quoteTableRef } from "@/lib/tableSql";
 
+// 表格编辑的 UPDATE / DELETE 改由驱动生成,其文本断言已迁到 internal/dbdriver/*/gridedit_test.go。
 describe("table SQL helpers", () => {
   it("escapes embedded quotes in identifiers", () => {
     expect(quoteIdent("name`with`backtick", "mysql")).toBe("`name``with``backtick`");
@@ -17,126 +18,5 @@ describe("table SQL helpers", () => {
     // 不能拼成两段式 [appdb].[users]——MSSQL 会把它当成 schema.object
     expect(quoteTableRef("appdb", "users", "mssql")).toBe("[users]");
     expect(quoteTableRef("appdb", "dbo.users", "mssql")).toBe("[dbo].[users]");
-  });
-
-  it("assembles single-row UPDATE per dialect (locks existing behavior + MSSQL TOP)", () => {
-    const args = { tableRef: "[dbo].[users]", setSql: "[name] = 'x'", whereSql: "[id] = '7'" };
-    // MSSQL：无 LIMIT，用 UPDATE TOP (1)
-    expect(buildSingleRowUpdate({ ...args, hasPrimaryKey: true, driver: "mssql" })).toBe(
-      "UPDATE TOP (1) [dbo].[users] SET [name] = 'x' WHERE [id] = '7';"
-    );
-    expect(buildSingleRowUpdate({ ...args, hasPrimaryKey: false, driver: "mssql" })).toBe(
-      "UPDATE TOP (1) [dbo].[users] SET [name] = 'x' WHERE [id] = '7';"
-    );
-    // 其它 driver 行为不变
-    const my = { tableRef: "`db`.`t`", setSql: "`n` = 'x'", whereSql: "`id` = '7'" };
-    expect(buildSingleRowUpdate({ ...my, hasPrimaryKey: true, driver: "mysql" })).toBe(
-      "UPDATE `db`.`t` SET `n` = 'x' WHERE `id` = '7' LIMIT 1;"
-    );
-    const pg = { tableRef: '"t"', setSql: "\"n\" = 'x'", whereSql: "\"id\" = '7'" };
-    expect(buildSingleRowUpdate({ ...pg, hasPrimaryKey: true, driver: "postgresql" })).toBe(
-      'UPDATE "t" SET "n" = \'x\' WHERE "id" = \'7\';'
-    );
-    expect(buildSingleRowUpdate({ ...pg, hasPrimaryKey: false, driver: "postgresql" })).toBe(
-      'UPDATE "t" SET "n" = \'x\' WHERE ctid = (SELECT ctid FROM "t" WHERE "id" = \'7\' LIMIT 1);'
-    );
-    const lite = { tableRef: '"main"."t"', setSql: "\"n\" = 'x'", whereSql: "\"id\" = '7'" };
-    expect(buildSingleRowUpdate({ ...lite, hasPrimaryKey: false, driver: "sqlite" })).toBe(
-      'UPDATE "main"."t" SET "n" = \'x\' WHERE rowid = (SELECT rowid FROM "main"."t" WHERE "id" = \'7\' LIMIT 1);'
-    );
-  });
-
-  it("builds MSSQL DELETE with TOP (1) instead of LIMIT", () => {
-    expect(
-      buildDeleteStatement({
-        database: "appdb",
-        table: "users",
-        columns: ["id", "name"],
-        row: { id: 7, name: "alice" },
-        primaryKeys: ["id"],
-        driver: "mssql",
-      }).sql
-    ).toBe("DELETE TOP (1) FROM [users] WHERE [id] = '7';");
-
-    expect(
-      buildDeleteStatement({
-        database: "appdb",
-        table: "users",
-        columns: ["id", "name"],
-        row: { id: 7, name: "alice" },
-        primaryKeys: [],
-        driver: "mssql",
-      }).sql
-    ).toBe("DELETE TOP (1) FROM [users] WHERE [id] = '7' AND [name] = 'alice';");
-  });
-
-  it("builds DELETE SQL using primary keys when available", () => {
-    const result = buildDeleteStatement({
-      database: "appdb",
-      table: "users",
-      columns: ["id", "name", "deleted_at"],
-      row: { id: 7, name: "alice", deleted_at: null },
-      primaryKeys: ["id"],
-      driver: "mysql",
-    });
-
-    expect(result.sql).toBe("DELETE FROM `appdb`.`users` WHERE `id` = '7' LIMIT 1;");
-    expect(result.usesPrimaryKey).toBe(true);
-  });
-
-  it("escapes postgresql table names in DELETE SQL", () => {
-    const result = buildDeleteStatement({
-      database: "appdb",
-      table: 'audit"logs',
-      columns: ['id"part', "name"],
-      row: { 'id"part': 7, name: "alice" },
-      primaryKeys: ['id"part'],
-      driver: "postgresql",
-    });
-
-    expect(result.sql).toBe(`DELETE FROM "audit""logs" WHERE "id""part" = '7';`);
-    expect(result.usesPrimaryKey).toBe(true);
-  });
-
-  it("falls back to all columns when deleting without a primary key", () => {
-    const result = buildDeleteStatement({
-      database: "appdb",
-      table: "users",
-      columns: ["id", "name", "deleted_at"],
-      row: { id: 7, name: "O'Reilly", deleted_at: null },
-      primaryKeys: [],
-      driver: "mysql",
-    });
-
-    expect(result.sql).toBe(
-      "DELETE FROM `appdb`.`users` WHERE `id` = '7' AND `name` = 'O''Reilly' AND `deleted_at` IS NULL LIMIT 1;"
-    );
-    expect(result.usesPrimaryKey).toBe(false);
-  });
-
-  it("builds SQLite DELETE SQL without unsupported LIMIT syntax", () => {
-    expect(
-      buildDeleteStatement({
-        database: "main",
-        table: "users",
-        columns: ["id", "name"],
-        row: { id: 7, name: "alice" },
-        primaryKeys: ["id"],
-        driver: "sqlite",
-      }).sql
-    ).toBe(`DELETE FROM "main"."users" WHERE "id" = '7';`);
-
-    expect(
-      buildDeleteStatement({
-        database: "main",
-        table: "users",
-        columns: ["id", "name"],
-        row: { id: 7, name: "alice" },
-        primaryKeys: [],
-        driver: "sqlite",
-      }).sql
-    ).toBe(
-      `DELETE FROM "main"."users" WHERE rowid = (SELECT rowid FROM "main"."users" WHERE "id" = '7' AND "name" = 'alice' LIMIT 1);`
-    );
   });
 });

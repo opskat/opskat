@@ -326,6 +326,7 @@ export function TableDataStatusBar({
               onClick={onAddRow}
               disabled={loading || submitting}
               title={t("query.addRow")}
+              data-testid="table-add-row"
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -335,6 +336,7 @@ export function TableDataStatusBar({
               className={actionTone}
               onClick={onDeleteRows}
               disabled={selectedRowCount === 0 || loading || submitting}
+              data-testid="table-delete-rows"
               title={
                 selectedRowCount > 1 ? t("query.deleteRecords", { count: selectedRowCount }) : t("query.deleteRecord")
               }
@@ -348,6 +350,7 @@ export function TableDataStatusBar({
               onClick={onApplyChanges}
               disabled={!hasPendingEdits || loading || submitting}
               title={t("query.applyChanges")}
+              data-testid="table-apply-changes"
             >
               <Check className="h-3.5 w-3.5" />
             </Button>

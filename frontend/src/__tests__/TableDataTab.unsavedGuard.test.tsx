@@ -6,7 +6,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { CountTableRows, ExecuteSQL, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
 import type { query_svc } from "../../wailsjs/go/models";
-import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
+import { BUILTIN_DRIVERS, mockGridEditStatements, provideDrivers } from "./dbDriverFixtures";
 
 // 插值参数也要能断言(条数、行号),t 把参数拼进返回的 key 里;引用保持稳定。
 vi.mock("react-i18next", () => {
@@ -93,6 +93,7 @@ async function openGuardFromNextPage(user: ReturnType<typeof userEvent.setup>) {
 describe("TableDataTab unsaved edits guard", () => {
   beforeEach(() => {
     provideDrivers(BUILTIN_DRIVERS);
+    mockGridEditStatements();
     setupStores();
     vi.mocked(OpenTable).mockReset();
     vi.mocked(QueryTableRows).mockReset();

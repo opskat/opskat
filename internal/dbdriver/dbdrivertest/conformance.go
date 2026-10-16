@@ -35,7 +35,8 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     的 id 与别名找到它。
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
-//     的浏览（ObjectSource），没有声明导出 / 复制为 SQL 时的行语句（RowStatements），以及
+//     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
+//     导出 / 复制为 SQL 时的行语句（RowStatements），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
@@ -112,7 +113,7 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 }
 
 // undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
-// ObjectSource、查看建表语句、行语句，以及整批执行里的关闭外键检查。
+// ObjectSource、查看建表语句、表格编辑与行语句，以及整批执行里的关闭外键检查。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -135,6 +136,14 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 		})
 		if !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("ExecuteBatch: the driver does not declare canDisableForeignKeyChecks, so disabling them must be refused with ErrUnsupported, got: %v", err))
+		}
+	}
+	if !desc.Supports(dbdriver.CapGridEdit) {
+		_, err := s.GridEditStatements(ctx, "", "x", dbdriver.GridEditRequest{
+			Columns: []string{"id"}, Inserts: []dbdriver.GridInsert{{Values: []dbdriver.ColumnValue{{Column: "id", Value: float64(1)}}}},
+		})
+		if !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("GridEditStatements: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapGridEdit, err))
 		}
 	}
 	if !desc.GeneratesRowStatements() {
@@ -388,6 +397,9 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 	if desc.GeneratesRowStatements() && opened != nil && opened.FirstPage != nil {
 		problems = append(problems, rowStatementProblems(ctx, s, database, table, opened)...)
 	}
+	if desc.Supports(dbdriver.CapGridEdit) && opened != nil && opened.FirstPage != nil {
+		problems = append(problems, gridEditProblems(ctx, s, database, table, opened)...)
+	}
 
 	problems = append(problems, batchProblems(ctx, desc, s, database, table)...)
 
@@ -411,16 +423,7 @@ func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, tab
 	var problems []string
 	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	first := opened.FirstPage
-	rows := make([]map[string]any, 0, len(first.Rows))
-	for _, row := range first.Rows {
-		record := make(map[string]any, len(first.Columns))
-		for i, column := range first.Columns {
-			if i < len(row) {
-				record[column] = row[i]
-			}
-		}
-		rows = append(rows, record)
-	}
+	rows := firstPageRecords(first)
 	for _, kind := range []dbdriver.RowStatementKind{dbdriver.RowInsert, dbdriver.RowUpdate} {
 		statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{
 			Kind: kind, Columns: first.Columns, Rows: rows, PrimaryKeys: opened.PrimaryKeys,
@@ -443,6 +446,75 @@ func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, tab
 	statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: first.Columns})
 	if err == nil && statements == nil {
 		report("RowStatements without rows: returned null; it must be an empty list")
+	}
+	return problems
+}
+
+// firstPageRecords 把一页的行转成按列名取值的记录，就像前端带回的表格行。
+func firstPageRecords(page *dbdriver.RowSet) []map[string]any {
+	records := make([]map[string]any, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		record := make(map[string]any, len(page.Columns))
+		for i, column := range page.Columns {
+			if i < len(row) {
+				record[column] = row[i]
+			}
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+// gridEditProblems 用打开表时的第一页检查表格编辑的语句：每行当作一个新增行（全部列）、一个改动
+// 的行（第一列设回原值）与一个删除的行，外加一个整行取默认值的新增行；三组各自与请求一一对应。
+// 没有任何行时三组都是空列表（序列化成 []，不是 null）。语句只生成，这里不执行。
+func gridEditProblems(ctx context.Context, s dbdriver.Session, database, table string, opened *dbdriver.OpenedTable) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	first := opened.FirstPage
+	req := dbdriver.GridEditRequest{Columns: first.Columns, PrimaryKeys: opened.PrimaryKeys, Inserts: []dbdriver.GridInsert{{}}}
+	for _, row := range firstPageRecords(first) {
+		values := make([]dbdriver.ColumnValue, 0, len(first.Columns))
+		for _, column := range first.Columns {
+			values = append(values, dbdriver.ColumnValue{Column: column, Value: row[column]})
+		}
+		req.Inserts = append(req.Inserts, dbdriver.GridInsert{Values: values})
+		req.Updates = append(req.Updates, dbdriver.GridUpdate{Row: row, Set: values[:1]})
+		req.Deletes = append(req.Deletes, row)
+	}
+
+	statements, err := s.GridEditStatements(ctx, database, table, req)
+	switch {
+	case errors.Is(err, dbdriver.ErrUnsupported):
+		report("GridEditStatements: declared %q but refused with ErrUnsupported: %v", dbdriver.CapGridEdit, err)
+	case err != nil:
+		report("GridEditStatements: %v", err)
+	case statements == nil:
+		report("GridEditStatements: returned no statements and no error")
+	default:
+		for _, group := range []struct {
+			name       string
+			statements []string
+			want       int
+		}{
+			{"inserts", statements.Inserts, len(req.Inserts)},
+			{"updates", statements.Updates, len(req.Updates)},
+			{"deletes", statements.Deletes, len(req.Deletes)},
+		} {
+			if len(group.statements) != group.want {
+				report("GridEditStatements: %d %s for %d row(s); there must be one per row", len(group.statements), group.name, group.want)
+			}
+			for i, statement := range group.statements {
+				if strings.TrimSpace(statement) == "" {
+					report("GridEditStatements: %s statement %d is empty", group.name, i)
+				}
+			}
+		}
+	}
+
+	empty, err := s.GridEditStatements(ctx, database, table, dbdriver.GridEditRequest{Columns: first.Columns})
+	if err == nil && (empty == nil || empty.Inserts == nil || empty.Updates == nil || empty.Deletes == nil) {
+		report("GridEditStatements without rows: returned null; each group must be an empty list")
 	}
 	return problems
 }
@@ -628,6 +700,9 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	// 细项声明只在声明了所属的功能时有意义。
 	if desc.CanDisableForeignKeyChecks && !desc.Supports(dbdriver.CapImport) {
 		report("canDisableForeignKeyChecks is declared without capability %q, the only feature that uses it", dbdriver.CapImport)
+	}
+	if desc.LocatesRowWithoutPrimaryKey && !desc.Supports(dbdriver.CapGridEdit) {
+		report("locatesRowWithoutPrimaryKey is declared without capability %q, the only feature that uses it", dbdriver.CapGridEdit)
 	}
 	return problems
 }

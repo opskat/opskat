@@ -5,7 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { OpenTable } from "../../wailsjs/go/query/Query";
-import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
+import { BUILTIN_DRIVERS, mockGridEditStatements, provideDrivers } from "./dbDriverFixtures";
 
 function setupStores() {
   useTabStore.setState({
@@ -46,6 +46,7 @@ function setupStores() {
 describe("TableDataTab — new row placeholder", () => {
   beforeEach(() => {
     provideDrivers(BUILTIN_DRIVERS);
+    mockGridEditStatements();
     vi.mocked(OpenTable).mockReset();
     setupStores();
   });

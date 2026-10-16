@@ -55,7 +55,8 @@
       "copy_sql",
       "read_only"
     ],
-    "canDisableForeignKeyChecks": true
+    "canDisableForeignKeyChecks": true,
+    "locatesRowWithoutPrimaryKey": false
   },
   {
     "id": "postgresql",
@@ -116,7 +117,8 @@
       "copy_sql",
       "read_only"
     ],
-    "canDisableForeignKeyChecks": false
+    "canDisableForeignKeyChecks": false,
+    "locatesRowWithoutPrimaryKey": true
   },
   {
     "id": "mssql",
@@ -177,7 +179,8 @@
       "copy_sql",
       "read_only"
     ],
-    "canDisableForeignKeyChecks": true
+    "canDisableForeignKeyChecks": true,
+    "locatesRowWithoutPrimaryKey": false
   },
   {
     "id": "sqlite",
@@ -226,6 +229,7 @@
       "copy_sql",
       "read_only"
     ],
-    "canDisableForeignKeyChecks": true
+    "canDisableForeignKeyChecks": true,
+    "locatesRowWithoutPrimaryKey": true
   }
 ]

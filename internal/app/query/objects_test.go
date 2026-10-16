@@ -188,6 +188,61 @@ func TestRowStatementsAreProducedByTheDriver(t *testing.T) {
 	assert.Empty(t, sessions[0].Statements())
 }
 
+// 表格编辑的语句由驱动在自己的会话上生成：前端发来的请求（JSON，键名与前端一致）原样到达驱动，
+// 驱动给的三组语句原样返回，没有任何语句被执行。
+func TestGridEditStatementsAreProducedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapGridEdit)
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	var request dbdriver.GridEditRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"columns":["id","name"],"primaryKeys":["id"],`+
+		`"inserts":[{"values":[{"column":"name","value":"dan"}]},{"values":[]}],`+
+		`"updates":[{"row":{"id":1,"name":"alice"},"set":[{"column":"name","value":null}]}],`+
+		`"deletes":[{"id":2,"name":"bob"}]}`), &request))
+	statements, err := q.GetGridEditStatements(1, "reporting", "events", request)
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.GridEditStatements{
+		Inserts: []string{"FAKE INSERT ROW 1 OF reporting.events", "FAKE INSERT ROW 2 OF reporting.events"},
+		Updates: []string{"FAKE UPDATE ROW 1 OF reporting.events"},
+		Deletes: []string{"FAKE DELETE ROW 1 OF reporting.events"},
+	}, statements)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{{Op: "grid_edit", Database: "reporting", Table: "events", GridEdit: &dbdriver.GridEditRequest{
+		Columns:     []string{"id", "name"},
+		PrimaryKeys: []string{"id"},
+		Inserts: []dbdriver.GridInsert{
+			{Values: []dbdriver.ColumnValue{{Column: "name", Value: "dan"}}},
+			{Values: []dbdriver.ColumnValue{}},
+		},
+		Updates: []dbdriver.GridUpdate{{
+			Row: map[string]any{"id": float64(1), "name": "alice"},
+			Set: []dbdriver.ColumnValue{{Column: "name", Value: nil}},
+		}},
+		Deletes: []map[string]any{{"id": float64(2), "name": "bob"}},
+	}}}, sessions[0].TableCalls())
+	assert.Empty(t, sessions[0].Statements())
+}
+
+// 没有声明表格编辑的驱动明确报「不支持」，且不执行任何语句。
+func TestGridEditStatementsRefusedWhenTheDriverDoesNotDeclareGridEdit(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.GetGridEditStatements(1, "", "events", dbdriver.GridEditRequest{
+		Columns: []string{"id"}, Deletes: []map[string]any{{"id": float64(1)}},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	for _, s := range fake.Sessions() {
+		assert.Empty(t, s.Statements())
+		assert.Empty(t, s.TableCalls())
+	}
+}
+
 // 导入的整批执行经资产的驱动会话：前端发来的请求（JSON，键名与前端一致）连同目标表到达驱动，
 // 复制模式放进一个事务；驱动的执行结果按语句种类计成新增 / 更新 / 删除。
 func TestExecuteTableImportRunsTheBatchOnTheDriverSession(t *testing.T) {
