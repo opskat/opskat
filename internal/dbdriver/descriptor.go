@@ -25,6 +25,13 @@ type Descriptor struct {
 	Form []FormTabFields `json:"form"`
 	// Capabilities 是驱动支持的功能；每一项单独声明，未声明即不支持。
 	Capabilities []Capability `json:"capabilities"`
+
+	// 以下是写功能内部的细项声明，各自只在声明了所属的功能时有意义。
+
+	// CanDisableForeignKeyChecks 声明导入（CapImport）能在执行期间关闭外键检查、结束后恢复
+	// （Session.ExecuteBatch 的 BatchRequest.DisableForeignKeyChecks）。没声明时导入不显示
+	// 「忽略外键」，会话以 ErrUnsupported 拒绝关闭外键检查。
+	CanDisableForeignKeyChecks bool `json:"canDisableForeignKeyChecks"`
 }
 
 // FormTab 是资产表单的一个 Tab。

@@ -147,6 +147,17 @@ type Session interface {
 	// 且不执行任何语句。
 	RowStatements(ctx context.Context, database, table string, req RowStatementsRequest) ([]string, error)
 
+	// ExecuteBatch 在会话的一条连接上按次序执行一批语句（导入的整批执行用它），见 BatchRequest。
+	// 空白语句跳过、不执行。语句本身的失败记在结果里，不作为 error 返回。
+	//
+	// 请求关闭外键检查时，驱动在执行前（事务之外）关闭、结束后恢复——语句失败、回滚、ctx 被取消
+	// 也要恢复；驱动没有声明 Descriptor.CanDisableForeignKeyChecks 时以 ErrUnsupported 拒绝，
+	// 且不执行任何语句。
+	//
+	// 批本身出错（拿不到连接，关闭 / 恢复外键检查、开始 / 提交 / 回滚事务失败，ctx 被取消）时
+	// 返回 error；此前已经执行过语句的，同时返回记着它们的结果。
+	ExecuteBatch(ctx context.Context, req BatchRequest) (*BatchResult, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }
@@ -172,6 +183,50 @@ type RowStatementsRequest struct {
 	// PrimaryKeys 是 UPDATE 定位那一行的列（值取自同一行）；为空时按全部 Columns 定位。
 	// INSERT 不用它。
 	PrimaryKeys []string `json:"primaryKeys"`
+}
+
+// BatchRequest 是 Session.ExecuteBatch 要在一条连接上执行的一批语句。
+type BatchRequest struct {
+	// Statements 按次序执行。
+	Statements []string `json:"statements"`
+	// Atomic 为真时整批在一个事务里执行：任一条失败即停止并回滚整批。
+	Atomic bool `json:"atomic"`
+	// ContinueOnError 只在不是 Atomic 时有意义：一条失败后继续执行后面的；为假时停在失败的那条。
+	ContinueOnError bool `json:"continueOnError"`
+	// DisableForeignKeyChecks 要求执行期间关闭外键检查（见 Session.ExecuteBatch）。
+	DisableForeignKeyChecks bool `json:"disableForeignKeyChecks"`
+	// Database / Table 是这批语句写入的表，含义同 Session 的其他表操作（table 用 ListTables 给出
+	// 的形式）。按表停用外键约束的驱动（SQL Server）作用于这张表，所以关闭外键检查时 Table 必填。
+	Database string `json:"database"`
+	Table    string `json:"table"`
+}
+
+// BatchResult 是一批语句的执行结果。
+type BatchResult struct {
+	// Executed 是执行过的语句，按执行的次序；跳过的空白语句、没轮到的语句不在其中。
+	Executed []BatchStatement `json:"executed"`
+	// RolledBack 为真表示 Atomic 的批里有语句失败、整批已经回滚：Executed 里成功的语句也没有留下。
+	RolledBack bool `json:"rolledBack"`
+}
+
+// BatchStatement 是批里一条执行过的语句。
+type BatchStatement struct {
+	// Index 是它在 BatchRequest.Statements 里的下标。
+	Index int `json:"index"`
+	// AffectedRows 是成功时影响的行数。
+	AffectedRows int64 `json:"affectedRows"`
+	// Error 是失败时数据库给出的错误；成功时为空串。
+	Error string `json:"error,omitempty"`
+}
+
+// Failed 报告批里是否有语句失败。
+func (r *BatchResult) Failed() bool {
+	for _, statement := range r.Executed {
+		if statement.Error != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Page 指定分页执行要取的那一页。

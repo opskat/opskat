@@ -54,9 +54,10 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 		"read-only switch without the capability": {func(d *dbdriver.Descriptor) {
 			d.Capabilities = []dbdriver.Capability{dbdriver.CapViews}
 		}, "read_only"},
-		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
-		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
-		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},
+		"foreign key toggle without import": {func(d *dbdriver.Descriptor) { d.CanDisableForeignKeyChecks = true }, "canDisableForeignKeyChecks"},
+		"nil capabilities":                  {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
+		"unknown capability":                {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
+		"duplicate capability":              {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := NewFake()
@@ -124,6 +125,23 @@ func TestConformanceChecksTableDDLAgainstTheDeclaration(t *testing.T) {
 	undeclared := NewFake()
 	problems = sessionProblems(undeclared.Desc, ddlSession{Session: open(t, undeclared), ddl: "CREATE TABLE x ()"})
 	assert.Contains(t, strings.Join(problems, "\n"), "TableDDL")
+}
+
+// 没声明能关闭外键检查的驱动，会话放行关闭外键检查时要点出来。
+func TestConformanceReportsAnUndeclaredForeignKeyToggleBeingServed(t *testing.T) {
+	fake := NewFake()
+	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}})
+	require.NoError(t, err)
+
+	problems := sessionProblems(fake.Desc, lenientBatchSession{session})
+	assert.Contains(t, strings.Join(problems, "\n"), "ExecuteBatch")
+}
+
+// lenientBatchSession 执行任何批，不管驱动声明了什么。
+type lenientBatchSession struct{ dbdriver.Session }
+
+func (lenientBatchSession) ExecuteBatch(context.Context, dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
+	return &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}, nil
 }
 
 // ddlSession 让 TableDDL 的回答由测试决定，不管驱动声明了什么。

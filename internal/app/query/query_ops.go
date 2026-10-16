@@ -2,7 +2,6 @@ package query
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -51,22 +49,6 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 	}
 	release := q.dbPanelCache.Hold(key)
 	return session, func() error { release(); return nil }, nil
-}
-
-// getOrDialPanelSQLDB 是一座过渡桥:还没迁到驱动上的面板操作(表数据导入)
-// 仍在共享代码里用 *sql.DB / *sql.Conn 自己拼 SQL,经它从会话里取出句柄。
-// 会话不在 database/sql 之上的驱动没有这个句柄,返回 dbdriver.ErrUnsupported。
-// 这些操作逐个迁成会话上的方法后删除本函数与 sqldb.DB,不要给它添新的调用方。
-func (q *Query) getOrDialPanelSQLDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func() error, error) {
-	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := sqldb.DB(session)
-	if err != nil {
-		return nil, nil, finishPanelDBOperation(err, cleanup)
-	}
-	return db, cleanup, nil
 }
 
 // panelDBCacheKey 返回面板缓存里这条会话的键。粒度由驱动声明：一条会话只连一个库的驱动
@@ -258,54 +240,31 @@ func (q *Query) ExecuteSQL(assetID int64, sqlText string, database string) (stri
 	return result, nil
 }
 
-// ExecuteTableImport executes a prepared table import batch on one database session.
-func (q *Query) ExecuteTableImport(
-	assetID int64,
-	database string,
-	request query_svc.TableImportBatchRequest,
-) (*query_svc.TableImportBatchResult, error) {
-	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
-	if err != nil {
-		return nil, fmt.Errorf("资产不存在: %w", err)
-	}
-	if !asset.IsDatabase() {
-		return nil, fmt.Errorf("资产不是数据库类型")
-	}
-	cfg, err := asset.GetDatabaseConfig()
-	if err != nil {
-		return nil, fmt.Errorf("获取数据库配置失败: %w", err)
-	}
-	if database != "" {
-		cfg.Database = database
-	}
-	password, err := credential_resolver.Default().ResolveDatabasePassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return nil, fmt.Errorf("解析凭据失败: %w", err)
-	}
+// tableImportTimeout 是导入整批执行的时限：整批在一次调用里执行完，不受资产的查询超时限制。
+const tableImportTimeout = 30 * time.Minute
 
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Minute)
-	defer cancel()
-
-	db, cleanup, err := q.getOrDialPanelSQLDB(ctx, asset, cfg, password)
+// ExecuteTableImport 由资产的驱动在会话的一条连接上执行导入的整批语句（复制模式、出错不继续、
+// 忽略外键时由前端调用），返回新增 / 更新 / 删除 / 错误计数。语句里有用户的数据，不进日志。
+func (q *Query) ExecuteTableImport(assetID int64, database string, request query_svc.TableImportBatchRequest) (*query_svc.TableImportBatchResult, error) {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.Int64("assetID", assetID), zap.String("database", database), zap.String("table", request.Table),
+		zap.String("mode", request.Mode), zap.Int("statements", len(request.Statements)),
+		zap.Bool("continueOnError", request.ContinueOnError), zap.Bool("disableForeignKeyChecks", request.DisableForeignKeyChecks))
+	log.Info("table import batch start")
+	start := time.Now()
+	var result *query_svc.TableImportBatchResult
+	err := q.withPanelSession(assetID, database, func(*asset_entity.DatabaseConfig) time.Duration { return tableImportTimeout },
+		func(ctx context.Context, session dbdriver.Session, database string) error {
+			var err error
+			result, err = query_svc.RunTableImportBatch(ctx, session, database, request)
+			return err
+		})
 	if err != nil {
-		return nil, fmt.Errorf("连接数据库失败: %w", err)
-	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		if cleanupErr := finishPanelDBOperation(nil, cleanup); cleanupErr != nil {
-			return nil, errors.Join(fmt.Errorf("打开数据库会话失败: %w", err), cleanupErr)
-		}
-		return nil, fmt.Errorf("打开数据库会话失败: %w", err)
-	}
-
-	result, err := query_svc.RunTableImportBatch(ctx, query_svc.NewSQLSession(conn), cfg.Driver, request)
-	if closeErr := conn.Close(); closeErr != nil && !isExpectedPanelCloseErr(closeErr) {
-		logger.Default().Warn("close db session failed", zap.Error(closeErr))
-		err = errors.Join(err, fmt.Errorf("关闭数据库会话失败: %w", closeErr))
-	}
-	if err := finishPanelDBOperation(err, cleanup); err != nil {
+		log.Error("table import batch failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
 		return nil, err
 	}
+	log.Info("table import batch done", zap.Duration("elapsed", time.Since(start)),
+		zap.Int("processed", result.Processed), zap.Int("errors", result.Error), zap.Bool("rolledBack", result.RolledBack))
 	return result, nil
 }
 

@@ -1,38 +1,28 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ImportTableDataDialog } from "@/components/query/ImportTableDataDialog";
 import * as App from "../../wailsjs/go/query/Query";
-
-type MockTableImportResult = {
-  processed: number;
-  added: number;
-  updated: number;
-  deleted: number;
-  error: number;
-  errors: Array<{ index: number; statement?: string; message: string }>;
-};
+import { dbdriver, query_svc } from "../../wailsjs/go/models";
+import { BUILTIN_DRIVERS, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
 
 describe("ImportTableDataDialog", () => {
   function mockExecuteTableImport(
-    result: MockTableImportResult = { processed: 1, added: 1, updated: 0, deleted: 0, error: 0, errors: [] }
+    result: Partial<query_svc.TableImportBatchResult> = { processed: 1, added: 1, updated: 0, deleted: 0, error: 0 }
   ) {
-    const executeTableImport = vi.fn().mockResolvedValue(result);
-    Object.assign(window, {
-      go: {
-        app: {
-          App: {
-            ExecuteTableImport: executeTableImport,
-          },
-        },
-      },
-    });
-    return executeTableImport;
+    vi.mocked(App.ExecuteTableImport).mockResolvedValue(
+      new query_svc.TableImportBatchResult({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, ...result })
+    );
+    return vi.mocked(App.ExecuteTableImport);
   }
+
+  beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
+  });
 
   afterEach(() => {
     vi.mocked(App.ExecuteSQL).mockReset();
-    delete (window as unknown as { go?: unknown }).go;
+    vi.mocked(App.ExecuteTableImport).mockReset();
   });
 
   async function walkCsvWizardToMode(user: ReturnType<typeof userEvent.setup>) {
@@ -299,21 +289,99 @@ describe("ImportTableDataDialog", () => {
     await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
 
     await waitFor(() => expect(App.ExecuteSQL).toHaveBeenCalledTimes(1));
-    expect(
-      (window as unknown as { go?: { app?: { App?: { ExecuteTableImport?: unknown } } } }).go?.app?.App
-        ?.ExecuteTableImport
-    ).toBeUndefined();
+    expect(App.ExecuteTableImport).not.toHaveBeenCalled();
   });
 
-  it("sends copy imports as one backend batch with foreign-key restore handled by the backend", async () => {
+  async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "query.importAdvancedSettings" }));
+    expect(await screen.findByText("query.importAdvancedTitle")).toBeInTheDocument();
+  }
+
+  async function closeAdvancedSettingsAndStart(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "query.importAdvancedOk" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
+  }
+
+  it("sends copy imports with ignored foreign keys as one batch through the Query binding", async () => {
     const user = userEvent.setup();
-    const executeTableImport = mockExecuteTableImport({
+    const executeTableImport = mockExecuteTableImport({ processed: 2, added: 1, deleted: 1 });
+    const onSuccess = vi.fn();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={onSuccess}
+      />
+    );
+
+    await walkCsvWizardToMode(user);
+    await user.click(screen.getByLabelText("query.importModeCopy"));
+    await openAdvancedSettings(user);
+    await user.click(await screen.findByLabelText("query.importAdvancedIgnoreForeignKey"));
+    await closeAdvancedSettingsAndStart(user);
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+    expect(executeTableImport).toHaveBeenCalledWith(1, "appdb", {
+      statements: ["DELETE FROM `appdb`.`users`;", "INSERT INTO `appdb`.`users` (`id`, `name`) VALUES ('1', 'Alice');"],
+      mode: "copy",
+      continueOnError: true,
+      disableForeignKeyChecks: true,
+      table: "users",
+    });
+    expect(App.ExecuteSQL).not.toHaveBeenCalled();
+    expect(screen.queryByText(/binding unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("sends imports that stop on the first error as one batch through the Query binding", async () => {
+    const user = userEvent.setup();
+    const executeTableImport = mockExecuteTableImport();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="dbo.users"
+        columns={["id", "name"]}
+        driver="mssql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardToMode(user);
+    await openAdvancedSettings(user);
+    await user.click(screen.getByLabelText("query.importAdvancedContinueOnError"));
+    await closeAdvancedSettingsAndStart(user);
+
+    await waitFor(() => expect(executeTableImport).toHaveBeenCalledTimes(1));
+    expect(executeTableImport).toHaveBeenCalledWith(
+      1,
+      "appdb",
+      expect.objectContaining({
+        mode: "append",
+        continueOnError: false,
+        disableForeignKeyChecks: false,
+        table: "dbo.users",
+      })
+    );
+    expect(App.ExecuteSQL).not.toHaveBeenCalled();
+  });
+
+  it("shows a rolled back batch and its failed statement in the import log", async () => {
+    const user = userEvent.setup();
+    mockExecuteTableImport({
       processed: 2,
-      added: 1,
-      updated: 0,
-      deleted: 1,
-      error: 0,
-      errors: [],
+      error: 1,
+      rolledBack: true,
+      errors: [new query_svc.TableImportBatchError({ index: 1, statement: "INSERT bad", message: "Duplicate entry" })],
     });
 
     render(
@@ -331,18 +399,73 @@ describe("ImportTableDataDialog", () => {
 
     await walkCsvWizardToMode(user);
     await user.click(screen.getByLabelText("query.importModeCopy"));
-    await user.click(screen.getByRole("button", { name: "query.importAdvancedSettings" }));
-    await user.click(screen.getByLabelText("query.importAdvancedIgnoreForeignKey"));
-    await user.click(screen.getByRole("button", { name: "query.importAdvancedOk" }));
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
     await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
 
-    expect(executeTableImport).toHaveBeenCalledWith(1, "appdb", {
-      statements: ["DELETE FROM `appdb`.`users`;", "INSERT INTO `appdb`.`users` (`id`, `name`) VALUES ('1', 'Alice');"],
-      mode: "copy",
-      continueOnError: true,
-      disableForeignKeyChecks: true,
-    });
-    expect(App.ExecuteSQL).not.toHaveBeenCalled();
+    expect(await screen.findByText("[ERR] Duplicate entry")).toBeInTheDocument();
+    expect(screen.getByText("[ERR] INSERT bad")).toBeInTheDocument();
+    expect(screen.getByText("[IMP] Processed: 2, Added: 0, Updated: 0, Deleted: 0, Errors: 1")).toBeInTheDocument();
+    expect(screen.getByText("[IMP] Rolled back")).toBeInTheDocument();
+  });
+
+  it("shows a failure of the batch itself in the import log", async () => {
+    const user = userEvent.setup();
+    vi.mocked(App.ExecuteTableImport).mockRejectedValue(new Error("begin transaction: connection reset"));
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardToMode(user);
+    await user.click(screen.getByLabelText("query.importModeCopy"));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
+
+    expect(await screen.findByText("[ERR] begin transaction: connection reset")).toBeInTheDocument();
+    expect(screen.getByText("[IMP] Finished with error")).toBeInTheDocument();
+  });
+
+  it("offers ignoring foreign keys only when the driver declares it can disable them", async () => {
+    const user = userEvent.setup();
+    provideDrivers([
+      ...BUILTIN_DRIVERS,
+      new dbdriver.Descriptor({ ...fakeDriverWith(["import"], "fk_toggle"), canDisableForeignKeyChecks: true }),
+      fakeDriverWith(["import"], "no_fk_toggle"),
+    ]);
+
+    for (const [driver, offered] of [
+      ["fk_toggle", true],
+      ["no_fk_toggle", false],
+      ["postgresql", false],
+    ] as const) {
+      const { unmount } = render(
+        <ImportTableDataDialog
+          open
+          onOpenChange={vi.fn()}
+          assetId={1}
+          database="appdb"
+          table="users"
+          columns={["id", "name"]}
+          driver={driver}
+          onSuccess={vi.fn()}
+        />
+      );
+      await walkCsvWizardToMode(user);
+      await openAdvancedSettings(user);
+      await waitFor(() =>
+        expect(screen.queryByLabelText("query.importAdvancedIgnoreForeignKey") !== null).toBe(offered)
+      );
+      expect(screen.getByLabelText("query.importAdvancedContinueOnError")).toBeInTheDocument();
+      unmount();
+    }
   });
 });

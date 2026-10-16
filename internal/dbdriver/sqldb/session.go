@@ -2,8 +2,7 @@
 // 取成结构化的值、连接怎么确认可用与关闭。方言相关的部分（分页与计数语句）由各驱动
 // 经 Dialect 给出。
 //
-// 它属于驱动一侧：只有驱动包引用它来实现 dbdriver.Session。共享代码不引用它——唯一的
-// 例外是 DB 这座过渡桥。
+// 它属于驱动一侧：只有驱动包引用它来实现 dbdriver.Session，共享代码不引用它。
 package sqldb
 
 import (
@@ -217,17 +216,4 @@ func ParseParams(params string) map[string]string {
 		}
 	}
 	return m
-}
-
-// DB 返回会话底下的 *sql.DB。
-//
-// 这是一座过渡桥，只为还没有迁到驱动上的操作（表数据导入）而留：它仍在共享代码里用
-// *sql.DB / *sql.Conn 自己拼 SQL。不在 database/sql 之上的会话没有这个句柄，返回
-// dbdriver.ErrUnsupported。导入迁完后删除本函数，不要给它添新的调用方。
-func DB(s dbdriver.Session) (*sql.DB, error) {
-	session, ok := s.(*Session)
-	if !ok {
-		return nil, fmt.Errorf("%w: this driver's session has no database/sql handle", dbdriver.ErrUnsupported)
-	}
-	return session.db, nil
 }

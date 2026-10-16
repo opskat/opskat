@@ -283,3 +283,115 @@ func TestFakeSessionGeneratesRowStatementsWithoutExecuting(t *testing.T) {
 	assert.Equal(t, []TableCall{{Op: "row_statements", Database: "app", Table: "users", RowStatements: &request}}, session.TableCalls())
 	assert.Empty(t, session.Statements())
 }
+
+// 整批执行：收到的请求原样记下，语句按次序执行（记进 Statements），空白语句跳过；StatementErrors
+// 里的语句失败，整批的那次停在它并报告回滚，出错继续的那次接着执行。
+func TestFakeSessionExecutesBatches(t *testing.T) {
+	fake := NewFake()
+	fake.StatementErrors = map[string]error{"BAD": errors.New("fakedb: rejected")}
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	ctx := context.Background()
+
+	atomic := dbdriver.BatchRequest{Statements: []string{"A", " ", "BAD", "C"}, Atomic: true, ContinueOnError: true, Database: "app", Table: "users"}
+	result, err := session.ExecuteBatch(ctx, atomic)
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.BatchResult{
+		Executed:   []dbdriver.BatchStatement{{Index: 0, AffectedRows: 3}, {Index: 2, Error: "fakedb: rejected"}},
+		RolledBack: true,
+	}, result)
+
+	continuing := dbdriver.BatchRequest{Statements: []string{"BAD", "C"}, ContinueOnError: true, Database: "app", Table: "users"}
+	result, err = session.ExecuteBatch(ctx, continuing)
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.BatchResult{
+		Executed: []dbdriver.BatchStatement{{Index: 0, Error: "fakedb: rejected"}, {Index: 1, AffectedRows: 3}},
+	}, result)
+
+	assert.Equal(t, []TableCall{
+		{Op: "batch", Database: "app", Table: "users", Batch: &atomic},
+		{Op: "batch", Database: "app", Table: "users", Batch: &continuing},
+	}, session.TableCalls())
+	assert.Equal(t, []string{"A", "BAD", "BAD", "C"}, session.Statements())
+}
+
+// 没声明能关闭外键检查的假驱动拒绝关闭它，且什么也不记、不执行；声明了就照常执行。
+func TestFakeSessionRefusesUndeclaredForeignKeyToggle(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	request := dbdriver.BatchRequest{Statements: []string{"A"}, DisableForeignKeyChecks: true, Table: "users"}
+
+	_, err := session.ExecuteBatch(context.Background(), request)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Empty(t, session.TableCalls())
+	assert.Empty(t, session.Statements())
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
+	fake.Desc.CanDisableForeignKeyChecks = true
+	_, err = session.ExecuteBatch(context.Background(), request)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"A"}, session.Statements())
+}
+
+// brokenBatch 让整批执行的回答由测试改坏。
+type brokenBatch struct {
+	dbdriver.Session
+	batch func(dbdriver.BatchRequest, *dbdriver.BatchResult, error) (*dbdriver.BatchResult, error)
+}
+
+func (b brokenBatch) ExecuteBatch(ctx context.Context, req dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
+	result, err := b.Session.ExecuteBatch(ctx, req)
+	return b.batch(req, result, err)
+}
+
+// 整批执行的一致性检查也得能失败：声明了关闭外键检查却拒绝、整批失败却没回滚、失败没报告、
+// 出错继续却停下。
+func TestTableConformanceReportsBrokenBatches(t *testing.T) {
+	for name, tt := range map[string]struct {
+		batch func(dbdriver.BatchRequest, *dbdriver.BatchResult, error) (*dbdriver.BatchResult, error)
+		want  string
+	}{
+		"declared foreign key toggle refused": {func(req dbdriver.BatchRequest, r *dbdriver.BatchResult, err error) (*dbdriver.BatchResult, error) {
+			if req.DisableForeignKeyChecks {
+				return nil, fmt.Errorf("%w: no", dbdriver.ErrUnsupported)
+			}
+			return r, err
+		}, "ExecuteBatch"},
+		"atomic batch not rolled back": {func(_ dbdriver.BatchRequest, r *dbdriver.BatchResult, err error) (*dbdriver.BatchResult, error) {
+			if r != nil {
+				r.RolledBack = false
+			}
+			return r, err
+		}, "roll"},
+		"failure not reported": {func(_ dbdriver.BatchRequest, r *dbdriver.BatchResult, err error) (*dbdriver.BatchResult, error) {
+			if r != nil {
+				for i := range r.Executed {
+					r.Executed[i].Error = ""
+				}
+			}
+			return r, err
+		}, "fail"},
+		"continue on error stops": {func(req dbdriver.BatchRequest, r *dbdriver.BatchResult, err error) (*dbdriver.BatchResult, error) {
+			if r != nil && !req.Atomic && len(r.Executed) > 1 {
+				r.Executed = r.Executed[:1]
+			}
+			return r, err
+		}, "continue"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := NewFake()
+			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
+			fake.Desc.CanDisableForeignKeyChecks = true
+			session := brokenBatch{Session: openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}), batch: tt.batch}
+			problems := tableProblems(fake.Desc, session, "app", "users")
+			require.NotEmpty(t, problems)
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+}
+
+func TestFakeDriverWithForeignKeyTogglePassesTableConformance(t *testing.T) {
+	fake := NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
+	fake.Desc.CanDisableForeignKeyChecks = true
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+}

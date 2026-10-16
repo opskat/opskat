@@ -34,6 +34,7 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
 	},
+	CanDisableForeignKeyChecks: true,
 }
 
 type driver struct{}

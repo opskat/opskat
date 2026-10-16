@@ -2,43 +2,10 @@ package query_svc
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/dbdriver"
 )
-
-// SQLTx is the small transaction surface needed by table imports.
-type SQLTx interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	Commit() error
-	Rollback() error
-}
-
-// SQLSession is a single database session. MySQL FOREIGN_KEY_CHECKS is session-scoped,
-// so imports that toggle it must use one SQL session from start to restore.
-type SQLSession interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (SQLTx, error)
-}
-
-type sqlConnSession struct {
-	conn *sql.Conn
-}
-
-// NewSQLSession adapts database/sql's Conn to the import service interface.
-func NewSQLSession(conn *sql.Conn) SQLSession {
-	return sqlConnSession{conn: conn}
-}
-
-func (s sqlConnSession) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return s.conn.ExecContext(ctx, query, args...)
-}
-
-func (s sqlConnSession) BeginTx(ctx context.Context, opts *sql.TxOptions) (SQLTx, error) {
-	return s.conn.BeginTx(ctx, opts)
-}
 
 // TableImportBatchRequest describes a prepared table import batch.
 type TableImportBatchRequest struct {
@@ -46,10 +13,12 @@ type TableImportBatchRequest struct {
 	Mode                    string   `json:"mode"`
 	ContinueOnError         bool     `json:"continueOnError"`
 	DisableForeignKeyChecks bool     `json:"disableForeignKeyChecks"`
-	Tables                  []string `json:"tables,omitempty"` // 仅 MSSQL 需要,已 Quote 过的表引用
+	// Table 是导入的目标表（ListTables 给出的形式）：按表停用外键约束的驱动作用于它。
+	Table string `json:"table"`
 }
 
-// TableImportBatchError captures a failed statement without leaking connection setup failures into row logs.
+// TableImportBatchError captures a failed statement; Index is -1 for a failure of the batch itself
+// (such as restoring foreign key checks) reported alongside failed statements.
 type TableImportBatchError struct {
 	Index     int    `json:"index"`
 	Statement string `json:"statement"`
@@ -67,160 +36,44 @@ type TableImportBatchResult struct {
 	Errors     []TableImportBatchError `json:"errors"`
 }
 
-// RunTableImportBatch executes an import batch on one database session.
-func RunTableImportBatch(
-	ctx context.Context,
-	session SQLSession,
-	driver asset_entity.DatabaseDriver,
-	request TableImportBatchRequest,
-) (result *TableImportBatchResult, err error) {
-	result = &TableImportBatchResult{}
-	if session == nil {
-		return nil, fmt.Errorf("SQL session is nil")
+// RunTableImportBatch 让驱动在会话的一条连接上执行导入的整批语句，再把结果计成导入摘要。
+// 复制模式与出错不继续的导入放进一个事务。database 是目标表所在的库。
+//
+// 批本身出错时：已经有语句失败的，它作为一条不对应语句的错误与那些失败一起报告；没有语句失败
+// 的，它就是导入的错误。
+func RunTableImportBatch(ctx context.Context, session dbdriver.Session, database string, request TableImportBatchRequest) (*TableImportBatchResult, error) {
+	batch, err := session.ExecuteBatch(ctx, dbdriver.BatchRequest{
+		Statements:              request.Statements,
+		Atomic:                  request.Mode == "copy" || !request.ContinueOnError,
+		ContinueOnError:         request.ContinueOnError,
+		DisableForeignKeyChecks: request.DisableForeignKeyChecks,
+		Database:                database,
+		Table:                   request.Table,
+	})
+	if err != nil && (batch == nil || !batch.Failed()) {
+		return nil, err
 	}
 
-	var restoreFK func() error
-	if request.DisableForeignKeyChecks {
-		var fkErr error
-		restoreFK, fkErr = disableForeignKeyChecks(ctx, session, driver, request)
-		if fkErr != nil {
-			return nil, fmt.Errorf("disable foreign key checks: %w", fkErr)
-		}
-		if restoreFK != nil {
-			defer func() {
-				if restoreErr := restoreFK(); restoreErr != nil {
-					if err == nil && len(result.Errors) == 0 {
-						err = fmt.Errorf("restore foreign key checks: %w", restoreErr)
-						return
-					}
-					result.Error++
-					result.Errors = append(result.Errors, TableImportBatchError{
-						Index:   -1,
-						Message: fmt.Sprintf("restore foreign key checks: %v", restoreErr),
-					})
-				}
-			}()
-		}
-	}
-
-	atomic := shouldRunAtomicImport(request)
-	var execer interface {
-		ExecContext(context.Context, string, ...any) (sql.Result, error)
-	} = session
-	var tx SQLTx
-	if atomic {
-		tx, err = session.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("begin import transaction: %w", err)
-		}
-		execer = tx
-	}
-
-	committed := false
-	defer func() {
-		if tx == nil || committed {
-			return
-		}
-		if rbErr := tx.Rollback(); rbErr != nil && err == nil {
-			err = fmt.Errorf("rollback import transaction: %w", rbErr)
-		}
-	}()
-
-	for index, statement := range request.Statements {
-		statement = strings.TrimSpace(statement)
-		if statement == "" {
+	result := &TableImportBatchResult{Processed: len(batch.Executed), RolledBack: batch.RolledBack}
+	for _, executed := range batch.Executed {
+		statement := strings.TrimSpace(request.Statements[executed.Index])
+		if executed.Error != "" {
+			result.Errors = append(result.Errors, TableImportBatchError{Index: executed.Index, Statement: statement, Message: executed.Error})
 			continue
 		}
-		result.Processed++
-
-		execResult, execErr := execer.ExecContext(ctx, statement)
-		if execErr != nil {
-			result.Error++
-			result.Errors = append(result.Errors, TableImportBatchError{
-				Index:     index,
-				Statement: statement,
-				Message:   execErr.Error(),
-			})
-			if atomic || !request.ContinueOnError {
-				break
-			}
-			continue
+		if !batch.RolledBack {
+			addAffectedRows(result, statement, request.Mode, executed.AffectedRows)
 		}
-
-		affected, rowsErr := execResult.RowsAffected()
-		if rowsErr != nil {
-			affected = 0
-		}
-		addAffectedRows(result, statement, request.Mode, affected)
 	}
-
-	if len(result.Errors) > 0 {
-		if atomic {
-			result.Added = 0
-			result.Updated = 0
-			result.Deleted = 0
-			result.RolledBack = true
-		}
-		return result, nil
+	if err != nil {
+		result.Errors = append(result.Errors, TableImportBatchError{Index: -1, Message: err.Error()})
 	}
-
-	if tx != nil {
-		if err = tx.Commit(); err != nil {
-			return nil, fmt.Errorf("commit import transaction: %w", err)
-		}
-		committed = true
-	}
+	result.Error = len(result.Errors)
 	return result, nil
 }
 
-func disableForeignKeyChecks(
-	ctx context.Context,
-	session SQLSession,
-	driver asset_entity.DatabaseDriver,
-	req TableImportBatchRequest,
-) (restore func() error, err error) {
-	switch driver {
-	case asset_entity.DriverMySQL:
-		if _, e := session.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); e != nil {
-			return nil, e
-		}
-		return func() error {
-			_, e := session.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1")
-			return e
-		}, nil
-	case asset_entity.DriverSQLite:
-		if _, e := session.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); e != nil {
-			return nil, e
-		}
-		return func() error {
-			_, e := session.ExecContext(ctx, "PRAGMA foreign_keys = ON")
-			return e
-		}, nil
-	case asset_entity.DriverMSSQL:
-		for _, t := range req.Tables {
-			if _, e := session.ExecContext(ctx, "ALTER TABLE "+t+" NOCHECK CONSTRAINT ALL"); e != nil {
-				return nil, e
-			}
-		}
-		return func() error {
-			for _, t := range req.Tables {
-				if _, e := session.ExecContext(ctx, "ALTER TABLE "+t+" WITH CHECK CHECK CONSTRAINT ALL"); e != nil {
-					return e
-				}
-			}
-			return nil
-		}, nil
-	}
-	return nil, nil // PG 与未知 driver: 不支持,返回 nil restore
-}
-
-func shouldRunAtomicImport(request TableImportBatchRequest) bool {
-	return request.Mode == "copy" || !request.ContinueOnError
-}
-
 func addAffectedRows(result *TableImportBatchResult, statement string, mode string, affected int64) {
-	kind := leadingSQLKeyword(statement)
-	switch kind {
+	switch leadingSQLKeyword(statement) {
 	case "DELETE":
 		result.Deleted += affected
 	case "UPDATE":
@@ -240,10 +93,6 @@ func addAffectedRows(result *TableImportBatchResult, statement string, mode stri
 }
 
 func leadingSQLKeyword(statement string) string {
-	statement = strings.TrimSpace(statement)
-	if statement == "" {
-		return ""
-	}
 	fields := strings.Fields(statement)
 	if len(fields) == 0 {
 		return ""

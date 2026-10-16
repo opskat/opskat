@@ -12,13 +12,6 @@ import (
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 )
 
-// driverBranchExempt 是写路径尚未迁移到驱动的共享 Go 文件（规格：写路径本轮保留在原处，
-// 下一轮迁移）。只减不增：迁完的文件从这里删掉；新代码不得按驱动名分支，走 dbdriver 注册表。
-var driverBranchExempt = map[string]string{
-	"internal/service/query_svc/table_import.go": "disableForeignKeyChecks 按驱动发不同的关闭外键检查语句；" +
-		"ExecuteTableImport 属写路径，本轮仍在过渡桥上",
-}
-
 const driverBranchMessage = "共享代码不得按驱动名分支：驱动差异放进 internal/dbdriver 里该驱动的实现，经注册表调用" +
 	"（新增驱动见 docs/references/adding-a-database-driver.md）"
 
@@ -42,7 +35,6 @@ func repoDriverBranchRule() driverBranchRule {
 		driverDir: "internal/dbdriver/",
 		consts:    driverConstNames,
 		literals:  registeredDriverLiterals(),
-		exempt:    driverBranchExempt,
 		message:   driverBranchMessage,
 	}
 }
@@ -65,35 +57,17 @@ func TestNoDriverBranchInSharedCode(t *testing.T) {
 	}
 }
 
-// TestDriverBranchExemptionsStillNeeded 豁免名单里的文件必须仍然存在且仍有分支：
-// 迁移完成后留着条目就是死豁免，会给以后的违规让路。
-func TestDriverBranchExemptionsStillNeeded(t *testing.T) {
-	root := repoRoot(t)
-	rule := repoDriverBranchRule()
-	rule.exempt = nil
-	for rel := range driverBranchExempt {
-		if vs := checkDriverBranch(parseRepoFile(t, root, rel), rule); len(vs) == 0 {
-			t.Errorf("%s 已不再按驱动名分支，请从 driverBranchExempt 删除", rel)
-		}
-	}
-}
-
 // driverBranchRule 禁止共享 Go 代码按数据库驱动名分支：驱动差异属于 internal/dbdriver 里
 // 各驱动自己的实现，经注册表调用。
 type driverBranchRule struct {
-	driverDir string            // 驱动包所在目录，里面的文件不检查
-	consts    map[string]bool   // 驱动 id 常量的名字（asset_entity.DriverMySQL…）
-	literals  map[string]bool   // 驱动 id 与别名的字符串取值，取自注册表
-	exempt    map[string]string // 仓库相对路径 -> 豁免原因；只减不增
+	driverDir string          // 驱动包所在目录，里面的文件不检查
+	consts    map[string]bool // 驱动 id 常量的名字（asset_entity.DriverMySQL…）
+	literals  map[string]bool // 驱动 id 与别名的字符串取值，取自注册表
 	message   string
 }
 
 func (r driverBranchRule) applies(path string) bool {
-	if strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, r.driverDir) {
-		return false
-	}
-	_, exempt := r.exempt[path]
-	return !exempt
+	return !strings.HasSuffix(path, "_test.go") && !strings.HasPrefix(path, r.driverDir)
 }
 
 // lastName 返回标识符或选择器的末段名字（c.Driver -> Driver）。
@@ -175,7 +149,6 @@ func TestCheckDriverBranch(t *testing.T) {
 		driverDir: "internal/dbdriver/",
 		consts:    map[string]bool{"DriverMySQL": true, "DriverPostgreSQL": true, "DriverMSSQL": true, "DriverSQLite": true},
 		literals:  map[string]bool{"mysql": true, "postgresql": true, "postgres": true, "mssql": true, "sqlserver": true, "sqlite": true, "sqlite3": true},
-		exempt:    map[string]string{"internal/service/legacy/import.go": "写路径尚未迁移"},
 		message:   "按驱动名分支",
 	}
 	count := func(path, src string) int {
@@ -224,11 +197,6 @@ func f(c *C) int {
 
 	t.Run("驱动包内不报", func(t *testing.T) {
 		if n := count("internal/dbdriver/mysql/x.go", violating["== 驱动常量"]); n != 0 {
-			t.Fatalf("want 0, got %d", n)
-		}
-	})
-	t.Run("豁免文件不报", func(t *testing.T) {
-		if n := count("internal/service/legacy/import.go", violating["== 驱动常量"]); n != 0 {
 			t.Fatalf("want 0, got %d", n)
 		}
 	})

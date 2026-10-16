@@ -28,7 +28,8 @@ import {
 import { FilePlus2, Link, Loader2, Play, Table2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { ExecuteSQL, ParseXlsx } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, ExecuteTableImport, ParseXlsx } from "../../../wailsjs/go/query/Query";
+import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import {
   buildImportInsertSql,
   detectDelimiter,
@@ -72,32 +73,6 @@ type ImportProgress = {
   error: number;
   seconds: number;
 };
-type TableImportBatchRequest = {
-  statements: string[];
-  mode: ImportMode;
-  continueOnError: boolean;
-  disableForeignKeyChecks: boolean;
-};
-type TableImportBatchError = {
-  index: number;
-  statement?: string;
-  message: string;
-};
-type TableImportBatchResult = {
-  processed: number;
-  added: number;
-  updated: number;
-  deleted: number;
-  error: number;
-  rolledBack?: boolean;
-  errors?: TableImportBatchError[];
-};
-type ExecuteTableImportFn = (
-  assetId: number,
-  database: string,
-  request: TableImportBatchRequest
-) => Promise<TableImportBatchResult>;
-
 const steps: WizardStep[] = ["type", "source", "delimiter", "options", "mapping", "mode", "summary"];
 const importModes: ImportMode[] = ["append", "update", "append-update", "append-skip", "delete", "copy"];
 const importFileRules: Record<ImportDataFormat, { extensions: string[]; mimes: string[] }> = {
@@ -194,19 +169,6 @@ function importNeedsBackendBatch(
   return mode === "copy" || !continueOnError || disableForeignKeyChecks;
 }
 
-async function executeTableImport(
-  assetId: number,
-  database: string,
-  request: TableImportBatchRequest
-): Promise<TableImportBatchResult> {
-  const wailsImport = (window as unknown as { go?: { app?: { App?: { ExecuteTableImport?: ExecuteTableImportFn } } } })
-    .go?.app?.App?.ExecuteTableImport;
-  if (typeof wailsImport !== "function") {
-    throw new Error("ExecuteTableImport binding unavailable");
-  }
-  return wailsImport(assetId, database, request);
-}
-
 export function ImportTableDataDialog({
   open,
   onOpenChange,
@@ -223,6 +185,12 @@ export function ImportTableDataDialog({
   onSuccess,
 }: ImportTableDataDialogProps) {
   const { t } = useTranslation();
+  const driversState = useDatabaseDrivers();
+  // 「忽略外键」只在驱动声明了能关闭外键检查时提供（规格决定 6）。
+  const canDisableForeignKeyChecks =
+    driversState.status === "ready" &&
+    !!driver &&
+    !!findDatabaseDriver(driversState.drivers, driver)?.canDisableForeignKeyChecks;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [format, setFormat] = useState<ImportDataFormat>("text");
@@ -498,15 +466,16 @@ export function ImportTableDataDialog({
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
 
     try {
-      const disableForeignKeyChecks = ignoreForeignKeyConstraint && driver !== "postgresql";
+      const disableForeignKeyChecks = ignoreForeignKeyConstraint && canDisableForeignKeyChecks;
       if (isSubmitCancelled?.(requestId)) return;
 
       if (importNeedsBackendBatch(importMode, continueOnError, disableForeignKeyChecks)) {
-        const result = await executeTableImport(assetId, database, {
+        const result = await ExecuteTableImport(assetId, database, {
           statements,
           mode: importMode,
           continueOnError,
           disableForeignKeyChecks,
+          table,
         });
         if (isSubmitCancelled?.(requestId)) return;
 
@@ -609,7 +578,7 @@ export function ImportTableDataDialog({
     database,
     format,
     importMode,
-    driver,
+    canDisableForeignKeyChecks,
     ignoreForeignKeyConstraint,
     continueOnError,
     isSubmitCancelled,
@@ -1189,14 +1158,16 @@ export function ImportTableDataDialog({
               />
               {t("query.importAdvancedEmptyStringAsNull")}
             </label>
-            <label className="flex w-fit items-center gap-3">
-              <input
-                type="checkbox"
-                checked={ignoreForeignKeyConstraint}
-                onChange={(event) => setIgnoreForeignKeyConstraint(event.target.checked)}
-              />
-              {t("query.importAdvancedIgnoreForeignKey")}
-            </label>
+            {canDisableForeignKeyChecks && (
+              <label className="flex w-fit items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={ignoreForeignKeyConstraint}
+                  onChange={(event) => setIgnoreForeignKeyConstraint(event.target.checked)}
+                />
+                {t("query.importAdvancedIgnoreForeignKey")}
+              </label>
+            )}
             <label className="flex w-fit items-center gap-3">
               <input
                 type="checkbox"

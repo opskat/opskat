@@ -2,175 +2,119 @@ package query_svc
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"strings"
 	"testing"
 
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/dbdriver"
 )
 
-type fakeSQLResult int64
-
-func (r fakeSQLResult) LastInsertId() (int64, error) { return 0, nil }
-func (r fakeSQLResult) RowsAffected() (int64, error) { return int64(r), nil }
-
-type fakeSQLSession struct {
-	operations []string
-	failOn     string
-	tx         *fakeSQLTx
+// batchSession 是只会整批执行的会话：记下收到的请求，返回给定的结果。
+type batchSession struct {
+	dbdriver.Session
+	request dbdriver.BatchRequest
+	result  *dbdriver.BatchResult
+	err     error
 }
 
-func (s *fakeSQLSession) ExecContext(_ context.Context, query string, _ ...any) (sql.Result, error) {
-	s.operations = append(s.operations, "conn:"+query)
-	if s.failOn != "" && strings.Contains(query, s.failOn) {
-		return nil, errors.New("statement failed")
+func (s *batchSession) ExecuteBatch(_ context.Context, req dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
+	s.request = req
+	return s.result, s.err
+}
+
+// 复制模式与不继续的导入放进一个事务；外键开关与目标表原样交给驱动。
+func TestRunTableImportBatchAsksTheDriverForOneTransactionWhenNeeded(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		mode            string
+		continueOnError bool
+		atomic          bool
+	}{
+		{"copy", "copy", true, true},
+		{"stop on error", "append", false, true},
+		{"continue on error", "append", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := &batchSession{result: &dbdriver.BatchResult{}}
+			_, err := RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{
+				Statements: []string{"INSERT INTO t VALUES (1);"}, Mode: tc.mode, ContinueOnError: tc.continueOnError,
+				DisableForeignKeyChecks: true, Table: "dbo.users",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, dbdriver.BatchRequest{
+				Statements: []string{"INSERT INTO t VALUES (1);"}, Atomic: tc.atomic, ContinueOnError: tc.continueOnError,
+				DisableForeignKeyChecks: true, Database: "appdb", Table: "dbo.users",
+			}, session.request)
+		})
 	}
-	return fakeSQLResult(1), nil
 }
 
-func (s *fakeSQLSession) BeginTx(_ context.Context, _ *sql.TxOptions) (SQLTx, error) {
-	s.operations = append(s.operations, "begin")
-	s.tx = &fakeSQLTx{session: s}
-	return s.tx, nil
-}
-
-type fakeSQLTx struct {
-	session *fakeSQLSession
-}
-
-func (tx *fakeSQLTx) ExecContext(_ context.Context, query string, _ ...any) (sql.Result, error) {
-	tx.session.operations = append(tx.session.operations, "tx:"+query)
-	if tx.session.failOn != "" && strings.Contains(query, tx.session.failOn) {
-		return nil, errors.New("statement failed")
+// 新增 / 更新 / 删除按语句的首个关键字计数，认不出的按导入模式归类；失败的语句带着语句原文。
+func TestRunTableImportBatchCountsRowsByStatementKind(t *testing.T) {
+	statements := []string{
+		"DELETE FROM t;", "UPDATE t SET a = 1;", "INSERT INTO t VALUES (1);", "REPLACE INTO t VALUES (2);",
+		"MERGE INTO t USING s ON 1 = 1;", "INSERT INTO t VALUES ('bad');",
 	}
-	return fakeSQLResult(1), nil
-}
+	session := &batchSession{result: &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{
+		{Index: 0, AffectedRows: 4}, {Index: 1, AffectedRows: 3}, {Index: 2, AffectedRows: 1},
+		{Index: 3, AffectedRows: 2}, {Index: 4, AffectedRows: 5}, {Index: 5, Error: "bad value"},
+	}}}
 
-func (tx *fakeSQLTx) Commit() error {
-	tx.session.operations = append(tx.session.operations, "commit")
-	return nil
-}
-
-func (tx *fakeSQLTx) Rollback() error {
-	tx.session.operations = append(tx.session.operations, "rollback")
-	return nil
-}
-
-func TestRunTableImportBatchRollsBackCopyAndRestoresForeignKeyChecks(t *testing.T) {
-	session := &fakeSQLSession{failOn: "INSERT"}
-	result, err := RunTableImportBatch(context.Background(), session, asset_entity.DriverMySQL, TableImportBatchRequest{
-		Mode:                    "copy",
-		ContinueOnError:         true,
-		DisableForeignKeyChecks: true,
-		Statements: []string{
-			"DELETE FROM `appdb`.`users`;",
-			"INSERT INTO `appdb`.`users` (`id`) VALUES (1);",
-		},
+	result, err := RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{
+		Statements: statements, Mode: "update", ContinueOnError: true,
 	})
-	if err != nil {
-		t.Fatalf("RunTableImportBatch() error = %v", err)
-	}
-
-	if !result.RolledBack {
-		t.Fatalf("expected copy import to roll back on statement failure")
-	}
-	if result.Error != 1 || result.Processed != 2 {
-		t.Fatalf("unexpected result counters: %+v", result)
-	}
-	if result.Added != 0 || result.Updated != 0 || result.Deleted != 0 {
-		t.Fatalf("rolled back import should not report persisted row counts: %+v", result)
-	}
-	wantOps := []string{
-		"conn:SET FOREIGN_KEY_CHECKS = 0",
-		"begin",
-		"tx:DELETE FROM `appdb`.`users`;",
-		"tx:INSERT INTO `appdb`.`users` (`id`) VALUES (1);",
-		"rollback",
-		"conn:SET FOREIGN_KEY_CHECKS = 1",
-	}
-	if strings.Join(session.operations, "\n") != strings.Join(wantOps, "\n") {
-		t.Fatalf("unexpected operation order:\n got: %v\nwant: %v", session.operations, wantOps)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, &TableImportBatchResult{
+		Processed: 6, Added: 3, Updated: 8, Deleted: 4, Error: 1,
+		Errors: []TableImportBatchError{{Index: 5, Statement: "INSERT INTO t VALUES ('bad');", Message: "bad value"}},
+	}, result)
 }
 
-func TestRunTableImportBatchContinuesNonAtomicImportAndRestoresForeignKeyChecks(t *testing.T) {
-	session := &fakeSQLSession{failOn: "bad"}
-	result, err := RunTableImportBatch(context.Background(), session, asset_entity.DriverMySQL, TableImportBatchRequest{
-		Mode:                    "append",
-		ContinueOnError:         true,
-		DisableForeignKeyChecks: true,
-		Statements: []string{
-			"INSERT INTO `appdb`.`users` (`id`) VALUES ('bad');",
-			"INSERT INTO `appdb`.`users` (`id`) VALUES (2);",
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunTableImportBatch() error = %v", err)
-	}
+// 回滚了的整批不报告留下的行。
+func TestRunTableImportBatchReportsNoRowsForARolledBackBatch(t *testing.T) {
+	session := &batchSession{result: &dbdriver.BatchResult{
+		Executed:   []dbdriver.BatchStatement{{Index: 0, AffectedRows: 3}, {Index: 1, Error: "duplicate"}},
+		RolledBack: true,
+	}}
 
-	if result.RolledBack {
-		t.Fatalf("append import with continueOnError should not be atomic")
-	}
-	if result.Error != 1 || result.Processed != 2 || result.Added != 1 {
-		t.Fatalf("unexpected result counters: %+v", result)
-	}
-	wantOps := []string{
-		"conn:SET FOREIGN_KEY_CHECKS = 0",
-		"conn:INSERT INTO `appdb`.`users` (`id`) VALUES ('bad');",
-		"conn:INSERT INTO `appdb`.`users` (`id`) VALUES (2);",
-		"conn:SET FOREIGN_KEY_CHECKS = 1",
-	}
-	if strings.Join(session.operations, "\n") != strings.Join(wantOps, "\n") {
-		t.Fatalf("unexpected operation order:\n got: %v\nwant: %v", session.operations, wantOps)
-	}
+	result, err := RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{
+		Statements: []string{"DELETE FROM t;", "INSERT INTO t VALUES (1);"}, Mode: "copy", ContinueOnError: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, &TableImportBatchResult{
+		Processed: 2, Error: 1, RolledBack: true,
+		Errors: []TableImportBatchError{{Index: 1, Statement: "INSERT INTO t VALUES (1);", Message: "duplicate"}},
+	}, result)
 }
 
-func TestRunTableImportBatchSQLiteForeignKeys(t *testing.T) {
-	session := &fakeSQLSession{}
-	_, err := RunTableImportBatch(context.Background(), session, asset_entity.DriverSQLite, TableImportBatchRequest{
-		Mode:                    "append",
-		ContinueOnError:         true,
-		DisableForeignKeyChecks: true,
-		Statements: []string{
-			`INSERT INTO "users" ("id") VALUES (1);`,
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunTableImportBatch() error = %v", err)
-	}
-	want := []string{
-		"conn:PRAGMA foreign_keys = OFF",
-		`conn:INSERT INTO "users" ("id") VALUES (1);`,
-		"conn:PRAGMA foreign_keys = ON",
-	}
-	if strings.Join(session.operations, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("got: %v\nwant: %v", session.operations, want)
-	}
-}
+// 批本身出错：已经有语句失败时，它与那些失败一起出现在错误列表里（不对应语句）；没有语句失败
+// 时它就是导入的错误。
+func TestRunTableImportBatchReportsBatchFailures(t *testing.T) {
+	restoreErr := errors.New("restore foreign key checks: denied")
 
-func TestRunTableImportBatchMSSQLForeignKeys(t *testing.T) {
-	session := &fakeSQLSession{}
-	_, err := RunTableImportBatch(context.Background(), session, asset_entity.DriverMSSQL, TableImportBatchRequest{
-		Mode:                    "append",
-		ContinueOnError:         true,
-		DisableForeignKeyChecks: true,
-		Tables:                  []string{"[appdb].[dbo].[users]", "[appdb].[dbo].[orders]"},
-		Statements: []string{
-			`INSERT INTO [appdb].[dbo].[users] ([id]) VALUES (1);`,
-		},
+	session := &batchSession{
+		result: &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{{Index: 0, Error: "bad value"}}},
+		err:    restoreErr,
+	}
+	result, err := RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{
+		Statements: []string{"INSERT INTO t VALUES ('bad');"}, Mode: "append", ContinueOnError: true,
 	})
-	if err != nil {
-		t.Fatalf("RunTableImportBatch() error = %v", err)
-	}
-	want := []string{
-		"conn:ALTER TABLE [appdb].[dbo].[users] NOCHECK CONSTRAINT ALL",
-		"conn:ALTER TABLE [appdb].[dbo].[orders] NOCHECK CONSTRAINT ALL",
-		`conn:INSERT INTO [appdb].[dbo].[users] ([id]) VALUES (1);`,
-		"conn:ALTER TABLE [appdb].[dbo].[users] WITH CHECK CHECK CONSTRAINT ALL",
-		"conn:ALTER TABLE [appdb].[dbo].[orders] WITH CHECK CHECK CONSTRAINT ALL",
-	}
-	if strings.Join(session.operations, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("got: %v\nwant: %v", session.operations, want)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Error)
+	assert.Equal(t, []TableImportBatchError{
+		{Index: 0, Statement: "INSERT INTO t VALUES ('bad');", Message: "bad value"},
+		{Index: -1, Message: restoreErr.Error()},
+	}, result.Errors)
+
+	session = &batchSession{result: &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{{Index: 0, AffectedRows: 1}}}, err: restoreErr}
+	_, err = RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{
+		Statements: []string{"INSERT INTO t VALUES (1);"}, Mode: "append", ContinueOnError: true,
+	})
+	require.ErrorIs(t, err, restoreErr)
+
+	session = &batchSession{err: restoreErr}
+	_, err = RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{Mode: "append"})
+	require.ErrorIs(t, err, restoreErr)
 }

@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 func newMockSession(t *testing.T) (*Session, sqlmock.Sqlmock) {
@@ -230,24 +228,6 @@ func TestEstablishClosesTheDatabaseWhenReadOnlyCannotBeApplied(t *testing.T) {
 	require.ErrorIs(t, err, denied)
 	assert.Contains(t, err.Error(), "设置只读模式失败")
 	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-// 过渡桥只对 database/sql 之上的会话成立；别的会话明确报「不支持」，而不是 panic 或给 nil。
-func TestDBIsOnlyAvailableForDatabaseSQLSessions(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	got, err := DB(NewSession(db, LimitOffset{}))
-	require.NoError(t, err)
-	assert.Same(t, db, got)
-
-	fakeSession, err := dbdrivertest.NewFake().Open(context.Background(), dbdriver.OpenRequest{
-		Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"},
-	})
-	require.NoError(t, err)
-	_, err = DB(fakeSession)
-	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 }
 
 func TestParseParams(t *testing.T) {

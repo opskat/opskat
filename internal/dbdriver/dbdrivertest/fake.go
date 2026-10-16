@@ -52,6 +52,9 @@ type Fake struct {
 	// DDL 是假库给任何表的建表语句。会话只在驱动声明了 CapViewDDL 时给出它，否则以
 	// ErrUnsupported 拒绝；TableErr 同样作用于它。
 	DDL string
+	// StatementErrors 模拟数据库拒绝的语句：ExecuteBatch 执行到原样在其中的语句时，以对应的错误
+	// 记为失败。NewFake 已放进 ConformanceFailingStatement，一致性测试靠它检查整批的失败处理。
+	StatementErrors map[string]error
 	// SessionPerAsset 为 true 时声明一条会话覆盖整个资产（像 SQLite）；默认一个库一条。
 	SessionPerAsset bool
 
@@ -102,6 +105,8 @@ func NewFake() *Fake {
 		},
 		PrimaryKeys: []string{"id"},
 		DDL:         "CREATE TABLE users (id int, name text)",
+
+		StatementErrors: map[string]error{ConformanceFailingStatement: errors.New("fakedb: syntax error")},
 	}
 }
 

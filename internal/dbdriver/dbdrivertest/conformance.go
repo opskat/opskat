@@ -21,6 +21,10 @@ const ConformanceStatement = "SELECT 1"
 // ConformancePageSize 是一致性测试分页执行时的每页行数。
 const ConformancePageSize = 10
 
+// ConformanceFailingStatement 是一致性测试整批执行时用来模拟失败的语句：任何数据库都会拒绝它，
+// 会话工厂给出的会话也必须拒绝它（假驱动经 Fake.StatementErrors）。
+const ConformanceFailingStatement = "NOT A STATEMENT"
+
 // SessionFactory 给一致性测试一条该驱动的会话，且不需要真的数据库：database/sql 之上的
 // 驱动接一个桩连接，文件型驱动开一个临时文件。会话由一致性测试关闭。
 type SessionFactory func(t *testing.T) dbdriver.Session
@@ -31,8 +35,8 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     的 id 与别名找到它。
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
-//     的浏览（ObjectSource），以及没有声明导出 / 复制为 SQL 时的行语句（RowStatements），且
-//     拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
+//     的浏览（ObjectSource），没有声明导出 / 复制为 SQL 时的行语句（RowStatements），以及
+//     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
@@ -108,7 +112,7 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 }
 
 // undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
-// ObjectSource、查看建表语句，以及行语句。
+// ObjectSource、查看建表语句、行语句，以及整批执行里的关闭外键检查。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -123,6 +127,14 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 	if !desc.Supports(dbdriver.CapViewDDL) {
 		if _, err := s.TableDDL(ctx, "", "x"); !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("TableDDL: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapViewDDL, err))
+		}
+	}
+	if !desc.CanDisableForeignKeyChecks {
+		_, err := s.ExecuteBatch(ctx, dbdriver.BatchRequest{
+			Statements: []string{ConformanceStatement}, DisableForeignKeyChecks: true, Table: "x",
+		})
+		if !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("ExecuteBatch: the driver does not declare canDisableForeignKeyChecks, so disabling them must be refused with ErrUnsupported, got: %v", err))
 		}
 	}
 	if !desc.GeneratesRowStatements() {
@@ -264,8 +276,9 @@ func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 }
 
 // RunTableConformance 检查表浏览：打开表、取一页、计数都可以调用，给出成形且彼此一致的结果；
-// 声明了导出 / 复制为 SQL 的驱动还要能为表里的行生成语句。会话必须是能回答这些操作的
-// （database 里有 table 这张表，最好有行），由测试关闭。筛选条件与排序项的语义、语句的写法
+// 声明了导出 / 复制为 SQL 的驱动还要能为表里的行生成语句；整批执行对失败的语句停下并回滚或
+// 继续，声明了能关闭外键检查的驱动关得掉也恢复得了（见 batchProblems）。会话必须是能回答这些
+// 操作的（database 里有 table 这张表，最好有行），由测试关闭。筛选条件与排序项的语义、语句的写法
 // 随驱动的方言而定，由各驱动自己的测试固定。
 func RunTableConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory, database, table string) {
 	t.Helper()
@@ -376,6 +389,8 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 		problems = append(problems, rowStatementProblems(ctx, s, database, table, opened)...)
 	}
 
+	problems = append(problems, batchProblems(ctx, desc, s, database, table)...)
+
 	starter, err := s.StarterQuery(ctx, database, table, ConformancePageSize)
 	switch {
 	case err != nil:
@@ -428,6 +443,56 @@ func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, tab
 	statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: first.Columns})
 	if err == nil && statements == nil {
 		report("RowStatements without rows: returned null; it must be an empty list")
+	}
+	return problems
+}
+
+// batchProblems 用必然失败的 ConformanceFailingStatement 检查整批执行（声明了能关闭外键检查的
+// 驱动同时关闭它，最后必须恢复得了）：整批的那次停在第一条失败的语句并回滚，出错继续的那次逐条
+// 执行；空白语句跳过，下标指向请求里的位置。失败的语句不改动任何数据，这里不检查表的内容。
+func batchProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session, database, table string) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	failing := []string{" ", ConformanceFailingStatement, ConformanceFailingStatement}
+
+	for _, atomic := range []bool{true, false} {
+		result, err := s.ExecuteBatch(ctx, dbdriver.BatchRequest{
+			Statements: failing, Atomic: atomic, ContinueOnError: true,
+			DisableForeignKeyChecks: desc.CanDisableForeignKeyChecks, Database: database, Table: table,
+		})
+		label := fmt.Sprintf("ExecuteBatch(atomic=%t, disableForeignKeyChecks=%t)", atomic, desc.CanDisableForeignKeyChecks)
+		switch {
+		case errors.Is(err, dbdriver.ErrUnsupported):
+			report("%s: refused with ErrUnsupported: %v", label, err)
+			continue
+		case err != nil:
+			report("%s: %v", label, err)
+			continue
+		case result == nil:
+			report("%s: returned no result and no error", label)
+			continue
+		}
+		wantIndexes := []int{1, 2}
+		if atomic {
+			wantIndexes = []int{1}
+		}
+		indexes := make([]int, 0, len(result.Executed))
+		for _, executed := range result.Executed {
+			indexes = append(indexes, executed.Index)
+			if executed.Error == "" {
+				report("%s: statement %d %q did not report its failure", label, executed.Index, ConformanceFailingStatement)
+			}
+		}
+		if !slices.Equal(indexes, wantIndexes) {
+			if atomic {
+				report("%s: executed statements %v; the batch must skip the blank one and stop at the first failure %v", label, indexes, wantIndexes)
+			} else {
+				report("%s: executed statements %v; with continueOnError the batch must skip the blank one and continue past failures %v", label, indexes, wantIndexes)
+			}
+		}
+		if result.RolledBack != atomic {
+			report("%s: rolledBack is %t; a failed atomic batch must roll back, a non-atomic one has nothing to roll back", label, result.RolledBack)
+		}
 	}
 	return problems
 }
@@ -559,6 +624,10 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	if desc.UsesField(dbdriver.FieldReadOnly) && !desc.Supports(dbdriver.CapReadOnly) {
 		report("form field %q is declared without capability %q; the switch would offer what Open refuses",
 			dbdriver.FieldReadOnly, dbdriver.CapReadOnly)
+	}
+	// 细项声明只在声明了所属的功能时有意义。
+	if desc.CanDisableForeignKeyChecks && !desc.Supports(dbdriver.CapImport) {
+		report("canDisableForeignKeyChecks is declared without capability %q, the only feature that uses it", dbdriver.CapImport)
 	}
 	return problems
 }

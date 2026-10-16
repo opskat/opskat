@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/query_svc"
 )
 
 // 树的浏览（列库、列表、表元数据、对象列表、对象源码）由驱动在自己的会话上完成，
@@ -185,6 +186,54 @@ func TestRowStatementsAreProducedByTheDriver(t *testing.T) {
 		PrimaryKeys: []string{"id"},
 	}}}, sessions[0].TableCalls())
 	assert.Empty(t, sessions[0].Statements())
+}
+
+// 导入的整批执行经资产的驱动会话：前端发来的请求（JSON，键名与前端一致）连同目标表到达驱动，
+// 复制模式放进一个事务；驱动的执行结果按语句种类计成新增 / 更新 / 删除。
+func TestExecuteTableImportRunsTheBatchOnTheDriverSession(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
+	fake.Desc.CanDisableForeignKeyChecks = true
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	var request query_svc.TableImportBatchRequest
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"statements":["DELETE FROM users;","INSERT INTO users VALUES (1);"],"mode":"copy","continueOnError":true,"disableForeignKeyChecks":true,"table":"dbo.users"}`,
+	), &request))
+	result, err := q.ExecuteTableImport(1, "reporting", request)
+	require.NoError(t, err)
+	// 假会话的每条写语句都改动表里的 3 行。
+	assert.Equal(t, &query_svc.TableImportBatchResult{Processed: 2, Added: 3, Deleted: 3}, result)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{{Op: "batch", Database: "reporting", Table: "dbo.users", Batch: &dbdriver.BatchRequest{
+		Statements:              []string{"DELETE FROM users;", "INSERT INTO users VALUES (1);"},
+		Atomic:                  true,
+		ContinueOnError:         true,
+		DisableForeignKeyChecks: true,
+		Database:                "reporting",
+		Table:                   "dbo.users",
+	}}}, sessions[0].TableCalls())
+	assert.Equal(t, []string{"DELETE FROM users;", "INSERT INTO users VALUES (1);"}, sessions[0].Statements())
+}
+
+// 没有声明能关闭外键检查的驱动明确报「不支持」，且不执行任何语句。
+func TestExecuteTableImportRefusesForeignKeyToggleTheDriverDoesNotDeclare(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.ExecuteTableImport(1, "", query_svc.TableImportBatchRequest{
+		Statements: []string{"INSERT INTO users VALUES (1);"}, Mode: "append", ContinueOnError: true,
+		DisableForeignKeyChecks: true, Table: "users",
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	for _, s := range fake.Sessions() {
+		assert.Empty(t, s.Statements())
+	}
 }
 
 // 没有声明复制 / 导出为 SQL 的驱动明确报「不支持」，且不执行任何语句。

@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "batch"。
 	Op       string
 	Database string
 	Table    string
@@ -174,6 +174,8 @@ type TableCall struct {
 	Page dbdriver.Page
 	// RowStatements 是 row_statements 收到的请求。
 	RowStatements *dbdriver.RowStatementsRequest
+	// Batch 是 batch 收到的请求。
+	Batch *dbdriver.BatchRequest
 }
 
 // TableCalls 返回这条会话收到的表浏览请求，按先后。
@@ -270,6 +272,42 @@ func (s *FakeSession) RowStatements(_ context.Context, database, table string, r
 		statements = append(statements, fmt.Sprintf("FAKE %s ROW %d OF %s.%s", strings.ToUpper(string(req.Kind)), i+1, database, table))
 	}
 	return statements, nil
+}
+
+// ExecuteBatch 记下收到的请求（Op "batch"），按次序执行每条非空白语句（记进 Statements，每条
+// 写语句改动表里的每一行）；Fake.StatementErrors 里的语句失败。假库没有事务：Atomic 的批停在
+// 失败的那条并报告回滚。驱动没有声明 CanDisableForeignKeyChecks 却被要求关闭外键检查时以
+// ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) ExecuteBatch(_ context.Context, req dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
+	if req.DisableForeignKeyChecks && !s.fake.Desc.CanDisableForeignKeyChecks {
+		return nil, fmt.Errorf("%w: %s does not declare disabling foreign key checks", dbdriver.ErrUnsupported, s.fake.Desc.ID)
+	}
+	if err := s.tableCall(TableCall{Op: "batch", Database: req.Database, Table: req.Table, Batch: &req}); err != nil {
+		return nil, err
+	}
+	result := &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}
+	for index, statement := range req.Statements {
+		if strings.TrimSpace(statement) == "" {
+			continue
+		}
+		_, err := s.record(statement)
+		if err == nil {
+			err = s.fake.StatementErrors[statement]
+		}
+		if err != nil {
+			result.Executed = append(result.Executed, dbdriver.BatchStatement{Index: index, Error: err.Error()})
+			if req.Atomic {
+				result.RolledBack = true
+				break
+			}
+			if !req.ContinueOnError {
+				break
+			}
+			continue
+		}
+		result.Executed = append(result.Executed, dbdriver.BatchStatement{Index: index, AffectedRows: int64(len(s.fake.Rows))})
+	}
+	return result, nil
 }
 
 func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {

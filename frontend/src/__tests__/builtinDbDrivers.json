@@ -54,7 +54,8 @@
       "export_sql",
       "copy_sql",
       "read_only"
-    ]
+    ],
+    "canDisableForeignKeyChecks": true
   },
   {
     "id": "postgresql",
@@ -114,7 +115,8 @@
       "export_sql",
       "copy_sql",
       "read_only"
-    ]
+    ],
+    "canDisableForeignKeyChecks": false
   },
   {
     "id": "mssql",
@@ -174,7 +176,8 @@
       "export_sql",
       "copy_sql",
       "read_only"
-    ]
+    ],
+    "canDisableForeignKeyChecks": true
   },
   {
     "id": "sqlite",
@@ -222,6 +225,7 @@
       "export_sql",
       "copy_sql",
       "read_only"
-    ]
+    ],
+    "canDisableForeignKeyChecks": true
   }
 ]
