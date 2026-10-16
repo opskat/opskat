@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryResultTable, type SelectedCellContext } from "@/components/query/QueryResultTable";
-import { isMac } from "@/stores/shortcutStore";
-import { TABLE_FIND_SCOPE_ATTR } from "@/lib/tableFind";
+import { FIND_SCOPE_ATTR, isMac } from "@/stores/shortcutStore";
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
@@ -63,7 +62,7 @@ describe("QueryResultTable — find in page", () => {
   it("opens a focused find bar on Cmd/Ctrl+F inside the grid", () => {
     renderGrid();
     expect(findInput()).toBeNull();
-    expect(grid().closest(`[${TABLE_FIND_SCOPE_ATTR}]`)).not.toBeNull();
+    expect(grid().closest(`[${FIND_SCOPE_ATTR}]`)).not.toBeNull();
 
     pressFind(grid());
 
@@ -88,7 +87,7 @@ describe("QueryResultTable — find in page", () => {
     pressFind(grid());
 
     expect(findInput()).toBeNull();
-    expect(document.querySelector(`[${TABLE_FIND_SCOPE_ATTR}]`)).toBeNull();
+    expect(document.querySelector(`[${FIND_SCOPE_ATTR}]`)).toBeNull();
   });
 
   it("selects the first match as the user types, highlights every match and counts them", async () => {

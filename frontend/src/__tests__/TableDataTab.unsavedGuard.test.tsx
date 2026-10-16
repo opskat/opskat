@@ -287,9 +287,6 @@ describe("TableDataTab unsaved edits guard", () => {
     await user.click(within(guard).getByText("query.unsavedEditsStay"));
     await waitFor(() => expect(dialog()).toBeNull());
 
-    if (!screen.queryByLabelText("query.pageSize")) {
-      await user.click(screen.getByTitle("query.tableFooterSettings"));
-    }
     expect(screen.getByLabelText("query.pageSize")).toHaveValue("1000");
     expect(rowsCalls()).toHaveLength(0);
     expect(cell("0:status")).toHaveTextContent("paid");

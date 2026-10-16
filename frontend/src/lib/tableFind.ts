@@ -4,9 +4,6 @@ import { cellValueToDisplayText } from "@/lib/cellValue";
  * 表格内查找（#328）的纯逻辑：只在当前已加载的那一页里，按表格显示的行序 / 列序匹配单元格的显示文本。
  */
 
-/** 结果区根节点上的标记：焦点在其内时全局 ⌘F（panel.filter）让路，由表格自己打开查找条。 */
-export const TABLE_FIND_SCOPE_ATTR = "data-table-find-scope";
-
 export interface TableFindOptions {
   caseSensitive: boolean;
   wholeCell: boolean;

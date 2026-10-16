@@ -27,7 +27,13 @@ import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } f
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import { eventMatchesBinding, formatBinding, formatModKey, useShortcutStore } from "@/stores/shortcutStore";
+import {
+  eventMatchesBinding,
+  FIND_SCOPE_ATTR,
+  formatBinding,
+  formatModKey,
+  useShortcutStore,
+} from "@/stores/shortcutStore";
 import { CellExpandEditor } from "./CellExpandEditor";
 import { ColumnHeaderCard, type ColumnInfo } from "./ColumnHeaderCard";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
@@ -35,7 +41,6 @@ import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
 import {
-  TABLE_FIND_SCOPE_ATTR,
   findMatches,
   revealDelta,
   type TableFindOptions,
@@ -1783,7 +1788,7 @@ function QueryResultTableImpl({
     />
   ) : null;
   // 结果区根节点:带上标记,全局 ⌘F 在此让路;查找条在加载 / 出错时也保留,关键词不丢。
-  const findScopeProps = findEnabled ? { [TABLE_FIND_SCOPE_ATTR]: "", onKeyDown: handleFindShortcut } : {};
+  const findScopeProps = findEnabled ? { [FIND_SCOPE_ATTR]: "", onKeyDown: handleFindShortcut } : {};
   const withFindScope = (body: React.ReactNode) =>
     findEnabled ? (
       <div className="flex-1 min-h-0 flex flex-col" {...findScopeProps}>
