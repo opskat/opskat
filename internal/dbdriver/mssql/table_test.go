@@ -40,9 +40,9 @@ func TestOpenTable(t *testing.T) {
 	mock.ExpectQuery(primaryKeysSQL).WithArgs("dbo", "users").
 		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME"}).AddRow("id"))
 	mock.ExpectQuery(columnsSQL).WithArgs("dbo", "users").
-		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT"}).
-			AddRow("id", "int", "NO", nil).
-			AddRow("name", "varchar", "YES", "('anon')"))
+		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "IS_AUTO_INCREMENT", "IS_IDENTITY_ALWAYS"}).
+			AddRow("id", "int", "NO", nil, 1, 1).
+			AddRow("name", "varchar", "YES", "('anon')", 0, 0))
 	mock.ExpectQuery("SELECT COUNT(*) FROM [dbo].[users]").WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
 	mock.ExpectQuery("SELECT TOP 10 * FROM [dbo].[users]").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "alice").AddRow(2, "bob"))
@@ -53,7 +53,7 @@ func TestOpenTable(t *testing.T) {
 	assert.Equal(t, []string{"id", "name"}, opened.FirstPage.Columns)
 	assert.Equal(t, map[string]string{"id": "int", "name": "varchar"}, opened.ColumnTypes)
 	assert.Equal(t, []dbdriver.TableColumnRule{
-		{Name: "id"},
+		{Name: "id", AutoIncrement: true},
 		{Name: "name", Nullable: true, HasDefault: true},
 	}, opened.ColumnRules)
 	assert.Equal(t, int64(2), opened.TotalCount)
