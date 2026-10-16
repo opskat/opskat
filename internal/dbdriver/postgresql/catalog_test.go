@@ -58,7 +58,9 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	session, mock := newMock(t)
 
 	mock.ExpectQuery("SELECT column_name, data_type, udt_name, is_nullable, column_default, "+
-		"col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position::int) AS column_comment "+
+		"col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position::int) AS column_comment, "+
+		"(is_identity = 'YES' OR column_default LIKE 'nextval(%') AS is_auto_increment, "+
+		"(identity_generation = 'ALWAYS') AS is_identity_always "+
 		"FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position").
 		WithArgs("reporting", "events").WillReturnRows(
 		sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default", "column_comment"}).

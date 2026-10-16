@@ -57,7 +57,9 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	session, mock := newMock(t)
 
 	mock.ExpectQuery("SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, " +
-		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT " +
+		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT, " +
+		"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_AUTO_INCREMENT, " +
+		"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY_ALWAYS " +
 		"FROM INFORMATION_SCHEMA.COLUMNS c " +
 		"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' " +
 		"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) " +

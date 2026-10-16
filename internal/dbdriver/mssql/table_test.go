@@ -20,7 +20,9 @@ const (
 		"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 " +
 		"ORDER BY kcu.ORDINAL_POSITION"
 	columnsSQL = "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, " +
-		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT " +
+		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT, " +
+		"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_AUTO_INCREMENT, " +
+		"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY_ALWAYS " +
 		"FROM INFORMATION_SCHEMA.COLUMNS c " +
 		"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' " +
 		"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) " +
@@ -119,4 +121,30 @@ func TestFilterSemantics(t *testing.T) {
 		Table:      "dbo.users",
 		TableRef:   "[dbo].[users]",
 	})
+}
+
+// IDENTITY 列既不必在新增行里填，也不能被 UPDATE，显式插入还要 IDENTITY_INSERT：自增与
+// 「只能由数据库生成」两个标志都置上；普通列都不置。
+func TestTableColumnsReportIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery(columnsSQL).WithArgs("dbo", "users").
+		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "COLUMN_COMMENT", "IS_AUTO_INCREMENT", "IS_IDENTITY_ALWAYS"}).
+			AddRow("id", "int", "NO", nil, nil, 1, 1).
+			AddRow("name", "varchar", "YES", nil, nil, 0, 0).
+			AddRow("note", "varchar", "YES", nil, nil, nil, nil))
+	conn, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	columns, err := dialect{}.TableColumns(context.Background(), conn, "appdb", "dbo.users")
+	require.NoError(t, err)
+
+	require.Len(t, columns, 3)
+	assert.True(t, columns[0].AutoIncrement)
+	assert.True(t, columns[0].IdentityAlways)
+	assert.False(t, columns[1].AutoIncrement || columns[1].IdentityAlways)
+	assert.False(t, columns[2].AutoIncrement || columns[2].IdentityAlways)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

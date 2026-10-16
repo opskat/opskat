@@ -284,3 +284,34 @@ func TestColumnMetasCarryCommentAndDefault(t *testing.T) {
 	assert.Equal(t, &empty, metas[1].Default)
 	assert.Equal(t, &anon, metas[2].Default)
 }
+
+// 驱动的列查询可以用 is_auto_increment / is_identity_always 两列报告自增：前者「新增行不必
+// 填」，后者「数据库拒绝对它显式写值」。布尔、整数与文本三种常见表示都认；NULL 为假。
+func TestQueryTableColumnsReadsAutoIncrementFlags(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery("COLUMNS").WillReturnRows(
+		sqlmock.NewRows([]string{"name", "is_auto_increment", "is_identity_always"}).
+			AddRow("plain", false, false).
+			AddRow("serial", true, false).
+			AddRow("always", true, true).
+			AddRow("mssql", int64(1), int64(1)).
+			AddRow("null", nil, nil).
+			AddRow("text", "YES", "NO"))
+	conn, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	columns, err := QueryTableColumns(context.Background(), conn, "COLUMNS")
+	require.NoError(t, err)
+
+	got := map[string][2]bool{}
+	for _, c := range columns {
+		got[c.Name] = [2]bool{c.AutoIncrement, c.IdentityAlways}
+	}
+	assert.Equal(t, map[string][2]bool{
+		"plain": {false, false}, "serial": {true, false}, "always": {true, true},
+		"mssql": {true, true}, "null": {false, false}, "text": {true, false},
+	}, got)
+}
