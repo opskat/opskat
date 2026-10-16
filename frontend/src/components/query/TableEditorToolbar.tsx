@@ -307,8 +307,9 @@ export function TableDataStatusBar({
       setPageSizeDraft(String(pageSize));
       return;
     }
-    setPageSizeDraft(String(next));
     if (next !== pageSize) onPageSizeChange(next);
+    // 草稿回到实际页大小:被拦截(留在本页)时不残留被拒绝的值;真正生效时由上面的同步接管新值。
+    setPageSizeDraft(String(pageSize));
   };
 
   const actionTone = "text-foreground disabled:text-muted-foreground disabled:opacity-35";

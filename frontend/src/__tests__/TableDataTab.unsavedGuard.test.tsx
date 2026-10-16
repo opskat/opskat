@@ -275,6 +275,26 @@ describe("TableDataTab unsaved edits guard", () => {
     expect(screen.getByTitle("query.applyChanges")).toBeDisabled();
   });
 
+  it("stay after a page size change shows the current page size again, not the rejected draft", async () => {
+    const user = await renderLoaded();
+    editCell("0:status", "paid");
+    await user.click(screen.getByTitle("query.tableFooterSettings"));
+    const limitInput = screen.getByLabelText("query.pageSize");
+    await user.clear(limitInput);
+    await user.type(limitInput, "200{Enter}");
+
+    const guard = await screen.findByRole("alertdialog");
+    await user.click(within(guard).getByText("query.unsavedEditsStay"));
+    await waitFor(() => expect(dialog()).toBeNull());
+
+    if (!screen.queryByLabelText("query.pageSize")) {
+      await user.click(screen.getByTitle("query.tableFooterSettings"));
+    }
+    expect(screen.getByLabelText("query.pageSize")).toHaveValue("1000");
+    expect(rowsCalls()).toHaveLength(0);
+    expect(cell("0:status")).toHaveTextContent("paid");
+  });
+
   it("folds the summary after ten lines into a count of the rest", async () => {
     // 网格是虚拟滚动的,jsdom 里只渲染前几行:4 行 × 2 列的修改 + 4 个新增行 = 12 条。
     openTable(Array.from({ length: 4 }, (_, i) => ({ id: i + 1, status: "pending" })));
