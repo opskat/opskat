@@ -58,10 +58,10 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
         return;
       }
 
-      // panel.filter 特殊处理：xterm / 数据库结果表格聚焦时透传（各自打开查找条），否则通过 store 触发 filter 面板
+      // panel.filter 特殊处理：xterm / Monaco 编辑器 / 数据库结果表格聚焦时透传（各自打开查找），否则通过 store 触发 filter 面板
       if (action === "panel.filter") {
         const el = document.activeElement as HTMLElement | null;
-        if (el?.closest(`.xterm, [${TABLE_FIND_SCOPE_ATTR}]`)) return;
+        if (el?.closest(`.xterm, .monaco-editor, [${TABLE_FIND_SCOPE_ATTR}]`)) return;
         e.preventDefault();
         e.stopPropagation();
         useLayoutStore.getState().requestOpenFilter();
