@@ -1782,6 +1782,7 @@ function QueryResultTableImpl({
       onOptionsChange={setFindOptions}
       status={findStatus}
       scope={findScope}
+      includesUnsaved={!!editableProp}
       onNext={() => stepFind(1)}
       onPrevious={() => stepFind(-1)}
       onClose={closeFind}

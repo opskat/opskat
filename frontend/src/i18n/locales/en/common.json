@@ -2077,7 +2077,8 @@
       "close": "Close find",
       "noResults": "No results",
       "invalidRegex": "Invalid regex",
-      "scope": "Loaded rows only: {{rows}} (page {{page}}), unsaved changes included"
+      "scope": "Loaded rows only: {{rows}} (page {{page}}), unsaved changes included",
+      "scopeReadOnly": "Loaded rows only: {{rows}} (page {{page}})"
     },
     "sortColumn": "Click to sort",
     "filterColumn": "Filter by column",

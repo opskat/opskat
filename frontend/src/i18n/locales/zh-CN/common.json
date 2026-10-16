@@ -2077,7 +2077,8 @@
       "close": "关闭查找",
       "noResults": "无结果",
       "invalidRegex": "正则无效",
-      "scope": "仅查找已加载的 {{rows}} 行（第 {{page}} 页），含未提交修改"
+      "scope": "仅查找已加载的 {{rows}} 行（第 {{page}} 页），含未提交修改",
+      "scopeReadOnly": "仅查找已加载的 {{rows}} 行（第 {{page}} 页）"
     },
     "sortColumn": "点击排序",
     "filterColumn": "按此列筛选",

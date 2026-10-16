@@ -21,6 +21,8 @@ interface TableFindBarProps {
   onOptionsChange: (options: TableFindOptions) => void;
   status: TableFindStatus;
   scope?: { rowCount: number; page: number };
+  /** 结果可编辑时匹配也覆盖未提交修改，范围说明里注明；只读结果不提。 */
+  includesUnsaved: boolean;
   onNext: () => void;
   onPrevious: () => void;
   onClose: () => void;
@@ -36,6 +38,7 @@ export function TableFindBar({
   onOptionsChange,
   status,
   scope,
+  includesUnsaved,
   onNext,
   onPrevious,
   onClose,
@@ -145,7 +148,10 @@ export function TableFindBar({
       </div>
       {scope && (
         <span className="ml-1 min-w-0 truncate text-xs text-muted-foreground">
-          {t("query.find.scope", { rows: scope.rowCount.toLocaleString(), page: scope.page })}
+          {t(includesUnsaved ? "query.find.scope" : "query.find.scopeReadOnly", {
+            rows: scope.rowCount.toLocaleString(),
+            page: scope.page,
+          })}
         </span>
       )}
       <Button

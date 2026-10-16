@@ -59,8 +59,20 @@ describe("QueryResultTable — find in page", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens a focused find bar on Cmd/Ctrl+F inside the grid", () => {
+  it("only mentions unsaved changes in the scope note when the grid can hold edits", () => {
     renderGrid();
+    pressFind(grid());
+    expect(screen.getByText("query.find.scopeReadOnly")).toBeInTheDocument();
+    expect(screen.queryByText("query.find.scope")).toBeNull();
+
+    cleanup();
+    renderGrid({ editable: true });
+    pressFind(grid());
+    expect(screen.getByText("query.find.scope")).toBeInTheDocument();
+  });
+
+  it("opens a focused find bar on Cmd/Ctrl+F inside the grid", () => {
+    renderGrid({ editable: true });
     expect(findInput()).toBeNull();
     expect(grid().closest(`[${FIND_SCOPE_ATTR}]`)).not.toBeNull();
 
