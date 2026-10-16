@@ -27,7 +27,7 @@
 6. **只有 MySQL 认得自增列。** [已核实] 只有 MySQL 从 `Extra` 读出 auto_increment（`internal/dbdriver/sqldb/table.go:304`），SQL Server 的 IDENTITY 列和 PostgreSQL 的 `GENERATED … AS IDENTITY` 列都被当成「非空且无默认值」（`internal/dbdriver/mssql/table.go:38-50`）。于是：
    - 在表格里新增一行时，这些列被要求必填（`lib/tableEdit.ts:25-30`），但在 SQL Server 上填了值又会被拒绝。
    - SQL Server 导入只能靠一段运行时判断自增列的包装，并且自增列在映射里、但不是匹配键时，追加/更新仍报 `Cannot update identity column`（第一轮规格「有意的行为变化」第 7 项记录的已知限制）。
-7. **PostgreSQL 改表对话框加载不到列，改名会写进 schema 前缀。** [已核实] 加载列时 schema 写死为 `public`，并拿 `schema.table` 去匹配 `table_name`（`AlterTableDialog.tsx:120`），而 PostgreSQL 的表名统一以 `schema.table` 形式传入，所以一列也查不到。改名输入框预填的是 `schema.table`（`:84`）：PostgreSQL 会生成 `RENAME TO "public.x"`，SQL Server 的 `sp_rename` 会把表真的命名为 `dbo.x`（`lib/tableSql.ts:140-145`）。按 `.` 拆分表名（`quoteQualifiedIdent`，`lib/tableSql.ts:16`）也让名字里带点的表在导出、复制、导入时引用出错。
+7. **PostgreSQL 改表对话框加载不到列，改名会写进 schema 前缀。** [已核实] 加载列时 schema 写死为 `public`，并拿 `schema.table` 去匹配 `table_name`（`AlterTableDialog.tsx:120`），而 PostgreSQL 的表名统一以 `schema.table` 形式传入，所以一列也查不到。改名输入框预填的是 `schema.table`（`:84`）：PostgreSQL 会生成 `RENAME TO "public.x"`，SQL Server 的 `sp_rename` 会把表真的命名为 `dbo.x`（`lib/tableSql.ts:140-145`）。按每个 `.` 拆分表名，让名字里带点的表引用出错：写路径在前端（`quoteQualifiedIdent`，`lib/tableSql.ts:16`），PostgreSQL 与 SQL Server 的读路径在驱动里（`sqldb.QuoteQualified`，`internal/dbdriver/sqldb/table.go:258`）。
 8. **表格编辑提交后，失败的修改也被清掉。** [已核实] 只要有一条语句影响了行，就清空全部待提交的修改与新增行（`TableDataTab.tsx:685-688`），失败的那几条也在其中，用户无从重试。
 9. **MySQL 改列会悄悄丢失列属性。** [已核实] 改列名、类型、可空、默认值或注释时，`CHANGE COLUMN` / `MODIFY COLUMN` 只按这五项重建列定义（`lib/tableSql.ts:91-107,241-244`）：
    - 列原有的 `AUTO_INCREMENT`、`ON UPDATE CURRENT_TIMESTAMP`、字符集与排序规则全部丢失。例如只给自增主键加一条注释，它就不再自增。
@@ -122,13 +122,13 @@
 - **MySQL**：文本中的反斜杠按会话的 `sql_mode` 转义；在 `NO_BACKSLASH_ESCAPES` 模式下不转义。写入后读回的值与用户给出的一致。
 - **PostgreSQL**：二进制写成 `'\x…'::bytea`。
 - **SQLite**：二进制写成 `X'…'`。
-- **表引用**：库、schema 与表名分开传给驱动，不再按 `.` 拆分字符串。数值、日期、空值等其余字面量的写法与改动前一致。
+- **表引用**：表名沿用列表给出的形式交给驱动（同第一轮）。带 schema 分组的驱动只在第一个点处分开 schema 与表名，其余驱动把整个名字当作表名；名字带点的表在浏览与各写操作中都作为一个整体引用（schema 名本身带点的不在此列）。数值、日期、空值等其余字面量的写法与改动前一致。
 
 ## 有意的行为变化
 
 1. **导入整批执行的三种情形可用。** 前提：任一驱动，选「复制」模式、或取消「出错继续」、或勾选「忽略外键」（PostgreSQL 见第 6 项）。动作：开始导入。结果：按「导入」一节执行，不再报 `ExecuteTableImport binding unavailable`；SQL Server 勾选「忽略外键」时，导入期间目标表的外键约束确实停用、结束后重新启用。[已核实] 改动前这三种情形必定报错。
 2. **SQL Server 与 MySQL 的文本、各驱动的二进制、自增列按方言正确写入。** 前提：表格编辑、导入、导出或复制为 SQL 涉及 SQL Server 的 Unicode 文本列、MySQL 中含反斜杠的文本、SQL Server 的二进制列，或任一驱动的自增列。结果：按「字面量与表引用」与「表格编辑」「导入」两节的规则生成；写入后读回的值与用户给出的一致；新增行不再要求填写自增列。[未复现] 文本与反斜杠的损坏是读代码推断的，动手前先在真库上复现，以确认这是修复而非行为不变；[已核实] 自增列在 SQL Server / PostgreSQL 上被要求必填（`lib/tableEdit.ts:25-30` 与 Problem 6）。
-3. **PostgreSQL 改表可用，改名不带 schema，名字带点的表可正确引用。** 前提：PostgreSQL 任一 schema 的表，或 SQL Server 的表，或名字里带点的表。动作：打开改表对话框并改名，或对带点的表导出、复制、导入。结果：列全部加载；改名后的表名就是用户输入的名字，仍在原 schema；带点的表名作为一个整体引用。
+3. **PostgreSQL 改表可用，改名不带 schema，名字带点的表可正确引用。** 前提：PostgreSQL 任一 schema 的表，或 SQL Server 的表，或名字里带点的表。动作：打开改表对话框并改名，或打开、浏览带点的表并对它编辑、导出、复制、导入。结果：列全部加载；改名后的表名就是用户输入的名字，仍在原 schema；带点的表名在浏览与写操作中都作为一个整体引用。[已核实] 改动前 PostgreSQL / SQL Server 的读路径也按每个点拆分。
 4. **表格编辑提交后保留失败的修改。** 前提：一次提交里部分语句成功、部分失败或影响 0 行。结果：成功的修改被清掉并刷新，失败的留在表格里。[已核实] 改动前全部清掉。
 5. **MySQL 改列保留未改动的属性。** 前提：MySQL 表中带 `AUTO_INCREMENT`、`ON UPDATE CURRENT_TIMESTAMP`、列级字符集 / 排序规则或表达式默认值的列。动作：在改表对话框里只改它的名称、类型、可空、默认值、注释中的一部分。结果：生成的语句保留用户没改的属性；执行后用「查看建表语句」看到这些属性仍在。[已核实] 改动前这些属性会丢失（Problem 9）。
 6. **导入预览与选项按驱动能力呈现。** 结果：
