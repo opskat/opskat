@@ -358,6 +358,18 @@
     background-color: color-mix(in oklab, oklch(0.70 0.18 82) 40%, transparent);
   }
 
+  .sql-current-statement {
+    background-color: color-mix(in oklab, var(--primary) 8%, transparent);
+  }
+
+  .dark .sql-current-statement {
+    background-color: color-mix(in oklab, var(--primary) 14%, transparent);
+  }
+
+  .sql-current-statement-bar {
+    border-left: 2px solid var(--primary);
+  }
+
   .query-table-frozen-header-selected {
     background-color: var(--muted);
     background-image: linear-gradient(

@@ -54,11 +54,12 @@ interface SQLPagedResult {
 const SQL_PAGE_SIZE_RANGE = { min: 50, max: 500 };
 const DEFAULT_PAGE_SIZE = 100;
 const noop = () => {};
-// 当前语句高亮走 Monaco 装饰,类名是 token 化的 Tailwind 工具类(源码里的字面量会被扫描生成)。
+// 当前语句高亮走 Monaco 装饰。Monaco 会把类名里的 "/" 等字符替换成空格(bg-primary/5 会退化成不透明的 bg-primary),
+// 所以这里只能放纯字母/连字符的领域类,样式定义在 globals.css。
 const CURRENT_STATEMENT_DECORATION = {
   isWholeLine: true,
-  className: "bg-primary/5",
-  linesDecorationsClassName: "border-l-2 border-primary",
+  className: "sql-current-statement",
+  linesDecorationsClassName: "sql-current-statement-bar",
 };
 type RunMode = "current" | "all";
 

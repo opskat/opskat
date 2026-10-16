@@ -126,6 +126,19 @@ describe("SqlEditorTab run current statement", () => {
     expect(screen.getByTestId("sql-execute-button")).toBeEnabled();
   });
 
+  it("hands Monaco only class names it preserves (it rewrites characters like '/' to spaces)", () => {
+    const ed = setup(TWO);
+    act(() => ed.setFocus(true));
+    const options = ed.decorations()[0].options;
+    const names = Object.entries(options)
+      .filter(([key]) => /classname$/i.test(key))
+      .map(([, value]) => value as string);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      expect(name).toMatch(/^[A-Za-z0-9_\- ]+$/);
+    }
+  });
+
   it("highlights the current statement lines only while focused without a selection", () => {
     const ed = setup(TWO);
     act(() => ed.setCursor(14));
