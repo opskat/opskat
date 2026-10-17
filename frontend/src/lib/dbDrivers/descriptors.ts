@@ -56,6 +56,14 @@ export function driverHasCapability(driver: DriverDescriptor | undefined, capabi
   return !!driver && driver.capabilities.includes(capability);
 }
 
+/**
+ * 改表时驱动是否能改这项属性(Go 侧 dbdriver.AlterAttribute 的取值,如 "column_type");改表名、给列改名、
+ * 新增与删除列不在其列,声明了改表就能做。描述里没有这份声明(null)即一项也不能改。
+ */
+export function driverCanAlter(driver: DriverDescriptor | undefined, attribute: string): boolean {
+  return !!driver?.alterTableAttributes?.includes(attribute);
+}
+
 /** 驱动是否在资产表单的任一 Tab 里使用该字段(Go 侧 dbdriver.FormField 的取值,如 "host")。 */
 export function driverUsesField(driver: DriverDescriptor, field: string): boolean {
   return driver.form.some((tab) => tab.fields.includes(field));

@@ -58,6 +58,17 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 		"exact row location without grid edit": {func(d *dbdriver.Descriptor) {
 			d.LocatesRowWithoutPrimaryKey = true
 		}, "locatesRowWithoutPrimaryKey"},
+		"alter attributes without alter table": {func(d *dbdriver.Descriptor) {
+			d.AlterTableAttributes = []dbdriver.AlterAttribute{dbdriver.AlterColumnType}
+		}, "alterTableAttributes"},
+		"unknown alter attribute": {func(d *dbdriver.Descriptor) {
+			d.Capabilities = append(d.Capabilities, dbdriver.CapAlterTable)
+			d.AlterTableAttributes = []dbdriver.AlterAttribute{"column_charset"}
+		}, "column_charset"},
+		"duplicate alter attribute": {func(d *dbdriver.Descriptor) {
+			d.Capabilities = append(d.Capabilities, dbdriver.CapAlterTable)
+			d.AlterTableAttributes = []dbdriver.AlterAttribute{dbdriver.AlterColumnType, dbdriver.AlterColumnType}
+		}, "column_type"},
 		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
 		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
 		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},

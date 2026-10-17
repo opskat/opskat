@@ -60,7 +60,8 @@
     "createDatabaseOptions": [
       { "key": "charset", "default": "utf8mb4" },
       { "key": "collation", "default": "utf8mb4_0900_ai_ci" }
-    ]
+    ],
+    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
   },
   {
     "id": "postgresql",
@@ -126,7 +127,8 @@
     "createDatabaseOptions": [
       { "key": "charset", "default": "UTF8" },
       { "key": "collation", "default": "en_US.UTF-8" }
-    ]
+    ],
+    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
   },
   {
     "id": "mssql",
@@ -189,7 +191,8 @@
     ],
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
-    "createDatabaseOptions": [{ "key": "collation", "default": "" }]
+    "createDatabaseOptions": [{ "key": "collation", "default": "" }],
+    "alterTableAttributes": ["column_type", "column_nullable"]
   },
   {
     "id": "sqlite",
@@ -240,6 +243,7 @@
     ],
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": true,
-    "createDatabaseOptions": null
+    "createDatabaseOptions": null,
+    "alterTableAttributes": []
   }
 ]

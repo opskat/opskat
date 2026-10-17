@@ -36,7 +36,7 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
-//     导出 / 复制为 SQL 时的行语句（RowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
+//     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导出 / 复制为 SQL 时的行语句（RowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
 //     必须给出语句），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
@@ -162,7 +162,7 @@ func schemaWriteProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriv
 }
 
 // undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
-// ObjectSource、查看建表语句、表格编辑与行语句，以及整批执行里的关闭外键检查。
+// ObjectSource、查看建表语句、表格编辑、改表与行语句，以及整批执行里的关闭外键检查。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -193,6 +193,15 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 		})
 		if !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("GridEditStatements: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapGridEdit, err))
+		}
+	}
+	if !desc.Supports(dbdriver.CapAlterTable) {
+		if _, err := s.AlterTableModel(ctx, "", "x"); !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("AlterTableModel: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapAlterTable, err))
+		}
+		_, err := s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{Name: "y"})
+		if !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("AlterTableStatements: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapAlterTable, err))
 		}
 	}
 	if !desc.GeneratesRowStatements() {
@@ -334,7 +343,8 @@ func browseProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 }
 
 // RunTableConformance 检查表浏览：打开表、取一页、计数都可以调用，给出成形且彼此一致的结果；
-// 声明了导出 / 复制为 SQL 的驱动还要能为表里的行生成语句；整批执行对失败的语句停下并回滚或
+// 声明了导出 / 复制为 SQL 的驱动还要能为表里的行生成语句，声明了改表的驱动要能读出这张表、原样交回时
+// 不生成语句（见 alterProblems）；整批执行对失败的语句停下并回滚或
 // 继续，声明了能关闭外键检查的驱动关得掉也恢复得了（见 batchProblems）。会话必须是能回答这些
 // 操作的（database 里有 table 这张表，最好有行），由测试关闭。筛选条件与排序项的语义、语句的写法
 // 随驱动的方言而定，由各驱动自己的测试固定。
@@ -448,6 +458,9 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 	}
 	if desc.Supports(dbdriver.CapGridEdit) && opened != nil && opened.FirstPage != nil {
 		problems = append(problems, gridEditProblems(ctx, s, database, table, opened)...)
+	}
+	if desc.Supports(dbdriver.CapAlterTable) && opened != nil && opened.FirstPage != nil {
+		problems = append(problems, alterProblems(ctx, s, database, table, opened.FirstPage.Columns)...)
 	}
 
 	problems = append(problems, batchProblems(ctx, desc, s, database, table)...)
@@ -564,6 +577,50 @@ func gridEditProblems(ctx context.Context, s dbdriver.Session, database, table s
 	empty, err := s.GridEditStatements(ctx, database, table, dbdriver.GridEditRequest{Columns: first.Columns})
 	if err == nil && (empty == nil || empty.Inserts == nil || empty.Updates == nil || empty.Deletes == nil) {
 		report("GridEditStatements without rows: returned null; each group must be an empty list")
+	}
+	return problems
+}
+
+// alterProblems 检查改表：读出的表名是列表名去掉 schema 的那部分，列都是表格里有的列；把读出的样子
+// 原样交回去，不能生成任何语句（序列化成 []，不是 null），表名不变。语句只生成，这里不执行。
+func alterProblems(ctx context.Context, s dbdriver.Session, database, table string, columns []string) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	model, err := s.AlterTableModel(ctx, database, table)
+	switch {
+	case errors.Is(err, dbdriver.ErrUnsupported):
+		report("AlterTableModel: declared %q but refused with ErrUnsupported: %v", dbdriver.CapAlterTable, err)
+		return problems
+	case err != nil:
+		report("AlterTableModel(%q): %v", table, err)
+		return problems
+	case model == nil || len(model.Columns) == 0:
+		report("AlterTableModel(%q): returned no columns and no error", table)
+		return problems
+	}
+	if model.Name == "" || !strings.HasSuffix(table, model.Name) {
+		report("AlterTableModel: name %q is not the end of the table's name %q", model.Name, table)
+	}
+	req := dbdriver.AlterTableRequest{Name: model.Name, Comment: model.Comment, Drops: []string{}}
+	for _, column := range model.Columns {
+		if !slices.Contains(columns, column.Name) {
+			report("AlterTableModel: column %q is not a column of the first page", column.Name)
+		}
+		req.Columns = append(req.Columns, dbdriver.AlterColumn{
+			OriginalName: column.Name, Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+			DefaultValue: column.DefaultValue, Comment: column.Comment,
+		})
+	}
+	result, err := s.AlterTableStatements(ctx, database, table, req)
+	switch {
+	case err != nil:
+		report("AlterTableStatements with the table as it is: %v", err)
+	case result == nil || result.Statements == nil:
+		report("AlterTableStatements with the table as it is: returned null; it must be an empty list")
+	case len(result.Statements) > 0:
+		report("AlterTableStatements with the table as it is: generated %q; nothing changed, so there must be no statements", result.Statements)
+	case result.Table != table:
+		report("AlterTableStatements with the table as it is: the table is now named %q, not %q", result.Table, table)
 	}
 	return problems
 }
@@ -760,6 +817,19 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	}
 	if len(desc.CreateDatabaseOptions) > 0 && !desc.Supports(dbdriver.CapCreateDatabase) {
 		report("createDatabaseOptions are declared without capability %q, the only feature that uses them", dbdriver.CapCreateDatabase)
+	}
+	seenAttributes := map[dbdriver.AlterAttribute]bool{}
+	for _, attribute := range desc.AlterTableAttributes {
+		if !slices.Contains(dbdriver.AlterAttributes(), attribute) {
+			report("alterTableAttributes has %q, which the alter table dialog has no input for", attribute)
+		}
+		if seenAttributes[attribute] {
+			report("alter table attribute %q is declared more than once", attribute)
+		}
+		seenAttributes[attribute] = true
+	}
+	if len(desc.AlterTableAttributes) > 0 && !desc.Supports(dbdriver.CapAlterTable) {
+		report("alterTableAttributes are declared without capability %q, the only feature that uses them", dbdriver.CapAlterTable)
 	}
 	return problems
 }

@@ -38,37 +38,34 @@ func (s *Session) CreateTableStatements(_ context.Context, database string, req 
 	}
 	defs := make([]string, 0, len(req.Columns))
 	for _, column := range req.Columns {
-		def := tables.QuoteIdent(strings.TrimSpace(column.Name)) + " " + strings.TrimSpace(column.Type)
-		if !column.Nullable {
-			def += " NOT NULL"
-		}
-		if strings.TrimSpace(column.DefaultValue) != "" {
-			def += " DEFAULT " + defaultValueLiteral(column.DefaultValue)
+		// 建表照旧不按列类型写默认值：零值的 Literals 把文本一律写成单引号成对转义的字符串。
+		def, err := ColumnDefinitionSQL(Literals{}, tables.QuoteIdent, dbdriver.ColumnDefinition{
+			Name: column.Name, Type: column.Type, Nullable: column.Nullable, DefaultValue: column.DefaultValue,
+		})
+		if err != nil {
+			return nil, err
 		}
 		defs = append(defs, def)
 	}
 	return []string{fmt.Sprintf("CREATE TABLE %s (\n  %s\n)", tables.TableRef(database, req.Name), strings.Join(defs, ",\n  "))}, nil
 }
 
-var (
-	numberPattern    = regexp.MustCompile(`^[-+]?\d+(\.\d+)?$`)
-	keywordPattern   = regexp.MustCompile(`(?i)^(true|false|null)$`)
-	timestampPattern = regexp.MustCompile(`(?i)^(current_timestamp(\(\))?|now\(\))$`)
-)
-
-// defaultValueLiteral 把用户填的默认值文本写成 DEFAULT 后面的内容：数字、TRUE / FALSE / NULL、
-// CURRENT_TIMESTAMP / NOW() 原样写入，其余当作字符串加引号。这是建表对话框一直以来的规则。
-func defaultValueLiteral(value string) string {
-	v := strings.TrimSpace(value)
-	switch {
-	case numberPattern.MatchString(v):
-		return v
-	case keywordPattern.MatchString(v):
-		return strings.ToUpper(v)
-	case timestampPattern.MatchString(v):
-		return v
+// ColumnDefinitionSQL 是建表与新增列时的列定义：名称加引号、类型文本原样（首尾空白除外）、不可空时
+// NOT NULL、有默认值时 DEFAULT（写法见 Literals.Default）。注释不在其中：各方言写法不同。
+func ColumnDefinitionSQL(literals Literals, quote func(string) string, column dbdriver.ColumnDefinition) (string, error) {
+	columnType := strings.TrimSpace(column.Type)
+	def := quote(strings.TrimSpace(column.Name)) + " " + columnType
+	if !column.Nullable {
+		def += " NOT NULL"
 	}
-	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+	if strings.TrimSpace(column.DefaultValue) != "" {
+		literal, err := literals.Default(column.DefaultValue, columnType)
+		if err != nil {
+			return "", err
+		}
+		def += " DEFAULT " + literal
+	}
+	return def, nil
 }
 
 // DropTableStatements 生成删表语句。不碰数据库。

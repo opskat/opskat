@@ -13,48 +13,62 @@ import {
   Label,
   Switch,
 } from "@opskat/ui";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, GetAlterTableModel, GetAlterTableStatements } from "../../../wailsjs/go/query/Query";
+import { dbdriver } from "../../../wailsjs/go/models";
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import {
-  buildAlterStatements,
-  quoteIdent,
-  sqlQuote,
-  type AlterDraftColumn,
-  type AlterLoadedColumn,
-} from "@/lib/tableSql";
+import { driverCanAlter, findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 
 interface AlterTableDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   assetId: number;
   database: string;
+  /** 列表给出的表名(带 schema 分组的驱动是 schema.table)。 */
   table: string;
+  /** 驱动 id;能改哪些属性按它的描述锁定。 */
   driver?: string;
+  /** 执行成功后调用;改了名时带上改名后的表名(列表给出的形式)。 */
   onSuccess: (tableName?: string) => void;
 }
 
-interface SQLResult {
-  rows?: Record<string, unknown>[];
+/** 对话框里的一列:originalName 是它在表里现在的名字,新增的列没有。 */
+interface DraftColumn {
+  id: number;
+  originalName?: string;
+  name: string;
+  type: string;
+  nullable: boolean;
+  defaultValue: string;
+  comment: string;
+  isNew: boolean;
 }
 
-function escapeLiteral(value: string): string {
-  return value.replace(/'/g, "''");
+/**
+ * 驱动声明的可改属性恰好是下面某一组时,显示对应的限制说明与表注释输入框的占位文案。其余组合不显示说明,
+ * 锁定的输入照样锁定。
+ */
+const ALTER_LIMITS: { attributes: string[]; hint: string; tableComment: string }[] = [
+  {
+    attributes: [],
+    hint: "query.alterLimitsRenameAddDropOnly",
+    tableComment: "query.alterTableCommentUnsupported",
+  },
+  {
+    attributes: ["column_type", "column_nullable"],
+    hint: "query.alterLimitsTypeAndNullabilityOnly",
+    tableComment: "query.alterTableCommentExtendedProperties",
+  },
+];
+
+function findAlterLimits(declared: string[]) {
+  return ALTER_LIMITS.find(
+    (limits) => limits.attributes.length === declared.length && limits.attributes.every((a) => declared.includes(a))
+  );
 }
 
-function getByKey(row: Record<string, unknown>, keys: string[]): unknown {
-  for (const key of keys) {
-    if (key in row) return row[key];
-  }
-  const lowerKeys = keys.map((k) => k.toLowerCase());
-  for (const [k, v] of Object.entries(row)) {
-    if (lowerKeys.includes(k.toLowerCase())) return v;
-  }
-  return undefined;
-}
-
-function createNewDraft(id: number): AlterDraftColumn {
+function createNewDraft(id: number): DraftColumn {
   return {
     id,
     name: "",
@@ -64,6 +78,61 @@ function createNewDraft(id: number): AlterDraftColumn {
     comment: "",
     isNew: true,
   };
+}
+
+/** 对话框里的样子与打开时驱动读出的相比有没有改动(比较方式同驱动:类型不分大小写,默认值与注释去掉首尾空白)。 */
+function draftChanged(
+  model: dbdriver.AlterTableModel,
+  tableNameDraft: string,
+  tableCommentDraft: string,
+  columns: DraftColumn[]
+): boolean {
+  const name = tableNameDraft.trim();
+  if (name && name !== model.name) return true;
+  if (tableCommentDraft.trim() !== model.comment.trim()) return true;
+  const kept = new Set<string>();
+  for (const col of columns) {
+    if (col.isNew || !col.originalName) {
+      if (col.name.trim()) return true;
+      continue;
+    }
+    kept.add(col.originalName);
+    const original = model.columns.find((c) => c.name === col.originalName);
+    if (!original) continue;
+    if (
+      col.name.trim() !== original.name ||
+      col.type.trim().toLowerCase() !== original.type.trim().toLowerCase() ||
+      col.nullable !== original.nullable ||
+      col.defaultValue.trim() !== original.defaultValue.trim() ||
+      col.comment.trim() !== original.comment.trim()
+    ) {
+      return true;
+    }
+  }
+  return model.columns.some((c) => !kept.has(c.name));
+}
+
+/** 交给驱动的改表请求:改完之后这张表的样子,以及要删除的已有列。 */
+function buildRequest(
+  model: dbdriver.AlterTableModel,
+  tableNameDraft: string,
+  tableCommentDraft: string,
+  columns: DraftColumn[]
+): dbdriver.AlterTableRequest {
+  const kept = new Set(columns.filter((col) => !col.isNew && col.originalName).map((col) => col.originalName));
+  return dbdriver.AlterTableRequest.createFrom({
+    name: tableNameDraft.trim(),
+    comment: tableCommentDraft,
+    columns: columns.map((col) => ({
+      originalName: col.isNew ? "" : (col.originalName ?? ""),
+      name: col.name,
+      type: col.type,
+      nullable: col.nullable,
+      defaultValue: col.defaultValue,
+      comment: col.comment,
+    })),
+    drops: model.columns.filter((c) => !kept.has(c.name)).map((c) => c.name),
+  });
 }
 
 export function AlterTableDialog({
@@ -76,137 +145,45 @@ export function AlterTableDialog({
   onSuccess,
 }: AlterTableDialogProps) {
   const { t } = useTranslation();
-  const isSqlite = driver === "sqlite";
-  const isMssql = driver === "mssql";
-
-  const [columns, setColumns] = useState<AlterDraftColumn[]>([]);
-  const [originalColumns, setOriginalColumns] = useState<AlterLoadedColumn[]>([]);
-  const [tableNameDraft, setTableNameDraft] = useState(table);
+  const [model, setModel] = useState<dbdriver.AlterTableModel | null>(null);
+  const [columns, setColumns] = useState<DraftColumn[]>([]);
+  const [tableNameDraft, setTableNameDraft] = useState("");
   const [tableCommentDraft, setTableCommentDraft] = useState("");
-  const [originalTableComment, setOriginalTableComment] = useState("");
   const [nextId, setNextId] = useState(1);
   const [loadingColumns, setLoadingColumns] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [previewStatements, setPreviewStatements] = useState<string[]>([]);
   const [pendingNextTableName, setPendingNextTableName] = useState<string | undefined>();
 
+  const driversState = useDatabaseDrivers();
+  const descriptor =
+    driversState.status === "ready" ? findDatabaseDriver(driversState.drivers, driver ?? "") : undefined;
+  const can = (attribute: string) => driverCanAlter(descriptor, attribute);
+  const limits = descriptor ? findAlterLimits(descriptor.alterTableAttributes ?? []) : undefined;
+  const canTableComment = can("table_comment");
+
   const resetForm = useCallback(() => {
+    setModel(null);
     setColumns([]);
-    setOriginalColumns([]);
-    setTableNameDraft(table);
+    setTableNameDraft("");
     setTableCommentDraft("");
-    setOriginalTableComment("");
     setNextId(1);
     setShowSqlPreview(false);
     setPreviewStatements([]);
     setPendingNextTableName(undefined);
-  }, [table]);
+  }, []);
 
+  // 表的列、类型、可空、默认值、注释与表注释都由驱动读出。
   const loadColumns = useCallback(async () => {
     if (!assetId || !open) return;
 
     try {
-      let columnSql = "";
-      let tableCommentSql = "";
-      if (driver === "postgresql") {
-        const escapedTable = escapeLiteral(table);
-        columnSql =
-          `SELECT c.column_name, c.data_type, c.udt_name, c.is_nullable, c.column_default, ` +
-          `COALESCE(pg_catalog.col_description(cls.oid, c.ordinal_position::int), '') AS comment ` +
-          `FROM information_schema.columns c ` +
-          `JOIN pg_catalog.pg_class cls ON cls.relname = c.table_name ` +
-          `JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace AND ns.nspname = c.table_schema ` +
-          `WHERE c.table_schema = 'public' AND c.table_name = '${escapedTable}' ORDER BY c.ordinal_position`;
-        tableCommentSql =
-          `SELECT COALESCE(pg_catalog.obj_description(cls.oid, 'pg_class'), '') AS table_comment ` +
-          `FROM pg_catalog.pg_class cls ` +
-          `JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace ` +
-          `WHERE ns.nspname = 'public' AND cls.relname = '${escapedTable}' LIMIT 1`;
-      } else if (driver === "sqlite") {
-        const schema = database ? `${quoteIdent(database, driver)}.` : "";
-        columnSql = `SELECT name, type, "notnull", dflt_value, pk FROM ${schema}pragma_table_info(${sqlQuote(table)})`;
-      } else if (driver === "mssql") {
-        // MSSQL 无 SHOW FULL COLUMNS，从 INFORMATION_SCHEMA 取列（table 为 schema.table）。
-        // 列注释走扩展属性，UI 已锁定，这里不查表注释。
-        const dot = table.indexOf(".");
-        const schemaName = dot >= 0 ? table.slice(0, dot) : "dbo";
-        const tableOnly = dot >= 0 ? table.slice(dot + 1) : table;
-        columnSql =
-          `SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT ` +
-          `FROM INFORMATION_SCHEMA.COLUMNS ` +
-          `WHERE TABLE_SCHEMA = '${escapeLiteral(schemaName)}' AND TABLE_NAME = '${escapeLiteral(tableOnly)}' ` +
-          `ORDER BY ORDINAL_POSITION`;
-      } else {
-        const quotedTable = quoteIdent(table, driver);
-        const escapedDb = escapeLiteral(database);
-        const escapedTable = escapeLiteral(table);
-        columnSql = `SHOW FULL COLUMNS FROM ${quotedTable}`;
-        tableCommentSql =
-          `SELECT COALESCE(table_comment, '') AS table_comment FROM information_schema.tables ` +
-          `WHERE table_schema = '${escapedDb}' AND table_name = '${escapedTable}' LIMIT 1`;
-      }
-
-      const [columnResult, tableCommentResult] = await Promise.all([
-        ExecuteSQL(assetId, columnSql, database),
-        tableCommentSql
-          ? ExecuteSQL(assetId, tableCommentSql, database)
-          : Promise.resolve(JSON.stringify({ rows: [] })),
-      ]);
-      const parsed: SQLResult = JSON.parse(columnResult);
-      const rows = parsed.rows || [];
-      const commentParsed: SQLResult = JSON.parse(tableCommentResult);
-      const tableCommentRows = commentParsed.rows || [];
-      const loadedTableComment = String(getByKey(tableCommentRows[0] || {}, ["table_comment"]) ?? "");
-
-      const loaded = rows
-        .map((row) => {
-          if (driver === "postgresql") {
-            const name = String(getByKey(row, ["column_name"]) ?? "");
-            const dataType = String(getByKey(row, ["data_type"]) ?? "");
-            const udtName = String(getByKey(row, ["udt_name"]) ?? "");
-            const nullable = String(getByKey(row, ["is_nullable"]) ?? "").toUpperCase() === "YES";
-            const defaultValue = String(getByKey(row, ["column_default"]) ?? "");
-            const comment = String(getByKey(row, ["comment"]) ?? "");
-            return {
-              name,
-              type: dataType === "USER-DEFINED" && udtName ? udtName : dataType,
-              nullable,
-              defaultValue,
-              comment,
-            } as AlterLoadedColumn;
-          }
-          if (driver === "sqlite") {
-            const name = String(getByKey(row, ["name"]) ?? "");
-            const type = String(getByKey(row, ["type"]) ?? "");
-            const nullable = Number(getByKey(row, ["notnull"]) ?? 0) !== 1;
-            const defaultValue = String(getByKey(row, ["dflt_value"]) ?? "");
-            return { name, type, nullable, defaultValue, comment: "" } as AlterLoadedColumn;
-          }
-          if (driver === "mssql") {
-            const name = String(getByKey(row, ["COLUMN_NAME"]) ?? "");
-            const dataType = String(getByKey(row, ["DATA_TYPE"]) ?? "");
-            const maxLenRaw = getByKey(row, ["CHARACTER_MAXIMUM_LENGTH"]);
-            const maxLen = maxLenRaw == null ? null : Number(maxLenRaw);
-            const type =
-              maxLen === -1 ? `${dataType}(max)` : maxLen && maxLen > 0 ? `${dataType}(${maxLen})` : dataType;
-            const nullable = String(getByKey(row, ["IS_NULLABLE"]) ?? "").toUpperCase() === "YES";
-            const defaultValue = String(getByKey(row, ["COLUMN_DEFAULT"]) ?? "");
-            return { name, type, nullable, defaultValue, comment: "" } as AlterLoadedColumn;
-          }
-
-          const name = String(getByKey(row, ["Field", "field"]) ?? "");
-          const type = String(getByKey(row, ["Type", "type"]) ?? "");
-          const nullable = String(getByKey(row, ["Null", "null"]) ?? "").toUpperCase() === "YES";
-          const defaultValue = String(getByKey(row, ["Default", "default"]) ?? "");
-          const comment = String(getByKey(row, ["Comment", "comment"]) ?? "");
-          return { name, type, nullable, defaultValue, comment } as AlterLoadedColumn;
-        })
-        .filter((col) => col.name);
-
-      setOriginalColumns(loaded);
+      const loaded = await GetAlterTableModel(assetId, database, table);
+      setModel(loaded);
       setColumns(
-        loaded.map((col, idx) => ({
+        loaded.columns.map((col, idx) => ({
           id: idx + 1,
           originalName: col.name,
           name: col.name,
@@ -217,38 +194,34 @@ export function AlterTableDialog({
           isNew: false,
         }))
       );
-      setOriginalTableComment(loadedTableComment);
-      setTableCommentDraft(loadedTableComment);
-      setNextId(loaded.length + 1);
-      setTableNameDraft(table);
+      setTableNameDraft(loaded.name);
+      setTableCommentDraft(loaded.comment);
+      setNextId(loaded.columns.length + 1);
     } catch (e) {
       toast.error(String(e));
+      setModel(null);
       setColumns([]);
-      setOriginalColumns([]);
-      setOriginalTableComment("");
       setTableCommentDraft("");
     } finally {
       setLoadingColumns(false);
     }
-  }, [assetId, open, driver, table, database]);
+  }, [assetId, open, table, database]);
 
-  // 打开(或资产/驱动/库/表变化)时同步进入加载态:渲染期对比上次值,替代 effect 里的同步 setState;
+  // 打开(或资产/库/表变化)时同步进入加载态:渲染期对比上次值,替代 effect 里的同步 setState;
   // 异步拉取仍留在下面的 effect(loadColumns 内已无同步 setState)。
   const [prevLoadKey, setPrevLoadKey] = useState<{
     open: boolean;
     assetId?: number;
-    driver?: string;
     table?: string;
     database?: string;
   }>({ open: false });
   if (
     open !== prevLoadKey.open ||
     assetId !== prevLoadKey.assetId ||
-    driver !== prevLoadKey.driver ||
     table !== prevLoadKey.table ||
     database !== prevLoadKey.database
   ) {
-    setPrevLoadKey({ open, assetId, driver, table, database });
+    setPrevLoadKey({ open, assetId, table, database });
     if (open && assetId) setLoadingColumns(true);
   }
 
@@ -261,21 +234,12 @@ export function AlterTableDialog({
     }
   }, [open, loadColumns]);
 
-  const hasPendingChanges = useMemo(() => {
-    const built = buildAlterStatements({
-      driver,
-      database,
-      table,
-      tableNameDraft,
-      tableCommentDraft,
-      originalTableComment,
-      originalColumns,
-      draftColumns: columns,
-    });
-    return built.statements.length > 0;
-  }, [driver, database, table, tableNameDraft, tableCommentDraft, originalTableComment, originalColumns, columns]);
+  const hasPendingChanges = useMemo(
+    () => !!model && draftChanged(model, tableNameDraft, tableCommentDraft, columns),
+    [model, tableNameDraft, tableCommentDraft, columns]
+  );
 
-  const updateColumn = useCallback((id: number, patch: Partial<AlterDraftColumn>) => {
+  const updateColumn = useCallback((id: number, patch: Partial<DraftColumn>) => {
     setColumns((prev) => prev.map((col) => (col.id === id ? { ...col, ...patch } : col)));
   }, []);
 
@@ -317,42 +281,32 @@ export function AlterTableDialog({
     return true;
   }, [columns, t]);
 
-  const handlePreview = useCallback(() => {
-    if (!assetId) return;
+  const handlePreview = useCallback(async () => {
+    if (!assetId || !model) return;
     if (!validateDraft()) return;
 
-    const built = buildAlterStatements({
-      driver,
-      database,
-      table,
-      tableNameDraft,
-      tableCommentDraft,
-      originalTableComment,
-      originalColumns,
-      draftColumns: columns,
-    });
-
-    if (built.statements.length === 0) {
-      toast.error(t("query.designTableNoChanges"));
-      return;
+    // 语句由驱动对照表现在的定义生成;生成失败时显示错误、不打开预览、不执行任何语句。
+    setGenerating(true);
+    try {
+      const result = await GetAlterTableStatements(
+        assetId,
+        database,
+        table,
+        buildRequest(model, tableNameDraft, tableCommentDraft, columns)
+      );
+      if (result.statements.length === 0) {
+        toast.error(t("query.designTableNoChanges"));
+        return;
+      }
+      setPreviewStatements(result.statements);
+      setPendingNextTableName(result.table !== table ? result.table : undefined);
+      setShowSqlPreview(true);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setGenerating(false);
     }
-
-    setPreviewStatements(built.statements);
-    setPendingNextTableName(built.nextTableName);
-    setShowSqlPreview(true);
-  }, [
-    assetId,
-    validateDraft,
-    driver,
-    database,
-    table,
-    tableNameDraft,
-    tableCommentDraft,
-    originalTableComment,
-    originalColumns,
-    columns,
-    t,
-  ]);
+  }, [assetId, model, validateDraft, database, table, tableNameDraft, tableCommentDraft, columns, t]);
 
   const handleConfirmSubmit = useCallback(async () => {
     if (!assetId || previewStatements.length === 0) return;
@@ -399,6 +353,7 @@ export function AlterTableDialog({
                 onChange={(e) => setTableNameDraft(e.target.value)}
                 placeholder={t("query.alterRenameTablePlaceholder")}
                 disabled={submitting || loadingColumns}
+                data-testid="alter-table-name"
               />
             </div>
 
@@ -409,18 +364,18 @@ export function AlterTableDialog({
                 value={tableCommentDraft}
                 onChange={(e) => setTableCommentDraft(e.target.value)}
                 placeholder={
-                  isSqlite
-                    ? t("query.alterSqliteUnsupportedTableComment")
-                    : isMssql
-                      ? t("query.alterMssqlUnsupportedTableComment")
-                      : t("query.tableCommentPlaceholder")
+                  canTableComment
+                    ? t("query.tableCommentPlaceholder")
+                    : t(limits?.tableComment ?? "query.alterTableCommentUnsupported", { name: descriptor?.name })
                 }
-                disabled={submitting || loadingColumns || isSqlite || isMssql}
+                disabled={submitting || loadingColumns || !canTableComment}
+                data-testid="alter-table-comment"
               />
             </div>
 
-            {isSqlite && <p className="text-[11px] text-muted-foreground">{t("query.alterSqliteLimitations")}</p>}
-            {isMssql && <p className="text-[11px] text-muted-foreground">{t("query.alterMssqlLimitations")}</p>}
+            {limits && (
+              <p className="text-[11px] text-muted-foreground">{t(limits.hint, { name: descriptor?.name })}</p>
+            )}
 
             <div className="flex items-center justify-between">
               <Label className="text-xs">{t("query.designTableColumns")}</Label>
@@ -430,6 +385,7 @@ export function AlterTableDialog({
                 className="h-7 text-xs gap-1"
                 onClick={handleAddColumn}
                 disabled={submitting || loadingColumns}
+                data-testid="alter-add-column"
               >
                 <Plus className="h-3.5 w-3.5" />
                 {t("query.designTableAddColumn")}
@@ -459,10 +415,8 @@ export function AlterTableDialog({
                   </div>
 
                   {columns.map((col) => {
-                    const sqliteExistingLocked = isSqlite && !col.isNew;
-                    // MSSQL 现有列：类型/可空可改（ALTER COLUMN），但默认值需命名约束、
-                    // 注释走扩展属性，均锁定不生成。
-                    const mssqlExistingDefaultLocked = isMssql && !col.isNew;
+                    // 新增的列总能给出类型、可空与默认值;已有列的这三项与所有列的注释按驱动的声明锁定。
+                    const locked = (attribute: string) => !col.isNew && !can(attribute);
                     return (
                       <div key={col.id} className="rounded-md border border-border p-2">
                         <div className="grid grid-cols-20 gap-2 items-center">
@@ -473,6 +427,7 @@ export function AlterTableDialog({
                               onChange={(e) => updateColumn(col.id, { name: e.target.value })}
                               placeholder={t("query.columnNamePlaceholder")}
                               disabled={submitting}
+                              data-testid="alter-column-name"
                             />
                           </div>
                           <div className="col-span-4">
@@ -481,7 +436,8 @@ export function AlterTableDialog({
                               value={col.type}
                               onChange={(e) => updateColumn(col.id, { type: e.target.value })}
                               placeholder={t("query.columnTypePlaceholder")}
-                              disabled={submitting || sqliteExistingLocked}
+                              disabled={submitting || locked("column_type")}
+                              data-testid="alter-column-type"
                             />
                           </div>
                           <div className="col-span-4">
@@ -490,7 +446,8 @@ export function AlterTableDialog({
                               value={col.defaultValue}
                               onChange={(e) => updateColumn(col.id, { defaultValue: e.target.value })}
                               placeholder={t("query.defaultValuePlaceholder")}
-                              disabled={submitting || sqliteExistingLocked || mssqlExistingDefaultLocked}
+                              disabled={submitting || locked("column_default")}
+                              data-testid="alter-column-default"
                             />
                           </div>
                           <div className="col-span-6">
@@ -499,14 +456,16 @@ export function AlterTableDialog({
                               value={col.comment}
                               onChange={(e) => updateColumn(col.id, { comment: e.target.value })}
                               placeholder={t("query.columnCommentPlaceholder")}
-                              disabled={submitting || isSqlite || isMssql}
+                              disabled={submitting || !can("column_comment")}
+                              data-testid="alter-column-comment"
                             />
                           </div>
                           <div className="col-span-2 flex items-center justify-center gap-1">
                             <Switch
                               checked={col.nullable}
                               onCheckedChange={(checked) => updateColumn(col.id, { nullable: checked })}
-                              disabled={submitting || sqliteExistingLocked}
+                              disabled={submitting || locked("column_nullable")}
+                              data-testid="alter-column-nullable"
                             />
                             <span className="text-[11px] text-muted-foreground">
                               {col.nullable ? "NULL" : "NOT NULL"}
@@ -547,9 +506,10 @@ export function AlterTableDialog({
               size="sm"
               className="h-8 text-xs"
               onClick={handlePreview}
-              disabled={submitting || loadingColumns || !hasPendingChanges}
+              disabled={submitting || generating || loadingColumns || !hasPendingChanges}
+              data-testid="alter-preview"
             >
-              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {submitting || generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               {t("query.designTablePreviewChanges")}
             </Button>
           </DialogFooter>

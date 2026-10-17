@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "batch"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "alter_model" / "alter_table" / "batch"。
 	Op       string
 	Database string
 	Table    string
@@ -180,6 +180,8 @@ type TableCall struct {
 	CreateTable *dbdriver.CreateTableRequest
 	// CreateDatabase 是 create_database 收到的请求。
 	CreateDatabase *dbdriver.CreateDatabaseRequest
+	// AlterTable 是 alter_table 收到的请求。
+	AlterTable *dbdriver.AlterTableRequest
 	// Batch 是 batch 收到的请求。
 	Batch *dbdriver.BatchRequest
 }
@@ -426,4 +428,53 @@ func (s *FakeSession) record(statement string) (isQuery bool, err error) {
 	}
 	s.statements = append(s.statements, statement)
 	return isQuery, nil
+}
+
+// AlterTableModel 记下收到的请求（Op "alter_model"），把假库的表元数据（Metadata 的列）当作这张表给出，
+// 表名原样、没有表注释。驱动没有声明改表时以 ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) AlterTableModel(_ context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
+		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
+	}
+	if err := s.tableCall(TableCall{Op: "alter_model", Database: database, Table: table}); err != nil {
+		return nil, err
+	}
+	return s.alterModel(table), nil
+}
+
+func (s *FakeSession) alterModel(table string) *dbdriver.AlterTableModel {
+	model := &dbdriver.AlterTableModel{Name: table, Columns: make([]dbdriver.ColumnDefinition, 0, len(s.fake.Metadata.Columns))}
+	for _, column := range s.fake.Metadata.Columns {
+		definition := dbdriver.ColumnDefinition{Name: column.Name, Type: column.Type, Nullable: column.Nullable, Comment: column.Comment}
+		if column.Default != nil {
+			definition.DefaultValue = *column.Default
+		}
+		model.Columns = append(model.Columns, definition)
+	}
+	return model
+}
+
+// AlterTableStatements 记下收到的请求（Op "alter_table"）：请求与 AlterTableModel 给出的样子相同时没有
+// 语句，否则给出一条一眼能与任何真实方言区分的语句；改了名时表名是新名字。驱动没有声明改表时以
+// ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) AlterTableStatements(_ context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
+		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
+	}
+	if err := s.tableCall(TableCall{Op: "alter_table", Database: database, Table: table, AlterTable: &req}); err != nil {
+		return nil, err
+	}
+	result := &dbdriver.AlterTableStatements{Statements: []string{}, Table: table}
+	if req.Name != "" && req.Name != table {
+		result.Table = req.Name
+	}
+	model := s.alterModel(table)
+	unchanged := result.Table == table && req.Comment == model.Comment && len(req.Drops) == 0 && len(req.Columns) == len(model.Columns)
+	for i := 0; unchanged && i < len(req.Columns); i++ {
+		unchanged = req.Columns[i].OriginalName == model.Columns[i].Name && req.Columns[i].Definition() == model.Columns[i]
+	}
+	if !unchanged {
+		result.Statements = []string{fmt.Sprintf("FAKE ALTER TABLE %s.%s", database, table)}
+	}
+	return result, nil
 }

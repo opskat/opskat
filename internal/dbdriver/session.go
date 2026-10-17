@@ -172,6 +172,18 @@ type Session interface {
 	// 没有声明 CapCreateDatabase 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	CreateDatabaseStatements(ctx context.Context, req CreateDatabaseRequest) ([]string, error)
 
+	// AlterTableModel 读出改表对话框打开时的这张表：不带 schema 的表名、表注释，以及各列的名称、
+	// 类型、可空、默认值与注释，按列在表里的次序（见 AlterTableModel）。表不存在时返回 error。驱动
+	// 没有声明 CapAlterTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	AlterTableModel(ctx context.Context, database, table string) (*AlterTableModel, error)
+
+	// AlterTableStatements 生成把表改成 req 的语句（只生成、不执行），按执行的次序；没有任何改动时
+	// 语句为空列表。驱动在自己的会话上读这张表现在的定义，与 req 比较得出改动（比较的方式同
+	// AlterTableRequest 的说明），改列时保留对话框里不显示、用户也没有改的列定义。req 要改驱动没有
+	// 声明可改的属性（Descriptor.AlterTableAttributes），或说到的列不在表中（表已不存在）时返回
+	// error。驱动没有声明 CapAlterTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	AlterTableStatements(ctx context.Context, database, table string, req AlterTableRequest) (*AlterTableStatements, error)
+
 	// ExecuteBatch 在会话的一条连接上按次序执行一批语句（导入的整批执行用它），见 BatchRequest。
 	// 空白语句跳过、不执行。语句本身的失败记在结果里，不作为 error 返回。
 	//
@@ -273,6 +285,68 @@ type CreateDatabaseRequest struct {
 	Name string `json:"name"`
 	// Options 是驱动声明的选项值，按选项的键取。
 	Options map[string]string `json:"options"`
+}
+
+// ColumnDefinition 是改表对话框里一列可编辑的部分。
+type ColumnDefinition struct {
+	Name string `json:"name"`
+	// Type 是类型文本，写进语句时原样（首尾空白除外）。
+	Type     string `json:"type"`
+	Nullable bool   `json:"nullable"`
+	// DefaultValue 是默认值文本，空表示没有默认值；写进语句的规则同 NewColumn.DefaultValue。
+	DefaultValue string `json:"defaultValue"`
+	// Comment 是列注释，空表示没有注释。
+	Comment string `json:"comment"`
+}
+
+// AlterTableModel 是改表对话框打开时看到的表。
+type AlterTableModel struct {
+	// Name 是改名输入框里的表名：不带 schema。
+	Name string `json:"name"`
+	// Comment 是表注释，没有时为空串。
+	Comment string `json:"comment"`
+	// Columns 按列在表里的次序。
+	Columns []ColumnDefinition `json:"columns"`
+}
+
+// AlterTableRequest 是改表对话框提交的改动：改完之后这张表的样子。
+//
+// 已有的列按 OriginalName 对到表里现在的那一列，与它比较：名称不同是改名，类型去掉首尾空白后
+// 不分大小写比较，默认值与注释去掉首尾空白后比较。都相同的列不生成语句。
+type AlterTableRequest struct {
+	// Name 是新表名，不带 schema（改名后表仍在原 schema）；为空或与现在的相同表示不改名。
+	Name string `json:"name"`
+	// Comment 是表注释；去掉首尾空白后与现在的相同表示不改。
+	Comment string `json:"comment"`
+	// Columns 是保留与新增的列，按对话框里的次序。
+	Columns []AlterColumn `json:"columns"`
+	// Drops 是要删除的已有列。
+	Drops []string `json:"drops"`
+}
+
+// AlterColumn 是改表请求里的一列。
+type AlterColumn struct {
+	// OriginalName 是这一列在表里现在的名字；为空表示新增的列。
+	OriginalName string `json:"originalName"`
+	// 以下同 ColumnDefinition：改表之后这一列的样子。
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	Nullable     bool   `json:"nullable"`
+	DefaultValue string `json:"defaultValue"`
+	Comment      string `json:"comment"`
+}
+
+// Definition 是这一列改表之后的样子。
+func (c AlterColumn) Definition() ColumnDefinition {
+	return ColumnDefinition{Name: c.Name, Type: c.Type, Nullable: c.Nullable, DefaultValue: c.DefaultValue, Comment: c.Comment}
+}
+
+// AlterTableStatements 是改表的语句。
+type AlterTableStatements struct {
+	// Statements 按执行的次序；任何一条失败都应停下。
+	Statements []string `json:"statements"`
+	// Table 是语句执行后这张表的名字，用 ListTables 给出的形式（改了名就是新名字，schema 不变）。
+	Table string `json:"table"`
 }
 
 // BatchRequest 是 Session.ExecuteBatch 要在一条连接上执行的一批语句。

@@ -2,6 +2,7 @@ package sqldb
 
 import (
 	"encoding/hex"
+	"regexp"
 	"strings"
 )
 
@@ -50,4 +51,25 @@ func (l Literals) Literal(value any, columnType string) (string, error) {
 		return "N" + quoted, nil
 	}
 	return quoted, nil
+}
+
+var (
+	numberPattern    = regexp.MustCompile(`^[-+]?\d+(\.\d+)?$`)
+	keywordPattern   = regexp.MustCompile(`(?i)^(true|false|null)$`)
+	timestampPattern = regexp.MustCompile(`(?i)^(current_timestamp(\(\))?|now\(\))$`)
+)
+
+// Default 把用户在建表 / 改表对话框里填的默认值文本写成 DEFAULT 后面的内容：数字、TRUE / FALSE /
+// NULL、CURRENT_TIMESTAMP / NOW() 原样写入，其余写成要存进 columnType 列的字面量（columnType 是
+// 用户填的类型文本，按括号前的类型名判断写法）。这是两个对话框一直以来的规则。
+func (l Literals) Default(value, columnType string) (string, error) {
+	v := strings.TrimSpace(value)
+	switch {
+	case numberPattern.MatchString(v), timestampPattern.MatchString(v):
+		return v, nil
+	case keywordPattern.MatchString(v):
+		return strings.ToUpper(v), nil
+	}
+	typeName, _, _ := strings.Cut(columnType, "(")
+	return l.Literal(v, strings.TrimSpace(typeName))
 }

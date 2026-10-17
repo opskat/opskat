@@ -272,26 +272,12 @@ func QuoteSchemaTable(table string, quote func(string) string) string {
 // （column_name / name / Field / COLUMN_NAME，Type / data_type / udt_name，Null / is_nullable，
 // Default / column_default / dflt_value，Comment / column_comment，Extra），这里按这些叫法取值。
 func QueryTableColumns(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]TableColumn, error) {
-	rows, err := conn.QueryContext(ctx, query, args...)
+	records, err := QueryRecords(ctx, conn, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]TableColumn, 0)
-	for rows.Next() {
-		values := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		row := ZipRow(cols, values)
+	out := make([]TableColumn, 0, len(records))
+	for _, row := range records {
 		name := PickString(row, "column_name", "name", "Field", "field", "COLUMN_NAME")
 		if name == "" {
 			continue
@@ -309,7 +295,7 @@ func QueryTableColumns(ctx context.Context, conn *sql.Conn, query string, args .
 			IdentityAlways: pickFlag(row, "is_identity_always", "IS_IDENTITY_ALWAYS"),
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // pickFlag 把结果集里的布尔列读成 bool：驱动可能给出布尔、整数（0 / 1）或文本（YES / t），

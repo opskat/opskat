@@ -40,10 +40,9 @@ const driverRestrictions = [
 // 写路径本轮仍由前端生成方言 SQL，下列文件因此还按驱动名分支（规格：写路径改由驱动生成是第二轮）。
 // 只减不增：迁到后端驱动的文件从这里删掉；新代码读驱动描述，不进这个名单。
 const driverBranchExempt = [
-  "src/components/query/AlterTableDialog.tsx", // 改表：各库 ALTER 语法
   "src/components/query/ImportTableDataDialog.tsx", // 导入：表名限定形式与外键检查开关
   "src/lib/tableImport.ts", // 导入：二进制字面量与 upsert 写法
-  "src/lib/tableSql.ts", // 引号规则与改表的方言 SQL
+  "src/lib/tableSql.ts", // 导入仍在用的引号规则
 ];
 
 export default tseslint.config(

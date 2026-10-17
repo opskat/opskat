@@ -252,6 +252,32 @@ func SplitSchemaTable(table, defaultSchema string) (string, string) {
 	return defaultSchema, table
 }
 
+// QueryRecords 执行一条查询，把每一行按结果列名取成 map（[]byte 转成字符串，见 ZipRow）。
+func QueryRecords(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]map[string]any, error) {
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var records []map[string]any
+	for rows.Next() {
+		values := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		records = append(records, ZipRow(cols, values))
+	}
+	return records, rows.Err()
+}
+
 // ZipRow 把一行的值按列名组成 map，[]byte 转成字符串。
 func ZipRow(cols []string, values []any) map[string]any {
 	row := make(map[string]any, len(cols))

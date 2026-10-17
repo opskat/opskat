@@ -39,6 +39,29 @@ type Descriptor struct {
 	// CreateDatabaseOptions 是新建数据库（CapCreateDatabase）时驱动接受的选项字段及默认值，按
 	// 对话框里的次序。建库对话框只显示这里声明的字段；没有声明的选项，会话以错误拒绝。
 	CreateDatabaseOptions []DatabaseOption `json:"createDatabaseOptions"`
+	// AlterTableAttributes 是改表（CapAlterTable）时，除了改表名、给列改名、新增与删除列之外还能
+	// 改的属性。改表对话框锁定没有声明的属性的输入；会话拒绝改动它们。
+	AlterTableAttributes []AlterAttribute `json:"alterTableAttributes"`
+}
+
+// AlterAttribute 是改表时可以单独声明能否修改的一项属性。
+type AlterAttribute string
+
+const (
+	// AlterTableComment：表注释。
+	AlterTableComment AlterAttribute = "table_comment"
+	// AlterColumnType / AlterColumnNullable / AlterColumnDefault：已有列的类型、可空与默认值。
+	// 新增的列总能给出这三项。
+	AlterColumnType     AlterAttribute = "column_type"
+	AlterColumnNullable AlterAttribute = "column_nullable"
+	AlterColumnDefault  AlterAttribute = "column_default"
+	// AlterColumnComment：列注释，新增的列与已有列都算。
+	AlterColumnComment AlterAttribute = "column_comment"
+)
+
+// AlterAttributes 是全部已知的改表属性。
+func AlterAttributes() []AlterAttribute {
+	return []AlterAttribute{AlterTableComment, AlterColumnType, AlterColumnNullable, AlterColumnDefault, AlterColumnComment}
 }
 
 // DatabaseOption 是新建数据库的一个选项字段。

@@ -124,6 +124,56 @@ test("edit a cell, add a row and delete a row in a SQLite table, then read the f
   ]);
 });
 
+test("alter a SQLite table: rename it, rename a column and add one, reading the schema back from the file", async ({
+  page,
+}) => {
+  const targetPath = join(
+    process.env.OPSKAT_DATA_DIR!,
+    `alter-target-${Date.now()}.db`,
+  );
+  seed(targetPath, [
+    "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    "INSERT INTO people(name) VALUES ('alpha')",
+  ]);
+  const panel = await openPanel(page, targetPath);
+
+  // 打开改表对话框:列由驱动读出;SQLite 的已有列只能改名或删除。
+  await panel
+    .locator('[data-table-node="main.people"]')
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^(Alter Table|修改表)$/ }).click();
+  const names = page.getByTestId("alter-column-name");
+  await expect(names).toHaveCount(2, { timeout: 30_000 });
+  await expect(names.nth(1)).toHaveValue("name");
+  await expect(page.getByTestId("alter-column-type").nth(1)).toBeDisabled();
+
+  await page.getByTestId("alter-table-name").fill("persons");
+  await names.nth(1).fill("full_name");
+  await page.getByTestId("alter-add-column").click();
+  await names.nth(2).fill("age");
+  await page.getByTestId("alter-column-type").nth(2).fill("INTEGER");
+  await page.getByTestId("alter-column-default").nth(2).fill("18");
+  await page.getByTestId("alter-preview").click();
+  await confirmPreview(page);
+
+  await expect(panel.locator('[data-table-node="main.persons"]')).toBeVisible({
+    timeout: 30_000,
+  });
+  expect(
+    readBack(
+      targetPath,
+      "SELECT name, type, dflt_value FROM pragma_table_info('persons')",
+    ),
+  ).toEqual([
+    { name: "id", type: "INTEGER", dflt_value: null },
+    { name: "full_name", type: "TEXT", dflt_value: null },
+    { name: "age", type: "INTEGER", dflt_value: "18" },
+  ]);
+  expect(readBack(targetPath, "SELECT full_name, age FROM persons")).toEqual([
+    { full_name: "alpha", age: 18 },
+  ]);
+});
+
 test("create a table, then truncate and drop it, in a SQLite database, reading the schema back from the file", async ({
   page,
 }) => {

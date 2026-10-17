@@ -35,6 +35,7 @@ var descriptor = dbdriver.Descriptor{
 		{Key: dbdriver.OptionCharset, Default: "UTF8"},
 		{Key: dbdriver.OptionCollation, Default: "en_US.UTF-8"},
 	},
+	AlterTableAttributes: alterAttributes,
 }
 
 type driver struct {

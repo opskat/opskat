@@ -310,6 +310,50 @@ func TestSchemaStatementsRefusedWhenTheDriverDoesNotDeclareThem(t *testing.T) {
 	}
 }
 
+// 改表：对话框打开时的表与改表语句都由驱动在自己的会话上给出；前端发来的请求（JSON，键名与前端
+// 一致）原样到达驱动，没有任何语句被执行。没有声明改表的驱动明确报「不支持」，同样不执行任何语句。
+func TestAlterTableIsProducedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	_, err := q.GetAlterTableModel(1, "app", "users")
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = q.GetAlterTableStatements(1, "app", "users", dbdriver.AlterTableRequest{Name: "people"})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapAlterTable)
+	model, err := q.GetAlterTableModel(1, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, "users", model.Name)
+	assert.Len(t, model.Columns, len(fake.Metadata.Columns))
+
+	var request dbdriver.AlterTableRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"people","comment":"c","columns":[`+
+		`{"originalName":"id","name":"id","type":"int","nullable":false,"defaultValue":"","comment":"pk"},`+
+		`{"originalName":"","name":"age","type":"INT","nullable":true,"defaultValue":"1","comment":""}],"drops":["name"]}`), &request))
+	result, err := q.GetAlterTableStatements(1, "app", "users", request)
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.AlterTableStatements{Statements: []string{"FAKE ALTER TABLE app.users"}, Table: "people"}, result)
+
+	var calls []dbdrivertest.TableCall
+	for _, session := range fake.Sessions() {
+		calls = append(calls, session.TableCalls()...)
+		assert.Empty(t, session.Statements())
+	}
+	assert.ElementsMatch(t, []dbdrivertest.TableCall{
+		{Op: "alter_model", Database: "app", Table: "users"},
+		{Op: "alter_table", Database: "app", Table: "users", AlterTable: &dbdriver.AlterTableRequest{
+			Name: "people", Comment: "c",
+			Columns: []dbdriver.AlterColumn{
+				{OriginalName: "id", Name: "id", Type: "int", Comment: "pk"},
+				{Name: "age", Type: "INT", Nullable: true, DefaultValue: "1"},
+			},
+			Drops: []string{"name"},
+		}},
+	}, calls)
+}
+
 // 导入的整批执行经资产的驱动会话：前端发来的请求（JSON，键名与前端一致）连同目标表到达驱动，
 // 复制模式放进一个事务；驱动的执行结果按语句种类计成新增 / 更新 / 删除。
 func TestExecuteTableImportRunsTheBatchOnTheDriverSession(t *testing.T) {

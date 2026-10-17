@@ -35,6 +35,7 @@ var descriptor = dbdriver.Descriptor{
 	CanDisableForeignKeyChecks: true,
 	// SQL Server 没有 CHARACTER SET，只有排序规则；默认空（用服务器默认）。
 	CreateDatabaseOptions: []dbdriver.DatabaseOption{{Key: dbdriver.OptionCollation}},
+	AlterTableAttributes:  alterAttributes,
 }
 
 type driver struct {

@@ -3,6 +3,7 @@ import "./sqliteFields";
 
 export {
   OBJECT_BROWSER_CAPABILITIES,
+  driverCanAlter,
   driverHasCapability,
   driverUsesField,
   findDatabaseDriver,

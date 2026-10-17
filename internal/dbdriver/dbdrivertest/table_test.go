@@ -513,3 +513,101 @@ func TestFakeSessionGeneratesSchemaStatementsWithoutExecuting(t *testing.T) {
 	}, session.TableCalls())
 	assert.Empty(t, session.Statements())
 }
+
+// 改表：假会话把表元数据当作这张表给出，原样交回时没有语句，改了什么就给一条一眼能与真实方言区分的
+// 语句；收到的请求原样记下，不执行任何语句。没声明改表的假驱动拒绝，且什么也没记下。
+func TestFakeSessionAltersTablesWithoutExecuting(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	ctx := context.Background()
+	rename := dbdriver.AlterTableRequest{Name: "people"}
+
+	_, err := session.AlterTableModel(ctx, "app", "users")
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = session.AlterTableStatements(ctx, "app", "users", rename)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Empty(t, session.TableCalls())
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapAlterTable)
+	model, err := session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.AlterTableModel{Name: "users", Columns: []dbdriver.ColumnDefinition{
+		{Name: "id", Type: "int", Comment: "primary key"},
+		{Name: "name", Type: "text", Nullable: true, DefaultValue: "anon"},
+	}}, model)
+	result, err := session.AlterTableStatements(ctx, "app", "users", rename)
+	require.NoError(t, err)
+	assert.Equal(t, &dbdriver.AlterTableStatements{Statements: []string{"FAKE ALTER TABLE app.users"}, Table: "people"}, result)
+	assert.Equal(t, []TableCall{
+		{Op: "alter_model", Database: "app", Table: "users"},
+		{Op: "alter_table", Database: "app", Table: "users", AlterTable: &rename},
+	}, session.TableCalls())
+	assert.Empty(t, session.Statements())
+
+	fake.Desc.AlterTableAttributes = []dbdriver.AlterAttribute{dbdriver.AlterColumnType}
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+}
+
+// brokenAlter 在假会话的改表之上按需改坏一处。
+type brokenAlter struct {
+	dbdriver.Session
+	model func(*dbdriver.AlterTableModel) *dbdriver.AlterTableModel
+	stmts func(*dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements
+}
+
+func (b brokenAlter) AlterTableModel(ctx context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
+	model, err := b.Session.AlterTableModel(ctx, database, table)
+	if b.model != nil && err == nil {
+		return b.model(model), nil
+	}
+	return model, err
+}
+
+func (b brokenAlter) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	result, err := b.Session.AlterTableStatements(ctx, database, table, req)
+	if b.stmts != nil && err == nil {
+		return b.stmts(result), nil
+	}
+	return result, err
+}
+
+// 改表的一致性检查也得能失败：声明了却给不出成形的结果，或没声明却放行。
+func TestTableConformanceReportsBrokenAlterTable(t *testing.T) {
+	for name, tt := range map[string]struct {
+		broken brokenAlter
+		want   string
+	}{
+		"model names a column the table does not have": {brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns = append(m.Columns, dbdriver.ColumnDefinition{Name: "ghost"})
+			return m
+		}}, "ghost"},
+		"model name is not the end of the table name": {brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Name = "app.users"
+			return m
+		}}, "app.users"},
+		"statements for an unchanged table": {brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+			r.Statements = []string{"ALTER TABLE users"}
+			return r
+		}}, "nothing changed"},
+		"statements are null": {brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+			r.Statements = nil
+			return r
+		}}, "null"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := NewFake()
+			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapAlterTable)
+			tt.broken.Session = openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+			problems := tableProblems(fake.Desc, tt.broken, "app", "users")
+			require.NotEmpty(t, problems)
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+
+	served := NewFake()
+	served.Desc.Capabilities = append(served.Desc.Capabilities, dbdriver.CapAlterTable)
+	session := openFake(t, served, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	problems := strings.Join(undeclaredObjectProblems(context.Background(), NewFake().Desc, session), "\n")
+	assert.Contains(t, problems, "AlterTableModel")
+	assert.Contains(t, problems, "AlterTableStatements")
+}
