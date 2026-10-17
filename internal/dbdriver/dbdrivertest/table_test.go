@@ -478,3 +478,38 @@ func TestFakeDriverWithForeignKeyTogglePassesTableConformance(t *testing.T) {
 	fake.Desc.CanDisableForeignKeyChecks = true
 	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
 }
+
+// 建表、删表、清空、建库的语句由假会话直接给出：每个操作一条一眼能与真实方言区分的语句，收到的请求
+// 原样记下，不执行任何语句；没声明对应功能的假驱动拒绝，且什么也没记下。
+func TestFakeSessionGeneratesSchemaStatementsWithoutExecuting(t *testing.T) {
+	fake := NewFake()
+	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	ctx := context.Background()
+	create := dbdriver.CreateTableRequest{Name: "users", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT"}}}
+	createDB := dbdriver.CreateDatabaseRequest{Name: "reports", Options: map[string]string{"collation": "c"}}
+
+	call := func() []error {
+		_, e1 := session.CreateTableStatements(ctx, "app", create)
+		_, e2 := session.DropTableStatements(ctx, "app", "users")
+		_, e3 := session.TruncateTableStatements(ctx, "app", "users")
+		_, e4 := session.CreateDatabaseStatements(ctx, createDB)
+		return []error{e1, e2, e3, e4}
+	}
+	for _, err := range call() {
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	}
+	assert.Empty(t, session.TableCalls())
+
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities,
+		dbdriver.CapCreateTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable, dbdriver.CapCreateDatabase)
+	for _, err := range call() {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []TableCall{
+		{Op: "create_table", Database: "app", Table: "users", CreateTable: &create},
+		{Op: "drop_table", Database: "app", Table: "users"},
+		{Op: "truncate_table", Database: "app", Table: "users"},
+		{Op: "create_database", Table: "reports", CreateDatabase: &createDB},
+	}, session.TableCalls())
+	assert.Empty(t, session.Statements())
+}

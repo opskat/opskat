@@ -14,18 +14,17 @@ import {
   ScrollArea,
   Switch,
 } from "@opskat/ui";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, GetCreateTableStatements } from "../../../wailsjs/go/query/Query";
+import { dbdriver } from "../../../wailsjs/go/models";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
-import { buildCreateTableSql } from "@/lib/tableSql";
 
 interface CreateTableDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   assetId: number;
   database: string;
-  driver?: string;
   onSuccess: (tableName: string) => void;
 }
 
@@ -47,14 +46,7 @@ function createEmptyColumn(id: number): ColumnDraft {
   };
 }
 
-export function CreateTableDialog({
-  open,
-  onOpenChange,
-  assetId,
-  database,
-  driver,
-  onSuccess,
-}: CreateTableDialogProps) {
+export function CreateTableDialog({ open, onOpenChange, assetId, database, onSuccess }: CreateTableDialogProps) {
   const { t } = useTranslation();
   const [tableName, setTableName] = useState("");
   const [columns, setColumns] = useState<ColumnDraft[]>([createEmptyColumn(1)]);
@@ -83,7 +75,7 @@ export function CreateTableDialog({
     setNextId(2);
   }, []);
 
-  const handlePreview = useCallback(() => {
+  const handlePreview = useCallback(async () => {
     if (!assetId) return;
 
     const name = tableName.trim();
@@ -107,22 +99,28 @@ export function CreateTableDialog({
       }
     }
 
-    const sql = buildCreateTableSql({
-      driver,
-      database,
-      name,
-      columns: columns.map((col) => ({
-        name: col.name,
-        type: col.type,
-        nullable: col.nullable,
-        defaultValue: col.defaultValue,
-      })),
-    });
-
-    setPreviewStatements([sql]);
-    setPendingName(name);
-    setShowSqlPreview(true);
-  }, [assetId, tableName, columns, driver, database, t]);
+    // 语句由驱动生成;生成失败时显示错误、不打开预览、不执行任何语句。
+    try {
+      const statements = await GetCreateTableStatements(
+        assetId,
+        database,
+        dbdriver.CreateTableRequest.createFrom({
+          name,
+          columns: columns.map((col) => ({
+            name: col.name,
+            type: col.type,
+            nullable: col.nullable,
+            defaultValue: col.defaultValue,
+          })),
+        })
+      );
+      setPreviewStatements(statements);
+      setPendingName(name);
+      setShowSqlPreview(true);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [assetId, tableName, columns, database, t]);
 
   const handleConfirmSubmit = useCallback(async () => {
     if (!assetId || previewStatements.length === 0) return;
@@ -166,6 +164,7 @@ export function CreateTableDialog({
                 className="h-8 text-xs font-mono"
                 value={tableName}
                 onChange={(e) => setTableName(e.target.value)}
+                data-testid="create-table-name"
                 placeholder={t("query.tableNamePlaceholder")}
                 disabled={submitting}
               />
@@ -196,6 +195,7 @@ export function CreateTableDialog({
                           className="h-8 text-xs font-mono"
                           value={col.name}
                           onChange={(e) => updateColumn(col.id, { name: e.target.value })}
+                          data-testid="create-table-column-name"
                           placeholder={t("query.columnNamePlaceholder")}
                           disabled={submitting}
                         />
@@ -206,6 +206,7 @@ export function CreateTableDialog({
                           className="h-8 text-xs font-mono"
                           value={col.type}
                           onChange={(e) => updateColumn(col.id, { type: e.target.value })}
+                          data-testid="create-table-column-type"
                           placeholder={t("query.columnTypePlaceholder")}
                           disabled={submitting}
                         />
@@ -257,7 +258,13 @@ export function CreateTableDialog({
             >
               {t("action.cancel")}
             </Button>
-            <Button size="sm" className="h-8 text-xs" onClick={handlePreview} disabled={submitting}>
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              data-testid="create-table-preview"
+              onClick={handlePreview}
+              disabled={submitting}
+            >
               {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               {t("query.designTablePreviewChanges")}
             </Button>

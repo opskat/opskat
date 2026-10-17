@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "batch"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "batch"。
 	Op       string
 	Database string
 	Table    string
@@ -176,6 +176,10 @@ type TableCall struct {
 	RowStatements *dbdriver.RowStatementsRequest
 	// GridEdit 是 grid_edit 收到的请求。
 	GridEdit *dbdriver.GridEditRequest
+	// CreateTable 是 create_table 收到的请求。
+	CreateTable *dbdriver.CreateTableRequest
+	// CreateDatabase 是 create_database 收到的请求。
+	CreateDatabase *dbdriver.CreateDatabaseRequest
 	// Batch 是 batch 收到的请求。
 	Batch *dbdriver.BatchRequest
 }
@@ -297,6 +301,46 @@ func (s *FakeSession) GridEditStatements(_ context.Context, database, table stri
 		Updates: statements("UPDATE", len(req.Updates)),
 		Deletes: statements("DELETE", len(req.Deletes)),
 	}, nil
+}
+
+// writeStatement 是建表、删表、清空、建库四个会话方法的共同做法：没有声明对应功能时以 ErrUnsupported
+// 拒绝（什么也不记、不执行），否则记下请求（call），给出一条一眼能与任何真实方言区分的语句。
+func (s *FakeSession) writeStatement(capability dbdriver.Capability, call TableCall, statement string) ([]string, error) {
+	if !s.fake.Desc.Supports(capability) {
+		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, capability)
+	}
+	if err := s.tableCall(call); err != nil {
+		return nil, err
+	}
+	return []string{statement}, nil
+}
+
+// CreateTableStatements 记下收到的请求（Op "create_table"）。
+func (s *FakeSession) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	return s.writeStatement(dbdriver.CapCreateTable,
+		TableCall{Op: "create_table", Database: database, Table: req.Name, CreateTable: &req},
+		fmt.Sprintf("FAKE CREATE TABLE %s.%s", database, req.Name))
+}
+
+// DropTableStatements 记下收到的请求（Op "drop_table"）。
+func (s *FakeSession) DropTableStatements(_ context.Context, database, table string) ([]string, error) {
+	return s.writeStatement(dbdriver.CapDropTable,
+		TableCall{Op: "drop_table", Database: database, Table: table},
+		fmt.Sprintf("FAKE DROP TABLE %s.%s", database, table))
+}
+
+// TruncateTableStatements 记下收到的请求（Op "truncate_table"）。
+func (s *FakeSession) TruncateTableStatements(_ context.Context, database, table string) ([]string, error) {
+	return s.writeStatement(dbdriver.CapTruncateTable,
+		TableCall{Op: "truncate_table", Database: database, Table: table},
+		fmt.Sprintf("FAKE TRUNCATE TABLE %s.%s", database, table))
+}
+
+// CreateDatabaseStatements 记下收到的请求（Op "create_database"）。
+func (s *FakeSession) CreateDatabaseStatements(_ context.Context, req dbdriver.CreateDatabaseRequest) ([]string, error) {
+	return s.writeStatement(dbdriver.CapCreateDatabase,
+		TableCall{Op: "create_database", Table: req.Name, CreateDatabase: &req},
+		fmt.Sprintf("FAKE CREATE DATABASE %s", req.Name))
 }
 
 // ExecuteBatch 记下收到的请求（Op "batch"），按次序执行每条非空白语句（记进 Statements，每条

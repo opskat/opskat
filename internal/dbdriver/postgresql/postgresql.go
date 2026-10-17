@@ -31,6 +31,10 @@ var descriptor = dbdriver.Descriptor{
 	},
 	// 没有主键的表按 ctid 定位单行。
 	LocatesRowWithoutPrimaryKey: true,
+	CreateDatabaseOptions: []dbdriver.DatabaseOption{
+		{Key: dbdriver.OptionCharset, Default: "UTF8"},
+		{Key: dbdriver.OptionCollation, Default: "en_US.UTF-8"},
+	},
 }
 
 type driver struct {

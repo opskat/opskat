@@ -154,6 +154,24 @@ type Session interface {
 	// CapGridEdit 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	GridEditStatements(ctx context.Context, database, table string, req GridEditRequest) (*GridEditStatements, error)
 
+	// CreateTableStatements 生成建表语句（只生成、不执行）：表名、列名按方言加引号，列的类型文本
+	// 原样写入，默认值的写法见 NewColumn.DefaultValue。req.Name 用 ListTables 给出的形式。驱动没有
+	// 声明 CapCreateTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	CreateTableStatements(ctx context.Context, database string, req CreateTableRequest) ([]string, error)
+
+	// DropTableStatements 生成删除一张表的语句（只生成、不执行）。驱动没有声明 CapDropTable 时返回
+	// 包着 ErrUnsupported 的错误，且不执行任何语句。
+	DropTableStatements(ctx context.Context, database, table string) ([]string, error)
+
+	// TruncateTableStatements 生成清空一张表的语句（只生成、不执行）：没有 TRUNCATE 的方言用
+	// DELETE FROM。驱动没有声明 CapTruncateTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	TruncateTableStatements(ctx context.Context, database, table string) ([]string, error)
+
+	// CreateDatabaseStatements 生成新建数据库的语句（只生成、不执行）。req.Options 的键只能是驱动
+	// 在 Descriptor.CreateDatabaseOptions 里声明过的；值为空表示不写该选项（用服务器默认）。驱动
+	// 没有声明 CapCreateDatabase 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	CreateDatabaseStatements(ctx context.Context, req CreateDatabaseRequest) ([]string, error)
+
 	// ExecuteBatch 在会话的一条连接上按次序执行一批语句（导入的整批执行用它），见 BatchRequest。
 	// 空白语句跳过、不执行。语句本身的失败记在结果里，不作为 error 返回。
 	//
@@ -231,6 +249,30 @@ type GridEditStatements struct {
 	Inserts []string `json:"inserts"`
 	Updates []string `json:"updates"`
 	Deletes []string `json:"deletes"`
+}
+
+// NewColumn 是建表对话框里的一列。
+type NewColumn struct {
+	Name string `json:"name"`
+	// Type 是类型文本，原样写入（首尾空白除外）。
+	Type     string `json:"type"`
+	Nullable bool   `json:"nullable"`
+	// DefaultValue 是用户填的默认值文本，空表示没有默认值。数字、TRUE / FALSE / NULL、
+	// CURRENT_TIMESTAMP / NOW() 原样写入，其余当作字符串加引号。
+	DefaultValue string `json:"defaultValue"`
+}
+
+// CreateTableRequest 是 Session.CreateTableStatements 要生成的建表语句。
+type CreateTableRequest struct {
+	Name    string      `json:"name"`
+	Columns []NewColumn `json:"columns"`
+}
+
+// CreateDatabaseRequest 是 Session.CreateDatabaseStatements 要生成的建库语句。
+type CreateDatabaseRequest struct {
+	Name string `json:"name"`
+	// Options 是驱动声明的选项值，按选项的键取。
+	Options map[string]string `json:"options"`
 }
 
 // BatchRequest 是 Session.ExecuteBatch 要在一条连接上执行的一批语句。

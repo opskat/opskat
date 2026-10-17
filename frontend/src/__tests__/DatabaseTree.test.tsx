@@ -3,8 +3,8 @@ import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { DatabaseTree } from "../components/query/DatabaseTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { ExecuteSQL, GetStarterQuery, ListTables } from "../../wailsjs/go/query/Query";
-import { BUILTIN_DRIVERS, FAKE_DRIVER, provideDrivers } from "./dbDriverFixtures";
+import { ExecuteSQL, GetCreateDatabaseStatements, GetStarterQuery, ListTables } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, FAKE_DRIVER, mockSchemaStatements, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
@@ -213,33 +213,39 @@ describe("DatabaseTree", () => {
     expect(screen.getByText("query.noTables")).toBeInTheDocument();
   });
 
-  it("opens create database dialog from toolbar", async () => {
+  it("creates a database with the statement the driver wrote, from the driver's declared option fields", async () => {
+    mockSchemaStatements();
     await renderTree();
 
     fireEvent.click(screen.getByLabelText("query.createDatabase"));
     expect(screen.getByText("query.createDatabaseDialogTitle")).toBeInTheDocument();
 
+    // The fields and their defaults come from the descriptor.
+    expect(screen.getByPlaceholderText("query.charsetPlaceholder")).toHaveValue("utf8mb4");
+    expect(screen.getByPlaceholderText("query.collationPlaceholder")).toHaveValue("utf8mb4_0900_ai_ci");
+
     fireEvent.change(screen.getByPlaceholderText("query.databaseNamePlaceholder"), {
       target: { value: "reports" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("query.charsetPlaceholder"), {
-      target: { value: "utf8mb4" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("query.collationPlaceholder"), {
-      target: { value: "utf8mb4_0900_ai_ci" },
     });
     fireEvent.click(screen.getByText("query.designTablePreviewChanges"));
 
     await waitFor(() => {
       expect(screen.getByText("query.sqlPreviewTitle")).toBeInTheDocument();
     });
+    expect(GetCreateDatabaseStatements).toHaveBeenCalledWith(1, "appdb", {
+      name: "reports",
+      options: { charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci" },
+    });
+    expect(screen.getByTestId("code-editor")).toHaveTextContent(
+      'CREATE DATABASE reports {"charset":"utf8mb4","collation":"utf8mb4_0900_ai_ci"}'
+    );
 
     fireEvent.click(screen.getByText("query.confirmExecute"));
 
     await waitFor(() => {
       expect(ExecuteSQL).toHaveBeenCalledWith(
         1,
-        "CREATE DATABASE `reports` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+        'CREATE DATABASE reports {"charset":"utf8mb4","collation":"utf8mb4_0900_ai_ci"}',
         "appdb"
       );
     });
@@ -269,6 +275,7 @@ describe("DatabaseTree — table multi-selection", () => {
     });
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
+    mockSchemaStatements();
   });
 
   const node = (table: string) => screen.getByText(table);
@@ -389,10 +396,11 @@ describe("DatabaseTree — table multi-selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "query.dropTables" }));
 
     await waitFor(() => {
-      const drops = vi.mocked(ExecuteSQL).mock.calls.filter(([, sql]) => String(sql).startsWith("DROP TABLE"));
-      expect(drops).toHaveLength(2);
-      expect(drops[0][2]).toBe("appdb");
-      expect(drops[1][2]).toBe("archivedb");
+      const drops = vi.mocked(ExecuteSQL).mock.calls.filter(([, sql]) => String(sql).startsWith("DROP "));
+      expect(drops).toEqual([
+        [1, "DROP appdb.logs", "appdb"],
+        [1, "DROP archivedb.logs_2024", "archivedb"],
+      ]);
     });
   });
 
@@ -410,7 +418,7 @@ describe("DatabaseTree — table multi-selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "query.dropTables" }));
 
     await waitFor(() => {
-      const drops = vi.mocked(ExecuteSQL).mock.calls.filter(([, sql]) => String(sql).startsWith("DROP TABLE"));
+      const drops = vi.mocked(ExecuteSQL).mock.calls.filter(([, sql]) => String(sql).startsWith("DROP "));
       expect(drops).toHaveLength(2);
     });
   });

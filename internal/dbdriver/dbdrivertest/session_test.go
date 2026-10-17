@@ -122,6 +122,36 @@ type brokenSession struct {
 	// generates 为真时不管声明与否都给出行语句；gridEdits 为真时不管声明与否都给出表格编辑语句。
 	generates bool
 	gridEdits bool
+	// schemaWrites 为真时不管声明与否都给出建表、删表、清空、建库的语句。
+	schemaWrites bool
+}
+
+func (b brokenSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	if b.schemaWrites {
+		return []string{"CREATE TABLE"}, nil
+	}
+	return b.Session.CreateTableStatements(ctx, database, req)
+}
+
+func (b brokenSession) DropTableStatements(ctx context.Context, database, table string) ([]string, error) {
+	if b.schemaWrites {
+		return []string{"DROP TABLE"}, nil
+	}
+	return b.Session.DropTableStatements(ctx, database, table)
+}
+
+func (b brokenSession) TruncateTableStatements(ctx context.Context, database, table string) ([]string, error) {
+	if b.schemaWrites {
+		return []string{"TRUNCATE TABLE"}, nil
+	}
+	return b.Session.TruncateTableStatements(ctx, database, table)
+}
+
+func (b brokenSession) CreateDatabaseStatements(ctx context.Context, req dbdriver.CreateDatabaseRequest) ([]string, error) {
+	if b.schemaWrites {
+		return []string{"CREATE DATABASE"}, nil
+	}
+	return b.Session.CreateDatabaseStatements(ctx, req)
 }
 
 func (b brokenSession) GridEditStatements(ctx context.Context, database, table string, req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
@@ -210,9 +240,13 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 			}
 			return withTotal(int64(len(res.Rows.Rows)))(res, err)
 		}}, "page"},
-		"close fails":                         {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
-		"undeclared row statements generated": {brokenSession{generates: true}, "RowStatements"},
-		"undeclared grid edit generated":      {brokenSession{gridEdits: true}, "GridEditStatements"},
+		"close fails":                          {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
+		"undeclared row statements generated":  {brokenSession{generates: true}, "RowStatements"},
+		"undeclared grid edit generated":       {brokenSession{gridEdits: true}, "GridEditStatements"},
+		"undeclared create table generated":    {brokenSession{schemaWrites: true}, "CreateTableStatements"},
+		"undeclared drop table generated":      {brokenSession{schemaWrites: true}, "DropTableStatements"},
+		"undeclared truncate generated":        {brokenSession{schemaWrites: true}, "TruncateTableStatements"},
+		"undeclared create database generated": {brokenSession{schemaWrites: true}, "CreateDatabaseStatements"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tt.broken.Session = openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
@@ -260,4 +294,21 @@ func TestConformanceReportsDriversThatMishandleUndeclaredReadOnly(t *testing.T) 
 
 	// 声明了只读的驱动不在这一项的检查范围内：它怎么落实只读由各驱动自己的测试固定。
 	assert.Empty(t, readOnlyProblems(misreportsReadOnly{NewFake()}))
+}
+
+// 声明了建表、删表、清空、建库却被会话拒绝；声明了建库选项却没有声明建库。
+func TestConformanceReportsDeclaredSchemaWritesBeingRefused(t *testing.T) {
+	desc := NewFake().Desc
+	desc.Capabilities = append(desc.Capabilities,
+		dbdriver.CapCreateTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable, dbdriver.CapCreateDatabase)
+	session := openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+
+	joined := strings.Join(schemaWriteProblems(context.Background(), desc, session), "\n")
+	for _, name := range []string{"CreateTableStatements", "DropTableStatements", "TruncateTableStatements", "CreateDatabaseStatements"} {
+		assert.Contains(t, joined, name+": declared")
+	}
+
+	desc = NewFake().Desc
+	desc.CreateDatabaseOptions = []dbdriver.DatabaseOption{{Key: dbdriver.OptionCollation}}
+	assert.Contains(t, strings.Join(descriptorProblems(desc), "\n"), "createDatabaseOptions")
 }

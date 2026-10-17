@@ -36,7 +36,8 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
-//     导出 / 复制为 SQL 时的行语句（RowStatements），以及
+//     导出 / 复制为 SQL 时的行语句（RowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
+//     必须给出语句），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
@@ -85,6 +86,7 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 
 	// 拒绝要在任何语句之前：基于桩连接的会话在见到未预期的语句时会失败。
 	problems = append(problems, undeclaredObjectProblems(ctx, desc, s)...)
+	problems = append(problems, schemaWriteProblems(ctx, desc, s)...)
 
 	res, err := s.Execute(ctx, ConformanceStatement)
 	problems = append(problems, resultProblems("Execute", res, err)...)
@@ -108,6 +110,53 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 
 	if err := s.Close(); err != nil {
 		problems = append(problems, fmt.Sprintf("Close: %v", err))
+	}
+	return problems
+}
+
+// schemaWriteProblems 检查建表、删表、清空、建库的语句生成（只生成、不执行，所以不需要数据）：
+// 声明了的必须给出非空语句，没有声明的必须以 ErrUnsupported 拒绝；建库还要接受驱动声明的选项（取
+// 默认值）、拒绝没有声明的选项。
+func schemaWriteProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	var problems []string
+	check := func(name string, capability dbdriver.Capability, statements []string, err error) {
+		switch {
+		case !desc.Supports(capability) && !errors.Is(err, dbdriver.ErrUnsupported):
+			problems = append(problems, fmt.Sprintf("%s: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", name, capability, err))
+		case !desc.Supports(capability):
+		case errors.Is(err, dbdriver.ErrUnsupported):
+			problems = append(problems, fmt.Sprintf("%s: declared %q but refused with ErrUnsupported: %v", name, capability, err))
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("%s: %v", name, err))
+		case len(statements) == 0:
+			problems = append(problems, fmt.Sprintf("%s: returned no statements and no error", name))
+		default:
+			for i, statement := range statements {
+				if strings.TrimSpace(statement) == "" {
+					problems = append(problems, fmt.Sprintf("%s: statement %d is empty", name, i))
+				}
+			}
+		}
+	}
+	statements, err := s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{
+		Name: "x", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT", Nullable: true}},
+	})
+	check("CreateTableStatements", dbdriver.CapCreateTable, statements, err)
+	statements, err = s.DropTableStatements(ctx, "", "x")
+	check("DropTableStatements", dbdriver.CapDropTable, statements, err)
+	statements, err = s.TruncateTableStatements(ctx, "", "x")
+	check("TruncateTableStatements", dbdriver.CapTruncateTable, statements, err)
+
+	options := make(map[string]string, len(desc.CreateDatabaseOptions))
+	for _, option := range desc.CreateDatabaseOptions {
+		options[option.Key] = option.Default
+	}
+	statements, err = s.CreateDatabaseStatements(ctx, dbdriver.CreateDatabaseRequest{Name: "x", Options: options})
+	check("CreateDatabaseStatements", dbdriver.CapCreateDatabase, statements, err)
+	if desc.Supports(dbdriver.CapCreateDatabase) {
+		if _, err := s.CreateDatabaseStatements(ctx, dbdriver.CreateDatabaseRequest{Name: "x", Options: map[string]string{"undeclared_option": "v"}}); err == nil {
+			problems = append(problems, "CreateDatabaseStatements: an option the driver did not declare must be refused")
+		}
 	}
 	return problems
 }
@@ -703,6 +752,14 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	}
 	if desc.LocatesRowWithoutPrimaryKey && !desc.Supports(dbdriver.CapGridEdit) {
 		report("locatesRowWithoutPrimaryKey is declared without capability %q, the only feature that uses it", dbdriver.CapGridEdit)
+	}
+	for _, option := range desc.CreateDatabaseOptions {
+		if option.Key != dbdriver.OptionCharset && option.Key != dbdriver.OptionCollation {
+			report("createDatabaseOptions has the key %q, which the create database dialog has no field text for", option.Key)
+		}
+	}
+	if len(desc.CreateDatabaseOptions) > 0 && !desc.Supports(dbdriver.CapCreateDatabase) {
+		report("createDatabaseOptions are declared without capability %q, the only feature that uses them", dbdriver.CapCreateDatabase)
 	}
 	return problems
 }

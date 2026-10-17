@@ -30,6 +30,10 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
 	},
 	CanDisableForeignKeyChecks: true,
+	CreateDatabaseOptions: []dbdriver.DatabaseOption{
+		{Key: dbdriver.OptionCharset, Default: "utf8mb4"},
+		{Key: dbdriver.OptionCollation, Default: "utf8mb4_0900_ai_ci"},
+	},
 }
 
 type driver struct {

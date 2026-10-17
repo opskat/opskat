@@ -12,64 +12,30 @@ import {
   Input,
   Label,
 } from "@opskat/ui";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, GetCreateDatabaseStatements } from "../../../wailsjs/go/query/Query";
+import { dbdriver } from "../../../wailsjs/go/models";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
-import { quoteIdent, sqlQuote } from "@/lib/tableSql";
 
 interface CreateDatabaseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   assetId: number;
   defaultDatabase: string;
-  driver?: string;
+  /** 驱动声明的建库选项字段与默认值(Descriptor.createDatabaseOptions);对话框只显示这些。 */
+  options: dbdriver.DatabaseOption[];
   onSuccess: () => void;
 }
 
+/** 驱动可声明的建库选项(Go 侧 dbdriver.Option*)对应的标签与占位文案。 */
+const OPTION_TEXT: Record<string, { label: string; placeholder: string }> = {
+  charset: { label: "query.charsetLabel", placeholder: "query.charsetPlaceholder" },
+  collation: { label: "query.collationLabel", placeholder: "query.collationPlaceholder" },
+};
+
 function isSafeOption(value: string): boolean {
   return /^[A-Za-z0-9_.-]+$/.test(value);
-}
-
-function buildCreateDatabaseSql(name: string, charset: string, collation: string, driver?: string): string {
-  const databaseRef = quoteIdent(name, driver);
-
-  if (driver === "postgresql") {
-    const parts = [`CREATE DATABASE ${databaseRef}`];
-    const options: string[] = [];
-
-    if (charset.trim()) {
-      options.push(`ENCODING = ${sqlQuote(charset.trim())}`);
-    }
-    if (collation.trim()) {
-      options.push(`LC_COLLATE = ${sqlQuote(collation.trim())}`);
-      options.push(`LC_CTYPE = ${sqlQuote(collation.trim())}`);
-    }
-
-    if (options.length > 0) {
-      parts.push(`WITH ${options.join(" ")}`);
-    }
-
-    return parts.join(" ");
-  }
-
-  if (driver === "mssql") {
-    // MSSQL 没有 CHARACTER SET，排序规则用 COLLATE；charset 字段不适用，留空用服务器默认。
-    const parts = [`CREATE DATABASE ${databaseRef}`];
-    if (collation.trim()) {
-      parts.push(`COLLATE ${collation.trim()}`);
-    }
-    return parts.join(" ");
-  }
-
-  const parts = [`CREATE DATABASE ${databaseRef}`];
-  if (charset.trim()) {
-    parts.push(`CHARACTER SET ${charset.trim()}`);
-  }
-  if (collation.trim()) {
-    parts.push(`COLLATE ${collation.trim()}`);
-  }
-  return parts.join(" ");
 }
 
 export function CreateDatabaseDialog({
@@ -77,27 +43,26 @@ export function CreateDatabaseDialog({
   onOpenChange,
   assetId,
   defaultDatabase,
-  driver,
+  options,
   onSuccess,
 }: CreateDatabaseDialogProps) {
   const { t } = useTranslation();
   const [databaseName, setDatabaseName] = useState("");
-  const [charset, setCharset] = useState(driver === "postgresql" ? "UTF8" : driver === "mssql" ? "" : "utf8mb4");
-  const [collation, setCollation] = useState(
-    driver === "postgresql" ? "en_US.UTF-8" : driver === "mssql" ? "" : "utf8mb4_0900_ai_ci"
-  );
+  // 用户改过的选项值;没改过的字段显示驱动声明的默认值(驱动描述晚到时也跟着变)。
+  const [edited, setEdited] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [previewStatements, setPreviewStatements] = useState<string[]>([]);
   const [pendingName, setPendingName] = useState("");
 
+  const valueOf = useCallback((option: dbdriver.DatabaseOption) => edited[option.key] ?? option.default, [edited]);
+
   const resetForm = useCallback(() => {
     setDatabaseName("");
-    setCharset(driver === "postgresql" ? "UTF8" : driver === "mssql" ? "" : "utf8mb4");
-    setCollation(driver === "postgresql" ? "en_US.UTF-8" : driver === "mssql" ? "" : "utf8mb4_0900_ai_ci");
-  }, [driver]);
+    setEdited({});
+  }, []);
 
-  const handlePreview = useCallback(() => {
+  const handlePreview = useCallback(async () => {
     if (!assetId) return;
 
     const name = databaseName.trim();
@@ -105,16 +70,26 @@ export function CreateDatabaseDialog({
       toast.error(t("query.createDatabaseNameRequired"));
       return;
     }
-    if ((charset.trim() && !isSafeOption(charset.trim())) || (collation.trim() && !isSafeOption(collation.trim()))) {
+    const values = Object.fromEntries(options.map((option) => [option.key, valueOf(option).trim()]));
+    if (Object.values(values).some((value) => value && !isSafeOption(value))) {
       toast.error(t("query.createDatabaseOptionInvalid"));
       return;
     }
 
-    const sql = buildCreateDatabaseSql(name, charset, collation, driver);
-    setPreviewStatements([sql]);
-    setPendingName(name);
-    setShowSqlPreview(true);
-  }, [assetId, databaseName, charset, collation, driver, t]);
+    // 语句由驱动生成;生成失败时显示错误、不打开预览、不执行任何语句。
+    try {
+      const statements = await GetCreateDatabaseStatements(
+        assetId,
+        defaultDatabase,
+        dbdriver.CreateDatabaseRequest.createFrom({ name, options: values })
+      );
+      setPreviewStatements(statements);
+      setPendingName(name);
+      setShowSqlPreview(true);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [assetId, databaseName, options, valueOf, defaultDatabase, t]);
 
   const handleConfirmSubmit = useCallback(async () => {
     if (!assetId || previewStatements.length === 0) return;
@@ -162,26 +137,21 @@ export function CreateDatabaseDialog({
                 disabled={submitting}
               />
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t("query.charsetLabel")}</Label>
-              <Input
-                className="h-8 text-xs font-mono"
-                value={charset}
-                onChange={(e) => setCharset(e.target.value)}
-                placeholder={t("query.charsetPlaceholder")}
-                disabled={submitting}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t("query.collationLabel")}</Label>
-              <Input
-                className="h-8 text-xs font-mono"
-                value={collation}
-                onChange={(e) => setCollation(e.target.value)}
-                placeholder={t("query.collationPlaceholder")}
-                disabled={submitting}
-              />
-            </div>
+            {options.map((option) => {
+              const text = OPTION_TEXT[option.key];
+              return (
+                <div key={option.key} className="space-y-1.5">
+                  <Label className="text-xs">{t(text.label)}</Label>
+                  <Input
+                    className="h-8 text-xs font-mono"
+                    value={valueOf(option)}
+                    onChange={(e) => setEdited((prev) => ({ ...prev, [option.key]: e.target.value }))}
+                    placeholder={t(text.placeholder)}
+                    disabled={submitting}
+                  />
+                </div>
+              );
+            })}
           </div>
 
           <DialogFooter>

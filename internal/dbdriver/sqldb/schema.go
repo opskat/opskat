@@ -1,0 +1,133 @@
+package sqldb
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+
+	"github.com/opskat/opskat/internal/dbdriver"
+)
+
+// TableTruncator 是方言里「清空一张表怎么写」：多数方言是 TRUNCATE TABLE，没有它的方言（SQLite）
+// 用 DELETE FROM。建表与删表各方言相同（CREATE TABLE / DROP TABLE，标识符与表引用沿用 Tables），
+// 不需要方言另外实现。
+//
+// 没实现的方言，Session.TruncateTableStatements 返回 dbdriver.ErrUnsupported。
+type TableTruncator interface {
+	// TruncateTableSQL 是清空一张表的语句（不含分号）。tableRef 已按方言加好引号。
+	TruncateTableSQL(tableRef string) string
+}
+
+// DatabaseCreator 是方言里「新建数据库怎么写」。没实现的方言（SQLite），
+// Session.CreateDatabaseStatements 返回 dbdriver.ErrUnsupported。
+type DatabaseCreator interface {
+	// CreateDatabaseSQL 是新建数据库的语句（不含分号）。databaseRef 已按方言加好引号；options 已经
+	// 过 CleanDatabaseOptions：键是方言接受的、值是合法字符，没填的选项不在其中。
+	CreateDatabaseSQL(databaseRef string, options map[string]string) string
+	// DatabaseOptionKeys 是方言接受的选项键（对应 Descriptor.CreateDatabaseOptions）。
+	DatabaseOptionKeys() []string
+}
+
+// CreateTableStatements 生成建表语句：表引用与列名按方言加引号，类型文本原样写入。不碰数据库。
+func (s *Session) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	defs := make([]string, 0, len(req.Columns))
+	for _, column := range req.Columns {
+		def := tables.QuoteIdent(strings.TrimSpace(column.Name)) + " " + strings.TrimSpace(column.Type)
+		if !column.Nullable {
+			def += " NOT NULL"
+		}
+		if strings.TrimSpace(column.DefaultValue) != "" {
+			def += " DEFAULT " + defaultValueLiteral(column.DefaultValue)
+		}
+		defs = append(defs, def)
+	}
+	return []string{fmt.Sprintf("CREATE TABLE %s (\n  %s\n)", tables.TableRef(database, req.Name), strings.Join(defs, ",\n  "))}, nil
+}
+
+var (
+	numberPattern    = regexp.MustCompile(`^[-+]?\d+(\.\d+)?$`)
+	keywordPattern   = regexp.MustCompile(`(?i)^(true|false|null)$`)
+	timestampPattern = regexp.MustCompile(`(?i)^(current_timestamp(\(\))?|now\(\))$`)
+)
+
+// defaultValueLiteral 把用户填的默认值文本写成 DEFAULT 后面的内容：数字、TRUE / FALSE / NULL、
+// CURRENT_TIMESTAMP / NOW() 原样写入，其余当作字符串加引号。这是建表对话框一直以来的规则。
+func defaultValueLiteral(value string) string {
+	v := strings.TrimSpace(value)
+	switch {
+	case numberPattern.MatchString(v):
+		return v
+	case keywordPattern.MatchString(v):
+		return strings.ToUpper(v)
+	case timestampPattern.MatchString(v):
+		return v
+	}
+	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+}
+
+// DropTableStatements 生成删表语句。不碰数据库。
+func (s *Session) DropTableStatements(_ context.Context, database, table string) ([]string, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	return []string{"DROP TABLE " + tables.TableRef(database, table)}, nil
+}
+
+// TruncateTableStatements 生成清空表的语句。不碰数据库。
+func (s *Session) TruncateTableStatements(_ context.Context, database, table string) ([]string, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	truncator, ok := s.dialect.(TableTruncator)
+	if !ok {
+		return nil, fmt.Errorf("%w: this driver does not truncate tables", dbdriver.ErrUnsupported)
+	}
+	return []string{truncator.TruncateTableSQL(tables.TableRef(database, table))}, nil
+}
+
+// CreateDatabaseStatements 生成新建数据库的语句。库名按方言加引号，选项值只接受字母、数字、
+// 下划线、点和连字符（它们原样写进语句）。不碰数据库。
+func (s *Session) CreateDatabaseStatements(_ context.Context, req dbdriver.CreateDatabaseRequest) ([]string, error) {
+	tables, err := s.tables()
+	if err != nil {
+		return nil, err
+	}
+	creator, ok := s.dialect.(DatabaseCreator)
+	if !ok {
+		return nil, fmt.Errorf("%w: this driver does not create databases", dbdriver.ErrUnsupported)
+	}
+	options, err := cleanDatabaseOptions(req.Options, creator.DatabaseOptionKeys())
+	if err != nil {
+		return nil, err
+	}
+	return []string{creator.CreateDatabaseSQL(tables.QuoteIdent(req.Name), options)}, nil
+}
+
+var safeOptionPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// cleanDatabaseOptions 去掉首尾空白与没填的选项，拒绝方言不接受的键与含其他字符的值。
+func cleanDatabaseOptions(options map[string]string, allowed []string) (map[string]string, error) {
+	cleaned := make(map[string]string, len(options))
+	for key, value := range options {
+		if !slices.Contains(allowed, key) {
+			return nil, fmt.Errorf("unsupported create database option %q", key)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !safeOptionPattern.MatchString(value) {
+			return nil, fmt.Errorf("invalid value for create database option %q", key)
+		}
+		cleaned[key] = value
+	}
+	return cleaned, nil
+}

@@ -1,6 +1,13 @@
 import { vi } from "vitest";
 import { dbdriver } from "../../wailsjs/go/models";
-import { GetGridEditStatements, ListDatabaseDrivers } from "../../wailsjs/go/query/Query";
+import {
+  GetCreateDatabaseStatements,
+  GetCreateTableStatements,
+  GetDropTableStatements,
+  GetGridEditStatements,
+  GetTruncateTableStatements,
+  ListDatabaseDrivers,
+} from "../../wailsjs/go/query/Query";
 import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
 import builtinDrivers from "./builtinDbDrivers.json";
 
@@ -72,6 +79,25 @@ export function mockGridEditStatements(): void {
       deletes: req.deletes.map((row) => `DELETE ${table} WHERE ${locate(row)}`),
     });
   });
+}
+
+/**
+ * 让建表、删表、清空、建库的绑定像驱动一样给出语句:内容是请求本身,一眼能与任何真实方言区分,
+ * 测试据此断言前端发出的意图与执行的语句。
+ */
+export function mockSchemaStatements(): void {
+  vi.mocked(GetCreateTableStatements).mockImplementation(async (_assetId, database, req) => [
+    `CREATE TABLE ${database}.${req.name} ${JSON.stringify(req.columns)}`,
+  ]);
+  vi.mocked(GetDropTableStatements).mockImplementation(async (_assetId, database, table) => [
+    `DROP ${database}.${table}`,
+  ]);
+  vi.mocked(GetTruncateTableStatements).mockImplementation(async (_assetId, database, table) => [
+    `TRUNCATE ${database}.${table}`,
+  ]);
+  vi.mocked(GetCreateDatabaseStatements).mockImplementation(async (_assetId, _database, req) => [
+    `CREATE DATABASE ${req.name} ${JSON.stringify(req.options)}`,
+  ]);
 }
 
 /** 让 Query.ListDatabaseDrivers 返回给定的描述列表,并丢弃进程内缓存。 */

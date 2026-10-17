@@ -41,11 +41,9 @@ const driverRestrictions = [
 // 只减不增：迁到后端驱动的文件从这里删掉；新代码读驱动描述，不进这个名单。
 const driverBranchExempt = [
   "src/components/query/AlterTableDialog.tsx", // 改表：各库 ALTER 语法
-  "src/components/query/CreateDatabaseDialog.tsx", // 建库：字符集 / 排序规则默认值与 CREATE DATABASE 语法
-  "src/components/query/DatabaseTree.tsx", // 清空表：SQLite 没有 TRUNCATE，改发 DELETE FROM
   "src/components/query/ImportTableDataDialog.tsx", // 导入：表名限定形式与外键检查开关
   "src/lib/tableImport.ts", // 导入：二进制字面量与 upsert 写法
-  "src/lib/tableSql.ts", // 引号规则与建表 / 改表 / 删表 / 清空的方言 SQL
+  "src/lib/tableSql.ts", // 引号规则与改表的方言 SQL
 ];
 
 export default tseslint.config(

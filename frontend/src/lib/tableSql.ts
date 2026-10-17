@@ -42,25 +42,6 @@ function formatDefaultValue(value: string): string {
   return sqlQuote(v);
 }
 
-export interface BuildCreateTableSqlInput {
-  driver?: string;
-  database: string;
-  name: string;
-  columns: { name: string; type: string; nullable: boolean; defaultValue: string }[];
-}
-
-export function buildCreateTableSql({ driver, database, name, columns }: BuildCreateTableSqlInput): string {
-  const tableRef = quoteTableRef(database, name, driver);
-
-  const defs = columns.map((col) => {
-    const nullable = col.nullable ? "" : " NOT NULL";
-    const def = col.defaultValue.trim() ? ` DEFAULT ${formatDefaultValue(col.defaultValue)}` : "";
-    return `${quoteIdent(col.name.trim(), driver)} ${col.type.trim()}${nullable}${def}`;
-  });
-
-  return `CREATE TABLE ${tableRef} (\n  ${defs.join(",\n  ")}\n)`;
-}
-
 export interface AlterLoadedColumn {
   name: string;
   type: string;

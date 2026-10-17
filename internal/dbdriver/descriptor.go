@@ -36,7 +36,24 @@ type Descriptor struct {
 	// 的那一行（PostgreSQL 的 ctid、SQLite 的 rowid），而不只是在原值相同的几行里取一行。声明了，
 	// 表格不显示「无主键」提示。
 	LocatesRowWithoutPrimaryKey bool `json:"locatesRowWithoutPrimaryKey"`
+	// CreateDatabaseOptions 是新建数据库（CapCreateDatabase）时驱动接受的选项字段及默认值，按
+	// 对话框里的次序。建库对话框只显示这里声明的字段；没有声明的选项，会话以错误拒绝。
+	CreateDatabaseOptions []DatabaseOption `json:"createDatabaseOptions"`
 }
+
+// DatabaseOption 是新建数据库的一个选项字段。
+type DatabaseOption struct {
+	// Key 是选项的键，Session.CreateDatabaseStatements 的 Options 按它取值；对话框据此选标签。
+	Key string `json:"key"`
+	// Default 是对话框里这个字段的初始值，可以为空。
+	Default string `json:"default"`
+}
+
+// 建库选项的键。
+const (
+	OptionCharset   = "charset"
+	OptionCollation = "collation"
+)
 
 // FormTab 是资产表单的一个 Tab。
 type FormTab string

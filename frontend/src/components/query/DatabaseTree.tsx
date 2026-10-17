@@ -30,7 +30,12 @@ import {
   ContextMenuSeparator,
   ConfirmDialog,
 } from "@opskat/ui";
-import { ExecuteSQL, GetStarterQuery } from "../../../wailsjs/go/query/Query";
+import {
+  ExecuteSQL,
+  GetDropTableStatements,
+  GetStarterQuery,
+  GetTruncateTableStatements,
+} from "../../../wailsjs/go/query/Query";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
@@ -38,7 +43,6 @@ import { CreateTableDialog } from "./CreateTableDialog";
 import { AlterTableDialog } from "./AlterTableDialog";
 import { TableStructureDialog } from "./TableStructureDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
-import { quoteTableRef } from "@/lib/tableSql";
 import {
   OBJECT_BROWSER_CAPABILITIES,
   driverHasCapability,
@@ -350,15 +354,16 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     const succeeded: TableRef[] = [];
     let errorMsg = "";
     for (const target of targets) {
-      const qualified = quoteTableRef(target.database, target.table, driver);
-      const sql =
-        type === "drop"
-          ? `DROP TABLE ${qualified}`
-          : driver === "sqlite"
-            ? `DELETE FROM ${qualified}`
-            : `TRUNCATE TABLE ${qualified}`;
       try {
-        await ExecuteSQL(tabMeta.assetId, sql, target.database);
+        // 语句由驱动生成;生成失败的表不执行任何语句。
+        const statements = await (type === "drop" ? GetDropTableStatements : GetTruncateTableStatements)(
+          tabMeta.assetId,
+          target.database,
+          target.table
+        );
+        for (const sql of statements) {
+          await ExecuteSQL(tabMeta.assetId, sql, target.database);
+        }
         succeeded.push(target);
       } catch (err) {
         errorMsg += `${target.database}.${target.table}: ${String(err)}\n`;
@@ -479,13 +484,21 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           </ContextMenuItem>
           {(can("truncate_table") || can("drop_table")) && <ContextMenuSeparator />}
           {can("truncate_table") && (
-            <ContextMenuItem variant="destructive" onClick={() => setConfirmAction({ type: "truncate", targets })}>
+            <ContextMenuItem
+              variant="destructive"
+              data-testid="table-truncate"
+              onClick={() => setConfirmAction({ type: "truncate", targets })}
+            >
               <Eraser className="h-3.5 w-3.5" />
               {isBatch ? t("query.truncateTables", { count: targets.length }) : t("query.truncateTable")}
             </ContextMenuItem>
           )}
           {can("drop_table") && (
-            <ContextMenuItem variant="destructive" onClick={() => setConfirmAction({ type: "drop", targets })}>
+            <ContextMenuItem
+              variant="destructive"
+              data-testid="table-drop"
+              onClick={() => setConfirmAction({ type: "drop", targets })}
+            >
               <Trash2 className="h-3.5 w-3.5" />
               {isBatch ? t("query.dropTables", { count: targets.length }) : t("query.dropTable")}
             </ContextMenuItem>
@@ -629,6 +642,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                       </ContextMenuItem>
                       {can("create_table") && (
                         <ContextMenuItem
+                          data-testid="database-add-table"
                           onClick={() => {
                             setCreateTableDatabase(db);
                             setShowCreateTable(true);
@@ -746,7 +760,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         onOpenChange={setShowCreateDatabase}
         assetId={tabMeta?.assetId ?? 0}
         defaultDatabase={defaultDatabase}
-        driver={driver}
+        options={driverDescriptor?.createDatabaseOptions ?? []}
         onSuccess={() => loadDatabases(tabId)}
       />
 
@@ -758,7 +772,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         }}
         assetId={tabMeta?.assetId ?? 0}
         database={createTableDatabase || defaultDatabase}
-        driver={driver}
         onSuccess={() => {
           const targetDb = createTableDatabase || defaultDatabase;
           if (targetDb) {

@@ -56,7 +56,11 @@
       "read_only"
     ],
     "canDisableForeignKeyChecks": true,
-    "locatesRowWithoutPrimaryKey": false
+    "locatesRowWithoutPrimaryKey": false,
+    "createDatabaseOptions": [
+      { "key": "charset", "default": "utf8mb4" },
+      { "key": "collation", "default": "utf8mb4_0900_ai_ci" }
+    ]
   },
   {
     "id": "postgresql",
@@ -118,7 +122,11 @@
       "read_only"
     ],
     "canDisableForeignKeyChecks": false,
-    "locatesRowWithoutPrimaryKey": true
+    "locatesRowWithoutPrimaryKey": true,
+    "createDatabaseOptions": [
+      { "key": "charset", "default": "UTF8" },
+      { "key": "collation", "default": "en_US.UTF-8" }
+    ]
   },
   {
     "id": "mssql",
@@ -180,7 +188,8 @@
       "read_only"
     ],
     "canDisableForeignKeyChecks": true,
-    "locatesRowWithoutPrimaryKey": false
+    "locatesRowWithoutPrimaryKey": false,
+    "createDatabaseOptions": [{ "key": "collation", "default": "" }]
   },
   {
     "id": "sqlite",
@@ -230,6 +239,7 @@
       "read_only"
     ],
     "canDisableForeignKeyChecks": true,
-    "locatesRowWithoutPrimaryKey": true
+    "locatesRowWithoutPrimaryKey": true,
+    "createDatabaseOptions": null
   }
 ]

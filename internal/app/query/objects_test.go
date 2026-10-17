@@ -243,6 +243,73 @@ func TestGridEditStatementsRefusedWhenTheDriverDoesNotDeclareGridEdit(t *testing
 	}
 }
 
+// 建表、删表、清空、建库的语句由驱动在自己的会话上生成：前端发来的请求（JSON，键名与前端一致）
+// 原样到达驱动，驱动给的语句原样返回，没有任何语句被执行。
+func TestSchemaStatementsAreProducedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities,
+		dbdriver.CapCreateTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable, dbdriver.CapCreateDatabase)
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	var create dbdriver.CreateTableRequest
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"name":"users","columns":[{"name":"id","type":"INT","nullable":false,"defaultValue":"1"}]}`), &create))
+	statements, err := q.GetCreateTableStatements(1, "reporting", create)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE CREATE TABLE reporting.users"}, statements)
+
+	statements, err = q.GetDropTableStatements(1, "reporting", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE DROP TABLE reporting.users"}, statements)
+
+	statements, err = q.GetTruncateTableStatements(1, "reporting", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE TRUNCATE TABLE reporting.users"}, statements)
+
+	var createDB dbdriver.CreateDatabaseRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"reports","options":{"collation":"c"}}`), &createDB))
+	statements, err = q.GetCreateDatabaseStatements(1, "app", createDB)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE CREATE DATABASE reports"}, statements)
+
+	var calls []dbdrivertest.TableCall
+	for _, session := range fake.Sessions() {
+		calls = append(calls, session.TableCalls()...)
+		assert.Empty(t, session.Statements())
+	}
+	assert.ElementsMatch(t, []dbdrivertest.TableCall{
+		{Op: "create_table", Database: "reporting", Table: "users", CreateTable: &dbdriver.CreateTableRequest{
+			Name: "users", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT", DefaultValue: "1"}},
+		}},
+		{Op: "drop_table", Database: "reporting", Table: "users"},
+		{Op: "truncate_table", Database: "reporting", Table: "users"},
+		{Op: "create_database", Table: "reports", CreateDatabase: &dbdriver.CreateDatabaseRequest{
+			Name: "reports", Options: map[string]string{"collation": "c"},
+		}},
+	}, calls)
+}
+
+// 没有声明对应功能的驱动明确报「不支持」，且不执行任何语句。
+func TestSchemaStatementsRefusedWhenTheDriverDoesNotDeclareThem(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.GetCreateTableStatements(1, "", dbdriver.CreateTableRequest{Name: "t"})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = q.GetDropTableStatements(1, "", "t")
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = q.GetTruncateTableStatements(1, "", "t")
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = q.GetCreateDatabaseStatements(1, "", dbdriver.CreateDatabaseRequest{Name: "d"})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	for _, s := range fake.Sessions() {
+		assert.Empty(t, s.Statements())
+		assert.Empty(t, s.TableCalls())
+	}
+}
+
 // 导入的整批执行经资产的驱动会话：前端发来的请求（JSON，键名与前端一致）连同目标表到达驱动，
 // 复制模式放进一个事务；驱动的执行结果按语句种类计成新增 / 更新 / 删除。
 func TestExecuteTableImportRunsTheBatchOnTheDriverSession(t *testing.T) {
