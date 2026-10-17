@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildImportInsertSql,
+  buildImportIntent,
   detectDelimiter,
   parseDelimitedText,
   parseImportSourceText,
@@ -67,251 +67,6 @@ describe("table import helpers", () => {
       headers: ["id", "name", "note"],
       rows: [["1", "Alice, A.", "中文"]],
     });
-  });
-
-  it("keeps empty cells as empty strings unless the null strategy marks them NULL", () => {
-    const parsed = parseDelimitedText("id,name,note\n1,,NULL\n2,Bob,", ",");
-
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.users",
-        headers: parsed.headers,
-        rows: parsed.rows,
-        mapping: { id: "id", name: "name", note: "note" },
-        nullStrategy: "literal-null",
-        driver: "mysql",
-      })
-    ).toEqual([
-      "INSERT INTO `appdb`.`users` (`id`, `name`, `note`) VALUES ('1', '', NULL);",
-      "INSERT INTO `appdb`.`users` (`id`, `name`, `note`) VALUES ('2', 'Bob', '');",
-    ]);
-  });
-
-  it("can map empty cells to SQL NULL", () => {
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.users",
-        headers: ["id", "name"],
-        rows: [["1", ""]],
-        mapping: { id: "id", name: "name" },
-        nullStrategy: "empty-is-null",
-        driver: "mysql",
-      })
-    ).toEqual(["INSERT INTO `appdb`.`users` (`id`, `name`) VALUES ('1', NULL);"]);
-  });
-
-  it("builds SQL for primary-key based import modes", () => {
-    const base = {
-      tableName: "appdb.users",
-      headers: ["id", "name", "email"],
-      rows: [["1", "Alice", "alice@example.test"]],
-      mapping: { id: "id", name: "name", email: "email" },
-      nullStrategy: "literal-null" as const,
-      primaryKeys: ["id"],
-      driver: "mysql",
-    };
-
-    expect(buildImportInsertSql({ ...base, mode: "update" })).toEqual([
-      "UPDATE `appdb`.`users` SET `name` = 'Alice', `email` = 'alice@example.test' WHERE `id` = '1';",
-    ]);
-    expect(buildImportInsertSql({ ...base, mode: "append-update" })).toEqual([
-      "INSERT INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `email` = VALUES(`email`);",
-    ]);
-    expect(buildImportInsertSql({ ...base, mode: "append-skip" })).toEqual([
-      "INSERT IGNORE INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test');",
-    ]);
-    expect(buildImportInsertSql({ ...base, mode: "delete" })).toEqual([
-      "DELETE FROM `appdb`.`users` WHERE `id` = '1';",
-    ]);
-    expect(buildImportInsertSql({ ...base, mode: "copy" })).toEqual([
-      "DELETE FROM `appdb`.`users`;",
-      "INSERT INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test');",
-    ]);
-  });
-
-  it("builds SQLite upsert and skip SQL without MySQL-only syntax", () => {
-    const base = {
-      tableName: "main.users",
-      headers: ["id", "name"],
-      rows: [["1", "Alice"]],
-      mapping: { id: "id", name: "name" },
-      nullStrategy: "literal-null" as const,
-      primaryKeys: ["id"],
-      driver: "sqlite",
-    };
-
-    expect(buildImportInsertSql({ ...base, mode: "append-update" })).toEqual([
-      'INSERT INTO "main"."users" ("id", "name") VALUES (\'1\', \'Alice\') ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name";',
-    ]);
-    expect(buildImportInsertSql({ ...base, mode: "append-skip" })).toEqual([
-      'INSERT OR IGNORE INTO "main"."users" ("id", "name") VALUES (\'1\', \'Alice\');',
-    ]);
-  });
-
-  describe("MSSQL import", () => {
-    // 期望的包装：同一批里由数据库判断映射列是否含自增列，含则临时 IDENTITY_INSERT ON，
-    // 语句失败时也要 OFF 并原样 THROW；不含则不触碰 IDENTITY_INSERT。
-    const wrapped = (core: string, columns: string[], table = "[dbo].[users]") => {
-      const hasIdentity =
-        "EXISTS (SELECT 1 FROM sys.identity_columns " +
-        `WHERE object_id = OBJECT_ID(N'${table}', N'U') AND name IN (${columns.map((c) => `N'${c}'`).join(", ")}))`;
-      return (
-        `IF ${hasIdentity} SET IDENTITY_INSERT ${table} ON; ` +
-        `BEGIN TRY ${core} END TRY ` +
-        `BEGIN CATCH IF ${hasIdentity} SET IDENTITY_INSERT ${table} OFF; THROW; END CATCH; ` +
-        `IF ${hasIdentity} SET IDENTITY_INSERT ${table} OFF;`
-      );
-    };
-
-    const base = {
-      tableName: "dbo.users",
-      headers: ["id", "name", "email"],
-      rows: [["1", "Alice", "alice@example.test"]],
-      mapping: { id: "id", name: "name", email: "email" },
-      nullStrategy: "literal-null" as const,
-      primaryKeys: ["id"],
-      driver: "mssql",
-    };
-    const cols = ["id", "name", "email"];
-
-    it("wraps MERGE for append-update and append-skip so identity columns can be written", () => {
-      expect(buildImportInsertSql({ ...base, mode: "append-update" })).toEqual([
-        wrapped(
-          "MERGE [dbo].[users] AS t USING (SELECT '1' AS [id], 'Alice' AS [name], 'alice@example.test' AS [email]) AS s " +
-            "ON (t.[id] = s.[id]) " +
-            "WHEN MATCHED THEN UPDATE SET t.[name] = s.[name], t.[email] = s.[email] " +
-            "WHEN NOT MATCHED THEN INSERT ([id], [name], [email]) VALUES (s.[id], s.[name], s.[email]);",
-          cols
-        ),
-      ]);
-
-      expect(buildImportInsertSql({ ...base, mode: "append-skip" })).toEqual([
-        wrapped(
-          "MERGE [dbo].[users] AS t USING (SELECT '1' AS [id], 'Alice' AS [name], 'alice@example.test' AS [email]) AS s " +
-            "ON (t.[id] = s.[id]) " +
-            "WHEN NOT MATCHED THEN INSERT ([id], [name], [email]) VALUES (s.[id], s.[name], s.[email]);",
-          cols
-        ),
-      ]);
-    });
-
-    it("wraps plain INSERT for append, and keeps copy's DELETE as its own unwrapped element", () => {
-      const insert = "INSERT INTO [dbo].[users] ([id], [name], [email]) VALUES ('1', 'Alice', 'alice@example.test');";
-      expect(buildImportInsertSql({ ...base, mode: "append" })).toEqual([wrapped(insert, cols)]);
-      expect(buildImportInsertSql({ ...base, mode: "copy" })).toEqual([
-        "DELETE FROM [dbo].[users];",
-        wrapped(insert, cols),
-      ]);
-    });
-
-    it("wraps every extended-insert chunk", () => {
-      const out = buildImportInsertSql({
-        ...base,
-        rows: [
-          ["1", "A", "a@x"],
-          ["2", "B", "b@x"],
-        ],
-        mode: "append",
-        advancedOptions: { extendedInsert: true, maxStatementSizeKb: 1 },
-      });
-      expect(out).toEqual([
-        wrapped("INSERT INTO [dbo].[users] ([id], [name], [email]) VALUES ('1', 'A', 'a@x'), ('2', 'B', 'b@x');", cols),
-      ]);
-    });
-
-    it("adds no row count of its own around the import statement", () => {
-      // 导入摘要的「新增 / 更新」取自每个元素的受影响行数（go-mssqldb 把一批里所有带计数的
-      // DONE 相加）。SQL Server 把变量赋值（DECLARE @x = … / SET @x = … / SELECT @x = …）
-      // 计为 1 行，真库上每条包装后的语句会多算 1 行，没有自增列的表也一样。
-      for (const mode of ["append", "append-update", "append-skip", "copy"] as const) {
-        for (const statement of buildImportInsertSql({ ...base, mode })) {
-          expect(statement).not.toMatch(/\bDECLARE\b|\b(SET|SELECT)\s+@/i);
-        }
-      }
-    });
-
-    it("escapes quotes in the object name and column names inside N'' literals", () => {
-      const [sql] = buildImportInsertSql({
-        tableName: "dbo.o'brien",
-        headers: ["i'd"],
-        rows: [["1"]],
-        mapping: { "i'd": "i'd" },
-        nullStrategy: "literal-null",
-        mode: "append",
-        driver: "mssql",
-      });
-      expect(sql).toContain("OBJECT_ID(N'[dbo].[o''brien]', N'U')");
-      expect(sql).toContain("name IN (N'i''d')");
-    });
-
-    it("only looks up identity columns of user tables, so a view keeps its original error", () => {
-      // 视图的列也出现在 sys.identity_columns 里，但对视图 SET IDENTITY_INSERT 报 8105 并中止整批，
-      // 掩盖原本的「Cannot insert explicit value for identity column」。
-      for (const statement of buildImportInsertSql({ ...base, mode: "append" })) {
-        expect(statement.match(/OBJECT_ID\([^)]*\)/g)).toEqual(Array(3).fill("OBJECT_ID(N'[dbo].[users]', N'U')"));
-      }
-    });
-
-    it("leaves update and delete untouched (they do not insert)", () => {
-      expect(buildImportInsertSql({ ...base, mode: "update" })).toEqual([
-        "UPDATE [dbo].[users] SET [name] = 'Alice', [email] = 'alice@example.test' WHERE [id] = '1';",
-      ]);
-      expect(buildImportInsertSql({ ...base, mode: "delete" })).toEqual([
-        "DELETE FROM [dbo].[users] WHERE [id] = '1';",
-      ]);
-    });
-
-    it("does not leak IDENTITY_INSERT handling into other drivers", () => {
-      for (const driver of ["mysql", "postgresql", "sqlite"]) {
-        for (const mode of ["append", "append-update", "append-skip", "copy"] as const) {
-          const out = buildImportInsertSql({ ...base, mode, driver });
-          expect(out.join("\n")).not.toMatch(/IDENTITY_INSERT|sys\.identity_columns/);
-        }
-      }
-    });
-  });
-
-  it("keeps foreign-key toggling out of generated row statements", () => {
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.users",
-        headers: ["id"],
-        rows: [["1"]],
-        mapping: { id: "id" },
-        nullStrategy: "literal-null",
-        mode: "copy",
-        advancedOptions: { ignoreForeignKeyConstraint: true },
-        driver: "mysql",
-      })
-    ).toEqual(["DELETE FROM `appdb`.`users`;", "INSERT INTO `appdb`.`users` (`id`) VALUES ('1');"]);
-  });
-
-  it("uses ON CONFLICT DO NOTHING for postgresql append-update with no value columns", () => {
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.users",
-        headers: ["id"],
-        rows: [["1"]],
-        mapping: { id: "id" },
-        nullStrategy: "literal-null",
-        primaryKeys: ["id"],
-        mode: "append-update",
-        driver: "postgresql",
-      })
-    ).toEqual([`INSERT INTO "appdb"."users" ("id") VALUES ('1') ON CONFLICT ("id") DO NOTHING;`]);
-
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.users",
-        headers: ["id"],
-        rows: [["1"]],
-        mapping: { id: "id" },
-        nullStrategy: "literal-null",
-        primaryKeys: ["id"],
-        mode: "append-update",
-        driver: "mysql",
-      })
-    ).toEqual(["INSERT IGNORE INTO `appdb`.`users` (`id`) VALUES ('1');"]);
   });
 
   it("detects TSV when tabs outnumber commas in the header", () => {
@@ -425,105 +180,131 @@ describe("table import helpers", () => {
       rows: [["1", '"Alice"']],
     });
   });
+});
 
-  it("normalizes decimal symbols for numeric target columns", () => {
+// 源文件里的值怎么转换留在前端（规格决定 5）：按驱动给出的列类别转换日期、小数点、二进制编码与空值，
+// 结构化地交给驱动（文本、空值、二进制字节）；语句由驱动生成，见 internal/dbdriver/*/import_test.go。
+describe("buildImportIntent", () => {
+  const text = (value: string) => ({ kind: "text", text: value });
+  const NULL = { kind: "null" };
+
+  it("sends the mapped columns in source order, the match keys, the mode and the multi-row options", () => {
     expect(
-      buildImportInsertSql({
-        tableName: "appdb.metrics",
-        headers: ["id", "score", "name"],
-        rows: [["1", "1,5", "alice,bob"]],
-        mapping: { id: "id", score: "score", name: "name" },
+      buildImportIntent({
+        headers: ["name", "skip", "id"],
+        rows: [["Alice", "x", "1"]],
+        mapping: { name: "name", id: "id" },
         nullStrategy: "literal-null",
-        driver: "mysql",
-        columnTypes: { id: "int", score: "decimal(10,2)", name: "varchar(64)" },
-        conversionOptions: { decimalSymbol: "," },
+        mode: "append-update",
+        keys: ["id"],
+        advancedOptions: { extendedInsert: true, maxStatementSizeKb: 64 },
       })
-    ).toEqual(["INSERT INTO `appdb`.`metrics` (`id`, `score`, `name`) VALUES ('1', '1.5', 'alice,bob');"]);
+    ).toEqual({
+      mode: "append-update",
+      columns: ["name", "id"],
+      keys: ["id"],
+      rows: [[text("Alice"), text("1")]],
+      extendedInsert: true,
+      maxStatementSizeKb: 64,
+    });
   });
 
-  it("converts source dates and datetimes to canonical SQL literals", () => {
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.events",
-        headers: ["id", "occurred_on", "occurred_at"],
-        rows: [["1", "24/8/23", "15:30:38 24/Aug/2023"]],
-        mapping: { id: "id", occurred_on: "occurred_on", occurred_at: "occurred_at" },
-        nullStrategy: "literal-null",
-        driver: "mysql",
-        columnTypes: { id: "int", occurred_on: "date", occurred_at: "datetime" },
-        conversionOptions: {
-          dateOrder: "dmy",
-          dateDelimiter: "/",
-          dateTimeOrder: "time-date",
-          timeDelimiter: ":",
-        },
-      })
-    ).toEqual([
-      "INSERT INTO `appdb`.`events` (`id`, `occurred_on`, `occurred_at`) VALUES ('1', '2023-08-24', '2023-08-24 15:30:38');",
+  it("keeps empty cells as empty strings unless the null strategy marks them NULL", () => {
+    const parsed = parseDelimitedText("id,name,note\n1,,NULL\n2,Bob,", ",");
+    const intent = (nullStrategy: "literal-null" | "empty-is-null", emptyStringAsNull = false) =>
+      buildImportIntent({
+        headers: parsed.headers,
+        rows: parsed.rows,
+        mapping: { id: "id", name: "name", note: "note" },
+        nullStrategy,
+        advancedOptions: { emptyStringAsNull },
+      }).rows;
+
+    expect(intent("literal-null")).toEqual([
+      [text("1"), text(""), NULL],
+      [text("2"), text("Bob"), text("")],
     ]);
+    expect(intent("empty-is-null")).toEqual([
+      [text("1"), NULL, text("NULL")],
+      [text("2"), text("Bob"), NULL],
+    ]);
+    expect(intent("literal-null", true)).toEqual([
+      [text("1"), NULL, text("NULL")],
+      [text("2"), text("Bob"), NULL],
+    ]);
+  });
+
+  it("normalizes decimal symbols only for columns the driver reports as numbers", () => {
+    expect(
+      buildImportIntent({
+        headers: ["id", "score", "name"],
+        rows: [["1,5", "1,5", "alice,bob"]],
+        mapping: { id: "id", score: "score", name: "name" },
+        nullStrategy: "literal-null",
+        columnCategories: { id: "number", score: "number", name: "text" },
+        conversionOptions: { decimalSymbol: "," },
+      }).rows
+    ).toEqual([[text("1.5"), text("1.5"), text("alice,bob")]]);
+  });
+
+  it("converts source dates and datetimes to canonical text for date and datetime columns", () => {
+    expect(
+      buildImportIntent({
+        headers: ["id", "occurred_on", "occurred_at", "bad"],
+        rows: [["1", "24/8/23", "15:30:38 24/Aug/2023", "not a date"]],
+        mapping: { id: "id", occurred_on: "occurred_on", occurred_at: "occurred_at", bad: "bad" },
+        nullStrategy: "literal-null",
+        columnCategories: { id: "number", occurred_on: "date", occurred_at: "datetime", bad: "date" },
+        conversionOptions: { dateOrder: "dmy", dateDelimiter: "/", dateTimeOrder: "time-date", timeDelimiter: ":" },
+      }).rows
+    ).toEqual([[text("1"), text("2023-08-24"), text("2023-08-24 15:30:38"), text("not a date")]]);
   });
 
   it("supports a separate year delimiter when enabled", () => {
     expect(
-      buildImportInsertSql({
-        tableName: "appdb.events",
+      buildImportIntent({
         headers: ["d"],
         rows: [["24/8-2023"]],
         mapping: { d: "d" },
         nullStrategy: "literal-null",
-        driver: "mysql",
-        columnTypes: { d: "date" },
-        conversionOptions: {
-          dateOrder: "dmy",
-          dateDelimiter: "/",
-          yearDelimiter: "-",
-        },
-      })
-    ).toEqual(["INSERT INTO `appdb`.`events` (`d`) VALUES ('2023-08-24');"]);
+        columnCategories: { d: "date" },
+        conversionOptions: { dateOrder: "dmy", dateDelimiter: "/", yearDelimiter: "-" },
+      }).rows
+    ).toEqual([[text("2023-08-24")]]);
   });
 
-  it("emits driver-aware binary literals from base64 and hex encodings", () => {
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.files",
-        headers: ["id", "payload"],
-        rows: [["1", "SGVsbG8="]],
-        mapping: { id: "id", payload: "payload" },
+  it("decodes base64 and hex into binary bytes for binary columns, and keeps undecodable cells as text", () => {
+    const rows = (binaryEncoding: "base64" | "hex", cells: string[]) =>
+      buildImportIntent({
+        headers: cells.map((_, i) => `c${i}`),
+        rows: [cells],
+        mapping: Object.fromEntries(cells.map((_, i) => [`c${i}`, `c${i}`])),
         nullStrategy: "literal-null",
-        driver: "mysql",
-        columnTypes: { id: "int", payload: "blob" },
-        conversionOptions: { binaryEncoding: "base64" },
-      })
-    ).toEqual(["INSERT INTO `appdb`.`files` (`id`, `payload`) VALUES ('1', X'48656c6c6f');"]);
+        columnCategories: Object.fromEntries(cells.map((_, i) => [`c${i}`, "binary"])),
+        conversionOptions: { binaryEncoding },
+      }).rows[0];
 
-    expect(
-      buildImportInsertSql({
-        tableName: "appdb.files",
-        headers: ["id", "payload"],
-        rows: [["1", "48656C6C6F"]],
-        mapping: { id: "id", payload: "payload" },
-        nullStrategy: "literal-null",
-        driver: "postgresql",
-        columnTypes: { id: "int", payload: "bytea" },
-        conversionOptions: { binaryEncoding: "hex" },
-      })
-    ).toEqual([`INSERT INTO "appdb"."files" ("id", "payload") VALUES ('1', '\\x48656c6c6f'::bytea);`]);
+    expect(rows("base64", ["SGVsbG8=", "", "not base64!"])).toEqual([
+      { kind: "binary", hex: "48656c6c6f" },
+      { kind: "binary", hex: "" },
+      text("not base64!"),
+    ]);
+    expect(rows("hex", ["48656C6C6F", "abc", "xyz"])).toEqual([
+      { kind: "binary", hex: "48656c6c6f" },
+      { kind: "binary", hex: "0abc" },
+      text("xyz"),
+    ]);
   });
 
-  it("uses converted literals in WHERE clauses for primary-key based modes", () => {
+  it("sends columns the driver did not categorize as text", () => {
     expect(
-      buildImportInsertSql({
-        tableName: "appdb.events",
-        headers: ["id", "name"],
-        rows: [["1,5", "Alice"]],
-        mapping: { id: "id", name: "name" },
+      buildImportIntent({
+        headers: ["d", "payload"],
+        rows: [["24/8/23", "SGVsbG8="]],
+        mapping: { d: "d", payload: "payload" },
         nullStrategy: "literal-null",
-        primaryKeys: ["id"],
-        mode: "update",
-        driver: "mysql",
-        columnTypes: { id: "decimal(10,2)", name: "varchar(64)" },
-        conversionOptions: { decimalSymbol: "," },
-      })
-    ).toEqual(["UPDATE `appdb`.`events` SET `name` = 'Alice' WHERE `id` = '1.5';"]);
+        conversionOptions: { dateOrder: "dmy", dateDelimiter: "/", binaryEncoding: "base64" },
+      }).rows
+    ).toEqual([[text("24/8/23"), text("SGVsbG8=")]]);
   });
 });

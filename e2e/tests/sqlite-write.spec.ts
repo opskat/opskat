@@ -238,3 +238,58 @@ test("create a table, then truncate and drop it, in a SQLite database, reading t
     ),
   ).toEqual([{ name: "anchor" }]);
 });
+
+test("import a CSV file into a SQLite table with append/update, then read the file back", async ({
+  page,
+}) => {
+  const targetPath = join(
+    process.env.OPSKAT_DATA_DIR!,
+    `import-target-${Date.now()}.db`,
+  );
+  seed(targetPath, [
+    "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, born DATE, avatar BLOB)",
+    "INSERT INTO people(id, name) VALUES (1, 'alpha'), (2, 'beta')",
+  ]);
+  const panel = await openPanel(page, targetPath);
+  await panel.locator('[data-table-node="main.people"]').dblclick();
+  await expect(cell(page, "0:name")).toBeVisible({ timeout: 30_000 });
+
+  // 导入向导:CSV,映射按列名自动对上,主键 id 作为匹配键,选「追加/更新」。
+  await page.getByTitle(/^(Import Data|导入数据)$/).click();
+  await page.getByTestId("import-type-csv").check();
+  await page.getByTestId("import-wizard-next").click();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "people.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(
+      "id,name,born,avatar\n1,alpha-updated,24/08/2023,SGk=\n3,gamma,01/01/2024,NULL\n",
+    ),
+  });
+  for (let step = 0; step < 4; step++) {
+    await page.getByTestId("import-wizard-next").click();
+  }
+  await page.getByTestId("import-mode-append-update").check();
+  await page.getByTestId("import-wizard-next").click();
+
+  // 摘要里是驱动生成的语句:SQLite 的 upsert,日期已按源格式转换,二进制写成 X'…'。
+  const statements = page.getByTestId("import-statement");
+  await expect(statements).toHaveCount(1, { timeout: 30_000 });
+  await expect(statements.first()).toHaveText(
+    `INSERT INTO "main"."people" ("id", "name", "born", "avatar") VALUES ('1', 'alpha-updated', '2023-08-24', X'4869'), ('3', 'gamma', '2024-01-01', NULL) ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name", "born" = excluded."born", "avatar" = excluded."avatar";`,
+  );
+  await page.getByTestId("import-wizard-start").click();
+  await expect(page.getByTestId("import-wizard-start")).toBeHidden({
+    timeout: 30_000,
+  });
+
+  expect(
+    readBack(
+      targetPath,
+      "SELECT id, name, born, hex(avatar) AS avatar FROM people ORDER BY id",
+    ),
+  ).toEqual([
+    { id: 1, name: "alpha-updated", born: "2023-08-24", avatar: "4869" },
+    { id: 2, name: "beta", born: null, avatar: "" },
+    { id: 3, name: "gamma", born: "2024-01-01", avatar: "" },
+  ]);
+});

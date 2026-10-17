@@ -5,6 +5,7 @@ import {
   GetCreateTableStatements,
   GetDropTableStatements,
   GetGridEditStatements,
+  GetImportStatements,
   GetTruncateTableStatements,
   ListDatabaseDrivers,
 } from "../../wailsjs/go/query/Query";
@@ -78,6 +79,20 @@ export function mockGridEditStatements(): void {
       updates: req.updates.map((update) => `UPDATE ${table} SET ${json(update.set)} WHERE ${locate(update.row)}`),
       deletes: req.deletes.map((row) => `DELETE ${table} WHERE ${locate(row)}`),
     });
+  });
+}
+
+/**
+ * 让 Query.GetImportStatements 像驱动一样给出导入的语句:每行一条,内容是模式、表与这一行的值(文本、
+ * null 或 0x 开头的二进制),复制模式前面多一条清空,一眼能与任何真实方言区分。
+ */
+export function mockImportStatements(): void {
+  vi.mocked(GetImportStatements).mockImplementation(async (_assetId, _database, table, req) => {
+    const rows = req.rows.map(
+      (row) =>
+        `IMPORT ${req.mode} ${table} ${JSON.stringify(row.map((v) => (v.kind === "null" ? null : v.kind === "binary" ? `0x${v.hex ?? ""}` : v.text)))}`
+    );
+    return req.mode === "copy" ? [`CLEAR ${table}`, ...rows] : rows;
   });
 }
 

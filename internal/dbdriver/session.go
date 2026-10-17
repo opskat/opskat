@@ -184,6 +184,12 @@ type Session interface {
 	// error。驱动没有声明 CapAlterTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	AlterTableStatements(ctx context.Context, database, table string, req AlterTableRequest) (*AlterTableStatements, error)
 
+	// ImportStatements 生成导入要执行的语句（只生成、不执行），按执行的次序：各导入模式的写法（见
+	// ImportMode）、字面量、往自增列写值时要的开关都由驱动决定。请求里的列不在表中（或表已不存在）、
+	// 一行的值与列数不符时返回 error。没有列时返回空列表。驱动没有声明 CapImport 时返回包着
+	// ErrUnsupported 的错误，且不执行任何语句。
+	ImportStatements(ctx context.Context, database, table string, req ImportRequest) ([]string, error)
+
 	// ExecuteBatch 在会话的一条连接上按次序执行一批语句（导入的整批执行用它），见 BatchRequest。
 	// 空白语句跳过、不执行。语句本身的失败记在结果里，不作为 error 返回。
 	//
@@ -347,6 +353,62 @@ type AlterTableStatements struct {
 	Statements []string `json:"statements"`
 	// Table 是语句执行后这张表的名字，用 ListTables 给出的形式（改了名就是新名字，schema 不变）。
 	Table string `json:"table"`
+}
+
+// ImportMode 是导入模式：已有的行（按 ImportRequest.Keys 匹配）怎么处理。
+type ImportMode string
+
+const (
+	// ImportAppend：每行插入。
+	ImportAppend ImportMode = "append"
+	// ImportUpdate：按键更新已有的行，不插入。
+	ImportUpdate ImportMode = "update"
+	// ImportAppendUpdate：键已存在的行更新，其余插入（upsert）。
+	ImportAppendUpdate ImportMode = "append-update"
+	// ImportAppendSkip：键已存在的行跳过，其余插入。
+	ImportAppendSkip ImportMode = "append-skip"
+	// ImportDelete：按键删除已有的行。
+	ImportDelete ImportMode = "delete"
+	// ImportCopy：先清空表，再每行插入。
+	ImportCopy ImportMode = "copy"
+)
+
+// ImportRequest 是 Session.ImportStatements 要生成的导入语句：映射到表上的行，以及怎么写进去。
+//
+// 要按键匹配已有行的模式（更新、追加/更新、追加/跳过、删除）在 Columns 里没有键列时不生成任何
+// 语句；更新模式没有可更新的列时同样不生成。更新类模式不写数据库不允许更新的自增列（SQL Server
+// IDENTITY、PostgreSQL GENERATED ALWAYS）：已有行的其余列照常更新，自增列保持原值。
+type ImportRequest struct {
+	Mode ImportMode `json:"mode"`
+	// Columns 是写入的目标列，按语句里的次序。
+	Columns []string `json:"columns"`
+	// Keys 是匹配已有行的键列；只有同时在 Columns 里的才用来匹配。
+	Keys []string `json:"keys"`
+	// Rows 是各行的值，与 Columns 一一对应。
+	Rows [][]ImportValue `json:"rows"`
+	// ExtendedInsert 为真时把多行合并成一条多行 INSERT，每条不超过 MaxStatementSizeKB（小于 1 按 1
+	// 算）；方言写不成多行的模式（SQL Server 的 MERGE）仍每行一条。
+	ExtendedInsert     bool `json:"extendedInsert"`
+	MaxStatementSizeKB int  `json:"maxStatementSizeKb"`
+}
+
+// ImportValueKind 是导入值的种类。
+type ImportValueKind string
+
+const (
+	ImportText   ImportValueKind = "text"
+	ImportNull   ImportValueKind = "null"
+	ImportBinary ImportValueKind = "binary"
+)
+
+// ImportValue 是导入的一个值，已按源文件的格式转换好（日期、小数点、空值、二进制编码都在前端
+// 处理）：驱动只按目标列写成字面量。
+type ImportValue struct {
+	Kind ImportValueKind `json:"kind"`
+	// Text 是 ImportText 的文本。
+	Text string `json:"text,omitempty"`
+	// Hex 是 ImportBinary 的字节，按十六进制写（不带前缀）。
+	Hex string `json:"hex,omitempty"`
 }
 
 // BatchRequest 是 Session.ExecuteBatch 要在一条连接上执行的一批语句。

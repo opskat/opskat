@@ -38,6 +38,7 @@ import { SqlPreviewDialog } from "./SqlPreviewDialog";
 import { UnsavedEditsDialog, type UnsavedEditSummaryItem } from "./UnsavedEditsDialog";
 import { driverHasCapability, findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import { ImportTableDataDialog } from "./ImportTableDataDialog";
+import type { ImportColumnCategory } from "@/lib/tableImport";
 import { ExportTableDataDialog } from "./ExportTableDataDialog";
 import { TableFilterBuilder } from "./TableFilterBuilder";
 import { TableDataStatusBar, TableEditorToolbar, type TableExportFormat } from "./TableEditorToolbar";
@@ -87,6 +88,7 @@ interface SQLResult {
 interface OpenTableResult {
   columns: string[];
   columnTypes: Record<string, string>;
+  columnCategories: Record<string, ImportColumnCategory>;
   columnRules: TableColumnRule[];
   primaryKeys: string[];
   totalCount: number;
@@ -165,6 +167,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
   const [columns, setColumns] = useState<string[]>([]);
   const [columnTypes, setColumnTypes] = useState<Record<string, string>>({});
+  const [columnCategories, setColumnCategories] = useState<Record<string, ImportColumnCategory>>({});
   const [columnRules, setColumnRules] = useState<TableColumnRule[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [newRows, setNewRows] = useState<Record<string, unknown>[]>([]);
@@ -293,6 +296,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         setElapsedMs(Math.round(performance.now() - startedAt));
         setPrimaryKeys(parsed.primaryKeys ?? []);
         setColumnTypes(parsed.columnTypes ?? {});
+        setColumnCategories(parsed.columnCategories ?? {});
         setColumnRules(parsed.columnRules ?? []);
         setColumns(parsed.columns ?? []);
         setRows(parsed.firstPage ?? []);
@@ -1364,6 +1368,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         table={table}
         columns={columns}
         columnTypes={columnTypes}
+        columnCategories={columnCategories}
         primaryKeys={primaryKeys}
         driver={driver}
         onSubmittingChange={setImporting}

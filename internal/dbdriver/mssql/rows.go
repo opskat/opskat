@@ -49,8 +49,15 @@ func (dialect) InsertRowSQL(tableRef, columns, values string, identity bool) str
 	if !identity {
 		return insert
 	}
+	return identityInsert(tableRef, insert)
+}
+
+// identityInsert 让 statement 能给这张表的 IDENTITY 列写值：临时打开 IDENTITY_INSERT，写完关闭，
+// 出错也关闭并原样抛出；都在同一条语句里，不留会话状态，也不赋值变量（SQL Server 把变量赋值计为
+// 1 行受影响）。
+func identityInsert(tableRef, statement string) string {
 	return fmt.Sprintf("SET IDENTITY_INSERT %[1]s ON; BEGIN TRY %[2]s END TRY "+
-		"BEGIN CATCH SET IDENTITY_INSERT %[1]s OFF; THROW; END CATCH; SET IDENTITY_INSERT %[1]s OFF;", tableRef, insert)
+		"BEGIN CATCH SET IDENTITY_INSERT %[1]s OFF; THROW; END CATCH; SET IDENTITY_INSERT %[1]s OFF;", tableRef, statement)
 }
 
 func (dialect) DeleteRowSQL(tableRef, where string) string {

@@ -9,7 +9,7 @@ import (
 	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 )
 
-// 行语句：反斜杠在文本字面量里是不是转义符取决于会话的 sql_mode，每次生成前在这条连接上查；
+// 行语句：反斜杠在文本字面量里是不是转义符取决于会话的 sql_mode，每次生成前在这条连接上查；二进制写成 X'…'；
 // 只改一行用 LIMIT 1。
 var _ sqldb.RowWriter = dialect{}
 
@@ -20,6 +20,9 @@ func (dialect) Literals(ctx context.Context, conn *sql.Conn) (sqldb.Literals, er
 	}
 	return sqldb.Literals{
 		BackslashEscapes: !strings.Contains(strings.ToUpper(mode), "NO_BACKSLASH_ESCAPES"),
+		Binary: func(columnType string) (string, string, bool) {
+			return "X'", "'", isBinaryType(columnType)
+		},
 	}, nil
 }
 

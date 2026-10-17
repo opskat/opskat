@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "alter_model" / "alter_table" / "batch"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "import" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "alter_model" / "alter_table" / "batch"。
 	Op       string
 	Database string
 	Table    string
@@ -176,6 +176,8 @@ type TableCall struct {
 	RowStatements *dbdriver.RowStatementsRequest
 	// GridEdit 是 grid_edit 收到的请求。
 	GridEdit *dbdriver.GridEditRequest
+	// Import 是 import 收到的请求。
+	Import *dbdriver.ImportRequest
 	// CreateTable 是 create_table 收到的请求。
 	CreateTable *dbdriver.CreateTableRequest
 	// CreateDatabase 是 create_database 收到的请求。
@@ -199,11 +201,12 @@ func (s *FakeSession) OpenTable(_ context.Context, database, table string, pageS
 		return nil, err
 	}
 	return &dbdriver.OpenedTable{
-		ColumnTypes: s.fake.ColumnTypes,
-		ColumnRules: s.fake.ColumnRules,
-		PrimaryKeys: s.fake.PrimaryKeys,
-		TotalCount:  int64(len(s.fake.Rows)),
-		FirstPage:   s.page(page),
+		ColumnTypes:      s.fake.ColumnTypes,
+		ColumnCategories: s.fake.ColumnCategories,
+		ColumnRules:      s.fake.ColumnRules,
+		PrimaryKeys:      s.fake.PrimaryKeys,
+		TotalCount:       int64(len(s.fake.Rows)),
+		FirstPage:        s.page(page),
 	}, nil
 }
 
@@ -303,6 +306,22 @@ func (s *FakeSession) GridEditStatements(_ context.Context, database, table stri
 		Updates: statements("UPDATE", len(req.Updates)),
 		Deletes: statements("DELETE", len(req.Deletes)),
 	}, nil
+}
+
+// ImportStatements 记下收到的请求（Op "import"），每行给出一条一眼能与任何真实方言区分的语句。
+// 驱动没有声明导入时以 ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) ImportStatements(_ context.Context, database, table string, req dbdriver.ImportRequest) ([]string, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapImport) {
+		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapImport)
+	}
+	if err := s.tableCall(TableCall{Op: "import", Database: database, Table: table, Import: &req}); err != nil {
+		return nil, err
+	}
+	statements := make([]string, 0, len(req.Rows))
+	for i := range req.Rows {
+		statements = append(statements, fmt.Sprintf("FAKE IMPORT %s ROW %d OF %s.%s", strings.ToUpper(string(req.Mode)), i+1, database, table))
+	}
+	return statements, nil
 }
 
 // writeStatement 是建表、删表、清空、建库四个会话方法的共同做法：没有声明对应功能时以 ErrUnsupported

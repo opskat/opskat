@@ -18,8 +18,8 @@ func TestFakeDriverPassesTableConformance(t *testing.T) {
 	fake := NewFake()
 	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
 
-	// 声明了复制为 SQL：行语句也要能生成。
-	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapCopySQL)
+	// 声明了复制为 SQL 与导入：行语句与导入语句也要能生成。
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapCopySQL, dbdriver.CapImport)
 	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
 }
 
@@ -81,6 +81,16 @@ type brokenTables struct {
 	rows  func(*dbdriver.RowSet, error) (*dbdriver.RowSet, error)
 	count func(int64, error) (int64, error)
 	stmts func([]string, error) ([]string, error)
+	// imports 改写导入语句的结果。
+	imports func([]string, error) ([]string, error)
+}
+
+func (b brokenTables) ImportStatements(ctx context.Context, database, table string, req dbdriver.ImportRequest) ([]string, error) {
+	statements, err := b.Session.ImportStatements(ctx, database, table, req)
+	if b.imports != nil {
+		return b.imports(statements, err)
+	}
+	return statements, err
 }
 
 func (b brokenTables) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
@@ -191,6 +201,27 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 			}
 			return statements[1:], err
 		}}, "one per row"},
+		"categories for an unknown column": {brokenTables{open: alterOpened(func(o *dbdriver.OpenedTable) {
+			o.ColumnCategories = map[string]dbdriver.ColumnCategory{"ghost": dbdriver.CategoryText}
+		})}, "ghost"},
+		"an unknown category": {brokenTables{open: alterOpened(func(o *dbdriver.OpenedTable) {
+			o.ColumnCategories = map[string]dbdriver.ColumnCategory{"id": "weird"}
+		})}, "weird"},
+		"declared import refused": {brokenTables{imports: func([]string, error) ([]string, error) {
+			return nil, unsupported
+		}}, "ImportStatements"},
+		"an import statement short": {brokenTables{imports: func(statements []string, err error) ([]string, error) {
+			if len(statements) == 0 {
+				return statements, err
+			}
+			return statements[1:], err
+		}}, "ImportStatements"},
+		"import without rows is null": {brokenTables{imports: func(statements []string, err error) ([]string, error) {
+			if len(statements) == 0 {
+				return nil, err
+			}
+			return statements, err
+		}}, "ImportStatements without rows"},
 		"row statements without rows are null": {brokenTables{stmts: func(statements []string, err error) ([]string, error) {
 			if len(statements) == 0 {
 				return nil, err
@@ -200,7 +231,7 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := NewFake()
-			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapExportSQL)
+			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapExportSQL, dbdriver.CapImport)
 			tt.broken.Session = openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
 			problems := tableProblems(fake.Desc, tt.broken, "app", "users")
 			require.NotEmpty(t, problems)

@@ -91,7 +91,8 @@ func (s *Session) tables() (Tables, error) {
 	return tables, nil
 }
 
-// OpenTable 在同一条连接上依次查主键、列定义、总行数、第一页；任何一步失败整次失败。
+// OpenTable 在同一条连接上依次查主键、列定义、总行数、第一页；任何一步失败整次失败。方言实现了
+// Importer 时同时按它给出列的类别。
 func (s *Session) OpenTable(ctx context.Context, database, table string, pageSize int) (*dbdriver.OpenedTable, error) {
 	tables, err := s.tables()
 	if err != nil {
@@ -124,9 +125,16 @@ func (s *Session) OpenTable(ctx context.Context, database, table string, pageSiz
 			TotalCount:  total,
 			FirstPage:   firstPage,
 		}
+		importer, imports := s.dialect.(Importer)
+		if imports {
+			opened.ColumnCategories = make(map[string]dbdriver.ColumnCategory, len(columns))
+		}
 		for _, column := range columns {
 			if column.Type != "" {
 				opened.ColumnTypes[column.Name] = column.Type
+			}
+			if imports {
+				opened.ColumnCategories[column.Name] = importer.ColumnCategory(column.Type)
 			}
 			opened.ColumnRules = append(opened.ColumnRules, dbdriver.TableColumnRule{
 				Name:          column.Name,

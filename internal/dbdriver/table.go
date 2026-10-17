@@ -109,11 +109,30 @@ type TableColumnRule struct {
 	AutoIncrement bool   `json:"autoIncrement"`
 }
 
+// ColumnCategory 是一列的值属于哪一类，由驱动按自己的类型系统判断。导入据此决定源文件里的值
+// 怎么转换（日期格式、小数点、二进制编码）。
+type ColumnCategory string
+
+const (
+	CategoryText     ColumnCategory = "text"
+	CategoryNumber   ColumnCategory = "number"
+	CategoryDate     ColumnCategory = "date"
+	CategoryDateTime ColumnCategory = "datetime"
+	CategoryBinary   ColumnCategory = "binary"
+)
+
+// ColumnCategories 是全部已知的列类别。
+func ColumnCategories() []ColumnCategory {
+	return []ColumnCategory{CategoryText, CategoryNumber, CategoryDate, CategoryDateTime, CategoryBinary}
+}
+
 // OpenedTable 是打开一张表时一次给出的首屏。
 type OpenedTable struct {
 	// ColumnTypes 按列名给出列类型；驱动说不出类型的列不在其中。
 	ColumnTypes map[string]string
-	ColumnRules []TableColumnRule
+	// ColumnCategories 按列名给出列的类别（声明了导入的驱动给出）；不在其中的列按文本处理。
+	ColumnCategories map[string]ColumnCategory
+	ColumnRules      []TableColumnRule
 	// PrimaryKeys 是主键列，按它们在主键里的次序；没有主键时为空。
 	PrimaryKeys []string
 	// TotalCount 是表的总行数。

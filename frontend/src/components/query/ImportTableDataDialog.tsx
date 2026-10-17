@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertDialog,
@@ -28,13 +28,15 @@ import {
 import { FilePlus2, Link, Loader2, Play, Table2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { ExecuteSQL, ExecuteTableImport, ParseXlsx } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, ExecuteTableImport, GetImportStatements, ParseXlsx } from "../../../wailsjs/go/query/Query";
+import { dbdriver } from "../../../wailsjs/go/models";
 import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import {
-  buildImportInsertSql,
+  buildImportIntent,
   detectDelimiter,
   parseImportSourceText,
   type ImportBinaryEncoding,
+  type ImportColumnCategory,
   type ImportDataFormat,
   type ImportDateOrder,
   type ImportDateTimeOrder,
@@ -57,6 +59,8 @@ interface ImportTableDataDialogProps {
   primaryKeys?: string[];
   driver?: string;
   columnTypes?: Record<string, string>;
+  /** 驱动给出的列类别（打开表时随表元数据返回），决定源文件里的值怎么转换。 */
+  columnCategories?: Record<string, ImportColumnCategory>;
   onSubmittingChange?: (submitting: boolean) => void;
   onSubmitStart?: () => number;
   isSubmitCancelled?: (requestId: number) => boolean;
@@ -179,6 +183,7 @@ export function ImportTableDataDialog({
   primaryKeys: tablePrimaryKeys,
   driver,
   columnTypes = {},
+  columnCategories,
   onSubmittingChange,
   onSubmitStart,
   isSubmitCancelled,
@@ -225,6 +230,14 @@ export function ImportTableDataDialog({
   const [ignoreForeignKeyConstraint, setIgnoreForeignKeyConstraint] = useState(false);
   const [continueOnError, setContinueOnError] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // 摘要与执行用的语句：离开导入模式这一步时由驱动生成，展示的与执行的是同一份。
+  const [statements, setStatements] = useState<string[]>([]);
+  const [generating, setGenerating] = useState(false);
+  // 生成要等后端：等回来时对话框若已关掉或重开，这次的结果就作废。
+  const latestGeneration = useRef(0);
+  useEffect(() => {
+    latestGeneration.current += 1;
+  }, [open]);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [progress, setProgress] = useState<ImportProgress>({
     processed: 0,
@@ -245,6 +258,8 @@ export function ImportTableDataDialog({
       setUrlDraft("");
       setLogLines([]);
       setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
+      setStatements([]);
+      setGenerating(false);
       setPrimaryKeys(new Set(tablePrimaryKeys ?? []));
       setImportMode("append");
       setAdvancedOpen(false);
@@ -319,8 +334,6 @@ export function ImportTableDataDialog({
     setMapping(nextAutoMapping(parsed.headers, columns));
   }
 
-  // MSSQL 与 PG 一样按 schema.table 引用，不带 database 前缀（避免被当成 schema.object）
-  const tableName = driver === "postgresql" || driver === "mssql" ? table : `${database}.${table}`;
   const primaryKeyColumns = useMemo(
     () => Array.from(primaryKeys).filter((column) => Object.values(mapping).includes(column)),
     [mapping, primaryKeys]
@@ -346,43 +359,6 @@ export function ImportTableDataDialog({
       yearDelimiterEnabled,
     ]
   );
-  const statements = useMemo(
-    () =>
-      buildImportInsertSql({
-        tableName,
-        headers: parsed.headers,
-        rows: parsed.rows,
-        mapping,
-        nullStrategy,
-        mode: importMode,
-        primaryKeys: primaryKeyColumns,
-        advancedOptions: {
-          extendedInsert,
-          maxStatementSizeKb,
-          emptyStringAsNull,
-          ignoreForeignKeyConstraint,
-        },
-        driver,
-        columnTypes,
-        conversionOptions,
-      }),
-    [
-      columnTypes,
-      conversionOptions,
-      driver,
-      emptyStringAsNull,
-      extendedInsert,
-      ignoreForeignKeyConstraint,
-      importMode,
-      mapping,
-      maxStatementSizeKb,
-      nullStrategy,
-      parsed.headers,
-      parsed.rows,
-      primaryKeyColumns,
-      tableName,
-    ]
-  );
   const unmappedHeaders = parsed.headers.filter((header) => !mapping[header]);
   const hasMappedColumns = parsed.headers.length > unmappedHeaders.length;
   const modeMissingPrimaryKey = importModeNeedsPrimaryKey(importMode) && primaryKeyColumns.length === 0;
@@ -394,7 +370,7 @@ export function ImportTableDataDialog({
     step === "delimiter" ||
     step === "options" ||
     (step === "mapping" && hasMappedColumns) ||
-    (step === "mode" && !modeMissingPrimaryKey && statements.length > 0);
+    (step === "mode" && !modeMissingPrimaryKey && !generating);
   const canStart = step === "summary" && statements.length > 0 && !submitting;
 
   const handleFiles = useCallback(
@@ -592,8 +568,39 @@ export function ImportTableDataDialog({
     t,
   ]);
 
+  const generateStatements = async () => {
+    const generation = ++latestGeneration.current;
+    setGenerating(true);
+    try {
+      const intent = buildImportIntent({
+        headers: parsed.headers,
+        rows: parsed.rows,
+        mapping,
+        nullStrategy,
+        mode: importMode,
+        keys: primaryKeyColumns,
+        advancedOptions: { extendedInsert, maxStatementSizeKb, emptyStringAsNull },
+        columnCategories,
+        conversionOptions,
+      });
+      const generated = await GetImportStatements(assetId, database, table, dbdriver.ImportRequest.createFrom(intent));
+      if (generation !== latestGeneration.current) return;
+      setStatements(generated);
+      setStepIndex((value) => value + 1);
+    } catch (e) {
+      if (generation !== latestGeneration.current) return;
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (generation === latestGeneration.current) setGenerating(false);
+    }
+  };
+
   const goNext = () => {
     if (!canNext || stepIndex >= steps.length - 1) return;
+    if (step === "mode") {
+      void generateStatements();
+      return;
+    }
     setStepIndex((value) => value + 1);
   };
 
@@ -606,7 +613,13 @@ export function ImportTableDataDialog({
             <Label className="text-sm">{t("query.importWizardTypeLabel")}</Label>
             {(["text", "csv", "json", "xml", "xlsx"] as ImportDataFormat[]).map((item) => (
               <label key={item} className="flex w-fit cursor-pointer items-center gap-2 text-sm">
-                <input type="radio" name="import-type" checked={format === item} onChange={() => setFormat(item)} />
+                <input
+                  type="radio"
+                  name="import-type"
+                  data-testid={`import-type-${item}`}
+                  checked={format === item}
+                  onChange={() => setFormat(item)}
+                />
                 {t(`query.importType${item[0].toUpperCase()}${item.slice(1)}`)}
               </label>
             ))}
@@ -1001,6 +1014,7 @@ export function ImportTableDataDialog({
                 <input
                   type="radio"
                   name="import-mode"
+                  data-testid={`import-mode-${mode}`}
                   checked={importMode === mode}
                   onChange={() => setImportMode(mode)}
                   className="mt-1"
@@ -1057,7 +1071,7 @@ export function ImportTableDataDialog({
                 </div>
               ))
             : statements.slice(0, 8).map((statement, index) => (
-                <div key={index} className="truncate">
+                <div key={index} className="truncate" data-testid="import-statement">
                   {statement}
                 </div>
               ))}
@@ -1098,7 +1112,7 @@ export function ImportTableDataDialog({
               type="button"
               variant="outline"
               size="sm"
-              disabled={submitting || stepIndex === 0}
+              disabled={submitting || generating || stepIndex === 0}
               onClick={() => setStepIndex(stepIndex - 1)}
             >
               {t("query.importWizardBack")}
@@ -1109,10 +1123,17 @@ export function ImportTableDataDialog({
               size="sm"
               disabled={submitting || step === "summary" || !canNext}
               onClick={goNext}
+              data-testid="import-wizard-next"
             >
               {t("query.importWizardNext")}
             </Button>
-            <Button type="button" size="sm" disabled={!canStart} onClick={handleStart}>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canStart}
+              onClick={handleStart}
+              data-testid="import-wizard-start"
+            >
               {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
               {t("query.importWizardStart")}
             </Button>

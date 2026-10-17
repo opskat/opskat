@@ -124,6 +124,15 @@ type brokenSession struct {
 	gridEdits bool
 	// schemaWrites 为真时不管声明与否都给出建表、删表、清空、建库的语句。
 	schemaWrites bool
+	// imports 为真时不管声明与否都给出导入语句。
+	imports bool
+}
+
+func (b brokenSession) ImportStatements(ctx context.Context, database, table string, req dbdriver.ImportRequest) ([]string, error) {
+	if b.imports {
+		return []string{"INSERT"}, nil
+	}
+	return b.Session.ImportStatements(ctx, database, table, req)
 }
 
 func (b brokenSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
@@ -243,6 +252,7 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 		"close fails":                          {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
 		"undeclared row statements generated":  {brokenSession{generates: true}, "RowStatements"},
 		"undeclared grid edit generated":       {brokenSession{gridEdits: true}, "GridEditStatements"},
+		"undeclared import generated":          {brokenSession{imports: true}, "ImportStatements"},
 		"undeclared create table generated":    {brokenSession{schemaWrites: true}, "CreateTableStatements"},
 		"undeclared drop table generated":      {brokenSession{schemaWrites: true}, "DropTableStatements"},
 		"undeclared truncate generated":        {brokenSession{schemaWrites: true}, "TruncateTableStatements"},

@@ -36,7 +36,7 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
-//     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导出 / 复制为 SQL 时的行语句（RowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
+//     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（RowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
 //     必须给出语句），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
@@ -162,7 +162,7 @@ func schemaWriteProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriv
 }
 
 // undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
-// ObjectSource、查看建表语句、表格编辑、改表与行语句，以及整批执行里的关闭外键检查。
+// ObjectSource、查看建表语句、表格编辑、改表、导入与行语句，以及整批执行里的关闭外键检查。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -202,6 +202,14 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 		_, err := s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{Name: "y"})
 		if !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("AlterTableStatements: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapAlterTable, err))
+		}
+	}
+	if !desc.Supports(dbdriver.CapImport) {
+		_, err := s.ImportStatements(ctx, "", "x", dbdriver.ImportRequest{
+			Mode: dbdriver.ImportAppend, Columns: []string{"id"}, Rows: [][]dbdriver.ImportValue{{{Kind: dbdriver.ImportText, Text: "1"}}},
+		})
+		if !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("ImportStatements: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapImport, err))
 		}
 	}
 	if !desc.GeneratesRowStatements() {
@@ -389,6 +397,14 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 				report("OpenTable: column rules name %q, which is not a column of the first page", rule.Name)
 			}
 		}
+		for name, category := range opened.ColumnCategories {
+			if !slices.Contains(first.Columns, name) {
+				report("OpenTable: column categories name %q, which is not a column of the first page", name)
+			}
+			if !slices.Contains(dbdriver.ColumnCategories(), category) {
+				report("OpenTable: column %q has category %q, which is not one of %v", name, category, dbdriver.ColumnCategories())
+			}
+		}
 		for _, name := range opened.PrimaryKeys {
 			if !slices.Contains(first.Columns, name) {
 				report("OpenTable: primary keys name %q, which is not a column of the first page", name)
@@ -459,6 +475,9 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 	if desc.Supports(dbdriver.CapGridEdit) && opened != nil && opened.FirstPage != nil {
 		problems = append(problems, gridEditProblems(ctx, s, database, table, opened)...)
 	}
+	if desc.Supports(dbdriver.CapImport) && opened != nil && opened.FirstPage != nil {
+		problems = append(problems, importProblems(ctx, s, database, table, opened.FirstPage)...)
+	}
 	if desc.Supports(dbdriver.CapAlterTable) && opened != nil && opened.FirstPage != nil {
 		problems = append(problems, alterProblems(ctx, s, database, table, opened.FirstPage.Columns)...)
 	}
@@ -508,6 +527,42 @@ func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, tab
 	statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: first.Columns})
 	if err == nil && statements == nil {
 		report("RowStatements without rows: returned null; it must be an empty list")
+	}
+	return problems
+}
+
+// importProblems 用打开表时的第一页检查导入语句：把每行当作要追加的一行（值都是 NULL，不依赖列的
+// 类型），每行一条 INSERT；没有行时是空列表（序列化成 []，不是 null）。语句只生成，这里不执行。
+func importProblems(ctx context.Context, s dbdriver.Session, database, table string, first *dbdriver.RowSet) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	req := dbdriver.ImportRequest{Mode: dbdriver.ImportAppend, Columns: first.Columns}
+	for range first.Rows {
+		row := make([]dbdriver.ImportValue, len(first.Columns))
+		for i := range row {
+			row[i] = dbdriver.ImportValue{Kind: dbdriver.ImportNull}
+		}
+		req.Rows = append(req.Rows, row)
+	}
+	statements, err := s.ImportStatements(ctx, database, table, req)
+	switch {
+	case errors.Is(err, dbdriver.ErrUnsupported):
+		report("ImportStatements: declared %q but refused with ErrUnsupported: %v", dbdriver.CapImport, err)
+	case err != nil:
+		report("ImportStatements: %v", err)
+	case len(statements) != len(req.Rows):
+		report("ImportStatements: %d statement(s) to append %d row(s) one by one; there must be one per row", len(statements), len(req.Rows))
+	default:
+		for i, statement := range statements {
+			if strings.TrimSpace(statement) == "" {
+				report("ImportStatements: statement %d is empty", i)
+			}
+		}
+	}
+	req.Rows = nil
+	statements, err = s.ImportStatements(ctx, database, table, req)
+	if err == nil && statements == nil {
+		report("ImportStatements without rows: returned null; it must be an empty list")
 	}
 	return problems
 }

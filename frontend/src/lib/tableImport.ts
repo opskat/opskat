@@ -1,5 +1,3 @@
-import { quoteIdent, quoteQualifiedIdent, sqlQuote } from "./tableSql";
-
 export type Delimiter = "," | "\t";
 export type ImportNullStrategy = "empty-is-empty-string" | "empty-is-null" | "literal-null";
 export type ImportDataFormat = "text" | "csv" | "json" | "xml" | "xlsx";
@@ -46,17 +44,32 @@ export interface ParseImportSourceTextArgs {
   dataEndRow?: number;
 }
 
-export interface BuildImportInsertSqlArgs {
-  tableName: string;
+/** 驱动按自己的类型系统给出的列类别（后端 dbdriver.ColumnCategory），决定源文件里的值怎么转换。 */
+export type ImportColumnCategory = "text" | "number" | "date" | "datetime" | "binary";
+
+/** 转换好的一个值（后端 dbdriver.ImportValue）：文本、空值，或按十六进制给出的二进制字节。 */
+export type ImportValue = { kind: "text"; text: string } | { kind: "null" } | { kind: "binary"; hex: string };
+
+/** 发给驱动的导入请求（后端 dbdriver.ImportRequest）；语句由驱动生成（Query.GetImportStatements）。 */
+export interface ImportIntent {
+  mode: ImportMode;
+  columns: string[];
+  keys: string[];
+  rows: ImportValue[][];
+  extendedInsert: boolean;
+  maxStatementSizeKb: number;
+}
+
+export interface BuildImportIntentArgs {
   headers: string[];
   rows: string[][];
   mapping: Record<string, string>;
   nullStrategy: ImportNullStrategy;
   mode?: ImportMode;
-  primaryKeys?: string[];
+  /** 匹配已有行的键列。 */
+  keys?: string[];
   advancedOptions?: ImportAdvancedOptions;
-  driver?: string;
-  columnTypes?: Record<string, string>;
+  columnCategories?: Record<string, ImportColumnCategory>;
   conversionOptions?: ImportValueConversionOptions;
 }
 
@@ -345,22 +358,6 @@ const MONTH_NAMES: Record<string, number> = {
   december: 12,
 };
 
-function isNumericType(type: string): boolean {
-  return /^(tinyint|smallint|mediumint|int|bigint|integer|float|double|decimal|numeric|real)/i.test(type);
-}
-
-function isDateOnlyType(type: string): boolean {
-  return /^date(?!time)/i.test(type);
-}
-
-function isDateTimeType(type: string): boolean {
-  return /^(datetime|timestamp)/i.test(type);
-}
-
-function isBinaryType(type: string): boolean {
-  return /^(blob|tinyblob|mediumblob|longblob|binary|varbinary|bytea)/i.test(type);
-}
-
 function pad(value: number, width: number): string {
   return String(value).padStart(width, "0");
 }
@@ -490,257 +487,83 @@ function bytesToHex(binary: string): string {
   return hex;
 }
 
-function formatBinaryLiteral(text: string, encoding: ImportBinaryEncoding, driver?: string): string | null {
+// binaryHex 把源文件里按 encoding 编码的二进制解码成字节的十六进制；不是合法编码时返回 null。
+function binaryHex(text: string, encoding: ImportBinaryEncoding): string | null {
   const cleaned = text.replace(/\s+/g, "");
-  let hex: string;
   if (encoding === "base64") {
-    if (!cleaned) return driver === "postgresql" ? `'\\x'::bytea` : `X''`;
+    if (!cleaned) return "";
     if (!/^[A-Za-z0-9+/=]+$/.test(cleaned)) return null;
     try {
-      hex = bytesToHex(atob(cleaned));
+      return bytesToHex(atob(cleaned));
     } catch {
       return null;
     }
-  } else {
-    if (!/^[0-9a-fA-F]*$/.test(cleaned)) return null;
-    hex = cleaned.toLowerCase();
-    if (hex.length % 2 !== 0) hex = `0${hex}`;
   }
-  if (driver === "postgresql") return `'\\x${hex}'::bytea`;
-  return `X'${hex}'`;
+  if (!/^[0-9a-fA-F]*$/.test(cleaned)) return null;
+  const hex = cleaned.toLowerCase();
+  return hex.length % 2 === 0 ? hex : `0${hex}`;
 }
 
-function emitImportLiteral(
+function convertImportValue(
   cell: string,
-  target: string,
+  category: ImportColumnCategory | undefined,
   nullStrategy: ImportNullStrategy,
-  columnTypes: Record<string, string> | undefined,
-  conversion: ImportValueConversionOptions | undefined,
-  driver: string | undefined
-): string {
+  conversion: ImportValueConversionOptions | undefined
+): ImportValue {
   const value = importValue(cell, nullStrategy);
-  if (value == null) return "NULL";
+  if (value == null) return { kind: "null" };
   const text = String(value);
-  const type = columnTypes?.[target];
 
-  if (type) {
-    if (isBinaryType(type) && conversion?.binaryEncoding) {
-      const literal = formatBinaryLiteral(text, conversion.binaryEncoding, driver);
-      if (literal) return literal;
-    }
-    if (isDateOnlyType(type)) {
-      const iso = parseImportDate(text, conversion);
-      if (iso) return sqlQuote(iso);
-    } else if (isDateTimeType(type)) {
-      const iso = parseImportDateTime(text, conversion);
-      if (iso) return sqlQuote(iso);
-    } else if (isNumericType(type) && conversion?.decimalSymbol && conversion.decimalSymbol !== ".") {
-      const normalized = text.split(conversion.decimalSymbol).join(".");
-      return sqlQuote(normalized);
-    }
+  if (category === "binary" && conversion?.binaryEncoding) {
+    const hex = binaryHex(text, conversion.binaryEncoding);
+    if (hex != null) return { kind: "binary", hex };
+  } else if (category === "date") {
+    const iso = parseImportDate(text, conversion);
+    if (iso) return { kind: "text", text: iso };
+  } else if (category === "datetime") {
+    const iso = parseImportDateTime(text, conversion);
+    if (iso) return { kind: "text", text: iso };
+  } else if (category === "number" && conversion?.decimalSymbol && conversion.decimalSymbol !== ".") {
+    return { kind: "text", text: text.split(conversion.decimalSymbol).join(".") };
   }
-
-  return sqlQuote(value);
+  return { kind: "text", text };
 }
 
-type LiteralEmitter = (cell: string, target: string) => string;
-
-function whereClauseForRow(
-  row: string[],
-  mapped: { source: string; index: number; target: string }[],
-  emit: LiteralEmitter,
-  driver?: string
-): string {
-  return mapped
-    .map((item) => {
-      const literal = emit(row[item.index] ?? "", item.target);
-      const column = quoteIdent(item.target, driver);
-      return literal === "NULL" ? `${column} IS NULL` : `${column} = ${literal}`;
-    })
-    .join(" AND ");
-}
-
-function chunkExtendedInsertStatements({
-  insertPrefix,
-  valuesSql,
-  suffix,
-  maxStatementSize,
-}: {
-  insertPrefix: string;
-  valuesSql: string[];
-  suffix: string;
-  maxStatementSize: number;
-}): string[] {
-  const statements: string[] = [];
-  let chunk: string[] = [];
-
-  for (const valueSql of valuesSql) {
-    const candidate = [...chunk, valueSql];
-    const statement = `${insertPrefix} ${candidate.join(", ")}${suffix};`;
-    if (chunk.length > 0 && statement.length > maxStatementSize) {
-      statements.push(`${insertPrefix} ${chunk.join(", ")}${suffix};`);
-      chunk = [valueSql];
-    } else {
-      chunk = candidate;
-    }
-  }
-
-  if (chunk.length > 0) statements.push(`${insertPrefix} ${chunk.join(", ")}${suffix};`);
-  return statements;
-}
-
-export function buildImportInsertSql({
-  tableName,
+/**
+ * 把映射好的源文件行整理成发给驱动的导入请求：只带映射了的列（按源文件的列序），值按目标列的类别
+ * 转换（日期、小数点、二进制编码、空值策略）。各模式怎么写、字面量与自增列由驱动决定。
+ */
+export function buildImportIntent({
   headers,
   rows,
   mapping,
   nullStrategy,
   mode = "append",
-  primaryKeys = [],
+  keys = [],
   advancedOptions,
-  driver,
-  columnTypes,
+  columnCategories = {},
   conversionOptions,
-}: BuildImportInsertSqlArgs): string[] {
+}: BuildImportIntentArgs): ImportIntent {
   const effectiveNullStrategy = advancedOptions?.emptyStringAsNull ? "empty-is-null" : nullStrategy;
   const mapped = headers
-    .map((source, index) => ({ source, index, target: mapping[source] }))
-    .filter((item): item is { source: string; index: number; target: string } => !!item.target);
+    .map((source, index) => ({ index, target: mapping[source] }))
+    .filter((item): item is { index: number; target: string } => !!item.target);
 
-  if (mapped.length === 0) return [];
-
-  const quotedTable = quoteQualifiedIdent(tableName, driver);
-  const columnSql = mapped.map((item) => quoteIdent(item.target, driver)).join(", ");
-  const primaryKeySet = new Set(primaryKeys);
-  const keyMapped = mapped.filter((item) => primaryKeySet.has(item.target));
-  const valueMapped = mapped.filter((item) => !primaryKeySet.has(item.target));
-
-  if (
-    (mode === "update" || mode === "append-update" || mode === "append-skip" || mode === "delete") &&
-    keyMapped.length === 0
-  ) {
-    return [];
-  }
-
-  const emit: LiteralEmitter = (cell, target) =>
-    emitImportLiteral(cell, target, effectiveNullStrategy, columnTypes, conversionOptions, driver);
-
-  const rowValuesSql = rows.map(
-    (row) => `(${mapped.map((item) => emit(row[item.index] ?? "", item.target)).join(", ")})`
-  );
-
-  const buildInsertStatements = (insertKeyword: string, suffix = "") => {
-    if (advancedOptions?.extendedInsert) {
-      return chunkExtendedInsertStatements({
-        insertPrefix: `${insertKeyword} ${quotedTable} (${columnSql}) VALUES`,
-        valuesSql: rowValuesSql,
-        suffix,
-        maxStatementSize: Math.max(1, advancedOptions.maxStatementSizeKb ?? 1024) * 1024,
-      });
-    }
-
-    return rowValuesSql.map((values) => `${insertKeyword} ${quotedTable} (${columnSql}) VALUES ${values}${suffix};`);
+  return {
+    mode,
+    columns: mapped.map((item) => item.target),
+    keys,
+    rows: rows.map((row) =>
+      mapped.map((item) =>
+        convertImportValue(
+          row[item.index] ?? "",
+          columnCategories[item.target],
+          effectiveNullStrategy,
+          conversionOptions
+        )
+      )
+    ),
+    extendedInsert: !!advancedOptions?.extendedInsert,
+    maxStatementSizeKb: advancedOptions?.maxStatementSizeKb ?? 1024,
   };
-
-  // MSSQL 往 IDENTITY 列写显式值需要 SET IDENTITY_INSERT ON，但表没有自增列时 ON 本身报错，
-  // 自增列不在映射里时 ON 之后的 INSERT 又因缺自增值报错，所以由数据库在同一批里判断映射列
-  // 是否含自增列；失败时也要 OFF 并原样 THROW。只认用户表（OBJECT_ID 的 'U'）：视图的列也在
-  // sys.identity_columns 里，对视图 SET IDENTITY_INSERT 却会中止整批、掩盖原本的错误。
-  // 每个元素单独执行（一个批），不能依赖会话状态跨元素保留。
-  // 条件每次重算而不存进变量：SQL Server 把变量赋值计为 1 行受影响，会让导入摘要的
-  // 「新增 / 更新」每条多算 1。
-  const wrapMssqlIdentityInsert = (statement: string): string => {
-    const nStr = (value: string) => `N${sqlQuote(value)}`;
-    const names = mapped.map((item) => nStr(item.target)).join(", ");
-    const hasIdentity =
-      `EXISTS (SELECT 1 FROM sys.identity_columns ` +
-      `WHERE object_id = OBJECT_ID(${nStr(quotedTable)}, N'U') AND name IN (${names}))`;
-    return (
-      `IF ${hasIdentity} SET IDENTITY_INSERT ${quotedTable} ON; ` +
-      `BEGIN TRY ${statement} END TRY ` +
-      `BEGIN CATCH IF ${hasIdentity} SET IDENTITY_INSERT ${quotedTable} OFF; THROW; END CATCH; ` +
-      `IF ${hasIdentity} SET IDENTITY_INSERT ${quotedTable} OFF;`
-    );
-  };
-
-  // MSSQL 没有 INSERT IGNORE / ON CONFLICT / ON DUPLICATE KEY，用 MERGE 实现
-  // upsert（includeUpdate=true）与"重复即跳过"（includeUpdate=false，仅 NOT MATCHED 插入）。
-  const buildMssqlMergeStatements = (includeUpdate: boolean): string[] =>
-    rows.map((row) => {
-      const source = mapped
-        .map((item) => `${emit(row[item.index] ?? "", item.target)} AS ${quoteIdent(item.target, driver)}`)
-        .join(", ");
-      const onClause = keyMapped
-        .map((item) => `t.${quoteIdent(item.target, driver)} = s.${quoteIdent(item.target, driver)}`)
-        .join(" AND ");
-      const insertVals = mapped.map((item) => `s.${quoteIdent(item.target, driver)}`).join(", ");
-      const matched =
-        includeUpdate && valueMapped.length > 0
-          ? `WHEN MATCHED THEN UPDATE SET ${valueMapped
-              .map((item) => `t.${quoteIdent(item.target, driver)} = s.${quoteIdent(item.target, driver)}`)
-              .join(", ")} `
-          : "";
-      return wrapMssqlIdentityInsert(
-        `MERGE ${quotedTable} AS t USING (SELECT ${source}) AS s ON (${onClause}) ` +
-          `${matched}WHEN NOT MATCHED THEN INSERT (${columnSql}) VALUES (${insertVals});`
-      );
-    });
-
-  let statements: string[];
-  if (mode === "update") {
-    if (valueMapped.length === 0) return [];
-    statements = rows.map((row) => {
-      const setSql = valueMapped
-        .map((item) => `${quoteIdent(item.target, driver)} = ${emit(row[item.index] ?? "", item.target)}`)
-        .join(", ");
-      return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereClauseForRow(row, keyMapped, emit, driver)};`;
-    });
-  } else if (mode === "append-update") {
-    const insertPrefix = "INSERT INTO";
-    if (valueMapped.length === 0) {
-      if (driver === "postgresql") {
-        const suffix = ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO NOTHING`;
-        statements = buildInsertStatements(insertPrefix, suffix);
-      } else if (driver === "sqlite") {
-        statements = buildInsertStatements("INSERT OR IGNORE INTO");
-      } else if (driver === "mssql") {
-        statements = buildMssqlMergeStatements(false);
-      } else {
-        statements = buildInsertStatements("INSERT IGNORE INTO");
-      }
-    } else if (driver === "mssql") {
-      statements = buildMssqlMergeStatements(true);
-    } else {
-      const updateSql =
-        driver === "postgresql" || driver === "sqlite"
-          ? ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO UPDATE SET ${valueMapped
-              .map((item) => `${quoteIdent(item.target, driver)} = excluded.${quoteIdent(item.target, driver)}`)
-              .join(", ")}`
-          : ` ON DUPLICATE KEY UPDATE ${valueMapped
-              .map((item) => `${quoteIdent(item.target, driver)} = VALUES(${quoteIdent(item.target, driver)})`)
-              .join(", ")}`;
-      statements = buildInsertStatements(insertPrefix, updateSql);
-    }
-  } else if (mode === "append-skip") {
-    if (driver === "postgresql") {
-      const suffix = ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO NOTHING`;
-      statements = buildInsertStatements("INSERT INTO", suffix);
-    } else if (driver === "sqlite") {
-      statements = buildInsertStatements("INSERT OR IGNORE INTO");
-    } else if (driver === "mssql") {
-      statements = buildMssqlMergeStatements(false);
-    } else {
-      statements = buildInsertStatements("INSERT IGNORE INTO");
-    }
-  } else if (mode === "delete") {
-    statements = rows.map(
-      (row) => `DELETE FROM ${quotedTable} WHERE ${whereClauseForRow(row, keyMapped, emit, driver)};`
-    );
-  } else {
-    statements = buildInsertStatements("INSERT INTO");
-    if (driver === "mssql") statements = statements.map(wrapMssqlIdentityInsert);
-    if (mode === "copy") statements = [`DELETE FROM ${quotedTable};`, ...statements];
-  }
-
-  return statements;
 }

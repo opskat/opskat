@@ -114,3 +114,20 @@ func TestRowStatementsQuoteADottedTableAsOneName(t *testing.T) {
 	assert.Equal(t, []string{"INSERT INTO `appdb`.`a.b` (`id`) VALUES ('1');"}, statements)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// 二进制列（binary / varbinary / blob 系列）写成 X'…'（文本按它的字节），与其他驱动一样按方言写
+// 二进制，而不是把字节当文本放进引号里。
+func TestRowStatementsWriteBinaryAsHexForMySQL(t *testing.T) {
+	session, mock := newMock(t)
+	expectColumns(mock, "`appdb`.`files`", [2]string{"id", "int"}, [2]string{"payload", "varbinary(16)"}, [2]string{"body", "longblob"})
+	mock.ExpectQuery(sqlModeSQL).WillReturnRows(sqlmock.NewRows([]string{"@@SESSION.sql_mode"}).AddRow(""))
+
+	statements, err := session.RowStatements(context.Background(), "appdb", "files", dbdriver.RowStatementsRequest{
+		Kind:    dbdriver.RowInsert,
+		Columns: []string{"id", "payload", "body"},
+		Rows:    []map[string]any{{"id": float64(1), "payload": "AB", "body": `C:\`}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO `appdb`.`files` (`id`, `payload`, `body`) VALUES ('1', X'4142', X'433a5c');"}, statements)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

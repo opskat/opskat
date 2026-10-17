@@ -243,6 +243,52 @@ func TestGridEditStatementsRefusedWhenTheDriverDoesNotDeclareGridEdit(t *testing
 	}
 }
 
+// 导入的语句由驱动在自己的会话上生成：前端发来的请求（JSON，键名与前端一致）原样到达驱动，驱动
+// 给的语句原样返回，没有任何语句被执行。
+func TestImportStatementsAreProducedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+	var request dbdriver.ImportRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"mode":"append-update","columns":["id","name","avatar"],"keys":["id"],`+
+		`"rows":[[{"kind":"text","text":"1"},{"kind":"null"},{"kind":"binary","hex":"00ff"}],`+
+		`[{"kind":"text","text":"2"},{"kind":"text","text":""},{"kind":"binary"}]],`+
+		`"extendedInsert":true,"maxStatementSizeKb":64}`), &request))
+	statements, err := q.GetImportStatements(1, "reporting", "events", request)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FAKE IMPORT APPEND-UPDATE ROW 1 OF reporting.events", "FAKE IMPORT APPEND-UPDATE ROW 2 OF reporting.events"}, statements)
+
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []dbdrivertest.TableCall{{Op: "import", Database: "reporting", Table: "events", Import: &dbdriver.ImportRequest{
+		Mode: dbdriver.ImportAppendUpdate, Columns: []string{"id", "name", "avatar"}, Keys: []string{"id"},
+		Rows: [][]dbdriver.ImportValue{
+			{{Kind: dbdriver.ImportText, Text: "1"}, {Kind: dbdriver.ImportNull}, {Kind: dbdriver.ImportBinary, Hex: "00ff"}},
+			{{Kind: dbdriver.ImportText, Text: "2"}, {Kind: dbdriver.ImportText}, {Kind: dbdriver.ImportBinary}},
+		},
+		ExtendedInsert: true, MaxStatementSizeKB: 64,
+	}}}, sessions[0].TableCalls())
+	assert.Empty(t, sessions[0].Statements())
+}
+
+// 没有声明导入的驱动明确报「不支持」，且不执行任何语句。
+func TestImportStatementsRefusedWhenTheDriverDoesNotDeclareImport(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.GetImportStatements(1, "", "events", dbdriver.ImportRequest{
+		Mode: dbdriver.ImportAppend, Columns: []string{"id"}, Rows: [][]dbdriver.ImportValue{{{Kind: dbdriver.ImportText, Text: "1"}}},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	for _, s := range fake.Sessions() {
+		assert.Empty(t, s.Statements())
+		assert.Empty(t, s.TableCalls())
+	}
+}
+
 // 建表、删表、清空、建库的语句由驱动在自己的会话上生成：前端发来的请求（JSON，键名与前端一致）
 // 原样到达驱动，驱动给的语句原样返回，没有任何语句被执行。
 func TestSchemaStatementsAreProducedByTheDriver(t *testing.T) {

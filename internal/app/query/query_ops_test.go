@@ -230,6 +230,7 @@ func TestBrowsingWorksForABuiltInDriver(t *testing.T) {
 	assert.JSONEq(t, `{
 		"columns": ["id", "name"],
 		"columnTypes": {"id": "INTEGER", "name": "TEXT"},
+		"columnCategories": {"id": "number", "name": "text"},
 		"columnRules": [
 			{"name": "id", "nullable": true, "hasDefault": false, "autoIncrement": false},
 			{"name": "name", "nullable": true, "hasDefault": false, "autoIncrement": false}
@@ -270,6 +271,7 @@ func TestTableBrowsingRunsOnTheDriverSession(t *testing.T) {
 	assert.JSONEq(t, `{
 		"columns": ["id", "name"],
 		"columnTypes": {"id": "int", "name": "text"},
+		"columnCategories": {"id": "number", "name": "text"},
 		"columnRules": [
 			{"name": "id", "nullable": false, "hasDefault": false, "autoIncrement": true},
 			{"name": "name", "nullable": true, "hasDefault": false, "autoIncrement": false}

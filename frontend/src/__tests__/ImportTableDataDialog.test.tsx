@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { ImportTableDataDialog } from "@/components/query/ImportTableDataDialog";
 import * as App from "../../wailsjs/go/query/Query";
 import { dbdriver, query_svc } from "../../wailsjs/go/models";
-import { BUILTIN_DRIVERS, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
+import { BUILTIN_DRIVERS, fakeDriverWith, mockImportStatements, provideDrivers } from "./dbDriverFixtures";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 
 describe("ImportTableDataDialog", () => {
   function mockExecuteTableImport(
@@ -18,11 +21,14 @@ describe("ImportTableDataDialog", () => {
 
   beforeEach(() => {
     provideDrivers(BUILTIN_DRIVERS);
+    mockImportStatements();
   });
 
   afterEach(() => {
     vi.mocked(App.ExecuteSQL).mockReset();
     vi.mocked(App.ExecuteTableImport).mockReset();
+    vi.mocked(App.GetImportStatements).mockReset();
+    vi.mocked(toast.error).mockReset();
   });
 
   async function walkCsvWizardToMode(user: ReturnType<typeof userEvent.setup>) {
@@ -225,11 +231,7 @@ describe("ImportTableDataDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
 
-    expect(App.ExecuteSQL).toHaveBeenCalledWith(
-      1,
-      "INSERT INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test');",
-      "appdb"
-    );
+    expect(App.ExecuteSQL).toHaveBeenCalledWith(1, 'IMPORT append users ["1","Alice","alice@example.test"]', "appdb");
   });
 
   it("shows import execution errors in the summary log", async () => {
@@ -329,7 +331,7 @@ describe("ImportTableDataDialog", () => {
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
     expect(executeTableImport).toHaveBeenCalledWith(1, "appdb", {
-      statements: ["DELETE FROM `appdb`.`users`;", "INSERT INTO `appdb`.`users` (`id`, `name`) VALUES ('1', 'Alice');"],
+      statements: ["CLEAR users", 'IMPORT copy users ["1","Alice"]'],
       mode: "copy",
       continueOnError: true,
       disableForeignKeyChecks: true,
@@ -467,5 +469,88 @@ describe("ImportTableDataDialog", () => {
       expect(screen.getByLabelText("query.importAdvancedContinueOnError")).toBeInTheDocument();
       unmount();
     }
+  });
+
+  // 摘要里展示的是驱动生成的语句（前 8 条，位置与截断同改动前），开始导入后逐条执行的正是这些。
+  it("shows the first 8 statements the driver generated and executes exactly those", async () => {
+    const user = userEvent.setup();
+    const generated = Array.from({ length: 10 }, (_, i) => `DRIVER STATEMENT ${i + 1}`);
+    vi.mocked(App.GetImportStatements).mockResolvedValue(generated);
+    vi.mocked(App.ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="dbo.users"
+        columns={["id", "name", "born"]}
+        primaryKeys={["id"]}
+        columnCategories={{ id: "number", name: "text", born: "date" }}
+        driver="mssql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardWithFileToMode(user, "id,name,born\n1,Alice,24/08/2023\n2,,NULL");
+    await user.click(screen.getByLabelText("query.importModeAppendUpdate"));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+
+    expect(await screen.findByText("DRIVER STATEMENT 1")).toBeInTheDocument();
+    expect(screen.getByText("DRIVER STATEMENT 8")).toBeInTheDocument();
+    expect(screen.queryByText("DRIVER STATEMENT 9")).not.toBeInTheDocument();
+    expect(App.GetImportStatements).toHaveBeenCalledTimes(1);
+    expect(App.GetImportStatements).toHaveBeenCalledWith(
+      1,
+      "appdb",
+      "dbo.users",
+      expect.objectContaining({
+        mode: "append-update",
+        columns: ["id", "name", "born"],
+        keys: ["id"],
+        rows: [
+          [
+            { kind: "text", text: "1" },
+            { kind: "text", text: "Alice" },
+            { kind: "text", text: "2023-08-24" },
+          ],
+          [{ kind: "text", text: "2" }, { kind: "text", text: "" }, { kind: "null" }],
+        ],
+        extendedInsert: true,
+        maxStatementSizeKb: 1024,
+      })
+    );
+
+    await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
+    await waitFor(() => expect(App.ExecuteSQL).toHaveBeenCalledTimes(10));
+    expect(vi.mocked(App.ExecuteSQL).mock.calls.map((call) => call[1])).toEqual(generated);
+  });
+
+  // 生成失败：错误照常弹出提示，停在导入模式这一步，不执行任何语句。
+  it("stays on the mode step and executes nothing when the driver cannot generate the statements", async () => {
+    const user = userEvent.setup();
+    vi.mocked(App.GetImportStatements).mockRejectedValue(new Error('column "ghost" is not in table users'));
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardToSummary(user);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('column "ghost" is not in table users'));
+    expect(screen.getByText("query.importModeIntro")).toBeInTheDocument();
+    expect(screen.queryByText("query.importSummaryIntro")).not.toBeInTheDocument();
+    expect(App.ExecuteSQL).not.toHaveBeenCalled();
+    expect(App.ExecuteTableImport).not.toHaveBeenCalled();
   });
 });

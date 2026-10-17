@@ -7,25 +7,28 @@ import "github.com/opskat/opskat/internal/dbdriver"
 
 // OpenTableResult 是打开一张表时一次返回的全部首屏数据。
 type OpenTableResult struct {
-	Columns     []string                   `json:"columns"`
-	ColumnTypes map[string]string          `json:"columnTypes"`
-	ColumnRules []dbdriver.TableColumnRule `json:"columnRules"`
-	PrimaryKeys []string                   `json:"primaryKeys"`
-	TotalCount  int64                      `json:"totalCount"`
-	FirstPage   []map[string]any           `json:"firstPage"`
-	PageSize    int                        `json:"pageSize"`
+	Columns     []string          `json:"columns"`
+	ColumnTypes map[string]string `json:"columnTypes"`
+	// ColumnCategories 是导入转换源文件里的值用的列类别（见 dbdriver.ColumnCategory）。
+	ColumnCategories map[string]dbdriver.ColumnCategory `json:"columnCategories"`
+	ColumnRules      []dbdriver.TableColumnRule         `json:"columnRules"`
+	PrimaryKeys      []string                           `json:"primaryKeys"`
+	TotalCount       int64                              `json:"totalCount"`
+	FirstPage        []map[string]any                   `json:"firstPage"`
+	PageSize         int                                `json:"pageSize"`
 }
 
 // NewOpenTableResult 把驱动给出的首屏转成绑定返回的形状。pageSize 是第一页请求的行数。
 func NewOpenTableResult(opened *dbdriver.OpenedTable, pageSize int) *OpenTableResult {
 	return &OpenTableResult{
-		Columns:     opened.FirstPage.Columns,
-		ColumnTypes: opened.ColumnTypes,
-		ColumnRules: opened.ColumnRules,
-		PrimaryKeys: opened.PrimaryKeys,
-		TotalCount:  opened.TotalCount,
-		FirstPage:   rowMaps(opened.FirstPage),
-		PageSize:    pageSize,
+		Columns:          opened.FirstPage.Columns,
+		ColumnTypes:      opened.ColumnTypes,
+		ColumnCategories: opened.ColumnCategories,
+		ColumnRules:      opened.ColumnRules,
+		PrimaryKeys:      opened.PrimaryKeys,
+		TotalCount:       opened.TotalCount,
+		FirstPage:        rowMaps(opened.FirstPage),
+		PageSize:         pageSize,
 	}
 }
 
