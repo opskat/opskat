@@ -13,7 +13,7 @@ import (
 // 标识符的引号沿用 Tables。
 //
 // 实现 Dialect 的类型同时实现 Tables 与 RowWriter 才生成行语句；没实现的方言，
-// Session.RowStatements 返回 dbdriver.ErrUnsupported。
+// Session.PrepareRowStatements 返回 dbdriver.ErrUnsupported。
 type RowWriter interface {
 	// Literals 返回在这条连接上写字面量的规则（规则随会话设置变化的方言在这里查，如 MySQL
 	// 的 sql_mode）。
@@ -22,9 +22,9 @@ type RowWriter interface {
 	UpdateRowSQL(tableRef, set, where string) string
 }
 
-// RowStatements 在一条连接上查表的列类型与方言的字面量规则，再为每行生成一条语句；只生成，
-// 不执行。没有行时不碰数据库。
-func (s *Session) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+// PrepareRowStatements 在一条连接上查表的列类型与方言的字面量规则，用完即还；交回的 writer
+// 只按它们生成语句，不再碰数据库。
+func (s *Session) PrepareRowStatements(ctx context.Context, database, table string) (dbdriver.RowStatementWriter, error) {
 	tables, err := s.tables()
 	if err != nil {
 		return nil, err
@@ -33,13 +33,7 @@ func (s *Session) RowStatements(ctx context.Context, database, table string, req
 	if !ok {
 		return nil, fmt.Errorf("%w: this driver does not generate row statements", dbdriver.ErrUnsupported)
 	}
-	if req.Kind != dbdriver.RowInsert && req.Kind != dbdriver.RowUpdate {
-		return nil, fmt.Errorf("unknown row statement kind %q", req.Kind)
-	}
-	if len(req.Rows) == 0 {
-		return []string{}, nil
-	}
-	return onConn(ctx, s, func(conn *sql.Conn) ([]string, error) {
+	return onConn(ctx, s, func(conn *sql.Conn) (dbdriver.RowStatementWriter, error) {
 		columns, err := tables.TableColumns(ctx, conn, database, table)
 		if err != nil {
 			return nil, fmt.Errorf("query columns: %w", err)
@@ -52,21 +46,12 @@ func (s *Session) RowStatements(ctx context.Context, database, table string, req
 		for _, column := range columns {
 			types[column.Name] = column.Type
 		}
-		w := rowSQL{
+		return rowSQL{
 			tableRef: tables.TableRef(database, table),
 			quote:    tables.QuoteIdent,
 			literal:  func(column string, value any) (string, error) { return literals.Literal(value, types[column]) },
 			update:   writer.UpdateRowSQL,
-		}
-		statements := make([]string, 0, len(req.Rows))
-		for _, row := range req.Rows {
-			statement, err := w.statement(req, row)
-			if err != nil {
-				return nil, err
-			}
-			statements = append(statements, statement)
-		}
-		return statements, nil
+		}, nil
 	})
 }
 
@@ -76,6 +61,22 @@ type rowSQL struct {
 	quote    func(string) string
 	literal  func(column string, value any) (string, error)
 	update   func(tableRef, set, where string) string
+}
+
+// RowStatements 为每行生成一条语句，只生成，不碰数据库。
+func (w rowSQL) RowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
+	if req.Kind != dbdriver.RowInsert && req.Kind != dbdriver.RowUpdate {
+		return nil, fmt.Errorf("unknown row statement kind %q", req.Kind)
+	}
+	statements := make([]string, 0, len(req.Rows))
+	for _, row := range req.Rows {
+		statement, err := w.statement(req, row)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, statement)
+	}
+	return statements, nil
 }
 
 func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any) (string, error) {

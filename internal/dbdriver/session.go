@@ -141,11 +141,12 @@ type Session interface {
 	// 调用方展示后再经 Execute 执行的正是这些语句。生成时驱动可以先查表的元数据（列类型等）
 	// 来决定写法。table 用 ListTables 给出的形式。
 
-	// RowStatements 生成把若干行写进表的语句，每行一条，按 req.Rows 的次序：RowInsert 是 INSERT，
-	// RowUpdate 是只改那一行的 UPDATE（见 RowStatementsRequest）。没有行时返回空列表。驱动没有
-	// 声明用到它的功能（Descriptor.GeneratesRowStatements）时返回包着 ErrUnsupported 的错误，
-	// 且不执行任何语句。
-	RowStatements(ctx context.Context, database, table string, req RowStatementsRequest) ([]string, error)
+	// PrepareRowStatements 在会话上读好为这张表生成行语句要的一切（列类型、随会话设置变化的
+	// 字面量规则），交回一个之后不再碰数据库的 RowStatementWriter：返回前用过的连接已经还回，
+	// 所以调用方可以在另一个查询占着会话的连接时（整表导出为 SQL：先备好，再打开读取的游标，
+	// 边读边写语句）用它生成语句。驱动没有声明用到它的功能（Descriptor.GeneratesRowStatements）
+	// 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	PrepareRowStatements(ctx context.Context, database, table string) (RowStatementWriter, error)
 
 	// GridEditStatements 生成表格编辑要执行的语句：每个新增行一条 INSERT、每个改动的行一条只改
 	// 那一行的 UPDATE、每个要删除的行一条只删那一行的 DELETE，各自按请求里的次序（见
@@ -215,7 +216,15 @@ const (
 	RowUpdate RowStatementKind = "update"
 )
 
-// RowStatementsRequest 是 Session.RowStatements 要生成的语句。
+// RowStatementWriter 为一张表生成行语句（Session.PrepareRowStatements 备好的）。
+type RowStatementWriter interface {
+	// RowStatements 生成把若干行写进表的语句，每行一条，按 req.Rows 的次序：RowInsert 是 INSERT，
+	// RowUpdate 是只改那一行的 UPDATE（见 RowStatementsRequest）。没有行时返回空列表。只生成，
+	// 不执行，也不碰数据库。
+	RowStatements(req RowStatementsRequest) ([]string, error)
+}
+
+// RowStatementsRequest 是 RowStatementWriter.RowStatements 要生成的语句。
 type RowStatementsRequest struct {
 	Kind RowStatementKind `json:"kind"`
 	// Columns 是 INSERT 写入、UPDATE 设置的列，按语句里的次序。

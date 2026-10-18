@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
 const sqlModeSQL = "SELECT @@SESSION.sql_mode"
@@ -29,7 +30,7 @@ func TestRowStatementsEscapeBackslashesUnderTheDefaultSQLMode(t *testing.T) {
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(sqlmock.NewRows([]string{"@@SESSION.sql_mode"}).
 		AddRow("ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO"))
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "users", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "path"},
 		Rows:    []map[string]any{{"id": float64(1), "path": `C:\new\table\x`}, {"id": float64(2), "path": "O'Reilly"}},
@@ -49,7 +50,7 @@ func TestRowStatementsKeepBackslashesUnderNoBackslashEscapes(t *testing.T) {
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(sqlmock.NewRows([]string{"@@SESSION.sql_mode"}).
 		AddRow("STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES"))
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "users", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"id", "path"},
 		Rows:        []map[string]any{{"id": float64(2), "path": `C:\new`}},
@@ -72,7 +73,7 @@ func TestRowStatementsMatchTheFormerFrontendTextForMySQL(t *testing.T) {
 
 	expectColumns(mock, "`appdb`.`users`", columns...)
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(mode())
-	statements, err := session.RowStatements(ctx, "appdb", "users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(ctx, session, "appdb", "users", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "name", "missing"},
 		Rows: []map[string]any{
@@ -90,7 +91,7 @@ func TestRowStatementsMatchTheFormerFrontendTextForMySQL(t *testing.T) {
 
 	expectColumns(mock, "`appdb`.`users`", columns...)
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(mode())
-	statements, err = session.RowStatements(ctx, "appdb", "users", dbdriver.RowStatementsRequest{
+	statements, err = dbdrivertest.RowStatements(ctx, session, "appdb", "users", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"id", "name"},
 		Rows:        []map[string]any{{"id": float64(2), "name": "O'Reilly", "missing": ""}},
@@ -107,7 +108,7 @@ func TestRowStatementsQuoteADottedTableAsOneName(t *testing.T) {
 	expectColumns(mock, "`appdb`.`a.b`", [2]string{"id", "int"})
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(sqlmock.NewRows([]string{"@@SESSION.sql_mode"}).AddRow(""))
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "a.b", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "a.b", dbdriver.RowStatementsRequest{
 		Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": float64(1)}},
 	})
 	require.NoError(t, err)
@@ -122,7 +123,7 @@ func TestRowStatementsWriteBinaryColumnTextAsStringsForMySQL(t *testing.T) {
 	expectColumns(mock, "`appdb`.`files`", [2]string{"id", "int"}, [2]string{"payload", "varbinary(16)"}, [2]string{"body", "longblob"})
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(sqlmock.NewRows([]string{"@@SESSION.sql_mode"}).AddRow(""))
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "files", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "files", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "payload", "body"},
 		Rows:    []map[string]any{{"id": float64(1), "payload": "AB", "body": `C:\`}},

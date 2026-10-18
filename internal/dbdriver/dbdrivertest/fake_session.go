@@ -164,7 +164,7 @@ func (s *FakeSession) ObjectSource(_ context.Context, _, objType, name, _ string
 
 // TableCall 是假会话收到的一次表浏览请求。
 type TableCall struct {
-	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "row_statements" / "grid_edit" / "import" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "alter_model" / "alter_table" / "batch"。
+	// Op 是 "open" / "rows" / "count" / "stream" / "ddl" / "starter" / "prepare_row_statements" / "row_statements" / "grid_edit" / "import" / "create_table" / "drop_table" / "truncate_table" / "create_database" / "alter_model" / "alter_table" / "batch"。
 	Op       string
 	Database string
 	Table    string
@@ -269,18 +269,32 @@ func (s *FakeSession) StarterQuery(_ context.Context, database, table string, li
 	return fmt.Sprintf("FAKE SELECT FIRST %d FROM %s.%s", limit, database, table), nil
 }
 
-// RowStatements 记下收到的请求（Op "row_statements"），每行给出一条一眼能与任何真实方言区分
-// 的语句。驱动没有声明导出 / 复制为 SQL 时以 ErrUnsupported 拒绝，什么也不记、不执行。
-func (s *FakeSession) RowStatements(_ context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+// PrepareRowStatements 记下收到的请求（Op "prepare_row_statements"），交回一个 writer。驱动没有
+// 声明导出 / 复制为 SQL 时以 ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) PrepareRowStatements(_ context.Context, database, table string) (dbdriver.RowStatementWriter, error) {
 	if !s.fake.Desc.GeneratesRowStatements() {
 		return nil, fmt.Errorf("%w: %s declares neither %s nor %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapExportSQL, dbdriver.CapCopySQL)
 	}
-	if err := s.tableCall(TableCall{Op: "row_statements", Database: database, Table: table, RowStatements: &req}); err != nil {
+	if err := s.tableCall(TableCall{Op: "prepare_row_statements", Database: database, Table: table}); err != nil {
 		return nil, err
 	}
+	return fakeRowWriter{session: s, database: database, table: table}, nil
+}
+
+// fakeRowWriter 记下收到的请求（Op "row_statements"，记在备好它的会话上），每行给出一条一眼
+// 能与任何真实方言区分的语句。它不碰会话：会话关了、TableErr 设了也照样生成。
+type fakeRowWriter struct {
+	session         *FakeSession
+	database, table string
+}
+
+func (w fakeRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
+	w.session.mu.Lock()
+	w.session.tableCalls = append(w.session.tableCalls, TableCall{Op: "row_statements", Database: w.database, Table: w.table, RowStatements: &req})
+	w.session.mu.Unlock()
 	statements := make([]string, 0, len(req.Rows))
 	for i := range req.Rows {
-		statements = append(statements, fmt.Sprintf("FAKE %s ROW %d OF %s.%s", strings.ToUpper(string(req.Kind)), i+1, database, table))
+		statements = append(statements, fmt.Sprintf("FAKE %s ROW %d OF %s.%s", strings.ToUpper(string(req.Kind)), i+1, w.database, w.table))
 	}
 	return statements, nil
 }

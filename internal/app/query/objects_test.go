@@ -179,12 +179,15 @@ func TestRowStatementsAreProducedByTheDriver(t *testing.T) {
 
 	sessions := fake.Sessions()
 	require.Len(t, sessions, 1)
-	assert.Equal(t, []dbdrivertest.TableCall{{Op: "row_statements", Database: "reporting", Table: "events", RowStatements: &dbdriver.RowStatementsRequest{
-		Kind:        dbdriver.RowInsert,
-		Columns:     []string{"id", "name"},
-		Rows:        []map[string]any{{"id": float64(1), "name": "alice"}, {"id": float64(2), "name": nil}},
-		PrimaryKeys: []string{"id"},
-	}}}, sessions[0].TableCalls())
+	assert.Equal(t, []dbdrivertest.TableCall{
+		{Op: "prepare_row_statements", Database: "reporting", Table: "events"},
+		{Op: "row_statements", Database: "reporting", Table: "events", RowStatements: &dbdriver.RowStatementsRequest{
+			Kind:        dbdriver.RowInsert,
+			Columns:     []string{"id", "name"},
+			Rows:        []map[string]any{{"id": float64(1), "name": "alice"}, {"id": float64(2), "name": nil}},
+			PrimaryKeys: []string{"id"},
+		}},
+	}, sessions[0].TableCalls())
 	assert.Empty(t, sessions[0].Statements())
 }
 

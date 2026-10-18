@@ -29,11 +29,12 @@ const baseProps = {
   onFormatChange: vi.fn(),
 };
 
-function mockCursor(chunks: { rows: Record<string, unknown>[]; done: boolean }[]) {
+function mockCursor(chunks: { rows?: Record<string, unknown>[]; statements?: string[]; done: boolean }[]) {
   vi.mocked(App.OpenTableExport).mockResolvedValue({ id: "cursor-1", columns: ["id", "name"] });
   vi.mocked(App.CloseTableExport).mockResolvedValue(undefined);
   const read = vi.mocked(App.ReadTableExport);
-  for (const chunk of chunks) read.mockResolvedValueOnce(chunk);
+  // 后端没给的那一项(导出为 SQL 时的 rows,其余格式的 statements)序列化成 null。
+  for (const chunk of chunks) read.mockResolvedValueOnce({ rows: null, statements: null, ...chunk } as never);
 }
 
 describe("ExportTableDataDialog", () => {
@@ -110,7 +111,11 @@ describe("ExportTableDataDialog", () => {
     await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));
     // 整表只打开一个游标(一次取数),再按批读出;不再按页码发多次查询。
     expect(App.OpenTableExport).toHaveBeenCalledTimes(1);
-    expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", { filters: [], sorts: [] });
+    expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", {
+      filters: [],
+      sorts: [],
+      insertColumns: [],
+    });
     expect(App.ReadTableExport).toHaveBeenNthCalledWith(1, "cursor-1", 1000);
     expect(App.ReadTableExport).toHaveBeenNthCalledWith(2, "cursor-1", 1000);
     expect(App.CloseTableExport).toHaveBeenCalledWith("cursor-1");
@@ -151,7 +156,7 @@ describe("ExportTableDataDialog", () => {
       await startExport(user, `/tmp/opskat/users.${format}`);
 
       await waitFor(() => expect(App.CloseTableExport).toHaveBeenCalled());
-      expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", { filters, sorts });
+      expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", { filters, sorts, insertColumns: [] });
       expect(App.QueryTableRows).not.toHaveBeenCalled();
       expect(App.ExecuteSQL).not.toHaveBeenCalled();
     }
@@ -248,24 +253,28 @@ describe("ExportTableDataDialog", () => {
     expect(App.ExecuteSQL).not.toHaveBeenCalled();
   });
 
-  it("asks the driver for each streamed chunk and appends its statements chunk by chunk", async () => {
+  // 整表导出为 SQL:游标自己交出驱动生成的 INSERT。读游标占着会话的连接时不再另要语句(远端 SQLite
+  // 只有一条连接,另要会等到超时),语句按批追加写进文件。
+  it("streams the driver's statements with the cursor and never asks for them while it is open", async () => {
     const user = userEvent.setup();
-    const firstChunk = [{ id: 1, name: "Alice" }];
-    const secondChunk = [{ id: 2, name: "Bob" }];
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.sql");
     mockCursor([
-      { rows: firstChunk, done: false },
-      { rows: secondChunk, done: true },
+      { statements: ["CHUNK ONE;"], done: false },
+      { statements: ["CHUNK TWO;"], done: true },
     ]);
-    vi.mocked(App.GetRowStatements).mockResolvedValueOnce(["CHUNK ONE;"]).mockResolvedValueOnce(["CHUNK TWO;"]);
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, { go: { app: { App: { WriteTableExportFile: writeFile } } } });
 
-    render(<ExportTableDataDialog {...baseProps} initialFormat="sql" />);
+    render(<ExportTableDataDialog {...baseProps} initialFormat="sql" filters={filters} sorts={sorts} />);
     await startExport(user, "/tmp/opskat/users.sql");
 
     await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(App.GetRowStatements).mock.calls.map((call) => call[3].rows)).toEqual([firstChunk, secondChunk]);
+    expect(App.OpenTableExport).toHaveBeenCalledWith(1, "appdb", "users", {
+      filters,
+      sorts,
+      insertColumns: ["id", "name"],
+    });
+    expect(App.GetRowStatements).not.toHaveBeenCalled();
     expect(writeFile).toHaveBeenNthCalledWith(1, "/tmp/opskat/users.sql", "CHUNK ONE;", {
       encoding: "utf-8",
       append: false,
@@ -274,13 +283,13 @@ describe("ExportTableDataDialog", () => {
       encoding: "utf-8",
       append: true,
     });
+    await waitFor(() => expect(screen.getByText(/\[EXP\] Processed 2 row\(s\)/)).toBeInTheDocument());
   });
 
   it("reports the driver's refusal and writes nothing", async () => {
     const user = userEvent.setup();
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.sql");
-    mockCursor([{ rows: baseProps.rows, done: true }]);
-    vi.mocked(App.GetRowStatements).mockRejectedValue(new Error("operation not supported by database driver"));
+    vi.mocked(App.OpenTableExport).mockRejectedValue(new Error("operation not supported by database driver"));
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, { go: { app: { App: { WriteTableExportFile: writeFile } } } });
 
@@ -290,6 +299,6 @@ describe("ExportTableDataDialog", () => {
     const log = await screen.findByText(/\[EXP\] Failed - /);
     expect(log.textContent).toContain("operation not supported by database driver");
     expect(writeFile).not.toHaveBeenCalled();
-    expect(App.CloseTableExport).toHaveBeenCalledWith("cursor-1");
+    expect(App.ReadTableExport).not.toHaveBeenCalled();
   });
 });

@@ -24,7 +24,7 @@ export interface TableExportOptions {
   nullValue?: string;
 }
 
-/** SQL 语句由驱动生成（Query.GetRowStatements），XLSX 由后端写盘；这里只拼分隔文本。 */
+/** SQL 语句由驱动生成（Query.GetRowStatements；整表导出时随导出游标交出），XLSX 由后端写盘；这里只拼分隔文本。 */
 export type DelimitedExportFormat = Extract<TableExportFormat, "csv" | "tsv">;
 
 interface BuildTableExportContentInput {

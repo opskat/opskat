@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
 const columnsSQL = `SELECT name, type, CASE "notnull" WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM `
@@ -23,7 +24,7 @@ func TestRowStatementsForSQLite(t *testing.T) {
 	}
 
 	mock.ExpectQuery(columnsSQL + `"main".pragma_table_info(?)`).WithArgs("users").WillReturnRows(columns())
-	statements, err := session.RowStatements(ctx, "main", "users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(ctx, session, "main", "users", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "name", "data"},
 		Rows:    []map[string]any{{"id": float64(1), "name": "O'Reilly", "data": "AB"}},
@@ -32,7 +33,7 @@ func TestRowStatementsForSQLite(t *testing.T) {
 	assert.Equal(t, []string{`INSERT INTO "main"."users" ("id", "name", "data") VALUES ('1', 'O''Reilly', X'4142');`}, statements)
 
 	mock.ExpectQuery(columnsSQL + `"main".pragma_table_info(?)`).WithArgs("users").WillReturnRows(columns())
-	statements, err = session.RowStatements(ctx, "main", "users", dbdriver.RowStatementsRequest{
+	statements, err = dbdrivertest.RowStatements(ctx, session, "main", "users", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"id", "name"},
 		Rows:        []map[string]any{{"id": float64(2), "name": "O'Reilly"}},
@@ -49,7 +50,7 @@ func TestRowStatementsRoundTripOnARealDatabase(t *testing.T) {
 	session := newDatabase(t, `CREATE TABLE "a.b" (id INTEGER PRIMARY KEY, name TEXT, data BLOB)`)
 	ctx := context.Background()
 
-	statements, err := session.RowStatements(ctx, "main", "a.b", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(ctx, session, "main", "a.b", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "name", "data"},
 		Rows:    []map[string]any{{"id": float64(7), "name": `O'Reilly C:\new`, "data": "\x00\xffA"}},

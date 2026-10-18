@@ -179,7 +179,7 @@ func (d Descriptor) Supports(c Capability) bool {
 	return slices.Contains(d.Capabilities, c)
 }
 
-// GeneratesRowStatements 报告驱动是否声明了用到 Session.RowStatements 的功能（导出为 SQL、
+// GeneratesRowStatements 报告驱动是否声明了用到 Session.PrepareRowStatements 的功能（导出为 SQL、
 // 复制为 SQL）：声明了，会话就必须能生成行语句；都没声明，会话以 ErrUnsupported 拒绝。
 func (d Descriptor) GeneratesRowStatements() bool {
 	return d.Supports(CapExportSQL) || d.Supports(CapCopySQL)

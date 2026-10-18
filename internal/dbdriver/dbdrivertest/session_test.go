@@ -170,12 +170,17 @@ func (b brokenSession) GridEditStatements(ctx context.Context, database, table s
 	return b.Session.GridEditStatements(ctx, database, table, req)
 }
 
-func (b brokenSession) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+func (b brokenSession) PrepareRowStatements(ctx context.Context, database, table string) (dbdriver.RowStatementWriter, error) {
 	if b.generates {
-		return []string{"INSERT"}, nil
+		return fixedRowWriter{"INSERT"}, nil
 	}
-	return b.Session.RowStatements(ctx, database, table, req)
+	return b.Session.PrepareRowStatements(ctx, database, table)
 }
+
+// fixedRowWriter 不管请求，总给出同样的语句。
+type fixedRowWriter []string
+
+func (w fixedRowWriter) RowStatements(dbdriver.RowStatementsRequest) ([]string, error) { return w, nil }
 
 func (b brokenSession) Execute(ctx context.Context, statement string) (*dbdriver.Result, error) {
 	res, err := b.Session.Execute(ctx, statement)
@@ -250,7 +255,7 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 			return withTotal(int64(len(res.Rows.Rows)))(res, err)
 		}}, "page"},
 		"close fails":                          {brokenSession{closeErr: errors.New("still busy")}, "still busy"},
-		"undeclared row statements generated":  {brokenSession{generates: true}, "RowStatements"},
+		"undeclared row statements generated":  {brokenSession{generates: true}, "PrepareRowStatements"},
 		"undeclared grid edit generated":       {brokenSession{gridEdits: true}, "GridEditStatements"},
 		"undeclared import generated":          {brokenSession{imports: true}, "ImportStatements"},
 		"undeclared create table generated":    {brokenSession{schemaWrites: true}, "CreateTableStatements"},

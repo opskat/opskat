@@ -300,8 +300,11 @@ func (q *Query) GetImportStatements(assetID int64, database, table string, reque
 func (q *Query) GetRowStatements(assetID int64, database, table string, request dbdriver.RowStatementsRequest) ([]string, error) {
 	var result []string
 	err := q.withObjectSession(assetID, database, func(ctx context.Context, session dbdriver.Session, database string) error {
-		statements, err := session.RowStatements(ctx, database, table, request)
-		result = statements
+		writer, err := session.PrepareRowStatements(ctx, database, table)
+		if err != nil {
+			return err
+		}
+		result, err = writer.RowStatements(request)
 		return err
 	})
 	return result, err

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
 func expectColumns(mock sqlmock.Sqlmock, schema, table string, columns ...[2]string) {
@@ -28,7 +29,7 @@ func TestRowStatementsInsertWritesUnicodeTextAndBinaryForSQLServer(t *testing.T)
 		[2]string{"id", "int"}, [2]string{"nv", "nvarchar"}, [2]string{"nc", "NCHAR"}, [2]string{"nt", "ntext"},
 		[2]string{"v", "varchar"}, [2]string{"bin", "varbinary"}, [2]string{"img", "image"})
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "dbo.users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "dbo.users", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "nv", "nc", "nt", "v", "bin", "img"},
 		Rows: []map[string]any{
@@ -49,7 +50,7 @@ func TestRowStatementsUpdateLocatesUnicodeKeysForSQLServer(t *testing.T) {
 	session, mock := newMock(t)
 	expectColumns(mock, "dbo", "users", [2]string{"code", "nvarchar"}, [2]string{"qty", "int"})
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "dbo.users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "dbo.users", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"code", "qty"},
 		Rows:        []map[string]any{{"code": "中文", "qty": float64(3)}},
@@ -65,7 +66,7 @@ func TestRowStatementsMatchTheFormerFrontendTextForSQLServer(t *testing.T) {
 	session, mock := newMock(t)
 	expectColumns(mock, "dbo", "users", [2]string{"id", "int"}, [2]string{"name", "varchar"})
 
-	statements, err := session.RowStatements(context.Background(), "appdb", "dbo.users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "dbo.users", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"id", "name"},
 		Rows:        []map[string]any{{"id": float64(2), "name": "O'Reilly"}},
@@ -82,7 +83,7 @@ func TestDottedTableNameIsOneNameForSQLServer(t *testing.T) {
 	ctx := context.Background()
 
 	expectColumns(mock, "dbo", "a.b", [2]string{"id", "int"})
-	statements, err := session.RowStatements(ctx, "appdb", "dbo.a.b", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(ctx, session, "appdb", "dbo.a.b", dbdriver.RowStatementsRequest{
 		Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": float64(1)}},
 	})
 	require.NoError(t, err)

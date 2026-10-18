@@ -3,6 +3,7 @@ package query
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -148,14 +149,18 @@ func tableExportTextEncoding(charset string) (encoding.Encoding, []byte) {
 	}
 }
 
-// 整表导出 CSV / TSV：行的格式化（日期、编码、分隔符……）在前端，所以后端把对驱动的那一次读取
-// 做成一个游标，分批交给前端。取数始终只有一次（StreamTableRows），不会因为分批而变成多条
-// 带偏移的语句。
+// 整表导出 CSV / TSV / SQL：分隔文本的格式化（日期、编码、分隔符……）在前端，所以后端把对驱动
+// 的那一次读取做成一个游标，分批交给前端。取数始终只有一次（StreamTableRows），不会因为分批而
+// 变成多条带偏移的语句。导出为 SQL 时游标直接交出驱动生成的 INSERT。
 
 // TableExportStreamRequest 是整表导出取数的请求：结构化的筛选条件与排序项，没有 SQL。
 type TableExportStreamRequest struct {
 	Filters []dbdriver.FilterItem `json:"filters"`
 	Sorts   []dbdriver.SortItem   `json:"sorts"`
+	// InsertColumns 非空表示导出为 SQL：每批交出把这些列写进表的 INSERT（驱动生成，每行一条，与
+	// GetRowStatements 对同样的行给出的一字不差），不再交出行。生成要的一切在打开读取之前就向
+	// 驱动备好：读取的游标一直占着会话的一条连接，远端 SQLite 的会话也只有这一条。
+	InsertColumns []string `json:"insertColumns"`
 }
 
 // TableExportCursor 是打开的导出游标。
@@ -167,7 +172,10 @@ type TableExportCursor struct {
 // TableExportChunk 是游标读出的一批行；Done 表示游标已读完。
 type TableExportChunk struct {
 	Rows []map[string]any `json:"rows"`
-	Done bool             `json:"done"`
+	// Statements 是导出为 SQL（TableExportStreamRequest.InsertColumns）时这批行的 INSERT，每行一条；
+	// 这时没有 Rows。
+	Statements []string `json:"statements"`
+	Done       bool     `json:"done"`
 }
 
 // tableExportTimeout 是一个导出游标的存活时限：到时即使前端没有关闭也会被收回。
@@ -176,9 +184,12 @@ const tableExportTimeout = 30 * time.Minute
 type exportCursor struct {
 	mu     sync.Mutex
 	stream dbdriver.RowStream
-	panel  *panelSession
-	stop   func() bool
-	closed bool
+	// writer 与 insertColumns 只在导出为 SQL 时有。
+	writer        dbdriver.RowStatementWriter
+	insertColumns []string
+	panel         *panelSession
+	stop          func() bool
+	closed        bool
 }
 
 var (
@@ -203,14 +214,22 @@ func (c *exportCursor) close() error {
 func (q *Query) OpenTableExport(assetID int64, database, table string, request TableExportStreamRequest) (*TableExportCursor, error) {
 	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
 		zap.String("op", "export-stream"), zap.Int64("assetID", assetID), zap.String("database", database), zap.String("table", table))
-	log.Debug("table export open")
+	log.Debug("table export open", zap.Bool("insertStatements", len(request.InsertColumns) > 0))
 	panel, err := q.acquirePanelSession(assetID, database,
 		func(*asset_entity.DatabaseConfig) time.Duration { return tableExportTimeout })
 	if err != nil {
 		log.Error("table export open failed", zap.Error(err))
 		return nil, err
 	}
-	stream, err := panel.session.StreamTableRows(panel.ctx, panel.database, table,
+	cursor := &exportCursor{panel: panel, insertColumns: request.InsertColumns}
+	if len(request.InsertColumns) > 0 {
+		if cursor.writer, err = panel.session.PrepareRowStatements(panel.ctx, panel.database, table); err != nil {
+			err = panel.finish(err)
+			log.Error("table export open failed", zap.Error(err))
+			return nil, err
+		}
+	}
+	cursor.stream, err = panel.session.StreamTableRows(panel.ctx, panel.database, table,
 		dbdriver.TableQuery{Filters: request.Filters, Sorts: request.Sorts})
 	if err != nil {
 		err = panel.finish(err)
@@ -219,7 +238,6 @@ func (q *Query) OpenTableExport(assetID int64, database, table string, request T
 	}
 
 	id := uuid.NewString()
-	cursor := &exportCursor{stream: stream, panel: panel}
 	cursor.stop = context.AfterFunc(panel.ctx, func() {
 		exportCursorsMu.Lock()
 		delete(exportCursors, id)
@@ -231,7 +249,7 @@ func (q *Query) OpenTableExport(assetID int64, database, table string, request T
 	exportCursorsMu.Lock()
 	exportCursors[id] = cursor
 	exportCursorsMu.Unlock()
-	return &TableExportCursor{ID: id, Columns: stream.Columns()}, nil
+	return &TableExportCursor{ID: id, Columns: cursor.stream.Columns()}, nil
 }
 
 func lookupExportCursor(id string) (*exportCursor, error) {
@@ -272,7 +290,30 @@ func (q *Query) ReadTableExport(id string, maxRows int) (*TableExportChunk, erro
 		}
 		rowSet.Rows = append(rowSet.Rows, cursor.stream.Row())
 	}
-	return &TableExportChunk{Rows: query_svc.NewTableRows(rowSet).Rows, Done: done}, nil
+	rows := query_svc.NewTableRows(rowSet).Rows
+	if cursor.writer == nil {
+		return &TableExportChunk{Rows: rows, Done: done}, nil
+	}
+	statements, err := cursor.insertStatements(rows)
+	if err != nil {
+		logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).Error("table export statements failed", zap.Error(err))
+		return nil, err
+	}
+	return &TableExportChunk{Statements: statements, Done: done}, nil
+}
+
+// insertStatements 生成一批行的 INSERT。行先转成前端拿到再带回来的样子（经 JSON：nil、字符串、
+// 数字、布尔），语句才与 GetRowStatements 对这些行给出的一字不差。
+func (c *exportCursor) insertStatements(rows []map[string]any) ([]string, error) {
+	data, err := json.Marshal(rows)
+	if err != nil {
+		return nil, fmt.Errorf("encode export rows: %w", err)
+	}
+	var sent []map[string]any
+	if err := json.Unmarshal(data, &sent); err != nil {
+		return nil, fmt.Errorf("decode export rows: %w", err)
+	}
+	return c.writer.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: c.insertColumns, Rows: sent})
 }
 
 // CloseTableExport 关闭导出游标并释放它占用的连接；已关闭的游标再关是空操作。

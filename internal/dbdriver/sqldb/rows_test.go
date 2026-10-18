@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
 // rowsDialect 在测试方言之上写行语句：ntext 列加 N 前缀，UPDATE 以 ONE ROW 收尾，好与任何
@@ -43,7 +44,7 @@ func TestRowStatementsInsertsOneStatementPerRow(t *testing.T) {
 	session, mock := newRowsSession(t)
 	expectColumnTypes(mock)
 
-	statements, err := session.RowStatements(context.Background(), "db", "t", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "name", "memo"},
 		Rows: []map[string]any{
@@ -64,7 +65,7 @@ func TestRowStatementsInsertsOneStatementPerRow(t *testing.T) {
 func TestRowStatementsUpdatesLocateTheRowByPrimaryKeyOrEveryColumn(t *testing.T) {
 	session, mock := newRowsSession(t)
 	expectColumnTypes(mock)
-	statements, err := session.RowStatements(context.Background(), "db", "t", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"memo"},
 		Rows:        []map[string]any{{"id": float64(2), "name": "中文", "memo": "x"}},
@@ -74,7 +75,7 @@ func TestRowStatementsUpdatesLocateTheRowByPrimaryKeyOrEveryColumn(t *testing.T)
 	assert.Equal(t, []string{"UPDATE <db>.<t> SET <memo> = 'x' WHERE <id> = '2' AND <name> = N'中文' ONE ROW;"}, statements)
 
 	expectColumnTypes(mock)
-	statements, err = session.RowStatements(context.Background(), "db", "t", dbdriver.RowStatementsRequest{
+	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowUpdate,
 		Columns: []string{"id", "memo"},
 		Rows:    []map[string]any{{"id": float64(2), "memo": nil}},
@@ -84,39 +85,51 @@ func TestRowStatementsUpdatesLocateTheRowByPrimaryKeyOrEveryColumn(t *testing.T)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 没有行时不碰数据库，给出空列表（序列化成 []，不是 null）。
-func TestRowStatementsWithoutRowsIsAnEmptyList(t *testing.T) {
+// 备好的 writer 不再碰数据库：会话关了也照样生成（整表导出为 SQL 时读游标占着会话唯一的连接）；
+// 没有行时给出空列表（序列化成 []，不是 null）。
+func TestPreparedRowStatementsNeedNoDatabase(t *testing.T) {
 	session, mock := newRowsSession(t)
-	statements, err := session.RowStatements(context.Background(), "db", "t", dbdriver.RowStatementsRequest{
-		Kind: dbdriver.RowInsert, Columns: []string{"id"},
+	expectColumnTypes(mock)
+	writer, err := session.PrepareRowStatements(context.Background(), "db", "t")
+	require.NoError(t, err)
+	mock.ExpectClose()
+	require.NoError(t, session.Close())
+
+	statements, err := writer.RowStatements(dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowInsert, Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": float64(1), "name": "中文"}},
 	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO <db>.<t> (<id>, <name>) VALUES ('1', N'中文');"}, statements)
+	statements, err = writer.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: []string{"id"}})
 	require.NoError(t, err)
 	assert.NotNil(t, statements)
 	assert.Empty(t, statements)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 方言不写行语句、或请求的种类不认识时，在碰数据库之前拒绝；查列失败时数据库的错误原样返回。
+// 方言不写行语句时在碰数据库之前拒绝；查列失败时数据库的错误原样返回；请求的种类不认识、值写不成
+// 字面量时生成报错。
 func TestRowStatementsRefusalsAndErrors(t *testing.T) {
 	ctx := context.Background()
 	request := dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": 1}}}
 
 	plain, plainMock := newTablesSession(t)
-	_, err := plain.RowStatements(ctx, "db", "t", request)
+	_, err := plain.PrepareRowStatements(ctx, "db", "t")
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	require.NoError(t, plainMock.ExpectationsWereMet())
 
 	session, mock := newRowsSession(t)
-	_, err = session.RowStatements(ctx, "db", "t", dbdriver.RowStatementsRequest{Kind: "upsert", Rows: request.Rows})
-	require.ErrorContains(t, err, "upsert")
-
 	boom := errors.New("no such table")
 	mock.ExpectQuery("COLUMNS").WillReturnError(boom)
-	_, err = session.RowStatements(ctx, "db", "t", request)
+	_, err = session.PrepareRowStatements(ctx, "db", "t")
 	require.ErrorIs(t, err, boom)
 
 	expectColumnTypes(mock)
-	_, err = session.RowStatements(ctx, "db", "t", dbdriver.RowStatementsRequest{
+	writer, err := session.PrepareRowStatements(ctx, "db", "t")
+	require.NoError(t, err)
+	_, err = writer.RowStatements(dbdriver.RowStatementsRequest{Kind: "upsert", Rows: request.Rows})
+	require.ErrorContains(t, err, "upsert")
+	_, err = writer.RowStatements(dbdriver.RowStatementsRequest{
 		Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": []string{"x"}}},
 	})
 	require.ErrorContains(t, err, "unsupported value")

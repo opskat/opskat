@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
 func expectColumns(mock sqlmock.Sqlmock, schema, table string, columns ...[2]string) {
@@ -26,7 +27,7 @@ func TestRowStatementsForPostgreSQL(t *testing.T) {
 	ctx := context.Background()
 	expectColumns(mock, "public", "users", [2]string{"id", "integer"}, [2]string{"name", "text"}, [2]string{"avatar", "bytea"})
 
-	statements, err := session.RowStatements(ctx, "mydb", "public.users", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(ctx, session, "mydb", "public.users", dbdriver.RowStatementsRequest{
 		Kind:    dbdriver.RowInsert,
 		Columns: []string{"id", "name", "avatar"},
 		Rows:    []map[string]any{{"id": float64(1), "name": `O'Reilly \n`, "avatar": "\xde\xad"}},
@@ -37,7 +38,7 @@ func TestRowStatementsForPostgreSQL(t *testing.T) {
 	}, statements)
 
 	expectColumns(mock, "public", "users", [2]string{"id", "integer"}, [2]string{"name", "text"})
-	statements, err = session.RowStatements(ctx, "mydb", "public.users", dbdriver.RowStatementsRequest{
+	statements, err = dbdrivertest.RowStatements(ctx, session, "mydb", "public.users", dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
 		Columns:     []string{"id", "name"},
 		Rows:        []map[string]any{{"id": float64(1), "name": nil}},
@@ -65,7 +66,7 @@ func TestDottedTableNameIsOneNameForPostgreSQL(t *testing.T) {
 	assert.Equal(t, []string{"id"}, opened.PrimaryKeys)
 
 	expectColumns(mock, "public", "a.b", [2]string{"id", "integer"})
-	statements, err := session.RowStatements(ctx, "mydb", "public.a.b", dbdriver.RowStatementsRequest{
+	statements, err := dbdrivertest.RowStatements(ctx, session, "mydb", "public.a.b", dbdriver.RowStatementsRequest{
 		Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": float64(1)}},
 	})
 	require.NoError(t, err)

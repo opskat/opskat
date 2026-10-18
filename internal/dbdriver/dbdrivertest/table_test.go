@@ -81,6 +81,10 @@ type brokenTables struct {
 	rows  func(*dbdriver.RowSet, error) (*dbdriver.RowSet, error)
 	count func(int64, error) (int64, error)
 	stmts func([]string, error) ([]string, error)
+	// prepare 非 nil 时备 writer 以它失败。
+	prepare error
+	// touchesDatabase 让备好的 writer 生成时还要用会话。
+	touchesDatabase bool
 	// imports 改写导入语句的结果。
 	imports func([]string, error) ([]string, error)
 }
@@ -93,10 +97,34 @@ func (b brokenTables) ImportStatements(ctx context.Context, database, table stri
 	return statements, err
 }
 
-func (b brokenTables) RowStatements(ctx context.Context, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
-	statements, err := b.Session.RowStatements(ctx, database, table, req)
-	if b.stmts != nil {
-		return b.stmts(statements, err)
+func (b brokenTables) PrepareRowStatements(ctx context.Context, database, table string) (dbdriver.RowStatementWriter, error) {
+	if b.prepare != nil {
+		return nil, b.prepare
+	}
+	writer, err := b.Session.PrepareRowStatements(ctx, database, table)
+	if err != nil {
+		return nil, err
+	}
+	return brokenRowWriter{writer: writer, tables: b, database: database, table: table}, nil
+}
+
+// brokenRowWriter 改写 writer 生成的结果；tables.touchesDatabase 时它像没备好一切的 writer
+// 那样每次生成都回会话上查一次表。
+type brokenRowWriter struct {
+	writer          dbdriver.RowStatementWriter
+	tables          brokenTables
+	database, table string
+}
+
+func (w brokenRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
+	if w.tables.touchesDatabase {
+		if _, err := w.tables.Session.CountTableRows(context.Background(), w.database, w.table, nil); err != nil {
+			return nil, err
+		}
+	}
+	statements, err := w.writer.RowStatements(req)
+	if w.tables.stmts != nil {
+		return w.tables.stmts(statements, err)
 	}
 	return statements, err
 }
@@ -187,11 +215,11 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 		"unfiltered page differs from the first page": {brokenTables{rows: alterRows(func(r *dbdriver.RowSet) {
 			r.Rows = r.Rows[:1]
 		})}, "first page"},
-		"count fails":                           {brokenTables{count: func(int64, error) (int64, error) { return 0, unsupported }}, "CountTableRows"},
-		"count disagrees with the opened table": {brokenTables{count: func(int64, error) (int64, error) { return 99, nil }}, "99"},
-		"declared row statements refused": {brokenTables{stmts: func([]string, error) ([]string, error) {
-			return nil, unsupported
-		}}, "RowStatements"},
+		"count fails":                              {brokenTables{count: func(int64, error) (int64, error) { return 0, unsupported }}, "CountTableRows"},
+		"count disagrees with the opened table":    {brokenTables{count: func(int64, error) (int64, error) { return 99, nil }}, "99"},
+		"declared row statements refused":          {brokenTables{prepare: unsupported}, "PrepareRowStatements"},
+		"preparing row statements fails":           {brokenTables{prepare: errors.New("no columns")}, "no columns"},
+		"prepared row writer touches the database": {brokenTables{touchesDatabase: true}, "must not touch the database"},
 		"row statements fail": {brokenTables{stmts: func([]string, error) ([]string, error) {
 			return nil, errors.New("boom")
 		}}, "boom"},
@@ -303,15 +331,20 @@ func TestFakeSessionGeneratesRowStatementsWithoutExecuting(t *testing.T) {
 		PrimaryKeys: []string{"id"},
 	}
 
-	_, err := session.RowStatements(ctx, "app", "users", request)
+	_, err := session.PrepareRowStatements(ctx, "app", "users")
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	assert.Empty(t, session.TableCalls())
 
 	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapCopySQL)
-	statements, err := session.RowStatements(ctx, "app", "users", request)
+	writer, err := session.PrepareRowStatements(ctx, "app", "users")
+	require.NoError(t, err)
+	statements, err := writer.RowStatements(request)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"FAKE UPDATE ROW 1 OF app.users", "FAKE UPDATE ROW 2 OF app.users"}, statements)
-	assert.Equal(t, []TableCall{{Op: "row_statements", Database: "app", Table: "users", RowStatements: &request}}, session.TableCalls())
+	assert.Equal(t, []TableCall{
+		{Op: "prepare_row_statements", Database: "app", Table: "users"},
+		{Op: "row_statements", Database: "app", Table: "users", RowStatements: &request},
+	}, session.TableCalls())
 	assert.Empty(t, session.Statements())
 }
 

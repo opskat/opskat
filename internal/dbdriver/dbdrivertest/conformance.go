@@ -36,7 +36,7 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //   - 会话：SQL 执行与分页执行是每个驱动都要有的，必须可调用并返回成形的结构化结果；
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
-//     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（RowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
+//     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（PrepareRowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
 //     必须给出语句），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
@@ -213,11 +213,9 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 		}
 	}
 	if !desc.GeneratesRowStatements() {
-		_, err := s.RowStatements(ctx, "", "x", dbdriver.RowStatementsRequest{
-			Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": float64(1)}},
-		})
+		_, err := s.PrepareRowStatements(ctx, "", "x")
 		if !errors.Is(err, dbdriver.ErrUnsupported) {
-			problems = append(problems, fmt.Sprintf("RowStatements: the driver declares neither %q nor %q, so it must be refused with ErrUnsupported, got: %v",
+			problems = append(problems, fmt.Sprintf("PrepareRowStatements: the driver declares neither %q nor %q, so it must be refused with ErrUnsupported, got: %v",
 				dbdriver.CapExportSQL, dbdriver.CapCopySQL, err))
 		}
 	}
@@ -469,8 +467,11 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 		}
 	}
 
+	var writer dbdriver.RowStatementWriter
 	if desc.GeneratesRowStatements() && opened != nil && opened.FirstPage != nil {
-		problems = append(problems, rowStatementProblems(ctx, s, database, table, opened)...)
+		var rowProblems []string
+		writer, rowProblems = rowStatementProblems(ctx, s, database, table, opened)
+		problems = append(problems, rowProblems...)
 	}
 	if desc.Supports(dbdriver.CapGridEdit) && opened != nil && opened.FirstPage != nil {
 		problems = append(problems, gridEditProblems(ctx, s, database, table, opened)...)
@@ -495,23 +496,38 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 	if err := s.Close(); err != nil {
 		report("Close: %v", err)
 	}
+	// 备好的 writer 不再碰数据库：会话关了也照样生成（整表导出为 SQL 在读游标占着会话的连接时用它）。
+	if writer != nil {
+		if _, err := writer.RowStatements(dbdriver.RowStatementsRequest{
+			Kind: dbdriver.RowInsert, Columns: opened.FirstPage.Columns, Rows: firstPageRecords(opened.FirstPage),
+		}); err != nil {
+			report("RowStatements after the session was closed: %v; a prepared writer must not touch the database", err)
+		}
+	}
 	return problems
 }
 
 // rowStatementProblems 用打开表时的第一页检查行语句：每行一条 INSERT、每行一条 UPDATE，没有行
-// 时是空列表（序列化成 []，不是 null）。语句只生成，这里不执行。
-func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, table string, opened *dbdriver.OpenedTable) []string {
+// 时是空列表（序列化成 []，不是 null）。语句只生成，这里不执行。备好的 writer 一并交回。
+func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, table string, opened *dbdriver.OpenedTable) (dbdriver.RowStatementWriter, []string) {
 	var problems []string
 	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	writer, err := s.PrepareRowStatements(ctx, database, table)
+	switch {
+	case errors.Is(err, dbdriver.ErrUnsupported):
+		report("PrepareRowStatements: declared %q or %q but refused with ErrUnsupported: %v", dbdriver.CapExportSQL, dbdriver.CapCopySQL, err)
+		return nil, problems
+	case err != nil:
+		report("PrepareRowStatements: %v", err)
+		return nil, problems
+	}
 	first := opened.FirstPage
 	rows := firstPageRecords(first)
 	for _, kind := range []dbdriver.RowStatementKind{dbdriver.RowInsert, dbdriver.RowUpdate} {
-		statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{
+		statements, err := writer.RowStatements(dbdriver.RowStatementsRequest{
 			Kind: kind, Columns: first.Columns, Rows: rows, PrimaryKeys: opened.PrimaryKeys,
 		})
 		switch {
-		case errors.Is(err, dbdriver.ErrUnsupported):
-			report("RowStatements(%s): declared %q or %q but refused with ErrUnsupported: %v", kind, dbdriver.CapExportSQL, dbdriver.CapCopySQL, err)
 		case err != nil:
 			report("RowStatements(%s): %v", kind, err)
 		case len(statements) != len(rows):
@@ -524,11 +540,11 @@ func rowStatementProblems(ctx context.Context, s dbdriver.Session, database, tab
 			}
 		}
 	}
-	statements, err := s.RowStatements(ctx, database, table, dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: first.Columns})
+	statements, err := writer.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: first.Columns})
 	if err == nil && statements == nil {
 		report("RowStatements without rows: returned null; it must be an empty list")
 	}
-	return problems
+	return writer, problems
 }
 
 // importProblems 用打开表时的第一页检查导入语句：把每行当作要追加的一行（值都是 NULL，不依赖列的
@@ -903,4 +919,13 @@ func registrationProblems(d dbdriver.Driver) []string {
 		}
 	}
 	return problems
+}
+
+// RowStatements 备好 writer 再生成一次行语句：驱动测试检查一个请求生成的文本时用。
+func RowStatements(ctx context.Context, s dbdriver.Session, database, table string, req dbdriver.RowStatementsRequest) ([]string, error) {
+	writer, err := s.PrepareRowStatements(ctx, database, table)
+	if err != nil {
+		return nil, err
+	}
+	return writer.RowStatements(req)
 }
