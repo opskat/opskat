@@ -16,6 +16,7 @@ import (
 // 回滚之后恢复。
 func TestExecuteBatchTogglesForeignKeyChecksAroundTheTransaction(t *testing.T) {
 	session, mock := newMock(t)
+	mock.ExpectQuery("SELECT @@SESSION.foreign_key_checks").WillReturnRows(sqlmock.NewRows([]string{"fk"}).AddRow(1))
 	mock.ExpectExec("SET FOREIGN_KEY_CHECKS = 0").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM `appdb`.`users`;").WillReturnResult(sqlmock.NewResult(0, 2))
@@ -32,5 +33,22 @@ func TestExecuteBatchTogglesForeignKeyChecksAroundTheTransaction(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, result.RolledBack)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 会话本来就没在检查外键（FOREIGN_KEY_CHECKS = 0）：不关闭，结束后也不把它打开。
+func TestExecuteBatchLeavesForeignKeyChecksOffWhenTheSessionHadThemOff(t *testing.T) {
+	session, mock := newMock(t)
+	mock.ExpectQuery("SELECT @@SESSION.foreign_key_checks").WillReturnRows(sqlmock.NewRows([]string{"fk"}).AddRow(0))
+	mock.ExpectExec("INSERT INTO `appdb`.`users` (`id`) VALUES (1);").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err := session.ExecuteBatch(context.Background(), dbdriver.BatchRequest{
+		Statements:              []string{"INSERT INTO `appdb`.`users` (`id`) VALUES (1);"},
+		ContinueOnError:         true,
+		DisableForeignKeyChecks: true,
+		Database:                "appdb",
+		Table:                   "users",
+	})
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

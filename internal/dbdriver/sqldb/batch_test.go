@@ -2,6 +2,7 @@ package sqldb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -16,8 +17,32 @@ import (
 // fkDialect 是能关闭外键检查的方言：语句里带着库名与表名，证明批把目标表交给了方言。
 type fkDialect struct{ LimitOffset }
 
-func (fkDialect) ForeignKeyChecksSQL(database, table string) (string, string) {
-	return "FK OFF " + database + "." + table, "FK ON " + database + "." + table
+func (fkDialect) ForeignKeyChecksSQL(_ context.Context, _ *sql.Conn, database, table string) (string, string, error) {
+	return "FK OFF " + database + "." + table, "FK ON " + database + "." + table, nil
+}
+
+// fkOffDialect 是连接本来就没在检查外键的方言：既不关闭，也不恢复。
+type fkOffDialect struct{ LimitOffset }
+
+func (fkOffDialect) ForeignKeyChecksSQL(context.Context, *sql.Conn, string, string) (string, string, error) {
+	return "", "", nil
+}
+
+// 连接本来就没在检查外键：批照常执行，前后都不碰外键检查。
+func TestExecuteBatchLeavesForeignKeyChecksAloneWhenTheyWereOff(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	session := NewSession(db, fkOffDialect{})
+	mock.ExpectExec("INSERT INTO users VALUES (1);").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	result, err := session.ExecuteBatch(context.Background(), dbdriver.BatchRequest{
+		Statements: []string{"INSERT INTO users VALUES (1);"}, ContinueOnError: true,
+		DisableForeignKeyChecks: true, Database: "appdb", Table: "users",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.BatchStatement{{Index: 0, AffectedRows: 1}}, result.Executed)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func newFKMockSession(t *testing.T) (*Session, sqlmock.Sqlmock) {

@@ -18,9 +18,11 @@ import (
 // 关闭外键检查；没实现的，Session.ExecuteBatch 以 dbdriver.ErrUnsupported 拒绝。驱动描述的
 // CanDisableForeignKeyChecks 与它一起声明。
 type ForeignKeyChecks interface {
-	// ForeignKeyChecksSQL 返回关闭外键检查的语句与恢复它的语句：在批的那条连接上、事务之外执行。
-	// database / table 是批写入的表，含义同 dbdriver.BatchRequest（按表停用约束的方言用它）。
-	ForeignKeyChecksSQL(database, table string) (disable, restore string)
+	// ForeignKeyChecksSQL 在批的那条连接上（事务之外）给出关闭外键检查的语句，与把它恢复成关闭之前
+	// 那样的语句：检查是连接级开关的方言先查这条连接现在的状态，本来就没在检查时两条都返回空串
+	// （不关闭、也不「恢复」成检查）。database / table 是批写入的表，含义同 dbdriver.BatchRequest
+	// （按表停用约束的方言用它）。
+	ForeignKeyChecksSQL(ctx context.Context, conn *sql.Conn, database, table string) (disable, restore string, err error)
 }
 
 // restoreTimeout 是恢复外键检查的时限。恢复不随批的 ctx 取消：批超时或被取消时也要恢复。
@@ -34,22 +36,30 @@ type execer interface {
 // ExecuteBatch 在会话的一条独立连接上执行整批语句：关闭外键检查（若要求）→ 开始事务（若
 // Atomic）→ 逐条执行 → 提交或回滚 → 恢复外键检查。
 func (s *Session) ExecuteBatch(ctx context.Context, req dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
-	var disable, restore string
+	var checks ForeignKeyChecks
 	if req.DisableForeignKeyChecks {
-		checks, ok := s.dialect.(ForeignKeyChecks)
-		if !ok {
+		var ok bool
+		if checks, ok = s.dialect.(ForeignKeyChecks); !ok {
 			return nil, fmt.Errorf("%w: this driver cannot disable foreign key checks", dbdriver.ErrUnsupported)
 		}
 		if req.Table == "" {
 			return nil, errors.New("disabling foreign key checks needs the table the batch writes into")
 		}
-		disable, restore = checks.ForeignKeyChecksSQL(req.Database, req.Table)
 	}
 	return onConn(ctx, s, func(conn *sql.Conn) (result *dbdriver.BatchResult, err error) {
-		if req.DisableForeignKeyChecks {
+		var disable, restore string
+		if checks != nil {
+			var queryErr error
+			if disable, restore, queryErr = checks.ForeignKeyChecksSQL(ctx, conn, req.Database, req.Table); queryErr != nil {
+				return nil, fmt.Errorf("query foreign key checks: %w", queryErr)
+			}
+		}
+		if disable != "" {
 			if _, err := conn.ExecContext(ctx, disable); err != nil {
 				return nil, fmt.Errorf("disable foreign key checks: %w", err)
 			}
+		}
+		if restore != "" {
 			defer func() {
 				restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
 				defer cancel()
