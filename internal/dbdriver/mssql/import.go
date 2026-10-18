@@ -9,9 +9,12 @@ import (
 )
 
 // 导入：T-SQL 没有 INSERT IGNORE / ON CONFLICT / ON DUPLICATE KEY，追加/更新与追加/跳过每行一条
-// MERGE（跳过时只有 NOT MATCHED 分支）；映射里有 IDENTITY 列时每条插入类语句都包上
-// IDENTITY_INSERT 的开关，没有时不碰它。
+// MERGE（跳过时只有 NOT MATCHED 分支）；多行 INSERT 每条最多 1000 行（VALUES 的上限）；映射里有
+// IDENTITY 列时每条插入类语句都包上 IDENTITY_INSERT 的开关，没有时不碰它。
 var _ sqldb.Importer = dialect{}
+
+// maxInsertRows 是一条 INSERT … VALUES 最多能写的行数，超过时 SQL Server 报 Msg 10738。
+const maxInsertRows = 1000
 
 func (dialect) ColumnCategory(columnType string) dbdriver.ColumnCategory {
 	switch strings.ToLower(columnType) {
@@ -31,6 +34,7 @@ func (dialect) ColumnCategory(columnType string) dbdriver.ColumnCategory {
 func (dialect) ImportInsertSQL(ins sqldb.ImportInsert) []string {
 	var statements []string
 	if ins.Conflict == sqldb.ConflictNone {
+		ins.MaxRows = maxInsertRows
 		statements = ins.Values(ins.Head("INSERT INTO")+" VALUES", "")
 	} else {
 		statements = make([]string, len(ins.Rows))

@@ -55,6 +55,9 @@ type ImportInsert struct {
 	Identity bool
 	// MaxStatementSize 大于 0 表示合并成多行 INSERT，每条不超过这么多字符；为 0 表示每行一条。
 	MaxStatementSize int
+	// MaxRows 大于 0 表示合并时每条最多这么多行（方言对 VALUES 的行数有上限时在 ImportInsertSQL 里
+	// 设它，如 SQL Server 的 1000 行）；为 0 表示只按 MaxStatementSize 合并。
+	MaxRows int
 }
 
 // Head 是 "keyword 表引用 (列, …)"。
@@ -72,8 +75,8 @@ func (ins ImportInsert) OnConflictDoUpdate() string {
 	return " ON CONFLICT (" + strings.Join(ins.Keys, ", ") + ") DO UPDATE SET " + strings.Join(set, ", ")
 }
 
-// Values 是 "prefix (行) suffix;" 形式的 INSERT：每行一条，或按 MaxStatementSize 合并成多行
-// （"prefix (行), (行)suffix;"）。一行本身就超过上限时单独成一条。长度按字符（UTF-16 码元）计。
+// Values 是 "prefix (行) suffix;" 形式的 INSERT：每行一条，或按 MaxStatementSize（与 MaxRows）合并成
+// 多行（"prefix (行), (行)suffix;"）。一行本身就超过上限时单独成一条。长度按字符（UTF-16 码元）计。
 func (ins ImportInsert) Values(prefix, suffix string) []string {
 	tuples := make([]string, len(ins.Rows))
 	for i, row := range ins.Rows {
@@ -99,7 +102,7 @@ func (ins ImportInsert) Values(prefix, suffix string) []string {
 		if len(chunk) > 0 {
 			grown += len(", ")
 		}
-		if len(chunk) > 0 && fixed+grown > ins.MaxStatementSize {
+		if len(chunk) > 0 && (fixed+grown > ins.MaxStatementSize || (ins.MaxRows > 0 && len(chunk) == ins.MaxRows)) {
 			statements = append(statements, statement(chunk))
 			chunk, grown = nil, utf16Len(tuple)
 		}

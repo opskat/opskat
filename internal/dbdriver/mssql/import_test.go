@@ -2,6 +2,7 @@ package mssql
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -215,6 +216,27 @@ func TestImportAddsNoRowCountOfItsOwnForSQLServer(t *testing.T) {
 		for _, statement := range statements {
 			assert.NotRegexp(t, `(?i)\bDECLARE\b|\b(SET|SELECT)\s+@`, statement)
 		}
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 多行 INSERT 的 VALUES 在 SQL Server 里最多 1000 行（多了报 Msg 10738）：行再短、上限再大，每条也
+// 不超过 1000 行。
+func TestImportExtendedInsertStaysWithinTheRowLimitForSQLServer(t *testing.T) {
+	session, mock := newMock(t)
+	expectImportColumns(mock, "dbo", "users", importColumn{"id", "int", false})
+	rows := make([][]dbdriver.ImportValue, 2001)
+	for i := range rows {
+		rows[i] = texts("1")
+	}
+
+	statements, err := session.ImportStatements(context.Background(), "appdb", "dbo.users", dbdriver.ImportRequest{
+		Mode: dbdriver.ImportAppend, Columns: []string{"id"}, Rows: rows, ExtendedInsert: true, MaxStatementSizeKB: 1024,
+	})
+	require.NoError(t, err)
+	require.Len(t, statements, 3)
+	for i, want := range []int{1000, 1000, 1} {
+		assert.Equal(t, want, strings.Count(statements[i], "('1')"), "statement %d", i)
 	}
 	require.NoError(t, mock.ExpectationsWereMet())
 }
