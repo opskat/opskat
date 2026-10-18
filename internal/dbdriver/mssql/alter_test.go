@@ -11,18 +11,20 @@ import (
 	"github.com/opskat/opskat/internal/dbdriver"
 )
 
-// mssqlColumn 是改表时读列定义的一行；nil 的 maxLen / def 是 NULL。
+// mssqlColumn 是改表时读列定义的一行；nil 的 maxLen / precision / scale / timePrecision / def 是 NULL。
 type mssqlColumn struct {
-	name, dataType string
-	maxLen         any
-	nullable       string
-	def            any
+	name, dataType                  string
+	maxLen                          any
+	precision, scale, timePrecision any
+	nullable                        string
+	def                             any
 }
 
 func expectAlterColumns(mock sqlmock.Sqlmock, schema, table string, columns ...mssqlColumn) {
-	rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "CHARACTER_MAXIMUM_LENGTH", "IS_NULLABLE", "COLUMN_DEFAULT"})
+	rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "CHARACTER_MAXIMUM_LENGTH",
+		"NUMERIC_PRECISION", "NUMERIC_SCALE", "DATETIME_PRECISION", "IS_NULLABLE", "COLUMN_DEFAULT"})
 	for _, c := range columns {
-		rows.AddRow(c.name, c.dataType, c.maxLen, c.nullable, c.def)
+		rows.AddRow(c.name, c.dataType, c.maxLen, c.precision, c.scale, c.timePrecision, c.nullable, c.def)
 	}
 	mock.ExpectQuery(alterColumnsSQL).WithArgs(schema, table).WillReturnRows(rows)
 }
@@ -78,6 +80,46 @@ func TestAlterTableStatementsForSQLServer(t *testing.T) {
 		},
 		Table: "users_v2",
 	}, result)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ALTER COLUMN 必须写出完整的类型：只改可空性时写回的类型是这一列现在的类型，精度、小数位与时间精度
+// 都要带上——写成裸的 decimal 会把 decimal(10,2) 改成 decimal(18,0)、舍掉已有数据的小数。长度只属于
+// 字符与二进制类型（xml、text 的 CHARACTER_MAXIMUM_LENGTH 不是类型的一部分）。
+func TestAlterTableKeepsTheFullSQLServerTypeWhenOnlyNullabilityChanges(t *testing.T) {
+	session, mock := newMock(t)
+	columns := []mssqlColumn{
+		{name: "amount", dataType: "decimal", precision: int64(10), scale: int64(2), nullable: "YES"},
+		{name: "rate", dataType: "numeric", precision: int64(5), scale: int64(0), nullable: "YES"},
+		{name: "at", dataType: "datetime2", timePrecision: int64(3), nullable: "YES"},
+		{name: "doc", dataType: "xml", maxLen: int64(-1), nullable: "YES"},
+		{name: "notes", dataType: "ntext", maxLen: int64(1073741823), nullable: "YES"},
+		{name: "count", dataType: "int", precision: int64(10), scale: int64(0), nullable: "YES"},
+	}
+	expectAlterColumns(mock, "dbo", "users", columns...)
+	model, err := session.AlterTableModel(context.Background(), "appdb", "users")
+	require.NoError(t, err)
+	types := make([]string, len(model.Columns))
+	for i, column := range model.Columns {
+		types[i] = column.Type
+	}
+	assert.Equal(t, []string{"decimal(10,2)", "numeric(5,0)", "datetime2(3)", "xml", "ntext", "int"}, types)
+
+	expectAlterColumns(mock, "dbo", "users", columns...)
+	req := dbdriver.AlterTableRequest{Name: "users"}
+	for _, column := range model.Columns {
+		req.Columns = append(req.Columns, dbdriver.AlterColumn{OriginalName: column.Name, Name: column.Name, Type: column.Type})
+	}
+	result, err := session.AlterTableStatements(context.Background(), "appdb", "users", req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"ALTER TABLE [users] ALTER COLUMN [amount] decimal(10,2) NOT NULL",
+		"ALTER TABLE [users] ALTER COLUMN [rate] numeric(5,0) NOT NULL",
+		"ALTER TABLE [users] ALTER COLUMN [at] datetime2(3) NOT NULL",
+		"ALTER TABLE [users] ALTER COLUMN [doc] xml NOT NULL",
+		"ALTER TABLE [users] ALTER COLUMN [notes] ntext NOT NULL",
+		"ALTER TABLE [users] ALTER COLUMN [count] int NOT NULL",
+	}, result.Statements)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
