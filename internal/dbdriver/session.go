@@ -193,8 +193,8 @@ type Session interface {
 	// ExecuteBatch 在会话的一条连接上按次序执行一批语句（导入的整批执行用它），见 BatchRequest。
 	// 空白语句跳过、不执行。语句本身的失败记在结果里，不作为 error 返回。
 	//
-	// 请求关闭外键检查时，驱动在执行前（事务之外）关闭、结束后恢复——语句失败、回滚、ctx 被取消
-	// 也要恢复；驱动没有声明 Descriptor.CanDisableForeignKeyChecks 时以 ErrUnsupported 拒绝，
+	// 请求关闭外键检查时，驱动在执行前（事务之外）关闭、结束后恢复成关闭之前的样子（本来就没在
+	// 检查的连接不会被打开检查）——语句失败、回滚、ctx 被取消也要恢复；驱动没有声明 Descriptor.CanDisableForeignKeyChecks 时以 ErrUnsupported 拒绝，
 	// 且不执行任何语句。
 	//
 	// 批本身出错（拿不到连接，关闭 / 恢复外键检查、开始 / 提交 / 回滚事务失败，ctx 被取消）时
