@@ -37,12 +37,6 @@ const driverRestrictions = [
   { selector: `BinaryExpression[operator=/^[!=]==?$/] > Literal[value=/^(${driverNames})$/]`, message: driverMessage },
   { selector: `SwitchCase[test.value=/^(${driverNames})$/]`, message: driverMessage },
 ];
-// 写路径本轮仍由前端生成方言 SQL，下列文件因此还按驱动名分支（规格：写路径改由驱动生成是第二轮）。
-// 只减不增：迁到后端驱动的文件从这里删掉；新代码读驱动描述，不进这个名单。
-const driverBranchExempt = [
-  "src/lib/tableSql.ts", // 前端旧的引号规则（写路径已不再调用）
-];
-
 export default tseslint.config(
   { ignores: ["dist", "wailsjs"] },
   js.configs.recommended,
@@ -83,13 +77,8 @@ export default tseslint.config(
     },
   },
   {
-    // 驱动描述的实现处、测试夹具与写路径豁免名单：可以按驱动名比较（其余禁令保留）。
-    files: [
-      "src/lib/dbDrivers/**/*.{ts,tsx}",
-      "src/**/__tests__/**/*.{ts,tsx}",
-      "src/**/*.test.{ts,tsx}",
-      ...driverBranchExempt,
-    ],
+    // 驱动描述的实现处与测试夹具：可以按驱动名比较（其余禁令保留）。
+    files: ["src/lib/dbDrivers/**/*.{ts,tsx}", "src/**/__tests__/**/*.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
     rules: {
       "no-restricted-syntax": ["error", ...react19Restrictions, ...paletteRestrictions],
     },

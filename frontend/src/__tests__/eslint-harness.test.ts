@@ -112,13 +112,8 @@ describe("harness: 共享前端代码不得按驱动名分支（驱动属性读�
     expect(ids).not.toContain("no-restricted-syntax");
   });
 
-  it("写路径豁免名单内的文件不被误报", async () => {
+  it("原写路径豁免文件 src/lib/tableSql.ts 按驱动名比较同样被拦截（豁免名单已删除）", async () => {
     const ids = await ruleIds("src/lib/tableSql.ts", compareInComponent);
-    expect(ids).not.toContain("no-restricted-syntax");
-  });
-
-  it("豁免名单之外的同类文件仍被拦截（豁免按文件，不按目录）", async () => {
-    const ids = await ruleIds("src/lib/tableSqlNew.ts", compareInComponent);
     expect(ids).toContain("no-restricted-syntax");
   });
 
