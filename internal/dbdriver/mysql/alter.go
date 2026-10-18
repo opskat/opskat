@@ -50,11 +50,8 @@ func (dialect) AlterableTable(ctx context.Context, conn *sql.Conn, database, tab
 	return out, nil
 }
 
-func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb.TableChange) ([]string, error) {
-	literals, err := d.Literals(ctx, conn)
-	if err != nil {
-		return nil, err
-	}
+func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableChange) ([]string, error) {
+	literals := sqldb.DefinitionLiterals
 	var statements []string
 	if change.Rename != "" {
 		statements = append(statements, "RENAME TABLE "+change.TableRef+" TO "+change.TargetRef)

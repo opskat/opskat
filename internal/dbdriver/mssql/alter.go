@@ -11,7 +11,7 @@ import (
 )
 
 // 改表：列按表所在的 schema 查 INFORMATION_SCHEMA（裸名按 dbo），类型带上长度（-1 写成 max）。改表名与
-// 列名用 sp_rename（名字是 Unicode 文本，带 N 前缀；新表名不带 schema，表留在原 schema），新增列 ADD
+// 列名用 sp_rename（新表名不带 schema，表留在原 schema），新增列 ADD
 // 不带 COLUMN 关键字，改类型与可空性用 ALTER COLUMN（必须同时给出类型）。默认值要经命名约束、注释要经
 // 扩展属性，都不在此修改，所以只能改已有列的类型与可空性，注释也不读。
 var _ sqldb.TableAlterer = dialect{}
@@ -51,21 +51,18 @@ func (dialect) AlterableTable(ctx context.Context, conn *sql.Conn, _, table stri
 	return out, nil
 }
 
-func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb.TableChange) ([]string, error) {
-	literals, err := d.Literals(ctx, conn)
-	if err != nil {
-		return nil, err
-	}
-	unicode := func(text string) (string, error) { return literals.Literal(text, "nvarchar") }
+func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableChange) ([]string, error) {
+	literals := sqldb.DefinitionLiterals
+	name := func(text string) (string, error) { return literals.Literal(text, "") }
 	target := change.TargetRef
 
 	var statements, renames, modifications []string
 	if change.Rename != "" {
-		from, err := unicode(change.Table)
+		from, err := name(change.Table)
 		if err != nil {
 			return nil, err
 		}
-		to, err := unicode(change.Rename)
+		to, err := name(change.Rename)
 		if err != nil {
 			return nil, err
 		}
@@ -83,11 +80,11 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 		}
 		if column.Renamed {
 			// 列的对象名要带（改名之后的）表名作前缀。
-			from, err := unicode(change.Target + "." + column.Current.Name)
+			from, err := name(change.Target + "." + column.Current.Name)
 			if err != nil {
 				return nil, err
 			}
-			to, err := unicode(c.Name)
+			to, err := name(c.Name)
 			if err != nil {
 				return nil, err
 			}

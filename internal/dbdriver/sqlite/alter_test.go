@@ -41,6 +41,7 @@ func TestAlterTableStatementsRunOnARealSQLiteDatabase(t *testing.T) {
 			{OriginalName: "id", Name: "id", Type: "INTEGER", Nullable: false},
 			{OriginalName: "name", Name: "full_name", Type: "TEXT", Nullable: true},
 			{Name: "age", Type: "INTEGER", Nullable: true, DefaultValue: "18"},
+			{Name: "tag", Type: "BLOB", Nullable: true, DefaultValue: "ab"},
 		},
 		Drops: []string{"gone"},
 	})
@@ -49,6 +50,7 @@ func TestAlterTableStatementsRunOnARealSQLiteDatabase(t *testing.T) {
 		Statements: []string{
 			`ALTER TABLE "main"."users" RENAME TO "users_v2"`,
 			`ALTER TABLE "main"."users_v2" ADD COLUMN "age" INTEGER DEFAULT 18`,
+			`ALTER TABLE "main"."users_v2" ADD COLUMN "tag" BLOB DEFAULT 'ab'`,
 			`ALTER TABLE "main"."users_v2" RENAME COLUMN "name" TO "full_name"`,
 			`ALTER TABLE "main"."users_v2" DROP COLUMN "gone"`,
 		},
@@ -61,7 +63,7 @@ func TestAlterTableStatementsRunOnARealSQLiteDatabase(t *testing.T) {
 	}
 	res, err := session.Execute(ctx, `SELECT name, type, dflt_value FROM pragma_table_info('users_v2')`)
 	require.NoError(t, err)
-	assert.Equal(t, [][]any{{"id", "INTEGER", nil}, {"full_name", "TEXT", nil}, {"age", "INTEGER", "18"}}, res.Rows.Rows)
+	assert.Equal(t, [][]any{{"id", "INTEGER", nil}, {"full_name", "TEXT", nil}, {"age", "INTEGER", "18"}, {"tag", "BLOB", "'ab'"}}, res.Rows.Rows)
 }
 
 // SQLite 的已有列只能改名或删除，没有注释：要改类型、可空、默认值、注释的请求生成失败，什么也不执行。

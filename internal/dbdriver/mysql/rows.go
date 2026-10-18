@@ -9,8 +9,8 @@ import (
 	"github.com/opskat/opskat/internal/dbdriver/sqldb"
 )
 
-// 行语句：反斜杠在文本字面量里是不是转义符取决于会话的 sql_mode，每次生成前在这条连接上查；二进制写成 X'…'；
-// 只改一行用 LIMIT 1。
+// 行语句：反斜杠在文本字面量里是不是转义符取决于会话的 sql_mode，每次生成前在这条连接上查；二进制列里
+// 表格带回的文本与改动前一样照字符串写，只有导入按二进制解码出的字节写成 X'…'；只改一行用 LIMIT 1。
 var _ sqldb.RowWriter = dialect{}
 
 func (dialect) Literals(ctx context.Context, conn *sql.Conn) (sqldb.Literals, error) {
@@ -23,6 +23,7 @@ func (dialect) Literals(ctx context.Context, conn *sql.Conn) (sqldb.Literals, er
 		Binary: func(columnType string) (string, string, bool) {
 			return "X'", "'", isBinaryType(columnType)
 		},
+		BinaryBytesOnly: true,
 	}, nil
 }
 

@@ -65,6 +65,7 @@ func TestAlterTableStatementsForPostgreSQL(t *testing.T) {
 		Columns: []dbdriver.AlterColumn{
 			{OriginalName: "name", Name: "full_name", Type: "varchar(120)", Nullable: false, DefaultValue: "anonymous", Comment: "full name comment"},
 			{Name: "age", Type: "integer", Nullable: true, Comment: "age in years"},
+			{Name: "tag", Type: "bytea", Nullable: true, DefaultValue: `\x41`},
 		},
 	})
 	require.NoError(t, err)
@@ -72,6 +73,7 @@ func TestAlterTableStatementsForPostgreSQL(t *testing.T) {
 		Statements: []string{
 			`ALTER TABLE "users" RENAME TO "users_v2"`,
 			`ALTER TABLE "users_v2" ADD COLUMN "age" integer`,
+			`ALTER TABLE "users_v2" ADD COLUMN "tag" bytea DEFAULT '\x41'`,
 			`ALTER TABLE "users_v2" RENAME COLUMN "name" TO "full_name"`,
 			`ALTER TABLE "users_v2" ALTER COLUMN "full_name" TYPE varchar(120)`,
 			`ALTER TABLE "users_v2" ALTER COLUMN "full_name" SET NOT NULL`,

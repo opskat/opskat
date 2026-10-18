@@ -67,7 +67,6 @@ func TestAlterTableStatementsForMySQL(t *testing.T) {
 		alterColumn{field: "id", typ: "INT", null: "NO"},
 		alterColumn{field: "name", typ: "VARCHAR(100)", null: "YES", comment: "old name"},
 	)
-	expectSQLMode(mock, "STRICT_TRANS_TABLES")
 
 	result, err := session.AlterTableStatements(context.Background(), "appdb", "users", dbdriver.AlterTableRequest{
 		Name:    "users_v2",
@@ -95,7 +94,6 @@ func TestAlterTableKeepsAutoIncrementWhenOnlyTheCommentChanges(t *testing.T) {
 	expectAlterTable(mock, "appdb", "users", "",
 		alterColumn{field: "id", typ: "bigint unsigned", null: "NO", extra: "auto_increment"},
 	)
-	expectSQLMode(mock, "")
 
 	result, err := session.AlterTableStatements(context.Background(), "appdb", "users", dbdriver.AlterTableRequest{
 		Name:    "users",
@@ -110,7 +108,7 @@ func TestAlterTableKeepsAutoIncrementWhenOnlyTheCommentChanges(t *testing.T) {
 
 // 用户没动的 ON UPDATE、排序规则（字符集随它）与表达式默认值原样保留（MySQL 5.7 没有 DEFAULT_GENERATED，
 // 时间函数默认值同样原样）；改成非文本类型时不再带排序规则；
-// 用户改过的默认值按新值写（清空即去掉），文本里的反斜杠按 sql_mode 转义。
+// 用户改过的默认值按新值写（清空即去掉），与建表一样照改动前的规则写：反斜杠、二进制列都不另作处理。
 func TestAlterTableKeepsUntouchedColumnAttributesForMySQL(t *testing.T) {
 	session, mock := newMock(t)
 	expectAlterTable(mock, "appdb", "events", "",
@@ -122,7 +120,6 @@ func TestAlterTableKeepsUntouchedColumnAttributesForMySQL(t *testing.T) {
 		alterColumn{field: "path", typ: "text", collation: "utf8mb4_0900_ai_ci", null: "YES"},
 		alterColumn{field: "seen", typ: "datetime(6)", null: "YES", def: "CURRENT_TIMESTAMP(6)", extra: "on update CURRENT_TIMESTAMP(6)"},
 	)
-	expectSQLMode(mock, "STRICT_TRANS_TABLES")
 
 	result, err := session.AlterTableStatements(context.Background(), "appdb", "events", dbdriver.AlterTableRequest{
 		Name: "events",
@@ -132,24 +129,25 @@ func TestAlterTableKeepsUntouchedColumnAttributesForMySQL(t *testing.T) {
 			{OriginalName: "label", Name: "label", Type: "varchar(20)", Nullable: true},
 			{OriginalName: "title", Name: "title", Type: "int", Nullable: true},
 			{OriginalName: "created", Name: "created", Type: "datetime(3)", Nullable: true},
-			{OriginalName: "path", Name: "path", Type: "text", Nullable: true, DefaultValue: `C:\new`},
+			{OriginalName: "path", Name: "path", Type: "text", Nullable: true, DefaultValue: `C:\new`, Comment: `a\b`},
+			{Name: "tag", Type: "varbinary(4)", Nullable: true, DefaultValue: "ab"},
 			{OriginalName: "seen", Name: "seen", Type: "datetime(6)", Nullable: true, DefaultValue: "CURRENT_TIMESTAMP(6)", Comment: "5.7"},
 		},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ALTER TABLE `appdb`.`events` " +
+	assert.Equal(t, []string{"ALTER TABLE `appdb`.`events` ADD COLUMN `tag` varbinary(4) DEFAULT 'ab', " +
 		"MODIFY COLUMN `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'touched', " +
 		"CHANGE COLUMN `code` `uid` varchar(36) COLLATE utf8mb4_bin DEFAULT (uuid()), " +
 		"MODIFY COLUMN `label` varchar(20) COLLATE utf8mb4_bin, " +
 		"MODIFY COLUMN `title` int, " +
 		"MODIFY COLUMN `created` datetime(3), " +
-		"MODIFY COLUMN `path` text COLLATE utf8mb4_0900_ai_ci DEFAULT 'C:\\\\new', " +
+		"MODIFY COLUMN `path` text COLLATE utf8mb4_0900_ai_ci DEFAULT 'C:\\new' COMMENT 'a\\b', " +
 		"MODIFY COLUMN `seen` datetime(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '5.7'",
 	}, result.Statements)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 什么都没改时没有语句，也不查 sql_mode；说到的列不在表里时生成失败。
+// 什么都没改时没有语句；说到的列不在表里时生成失败。
 func TestAlterTableWithoutChangesOrWithUnknownColumnsForMySQL(t *testing.T) {
 	session, mock := newMock(t)
 	ctx := context.Background()

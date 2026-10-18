@@ -19,18 +19,22 @@ type Literals struct {
 	// Binary 报告这种列类型是二进制，并给出十六进制字面量的前后缀（0x… / X'…' / '\x…'::bytea）；
 	// nil 表示方言照文本写二进制列。
 	Binary func(columnType string) (prefix, suffix string, ok bool)
+	// BinaryBytesOnly 为真表示只有字节值（[]byte，如导入按二进制解码出的值）写成十六进制字面量；
+	// 写进二进制列的文本（表格里带回的值、导入里没按二进制解码的值）照字符串写（MySQL 一直这样写）。
+	BinaryBytesOnly bool
 }
 
 // Literal 把要写进 columnType 列的值写成字面量。nil 是 NULL；二进制列写成方言的十六进制字面量
 // （文本按它的字节）；其余写成字符串字面量——数字、布尔、日期文本也一样，由数据库按列的类型
-// 转换，数字照表格显示它的样子（见 valueText）。列类型是驱动目录里给出的写法；不认识的
-// 类型（包括空串）照文本写。
+// 转换，数字照表格显示它的样子（见 valueText）。BinaryBytesOnly 时二进制列只有字节值写成十六进制。
+// 列类型是驱动目录里给出的写法；不认识的类型（包括空串）照文本写。
 func (l Literals) Literal(value any, columnType string) (string, error) {
 	if value == nil {
 		return "NULL", nil
 	}
 	var text string
-	if b, ok := value.([]byte); ok {
+	b, isBytes := value.([]byte)
+	if isBytes {
 		text = string(b)
 	} else {
 		var err error
@@ -38,7 +42,7 @@ func (l Literals) Literal(value any, columnType string) (string, error) {
 			return "", err
 		}
 	}
-	if l.Binary != nil {
+	if l.Binary != nil && (isBytes || !l.BinaryBytesOnly) {
 		if prefix, suffix, ok := l.Binary(columnType); ok {
 			return prefix + hex.EncodeToString([]byte(text)) + suffix, nil
 		}

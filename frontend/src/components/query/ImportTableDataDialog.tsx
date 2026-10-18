@@ -362,6 +362,11 @@ export function ImportTableDataDialog({
   const unmappedHeaders = parsed.headers.filter((header) => !mapping[header]);
   const hasMappedColumns = parsed.headers.length > unmappedHeaders.length;
   const modeMissingPrimaryKey = importModeNeedsPrimaryKey(importMode) && primaryKeyColumns.length === 0;
+  // 与改动前一样，模式这一步在没有可导入的内容时不能往下走：源文件没有数据行（复制模式仍会先清空表），
+  // 或「更新」只映射了键列、没有要更新的列。
+  const modeHasNothingToImport =
+    (parsed.rows.length === 0 && importMode !== "copy") ||
+    (importMode === "update" && parsed.headers.every((header) => !mapping[header] || primaryKeys.has(mapping[header])));
   const step = steps[stepIndex];
   const isDelimitedFormat = format === "text" || format === "csv";
   const canNext =
@@ -370,7 +375,7 @@ export function ImportTableDataDialog({
     step === "delimiter" ||
     step === "options" ||
     (step === "mapping" && hasMappedColumns) ||
-    (step === "mode" && !modeMissingPrimaryKey && !generating);
+    (step === "mode" && !modeMissingPrimaryKey && !modeHasNothingToImport && !generating);
   const canStart = step === "summary" && statements.length > 0 && !submitting;
 
   const handleFiles = useCallback(

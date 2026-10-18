@@ -386,10 +386,10 @@ type ImportRequest struct {
 	Keys []string `json:"keys"`
 	// Rows 是各行的值，与 Columns 一一对应。
 	Rows [][]ImportValue `json:"rows"`
-	// ExtendedInsert 为真时把多行合并成一条多行 INSERT，每条不超过 MaxStatementSizeKB（小于 1 按 1
-	// 算）；方言写不成多行的模式（SQL Server 的 MERGE）仍每行一条。
-	ExtendedInsert     bool `json:"extendedInsert"`
-	MaxStatementSizeKB int  `json:"maxStatementSizeKb"`
+	// ExtendedInsert 为真时把多行合并成一条多行 INSERT，每条不超过 MaxStatementSizeKB（可以带小数，
+	// 小于 1 按 1 算）；方言写不成多行的模式（SQL Server 的 MERGE）仍每行一条。
+	ExtendedInsert     bool    `json:"extendedInsert"`
+	MaxStatementSizeKB float64 `json:"maxStatementSizeKb"`
 }
 
 // ImportValueKind 是导入值的种类。

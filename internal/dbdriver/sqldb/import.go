@@ -264,7 +264,7 @@ func (p importPlan) statements(importer Importer) []string {
 		Identity: identity,
 	}
 	if p.req.ExtendedInsert {
-		insert.MaxStatementSize = max(1, p.req.MaxStatementSizeKB) * 1024
+		insert.MaxStatementSize = int(max(1, p.req.MaxStatementSizeKB) * 1024)
 	}
 	switch p.req.Mode {
 	case dbdriver.ImportAppendUpdate, dbdriver.ImportAppendSkip:

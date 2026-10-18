@@ -52,7 +52,7 @@ func TestAlterTableModelForSQLServer(t *testing.T) {
 }
 
 // sp_rename / ADD / ALTER COLUMN / DROP COLUMN 与方括号：与改动前前端生成的文本一致（原
-// AlterTableDialog.test.ts 的断言），sp_rename 的名字带 N 前缀。
+// AlterTableDialog.test.ts 的断言）。
 func TestAlterTableStatementsForSQLServer(t *testing.T) {
 	session, mock := newMock(t)
 	expectAlterColumns(mock, "dbo", "users",
@@ -71,7 +71,7 @@ func TestAlterTableStatementsForSQLServer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
-			"EXEC sp_rename N'users', N'users_v2'",
+			"EXEC sp_rename 'users', 'users_v2'",
 			"ALTER TABLE [users_v2] ADD [email] VARCHAR(255) NOT NULL",
 			"ALTER TABLE [users_v2] ALTER COLUMN [id] BIGINT NOT NULL",
 			"ALTER TABLE [users_v2] DROP COLUMN [name]",
@@ -90,13 +90,15 @@ func TestAlterTableRenamesSQLServerColumnsThenAltersThemByTheNewName(t *testing.
 		Columns: []dbdriver.AlterColumn{
 			{OriginalName: "full_name", Name: "display_name", Type: "NVARCHAR(200)", Nullable: false},
 			{Name: "nick", Type: "NVARCHAR(20)", Nullable: true, DefaultValue: "匿名"},
+			{Name: "tag", Type: "VARBINARY(4)", Nullable: true, DefaultValue: "ab"},
 		},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
-			"ALTER TABLE [users] ADD [nick] NVARCHAR(20) DEFAULT N'匿名'",
-			"EXEC sp_rename N'users.full_name', N'display_name', 'COLUMN'",
+			"ALTER TABLE [users] ADD [nick] NVARCHAR(20) DEFAULT '匿名'",
+			"ALTER TABLE [users] ADD [tag] VARBINARY(4) DEFAULT 'ab'",
+			"EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN'",
 			"ALTER TABLE [users] ALTER COLUMN [display_name] NVARCHAR(200) NOT NULL",
 		},
 		Table: "users",
@@ -104,7 +106,7 @@ func TestAlterTableRenamesSQLServerColumnsThenAltersThemByTheNewName(t *testing.
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 改名只给不带 schema 的新名字：sp_rename 的新名是 N'users_v2'（改动前是 'dbo.users_v2'，表会被真的
+// 改名只给不带 schema 的新名字：sp_rename 的新名是 'users_v2'（改动前是 'dbo.users_v2'，表会被真的
 // 命名为 dbo.users_v2），表仍在 dbo，之后给列改名用的是改名后的表。
 func TestAlterTableRenameGivesSpRenameTheBareNewName(t *testing.T) {
 	session, mock := newMock(t)
@@ -117,8 +119,8 @@ func TestAlterTableRenameGivesSpRenameTheBareNewName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
-			"EXEC sp_rename N'dbo.users', N'users_v2'",
-			"EXEC sp_rename N'dbo.users_v2.c', N'd', 'COLUMN'",
+			"EXEC sp_rename 'dbo.users', 'users_v2'",
+			"EXEC sp_rename 'dbo.users_v2.c', 'd', 'COLUMN'",
 		},
 		Table: "dbo.users_v2",
 	}, result)

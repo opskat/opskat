@@ -528,6 +528,56 @@ describe("ImportTableDataDialog", () => {
   });
 
   // 生成失败：错误照常弹出提示，停在导入模式这一步，不执行任何语句。
+  it("keeps Next disabled on the mode step when the mapping leaves nothing to import, as before", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        primaryKeys={["id"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    // 源文件只有表头：除复制模式外没有语句可生成。
+    await walkCsvWizardWithFileToMode(user, "id,name\n");
+    expect(screen.getByText("query.importModeIntro")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "query.importWizardNext" })).toBeDisabled();
+    await user.click(screen.getByLabelText("query.importModeCopy"));
+    expect(screen.getByRole("button", { name: "query.importWizardNext" })).toBeEnabled();
+    expect(App.GetImportStatements).not.toHaveBeenCalled();
+  });
+
+  it("keeps Next disabled for an update import that maps only the key columns, as before", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        primaryKeys={["id"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardWithFileToMode(user, "id\n1");
+    await user.click(screen.getByLabelText("query.importModeUpdate"));
+    expect(screen.getByRole("button", { name: "query.importWizardNext" })).toBeDisabled();
+    await user.click(screen.getByLabelText("query.importModeAppend"));
+    expect(screen.getByRole("button", { name: "query.importWizardNext" })).toBeEnabled();
+  });
+
   it("stays on the mode step and executes nothing when the driver cannot generate the statements", async () => {
     const user = userEvent.setup();
     vi.mocked(App.GetImportStatements).mockRejectedValue(new Error('column "ghost" is not in table users'));

@@ -115,9 +115,9 @@ func TestRowStatementsQuoteADottedTableAsOneName(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 二进制列（binary / varbinary / blob 系列）写成 X'…'（文本按它的字节），与其他驱动一样按方言写
-// 二进制，而不是把字节当文本放进引号里。
-func TestRowStatementsWriteBinaryAsHexForMySQL(t *testing.T) {
+// 二进制列（binary / varbinary / blob 系列）里表格带回的值是文本，与改动前一样写成字符串字面量
+// （反斜杠照样按 sql_mode 转义），不改写成 X'…'。
+func TestRowStatementsWriteBinaryColumnTextAsStringsForMySQL(t *testing.T) {
 	session, mock := newMock(t)
 	expectColumns(mock, "`appdb`.`files`", [2]string{"id", "int"}, [2]string{"payload", "varbinary(16)"}, [2]string{"body", "longblob"})
 	mock.ExpectQuery(sqlModeSQL).WillReturnRows(sqlmock.NewRows([]string{"@@SESSION.sql_mode"}).AddRow(""))
@@ -128,6 +128,6 @@ func TestRowStatementsWriteBinaryAsHexForMySQL(t *testing.T) {
 		Rows:    []map[string]any{{"id": float64(1), "payload": "AB", "body": `C:\`}},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"INSERT INTO `appdb`.`files` (`id`, `payload`, `body`) VALUES ('1', X'4142', X'433a5c');"}, statements)
+	assert.Equal(t, []string{"INSERT INTO `appdb`.`files` (`id`, `payload`, `body`) VALUES ('1', 'AB', 'C:\\\\');"}, statements)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

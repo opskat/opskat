@@ -30,6 +30,11 @@ type DatabaseCreator interface {
 	DatabaseOptionKeys() []string
 }
 
+// DefinitionLiterals 是建表与改表里默认值、注释的字面量规则：与改动前一样，文本一律写成单引号成对
+// 转义的字符串——不按列类型加 N 前缀、不转义反斜杠、不写成十六进制。按方言写字面量的只是写进表里
+// 的值（RowWriter.Literals）。
+var DefinitionLiterals = Literals{}
+
 // CreateTableStatements 生成建表语句：表引用与列名按方言加引号，类型文本原样写入。不碰数据库。
 func (s *Session) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
 	tables, err := s.tables()
@@ -38,8 +43,7 @@ func (s *Session) CreateTableStatements(_ context.Context, database string, req 
 	}
 	defs := make([]string, 0, len(req.Columns))
 	for _, column := range req.Columns {
-		// 建表照旧不按列类型写默认值：零值的 Literals 把文本一律写成单引号成对转义的字符串。
-		def, err := ColumnDefinitionSQL(Literals{}, tables.QuoteIdent, dbdriver.ColumnDefinition{
+		def, err := ColumnDefinitionSQL(DefinitionLiterals, tables.QuoteIdent, dbdriver.ColumnDefinition{
 			Name: column.Name, Type: column.Type, Nullable: column.Nullable, DefaultValue: column.DefaultValue,
 		})
 		if err != nil {

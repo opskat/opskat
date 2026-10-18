@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -88,7 +89,8 @@ func TestImportWithoutKeysGeneratesNothingForMySQL(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 字面量按目标列与会话：反斜杠按 sql_mode 转义，二进制列写成 X'…'。
+// 字面量按目标列与会话：反斜杠按 sql_mode 转义，按二进制解码出的字节写成 X'…'（与改动前一样），
+// 没按二进制解码的文本即使写进二进制列也照字符串写。
 func TestImportLiteralsForMySQL(t *testing.T) {
 	session, mock := newMock(t)
 	expectColumns(mock, "`appdb`.`files`", [2]string{"id", "int"}, [2]string{"path", "varchar(255)"}, [2]string{"payload", "blob"})
@@ -98,10 +100,31 @@ func TestImportLiteralsForMySQL(t *testing.T) {
 		Mode: dbdriver.ImportAppend, Columns: []string{"id", "path", "payload"},
 		Rows: [][]dbdriver.ImportValue{{
 			{Kind: dbdriver.ImportText, Text: "1"}, {Kind: dbdriver.ImportText, Text: `C:\new`}, {Kind: dbdriver.ImportBinary, Hex: "48656c6c6f"},
+		}, {
+			{Kind: dbdriver.ImportText, Text: "2"}, {Kind: dbdriver.ImportText, Text: "x"}, {Kind: dbdriver.ImportText, Text: "AB"},
 		}},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"INSERT INTO `appdb`.`files` (`id`, `path`, `payload`) VALUES ('1', 'C:\\\\new', X'48656c6c6f');"}, statements)
+	assert.Equal(t, []string{"INSERT INTO `appdb`.`files` (`id`, `path`, `payload`) VALUES ('1', 'C:\\\\new', X'48656c6c6f');",
+		"INSERT INTO `appdb`.`files` (`id`, `path`, `payload`) VALUES ('2', 'x', 'AB');",
+	}, statements)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 上限可以带小数（对话框的输入框接受 1.5）：请求照前端发来的 JSON 解出，1.5 KB 按 1536 个字符算，
+// 与改动前一致。
+func TestImportExtendedInsertAcceptsAFractionalLimitForMySQL(t *testing.T) {
+	session, mock := newMock(t)
+	row := strings.Repeat("a", 700)
+	var req dbdriver.ImportRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"mode":"append","columns":["body"],"keys":[],"extendedInsert":true,`+
+		`"maxStatementSizeKb":1.5,"rows":[[{"kind":"text","text":"`+row+`"}],[{"kind":"text","text":"`+row+`"}]]}`), &req))
+	expectColumns(mock, "`appdb`.`notes`", [2]string{"body", "text"})
+	expectSQLMode(mock, "")
+
+	statements, err := session.ImportStatements(context.Background(), "appdb", "notes", req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO `appdb`.`notes` (`body`) VALUES ('" + row + "'), ('" + row + "');"}, statements)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
