@@ -10,7 +10,7 @@ import (
 
 // 导入：T-SQL 没有 INSERT IGNORE / ON CONFLICT / ON DUPLICATE KEY，追加/更新与追加/跳过每行一条
 // MERGE（跳过时只有 NOT MATCHED 分支）；多行 INSERT 每条最多 1000 行（VALUES 的上限）；映射里有
-// IDENTITY 列时每条插入类语句都包上 IDENTITY_INSERT 的开关，没有时不碰它。
+// 用户表的 IDENTITY 列时每条插入类语句都包上 IDENTITY_INSERT 的开关，没有时（含视图）不碰它。
 var _ sqldb.Importer = dialect{}
 
 // maxInsertRows 是一条 INSERT … VALUES 最多能写的行数，超过时 SQL Server 报 Msg 10738。

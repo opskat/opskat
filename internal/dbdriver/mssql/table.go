@@ -34,14 +34,16 @@ func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, _, table string)
 }
 
 // 列注释存在 sys.extended_properties，minor_id 是 column_id；ORDINAL_POSITION 在删过列后会与它错开，
-// 所以按列名取 ColumnId 来对。
+// 所以按列名取 ColumnId 来对。IDENTITY 列是自增；只有用户表的 IDENTITY 列（OBJECT_ID 的 N'U'）
+// 才是 IdentityAlways、写值时开关 IDENTITY_INSERT——视图的列在 COLUMNPROPERTY 里同样报告为
+// IsIdentity，对视图 SET IDENTITY_INSERT 却报 8105、盖住真实的错误，所以视图按普通插入写。
 func (dialect) TableColumns(ctx context.Context, conn *sql.Conn, _, table string) ([]sqldb.TableColumn, error) {
 	schema, tbl := splitSchemaTable(table)
 	return sqldb.QueryTableColumns(ctx, conn,
 		"SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, "+
 			"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT, "+
 			"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_AUTO_INCREMENT, "+
-			"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY_ALWAYS "+
+			"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME), N'U'), c.COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY_ALWAYS "+
 			"FROM INFORMATION_SCHEMA.COLUMNS c "+
 			"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' "+
 			"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) "+

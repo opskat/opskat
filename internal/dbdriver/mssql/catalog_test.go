@@ -56,16 +56,7 @@ var zeroDefault = "((0))"
 func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	session, mock := newMock(t)
 
-	mock.ExpectQuery("SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, " +
-		"CAST(ep.value AS NVARCHAR(MAX)) AS COLUMN_COMMENT, " +
-		"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_AUTO_INCREMENT, " +
-		"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY_ALWAYS " +
-		"FROM INFORMATION_SCHEMA.COLUMNS c " +
-		"LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.name = 'MS_Description' " +
-		"AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) " +
-		"AND ep.minor_id = COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'ColumnId') " +
-		"WHERE c.TABLE_SCHEMA = @p1 AND c.TABLE_NAME = @p2 " +
-		"ORDER BY c.ORDINAL_POSITION").
+	mock.ExpectQuery(columnsSQL).
 		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "COLUMN_COMMENT"}).
 			AddRow("id", "int", "NO", "((0))", "event id").AddRow("note", "nvarchar", "YES", nil, nil))
 	mock.ExpectQuery("SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
