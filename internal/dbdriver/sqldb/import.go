@@ -51,7 +51,8 @@ type ImportInsert struct {
 	Conflict ImportConflict
 	// Rows 是各行的字面量，与 Columns 一一对应。
 	Rows [][]string
-	// Identity 为真表示写入的列里有数据库默认拒绝显式写值的自增列（TableColumn.IdentityAlways）。
+	// Identity 为真表示写入的列里有数据库默认拒绝显式写值、要用方言的开关才能写的自增列
+	// （TableColumn.IdentityAlways 且不是 NoIdentityOverride）。
 	Identity bool
 	// MaxStatementSize 大于 0 表示合并成多行 INSERT，每条不超过这么多字符；为 0 表示每行一条。
 	MaxStatementSize int
@@ -226,7 +227,7 @@ func (p importPlan) statements(importer Importer) []string {
 	var keys, updates []int // 列在 req.Columns 里的下标
 	identity := false
 	for i, column := range p.req.Columns {
-		identity = identity || p.columns[column].IdentityAlways
+		identity = identity || p.columns[column].overridesIdentity()
 		switch {
 		case slices.Contains(p.req.Keys, column):
 			keys = append(keys, i)

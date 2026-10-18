@@ -30,6 +30,20 @@ func expectImportColumns(mock sqlmock.Sqlmock, schema, table string, columns ...
 	mock.ExpectQuery(columnsSQL).WithArgs(schema, table).WillReturnRows(rows)
 }
 
+// expectViewColumns 是 columnsSQL 对一个视图的回答：视图的 IDENTITY 列在 COLUMNPROPERTY 里同样
+// 报告为 IsIdentity，OBJECT_ID(…, N'V') 也找得到它。
+func expectViewColumns(mock sqlmock.Sqlmock, schema, view string, columns ...importColumn) {
+	rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "IS_AUTO_INCREMENT", "IS_IDENTITY_ALWAYS", "IS_NO_IDENTITY_OVERRIDE"})
+	for _, c := range columns {
+		flag := 0
+		if c.identity {
+			flag = 1
+		}
+		rows.AddRow(c.name, c.typ, "YES", nil, flag, flag, flag)
+	}
+	mock.ExpectQuery(columnsSQL).WithArgs(schema, view).WillReturnRows(rows)
+}
+
 func texts(values ...string) []dbdriver.ImportValue {
 	out := make([]dbdriver.ImportValue, len(values))
 	for i, v := range values {
@@ -156,6 +170,36 @@ func TestImportUpdateModesSkipTheIdentityColumnForSQLServer(t *testing.T) {
 			" END TRY BEGIN CATCH SET IDENTITY_INSERT [dbo].[items] OFF; THROW; END CATCH; SET IDENTITY_INSERT [dbo].[items] OFF;",
 	}, generate(dbdriver.ImportAppendUpdate, "code", "id"))
 	assert.Empty(t, generate(dbdriver.ImportUpdate, "code", "id"))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 目标是视图（映射含视图里的 IDENTITY 列）：插入类语句不开关 IDENTITY_INSERT（对视图开关报 8105、
+// 盖住真实原因），按普通插入生成；更新类语句与用户表一样不去改 IDENTITY 列。
+func TestImportIntoAViewWithAnIdentityColumnForSQLServer(t *testing.T) {
+	session, mock := newMock(t)
+	ctx := context.Background()
+	items := []importColumn{{"code", "varchar", false}, {"id", "int", true}, {"name", "varchar", false}}
+	generate := func(mode dbdriver.ImportMode) []string {
+		t.Helper()
+		expectViewColumns(mock, "dbo", "v_items", items...)
+		statements, err := session.ImportStatements(ctx, "appdb", "dbo.v_items", dbdriver.ImportRequest{
+			Mode: mode, Columns: []string{"code", "id", "name"}, Keys: []string{"code"},
+			Rows: [][]dbdriver.ImportValue{texts("A1", "7", "Alice")},
+		})
+		require.NoError(t, err)
+		return statements
+	}
+
+	assert.Equal(t, []string{"INSERT INTO [dbo].[v_items] ([code], [id], [name]) VALUES ('A1', '7', 'Alice');"},
+		generate(dbdriver.ImportAppend))
+	assert.Equal(t, []string{
+		"MERGE [dbo].[v_items] AS t USING (SELECT 'A1' AS [code], '7' AS [id], 'Alice' AS [name]) AS s " +
+			"ON (t.[code] = s.[code]) " +
+			"WHEN MATCHED THEN UPDATE SET t.[name] = s.[name] " +
+			"WHEN NOT MATCHED THEN INSERT ([code], [id], [name]) VALUES (s.[code], s.[id], s.[name]);",
+	}, generate(dbdriver.ImportAppendUpdate))
+	assert.Equal(t, []string{"UPDATE [dbo].[v_items] SET [name] = 'Alice' WHERE [code] = 'A1';"},
+		generate(dbdriver.ImportUpdate))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

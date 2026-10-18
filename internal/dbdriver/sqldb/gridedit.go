@@ -17,8 +17,8 @@ import (
 // Session.GridEditStatements 返回 dbdriver.ErrUnsupported。
 type RowEditor interface {
 	// InsertRowSQL 是新增一行的 INSERT（含末尾分号）。columns / values 已写好、以逗号分隔、不含
-	// 括号；为空表示整行取默认值。identity 为真表示写入的列里有数据库默认拒绝显式写值的自增列
-	// （TableColumn.IdentityAlways）。
+	// 括号；为空表示整行取默认值。identity 为真表示写入的列里有数据库默认拒绝显式写值、要用方言
+	// 的开关才能写的自增列（TableColumn.IdentityAlways 且不是 NoIdentityOverride）。
 	InsertRowSQL(tableRef, columns, values string, identity bool) string
 	// DeleteRowSQL 是只删一行的 DELETE（含末尾分号）。where 已写好，不含关键字。
 	DeleteRowSQL(tableRef, where string) string
@@ -147,7 +147,7 @@ func (g gridSQL) insert(values []dbdriver.ColumnValue) (string, error) {
 			return "", err
 		}
 		names[i], literals[i] = g.quote(value.Column), literal
-		identity = identity || g.columns[value.Column].IdentityAlways
+		identity = identity || g.columns[value.Column].overridesIdentity()
 	}
 	return g.editor.InsertRowSQL(g.tableRef, strings.Join(names, ", "), strings.Join(literals, ", "), identity), nil
 }

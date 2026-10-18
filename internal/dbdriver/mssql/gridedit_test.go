@@ -48,6 +48,24 @@ func TestGridEditInsertsWriteIdentityValuesForSQLServer(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// 往视图新增行、给视图里的 IDENTITY 列填了值：不开关 IDENTITY_INSERT（对视图开关报 8105、盖住
+// 真实原因），按普通插入生成，报错交给数据库。
+func TestGridEditInsertIntoAViewIsAPlainInsertForSQLServer(t *testing.T) {
+	session, mock := newMock(t)
+	mock.ExpectQuery(columnsSQL).WithArgs("dbo", "v_users").
+		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "IS_AUTO_INCREMENT", "IS_IDENTITY_ALWAYS", "IS_NO_IDENTITY_OVERRIDE"}).
+			AddRow("id", "int", "NO", nil, 1, 1, 1).
+			AddRow("name", "nvarchar", "YES", nil, 0, 0, 0))
+
+	statements, err := session.GridEditStatements(context.Background(), "appdb", "dbo.v_users", dbdriver.GridEditRequest{
+		Columns: []string{"id", "name"},
+		Inserts: []dbdriver.GridInsert{{Values: []dbdriver.ColumnValue{{Column: "id", Value: "7"}, {Column: "name", Value: "中文"}}}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO [dbo].[v_users] ([id], [name]) VALUES ('7', N'中文');"}, statements.Inserts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // 改动与删除只动一行：T-SQL 没有 LIMIT，有没有主键都用 TOP (1)；按主键定位，没有主键时按原行
 // 的全部列定位（NULL 写成 IS NULL）。与改动前前端生成的文本逐字一致（原 tableSql.test.ts 的断言）。
 func TestGridEditUpdatesAndDeletesOneRowForSQLServer(t *testing.T) {
