@@ -119,21 +119,42 @@ export function dropRowEdits(
   return next;
 }
 
+function sameRow(a: Record<string, unknown>, b: Record<string, unknown>, primaryKeys: string[]): boolean {
+  const keys = primaryKeys.length > 0 ? primaryKeys : Object.keys(a);
+  return keys.every((key) => Object.is(a[key], b[key]));
+}
+
 /**
- * 已保存的行数变了（刷新后的页更长或更短）时，新增行的行号跟着移动，值仍在原来那些新增行上。
- * 已保存行的修改行号不变；超出新页的已保存行已不在表格里，它的修改随之丢掉。
+ * 已保存的行换成了刷新后的页（previousRows → rows）时，修改跟着它所在的行走：已保存行的修改移到
+ * 刷新后同一行（按主键，没有主键时按整行的值）的行号上，新的页里没有那一行时随之丢掉——服务端的
+ * 行次序可能变了，按行号留下会把修改落到另一行上；新增行排在刷新后的已保存行之后，值不变。
  */
-export function rebaseNewRowEdits(
+export function rebaseEdits(
   edits: Map<string, unknown>,
-  previousRowsLength: number,
-  rowsLength: number
+  previousRows: Record<string, unknown>[],
+  rows: Record<string, unknown>[],
+  primaryKeys: string[]
 ): Map<string, unknown> {
-  if (previousRowsLength === rowsLength) return edits;
+  if (previousRows === rows || edits.size === 0) return edits;
+  const moved = new Map<number, number | undefined>();
+  const claimed = new Set<number>();
+  const newIndexOf = (rowIdx: number) => {
+    if (!moved.has(rowIdx)) {
+      const found = rows.findIndex((row, idx) => !claimed.has(idx) && sameRow(previousRows[rowIdx], row, primaryKeys));
+      if (found >= 0) claimed.add(found);
+      moved.set(rowIdx, found >= 0 ? found : undefined);
+    }
+    return moved.get(rowIdx);
+  };
   const next = new Map<string, unknown>();
   for (const [key, value] of edits) {
     const { rowIdx, column } = parseEditKey(key);
-    if (rowIdx >= previousRowsLength) next.set(`${rowIdx - previousRowsLength + rowsLength}:${column}`, value);
-    else if (rowIdx < rowsLength) next.set(key, value);
+    if (rowIdx >= previousRows.length) {
+      next.set(`${rowIdx - previousRows.length + rows.length}:${column}`, value);
+      continue;
+    }
+    const target = newIndexOf(rowIdx);
+    if (target !== undefined) next.set(`${target}:${column}`, value);
   }
   return next;
 }

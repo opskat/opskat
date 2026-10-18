@@ -52,7 +52,7 @@ import { toTsv, toTsvData, toTsvFields } from "@/lib/tableExport";
 import {
   collectGridEdits,
   dropRowEdits,
-  rebaseNewRowEdits,
+  rebaseEdits,
   type PendingGridEdits,
   type TableColumnRule,
 } from "@/lib/tableEdit";
@@ -374,16 +374,19 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     [appliedSorts, sortColumn, sortDir]
   );
 
-  // 修改按 "行号:列名" 记,新增行排在已保存的行之后:重新取到的页长度变了(提交后只清掉成功的修改,
-  // 失败的新增行还在),新增行的修改跟着移到新的行号上。rowsLengthRef 是修改当前所基于的已保存行数。
-  const rowsLengthRef = useRef(0);
+  // 修改按 "行号:列名" 记,新增行排在已保存的行之后。提交后只清掉成功的修改,刷新取到的页里行的次序
+  // 与长度都可能变了:留下的修改跟着它所在的行移到新的行号上(见 rebaseEdits)。rowsRef 是修改当前
+  // 所基于的已保存行,primaryKeysRef 是认出同一行用的主键。
+  const rowsRef = useRef<Record<string, unknown>[]>([]);
+  const primaryKeysRef = useRef<string[]>([]);
   useEffect(() => {
-    rowsLengthRef.current = rows.length;
-  }, [rows.length]);
+    rowsRef.current = rows;
+    primaryKeysRef.current = primaryKeys;
+  }, [rows, primaryKeys]);
   const replaceRows = useCallback((next: Record<string, unknown>[]) => {
-    const previous = rowsLengthRef.current;
+    const previous = rowsRef.current;
     setRows(next);
-    setEdits((prev) => rebaseNewRowEdits(prev, previous, next.length));
+    setEdits((prev) => rebaseEdits(prev, previous, next, primaryKeysRef.current));
   }, []);
 
   // Fetch total count

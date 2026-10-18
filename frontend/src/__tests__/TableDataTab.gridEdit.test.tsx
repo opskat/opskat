@@ -208,6 +208,61 @@ describe("TableDataTab grid edits go through the driver", () => {
     expect(gutter(4)).toBeNull();
   });
 
+  it("keeps a failed edit on the row it was made on when the refreshed page lists the rows in another order", async () => {
+    vi.mocked(ExecuteSQL).mockImplementation(async (_id, sql) => {
+      if (String(sql).includes('"id":2')) throw new Error("check constraint");
+      return JSON.stringify({ affected_rows: 1 });
+    });
+    // 没有排序时服务端可能换了行的次序(PostgreSQL 把改过的行排到后面):刷新后 id 2 在第一行。
+    vi.mocked(QueryTableRows).mockResolvedValue({
+      columns: ["id", "name"],
+      rows: [
+        { id: 2, name: "bob" },
+        { id: 1, name: "ally" },
+      ],
+    });
+    const user = await renderLoaded();
+    editCell("0:name", "ally");
+    editCell("1:name", "bea");
+
+    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(await screen.findByText("query.confirmExecute"));
+
+    await waitFor(() => expect(cell("1:name")).toHaveTextContent("ally"));
+    // 失败的改动仍在 id 2 那一行上,没有落到刷新后排在原位置的 id 1 上。
+    expect(cell("0:name")).toHaveTextContent("bea");
+
+    vi.mocked(ExecuteSQL).mockClear();
+    vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
+    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(await screen.findByText("query.confirmExecute"));
+    await waitFor(() => expect(executed()).toEqual(['UPDATE users SET {"name":"bea"} WHERE {"id":2}']));
+  });
+
+  it("drops a failed edit whose row is no longer on the refreshed page", async () => {
+    vi.mocked(ExecuteSQL).mockImplementation(async (_id, sql) => {
+      if (String(sql).includes('"id":2')) throw new Error("check constraint");
+      return JSON.stringify({ affected_rows: 1 });
+    });
+    // 刷新后的页里没有 id 2 了(被别处删掉或移到了别的页)。
+    vi.mocked(QueryTableRows).mockResolvedValue({
+      columns: ["id", "name"],
+      rows: [
+        { id: 1, name: "ally" },
+        { id: 3, name: "cy" },
+      ],
+    });
+    const user = await renderLoaded();
+    editCell("0:name", "ally");
+    editCell("1:name", "bea");
+
+    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(await screen.findByText("query.confirmExecute"));
+
+    await waitFor(() => expect(cell("1:name")).toHaveTextContent("cy"));
+    expect(screen.getByTitle("query.applyChanges")).toBeDisabled();
+  });
+
   it("shows a generation failure where errors show and opens no preview", async () => {
     vi.mocked(GetGridEditStatements).mockRejectedValue('column "name" is not in table users');
     const user = await renderLoaded();
