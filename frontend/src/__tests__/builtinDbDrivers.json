@@ -126,7 +126,7 @@
     "locatesRowWithoutPrimaryKey": true,
     "createDatabaseOptions": [
       { "key": "charset", "default": "UTF8" },
-      { "key": "collation", "default": "en_US.UTF-8" }
+      { "key": "collation", "default": "" }
     ],
     "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
   },

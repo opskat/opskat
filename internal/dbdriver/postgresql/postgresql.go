@@ -29,11 +29,13 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
 	},
-	// 没有主键的表按 ctid 定位单行。
+	// 没有主键的表按 (tableoid, ctid) 定位单行。
 	LocatesRowWithoutPrimaryKey: true,
+	// 排序规则默认留空：不写 LC_COLLATE / LC_CTYPE，沿用模板库的（写死的值与模板库的拼写不一致时
+	// CREATE DATABASE 报 22023）。
 	CreateDatabaseOptions: []dbdriver.DatabaseOption{
 		{Key: dbdriver.OptionCharset, Default: "UTF8"},
-		{Key: dbdriver.OptionCollation, Default: "en_US.UTF-8"},
+		{Key: dbdriver.OptionCollation},
 	},
 	AlterTableAttributes: alterAttributes,
 }

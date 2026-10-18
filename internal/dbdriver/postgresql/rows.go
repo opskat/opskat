@@ -28,8 +28,9 @@ func (dialect) UpdateRowSQL(tableRef, set, where string) string {
 }
 
 // 表格编辑：一列都没填的新增行写 DEFAULT VALUES；给 GENERATED ALWAYS 列写值要带 OVERRIDING
-// SYSTEM VALUE；没有主键时用 ctid 把全列匹配到的几行收敛成物理上的一行（所以描述声明了
-// LocatesRowWithoutPrimaryKey）。
+// SYSTEM VALUE；没有主键时用 (tableoid, ctid) 把全列匹配到的几行收敛成物理上的一行（所以描述声明了
+// LocatesRowWithoutPrimaryKey）。ctid 只在单个分区 / 子表内唯一，查分区表或继承表的父表时不同
+// 子表里会有相同的 ctid，带上 tableoid 才只改一行。
 var _ sqldb.RowEditor = dialect{}
 
 func (dialect) InsertRowSQL(tableRef, columns, values string, identity bool) string {
@@ -47,5 +48,5 @@ func (dialect) DeleteRowSQL(tableRef, where string) string {
 }
 
 func (dialect) ExactRow(tableRef, where string) (string, bool) {
-	return fmt.Sprintf("ctid = (SELECT ctid FROM %s WHERE %s LIMIT 1)", tableRef, where), true
+	return fmt.Sprintf("(tableoid, ctid) = (SELECT tableoid, ctid FROM %s WHERE %s LIMIT 1)", tableRef, where), true
 }

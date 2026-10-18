@@ -38,8 +38,8 @@ func TestGridEditInsertsOverrideGeneratedAlwaysForPostgreSQL(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 有主键时按主键定位，语句不另加限制；没有主键时用 ctid 把全列匹配到的几行收敛成物理上的一行。
-// 与改动前前端生成的文本逐字一致（原 tableSql.test.ts 的断言）。
+// 有主键时按主键定位，语句不另加限制；没有主键时用 (tableoid, ctid) 把全列匹配到的几行收敛成
+// 物理上的一行：ctid 只在单个分区 / 子表内唯一，带上 tableoid 才不会改到别的分区里 ctid 相同的行。
 func TestGridEditLocatesRowsForPostgreSQL(t *testing.T) {
 	session, mock := newMock(t)
 	ctx := context.Background()
@@ -66,8 +66,8 @@ func TestGridEditLocatesRowsForPostgreSQL(t *testing.T) {
 		Deletes: []map[string]any{{"id": float64(7), "n": "old"}},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{`UPDATE "t" SET "n" = 'x' WHERE ctid = (SELECT ctid FROM "t" WHERE "id" = '7' AND "n" IS NULL LIMIT 1);`}, statements.Updates)
-	assert.Equal(t, []string{`DELETE FROM "t" WHERE ctid = (SELECT ctid FROM "t" WHERE "id" = '7' AND "n" = 'old' LIMIT 1);`}, statements.Deletes)
+	assert.Equal(t, []string{`UPDATE "t" SET "n" = 'x' WHERE (tableoid, ctid) = (SELECT tableoid, ctid FROM "t" WHERE "id" = '7' AND "n" IS NULL LIMIT 1);`}, statements.Updates)
+	assert.Equal(t, []string{`DELETE FROM "t" WHERE (tableoid, ctid) = (SELECT tableoid, ctid FROM "t" WHERE "id" = '7' AND "n" = 'old' LIMIT 1);`}, statements.Deletes)
 
 	columns(`audit"logs`, `id"part`, "name")
 	statements, err = session.GridEditStatements(ctx, "mydb", `audit"logs`, dbdriver.GridEditRequest{

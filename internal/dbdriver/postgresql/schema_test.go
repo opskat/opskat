@@ -58,9 +58,16 @@ func TestCreateDatabaseStatementsForPostgreSQL(t *testing.T) {
 	assert.Equal(t, []string{`CREATE DATABASE "reports"`}, statements)
 }
 
-func TestPostgreSQLDeclaresCreateDatabaseOptions(t *testing.T) {
-	assert.Equal(t, []dbdriver.DatabaseOption{
-		{Key: dbdriver.OptionCharset, Default: "UTF8"},
-		{Key: dbdriver.OptionCollation, Default: "en_US.UTF-8"},
-	}, descriptor.CreateDatabaseOptions)
+// 对话框不改选项时提交的就是描述里的默认值：编码为 UTF8，不写 LC_COLLATE / LC_CTYPE，沿用模板库的
+// 排序规则（模板库是 en_US.utf8 时写 en_US.UTF-8 会报 22023）。
+func TestCreateDatabaseWithDefaultOptionsKeepsTemplateCollationForPostgreSQL(t *testing.T) {
+	session, _ := newMock(t)
+	options := make(map[string]string, len(descriptor.CreateDatabaseOptions))
+	for _, option := range descriptor.CreateDatabaseOptions {
+		options[option.Key] = option.Default
+	}
+
+	statements, err := session.CreateDatabaseStatements(context.Background(), dbdriver.CreateDatabaseRequest{Name: "reports", Options: options})
+	require.NoError(t, err)
+	assert.Equal(t, []string{`CREATE DATABASE "reports" WITH ENCODING = 'UTF8'`}, statements)
 }

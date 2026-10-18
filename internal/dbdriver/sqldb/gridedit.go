@@ -22,7 +22,7 @@ type RowEditor interface {
 	InsertRowSQL(tableRef, columns, values string, identity bool) string
 	// DeleteRowSQL 是只删一行的 DELETE（含末尾分号）。where 已写好，不含关键字。
 	DeleteRowSQL(tableRef, where string) string
-	// ExactRow 把 where 匹配到的行收敛成其中物理上的一行，给出新的条件（PostgreSQL 的 ctid、
+	// ExactRow 把 where 匹配到的行收敛成其中物理上的一行，给出新的条件（PostgreSQL 的 (tableoid, ctid)、
 	// SQLite 的 rowid）。方言没有物理行标识时 ok 为假：只改 / 只删一行由 UpdateRowSQL /
 	// DeleteRowSQL 自己的写法保证（LIMIT 1、TOP (1)），驱动描述也不能声明
 	// LocatesRowWithoutPrimaryKey。
