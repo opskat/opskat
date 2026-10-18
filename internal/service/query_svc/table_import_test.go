@@ -89,6 +89,28 @@ func TestRunTableImportBatchReportsNoRowsForARolledBackBatch(t *testing.T) {
 	}, result)
 }
 
+// 在一个事务里的整批有语句失败、回滚本身又出错：事务没有提交，执行成功的语句也没有留下，不能计成
+// 新增；回滚的错误与失败的语句一起报告。
+func TestRunTableImportBatchReportsNoRowsWhenAFailedTransactionCannotRollBack(t *testing.T) {
+	rollbackErr := errors.New("rollback transaction: connection reset")
+	session := &batchSession{
+		result: &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{{Index: 0, AffectedRows: 3}, {Index: 1, Error: "duplicate"}}},
+		err:    rollbackErr,
+	}
+
+	result, err := RunTableImportBatch(context.Background(), session, "appdb", TableImportBatchRequest{
+		Statements: []string{"INSERT INTO t VALUES (1), (2), (3);", "INSERT INTO t VALUES (1);"}, Mode: "append",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, &TableImportBatchResult{
+		Processed: 2, Error: 2,
+		Errors: []TableImportBatchError{
+			{Index: 1, Statement: "INSERT INTO t VALUES (1);", Message: "duplicate"},
+			{Index: -1, Message: rollbackErr.Error()},
+		},
+	}, result)
+}
+
 // 批本身出错：已经有语句失败时，它与那些失败一起出现在错误列表里（不对应语句）；没有语句失败
 // 时它就是导入的错误。
 func TestRunTableImportBatchReportsBatchFailures(t *testing.T) {

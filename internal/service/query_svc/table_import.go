@@ -41,10 +41,14 @@ type TableImportBatchResult struct {
 //
 // 批本身出错时：已经有语句失败的，它作为一条不对应语句的错误与那些失败一起报告；没有语句失败
 // 的，它就是导入的错误。
+//
+// 新增 / 更新 / 删除只计留下来的行：事务里的整批有语句失败就不会提交（回滚了，或者连回滚都出错），
+// 其中执行成功的语句也不计。
 func RunTableImportBatch(ctx context.Context, session dbdriver.Session, database string, request TableImportBatchRequest) (*TableImportBatchResult, error) {
+	atomic := request.Mode == "copy" || !request.ContinueOnError
 	batch, err := session.ExecuteBatch(ctx, dbdriver.BatchRequest{
 		Statements:              request.Statements,
-		Atomic:                  request.Mode == "copy" || !request.ContinueOnError,
+		Atomic:                  atomic,
 		ContinueOnError:         request.ContinueOnError,
 		DisableForeignKeyChecks: request.DisableForeignKeyChecks,
 		Database:                database,
@@ -55,13 +59,14 @@ func RunTableImportBatch(ctx context.Context, session dbdriver.Session, database
 	}
 
 	result := &TableImportBatchResult{Processed: len(batch.Executed), RolledBack: batch.RolledBack}
+	committed := !atomic || !batch.Failed()
 	for _, executed := range batch.Executed {
 		statement := strings.TrimSpace(request.Statements[executed.Index])
 		if executed.Error != "" {
 			result.Errors = append(result.Errors, TableImportBatchError{Index: executed.Index, Statement: statement, Message: executed.Error})
 			continue
 		}
-		if !batch.RolledBack {
+		if committed {
 			addAffectedRows(result, statement, request.Mode, executed.AffectedRows)
 		}
 	}
