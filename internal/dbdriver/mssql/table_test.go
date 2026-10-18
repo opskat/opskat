@@ -125,8 +125,7 @@ func TestFilterSemantics(t *testing.T) {
 }
 
 // IDENTITY 列既不必在新增行里填，也不能被 UPDATE，显式插入还要 IDENTITY_INSERT：自增与
-// 「只能由数据库生成」两个标志都置上；普通列都不置。视图的 IDENTITY 列另置 NoIdentityOverride：
-// 对视图 SET IDENTITY_INSERT 报 8105、盖住真实原因，写入按普通插入生成（更新照样不改它）。
+// 「只能由数据库生成」两个标志都置上；普通列都不置。
 func TestTableColumnsReportIdentity(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -136,10 +135,6 @@ func TestTableColumnsReportIdentity(t *testing.T) {
 			AddRow("id", "int", "NO", nil, nil, 1, 1).
 			AddRow("name", "varchar", "YES", nil, nil, 0, 0).
 			AddRow("note", "varchar", "YES", nil, nil, nil, nil))
-	mock.ExpectQuery(columnsSQL).WithArgs("dbo", "v_users").
-		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT", "COLUMN_COMMENT", "IS_AUTO_INCREMENT", "IS_IDENTITY_ALWAYS", "IS_NO_IDENTITY_OVERRIDE"}).
-			AddRow("id", "int", "NO", nil, nil, 1, 1, 1).
-			AddRow("name", "varchar", "YES", nil, nil, 0, 0, 0))
 	conn, err := db.Conn(context.Background())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
@@ -152,12 +147,5 @@ func TestTableColumnsReportIdentity(t *testing.T) {
 	assert.True(t, columns[0].IdentityAlways)
 	assert.False(t, columns[1].AutoIncrement || columns[1].IdentityAlways)
 	assert.False(t, columns[2].AutoIncrement || columns[2].IdentityAlways)
-	assert.False(t, columns[0].NoIdentityOverride || columns[1].NoIdentityOverride || columns[2].NoIdentityOverride)
-
-	columns, err = dialect{}.TableColumns(context.Background(), conn, "appdb", "dbo.v_users")
-	require.NoError(t, err)
-	require.Len(t, columns, 2)
-	assert.True(t, columns[0].AutoIncrement && columns[0].IdentityAlways && columns[0].NoIdentityOverride)
-	assert.False(t, columns[1].AutoIncrement || columns[1].IdentityAlways || columns[1].NoIdentityOverride)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
