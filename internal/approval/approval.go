@@ -29,23 +29,21 @@ type BatchItem struct {
 
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
-	Token       string          `json:"token,omitempty"`      // 认证 token
-	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"|"ext_dev_install"|"ext_store_search"|"ext_store_install"
-	CheckType   string          `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
-	AssetID     int64           `json:"asset_id,omitempty"`
-	AssetName   string          `json:"asset_name,omitempty"`
-	Command     string          `json:"command,omitempty"`
-	Detail      string          `json:"detail"`
-	SessionID   string          `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
-	GrantItems  []GrantItem     `json:"grant_items,omitempty"` // type="grant" 时使用
-	BatchItems  []BatchItem     `json:"batch_items,omitempty"` // type="batch" 时使用
-	Description string          `json:"description,omitempty"` // 授权描述
-	Extension   string          `json:"extension,omitempty"`   // type="ext_tool" / "ext_store_install": extension name
-	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
-	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
-	Path        string          `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
-	MFA         *MFAChallenge   `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
-	Lang        string          `json:"lang,omitempty"`        // type="ext_store_search": index language tag ("en", "zh-CN") for display text
+	Token       string        `json:"token,omitempty"`      // 认证 token
+	Type        string        `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_dev_install"|"ext_store_search"|"ext_store_install"
+	CheckType   string        `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
+	AssetID     int64         `json:"asset_id,omitempty"`
+	AssetName   string        `json:"asset_name,omitempty"`
+	Command     string        `json:"command,omitempty"`
+	Detail      string        `json:"detail"`
+	SessionID   string        `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
+	GrantItems  []GrantItem   `json:"grant_items,omitempty"` // type="grant" 时使用
+	BatchItems  []BatchItem   `json:"batch_items,omitempty"` // type="batch" 时使用
+	Description string        `json:"description,omitempty"` // 授权描述
+	Extension   string        `json:"extension,omitempty"`   // type="ext_store_install": extension name
+	Path        string        `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
+	MFA         *MFAChallenge `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
+	Lang        string        `json:"lang,omitempty"`        // type="ext_store_search": index language tag ("en", "zh-CN") for display text
 }
 
 // MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的
@@ -80,8 +78,6 @@ type ApprovalResponse struct {
 	ApproveGrant   bool        `json:"approve_grant,omitempty"`   // 用户选择了"记住并允许"
 	MatchedPattern string      `json:"matched_pattern,omitempty"` // session 匹配时命中的规则模式
 	EditedItems    []GrantItem `json:"edited_items,omitempty"`    // 用户编辑后的 grant items
-	ToolResult     string      `json:"tool_result,omitempty"`     // type="ext_tool": execution result (JSON)
-	ToolError      string      `json:"tool_error,omitempty"`      // type="ext_tool": execution error message
 	Extension      string      `json:"extension,omitempty"`       // type="ext_dev_install" / "ext_store_install": installed extension name
 	Version        string      `json:"version,omitempty"`         // type="ext_dev_install" / "ext_store_install": installed extension version
 	MFAAnswers     []string    `json:"mfa_answers,omitempty"`     // type="mfa": answers in prompt order; never logged

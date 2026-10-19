@@ -184,8 +184,6 @@ func ApprovalKindFor(approvalType, command string) string {
 	switch approvalType {
 	case ApprovalTypeDelete:
 		return ApprovalKindDelete
-	case "ext_tool":
-		return ApprovalKindExtension
 	default:
 		if SupportsGrantApproval(approvalType) && len(NormalizeGrantPatterns(approvalType, command, GrantOriginSystem)) > 0 {
 			return ApprovalKindSingle

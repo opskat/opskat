@@ -2,7 +2,6 @@ package opsctl
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -20,15 +19,6 @@ type opsctlTestLang struct{}
 
 func (opsctlTestLang) Lang() string { return "en" }
 
-type extToolExecutorStub struct {
-	result string
-	err    error
-}
-
-func (s extToolExecutorStub) ExecuteExtTool(context.Context, int64, string) (string, error) {
-	return s.result, s.err
-}
-
 func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 	secret := "grant-" + "credential-sentinel"
 	reqItems := []approvalpkg.GrantItem{{
@@ -40,28 +30,6 @@ func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, reqItems[0].Command, got[0].Command)
 	require.Equal(t, reqItems[0].Detail, got[0].Detail)
-}
-
-// spec Decision 4 / Direct execution：opsctl extension 委托执行把 executor 返回的 bytes
-// 与 error 原样交给调用者，不做内容改写——审计只在 sink 按原值落库，不得在直接执行
-// 通道里改写结果或错误正文。
-func TestHandleExtToolExecPassesThroughResultAndError(t *testing.T) {
-	t.Run("result bytes unchanged", func(t *testing.T) {
-		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{
-			result: `{"token":"extension-credential-sentinel","rows":1}`,
-		}}
-		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{AssetID: 3, Command: "read"})
-		require.True(t, resp.Approved)
-		require.Equal(t, `{"token":"extension-credential-sentinel","rows":1}`, resp.ToolResult)
-	})
-
-	t.Run("error text unchanged", func(t *testing.T) {
-		execErr := errors.New("Authorization: Basic extension-credential-sentinel")
-		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{err: execErr}}
-		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{AssetID: 3, Command: "read"})
-		require.False(t, resp.Approved)
-		require.Equal(t, execErr.Error(), resp.ToolError)
-	})
 }
 
 func TestRespondOpsctlApprovalInvalidResponseLogOmitsPayload(t *testing.T) {

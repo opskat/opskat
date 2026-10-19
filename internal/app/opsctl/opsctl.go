@@ -24,19 +24,10 @@ type WindowActivator interface {
 	ActivateWindow()
 }
 
-// ExtToolExecutor 在 opsctl Unix socket 收到扩展资产的执行请求时把执行交回桌面进程。
-//
-// 只有扩展资产走这条路，理由是执行位置而不是语义：WASM 运行时只存在于桌面进程。
-// 命令串与 `opsctl exec <asset> -- <command>` 里的完全一样，桌面端跑的也是同一个统一
-// exec handler，因此策略、审批、grant、审计与内置类型逐字一致。
-type ExtToolExecutor interface {
-	ExecuteExtTool(ctx context.Context, assetID int64, command string) (string, error)
-}
-
 // ExtDevInstaller 把 `opsctl ext dev` 送来的扩展目录装进运行中的桌面进程，
 // 返回装上的扩展名与版本。
 //
-// 与 ExtToolExecutor 同一条理由——位置而非语义：安装要落 enabled 状态、经 extreg
+// 位置而非语义：安装要落 enabled 状态、经 extreg
 // 注册资产类型/策略/技能、刷新前端，这些注册表只存在于桌面进程。因此这里跑的就是
 // 扩展页"从目录安装"按钮跑的那一个 extension_svc.Install（只是不弹安装确认框——
 // ext dev 自己的审批弹窗已经问过），dev 与 prod 的加载路径由构造相同，而不是靠两套
@@ -57,7 +48,6 @@ type Opsctl struct {
 
 	approvalServer  *approval.Server
 	authToken       string
-	extExecutor     ExtToolExecutor
 	extDevInstaller ExtDevInstaller
 	extStore        ExtStore
 	// extDevApprove 把一次 ext dev 安装交给用户确认；New 接到 requestSingleApproval
@@ -79,9 +69,6 @@ type pendingOpsctlApproval struct {
 
 // SetAuthToken main.go 注入 socket 鉴权 token，供 startApprovalServer 使用。
 func (o *Opsctl) SetAuthToken(token string) { o.authToken = token }
-
-// SetExtToolExecutor main.go 注入扩展工具执行器。
-func (o *Opsctl) SetExtToolExecutor(e ExtToolExecutor) { o.extExecutor = e }
 
 // SetExtDevInstaller main.go 注入扩展开发安装器。
 func (o *Opsctl) SetExtDevInstaller(i ExtDevInstaller) { o.extDevInstaller = i }

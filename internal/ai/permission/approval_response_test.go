@@ -64,7 +64,6 @@ func TestApprovalKindFor(t *testing.T) {
 		want         string
 	}{
 		{name: "delete", approvalType: ApprovalTypeDelete, want: ApprovalKindDelete},
-		{name: "ext_tool", approvalType: "ext_tool", want: ApprovalKindExtension},
 		{name: "exec with a matchable command", approvalType: "exec", command: "uptime", want: ApprovalKindSingle},
 		{name: "exec without sub-commands", approvalType: "exec", command: `echo "`, want: ApprovalKindOnce},
 		{name: "unregistered type", approvalType: "create", want: ApprovalKindOnce},

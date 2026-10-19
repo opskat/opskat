@@ -31,7 +31,6 @@ import (
 	"github.com/opskat/opskat/internal/app/system"
 	"github.com/opskat/opskat/internal/app/vnc"
 
-	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/assetconn"
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
@@ -438,7 +437,6 @@ func initExtensionSystem(
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)
-	opsctlB.SetExtToolExecutor(desktopExecExecutor{})
 	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
 
 	// 接入 snippet 分类注册表
@@ -459,14 +457,6 @@ func initExtensionSystem(
 		}
 		wailsRuntime.EventsEmit(wctx, "ext:ready", nil)
 	}()
-}
-
-// desktopExecExecutor 把统一 exec handler 交给 opsctl binder：opsctl 对扩展资产的命令
-// 由桌面进程执行（WASM 运行时只在这里），走的仍然是同一个 handler。
-type desktopExecExecutor struct{}
-
-func (desktopExecExecutor) ExecuteExtTool(ctx context.Context, assetID int64, command string) (string, error) {
-	return aitool.ExecOnAsset(ctx, assetID, command)
 }
 
 // desktopExtDevInstaller 把 `opsctl ext dev` 的安装请求交回扩展 binder，跑的是

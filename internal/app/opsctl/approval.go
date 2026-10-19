@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/approval"
@@ -44,11 +42,6 @@ func (o *Opsctl) handleRequest(ctx context.Context, req approval.ApprovalRequest
 	// SSH MFA 挑战：opsctl 不可交互时请桌面端代答；请求方断开即关闭对话框
 	if req.Type == "mfa" {
 		return o.mfa.challenge(ctx, req)
-	}
-
-	// 扩展工具执行
-	if req.Type == "ext_tool" {
-		return o.handleExtToolExec(req)
 	}
 
 	// 扩展开发安装（opsctl ext dev）
@@ -102,13 +95,12 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	}
 }
 
-// opsctlAuditSource 是 opsctl 发起的审批与扩展工具调用落审计的来源列。
+// opsctlAuditSource 是 opsctl 发起的审批落审计的来源列。
 const opsctlAuditSource = "opsctl"
 
 // awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
 // 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串落
-// （requestSingleApproval），扩展工具闸门交给 HandleConfirm 按 (action, resource) 落
-// （extToolConfirm）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
+// （requestSingleApproval）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
 // 就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
 func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
@@ -435,101 +427,6 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
 	}
 }
-
-// extToolGateResult is what gateExtToolCall hands back: the output and decision,
-// plus the normalized command the unified exec handler actually ran —
-// canonicalization can rewrite flag order/spelling, and the audit row should show
-// what ran, not what was sent.
-type extToolGateResult struct {
-	output            string
-	normalizedCommand string
-	decision          aictx.CheckResult
-}
-
-// gateExtToolCall runs one extension-tool invocation through the exact same
-// policy check / in-app approval / grant / audit pipeline AI's unified exec uses.
-//
-// NeedConfirm surfaces through the desktop's one "opsctl:approval" dialog
-// (extToolConfirm).
-//
-// It returns the context it built (audit source/session/decision slot all
-// installed on it) alongside the result: a caller's own WriteToolCall must use
-// that returned context, not the one it passed in, or the audit row it writes
-// carries none of what this function just annotated, the audit source included.
-func (o *Opsctl) gateExtToolCall(ctx context.Context, sessionID string, assetID int64, command string) (context.Context, extToolGateResult, error) {
-	ctx = aictx.WithAuditSource(ctx, opsctlAuditSource)
-	ctx = aictx.WithSessionID(ctx, sessionID)
-	checker := permission.NewCommandPolicyChecker(o.extToolConfirm(sessionID))
-	ctx = permission.WithPolicyChecker(ctx, checker)
-
-	// 审计行由**做出决策的进程**写：策略判定、审批结果与规范化命令都只在这里存在，
-	// 调用方侧只知道最终的结果字符串。command slot 让统一 exec 的规范化形式落库，
-	// 与 AI 会话那条路径一致。
-	var decision aictx.CheckResult
-	ctx = aictx.WithCheckResultSlot(ctx, &decision)
-	normalizedCommand := command
-	ctx = aictx.WithAuditCommandSlot(ctx, &normalizedCommand)
-
-	result, err := o.extExecutor.ExecuteExtTool(ctx, assetID, command)
-	return ctx, extToolGateResult{output: result, normalizedCommand: normalizedCommand, decision: decision}, err
-}
-
-// extToolConfirm is the confirm step of the extension-tool gate: the item
-// HandleConfirm built — for an extension type it carries the check_policy
-// (action, resource) and the formatted request — goes to the desktop's one
-// "opsctl:approval" dialog, and the user's answer goes back unchanged, edits
-// included. Persisting an "always allow" is HandleConfirm's: it grants the
-// classification, the only shape extension grant matching reads.
-func (o *Opsctl) extToolConfirm(sessionID string) permission.CommandConfirmFunc {
-	return func(ctx context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		parsed, _ := o.awaitSingleApproval(ctx, items[0], sessionID)
-		switch parsed.Decision {
-		case permission.ApprovalAllowAll:
-			return permission.ApprovalResponse{Decision: "allowAll", EditedItems: parsed.EditedItems}
-		case permission.ApprovalAllow:
-			return permission.ApprovalResponse{Decision: "allow"}
-		default:
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-	}
-}
-
-// handleExtToolExec 处理 opsctl 对扩展资产的委托执行请求。
-//
-// 桌面端在这里跑的是与 AI 会话完全相同的统一 exec handler：策略检查、审批弹窗、
-// "始终允许"落 grant、审计，全部由 gateExtToolCall 那条路径提供。本函数只负责把 opsctl
-// 的 socket 请求翻译成一次进程内调用，并按 opsctl 自己的语义（拒绝 = socket 错误）
-// 把结果译回 approval.ApprovalResponse。
-func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.ApprovalResponse {
-	if o.extExecutor == nil {
-		return approval.ApprovalResponse{ToolError: "extension system not initialized"}
-	}
-
-	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
-	gateCtx, gateResult, err := o.gateExtToolCall(ctx, req.SessionID, req.AssetID, req.Command)
-	decision := gateResult.decision
-	extAuditWriter.WriteToolCall(gateCtx, audit.ToolCallInfo{
-		ToolName: "exec",
-		ArgsJSON: fmt.Sprintf(`{"asset_id":%d,"command":%q}`, req.AssetID, req.Command),
-		Command:  gateResult.normalizedCommand,
-		Result:   gateResult.output,
-		Error:    err,
-		Decision: &decision,
-	})
-	if err != nil {
-		return approval.ApprovalResponse{ToolError: err.Error()}
-	}
-	// 统一 exec 把拒绝当普通文本结果交回（那是给模型看的，模型据此调整），但对
-	// opsctl 而言命令没有执行——决策槽里的 Deny 是唯一可靠的信号，按错误回传，
-	// 客户端才会与内置类型一样 exit 1 + stderr，而不是把拒绝文本当输出打到 stdout。
-	if decision.Decision != aictx.Allow {
-		return approval.ApprovalResponse{ToolError: gateResult.output}
-	}
-	return approval.ApprovalResponse{Approved: true, ToolResult: gateResult.output}
-}
-
-// extAuditWriter 与 opsctl CLI 侧用的是同一个默认写入器实现，两条路径落同一组列语义。
-var extAuditWriter audit.AuditWriter = audit.NewDefaultAuditWriter()
 
 // RespondOpsctlApproval 前端响应 opsctl 审批请求（统一入口）
 func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.ApprovalResponse) {
