@@ -98,6 +98,13 @@ func masterKeyOpts(opts Options, dataDir string) credential_svc.MasterKeyOptions
 	}
 }
 
+// SQLiteDSN 返回主库 opskat.db 的连接串。桌面端与 opsctl 是两个进程，会同时写这个文件：
+// 事务一开始就取写锁（_txlock=immediate），"检查再写入"因此在跨进程之间串行；
+// 拿不到锁时最多等 busy_timeout，而不是立刻报 database is locked。
+func SQLiteDSN(path string) string {
+	return path + "?_txlock=immediate&_pragma=busy_timeout(10000)"
+}
+
 // Init 初始化数据库、凭证服务、注册 Repository、运行迁移
 func Init(ctx context.Context, opts Options) error {
 	dataDir := opts.DataDir
@@ -119,7 +126,7 @@ func Init(ctx context.Context, opts Options) error {
 	cfg, err := configs.NewConfig("opskat", configs.WithSource(memory.NewSource(map[string]interface{}{
 		"db": map[string]interface{}{
 			"driver": "sqlite",
-			"dsn":    filepath.Join(dataDir, "opskat.db"),
+			"dsn":    SQLiteDSN(filepath.Join(dataDir, "opskat.db")),
 		},
 	})))
 	if err != nil {

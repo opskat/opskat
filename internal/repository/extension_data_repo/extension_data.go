@@ -8,6 +8,8 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/extension_data_entity"
 
 	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -52,36 +54,36 @@ func (r *extensionDataRepo) Set(ctx context.Context, extName, key string, value 
 		return fmt.Errorf("extension KV: value exceeds %d bytes (got %d)", MaxKVValueSize, len(value))
 	}
 
-	// Compute total size of existing keys for this extension (excluding the one we're updating)
-	var totalSize int64
-	err := db.Ctx(ctx).Model(&extension_data_entity.ExtensionData{}).
-		Where("extension_name = ? AND key != ?", extName, key).
-		Select("COALESCE(SUM(LENGTH(value)), 0)").
-		Row().Scan(&totalSize)
-	if err != nil {
-		return fmt.Errorf("query KV total size: %w", err)
-	}
-	if totalSize+int64(len(value)) > MaxKVPerExtension {
-		return fmt.Errorf("extension KV: extension %q quota exceeded (%d + %d > %d)",
-			extName, totalSize, len(value), MaxKVPerExtension)
-	}
+	// Quota check and write share one transaction so that two processes (desktop app
+	// and opsctl) writing the same extension cannot both pass the check. The
+	// transaction begins immediately (see bootstrap.SQLiteDSN), which makes SQLite
+	// serialise writers and lets the loser wait instead of failing.
+	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		// Total size of the other keys of this extension (the key being written is replaced).
+		var totalSize int64
+		err := tx.Model(&extension_data_entity.ExtensionData{}).
+			Where("extension_name = ? AND key != ?", extName, key).
+			Select("COALESCE(SUM(LENGTH(value)), 0)").
+			Row().Scan(&totalSize)
+		if err != nil {
+			return fmt.Errorf("query KV total size: %w", err)
+		}
+		if totalSize+int64(len(value)) > MaxKVPerExtension {
+			return fmt.Errorf("extension KV: extension %q quota exceeded (%d + %d > %d)",
+				extName, totalSize, len(value), MaxKVPerExtension)
+		}
 
-	var existing extension_data_entity.ExtensionData
-	now := time.Now().Unix()
-	err = db.Ctx(ctx).Where("extension_name = ? AND key = ?", extName, key).First(&existing).Error
-	if err == nil {
-		return db.Ctx(ctx).Model(&existing).Updates(map[string]any{
-			"value":      value,
-			"updatetime": now,
-		}).Error
-	}
-	row := extension_data_entity.ExtensionData{
-		ExtensionName: extName,
-		Key:           key,
-		Value:         value,
-		Updatetime:    now,
-	}
-	return db.Ctx(ctx).Create(&row).Error
+		row := extension_data_entity.ExtensionData{
+			ExtensionName: extName,
+			Key:           key,
+			Value:         value,
+			Updatetime:    time.Now().Unix(),
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "extension_name"}, {Name: "key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"value", "updatetime"}),
+		}).Create(&row).Error
+	})
 }
 
 func (r *extensionDataRepo) Delete(ctx context.Context, extName, key string) error {
