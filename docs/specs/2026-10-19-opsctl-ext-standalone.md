@@ -24,7 +24,7 @@ issue #329（Oracle 数据库支持）路线第二步「扩展平台能力」里
    - 终端里选「永久允许」，写出的规则不是动作，被扩展规则落库拒绝（`internal/ai/permission/rule_ext.go:170-193`），命令按拒绝处理；
    - 无人审批时 NEEDS AUTHORIZATION 给出的 `opsctl policy allow … -- '<整条命令>'` 无法生效；
    - 桌面端单条审批选「永久允许」，授权落库失败，只记一条警告（`permission.go:824-840`）。
-5. **两个进程同时写扩展 KV 会超出配额。** [已核实] KV 写入先汇总已用大小、再查、再改或新建，不在事务里（`internal/repository/extension_data_repo/extension_data.go:50-80`）。桌面端与 opsctl 同时运行同一扩展后，两边并发写可能都通过配额检查，或对同一键各插一行。
+5. **两个进程同时写扩展 KV 会超出配额。** [已核实] KV 写入先汇总已用大小、再查、再改或新建，不在事务里（`internal/repository/extension_data_repo/extension_data.go:50-80`）。桌面端与 opsctl 同时运行同一扩展后，两边并发写可能都通过配额检查而超出配额；（扩展, 键）上有唯一索引（`migrations/202603300002_extension_data.go:21`），两边同时新建同一个键时，后写的一方报唯一约束错误。
 
 ## Actors and user stories
 
@@ -43,6 +43,7 @@ issue #329（Oracle 数据库支持）路线第二步「扩展平台能力」里
 | 5 | **[用户决定]** batch 支持扩展资产 | 有了 opsctl 内的执行器，batch 的每一项与其他类型一样参与整批审批与执行。Rejected: 本轮只做单资产 exec——batch 里继续报错 |
 | 6 | 文件对话框在 opsctl 中不可用：需要它的工具报错，并指向 opsctl 的 `--<flag>-file` | opsctl 没有图形界面；`--<flag>-file` 已是 opsctl 读文件参数的方式（`internal/extreg/file_flags.go`）。Rejected: 在终端里模拟一个文件选择——与 `--<flag>-file` 重复 |
 | 7 | 扩展 KV 的配额检查与写入在一个事务里完成 | 两个进程会同时运行同一个扩展（Problem 5）。Rejected: 只靠进程内锁——管不到另一个进程 |
+| 8 | **[用户决定]** batch 不加「永久允许」 | [已核实] batch 对所有类型都只有本次允许与拒绝（`cmd/opsctl/command/tty_approval.go:51-55`，`internal/ai/permission/approval.go:89-93`，`frontend/src/components/approval/OpsctlApprovalDialog.tsx:436-479`）。Rejected: 给 batch 加永久允许——对所有类型都是新功能，超出本轮 |
 
 ## 执行
 
@@ -81,7 +82,7 @@ issue #329（Oracle 数据库支持）路线第二步「扩展平台能力」里
 
 - 前提：batch 里有扩展资产的项，可以与其他类型混在一批。动作：`opsctl batch`。结果：
   - 扩展项与其他项一起做整批的策略检查与一次审批；审批里扩展项显示动作与资源；
-  - 整批「永久允许」时，扩展项按动作与资源保存授权；
+  - 与其他类型一样，batch 的审批只有「本次允许」与「拒绝」，没有「永久允许」；
   - 执行时每个扩展项在 opsctl 里执行，结果、错误与审计按 batch 现有的逐项格式给出；
   - 同一批里同一扩展的多项只加载一次扩展。
 - 某个扩展项所属扩展被停用或加载失败：只有这一项报错，其余项照常。
@@ -94,7 +95,7 @@ issue #329（Oracle 数据库支持）路线第二步「扩展平台能力」里
 ## 桌面端与 opsctl 同时运行
 
 - 两个进程各自运行扩展实例，互不共享运行时状态；共用扩展目录、编译缓存与描述缓存，写入不会互相破坏。
-- 扩展 KV 的写入在事务里完成配额检查与写入：两个进程并发写同一扩展时，总量不超过配额，同一个键不会出现两行。
+- 扩展 KV 的写入在事务里完成配额检查与写入：两个进程并发写同一扩展时，总量不超过配额；并发写同一个键时两边都成功，最后只有一行，值是后写的一方。
 - 桌面端里「代 opsctl 执行扩展工具」的请求类型被移除；桌面端仍处理 opsctl 发来的审批请求。
 
 ## 文档
@@ -116,8 +117,8 @@ opsctl 帮助文本、`docs/ARCHITECTURE.md`、`docs/references/testing-debuggin
 |---|---|---|
 | opsctl 进程内执行扩展 exec | 用 WASM 夹具扩展：不连桌面端即可执行；停用的扩展报错；没有描述缓存时自己描述并写入缓存；文件对话框报错并指向 `--<flag>-file`；标准输出只有结果 | `internal/app/opsctl/ext_tool_reject_test.go`（真实 extreg + 夹具 + 审计记录），`pkg/extension/extensiontest/fixture.go` |
 | opsctl 审批链对扩展 | 拒绝参数立即拒绝；终端「永久允许」写出扩展规则并在下次放行；NEEDS AUTHORIZATION 给出的命令照做后放行；桌面端「永久允许」保存扩展授权；会话授权生效 | `cmd/opsctl/command/approval_test.go`、`internal/app/opsctl/approval_grant_ext_test.go` |
-| batch | 扩展项与内置项同批审批与执行；扩展项授权；一项所属扩展停用只影响这一项 | `cmd/opsctl/command/batch_test.go` |
-| KV 跨进程 | 并发写入时配额与唯一键成立 | `internal/repository/extension_data_repo` 的测试 |
+| batch | 扩展项与内置项同批审批与执行；审批里扩展项显示动作与资源；一项所属扩展停用只影响这一项 | `cmd/opsctl/command/batch_test.go` |
+| KV 跨进程 | 两个数据库连接并发写入时配额成立、同键写入都成功且只留一行 | `internal/repository/extension_data_repo` 的测试 |
 | e2e | 桌面端关闭时 opsctl 对夹具扩展资产 exec 成功；桌面端运行、无终端时弹出扩展审批项，批准后 opsctl 输出结果 | `e2e/tests/opsctl-approval.spec.ts`、`e2e/tests/extension-asset-type.spec.ts` |
 
 不能自动化、由收尾时的运行时验证覆盖：用一个真实扩展（如 Elasticsearch）对真实服务、经 SSH 隧道，在桌面端关闭时跑 `opsctl exec` 与 `opsctl batch`，与改动前经桌面端执行的结果和审计逐项对比；桌面端运行时的审批弹窗与「永久允许」。
