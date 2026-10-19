@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -36,10 +35,8 @@ function runOpsctl(dataDir: string, args: string[]): Promise<{ code: number | nu
   });
 }
 
-// opsctl registers an extension's asset types from the describe() answer the desktop
-// app caches when it loads the extension — the app has loaded it once on this
-// machine. The suite's app has loaded the same fixture, so its answer is the one
-// copied here, keyed by the hash of the binary in the fresh data dir.
+// The suite's app caches the fixture's describe() answer once it has loaded the
+// extension: polling for that row is how a test waits for the app to be ready.
 async function cachedFixtureDescriptor(): Promise<string> {
   const suiteDb = join(process.env.OPSKAT_DATA_DIR!, "opskat.db");
   let descriptor = "";
@@ -67,20 +64,15 @@ test("opsctl runs an extension tool itself when no desktop app runs on the data 
   const dataDir = mkdtempSync(join(tmpdir(), "opskat-e2e-opsctl-ext-"));
   try {
     installExtensions(dataDir, [EXT]);
-    // The first command creates and migrates the fresh database.
+    // The first command creates and migrates the fresh database. No app has ever
+    // loaded the extension on this data dir, so its describe() cache is empty:
+    // opsctl describes the extension itself and writes the cache.
     const listed = await runOpsctl(dataDir, ["ext", "list"]);
     expect(listed, listed.stderr).toMatchObject({ code: 0 });
 
-    const descriptor = await cachedFixtureDescriptor();
-    const wasmHash = createHash("sha256")
-      .update(readFileSync(join(dataDir, "extensions", EXT.name, "main.wasm")))
-      .digest("hex");
     const now = Math.floor(Date.now() / 1000);
     const db = new DatabaseSync(join(dataDir, "opskat.db"));
     try {
-      db.prepare(
-        "INSERT INTO extension_describe (name, wasm_hash, descriptor, createtime, updatetime) VALUES (?, ?, ?, ?, ?)"
-      ).run(EXT.name, wasmHash, descriptor, now, now);
       db.prepare(
         "INSERT INTO assets (name, type, config, extension_name, status, createtime, updatetime) VALUES (?, ?, ?, ?, 1, ?, ?)"
       ).run(ASSET, "fixture", JSON.stringify({ endpoint: "http://127.0.0.1:1" }), EXT.name, now, now);
