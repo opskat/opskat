@@ -51,10 +51,37 @@ func notifyDesktopAssetChanged() {
 }
 
 func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, params map[string]any, decision ...*aictx.CheckResult) int {
-	handler, ok := handlers[toolName]
+	result, code, ok := runHandler(ctx, handlers, toolName, params, decision...)
 	if !ok {
+		return code
+	}
+
+	// 写操作成功后通知桌面端刷新 UI
+	if refreshesDesktopUI(toolName) {
+		notifyDesktopAssetChanged()
+	}
+
+	// Pretty-print JSON output
+	var obj any
+	if json.Unmarshal([]byte(result), &obj) == nil {
+		pretty, err := json.MarshalIndent(obj, "", "  ")
+		if err == nil {
+			fmt.Println(string(pretty))
+			return 0
+		}
+	}
+	fmt.Println(result)
+	return 0
+}
+
+// runHandler 执行一个工具并写审计，不输出结果：ok 为 false 时错误已写到 stderr，
+// code 是该返回的退出码。callHandler 在它之上做 opsctl 自己的结果排版；扩展工具的
+// 结果要原样写到标准输出（spec 执行 › 单资产 exec），调用方直接用它。
+func runHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, params map[string]any, decision ...*aictx.CheckResult) (result string, code int, ok bool) {
+	handler, found := handlers[toolName]
+	if !found {
 		fmt.Fprintf(os.Stderr, "Internal error: unknown tool %s\n", toolName)
-		return 1
+		return "", 1, false
 	}
 
 	if params == nil {
@@ -88,25 +115,9 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	writeOpsctlAudit(ctx, toolName, string(argsJSON), result, err, dec)
 
 	if err != nil {
-		return writeRemoteFailure(os.Stderr, err)
+		return "", writeRemoteFailure(os.Stderr, err), false
 	}
-
-	// 写操作成功后通知桌面端刷新 UI
-	if refreshesDesktopUI(toolName) {
-		notifyDesktopAssetChanged()
-	}
-
-	// Pretty-print JSON output
-	var obj any
-	if json.Unmarshal([]byte(result), &obj) == nil {
-		pretty, err := json.MarshalIndent(obj, "", "  ")
-		if err == nil {
-			fmt.Println(string(pretty))
-			return 0
-		}
-	}
-	fmt.Println(result)
-	return 0
+	return result, 0, true
 }
 
 // opsctlAuditWriter 全局审计写入器

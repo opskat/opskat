@@ -818,9 +818,9 @@ func TestCmdExec_ExtensionAssetRunsInOpsctlWithoutDesktop(t *testing.T) {
 	code, stdout, stderr := env.exec(t, "fx-1", "--", "echo", "--msg", "hi")
 
 	require.Equal(t, 0, code, "stderr: %s", stderr)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "stdout must be the result alone: %q", stdout)
-	assert.Equal(t, map[string]any{"tool": "echo", "args": map[string]any{"msg": "hi"}}, got)
+	// The tool's result exactly as it returned it (the guest marshals a Go map, so its
+	// keys come sorted) — not re-indented, no newline added.
+	assert.Equal(t, `{"args":{"msg":"hi"},"tool":"echo"}`, stdout)
 
 	rows := env.auditRows(t)
 	require.Len(t, rows, 1)

@@ -166,17 +166,22 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 与扩展类型的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它
 	// 已经知道按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面
 	// validateRedisScope 挡掉了非空 scope，这里传空字符串等价于不传）。
-	execCtx := auditCtx
-	if isExtensionAsset {
-		// 扩展经资产连接路径拨号（SSH 隧道、代理链）：隧道上的 SSH 跳板要 MFA 时，与
-		// ssh 资产一样按 --mfa-code → 终端 → 桌面端的顺序应答。
-		execCtx = withMFA(auditCtx)
-	}
-	return callHandler(execCtx, handlers, "exec", map[string]any{
+	params := map[string]any{
 		"asset":   strconv.FormatInt(asset.ID, 10),
 		"command": command,
 		"scope":   scope,
-	}, approvalResult.ToCheckResult())
+	}
+	if !isExtensionAsset {
+		return callHandler(auditCtx, handlers, "exec", params, approvalResult.ToCheckResult())
+	}
+	// 扩展经资产连接路径拨号（SSH 隧道、代理链）：隧道上的 SSH 跳板要 MFA 时，与 ssh
+	// 资产一样按 --mfa-code → 终端 → 桌面端的顺序应答。工具的结果原样写到标准输出
+	// （不重排 JSON、不补换行），管道与脚本拿到的就是工具给出的那一串。
+	result, code, ok := runHandler(withMFA(auditCtx), handlers, "exec", params, approvalResult.ToCheckResult())
+	if ok {
+		fmt.Print(result)
+	}
+	return code
 }
 
 // execApprovalDetail 构建审批弹窗里 exec 的补充说明：scope 非空时插进 --scope <value>，
