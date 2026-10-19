@@ -55,7 +55,7 @@ issue #329（Oracle 数据库支持）路线第二步「扩展平台能力」里
 - **没有描述缓存。** 前提：本机没有这个扩展的 `describe()` 缓存（桌面端从没加载过它）。结果：opsctl 自己加载扩展取得描述，写入缓存，照常执行；不再提示「先在桌面端加载一次」。管理类命令（create、update、list、policy）照旧用缓存，缓存缺失时同样由 opsctl 加载扩展补齐。
 - **宿主能力。** 扩展在 opsctl 里拿到的宿主能力与桌面端相同：
   - 读资产配置；按扩展声明的凭据能力拿明文或句柄；KV；
-  - 经资产连接路径的 HTTP 与 TCP（SSH 隧道、代理、代理链、TLS）；隧道上的 SSH 跳板要 MFA 时，与 `opsctl exec` 对 SSH 资产一样在终端提示。
+  - 经资产连接路径的 HTTP 与 TCP（SSH 隧道、代理、代理链、TLS）；路径上的 SSH 跳板要 MFA 时按「修正轮 1」应答。
 - **文件对话框。** 前提：工具在执行中请求文件对话框。结果：工具失败，报「opsctl 中没有文件对话框」，并指出可用 `--<flag>-file` 传文件参数。
 - **超时与取消。** 工具声明的超时照常生效，超时后工具失败、退出码 1。用户按 Ctrl+C 时 opsctl 结束，与对内置类型执行时一致。
 - **日志。** 扩展的日志与它的标准输出 / 标准错误不写进 opsctl 的标准输出，管道与脚本拿到的只有结果。
@@ -122,6 +122,22 @@ opsctl 帮助文本、`docs/ARCHITECTURE.md`、`docs/references/testing-debuggin
 | e2e | 桌面端关闭时 opsctl 对夹具扩展资产 exec 成功；桌面端运行、无终端时弹出扩展审批项，批准后 opsctl 输出结果 | `e2e/tests/opsctl-approval.spec.ts`、`e2e/tests/extension-asset-type.spec.ts` |
 
 不能自动化、由收尾时的运行时验证覆盖：用一个真实扩展（如 Elasticsearch）对真实服务、经 SSH 隧道，在桌面端关闭时跑 `opsctl exec` 与 `opsctl batch`，与改动前经桌面端执行的结果和审计逐项对比；桌面端运行时的审批弹窗与「永久允许」。
+
+## 修正轮 1：连接路径上 SSH 跳板的 MFA
+
+运行时验证 V8 不成立：经要 MFA 的 SSH 跳板的扩展资产，opsctl 不提示、不接受 `--mfa-code`，exec 与 batch 都以 `no interactive responder` 失败。根因不在扩展：SSH 隧道与代理链在拨号时都展开成代理链的 SSH 层，这一层建认证时不带 opsctl 的 MFA 应答方，所以 opsctl 对经这种跳板的内置 SSH 资产同样失败（已验证：代码阅读）。原规格那句「与 `opsctl exec` 对 SSH 资产一样」并不成立。**[用户决定]** 在根上修，解除 [2026-09-22-opsctl-mfa](2026-09-22-opsctl-mfa.md)「Out of scope」里「跳板机与代理链上的 MFA」「其它资产类型经 SSH 隧道时的 MFA」两条。
+
+- **跳板 MFA。** 前提：资产的连接路径（SSH 隧道或代理链）上有一台 SSH 跳板，握手要 keyboard-interactive 第二因子；口令 / 密钥 / Agent 认证的跳板都算。动作：opsctl 中已接上 MFA 应答的命令（`ssh`、`exec`、`cp`、`batch`，含扩展资产）对这个资产建连。结果：跳板的挑战与目标资产自己的挑战走同一套应答来源与顺序——`--mfa-code` / `OPSKAT_MFA_CODE` → 可交互终端提示 → 运行中的桌面端对话框（对话框显示的是跳板资产）→ 都不行时 `NEEDS MFA`、退出码 3。路径上有多台要 MFA 的主机时按拨号顺序逐台应答。
+- **答案被拒。** 跳板拒绝答案时，与目标资产被拒一样报 MFA 验证失败，不拿同一个码重试。
+- **不变的部分。** 桌面端内（终端、AI、扩展页面、协议连接池）经这类跳板的行为不变；不要 MFA 的跳板行为不变；答案只用于当次握手，绝不记录。
+- **加载失败的报错。** 前提：资产所属扩展在本次描述失败（例如 `main.wasm` 缺失），资产类型因此未被认领。结果：最后的 `Error:` 行点名描述失败的扩展与原因，不再只说 `has no exec support yet`；batch 里该项的错误同理。退出码不变。
+
+| Seam | What it verifies | Prior art |
+|---|---|---|
+| 跳板 MFA | 两台测试 SSH 服务器（跳板要 OTP，目标经跳板为隧道）：对经跳板的 SSH 资产与扩展资产，`--mfa-code` 与终端应答都能建连；无应答方时报需要 MFA；跳板拒绝答案时报 MFA 验证失败；ctx 不带应答方（桌面端路径）时行为不变。替换只直连堡垒、没走跳板层的 `TestCmdExec_ExtensionExecAnswersTunnelMFA` / `TestBatchExt_ExtensionItemAnswersTunnelMFA` | `cmd/opsctl/command/exec_test.go` 的 `newOTPExecServer` |
+| 加载失败报错 | 缺 `main.wasm` 且无描述缓存时，exec 与 batch 的报错点名扩展与原因 | `cmd/opsctl/command` 现有扩展测试 |
+
+运行时复验：重新起 `opskat-mfa-sshd`（需再次授权），复验 V8（扩展资产 exec / batch，终端与 `--mfa-code`），加测经该跳板的内置 SSH 资产 exec，复验 V5 的报错。
 
 ## Open questions
 
