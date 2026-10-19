@@ -399,7 +399,11 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	} else {
 		handlerCtx := ctx
 		if cmd.extension {
-			// Same as cmdExec on an extension asset: a tunnel's SSH hop answers MFA.
+			// Same as cmdExec on an extension asset: ResolveProxyChain gives every SSH hop
+			// on the asset's connection path the responder, so a hop asking for MFA is
+			// answered the way an SSH item's target is, and with no answer source the item
+			// ends the batch with NEEDS MFA. Database and other built-in items get no
+			// responder (TestBatchDataItem_TunnelDialGetsNoMFAResponder).
 			handlerCtx = withMFA(ctx)
 		}
 		result = executeBatchHandler(handlerCtx, handlers, batchAuditTool, cmd, map[string]any{
@@ -475,8 +479,12 @@ func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandl
 
 	output, err := handler(ctx, params)
 	if err != nil {
+		err = mfaRefusalOf(ctx, err)
 		result.Error = err.Error()
 		result.ExitCode = 1
+		if needsMFA(err) {
+			result.mfaErr = err
+		}
 		return result
 	}
 

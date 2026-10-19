@@ -332,12 +332,7 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	client, closers, err := m.dial(cfg, sshConfig, addr)
 	if err != nil {
-		if _, typed := sshagent.CodeOf(err); !typed && mfa != nil && mfa.answered.Load() {
-			// 应答方给出的答案之后握手仍失败：服务器拒绝了这次 MFA。以类型化的
-			// 「MFA 验证失败」上报，调用方据此不拿同一个码重试。
-			return nil, nil, fmt.Errorf("%w: %v", &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected the MFA answers"}, err)
-		}
-		return nil, nil, err
+		return nil, nil, mfa.classify(err)
 	}
 	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责。调用方先关闭
 	// 返回的 client（打断可能阻塞的 SendRequest），再按序关闭 closers；stop 放在
@@ -882,6 +877,15 @@ type answeredMFA struct {
 	answered atomic.Bool
 }
 
+// classify 把应答方给出答案之后仍失败的握手识别为「服务器拒绝了这次 MFA」，以类型化的
+// MFA 验证失败上报，调用方据此不拿同一个码重试。已类型化的错误与未作答的失败原样返回。
+func (a *answeredMFA) classify(err error) error {
+	if _, typed := sshagent.CodeOf(err); typed || a == nil || !a.answered.Load() {
+		return err
+	}
+	return fmt.Errorf("%w: %v", &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected the MFA answers"}, err)
+}
+
 func (a *answeredMFA) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
 	answers, err := a.inner.SubmitChallenge(ctx, ch)
 	if err == nil {
@@ -991,8 +995,42 @@ func buildAuthMethods(authType, password, key, keyPassphrase string, privateKeyP
 	return methods, nil
 }
 
-func BuildAuthMethodsForProxyChain(authType, password, key, keyPassphrase string, privateKeyPaths []string) ([]ssh.AuthMethod, error) {
-	return buildAuthMethods(authType, password, key, keyPassphrase, privateKeyPaths, kbiResponders{})
+// ProxyChainHandshake 为代理链上的一个 SSH 跳板层构造握手：与目标层同一套认证——
+// 口令 / 密钥经 buildAuthMethods（keyboard-interactive 第二因子），cfg.Agent 非 nil 时经
+// Agent 认证工厂。cfg 只读认证与主机密钥字段（Host/Port/Username/AuthType/Password/Key/
+// KeyPassphrase/PrivateKeys/Agent/HostKeyVerifyFunc）。
+//
+// newMFA 非 nil 时每次握手取一个应答方承接这台跳板的挑战（层解析一次、可能拨号多次，
+// 应答方持有「本连接内」的状态，不能跨握手共用）；应答之后握手仍失败报 MFA 验证失败。
+// newMFA 为 nil 时保持非交互：需要第二因子即报 ssh_agent_mfa_required。认证材料的错误
+// （如私钥解析失败）在构造时返回。
+func ProxyChainHandshake(cfg ConnectConfig, newMFA func() sshagent.InteractiveCaller) (func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error), error) {
+	if _, err := buildClientConfig(cfg); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error) {
+		layer := cfg
+		layer.Ctx = ctx
+		var mfa *answeredMFA
+		if newMFA != nil {
+			mfa = &answeredMFA{inner: newMFA()}
+			layer.MFA = mfa
+			if layer.Agent != nil {
+				agentCfg := *layer.Agent
+				agentCfg.MFA = mfa
+				layer.Agent = &agentCfg
+			}
+		}
+		sshConfig, err := buildClientConfig(layer)
+		if err != nil {
+			return nil, err
+		}
+		client, err := newClientLayer(ctx, layer, sshConfig, conn, addr)
+		if err != nil {
+			return nil, mfa.classify(err)
+		}
+		return client, nil
+	}, nil
 }
 
 // parsePrivateKey 解析私钥，支持 passphrase

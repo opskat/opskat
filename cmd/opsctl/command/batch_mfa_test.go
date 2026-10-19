@@ -8,9 +8,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,7 +34,8 @@ import (
 )
 
 // otpExecServer 是一台「公钥部分成功后要求单提示 OTP」的 SSH 服务器，能执行 exec
-// 请求（回显 "ok:<command>"）。challenges 统计服务器发出的 OTP 挑战次数。
+// 请求（回显 "ok:<command>"），也能作为跳板转发 direct-tcpip 通道（经它到达隧道后面
+// 的资产）。challenges 统计服务器发出的 OTP 挑战次数。
 type otpExecServer struct {
 	addr       string
 	challenges atomic.Int32
@@ -88,6 +91,10 @@ func serveExecConn(conn net.Conn, cfg *ssh.ServerConfig) {
 	}
 	go ssh.DiscardRequests(reqs)
 	for nc := range chans {
+		if nc.ChannelType() == "direct-tcpip" {
+			go forwardDirectTCPIP(nc)
+			continue
+		}
 		ch, chReqs, err := nc.Accept()
 		if err != nil {
 			continue
@@ -108,6 +115,37 @@ func serveExecConn(conn net.Conn, cfg *ssh.ServerConfig) {
 			}
 		}()
 	}
+}
+
+// forwardDirectTCPIP 把一条 direct-tcpip 通道接到它指明的地址。
+func forwardDirectTCPIP(nc ssh.NewChannel) {
+	var target struct {
+		Host     string
+		Port     uint32
+		OrigHost string
+		OrigPort uint32
+	}
+	if err := ssh.Unmarshal(nc.ExtraData(), &target); err != nil {
+		_ = nc.Reject(ssh.ConnectionFailed, err.Error())
+		return
+	}
+	upstream, err := net.Dial("tcp", net.JoinHostPort(target.Host, strconv.Itoa(int(target.Port))))
+	if err != nil {
+		_ = nc.Reject(ssh.ConnectionFailed, err.Error())
+		return
+	}
+	ch, chReqs, err := nc.Accept()
+	if err != nil {
+		_ = upstream.Close()
+		return
+	}
+	go ssh.DiscardRequests(chReqs)
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(upstream, ch); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(ch, upstream); done <- struct{}{} }()
+	<-done
+	_ = ch.Close()
+	_ = upstream.Close()
 }
 
 // setupBatchMFAAsset 用临时文件 SQLite 注册资产与主机密钥仓库（并发拨号会开多条
@@ -222,8 +260,8 @@ func TestBatchExec_NoMFASourceEndsBatchWithNeedsMFA(t *testing.T) {
 	assert.Equal(t, int32(1), srv.challenges.Load())
 }
 
-// SSH 隧道上的 MFA 不在本轮范围内（spec Out of scope）：batch 的数据类条目经 SSH 隧道
-// 拨号时不得拿到 MFA 应答方——--mfa-code 只属于 SSH exec 条目，隧道行为保持不变。
+// 跳板 MFA 只覆盖 SSH 资产与扩展资产（spec 修正轮 1）：batch 的数据库等内置类型条目经
+// SSH 隧道拨号时不得拿到 MFA 应答方——--mfa-code 不属于它们，隧道行为保持不变。
 func TestBatchDataItem_TunnelDialGetsNoMFAResponder(t *testing.T) {
 	srv := newOTPExecServer(t, "123456")
 	sshAsset := setupBatchMFAAssets(t, srv)[0]

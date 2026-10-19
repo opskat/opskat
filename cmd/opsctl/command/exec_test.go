@@ -45,9 +45,9 @@ import (
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/host_key_repo"
 	"github.com/opskat/opskat/internal/repository/policy_group_repo"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
+	"github.com/opskat/opskat/internal/sshagent"
 	"github.com/opskat/opskat/migrations"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
@@ -793,7 +793,13 @@ func setupLocalExtExec(t *testing.T, states ...*extension_state_entity.Extension
 // code, stdout and stderr.
 func (e *localExtEnv) exec(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
-	ctx := withMFACode(context.Background(), "")
+	return e.execWithMFACode(t, "", args...)
+}
+
+// execWithMFACode is exec with a global --mfa-code ("" = none).
+func (e *localExtEnv) execWithMFACode(t *testing.T, mfaCode string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	ctx := withMFACode(context.Background(), mfaCode)
 	stderr = captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
 			code = cmdExec(ctx, buildHandlerMap(), args, "sess-ext")
@@ -911,38 +917,152 @@ func TestCmdExec_ExtensionToolTimeoutFails(t *testing.T) {
 	assert.Empty(t, stdout)
 }
 
-// The extension's connection path dials with the exec's context, so an SSH hop that
-// asks for MFA is answered the way `opsctl exec` on an SSH asset answers it — here
-// from --mfa-code.
-func TestCmdExec_ExtensionExecAnswersTunnelMFA(t *testing.T) {
-	setupLocalExtExec(t)
-	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
-	srv := newOTPExecServer(t, "123456")
-	bastion := createOTPSSHAsset(t, srv)
+// mfaHopEnv is the fixture asset with its endpoint — a TCP echo server — behind an SSH
+// tunnel whose hop asks for an OTP after the public key, the way V8 found it: the
+// extension reaches its endpoint only through that hop's layer of the connection path.
+type mfaHopEnv struct {
+	*localExtEnv
+	hop      *otpExecServer
+	echoAddr string
+}
 
-	var dialErr error
-	handlers := map[string]tool.ToolHandlerFunc{
-		"exec": func(ctx context.Context, _ map[string]any) (string, error) {
-			client, closers, err := credential_resolver.Default().DialAssetSSH(ctx, bastion.ID)
-			dialErr = err
-			if err == nil {
-				_ = client.Close()
-				for _, c := range closers {
-					_ = c.Close()
-				}
+func setupExtBehindMFAHop(t *testing.T, otp string) *mfaHopEnv {
+	t.Helper()
+	return putBehindMFAHop(t, setupLocalExtExec(t), otp)
+}
+
+// putBehindMFAHop moves env's fixture asset behind a new OTP-requiring hop.
+func putBehindMFAHop(t *testing.T, env *localExtEnv, otp string) *mfaHopEnv {
+	t.Helper()
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	hop := newOTPExecServer(t, otp)
+	echoAddr := newTCPEchoServer(t)
+	env.asset.SSHTunnelID = createOTPSSHAsset(t, hop).ID
+	env.asset.Config = fmt.Sprintf(`{"endpoint":%q}`, echoAddr)
+	require.NoError(t, env.gdb.Save(env.asset).Error)
+	return &mfaHopEnv{localExtEnv: env, hop: hop, echoAddr: echoAddr}
+}
+
+// tcpEchoCommand is the fixture tool call that reaches the asset's endpoint.
+func (e *mfaHopEnv) tcpEchoCommand() string {
+	return "tcp_echo --addr=" + e.echoAddr
+}
+
+// tcpEcho runs `opsctl exec fx-1 -- tcp_echo` with the given --mfa-code ("" = none).
+func (e *mfaHopEnv) tcpEcho(t *testing.T, mfaCode string) (code int, stdout, stderr string) {
+	t.Helper()
+	return e.execWithMFACode(t, mfaCode, "fx-1", "--", "tcp_echo", "--addr="+e.echoAddr)
+}
+
+// newTCPEchoServer answers each connection's first read with the same bytes.
+func newTCPEchoServer(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
 			}
-			return "{}", err
-		},
-	}
-	ctx := withMFACode(context.Background(), "123456")
-	var code int
-	stderr := captureStderr(t, func() {
-		code = cmdExec(ctx, handlers, []string{"fx-1", "--", "echo"}, "sess-ext")
-	})
+			go func() {
+				defer func() { _ = conn.Close() }()
+				buf := make([]byte, 16)
+				n, err := conn.Read(buf)
+				if err != nil {
+					return
+				}
+				_, _ = conn.Write(buf[:n])
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// An extension asset whose tunnel hop asks for MFA connects in opsctl with the code
+// from --mfa-code: the hop's challenge is answered once and the tool's result is the
+// only thing on stdout.
+func TestCmdExec_ExtensionThroughMFAHopAnswersWithMFACode(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+
+	code, stdout, stderr := env.tcpEcho(t, "123456")
 
 	require.Equal(t, 0, code, "stderr: %s", stderr)
-	require.NoError(t, dialErr, "the tunnel's MFA challenge must be answered with --mfa-code")
-	assert.Equal(t, int32(1), srv.challenges.Load())
+	assert.JSONEq(t, `{"echo":"ping"}`, stdout)
+	assert.Equal(t, int32(1), env.hop.challenges.Load())
+}
+
+// In an interactive terminal the hop's challenge is shown on stderr and answered from
+// stdin, as the target's own challenge would be.
+func TestCmdExec_ExtensionThroughMFAHopAnswersOnTerminal(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+	swapGlobal(t, func() func() bool { return stdinIsTerminal }, func(f func() bool) { stdinIsTerminal = f }, func() bool { return true })
+	swapGlobal(t, func() func() bool { return stderrIsTerminal }, func(f func() bool) { stderrIsTerminal = f }, func() bool { return true })
+	in, w, err := os.Pipe()
+	require.NoError(t, err)
+	_, err = w.WriteString("123456\n")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	swapGlobal(t, func() *os.File { return os.Stdin }, func(f *os.File) { os.Stdin = f }, in)
+
+	code, stdout, stderr := env.tcpEcho(t, "")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.JSONEq(t, `{"echo":"ping"}`, stdout)
+	assert.Contains(t, stderr, "SSH MFA challenge:")
+	assert.Contains(t, stderr, "OTP: ")
+	assert.Equal(t, int32(1), env.hop.challenges.Load())
+}
+
+// No code, no terminal, no desktop app: the hop's challenge has no answer source, so
+// opsctl refuses structurally — NEEDS MFA on stderr's first line, exit code 3.
+func TestCmdExec_ExtensionThroughMFAHopWithoutSourceNeedsMFA(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+
+	code, stdout, stderr := env.tcpEcho(t, "")
+
+	assert.Equal(t, refusalExitCode, code, "stderr: %s", stderr)
+	assert.Empty(t, stdout)
+	firstLine, _, _ := strings.Cut(stderr, "\n")
+	assert.Equal(t, needsMFAMarker, firstLine)
+}
+
+// A hop that rejects the code fails as an MFA verification failure, and the same code
+// is not offered to it again.
+func TestCmdExec_ExtensionThroughMFAHopRejectingTheCodeIsMFAFailed(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+
+	code, stdout, stderr := env.tcpEcho(t, "000000")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, sshagent.CodeMFAFailed)
+	assert.Equal(t, int32(1), env.hop.challenges.Load())
+}
+
+// `opsctl exec` on an SSH asset behind a hop that asks for MFA, where the target asks
+// too: both are answered from --mfa-code, the hop first, and the command runs.
+func TestExecSSHStreaming_ThroughMFAHopAnswersEachHostInDialOrder(t *testing.T) {
+	setupLocalExtExec(t)
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	hop := newOTPExecServer(t, "123456")
+	hopAsset := createOTPSSHAsset(t, hop)
+	target := newOTPExecServer(t, "123456")
+	targetAsset := createOTPSSHAsset(t, target)
+	targetAsset.SSHTunnelID = hopAsset.ID
+	require.NoError(t, asset_repo.Asset().Update(context.Background(), targetAsset))
+
+	ctx := withMFACode(context.Background(), "123456")
+	var code int
+	stdout := captureStdout(t, func() {
+		code = execSSHStreaming(ctx, ctx, targetAsset, "uptime", ApprovalResult{})
+	})
+
+	require.Equal(t, 0, code)
+	assert.Equal(t, "ok:uptime", stdout)
+	assert.Equal(t, int32(1), hop.challenges.Load())
+	assert.Equal(t, int32(1), target.challenges.Load())
 }
 
 // createOTPSSHAsset stores a key-authenticated SSH asset pointing at srv.

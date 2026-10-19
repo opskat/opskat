@@ -14,14 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/repository/host_key_repo"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
@@ -74,6 +71,12 @@ func setupBatchExt(t *testing.T, states ...*extension_state_entity.ExtensionStat
 // "builtin-ok" for the built-in assets.
 func (e *batchExtEnv) batch(t *testing.T, args ...string) (int, batchOutput, string) {
 	t.Helper()
+	return e.batchWithMFACode(t, "", args...)
+}
+
+// batchWithMFACode is batch with a global --mfa-code ("" = none).
+func (e *batchExtEnv) batchWithMFACode(t *testing.T, mfaCode string, args ...string) (int, batchOutput, string) {
+	t.Helper()
 	handlers := buildHandlerMap()
 	execTool := handlers[batchAuditTool]
 	builtin := map[string]bool{strconv.FormatInt(e.kafka.ID, 10): true, strconv.FormatInt(e.oss.ID, 10): true}
@@ -87,7 +90,7 @@ func (e *batchExtEnv) batch(t *testing.T, args ...string) (int, batchOutput, str
 	var stdout string
 	stderr := captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			code = cmdBatch(withMFACode(context.Background(), ""), handlers, args, "sess-batch")
+			code = cmdBatch(withMFACode(context.Background(), mfaCode), handlers, args, "sess-batch")
 		})
 	})
 	var out batchOutput
@@ -271,38 +274,32 @@ func TestBatchExt_DesktopRequestCarriesTheClassification(t *testing.T) {
 	}, builtin, "a built-in item is sent as before")
 }
 
-// An extension item dials through its asset's connection path the way `opsctl exec`
-// on it does: an SSH hop that asks for MFA is answered — here from --mfa-code — the
-// way a batch's SSH items answer it.
-func TestBatchExt_ExtensionItemAnswersTunnelMFA(t *testing.T) {
+// An extension item reaches its endpoint through its asset's SSH tunnel the way
+// `opsctl exec` on it does: the hop's MFA challenge is answered from the batch's
+// --mfa-code, once.
+func TestBatchExt_ExtensionItemThroughMFAHopAnswersWithMFACode(t *testing.T) {
 	env := setupBatchExt(t)
-	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
-	srv := newOTPExecServer(t, "123456")
-	bastion := createOTPSSHAsset(t, srv)
+	hop := putBehindMFAHop(t, env.localExtEnv, "123456")
 
-	var dialErr error
-	handlers := map[string]tool.ToolHandlerFunc{
-		batchAuditTool: func(ctx context.Context, _ map[string]any) (string, error) {
-			client, closers, err := credential_resolver.Default().DialAssetSSH(ctx, bastion.ID)
-			dialErr = err
-			if err == nil {
-				_ = client.Close()
-				for _, c := range closers {
-					_ = c.Close()
-				}
-			}
-			return "{}", err
-		},
-	}
-	var code int
-	stderr := captureStderr(t, func() {
-		captureStdout(t, func() {
-			code = cmdBatch(withMFACode(context.Background(), "123456"), handlers,
-				[]string{env.item(env.asset, batchExtRead)}, "sess-batch")
-		})
-	})
+	code, out, stderr := env.batchWithMFACode(t, "123456", env.item(env.asset, hop.tcpEchoCommand()))
 
 	require.Equal(t, 0, code, "stderr: %s", stderr)
-	require.NoError(t, dialErr, "the tunnel's MFA challenge must be answered with --mfa-code")
-	assert.Equal(t, int32(1), srv.challenges.Load())
+	require.Len(t, out.Results, 1)
+	assert.JSONEq(t, `{"echo":"ping"}`, out.Results[0].Stdout)
+	assert.Equal(t, int32(1), hop.hop.challenges.Load())
+}
+
+// With no answer source the extension item's hop ends the batch like an SSH item
+// that needs MFA: NEEDS MFA on stderr's first line, exit code 3.
+func TestBatchExt_ExtensionItemThroughMFAHopWithoutSourceNeedsMFA(t *testing.T) {
+	env := setupBatchExt(t)
+	hop := putBehindMFAHop(t, env.localExtEnv, "123456")
+
+	code, out, stderr := env.batch(t, env.item(env.asset, hop.tcpEchoCommand()))
+
+	assert.Equal(t, refusalExitCode, code, "stderr: %s", stderr)
+	require.Len(t, out.Results, 1)
+	assert.NotEmpty(t, out.Results[0].Error)
+	firstLine, _, _ := strings.Cut(stderr, "\n")
+	assert.Equal(t, needsMFAMarker, firstLine)
 }

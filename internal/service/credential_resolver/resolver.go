@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"sort"
 
@@ -83,42 +82,42 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 					zap.Int64("assetID", asset.ID), zap.Int("upstreamHops", len(upstream)))
 				resolved = append(resolved, upstream...)
 			}
-			// Agent 层：不解析密码/密钥材料，经同一认证工厂在真正拨号时完成握手。
+			hop := ssh_svc.ConnectConfig{
+				Host:              cfg.Host,
+				Port:              cfg.Port,
+				Username:          cfg.Username,
+				AuthType:          cfg.AuthType,
+				HostKeyVerifyFunc: ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
+			}
 			if cfg.AuthType == asset_entity.AuthTypeAgent {
-				agentCfg, err := r.ResolveAgentAuthConfig(cfg)
-				if err != nil {
+				// Agent 层不解析密码/密钥材料，经同一认证工厂在真正拨号时完成握手。
+				if hop.Agent, err = r.ResolveAgentAuthConfig(cfg); err != nil {
 					return nil, err
 				}
-				resolved = append(resolved, proxychain.Layer{
-					Type:             proxychain.LayerSSH,
-					Name:             layer.Name,
-					Host:             cfg.Host,
-					Port:             cfg.Port,
-					Username:         cfg.Username,
-					Handshake:        r.agentHandshakeLayer(agentCfg, cfg.Username, cfg.Host, cfg.Port),
-					EstablishTimeout: stepTimeout,
-				})
-				break
+			} else {
+				password, key, passphrase, err := r.ResolveSSHCredentials(ctx, cfg)
+				if err != nil {
+					return nil, fmt.Errorf("解析代理链 SSH 凭据失败: %w", err)
+				}
+				hop.Password, hop.Key, hop.KeyPassphrase, hop.PrivateKeys = password, key, passphrase, cfg.PrivateKeys
 			}
-			password, key, passphrase, err := r.ResolveSSHCredentials(ctx, cfg)
-			if err != nil {
-				return nil, fmt.Errorf("解析代理链 SSH 凭据失败: %w", err)
+			// 跳板要第二因子时与目标一样交给 ctx 里的应答方，挑战以跳板资产为对象。
+			var newMFA func() sshagent.InteractiveCaller
+			if newCaller := mfaCallerFrom(ctx); newCaller != nil {
+				hopID := asset.ID
+				newMFA = func() sshagent.InteractiveCaller { return newCaller(hopID) }
 			}
-			auth, err := ssh_svc.BuildAuthMethodsForProxyChain(cfg.AuthType, password, key, passphrase, cfg.PrivateKeys)
+			handshake, err := ssh_svc.ProxyChainHandshake(hop, newMFA)
 			if err != nil {
 				return nil, err
 			}
 			resolved = append(resolved, proxychain.Layer{
-				Type:     proxychain.LayerSSH,
-				Name:     layer.Name,
-				Host:     cfg.Host,
-				Port:     cfg.Port,
-				Username: cfg.Username,
-				SSHConfig: &ssh.ClientConfig{
-					User:            cfg.Username,
-					Auth:            auth,
-					HostKeyCallback: ssh_svc.MakeHostKeyCallback(cfg.Host, cfg.Port, ssh_svc.AutoTrustFirstRejectChangeVerifyFunc()),
-				},
+				Type:             proxychain.LayerSSH,
+				Name:             layer.Name,
+				Host:             cfg.Host,
+				Port:             cfg.Port,
+				Username:         cfg.Username,
+				Handshake:        handshake,
 				EstablishTimeout: stepTimeout,
 			})
 		case asset_entity.ProxyChainLayerSOCKS5:
@@ -246,15 +245,6 @@ func (r *Resolver) agentSource(sourceID int64) func(context.Context) (sshagent.S
 			Type:  sshagent.EndpointType(src.EndpointType),
 			Value: src.Endpoint,
 		}, nil
-	}
-}
-
-// agentHandshakeLayer 为代理链的 Agent SSH 层构造握手闭包：来源在握手发生时解析，
-// 执行握手的组件拥有 Agent 传输。
-func (r *Resolver) agentHandshakeLayer(agentCfg *ssh_svc.AgentConfig, username, host string, port int) func(context.Context, net.Conn, string) (*ssh.Client, error) {
-	return func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error) {
-		hk := ssh_svc.MakeAgentHostKeyCallback(host, port, ssh_svc.AutoTrustFirstRejectChangeVerifyFunc())
-		return ssh_svc.AgentClientConn(ctx, agentCfg, username, hk, conn, addr)
 	}
 }
 
@@ -488,7 +478,7 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		return nil, nil, err
 	}
 	var mfa sshagent.InteractiveCaller
-	if newCaller, ok := ctx.Value(mfaKeyType{}).(func(assetID int64) sshagent.InteractiveCaller); ok {
+	if newCaller := mfaCallerFrom(ctx); newCaller != nil {
 		mfa = newCaller(assetID)
 		if agentCfg != nil {
 			agentCfg.MFA = mfa
@@ -518,8 +508,16 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 
 type mfaKeyType struct{}
 
-// WithMFA 让经 ctx 发起的 DialAssetSSH 把 keyboard-interactive 挑战交给应答方（opsctl）。
-// newCaller 每次新建连接调用一次（传入目标资产），使应答方可以持有「本连接内」的状态。
+// WithMFA 让经 ctx 发起的 DialAssetSSH 与 ResolveProxyChain 把 keyboard-interactive /
+// Agent MFA 挑战交给应答方（opsctl）：目标资产的挑战，以及连接路径上每台 SSH 跳板的挑战。
+// newCaller 每次新建连接（每台主机的每次握手）调用一次，传入被挑战的那台资产（目标或
+// 跳板），使应答方可以持有「本连接内」的状态。
 func WithMFA(ctx context.Context, newCaller func(assetID int64) sshagent.InteractiveCaller) context.Context {
 	return context.WithValue(ctx, mfaKeyType{}, newCaller)
+}
+
+// mfaCallerFrom 取 WithMFA 登记的应答方；没有登记时返回 nil（非交互）。
+func mfaCallerFrom(ctx context.Context) func(assetID int64) sshagent.InteractiveCaller {
+	newCaller, _ := ctx.Value(mfaKeyType{}).(func(assetID int64) sshagent.InteractiveCaller)
+	return newCaller
 }
