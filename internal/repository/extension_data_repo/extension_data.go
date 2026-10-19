@@ -57,7 +57,7 @@ func (r *extensionDataRepo) Set(ctx context.Context, extName, key string, value 
 	// Quota check and write share one transaction so that two processes (desktop app
 	// and opsctl) writing the same extension cannot both pass the check. The
 	// transaction begins immediately (see bootstrap.SQLiteDSN), which makes SQLite
-	// serialise writers and lets the loser wait instead of failing.
+	// serialize writers and lets the loser wait instead of failing.
 	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		// Total size of the other keys of this extension (the key being written is replaced).
 		var totalSize int64
