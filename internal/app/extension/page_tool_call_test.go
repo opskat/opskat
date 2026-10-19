@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,9 +19,8 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
-
-const fixtureExtSrc = "../../../pkg/extension/testdata/fixture-ext"
 
 // pageCallFixture loads pkg/extension's fixture extension through the real
 // Manager, so describe() (tool schemas, timeouts) reaches the manifest exactly
@@ -32,31 +28,21 @@ const fixtureExtSrc = "../../../pkg/extension/testdata/fixture-ext"
 func pageCallFixture(t *testing.T) (*Extension, *mock_asset_repo.MockAssetRepo) {
 	t.Helper()
 	root := t.TempDir()
-	dir := filepath.Join(root, "fixture-ext")
-	require.NoError(t, os.MkdirAll(dir, 0o750))
-	build := exec.Command("go", "build", "-buildmode=c-shared", "-o", filepath.Join(dir, "main.wasm"), fixtureExtSrc) //nolint:gosec // fixed argv, only the temp output path varies
-	build.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
-	out, err := build.CombinedOutput()
-	require.NoError(t, err, "build fixture extension: %s", out)
-	manifest, err := os.ReadFile(filepath.Join(fixtureExtSrc, "manifest.json"))
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600)) //nolint:gosec // dir is this test's own temp dir
+	dir := extensiontest.InstallFixture(t, root)
 
 	credential_svc.SetDefault(credential_svc.New("page-call-key", []byte("0123456789abcdef")))
 	e := &Extension{ctx: context.Background(), lang: fixedLang("en")}
+	var svc *extension_svc.Service
 	mgr := extension.NewManager(root, func(name string) extension.HostProvider {
-		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{
-			AssetConfigs: e.NewAssetConfigGetter(name),
-			AssetDialer:  e.NewAssetDialer(name),
-		})
+		return extension.NewDefaultHostProvider(svc.HostConfig(name))
 	}, zap.NewNop())
 	t.Cleanup(func() { mgr.Close(context.Background()) })
-	_, err = mgr.LoadExtension(context.Background(), dir)
-	require.NoError(t, err)
 
 	assets := mock_asset_repo.NewMockAssetRepo(gomock.NewController(t))
-	svc := extension_svc.New(mgr, nil, nil, assets, zap.NewNop(), nil, nil)
-	svc.Bridge().Register(mgr.GetExtension("fixture-ext"))
+	svc = extension_svc.New(mgr, nil, nil, assets, zap.NewNop(), nil, nil)
+	_, err := mgr.LoadExtension(context.Background(), dir)
+	require.NoError(t, err)
+	svc.Bridge().Register(mgr.GetExtension(extensiontest.FixtureName))
 	e.SetService(svc)
 	return e, assets
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -62,13 +61,18 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return 1
 	}
 
-	// 归属直接问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
-	// 接线）：内置类型天然报 ("", false)，因为注册表拒绝让扩展占用一个内置类型名——
-	// 与桌面端的冲突规则同一条，opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。
-	// 提前拿到这个答案，同时喂给 parseExecArgs（多词 argv 的引号策略——扩展的 flag
-	// DSL 没有远端 shell，元字符必须逐词保真；ssh 等类型的多词语义不变）和下面的派发
-	// 判断，避免同一个"是不是扩展资产"的问题被问两次、答案还可能不一致。
-	extName, isExtensionAsset := assettype.ExtensionOwnerOf(asset.Type)
+	// 归属先问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
+	// 接线），注册表不认识的类型再找已安装的扩展（见 extensionOwnerOf）：内置类型天然报
+	// ("", false)，因为注册表拒绝让扩展占用一个内置类型名——与桌面端的冲突规则同一条，
+	// opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。提前拿到这个答案，同时喂给
+	// parseExecArgs（多词 argv 的引号策略——扩展的 flag DSL 没有远端 shell，元字符必须
+	// 逐词保真；ssh 等类型的多词语义不变）和下面的激活判断，避免同一个"是不是扩展资产"
+	// 的问题被问两次、答案还可能不一致。
+	extName, isExtensionAsset, err := extensionOwnerOf(asset.Type)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
@@ -91,11 +95,14 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return 1
 	}
 
-	// 扩展提供的资产类型：命令交回桌面进程执行。理由是执行位置而不是语义——WASM 运行时、
-	// 扩展的宿主能力与解密后的资产配置只存在于桌面进程里。桌面端跑的是同一个统一 exec
-	// handler，策略/审批/grant/审计因此与内置类型逐字一致，也由那一端落库。
+	// 扩展提供的资产类型：在本进程里只激活这一个扩展（spec 决策 1、3：执行一律在
+	// opsctl，桌面端至多是审批人），之后与内置类型走下面同一条规范化 → 审批 → 统一
+	// exec handler 的路径，策略、审批、grant 与审计都在这里落。
 	if isExtensionAsset {
-		return execViaDesktop(asset, extName, command, session)
+		if command, err = prepareExtensionExec(ctx, asset, extName, command); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
 	}
 
 	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
@@ -156,10 +163,16 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return execSSHStreamFn(ctx, auditCtx, asset, command, approvalResult)
 	}
 	// 其余类型走统一 exec handler：opsctl 由此获得 database/redis/mongodb/etcd/kafka/k8s
-	// 的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它已经知道
-	// 按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面 validateRedisScope
-	// 挡掉了非空 scope，这里传空字符串等价于不传）。
-	return callHandler(auditCtx, handlers, "exec", map[string]any{
+	// 与扩展类型的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它
+	// 已经知道按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面
+	// validateRedisScope 挡掉了非空 scope，这里传空字符串等价于不传）。
+	execCtx := auditCtx
+	if isExtensionAsset {
+		// 扩展经资产连接路径拨号（SSH 隧道、代理链）：隧道上的 SSH 跳板要 MFA 时，与
+		// ssh 资产一样按 --mfa-code → 终端 → 桌面端的顺序应答。
+		execCtx = withMFA(auditCtx)
+	}
+	return callHandler(execCtx, handlers, "exec", map[string]any{
 		"asset":   strconv.FormatInt(asset.ID, 10),
 		"command": command,
 		"scope":   scope,
@@ -276,13 +289,16 @@ Arguments:
               Dispatched by the asset's real type: ssh keeps its streaming
               channel (pipes, exit code); the other built-in types (database,
               redis, mongodb, etcd, kafka, k8s, oss) run through the unified
-              exec handler; an extension-provided type is executed by the
-              running desktop app, which owns the WASM runtime.
+              exec handler; so does an extension-provided type, after
+              opsctl loads that one extension itself — the desktop app does
+              not have to be running, and a disabled extension is refused.
               For an extension asset the command is "<tool> --flag=value" or
               "<tool> --flag value" (space form; a boolean flag never
               consumes the following word as its value — pass --flag=false
               explicitly to set it to false); run 'opsctl help <asset>' for
-              its tool and flag reference.
+              its tool and flag reference. opsctl has no file dialog: a tool
+              that asks for one fails; pass the file with its --<flag>-file
+              parameter instead.
 
 Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this
@@ -340,30 +356,13 @@ Examples:
 `)
 }
 
-// execViaDesktop 把一条扩展资产上的命令交给运行中的桌面端执行。
-//
-// 桌面端不在时 fail closed：本进程既没有 WASM 运行时，也没有扩展的策略引擎，
-// 在这里"本地跑一下"等于同时绕开两者。
-func execViaDesktop(asset *asset_entity.Asset, extName, command, session string) int {
-	// `--<flag>-file` is opsctl-only: read here, so the desktop (and its approval,
-	// grants and audit) only ever sees the inline `--<flag> <content>` form.
-	command, err := extreg.ExpandFileFlags(extName, command, execStdin)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+// prepareExtensionExec 在本进程里激活 extName，再把 opsctl 独有的 `--<flag>-file` 读成
+// 行内的 `--<flag> <content>`：规范化、策略、审批、grant 与审计只会见到行内形式，
+// 两种写法因此完全等价。激活在前——停用的扩展要先按名字拒绝，而不是在展开时报
+// "未注册"。
+func prepareExtensionExec(ctx context.Context, asset *asset_entity.Asset, extName, command string) (string, error) {
+	if err := activateExtensionFn(ctx, extName); err != nil {
+		return "", fmt.Errorf("asset %q is type=%s, provided by extension %q: %w", asset.Name, asset.Type, extName, err)
 	}
-	result, err := delegateExtExecFn(asset.ID, asset.Name, command, session)
-	if err != nil {
-		if strings.Contains(err.Error(), "cannot connect") {
-			fmt.Fprintf(os.Stderr,
-				"Error: asset %q is type=%s, provided by extension %q; the desktop app must be running to execute it\n",
-				asset.Name, asset.Type, extName)
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	// 结果原样输出，供管道与脚本消费。
-	fmt.Print(result)
-	return 0
+	return extreg.ExpandFileFlags(extName, command, execStdin)
 }

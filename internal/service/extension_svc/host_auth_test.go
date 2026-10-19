@@ -1,4 +1,4 @@
-package extension
+package extension_svc
 
 import (
 	"context"
@@ -22,12 +22,12 @@ var bearerAuth = &extension.AuthDef{Groups: []extension.AuthGroup{{
 
 func TestAssetCredentialValuesServeInjectionOnly(t *testing.T) {
 	Convey("credential injection reads decrypted fields host-side, whatever the extension may read itself", t, func() {
-		e, assets := newHostTestBinder(t)
+		svc, assets := newHostTestService(t)
 
 		Convey("an extension without credentials:read still gets the plaintext for injection", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(4)).
 				Return(&asset_entity.Asset{ID: 4, Type: "other-store", Config: encryptedConfig(t, "theirs")}, nil)
-			values, err := e.NewAssetConfigGetter("other").AssetCredentialValues(context.Background(), 4, []string{"host", "password"})
+			values, err := configGetterOf(svc, "other").AssetCredentialValues(context.Background(), 4, []string{"host", "password"})
 			So(err, ShouldBeNil)
 			So(values, ShouldResemble, map[string]string{"host": "h", "password": "theirs"})
 		})
@@ -35,7 +35,7 @@ func TestAssetCredentialValuesServeInjectionOnly(t *testing.T) {
 		Convey("only the named fields are decrypted", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(5)).
 				Return(&asset_entity.Asset{ID: 5, Type: "other-store", Config: `{"host":"h","password":"not-a-ciphertext"}`}, nil)
-			values, err := e.NewAssetConfigGetter("other").AssetCredentialValues(context.Background(), 5, []string{"host"})
+			values, err := configGetterOf(svc, "other").AssetCredentialValues(context.Background(), 5, []string{"host"})
 			So(err, ShouldBeNil)
 			So(values, ShouldResemble, map[string]string{"host": "h"})
 		})
@@ -43,7 +43,7 @@ func TestAssetCredentialValuesServeInjectionOnly(t *testing.T) {
 		Convey("another extension's asset is refused", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(3)).
 				Return(&asset_entity.Asset{ID: 3, Type: "acme-store", Config: encryptedConfig(t, "mine")}, nil)
-			values, err := e.NewAssetConfigGetter("other").AssetCredentialValues(context.Background(), 3, []string{"password"})
+			values, err := configGetterOf(svc, "other").AssetCredentialValues(context.Background(), 3, []string{"password"})
 			So(err, ShouldNotBeNil)
 			So(values, ShouldBeNil)
 		})
@@ -52,7 +52,7 @@ func TestAssetCredentialValuesServeInjectionOnly(t *testing.T) {
 
 func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 	Convey("a referenced password that does not decrypt fails the request before anything is sent", t, func() {
-		e, assets := newHostTestBinder(t)
+		svc, assets := newHostTestService(t)
 		var hits atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			hits.Add(1)
@@ -61,7 +61,7 @@ func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 		assets.EXPECT().Find(gomock.Any(), int64(5)).
 			Return(&asset_entity.Asset{ID: 5, Type: "other-store", Config: `{"host":"h","password":"not-a-ciphertext"}`}, nil).AnyTimes()
 
-		provider := extension.NewDefaultHostProvider(extension.DefaultHostConfig{AssetConfigs: e.NewAssetConfigGetter("other")})
+		provider := extension.NewDefaultHostProvider(extension.DefaultHostConfig{AssetConfigs: configGetterOf(svc, "other")})
 		res, err := provider.OpenIO(context.Background(), &extension.AssetRef{ID: 5, Name: "store", Type: "other-store"}, extension.IOOpenParams{
 			Type: "http", Method: "GET", URL: srv.URL + "/",
 			Auth: &extension.HTTPAuth{Def: bearerAuth, IsEndpoint: func(*url.URL) bool { return true }},
@@ -80,14 +80,14 @@ func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 // credentials:read never sees it in its own config.
 func TestTestConnectionKeepsCredentialsForInjectionWithoutCredentialsRead(t *testing.T) {
 	Convey("given an extension without credentials:read", t, func() {
-		e, assets := newHostTestBinder(t)
+		svc, assets := newHostTestService(t)
 		manifest := &extension.Manifest{
 			Name:       "other",
 			AssetTypes: []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}},
 		}
 
 		Convey("a password typed into the new-asset form is kept for injection, withheld from the guest", func() {
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)
 			So(err, ShouldBeNil)
 			So(string(adhoc.Config), ShouldNotContainSubstring, "typed")
 			So(string(adhoc.Credentials), ShouldEqual, `{"host":"h","password":"typed"}`)
@@ -96,7 +96,7 @@ func TestTestConnectionKeepsCredentialsForInjectionWithoutCredentialsRead(t *tes
 		Convey("an unchanged password of the edited asset is kept for injection from storage", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(5)).
 				Return(&asset_entity.Asset{ID: 5, Type: "other-store", Config: encryptedConfig(t, "theirs")}, nil)
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 5, `{"host":"h"}`)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 5, `{"host":"h"}`)
 			So(err, ShouldBeNil)
 			So(string(adhoc.Config), ShouldNotContainSubstring, "theirs")
 			So(string(adhoc.Credentials), ShouldEqual, `{"host":"h","password":"theirs"}`)

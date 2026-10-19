@@ -1,4 +1,4 @@
-package extension
+package extension_svc
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
-	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -33,15 +32,13 @@ func TestAssetDialerForConfig(t *testing.T) {
 		asset_repo.RegisterAsset(assets)
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
-		svc := extension_svc.New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
 		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true, TLS: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
-		e := &Extension{ctx: context.Background(), lang: fixedLang("en")}
-		e.SetService(svc)
 		ctx := context.Background()
 
 		Convey("an asset type with no declared connection support dials directly", func() {
-			dial, tlsConfig, err := e.NewAssetDialer("plain").DialContextForConfig(ctx, "plain-store", &extension.AdHocAssetConfig{
+			dial, tlsConfig, err := dialerOf(svc, "plain").DialContextForConfig(ctx, "plain-store", &extension.AdHocAssetConfig{
 				Config:      mustJSONAdHoc(t, map[string]any{}),
 				SSHTunnelID: 99,
 			})
@@ -51,19 +48,19 @@ func TestAssetDialerForConfig(t *testing.T) {
 		})
 
 		Convey("an unknown asset type is refused", func() {
-			_, _, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "nope", &extension.AdHocAssetConfig{})
+			_, _, err := dialerOf(svc, "es").DialContextForConfig(ctx, "nope", &extension.AdHocAssetConfig{})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "nope")
 		})
 
 		Convey("an unloaded extension is refused", func() {
-			_, _, err := e.NewAssetDialer("ghost").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{})
+			_, _, err := dialerOf(svc, "ghost").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "not loaded")
 		})
 
 		Convey("no SSH tunnel id, no proxy chain, no TLS: dials directly", func() {
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			dial, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				Config: mustJSONAdHoc(t, map[string]any{"endpoint": "es.internal:9200"}),
 			})
 			So(err, ShouldBeNil)
@@ -81,7 +78,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), tunnelID).
 				Return(&asset_entity.Asset{ID: tunnelID, Name: "bastion", Type: asset_entity.AssetTypeSSH, Config: string(sshCfg)}, nil)
 
-			dial, _, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			dial, _, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				SSHTunnelID: tunnelID,
 			})
 			So(err, ShouldBeNil)
@@ -104,7 +101,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 				"layers": []map[string]any{{"id": "hop1", "type": "socks5", "enabled": true, "host": host, "port": portN}},
 			})
 
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			dial, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				ProxyChain: chain,
 			})
 			So(err, ShouldBeNil)
@@ -121,7 +118,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 
 		Convey("submitted TLS settings, enabled, are built for the dial", func() {
 			tls, _ := json.Marshal(map[string]any{"enabled": true, "insecure": true, "serverName": "es.example.com"})
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			dial, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				TLS: tls,
 			})
 			So(err, ShouldBeNil)
@@ -133,7 +130,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 
 		Convey("submitted TLS settings left disabled have no effect", func() {
 			tls, _ := json.Marshal(map[string]any{"enabled": false, "insecure": true})
-			_, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			_, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				TLS: tls,
 			})
 			So(err, ShouldBeNil)
@@ -142,7 +139,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 
 		Convey("a CA certificate that does not parse fails, with no fallback to unverified", func() {
 			tls, _ := json.Marshal(map[string]any{"enabled": true, "caCert": "not a certificate"})
-			dial, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			dial, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				TLS: tls,
 			})
 			So(dial, ShouldBeNil)
@@ -152,7 +149,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 
 		Convey("a TLS CA file that cannot be read fails, with no fallback to unverified", func() {
 			tls, _ := json.Marshal(map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"})
-			_, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			_, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				TLS: tls,
 			})
 			So(tlsConfig, ShouldBeNil)
@@ -168,7 +165,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 			tls, _ := json.Marshal(map[string]any{
 				"enabled": true, "caCert": string(certPEM), "clientCert": string(certPEM), "clientKey": encryptedKey,
 			})
-			_, tlsConfig, err := e.NewAssetDialer("es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
+			_, tlsConfig, err := dialerOf(svc, "es").DialContextForConfig(ctx, "es-cluster", &extension.AdHocAssetConfig{
 				TLS: tls,
 			})
 			So(err, ShouldBeNil)

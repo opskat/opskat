@@ -3,24 +3,28 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/extreg"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 )
 
-var delegateExtExecFn = delegateExtExec
-
-// devInstallFn 变量化同 delegateExtExecFn：让 cmdExtDev 的判断可测，不必真起一个桌面端。
+// devInstallFn 变量化：让 cmdExtDev 的判断可测，不必真起一个桌面端。
 var devInstallFn = requestExtDevInstall
 
 // extregRegisterFn 是"仅描述注册"的接缝，同上一套路。
@@ -28,6 +32,103 @@ var extregRegisterFn = extreg.RegisterDescribeOnly
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
+
+// activateExtensionFn 在本进程里完整激活一个扩展：加载它的 WASM，并把启动时的仅描述
+// 注册换成完整注册——策略检查、执行器、命令规范化、配置校验都接上，之后它的资产与
+// 内置类型走同一条 requireApproval → callHandler 路径。变量化同上一套路。
+var activateExtensionFn = activateExtension
+
+// extensionHost 是本进程的扩展宿主：第一次激活时才建，只装被激活的扩展
+// （spec 决策 3：opsctl 只加载目标资产所属的扩展），由 releaseExtensions 在命令结束时释放。
+var extensionHost struct {
+	mu  sync.Mutex
+	svc *extension_svc.Service
+}
+
+func activateExtension(ctx context.Context, extName string) error {
+	extensionHost.mu.Lock()
+	if extensionHost.svc == nil {
+		extensionHost.svc = newExtensionHost()
+	}
+	svc := extensionHost.svc
+	extensionHost.mu.Unlock()
+	return svc.Activate(ctx, extName)
+}
+
+// newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：
+// 资产配置与凭据、KV、资产连接路径）建扩展运行时；桌面窗口才有的两项里，文件对话框
+// 换成 noFileDialog，action 事件不接（exec 只调工具，不跑 action）。
+//
+// 日志走 logger.Default()：opsctl 不初始化日志，它是 no-op，扩展的日志与 guest 的
+// 标准输出 / 标准错误（pkg/extension guestLogWriter 也写它）因此永远不进 opsctl 的
+// 标准输出——管道与脚本拿到的只有结果。
+func newExtensionHost() *extension_svc.Service {
+	var svc *extension_svc.Service // 工厂只在扩展加载时调用，那时已赋值
+	mgr := extension.NewManager(extensionsDirFn(), func(extName string) extension.HostProvider {
+		cfg := svc.HostConfig(extName)
+		cfg.FileDialogs = noFileDialog{}
+		return extension.NewDefaultHostProvider(cfg)
+	}, logger.Default())
+	svc = extension_svc.New(mgr,
+		extension_state_repo.ExtensionState(),
+		extension_data_repo.ExtensionData(),
+		asset_repo.Asset(),
+		logger.Default(), nil, nil)
+	// 完整注册遇到声明了测试连接的类型就要 registrar，激活前接好。
+	extreg.SetConnTestRegistrar(svc.ConnTestRegistrar())
+	return svc
+}
+
+// releaseExtensions 撤掉本进程激活过的扩展并关闭它们的 WASM 运行时。root.go 在命令
+// 结束时调用；没有激活过任何扩展时什么也不做。
+func releaseExtensions(ctx context.Context) {
+	extensionHost.mu.Lock()
+	defer extensionHost.mu.Unlock()
+	if extensionHost.svc == nil {
+		return
+	}
+	for _, name := range extensionHost.svc.Bridge().ListNames() {
+		extreg.Unregister(name)
+	}
+	extensionHost.svc.Close(ctx)
+	extensionHost.svc = nil
+}
+
+// errNoFileDialog 是 opsctl 对"工具要弹文件对话框"的回答（spec 决策 6）：opsctl 没有
+// 图形界面，工具要读的文件经它声明的 --<flag>-file 参数从命令行传入（opsctl help
+// <asset> 的参数表列出了哪些参数可以这样传）。
+var errNoFileDialog = errors.New("opsctl has no file dialog: pass the file through the tool's --<flag>-file parameter instead (see 'opsctl help <asset>')")
+
+type noFileDialog struct{}
+
+func (noFileDialog) FileDialog(string, extension.DialogOptions) (string, error) {
+	return "", errNoFileDialog
+}
+
+// extensionOwnerOf 回答 assetType 由哪个已安装的扩展提供。已启用的扩展由启动时的
+// registerExtensionAssetTypes 接进了资产类型注册表，直接问它；注册表不认识的类型再到
+// 已安装的扩展里找——停用的扩展不注册，它的资产却仍在库里，必须认得出来，激活才能点名
+// 说它已停用，而不是让 exec 报"类型不支持"。内置类型从不走到扫描。
+func extensionOwnerOf(assetType string) (string, bool, error) {
+	if name, ok := assettype.ExtensionOwnerOf(assetType); ok {
+		return name, true, nil
+	}
+	if _, registered := assettype.Get(assetType); registered {
+		return "", false, nil
+	}
+	scanned, err := scanExtensionDirs()
+	if err != nil {
+		return "", false, err
+	}
+	for _, ext := range scanned {
+		for _, at := range ext.info.Manifest.AssetTypes {
+			if at.Type == assetType {
+				return ext.info.Name, true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
 
 func cmdExt(ctx context.Context, args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -144,8 +245,9 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // Without it opsctl is blind to extension asset types while the app on the same
 // machine is not: `create asset --type notebook` reports an unsupported type, `help
 // notebook` lists only the built-ins and `policy show` on an extension asset refuses
-// with "no permanent rule support". `exec` was the exception only because it delegates
-// to the desktop app instead of resolving anything locally.
+// with "no permanent rule support". `exec` starts from this registration too: it then
+// activates just the asset's own extension in full (activateExtensionFn), replacing
+// that extension's describe-only entry with one that can execute.
 //
 // Failures are reported and skipped rather than fatal: a single unregisterable
 // extension (a name collision with a built-in type, a describe() answer this binary is
@@ -210,38 +312,6 @@ func cmdExtList() int {
 	return 0
 }
 
-// delegateExtExec hands one exec on an extension asset to the running desktop app.
-//
-// The reason is execution location, not semantics: the WASM runtime, the extension's
-// host capabilities and its decrypted asset config only exist inside the desktop
-// process. The command string is exactly the one the user typed after `--`, and the app
-// runs it through the same unified exec handler an AI session would, so policy, the
-// approval dialog, grants and audit are identical.
-func delegateExtExec(assetID int64, assetName, command, session string) (string, error) {
-	dataDir := bootstrap.ResolvedDataDir()
-	sockPath := approval.SocketPath(dataDir)
-
-	token, err := bootstrap.ReadAuthToken(dataDir)
-	if err != nil {
-		logger.Default().Warn("read auth token", zap.Error(err))
-	}
-
-	resp, err := approval.RequestApprovalWithToken(sockPath, token, approval.ApprovalRequest{
-		Type:      "ext_tool",
-		AssetID:   assetID,
-		AssetName: assetName,
-		Command:   command,
-		SessionID: session,
-	})
-	if err != nil {
-		return "", err
-	}
-	if resp.ToolError != "" {
-		return "", fmt.Errorf("%s", resp.ToolError)
-	}
-	return resp.ToolResult, nil
-}
-
 // cmdExtDev 把一个未打包的扩展目录装进运行中的桌面应用。
 //
 // 扩展开发没有第二套宿主——安装、加载、注册全部发生在桌面进程里那一套代码上，
@@ -287,8 +357,8 @@ func cmdExtDev(args []string) int {
 
 // requestExtDevInstall 让运行中的桌面进程装这个目录。
 //
-// 与 delegateExtExec 同一条理由：注册表、WASM 运行时、能力面都只存在于桌面进程，
-// opsctl 自己装一份就等于第二套加载路径。
+// 安装改的是桌面端正在运行的那一份（注册表、已加载的 WASM 模块、前端页面），
+// opsctl 自己装一份就等于第二套安装路径。
 func requestExtDevInstall(sourceDir string) (string, string, error) {
 	resp, err := requestDesktop(approval.ApprovalRequest{
 		Type: "ext_dev_install",
@@ -357,7 +427,9 @@ To run an extension tool, use exec against one of the extension's assets:
   opsctl exec <asset> -- <tool> --flag=value
 
 That is the same command built-in asset types use; the asset's type selects the
-extension. Run 'opsctl help <asset>' to see the tool and flag reference.
+extension, which opsctl loads and runs itself, whether or not the desktop app is
+running. A disabled extension is refused. Run 'opsctl help <asset>' to see the
+tool and flag reference.
 
 Examples:
   opsctl ext list

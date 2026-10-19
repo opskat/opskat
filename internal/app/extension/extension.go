@@ -65,28 +65,16 @@ func (e *Extension) NewHostProvider(extName string) interface{} {
 	return nil
 }
 
-// AssetConfigGetter / FileDialogOpener / KVStore / ActionEventHandler / AssetDialer 暴露给 main.go
-// 作为 extension.NewDefaultHostProvider 的依赖。
-
-// NewAssetConfigGetter 为指定扩展返回 assetConfigGetter：只服务该扩展自己注册的资产类型。
-func (e *Extension) NewAssetConfigGetter(extName string) *assetConfigGetter {
-	return &assetConfigGetter{ext: e, extName: extName}
-}
+// FileDialogOpener / ActionEventHandler 暴露给 main.go：它们是只有桌面窗口才能提供的
+// 宿主能力，main.go 把它们补进 extension_svc.Service.HostConfig 给出的其余能力（资产配置、
+// KV、连接路径——与 opsctl 共用）再交给 extension.NewDefaultHostProvider。
 
 // NewFileDialogOpener 返回 fileDialogOpener 实例。
 func (e *Extension) NewFileDialogOpener() *fileDialogOpener { return &fileDialogOpener{ctx: e.ctx} }
 
-// NewKVStore 为指定扩展返回 kvStore 实例。
-func (e *Extension) NewKVStore(extName string) *kvStore { return &kvStore{ext: e, extName: extName} }
-
 // NewActionEventHandler 为指定扩展返回 actionEventHandler 实例。
 func (e *Extension) NewActionEventHandler(extName string) *actionEventHandler {
 	return &actionEventHandler{ctx: e.ctx, extName: extName}
-}
-
-// NewAssetDialer 为指定扩展返回 assetDialer：解析该扩展资产声明的连接路径（SSH 隧道）。
-func (e *Extension) NewAssetDialer(extName string) *assetDialer {
-	return &assetDialer{ext: e, extName: extName}
 }
 
 // Startup 异步初始化扩展系统（WASM 编译较慢，单独协程跑）。

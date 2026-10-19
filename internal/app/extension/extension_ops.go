@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/extreg"
@@ -209,7 +210,7 @@ func (e *Extension) assetRef(extName string, assetID int64) (*extension.AssetRef
 	if assetID == 0 {
 		return nil, nil
 	}
-	_, asset, err := ownedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), e.service, extName, assetID)
+	_, asset, err := e.service.OwnedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -218,13 +219,15 @@ func (e *Extension) assetRef(extName string, assetID int64) (*extension.AssetRef
 
 // GetDecryptedExtensionConfig returns the config of an asset extName owns for
 // that extension's configuration form: password fields decrypted when extName
-// declares credentials:read, withheld otherwise (see getDecryptedExtConfig). An
-// asset of a type extName does not register is refused.
+// declares credentials:read, withheld otherwise (see extension_svc.Service.FormConfig).
+// An asset of a type extName does not register is refused.
 func (e *Extension) GetDecryptedExtensionConfig(assetID int64, extName string) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}
-	return getDecryptedExtConfig(e.service, extName, assetID)
+	ctx, cancel := context.WithTimeout(i18n.Ctx(e.ctx, e.lang.Lang()), 10*time.Second)
+	defer cancel()
+	return e.service.FormConfig(ctx, extName, assetID)
 }
 
 // ValidateExtensionConfig runs the guest's config validator over configJSON, the

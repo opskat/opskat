@@ -17,6 +17,10 @@ import (
 	"github.com/opskat/opskat/pkg/extension"
 )
 
+// FixtureName is the fixture extension's name: its manifest's, and the directory
+// InstallFixture lays it out in.
+const FixtureName = "fixture-ext"
+
 // fixtureSrc is the fixture extension's source directory, found from this file so
 // a test in any package can build it.
 func fixtureSrc(t testing.TB) string {
@@ -28,14 +32,14 @@ func fixtureSrc(t testing.TB) string {
 	return filepath.Join(filepath.Dir(file), "..", "testdata", "fixture-ext")
 }
 
-// LoadFixture builds the fixture extension and loads it through the real
-// extension.Manager, so its describe() reaches the manifest exactly as it does in
-// the app. The manager is closed when the test ends.
-func LoadFixture(t testing.TB) *extension.Extension {
+// InstallFixture builds the fixture extension and lays it out under root exactly as
+// an installed extension looks on disk (<root>/fixture-ext/{manifest.json,main.wasm}),
+// so root can stand in for a data dir's extensions directory. It returns the
+// extension's directory.
+func InstallFixture(t testing.TB, root string) string {
 	t.Helper()
 	src := fixtureSrc(t)
-	root := t.TempDir()
-	dir := filepath.Join(root, "fixture-ext")
+	dir := filepath.Join(root, FixtureName)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +56,16 @@ func LoadFixture(t testing.TB) *extension.Extension {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); err != nil { //nolint:gosec // dir is this test's own temp dir
 		t.Fatal(err)
 	}
+	return dir
+}
+
+// LoadFixture builds the fixture extension and loads it through the real
+// extension.Manager, so its describe() reaches the manifest exactly as it does in
+// the app. The manager is closed when the test ends.
+func LoadFixture(t testing.TB) *extension.Extension {
+	t.Helper()
+	root := t.TempDir()
+	dir := InstallFixture(t, root)
 
 	mgr := extension.NewManager(root, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})

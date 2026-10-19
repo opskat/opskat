@@ -189,7 +189,7 @@ func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) 
 	assert.Equal(t, "acme-store", handler.Type())
 	owner, ok := assettype.ExtensionOwnerOf("acme-store")
 	require.True(t, ok)
-	assert.Equal(t, "acme", owner, "exec routes to the desktop app by this answer")
+	assert.Equal(t, "acme", owner, "exec activates the owning extension by this answer")
 
 	// `opsctl help acme-store` renders the tool/parameter table describe() reported.
 	help, ok := permission.HelpFor("acme-store")
@@ -199,8 +199,8 @@ func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) 
 	// `opsctl policy show/allow/deny` need a permanent-rule landing for the type.
 	assert.True(t, permission.TypeRulesSupported("acme-store"))
 
-	// …but execution is not local: the WASM runtime, the host capabilities and the
-	// decrypted asset config only exist in the desktop process.
+	// …but nothing executes until exec activates the extension: this registration
+	// compiles no WASM.
 	assert.NotContains(t, permission.RegisteredExecTypes(), "acme-store")
 }
 
@@ -229,65 +229,6 @@ func TestRegisterExtensionAssetTypesReportsAMissingDescriptorInsteadOfRegisterin
 	assert.Contains(t, reported[0].Error(), "acme")
 	_, registered := assettype.Get("acme-store")
 	assert.False(t, registered)
-}
-
-// --- delegation --------------------------------------------------------------
-
-func TestExecViaDesktopFailsClosedWhenDesktopIsOffline(t *testing.T) {
-	registerBulkExtension(t)
-	orig := delegateExtExecFn
-	delegateExtExecFn = func(int64, string, string, string) (string, error) {
-		return "", errors.New("cannot connect to approval socket")
-	}
-	t.Cleanup(func() { delegateExtExecFn = orig })
-
-	asset := &asset_entity.Asset{ID: 1, Name: "my-bucket", Type: "acme-store"}
-	assert.Equal(t, 1, execViaDesktop(asset, "acme", "list_objects --bucket=logs", "sess"))
-}
-
-func TestExecViaDesktopPassesTheCommandThroughVerbatim(t *testing.T) {
-	registerBulkExtension(t)
-	var gotID int64
-	var gotCommand string
-	orig := delegateExtExecFn
-	delegateExtExecFn = func(assetID int64, _, command, _ string) (string, error) {
-		gotID, gotCommand = assetID, command
-		return `{"objects":1}`, nil
-	}
-	t.Cleanup(func() { delegateExtExecFn = orig })
-
-	asset := &asset_entity.Asset{ID: 7, Name: "my-bucket", Type: "acme-store"}
-	require.Equal(t, 0, execViaDesktop(asset, "acme", "list_objects --bucket=logs", "sess"))
-	assert.Equal(t, int64(7), gotID)
-	// The desktop side canonicalizes and policy-checks; opsctl must not rewrite the
-	// command on the way there, or approval would show something else than was typed.
-	assert.Equal(t, "list_objects --bucket=logs", gotCommand)
-}
-
-// A policy refusal from the desktop arrives as a tool error; opsctl must report it
-// the way a denied builtin exec does — exit 1, the reason on stderr, nothing on
-// stdout — so a script piping the output cannot mistake the refusal for a result.
-func TestExecViaDesktopPolicyDenialExitsNonZeroOnStderr(t *testing.T) {
-	registerBulkExtension(t)
-	refusal := "command denied by policy: delete_bucket"
-	orig := delegateExtExecFn
-	delegateExtExecFn = func(int64, string, string, string) (string, error) {
-		return "", errors.New(refusal)
-	}
-	t.Cleanup(func() { delegateExtExecFn = orig })
-
-	var code int
-	var stderr string
-	stdout := captureStdout(t, func() {
-		stderr = captureStderr(t, func() {
-			code = execViaDesktop(&asset_entity.Asset{ID: 7, Name: "my-bucket", Type: "acme-store"},
-				"acme", "delete_bucket --bucket=logs", "sess")
-		})
-	})
-
-	assert.Equal(t, 1, code)
-	assert.Contains(t, stderr, refusal)
-	assert.Empty(t, string(stdout))
 }
 
 // --- ext dev -----------------------------------------------------------------
@@ -378,58 +319,42 @@ func registerBulkExtension(t *testing.T) {
 	registerExtensionAssetTypes()
 }
 
-// captureDelegation replaces the desktop hand-off and records what would be sent.
-func captureDelegation(t *testing.T) *[]string {
-	t.Helper()
-	var sent []string
-	orig := delegateExtExecFn
-	delegateExtExecFn = func(_ int64, _, command, _ string) (string, error) {
-		sent = append(sent, command)
-		return "{}", nil
-	}
-	t.Cleanup(func() { delegateExtExecFn = orig })
-	return &sent
-}
-
-func TestExecViaDesktopExpandsFileFlagsBeforeSending(t *testing.T) {
+// prepareExtensionExec reads `--<flag>-file` into the inline `--<flag> <content>`
+// form after activating the extension, so canonicalization, policy, approval and the
+// tool only ever see the inline form.
+func TestPrepareExtensionExecExpandsFileFlags(t *testing.T) {
 	registerBulkExtension(t)
+	orig := activateExtensionFn
+	activateExtensionFn = func(context.Context, string) error { return nil }
+	t.Cleanup(func() { activateExtensionFn = orig })
 	asset := &asset_entity.Asset{ID: 7, Name: "s", Type: "acme-store"}
 	path := filepath.Join(t.TempDir(), "body.ndjson")
 	require.NoError(t, os.WriteFile(path, []byte("line1\nline2\n"), 0o600))
+	ctx := context.Background()
 
 	t.Run("file path", func(t *testing.T) {
-		sent := captureDelegation(t)
-		require.Equal(t, 0, execViaDesktop(asset, "acme", "bulk --index=logs --body-file "+path, "sess"))
-		require.Len(t, *sent, 1)
-		assert.NotContains(t, (*sent)[0], "-file", "the desktop must only ever see the inline form")
-		assert.Contains(t, (*sent)[0], "--body='line1\nline2\n'")
+		got, err := prepareExtensionExec(ctx, asset, "acme", "bulk --index=logs --body-file "+path)
+		require.NoError(t, err)
+		assert.NotContains(t, got, "-file", "everything after opsctl only ever sees the inline form")
+		assert.Contains(t, got, "--body='line1\nline2\n'")
 	})
 
 	t.Run("stdin", func(t *testing.T) {
-		sent := captureDelegation(t)
 		orig := execStdin
 		execStdin = strings.NewReader("line1\nline2\n")
 		t.Cleanup(func() { execStdin = orig })
-		require.Equal(t, 0, execViaDesktop(asset, "acme", "bulk --index=logs --body-file -", "sess"))
-		require.Len(t, *sent, 1)
-		assert.Contains(t, (*sent)[0], "--body='line1\nline2\n'")
+		got, err := prepareExtensionExec(ctx, asset, "acme", "bulk --index=logs --body-file -")
+		require.NoError(t, err)
+		assert.Contains(t, got, "--body='line1\nline2\n'")
 	})
 
-	t.Run("a refused file sends nothing and exits non-zero", func(t *testing.T) {
-		sent := captureDelegation(t)
-		var code int
-		stderr := captureStderr(t, func() {
-			code = execViaDesktop(asset, "acme", "bulk --body=x --body-file "+path, "sess")
-		})
-		assert.NotEqual(t, 0, code)
-		assert.Empty(t, *sent)
-		assert.Contains(t, stderr, "--body")
+	t.Run("a refused file is an error", func(t *testing.T) {
+		_, err := prepareExtensionExec(ctx, asset, "acme", "bulk --body=x --body-file "+path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--body")
 
-		stderr = captureStderr(t, func() {
-			code = execViaDesktop(asset, "acme", "bulk --body-file "+path+".missing", "sess")
-		})
-		assert.NotEqual(t, 0, code)
-		assert.Empty(t, *sent)
-		assert.Contains(t, stderr, "missing")
+		_, err = prepareExtensionExec(ctx, asset, "acme", "bulk --body-file "+path+".missing")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing")
 	})
 }

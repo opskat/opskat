@@ -161,7 +161,7 @@ opskat.Tool("request", handleRequest).
 ```
 
 `opsctl exec <asset> -- request --body-file payload.ndjson` (or `--body-file -` for
-stdin) is then exactly `--body <file content>`: opsctl reads the file and sends the
+stdin) is then exactly `--body <file content>`: opsctl reads the file and runs the
 inline form, so `PolicyFunc` / `PolicyResources`, the approval dialog, grants and
 audit all see the content, and the handler receives it as the ordinary `body`
 argument — there is nothing to implement. `describe()` reports the marker as
@@ -177,6 +177,9 @@ argument — there is nothing to implement. `describe()` reports the marker as
   named twice.
 - AI `exec` and the extension's own pages do not accept `--body-file` — it is an
   unknown flag there. Reading files happens only inside the opsctl process.
+- opsctl has no file dialog: under `opsctl exec`, a tool that calls
+  `opskat.FileDialog` fails with an error pointing at `--<flag>-file`. A tool meant to
+  be driven from the command line takes its file through a `FileParam` instead.
 
 ### The asset comes from the host, not from the arguments
 
@@ -513,6 +516,13 @@ Then drive it like any other asset type:
 opsctl help <asset>                                     # SKILL.md + the parameter table
 opsctl exec <asset> -- note_list
 ```
+
+`opsctl exec` runs the tool in opsctl's own process: it loads just this extension from
+the data dir's `extensions/` directory, with the host capabilities the app gives it
+(asset config and credentials, KV, the asset's connection path), so it works whether
+or not the desktop app is running — a running app only answers approvals. Each
+command loads the build on disk, so after an `ext dev` reload the next `exec` already
+runs the new one. An extension disabled in the app is refused.
 
 ## Testing
 

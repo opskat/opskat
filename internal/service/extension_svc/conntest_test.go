@@ -1,4 +1,4 @@
-package extension
+package extension_svc
 
 import (
 	"context"
@@ -32,12 +32,12 @@ func acmeManifest() *extension.Manifest {
 
 func TestBuildAdHocTestConfig(t *testing.T) {
 	Convey("Given the acme extension (credentials:read) with a password field", t, func() {
-		e, assets := newHostTestBinder(t)
+		svc, assets := newHostTestService(t)
 		manifest := acmeManifest()
 
 		Convey("a new asset (no asset id) sends the submitted password as-is", func() {
 			cfg := `{"host":"h","password":"typed"}`
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 0, cfg)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 0, cfg)
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
@@ -48,7 +48,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(1)).
 				Return(&asset_entity.Asset{ID: 1, Type: "acme-store", Config: encryptedConfig(t, "s3cret")}, nil)
 
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 1, `{"host":"h"}`)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 1, `{"host":"h"}`)
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
@@ -63,7 +63,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(2)).
 				Return(&asset_entity.Asset{ID: 2, Type: "acme-store", Config: encryptedConfig(t, "s3cret")}, nil)
 
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 2, `{"host":"h","password":""}`)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 2, `{"host":"h","password":""}`)
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
@@ -76,7 +76,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(3)).
 				Return(&asset_entity.Asset{ID: 3, Type: "acme-store", Config: encryptedConfig(t, "s3cret")}, nil)
 
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 3, `{"host":"h","password":"new-one"}`)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 3, `{"host":"h","password":"new-one"}`)
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
@@ -90,12 +90,12 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(9)).
 				Return(&asset_entity.Asset{ID: 9, Type: "some-other-store"}, nil)
 
-			_, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 9, `{}`)
+			_, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 9, `{}`)
 			So(err, ShouldNotBeNil)
 		})
 
 		Convey("an asset type the extension does not register is refused", func() {
-			_, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "not-a-type", 0, `{}`)
+			_, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "not-a-type", 0, `{}`)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "not-a-type")
 		})
@@ -109,7 +109,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 					"tls":         map[string]any{"enabled": true},
 				},
 			})
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 0, string(cfg))
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "acme", manifest, "acme-store", 0, string(cfg))
 			So(err, ShouldBeNil)
 			So(adhoc.SSHTunnelID, ShouldEqual, 7)
 			So(adhoc.ProxyChain, ShouldNotBeNil)
@@ -121,7 +121,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 	})
 
 	Convey("Given an extension without credentials:read", t, func() {
-		e, assets := newHostTestBinder(t)
+		svc, assets := newHostTestService(t)
 		manifest := &extension.Manifest{
 			Name:         "other",
 			AssetTypes:   []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema}},
@@ -132,7 +132,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 			assets.EXPECT().Find(gomock.Any(), int64(5)).
 				Return(&asset_entity.Asset{ID: 5, Type: "other-store", Config: encryptedConfig(t, "theirs")}, nil)
 
-			adhoc, err := e.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 5, `{"host":"h"}`)
+			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 5, `{"host":"h"}`)
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
@@ -140,7 +140,7 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 
 			// Even a freshly typed value in this call is withheld: the guest
 			// authenticates via host-injected Auth, never a value it holds itself.
-			adhoc, err = e.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)
+			adhoc, err = svc.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)
 			So(err, ShouldBeNil)
 			So(json.Unmarshal(adhoc.Config, &out), ShouldBeNil)
 			So(out, ShouldNotContainKey, "password")
@@ -164,9 +164,9 @@ func (f *fakeTestConnCaller) TestConnection(_ context.Context, assetType string,
 
 func TestConnTestRegistrarBuild(t *testing.T) {
 	Convey("Build's tester parses the asset id out of plainPassword and dispatches to the plugin", t, func() {
-		e, assets := newHostTestBinder(t)
+		svc, assets := newHostTestService(t)
 		manifest := acmeManifest()
-		reg := e.NewConnTestRegistrar()
+		reg := svc.ConnTestRegistrar()
 
 		Convey("a new asset: empty plainPassword means asset id 0, no merge attempted", func() {
 			caller := &fakeTestConnCaller{}

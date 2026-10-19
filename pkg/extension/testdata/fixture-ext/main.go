@@ -274,6 +274,16 @@ func init() {
 		return map[string]any{"ok": true}, nil
 	}).Policy("read")
 
+	// pick_file asks the host for a file dialog, so a test sees what a host that
+	// has no dialog to show (opsctl) answers a tool that needs one.
+	opskat.Tool("pick_file", func(*opskat.ToolContext, noArgs) (any, error) {
+		path, err := opskat.FileDialog("open", opskat.DialogOptions{Title: "Pick a file"})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"path": path}, nil
+	}).Policy("read")
+
 	// spin busy-loops for the requested duration without ever yielding to a WASI
 	// clock, so a host-side deadline has to interrupt the guest to stop it.
 	opskat.Tool("spin", func(_ *opskat.ToolContext, args spinArgs) (any, error) {

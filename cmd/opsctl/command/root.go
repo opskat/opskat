@@ -86,10 +86,12 @@ func Execute() int {
 		return 1
 	}
 
-	// 扩展提供的资产类型：内置类型由 assettype 的 init() 注册，扩展的那份接线在桌面
-	// 进程里随 WASM 加载发生，opsctl 只能自己按缓存的 describe() 再接一次。必须早于
+	// 扩展提供的资产类型：内置类型由 assettype 的 init() 注册，扩展的按缓存的
+	// describe() 只注册不需要 WASM 的那一半，不编译任何扩展；exec 再按需把目标资产
+	// 所属的那一个扩展完整激活（activateExtensionFn），命令结束时释放。必须早于
 	// buildHandlerMap —— 工具描述里的类型清单是那时候取的。
 	registerExtensionAssetTypes()
+	defer releaseExtensions(ctx)
 
 	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
 	ctx = aictx.WithPolicyLang(ctx, resolvePolicyLang(
