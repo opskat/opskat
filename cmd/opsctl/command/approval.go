@@ -276,8 +276,9 @@ func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []s
 	}, refusal
 }
 
-// refuseBatchApproval 是批量审批（opsctl batch / 多源 cp）的结构化拒绝：条条有主体，
-// 恒为 NEEDS AUTHORIZATION，逐条给出可照抄的 policy allow 命令。
+// refuseBatchApproval 是批量审批（opsctl batch / 多源 cp）的结构化拒绝：恒为 NEEDS
+// AUTHORIZATION，逐条给出可照抄的 policy allow 命令——主体与终端批量提示同源
+// （batchItemSubjects），扩展条目给的是 '<action>:<resource>' 规则。
 func refuseBatchApproval(items []approval.BatchItem, session string) (ApprovalResult, error) {
 	ctx := envPolicyLangCtx()
 	entries := make([]refusalSubject, 0, len(items))
@@ -286,7 +287,7 @@ func refuseBatchApproval(items []approval.BatchItem, session string) (ApprovalRe
 			assetName:    item.AssetName,
 			assetID:      item.AssetID,
 			approvalType: item.Type,
-			patterns:     normalizedApprovalSubjects(item.Type, item.Command),
+			patterns:     batchItemSubjects(item),
 		})
 	}
 	err := &structuredRefusal{

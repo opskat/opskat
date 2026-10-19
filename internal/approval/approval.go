@@ -18,13 +18,22 @@ import (
 // BatchItem 批量执行中的单条操作
 type BatchItem struct {
 	Type string `json:"type"` // 审批类型，由 permission.ApprovalTypeFor(资产类型) 得出：
-	// "exec"|"serial"|"sql"|"redis"|"etcd"|"mongo"|"kafka"|"k8s"|"oss"
+	// "exec"|"serial"|"sql"|"redis"|"etcd"|"mongo"|"kafka"|"k8s"|"oss"，扩展资产是它的扩展类型名
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
 	Command   string `json:"command"`
 	// Detail 是这一条的补充说明，供折叠摘要展示"两端基点"一类信息（如 cp 的
 	// "opsctl cp <src> → <dst>"）；batch_exec 的命令条目不产出，留空。
 	Detail string `json:"detail"`
+	// Action / Resource / Resources / RememberPattern: the same classification
+	// ApprovalRequest carries, set only for an item on an extension asset its extension
+	// classified (permission.ApprovalItemFor). The approver sees the action and
+	// resources; RememberPattern is the item's rule subject (the policy allow line of
+	// NEEDS AUTHORIZATION) — batch itself offers no "always allow".
+	Action          string   `json:"action,omitempty"`
+	Resource        string   `json:"resource,omitempty"`
+	Resources       []string `json:"resources,omitempty"`
+	RememberPattern string   `json:"remember_pattern,omitempty"`
 }
 
 // ApprovalRequest is sent from opsctl to the desktop app.

@@ -200,7 +200,9 @@ func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (st
 	return command, permission.GrantOriginSystem
 }
 
-// handleBatchApproval 处理批量执行审批（exec/sql/redis 混合）
+// handleBatchApproval 处理批量执行审批（各内置类型与扩展资产混合）。整批只有本次允许 /
+// 拒绝；扩展资产上分类成功的条目带着 opsctl 用共用构造（permission.ApprovalItemFor）
+// 给出的动作与资源，弹窗与单条审批一样在命令上方展示它们。
 func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("batch_%d", time.Now().UnixNano())
 
@@ -208,6 +210,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 	for _, item := range req.BatchItems {
 		expectedItems = append(expectedItems, permission.ApprovalItem{
 			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+			Action: item.Action, Resource: item.Resource, Resources: item.Resources,
 		})
 	}
 	// 批量事件发送原始 items，展示与执行逐字一致。
@@ -219,6 +222,9 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 			"asset_name": expectedItems[i].AssetName,
 			"command":    expectedItems[i].Command,
 			"detail":     expectedItems[i].Detail,
+			"action":     expectedItems[i].Action,
+			"resource":   expectedItems[i].Resource,
+			"resources":  expectedItems[i].Resources,
 		})
 	}
 
@@ -226,15 +232,15 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 		o.window.ActivateWindow()
 	}
 
-	wailsRuntime.EventsEmit(o.ctx, "opsctl:batch-approval", map[string]any{
+	ch := make(chan permission.ApprovalResponse, 1)
+	// 先登记再发事件：响应一到就要找得到这条待决审批。
+	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expectedItems, ch: ch})
+	defer o.pendingOpsctlApprovals.Delete(confirmID)
+	o.emit("opsctl:batch-approval", map[string]any{
 		"confirm_id": confirmID,
 		"session_id": req.SessionID,
 		"items":      items,
 	})
-
-	ch := make(chan permission.ApprovalResponse, 1)
-	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expectedItems, ch: ch})
-	defer o.pendingOpsctlApprovals.Delete(confirmID)
 
 	select {
 	case resp := <-ch:

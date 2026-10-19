@@ -74,17 +74,11 @@ func envPolicyLangCtx() context.Context {
 		os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")))
 }
 
-// normalizedApprovalSubjects 给出经 NormalizeGrantPatterns 归一化之后的主体：
-// 终端提示展示它、审计的 MatchedPattern 记它——人必须看到自己真正授出的范围，
-// 而不是自己敲的原串（复合命令按子命令拆、OSS 的 DSL 派生策略串都发生在这里）。
-// 主体是系统替用户推导的，origin 恒为 GrantOriginSystem。
-func normalizedApprovalSubjects(approvalType, command string) []string {
-	return permission.NormalizeGrantPatterns(approvalType, command, permission.GrantOriginSystem)
-}
-
 // approvalSubjects 给出单条审批的可授权主体（permission.ApprovalRuleSubjects）：终端
 // 提示展示它、“永久允许”按它落规则、NEEDS AUTHORIZATION 按它给出 policy allow 原文、
-// 审计的 MatchedPattern 记它。内置类型与 normalizedApprovalSubjects 相同；扩展资产上
+// 审计的 MatchedPattern 记它——人必须看到自己真正授出的范围，而不是自己敲的原串。
+// 内置类型是经 NormalizeGrantPatterns 归一化的命令（复合命令按子命令拆、OSS 的 DSL
+// 派生策略串都发生在那里，origin 恒为 GrantOriginSystem）；扩展资产上
 // 分类成功的调用是 <action>[:<resource-glob>] 规则——扩展规则落点只收这种形状，整条
 // 命令写不进去；分类失败的扩展调用没有主体。
 func approvalSubjects(req approval.ApprovalRequest) []string {
@@ -198,13 +192,23 @@ func runTTYBatchApproval(ctx context.Context, items []approval.BatchItem, in io.
 	}, nil
 }
 
-// batchApprovalSubjects 汇聚整批的归一化主体，供审计的 MatchedPattern 记录。
+// batchApprovalSubjects 汇聚整批的可授权主体，供审计的 MatchedPattern 记录。
 func batchApprovalSubjects(items []approval.BatchItem) string {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
-		parts = append(parts, strings.Join(normalizedApprovalSubjects(item.Type, item.Command), ", "))
+		parts = append(parts, strings.Join(batchItemSubjects(item), ", "))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// batchItemSubjects 是批量审批里一条的可授权主体，与单条审批同一个来源
+// （permission.ApprovalRuleSubjects，审批面即条目的审批类型）：内置类型是归一化后的
+// 命令，扩展资产上分类成功的调用是 <action>[:<resource-glob>] 规则。
+func batchItemSubjects(item approval.BatchItem) []string {
+	return permission.ApprovalRuleSubjects(item.Type, permission.ApprovalItem{
+		Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+		Action: item.Action, Resource: item.Resource, Resources: item.Resources, RememberPattern: item.RememberPattern,
+	})
 }
 
 // readTTYChoice 反复渲染提示并读取一行输入，直到得到白名单内的决策或一个终止性
@@ -266,7 +270,7 @@ func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, 
 		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Asset:", "资产："), //nolint:errcheck // 终端呈现尽力而为
 			assetIdentity(req.AssetName, req.AssetID, face))
 	}
-	renderTTYClassification(ctx, req, out)
+	renderTTYClassification(ctx, "", req.Action, req.Resources, out)
 	// 无主体的操作（create/update/delete）没有可列的主体，不渲染悬空的标题。
 	if len(patterns) > 0 {
 		fmt.Fprintf(out, "%s\n", policy.PolicyMsg(ctx, "Subject:", "主体：")) //nolint:errcheck // 终端呈现尽力而为
@@ -283,30 +287,32 @@ func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, 
 
 // renderTTYClassification 渲染扩展调用的分类（只有分类成功的扩展审批项带 Action）：
 // 动作与这次调用触及的资源，与桌面端审批弹窗的 ApprovalClassification 展示同一对
-// （动作、资源）——资源按扩展返回的原样。
-func renderTTYClassification(ctx context.Context, req approval.ApprovalRequest, out io.Writer) {
-	if req.Action == "" {
+// （动作、资源）——资源按扩展返回的原样。indent 让批量提示把它缩进到所属条目下。
+func renderTTYClassification(ctx context.Context, indent, action string, resources []string, out io.Writer) {
+	if action == "" {
 		return
 	}
-	fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Action:", "动作："), req.Action) //nolint:errcheck // 终端呈现尽力而为
-	switch len(req.Resources) {
+	fmt.Fprintf(out, "%s%s %s\n", indent, policy.PolicyMsg(ctx, "Action:", "动作："), action) //nolint:errcheck // 终端呈现尽力而为
+	switch len(resources) {
 	case 0:
 	case 1:
-		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Resource:", "资源："), req.Resources[0]) //nolint:errcheck // 终端呈现尽力而为
+		fmt.Fprintf(out, "%s%s %s\n", indent, policy.PolicyMsg(ctx, "Resource:", "资源："), resources[0]) //nolint:errcheck // 终端呈现尽力而为
 	default:
-		fmt.Fprintf(out, "%s %s\n", //nolint:errcheck // 终端呈现尽力而为
-			policy.PolicyFmt(ctx, "Resources (%d):", "资源（%d 个）：", len(req.Resources)),
-			strings.Join(req.Resources, ", "))
+		fmt.Fprintf(out, "%s%s %s\n", indent, //nolint:errcheck // 终端呈现尽力而为
+			policy.PolicyFmt(ctx, "Resources (%d):", "资源（%d 个）：", len(resources)),
+			strings.Join(resources, ", "))
 	}
 }
 
-// renderTTYBatchPrompt 渲染批量审批的提示：全部条目一次列完，两选。
+// renderTTYBatchPrompt 渲染批量审批的提示：全部条目一次列完，两选。扩展条目在主体
+// 之上带动作与资源，与单条提示同一套渲染。
 func renderTTYBatchPrompt(ctx context.Context, items []approval.BatchItem, out io.Writer) {
 	fmt.Fprintf(out, "%s\n", policy.PolicyFmt(ctx, //nolint:errcheck // 终端呈现尽力而为
 		"Batch approval required (%d items)", "需要批量审批（共 %d 条）", len(items)))
 	for i, item := range items {
 		fmt.Fprintf(out, "  %d. %s\n", i+1, assetIdentity(item.AssetName, item.AssetID, item.Type)) //nolint:errcheck // 终端呈现尽力而为
-		for _, p := range normalizedApprovalSubjects(item.Type, item.Command) {
+		renderTTYClassification(ctx, "      ", item.Action, item.Resources, out)
+		for _, p := range batchItemSubjects(item) {
 			fmt.Fprintf(out, "      - %s\n", p) //nolint:errcheck // 终端呈现尽力而为
 		}
 		if item.Detail != "" {

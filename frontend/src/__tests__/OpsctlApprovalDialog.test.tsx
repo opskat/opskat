@@ -298,6 +298,31 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
   });
 
+  // opsctl batch 里的扩展资产条目带着扩展分类出的动作与资源，与单条审批一样展示在命令上方；
+  // 内置条目没有分类，不出现动作行。batch 仍只有拒绝 / 允许，没有「记住」。
+  it("batch 里的扩展条目显示动作与资源，内置条目不显示，且不提供「记住」", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireBatchApproval(handlers, [
+      {
+        type: "fixture",
+        asset_id: 1,
+        asset_name: "fx-1",
+        command: "classify_many --resources=logs-a --resources=logs-b",
+        action: "write",
+        resource: "",
+        resources: ["logs-a", "logs-b"],
+      },
+      { type: "kafka", asset_id: 2, asset_name: "kf-1", command: "message.write orders" },
+    ]);
+
+    expect(screen.getAllByTestId("approval-action").map((el) => el.textContent)).toEqual(["write"]);
+    expect(screen.getAllByTestId("approval-resource").map((el) => el.textContent)).toEqual(["logs-a", "logs-b"]);
+    expect(screen.getByText("message.write orders")).toBeVisible();
+    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+  });
+
   // batch verb（exec/sql/redis 混合批）同样走 opsctl:batch-approval，但 cmd/opsctl/command/
   // batch.go 建 BatchItem 时不填 Detail——它的条目分属不同资产/类型，没有 cp 那种"两端基点"
   // 可摘要。折叠是为 cp 设计的：collapse 掉一句读不出内容的"N 项已折叠"，Approve 按钮却还
