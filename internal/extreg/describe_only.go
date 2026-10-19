@@ -93,17 +93,16 @@ func registerPolicyGroups(extName string, m *extension.Manifest) error {
 //
 // info 由 extension.LoadManifestInfo 读出：manifest 的安全契约 + 缓存里那份描述符 +
 // SKILL.md + locales，全程不编译也不实例化 WASM。缓存里没有这个扩展的答案时
-// info.Manifest.AssetTypes 是空的，本函数报错而不是静默注册零个类型——"什么都没
-// 发生"和"注册成功"必须能区分开。调用方（opsctl）在缓存缺失时先自己加载一次扩展
-// 取得 describe() 并写入缓存，再来注册。
+// info.Manifest.AssetTypes 是空的（describe() 本身至少声明一个资产类型），本函数报错
+// 而不是静默注册零个类型——"什么都没发生"和"注册成功"必须能区分开。调用方（opsctl）
+// 在缓存缺失时先自己加载一次扩展，带着取得的 describe() 答案来注册。
 //
 // 与 Register 一样是全有或全无，也写同一张 registered 表：一个进程里一个扩展只有一种
 // 接线方式；这条路没有 plugin，桌面端不会用它。
 func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	m := info.Manifest
 	if len(m.AssetTypes) == 0 {
-		return fmt.Errorf("extension %q has no cached describe() answer on this machine: "+
-			"describe() reported no asset types for it", info.Name)
+		return fmt.Errorf("extension %q has no cached describe() answer on this machine", info.Name)
 	}
 	localized := m.Localized(func(key string) string { return info.Translate(helpLang, key) })
 	help := helpDocument(info.SkillMD, info.Name, localized)

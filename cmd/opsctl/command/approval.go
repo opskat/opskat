@@ -198,14 +198,6 @@ func withApprovalItem(ctx context.Context, req approval.ApprovalRequest) approva
 	return req
 }
 
-// approvalItemOf 是请求对应的审批项（approval 包不依赖 permission，请求只是它的线上形态）。
-func approvalItemOf(req approval.ApprovalRequest) permission.ApprovalItem {
-	return permission.ApprovalItem{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName, Command: req.Command, Detail: req.Detail,
-		Action: req.Action, Resource: req.Resource, Resources: req.Resources, RememberPattern: req.RememberPattern,
-	}
-}
-
 // refusalSubject 是结构化拒绝里的一条可授权主体：某个资产上、某个审批类型下，
 // 可照抄进 opsctl policy allow 的 pattern 集合（内置类型是归一化后的命令，扩展是
 // <action>[:<resource-glob>] 规则，见 approvalSubjects）。

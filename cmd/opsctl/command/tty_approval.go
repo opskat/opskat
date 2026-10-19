@@ -82,7 +82,7 @@ func envPolicyLangCtx() context.Context {
 // 分类成功的调用是 <action>[:<resource-glob>] 规则——扩展规则落点只收这种形状，整条
 // 命令写不进去；分类失败的扩展调用没有主体。
 func approvalSubjects(req approval.ApprovalRequest) []string {
-	return permission.ApprovalRuleSubjects(ttyApprovalFace(req), approvalItemOf(req))
+	return permission.ApprovalRuleSubjects(ttyApprovalFace(req), permission.ApprovalItemOfRequest(req))
 }
 
 // ttyApprovalFace 返回这次审批的方向化审批面：CheckType 优先（cp 的单端点审批由
@@ -120,11 +120,8 @@ func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest
 func runTTYApproval(ctx context.Context, req approval.ApprovalRequest, in io.Reader, out io.Writer) (ApprovalResult, error) {
 	face := ttyApprovalFace(req)
 	patterns := approvalSubjects(req)
-	kind := permission.ApprovalKindFor(face, req.Command)
-	if kind == permission.ApprovalKindSingle && len(patterns) == 0 {
-		// 没有规则能落（分类失败的扩展调用）：“永久允许”只会写失败，只给本次允许/拒绝。
-		kind = permission.ApprovalKindOnce
-	}
+	// 没有规则能落（分类失败的扩展调用）时只给本次允许/拒绝，与桌面端弹窗同一判定。
+	kind := permission.ApprovalKindForItem(face, permission.ApprovalItemOfRequest(req))
 	matched := strings.Join(patterns, ", ")
 
 	log := logger.Ctx(ctx).With(
@@ -205,10 +202,7 @@ func batchApprovalSubjects(items []approval.BatchItem) string {
 // （permission.ApprovalRuleSubjects，审批面即条目的审批类型）：内置类型是归一化后的
 // 命令，扩展资产上分类成功的调用是 <action>[:<resource-glob>] 规则。
 func batchItemSubjects(item approval.BatchItem) []string {
-	return permission.ApprovalRuleSubjects(item.Type, permission.ApprovalItem{
-		Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
-		Action: item.Action, Resource: item.Resource, Resources: item.Resources, RememberPattern: item.RememberPattern,
-	})
+	return permission.ApprovalRuleSubjects(item.Type, permission.ApprovalItemOfBatchItem(item))
 }
 
 // readTTYChoice 反复渲染提示并读取一行输入，直到得到白名单内的决策或一个终止性

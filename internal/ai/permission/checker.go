@@ -516,6 +516,20 @@ func ApprovalRuleSubjects(face string, item ApprovalItem) []string {
 	return NormalizeGrantPatterns(face, item.Command, GrantOriginSystem)
 }
 
+// ApprovalKindForItem is ApprovalKindFor for an approval whose "always allow"
+// persists ApprovalRuleSubjects(face, item) — opsctl's terminal prompt and the
+// desktop dialog answering opsctl. An item with no subject (an extension call that
+// did not classify) has nothing an "always allow" could persist, so it is approved
+// once: persisting its command text instead would land as a rule spelled like the
+// command, matching something other than what the user was shown.
+func ApprovalKindForItem(face string, item ApprovalItem) string {
+	kind := ApprovalKindFor(face, item.Command)
+	if kind == ApprovalKindSingle && len(ApprovalRuleSubjects(face, item)) == 0 {
+		return ApprovalKindOnce
+	}
+	return kind
+}
+
 // classificationGrantKeys is the grant an unedited "always allow" persists: for a
 // single resource its exact key, for several the one rule the approval item offered
 // as its Remember pre-fill (multiResourceRememberPattern).

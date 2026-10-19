@@ -77,11 +77,7 @@ func (o *Opsctl) startApprovalServer() {
 // <action>:<resource-glob>：弹窗展示同一个扩展审批项，“始终允许”落扩展授权
 // ext:<policyType>:…——与 AI 审批（HandleConfirm）对同一审批项落的相同。
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
-	item := permission.ApprovalItem{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
-		Command: req.Command, Detail: req.Detail,
-		Action: req.Action, Resource: req.Resource, Resources: req.Resources, RememberPattern: req.RememberPattern,
-	}
+	item := permission.ApprovalItemOfRequest(req)
 	parsed, reason := o.awaitSingleApproval(o.ctx, item, req.SessionID)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
@@ -118,7 +114,8 @@ const opsctlAuditSource = "opsctl"
 // 就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
 func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-	kind := permission.ApprovalKindFor(item.Type, item.Command)
+	// 与 opsctl 终端提示同一判定：分类失败的扩展调用没有可落的规则，只给本次允许/拒绝。
+	kind := permission.ApprovalKindForItem(item.Type, item)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", item.Type),
@@ -208,10 +205,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 
 	expectedItems := make([]permission.ApprovalItem, 0, len(req.BatchItems))
 	for _, item := range req.BatchItems {
-		expectedItems = append(expectedItems, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
-			Action: item.Action, Resource: item.Resource, Resources: item.Resources,
-		})
+		expectedItems = append(expectedItems, permission.ApprovalItemOfBatchItem(item))
 	}
 	// 批量事件发送原始 items，展示与执行逐字一致。
 	items := make([]map[string]any, 0, len(expectedItems))

@@ -3,6 +3,8 @@ package permission
 import (
 	"fmt"
 	"strings"
+
+	"github.com/opskat/opskat/internal/approval"
 )
 
 // ApprovalItem 统一审批项，AI 和 opsctl 共用
@@ -31,6 +33,26 @@ type ApprovalItem struct {
 	// editor pre-fills and edits this instead of Command; an edited value must keep
 	// "<action>:", and echoing the pre-fill back unchanged is no edit.
 	RememberPattern string `json:"remember_pattern,omitempty"`
+}
+
+// ApprovalItemOfRequest is the approval item an opsctl single-approval request
+// carries: the request is the item's wire form (internal/approval does not depend on
+// this package), so opsctl's terminal prompt and the desktop dialog answering the
+// request read the same item.
+func ApprovalItemOfRequest(req approval.ApprovalRequest) ApprovalItem {
+	return ApprovalItem{
+		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName, Command: req.Command, Detail: req.Detail,
+		Action: req.Action, Resource: req.Resource, Resources: req.Resources, RememberPattern: req.RememberPattern,
+	}
+}
+
+// ApprovalItemOfBatchItem is ApprovalItemOfRequest for one item of an opsctl batch
+// approval.
+func ApprovalItemOfBatchItem(item approval.BatchItem) ApprovalItem {
+	return ApprovalItem{
+		Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+		Action: item.Action, Resource: item.Resource, Resources: item.Resources, RememberPattern: item.RememberPattern,
+	}
 }
 
 // ApprovalResponse 统一审批响应

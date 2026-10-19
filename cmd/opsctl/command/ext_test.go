@@ -387,6 +387,28 @@ func TestRegisterExtensionAssetTypes_FillsAMissingDescribeCacheItself(t *testing
 	assert.NotEmpty(t, payload, "the answer is written to the cache for the next command")
 }
 
+// unwritableDescribeCache is the data dir's describe() cache with writes failing
+// (a locked or read-only database).
+type unwritableDescribeCache struct{ repoDescribeCache }
+
+func (unwritableDescribeCache) StoreDescriptor(string, string, []byte) error {
+	return errors.New("database is locked")
+}
+
+// The answer opsctl just got from describe() registers the extension even when it
+// cannot be written to the cache: the command that described it still sees its types.
+func TestRegisterExtensionAssetTypes_UsesItsOwnDescribeWhenTheCacheCannotBeWritten(t *testing.T) {
+	env := setupLocalExtExec(t)
+	extension.SetDescribeCache(unwritableDescribeCache{})
+	t.Cleanup(func() { extension.SetDescribeCache(repoDescribeCache{}) })
+
+	stderr := captureStderr(t, func() { bootWithoutDescribeCache(t, env) })
+
+	owner, ok := assettype.ExtensionOwnerOf("fixture")
+	require.True(t, ok, "the type must be registered from opsctl's own describe(): %s", stderr)
+	assert.Equal(t, extensiontest.FixtureName, owner)
+}
+
 func TestCmdExec_ExtensionAssetRunsWithNoDescribeCache(t *testing.T) {
 	env := setupLocalExtExec(t)
 	bootWithoutDescribeCache(t, env)

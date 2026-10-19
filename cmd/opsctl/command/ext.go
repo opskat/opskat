@@ -285,17 +285,25 @@ func registerExtensionAssetTypes() {
 var describeExtensionFn = describeExtension
 
 // describeExtension 补缓存缺失的扩展：加载它的 WASM 取 describe() 的答案（Manager 在
-// 缓存缺失时顺手写入 extension_describe），随即释放，再按已写入的缓存重读一次清单。
-// 它只取描述，不接入 extreg——真正执行由 activateExtensionFn 在 exec 时完整激活。
+// 缓存缺失时顺手写入 extension_describe，供下一条命令用），随即释放。返回的清单带的是
+// 这次加载拿到的答案，而不是从缓存重读——缓存写入失败只让下一条命令再描述一次，
+// 不让这一条命令丢掉刚拿到的描述。它只取描述，不接入 extreg——真正执行由
+// activateExtensionFn 在 exec 时完整激活。
 func describeExtension(ctx context.Context, dir string) (*extension.ManifestInfo, error) {
 	mgr := extension.NewManager(filepath.Dir(dir), func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
 	}, logger.Default())
 	defer mgr.Close(ctx)
-	if _, err := mgr.LoadExtension(ctx, dir); err != nil {
+	described, err := mgr.LoadExtension(ctx, dir)
+	if err != nil {
 		return nil, err
 	}
-	return extension.LoadManifestInfo(dir)
+	info, err := extension.LoadManifestInfo(dir)
+	if err != nil {
+		return nil, err
+	}
+	info.Manifest = described
+	return info, nil
 }
 
 // disabledExtensionNames reads the persisted enabled/disabled state. An unreadable DB

@@ -127,3 +127,33 @@ func TestRequestSingleApprovalAllowAllOfACallWithoutResource(t *testing.T) {
 	require.True(t, extGrantCovers(t))
 	require.False(t, extGrantCovers(t, "logs-app"))
 }
+
+// An extension call its extension could not classify (no Action on the request) has
+// no rule an "always allow" could save: the desktop dialog offers allow once / deny,
+// as opsctl's terminal prompt does, and an "always allow" answer is refused — never
+// saved as a rule spelled like the command text, which for a command such as
+// "delete" would allow that action on every resource.
+func TestRequestSingleApprovalOfAnUnclassifiedExtensionCallIsOnceOnly(t *testing.T) {
+	repo := withExtSingleFixture(t)
+	const typ = "unclassified-opsctl-single-test"
+	require.NoError(t, permission.RegisterPolicyCheck(typ,
+		func(context.Context, int64, string) aictx.CheckResult {
+			return aictx.CheckResult{Decision: aictx.NeedConfirm}
+		},
+		func(context.Context, string) (permission.ExtensionClassification, bool) {
+			return permission.ExtensionClassification{}, false
+		}))
+	t.Cleanup(func() { permission.UnregisterPolicyCheck(typ) })
+	require.NoError(t, permission.RegisterExtensionRuleSink(typ, "unclassified", []string{"delete"}))
+	t.Cleanup(func() { permission.UnregisterRuleSink(typ) })
+	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
+	shown := answeringDialog(o, permission.ApprovalResponse{Decision: "allowAll"})
+
+	resp := o.requestSingleApproval(approval.ApprovalRequest{
+		Type: typ, AssetID: 3, AssetName: "es-logs", SessionID: "opsctl-sess", Command: "delete",
+	})
+
+	require.Equal(t, permission.ApprovalKindOnce, (*shown)["kind"])
+	require.False(t, resp.Approved)
+	require.Empty(t, repo.items)
+}
