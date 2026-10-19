@@ -15,10 +15,6 @@ import (
 	approvalpkg "github.com/opskat/opskat/internal/approval"
 )
 
-type opsctlTestLang struct{}
-
-func (opsctlTestLang) Lang() string { return "en" }
-
 func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 	secret := "grant-" + "credential-sentinel"
 	reqItems := []approvalpkg.GrantItem{{
