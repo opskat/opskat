@@ -16,11 +16,10 @@ import (
 
 // 仅描述注册：把一个扩展**不需要 WASM 运行时**的那一半接进宿主注册表。
 //
-// 它存在是因为 opsctl 是另一个进程。桌面端加载 WASM 模块、问 describe()、再走
-// Register 把资产类型、执行器、策略判定一并注册；opsctl 没有 wazero、没有解密后的
-// 资产配置、也没有审批 UI，却仍然要能回答"notebook 是个资产类型吗"——否则
-// `create asset --type notebook` / `help notebook` / `policy show <ext-asset>` 全部
-// 报"未知类型"，而同一台机器上的桌面端明明认识它。
+// 它存在是因为 opsctl 启动时要在不编译任何 WASM 的前提下回答"notebook 是个资产类型
+// 吗"——否则 `create asset --type notebook` / `help notebook` / `policy show <ext-asset>`
+// 全部报"未知类型"。桌面端加载 WASM 模块、问 describe()、再走 Register 把资产类型、
+// 执行器、策略判定一并注册；opsctl 启动时只走本路径，每条命令都省掉编译所有扩展的开销。
 //
 // 缺口的地基是 extension_describe 表：它的存在意义正是"注册资产类型不必跑 WASM"。
 // 本文件是消费那份缓存的注册路径。
@@ -30,9 +29,9 @@ import (
 //     tools[].parameters 渲染的参数表）、永久规则落点、默认策略与扩展权限组。
 //     它们全部由 describe() 的**数据**决定，缓存里就有。
 //   - 不注册：执行器与 policyCheck。两者都要调 guest（CallTool / check_policy），
-//     而 WASM 运行时、宿主能力面与凭据都只在桌面进程里。opsctl 的 exec 因此继续把
-//     命令交回桌面端执行（cmd/opsctl/command/exec.go 的 execViaDesktop），
-//     策略/审批/grant/审计由那一端按同一条统一 exec 路径落库。
+//     需要 WASM 运行时。opsctl 的 exec 要执行时，先用 extension_svc 的 Activate 在本进程里
+//     加载目标资产所属的那一个扩展，卸掉这里的仅描述注册，再走 Register 完整注册，
+//     之后与内置类型走同一条统一 exec 路径（审批 / grant / 审计）。
 //
 // 这不是"opsctl 专用的第二套注册"：spec 推导、help 渲染、权限组落库都与 Register
 // 共用同一份代码，本文件只是少调用几个注册函数。
@@ -93,17 +92,18 @@ func registerPolicyGroups(extName string, m *extension.Manifest) error {
 // RegisterDescribeOnly 按缓存的 describe() 答案注册一个扩展的非执行面。
 //
 // info 由 extension.LoadManifestInfo 读出：manifest 的安全契约 + 缓存里那份描述符 +
-// SKILL.md + locales，全程不编译也不实例化 WASM。缓存里没有这个扩展（这台机器从没
-// 加载过它）时 info.Manifest.AssetTypes 是空的，本函数报错而不是静默注册零个类型——
-// "什么都没发生"和"注册成功"必须能区分开，调用方据此告诉用户去桌面端加载一次。
+// SKILL.md + locales，全程不编译也不实例化 WASM。缓存里没有这个扩展的答案时
+// info.Manifest.AssetTypes 是空的，本函数报错而不是静默注册零个类型——"什么都没
+// 发生"和"注册成功"必须能区分开。调用方（opsctl）在缓存缺失时先自己加载一次扩展
+// 取得 describe() 并写入缓存，再来注册。
 //
 // 与 Register 一样是全有或全无，也写同一张 registered 表：一个进程里一个扩展只有一种
-// 接线方式，桌面端不会用这条路，opsctl 也拿不到 plugin。
+// 接线方式；这条路没有 plugin，桌面端不会用它。
 func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	m := info.Manifest
 	if len(m.AssetTypes) == 0 {
 		return fmt.Errorf("extension %q has no cached describe() answer on this machine: "+
-			"its asset types cannot be registered until the desktop app loads it once", info.Name)
+			"describe() reported no asset types for it", info.Name)
 	}
 	localized := m.Localized(func(key string) string { return info.Translate(helpLang, key) })
 	help := helpDocument(info.SkillMD, info.Name, localized)

@@ -239,8 +239,8 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 }
 
 // registerExtensionAssetTypes wires every enabled extension's non-executing face into
-// this process's registries, from the descriptor the desktop app cached the last time
-// it loaded that extension (extension_describe). No WASM is compiled or run.
+// this process's registries, from the descriptor cached the last time any process
+// loaded that extension (extension_describe). The cheap path compiles no WASM.
 //
 // Without it opsctl is blind to extension asset types while the app on the same
 // machine is not: `create asset --type notebook` reports an unsupported type, `help
@@ -249,11 +249,14 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // activates just the asset's own extension in full (activateExtensionFn), replacing
 // that extension's describe-only entry with one that can execute.
 //
+// An enabled extension with no cached answer (the desktop app never loaded it on this
+// machine) is described here first (describeExtensionFn), which also writes the cache
+// for the next command; a disabled one is never loaded. Without the answer opsctl
+// cannot tell which extension owns an asset type.
+//
 // Failures are reported and skipped rather than fatal: a single unregisterable
 // extension (a name collision with a built-in type, a describe() answer this binary is
-// too old to accept) must not take down every unrelated opsctl command. A cache miss
-// is reported the same way — it is a real, fixable degradation ("load it once in the
-// desktop app"), not something to swallow into a later "unknown asset type".
+// too old to accept) must not take down every unrelated opsctl command.
 func registerExtensionAssetTypes() {
 	scanned, err := scanExtensionDirs()
 	if err != nil {
@@ -265,10 +268,34 @@ func registerExtensionAssetTypes() {
 			// A disabled extension is not registered in the running app either.
 			continue
 		}
-		if err := extregRegisterFn(ext.info); err != nil {
+		info := ext.info
+		if len(info.Manifest.AssetTypes) == 0 {
+			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
+				continue
+			}
+		}
+		if err := extregRegisterFn(info); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
 	}
+}
+
+// describeExtensionFn 变量化同上一套路。
+var describeExtensionFn = describeExtension
+
+// describeExtension 补缓存缺失的扩展：加载它的 WASM 取 describe() 的答案（Manager 在
+// 缓存缺失时顺手写入 extension_describe），随即释放，再按已写入的缓存重读一次清单。
+// 它只取描述，不接入 extreg——真正执行由 activateExtensionFn 在 exec 时完整激活。
+func describeExtension(ctx context.Context, dir string) (*extension.ManifestInfo, error) {
+	mgr := extension.NewManager(filepath.Dir(dir), func(string) extension.HostProvider {
+		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
+	}, logger.Default())
+	defer mgr.Close(ctx)
+	if _, err := mgr.LoadExtension(ctx, dir); err != nil {
+		return nil, err
+	}
+	return extension.LoadManifestInfo(dir)
 }
 
 // disabledExtensionNames reads the persisted enabled/disabled state. An unreadable DB

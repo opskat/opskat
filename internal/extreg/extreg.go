@@ -74,8 +74,8 @@ var connTestRegistrar ConnTestRegistrar
 
 // SetConnTestRegistrar wires the registrar main.go constructs at startup,
 // before any extension loads. Called more than once, the last call wins —
-// there is exactly one desktop process wiring this, same as every other
-// setter-injected seam in main.go.
+// each process (the desktop app, or opsctl when it activates an extension)
+// wires this once, same as every other setter-injected seam.
 func SetConnTestRegistrar(r ConnTestRegistrar) { connTestRegistrar = r }
 
 // loaded 是一个已加载扩展在本包内的最小画像。
@@ -183,7 +183,7 @@ func Unregister(name string) {
 
 func registerType(l loaded, at extension.AssetTypeDef, help, description string) error {
 	m := l.manifest
-	// 测试连接要跑 WASM，只有桌面进程接了 registrar；先查，免得登记到一半再回滚。
+	// 测试连接要跑 WASM，只有加载扩展的进程（桌面端、激活扩展的 opsctl）接了 registrar；先查，免得登记到一半再回滚。
 	if at.TestConnection && connTestRegistrar == nil {
 		return fmt.Errorf("extension %q: asset type %q declares a test-connection handler but no registrar is wired", l.name, at.Type)
 	}
@@ -218,8 +218,8 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
 	// 配置校验：guest 的 RegisterConfigValidator 挂到资产写入口（asset_svc），桌面表单、
-	// put_asset、opsctl create 落库前都经它。仅描述注册（opsctl 进程）没有 plugin，不注册——
-	// 那边只有 configSchema 的必填/未知字段校验。
+	// put_asset、opsctl create 落库前都经它。仅描述注册（opsctl 启动时）没有 plugin，不注册——
+	// 那时只有 configSchema 的必填/未知字段校验；opsctl 激活扩展后走本路径，才有 guest 校验。
 	if err := asset_entity.RegisterConfigValidator(at.Type, validateConfig(l)); err != nil {
 		assettype.Unregister(at.Type)
 		permission.UnregisterPolicyCheck(at.Type)
@@ -233,7 +233,7 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 		return &policyent.CommandPolicy{Groups: defaults}
 	})
 	// 测试连接：仅当 describe() 声明了处理器时才登记，且只在这条(而非
-	// RegisterDescribeOnly)路径——测试连接要跑 WASM，opsctl 进程没有运行时。
+	// RegisterDescribeOnly)路径——测试连接要跑 WASM，仅描述注册没有运行时。
 	if at.TestConnection {
 		conntest.Register(at.Type, connTestRegistrar.Build(l.name, m, at.Type, l.plugin))
 	}

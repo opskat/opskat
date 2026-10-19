@@ -195,8 +195,8 @@ func getPolicyGroupItemLocalized(ctx context.Context, id string) (*policy_group_
 	}
 	if policy_group_entity.IsBuiltinID(id) || policy_group_entity.IsExtensionID(id) {
 		return nil, errors.New(policy.PolicyFmt(ctx,
-			"policy group %s not found (extension groups are only visible while the desktop app is running)",
-			"权限组 %s 不存在（扩展组只在桌面端运行时可见）", id))
+			"policy group %s not found (extension groups come from installed, enabled extensions)",
+			"权限组 %s 不存在（扩展组来自已安装且启用的扩展）", id))
 	}
 	if _, perr := strconv.ParseInt(id, 10, 64); perr != nil {
 		return nil, errors.New(policy.PolicyFmt(ctx,
@@ -207,7 +207,7 @@ func getPolicyGroupItemLocalized(ctx context.Context, id string) (*policy_group_
 }
 
 // knownPolicyGroupKind 从内置与扩展注册表派生合法 kind（Validate 的 isBuiltinKind 未
-// 导出；扩展 kind 在 opsctl 进程内为空，与运行时可见性一致）。
+// 导出；扩展 kind 来自启动时注册的已启用扩展）。
 func knownPolicyGroupKind(kind string) bool {
 	for _, pg := range policy_group_entity.BuiltinGroups() {
 		if pg.PolicyType == kind {
