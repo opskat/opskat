@@ -82,6 +82,15 @@ func normalizedApprovalSubjects(approvalType, command string) []string {
 	return permission.NormalizeGrantPatterns(approvalType, command, permission.GrantOriginSystem)
 }
 
+// approvalSubjects 给出单条审批的可授权主体（permission.ApprovalRuleSubjects）：终端
+// 提示展示它、“永久允许”按它落规则、NEEDS AUTHORIZATION 按它给出 policy allow 原文、
+// 审计的 MatchedPattern 记它。内置类型与 normalizedApprovalSubjects 相同；扩展资产上
+// 分类成功的调用是 <action>[:<resource-glob>] 规则——扩展规则落点只收这种形状，整条
+// 命令写不进去；分类失败的扩展调用没有主体。
+func approvalSubjects(req approval.ApprovalRequest) []string {
+	return permission.ApprovalRuleSubjects(ttyApprovalFace(req), approvalItemOf(req))
+}
+
 // ttyApprovalFace 返回这次审批的方向化审批面：CheckType 优先（cp 的单端点审批由
 // cp.go 携带 cp:read/cp:write），回落 req.Type。归一化、提示展示、照抄命令与
 // “永久允许”的规则落点都按它取——把方向面折叠成 "cp" 会丢掉方向。
@@ -116,8 +125,12 @@ func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest
 // 供调用方照常落审计；MatchedPattern 记归一化后的主体。
 func runTTYApproval(ctx context.Context, req approval.ApprovalRequest, in io.Reader, out io.Writer) (ApprovalResult, error) {
 	face := ttyApprovalFace(req)
-	patterns := normalizedApprovalSubjects(face, req.Command)
+	patterns := approvalSubjects(req)
 	kind := permission.ApprovalKindFor(face, req.Command)
+	if kind == permission.ApprovalKindSingle && len(patterns) == 0 {
+		// 没有规则能落（分类失败的扩展调用）：“永久允许”只会写失败，只给本次允许/拒绝。
+		kind = permission.ApprovalKindOnce
+	}
 	matched := strings.Join(patterns, ", ")
 
 	log := logger.Ctx(ctx).With(
@@ -244,7 +257,8 @@ func readTTYChoice(ctx context.Context, kind string, in io.Reader, out io.Writer
 }
 
 // renderTTYApprovalPrompt 渲染单条审批的提示：资产名/ID/类型（face，含 cp 方向）、
-// 归一化后的主体、审批项自带的 detail，以及按 ApprovalKind 取的选项。给人读的标签
+// 扩展调用的动作与资源、可授权主体（approvalSubjects）、审批项自带的 detail，以及按
+// ApprovalKind 取的选项。给人读的标签
 // 跟随策略语言，选项字母恒为 ASCII 小写。
 func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, face string, patterns []string, kind string, out io.Writer) {
 	fmt.Fprintln(out, policy.PolicyMsg(ctx, "Approval required", "需要审批")) //nolint:errcheck // 终端呈现尽力而为
@@ -252,6 +266,7 @@ func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, 
 		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Asset:", "资产："), //nolint:errcheck // 终端呈现尽力而为
 			assetIdentity(req.AssetName, req.AssetID, face))
 	}
+	renderTTYClassification(ctx, req, out)
 	// 无主体的操作（create/update/delete）没有可列的主体，不渲染悬空的标题。
 	if len(patterns) > 0 {
 		fmt.Fprintf(out, "%s\n", policy.PolicyMsg(ctx, "Subject:", "主体：")) //nolint:errcheck // 终端呈现尽力而为
@@ -264,6 +279,25 @@ func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, 
 	}
 	fmt.Fprintln(out, ttyOptionsLine(ctx, kind))               //nolint:errcheck // 终端呈现尽力而为
 	fmt.Fprint(out, policy.PolicyMsg(ctx, "Choice: ", "请选择：")) //nolint:errcheck // 终端呈现尽力而为
+}
+
+// renderTTYClassification 渲染扩展调用的分类（只有分类成功的扩展审批项带 Action）：
+// 动作与这次调用触及的资源，与桌面端审批弹窗的 ApprovalClassification 展示同一对
+// （动作、资源）——资源按扩展返回的原样。
+func renderTTYClassification(ctx context.Context, req approval.ApprovalRequest, out io.Writer) {
+	if req.Action == "" {
+		return
+	}
+	fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Action:", "动作："), req.Action) //nolint:errcheck // 终端呈现尽力而为
+	switch len(req.Resources) {
+	case 0:
+	case 1:
+		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Resource:", "资源："), req.Resources[0]) //nolint:errcheck // 终端呈现尽力而为
+	default:
+		fmt.Fprintf(out, "%s %s\n", //nolint:errcheck // 终端呈现尽力而为
+			policy.PolicyFmt(ctx, "Resources (%d):", "资源（%d 个）：", len(req.Resources)),
+			strings.Join(req.Resources, ", "))
+	}
 }
 
 // renderTTYBatchPrompt 渲染批量审批的提示：全部条目一次列完，两选。

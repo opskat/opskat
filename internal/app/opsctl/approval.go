@@ -72,12 +72,17 @@ func (o *Opsctl) startApprovalServer() {
 }
 
 // requestSingleApproval 是 opsctl socket 上单条审批的入口：弹窗、等用户作答，"始终允许"
-// 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。
+// 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。扩展资产上分类成功的调用，请求带着
+// opsctl 用共用构造（permission.ApprovalItemFor）给出的动作、资源与“记住”的
+// <action>:<resource-glob>：弹窗展示同一个扩展审批项，“始终允许”落扩展授权
+// ext:<policyType>:…——与 AI 审批（HandleConfirm）对同一审批项落的相同。
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
-	parsed, reason := o.awaitSingleApproval(o.ctx, permission.ApprovalItem{
+	item := permission.ApprovalItem{
 		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
 		Command: req.Command, Detail: req.Detail,
-	}, req.SessionID)
+		Action: req.Action, Resource: req.Resource, Resources: req.Resources, RememberPattern: req.RememberPattern,
+	}
+	parsed, reason := o.awaitSingleApproval(o.ctx, item, req.SessionID)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
 		return approval.ApprovalResponse{Approved: true}
@@ -85,8 +90,17 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 		if req.SessionID == "" {
 			return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
 		}
-		pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
-		permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
+		ctx := i18n.Ctx(o.ctx, o.lang.Lang())
+		if item.Action != "" {
+			// 用户批准的是这次调用；授权没落成只影响下一次（会再问），如实记下而不拒绝本次。
+			if err := permission.SaveExtensionItemGrant(ctx, req.SessionID, item, parsed.EditedItems); err != nil {
+				logger.Ctx(ctx).Warn("opsctl extension grant not saved",
+					zap.Int64("assetID", req.AssetID), zap.String("approvalType", req.Type), zap.Error(err))
+			}
+		} else {
+			pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
+			permission.SaveGrantPatternsForApproval(ctx, req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
+		}
 		// 只回 Approved：ApproveGrant 在 opsctl 协议里是"整个会话已获批"（grant 审批），
 		// CLI 见到它会把会话写成活动会话——单条命令的"始终允许"不是那个意思。
 		return approval.ApprovalResponse{Approved: true}
@@ -99,8 +113,8 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 const opsctlAuditSource = "opsctl"
 
 // awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
-// 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串落
-// （requestSingleApproval）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
+// 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串、扩展调用
+// 按分类落（requestSingleApproval）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
 // 就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
 func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())

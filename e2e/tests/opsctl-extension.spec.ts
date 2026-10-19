@@ -109,3 +109,40 @@ test("opsctl runs an extension tool itself when no desktop app runs on the data 
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+// With the desktop app running on the data dir and no terminal, the desktop is the
+// approver of a call opsctl runs itself: its dialog shows the same extension item the
+// app's own AI approvals show — the action and resource the extension classified the
+// call as — and once approved, the tool's result is what opsctl prints.
+test("the desktop app approves an extension call opsctl runs, showing its action and resource", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("app-root")).toBeVisible();
+  // The suite's app has loaded the fixture once it has cached its describe() answer.
+  await cachedFixtureDescriptor();
+
+  const asset = `e2e-fixture-approve-${Date.now()}`;
+  const db = new DatabaseSync(join(process.env.OPSKAT_DATA_DIR!, "opskat.db"));
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      "INSERT INTO assets (name, type, config, extension_name, status, createtime, updatetime) VALUES (?, ?, ?, ?, 1, ?, ?)"
+    ).run(asset, "fixture", JSON.stringify({ endpoint: "http://127.0.0.1:1" }), EXT.name, now, now);
+  } finally {
+    db.close();
+  }
+
+  // The fixture's default policy allows "read" only: a write needs an approver, and
+  // with stdin not a terminal that is the desktop app.
+  const resultPromise = runOpsctl(process.env.OPSKAT_DATA_DIR!, ["exec", asset, "--", "reject_host", "--resource=logs"]);
+
+  const dialog = page.getByTestId("opsctl-approval-dialog");
+  await expect(dialog).toBeVisible({ timeout: 90_000 });
+  await expect(dialog.getByTestId("approval-action")).toHaveText("write");
+  await expect(dialog.getByTestId("approval-resource")).toHaveText(["logs"]);
+  await dialog.getByTestId("opsctl-approval-allow").click();
+
+  const result = await resultPromise;
+  expect(result, result.stderr).toMatchObject({ code: 0 });
+  expect(JSON.parse(result.stdout)).toEqual({ ran: true });
+});

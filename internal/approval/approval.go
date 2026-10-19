@@ -44,6 +44,15 @@ type ApprovalRequest struct {
 	Path        string        `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
 	MFA         *MFAChallenge `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
 	Lang        string        `json:"lang,omitempty"`        // type="ext_store_search": index language tag ("en", "zh-CN") for display text
+	// Action / Resource / Resources / RememberPattern are set only for a call on an
+	// extension asset that its extension classified: the fields of the shared approval
+	// item (permission.ApprovalItemFor), so the desktop shows the same action and
+	// resources the terminal prompt does and "always allow" saves the extension grant
+	// ext:<policyType>:<RememberPattern> rather than the command text.
+	Action          string   `json:"action,omitempty"`
+	Resource        string   `json:"resource,omitempty"`
+	Resources       []string `json:"resources,omitempty"`
+	RememberPattern string   `json:"remember_pattern,omitempty"`
 }
 
 // MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的
