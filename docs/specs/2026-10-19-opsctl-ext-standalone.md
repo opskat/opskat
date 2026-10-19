@@ -125,11 +125,11 @@ opsctl 帮助文本、`docs/ARCHITECTURE.md`、`docs/references/testing-debuggin
 
 ## 修正轮 1：连接路径上 SSH 跳板的 MFA
 
-运行时验证 V8 不成立：经要 MFA 的 SSH 跳板的扩展资产，opsctl 不提示、不接受 `--mfa-code`，exec 与 batch 都以 `no interactive responder` 失败。根因不在扩展：SSH 隧道与代理链在拨号时都展开成代理链的 SSH 层，这一层建认证时不带 opsctl 的 MFA 应答方，所以 opsctl 对经这种跳板的内置 SSH 资产同样失败（已验证：代码阅读）。原规格那句「与 `opsctl exec` 对 SSH 资产一样」并不成立。**[用户决定]** 在根上修，解除 [2026-09-22-opsctl-mfa](2026-09-22-opsctl-mfa.md)「Out of scope」里「跳板机与代理链上的 MFA」「其它资产类型经 SSH 隧道时的 MFA」两条。
+运行时验证 V8 不成立：经要 MFA 的 SSH 跳板的扩展资产，opsctl 不提示、不接受 `--mfa-code`，exec 与 batch 都以 `no interactive responder` 失败。根因不在扩展：SSH 隧道与代理链在拨号时都展开成代理链的 SSH 层，这一层建认证时不带 opsctl 的 MFA 应答方，所以 opsctl 对经这种跳板的内置 SSH 资产同样失败（已验证：代码阅读）。原规格那句「与 `opsctl exec` 对 SSH 资产一样」并不成立。**[用户决定]** 在根上修，解除 [2026-09-22-opsctl-mfa](2026-09-22-opsctl-mfa.md)「Out of scope」里「跳板机与代理链上的 MFA」一条，范围是 SSH 资产与扩展资产；「其它资产类型经 SSH 隧道时的 MFA」仍不在范围内——opsctl 对数据库等内置类型不接 MFA 应答方（`cmd/opsctl/command/batch_mfa_test.go` 的 `TestBatchDataItem_TunnelDialGetsNoMFAResponder`），行为不变。
 
 - **跳板 MFA。** 前提：资产的连接路径（SSH 隧道或代理链）上有一台 SSH 跳板，握手要 keyboard-interactive 第二因子；口令 / 密钥 / Agent 认证的跳板都算。动作：opsctl 中已接上 MFA 应答的命令（`ssh`、`exec`、`cp`、`batch`，含扩展资产）对这个资产建连。结果：跳板的挑战与目标资产自己的挑战走同一套应答来源与顺序——`--mfa-code` / `OPSKAT_MFA_CODE` → 可交互终端提示 → 运行中的桌面端对话框（对话框显示的是跳板资产）→ 都不行时 `NEEDS MFA`、退出码 3。路径上有多台要 MFA 的主机时按拨号顺序逐台应答。
 - **答案被拒。** 跳板拒绝答案时，与目标资产被拒一样报 MFA 验证失败，不拿同一个码重试。
-- **不变的部分。** 桌面端内（终端、AI、扩展页面、协议连接池）经这类跳板的行为不变；不要 MFA 的跳板行为不变；答案只用于当次握手，绝不记录。
+- **不变的部分。** opsctl 对数据库等内置非 SSH 类型经隧道拨号不变；桌面端内（终端、AI、扩展页面、协议连接池）经这类跳板的行为不变；不要 MFA 的跳板行为不变；答案只用于当次握手，绝不记录。
 - **加载失败的报错。** 前提：资产所属扩展在本次描述失败（例如 `main.wasm` 缺失），资产类型因此未被认领。结果：最后的 `Error:` 行点名描述失败的扩展与原因，不再只说 `has no exec support yet`；batch 里该项的错误同理。退出码不变。
 
 | Seam | What it verifies | Prior art |
