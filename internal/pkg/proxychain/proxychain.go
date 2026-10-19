@@ -48,7 +48,8 @@ type Layer struct {
 	Token          string
 	TimeoutSeconds int
 	// EstablishTimeout 是建立这一层时单个步骤的时限：SSH 层的握手认证、经它打开到下一
-	// 地址的通道，SOCKS5 层的握手。0 表示只受调用方 ctx 约束。
+	// 地址的通道，SOCKS5 层的握手。0 表示只受调用方 ctx 约束。SSH 握手里等人回答 MFA
+	// 的时间不计（WithDialTimeout / AwaitAnswer）。
 	EstablishTimeout time.Duration
 	// Handshake 覆盖该 SSH 层的握手（SSH Agent 认证需要持有 Agent 传输走完整握手）。
 	// 为 nil 时使用标准 ssh.NewClientConn。调用方负责在握手前关闭 conn 的失败路径。
@@ -158,8 +159,9 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 		return nil, fmt.Errorf("连接 SSH 代理层失败: %w", err)
 	}
 	// ssh.NewClientConn 自己没有握手时限（ClientConfig.Timeout 只管 ssh.Dial 的 TCP 连接），
-	// 对端连上后不再应答就会一直等下去。
-	hsCtx, cancel := stepContext(ctx, layer.EstablishTimeout)
+	// 对端连上后不再应答就会一直等下去。握手里等人回答这台跳板的 MFA 时（AwaitAnswer）
+	// 不计时。
+	hsCtx, cancel := WithDialTimeout(ctx, layer.EstablishTimeout)
 	defer cancel()
 	done := make(chan struct{})
 	var client *ssh.Client
@@ -180,7 +182,7 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 	select {
 	case <-hsCtx.Done():
 		_ = conn.Close()
-		return nil, fmt.Errorf("SSH 代理层 %s 握手未完成: %w", addr, hsCtx.Err())
+		return nil, fmt.Errorf("SSH 代理层 %s 握手未完成: %w", addr, context.Cause(hsCtx))
 	case <-done:
 	}
 	if hsErr != nil {

@@ -886,8 +886,12 @@ func (a *answeredMFA) classify(err error) error {
 	return fmt.Errorf("%w: %v", &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected the MFA answers"}, err)
 }
 
+// SubmitChallenge 交给应答方作答；等待作答的时间（终端输入、桌面端对话框）不计入
+// ctx 上的拨号时限（proxychain.AwaitAnswer），取消 ctx 仍结束等待。
 func (a *answeredMFA) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
+	resume := proxychain.AwaitAnswer(ctx)
 	answers, err := a.inner.SubmitChallenge(ctx, ch)
+	resume()
 	if err == nil {
 		a.answered.Store(true)
 	}

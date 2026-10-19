@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/pkg/netdial"
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 )
 
 // DialContextFunc opens a network connection, like net.Dialer.DialContext.
@@ -240,7 +241,9 @@ func openTCP(ctx context.Context, dial DialContextFunc, tlsConfig *tls.Config, p
 	if dial == nil {
 		dial = (&netdial.Dialer{}).DialContext
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	// The timeout bounds the network, not a person: time spent answering an SSH
+	// hop's MFA prompt on the asset's connection path is not counted.
+	dialCtx, cancel := proxychain.WithDialTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := dial(dialCtx, "tcp", params.Addr)
 	if err != nil {

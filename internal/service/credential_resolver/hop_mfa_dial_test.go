@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
+	"github.com/opskat/opskat/internal/pkg/sshtuning"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -287,6 +289,73 @@ func TestDialAssetSSHAnswersMFAOnConnectionPathHop(t *testing.T) {
 			callers, challenged := mfa.snapshot()
 			assert.Equal(t, []int64{hop, hop}, callers)
 			assert.Equal(t, []int64{hop, hop}, challenged)
+		})
+	})
+}
+
+// shortenDialTimeout shrinks the SSH dial timeout — the per-step limit of every hop
+// handshake — for the test.
+func shortenDialTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	previous := sshtuning.Get()
+	t.Cleanup(func() { sshtuning.Set(previous) })
+	tuned := previous
+	tuned.DialTimeout = d
+	sshtuning.Set(tuned)
+}
+
+func TestHopMFAAnswerTimeIsNotCountedAgainstTheHandshakeLimit(t *testing.T) {
+	convey.Convey("等人回答跳板 MFA 的时间不计入跳板握手时限，取消仍结束等待", t, func() {
+		ctx := setupAgentDialTest(t)
+		shortenDialTimeout(t, 200*time.Millisecond)
+		host, port := newForwardingSSHServer(t, otpAfterPublicKey("123456"))
+		hop := createKeyFileAsset(t, ctx, host, port)
+		targetHost, targetPort := newDialTestSSHServer(t, &ssh.ServerConfig{}).hostPort()
+		target := createHopAssetAt(t, ctx, targetHost, targetPort, hop, "")
+
+		dialWithin := func(dialCtx context.Context, d time.Duration) error {
+			done := make(chan error, 1)
+			go func() { done <- dialAndClose(dialCtx, target) }()
+			select {
+			case err := <-done:
+				return err
+			case <-time.After(d):
+				t.Fatalf("拨号在 %s 内没有返回", d)
+				return nil
+			}
+		}
+
+		convey.Convey("答案晚于时限到达仍能建连", func() {
+			slow := func(int64) sshagent.InteractiveCaller {
+				return mfaFunc(func(ctx context.Context, _ sshagent.MFAChallenge) ([]string, error) {
+					select {
+					case <-time.After(600 * time.Millisecond):
+						return []string{"123456"}, nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				})
+			}
+			assert.NoError(t, dialWithin(WithMFA(ctx, slow), 5*time.Second))
+		})
+
+		convey.Convey("等待作答时取消，等待与拨号随之结束", func() {
+			dialCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			waiting := make(chan struct{})
+			never := func(int64) sshagent.InteractiveCaller {
+				return mfaFunc(func(ctx context.Context, _ sshagent.MFAChallenge) ([]string, error) {
+					close(waiting)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				})
+			}
+			go func() {
+				<-waiting
+				time.Sleep(400 * time.Millisecond) // past the step limit
+				cancel()
+			}()
+			assert.ErrorIs(t, dialWithin(WithMFA(dialCtx, never), 5*time.Second), context.Canceled)
 		})
 	})
 }
