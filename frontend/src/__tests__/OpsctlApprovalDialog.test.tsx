@@ -174,16 +174,6 @@ describe("OpsctlApprovalDialog", () => {
     expect(response?.edited_items?.[0].command).toBe("object.read mybucket/safe/*");
   });
 
-  it("扩展审批（type=ext_tool）不提供 remember/allowAll", () => {
-    const handlers = captureHandlers();
-    render(<OpsctlApprovalDialog />);
-
-    fireSingleApproval(handlers, { kind: "extension", type: "ext_tool", session_id: "session-1" });
-
-    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
-    expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
-  });
-
   it("普通一次性审批（kind=once）不提供 remember/allowAll", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);

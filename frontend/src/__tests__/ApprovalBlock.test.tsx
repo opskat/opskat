@@ -128,25 +128,6 @@ describe("ApprovalBlock", () => {
     expect(response?.edited_items?.[0].command).toBe("object.read mybucket/safe/*");
   });
 
-  it("扩展审批不提供 remember/allowAll", () => {
-    renderApproval({
-      approvalKind: "extension",
-      approvalItems: [
-        {
-          type: "ext_tool",
-          asset_id: 0,
-          asset_name: "",
-          command: 'oss.delete_objects {"bucket":"prod"}',
-        },
-      ],
-    });
-
-    expect(screen.getByTestId("ai-approval-block")).toHaveAttribute("data-approval-kind", "extension");
-    expect(screen.queryByTestId("ai-approval-remember")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("ai-approval-allow-all")).not.toBeInTheDocument();
-    expect(screen.getByTestId("ai-approval-allow")).toBeInTheDocument();
-  });
-
   it("扩展审批（kind=single 带 action/resource）显示动作、资源，请求详情可折叠", () => {
     renderApproval({
       approvalKind: "single",

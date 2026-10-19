@@ -32,12 +32,11 @@ func TestParseTTYApprovalInput(t *testing.T) {
 			So(choice, ShouldEqual, ttyDeny)
 		})
 
-		Convey("once/batch/delete/extension 两选，没有永久允许", func() {
+		Convey("once/batch/delete 两选，没有永久允许", func() {
 			for _, kind := range []string{
 				permission.ApprovalKindOnce,
 				permission.ApprovalKindBatch,
 				permission.ApprovalKindDelete,
-				permission.ApprovalKindExtension,
 			} {
 				choice, err := parseTTYApprovalInput(kind, "a")
 				So(err, ShouldBeNil)

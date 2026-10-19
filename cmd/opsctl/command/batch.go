@@ -75,6 +75,9 @@ type resolvedBatchCmd struct {
 	// uses command (raw), never this field.
 	checkCommand string
 	decision     *aictx.CheckResult // 策略预检结果，用于审计
+	// extension marks an item on an extension asset: its tool dials through the
+	// asset's connection path, whose SSH hop answers MFA the way `opsctl exec` does.
+	extension bool
 }
 
 func isValidBatchType(name string) bool {
@@ -209,6 +212,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			command:      command,
 			scope:        cmd.Scope,
 			checkCommand: checkCommand,
+			extension:    isExtensionAsset,
 		}
 	}
 
@@ -393,7 +397,12 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	if cmd.asset.IsSSH() {
 		result = executeBatchExec(ctx, cmd)
 	} else {
-		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+		handlerCtx := ctx
+		if cmd.extension {
+			// Same as cmdExec on an extension asset: a tunnel's SSH hop answers MFA.
+			handlerCtx = withMFA(ctx)
+		}
+		result = executeBatchHandler(handlerCtx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
 			"scope":   cmd.scope,

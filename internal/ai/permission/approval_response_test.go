@@ -24,7 +24,7 @@ func TestParseApprovalResponseKindCapabilities(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ApprovalAllowAll, parsed.Decision)
 
-	for _, kind := range []string{ApprovalKindOnce, ApprovalKindBatch, ApprovalKindGrant, ApprovalKindDelete, ApprovalKindExtension} {
+	for _, kind := range []string{ApprovalKindOnce, ApprovalKindBatch, ApprovalKindGrant, ApprovalKindDelete} {
 		t.Run(kind+" rejects allowAll", func(t *testing.T) {
 			parsed, err := ParseApprovalResponse(kind, ApprovalResponse{Decision: "allowAll"}, expected)
 			require.Error(t, err)

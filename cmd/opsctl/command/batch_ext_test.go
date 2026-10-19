@@ -14,11 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/host_key_repo"
+	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
@@ -266,4 +269,40 @@ func TestBatchExt_DesktopRequestCarriesTheClassification(t *testing.T) {
 	assert.Equal(t, approval.BatchItem{
 		Type: "kafka", AssetID: env.kafka.ID, AssetName: env.kafka.Name, Command: "message.write orders",
 	}, builtin, "a built-in item is sent as before")
+}
+
+// An extension item dials through its asset's connection path the way `opsctl exec`
+// on it does: an SSH hop that asks for MFA is answered — here from --mfa-code — the
+// way a batch's SSH items answer it.
+func TestBatchExt_ExtensionItemAnswersTunnelMFA(t *testing.T) {
+	env := setupBatchExt(t)
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	srv := newOTPExecServer(t, "123456")
+	bastion := createOTPSSHAsset(t, srv)
+
+	var dialErr error
+	handlers := map[string]tool.ToolHandlerFunc{
+		batchAuditTool: func(ctx context.Context, _ map[string]any) (string, error) {
+			client, closers, err := credential_resolver.Default().DialAssetSSH(ctx, bastion.ID)
+			dialErr = err
+			if err == nil {
+				_ = client.Close()
+				for _, c := range closers {
+					_ = c.Close()
+				}
+			}
+			return "{}", err
+		},
+	}
+	var code int
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			code = cmdBatch(withMFACode(context.Background(), "123456"), handlers,
+				[]string{env.item(env.asset, batchExtRead)}, "sess-batch")
+		})
+	})
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	require.NoError(t, dialErr, "the tunnel's MFA challenge must be answered with --mfa-code")
+	assert.Equal(t, int32(1), srv.challenges.Load())
 }

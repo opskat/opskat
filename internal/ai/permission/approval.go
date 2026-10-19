@@ -52,8 +52,6 @@ const (
 	ApprovalKindLocalTool = "local_tool"
 	// ApprovalKindDelete 删除类审批不可 grant，前端不渲染 rememberMode。
 	ApprovalKindDelete = "delete"
-	// ApprovalKindExtension 扩展参数没有定义安全、可复用的 grant pattern，只能本次允许。
-	ApprovalKindExtension = "extension"
 )
 
 // ApprovalDecision 是经过 ParseApprovalResponse 白名单解析后的 typed 决策。
@@ -97,7 +95,7 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 
 	switch kind {
 	case ApprovalKindSingle, ApprovalKindOnce, ApprovalKindBatch, ApprovalKindGrant, ApprovalKindLocalTool,
-		ApprovalKindDelete, ApprovalKindExtension:
+		ApprovalKindDelete:
 	default:
 		return ParsedApprovalResponse{Decision: ApprovalDeny}, fmt.Errorf("invalid approval kind %q", kind)
 	}
