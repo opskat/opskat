@@ -6,8 +6,10 @@ import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups } from "@/components/asset/configFields";
 import {
+  buildDriverOptions,
   driverFormGroups,
   driverUsesField,
+  missingRequiredDriverField,
   findDatabaseDriver,
   useDatabaseDrivers,
   type DriverDescriptor,
@@ -64,10 +66,12 @@ function DatabaseConfigForm({
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
       const baseOk =
         (!needsPath || !!s.path.trim()) && (!isRemote || s.sshTunnelId > 0) && (!needsHost || !!s.host.trim());
-      const canSave = baseOk && !proxyChainError;
+      const driverFieldsOk = !missingRequiredDriverField(d, s);
+      const canSave = baseOk && driverFieldsOk && !proxyChainError;
       let saveDisabledReason = "";
       if (!canSave) {
         if (proxyChainError) saveDisabledReason = proxyChainError;
+        else if (baseOk) saveDisabledReason = "asset.formMissingDriverField";
         else if (isRemote && s.path.trim() && s.sshTunnelId <= 0) {
           saveDisabledReason = "asset.formMissingSQLiteSSH";
         } else if (needsPath && !s.path.trim()) {
@@ -87,12 +91,13 @@ function DatabaseConfigForm({
           d,
           await resolveSaveCredential(cred.value, ctx.encryptPassword),
           await resolveSaveProxyPassword(s, ctx.encryptPassword),
-          await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+          await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
+          await buildDriverOptions(d, s, ctx.encryptPassword)
         ),
         sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
       };
     },
-    buildTest: async (s) => {
+    buildTest: async (s, ctx) => {
       const d = findDatabaseDriver(drivers, s.driver);
       if (!d)
         return {
@@ -109,7 +114,9 @@ function DatabaseConfigForm({
           s.proxyPassword,
           Object.fromEntries(
             s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-          )
+          ),
+          // 测试连接与已存资产一样由后端解密口令类专属字段,所以这里同样给密文。
+          await buildDriverOptions(d, s, ctx.encryptPassword)
         ),
         password: cred.value.password,
       };

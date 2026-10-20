@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
-import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
+import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
 import { ListDatabaseDrivers } from "../../wailsjs/go/query/Query";
 import { BUILTIN_DRIVERS } from "./dbDriverFixtures";
 
 beforeEach(() => {
-  resetDatabaseDriverCache();
+  refreshDatabaseDrivers();
   vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
 });
 

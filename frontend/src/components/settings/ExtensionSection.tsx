@@ -298,7 +298,11 @@ export function ExtensionSection() {
                                 onUpdate={() => void updateFromStore(update)}
                               />
                             )}
-                            <Switch checked={ext.enabled} onCheckedChange={() => handleToggle(ext)} />
+                            <Switch
+                              checked={ext.enabled}
+                              onCheckedChange={() => handleToggle(ext)}
+                              data-testid={`extension-toggle-${ext.name}`}
+                            />
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0">

@@ -23,6 +23,10 @@ export interface DatabaseFormState extends ConnectionFormFields {
   params: string;
   path: string;
   queryTimeoutSeconds: number;
+  /** 用户在表单上改过的驱动专属字段取值(口令类为明文);切换驱动时清空。 */
+  driverOptions: Record<string, unknown>;
+  /** 资产已存的 driver_options 及其所属驱动(口令类为密文):回填与沿用未改的口令。 */
+  storedDriverOptions: { driver: string; values: Record<string, unknown> };
 }
 
 /** 驱动尚未选定的空白表单;新建时由 applyDriverChange 套上驱动描述里的默认值。 */
@@ -39,6 +43,8 @@ export const DATABASE_DEFAULTS: DatabaseFormState = {
   params: "",
   path: "",
   queryTimeoutSeconds: 30,
+  driverOptions: {},
+  storedDriverOptions: { driver: "", values: {} },
   ...CONNECTION_DEFAULTS,
 };
 
@@ -60,12 +66,14 @@ interface DatabaseConfig {
   path?: string;
   proxy?: ProxyConfigJSON;
   proxy_chain?: ProxyChainJSON;
+  driver_options?: Record<string, unknown>;
 }
 
 /**
  * 保存/测试共用序列化(键序锁旧 save 分支:driver 首键;文件型驱动→[sqlite_source/ssh_asset_id/]path;
  * 主机型驱动→host/port/username/[credential|password]/[ssh_asset_id]/[ssl_mode]/[tls]/[proxy];
  * 末尾共有 database/read_only/params)。写哪些键由驱动描述声明的字段决定,不认驱动名。
+ * driverOptions 由 buildDriverOptions 预解析(口令类已加密),放在末尾。
  * cred 由 resolveSave/TestCredential 预解析;proxyPassword 由 resolveSaveProxyPassword(save=密文)
  * 或 state.proxyPassword(test=明文)预解析。隧道与代理互斥,按 connectionType 二选一;
  * 自带 SSH 资产字段的驱动(远端文件)用那个字段,不吃通用隧道 / 代理配置。
@@ -75,7 +83,8 @@ export function buildDatabaseConfig(
   driver: DriverDescriptor,
   cred: CredentialFragment,
   proxyPassword = "",
-  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
+  driverOptions?: Record<string, unknown>
 ): string {
   const uses = (field: string) => driverUsesField(driver, field);
   const cfg: DatabaseConfig = { driver: state.driver };
@@ -107,6 +116,7 @@ export function buildDatabaseConfig(
   if (state.readOnly) cfg.read_only = true;
   if (state.params) cfg.params = state.params;
   if (state.queryTimeoutSeconds > 0) cfg.query_timeout_seconds = state.queryTimeoutSeconds;
+  if (driverOptions) cfg.driver_options = driverOptions;
   return JSON.stringify(cfg);
 }
 
@@ -128,6 +138,8 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
       params: cfg.params || "",
       path: cfg.path || "",
       queryTimeoutSeconds: cfg.query_timeout_seconds || 30,
+      driverOptions: {},
+      storedDriverOptions: { driver: cfg.driver ?? "", values: cfg.driver_options ?? {} },
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
@@ -139,12 +151,14 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
  * driver 切换的 section 自有字段复位(壳 icon 副作用留在组件),按新驱动的描述:
  * 不用主机的驱动(文件型)→ 清 host/username,port=0,path 保留,连接方式复位;
  * 用主机的驱动 → port=描述的默认端口,清 path,驱动不用 ssl_mode 时复位 sslMode。
+ * 专属字段是各驱动自己的:改过的取值清空,新驱动的字段从已存值或默认值起步。
  */
 export function applyDriverChange(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
   if (!driverUsesField(driver, "host")) {
     return {
       ...state,
       driver: driver.id,
+      driverOptions: {},
       sqliteSource: "local",
       host: "",
       port: 0,
@@ -155,6 +169,7 @@ export function applyDriverChange(state: DatabaseFormState, driver: DriverDescri
   return {
     ...state,
     driver: driver.id,
+    driverOptions: {},
     sqliteSource: "local",
     port: driver.defaultPort,
     path: "",

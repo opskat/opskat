@@ -251,9 +251,15 @@ function loadDotEnv() {
 // notebook has no use for — a format:"endpoint" field under network.assetEndpoint, the
 // host's SSH-tunnel connection setting, and a test-connection handler — so the asset
 // form's connection section and "Test connection" button can be driven for real.
+//
+// `fixture-dbdriver` is pkg/extension's database-driver test extension: it provides
+// no asset type, only the SQL driver "fixturedb" (an in-memory catalog that logs in
+// to whatever its asset's host:port is), so a database asset, the query panel and the
+// driver's disable / enable lifecycle can be driven against an extension driver.
 const HARNESS_EXTENSIONS = [
   { name: "notebook", dir: "extensions/notebook" },
   { name: "fixture-ext", dir: "pkg/extension/testdata/fixture-ext" },
+  { name: "fixture-dbdriver", dir: "pkg/extension/testdata/fixture-dbdriver" },
 ];
 
 // Builds each extension's wasm guest and lays the result out in the run's data dir,

@@ -6,7 +6,7 @@ import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection"
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
 import { asset_entity } from "../../../../wailsjs/go/models";
 import { ListDatabaseDrivers } from "../../../../wailsjs/go/query/Query";
-import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
+import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
 import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
 
 vi.mock("../../../../wailsjs/go/system/System", () => ({
@@ -23,7 +23,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  resetDatabaseDriverCache();
+  refreshDatabaseDrivers();
   vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
 });
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
-import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
+import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
 import { ListDatabaseDrivers } from "../../wailsjs/go/query/Query";
 import { BUILTIN_DRIVERS, FAKE_DRIVER } from "./dbDriverFixtures";
 
@@ -19,7 +19,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  resetDatabaseDriverCache();
+  refreshDatabaseDrivers();
 });
 
 const ctx = { isEdit: false, encryptPassword: vi.fn() };
