@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -615,5 +616,87 @@ func TestParseDescriptorEnumPresentation(t *testing.T) {
 		auth := out["properties"].(map[string]any)["auth"].(map[string]any)
 		So(auth["enumLabels"], ShouldResemble, []any{"T:k.a"})
 		So(auth["enum"], ShouldResemble, []any{"a"})
+	})
+}
+
+const driverDescriptorJSON = `{"id":"mysql-ext","name":"MySQL Ext","icon":"x","order":50,"aliases":[],"defaultPort":3306,` +
+	`"form":[{"tab":"connection","fields":["host","port"]}],"capabilities":["schemas"],` +
+	`"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
+
+func TestParseDescriptorDatabaseDrivers(t *testing.T) {
+	Convey("A descriptor may provide SQL database drivers", t, func() {
+		Convey("a driver-only extension needs neither an asset type nor a policy type", func() {
+			d, err := ParseDescriptor([]byte(`{"icon":"mysql","databaseDrivers":[` + driverDescriptorJSON + `]}`))
+			So(err, ShouldBeNil)
+			So(d.DatabaseDrivers, ShouldHaveLength, 1)
+			So(string(d.DatabaseDrivers[0].ID), ShouldEqual, "mysql-ext")
+		})
+
+		Convey("an extension without drivers still needs an asset type", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "assetTypes")
+		})
+
+		Convey("tools are unreachable without an asset type, drivers or not", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],` +
+				`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "tools")
+		})
+
+		Convey("an extension may mix asset types and drivers", func() {
+			_, err := ParseDescriptor(desc(`"databaseDrivers":[` + driverDescriptorJSON + `]`))
+			So(err, ShouldBeNil)
+		})
+
+		Convey("an invalid driver descriptor fails naming the driver id", func() {
+			for _, bad := range []string{
+				`"form":[{"tab":"connection","fields":["nope"]}]`,
+				`"capabilities":["teleport"]`,
+				`"form":[{"tab":"nowhere","fields":["host"]}]`,
+				`"driverFields":[{"key":"host","type":"text","tab":"connection"}]`,
+			} {
+				_, err := ParseDescriptor([]byte(`{"databaseDrivers":[{"id":"bad-one",` + bad + `}]}`))
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "bad-one")
+			}
+		})
+
+		Convey("duplicate driver ids in one descriptor are refused", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `,` + driverDescriptorJSON + `]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "mysql-ext")
+		})
+	})
+}
+
+func TestDescribeIntoDatabaseDrivers(t *testing.T) {
+	const drivers = `"databaseDrivers":[` + driverDescriptorJSON + `]`
+	load := func(declared []string, payload string) (*Manifest, error) {
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, payload))
+		m := &Manifest{Name: "ext-a", HostABI: HostABIVersion, Capabilities: Capabilities{DatabaseDrivers: declared}}
+		_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
+		return m, err
+	}
+	Convey("The manifest's driver ids and describe()'s must be the same set", t, func() {
+		Convey("matching sets load, and the driver icon is the extension's", func() {
+			m, err := load([]string{"mysql-ext"}, `{"icon":"ext-icon",`+drivers+`}`)
+			So(err, ShouldBeNil)
+			So(m.DatabaseDrivers, ShouldHaveLength, 1)
+			So(m.DatabaseDrivers[0].Icon, ShouldEqual, "ext-icon")
+		})
+		Convey("a driver described but not declared", func() {
+			_, err := load(nil, `{`+drivers+`}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "mysql-ext")
+		})
+		Convey("a driver declared but not described", func() {
+			_, err := load([]string{"mysql-ext", "ghost"}, `{`+drivers+`}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "ghost")
+		})
 	})
 }

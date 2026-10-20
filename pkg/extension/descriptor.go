@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // Descriptor is what the guest answers to describe(): everything an extension can
@@ -27,6 +29,9 @@ type Descriptor struct {
 	Policies   PoliciesDef    `json:"policies"`
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
+	// DatabaseDrivers are the SQL database drivers the extension provides, one
+	// descriptor per id the manifest lists in capabilities.databaseDrivers.
+	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
 }
 
 // ParseDescriptor decodes and validates a describe() payload.
@@ -46,6 +51,9 @@ func ParseDescriptor(data []byte) (*Descriptor, error) {
 }
 
 func (d *Descriptor) validate() error {
+	if err := d.validateDatabaseDrivers(); err != nil {
+		return err
+	}
 	if err := d.validateAssetScope(); err != nil {
 		return err
 	}
@@ -63,7 +71,17 @@ func (d *Descriptor) validate() error {
 // Extension tools travel the same exec / help / policy / grant path built-in types
 // do, and the entry to that path is an *asset*. A missing declaration is therefore not "an optional field left out"
 // but "this extension has no reachable entry point", and must be said at load time.
+//
+// An extension that provides database drivers is the exception: its entry point is
+// the database asset the user already has, so it may declare no asset types and no
+// policy type — but then it has no tools either, since a tool could not be reached.
 func (d *Descriptor) validateAssetScope() error {
+	if len(d.AssetTypes) == 0 && len(d.DatabaseDrivers) > 0 {
+		if len(d.Tools) > 0 {
+			return fmt.Errorf("describe(): tools require an asset type to be reached through; an extension that only provides database drivers declares none")
+		}
+		return nil
+	}
 	if len(d.AssetTypes) == 0 {
 		return fmt.Errorf("describe(): assetTypes must declare at least one asset type — extension tools are reached through exec on an asset")
 	}
@@ -111,6 +129,44 @@ func (d *Descriptor) validateAssetScope() error {
 	// could itself contain ":" would let one face's namespace spell another's.
 	if !nameRe.MatchString(d.Policies.Type) {
 		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policies.Type)
+	}
+	return nil
+}
+
+// validateDatabaseDrivers checks every driver descriptor on its own (dbdriver
+// validation: known fields, capabilities and tabs, driver fields clear of the
+// built-in ones) and that no id appears twice. Errors name the driver id.
+func (d *Descriptor) validateDatabaseDrivers() error {
+	seen := make(map[dbdriver.DriverID]struct{}, len(d.DatabaseDrivers))
+	for _, drv := range d.DatabaseDrivers {
+		if err := drv.Validate(); err != nil {
+			return fmt.Errorf("describe(): databaseDrivers: %w", err)
+		}
+		if _, dup := seen[drv.ID]; dup {
+			return fmt.Errorf("describe(): databaseDrivers: duplicate driver %q", drv.ID)
+		}
+		seen[drv.ID] = struct{}{}
+	}
+	return nil
+}
+
+// checkDatabaseDrivers requires the merged manifest's driver descriptors to be
+// exactly the driver ids the manifest declared: the manifest is what the user
+// audited, the descriptor is what the code implements, and they may not disagree.
+// The error names the offending driver; the caller adds the extension.
+func (m *Manifest) checkDatabaseDrivers() error {
+	described := make(map[string]struct{}, len(m.DatabaseDrivers))
+	for _, drv := range m.DatabaseDrivers {
+		id := string(drv.ID)
+		described[id] = struct{}{}
+		if !slices.Contains(m.Capabilities.DatabaseDrivers, id) {
+			return fmt.Errorf("describe() provides database driver %q that manifest capabilities.databaseDrivers does not declare", id)
+		}
+	}
+	for _, id := range m.Capabilities.DatabaseDrivers {
+		if _, ok := described[id]; !ok {
+			return fmt.Errorf("manifest declares database driver %q but describe() does not provide it", id)
+		}
 	}
 	return nil
 }
@@ -347,6 +403,12 @@ func (m *Manifest) apply(d *Descriptor) {
 	m.Policies.Actions = policyActions(d.Tools)
 	m.Frontend = d.Frontend
 	m.Snippets = d.Snippets
+	// A driver's icon is the extension's: it is the one icon the user sees on it.
+	m.DatabaseDrivers = make([]dbdriver.Descriptor, len(d.DatabaseDrivers))
+	for i, drv := range d.DatabaseDrivers {
+		drv.Icon = d.Icon
+		m.DatabaseDrivers[i] = drv
+	}
 }
 
 func policyActions(tools []ToolDef) []string {

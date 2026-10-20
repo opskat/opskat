@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // HostABIVersion is the current host ABI contract version.
@@ -34,13 +36,22 @@ import (
 // extension that uses it declares 2.2 and an older app refuses to load it. 2.2
 // also lets check_policy answer {"reject":"<reason>"} (the SDK's RejectArgs): the
 // tool refusing the call's arguments, which the host denies without asking.
-const HostABIVersion = "2.2"
+//
+// 2.3 lets an extension provide SQL database drivers (capabilities.databaseDrivers
+// plus the driver descriptors in describe()). An older host would not know to read
+// them and would load the extension as one with nothing to offer, so an extension
+// declaring drivers declares 2.3 and an older app refuses to install it.
+const HostABIVersion = "2.3"
 
-// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 and 2.1
-// stay listed so extensions built before host-ui or multi-resource classification
-// keep loading unchanged; only a hostABI newer than everything here (e.g. an
-// extension declaring 2.3 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2"}
+// databaseDriversMinHostABI is the first host ABI that understands
+// capabilities.databaseDrivers.
+const databaseDriversMinHostABI = "2.3"
+
+// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
+// 2.2 stay listed so extensions built before host-ui, multi-resource
+// classification or database drivers keep loading unchanged; only a hostABI newer
+// than everything here (e.g. an extension declaring 2.4 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -95,6 +106,8 @@ type Manifest struct {
 	Policies   PoliciesDef    `json:"policies"`
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
+	// DatabaseDrivers are the driver descriptors, one per capabilities.databaseDrivers id.
+	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
 }
 
 // manifestFile is what manifest.json is allowed to say.
@@ -161,6 +174,9 @@ type Capabilities struct {
 	// connection.sshTunnel declaration, not this capability.
 	Tunnel  bool              `json:"tunnel"`
 	Network NetworkCapability `json:"network"`
+	// DatabaseDrivers lists the SQL database driver ids the extension provides.
+	// describe() must answer with exactly this set of drivers; requires hostABI 2.3.
+	DatabaseDrivers []string `json:"databaseDrivers"`
 }
 
 // NetworkCapability grants network reach that is decided per call rather than by
@@ -252,7 +268,14 @@ func (at AssetTypeDef) bindsEndpoint() bool {
 // asset's endpoints, and an extension without network.assetEndpoint has none. It
 // runs once describe() is merged in, since the declaration comes from the guest
 // and the capability from manifest.json.
+//
+// It is also the one post-merge check of the guest's answer against the manifest,
+// so the database driver ids the manifest declares are compared with the ones
+// describe() provided here too (see checkDatabaseDrivers).
 func (m *Manifest) validateEndpointBindings() error {
+	if err := m.checkDatabaseDrivers(); err != nil {
+		return err
+	}
 	if m.Capabilities.Network.AssetEndpoint {
 		return nil
 	}
@@ -503,7 +526,43 @@ func (m *Manifest) validate() error {
 	if m.Backend.Binary == "" {
 		return fmt.Errorf("manifest: backend.binary is required — it names the WASM module the host loads")
 	}
+	return m.validateDatabaseDrivers()
+}
+
+// validateDatabaseDrivers checks the driver ids the manifest declares: well-formed,
+// unique, and only on a host ABI that reads them.
+func (m *Manifest) validateDatabaseDrivers() error {
+	ids := m.Capabilities.DatabaseDrivers
+	if len(ids) == 0 {
+		return nil
+	}
+	if !hostABIAtLeast(m.HostABI, databaseDriversMinHostABI) {
+		return fmt.Errorf("manifest: capabilities.databaseDrivers requires hostABI %s or newer (got %s)", databaseDriversMinHostABI, m.HostABI)
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if !nameRe.MatchString(id) {
+			return fmt.Errorf("manifest: capabilities.databaseDrivers id %q must match %s", id, nameRe.String())
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("manifest: capabilities.databaseDrivers lists %q twice", id)
+		}
+		seen[id] = struct{}{}
+	}
 	return nil
+}
+
+// hostABIAtLeast compares "major.minor" host ABI versions. Both are known-good
+// here (the caller has already checked abi against SupportedHostABIs).
+func hostABIAtLeast(abi, floor string) bool {
+	var aMaj, aMin, fMaj, fMin int
+	if _, err := fmt.Sscanf(abi, "%d.%d", &aMaj, &aMin); err != nil {
+		return false
+	}
+	if _, err := fmt.Sscanf(floor, "%d.%d", &fMaj, &fMin); err != nil {
+		return false
+	}
+	return aMaj > fMaj || (aMaj == fMaj && aMin >= fMin)
 }
 
 func isSupportedHostABI(abi string) bool {
