@@ -1,0 +1,13 @@
+{
+  "extension.displayName": "Jev 命令审核",
+  "extension.description": "在辅助审批和 Autopilot 下用 TypeSafe 的 Jev 模型审核命令，只拦明确危险的操作",
+
+  "settings.apiKey.title": "API key",
+  "settings.apiKey.desc": "TypeSafe 的 API key。加密保存，扩展拿不到原文，OpsKat 只在发往下面服务地址的请求里带上它。",
+  "settings.baseUrl.title": "服务地址",
+  "settings.baseUrl.desc": "兼容 TypeSafe System One API 的服务。API key 只会发往这个地址。",
+  "settings.model.title": "模型",
+  "settings.model.desc": "Jev 模型名，默认 jev-latest（最新版本）。",
+  "settings.threshold.title": "阈值",
+  "settings.threshold.desc": "0 到 1 之间的数。模型判断任意一种危险的概率达到它，命令就审核不通过；越小越严格。"
+}

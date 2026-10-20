@@ -30,12 +30,13 @@ func ShellCommandRules(rules []string) []string {
 //   - 独立 deny "*" 拒绝一切；
 //   - 独立 allow "*" 在没有任何具体 deny 规则时放行一切——配置它就是显式选择全权限。
 //
-// 其余一律 NeedConfirm，并把原因写进 Message，引导调用方修正命令。空白命令永不放行。
+// 其余一律 NeedConfirm（标为 Unreviewable，只能由人判断，不交给模型审核），并把原因写进
+// Message，引导调用方修正命令。空白命令永不放行。
 //
 // allowRules / denyRules 是资产、组链与策略组合并后的生效 shell 规则（已经过 ShellCommandRules）。
 func DecideUnenumerableShell(ctx context.Context, command string, parseErr error, allowRules, denyRules []string) aictx.CheckResult {
 	if strings.TrimSpace(command) == "" {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+		return aictx.CheckResult{Decision: aictx.NeedConfirm, Unreviewable: true}
 	}
 	if i := slices.IndexFunc(denyRules, isWildcardAll); i >= 0 {
 		return aictx.CheckResult{
@@ -48,7 +49,7 @@ func DecideUnenumerableShell(ctx context.Context, command string, parseErr error
 	if i := slices.IndexFunc(allowRules, isWildcardAll); i >= 0 && len(denyRules) == 0 {
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: allowRules[i]}
 	}
-	return aictx.CheckResult{Decision: aictx.NeedConfirm, Message: unenumerableShellMessage(ctx, parseErr)}
+	return aictx.CheckResult{Decision: aictx.NeedConfirm, Message: unenumerableShellMessage(ctx, parseErr), Unreviewable: true}
 }
 
 func unenumerableShellMessage(ctx context.Context, parseErr error) string {

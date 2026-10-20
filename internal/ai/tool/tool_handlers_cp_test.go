@@ -61,6 +61,13 @@ func cpWithLocalWriteGate(ctx context.Context, decision string) (context.Context
 	return helper.WithLocalWriteGate(ctx, gate), reqs
 }
 
+func TestCpDestinationScopeKeepsRemoteSlashOnWindows(t *testing.T) {
+	got := cpDestinationScope(&cpEndpoint{asset: &asset_entity.Asset{Type: "ssh"}, path: "/var/log/app.log"})
+	if got != "/var/log" {
+		t.Fatalf("remote scope = %q, want /var/log", got)
+	}
+}
+
 // TestCpAutoAllowedTransferGatesTheLocalWrite 锁住 §6.2「本地端点不产生审批项」那条规则的
 // **前提**：D11 说本地路径由"用户批准的那条命令串"完全决定，可两端都被策略/grant 自动放行
 // 时压根没有那条串——一个弹框都没弹过。这一档下本地写改由 local_write 门禁把关。

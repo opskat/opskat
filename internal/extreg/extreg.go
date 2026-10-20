@@ -97,7 +97,11 @@ var (
 )
 
 // claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。调用方持有 mu。
+// 纯审核扩展没有策略面（policyType 为空），不占用任何策略类型。
 func claimPolicyType(extName, policyType string) error {
+	if policyType == "" {
+		return nil
+	}
 	if policy_group_entity.IsBuiltinPolicyType(policyType) {
 		return fmt.Errorf("extension %q: policy type %q is a built-in policy type", extName, policyType)
 	}

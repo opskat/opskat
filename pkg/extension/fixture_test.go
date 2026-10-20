@@ -161,6 +161,14 @@ func (h *recordedHost) KVGet(key string) ([]byte, error) {
 	return h.kv[key], nil
 }
 
+func (h *recordedHost) SettingsGet() (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (h *recordedHost) SettingSecrets([]string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 func (h *recordedHost) KVSet(key string, value []byte) error {
 	if h.arrivals != nil {
 		h.arrivals <- struct{}{}

@@ -66,6 +66,28 @@ func fieldsWithFormat(schema map[string]any, format string) []string {
 	return fields
 }
 
+// ValidateSettings 按 settingsSchema 检查一份设置：必填字段必须有，不能有未声明字段。
+// 字段级的格式（password / endpoint）由保存方和网络门各自处理，这里不重复解释。
+func ValidateSettings(schema map[string]any, values map[string]any) error {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("settingsSchema has no properties")
+	}
+	for name := range values {
+		if _, declared := props[name]; !declared {
+			return fmt.Errorf("settings field %q is not declared", name)
+		}
+	}
+	required, _ := schema["required"].([]any)
+	for _, raw := range required {
+		name, _ := raw.(string)
+		if _, ok := values[name]; !ok {
+			return fmt.Errorf("settings field %q is required", name)
+		}
+	}
+	return nil
+}
+
 // ConfigSchemaProperties returns the declared property names of a configSchema,
 // sorted. Empty for a schema without a properties object.
 func ConfigSchemaProperties(schema map[string]any) []string {

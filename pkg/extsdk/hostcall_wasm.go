@@ -196,6 +196,21 @@ func (w *wasmHostCaller) KVSet(key string, value []byte) error {
 	return err
 }
 
+func (w *wasmHostCaller) SettingsGet() (map[string]string, error) {
+	payload, err := call("settings_get", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]string
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, fmt.Errorf("parse settings_get reply: %w", err)
+	}
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out, nil
+}
+
 func (w *wasmHostCaller) ActionEvent(eventType string, data []byte) {
 	// Events are fire-and-forget; a delivery failure is the host's to log.
 	_, _ = call("action.event", map[string]any{"type": eventType, "data": json.RawMessage(data)})

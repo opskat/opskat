@@ -383,6 +383,28 @@ func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.Raw
 	return decodePolicyDecision(result)
 }
 
+// reviewEnvelope 是 review_commands 的输入：一批已替换敏感信息的命令。
+type reviewEnvelope struct {
+	Items []ReviewItem `json:"items"`
+}
+
+// ReviewCommands 调用 review_commands，并按 reviewer 声明校验整批结果。
+// 条数不符、未知问题 id、reject 不带问题、JSON 无法解析、调用出错（含 guest panic）
+// 都返回带 ReasonInvalidResult 的错误，由调用方整批按审核失败处理。
+// maxDuration 为 0 时不加宿主超时，由调用方的 ctx 控制。
+func (p *Plugin) ReviewCommands(ctx context.Context, items []ReviewItem, maxDuration time.Duration) ([]ReviewCommandResult, error) {
+	if p.manifest.Reviewer == nil {
+		return nil, fmt.Errorf("review %s: extension %q has no reviewer section", ReasonInvalidResult, p.manifest.Name)
+	}
+	return validateReviewResults(len(items), p.manifest.Reviewer.Questions, func() (json.RawMessage, error) {
+		input, err := json.Marshal(reviewEnvelope{Items: items})
+		if err != nil {
+			return nil, fmt.Errorf("marshal review_commands input: %w", err)
+		}
+		return p.call(ctx, newInvocation(p.nextInvocationID(), nil), "review_commands", input, maxDuration)
+	})
+}
+
 // ValidateConfig calls validate_config on the extension. config is the asset's
 // config exactly as about to be persisted, which may carry the host's reserved
 // connection-settings key (proxy chain, TLS) — stripped here, before it ever

@@ -7,6 +7,11 @@ extension breaks `go test ./...` instead of a repository nobody rebuilt.
 - [`notebook/`](./notebook) — the reference example. One asset type, four tools, a
   policy face that allows, asks and refuses, a `SKILL.md` and two locales. It stores
   everything in the host KV, so it runs offline with no capability grants at all.
+- [`jev-command-review/`](./jev-command-review) — a command reviewer and nothing else: no asset
+  type, no tools, no `SKILL.md`. It answers `review_commands` with TypeSafe's Jev model
+  (`internal/pkg/jevreview`), keeps its API key in an extension setting it only ever sees
+  as the `{{setting.api_key}}` placeholder, and declares `capabilities.commandReview` —
+  on a release build the host uses it only when installed from the official store.
 
 The runtime that loads these — wazero, the reactor ABI, the capability enforcement,
 the descriptor cache — is described in

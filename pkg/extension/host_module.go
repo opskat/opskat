@@ -62,6 +62,7 @@ var hostOps = map[string]hostOpFunc{
 	"log":              opLog,
 	"kv.get":           opKVGet,
 	"kv.set":           opKVSet,
+	"settings_get":     opSettingsGet,
 	"asset.get_config": opAssetGetConfig,
 	"file_dialog":      opFileDialog,
 	"io.open":          opIOOpen,
@@ -165,6 +166,17 @@ func opKVGet(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	return env.host.KVGet(p.Key)
+}
+
+func opSettingsGet(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
+	values, err := env.host.SettingsGet()
+	if err != nil {
+		return nil, err
+	}
+	if values == nil {
+		values = map[string]string{}
+	}
+	return json.Marshal(values)
 }
 
 func opKVSet(env hostCallEnv, params json.RawMessage) ([]byte, error) {

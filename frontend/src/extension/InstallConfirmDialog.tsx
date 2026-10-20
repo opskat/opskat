@@ -97,6 +97,7 @@ export function ExtensionInstallConfirmDialog() {
   };
 
   const credentialsRead = current?.capabilities.some((c) => c.kind === "credentials" && c.value === "read");
+  const commandReview = current?.capabilities.some((c) => c.kind === "commandReview");
   const mode = !current?.from ? "install" : current.downgrade ? "downgrade" : "update";
   const confirmLabel = INSTALL_MODE_KEYS[mode].action;
 
@@ -128,6 +129,16 @@ export function ExtensionInstallConfirmDialog() {
                 >
                   <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
                   <span>{t("extension.credentialsReadWarning")}</span>
+                </div>
+              )}
+
+              {commandReview && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-warning"
+                >
+                  <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{t("extension.commandReviewWarning")}</span>
                 </div>
               )}
 

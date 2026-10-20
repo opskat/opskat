@@ -444,6 +444,7 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 				DecisionSource: result.DecisionSource,
 				MatchedPattern: result.MatchedPattern,
 				SessionID:      session,
+				Review:         result.Review,
 			}, fmt.Errorf("transfer denied by policy: %s", result.Message)
 		case aictx.Allow:
 			allowed = result
@@ -457,6 +458,7 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 				AssetName: subject.assetName,
 				Command:   subject.command,
 				Detail:    detail,
+				Review:    result.Review,
 			})
 		}
 	}
@@ -466,9 +468,17 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 			DecisionSource: allowed.DecisionSource,
 			MatchedPattern: allowed.MatchedPattern,
 			SessionID:      session,
+			Review:         allowed.Review,
 		}, nil
 	}
-	return cpBatchSendFn(items, session)
+	result, err := cpBatchSendFn(items, session)
+	// 这次确认只落一行审计：带上说明为什么问人的那个审核结果。
+	reviews := make([]*aictx.ReviewInfo, len(items))
+	for i, item := range items {
+		reviews[i] = item.Review
+	}
+	result.Review = aictx.BatchReview(reviews)
+	return result, err
 }
 
 // cpToolParams 是交给 cp 工具的参数，同时也是这次调用落进 audit_logs.request 的原文

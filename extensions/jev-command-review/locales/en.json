@@ -1,0 +1,13 @@
+{
+  "extension.displayName": "Jev Command Review",
+  "extension.description": "Reviews commands with TypeSafe's Jev model under Assisted approval and Autopilot, stopping only clearly dangerous ones",
+
+  "settings.apiKey.title": "API key",
+  "settings.apiKey.desc": "TypeSafe API key. Stored encrypted; the extension never sees it, OpsKat adds it only to requests sent to the service URL below.",
+  "settings.baseUrl.title": "Service URL",
+  "settings.baseUrl.desc": "A service compatible with the TypeSafe System One API. The API key is sent only to this address.",
+  "settings.model.title": "Model",
+  "settings.model.desc": "Jev model name; defaults to jev-latest.",
+  "settings.threshold.title": "Threshold",
+  "settings.threshold.desc": "A number between 0 and 1. A command fails the review when the model's probability for any danger reaches it; lower is stricter."
+}

@@ -385,7 +385,7 @@ func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string) (s
 	if e.service == nil {
 		return "", "", fmt.Errorf("extension system not initialized")
 	}
-	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, nil)
+	manifest, err := e.service.InstallDev(i18n.Ctx(ctx, e.lang.Lang()), sourceDir)
 	if err != nil {
 		return "", "", err
 	}

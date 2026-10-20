@@ -101,7 +101,8 @@ func registerPolicyGroups(extName string, m *extension.Manifest) error {
 // 接线方式；这条路没有 plugin，桌面端不会用它。
 func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	m := info.Manifest
-	if len(m.AssetTypes) == 0 {
+	// 纯审核扩展本来就没有资产类型：有 reviewer 段说明缓存在，只是没有东西要注册。
+	if len(m.AssetTypes) == 0 && m.Reviewer == nil {
 		return fmt.Errorf("extension %q has no cached describe() answer on this machine", info.Name)
 	}
 	localized := m.Localized(func(key string) string { return info.Translate(helpLang, key) })

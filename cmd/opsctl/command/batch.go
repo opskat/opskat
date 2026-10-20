@@ -225,15 +225,22 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	}
 	var autoAllow, autoDeny, needConfirm []permBucket
 
+	// checkCommand, not command: policy matching must see whatever canonicalize
+	// produced (kafka's deny rules are keyed on its two-token canonical shape), same
+	// as cmdExec — see prepareExecCommand's doc comment. All commands are checked in
+	// one CheckPermissions call so model reviews run in parallel.
+	var permReqs []permission.PermissionRequest
+	var permIndices []int
 	for i, cmd := range resolved {
 		if cmd.asset == nil {
 			continue
 		}
-		permCtx := aictx.WithSessionID(ctx, session)
-		// checkCommand, not command: policy matching must see whatever canonicalize
-		// produced (kafka's deny rules are keyed on its two-token canonical shape), same
-		// as cmdExec — see prepareExecCommand's doc comment.
-		pr := permission.CheckPermission(permCtx, cmd.asset.Type, cmd.asset.ID, cmd.checkCommand)
+		permIndices = append(permIndices, i)
+		permReqs = append(permReqs, permission.PermissionRequest{AssetType: cmd.asset.Type, AssetID: cmd.asset.ID, Command: cmd.checkCommand})
+	}
+	permResults := permission.CheckPermissions(aictx.WithSessionID(ctx, session), permReqs)
+	for k, i := range permIndices {
+		pr := permResults[k]
 		prCopy := pr
 		resolved[i].decision = &prCopy
 		bucket := permBucket{idx: i, result: pr}
@@ -285,6 +292,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				Resource:        item.Resource,
 				Resources:       item.Resources,
 				RememberPattern: item.RememberPattern,
+				Review:          b.result.Review,
 			})
 		}
 
@@ -302,7 +310,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				cmd := resolved[b.idx]
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
 				argsJSON := batchArgsJSON(cmd.asset.ID, cmd.command, cmd.scope)
-				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
+				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource, Review: b.result.Review}
 				deniedCtx := withBatchAuditCommand(auditCtx, cmd.checkCommand)
 				writeOpsctlAudit(deniedCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
 			}
@@ -314,6 +322,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				resolved[b.idx].decision = &aictx.CheckResult{
 					Decision:       aictx.Allow,
 					DecisionSource: aictx.SourceUserAllow,
+					Review:         b.result.Review,
 				}
 				execSet[b.idx] = true
 			}

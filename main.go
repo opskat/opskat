@@ -407,8 +407,8 @@ func initExtensionSystem(
 	// extSvc 在下面才构造：工厂只在扩展加载时调用，那时它已经赋值。
 	var extSvc *extension_svc.Service
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
-		// 资产配置 / KV / 连接路径来自 extension_svc（与 opsctl 共用），文件对话框与
-		// action 事件只有桌面窗口能给。
+		// 资产配置 / KV / 连接路径 / 扩展设置来自 extension_svc（与 opsctl 共用），
+		// 文件对话框与 action 事件只有桌面窗口能给。
 		cfg := extSvc.HostConfig(extName)
 		cfg.FileDialogs = extB.NewFileDialogOpener()
 		cfg.ActionEvents = extB.NewActionEventHandler(extName)
@@ -436,6 +436,7 @@ func initExtensionSystem(
 	extreg.SetConnTestRegistrar(extSvc.ConnTestRegistrar())
 
 	extB.SetService(extSvc)
+	bootstrap.SetExtensionService(extSvc)
 	aiB.SetExtensionService(extSvc)
 	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
 

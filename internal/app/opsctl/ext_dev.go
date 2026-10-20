@@ -142,6 +142,11 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, overwr
 			"警告：credentials: read —— 该扩展能以明文读取其资产里保存的全部密码\n",
 			"WARNING: credentials: read — this extension can read every password stored in its assets in plaintext\n"))
 	}
+	if m.Capabilities.CommandReview {
+		b.WriteString(i18n.Pick(lang,
+			"警告：commandReview —— 此扩展可以自动放行命令\n",
+			"WARNING: commandReview — this extension can auto-allow commands\n"))
+	}
 	fmt.Fprintf(&b, "extension: %s %s\n", m.Name, m.Version)
 	if overwrites {
 		fmt.Fprintf(&b, "overwrites installed: %s %s\n", m.Name, installedVersion)
@@ -172,6 +177,9 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, overwr
 	}
 	if c.Network.AssetEndpoint {
 		capLine("network.assetEndpoint", "true")
+	}
+	if c.CommandReview {
+		capLine("commandReview", "true")
 	}
 	if lines == 0 {
 		b.WriteString(" none")

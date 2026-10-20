@@ -259,6 +259,15 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // too old to accept) must not take down every unrelated opsctl command.
 func registerExtensionAssetTypes() {
 	extensionDescribeFailures = nil
+	// 命令审核走与执行扩展同一个宿主：来源、摘要和设置都由它读，选中的审核器只在真正要审核时加载。
+	extensionHost.mu.Lock()
+	if extensionHost.svc == nil {
+		extensionHost.svc = newExtensionHost()
+	}
+	svc := extensionHost.svc
+	extensionHost.mu.Unlock()
+	svc.LoadReviewersOnDemand()
+	bootstrap.SetExtensionService(svc)
 	scanned, err := scanExtensionDirs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -270,7 +279,8 @@ func registerExtensionAssetTypes() {
 			continue
 		}
 		info := ext.info
-		if len(info.Manifest.AssetTypes) == 0 {
+		// 纯审核扩展没有资产类型；有缓存的 reviewer 段就不是"没描述过"，没有东西要注册。
+		if len(info.Manifest.AssetTypes) == 0 && info.Manifest.Reviewer == nil {
 			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
 				extensionDescribeFailures = append(extensionDescribeFailures, extensionDescribeFailure{name: ext.info.Name, err: err})

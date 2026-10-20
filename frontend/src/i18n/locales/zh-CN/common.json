@@ -2892,6 +2892,13 @@
     "count": "{{count}} 个问题"
   },
   "extension": {
+    "settings": {
+      "required": "请填写",
+      "title": "设置",
+      "save": "保存设置",
+      "saved": "扩展设置已保存",
+      "saveAndTest": "保存并测试"
+    },
     "title": "扩展",
     "mirror": {
       "title": "扩展下载",
@@ -2994,6 +3001,7 @@
     "disableSuccess": "扩展已禁用",
     "detail": "详情",
     "credentialsReadWarning": "此扩展可以明文读取其资产中保存的全部密码（credentials: read），请确认你信任它的作者后再使用。",
+    "commandReviewWarning": "此扩展可以自动放行命令：它判定“通过”的命令，在辅助审批和 Autopilot 下会直接执行，不再询问你。只安装你信任的审核扩展。",
     "installConfirm": {
       "title": "安装扩展？",
       "titleUpdate": "更新扩展？",
@@ -3023,16 +3031,14 @@
     "pages": "页面",
     "pageName": "页面名称",
     "pageSlot": "插槽",
-    "noTools": "无工具",
-    "noPolicies": "无策略组",
-    "noPages": "无页面",
     "loadError": "加载扩展列表失败",
     "pageDisabled": "扩展 \"{{name}}\" 已禁用，在 设置 → 扩展 中重新启用后可继续使用此页面",
     "hostUi": {
       "jsonTreeExpand": "展开",
       "jsonTreeCollapse": "折叠",
       "jsonTreeEmpty": "暂无数据"
-    }
+    },
+    "reviewQuestions": "审核项"
   },
   "snippet": {
     "title": "代码片段",
@@ -3382,6 +3388,96 @@
       "connected": "已连接",
       "error": "错误",
       "closed": "已断开"
+    }
+  },
+  "commandReview": {
+    "withMode": "{{mode}} · {{summary}}",
+    "auditLabel": "模型审核",
+    "listSeparator": "、",
+    "summary": {
+      "pass": "模型审核通过",
+      "reject": "模型审核未通过（{{detail}}）",
+      "fail": "模型审核失败（{{detail}}）"
+    },
+    "question": {
+      "destructive": "可能破坏或不可恢复地修改数据",
+      "disruptive": "可能中断服务",
+      "remote_code": "会下载并执行代码"
+    },
+    "reason": {
+      "not_configured": "命令审核扩展还没配置好",
+      "invalid_api_key": "命令审核的 API key 无效",
+      "timeout": "超时",
+      "too_long": "命令过长",
+      "unparseable": "命令无法解析",
+      "undecodable": "命令把要执行的内容藏在解码后面",
+      "unavailable": "服务不可用",
+      "invalid_result": "审核扩展返回了无效结果",
+      "reviewer_unavailable": "要用的命令审核扩展不可用",
+      "no_reviewer": "没有可用的命令审核扩展"
+    },
+    "settings": {
+      "title": "命令审核",
+      "desc": "权限模式为辅助审批或 Autopilot 的资产，规则判断不了、原本要问人的命令会先交给审核扩展判断，只拦明确危险的操作。送审前会展开解码执行的脚本，并替换密码等敏感信息。",
+      "timeout": "审核超时（毫秒）",
+      "timeoutHint": "每次调用审核扩展的超时；超时会自动重试一次",
+      "timeoutRange": "超时需在 {{min}}~{{max}} 毫秒之间",
+      "reviewer": "审核扩展",
+      "unsigned": "未经签名",
+      "reviewerUnusable": "{{name}} 现在不能使用：{{reason}}",
+      "reviewerSaved": "审核服务已切换",
+      "save": "保存",
+      "saved": "命令审核设置已保存",
+      "lastFail": "最近一次审核失败：{{reason}}（{{time}}）",
+      "notice": "这是省事功能，不是安全防线：命令里故意写的误导文字可能影响判断，真正的底线仍然是禁止规则。",
+      "noReviewer": "还没有可用的审核扩展。到 设置 › 扩展 安装并启用一个（例如「Jev 命令审核」）。在那之前，辅助审批会把这些命令全部转人工，Autopilot 会全部拒绝。",
+      "selectReviewer": "启用了多个审核扩展，请选用其中一个。",
+      "configureReviewer": "在扩展详情里设置"
+    },
+    "mode": {
+      "title": "权限模式",
+      "desc": "规则判断不了、原本要问人的命令怎么处理",
+      "inheritOption": {
+        "asset": "沿用分组",
+        "group": "沿用上级分组"
+      },
+      "inheritFrom": {
+        "asset": "当前沿用「{{mode}}」，来自分组",
+        "group": "当前沿用「{{mode}}」，来自上级分组"
+      },
+      "inheritNone": {
+        "ungrouped": "资产未分组，按默认处理",
+        "asset": "所在分组及上级分组都没有设置，按默认处理。所在分组",
+        "top": "顶层分组没有上级可沿用，按默认处理",
+        "group": "上级分组都没有设置，按默认处理。上级分组"
+      },
+      "default": "默认",
+      "assisted": "辅助审批",
+      "autopilot": "Autopilot",
+      "defaultDesc": "问人，和原来一样",
+      "assistedDesc": "模型审核通过就自动执行，否则转人工确认",
+      "autopilotDesc": "模型审核通过就自动执行，否则直接拒绝并告诉调用方原因，不等人",
+      "confirmTitle": "开启{{mode}}？",
+      "confirmAssisted": "规则判断不了的命令会先交给审核模型，审核通过就自动执行，不再问你。审核未通过或审核失败时仍然问你。命令会（替换掉敏感信息后）发给设置里的审核服务。",
+      "confirmAutopilot": "规则判断不了的命令会先交给审核模型，审核通过就自动执行；判断为明确危险或审核失败时直接拒绝，不会等你确认。适合无人值守的场景。命令会（替换掉敏感信息后）发给设置里的审核服务。",
+      "confirm": "开启",
+      "saved": "权限模式已保存",
+      "noReviewer": "当前没有可用的审核扩展：辅助审批与 Autopilot 会转到默认。"
+    },
+    "configError": {
+      "not_configured": "命令审核扩展还没配置好（比如没填 API key），要审核的命令都会审核失败。",
+      "invalid_api_key": "命令审核扩展的 API key 无效，要审核的命令都会审核失败。",
+      "openSettings": "打开设置",
+      "no_reviewer": "有资产开启了辅助审批或 Autopilot，但没有可用的命令审核扩展，要审核的命令都会审核失败。",
+      "reviewer_unavailable": "要用的命令审核扩展现在不可用（可能被停用，或安装包被改动过），要审核的命令都会审核失败。"
+    },
+    "scores": "评分",
+    "retried": "自动重试过：共请求 {{attempts}} 次",
+    "reviewedBy": "由审核扩展 {{name}} {{version}} 判断",
+    "scoreName": {
+      "destructive": "破坏数据",
+      "disruptive": "中断服务",
+      "remote_code": "下载并执行代码"
     }
   }
 }

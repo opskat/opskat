@@ -21,6 +21,24 @@ const (
 	InstallSourceDir   InstallSource = "dir"
 )
 
+// 持久化的安装来源。与安装确认里的 file/dir 不同：两者都是本地安装。
+const (
+	InstallOriginStore = "store"
+	InstallOriginLocal = "local"
+	InstallOriginDev   = "dev"
+)
+
+// installOriginOf 把确认来源收成要落库的三类。devInstall 只用于 opsctl ext dev。
+func installOriginOf(source InstallSource, devInstall bool) string {
+	if devInstall {
+		return InstallOriginDev
+	}
+	if source == InstallSourceStore {
+		return InstallOriginStore
+	}
+	return InstallOriginLocal
+}
+
 // Capability grant kinds, one per independently granted thing in
 // extension.Capabilities.
 const (
@@ -30,6 +48,8 @@ const (
 	CapCredentials   = "credentials"
 	CapTunnel        = "tunnel"
 	CapAssetEndpoint = "network.assetEndpoint"
+	// CapCommandReview 表示扩展可以自动放行命令。安装确认单独列出它。
+	CapCommandReview = "commandReview"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -151,6 +171,9 @@ func capabilityGrants(c extension.Capabilities) []CapabilityGrant {
 	}
 	if c.Network.AssetEndpoint {
 		out = append(out, CapabilityGrant{Kind: CapAssetEndpoint})
+	}
+	if c.CommandReview {
+		out = append(out, CapabilityGrant{Kind: CapCommandReview})
 	}
 	return out
 }

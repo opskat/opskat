@@ -104,8 +104,17 @@ func TestParseManifest(t *testing.T) {
 			So(m.HostABI, ShouldEqual, "2.0")
 		})
 
+		Convey("should accept the 2.3 hostABI that adds command review", func() {
+			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "2.3",` +
+				`"backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":{"commandReview":true}}`)
+			m, err := ParseManifest(data)
+			So(err, ShouldBeNil)
+			So(m.HostABI, ShouldEqual, "2.3")
+			So(m.Capabilities.CommandReview, ShouldBeTrue)
+		})
+
 		Convey("should reject an hostABI newer than anything this runtime supports", func() {
-			for _, abi := range []string{"2.3", "3.0"} {
+			for _, abi := range []string{"2.4", "3.0"} {
 				data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "` + abi + `"}`)
 				_, err := ParseManifest(data)
 				So(err, ShouldNotBeNil)
