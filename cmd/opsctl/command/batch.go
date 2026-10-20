@@ -184,6 +184,10 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		if ownerErr == nil && isExtensionAsset {
 			command, ownerErr = extensions.prepare(ctx, asset, extName, command)
 		}
+		if ownerErr == nil && !isExtensionAsset {
+			// 数据库资产的驱动由扩展提供：同样每批只激活一次。
+			ownerErr = activateDriverExtension(ctx, asset, extensions.activate)
+		}
 		if ownerErr != nil {
 			results[i].Error = ownerErr.Error()
 			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", ownerErr, nil)
@@ -580,15 +584,20 @@ type batchExtensions map[string]error
 // 错误措辞与之相同；`--<flag>-file` 照样展开成行内形式，但 batch 的标准输入不属于
 // 任何一项（JSON 输入模式已读完它），`-` 读到的是拒绝读取的 batchStdin。
 func (b batchExtensions) prepare(ctx context.Context, asset *asset_entity.Asset, extName, command string) (string, error) {
+	if err := b.activate(ctx, extName); err != nil {
+		return "", fmt.Errorf("asset %q is type=%s, provided by extension %q: %w", asset.Name, asset.Type, extName, err)
+	}
+	return extreg.ExpandFileFlags(extName, command, batchStdin{})
+}
+
+// activate 激活 extName，每批只试一次，结果（含失败）记住。
+func (b batchExtensions) activate(ctx context.Context, extName string) error {
 	err, tried := b[extName]
 	if !tried {
 		err = activateExtensionFn(ctx, extName)
 		b[extName] = err
 	}
-	if err != nil {
-		return "", fmt.Errorf("asset %q is type=%s, provided by extension %q: %w", asset.Name, asset.Type, extName, err)
-	}
-	return extreg.ExpandFileFlags(extName, command, batchStdin{})
+	return err
 }
 
 // batchStdin 是 batch 条目的 `--<flag>-file -` 读到的标准输入：拒绝，而不是静默读出空内容。

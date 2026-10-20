@@ -105,6 +105,13 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		}
 	}
 
+	// 数据库资产的驱动由扩展提供时，同样只激活这一个扩展，且早于审批：驱动不可用
+	// （扩展在桌面端被停用）不该让用户为一条注定失败的命令点头。
+	if err := activateDriverExtension(ctx, asset, activateExtensionFn); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
 	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
 	// before requireApproval (which pops a blocking desktop dialog). See
 	// prepareExecCommand's doc comment for why. checkCommand is the (possibly

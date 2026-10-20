@@ -1,6 +1,7 @@
 package extreg
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -9,8 +10,10 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/assettype"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -93,15 +96,16 @@ func registerPolicyGroups(extName string, m *extension.Manifest) error {
 //
 // info 由 extension.LoadManifestInfo 读出：manifest 的安全契约 + 缓存里那份描述符 +
 // SKILL.md + locales，全程不编译也不实例化 WASM。缓存里没有这个扩展的答案时
-// info.Manifest.AssetTypes 是空的（describe() 本身至少声明一个资产类型），本函数报错
-// 而不是静默注册零个类型——"什么都没发生"和"注册成功"必须能区分开。调用方（opsctl）
+// info.Manifest 的资产类型与数据库驱动描述都是空的（describe() 至少声明其一；只提供
+// 驱动的扩展没有资产类型，驱动照常注册但没有可运行的会话——打开报驱动不可用，激活后才能执行），
+// 本函数报错而不是静默注册零个类型——"什么都没发生"和"注册成功"必须能区分开。调用方（opsctl）
 // 在缓存缺失时先自己加载一次扩展，带着取得的 describe() 答案来注册。
 //
 // 与 Register 一样是全有或全无，也写同一张 registered 表：一个进程里一个扩展只有一种
 // 接线方式；这条路没有 plugin，桌面端不会用它。
 func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	m := info.Manifest
-	if len(m.AssetTypes) == 0 {
+	if len(m.AssetTypes) == 0 && len(m.DatabaseDrivers) == 0 {
 		return fmt.Errorf("extension %q has no cached describe() answer on this machine", info.Name)
 	}
 	localized := m.Localized(func(key string) string { return info.Translate(helpLang, key) })
@@ -116,6 +120,13 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 		return err
 	}
 
+	// 驱动先注册，理由同 register：撞名最常见，先查。
+	extDrivers, err := registerDrivers(info.Name, m.DatabaseDrivers, notLoadedOpener{ext: info.Name})
+	if err != nil {
+		delete(policyTypeOwner, m.Policies.Type)
+		return err
+	}
+
 	var done []string
 	rollback := func() {
 		for _, t := range done {
@@ -123,6 +134,7 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(info.Name)
 		delete(policyTypeOwner, m.Policies.Type)
+		removeDrivers(releaseDrivers(extDrivers))
 	}
 
 	for _, at := range m.AssetTypes {
@@ -138,10 +150,20 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	}
 
 	registered[info.Name] = done
+	drivers[info.Name] = extDrivers
 	manifests[info.Name] = m
 	logger.Default().Info("extension registered from cached descriptor",
-		zap.String("extension", info.Name), zap.Strings("assetTypes", done))
+		zap.String("extension", info.Name), zap.Strings("assetTypes", done),
+		zap.Strings("databaseDrivers", m.Capabilities.DatabaseDrivers))
 	return nil
+}
+
+// notLoadedOpener 是仅描述注册里驱动背后的"插件"：驱动的描述与专属字段已可用，但这个进程没有
+// 加载扩展，打开会话报驱动不可用。需要执行的调用方先激活扩展（Unregister + 完整 Register）。
+type notLoadedOpener struct{ ext string }
+
+func (o notLoadedOpener) OpenDriverSession(_ context.Context, id string, _ dbdriver.OpenRequest) (dbdriver.Session, error) {
+	return nil, fmt.Errorf("%w: %q (its extension %q is not loaded in this process)", dbregistry.ErrDriverUnavailable, id, o.ext)
 }
 
 func registerDescribeOnlyType(extName string, m *extension.Manifest, at extension.AssetTypeDef, help string) error {
@@ -164,4 +186,12 @@ func registerDescribeOnlyType(extName string, m *extension.Manifest, at extensio
 		return &policyent.CommandPolicy{Groups: defaults}
 	})
 	return nil
+}
+
+// DriverOwnerOf 回答已注册的数据库驱动 id 由哪个扩展提供；内置驱动与未注册的 id 报 false。
+func DriverOwnerOf(id dbdriver.DriverID) (string, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	ext, ok := driverOwner[id]
+	return ext, ok
 }

@@ -7,17 +7,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -128,6 +132,54 @@ func extensionOwnerOf(assetType string) (string, bool, error) {
 		}
 	}
 	return "", false, nil
+}
+
+// driverExtensionOf 回答数据库资产的驱动由哪个已安装的扩展提供。内置驱动与非数据库资产
+// 报 false。已启用的扩展由启动时的 registerExtensionAssetTypes 把驱动接进了驱动注册表，
+// 直接问它；注册表不认识的驱动 id 再到已安装的扩展声明里找——停用的扩展不注册，它的资产
+// 却仍在库里，必须认得出来，激活才能点名说它已停用。内置驱动先查：扩展不能占用内置 id，
+// 磁盘上声明了同名驱动的 manifest 不会让 opsctl 改道。
+func driverExtensionOf(asset *asset_entity.Asset) (extName string, driverID dbdriver.DriverID, ok bool, err error) {
+	if !asset.IsDatabase() {
+		return "", "", false, nil
+	}
+	cfg, err := asset.GetDatabaseConfig()
+	if err != nil {
+		return "", "", false, err
+	}
+	id := dbdriver.DriverID(cfg.Driver)
+	if name, ok := extreg.DriverOwnerOf(id); ok {
+		return name, id, true, nil
+	}
+	if _, lookupErr := dbregistry.Lookup(id); lookupErr == nil {
+		return "", id, false, nil
+	}
+	scanned, err := scanExtensionDirs()
+	if err != nil {
+		return "", id, false, err
+	}
+	for _, ext := range scanned {
+		if slices.Contains(ext.info.Manifest.Capabilities.DatabaseDrivers, string(id)) {
+			return ext.info.Name, id, true, nil
+		}
+	}
+	return "", id, false, nil
+}
+
+// activateDriverExtension 在 exec 前为扩展提供驱动的数据库资产激活该扩展：之后
+// connpool.OpenDatabase 从驱动注册表拿到的是能执行的驱动，审批、审计与内置驱动同一条
+// 路径。激活失败（扩展在桌面端被停用、加载失败）说成「驱动不可用」，点名驱动与扩展，
+// 与查询面板、AI 对同一情形的说法一致。其他资产什么也不做。activate 是激活入口，
+// batch 经它让同一扩展每批只激活一次。
+func activateDriverExtension(ctx context.Context, asset *asset_entity.Asset, activate func(context.Context, string) error) error {
+	extName, id, ok, err := driverExtensionOf(asset)
+	if err != nil || !ok {
+		return err
+	}
+	if err := activate(ctx, extName); err != nil {
+		return fmt.Errorf("%w: %q, provided by extension %q: %w", dbregistry.ErrDriverUnavailable, id, extName, err)
+	}
+	return nil
 }
 
 func cmdExt(ctx context.Context, args []string) int {
@@ -270,7 +322,8 @@ func registerExtensionAssetTypes() {
 			continue
 		}
 		info := ext.info
-		if len(info.Manifest.AssetTypes) == 0 {
+		// 描述缓存里的答案至少声明一个资产类型或一个数据库驱动；两者皆无才是缓存缺失。
+		if len(info.Manifest.AssetTypes) == 0 && len(info.Manifest.DatabaseDrivers) == 0 {
 			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
 				extensionDescribeFailures = append(extensionDescribeFailures, extensionDescribeFailure{name: ext.info.Name, err: err})
