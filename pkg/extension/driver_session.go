@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension/driverwire"
 )
@@ -87,7 +90,7 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 		return nil, err
 	}
 	inv := newInvocation(p.nextInvocationID(), nil)
-	inv.reach = &req.Transport
+	inv.reach = p.confineReach(driver, req)
 	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv, refs: 1}
 
 	var opened driverwire.Opened
@@ -105,6 +108,45 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 	logger.Ctx(ctx).Info("extension database driver instance logged in",
 		zap.String("extension", p.manifest.Name), zap.String("driver", driver), zap.String("invocation", inv.id))
 	return d, nil
+}
+
+// confineReach is the reach path an instance's invocation dials through: the
+// session's own, narrowed to the one address the asset's config names. The host
+// resolved that path for that address alone (tunnel, proxy chain or direct), so a
+// driver gets no way to reach anything else along it. A refused address is named
+// in the error the guest gets and logged; the log carries no credential, only
+// the addresses. A session without a Dial of its own dials directly, as a TCP
+// stream of any other host call does.
+func (p *Plugin) confineReach(driver string, req *dbdriver.OpenRequest) *dbdriver.Transport {
+	transport := req.Transport
+	allowed := ""
+	if cfg := req.Config; cfg != nil {
+		allowed = net.JoinHostPort(canonicalHost(cfg.Host), strconv.Itoa(cfg.Port))
+	}
+	dial := transport.Dial
+	if dial == nil {
+		dial = (&netdial.Dialer{}).DialContext
+	}
+	transport.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if !sameEndpoint(allowed, addr) {
+			logger.Ctx(ctx).Warn("extension database driver dial denied",
+				zap.String("extension", p.manifest.Name), zap.String("driver", driver),
+				zap.String("addr", addr), zap.String("allowed", allowed))
+			return nil, fmt.Errorf("dial denied: %q is not the address of the database asset (%s)", addr, allowed)
+		}
+		return dial(ctx, network, addr)
+	}
+	return &transport
+}
+
+// sameEndpoint reports whether addr names the host:port allowed, hosts compared
+// the way asset endpoints are (case folded, IP literals spelled one way).
+func sameEndpoint(allowed, addr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	return allowed == net.JoinHostPort(canonicalHost(host), port)
 }
 
 // driverInstance is one module instance of a session, logged in to the database.

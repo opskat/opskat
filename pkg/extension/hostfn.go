@@ -3,6 +3,8 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/tetratelabs/wazero/api"
@@ -56,4 +58,46 @@ func deadlineTime(unixNanos int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, unixNanos)
+}
+
+func errUnavailableInDriverCall(what string) error {
+	return fmt.Errorf("%s is unavailable during driver calls: a database driver may only write logs and dial its database", what)
+}
+
+// driverCallOps are the host ops a driver call may make: logging, and the TCP
+// streams (with their deadlines) that carry its connection to the database.
+// Everything else (KV, file dialogs, asset config, action events) is refused.
+var driverCallOps = map[string]bool{"log": true, "io.open": true, "io.set_deadline": true, "action.should_stop": true}
+
+func init() {
+	for op, fn := range hostOps {
+		hostOps[op] = gateDriverCall(op, fn)
+	}
+}
+
+// gateDriverCall makes fn refuse the calls of a database driver session (the
+// invocations that carry a reach path) unless a driver call may make it. For
+// io.open only a TCP stream is allowed, and it goes along the reach path alone
+// (see opIOOpen); an HTTP request or a file is refused.
+func gateDriverCall(op string, fn hostOpFunc) hostOpFunc {
+	return func(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+		if env.inv.reach == nil {
+			return fn(env, params)
+		}
+		if !driverCallOps[op] {
+			return nil, errUnavailableInDriverCall("host op " + op)
+		}
+		if op == "io.open" {
+			var p struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			if p.Type != "tcp" {
+				return nil, errUnavailableInDriverCall("io type " + p.Type)
+			}
+		}
+		return fn(env, params)
+	}
 }

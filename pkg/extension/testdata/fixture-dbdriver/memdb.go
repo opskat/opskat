@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"unsafe"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
+	opskat "github.com/opskat/opskat/pkg/extsdk"
 )
 
 // memdb is the fixture's database: a fixed, read-only catalog held in guest
@@ -178,6 +180,7 @@ var (
 	selectAll = regexp.MustCompile(`^SELECT \* FROM (\S+)(?: LIMIT (\d+)(?: OFFSET (\d+))?)?$`)
 	countAll  = regexp.MustCompile(`^SELECT COUNT\(\*\) FROM (\S+)$`)
 	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS) FROM \[([^\]]*)\]$`)
+	showHost  = regexp.MustCompile(`^SHOW HOST (\w+)(?: (\S+))?$`)
 	showOf    = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE) (\S+)$`)
 	tableRef  = regexp.MustCompile(`^(?:\[([^\]]*)\]\.)?\[([^\]]+)\]$`)
 )
@@ -204,6 +207,9 @@ func (c *conn) query(q string) (driver.Rows, error) {
 		return values([]string{"options"}, []driver.Value{string(raw)}), nil
 	case q == "SELECT PANIC", q == "SELECT TRAP", q == "SELECT OOM":
 		fault(q)
+	}
+	if m := showHost.FindStringSubmatch(q); m != nil {
+		return hostProbe(m[1], m[2]), nil
 	}
 	if m := countOf.FindStringSubmatch(q); m != nil {
 		return c.count(m[1])
@@ -424,4 +430,40 @@ func (r *memRows) Next(dest []driver.Value) error {
 		*r.produced++
 	}
 	return nil
+}
+
+// hostProbe makes the host call the test names from inside a driver call
+// ("SHOW HOST <what> [target]") and answers the error it got, empty for none: what
+// a driver call may and may not ask of the host.
+func hostProbe(what, target string) driver.Rows {
+	var err error
+	switch what {
+	case "LOG":
+		opskat.Log("info", "fixturedb host probe")
+	case "KV":
+		_, err = opskat.KVGet("probe")
+	case "KVSET":
+		err = opskat.KVSet("probe", []byte("x"))
+	case "FILE_DIALOG":
+		_, err = opskat.FileDialog("open", opskat.DialogOptions{})
+	case "ASSET_CONFIG":
+		_, err = (&opskat.ActionContext{Asset: opskat.Asset{ID: 1}}).AssetConfig()
+	case "HTTP":
+		var resp *http.Response
+		if resp, err = (&http.Client{Transport: opskat.NewHTTPTransport()}).Get(target); err == nil {
+			_ = resp.Body.Close()
+		}
+	case "DIAL":
+		var nc net.Conn
+		if nc, err = opskat.Dial("tcp", target); err == nil {
+			_ = nc.Close()
+		}
+	default:
+		err = fmt.Errorf("fixturedb: unknown host probe %q", what)
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	return values([]string{"error"}, []driver.Value{msg})
 }
