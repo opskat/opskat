@@ -54,6 +54,10 @@ const (
 	// result over it fails the call: a truncated result would be read as a
 	// complete one by the model or page that asked.
 	defaultMaxResultBytes = 16 << 20
+	// defaultDriverIdleTimeout is how long an instance of a database driver
+	// session may stay idle before it is closed, unless it is the session's
+	// last one (see driver_session.go).
+	defaultDriverIdleTimeout = time.Minute
 )
 
 // Plugin represents a loaded WASM extension.
@@ -87,6 +91,8 @@ type pluginOptions struct {
 	maxInstanceCalls int
 	toolTimeout      time.Duration
 	maxResultBytes   int
+	// driverIdleTimeout is defaultDriverIdleTimeout; tests shorten it.
+	driverIdleTimeout time.Duration
 }
 
 // PluginOption customizes plugin execution.
@@ -126,10 +132,11 @@ type instance struct {
 // If cache is non-nil, compiled modules are cached to disk for faster subsequent loads.
 func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host HostProvider, cache wazero.CompilationCache, opts ...PluginOption) (*Plugin, error) {
 	o := pluginOptions{
-		maxInstances:     defaultMaxInstances,
-		maxInstanceCalls: defaultMaxInstanceCalls,
-		toolTimeout:      defaultToolTimeout,
-		maxResultBytes:   defaultMaxResultBytes,
+		maxInstances:      defaultMaxInstances,
+		maxInstanceCalls:  defaultMaxInstanceCalls,
+		toolTimeout:       defaultToolTimeout,
+		maxResultBytes:    defaultMaxResultBytes,
+		driverIdleTimeout: defaultDriverIdleTimeout,
 	}
 	for _, opt := range opts {
 		opt(&o)

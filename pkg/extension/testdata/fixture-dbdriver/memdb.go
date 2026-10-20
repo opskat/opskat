@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
@@ -192,6 +193,8 @@ func (c *conn) query(q string) (driver.Rows, error) {
 			return nil, err
 		}
 		return values([]string{"config"}, []driver.Value{string(raw)}), nil
+	case q == "SELECT PANIC", q == "SELECT TRAP", q == "SELECT OOM":
+		fault(q)
 	}
 	if m := countOf.FindStringSubmatch(q); m != nil {
 		return c.count(m[1])
@@ -355,6 +358,28 @@ func lookup(ref string) (*memTable, error) {
 		return nil, fmt.Errorf("fixturedb: no table %s", ref)
 	}
 	return t, nil
+}
+
+// The ways an extension driver can fail inside a call, for the host's fault
+// isolation tests: a Go panic (the SDK recovers it into an error reply), a WASM
+// trap (a read past the end of guest memory) and running out of guest memory
+// (the Go runtime dies once the host's memory limit refuses to grow it).
+var (
+	faultSink  byte
+	faultHoard [][]byte
+)
+
+func fault(q string) {
+	switch q {
+	case "SELECT PANIC":
+		panic("fixturedb: panic requested by the test")
+	case "SELECT TRAP":
+		faultSink = *(*byte)(unsafe.Pointer(uintptr(0xFFFF_FFF0)))
+	case "SELECT OOM":
+		for {
+			faultHoard = append(faultHoard, make([]byte, 8<<20))
+		}
+	}
 }
 
 func atoi(s string) int {

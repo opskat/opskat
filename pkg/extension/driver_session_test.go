@@ -1,13 +1,9 @@
 package extension_test
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,80 +15,14 @@ import (
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
-// fixtureServer is the far end of the fixture driver's reach path: it answers the
-// logins and statement announcements memdb sends (see testdata/fixture-dbdriver),
-// and records them.
-type fixtureServer struct {
-	mu         sync.Mutex
-	addrs      []string
-	passwords  []string
-	statements []string
-	// refuse, when set, is the error every login gets.
-	refuse string
-}
-
-func (s *fixtureServer) dial(_ context.Context, _, addr string) (net.Conn, error) {
-	s.mu.Lock()
-	s.addrs = append(s.addrs, addr)
-	s.mu.Unlock()
-	client, server := net.Pipe()
-	go s.serve(server)
-	return client, nil
-}
-
-func (s *fixtureServer) serve(c net.Conn) {
-	defer func() { _ = c.Close() }()
-	r := bufio.NewReader(c)
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return
-		}
-		line = strings.TrimSpace(line)
-		reply := "OK\n"
-		s.mu.Lock()
-		if login, ok := strings.CutPrefix(line, "LOGIN "); ok {
-			if s.refuse != "" {
-				reply = "ERR " + s.refuse + "\n"
-			} else {
-				_, password, _ := strings.Cut(login, " ")
-				s.passwords = append(s.passwords, password)
-			}
-		} else {
-			s.statements = append(s.statements, line)
-		}
-		s.mu.Unlock()
-		if _, err := c.Write([]byte(reply)); err != nil {
-			return
-		}
-	}
-}
-
-func (s *fixtureServer) logins() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.passwords...)
-}
-
-func (s *fixtureServer) dialed() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.addrs...)
-}
-
-func (s *fixtureServer) seen() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.statements...)
-}
-
 // extensionDriver is a dbdriver.Driver whose sessions live in the fixture
-// extension: what the host registry will hold for an extension's driver.
+// extension: what the host registry will hold for an extension's driver. Its
+// reach path leads to server (see extension.FixtureDBServer).
 type extensionDriver struct {
 	dbdriver.NetworkRules
 	desc   dbdriver.Descriptor
 	plugin *extension.Plugin
-	server *fixtureServer
+	server *extension.FixtureDBServer
 }
 
 func (d *extensionDriver) Descriptor() dbdriver.Descriptor { return d.desc }
@@ -100,7 +30,7 @@ func (d *extensionDriver) Descriptor() dbdriver.Descriptor { return d.desc }
 func (d *extensionDriver) SessionPerDatabase() bool { return true }
 
 func (d *extensionDriver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session, error) {
-	req.Transport.Dial = d.server.dial
+	req.Transport.Dial = d.server.Dial
 	return d.plugin.OpenDriverSession(ctx, string(d.desc.ID), req)
 }
 
@@ -124,7 +54,7 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 	newDriver := func() *extensionDriver {
 		return &extensionDriver{
 			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
-			desc:         desc, plugin: ext.Plugin, server: &fixtureServer{},
+			desc:         desc, plugin: ext.Plugin, server: extension.NewFixtureDBServer(t),
 		}
 	}
 	ctx := context.Background()
@@ -154,10 +84,10 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		_, err = s.CountTableRows(ctx, "app", "users", nil)
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"s3cret"}, d.server.logins(), "one login, with the password the host handed to open")
-		assert.Equal(t, []string{"db.internal:7357"}, d.server.dialed(), "the driver dials the asset's host:port through the reach path")
-		assert.Contains(t, d.server.seen(), "QUERY SELECT 1")
-		assert.Contains(t, d.server.seen(), "QUERY SELECT COUNT(*) FROM [app].[users]")
+		assert.Equal(t, []string{"s3cret"}, d.server.Logins(), "one login, with the password the host handed to open")
+		assert.Equal(t, []string{"db.internal:7357"}, d.server.Dialed(), "the driver dials the asset's host:port through the reach path")
+		assert.Contains(t, d.server.Seen(), "QUERY SELECT 1")
+		assert.Contains(t, d.server.Seen(), "QUERY SELECT COUNT(*) FROM [app].[users]")
 	})
 
 	t.Run("a whole-table read is a cursor read over several calls", func(t *testing.T) {
@@ -165,17 +95,22 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		s := d.open(t)
 		defer func() { assert.NoError(t, s.Close()) }()
 
-		stream, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
+		// The cursor holds the session's one instance until it is closed; the
+		// progress read then runs on that same instance, the only one logged in.
+		first, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
 		require.NoError(t, err)
-		require.True(t, stream.Next())
-		assert.Equal(t, "1", fmt.Sprint(stream.Row()[0]))
-
+		require.True(t, first.Next())
+		assert.Equal(t, "1", fmt.Sprint(first.Row()[0]))
+		require.NoError(t, first.Close())
 		progress, err := s.Execute(ctx, "SHOW STREAM PROGRESS")
 		require.NoError(t, err)
+		require.Len(t, d.server.Logins(), 1)
 		produced := fmt.Sprint(progress.Rows.Rows[0][0])
 		assert.NotEqual(t, "1000", produced, "the guest cursor must not have been drained by the first read")
 
-		read := 1
+		stream, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
+		require.NoError(t, err)
+		read := 0
 		for stream.Next() {
 			read++
 			require.Equal(t, fmt.Sprint(read), fmt.Sprint(stream.Row()[0]), "rows arrive in order, numbers exactly")
@@ -187,7 +122,7 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 
 	t.Run("an open that cannot log in fails with the driver's error", func(t *testing.T) {
 		d := newDriver()
-		d.server.refuse = "access denied for user alice"
+		d.server.Refuse = "access denied for user alice"
 		_, err := d.Open(ctx, dbdriver.OpenRequest{
 			Config:   &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: 7357, Username: "alice"},
 			Password: "wrong",
@@ -209,7 +144,7 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, "app", seen["database"])
 		assert.Equal(t, "alice", seen["username"])
 		assert.NotContains(t, seen, "password")
-		assert.Equal(t, []string{"s3cret"}, d.server.logins())
+		assert.Equal(t, []string{"s3cret"}, d.server.Logins())
 	})
 
 	t.Run("a driver the extension does not provide is refused", func(t *testing.T) {
