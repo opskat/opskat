@@ -55,6 +55,9 @@ const SOURCE_LABEL: Record<InstallConfirmRequest["source"], string> = {
   dir: "extension.installConfirm.sourceDir",
 };
 
+/** extension_svc.CapDatabaseDriver: one grant per driver id the extension provides. */
+const DATABASE_DRIVER_KIND = "databaseDriver";
+
 const sameGrant = (a: CapabilityGrant, b: CapabilityGrant) => a.kind === b.kind && a.value === b.value;
 
 /**
@@ -97,6 +100,7 @@ export function ExtensionInstallConfirmDialog() {
   };
 
   const credentialsRead = current?.capabilities.some((c) => c.kind === "credentials" && c.value === "read");
+  const providesDatabaseDrivers = current?.capabilities.some((c) => c.kind === DATABASE_DRIVER_KIND);
   const mode = !current?.from ? "install" : current.downgrade ? "downgrade" : "update";
   const confirmLabel = INSTALL_MODE_KEYS[mode].action;
 
@@ -121,15 +125,21 @@ export function ExtensionInstallConfirmDialog() {
                 </div>
               </div>
 
-              {credentialsRead && (
-                <div
-                  role="alert"
-                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-warning"
-                >
-                  <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>{t("extension.credentialsReadWarning")}</span>
-                </div>
-              )}
+              {[
+                credentialsRead && "extension.credentialsReadWarning",
+                providesDatabaseDrivers && "extension.databaseDriversWarning",
+              ]
+                .filter((key): key is string => !!key)
+                .map((key) => (
+                  <div
+                    key={key}
+                    role="alert"
+                    className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-warning"
+                  >
+                    <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>{t(key)}</span>
+                  </div>
+                ))}
 
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
                 <dt className="text-muted-foreground">{t("extension.version")}</dt>
@@ -161,7 +171,9 @@ export function ExtensionInstallConfirmDialog() {
                         data-testid={`ext-install-cap-${cap.kind}`}
                         className="flex items-center gap-2 text-xs p-2 rounded bg-muted/50"
                       >
-                        <span className="font-mono font-medium shrink-0">{cap.kind}</span>
+                        <span className="font-mono font-medium shrink-0">
+                          {cap.kind === DATABASE_DRIVER_KIND ? t("extension.installConfirm.databaseDriver") : cap.kind}
+                        </span>
                         {cap.value && <span className="font-mono text-muted-foreground break-all">{cap.value}</span>}
                         {current.added.some((a) => sameGrant(a, cap)) && (
                           <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded bg-info/15 text-info">

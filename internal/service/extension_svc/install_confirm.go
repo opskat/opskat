@@ -24,12 +24,13 @@ const (
 // Capability grant kinds, one per independently granted thing in
 // extension.Capabilities.
 const (
-	CapFSRead        = "fs.read"
-	CapFSWrite       = "fs.write"
-	CapHTTP          = "http"
-	CapCredentials   = "credentials"
-	CapTunnel        = "tunnel"
-	CapAssetEndpoint = "network.assetEndpoint"
+	CapFSRead         = "fs.read"
+	CapFSWrite        = "fs.write"
+	CapHTTP           = "http"
+	CapCredentials    = "credentials"
+	CapTunnel         = "tunnel"
+	CapAssetEndpoint  = "network.assetEndpoint"
+	CapDatabaseDriver = "databaseDriver"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -151,6 +152,11 @@ func capabilityGrants(c extension.Capabilities) []CapabilityGrant {
 	}
 	if c.Network.AssetEndpoint {
 		out = append(out, CapabilityGrant{Kind: CapAssetEndpoint})
+	}
+	// Only the ids are known here (manifest / signed store index); describe() has
+	// not run before an install is confirmed.
+	for _, id := range c.DatabaseDrivers {
+		out = append(out, CapabilityGrant{Kind: CapDatabaseDriver, Value: id})
 	}
 	return out
 }

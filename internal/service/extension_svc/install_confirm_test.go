@@ -311,6 +311,37 @@ func TestInstallConfirm_IncompatibleNeverAsks(t *testing.T) {
 	require.True(t, errors.As(err, &inc))
 }
 
+// A driver the extension provides is one grant per driver id, so an upgrade marks
+// exactly the drivers the installed version did not already have.
+func TestNewInstallConfirm_DatabaseDriversAreGrantsAndUpgradeMarksNewOnes(t *testing.T) {
+	stub := installDescribeStub(t)
+	svc := newConfirmTestService(t, t.TempDir())
+	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-drv", "1.0.0",
+		map[string]any{"databaseDrivers": []string{"oracle"}})
+	stub.put("ext-drv", map[string]any{
+		"icon": "database",
+		"i18n": map[string]any{"displayName": "ext.name", "description": "ext.name"},
+		"databaseDrivers": []map[string]any{{
+			"id": "oracle", "name": "Oracle", "icon": "database", "order": 50, "aliases": []string{},
+			"defaultPort": 1521, "form": []map[string]any{{"tab": "connection", "fields": []string{"host", "port"}}},
+			"capabilities": []string{"schemas"}, "createDatabaseOptions": []any{},
+			"alterTableAttributes": []any{}, "driverFields": []any{},
+		}},
+	})
+	_, err := svc.Install(langCtx, dir, nil)
+	require.NoError(t, err)
+
+	c := svc.NewInstallConfirm(InstallCandidate{
+		Name: "ext-drv", Version: "1.1.0", Source: InstallSourceStore,
+		Capabilities: extension.Capabilities{DatabaseDrivers: []string{"oracle", "dm"}},
+	})
+	assert.Equal(t, []CapabilityGrant{
+		{Kind: CapDatabaseDriver, Value: "oracle"},
+		{Kind: CapDatabaseDriver, Value: "dm"},
+	}, c.Capabilities)
+	assert.Equal(t, []CapabilityGrant{{Kind: CapDatabaseDriver, Value: "dm"}}, c.Added)
+}
+
 // The store builds its confirm from signed index data before downloading; the
 // same builder compares against what is installed.
 func TestNewInstallConfirm_FromStoreCandidate(t *testing.T) {
