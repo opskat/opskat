@@ -225,7 +225,15 @@ func opIOOpen(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	epoch := env.inv.io.Epoch()
-	res, err := env.host.OpenIO(env.ctx, env.inv.asset, p)
+	var res *IOResource
+	var err error
+	if p.Type == "tcp" && env.inv.reach != nil {
+		// A database driver reaches its database along the session's reach path,
+		// not along an asset endpoint of the extension's own.
+		res, err = openTCP(env.ctx, DialContextFunc(env.inv.reach.Dial), nil, p, nil)
+	} else {
+		res, err = env.host.OpenIO(env.ctx, env.inv.asset, p)
+	}
 	if err != nil {
 		return nil, err
 	}

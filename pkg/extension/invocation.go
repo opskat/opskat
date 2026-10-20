@@ -3,6 +3,8 @@ package extension
 import (
 	"context"
 	"fmt"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // invocation is the state that belongs to one WASM call and dies with it: the
@@ -23,6 +25,10 @@ type invocation struct {
 	// the only asset whose config the guest may read: the id is the host's, never
 	// the guest's.
 	asset *AssetRef
+	// reach is set for the calls of a database driver session: the reach path
+	// (tunnel, proxy chain, or direct) the host resolved for the session, which
+	// every TCP stream the guest opens takes. Its Dial is nil for a direct dial.
+	reach *dbdriver.Transport
 }
 
 func newInvocation(id string, cancel *ActionCancellation) *invocation {

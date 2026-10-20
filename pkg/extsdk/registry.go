@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"slices"
 	"time"
-
-	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // The registration API is the single place an extension declares what it can do.
@@ -128,15 +126,8 @@ var (
 	snippetSeeds    []Seed
 	actions         = map[string]ActionHandler{}
 	configValidator ConfigValidator
-	databaseDrivers []dbdriver.Descriptor
+	databaseDrivers []*driverEntry
 )
-
-// DatabaseDriver declares a SQL database driver this extension provides: the
-// descriptor describe() reports for it. The driver id must also be listed in the
-// manifest's capabilities.databaseDrivers, which needs hostABI 2.3; the host
-// refuses to load an extension whose two lists differ. The driver's icon is the
-// extension's (Meta.Icon), not the descriptor's.
-func DatabaseDriver(d dbdriver.Descriptor) { databaseDrivers = append(databaseDrivers, d) }
 
 // Extension declares the extension's presentation metadata and policy face.
 func Extension(m Meta) { meta = m }
@@ -583,6 +574,7 @@ func resetRegistries() {
 	snippetCats = nil
 	snippetSeeds = nil
 	databaseDrivers = nil
+	driverHandles = newDriverHandleTable()
 	actions = map[string]ActionHandler{}
 	configValidator = nil
 }

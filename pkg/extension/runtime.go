@@ -430,12 +430,9 @@ func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input
 		return nil, fmt.Errorf("plugin closed")
 	}
 
-	req, err := json.Marshal(map[string]any{
-		"fn":    fnName,
-		"input": json.RawMessage(input),
-	})
+	req, err := callRequest(fnName, input)
 	if err != nil {
-		return nil, fmt.Errorf("marshal %s envelope: %w", fnName, err)
+		return nil, err
 	}
 
 	callCtx := ctx
@@ -471,6 +468,18 @@ func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input
 		return nil, fmt.Errorf("call %s: %w", fnName, callErr)
 	}
 	return out, nil
+}
+
+// callRequest is the opskat_call envelope: the guest function and its input.
+func callRequest(fnName string, input []byte) ([]byte, error) {
+	req, err := json.Marshal(map[string]any{
+		"fn":    fnName,
+		"input": json.RawMessage(input),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s envelope: %w", fnName, err)
+	}
+	return req, nil
 }
 
 // acquire takes a pool slot, instantiating a module if the slot is empty.

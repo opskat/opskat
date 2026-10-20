@@ -3,6 +3,8 @@ package opskat
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/opskat/opskat/pkg/extension/driverwire"
 )
 
 // dispatch routes a function call to the registered handler.
@@ -20,6 +22,8 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 		return dispatchConfigValidator(input)
 	case "test_connection":
 		return dispatchTestConnection(input)
+	case driverwire.Function:
+		return dispatchDatabaseDriver(input)
 	default:
 		return nil, fmt.Errorf("unknown function: %s", fnName)
 	}
