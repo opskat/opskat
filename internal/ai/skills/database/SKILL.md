@@ -43,6 +43,7 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `proxy_chain` | array | no | Ordered list of hops, nearest to this machine first; replaces the whole stored chain and the SSH tunnel, `[]` clears it. Layers: `{"type":"ssh","ssh_asset_id":N}`, `{"type":"socks5","host":"...","port":N,"username":"...","password":"..."}`, `{"type":"http_tunnel","url":"https://...","token":"...","timeout_seconds":N}` (first layer only). `password` / `token` are **write-only**, encrypted in the asset. Not together with `ssh_asset_id` |
 | `sqlite_source` | string | SQLite only | `"local"` (default) or `"remote_ssh_vfs"` |
 | `path` | string | SQLite only | Absolute database-file path |
+| `driver_options` | object | no | Driver-specific fields; keys, types, required and defaults come from the selected driver's declaration. Only drivers that declare fields accept it, and undeclared keys are rejected. Password-type values are **write-only**, encrypted in the asset, and shown only as set (`driver_options_secrets_set`) when the asset is viewed |
 
 For non-SQLite drivers, `password` and `credential_id` are mutually exclusive. Plaintext is
 write-only, encrypted in the asset, and never creates a managed credential. SQLite accepts
