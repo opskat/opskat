@@ -30,6 +30,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
@@ -1063,6 +1064,29 @@ func TestExecSSHStreaming_ThroughMFAHopAnswersEachHostInDialOrder(t *testing.T) 
 	assert.Equal(t, "ok:uptime", stdout)
 	assert.Equal(t, int32(1), hop.challenges.Load())
 	assert.Equal(t, int32(1), target.challenges.Load())
+}
+
+// `opsctl cp` answers MFA (withMFA) for the whole transfer, but hop MFA covers SSH and
+// extension assets only: an object-storage endpoint reached through a hop that asks for
+// MFA dials its connection path (connpool.ProxyChainDialContext) without a responder,
+// as before — the hop's challenge is not answered with the code.
+func TestCpMFA_NonSSHConnectionPathGetsNoHopResponder(t *testing.T) {
+	setupLocalExtExec(t)
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	hop := newOTPExecServer(t, "123456")
+	hopAsset := createOTPSSHAsset(t, hop)
+	echoAddr := newTCPEchoServer(t)
+
+	cpCtx := withMFA(withMFACode(context.Background(), "123456"))
+	dial, err := connpool.ProxyChainDialContext(cpCtx, asset_entity.EffectiveProxyChain(nil, hopAsset.ID, nil))
+	require.NoError(t, err)
+	conn, err := dial(context.Background(), "tcp", echoAddr)
+	if err == nil {
+		_ = conn.Close()
+	}
+
+	code, _ := sshagent.CodeOf(err)
+	assert.Equal(t, sshagent.CodeMFARequired, code, "err: %v", err)
 }
 
 // createOTPSSHAsset stores a key-authenticated SSH asset pointing at srv.

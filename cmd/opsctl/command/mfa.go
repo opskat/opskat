@@ -48,9 +48,24 @@ func withMFACode(ctx context.Context, code string) context.Context {
 	return context.WithValue(ctx, mfaCodeKeyType{}, code)
 }
 
-// withMFA 为 ssh/exec/cp/batch 的拨号接上应答来源。可交互判据与审批一致
-// （stdin 与 stderr 双 TTY）。
+// withMFA 为 ssh/exec/cp/batch 对 SSH 资产的拨号接上应答来源：目标资产及其连接路径上
+// 的 SSH 跳板（credential_resolver.WithMFA，只经 DialAssetSSH 生效——cp 的对象存储端点等
+// 其它类型经隧道拨号不应答跳板）。可交互判据与审批一致（stdin 与 stderr 双 TTY）。
 func withMFA(ctx context.Context) context.Context {
+	ctx, src := withMFASources(ctx)
+	return credential_resolver.WithMFA(ctx, src.newCaller)
+}
+
+// withConnectionPathMFA 为扩展资产的执行接上同一套应答来源：扩展经资产连接路径拨号，
+// 路径上要 MFA 的 SSH 跳板由它应答（credential_resolver.WithConnectionPathMFA）。
+func withConnectionPathMFA(ctx context.Context) context.Context {
+	ctx, src := withMFASources(ctx)
+	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
+}
+
+// withMFASources 组出一次执行的应答来源，并把记录「没有应答来源」拒绝的 mfaRefusals
+// 挂到 ctx（mfaRefusalOf 据此认回拒绝）。
+func withMFASources(ctx context.Context) (context.Context, mfaSources) {
 	code, _ := ctx.Value(mfaCodeKeyType{}).(string)
 	dataDir := bootstrap.ResolvedDataDir()
 	token, err := bootstrap.ReadAuthToken(dataDir)
@@ -64,13 +79,12 @@ func withMFA(ctx context.Context) context.Context {
 		desktop:     desktopMFASender(approval.SocketPath(dataDir), token),
 		refusals:    &mfaRefusals{},
 	}
-	ctx = context.WithValue(ctx, mfaRefusalsKeyType{}, src.refusals)
-	return credential_resolver.WithMFA(ctx, src.newCaller)
+	return context.WithValue(ctx, mfaRefusalsKeyType{}, src.refusals), src
 }
 
 type mfaRefusalsKeyType struct{}
 
-// mfaRefusals 记下一次 withMFA 的应答方因「没有应答来源」给出的拒绝。
+// mfaRefusals 记下一次 withMFA / withConnectionPathMFA 的应答方因「没有应答来源」给出的拒绝。
 type mfaRefusals struct {
 	last atomic.Pointer[noMFASourceError]
 }

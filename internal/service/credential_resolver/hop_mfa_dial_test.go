@@ -279,7 +279,7 @@ func TestDialAssetSSHAnswersMFAOnConnectionPathHop(t *testing.T) {
 			t.Cleanup(func() { _ = echo.Close() })
 
 			mfa := &hopMFA{answer: "123456"}
-			layers, err := Default().ResolveProxyChain(WithMFA(ctx, mfa.newCaller), sshChain(hop), 5)
+			layers, err := Default().ResolveProxyChain(WithConnectionPathMFA(ctx, mfa.newCaller), sshChain(hop), 5)
 			require.NoError(t, err)
 			for range 2 {
 				conn, err := proxychain.Chain{Layers: layers}.Dial(context.Background(), echo.Addr().String())

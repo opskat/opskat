@@ -174,12 +174,12 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	if !isExtensionAsset {
 		return callHandler(auditCtx, handlers, "exec", params, approvalResult.ToCheckResult())
 	}
-	// 扩展经资产连接路径拨号（SSH 隧道、代理链）：ResolveProxyChain 把 withMFA 的应答方
-	// 接到路径上每台 SSH 跳板，要 MFA 的跳板按 --mfa-code → 终端 → 桌面端的顺序应答，
+	// 扩展经资产连接路径拨号（SSH 隧道、代理链）：ResolveProxyChain 把 withConnectionPathMFA
+	// 的应答方接到路径上每台 SSH 跳板，要 MFA 的跳板按 --mfa-code → 终端 → 桌面端的顺序应答，
 	// 都不行时以 NEEDS MFA 拒绝（拒绝经客体只剩文本，由 relayMFARefusals 认回来）。
 	// 工具的结果原样写到标准输出（不重排 JSON、不补换行），管道与脚本拿到的就是工具
 	// 给出的那一串。
-	result, code, ok := runHandler(withMFA(auditCtx), relayMFARefusals(handlers, "exec"), "exec", params, approvalResult.ToCheckResult())
+	result, code, ok := runHandler(withConnectionPathMFA(auditCtx), relayMFARefusals(handlers, "exec"), "exec", params, approvalResult.ToCheckResult())
 	if ok {
 		fmt.Print(result)
 	}

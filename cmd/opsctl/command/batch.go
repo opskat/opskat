@@ -404,7 +404,7 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 			// answered the way an SSH item's target is, and with no answer source the item
 			// ends the batch with NEEDS MFA. Database and other built-in items get no
 			// responder (TestBatchDataItem_TunnelDialGetsNoMFAResponder).
-			handlerCtx = withMFA(ctx)
+			handlerCtx = withConnectionPathMFA(ctx)
 		}
 		result = executeBatchHandler(handlerCtx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),

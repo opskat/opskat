@@ -87,8 +87,9 @@ func Execute() int {
 	}
 
 	// 扩展提供的资产类型：内置类型由 assettype 的 init() 注册，扩展的按缓存的
-	// describe() 只注册不需要 WASM 的那一半，不编译任何扩展；exec 再按需把目标资产
-	// 所属的那一个扩展完整激活（activateExtensionFn），命令结束时释放。必须早于
+	// describe() 只注册不需要 WASM 的那一半，只有缓存缺失的已启用扩展才加载一次取描述
+	// （并写入缓存）；exec 再按需把目标资产所属的那一个扩展完整激活
+	// （activateExtensionFn），命令结束时释放。必须早于
 	// buildHandlerMap —— 工具描述里的类型清单是那时候取的。
 	registerExtensionAssetTypes()
 	defer releaseExtensions(ctx)
