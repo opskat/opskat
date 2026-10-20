@@ -10,7 +10,7 @@ import (
 )
 
 // 驱动看不到的字段：口令与凭据由宿主解析后单独交给驱动，代理由宿主解析成传输层。
-var hostOnlyDatabaseFields = []string{"password", "credential_id", "proxy", "proxy_chain"}
+var hostOnlyDatabaseFields = []string{"password", "credential_id", "proxy", "proxy_chain", "driver_options"}
 
 // filledDatabaseConfig 给 DatabaseConfig 的每个字段填上非零值，新增字段也会被填上。
 func filledDatabaseConfig(t *testing.T) *DatabaseConfig {
@@ -28,6 +28,9 @@ func filledDatabaseConfig(t *testing.T) *DatabaseConfig {
 			f.SetBool(true)
 		case reflect.Pointer:
 			f.Set(reflect.New(f.Type().Elem()))
+		case reflect.Map:
+			f.Set(reflect.MakeMap(f.Type()))
+			f.SetMapIndex(reflect.ValueOf("k"), reflect.ValueOf("v"))
 		default:
 			t.Fatalf("filledDatabaseConfig: unhandled field %s of kind %s", v.Type().Field(i).Name, f.Kind())
 		}
@@ -57,7 +60,8 @@ func TestDriverConfigCarriesEveryFieldButCredentialsAndProxies(t *testing.T) {
 
 func TestSetDriverConfigWritesDriverFieldsAndKeepsCredentialsAndProxies(t *testing.T) {
 	cfg := filledDatabaseConfig(t)
-	keep := DatabaseConfig{Password: cfg.Password, CredentialID: cfg.CredentialID, Proxy: cfg.Proxy, ProxyChain: cfg.ProxyChain}
+	keep := DatabaseConfig{Password: cfg.Password, CredentialID: cfg.CredentialID, Proxy: cfg.Proxy, ProxyChain: cfg.ProxyChain,
+		DriverOptions: cfg.DriverOptions}
 
 	cfg.SetDriverConfig((&DatabaseConfig{}).DriverConfig())
 

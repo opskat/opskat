@@ -42,6 +42,9 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
+	if err := d.Descriptor().Validate(); err != nil {
+		t.Errorf("descriptor: %v", err)
+	}
 	for _, problem := range descriptorProblems(d.Descriptor()) {
 		t.Errorf("descriptor: %s", problem)
 	}

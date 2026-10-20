@@ -1,6 +1,11 @@
 package dbdriver
 
-import "slices"
+import (
+	"fmt"
+	"maps"
+	"math"
+	"slices"
+)
 
 // Descriptor 是一个驱动的自我描述，原样经绑定交给前端。它只有可序列化的普通数据。
 type Descriptor struct {
@@ -38,6 +43,192 @@ type Descriptor struct {
 	// AlterTableAttributes 是改表（CapAlterTable）时，除了改表名、给列改名、新增与删除列之外还能
 	// 改的属性。改表对话框锁定没有声明的属性的输入；会话拒绝改动它们。
 	AlterTableAttributes []AlterAttribute `json:"alterTableAttributes"`
+
+	// DriverFields 是驱动专属的配置字段：值存在资产配置的 driver_options 里，按这里的声明校验。
+	// 内置驱动不声明。
+	DriverFields []DriverField `json:"driverFields"`
+}
+
+// DriverFieldType 是驱动专属字段的取值类型。
+type DriverFieldType string
+
+const (
+	FieldTypeText     DriverFieldType = "text"
+	FieldTypeNumber   DriverFieldType = "number"
+	FieldTypeSwitch   DriverFieldType = "switch"
+	FieldTypeEnum     DriverFieldType = "enum"
+	FieldTypePassword DriverFieldType = "password"
+	FieldTypeTextarea DriverFieldType = "textarea"
+)
+
+// DriverFieldTypes 是全部已知的专属字段类型。
+func DriverFieldTypes() []DriverFieldType {
+	return []DriverFieldType{FieldTypeText, FieldTypeNumber, FieldTypeSwitch, FieldTypeEnum, FieldTypePassword, FieldTypeTextarea}
+}
+
+// DriverField 声明驱动的一个专属配置字段。
+type DriverField struct {
+	// Key 是 driver_options 里的键，也是 opsctl / AI 入参 driver_options 对象里的键；
+	// 不能与内置表单字段（FormFields）同名。
+	Key  string          `json:"key"`
+	Type DriverFieldType `json:"type"`
+	// Tab 是字段所在的表单 Tab。
+	Tab      FormTab `json:"tab"`
+	Required bool    `json:"required,omitempty"`
+	// Default 是未给出时的取值，类型与 Type 一致；口令类不能有默认值。
+	Default any `json:"default,omitempty"`
+	// Enum 是枚举类的取值，只有枚举类声明。
+	Enum []string `json:"enum,omitempty"`
+	// Label / Description 由扩展自己的多语言解析，宿主原样交给前端。
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// Validate 检查描述自身是否合法；扩展加载时用它拒绝不合法的驱动。错误点名驱动 id 与出问题的键。
+func (d Descriptor) Validate() error {
+	if d.ID == "" {
+		return fmt.Errorf("driver descriptor has no id")
+	}
+	for _, tab := range d.Form {
+		if !slices.Contains(FormTabs(), tab.Tab) {
+			return fmt.Errorf("driver %q: unknown form tab %q", d.ID, tab.Tab)
+		}
+		for _, f := range tab.Fields {
+			if !slices.Contains(FormFields(), f) {
+				return fmt.Errorf("driver %q: unknown form field %q", d.ID, f)
+			}
+		}
+	}
+	for _, c := range d.Capabilities {
+		if !slices.Contains(Capabilities(), c) {
+			return fmt.Errorf("driver %q: unknown capability %q", d.ID, c)
+		}
+	}
+	seen := map[string]bool{}
+	for _, f := range d.DriverFields {
+		if err := f.validate(); err != nil {
+			return fmt.Errorf("driver %q: %w", d.ID, err)
+		}
+		if seen[f.Key] {
+			return fmt.Errorf("driver %q: duplicate driver field %q", d.ID, f.Key)
+		}
+		seen[f.Key] = true
+	}
+	return nil
+}
+
+func (f DriverField) validate() error {
+	if f.Key == "" {
+		return fmt.Errorf("driver field has an empty key")
+	}
+	if slices.Contains(FormFields(), FormField(f.Key)) {
+		return fmt.Errorf("driver field %q has the same name as a built-in form field", f.Key)
+	}
+	if !slices.Contains(DriverFieldTypes(), f.Type) {
+		return fmt.Errorf("driver field %q has unknown type %q", f.Key, f.Type)
+	}
+	if !slices.Contains(FormTabs(), f.Tab) {
+		return fmt.Errorf("driver field %q has unknown tab %q", f.Key, f.Tab)
+	}
+	if f.Type == FieldTypeEnum && len(f.Enum) == 0 {
+		return fmt.Errorf("driver field %q is an enum without values", f.Key)
+	}
+	if f.Type != FieldTypeEnum && len(f.Enum) > 0 {
+		return fmt.Errorf("driver field %q declares enum values but is not an enum", f.Key)
+	}
+	if f.Default == nil {
+		return nil
+	}
+	if f.Type == FieldTypePassword {
+		return fmt.Errorf("driver field %q is a password and cannot have a default", f.Key)
+	}
+	if err := f.checkValue(f.Default); err != nil {
+		return fmt.Errorf("default of %w", err)
+	}
+	return nil
+}
+
+// checkValue 检查取值是否符合声明的类型；错误点名键。
+func (f DriverField) checkValue(v any) error {
+	bad := func(want string) error { return fmt.Errorf("driver field %q must be %s", f.Key, want) }
+	switch f.Type {
+	case FieldTypeText, FieldTypeTextarea, FieldTypePassword:
+		if _, ok := v.(string); !ok {
+			return bad("a string")
+		}
+	case FieldTypeSwitch:
+		if _, ok := v.(bool); !ok {
+			return bad("a boolean")
+		}
+	case FieldTypeNumber:
+		var n float64
+		switch x := v.(type) {
+		case int:
+			n = float64(x)
+		case int64:
+			n = float64(x)
+		case float64:
+			n = x
+		default:
+			return bad("a number")
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return bad("an integer")
+		}
+	case FieldTypeEnum:
+		s, ok := v.(string)
+		if !ok || !slices.Contains(f.Enum, s) {
+			return bad(fmt.Sprintf("one of %v", f.Enum))
+		}
+	}
+	return nil
+}
+
+// DriverField 返回按键声明的专属字段。
+func (d Descriptor) DriverField(key string) (DriverField, bool) {
+	for _, f := range d.DriverFields {
+		if f.Key == key {
+			return f, true
+		}
+	}
+	return DriverField{}, false
+}
+
+// CheckDriverOptions 检查 driver_options：键必须是声明过的，给出的值必须符合类型。不检查必填、
+// 不补默认值（局部更新只带部分键）。
+func (d Descriptor) CheckDriverOptions(opts map[string]any) error {
+	for _, key := range slices.Sorted(maps.Keys(opts)) {
+		f, ok := d.DriverField(key)
+		if !ok {
+			return fmt.Errorf("driver %q has no driver option %q", d.ID, key)
+		}
+		if err := f.checkValue(opts[key]); err != nil {
+			return fmt.Errorf("driver %q: %w", d.ID, err)
+		}
+	}
+	return nil
+}
+
+// CompleteDriverOptions 补上缺省值并检查必填，返回完整的 driver_options（不改入参）。
+func (d Descriptor) CompleteDriverOptions(opts map[string]any) (map[string]any, error) {
+	out := maps.Clone(opts)
+	if out == nil {
+		out = map[string]any{}
+	}
+	for _, f := range d.DriverFields {
+		v, present := out[f.Key]
+		if s, isString := v.(string); present && isString && s == "" {
+			present = false
+		}
+		if !present && f.Default != nil {
+			out[f.Key] = f.Default
+			present = true
+		}
+		if !present && f.Required {
+			return nil, fmt.Errorf("driver %q: driver option %q is required", d.ID, f.Key)
+		}
+	}
+	return out, nil
 }
 
 // AlterAttribute 是改表时可以单独声明能否修改的一项属性。

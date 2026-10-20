@@ -9,7 +9,41 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
+
+func registerDriverOptionsFake(t *testing.T) {
+	t.Helper()
+	fake := dbdrivertest.NewFake()
+	fake.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "region", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection},
+		{Key: "token", Type: dbdriver.FieldTypePassword, Tab: dbdriver.TabConnection},
+	}
+	dbdrivertest.Register(t, fake)
+}
+
+// 口令类的 driver_options 与内置口令一样计入明文告警；非口令类的不算，值也不回显。
+func TestParseAssetCreateDriverOptionsPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretConfig := `{"driver":"fakedb","host":"h","driver_options":{"region":"eu","token":"opt-top-secret"}}`
+	plainConfig := `{"driver":"fakedb","host":"h","driver_options":{"region":"eu"}}`
+
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", secretConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "opt-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config-file", "a.json"}, nil,
+		map[string][]byte{"a.json": []byte(secretConfig)})
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", plainConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
 
 type failingWriter struct{ err error }
 

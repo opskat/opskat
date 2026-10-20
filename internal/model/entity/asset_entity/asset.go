@@ -192,6 +192,9 @@ type DatabaseConfig struct {
 	Path                string            `json:"path,omitempty"`          // SQLite 文件路径;local 为本地绝对路径,remote_ssh_vfs 为远端绝对路径
 	Proxy               *ProxyConfig      `json:"proxy,omitempty"`         // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 	ProxyChain          *ProxyChainConfig `json:"proxy_chain,omitempty"`
+	// DriverOptions 是驱动专属字段的取值（Descriptor.DriverFields）；口令类的值 credential_svc 加密。
+	// 驱动不可用时也原样保留。
+	DriverOptions map[string]any `json:"driver_options,omitempty"`
 }
 
 // RedisConfig Redis类型的特定配置

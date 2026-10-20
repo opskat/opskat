@@ -15,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -325,7 +326,7 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 			return 1
 		}
 	}
-	if writeOnlyFieldPresent(asset.Type, config) {
+	if writeOnlyFieldPresent(asset.Type, config, asset) {
 		switch configSource {
 		case "--config":
 			if err := warnArgvPlaintext(streams.stderr); err != nil {
@@ -408,13 +409,14 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 // writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
 // AutomationContract 声明——接受（ConfigFields）但不进审批（ApprovalFields）的字段，
 // 如 password / credential_id / Redis 的 sentinel_password / tls_key_pem；外加 proxy_chain
-// 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。
-func writeOnlyFieldPresent(assetType string, config map[string]any) bool {
+// 层里的 password / token（链本身以摘要进审批，密钥藏在层里）；以及 driver_options 里驱动声明为
+// 口令类的取值。stored 是被更新的已存资产（创建时为 nil），局部更新没带 driver 时据它认出驱动。
+func writeOnlyFieldPresent(assetType string, config map[string]any, stored *asset_entity.Asset) bool {
 	handler, ok := assettype.Get(assetType)
 	if !ok {
 		return false
 	}
-	if assettype.ProxyChainHasSecret(config) {
+	if assettype.ProxyChainHasSecret(config) || assettype.DriverOptionsHaveSecret(config, stored) {
 		return true
 	}
 	contract := handler.AutomationContract()

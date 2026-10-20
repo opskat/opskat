@@ -67,6 +67,10 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		return view
 	}
 	maps.Copy(view, drv.ConnectionView(cfg.DriverConfig()))
+	if values, secretsSet := viewDriverOptions(drv.Descriptor(), cfg.DriverOptions); len(cfg.DriverOptions) > 0 {
+		view[argDriverOptions] = values
+		view["driver_options_secrets_set"] = secretsSet
+	}
 	return view
 }
 
@@ -90,6 +94,11 @@ func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQuery
 func (h *databaseHandler) PolicyKind() string { return policy.PolicyKindQuery }
 
 func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[string]any) (map[string]any, error) {
+	if _, ok := args[argDriverOptions]; ok {
+		if err := h.checkUpdateDriverOptions(a, args); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := args["driver"]; ok {
 		return args, nil
 	}
@@ -107,12 +116,37 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 	return out, nil
 }
 
+// checkUpdateDriverOptions 在审批前按驱动的声明校验更新入参里的 driver_options。
+func (h *databaseHandler) checkUpdateDriverOptions(a *asset_entity.Asset, args map[string]any) error {
+	cfg, err := a.GetDatabaseConfig()
+	if err != nil {
+		return err
+	}
+	id := cfg.Driver
+	if v := ArgString(args, "driver"); v != "" {
+		id = asset_entity.DatabaseDriver(v)
+	}
+	drv, err := dbregistry.Lookup(id)
+	if err != nil {
+		return err
+	}
+	opts, err := driverOptionsArg(args)
+	if err != nil {
+		return err
+	}
+	return drv.Descriptor().CheckDriverOptions(opts)
+}
+
 func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
 	drv, err := requestedDriver(args)
 	if err != nil {
 		return err
 	}
-	return drv.ValidateCreateArgs(driverArgs(args))
+	if err := drv.ValidateCreateArgs(driverArgs(args)); err != nil {
+		return err
+	}
+	_, err = validateCreateDriverOptions(drv.Descriptor(), args)
+	return err
 }
 
 func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
@@ -131,6 +165,13 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 	driverCfg := cfg.DriverConfig()
 	drv.ApplyCreateArgs(driverCfg, driverArgs(args))
 	cfg.SetDriverConfig(driverCfg)
+	opts, err := validateCreateDriverOptions(drv.Descriptor(), args)
+	if err != nil {
+		return err
+	}
+	if cfg.DriverOptions, err = encryptDriverOptions(drv.Descriptor(), opts); err != nil {
+		return err
+	}
 	if usesPassword(drv) {
 		if password := ArgString(args, "password"); password != "" {
 			encrypted, err := credential_svc.Default().Encrypt(password)
@@ -179,6 +220,13 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	driverCfg := cfg.DriverConfig()
 	drv.ApplyUpdateArgs(driverCfg, driverArgs(args))
 	cfg.SetDriverConfig(driverCfg)
+	if updates, err := driverOptionsArg(args); err != nil {
+		return err
+	} else if updates != nil {
+		if cfg.DriverOptions, err = mergeDriverOptions(drv.Descriptor(), cfg.DriverOptions, updates); err != nil {
+			return err
+		}
+	}
 	if usesPassword(drv) {
 		if _, ok := args["credential_id"]; ok {
 			cfg.CredentialID = ArgInt64(args, "credential_id")
