@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -147,6 +150,34 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, []string{"s3cret"}, d.server.Logins())
 	})
 
+	t.Run("every instance of a session is handed the driver options when it logs in, and they are not logged", func(t *testing.T) {
+		const secret = "opt-s3cret"
+		logs := observeLogs(t)
+		d := newDriver()
+		s, err := d.Open(ctx, dbdriver.OpenRequest{
+			Config:        &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: desc.DefaultPort, Username: "alice", Database: "app"},
+			Password:      "s3cret",
+			DriverOptions: map[string]any{"tenant": "acme", "token": secret},
+		})
+		require.NoError(t, err)
+		defer func() { assert.NoError(t, s.Close()) }()
+		want := map[string]any{"tenant": "acme", "token": secret}
+
+		assert.Equal(t, want, openOptions(t, s), "the first instance")
+
+		// A cursor holds the first instance, so the next operation logs in a second one.
+		cursor, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
+		require.NoError(t, err)
+		require.True(t, cursor.Next())
+		assert.Equal(t, want, openOptions(t, s), "a second instance of the same session")
+		require.NoError(t, cursor.Close())
+		require.Len(t, d.server.Logins(), 2)
+
+		for _, entry := range logs.All() {
+			assert.NotContains(t, fmt.Sprint(entry.Message, entry.ContextMap()), secret)
+		}
+	})
+
 	t.Run("a driver the extension does not provide is refused", func(t *testing.T) {
 		_, err := ext.Plugin.OpenDriverSession(ctx, "otherdb", dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "otherdb"}})
 		require.Error(t, err)
@@ -160,4 +191,25 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		_, err := s.Execute(ctx, "SELECT 1")
 		assert.Error(t, err)
 	})
+}
+
+// openOptions asks the fixture's instance that runs the statement which driver
+// options its driver was opened with.
+func openOptions(t *testing.T, s dbdriver.Session) map[string]any {
+	t.Helper()
+	res, err := s.Execute(context.Background(), "SHOW OPEN OPTIONS")
+	require.NoError(t, err)
+	var seen map[string]any
+	require.NoError(t, json.Unmarshal([]byte(res.Rows.Rows[0][0].(string)), &seen))
+	return seen
+}
+
+// observeLogs routes the app logger into memory for the test.
+func observeLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zap.DebugLevel)
+	orig := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(orig) })
+	return logs
 }

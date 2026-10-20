@@ -2,18 +2,23 @@ package extreg
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/connpool"
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 )
@@ -169,14 +174,28 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 // The extension's driver is reached the way every driver is: connpool resolves the
 // asset into the request, and the extension gets exactly that request.
 func TestExtensionDriverOpensThroughThePluginWithTheHostBuiltRequest(t *testing.T) {
+	credential_svc.SetDefault(credential_svc.New("driver-options-test-key", []byte("0123456789abcdef")))
+	encryptedOption, err := credential_svc.Default().Encrypt("opt-s3cret")
+	require.NoError(t, err)
+	core, logs := observer.New(zap.DebugLevel)
+	origLogger := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(origLogger) })
+
 	plugin := newFakeDriverPlugin()
-	require.NoError(t, registerManifest(t, driverOnlyManifest("acme-db", driverDescriptor("acmedb")), plugin))
+	desc := driverDescriptor("acmedb")
+	desc.DriverFields = []dbdriver.DriverField{
+		{Key: "tenant", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabAdvanced},
+		{Key: "token", Type: dbdriver.FieldTypePassword, Tab: dbdriver.TabAdvanced},
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("acme-db", desc), plugin))
 
 	cfg := &asset_entity.DatabaseConfig{
 		Driver: "acmedb", Host: "10.0.0.5", Port: 9000, Username: "app", Database: "orders",
 		Password: "ciphertext", CredentialID: 7,
 		// The proxy does not exist: the request carries the dial, nothing dials it here.
-		Proxy: &asset_entity.ProxyConfig{Type: "socks5", Host: "127.0.0.1", Port: 1, Password: "proxy-secret"},
+		Proxy:         &asset_entity.ProxyConfig{Type: "socks5", Host: "127.0.0.1", Port: 1, Password: "proxy-secret"},
+		DriverOptions: map[string]any{"tenant": "acme", "token": encryptedOption},
 	}
 	session, err := connpool.OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3}, cfg, "s3cret", nil)
 	require.NoError(t, err)
@@ -188,6 +207,12 @@ func TestExtensionDriverOpensThroughThePluginWithTheHostBuiltRequest(t *testing.
 	assert.Equal(t, cfg.DriverConfig(), req.Config, "the driver's view of the config, without the host-owned parts")
 	assert.Equal(t, "s3cret", req.Password, "the decrypted password")
 	assert.NotNil(t, req.Transport.Dial, "the asset's reach path")
+	assert.Equal(t, map[string]any{"tenant": "acme", "token": "opt-s3cret"}, req.DriverOptions,
+		"the driver options, password-type ones decrypted")
+	assert.Equal(t, encryptedOption, cfg.DriverOptions["token"], "the stored config keeps the ciphertext")
+	for _, entry := range logs.All() {
+		assert.NotContains(t, fmt.Sprint(entry.Message, entry.ContextMap()), "opt-s3cret")
+	}
 
 	res, err := session.Execute(context.Background(), "SELECT * FROM t")
 	require.NoError(t, err)

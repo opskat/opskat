@@ -89,6 +89,7 @@ type connector struct {
 	user     string
 	password string
 	config   dbdriver.Config
+	options  map[string]any
 }
 
 func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -96,7 +97,7 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	cn := &conn{nc: nc, r: bufio.NewReader(nc), config: c.config}
+	cn := &conn{nc: nc, r: bufio.NewReader(nc), config: c.config, options: c.options}
 	if err := cn.roundTrip("LOGIN " + c.user + " " + c.password); err != nil {
 		_ = nc.Close()
 		return nil, err
@@ -116,6 +117,8 @@ type conn struct {
 	nc     net.Conn
 	r      *bufio.Reader
 	config dbdriver.Config
+	// options are the driver options the session was opened with.
+	options map[string]any
 }
 
 func (c *conn) roundTrip(line string) error {
@@ -193,6 +196,12 @@ func (c *conn) query(q string) (driver.Rows, error) {
 			return nil, err
 		}
 		return values([]string{"config"}, []driver.Value{string(raw)}), nil
+	case q == "SHOW OPEN OPTIONS":
+		raw, err := json.Marshal(c.options)
+		if err != nil {
+			return nil, err
+		}
+		return values([]string{"options"}, []driver.Value{string(raw)}), nil
 	case q == "SELECT PANIC", q == "SELECT TRAP", q == "SELECT OOM":
 		fault(q)
 	}

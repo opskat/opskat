@@ -72,10 +72,11 @@ func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
 		})
 
 		Convey("fields the extension does not know are ignored, in the call and in its arguments", func() {
-			reply := callDriver(t, `{"op":"open","fromTheFuture":1,"args":{"driver":"demodb","config":{"driver":"demodb","host":"db.internal","newKey":true},"password":"s3cret","alsoNew":"x"}}`)
+			reply := callDriver(t, `{"op":"open","fromTheFuture":1,"args":{"driver":"demodb","config":{"driver":"demodb","host":"db.internal","newKey":true},"password":"s3cret","driverOptions":{"tenant":"acme","token":"opt-s3cret"},"alsoNew":"x"}}`)
 			So(reply.Error, ShouldBeNil)
 			So(opened.Config.Host, ShouldEqual, "db.internal")
 			So(opened.Password, ShouldEqual, "s3cret")
+			So(opened.DriverOptions, ShouldResemble, map[string]any{"tenant": "acme", "token": "opt-s3cret"})
 			So(opened.Transport.Dial, ShouldNotBeNil)
 			var session struct {
 				Session uint64 `json:"session"`

@@ -264,9 +264,10 @@ func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
 		return nil, fmt.Errorf("%w: %s does not provide read-only connections", dbdriver.ErrUnsupported, a.Driver)
 	}
 	db, dialect, err := drv.open(ctx, dbdriver.OpenRequest{
-		Config:    a.Config,
-		Password:  a.Password,
-		Transport: dbdriver.Transport{Dial: opskat.DialContext},
+		Config:        a.Config,
+		Password:      a.Password,
+		DriverOptions: a.DriverOptions,
+		Transport:     dbdriver.Transport{Dial: opskat.DialContext},
 	})
 	if err != nil {
 		return nil, err

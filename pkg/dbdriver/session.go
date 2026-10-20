@@ -33,6 +33,9 @@ type OpenRequest struct {
 	Config *Config
 	// Password 是已解析的明文口令。
 	Password string
+	// DriverOptions 是资产的驱动专属字段（Descriptor.DriverFields）的取值，按键取；口令类的值
+	// 与 Password 一样已解密成明文、只在打开会话时给出。不声明专属字段的驱动（内置驱动）忽略它。
+	DriverOptions map[string]any
 	// Transport 是共享代码解析好的「怎么到达数据库」。
 	Transport Transport
 }

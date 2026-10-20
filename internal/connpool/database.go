@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sync"
 
@@ -14,6 +15,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/netdial"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
@@ -57,7 +59,34 @@ func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, passwor
 	if err != nil {
 		return nil, err
 	}
-	return driver.Open(ctx, dbdriver.OpenRequest{Config: cfg.DriverConfig(), Password: password, Transport: transport})
+	options, err := driverOptions(driver.Descriptor(), cfg.DriverOptions)
+	if err != nil {
+		return nil, err
+	}
+	return driver.Open(ctx, dbdriver.OpenRequest{
+		Config: cfg.DriverConfig(), Password: password, DriverOptions: options, Transport: transport,
+	})
+}
+
+// driverOptions 是交给驱动的专属字段取值：存着的口令类取值（credential_svc 加密）解密成明文，
+// 与口令一样只放进打开会话的请求。返回副本，不改资产配置。
+func driverOptions(desc dbdriver.Descriptor, stored map[string]any) (map[string]any, error) {
+	if len(stored) == 0 {
+		return nil, nil
+	}
+	options := maps.Clone(stored)
+	for _, f := range desc.DriverFields {
+		encrypted, ok := options[f.Key].(string)
+		if f.Type != dbdriver.FieldTypePassword || !ok || encrypted == "" {
+			continue
+		}
+		plaintext, err := credential_svc.Default().Decrypt(encrypted)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt driver option %q: %w", f.Key, err)
+		}
+		options[f.Key] = plaintext
+	}
+	return options, nil
 }
 
 // databaseTransport 把配置解析成到达数据库的途径。网络连接的优先级：代理链 > SSH 隧道 >

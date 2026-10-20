@@ -58,6 +58,7 @@ func open(ctx context.Context, req dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect
 		user:     cfg.Username,
 		password: req.Password,
 		config:   cfg,
+		options:  req.DriverOptions,
 	})
 	if err := sqldb.Establish(ctx, db, nil); err != nil {
 		return nil, nil, err
