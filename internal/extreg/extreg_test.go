@@ -3,6 +3,7 @@ package extreg
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 	"github.com/opskat/opskat/internal/service/conntest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -66,6 +68,16 @@ type fakePlugin struct {
 	testConnErr        error
 	lastTestConnType   string
 	lastTestConnConfig *extension.AdHocAssetConfig
+
+	// openDriver answers OpenDriverSession; nil means the extension provides no driver.
+	openDriver func(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
+}
+
+func (p *fakePlugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	if p.openDriver == nil {
+		return nil, fmt.Errorf("fake plugin provides no database driver %q", id)
+	}
+	return p.openDriver(ctx, id, req)
 }
 
 func (p *fakePlugin) TestConnection(_ context.Context, assetType string, adhoc *extension.AdHocAssetConfig) error {

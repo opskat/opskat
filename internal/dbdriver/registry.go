@@ -45,24 +45,46 @@ func validateConfig(cfg *dbdriver.Config, route dbdriver.Route) error {
 	return d.ValidateConfig(cfg, route)
 }
 
-// Register 注册一个驱动。id 为空、或 id / 别名与已注册驱动的任何名字相同时 panic：
-// 一个名字只能指向一个驱动，撞名是注册方的编程错误，不该被后注册者静默覆盖。
+// NameTakenError 是 TryRegister 拒绝一个驱动的原因：它的 id 或某个别名（Name）已经属于
+// 已注册的驱动 Owner。
+type NameTakenError struct {
+	Name   string
+	Driver dbdriver.DriverID
+	Owner  dbdriver.DriverID
+}
+
+func (e *NameTakenError) Error() string {
+	return fmt.Sprintf("dbdriver: name %q of driver %q is already registered by driver %q", e.Name, e.Driver, e.Owner)
+}
+
+// Register 注册一个内置驱动（在 init() 里调用）。id 为空、或 id / 别名与已注册驱动的任何
+// 名字相同时 panic：一个名字只能指向一个驱动，内置驱动撞名是编程错误，不该被后注册者
+// 静默覆盖。
 func Register(d dbdriver.Driver) {
+	if err := TryRegister(d); err != nil {
+		panic(err.Error())
+	}
+}
+
+// TryRegister 注册一个运行期才出现的驱动（扩展提供的）。规则同 Register，但撞名不 panic：
+// 返回 *NameTakenError（id 为空时是普通错误），驱动的任何名字都不注册。
+func TryRegister(d dbdriver.Driver) error {
 	desc := d.Descriptor()
 	if desc.ID == "" {
-		panic("dbdriver: driver must declare an id")
+		return errors.New("dbdriver: driver must declare an id")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	for _, name := range desc.Names() {
 		if owner, exists := names[name]; exists {
-			panic(fmt.Sprintf("dbdriver: name %q of driver %q is already registered by driver %q", name, desc.ID, owner))
+			return &NameTakenError{Name: name, Driver: desc.ID, Owner: owner}
 		}
 	}
 	drivers[desc.ID] = d
 	for _, name := range desc.Names() {
 		names[name] = desc.ID
 	}
+	return nil
 }
 
 // Unregister 移除一个驱动及它占用的全部名字。

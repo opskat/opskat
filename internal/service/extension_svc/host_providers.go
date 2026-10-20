@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -50,7 +51,7 @@ type assetConfigGetter struct {
 func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	caller, asset, err := g.svc.OwnedAsset(ctx, g.extName, assetID)
+	caller, asset, _, err := g.svc.ownedTypedAsset(ctx, g.extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 // Only the named fields are decrypted — a stored secret the active auth group
 // does not reference cannot fail the request.
 func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error) {
-	caller, asset, err := g.svc.OwnedAsset(ctx, g.extName, assetID)
+	caller, asset, def, err := g.svc.ownedTypedAsset(ctx, g.extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,7 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 	if err != nil {
 		return nil, fmt.Errorf("%s config: %w", asset.Type, err)
 	}
-	for _, field := range extension.PasswordFieldsFromSchema(caller.Manifest.AssetTypeDef(asset.Type).ConfigSchema) {
+	for _, field := range extension.PasswordFieldsFromSchema(def.ConfigSchema) {
 		if value := values[field]; value != "" {
 			if values[field], err = decryptPasswordField(asset.Type, field, value); err != nil {
 				return nil, err
@@ -108,10 +109,11 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 	return values, nil
 }
 
-// OwnedAsset loads assetID on behalf of extName and confirms the asset's type is
-// one extName itself registers. Every path that hands an asset — or its config —
+// OwnedAsset loads assetID on behalf of extName and confirms the asset belongs to
+// extName: its type is one extName itself registers, or it is a database asset
+// whose driver extName provides. Every path that hands an asset — or its config —
 // to an extension goes through here, so "which extension may see this asset" is
-// answered once, by the asset's stored type rather than by whoever asked.
+// answered once, by the asset's stored type and driver rather than by whoever asked.
 func (s *Service) OwnedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, error) {
 	caller := s.Bridge().Get(extName)
 	if caller == nil {
@@ -121,10 +123,48 @@ func (s *Service) OwnedAsset(ctx context.Context, extName string, assetID int64)
 	if err != nil {
 		return nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
 	}
-	if caller.Manifest.AssetTypeDef(asset.Type) == nil {
+	if caller.Manifest.AssetTypeDef(asset.Type) != nil {
+		return caller, asset, nil
+	}
+	driver, err := databaseDriverOf(asset)
+	if err != nil {
+		return nil, nil, fmt.Errorf("asset %d: %w", assetID, err)
+	}
+	if driver == "" || !slices.Contains(caller.Manifest.Capabilities.DatabaseDrivers, driver) {
 		return nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
 	}
 	return caller, asset, nil
+}
+
+// databaseDriverOf is the driver id a database asset's config names; "" for any
+// other asset.
+func databaseDriverOf(asset *HostAssetConfig) (string, error) {
+	a := &asset_entity.Asset{Type: asset.Type, Config: asset.Config}
+	if !a.IsDatabase() {
+		return "", nil
+	}
+	cfg, err := a.GetDatabaseConfig()
+	if err != nil {
+		return "", err
+	}
+	return string(cfg.Driver), nil
+}
+
+// ownedTypedAsset is OwnedAsset for the paths that serve an asset of one of
+// extName's own asset types — its config, credentials, form and connection path,
+// all read through the type's describe() declaration. A database asset of a
+// driver extName provides is extName's too, but its config, password and reach
+// path go to the driver only in the open call of a session.
+func (s *Service) ownedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
+	owner, asset, err := s.OwnedAsset(ctx, extName, assetID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	def := owner.Manifest.AssetTypeDef(asset.Type)
+	if def == nil {
+		return nil, nil, nil, fmt.Errorf("asset %d (type %q) reaches extension %q only through its database driver session", assetID, asset.Type, extName)
+	}
+	return owner, asset, def, nil
 }
 
 // kvStore implements extension.KVStore, scoped to one extension.
@@ -154,7 +194,7 @@ func (s *kvStore) Set(key string, value []byte) error {
 // back) as a value. The form instead shows a withheld field as already set and
 // keeps its stored ciphertext on save.
 func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64) (string, error) {
-	owner, asset, err := s.OwnedAsset(ctx, extName, assetID)
+	owner, asset, _, err := s.ownedTypedAsset(ctx, extName, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -313,11 +353,11 @@ func parseHostConnectionConfig(configJSON string) (*hostConnectionConfig, error)
 // responder the caller put on it (opsctl's terminal / desktop prompt), exactly as
 // for a built-in type dialed through the same tunnel.
 func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, *tls.Config, string, error) {
-	owner, asset, err := d.svc.OwnedAsset(ctx, d.extName, assetID)
+	_, asset, def, err := d.svc.ownedTypedAsset(ctx, d.extName, assetID)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	conn := owner.Manifest.AssetTypeDef(asset.Type).Connection
+	conn := def.Connection
 	if conn == nil {
 		return nil, nil, "", nil
 	}

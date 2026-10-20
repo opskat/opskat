@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/pkg/appversion"
@@ -147,7 +148,7 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.unregister(name)
+	s.unregister(ctx, name)
 	_ = s.manager.Unload(ctx, name)
 	s.discardHostHTTPCache(name)
 	if s.snippetHook != nil {
@@ -263,7 +264,7 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	// running version's entry has to go before the new one can be registered.
 	previous := s.bridge.Get(manifest.Name)
 	if previous != nil {
-		s.unregister(manifest.Name)
+		s.unregister(ctx, manifest.Name)
 	}
 	if err := s.register(staged.Extension()); err != nil {
 		staged.Abort(ctx)
@@ -271,7 +272,7 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		return nil, err
 	}
 	if err := staged.Commit(ctx); err != nil {
-		s.unregister(manifest.Name)
+		s.unregister(ctx, manifest.Name)
 		s.restoreRegistration(previous)
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
@@ -405,6 +406,9 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 				return fmt.Errorf("cannot uninstall %q: %d asset(s) still reference its asset types %v; delete them first or use force uninstall", name, count, assetTypes)
 			}
 		}
+		if err := s.checkDriverAssets(ctx, name); err != nil {
+			return err
+		}
 	}
 
 	// Snippet hook: remove seeds + refresh categories BEFORE manager.Uninstall removes
@@ -417,7 +421,7 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 		}
 	}
 
-	s.unregister(name)
+	s.unregister(ctx, name)
 
 	if err := s.manager.Uninstall(ctx, name); err != nil {
 		return fmt.Errorf("uninstall extension: %w", err)
@@ -526,7 +530,7 @@ func (s *Service) loadAndApplyState(ctx context.Context) {
 	// would otherwise be refused as a conflict with its own previous incarnation.
 	if s.bridge != nil {
 		for _, name := range s.bridge.ListNames() {
-			s.unregister(name)
+			s.unregister(ctx, name)
 		}
 	}
 
@@ -570,9 +574,50 @@ func (s *Service) register(ext *extension.Extension) error {
 	return nil
 }
 
-func (s *Service) unregister(name string) {
+// unregister takes name out of the app-wide registries. The database drivers it
+// provided leave the driver registry with their sessions closed (extreg.Unregister);
+// the database assets using them then have their cached sessions dropped, so the
+// query panel shows the driver as unavailable now and opens a session of whatever
+// registers the driver next — a re-enabled or upgraded version — instead of reusing
+// a closed one.
+func (s *Service) unregister(ctx context.Context, name string) {
+	var drivers []string
+	if ext := s.bridge.Get(name); ext != nil {
+		drivers = ext.Manifest.Capabilities.DatabaseDrivers
+	}
 	extreg.Unregister(name)
 	s.bridge.Unregister(name)
+	for _, driver := range drivers {
+		assets, err := s.assetRepo.List(ctx, asset_repo.ListOptions{DatabaseDriver: driver})
+		if err != nil {
+			s.logger.Error("list database assets of a removed driver; their cached sessions stay until reclaimed",
+				zap.String("extension", name), zap.String("driver", driver), zap.Error(err))
+			continue
+		}
+		for _, asset := range assets {
+			assetconn.InvalidateAsset(ctx, asset.ID)
+		}
+	}
+}
+
+// checkDriverAssets refuses to uninstall name while database assets use one of its
+// drivers. The driver ids come from the manifest on disk, so the check holds for
+// a disabled extension too.
+func (s *Service) checkDriverAssets(ctx context.Context, name string) error {
+	info, err := extension.LoadManifestInfo(s.manager.ExtDir(name))
+	if err != nil {
+		return fmt.Errorf("cannot uninstall %q: read its manifest to check the database assets using its drivers: %w; use force uninstall to remove it anyway", name, err)
+	}
+	for _, driver := range info.Manifest.Capabilities.DatabaseDrivers {
+		assets, err := s.assetRepo.List(ctx, asset_repo.ListOptions{DatabaseDriver: driver})
+		if err != nil {
+			return fmt.Errorf("cannot uninstall %q: list the database assets using its driver %q: %w", name, driver, err)
+		}
+		if len(assets) > 0 {
+			return fmt.Errorf("cannot uninstall %q: %d database asset(s) still use its database driver %q; delete them or switch their driver first, or use force uninstall", name, len(assets), driver)
+		}
+	}
+	return nil
 }
 
 // discardHostHTTPCache releases name's cached HTTP clients (kept for

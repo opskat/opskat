@@ -41,6 +41,9 @@ type ListOptions struct {
 	Type         string
 	GroupID      int64
 	ExactGroupID bool // 精确匹配 GroupID（包括 0），用于获取未分组资产
+	// DatabaseDriver 非空时只列配置的驱动 id 为它的数据库资产（扩展卸载前检查驱动还有没有
+	// 资产在用、驱动移除时丢弃这些资产缓存着的会话）。
+	DatabaseDriver string
 }
 
 var defaultAsset AssetRepo
@@ -84,6 +87,9 @@ func (r *assetRepo) List(ctx context.Context, opts ListOptions) ([]*asset_entity
 	query := db.Ctx(ctx).Where("status = ?", asset_entity.StatusActive)
 	if opts.Type != "" {
 		query = query.Where("type = ?", opts.Type)
+	}
+	if opts.DatabaseDriver != "" {
+		query = query.Where("type = ? AND json_extract(config, '$.driver') = ?", asset_entity.AssetTypeDatabase, opts.DatabaseDriver)
 	}
 	if opts.ExactGroupID {
 		query = query.Where("group_id = ?", opts.GroupID)

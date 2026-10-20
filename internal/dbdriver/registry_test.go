@@ -57,6 +57,48 @@ func TestRegisterRejectsNamesAnotherDriverOwns(t *testing.T) {
 	}
 }
 
+// 扩展在运行期注册驱动：撞名是加载失败而不是编程错误，TryRegister 不 panic，返回点名冲突的
+// 名字与占用它的驱动的错误，整个驱动都不注册。
+func TestTryRegisterReportsTheNameAndItsOwnerWithoutPanicking(t *testing.T) {
+	dbdrivertest.Register(t, dbdrivertest.NewFake())
+
+	for name, tc := range map[string]struct {
+		desc  dbdriver.Descriptor
+		taken string
+	}{
+		"same id":              {dbdriver.Descriptor{ID: "fakedb"}, "fakedb"},
+		"id taken as alias":    {dbdriver.Descriptor{ID: "fake"}, "fake"},
+		"alias taken as id":    {dbdriver.Descriptor{ID: "other", Aliases: []string{"free", "fakedb"}}, "fakedb"},
+		"alias taken as alias": {dbdriver.Descriptor{ID: "other", Aliases: []string{"fake"}}, "fake"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var err error
+			require.NotPanics(t, func() { err = dbregistry.TryRegister(&dbdrivertest.Fake{Desc: tc.desc}) })
+			var taken *dbregistry.NameTakenError
+			require.ErrorAs(t, err, &taken)
+			assert.Equal(t, tc.taken, taken.Name)
+			assert.Equal(t, dbdriver.DriverID("fakedb"), taken.Owner)
+			assert.Contains(t, err.Error(), `"`+tc.taken+`"`)
+			assert.Contains(t, err.Error(), `"fakedb"`)
+
+			for _, n := range []string{"other", "free"} {
+				_, ok := dbregistry.ByName(n)
+				assert.False(t, ok, "a refused driver must not stay half-registered (%s)", n)
+			}
+		})
+	}
+
+	require.Error(t, dbregistry.TryRegister(&dbdrivertest.Fake{}), "a driver without an id is refused")
+
+	other := dbdrivertest.NewFake()
+	other.Desc.ID, other.Desc.Aliases = "other", []string{"free"}
+	require.NoError(t, dbregistry.TryRegister(other))
+	t.Cleanup(func() { dbregistry.Unregister("other") })
+	got, err := dbregistry.Lookup("other")
+	require.NoError(t, err)
+	assert.Same(t, other, got)
+}
+
 func TestUnregisterFreesIDAndAliases(t *testing.T) {
 	dbregistry.Register(dbdrivertest.NewFake())
 	dbregistry.Unregister("fakedb")
