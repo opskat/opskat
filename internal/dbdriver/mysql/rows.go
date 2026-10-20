@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 行语句：反斜杠在文本字面量里是不是转义符取决于会话的 sql_mode，每次生成前在这条连接上查；二进制列里

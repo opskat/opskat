@@ -11,16 +11,17 @@ import (
 	"github.com/pkg/sftp"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/sshpool"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // OpenDatabase 经配置里的驱动打开一条数据库会话。
 //
 // 这里只做所有驱动共用的两件事：按 cfg.Driver 在注册表里找到驱动（没注册就返回点名该驱动
-// 的 dbdriver.ErrDriverUnavailable，不把它当成别的驱动去连），以及把直连 / SSH 隧道 /
+// 的 dbregistry.ErrDriverUnavailable，不把它当成别的驱动去连），以及把直连 / SSH 隧道 /
 // SOCKS5 代理 / 代理链解析成驱动可以直接用的传输层。连接怎么建、连接级只读怎么落实、
 // 连不上报什么错，都是驱动的事；返回的会话归调用方，用完 Close。
 //
@@ -48,7 +49,7 @@ func OpenDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 }
 
 func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, password string, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.Session, error) {
-	driver, err := dbdriver.Lookup(cfg.Driver)
+	driver, err := dbregistry.Lookup(cfg.Driver)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +57,7 @@ func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, passwor
 	if err != nil {
 		return nil, err
 	}
-	return driver.Open(ctx, dbdriver.OpenRequest{Config: cfg, Password: password, Transport: transport})
+	return driver.Open(ctx, dbdriver.OpenRequest{Config: cfg.DriverConfig(), Password: password, Transport: transport})
 }
 
 // databaseTransport 把配置解析成到达数据库的途径。网络连接的优先级：代理链 > SSH 隧道 >

@@ -10,7 +10,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 const xlsxSheetName = "Sheet1"

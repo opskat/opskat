@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // batchSession 是只会整批执行的会话：记下收到的请求，返回给定的结果。

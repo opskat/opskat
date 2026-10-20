@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 结构化的筛选条件与排序项怎么变成 SQL：这一部分在各方言里相同，只有标识符的引号不同，

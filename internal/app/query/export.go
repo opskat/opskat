@@ -24,9 +24,9 @@ import (
 	"golang.org/x/text/transform"
 
 	"github.com/opskat/opskat/internal/app/i18n"
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/query_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // TableExportWriteOptions controls how exported table data is written to disk.

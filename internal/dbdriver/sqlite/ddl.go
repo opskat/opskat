@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 建表语句：SQLite 把原文存在 sqlite_master.sql 里。库名是 schema 名。

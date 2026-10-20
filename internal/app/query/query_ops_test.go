@@ -14,13 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/query_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 type stubLang struct{}
@@ -115,11 +116,11 @@ func TestPanelRejectsUnregisteredDriver(t *testing.T) {
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "oracle", Host: "127.0.0.1", Port: 1521, Username: "u"})
 
 	_, err := q.ExecuteSQL(1, "SELECT 1", "")
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 
 	_, err = q.ExecuteSQLPaged(1, "SELECT 1", "", 0, 10)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 }
 
@@ -422,7 +423,7 @@ func TestPanelDBCacheKey(t *testing.T) {
 
 	t.Run("an unregistered driver has no key", func(t *testing.T) {
 		_, err := panelDBCacheKey(7, &asset_entity.DatabaseConfig{Driver: "oracle", Database: "app"})
-		require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	})
 }
 

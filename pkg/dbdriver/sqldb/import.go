@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // Importer 是方言里「导入怎么写」的那一半：列属于哪一类，以及插入类模式（追加、复制、追加/更新、

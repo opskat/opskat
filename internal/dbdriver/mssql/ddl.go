@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 建表语句：SQL Server 不存原文，从 INFORMATION_SCHEMA 重建。表名是 "schema.table"（裸名

@@ -14,13 +14,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestPostgreSQLPassesConformance(t *testing.T) {
-	d, err := dbdriver.Lookup(asset_entity.DriverPostgreSQL)
+	d, err := dbregistry.Lookup(asset_entity.DriverPostgreSQL)
 	require.NoError(t, err)
 
 	dbdrivertest.RunConformance(t, d, func(t *testing.T) dbdriver.Session {
@@ -38,7 +39,7 @@ func TestPostgreSQLPassesConformance(t *testing.T) {
 
 func TestDialConnectorPassesAddr(t *testing.T) {
 	Convey("dialConnector 把目标网络与地址透传给 dial", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
+		cfg := &dbdriver.Config{
 			Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433,
 			Username: "u", Database: "d",
 		}
@@ -58,7 +59,7 @@ func TestDialConnectorPassesAddr(t *testing.T) {
 		return // Unix socket 主机只在 Unix 客户端上有意义，pgx 在 Windows 上不把 /tmp 当 socket 目录
 	}
 	Convey("dialConnector 对 unix socket 主机透传 unix 网络(直连本机 PG)", t, func() {
-		connStr := dsn(&asset_entity.DatabaseConfig{
+		connStr := dsn(&dbdriver.Config{
 			Driver: asset_entity.DriverPostgreSQL, Host: "localhost", Port: 5432,
 			Username: "u", Database: "d", Params: "host=/tmp",
 		}, "pw")
@@ -75,7 +76,7 @@ func TestDialConnectorPassesAddr(t *testing.T) {
 }
 
 func TestDSN(t *testing.T) {
-	cfg := &asset_entity.DatabaseConfig{
+	cfg := &dbdriver.Config{
 		Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433,
 		Username: "app user", Database: "my db",
 	}
@@ -94,7 +95,7 @@ func TestOpenDialsThroughTheTransport(t *testing.T) {
 	defer cancel()
 
 	_, err := driver{}.Open(ctx, dbdriver.OpenRequest{
-		Config:   &asset_entity.DatabaseConfig{Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433, Username: "u", Database: "d"},
+		Config:   &dbdriver.Config{Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433, Username: "u", Database: "d"},
 		Password: "pw",
 		Transport: dbdriver.Transport{Dial: func(_ context.Context, network, addr string) (net.Conn, error) {
 			dialed.Store(network + " " + addr)

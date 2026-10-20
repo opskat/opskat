@@ -12,12 +12,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	_ "github.com/opskat/opskat/internal/dbdriver/mysql"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/socksdial/socksdialtest"
 	"github.com/opskat/opskat/internal/sshpool"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 连接串、拨号接入、连接级只读、分页方言的断言都随代码迁到了各驱动包
@@ -42,7 +43,7 @@ func openWithFake(t *testing.T, asset *asset_entity.Asset, cfg *asset_entity.Dat
 func TestOpenDatabaseRejectsUnregisteredDriver(t *testing.T) {
 	_, err := OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3},
 		&asset_entity.DatabaseConfig{Driver: "oracle", Host: "127.0.0.1", Port: 1521, Username: "u"}, "pw", nil)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 }
 

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 建表 / 删表 / 清空 / 建库：与改动前前端生成的文本逐字一致（原 CreateTableDialog.test.ts、

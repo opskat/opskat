@@ -7,10 +7,10 @@ import (
 
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/connpool"
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/sshpool"
+	"github.com/opskat/opskat/pkg/dbdriver"
 
 	"github.com/redis/go-redis/v9"
 )

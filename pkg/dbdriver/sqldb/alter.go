@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // TableAlterer 是方言里「改表」的那一半：怎么读出改表对话框里的这张表、怎么把改动写成语句。对话框

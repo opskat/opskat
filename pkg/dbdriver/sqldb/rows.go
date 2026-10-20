@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // RowWriter 是方言里「怎么把行写进表」的那一半：字面量的写法与只改一行的 UPDATE。表引用与

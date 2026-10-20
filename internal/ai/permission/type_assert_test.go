@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	// The permission package only knows the registry; its tests need the built-in drivers.
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
@@ -212,7 +212,7 @@ func TestAssertAssetType_NamesOfADriverAddedByRegistrationAlone(t *testing.T) {
 // resolveDeclaredType looks a name up in permissionTypes first, so a driver name that is
 // also a permission type would lose its driver constraint without anyone noticing.
 func TestDriverNamesDoNotCollideWithPermissionTypes(t *testing.T) {
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		for _, name := range d.Descriptor().Names() {
 			if _, exists := permissionTypeFor(name); exists {
 				t.Errorf("driver name %q is also a registered permission type", name)

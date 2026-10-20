@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // Tables 是方言里「怎么浏览一张表的数据」的那一半：标识符与表引用怎么写、主键与列定义

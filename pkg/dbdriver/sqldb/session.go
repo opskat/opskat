@@ -17,7 +17,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // Dialect 是分页执行里随方言变化的部分。传入的 query 已去掉末尾分号。

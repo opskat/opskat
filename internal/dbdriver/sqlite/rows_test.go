@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 const columnsSQL = `SELECT name, type, CASE "notnull" WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM `

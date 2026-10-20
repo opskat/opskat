@@ -2,8 +2,9 @@
 package postgresql
 
 import (
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 var descriptor = dbdriver.Descriptor{
@@ -45,7 +46,7 @@ type driver struct {
 }
 
 func init() {
-	dbdriver.Register(driver{NetworkRules: dbdriver.NetworkRules{DefaultPort: descriptor.DefaultPort}})
+	dbregistry.Register(driver{NetworkRules: dbdriver.NetworkRules{DefaultPort: descriptor.DefaultPort}})
 }
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }

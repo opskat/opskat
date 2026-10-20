@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 整批执行时关闭外键检查：FOREIGN_KEY_CHECKS 是会话级的，只作用于批的那条连接。会话本来就没在

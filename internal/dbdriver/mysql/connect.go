@@ -10,9 +10,8 @@ import (
 
 	gomysql "github.com/go-sql-driver/mysql"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // Open 打开一条 MySQL 会话。
@@ -59,7 +58,7 @@ func newSession(db *sql.DB) dbdriver.Session {
 }
 
 // dsn 生成连接串。network 是 "tcp"（go-sql-driver 默认的拨号），或 registerDialer 登记的名字。
-func dsn(cfg *asset_entity.DatabaseConfig, password, network string) string {
+func dsn(cfg *dbdriver.Config, password, network string) string {
 	c := gomysql.NewConfig()
 	c.User = cfg.Username
 	c.Passwd = password

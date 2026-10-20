@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 )
 
@@ -22,7 +22,7 @@ var driverConstNames = map[string]bool{
 // registeredDriverLiterals 取注册表里每个驱动的 id 与别名，作为字符串字面量的判据。
 func registeredDriverLiterals() map[string]bool {
 	out := map[string]bool{}
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		for _, name := range d.Descriptor().Names() {
 			out[name] = true
 		}

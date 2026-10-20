@@ -15,7 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
@@ -262,7 +262,7 @@ func buildExecAuditResult(exitCode int, stdout, stderr string) string {
 // driverTypeNames 列出可作 --type 值的数据库驱动名：注册表里每个驱动的 id 与别名。
 func driverTypeNames() string {
 	var names []string
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		names = append(names, d.Descriptor().Names()...)
 	}
 	return strings.Join(names, ", ")

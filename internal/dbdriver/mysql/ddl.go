@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"regexp"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 建表语句：MySQL 自己存着原文，SHOW CREATE TABLE 直接给。表名只加引号，不带库名——连接

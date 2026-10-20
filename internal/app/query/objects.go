@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/app/i18n"
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/query_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // defaultQueryTimeout 数据库元数据浏览 / SQL 查询在资产未配置 QueryTimeoutSeconds 时的默认超时。

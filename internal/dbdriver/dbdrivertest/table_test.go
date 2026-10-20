@@ -10,8 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestFakeDriverPassesTableConformance(t *testing.T) {
@@ -26,7 +25,7 @@ func TestFakeDriverPassesTableConformance(t *testing.T) {
 // 假驱动的表浏览不经过任何语句：结果直接来自内存里的表，收到的结构化请求原样记下。
 func TestFakeSessionBrowsesItsTableWithoutStatements(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 	query := dbdriver.TableQuery{
 		Filters: []dbdriver.FilterItem{{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpIsNotNull}},
@@ -60,7 +59,7 @@ func TestFakeSessionBrowsesItsTableWithoutStatements(t *testing.T) {
 func TestFakeSessionFailsTableBrowsingWithItsError(t *testing.T) {
 	fake := NewFake()
 	fake.TableErr = errors.New("fakedb: no such table")
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 
 	_, err := session.OpenTable(ctx, "app", "users", 2)
@@ -260,7 +259,7 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake := NewFake()
 			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapExportSQL, dbdriver.CapImport)
-			tt.broken.Session = openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+			tt.broken.Session = openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 			problems := tableProblems(fake.Desc, tt.broken, "app", "users")
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
@@ -271,7 +270,7 @@ func TestTableConformanceReportsBrokenSessions(t *testing.T) {
 // 整表读取是一次对会话的调用，行原样交出，不经过任何语句。
 func TestFakeSessionStreamsItsTableInOneCall(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	query := dbdriver.TableQuery{Sorts: []dbdriver.SortItem{{Column: "id", Direction: dbdriver.SortDescending}}}
 
 	stream, err := session.StreamTableRows(context.Background(), "app", "users", query)
@@ -296,7 +295,7 @@ func TestFakeSessionStreamsItsTableInOneCall(t *testing.T) {
 // 拒绝查看建表语句，且什么也没记下。
 func TestFakeSessionServesDDLAndStarterQueryWithoutStatements(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 
 	_, err := session.TableDDL(ctx, "app", "users")
@@ -322,7 +321,7 @@ func TestFakeSessionServesDDLAndStarterQueryWithoutStatements(t *testing.T) {
 // 语句；没声明复制 / 导出为 SQL 的假驱动拒绝，且什么也没记下。
 func TestFakeSessionGeneratesRowStatementsWithoutExecuting(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 	request := dbdriver.RowStatementsRequest{
 		Kind:        dbdriver.RowUpdate,
@@ -353,7 +352,7 @@ func TestFakeSessionGeneratesRowStatementsWithoutExecuting(t *testing.T) {
 func TestFakeSessionExecutesBatches(t *testing.T) {
 	fake := NewFake()
 	fake.StatementErrors = map[string]error{"BAD": errors.New("fakedb: rejected")}
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 
 	atomic := dbdriver.BatchRequest{Statements: []string{"A", " ", "BAD", "C"}, Atomic: true, ContinueOnError: true, Database: "app", Table: "users"}
@@ -381,7 +380,7 @@ func TestFakeSessionExecutesBatches(t *testing.T) {
 // 没声明能关闭外键检查的假驱动拒绝关闭它，且什么也不记、不执行；声明了就照常执行。
 func TestFakeSessionRefusesUndeclaredForeignKeyToggle(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	request := dbdriver.BatchRequest{Statements: []string{"A"}, DisableForeignKeyChecks: true, Table: "users"}
 
 	_, err := session.ExecuteBatch(context.Background(), request)
@@ -445,7 +444,7 @@ func TestTableConformanceReportsBrokenBatches(t *testing.T) {
 			fake := NewFake()
 			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapImport)
 			fake.Desc.CanDisableForeignKeyChecks = true
-			session := brokenBatch{Session: openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}), batch: tt.batch}
+			session := brokenBatch{Session: openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"}), batch: tt.batch}
 			problems := tableProblems(fake.Desc, session, "app", "users")
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
@@ -457,7 +456,7 @@ func TestTableConformanceReportsBrokenBatches(t *testing.T) {
 // 收到的请求原样记下，不执行任何语句；没声明 grid_edit 的假驱动拒绝，且什么也没记下。
 func TestFakeSessionGeneratesGridEditStatementsWithoutExecuting(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 	request := dbdriver.GridEditRequest{
 		Columns:     []string{"id", "name"},
@@ -521,7 +520,7 @@ func TestTableConformanceReportsBrokenGridEdits(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake := NewFake()
 			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapGridEdit)
-			session := brokenGridEdit{Session: openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}), grid: tt.grid}
+			session := brokenGridEdit{Session: openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"}), grid: tt.grid}
 			problems := tableProblems(fake.Desc, session, "app", "users")
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
@@ -547,7 +546,7 @@ func TestFakeDriverWithForeignKeyTogglePassesTableConformance(t *testing.T) {
 // 原样记下，不执行任何语句；没声明对应功能的假驱动拒绝，且什么也没记下。
 func TestFakeSessionGeneratesSchemaStatementsWithoutExecuting(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 	create := dbdriver.CreateTableRequest{Name: "users", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT"}}}
 	createDB := dbdriver.CreateDatabaseRequest{Name: "reports", Options: map[string]string{"collation": "c"}}
@@ -582,7 +581,7 @@ func TestFakeSessionGeneratesSchemaStatementsWithoutExecuting(t *testing.T) {
 // 语句；收到的请求原样记下，不执行任何语句。没声明改表的假驱动拒绝，且什么也没记下。
 func TestFakeSessionAltersTablesWithoutExecuting(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	ctx := context.Background()
 	rename := dbdriver.AlterTableRequest{Name: "people"}
 
@@ -661,7 +660,7 @@ func TestTableConformanceReportsBrokenAlterTable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake := NewFake()
 			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapAlterTable)
-			tt.broken.Session = openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+			tt.broken.Session = openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 			problems := tableProblems(fake.Desc, tt.broken, "app", "users")
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
@@ -670,7 +669,7 @@ func TestTableConformanceReportsBrokenAlterTable(t *testing.T) {
 
 	served := NewFake()
 	served.Desc.Capabilities = append(served.Desc.Capabilities, dbdriver.CapAlterTable)
-	session := openFake(t, served, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, served, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	problems := strings.Join(undeclaredObjectProblems(context.Background(), NewFake().Desc, session), "\n")
 	assert.Contains(t, problems, "AlterTableModel")
 	assert.Contains(t, problems, "AlterTableStatements")

@@ -16,13 +16,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestMySQLPassesConformance(t *testing.T) {
-	d, err := dbdriver.Lookup(asset_entity.DriverMySQL)
+	d, err := dbregistry.Lookup(asset_entity.DriverMySQL)
 	require.NoError(t, err)
 
 	dbdrivertest.RunConformance(t, d, func(t *testing.T) dbdriver.Session {
@@ -50,7 +51,7 @@ func TestRegisterDialerUnique(t *testing.T) {
 }
 
 func TestDSN(t *testing.T) {
-	cfg := &asset_entity.DatabaseConfig{
+	cfg := &dbdriver.Config{
 		Driver: asset_entity.DriverMySQL, Host: "db.internal", Port: 3307,
 		Username: "root", Database: "app", TLS: true, Params: "sql_mode=ANSI",
 	}
@@ -83,7 +84,7 @@ func TestOpenDialsThroughTheTransport(t *testing.T) {
 	defer cancel()
 
 	_, err := driver{}.Open(ctx, dbdriver.OpenRequest{
-		Config:   &asset_entity.DatabaseConfig{Driver: asset_entity.DriverMySQL, Host: "db.internal", Port: 3307, Username: "u"},
+		Config:   &dbdriver.Config{Driver: asset_entity.DriverMySQL, Host: "db.internal", Port: 3307, Username: "u"},
 		Password: "pw",
 		Transport: dbdriver.Transport{Dial: func(_ context.Context, network, addr string) (net.Conn, error) {
 			dialed.Store(network + " " + addr)
@@ -122,7 +123,7 @@ func TestTransportDialerIsDeregisteredWhenTheSessionEnds(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, err := driver{}.Open(ctx, dbdriver.OpenRequest{
-			Config:    &asset_entity.DatabaseConfig{Driver: asset_entity.DriverMySQL, Host: "db.internal", Port: 3307, Username: "u"},
+			Config:    &dbdriver.Config{Driver: asset_entity.DriverMySQL, Host: "db.internal", Port: 3307, Username: "u"},
 			Transport: dbdriver.Transport{Dial: dial},
 		})
 		require.Error(t, err)

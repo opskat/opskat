@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestDatabaseHandlerApplyCreateArgsSQLite(t *testing.T) {
@@ -208,12 +209,12 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 	args := map[string]any{"driver": "oracle", "host": "ora.internal", "port": float64(1521), "username": "system"}
 
 	_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 
-	require.ErrorIs(t, h.ValidateCreateArgs(args), dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, h.ValidateCreateArgs(args), dbregistry.ErrDriverUnavailable)
 	err = h.ApplyCreateArgs(t.Context(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 
 	// 已经存着一个不可用驱动的资产（例如提供它的扩展没加载）：带连接配置的更新同样报错，而
 	// 不是按网络驱动合并字段。
@@ -223,7 +224,7 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 	}))
 	storedConfig := stored.Config
 	err = h.ApplyUpdateArgs(t.Context(), stored, map[string]any{"host": "ora-2.internal"})
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 	assert.Equal(t, storedConfig, stored.Config)
 

@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // rowsDialect 在测试方言之上写行语句：ntext 列加 N 前缀，UPDATE 以 ONE ROW 收尾，好与任何

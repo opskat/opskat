@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // DDL 是方言里「一张表的建表语句怎么得到」：各驱动在一条 *sql.Conn 上用自己的方式取（读

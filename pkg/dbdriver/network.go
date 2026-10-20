@@ -1,10 +1,6 @@
 package dbdriver
 
-import (
-	"errors"
-
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-)
+import "errors"
 
 // NetworkRules 是「主机 + 端口 + 用户名」这类经网络连接的驱动共用的 ConfigRules，
 // 驱动嵌入它即可；内置的 MySQL / PostgreSQL / SQL Server 都是这样。
@@ -13,7 +9,7 @@ type NetworkRules struct {
 	DefaultPort int
 }
 
-func (r NetworkRules) ValidateConfig(_ *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) error {
+func (r NetworkRules) ValidateConfig(cfg *Config, _ Route) error {
 	if cfg.Host == "" {
 		return errors.New("数据库主机地址不能为空")
 	}
@@ -40,7 +36,7 @@ func (r NetworkRules) ValidateCreateArgs(args Args) error {
 	return nil
 }
 
-func (r NetworkRules) ApplyCreateArgs(cfg *asset_entity.DatabaseConfig, args Args) {
+func (r NetworkRules) ApplyCreateArgs(cfg *Config, args Args) {
 	cfg.Host = args.String("host")
 	cfg.Port = args.Int("port")
 	if cfg.Port == 0 {
@@ -49,7 +45,7 @@ func (r NetworkRules) ApplyCreateArgs(cfg *asset_entity.DatabaseConfig, args Arg
 	cfg.Username = args.String("username")
 }
 
-func (r NetworkRules) ApplyUpdateArgs(cfg *asset_entity.DatabaseConfig, args Args) {
+func (r NetworkRules) ApplyUpdateArgs(cfg *Config, args Args) {
 	if v := args.String("host"); v != "" {
 		cfg.Host = v
 	}
@@ -61,7 +57,7 @@ func (r NetworkRules) ApplyUpdateArgs(cfg *asset_entity.DatabaseConfig, args Arg
 	}
 }
 
-func (r NetworkRules) ConnectionView(cfg *asset_entity.DatabaseConfig) map[string]any {
+func (r NetworkRules) ConnectionView(cfg *Config) map[string]any {
 	return map[string]any{
 		"host":     cfg.Host,
 		"port":     cfg.Port,

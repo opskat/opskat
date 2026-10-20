@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 导入时忽略外键：MySQL 的 FOREIGN_KEY_CHECKS 是会话级的，在批的那条连接上、事务之外关闭，

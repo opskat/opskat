@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 方言没有提供目录查询时，浏览操作明确报「不支持」，且不碰数据库（mock 没有预期任何语句）。

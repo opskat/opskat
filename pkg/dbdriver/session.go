@@ -6,8 +6,6 @@ import (
 	"io"
 	"net"
 	"os"
-
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 // ErrUnsupported 表示驱动不支持被要求的操作（没有声明对应的功能，或它的会话做不了这件事）。
@@ -32,7 +30,7 @@ type Connector interface {
 // OpenRequest 是打开一条会话所需的全部输入。
 type OpenRequest struct {
 	// Config 是要连接的配置；调用方可能已经用本次操作指定的库名覆盖了 Database。
-	Config *asset_entity.DatabaseConfig
+	Config *Config
 	// Password 是已解析的明文口令。
 	Password string
 	// Transport 是共享代码解析好的「怎么到达数据库」。

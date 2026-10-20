@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 const enabledForeignKeysSQL = "SELECT name FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID(@p1) AND is_disabled = 0 ORDER BY name"

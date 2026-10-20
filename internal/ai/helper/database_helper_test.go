@@ -7,12 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-// 连接串、只读、分页方言与关闭顺序的断言随代码迁到了驱动一侧（internal/dbdriver/sqldb 与
+// 连接串、只读、分页方言与关闭顺序的断言随代码迁到了驱动一侧（pkg/dbdriver/sqldb 与
 // 各驱动包）；这里测的是共享的这一段：经资产的驱动拿会话，把驱动给的结构化结果排成对外
 // 的 JSON。假驱动的会话不是 *sql.DB，所以这些测试同时证明共享代码不依赖它。
 
@@ -26,7 +27,7 @@ func fakeDatabaseAsset(t *testing.T, cfg *asset_entity.DatabaseConfig) *asset_en
 func openFakeSession(t *testing.T, fake *dbdrivertest.Fake) dbdriver.Session {
 	t.Helper()
 	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{
-		Config: &asset_entity.DatabaseConfig{Driver: fake.Desc.ID, Host: "h"},
+		Config: &dbdriver.Config{Driver: fake.Desc.ID, Host: "h"},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
@@ -140,6 +141,6 @@ func TestExecSQLOnAssetRejectsUnregisteredDriver(t *testing.T) {
 	})
 
 	_, err := ExecSQLOnAsset(context.Background(), asset, "SELECT 1", "")
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 }

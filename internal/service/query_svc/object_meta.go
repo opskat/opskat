@@ -1,6 +1,8 @@
 package query_svc
 
-import "github.com/opskat/opskat/internal/dbdriver"
+import (
+	"github.com/opskat/opskat/pkg/dbdriver"
+)
 
 // 对象浏览绑定返回的类型。查询由驱动在自己的会话上完成（dbdriver.Session 的浏览方法），
 // 这里只是把驱动的结构化结果交给前端的形状；字段与驱动一一对应。

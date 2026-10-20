@@ -1,3 +1,8 @@
+// Package dbdriver 是宿主的数据库驱动注册表：驱动按公开契约（pkg/dbdriver）实现，在这里
+// Register，共享代码按存进资产配置的驱动 id 经 Lookup / ByName / List 取用，不按驱动名分支。
+//
+// 内置驱动是本包的子包（mysql / postgresql / mssql / sqlite），在各自的 init() 里 Register，
+// 由 builtin 一并链接；新增驱动 = 新增一个注册，不改这里也不改调用方。
 package dbdriver
 
 import (
@@ -8,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // ErrDriverUnavailable 表示配置里的驱动 id 不在注册表中（驱动未内置，或提供它的扩展没有
@@ -16,9 +22,9 @@ var ErrDriverUnavailable = errors.New("database driver unavailable")
 
 var (
 	mu      sync.RWMutex
-	drivers = map[asset_entity.DatabaseDriver]Driver{}
+	drivers = map[dbdriver.DriverID]dbdriver.Driver{}
 	// names 把每个可断言的名字（id 与别名）映射到拥有它的驱动 id。
-	names = map[string]asset_entity.DatabaseDriver{}
+	names = map[string]dbdriver.DriverID{}
 )
 
 func init() {
@@ -29,19 +35,19 @@ func init() {
 // validateConfig 跑配置所属驱动自己的规则。驱动没有注册时没有规则可跑，直接通过：这样的
 // 资产连不上、查不了（Lookup 处报 ErrDriverUnavailable），但仍要能改名、移动、保存——与扩展
 // 资产类型在扩展没加载时的做法一致（asset_entity.ValidateRegisteredConfig）。
-func validateConfig(a *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) error {
+func validateConfig(cfg *dbdriver.Config, route dbdriver.Route) error {
 	mu.RLock()
 	d, ok := drivers[cfg.Driver]
 	mu.RUnlock()
 	if !ok {
 		return nil
 	}
-	return d.ValidateConfig(a, cfg)
+	return d.ValidateConfig(cfg, route)
 }
 
 // Register 注册一个驱动。id 为空、或 id / 别名与已注册驱动的任何名字相同时 panic：
 // 一个名字只能指向一个驱动，撞名是注册方的编程错误，不该被后注册者静默覆盖。
-func Register(d Driver) {
+func Register(d dbdriver.Driver) {
 	desc := d.Descriptor()
 	if desc.ID == "" {
 		panic("dbdriver: driver must declare an id")
@@ -60,7 +66,7 @@ func Register(d Driver) {
 }
 
 // Unregister 移除一个驱动及它占用的全部名字。
-func Unregister(id asset_entity.DatabaseDriver) {
+func Unregister(id dbdriver.DriverID) {
 	mu.Lock()
 	defer mu.Unlock()
 	delete(drivers, id)
@@ -73,7 +79,7 @@ func Unregister(id asset_entity.DatabaseDriver) {
 
 // Lookup 按存进配置的驱动 id 取驱动（别名不是合法的 id）。未注册时返回包着
 // ErrDriverUnavailable、点名该驱动的错误。
-func Lookup(id asset_entity.DatabaseDriver) (Driver, error) {
+func Lookup(id dbdriver.DriverID) (dbdriver.Driver, error) {
 	mu.RLock()
 	d, ok := drivers[id]
 	mu.RUnlock()
@@ -84,7 +90,7 @@ func Lookup(id asset_entity.DatabaseDriver) (Driver, error) {
 }
 
 // ByName 按 id 或别名取驱动，用于解析调用方声明的类型名（--type postgres）。
-func ByName(name string) (Driver, bool) {
+func ByName(name string) (dbdriver.Driver, bool) {
 	mu.RLock()
 	defer mu.RUnlock()
 	id, ok := names[name]
@@ -96,10 +102,10 @@ func ByName(name string) (Driver, bool) {
 
 // List 返回全部已注册的驱动，按各自声明的 Descriptor.Order 排序（相同时按 id），与注册
 // 先后无关。
-func List() []Driver {
+func List() []dbdriver.Driver {
 	mu.RLock()
 	defer mu.RUnlock()
-	out := make([]Driver, 0, len(drivers))
+	out := make([]dbdriver.Driver, 0, len(drivers))
 	for _, d := range drivers {
 		out = append(out, d)
 	}

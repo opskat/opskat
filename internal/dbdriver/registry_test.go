@@ -6,14 +6,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestLookupUnregisteredDriverNamesIt(t *testing.T) {
-	_, err := dbdriver.Lookup("oracle")
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	_, err := dbregistry.Lookup("oracle")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 }
 
@@ -21,20 +22,20 @@ func TestRegisteredDriverIsFoundByIDAndByAlias(t *testing.T) {
 	fake := dbdrivertest.NewFake()
 	dbdrivertest.Register(t, fake)
 
-	got, err := dbdriver.Lookup("fakedb")
+	got, err := dbregistry.Lookup("fakedb")
 	require.NoError(t, err)
 	assert.Same(t, fake, got)
 
 	// 存进配置的只有 id：别名不是合法的 driver 取值。
-	_, err = dbdriver.Lookup("fake")
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	_, err = dbregistry.Lookup("fake")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 
 	for _, name := range []string{"fakedb", "fake"} {
-		byName, ok := dbdriver.ByName(name)
+		byName, ok := dbregistry.ByName(name)
 		require.True(t, ok, name)
 		assert.Same(t, fake, byName)
 	}
-	_, ok := dbdriver.ByName("oracle")
+	_, ok := dbregistry.ByName("oracle")
 	assert.False(t, ok)
 }
 
@@ -49,20 +50,20 @@ func TestRegisterRejectsNamesAnotherDriverOwns(t *testing.T) {
 		"empty id":             {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert.Panics(t, func() { dbdriver.Register(&dbdrivertest.Fake{Desc: desc}) })
-			_, err := dbdriver.Lookup("other")
-			assert.ErrorIs(t, err, dbdriver.ErrDriverUnavailable, "a rejected driver must not stay half-registered")
+			assert.Panics(t, func() { dbregistry.Register(&dbdrivertest.Fake{Desc: desc}) })
+			_, err := dbregistry.Lookup("other")
+			assert.ErrorIs(t, err, dbregistry.ErrDriverUnavailable, "a rejected driver must not stay half-registered")
 		})
 	}
 }
 
 func TestUnregisterFreesIDAndAliases(t *testing.T) {
-	dbdriver.Register(dbdrivertest.NewFake())
-	dbdriver.Unregister("fakedb")
+	dbregistry.Register(dbdrivertest.NewFake())
+	dbregistry.Unregister("fakedb")
 
-	_, err := dbdriver.Lookup("fakedb")
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
-	_, ok := dbdriver.ByName("fake")
+	_, err := dbregistry.Lookup("fakedb")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+	_, ok := dbregistry.ByName("fake")
 	assert.False(t, ok)
 	// 名字确实腾出来了：同一个驱动可以再注册一次。
 	dbdrivertest.Register(t, dbdrivertest.NewFake())
@@ -83,11 +84,11 @@ func TestListFollowsEachDriversDeclaredOrder(t *testing.T) {
 		dbdrivertest.Register(t, fake)
 	}
 	ids := make([]asset_entity.DatabaseDriver, 0, 4)
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		ids = append(ids, d.Descriptor().ID)
 	}
 	assert.Equal(t, []asset_entity.DatabaseDriver{"zz", "aa", "bb", "mm"}, ids)
-	assert.Equal(t, []string{"zz", "aa", "bb", "mm"}, dbdriver.IDs())
+	assert.Equal(t, []string{"zz", "aa", "bb", "mm"}, dbregistry.IDs())
 }
 
 // 实体层的 Validate 经注册表找到驱动：驱动自己的规则生效，未注册的驱动报「不可用」。

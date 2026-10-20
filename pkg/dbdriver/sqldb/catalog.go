@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // Catalog 是方言里「数据库自己怎么回答树的浏览」的那一半：各驱动在一条 *sql.Conn 上用自己

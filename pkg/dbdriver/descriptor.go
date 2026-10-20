@@ -1,15 +1,11 @@
 package dbdriver
 
-import (
-	"slices"
-
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-)
+import "slices"
 
 // Descriptor 是一个驱动的自我描述，原样经绑定交给前端。它只有可序列化的普通数据。
 type Descriptor struct {
-	// ID 是存进 DatabaseConfig.Driver 的值，改名即数据迁移。
-	ID asset_entity.DatabaseDriver `json:"id"`
+	// ID 是存进资产配置 driver 字段的值，改名即数据迁移。
+	ID DriverID `json:"id"`
 	// Name 是展示名（专有名词，不翻译）。
 	Name string `json:"name"`
 	// Icon 是资产图标名。
@@ -93,7 +89,7 @@ func FormTabs() []FormTab {
 	return []FormTab{TabConnection, TabTunnel, TabTLS, TabAdvanced}
 }
 
-// FormField 是资产表单的一个字段。除 FieldTunnel 外，取值就是 DatabaseConfig 的 JSON 键，
+// FormField 是资产表单的一个字段。除 FieldTunnel 外，取值就是数据库资产配置的 JSON 键，
 // 也是 opsctl / AI 入参里的同名键。
 type FormField string
 

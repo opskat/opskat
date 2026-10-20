@@ -11,7 +11,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // ForeignKeyChecks 是方言里「怎么在一条连接上暂时关闭外键检查」。实现它的方言才能在整批执行时

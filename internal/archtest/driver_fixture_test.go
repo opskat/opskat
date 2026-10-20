@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 前端测试把内置驱动的描述当作 Query.ListDatabaseDrivers 的返回值用，那份描述是一个提交进
@@ -23,7 +24,7 @@ func TestFrontendBuiltinDriverFixtureMatchesRegistry(t *testing.T) {
 	}
 
 	registered := make([]dbdriver.Descriptor, 0, len(fixture))
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		registered = append(registered, d.Descriptor())
 	}
 	if !reflect.DeepEqual(fixture, registered) {

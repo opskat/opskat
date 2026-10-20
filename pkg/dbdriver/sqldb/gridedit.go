@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // RowEditor 是方言里「表格编辑怎么写一行」的那一半：新增一行、只删一行，以及没有主键时怎么把

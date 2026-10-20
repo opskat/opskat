@@ -7,8 +7,9 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 var descriptor = dbdriver.Descriptor{
@@ -40,44 +41,50 @@ var descriptor = dbdriver.Descriptor{
 	AlterTableAttributes:        alterAttributes,
 }
 
+// 文件来源（Config.SQLiteSource）的取值，与资产实体的定义同源。
+const (
+	sourceLocal     = string(asset_entity.SQLiteSourceLocal)
+	sourceRemoteSSH = string(asset_entity.SQLiteSourceRemoteSSHVFS)
+)
+
 type driver struct{}
 
 func init() {
-	dbdriver.Register(driver{})
+	dbregistry.Register(driver{})
 }
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }
 
-func (driver) ValidateConfig(a *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) error {
+func (driver) ValidateConfig(cfg *dbdriver.Config, route dbdriver.Route) error {
 	if cfg.Path == "" {
 		return errors.New("SQLite 必须指定 path")
 	}
 	source := cfg.SQLiteSource
 	if source == "" {
-		source = asset_entity.SQLiteSourceLocal
+		source = sourceLocal
 	}
 	switch source {
-	case asset_entity.SQLiteSourceLocal:
+	case sourceLocal:
 		if !filepath.IsAbs(cfg.Path) && !path.IsAbs(cfg.Path) {
 			return errors.New("SQLite path 必须为绝对路径")
 		}
-		if a.SSHTunnelID > 0 || cfg.SSHAssetID > 0 {
+		if route.SSHTunnelID > 0 || cfg.SSHAssetID > 0 {
 			return errors.New("SQLite 本地文件不支持 SSH 隧道")
 		}
-	case asset_entity.SQLiteSourceRemoteSSHVFS:
+	case sourceRemoteSSH:
 		if !path.IsAbs(cfg.Path) {
 			return errors.New("SQLite path 必须为绝对路径")
 		}
-		if a.SSHTunnelID == 0 && cfg.SSHAssetID == 0 {
+		if route.SSHTunnelID == 0 && cfg.SSHAssetID == 0 {
 			return errors.New("远端 SQLite 必须指定 SSH 资产")
 		}
 	default:
 		return fmt.Errorf("不支持的 SQLite source: %s", source)
 	}
-	if cfg.Proxy != nil {
+	if route.Proxy {
 		return errors.New("SQLite 不支持代理")
 	}
-	if cfg.ProxyChain != nil && len(cfg.ProxyChain.Layers) > 0 {
+	if route.ProxyChain {
 		return errors.New("SQLite 本地文件不支持代理链")
 	}
 	return nil
@@ -87,7 +94,7 @@ func (driver) CreateDefaults(args dbdriver.Args) map[string]any {
 	if args.String("sqlite_source") != "" {
 		return nil
 	}
-	return map[string]any{"sqlite_source": string(asset_entity.SQLiteSourceLocal)}
+	return map[string]any{"sqlite_source": sourceLocal}
 }
 
 func (driver) ValidateCreateArgs(args dbdriver.Args) error {
@@ -97,28 +104,28 @@ func (driver) ValidateCreateArgs(args dbdriver.Args) error {
 	return nil
 }
 
-func (driver) ApplyCreateArgs(cfg *asset_entity.DatabaseConfig, args dbdriver.Args) {
+func (driver) ApplyCreateArgs(cfg *dbdriver.Config, args dbdriver.Args) {
 	cfg.Path = args.String("path")
-	cfg.SQLiteSource = asset_entity.SQLiteSource(args.String("sqlite_source"))
+	cfg.SQLiteSource = args.String("sqlite_source")
 	if cfg.SQLiteSource == "" {
-		cfg.SQLiteSource = asset_entity.SQLiteSourceLocal
+		cfg.SQLiteSource = sourceLocal
 	}
 }
 
-func (driver) ApplyUpdateArgs(cfg *asset_entity.DatabaseConfig, args dbdriver.Args) {
+func (driver) ApplyUpdateArgs(cfg *dbdriver.Config, args dbdriver.Args) {
 	if args.Has("path") {
 		cfg.Path = args.String("path")
 	}
 	if args.Has("sqlite_source") {
-		cfg.SQLiteSource = asset_entity.SQLiteSource(args.String("sqlite_source"))
+		cfg.SQLiteSource = args.String("sqlite_source")
 	}
 	// SSH 资产只对远端文件有意义：来源不是远端时不留它，否则本地文件会被校验拒绝。
-	if cfg.SQLiteSource != asset_entity.SQLiteSourceRemoteSSHVFS {
+	if cfg.SQLiteSource != sourceRemoteSSH {
 		cfg.SSHAssetID = 0
 	}
 }
 
-func (driver) ConnectionView(cfg *asset_entity.DatabaseConfig) map[string]any {
+func (driver) ConnectionView(cfg *dbdriver.Config) map[string]any {
 	return map[string]any{
 		"sqlite_source": cfg.SQLiteSource,
 		"path":          cfg.Path,

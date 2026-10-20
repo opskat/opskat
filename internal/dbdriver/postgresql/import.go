@@ -3,8 +3,8 @@ package postgresql
 import (
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 导入：追加/更新与追加/跳过用 ON CONFLICT (键)；映射里有 GENERATED ALWAYS 列时插入带 OVERRIDING

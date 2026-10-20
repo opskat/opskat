@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb/sqldbtest"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb/sqldbtest"
 )
 
 const (

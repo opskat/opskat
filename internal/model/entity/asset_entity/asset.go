@@ -9,6 +9,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/pkg/jsonfield"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 资产类型常量
@@ -27,8 +28,8 @@ const (
 	AssetTypeOSS      = "oss"
 )
 
-// DatabaseDriver 数据库驱动类型
-type DatabaseDriver string
+// DatabaseDriver 数据库驱动类型：就是驱动契约里的驱动 id。
+type DatabaseDriver = dbdriver.DriverID
 
 const (
 	DriverMySQL      DatabaseDriver = "mysql"
@@ -989,7 +990,7 @@ func (a *Asset) validateDatabase() error {
 		// 没有链接驱动注册表（internal/dbdriver）的二进制里没有任何驱动可用。
 		return fmt.Errorf("数据库驱动 %s 不可用：未链接驱动注册表", cfg.Driver)
 	}
-	if err := databaseDriverConfigValidator(a, cfg); err != nil {
+	if err := databaseDriverConfigValidator(cfg.DriverConfig(), a.databaseRoute(cfg)); err != nil {
 		return err
 	}
 	// 0 表示使用默认值（30s）；显式配置时限定 5~600s。

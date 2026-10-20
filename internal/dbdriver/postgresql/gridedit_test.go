@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 新增行：给 GENERATED ALWAYS 列填了值时带 OVERRIDING SYSTEM VALUE（否则数据库拒绝显式值）；

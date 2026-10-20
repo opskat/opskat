@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 导入：T-SQL 没有 INSERT IGNORE / ON CONFLICT / ON DUPLICATE KEY，追加/更新与追加/跳过每行一条

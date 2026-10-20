@@ -10,11 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb/sqldbtest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb/sqldbtest"
 )
 
 func newMockSession(db *sql.DB) dbdriver.Session { return sqldb.NewSession(db, dialect{}) }
@@ -28,11 +29,11 @@ func newMock(t *testing.T) (dbdriver.Session, sqlmock.Sqlmock) {
 }
 
 func TestSQLitePassesTableConformance(t *testing.T) {
-	d, err := dbdriver.Lookup(asset_entity.DriverSQLite)
+	d, err := dbregistry.Lookup(asset_entity.DriverSQLite)
 	require.NoError(t, err)
 
 	dbdrivertest.RunTableConformance(t, d, func(t *testing.T) dbdriver.Session {
-		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{
+		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "table.db"),
 		}})
 		require.NoError(t, err)

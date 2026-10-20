@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // fakeSession 打开假驱动的一条会话：它不是 *sql.DB，导出只能经会话的表浏览方法取数。

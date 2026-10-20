@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // dialect 是 SQLite 的方言：分页用共用的 LIMIT / OFFSET，浏览用 sqlite_master 与 pragma。

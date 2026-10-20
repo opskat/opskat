@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 行语句：声明类型含 BLOB 的列（BLOB 亲和性）写成 X'…'；按主键或全部列定位的 UPDATE 不另加限制。

@@ -6,13 +6,14 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	// 数据库资产类型离不开驱动：链接它的二进制同时链接全部内置驱动。
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 type databaseHandler struct{}
@@ -38,9 +39,9 @@ func (a driverArgs) Int(key string) int       { return ArgInt(a, key) }
 func requestedDriver(args map[string]any) (dbdriver.Driver, error) {
 	id := ArgString(args, "driver")
 	if id == "" {
-		return nil, fmt.Errorf("database type requires driver parameter (%s)", strings.Join(dbdriver.IDs(), ", "))
+		return nil, fmt.Errorf("database type requires driver parameter (%s)", strings.Join(dbregistry.IDs(), ", "))
 	}
-	return dbdriver.Lookup(asset_entity.DatabaseDriver(id))
+	return dbregistry.Lookup(asset_entity.DatabaseDriver(id))
 }
 
 // usesPassword 报告驱动是否用口令认证（见 dbdriver.FieldPassword）。
@@ -59,13 +60,13 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		"read_only":             cfg.ReadOnly,
 		"query_timeout_seconds": cfg.QueryTimeoutSeconds,
 	}
-	drv, err := dbdriver.Lookup(cfg.Driver)
+	drv, err := dbregistry.Lookup(cfg.Driver)
 	if err != nil {
 		// 驱动不可用时没有谁能说出它的连接字段是哪些：只给驱动无关的部分，其中的 driver
 		// 已经点明这是哪个驱动。
 		return view
 	}
-	maps.Copy(view, drv.ConnectionView(cfg))
+	maps.Copy(view, drv.ConnectionView(cfg.DriverConfig()))
 	return view
 }
 
@@ -127,7 +128,9 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 		QueryTimeoutSeconds: ArgInt(args, "query_timeout_seconds"),
 		SSHAssetID:          ArgInt64(args, "ssh_asset_id"),
 	}
-	drv.ApplyCreateArgs(cfg, driverArgs(args))
+	driverCfg := cfg.DriverConfig()
+	drv.ApplyCreateArgs(driverCfg, driverArgs(args))
+	cfg.SetDriverConfig(driverCfg)
 	if usesPassword(drv) {
 		if password := ArgString(args, "password"); password != "" {
 			encrypted, err := credential_svc.Default().Encrypt(password)
@@ -151,7 +154,7 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	if v := ArgString(args, "driver"); v != "" {
 		cfg.Driver = asset_entity.DatabaseDriver(v)
 	}
-	drv, err := dbdriver.Lookup(cfg.Driver)
+	drv, err := dbregistry.Lookup(cfg.Driver)
 	if err != nil {
 		// 驱动不可用的资产仍可编辑：不带任何连接配置的更新（改名、描述、分组）没有东西要
 		// 合并，配置原样保留。带了连接配置就没有驱动能解释它，报「驱动不可用」。
@@ -173,7 +176,9 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	if _, ok := args["ssh_asset_id"]; ok {
 		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
 	}
-	drv.ApplyUpdateArgs(cfg, driverArgs(args))
+	driverCfg := cfg.DriverConfig()
+	drv.ApplyUpdateArgs(driverCfg, driverArgs(args))
+	cfg.SetDriverConfig(driverCfg)
 	if usesPassword(drv) {
 		if _, ok := args["credential_id"]; ok {
 			cfg.CredentialID = ArgInt64(args, "credential_id")

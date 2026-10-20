@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 表浏览：库已由连接限定，表以 "schema"."table" 引用（裸名不加 schema，由 search_path 解析），
