@@ -146,7 +146,7 @@ func TestOpenTCP_AnswerWaitIsNotCountedAgainstTheDialTimeout(t *testing.T) {
 				case <-time.After(wait):
 				case <-ctx.Done():
 					resume()
-					return nil, context.Cause(ctx)
+					return nil, ctx.Err()
 				}
 				resume()
 				return (&net.Dialer{}).DialContext(ctx, network, addr)
@@ -172,6 +172,18 @@ func TestOpenTCP_AnswerWaitIsNotCountedAgainstTheDialTimeout(t *testing.T) {
 			_, err := openTCP(ctx, waitingDial(time.Minute, waiting), nil, params, nil)
 			So(errors.Is(err, context.Canceled), ShouldBeTrue)
 			So(time.Since(start), ShouldBeLessThan, 5*time.Second)
+		})
+
+		// A dial reports what its ctx reports once it ends (net.Dialer maps ctx.Err():
+		// DeadlineExceeded → "i/o timeout", Canceled → "operation was canceled"), so an
+		// open that runs out of time must read as a timeout, not as a canceled call.
+		Convey("a dial that outlasts the timeout reports a timeout", func() {
+			blocked := func(ctx context.Context, network, addr string) (net.Conn, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			_, err := openTCP(context.Background(), blocked, nil, params, nil)
+			So(errors.Is(err, context.DeadlineExceeded), ShouldBeTrue)
 		})
 	})
 }

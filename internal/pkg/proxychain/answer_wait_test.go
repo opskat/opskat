@@ -30,7 +30,37 @@ func TestAwaitAnswerStopsEveryDialTimeoutOnTheChain(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("the timeout must keep bounding the network after the answer")
 	}
-	assert.ErrorIs(t, context.Cause(inner), context.DeadlineExceeded)
+	assert.ErrorIs(t, inner.Err(), context.DeadlineExceeded)
 	<-outer.Done()
-	assert.ErrorIs(t, context.Cause(outer), context.DeadlineExceeded)
+	assert.ErrorIs(t, outer.Err(), context.DeadlineExceeded)
+}
+
+// A dial reads ctx.Err() — usually through a ctx it derived (net.Dialer, a TLS or SSH
+// handshake) — to tell a timeout from a canceled call, so an expired dial timeout
+// ends its ctx and every ctx derived from it with DeadlineExceeded, while canceling
+// the caller still reads as Canceled.
+func TestDialTimeoutEndsWithDeadlineExceeded(t *testing.T) {
+	ctx, cancel := WithDialTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	derived, cancelDerived := context.WithCancel(ctx)
+	defer cancelDerived()
+
+	select {
+	case <-derived.Done():
+	case <-time.After(time.Second):
+		t.Fatal("the dial timeout must end the ctx")
+	}
+	assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	assert.ErrorIs(t, derived.Err(), context.DeadlineExceeded)
+
+	parent, cancelParent := context.WithCancel(context.Background())
+	canceled, cancelCanceled := WithDialTimeout(parent, time.Minute)
+	defer cancelCanceled()
+	cancelParent()
+	select {
+	case <-canceled.Done():
+	case <-time.After(time.Second):
+		t.Fatal("canceling the caller must end the ctx")
+	}
+	assert.ErrorIs(t, canceled.Err(), context.Canceled)
 }

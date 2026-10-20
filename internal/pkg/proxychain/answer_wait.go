@@ -11,19 +11,26 @@ import (
 // connect, an SSH hop's handshake — by timeout. Time spent waiting for a person's
 // answer (AwaitAnswer on the returned ctx or one derived from it) is not counted,
 // so a slow MFA answer on a hop still connects; canceling the parent still ends
-// the wait at once. On expiry the ctx is canceled with cause
-// context.DeadlineExceeded (read it with context.Cause). 0 means only the caller's
-// ctx bounds it.
+// the wait at once. On expiry the ctx ends with context.DeadlineExceeded, like a
+// context.WithTimeout one, so a dial reading ctx.Err() reports a timeout rather
+// than a canceled call. 0 means only the caller's ctx bounds it.
 func WithDialTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		return ctx, func() {}
 	}
-	inner, cancel := context.WithCancelCause(ctx)
-	c := &dialClock{remaining: timeout, started: time.Now(), cancel: cancel}
-	c.timer = time.AfterFunc(timeout, c.expire)
+	c := &dialClock{parent: ctx, done: make(chan struct{}), remaining: timeout, started: time.Now()}
 	outer, _ := ctx.Value(dialClocksKey{}).([]*dialClock)
-	inner = context.WithValue(inner, dialClocksKey{}, append(slices.Clip(outer), c))
-	return inner, c.stop
+	c.clocks = append(slices.Clip(outer), c)
+	c.mu.Lock()
+	c.timer = time.AfterFunc(timeout, c.expire)
+	c.mu.Unlock()
+	c.stopParent = context.AfterFunc(ctx, func() { c.end(ctx.Err()) })
+	if err := ctx.Err(); err != nil {
+		// Already ended: end now, as context.WithTimeout would, not whenever
+		// AfterFunc's goroutine gets to run.
+		c.end(err)
+	}
+	return c, c.stop
 }
 
 // AwaitAnswer stops every dial timeout on ctx's chain (WithDialTimeout) until the
@@ -47,23 +54,47 @@ func AwaitAnswer(ctx context.Context) (resume func()) {
 
 type dialClocksKey struct{}
 
-// dialClock is one WithDialTimeout's budget: remaining is what is left of it as of
-// started; while paused > 0 the timer is stopped and remaining is frozen.
+// dialClock is the ctx WithDialTimeout returns, and its budget: remaining is what
+// is left of it as of started; while paused > 0 the timer is stopped and remaining
+// is frozen. It is its own context.Context rather than a context.WithCancelCause:
+// that one's Err() is always Canceled, which net.Dialer, TLS and SSH handshakes
+// would report as a canceled call instead of a timeout. Its Done channel is its own,
+// so a ctx derived from it takes its Err() — DeadlineExceeded on expiry.
 type dialClock struct {
+	parent     context.Context
+	clocks     []*dialClock // this clock and the ones it is nested in, outermost first
+	done       chan struct{}
+	stopParent func() bool
+
 	mu        sync.Mutex
+	err       error
 	remaining time.Duration
 	started   time.Time
 	paused    int
-	done      bool
 	timer     *time.Timer
-	cancel    context.CancelCauseFunc
+}
+
+func (c *dialClock) Deadline() (time.Time, bool) { return c.parent.Deadline() }
+func (c *dialClock) Done() <-chan struct{}       { return c.done }
+
+func (c *dialClock) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *dialClock) Value(key any) any {
+	if key == (dialClocksKey{}) {
+		return c.clocks
+	}
+	return c.parent.Value(key)
 }
 
 func (c *dialClock) pause() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.paused++
-	if c.paused == 1 && !c.done && c.timer.Stop() {
+	if c.paused == 1 && c.err == nil && c.timer.Stop() {
 		c.remaining -= time.Since(c.started)
 	}
 }
@@ -72,7 +103,7 @@ func (c *dialClock) resume() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.paused--
-	if c.paused == 0 && !c.done {
+	if c.paused == 0 && c.err == nil {
 		c.started = time.Now()
 		c.timer.Reset(max(c.remaining, 0))
 	}
@@ -80,22 +111,33 @@ func (c *dialClock) resume() {
 
 func (c *dialClock) expire() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.paused > 0 {
 		// The timer fired as a wait began: nothing is left of the budget, and the
 		// wait's end restarts the timer at zero.
 		c.remaining = 0
-		c.mu.Unlock()
 		return
 	}
-	c.done = true
-	c.mu.Unlock()
-	c.cancel(context.DeadlineExceeded)
+	c.endLocked(context.DeadlineExceeded)
+}
+
+// end ends the ctx with err; only the first call counts.
+func (c *dialClock) end(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.endLocked(err)
+}
+
+func (c *dialClock) endLocked(err error) {
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	c.timer.Stop()
+	close(c.done)
 }
 
 func (c *dialClock) stop() {
-	c.mu.Lock()
-	c.done = true
-	c.timer.Stop()
-	c.mu.Unlock()
-	c.cancel(context.Canceled)
+	c.stopParent()
+	c.end(context.Canceled)
 }
