@@ -230,6 +230,37 @@ func TestRegisterExtensionAssetTypesReportsAFailedDescribeInsteadOfRegisteringNo
 	assert.False(t, registered)
 }
 
+// An extension that cannot be described here (no cache, main.wasm gone) leaves its
+// asset type unclaimed; the final error names the extension and the reason instead of
+// only saying the type has no exec support.
+func TestCmdExec_ExtensionThatFailedToDescribeIsNamedInTheError(t *testing.T) {
+	env := setupLocalExtExec(t)
+	require.NoError(t, os.Remove(filepath.Join(env.extDir, "main.wasm")))
+	_ = captureStderr(t, func() { bootWithoutDescribeCache(t, env) })
+
+	code, _, stderr := env.exec(t, "fx-1", "--", "echo", "--msg", "hi")
+
+	assert.Equal(t, 1, code)
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	last := lines[len(lines)-1]
+	assert.Contains(t, last, "has no exec support yet")
+	assert.Contains(t, last, `"`+extensiontest.FixtureName+`"`)
+	assert.Contains(t, last, "main.wasm")
+}
+
+// With no describe failure the message stays exactly the AI exec tool's.
+func TestUnsupportedExecTypeError_UnchangedWhenNoExtensionFailed(t *testing.T) {
+	dir := withExtensionDir(t)
+	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
+	forgetExtension(t, "acme")
+	registerExtensionAssetTypes()
+
+	err := unsupportedExecTypeError(&asset_entity.Asset{Name: "a", Type: "rdp"})
+
+	assert.Equal(t, `asset "a" (type=rdp) has no exec support yet; supported types: `+
+		strings.Join(permission.RegisteredExecTypes(), ", "), err.Error())
+}
+
 // --- ext dev -----------------------------------------------------------------
 
 // stubDevInstall replaces the socket round trip so the tests observe what opsctl

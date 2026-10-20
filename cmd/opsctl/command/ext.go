@@ -258,6 +258,7 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // extension (a name collision with a built-in type, a describe() answer this binary is
 // too old to accept) must not take down every unrelated opsctl command.
 func registerExtensionAssetTypes() {
+	extensionDescribeFailures = nil
 	scanned, err := scanExtensionDirs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -272,6 +273,7 @@ func registerExtensionAssetTypes() {
 		if len(info.Manifest.AssetTypes) == 0 {
 			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
+				extensionDescribeFailures = append(extensionDescribeFailures, extensionDescribeFailure{name: ext.info.Name, err: err})
 				continue
 			}
 		}
@@ -280,6 +282,19 @@ func registerExtensionAssetTypes() {
 		}
 	}
 }
+
+// extensionDescribeFailure is one enabled extension whose describe() could not be
+// obtained in this run, so none of its asset types got registered.
+type extensionDescribeFailure struct {
+	name string
+	err  error
+}
+
+// extensionDescribeFailures is what the last registerExtensionAssetTypes could not
+// describe. Recorded once there, at the producer; exec and batch read it to say why an
+// asset type nobody claimed has no exec support (opsctl cannot tell which of these
+// extensions owns the type — the description that would say is what failed).
+var extensionDescribeFailures []extensionDescribeFailure
 
 // describeExtensionFn 变量化同上一套路。
 var describeExtensionFn = describeExtension

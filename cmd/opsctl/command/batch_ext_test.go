@@ -210,6 +210,23 @@ func TestBatchExt_UnusableExtensionFailsOnlyItsItems(t *testing.T) {
 	}
 }
 
+// An item whose extension failed to describe on this run (asset type unclaimed) names
+// the extension and the reason, not only the missing exec support.
+func TestBatchExt_ExtensionThatFailedToDescribeIsNamedInTheItemError(t *testing.T) {
+	env := setupBatchExt(t)
+	require.NoError(t, os.Remove(filepath.Join(env.extDir, "main.wasm")))
+	_ = captureStderr(t, func() { bootWithoutDescribeCache(t, env.localExtEnv) })
+
+	code, out, stderr := env.batch(t, env.item(env.asset, batchExtRead), env.item(env.oss, batchOSSCall))
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	require.Len(t, out.Results, 2)
+	assert.Contains(t, out.Results[0].Error, "has no exec support yet")
+	assert.Contains(t, out.Results[0].Error, `"`+extensiontest.FixtureName+`"`)
+	assert.Contains(t, out.Results[0].Error, "main.wasm")
+	assert.Equal(t, "builtin-ok", out.Results[1].Stdout)
+}
+
 // With nobody to ask, NEEDS AUTHORIZATION lists every item: the extension item by
 // its action and resource, with the policy allow line of its rule; the built-in
 // item exactly as before.

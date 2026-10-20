@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -179,10 +180,20 @@ func prepareExecCommand(ctx context.Context, asset *asset_entity.Asset, command 
 
 // unsupportedExecTypeError mirrors internal/ai/tool/tool_handlers_unified.go's
 // unsupportedTypeError verbatim, so the same asset type reports the same message
-// whether the command came in through opsctl or the AI exec tool.
+// whether the command came in through opsctl or the AI exec tool. When extensions
+// failed to describe in this run the message adds them: the asset's type may be one
+// of theirs.
 func unsupportedExecTypeError(asset *asset_entity.Asset) error {
-	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
+	msg := fmt.Sprintf("asset %q (type=%s) has no exec support yet; supported types: %s",
 		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
+	if len(extensionDescribeFailures) > 0 {
+		failed := make([]string, 0, len(extensionDescribeFailures))
+		for _, f := range extensionDescribeFailures {
+			failed = append(failed, fmt.Sprintf("%q: %v", f.name, f.err))
+		}
+		msg += "; extension(s) that failed to describe: " + strings.Join(failed, "; ")
+	}
+	return errors.New(msg)
 }
 
 // rejectExtraArgs 报告子命令消费不了的多余参数并返回 true。静默忽略会让写错位置的
