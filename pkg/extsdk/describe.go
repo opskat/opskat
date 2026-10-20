@@ -120,9 +120,8 @@ func dispatchDescribe() (json.RawMessage, error) {
 		Icon:     meta.Icon,
 		I18n:     descI18n{DisplayName: meta.DisplayName, Description: meta.Description},
 		Policies: descPolicies{Type: meta.PolicyType},
-	}
-	for _, drv := range databaseDrivers {
-		d.DatabaseDrivers = append(d.DatabaseDrivers, drv.desc)
+
+		DatabaseDrivers: databaseDrivers,
 	}
 
 	for _, at := range assetTypes {

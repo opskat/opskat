@@ -501,14 +501,16 @@ answer with exactly those drivers or the extension is refused at load:
 }
 ```
 
-The driver registers its descriptor and how a session connects. The SDK assembles the
-session from what `open` returns with `pkg/dbdriver/sqldb`, so the extension writes a
-`database/sql` driver (or embeds one compiled for `wasip1`) and the dialect, nothing
-else:
+The driver registers its descriptor and how a session connects with
+`sdkdbdriver.DatabaseDriver` (`pkg/extsdk/sdkdbdriver`). It is a package of its own:
+serving a driver links `database/sql` and `pkg/dbdriver/sqldb`, and an extension that
+does not import it carries neither. The SDK assembles the session from what `open`
+returns with `sqldb`, so the extension writes a `database/sql` driver (or embeds one
+compiled for `wasip1`) and the dialect, nothing else:
 
 ```go
 opskat.Extension(opskat.Meta{Icon: "database", DisplayName: "extension.displayName"})
-opskat.DatabaseDriver(dbdriver.Descriptor{
+sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
     ID: "mydb", Name: "MyDB", Order: 500, Aliases: []string{}, DefaultPort: 4000,
     Form: []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
         dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldUsername, dbdriver.FieldPassword, dbdriver.FieldDatabase,

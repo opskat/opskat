@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // The registration API is the single place an extension declares what it can do.
@@ -126,7 +128,7 @@ var (
 	snippetSeeds    []Seed
 	actions         = map[string]ActionHandler{}
 	configValidator ConfigValidator
-	databaseDrivers []*driverEntry
+	databaseDrivers []dbdriver.Descriptor
 )
 
 // Extension declares the extension's presentation metadata and policy face.
@@ -574,7 +576,7 @@ func resetRegistries() {
 	snippetCats = nil
 	snippetSeeds = nil
 	databaseDrivers = nil
-	driverHandles = newDriverHandleTable()
+	databaseDriverServe = nil
 	actions = map[string]ActionHandler{}
 	configValidator = nil
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
+	"github.com/opskat/opskat/pkg/extsdk/sdkdbdriver"
 )
 
 func main() {}
@@ -44,7 +45,7 @@ var descriptor = dbdriver.Descriptor{
 
 func init() {
 	opskat.Extension(opskat.Meta{Icon: "database", DisplayName: "Fixture DB", Description: "Test fixture database driver"})
-	opskat.DatabaseDriver(descriptor, open)
+	sdkdbdriver.DatabaseDriver(descriptor, open)
 }
 
 // open logs in through the reach path the host handed over and confirms the

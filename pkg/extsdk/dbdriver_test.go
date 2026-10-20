@@ -1,53 +1,22 @@
 package opskat
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
-	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
-var demoDriver = dbdriver.Descriptor{
-	ID:      "demodb",
-	Name:    "DemoDB",
-	Order:   100,
-	Aliases: []string{},
-	Form: []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
-		dbdriver.FieldHost, dbdriver.FieldPassword,
-	}}},
-	Capabilities: []dbdriver.Capability{},
-}
-
-// driverReply is the database_driver reply as the host reads it.
-type driverReply struct {
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Message string `json:"message"`
-		Code    string `json:"code"`
-	} `json:"error"`
-}
-
-func callDriver(t *testing.T, input string) driverReply {
-	t.Helper()
-	raw, err := dispatch("database_driver", []byte(input))
-	So(err, ShouldBeNil)
-	var reply driverReply
-	So(json.Unmarshal(raw, &reply), ShouldBeNil)
-	return reply
-}
-
 func TestDescribeReportsDatabaseDrivers(t *testing.T) {
-	Convey("a driver registered with DatabaseDriver is reported by describe()", t, func() {
+	Convey("a driver registered through the seam is reported by describe() and served its calls", t, func() {
 		resetRegistries()
 		Extension(Meta{Icon: "database"})
-		DatabaseDriver(demoDriver, func(context.Context, dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) {
-			return nil, nil, nil
+		var served []byte
+		RegisterDatabaseDriver(dbdriver.Descriptor{ID: "demodb", Name: "DemoDB"}, func(input []byte) (json.RawMessage, error) {
+			served = input
+			return json.RawMessage(`{"result":{"session":1}}`), nil
 		})
 
 		drivers := decodeDescribe(t)["databaseDrivers"].([]any)
@@ -55,81 +24,20 @@ func TestDescribeReportsDatabaseDrivers(t *testing.T) {
 		reported := drivers[0].(map[string]any)
 		So(reported["id"], ShouldEqual, "demodb")
 		So(reported["name"], ShouldEqual, "DemoDB")
-	})
-}
 
-func TestDatabaseDriverRegistrationRejectsBrokenDeclarations(t *testing.T) {
-	Convey("a driver without an opener, or registered twice, fails at init", t, func() {
-		resetRegistries()
-		So(func() { DatabaseDriver(demoDriver, nil) }, ShouldPanic)
-
-		open := func(context.Context, dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) { return nil, nil, nil }
-		DatabaseDriver(demoDriver, open)
-		So(func() { DatabaseDriver(demoDriver, open) }, ShouldPanic)
-	})
-}
-
-func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
-	Convey("the host opens a session and runs operations on it as JSON", t, func() {
-		resetRegistries()
-		db, mock, err := sqlmock.New()
+		out, err := dispatch("database_driver", []byte(`{"op":"open"}`))
 		So(err, ShouldBeNil)
-		var opened dbdriver.OpenRequest
-		DatabaseDriver(demoDriver, func(_ context.Context, req dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) {
-			opened = req
-			return db, sqldb.LimitOffset{}, nil
-		})
-
-		Convey("fields the extension does not know are ignored, in the call and in its arguments", func() {
-			reply := callDriver(t, `{"op":"open","fromTheFuture":1,"args":{"driver":"demodb","config":{"driver":"demodb","host":"db.internal","newKey":true},"password":"s3cret","alsoNew":"x"}}`)
-			So(reply.Error, ShouldBeNil)
-			So(opened.Config.Host, ShouldEqual, "db.internal")
-			So(opened.Password, ShouldEqual, "s3cret")
-			So(opened.Transport.Dial, ShouldNotBeNil)
-			var session struct {
-				Session uint64 `json:"session"`
-			}
-			So(json.Unmarshal(reply.Result, &session), ShouldBeNil)
-
-			mock.ExpectQuery("SELECT 1").WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
-			reply = callDriver(t, `{"op":"execute","session":`+jsonNumber(session.Session)+`,"args":{"statement":"SELECT 1","notYet":[1,2]}}`)
-			So(reply.Error, ShouldBeNil)
-			var result dbdriver.Result
-			So(json.Unmarshal(reply.Result, &result), ShouldBeNil)
-			So(result.Rows.Columns, ShouldResemble, []string{"1"})
-			So(len(result.Rows.Rows), ShouldEqual, 1)
-		})
-
-		Convey("a refusal the session reports as ErrUnsupported crosses as code unsupported", func() {
-			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb"}}}`)
-			var session struct {
-				Session uint64 `json:"session"`
-			}
-			So(json.Unmarshal(reply.Result, &session), ShouldBeNil)
-
-			reply = callDriver(t, `{"op":"tableDDL","session":`+jsonNumber(session.Session)+`,"args":{"table":"x"}}`)
-			So(reply.Error, ShouldNotBeNil)
-			So(reply.Error.Code, ShouldEqual, "unsupported")
-			So(reply.Error.Message, ShouldContainSubstring, dbdriver.ErrUnsupported.Error())
-		})
-
-		Convey("a read-only config is refused before the opener runs when the driver does not declare it", func() {
-			opened = dbdriver.OpenRequest{}
-			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb","read_only":true}}}`)
-			So(reply.Error, ShouldNotBeNil)
-			So(reply.Error.Code, ShouldEqual, "unsupported")
-			So(opened.Config, ShouldBeNil)
-		})
-
-		Convey("a driver the extension does not register is an error", func() {
-			reply := callDriver(t, `{"op":"open","args":{"driver":"otherdb","config":{"driver":"otherdb"}}}`)
-			So(reply.Error, ShouldNotBeNil)
-			So(reply.Error.Message, ShouldContainSubstring, "otherdb")
-		})
+		So(string(out), ShouldEqual, `{"result":{"session":1}}`)
+		So(string(served), ShouldEqual, `{"op":"open"}`)
 	})
 }
 
-func jsonNumber(n uint64) string {
-	raw, _ := json.Marshal(n)
-	return string(raw)
+func TestDatabaseDriverCallsWithoutADriver(t *testing.T) {
+	Convey("an extension that registered no driver reports so instead of serving the call", t, func() {
+		resetRegistries()
+		_, err := dispatch("database_driver", []byte(`{"op":"open"}`))
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "no database driver")
+		So(func() { RegisterDatabaseDriver(dbdriver.Descriptor{ID: "demodb"}, nil) }, ShouldPanic)
+	})
 }
