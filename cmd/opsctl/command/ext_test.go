@@ -763,3 +763,104 @@ func TestCmdBatch_ExtensionDriverItemsActivateTheExtensionOnce(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(stdout, `\"columns\"`), "both items returned a result: %s", stdout)
 	assert.GreaterOrEqual(t, len(env.db.statements()), 2, "both items reached the database through the extension")
 }
+
+// --- driver fields through an extension driver, managed from the command line ------
+
+// withDriverFields rewrites the describe() answer the desktop app cached for the driver
+// fixture so its driver declares fields of its own (the fixture source declares none),
+// then redoes opsctl's boot registration from that cache.
+func withDriverFields(t *testing.T) {
+	t.Helper()
+	hash, payload, err := repoDescribeCache{}.LoadDescriptor(extensiontest.DBDriverFixtureName)
+	require.NoError(t, err)
+	var desc map[string]any
+	require.NoError(t, json.Unmarshal(payload, &desc))
+	drivers := desc["databaseDrivers"].([]any)
+	drivers[0].(map[string]any)["driverFields"] = []map[string]any{
+		{"key": "service_name", "type": "text", "tab": "connection", "required": true},
+		{"key": "wallet_secret", "type": "password", "tab": "connection"},
+	}
+	patched, err := json.Marshal(desc)
+	require.NoError(t, err)
+	require.NoError(t, repoDescribeCache{}.StoreDescriptor(extensiontest.DBDriverFixtureName, hash, patched))
+	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	registerExtensionAssetTypes()
+	d, ok := dbregistry.ByName("fixturedb")
+	require.True(t, ok)
+	require.Len(t, d.Descriptor().DriverFields, 2, "the cached driver fields reach the describe-only registration")
+}
+
+func allowAssetWrites(t *testing.T) {
+	t.Helper()
+	allow := func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-ext"}, nil
+	}
+	swapGlobal(t, func() func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return requireCreateApproval
+	},
+		func(f func(context.Context, approval.ApprovalRequest) (ApprovalResult, error)) {
+			requireCreateApproval = f
+		}, allow)
+	swapGlobal(t, func() func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return requireUpdateApproval
+	},
+		func(f func(context.Context, approval.ApprovalRequest) (ApprovalResult, error)) {
+			requireUpdateApproval = f
+		}, allow)
+}
+
+func runCmd(t *testing.T, fn func() int) (code int, stdout, stderr string) {
+	t.Helper()
+	stderr = captureStderr(t, func() { stdout = captureStdout(t, func() { code = fn() }) })
+	return code, stdout, stderr
+}
+
+func TestExtensionDriverFields_ManagedFromTheCommandLine(t *testing.T) {
+	setupDriverExt(t)
+	withDriverFields(t)
+	allowAssetWrites(t)
+	ctx := context.Background()
+	handlers := buildHandlerMap()
+	create := func(options string) (int, string, string) {
+		cfg := `{"driver":"fixturedb","host":"db.internal","port":7357,"username":"alice","driver_options":` + options + `}`
+		return runCmd(t, func() int {
+			return cmdCreate(ctx, handlers, []string{"asset", "--type", "database", "--name", "fx-opts", "--config", cfg}, "sess-ext")
+		})
+	}
+
+	// Validation by the driver's declarations.
+	code, _, stderr := create(`{"service_name":"orcl","bogus":1}`)
+	assert.Equal(t, 1, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "bogus")
+	code, _, stderr = create(`{}`)
+	assert.Equal(t, 1, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "service_name")
+
+	// Valid, with a password-type option: plaintext warning, created.
+	code, stdout, stderr := create(`{"service_name":"orcl","wallet_secret":"top-secret-value"}`)
+	require.Equal(t, 0, code, "stderr: %s\nstdout: %s", stderr, stdout)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr+stdout, "top-secret-value")
+
+	// Update changes a driver option.
+	code, _, stderr = runCmd(t, func() int {
+		return cmdUpdate(ctx, handlers, []string{"asset", "fx-opts", "--config", `{"driver_options":{"service_name":"orcl2"}}`}, "sess-ext")
+	})
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	// The stored config carries the updated option and the password option encrypted.
+	found, err := asset_repo.Asset().FindByName(ctx, "fx-opts")
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	cfg, err := found[0].GetDatabaseConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "orcl2", cfg.DriverOptions["service_name"])
+	assert.NotEmpty(t, cfg.DriverOptions["wallet_secret"])
+	assert.NotEqual(t, "top-secret-value", cfg.DriverOptions["wallet_secret"])
+
+	// List shows the asset with its extension driver.
+	code, stdout, stderr = runCmd(t, func() int { return cmdList(ctx, handlers, []string{"assets", "--type", "database"}) })
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "fx-opts")
+	assert.Contains(t, stdout, "fixturedb")
+}
