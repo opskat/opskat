@@ -277,3 +277,44 @@ func TestToSafeViewDriverOptions(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "driver_options")
 }
+
+// 声明了证书字段组的驱动：opsctl get asset 与 AI get_asset 都经 toSafeView 展示资产，
+// 证书设置照常可见，私钥内容只显示为已设置，密文与证书内容不出库。
+func TestToSafeViewCertificateFields(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}})
+	dbdrivertest.Register(t, fake)
+	asset := &asset_entity.Asset{ID: 9, Name: "tls", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u",
+		TLS: true, TLSInsecure: true, TLSServerName: "db.internal",
+		TLSCAPEM: "CA-CONTENT", TLSCertPEM: "CERT-CONTENT", TLSKeyPEM: "ENCRYPTED-KEY",
+	}))
+
+	data, err := json.Marshal(toSafeView(asset))
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, true, got["tls"])
+	assert.Equal(t, true, got["tls_insecure"])
+	assert.Equal(t, "db.internal", got["tls_server_name"])
+	assert.Equal(t, true, got["tls_key_pem_set"])
+	assert.NotContains(t, string(data), "ENCRYPTED-KEY")
+	assert.NotContains(t, string(data), "CA-CONTENT")
+	assert.NotContains(t, string(data), "CERT-CONTENT")
+
+	paths := &asset_entity.Asset{ID: 10, Name: "tls-paths", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, paths.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u",
+		TLS: true, TLSCAFile: "/etc/ca.pem", TLSCertFile: "/etc/c.pem", TLSKeyFile: "/etc/k.pem",
+	}))
+	data, err = json.Marshal(toSafeView(paths))
+	require.NoError(t, err)
+	got = map[string]any{}
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "/etc/ca.pem", got["tls_ca_file"])
+	assert.Equal(t, "/etc/c.pem", got["tls_cert_file"])
+	assert.Equal(t, "/etc/k.pem", got["tls_key_file"])
+	assert.NotContains(t, got, "tls_key_pem_set")
+}

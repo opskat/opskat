@@ -58,9 +58,10 @@ const databaseDriversMinHostABI = "2.3"
 const DatabaseExtrasMinHostABI = "2.4"
 
 // SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
-// 2.2 stay listed so extensions built before host-ui, multi-resource
-// classification or database drivers keep loading unchanged; only a hostABI newer
-// than everything here (e.g. an extension declaring 2.4 or 3.0) is refused.
+// 2.3 stay listed so extensions built before host-ui, multi-resource
+// classification, database drivers or the 2.4 driver capabilities keep loading
+// unchanged; only a hostABI newer than everything here (e.g. an extension
+// declaring 2.5 or 3.0) is refused.
 var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4"}
 
 var (

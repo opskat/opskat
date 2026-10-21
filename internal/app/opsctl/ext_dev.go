@@ -188,6 +188,9 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 		if overwrites && !installed.Network.DatabaseRedirects {
 			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
 		}
+		v += i18n.Pick(lang,
+			" —— 驱动可以连到数据库重定向到的其他地址，经资产的到达途径",
+			" — the driver may connect to other addresses the database redirects to, through the asset's route")
 		capLine("network.databaseRedirects", v)
 	}
 	if len(c.DatabaseDrivers) > 0 {

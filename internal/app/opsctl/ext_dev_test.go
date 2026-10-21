@@ -471,6 +471,8 @@ func TestHandleExtDevInstallDatabaseRedirectsNewMark(t *testing.T) {
 			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "network.databaseRedirects: true")
+			// 与桌面端确认一样说明这项能力的含义，而不只列出键。
+			require.Contains(t, detail, "the driver may connect to other addresses the database redirects to, through the asset's route")
 			if tc.marked {
 				require.Contains(t, detail, "network.databaseRedirects: true (new)")
 			} else {

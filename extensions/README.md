@@ -549,6 +549,19 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   (`0.0.0.0`, `::`) or link-local target is refused unless the asset's own address is one. The first dial of each such
   address in a session is logged (extension, driver, asset, address); one the route
   cannot reach fails with the route's error naming the address.
+- **Certificate TLS is the driver's own.** Declare `dbdriver.FieldTLSCert` on the
+  `TabTLS` tab (not together with `FieldTLS`; needs `hostABI` `2.4`) and the asset form
+  shows the same certificate fields as a Redis asset: enable TLS, skip verification,
+  server name, and the CA certificate, client certificate and client key, each a file
+  path or pasted content. When the asset has TLS on, `open` gets them as `req.TLS`
+  (`*dbdriver.TLSMaterial`): `Insecure`, `ServerName` and the `CA` / `Cert` / `Key`
+  contents — paths already read by the process opening the session, the key decrypted —
+  handed over like the password, only in this call; with TLS off `req.TLS` is `nil`.
+  The driver builds its own `tls.Config` from them (its database library may start or
+  redo TLS mid-protocol); the host never wraps the connection in TLS. A file that cannot
+  be read or a key that does not decrypt fails the open naming the field; invalid
+  contents or a failed handshake are the driver's own TLS error, never a fallback to
+  plaintext or to no verification.
 - **The form is a network database's.** An extension driver is checked by the host's
   network rules (host, port and username required), so its `Form` must declare
   `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields
