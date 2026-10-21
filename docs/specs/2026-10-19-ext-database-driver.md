@@ -173,5 +173,19 @@
 - 真实数据库与网络路径。验证目录里做一个把 `go-sql-driver/mysql` 编进 WASM 的验证用扩展（不提交为示例，不发布），对 `.env` 的 E2E MySQL 与内置 MySQL 驱动逐项对比读写结果：直连与经 SSH 隧道；长查询时并发浏览；取消与超时；停用、升级、卸载；桌面端关闭时 opsctl 执行。
 - 登录次数与延迟（会话保持的收益）：在真实链路上观察。
 
+## 修正轮 1：开发安装确认与 `--driver` 明文告警
+
+运行时验证（`e2e/scratch/2026-10-19-ext-database-driver/report.md`）有两项不成立，**[用户决定]** 开修正轮一并修：
+
+- **开发安装 / 升级确认。** [实测] `opsctl ext dev` 安装或升级声明了驱动的扩展时，桌面端确认弹窗的能力行写 `capabilities: none`，不提驱动、没有明文口令警示。前提：用 `opsctl ext dev` 安装或覆盖一个声明了 `databaseDrivers` 的扩展。动作：桌面端弹出确认。结果：与「声明与安装」里的安装 / 升级确认一致——能力里列出「提供数据库驱动」并按 id 点名每个驱动，给出与 `credentials: read` 同级的醒目警示（用这些驱动的数据库资产，口令会以明文交给扩展）；覆盖安装时新增的驱动标出「新增」。不声明驱动的扩展，弹窗内容不变。
+- **`--driver` 旗标下的明文告警。** [实测] `opsctl create asset … --driver <扩展驱动> --config '{"driver_options":{<口令类字段>:"…"}}'` 不出现明文告警；驱动写在 `--config` 里时会告警。前提：opsctl 创建或更新数据库资产，口令类专属字段以明文出现在 `--config` / `--config-file` 里，驱动由 `--driver` 旗标给出（或更新时取自已存资产）。动作：执行命令。结果：与驱动写在 `--config` 里时相同的明文告警；告警不回显口令值。不含口令类专属字段时不告警，现有内置口令的告警不变。
+
+| Seam | What it verifies | Prior art |
+|---|---|---|
+| 开发安装确认 | 声明驱动的扩展的确认内容含「提供数据库驱动」、各驱动 id、明文警示，覆盖安装时新增驱动标「新增」；不声明驱动时内容不变 | `internal/app/opsctl/ext_dev_test.go` |
+| 明文告警 | `--driver` 旗标 + `--config` / `--config-file` 中的口令类专属字段告警；无口令类字段不告警 | `cmd/opsctl/command/create_asset_parser_test.go`、`ext_test.go` 的 `TestExtensionDriverFields_ManagedFromTheCommandLine` |
+
+运行时复验：对 vmysql 重跑 `opsctl ext dev` 覆盖安装看确认弹窗，重跑 `tools/warn-check.sh`。
+
 ## Open questions
 
