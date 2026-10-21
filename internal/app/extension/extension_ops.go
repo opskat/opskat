@@ -407,3 +407,18 @@ func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
 	}
 	return info.Version, true
 }
+
+// InstalledExtensionDrivers returns the database driver ids the installed
+// extension named name declares, nil when it is not installed. `opsctl ext dev`
+// compares them with the incoming manifest to mark newly added drivers.
+func InstalledExtensionDrivers(e *Extension, name string) []string {
+	if e.service == nil {
+		return nil
+	}
+	info, err := e.service.GetDetail(name, e.lang.Lang())
+	if err != nil {
+		// GetDetail's only failure is "not installed".
+		return nil
+	}
+	return info.Manifest.Capabilities.DatabaseDrivers
+}

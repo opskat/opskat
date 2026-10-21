@@ -23,6 +23,7 @@ import (
 type recordingDevInstaller struct {
 	installs  []string // directories handed to InstallExtensionDir
 	installed map[string]string
+	drivers   map[string][]string // driver ids declared by the installed version
 	manifest  *extension.Manifest // manifest read from the last installed directory
 	err       error
 }
@@ -30,6 +31,10 @@ type recordingDevInstaller struct {
 func (i *recordingDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
 	v, ok := i.installed[name]
 	return v, ok
+}
+
+func (i *recordingDevInstaller) InstalledExtensionDrivers(_ context.Context, name string) []string {
+	return i.drivers[name]
 }
 
 func (i *recordingDevInstaller) InstallExtensionDir(_ context.Context, sourceDir string) (string, string, error) {
@@ -372,4 +377,65 @@ func TestHandleExtDevInstallIgnoresMinAppVersionOnDevBuild(t *testing.T) {
 	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
 
 	require.True(t, resp.Approved, resp.Reason)
+}
+
+func writeDriverExtension(t *testing.T, name string, ids ...string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "dist")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	quoted := make([]string, len(ids))
+	for i, id := range ids {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	manifest := fmt.Sprintf(`{"name": %q, "version": "1.1.0", "hostABI": "2.3",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"databaseDrivers": [%s]}}`, name, strings.Join(quoted, ","))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	return dir
+}
+
+// A database driver receives the plaintext password of every asset that uses it,
+// so the dialog names each driver and leads with the same kind of warning as
+// credentials: read.
+func TestHandleExtDevInstallListsDatabaseDriversWithPlaintextWarning(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	o := newDevOpsctl(&recordingDevInstaller{}, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
+
+	detail := approver.prompts[0].Detail
+	first := strings.SplitN(detail, "\n", 2)[0]
+	require.Contains(t, first, "databaseDrivers")
+	require.Contains(t, first, "plaintext")
+	require.Contains(t, detail, "databaseDrivers: vmysql, vmaria")
+	require.NotContains(t, detail, "capabilities: none")
+	require.NotContains(t, detail, "(new)")
+}
+
+func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{
+		installed: map[string]string{"vmysql": "1.0.0"},
+		drivers:   map[string][]string{"vmysql": {"vmysql"}},
+	}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
+
+	detail := approver.prompts[0].Detail
+	require.Contains(t, detail, "overwrites installed: vmysql 1.0.0")
+	require.Contains(t, detail, "databaseDrivers: vmysql, vmaria (new)")
+}
+
+// An extension that provides no driver gets exactly the dialog it always had.
+func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, drivers: map[string][]string{"oss": {"gone"}}}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
+
+	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\ncapabilities:\n  http: https://api.example.com/",
+		approver.prompts[0].Detail)
 }

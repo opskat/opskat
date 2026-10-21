@@ -36,6 +36,9 @@ type ExtDevInstaller interface {
 	// InstalledExtensionVersion 报告同名扩展是否已安装（启用或停用）及其版本，
 	// 供确认弹窗说明这次安装会不会覆盖它。
 	InstalledExtensionVersion(ctx context.Context, name string) (version string, installed bool)
+	// InstalledExtensionDrivers 返回已安装的同名扩展所声明的数据库驱动 id，
+	// 供确认弹窗把本次新增的驱动标出来；未安装时返回 nil。
+	InstalledExtensionDrivers(ctx context.Context, name string) []string
 	InstallExtensionDir(ctx context.Context, sourceDir string) (name, version string, err error)
 }
 
