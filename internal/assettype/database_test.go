@@ -2,6 +2,7 @@ package assettype
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/smartystreets/goconvey/convey"
@@ -254,4 +255,95 @@ func TestMissingDriverParameterListsRegisteredDrivers(t *testing.T) {
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "database type requires driver parameter (mysql, postgresql, mssql, sqlite, fakedb)", name)
 	}
+}
+
+// certFake 注册一个声明了证书字段组的假驱动。
+func certFake(t *testing.T) {
+	t.Helper()
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}})
+	dbdrivertest.Register(t, fake)
+}
+
+const testKeyPEM = "-----BEGIN PRIVATE KEY-----\nSECRETKEYBODY\n-----END PRIVATE KEY-----"
+
+func TestDatabaseHandlerCertificateFieldsFollowTheDriverDeclaration(t *testing.T) {
+	h, ok := Get(asset_entity.AssetTypeDatabase)
+	require.True(t, ok)
+	certFake(t)
+
+	t.Run("declared: create stores the fields and encrypts the key", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+			"driver": "fakedb", "host": "fake.internal", "password": "pw",
+			"tls": true, "tls_insecure": true, "tls_server_name": "db.example",
+			"tls_ca_pem": "CA", "tls_cert_pem": "CERT", "tls_key_pem": testKeyPEM,
+		})
+		require.NoError(t, err)
+		assert.NotContains(t, prepared.Approval, "tls_key_pem", "key content never reaches the approval view")
+		assert.Equal(t, "db.example", prepared.Approval["tls_server_name"])
+
+		a := &asset_entity.Asset{Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, h.ApplyCreateArgs(t.Context(), a, prepared.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.True(t, cfg.TLS)
+		assert.True(t, cfg.TLSInsecure)
+		assert.Equal(t, "db.example", cfg.TLSServerName)
+		assert.Equal(t, "CA", cfg.TLSCAPEM)
+		assert.Equal(t, "CERT", cfg.TLSCertPEM)
+		assert.NotEqual(t, testKeyPEM, cfg.TLSKeyPEM)
+		plain, err := credential_svc.Default().Decrypt(cfg.TLSKeyPEM)
+		require.NoError(t, err)
+		assert.Equal(t, testKeyPEM, plain)
+
+		view := h.SafeView(a)
+		assert.Equal(t, true, view["tls_key_pem_set"])
+		assert.NotContains(t, view, "tls_key_pem")
+		assert.NotContains(t, fmt.Sprint(view), "SECRETKEYBODY")
+		assert.NotContains(t, fmt.Sprint(view), cfg.TLSKeyPEM)
+	})
+
+	t.Run("declared: update touches only the given fields", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "fakedb", Host: "fake.internal", Port: 1, TLS: true, TLSCAPEM: "CA", TLSKeyPEM: "ENC",
+		}))
+		update, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"tls_server_name": "n"})
+		require.NoError(t, err)
+		_, err = h.(*databaseHandler).AutomationUpdateContext(a, update.Config)
+		require.NoError(t, err)
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, update.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, "n", cfg.TLSServerName)
+		assert.Equal(t, "CA", cfg.TLSCAPEM)
+		assert.Equal(t, "ENC", cfg.TLSKeyPEM)
+		assert.True(t, cfg.TLS)
+	})
+
+	t.Run("not declared: refused naming the keys, built-in drivers included", func(t *testing.T) {
+		for _, driver := range []string{"mysql", "postgresql", "sqlite"} {
+			args := map[string]any{"driver": driver, "host": "h", "username": "u", "path": "/tmp/x.db", "tls_ca_pem": "CA", "tls_server_name": "n"}
+			_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+			require.Error(t, err, driver)
+			assert.Contains(t, err.Error(), "tls_ca_pem", driver)
+			assert.Contains(t, err.Error(), "tls_server_name", driver)
+		}
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: "mysql", Host: "h", Port: 3306, Username: "u"}))
+		_, err := h.(*databaseHandler).AutomationUpdateContext(a, map[string]any{"tls_key_pem": testKeyPEM})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tls_key_pem")
+		assert.NotContains(t, err.Error(), "SECRETKEYBODY")
+	})
+
+	t.Run("driver unavailable: renaming keeps the certificate fields", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "gone", Host: "h", Port: 1, TLS: true, TLSCAPEM: "CA", TLSKeyPEM: "ENC",
+		}))
+		before := a.Config
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, map[string]any{}))
+		assert.Equal(t, before, a.Config)
+	})
 }

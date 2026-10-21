@@ -44,6 +44,15 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `sqlite_source` | string | SQLite only | `"local"` (default) or `"remote_ssh_vfs"` |
 | `path` | string | SQLite only | Absolute database-file path |
 | `driver_options` | object | no | Driver-specific fields; keys, types, required and defaults come from the selected driver's declaration. Only drivers that declare fields accept it, and undeclared keys are rejected. Password-type values are **write-only**, encrypted in the asset, and shown only as set (`driver_options_secrets_set`) when the asset is viewed |
+| `tls` | boolean | no | Certificate TLS switch. The `tls_*` keys below have the same names and meaning as Redis assets; only drivers that declare the certificate field group accept them (and `tls`), any other driver rejects them naming the keys |
+| `tls_insecure` | boolean | no | `true` to skip TLS certificate verification |
+| `tls_server_name` | string | no | TLS SNI / server name override |
+| `tls_ca_file` | string | no | Path to a CA certificate file. The three certificates share one source: give them all as paths (`tls_*_file`) or all as content (`tls_*_pem`); switching source drops what was stored in the other |
+| `tls_ca_pem` | string | no | CA certificate as PEM content, stored in the asset |
+| `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |
+| `tls_cert_pem` | string | no | Client certificate as PEM content (mTLS) |
+| `tls_key_file` | string | no | Path to a client key file (mTLS) |
+| `tls_key_pem` | string | no | **Write-only.** Client key as PEM content (mTLS), encrypted in the asset; shown only as set (`tls_key_pem_set`) when the asset is viewed |
 
 For non-SQLite drivers, `password` and `credential_id` are mutually exclusive. Plaintext is
 write-only, encrypted in the asset, and never creates a managed credential. SQLite accepts

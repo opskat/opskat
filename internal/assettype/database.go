@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
@@ -67,6 +68,9 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		return view
 	}
 	maps.Copy(view, drv.ConnectionView(cfg.DriverConfig()))
+	if drv.Descriptor().UsesField(dbdriver.FieldTLSCert) {
+		maps.Copy(view, certificateView(cfg))
+	}
 	if len(cfg.DriverOptions) > 0 {
 		values, secretsSet := viewDriverOptions(drv.Descriptor(), cfg.DriverOptions)
 		view[argDriverOptions] = values
@@ -75,6 +79,62 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		}
 	}
 	return view
+}
+
+// certificateView 是证书字段组的安全视图：开关、校验设置与路径照常给出；私钥内容是密文，
+// 只报告是否已设置（与 driver_options_secrets_set 同一做法），CA 与客户端证书内容不进视图。
+func certificateView(cfg *asset_entity.DatabaseConfig) map[string]any {
+	view := map[string]any{"tls": cfg.TLS}
+	for key, value := range map[string]string{
+		"tls_server_name": cfg.TLSServerName, "tls_ca_file": cfg.TLSCAFile,
+		"tls_cert_file": cfg.TLSCertFile, "tls_key_file": cfg.TLSKeyFile,
+	} {
+		if value != "" {
+			view[key] = value
+		}
+	}
+	if cfg.TLSInsecure {
+		view["tls_insecure"] = true
+	}
+	if cfg.TLSKeyPEM != "" {
+		view[argTLSKeyPEM+"_set"] = true
+	}
+	return view
+}
+
+// rejectUndeclaredCertificateArgs 拒绝给没有声明证书字段组的驱动带 TLS 键（含 tls 开关）：
+// 键在数据库契约里是固定的，是否适用由驱动的描述决定，错误点名被拒的键。
+func rejectUndeclaredCertificateArgs(d dbdriver.Driver, args map[string]any) error {
+	if d.Descriptor().UsesField(dbdriver.FieldTLSCert) {
+		return nil
+	}
+	var given []string
+	for _, key := range tlsConfigArgs() {
+		if _, ok := args[key]; ok {
+			given = append(given, key)
+		}
+	}
+	if len(given) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s is not applicable to %s: the driver does not declare certificate fields", strings.Join(given, ", "), d.Descriptor().Name)
+}
+
+// applyCertificateArgs 把请求里出现的证书字段写进 cfg；私钥内容加密落库。
+func applyCertificateArgs(cfg *asset_entity.DatabaseConfig, args map[string]any) error {
+	if _, ok := args[argTLS]; ok {
+		cfg.TLS = ArgBool(args, argTLS)
+	}
+	if _, ok := args[argTLSInsec]; ok {
+		cfg.TLSInsecure = ArgBool(args, argTLSInsec)
+	}
+	if _, ok := args[argTLSServer]; ok {
+		cfg.TLSServerName = ArgString(args, argTLSServer)
+	}
+	return applyTLSCertArgs(args, tlsCertStore{
+		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	})
 }
 
 func (h *databaseHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
@@ -97,6 +157,9 @@ func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQuery
 func (h *databaseHandler) PolicyKind() string { return policy.PolicyKindQuery }
 
 func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[string]any) (map[string]any, error) {
+	if err := h.checkUpdateCertificateArgs(a, args); err != nil {
+		return nil, err
+	}
 	if err := h.checkUpdateDriverOptions(a, args); err != nil {
 		return nil, err
 	}
@@ -115,6 +178,26 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 	out := cloneArgs(args)
 	out["driver"] = string(current.Driver)
 	return out, nil
+}
+
+// checkUpdateCertificateArgs 在审批前按更新后的驱动（入参指定的，否则资产现有的）判断 TLS 键是否适用。
+func (h *databaseHandler) checkUpdateCertificateArgs(a *asset_entity.Asset, args map[string]any) error {
+	if !slices.ContainsFunc(tlsConfigArgs(), func(key string) bool { _, ok := args[key]; return ok }) {
+		return nil
+	}
+	cfg, err := a.GetDatabaseConfig()
+	if err != nil {
+		return err
+	}
+	id := cfg.Driver
+	if switchesDriver(cfg, args) {
+		id = asset_entity.DatabaseDriver(ArgString(args, "driver"))
+	}
+	drv, err := dbregistry.Lookup(id)
+	if err != nil {
+		return err
+	}
+	return rejectUndeclaredCertificateArgs(drv, args)
 }
 
 // checkUpdateDriverOptions 在审批前按驱动的声明校验更新后的 driver_options：入参叠加到已存取值上
@@ -165,6 +248,9 @@ func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectUndeclaredCertificateArgs(drv, args); err != nil {
+		return err
+	}
 	if err := drv.ValidateCreateArgs(driverArgs(args)); err != nil {
 		return err
 	}
@@ -188,6 +274,9 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 	driverCfg := cfg.DriverConfig()
 	drv.ApplyCreateArgs(driverCfg, driverArgs(args))
 	cfg.SetDriverConfig(driverCfg)
+	if err := applyCertificateArgs(cfg, args); err != nil {
+		return err
+	}
 	opts, err := validateCreateDriverOptions(drv.Descriptor(), args)
 	if err != nil {
 		return err
@@ -246,6 +335,11 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	driverCfg := cfg.DriverConfig()
 	drv.ApplyUpdateArgs(driverCfg, driverArgs(args))
 	cfg.SetDriverConfig(driverCfg)
+	if drv.Descriptor().UsesField(dbdriver.FieldTLSCert) {
+		if err := applyCertificateArgs(cfg, args); err != nil {
+			return err
+		}
+	}
 	if updates, err := driverOptionsArg(args); err != nil {
 		return err
 	} else if updates != nil || switched {

@@ -45,6 +45,29 @@ func TestParseAssetCreateDriverOptionsPlaintextWarning(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
+// TLS 私钥内容与口令一样是明文：出现在 --config / --config-file 里计入告警，值不回显；
+// 其余证书字段（服务器名、CA 内容）不算。
+func TestParseAssetCreateTLSKeyContentPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretConfig := `{"driver":"fakedb","host":"h","tls":true,"tls_key_pem":"KEY-top-secret"}`
+	plainConfig := `{"driver":"fakedb","host":"h","tls":true,"tls_server_name":"db","tls_ca_pem":"CA"}`
+
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", secretConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "KEY-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config-file", "a.json"}, nil,
+		map[string][]byte{"a.json": []byte(secretConfig)})
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+	assert.NotContains(t, stderr, "KEY-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", plainConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
+
 // 驱动由 --driver 旗标给出时，--config / --config-file 里的口令类专属字段与驱动写在
 // --config 里一样计入明文告警；无口令类字段不告警；值不回显；内置口令告警不变。
 func TestParseAssetCreateDriverFlagPlaintextWarning(t *testing.T) {

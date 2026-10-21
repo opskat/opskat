@@ -112,10 +112,11 @@ func bindSSHCredential(args map[string]any, binding CredentialBinding) (map[stri
 
 func (*databaseHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions},
+		// tls_* 是证书字段组：键在契约里固定，按驱动是否声明 FieldTLSCert 在 database.go 里判定。
+		withFields([]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions}, tlsConfigArgs()...),
 		// driver_options 是复合值，审批视图与审计投影整体省略它；其中的口令类明文由
 		// DriverOptionsHaveSecret 单独判断（opsctl 的明文告警）。
-		[]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions},
+		withFields([]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions}, tlsApprovalArgs()...),
 		normalizeDatabaseAutomation,
 		databaseCredentialPlan,
 		bindDatabaseCredential,
