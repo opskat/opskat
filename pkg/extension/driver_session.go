@@ -79,6 +79,7 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 		req.Config = &cfg
 	}
 	s := &driverSession{plugin: p, driver: id, open: req, live: 1}
+	s.reach = p.confineReach(id, &s.open)
 	inst, err := s.login(ctx)
 	if err != nil {
 		return nil, err
@@ -88,8 +89,9 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 }
 
 // openDriverInstance creates an instance and logs it in: the driver opens its
-// session in the guest and connects.
-func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbdriver.OpenRequest) (*driverInstance, error) {
+// session in the guest and connects, every TCP stream taking the session's
+// confined reach path.
+func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbdriver.OpenRequest, reach *dbdriver.Transport) (*driverInstance, error) {
 	if p.closed.Load() {
 		return nil, fmt.Errorf("plugin closed")
 	}
@@ -98,7 +100,7 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 		return nil, err
 	}
 	inv := newInvocation(p.nextInvocationID(), nil)
-	inv.reach = p.confineReach(driver, req)
+	inv.reach = reach
 	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv}
 	d.refs.Store(1)
 
@@ -119,33 +121,165 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 	return d, nil
 }
 
-// confineReach is the reach path an instance's invocation dials through: the
-// session's own, narrowed to the one address the asset's config names. The host
-// resolved that path for that address alone (tunnel, proxy chain or direct), so a
-// driver gets no way to reach anything else along it. A refused address is named
-// in the error the guest gets and logged; the log carries no credential, only
-// the addresses. A session without a Dial of its own dials directly, as a TCP
-// stream of any other host call does.
+// confineReach is the reach path every instance of a session dials through: the
+// session's own, narrowed by a reachGate. The asset's own address takes the
+// route's Dial, as a built-in driver's connection does. Any other address is
+// refused unless the extension declares capabilities.network.databaseRedirects;
+// then it is a redirect the database answered with, dialed by address along the
+// same route (see reachGate.redirect). A refused address is named in the error
+// the guest gets and logged; the logs carry no credential, only the addresses.
+// A route without a dial of its own dials directly, as a TCP stream of any other
+// host call does.
 func (p *Plugin) confineReach(driver string, req *dbdriver.OpenRequest) *dbdriver.Transport {
-	transport := req.Transport
-	allowed := ""
+	g := &reachGate{
+		extension: p.manifest.Name,
+		driver:    driver,
+		assetID:   req.AssetID,
+		redirects: p.manifest.Capabilities.Network.DatabaseRedirects,
+		direct:    req.Transport.Direct,
+		dial:      orDirectDial(req.Transport.Dial),
+		dialAddr:  orDirectDial(req.Transport.DialAddr),
+		followed:  map[string]bool{},
+	}
 	if cfg := req.Config; cfg != nil {
-		allowed = net.JoinHostPort(canonicalHost(cfg.Host), strconv.Itoa(cfg.Port))
+		g.assetHost = cfg.Host
+		g.allowed = net.JoinHostPort(canonicalHost(cfg.Host), strconv.Itoa(cfg.Port))
 	}
-	dial := transport.Dial
+	return &dbdriver.Transport{Dial: g.dialContext}
+}
+
+func orDirectDial(dial dbdriver.DialFunc) dbdriver.DialFunc {
 	if dial == nil {
-		dial = (&netdial.Dialer{}).DialContext
+		return (&netdial.Dialer{}).DialContext
 	}
-	transport.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if !sameEndpoint(allowed, addr) {
-			logger.Ctx(ctx).Warn("extension database driver dial denied",
-				zap.String("extension", p.manifest.Name), zap.String("driver", driver),
-				zap.String("addr", addr), zap.String("allowed", allowed))
-			return nil, fmt.Errorf("dial denied: %q is not the address of the database asset (%s)", addr, allowed)
+	return dial
+}
+
+// reachGate decides, for one session, which addresses its driver may dial and
+// along what.
+type reachGate struct {
+	extension, driver string
+	assetID           int64
+	// assetHost is the asset's host as configured; allowed is its host:port as
+	// sameEndpoint compares it.
+	assetHost, allowed string
+	// redirects is the extension's capabilities.network.databaseRedirects.
+	redirects bool
+	// direct reports a direct route: names resolve on this machine.
+	direct         bool
+	dial, dialAddr dbdriver.DialFunc
+
+	mu sync.Mutex
+	// followed are the redirect addresses the session has dialed, logged on the
+	// first dial of each.
+	followed map[string]bool
+}
+
+func (g *reachGate) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if sameEndpoint(g.allowed, addr) {
+		return g.dial(ctx, network, addr)
+	}
+	if !g.redirects {
+		g.deny(ctx, addr)
+		return nil, fmt.Errorf("dial denied: %q is not the address of the database asset (%s), and extension %q does not declare following database redirects (capabilities.network.databaseRedirects)",
+			addr, g.allowed, g.extension)
+	}
+	return g.redirect(ctx, network, addr)
+}
+
+func (g *reachGate) deny(ctx context.Context, addr string) {
+	logger.Ctx(ctx).Warn("extension database driver dial denied",
+		zap.String("extension", g.extension), zap.String("driver", g.driver), zap.Int64("assetID", g.assetID),
+		zap.String("addr", addr), zap.String("allowed", g.allowed))
+}
+
+// redirect dials an address other than the asset's along the asset's route, by
+// address: through an SSH tunnel to that address itself, its name resolved at the
+// far end of a tunnel, proxy or proxy chain. On a direct route the name resolves
+// here, and an address on this machine (loopback, unspecified) or on its link
+// (link-local) is refused — a database the user reaches directly cannot point the
+// driver at the user's own machine — unless the asset itself is such an address.
+// What is dialed is the address checked, not the name resolved again.
+func (g *reachGate) redirect(ctx context.Context, network, addr string) (net.Conn, error) {
+	g.logFirst(ctx, addr)
+	targets := []string{addr}
+	if g.direct {
+		var err error
+		if targets, err = g.directTargets(ctx, network, addr); err != nil {
+			return nil, err
 		}
-		return dial(ctx, network, addr)
 	}
-	return &transport
+	var errs []error
+	for _, target := range targets {
+		conn, err := g.dialAddr(ctx, network, target)
+		if err == nil {
+			return conn, nil
+		}
+		errs = append(errs, err)
+	}
+	return nil, fmt.Errorf("dial %s: %w", addr, errors.Join(errs...))
+}
+
+// logFirst records the session's first dial of a redirect address.
+func (g *reachGate) logFirst(ctx context.Context, addr string) {
+	key := addr
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		key = net.JoinHostPort(canonicalHost(host), port)
+	}
+	g.mu.Lock()
+	first := !g.followed[key]
+	g.followed[key] = true
+	g.mu.Unlock()
+	if first {
+		logger.Ctx(ctx).Info("extension database driver follows a database redirect",
+			zap.String("extension", g.extension), zap.String("driver", g.driver), zap.Int64("assetID", g.assetID),
+			zap.String("addr", addr))
+	}
+}
+
+// directTargets are the addresses to dial for addr on a direct route: addr
+// itself when it and the asset are both on this machine or its link, else the
+// resolved ip:port addresses — none of them on this machine or its link.
+func (g *reachGate) directTargets(ctx context.Context, network, addr string) ([]string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := resolveHere(ctx, network, host)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+	if slices.ContainsFunc(ips, onThisMachineOrLink) {
+		assetIPs, err := resolveHere(ctx, network, g.assetHost)
+		if err != nil {
+			return nil, fmt.Errorf("dial %s: resolve the database asset's host: %w", addr, err)
+		}
+		if slices.ContainsFunc(assetIPs, onThisMachineOrLink) {
+			return []string{addr}, nil
+		}
+		g.deny(ctx, addr)
+		return nil, fmt.Errorf("dial denied: %q is a loopback or link-local address, which a database redirect on a direct route may not reach (the database asset is %s)",
+			addr, g.allowed)
+	}
+	targets := make([]string, len(ips))
+	for i, ip := range ips {
+		targets[i] = net.JoinHostPort(ip.String(), port)
+	}
+	return targets, nil
+}
+
+// resolveHere resolves host on this machine, the way a direct dial would.
+func resolveHere(ctx context.Context, network, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	return (&netdial.Dialer{}).Resolve(ctx, network, host)
+}
+
+// onThisMachineOrLink reports a loopback or link-local address, or the
+// unspecified one, which a dial reaches as this machine.
+func onThisMachineOrLink(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
 // sameEndpoint reports whether addr names the host:port allowed, hosts compared
@@ -355,6 +489,9 @@ type driverSession struct {
 	// instances are logged in on demand: when operations overlap, and after an
 	// instance is discarded.
 	open dbdriver.OpenRequest
+	// reach is the session's reach path as confined for the driver
+	// (Plugin.confineReach), shared by every instance.
+	reach *dbdriver.Transport
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -447,7 +584,7 @@ func (s *driverSession) forgo(g driverGrant) {
 
 // login logs in an instance the session has already counted in live.
 func (s *driverSession) login(ctx context.Context) (*driverInstance, error) {
-	inst, err := s.plugin.openDriverInstance(ctx, s.driver, &s.open)
+	inst, err := s.plugin.openDriverInstance(ctx, s.driver, &s.open, s.reach)
 	if err != nil {
 		s.mu.Lock()
 		s.live--

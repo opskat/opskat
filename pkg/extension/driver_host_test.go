@@ -3,6 +3,9 @@ package extension_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
@@ -38,19 +42,23 @@ func (h *hostSpy) AssetCredentialValues(context.Context, int64, []string) (map[s
 }
 
 // loadDriverFixture loads the fixture driver extension with a real host provider
-// whose capabilities all count their use. withAssetEndpoint declares
-// network.assetEndpoint in its manifest.
-func loadDriverFixture(t *testing.T, spy *hostSpy, withAssetEndpoint bool) *extension.Extension {
+// whose capabilities all count their use. network, when set, is the manifest's
+// capabilities.network; declaring databaseRedirects raises its hostABI to the one
+// that reads it.
+func loadDriverFixture(t *testing.T, spy *hostSpy, network map[string]any) *extension.Extension {
 	t.Helper()
 	root := t.TempDir()
 	dir := extensiontest.InstallDBDriverFixture(t, root)
-	if withAssetEndpoint {
+	if network != nil {
 		path := filepath.Join(dir, "manifest.json")
 		raw, err := os.ReadFile(path) //nolint:gosec // this test's own temp dir
 		require.NoError(t, err)
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(raw, &m))
-		m["capabilities"].(map[string]any)["network"] = map[string]any{"assetEndpoint": true}
+		m["capabilities"].(map[string]any)["network"] = network
+		if network["databaseRedirects"] == true {
+			m["hostABI"] = extension.DatabaseExtrasMinHostABI
+		}
 		raw, err = json.Marshal(m)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(path, raw, 0o600))
@@ -78,12 +86,14 @@ func probe(t *testing.T, s dbdriver.Session, what string) string {
 func TestDriverCallHostCapabilities(t *testing.T) {
 	for _, withEndpoint := range []bool{false, true} {
 		name := "without network.assetEndpoint"
+		var network map[string]any
 		if withEndpoint {
 			name = "with network.assetEndpoint"
+			network = map[string]any{"assetEndpoint": true}
 		}
 		t.Run(name, func(t *testing.T) {
 			spy := &hostSpy{}
-			ext := loadDriverFixture(t, spy, withEndpoint)
+			ext := loadDriverFixture(t, spy, network)
 			desc := ext.Manifest.DatabaseDrivers[0]
 			d := &extensionDriver{
 				NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
@@ -127,6 +137,7 @@ func TestDriverCallHostCapabilities(t *testing.T) {
 				for _, addr := range []string{"other.internal:7357", "db.internal:7358"} {
 					msg := probe(t, s, "DIAL "+addr)
 					assert.Contains(t, msg, addr, "the refused address is named")
+					assert.Contains(t, msg, "does not declare following database redirects", "the refusal says why")
 				}
 				assert.Len(t, d.server.Dialed(), before, "the reach path never sees them")
 
@@ -149,4 +160,125 @@ func TestDriverCallHostCapabilities(t *testing.T) {
 			})
 		})
 	}
+}
+
+// redirectRoute is a reach path with two ends to tell apart: the asset's own dial
+// (Transport.Dial) and the by-address dial (Transport.DialAddr).
+type redirectRoute struct {
+	asset, byAddr *extension.FixtureDBServer
+}
+
+func newRedirectRoute(t *testing.T) redirectRoute {
+	return redirectRoute{asset: extension.NewFixtureDBServer(t), byAddr: extension.NewFixtureDBServer(t)}
+}
+
+// openRedirectSession opens a session of the fixture driver on host along
+// transport, as the host does for asset 42.
+func openRedirectSession(t *testing.T, ext *extension.Extension, host string, transport dbdriver.Transport) dbdriver.Session {
+	t.Helper()
+	desc := ext.Manifest.DatabaseDrivers[0]
+	s, err := ext.Plugin.OpenDriverSession(context.Background(), string(desc.ID), dbdriver.OpenRequest{
+		Config:    &dbdriver.Config{Driver: desc.ID, Host: host, Port: desc.DefaultPort, Username: "alice", Database: "app"},
+		Password:  "s3cret",
+		Transport: transport,
+		AssetID:   42,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, s.Close()) })
+	return s
+}
+
+// redirectLogs counts, by address, the Info entries that record a session
+// following a redirect.
+func redirectLogs(t *testing.T, logs *observer.ObservedLogs) map[string]int {
+	t.Helper()
+	seen := map[string]int{}
+	for _, e := range logs.All() {
+		fields := e.ContextMap()
+		assert.NotContains(t, fmt.Sprint(e.Message, fields), "s3cret")
+		if e.Level != zap.InfoLevel || fields["addr"] == nil {
+			continue
+		}
+		assert.Equal(t, "fixture-dbdriver", fields["extension"])
+		assert.Equal(t, extensiontest.DBDriverFixtureDriver, fields["driver"])
+		assert.EqualValues(t, 42, fields["assetID"])
+		seen[fields["addr"].(string)]++
+	}
+	return seen
+}
+
+func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
+	ext := loadDriverFixture(t, &hostSpy{}, map[string]any{"databaseRedirects": true})
+
+	t.Run("through a tunnel or proxy any address is dialed by address along the route, unresolved", func(t *testing.T) {
+		route := newRedirectRoute(t)
+		s := openRedirectSession(t, ext, "db.internal", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: route.byAddr.Dial})
+
+		for _, addr := range []string{"node2.internal:7400", "127.0.0.1:7401", "localhost:7402"} {
+			assert.Empty(t, probe(t, s, "DIAL "+addr), addr)
+		}
+		assert.Empty(t, probe(t, s, "DIAL db.internal:7357"))
+
+		assert.Equal(t, []string{"node2.internal:7400", "127.0.0.1:7401", "localhost:7402"}, route.byAddr.Dialed(),
+			"another address goes by address along the route; its name is the far end's to resolve")
+		assert.Equal(t, []string{"db.internal:7357", "db.internal:7357"}, route.asset.Dialed(),
+			"the asset's own address still takes the asset's dial: the login, then the probe")
+	})
+
+	t.Run("each address other than the asset's is logged once per session", func(t *testing.T) {
+		logs := observeLogs(t)
+		route := newRedirectRoute(t)
+		s := openRedirectSession(t, ext, "db.internal", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: route.byAddr.Dial})
+		for _, addr := range []string{"node2.internal:7400", "node2.internal:7400", "node3.internal:7400", "db.internal:7357"} {
+			assert.Empty(t, probe(t, s, "DIAL "+addr), addr)
+		}
+		assert.Equal(t, map[string]int{"node2.internal:7400": 1, "node3.internal:7400": 1}, redirectLogs(t, logs))
+
+		other := openRedirectSession(t, ext, "db.internal", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: route.byAddr.Dial})
+		assert.Empty(t, probe(t, other, "DIAL node2.internal:7400"))
+		assert.Equal(t, map[string]int{"node2.internal:7400": 2, "node3.internal:7400": 1}, redirectLogs(t, logs),
+			"another session logs its own first dial")
+	})
+
+	t.Run("on a direct route, loopback and link-local addresses are refused by name", func(t *testing.T) {
+		logs := observeLogs(t)
+		route := newRedirectRoute(t)
+		s := openRedirectSession(t, ext, "203.0.113.10", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: route.byAddr.Dial, Direct: true})
+
+		local := []string{"127.0.0.1:7400", "127.8.0.1:7400", "[::1]:7400", "localhost:7400", "169.254.10.1:7400", "[fe80::1]:7400", "0.0.0.0:7400"}
+		for _, addr := range local {
+			assert.Contains(t, probe(t, s, "DIAL "+addr), addr, "the refused address is named")
+		}
+		assert.Empty(t, route.byAddr.Dialed(), "nothing refused is dialed")
+		refused := 0
+		for _, e := range logs.All() {
+			if e.Level == zap.WarnLevel {
+				refused++
+			}
+		}
+		assert.Equal(t, len(local), refused, "each refusal is a Warn")
+
+		assert.Empty(t, probe(t, s, "DIAL 203.0.113.20:7400"))
+		assert.Equal(t, []string{"203.0.113.20:7400"}, route.byAddr.Dialed(), "any other address is dialed")
+	})
+
+	t.Run("on a direct route to a loopback asset, loopback redirects are allowed", func(t *testing.T) {
+		route := newRedirectRoute(t)
+		s := openRedirectSession(t, ext, "127.0.0.1", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: route.byAddr.Dial, Direct: true})
+		for _, addr := range []string{"127.0.0.1:7401", "localhost:7402"} {
+			assert.Empty(t, probe(t, s, "DIAL "+addr), addr)
+		}
+		assert.Equal(t, []string{"127.0.0.1:7401", "localhost:7402"}, route.byAddr.Dialed())
+	})
+
+	t.Run("an address the route cannot reach fails, naming the address and the cause", func(t *testing.T) {
+		route := newRedirectRoute(t)
+		unreachable := func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("connect: connection refused")
+		}
+		s := openRedirectSession(t, ext, "db.internal", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: unreachable})
+		msg := probe(t, s, "DIAL node9.internal:7400")
+		assert.Contains(t, msg, "node9.internal:7400")
+		assert.Contains(t, msg, "connection refused")
+	})
 }

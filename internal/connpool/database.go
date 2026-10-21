@@ -40,7 +40,7 @@ func OpenDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	}
 	logger.Ctx(ctx).Info("open database session start", logFields...)
 
-	session, err := openDatabase(ctx, cfg, password, sshAssetID, sshPool)
+	session, err := openDatabase(ctx, asset.ID, cfg, password, sshAssetID, sshPool)
 	if err != nil {
 		logger.Ctx(ctx).Error("open database session failed", append(logFields, zap.Error(err))...)
 		return nil, err
@@ -49,7 +49,7 @@ func OpenDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	return session, nil
 }
 
-func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, password string, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.Session, error) {
+func openDatabase(ctx context.Context, assetID int64, cfg *asset_entity.DatabaseConfig, password string, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.Session, error) {
 	driver, err := dbregistry.Lookup(cfg.Driver)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, passwor
 		return nil, err
 	}
 	return driver.Open(ctx, dbdriver.OpenRequest{
-		Config: cfg.DriverConfig(), Password: password, DriverOptions: options, Transport: transport,
+		Config: cfg.DriverConfig(), Password: password, DriverOptions: options, Transport: transport, AssetID: assetID,
 	})
 }
 
@@ -102,6 +102,10 @@ func driverOptions(desc dbdriver.Descriptor, stored map[string]any) (map[string]
 // SOCKS5 代理 > 直连；直连 .local 主机时经统一拨号器（绕过系统解析器的 mDNS；零值参数，
 // 超时仍由驱动经 ctx 控制），其余直连留给驱动默认的拨号。
 //
+// 按地址拨号（DialAddr）走同一条途径，只是到达驱动请求的地址：经 SSH 隧道时连那个地址本身
+// （Dial 固定连资产地址，内置驱动拨的是本机解析出的 ip:port，不能改它的语义），代理与代理链
+// 本就按请求的地址拨；直连时用统一拨号器。
+//
 // 配置了 SSH 资产时还给出那台主机的文件系统：数据库是主机上一个文件的驱动（远端 SQLite）
 // 用它，按网络连接的驱动用 Dial——两者都是惰性的，用哪个由驱动决定。
 func databaseTransport(ctx context.Context, cfg *asset_entity.DatabaseConfig, sshAssetID int64, sshPool *sshpool.Pool) (dbdriver.Transport, error) {
@@ -120,15 +124,22 @@ func databaseTransport(ctx context.Context, cfg *asset_entity.DatabaseConfig, ss
 		}
 		if dial != nil { // 代理链解析为空层即直连
 			transport.Dial = dbdriver.DialFunc(dial.ignoreNetwork())
+			transport.DialAddr = transport.Dial
 		}
 	case sshAssetID > 0 && sshPool != nil:
 		tunnel := NewSSHTunnel(sshAssetID, cfg.Host, cfg.Port, sshPool)
 		transport.Dial = dbdriver.DialFunc(tunnelDialFunc(tunnel).ignoreNetwork())
+		transport.DialAddr = dbdriver.DialFunc(tunnelAddrDialFunc(tunnel).ignoreNetwork())
 	case cfg.Proxy != nil:
 		transport.Dial = dbdriver.DialFunc(proxyDialFunc(cfg.Proxy).ignoreNetwork())
+		transport.DialAddr = transport.Dial
 	}
-	if transport.Dial == nil && netdial.IsLocalAddr(cfg.Host) {
-		transport.Dial = (&netdial.Dialer{}).DialContext
+	if transport.DialAddr == nil {
+		transport.Direct = true
+		transport.DialAddr = (&netdial.Dialer{}).DialContext
+		if netdial.IsLocalAddr(cfg.Host) {
+			transport.Dial = transport.DialAddr
+		}
 	}
 	return transport, nil
 }

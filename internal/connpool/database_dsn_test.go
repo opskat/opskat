@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,6 +76,14 @@ func TestOpenDatabaseTransport(t *testing.T) {
 		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{Host: "10.0.0.5", Port: 7777}, nil)
 		assert.Nil(t, session.Request.Transport.Dial)
 		assert.Nil(t, session.Request.Transport.RemoteFS)
+		assert.True(t, session.Request.Transport.Direct, "names resolve on this machine")
+		assert.Equal(t, int64(3), session.Request.AssetID, "the session knows its asset, for the host's logs")
+	})
+
+	t.Run("direct: dialing by address reaches the address asked for", func(t *testing.T) {
+		echo := startEcho(t)
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{Host: "10.0.0.5", Port: 7777}, nil)
+		requireDialEchoes(t, session.Request.Transport.DialAddr, echo)
 	})
 
 	t.Run("direct to a .local host: dialing bypasses the system resolver", func(t *testing.T) {
@@ -90,6 +99,8 @@ func TestOpenDatabaseTransport(t *testing.T) {
 			Proxy: &asset_entity.ProxyConfig{Type: "socks5", Host: proxyHost, Port: proxyPort},
 		}, nil)
 		requireDialEchoes(t, session.Request.Transport.Dial, echo)
+		requireDialEchoes(t, session.Request.Transport.DialAddr, echo)
+		assert.False(t, session.Request.Transport.Direct, "names resolve at the proxy")
 	})
 
 	t.Run("proxy chain", func(t *testing.T) {
@@ -103,6 +114,8 @@ func TestOpenDatabaseTransport(t *testing.T) {
 			}}},
 		}, nil)
 		requireDialEchoes(t, session.Request.Transport.Dial, echo)
+		requireDialEchoes(t, session.Request.Transport.DialAddr, echo)
+		assert.False(t, session.Request.Transport.Direct, "names resolve along the chain")
 	})
 
 	t.Run("proxy chain with no layers is a direct connection", func(t *testing.T) {
@@ -110,6 +123,7 @@ func TestOpenDatabaseTransport(t *testing.T) {
 			Host: "10.0.0.5", Port: 7777, ProxyChain: &asset_entity.ProxyChainConfig{},
 		}, nil)
 		assert.Nil(t, session.Request.Transport.Dial)
+		assert.True(t, session.Request.Transport.Direct)
 	})
 
 	t.Run("SSH tunnel: dials the configured host and port through the SSH asset", func(t *testing.T) {
@@ -128,6 +142,34 @@ func TestOpenDatabaseTransport(t *testing.T) {
 		requireEcho(t, conn)
 		assert.Equal(t, "db.internal:7777", forwarded)
 		assert.NotNil(t, session.Request.Transport.RemoteFS, "an SSH asset also offers the host's file system")
+	})
+
+	t.Run("SSH tunnel: dialing by address reaches the address asked for, resolved on the SSH host", func(t *testing.T) {
+		var mu sync.Mutex
+		var forwarded []string
+		srv := startForwardPolicyServer(t, func(target string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			forwarded = append(forwarded, target)
+			return true
+		})
+		session := openWithFake(t, &asset_entity.Asset{ID: 3, SSHTunnelID: 9},
+			&asset_entity.DatabaseConfig{Host: "db.internal", Port: 7777}, srv.pool(t))
+		assert.False(t, session.Request.Transport.Direct, "names resolve on the SSH host")
+
+		conn, err := session.Request.Transport.DialAddr(context.Background(), "tcp", "node2.internal:7778")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
+		// The asset's own dial still goes to the configured host:port: a built-in
+		// driver that dials a resolved ip:port keeps reaching the asset.
+		conn, err = session.Request.Transport.Dial(context.Background(), "tcp", "10.9.9.9:1")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, []string{"node2.internal:7778", "db.internal:7777"}, forwarded)
 	})
 
 	t.Run("the tunnel wins over a proxy", func(t *testing.T) {

@@ -538,6 +538,17 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   Every network connection must be made with `req.Transport.Dial`: the host dials it
   along the asset's SSH tunnel or proxy chain. `open` returns once the database
   answers; its error is shown to the user as the driver's error.
+- **The driver reaches the asset's `host:port`, and redirects only when declared.**
+  Without `network.databaseRedirects` the host dials only the asset's own `host:port`;
+  any other address fails naming it and saying the extension does not declare following
+  database redirects. With it, any other `host:port` (a cluster node, a replica, a
+  routed listener the database answers with) is dialed along the asset's route —
+  direct, SSH tunnel, proxy or proxy chain — to that address itself: through a tunnel,
+  proxy or chain the name resolves at the far end, directly it resolves on the user's
+  machine, and then a loopback (`127.0.0.0/8`, `::1`, `localhost`), unspecified
+  (`0.0.0.0`, `::`) or link-local target is refused unless the asset's own address is one. The first dial of each such
+  address in a session is logged (extension, driver, asset, address); one the route
+  cannot reach fails with the route's error naming the address.
 - **The form is a network database's.** An extension driver is checked by the host's
   network rules (host, port and username required), so its `Form` must declare
   `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields
