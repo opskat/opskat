@@ -109,44 +109,50 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 		return fmt.Errorf("extension %q has no cached describe() answer on this machine", info.Name)
 	}
 	localized := m.Localized(func(key string) string { return info.Translate(helpLang, key) })
-	help := helpDocument(info.SkillMD, info.Name, localized)
+	withdrawn, err := registerDescribeOnlyLocked(info, helpDocument(info.SkillMD, info.Name, localized))
+	// 同 register：撤回的驱动在 mu 之外作废会话。
+	removeDrivers(withdrawn)
+	return err
+}
 
+// registerDescribeOnlyLocked 持 mu 做 RegisterDescribeOnly 的登记。失败时返回已移出驱动注册表、
+// 会话待作废的驱动。
+func registerDescribeOnlyLocked(info *extension.ManifestInfo, help string) ([]*extensionDriver, error) {
+	m := info.Manifest
 	mu.Lock()
 	defer mu.Unlock()
 	if _, exists := registered[info.Name]; exists {
-		return fmt.Errorf("extension %q is already registered", info.Name)
+		return nil, fmt.Errorf("extension %q is already registered", info.Name)
 	}
 	if err := claimPolicyType(info.Name, m.Policies.Type); err != nil {
-		return err
+		return nil, err
 	}
 
 	// 驱动先注册，理由同 register：撞名最常见，先查。
 	extDrivers, err := registerDrivers(info.Name, m.DatabaseDrivers, notLoadedOpener{ext: info.Name}, info.Translate)
 	if err != nil {
 		delete(policyTypeOwner, m.Policies.Type)
-		return err
+		return extDrivers, err
 	}
 
 	var done []string
-	rollback := func() {
+	rollback := func() []*extensionDriver {
 		for _, t := range done {
 			unregisterType(t)
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(info.Name)
 		delete(policyTypeOwner, m.Policies.Type)
-		removeDrivers(releaseDrivers(extDrivers))
+		return releaseDrivers(extDrivers)
 	}
 
 	for _, at := range m.AssetTypes {
 		if err := registerDescribeOnlyType(info.Name, m, at, help); err != nil {
-			rollback()
-			return err
+			return rollback(), err
 		}
 		done = append(done, at.Type)
 	}
 	if err := registerPolicyGroups(info.Name, m); err != nil {
-		rollback()
-		return err
+		return rollback(), err
 	}
 
 	registered[info.Name] = done
@@ -155,7 +161,7 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	logger.Default().Info("extension registered from cached descriptor",
 		zap.String("extension", info.Name), zap.Strings("assetTypes", done),
 		zap.Strings("databaseDrivers", m.Capabilities.DatabaseDrivers))
-	return nil
+	return nil, nil
 }
 
 // notLoadedOpener 是仅描述注册里驱动背后的"插件"：驱动的描述与专属字段已可用，但这个进程没有

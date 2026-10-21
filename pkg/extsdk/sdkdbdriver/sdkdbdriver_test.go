@@ -90,6 +90,7 @@ func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
 			So(json.Unmarshal(reply.Result, &result), ShouldBeNil)
 			So(result.Rows.Columns, ShouldResemble, []string{"1"})
 			So(len(result.Rows.Rows), ShouldEqual, 1)
+			So(mock.ExpectationsWereMet(), ShouldBeNil)
 		})
 
 		Convey("a refusal the session reports as ErrUnsupported crosses as code unsupported", func() {
@@ -111,6 +112,19 @@ func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
 			So(reply.Error, ShouldNotBeNil)
 			So(reply.Error.Code, ShouldEqual, "unsupported")
 			So(opened.Config, ShouldBeNil)
+		})
+
+		Convey("an operation of a newer host is refused as unsupported, so the host treats the feature as absent", func() {
+			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb"}}}`)
+			var session struct {
+				Session uint64 `json:"session"`
+			}
+			So(json.Unmarshal(reply.Result, &session), ShouldBeNil)
+
+			reply = callDriver(t, `{"op":"opFromTheFuture","session":`+jsonNumber(session.Session)+`}`)
+			So(reply.Error, ShouldNotBeNil)
+			So(reply.Error.Code, ShouldEqual, "unsupported")
+			So(reply.Error.Message, ShouldContainSubstring, "opFromTheFuture")
 		})
 
 		Convey("a driver the extension does not register is an error", func() {

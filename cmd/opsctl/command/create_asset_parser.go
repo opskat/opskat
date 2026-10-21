@@ -153,7 +153,7 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	}
 	// 明文告警与 update 同源：凭据字段之外，类型声明的只写字段（如 Redis 的 sentinel_password）
 	// 同样算明文。--password 与 --config 同时带明文时 argv 告警只打一次。
-	configHasSecret := secretInConfig != "" || writeOnlyFieldPresent(*assetType, fileConfig, nil) ||
+	configHasSecret := secretInConfig != "" || writeOnlyFieldPresent(*assetType, fileConfig) ||
 		assettype.DriverOptionsHaveSecret(config, nil)
 	if visited["password"] || (configSource == "--config" && configHasSecret) {
 		if err := warnArgvPlaintext(deps.stderr); err != nil {

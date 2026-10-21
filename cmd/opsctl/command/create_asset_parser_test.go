@@ -74,6 +74,18 @@ func TestParseAssetCreateDriverFlagPlaintextWarning(t *testing.T) {
 	assert.NotContains(t, stderr, "builtin-top-secret")
 }
 
+// 告警按合并了旗标之后的有效驱动判断：--config 写的驱动被 --driver 覆盖时，按旧驱动的声明
+// 认作口令的字段不再告警（有效驱动没有口令类专属字段）。
+func TestParseAssetCreateDriverFlagOverridesConfigDriverForWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	args := []string{"--name", "x", "--type", "database", "--driver", "mysql", "--host", "h",
+		"--config", `{"driver":"fakedb","driver_options":{"token":"not-a-secret-for-mysql"}}`}
+
+	_, stderr, err := parseAssetCreateForTest(t, args, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
+
 type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }

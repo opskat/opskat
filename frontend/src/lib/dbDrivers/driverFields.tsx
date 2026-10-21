@@ -33,7 +33,7 @@ function storedSecret(driver: DriverDescriptor, state: DatabaseFormState, key: s
  * 表单上各专属字段当前的取值:用户改过的取改后的值,否则取资产已存的值,再否则取描述的默认值;
  * 开关没有默认值时为关。口令类只有用户输入的明文(没输入为空串)。
  */
-export function driverOptionValues(driver: DriverDescriptor, state: DatabaseFormState): Record<string, unknown> {
+function driverOptionValues(driver: DriverDescriptor, state: DatabaseFormState): Record<string, unknown> {
   const edits = state.driverOptions;
   const stored = storedOptionsOf(driver, state);
   const out: Record<string, unknown> = {};

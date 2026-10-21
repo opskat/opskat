@@ -67,7 +67,8 @@ var drivers []*driverEntry
 
 // driverHandleTable holds what the host refers to by id in this instance: open
 // sessions, open cursors (with the session they read from) and prepared row
-// statement writers, which outlive their session.
+// statement writers, which outlive their session until the host releases them
+// (driverwire.Call.ReleaseWriters).
 type driverHandleTable struct {
 	next     uint64
 	sessions map[uint64]dbdriver.Session
@@ -102,6 +103,9 @@ func serve(input []byte) (json.RawMessage, error) {
 	var call driverwire.Call
 	if err := json.Unmarshal(input, &call); err != nil {
 		return nil, fmt.Errorf("parse database driver call: %w", err)
+	}
+	for _, id := range call.ReleaseWriters {
+		delete(driverHandles.writers, id)
 	}
 	result, opErr := runDriverOp(context.Background(), call)
 	var reply driverwire.Reply
@@ -234,7 +238,9 @@ func runDriverRequestOp(ctx context.Context, s dbdriver.Session, op string, a dr
 			return s.ExecuteBatch(ctx, req)
 		})
 	default:
-		return nil, fmt.Errorf("unknown database driver operation %q", op)
+		// An operation of a host newer than this SDK: refused as unsupported, so the host
+		// treats the feature as one the driver does not have rather than as a failure.
+		return nil, fmt.Errorf("%w: unknown database driver operation %q", dbdriver.ErrUnsupported, op)
 	}
 }
 

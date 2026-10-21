@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extension/driverwire"
 )
 
 func TestLoadPlugin(t *testing.T) {
@@ -975,19 +977,15 @@ func TestDriverFaultFailsOnlyTheOperation(t *testing.T) {
 	}
 }
 
-// sessionPool reads a session's instances (alive, idle) and waiting operations.
-func sessionPool(s dbdriver.Session) (live, idle, queued int) {
-	ds := s.(*driverSession)
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-	return ds.live, len(ds.idle), len(ds.queue)
-}
-
+// waitQueued waits until n operations wait for an instance of s: the point a test
+// can act on knowing they arrived in that order.
 func waitQueued(t *testing.T, s dbdriver.Session, n int) {
 	t.Helper()
+	ds := s.(*driverSession)
 	require.Eventually(t, func() bool {
-		_, _, queued := sessionPool(s)
-		return queued == n
+		ds.mu.Lock()
+		defer ds.mu.Unlock()
+		return len(ds.queue) == n
 	}, callBound, time.Millisecond, "waiting for %d queued operation(s)", n)
 }
 
@@ -1058,9 +1056,7 @@ func TestDriverCancelingAQueuedOperationOnlyDequeuesIt(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, waitOp(t, canceled, driverInterruptBound), context.Canceled)
-	live, _, queued := sessionPool(s)
-	assert.Equal(t, 3, live, "no instance was touched")
-	assert.Equal(t, 1, queued)
+	assert.Equal(t, 3, srv.OpenConns(), "no instance was touched")
 	for _, op := range ops {
 		assertPending(t, op, "a running operation")
 	}
@@ -1089,18 +1085,46 @@ func TestDriverIdleExtraInstancesClose(t *testing.T) {
 		require.NoError(t, waitOp(t, ops[i], callBound))
 	}
 
-	require.Eventually(t, func() bool {
-		live, idle, _ := sessionPool(s)
-		return live == 1 && idle == 1
-	}, callBound, 5*time.Millisecond, "the extra instances close once idle")
 	require.Eventually(t, func() bool { return srv.OpenConns() == 1 }, callBound, 5*time.Millisecond,
-		"closing an instance closes its connection")
-	assert.Never(t, func() bool {
-		live, _, _ := sessionPool(s)
-		return live == 0
-	}, 10*p.opts.driverIdleTimeout, 5*time.Millisecond, "the session keeps its last instance")
+		"the extra instances close once idle, and with them their connections")
+	assert.Never(t, func() bool { return srv.OpenConns() == 0 }, 10*p.opts.driverIdleTimeout, 5*time.Millisecond,
+		"the session keeps its last instance")
 
 	_, err := s.Execute(context.Background(), "SELECT 1")
 	require.NoError(t, err)
 	assert.Len(t, srv.Logins(), 3, "the instance kept is still logged in")
+}
+
+// A row statement writer the host no longer holds is forgotten in the guest too,
+// with the next call on its instance: one writer per "copy as SQL" does not grow
+// the memory of an instance that lives as long as its session.
+func TestDriverRowWriterIsReleasedInTheGuest(t *testing.T) {
+	p := newDBDriverPlugin(t)
+	srv := NewFixtureDBServer(t)
+	s := openFixtureSession(t, p, srv)
+	ctx := context.Background()
+
+	inst, id := prepareAndDropWriter(t, s)
+	forgotten := func() bool {
+		raw, _ := json.Marshal(dbdriver.RowStatementsRequest{})
+		err := inst.call(ctx, driverwire.Call{Op: driverwire.OpRowStatements, Args: driverwire.Args{Writer: id, Request: raw}}, nil)
+		return err != nil && strings.Contains(err.Error(), "no database driver row statement writer")
+	}
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		if _, err := s.Execute(ctx, "SELECT 1"); err != nil {
+			return false
+		}
+		return forgotten()
+	}, callBound, 10*time.Millisecond, "the writer is gone from the guest once the host let go of it")
+}
+
+// prepareAndDropWriter prepares a writer on s and lets go of it, returning the
+// instance it lives on and its id in the guest.
+func prepareAndDropWriter(t *testing.T, s dbdriver.Session) (*driverInstance, uint64) {
+	t.Helper()
+	w, err := s.PrepareRowStatements(context.Background(), "app", "users")
+	require.NoError(t, err)
+	dw := w.(*driverRowWriter)
+	return dw.inst, dw.id
 }

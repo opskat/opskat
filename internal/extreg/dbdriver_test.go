@@ -200,7 +200,9 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 // The extension's driver is reached the way every driver is: connpool resolves the
 // asset into the request, and the extension gets exactly that request.
 func TestExtensionDriverOpensThroughThePluginWithTheHostBuiltRequest(t *testing.T) {
+	origCredentials := credential_svc.Default()
 	credential_svc.SetDefault(credential_svc.New("driver-options-test-key", []byte("0123456789abcdef")))
+	t.Cleanup(func() { credential_svc.SetDefault(origCredentials) })
 	encryptedOption, err := credential_svc.Default().Encrypt("opt-s3cret")
 	require.NoError(t, err)
 	core, logs := observer.New(zap.DebugLevel)
@@ -230,7 +232,9 @@ func TestExtensionDriverOpensThroughThePluginWithTheHostBuiltRequest(t *testing.
 	ids, requests, _ := plugin.opened()
 	require.Equal(t, []string{"acmedb"}, ids)
 	req := requests[0]
-	assert.Equal(t, cfg.DriverConfig(), req.Config, "the driver's view of the config, without the host-owned parts")
+	assert.Equal(t, &dbdriver.Config{
+		Driver: "acmedb", Host: "10.0.0.5", Port: 9000, Username: "app", Database: "orders",
+	}, req.Config, "the driver's view of the config: no password, credential or proxy")
 	assert.Equal(t, "s3cret", req.Password, "the decrypted password")
 	assert.NotNil(t, req.Transport.Dial, "the asset's reach path")
 	assert.Equal(t, map[string]any{"tenant": "acme", "token": "opt-s3cret"}, req.DriverOptions,
@@ -295,4 +299,129 @@ func TestUnregisteringAnExtensionClosesItsDriverSessions(t *testing.T) {
 	res, err := open().Execute(context.Background(), "SELECT * FROM t")
 	require.NoError(t, err)
 	assert.Len(t, res.Rows.Rows, 3)
+}
+
+// slowCloseSession is a session whose Close waits for release: an extension whose
+// close is still talking to a database.
+type slowCloseSession struct {
+	*dbdrivertest.FakeSession
+	closing chan struct{}
+	release chan struct{}
+}
+
+func (s *slowCloseSession) Close() error {
+	close(s.closing)
+	<-s.release
+	return nil
+}
+
+// An Open that loses the race with the driver's removal closes the session it got
+// without holding the driver's lock: another session's Close does not queue behind
+// that extension call.
+func TestOpenRacingRemovalClosesItsSessionOutsideTheDriverLock(t *testing.T) {
+	opening, proceed := make(chan struct{}), make(chan struct{})
+	slow := &slowCloseSession{closing: make(chan struct{}), release: make(chan struct{})}
+	defer close(slow.release)
+	var calls int
+	p := &fakePlugin{}
+	p.openDriver = func(ctx context.Context, _ string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+		calls++
+		inner, err := dbdrivertest.NewFake().Open(ctx, req)
+		if err != nil || calls == 1 {
+			return inner, err
+		}
+		slow.FakeSession = inner.(*dbdrivertest.FakeSession)
+		close(opening)
+		<-proceed // the extension does not notice the canceled ctx
+		return slow, nil
+	}
+	d := newExtensionDriver("acme-db", driverDescriptor("acmedb"), p, (&extension.Extension{}).Translate)
+	req := dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "acmedb", Host: "h", Port: 1, Username: "u"}}
+	other, err := d.Open(context.Background(), req)
+	require.NoError(t, err)
+
+	lost := make(chan error, 1)
+	go func() {
+		_, err := d.Open(context.Background(), req)
+		lost <- err
+	}()
+	<-opening
+	d.remove()
+	close(proceed)
+	<-slow.closing
+
+	closed := make(chan struct{})
+	go func() {
+		_ = other.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("another session's Close waited for the extension call closing the lost Open's session")
+	}
+	slow.release <- struct{}{}
+	require.ErrorIs(t, <-lost, dbregistry.ErrDriverUnavailable)
+}
+
+// An extension driver connects over the network under the shared host + port +
+// username rules: a descriptor whose form leaves one of them out (every asset of
+// it would fail to save) or declares a database file is refused when the extension
+// registers, naming the driver, instead of installing a driver no asset can use.
+func TestExtensionDriverFormMustFitTheNetworkRules(t *testing.T) {
+	for name, fields := range map[string][]dbdriver.FormField{
+		"no username": {dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldPassword},
+		"a file path": {dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldUsername, dbdriver.FieldPath},
+	} {
+		desc := driverDescriptor("formdb")
+		desc.Form = []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: fields}}
+		err := registerManifest(t, driverOnlyManifest("form-db", desc), newFakeDriverPlugin())
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), `"formdb"`, name)
+		_, err = dbregistry.Lookup("formdb")
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable, name)
+	}
+}
+
+// Removing a driver closes its sessions side by side: each extension close is
+// bounded, but one after another a database that never answers would hold the
+// disable or upgrade that bound once per session.
+func TestRemovingADriverClosesItsSessionsSideBySide(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var slows []*slowCloseSession
+	p := &fakePlugin{}
+	p.openDriver = func(ctx context.Context, _ string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+		inner, err := dbdrivertest.NewFake().Open(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		s := &slowCloseSession{FakeSession: inner.(*dbdrivertest.FakeSession), closing: make(chan struct{}), release: release}
+		mu.Lock()
+		slows = append(slows, s)
+		mu.Unlock()
+		return s, nil
+	}
+	d := newExtensionDriver("acme-db", driverDescriptor("acmedb"), p, (&extension.Extension{}).Translate)
+	req := dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "acmedb", Host: "h", Port: 1, Username: "u"}}
+	for range 2 {
+		_, err := d.Open(context.Background(), req)
+		require.NoError(t, err)
+	}
+
+	removed := make(chan struct{})
+	go func() {
+		d.remove()
+		close(removed)
+	}()
+	for _, s := range slows {
+		select {
+		case <-s.closing:
+		case <-time.After(2 * time.Second):
+			close(release)
+			t.Fatal("a session's close waited for another session's close")
+		}
+	}
+	close(release)
+	<-removed
 }

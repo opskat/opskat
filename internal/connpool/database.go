@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"sync"
 
@@ -68,13 +67,23 @@ func openDatabase(ctx context.Context, cfg *asset_entity.DatabaseConfig, passwor
 	})
 }
 
-// driverOptions 是交给驱动的专属字段取值：存着的口令类取值（credential_svc 加密）解密成明文，
-// 与口令一样只放进打开会话的请求。返回副本，不改资产配置。
+// driverOptions 是交给驱动的专属字段取值，按驱动当前的声明整理：只交声明了的键（驱动升级删掉的
+// 键不交出去），没存的取声明的默认值，必填缺失则打不开；存着的口令类取值（credential_svc 加密）
+// 解密成明文，与口令一样只放进打开会话的请求。返回副本，不改资产配置。
 func driverOptions(desc dbdriver.Descriptor, stored map[string]any) (map[string]any, error) {
-	if len(stored) == 0 {
+	if len(desc.DriverFields) == 0 {
 		return nil, nil
 	}
-	options := maps.Clone(stored)
+	declared := make(map[string]any, len(desc.DriverFields))
+	for _, f := range desc.DriverFields {
+		if v, ok := stored[f.Key]; ok {
+			declared[f.Key] = v
+		}
+	}
+	options, err := desc.CompleteDriverOptions(declared)
+	if err != nil {
+		return nil, err
+	}
 	for _, f := range desc.DriverFields {
 		encrypted, ok := options[f.Key].(string)
 		if f.Type != dbdriver.FieldTypePassword || !ok || encrypted == "" {

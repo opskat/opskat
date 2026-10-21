@@ -67,9 +67,12 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		return view
 	}
 	maps.Copy(view, drv.ConnectionView(cfg.DriverConfig()))
-	if values, secretsSet := viewDriverOptions(drv.Descriptor(), cfg.DriverOptions); len(cfg.DriverOptions) > 0 {
+	if len(cfg.DriverOptions) > 0 {
+		values, secretsSet := viewDriverOptions(drv.Descriptor(), cfg.DriverOptions)
 		view[argDriverOptions] = values
-		view["driver_options_secrets_set"] = secretsSet
+		if len(secretsSet) > 0 {
+			view["driver_options_secrets_set"] = secretsSet
+		}
 	}
 	return view
 }
@@ -114,8 +117,9 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 	return out, nil
 }
 
-// checkUpdateDriverOptions 在审批前按驱动的声明校验更新入参里的 driver_options；切换驱动时
-// 新驱动的专属字段从头取值，必填也在这里查。既没带 driver_options 也没切换驱动时无事可查。
+// checkUpdateDriverOptions 在审批前按驱动的声明校验更新后的 driver_options：入参叠加到已存取值上
+// （切换驱动时从头取值），必填与默认值按合并结果查，与落库时一致。既没带 driver_options 也没
+// 切换驱动时无事可查。
 func (h *databaseHandler) checkUpdateDriverOptions(a *asset_entity.Asset, args map[string]any) error {
 	_, given := args[argDriverOptions]
 	if !given && ArgString(args, "driver") == "" {
@@ -141,12 +145,12 @@ func (h *databaseHandler) checkUpdateDriverOptions(a *asset_entity.Asset, args m
 	if err != nil {
 		return err
 	}
-	if err := drv.Descriptor().CheckDriverOptions(opts); err != nil {
-		return err
-	}
+	// 与落库（ApplyUpdateArgs）同一条合并规则：用户点了同意之后不该再因必填缺失而失败。
+	stored := cfg.DriverOptions
 	if switched {
-		_, err = drv.Descriptor().CompleteDriverOptions(opts)
+		stored = nil
 	}
+	_, err = mergeDriverOptions(drv.Descriptor(), stored, opts)
 	return err
 }
 

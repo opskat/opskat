@@ -89,12 +89,16 @@ func (d *extensionDriver) Open(ctx context.Context, req dbdriver.OpenRequest) (d
 	}
 	s := &extensionSession{driver: d, inner: inner}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if gone := d.removed(); gone != nil {
+	gone := d.removed()
+	if gone == nil {
+		d.sessions[s] = struct{}{}
+	}
+	d.mu.Unlock()
+	if gone != nil {
+		// 关闭要等扩展里的调用停下，不占着 d.mu：别的会话的 Close 与驱动移除不该排在它后面。
 		s.closeInner()
 		return nil, gone
 	}
-	d.sessions[s] = struct{}{}
 	return s, nil
 }
 
@@ -121,7 +125,7 @@ func (d *extensionDriver) operation(ctx context.Context) (context.Context, func(
 	}
 }
 
-// remove 作废驱动：取消执行中与排队的操作，关闭它打开过的全部会话。驱动已经移出注册表，
+// remove 作废驱动：取消执行中与排队的操作，并行关闭它打开过的全部会话。驱动已经移出注册表，
 // 不会再有新会话。
 func (d *extensionDriver) remove() {
 	d.mu.Lock()
@@ -129,28 +133,52 @@ func (d *extensionDriver) remove() {
 	sessions := d.sessions
 	d.sessions = make(map[*extensionSession]struct{})
 	d.mu.Unlock()
+	// Side by side: each extension close is bounded, and a database that no longer
+	// answers would otherwise hold the removal that long per session.
+	var wg sync.WaitGroup
 	for s := range sessions {
-		s.closeInner()
+		wg.Go(s.closeInner)
 	}
+	wg.Wait()
 	logger.Default().Info("extension database driver removed",
 		zap.String("extension", d.ext), zap.String("driver", string(d.desc.ID)), zap.Int("sessions", len(sessions)))
 }
 
 // registerDrivers 把 ext 提供的驱动注册进驱动注册表，全有或全无：任何一个与内置驱动或别的
-// 扩展的驱动撞名（id 或别名），已注册的这几个撤回，返回点名冲突名字与占用者的错误。调用方
-// 持有 mu。
+// 扩展的驱动撞名（id 或别名），已注册的这几个移出注册表，返回点名冲突名字与占用者的错误。
+// 调用方持有 mu；出错时返回的是已移出、会话待作废的驱动，由调用方放开 mu 之后交给
+// removeDrivers（注册与撞名之间已可能有会话打开）。
 func registerDrivers(ext string, descs []dbdriver.Descriptor, plugin driverOpener, translate translateFunc) ([]*extensionDriver, error) {
 	done := make([]*extensionDriver, 0, len(descs))
 	for _, desc := range descs {
+		if err := fitsNetworkRules(desc); err != nil {
+			return releaseDrivers(done), fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, err)
+		}
 		d := newExtensionDriver(ext, desc, plugin, translate)
 		if err := dbregistry.TryRegister(d); err != nil {
-			removeDrivers(releaseDrivers(done))
-			return nil, fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, describeDriverClash(err))
+			return releaseDrivers(done), fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, describeDriverClash(err))
 		}
 		driverOwner[desc.ID] = ext
 		done = append(done, d)
 	}
 	return done, nil
+}
+
+// fitsNetworkRules 要求驱动的表单与 extensionDriver 的配置规则（dbdriver.NetworkRules）相符：
+// 声明主机、端口与用户名（规则要求它们必填，表单不给就没有资产存得下来），不声明数据库文件
+// 一类的字段（扩展驱动只经到达途径连网络上的数据库，宿主不替它打开文件）。
+func fitsNetworkRules(desc dbdriver.Descriptor) error {
+	for _, f := range []dbdriver.FormField{dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldUsername} {
+		if !desc.UsesField(f) {
+			return fmt.Errorf("an extension driver connects over the network and its form must declare %q", f)
+		}
+	}
+	for _, f := range []dbdriver.FormField{dbdriver.FieldSQLiteSource, dbdriver.FieldPath, dbdriver.FieldSSHAsset} {
+		if desc.UsesField(f) {
+			return fmt.Errorf("an extension driver connects over the network and its form may not declare %q", f)
+		}
+	}
+	return nil
 }
 
 // describeDriverClash 把注册表的撞名错误换成点名占用者的说法：内置驱动，还是哪个扩展的驱动。
@@ -176,10 +204,12 @@ func releaseDrivers(drivers []*extensionDriver) []*extensionDriver {
 	return drivers
 }
 
-// removeDrivers 作废已移出注册表的驱动的会话。关闭会话要等扩展里执行中的调用停下，所以不在
-// mu 里做。
+// removeDrivers 并行作废已移出注册表的驱动的会话。关闭会话要等扩展里执行中的调用停下，所以
+// 不在 mu 里做。
 func removeDrivers(drivers []*extensionDriver) {
+	var wg sync.WaitGroup
 	for _, d := range drivers {
-		d.remove()
+		wg.Go(d.remove)
 	}
+	wg.Wait()
 }

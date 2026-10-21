@@ -234,43 +234,37 @@ func TestUninstallGoesAheadWhenNoAssetUsesItsDriver(t *testing.T) {
 	requireDriverUnavailable(t, err)
 }
 
-// A database asset belongs to the extension that provides its driver.
-func TestDatabaseAssetBelongsToTheExtensionProvidingItsDriver(t *testing.T) {
+// The extension that provides a database asset's driver reaches that asset only
+// through a session of its driver: the paths that hand an extension's own assets to
+// it — config, credentials, form, connection path — refuse it, naming the extension.
+func TestDatabaseAssetReachesItsDriverExtensionOnlyThroughTheSession(t *testing.T) {
 	svc, assets := newHostTestService(t)
 	svc.Bridge().Register(&extension.Extension{Name: "mydb", Manifest: &extension.Manifest{
 		Name: "mydb", Capabilities: extension.Capabilities{DatabaseDrivers: []string{"mydb"}},
 	}})
-	databaseAsset := func(id int64, driver string) {
-		assets.EXPECT().Find(gomock.Any(), id).Return(&asset_entity.Asset{
-			ID: id, Name: "db", Type: asset_entity.AssetTypeDatabase,
-			Config: `{"driver":"` + driver + `","host":"h","port":1,"username":"u","password":"ciphertext"}`,
-		}, nil).AnyTimes()
-	}
-	databaseAsset(1, "mydb")
-	databaseAsset(2, "mysql")
+	assets.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{
+		ID: 1, Name: "db", Type: asset_entity.AssetTypeDatabase,
+		Config: `{"driver":"mydb","host":"h","port":1,"username":"u","password":"ciphertext"}`,
+	}, nil).AnyTimes()
 	ctx := context.Background()
 
-	owner, asset, err := svc.OwnedAsset(ctx, "mydb", 1)
-	require.NoError(t, err)
-	assert.Equal(t, "mydb", owner.Name)
-	assert.Equal(t, asset_entity.AssetTypeDatabase, asset.Type)
-
-	_, _, err = svc.OwnedAsset(ctx, "acme", 1)
-	require.Error(t, err, "another extension may not reach it")
-	assert.Contains(t, err.Error(), `"acme"`)
-
-	_, _, err = svc.OwnedAsset(ctx, "mydb", 2)
-	require.Error(t, err, "the driver's extension may not reach other database assets")
-	assert.Contains(t, err.Error(), `"mydb"`)
-
-	// Its config and reach path go to the driver only through the session.
-	const onlyThroughSession = "only through its database driver session"
-	_, err = configGetterOf(svc, "mydb").GetAssetConfig(1)
-	require.ErrorContains(t, err, onlyThroughSession)
+	const refused = `does not belong to extension "mydb"`
+	_, err := configGetterOf(svc, "mydb").GetAssetConfig(1)
+	require.ErrorContains(t, err, refused)
 	_, err = configGetterOf(svc, "mydb").AssetCredentialValues(ctx, 1, []string{"password"})
-	require.ErrorContains(t, err, onlyThroughSession)
+	require.ErrorContains(t, err, refused)
 	_, err = svc.FormConfig(ctx, "mydb", 1)
-	require.ErrorContains(t, err, onlyThroughSession)
+	require.ErrorContains(t, err, refused)
 	_, _, _, err = dialerOf(svc, "mydb").DialContextFor(ctx, 1)
-	require.ErrorContains(t, err, onlyThroughSession)
+	require.ErrorContains(t, err, refused)
+}
+
+// The driver check reads the manifest of an installed extension; a name that is
+// not installed has no drivers to check, and uninstalling it stays the no-op it
+// was, rather than a refusal that tells the user to force it.
+func TestUninstallOfAnExtensionThatIsNotInstalledHasNoDriversToCheck(t *testing.T) {
+	f := newDriverFixture(t)
+	f.init(t, true)
+
+	require.NoError(t, f.svc.Uninstall(context.Background(), "never-installed", false, false))
 }

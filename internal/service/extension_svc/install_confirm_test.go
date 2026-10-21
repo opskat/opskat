@@ -323,7 +323,7 @@ func TestNewInstallConfirm_DatabaseDriversAreGrantsAndUpgradeMarksNewOnes(t *tes
 		"i18n": map[string]any{"displayName": "ext.name", "description": "ext.name"},
 		"databaseDrivers": []map[string]any{{
 			"id": "oracle", "name": "Oracle", "icon": "database", "order": 50, "aliases": []string{},
-			"defaultPort": 1521, "form": []map[string]any{{"tab": "connection", "fields": []string{"host", "port"}}},
+			"defaultPort": 1521, "form": []map[string]any{{"tab": "connection", "fields": []string{"host", "port", "username"}}},
 			"capabilities": []string{"schemas"}, "createDatabaseOptions": []any{},
 			"alterTableAttributes": []any{}, "driverFields": []any{},
 		}},

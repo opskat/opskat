@@ -532,6 +532,11 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   Every network connection must be made with `req.Transport.Dial`: the host dials it
   along the asset's SSH tunnel or proxy chain. `open` returns once the database
   answers; its error is shown to the user as the driver's error.
+- **The form is a network database's.** An extension driver is checked by the host's
+  network rules (host, port and username required), so its `Form` must declare
+  `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields
+  (`FieldSQLiteSource`, `FieldPath`, `FieldSSHAsset`); otherwise the extension is
+  refused when it registers, naming the driver.
 - **Declare exactly what the dialect implements.** The optional `sqldb` dialect
   interfaces decide which session operations exist; a capability in the descriptor the
   dialect does not implement offers the user an entry point that fails. A read-only

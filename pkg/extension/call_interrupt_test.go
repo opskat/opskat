@@ -483,3 +483,36 @@ func TestDriverSessionCloseIsBounded(t *testing.T) {
 	require.ErrorIs(t, waitOp(t, closed, p.opts.driverCloseTimeout+driverInterruptBound), context.DeadlineExceeded,
 		"the close fails as a timeout instead of waiting for the database")
 }
+
+// A session's idle instances close side by side: each close is bounded, but one
+// after another a database that never answers would hold the close for that bound
+// once per instance.
+func TestDriverSessionClosesItsInstancesSideBySide(t *testing.T) {
+	p := newDBDriverPlugin(t)
+	p.opts.driverCloseTimeout = time.Minute
+	srv := NewFixtureDBServer(t)
+	srv.Hold = "LOGOFF"
+	ctx := context.Background()
+	s, err := p.OpenDriverSession(ctx, "fixturedb", dbdriver.OpenRequest{
+		Config:        &dbdriver.Config{Driver: "fixturedb", Host: "db.internal", Port: 7357, Username: "alice", Database: "app"},
+		Password:      "s3cret",
+		DriverOptions: map[string]any{"logoff": true},
+		Transport:     dbdriver.Transport{Dial: srv.Dial},
+	})
+	require.NoError(t, err)
+	// A cursor holds the first instance, so the query logs in a second; both are
+	// then idle.
+	rows, err := s.StreamTableRows(ctx, "app", "users", dbdriver.TableQuery{})
+	require.NoError(t, err)
+	_, err = s.Execute(ctx, "SELECT 1")
+	require.NoError(t, err)
+	require.NoError(t, rows.Close())
+	require.Len(t, srv.Logins(), 2)
+
+	closed := driverOp(s.Close)
+	first := srv.WaitHeld(t)
+	second := srv.WaitHeld(t) // fails the test if it waits for the first close
+	first.Release()
+	second.Release()
+	require.NoError(t, waitOp(t, closed, callBound))
+}

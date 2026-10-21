@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -58,8 +59,7 @@ var errDriverSessionClosed = errors.New("database driver session is closed")
 // must declare in capabilities.databaseDrivers. req is handed to the driver — its
 // config, the decrypted password, the driver options and the reach path, which
 // every TCP connection the driver opens takes — each time an instance of the
-// session logs in. A
-// driver that cannot connect fails with its own error.
+// session logs in. A driver that cannot connect fails with its own error.
 //
 // The session's calls are bounded only by ctx — the asset's query timeout and
 // the caller's cancellation — not by the plugin's tool timeout.
@@ -99,7 +99,8 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 	}
 	inv := newInvocation(p.nextInvocationID(), nil)
 	inv.reach = p.confineReach(driver, req)
-	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv, refs: 1}
+	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv}
+	d.refs.Store(1)
 
 	var opened driverwire.Opened
 	err = d.call(ctx, driverwire.Call{Op: driverwire.OpOpen, Args: driverwire.Args{
@@ -178,29 +179,51 @@ type driverInstance struct {
 	idleGen   uint64
 	idleTimer *time.Timer
 
-	mu   sync.Mutex
-	refs int
+	// refs counts the session's hold on the instance and each writer prepared on
+	// it. It is not under mu: a writer's cleanup must not wait for a call.
+	refs atomic.Int32
+
+	// released are the writers prepared on the instance that their holders have let
+	// go of; the next call hands them to the guest to forget.
+	releasedMu sync.Mutex
+	released   []uint64
+
+	mu sync.Mutex
 	// broken is the failure that left the instance in an unknown state (a trap, a
 	// canceled call); every later call fails with it.
 	broken error
 }
 
-func (d *driverInstance) hold() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.refs++
-}
+func (d *driverInstance) hold() { d.refs.Add(1) }
 
+// drop lets go of one hold; the last closes the module. No call can be running
+// then: calls are made by the session, which holds the instance until it retires
+// it, and by writers, which hold it while they are reachable.
 func (d *driverInstance) drop() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.refs--
-	if d.refs > 0 {
+	if d.refs.Add(-1) > 0 {
 		return
 	}
 	if err := d.inst.mod.Close(context.Background()); err != nil {
 		logger.Default().Warn("close database driver instance", zap.Error(err))
 	}
+}
+
+// releaseWriter is a writer's cleanup: the guest forgets the writer with the next
+// call on the instance, and the writer's hold on the instance goes.
+func (d *driverInstance) releaseWriter(id uint64) {
+	d.releasedMu.Lock()
+	d.released = append(d.released, id)
+	d.releasedMu.Unlock()
+	d.drop()
+}
+
+// takeReleased hands over the writers to release with the next call.
+func (d *driverInstance) takeReleased() []uint64 {
+	d.releasedMu.Lock()
+	defer d.releasedMu.Unlock()
+	ids := d.released
+	d.released = nil
+	return ids
 }
 
 func (d *driverInstance) usable() bool {
@@ -248,15 +271,6 @@ func (d *driverInstance) retire() error {
 // fails in the guest itself (a panic, a trap, running out of memory) fails as an
 // extension database driver fault. Either way the instance is left unusable.
 func (d *driverInstance) call(ctx context.Context, call driverwire.Call, out any) error {
-	input, err := json.Marshal(call)
-	if err != nil {
-		return fmt.Errorf("marshal database driver %s: %w", call.Op, err)
-	}
-	req, err := callRequest(driverwire.Function, input)
-	if err != nil {
-		return err
-	}
-
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.broken != nil {
@@ -264,6 +278,15 @@ func (d *driverInstance) call(ctx context.Context, call driverwire.Call, out any
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("database driver %s: %w", call.Op, err)
+	}
+	call.ReleaseWriters = d.takeReleased()
+	input, err := json.Marshal(call)
+	if err != nil {
+		return fmt.Errorf("marshal database driver %s: %w", call.Op, err)
+	}
+	req, err := callRequest(driverwire.Function, input)
+	if err != nil {
+		return err
 	}
 	stopInterrupt := context.AfterFunc(ctx, d.inv.close)
 	raw, err := d.inst.invoke(withInvocation(ctx, d.inv), req)
@@ -633,7 +656,7 @@ func (s *driverSession) PrepareRowStatements(ctx context.Context, database, tabl
 		}
 		inst.hold()
 		w = &driverRowWriter{inst: inst, id: prepared.Writer}
-		runtime.AddCleanup(w, (*driverInstance).drop, inst)
+		runtime.AddCleanup(w, func(r writerRef) { r.inst.releaseWriter(r.id) }, writerRef{inst: inst, id: prepared.Writer})
 		return nil
 	})
 	if err != nil {
@@ -678,8 +701,8 @@ func (s *driverSession) ExecuteBatch(ctx context.Context, req dbdriver.BatchRequ
 	return forwardRequest[*dbdriver.BatchResult](ctx, s, driverwire.OpExecuteBatch, driverwire.Args{}, req)
 }
 
-// Close closes the session: its idle instances now — the session in the guest,
-// then whatever connection it left open — and each instance still held by an
+// Close closes the session: its idle instances now, side by side — the session in
+// the guest, then whatever connection it left open — and each instance still held by an
 // operation or a cursor once that lets go of it. Operations waiting for an
 // instance fail. Closing twice is a no-op.
 func (s *driverSession) Close() error {
@@ -700,10 +723,14 @@ func (s *driverSession) Close() error {
 	for _, g := range queue {
 		g <- driverGrant{err: errDriverSessionClosed}
 	}
-	var errs []error
-	for _, inst := range idle {
-		errs = append(errs, inst.retire())
+	// Side by side: each close is bounded by the driver close timeout, and a database
+	// that no longer answers would otherwise hold the close that long per instance.
+	errs := make([]error, len(idle))
+	var wg sync.WaitGroup
+	for i, inst := range idle {
+		wg.Go(func() { errs[i] = inst.retire() })
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
@@ -764,13 +791,24 @@ func (r *driverStream) Close() error {
 	return r.inst.call(r.ctx, driverwire.Call{Op: driverwire.OpStreamClose, Args: driverwire.Args{Stream: r.id}}, nil)
 }
 
-// driverRowWriter is a row statement writer prepared in the guest.
+// driverRowWriter is a row statement writer prepared in the guest. Once it is
+// collected the guest forgets it (driverInstance.releaseWriter).
 type driverRowWriter struct {
 	inst *driverInstance
 	id   uint64
 }
 
+// writerRef is what a writer's cleanup needs: not the writer itself, which would
+// keep it reachable.
+type writerRef struct {
+	inst *driverInstance
+	id   uint64
+}
+
 func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
+	// The writer stays reachable until its call is done: its cleanup releases it in
+	// the guest and its hold on the instance.
+	defer runtime.KeepAlive(w)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal row statements request: %w", err)

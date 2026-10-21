@@ -249,3 +249,24 @@ func TestOpenDatabaseMySQLViaProxyRouted(t *testing.T) {
 		}
 	})
 }
+
+// 交给驱动的专属字段按驱动当前的声明整理：没存的取声明的默认值（表单清空了有默认值的字段、
+// 驱动升级新增了字段），声明里已经没有的键不交出去（驱动升级删了一个口令类字段，它的密文不该
+// 以普通取值的身份交给驱动）。
+func TestOpenDatabaseHandsTheDriverItsDeclaredOptions(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "fetch_size", Type: dbdriver.FieldTypeNumber, Tab: dbdriver.TabAdvanced, Default: 100},
+		{Key: "region", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection},
+	}
+	dbdrivertest.Register(t, fake)
+
+	session, err := OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "10.0.0.5", Port: 7777,
+		DriverOptions: map[string]any{"region": "eu", "retired_token": "ciphertext"},
+	}, "pw", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+	req := session.(*dbdrivertest.FakeSession).Request
+	assert.Equal(t, map[string]any{"fetch_size": 100, "region": "eu"}, req.DriverOptions)
+}

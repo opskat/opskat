@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -109,63 +108,29 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 	return values, nil
 }
 
-// OwnedAsset loads assetID on behalf of extName and confirms the asset belongs to
-// extName: its type is one extName itself registers, or it is a database asset
-// whose driver extName provides. Every path that hands an asset — or its config —
-// to an extension goes through here, so "which extension may see this asset" is
-// answered once, by the asset's stored type and driver rather than by whoever asked.
-func (s *Service) OwnedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, error) {
+// OwnedTypedAsset loads assetID on behalf of extName and confirms the asset's type
+// is one extName itself registers, returning that type's declaration. Every path
+// that hands an asset — or its config — to an extension goes through here (its
+// config, credentials, form and connection path, all read through the type's
+// describe() declaration, and the asset a call from the extension's frontend is
+// scoped to), so "which extension may see this asset" is answered once, by the
+// asset's stored type rather than by whoever asked. A database asset of a driver
+// extName provides is not one of them: its config, password and reach path go to
+// the driver only in the open call of a session.
+func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
 	caller := s.Bridge().Get(extName)
 	if caller == nil {
-		return nil, nil, fmt.Errorf("extension %q not loaded", extName)
+		return nil, nil, nil, fmt.Errorf("extension %q not loaded", extName)
 	}
 	asset, err := s.GetHostAssetConfig(ctx, assetID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
+		return nil, nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
 	}
-	if caller.Manifest.AssetTypeDef(asset.Type) != nil {
-		return caller, asset, nil
-	}
-	driver, err := databaseDriverOf(asset)
-	if err != nil {
-		return nil, nil, fmt.Errorf("asset %d: %w", assetID, err)
-	}
-	if driver == "" || !slices.Contains(caller.Manifest.Capabilities.DatabaseDrivers, driver) {
-		return nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
-	}
-	return caller, asset, nil
-}
-
-// databaseDriverOf is the driver id a database asset's config names; "" for any
-// other asset.
-func databaseDriverOf(asset *HostAssetConfig) (string, error) {
-	a := &asset_entity.Asset{Type: asset.Type, Config: asset.Config}
-	if !a.IsDatabase() {
-		return "", nil
-	}
-	cfg, err := a.GetDatabaseConfig()
-	if err != nil {
-		return "", err
-	}
-	return string(cfg.Driver), nil
-}
-
-// OwnedTypedAsset is OwnedAsset for the paths that serve an asset of one of
-// extName's own asset types — its config, credentials, form and connection path,
-// all read through the type's describe() declaration, and the asset a call from
-// the extension's frontend is scoped to. A database asset of a
-// driver extName provides is extName's too, but its config, password and reach
-// path go to the driver only in the open call of a session.
-func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
-	owner, asset, err := s.OwnedAsset(ctx, extName, assetID)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	def := owner.Manifest.AssetTypeDef(asset.Type)
+	def := caller.Manifest.AssetTypeDef(asset.Type)
 	if def == nil {
-		return nil, nil, nil, fmt.Errorf("asset %d (type %q) reaches extension %q only through its database driver session", assetID, asset.Type, extName)
+		return nil, nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
 	}
-	return owner, asset, def, nil
+	return caller, asset, def, nil
 }
 
 // kvStore implements extension.KVStore, scoped to one extension.

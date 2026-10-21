@@ -127,44 +127,50 @@ func Register(ext *extension.Extension) error {
 }
 
 func register(l loaded, help, description string) error {
+	withdrawn, err := registerLocked(l, help, description)
+	// 撤回的驱动在 mu 之外作废会话：关闭要等扩展里执行中的调用停下。
+	removeDrivers(withdrawn)
+	return err
+}
+
+// registerLocked 持 mu 做 register 的登记。失败时返回已移出驱动注册表、会话待作废的驱动。
+func registerLocked(l loaded, help, description string) ([]*extensionDriver, error) {
 	m := l.manifest
 	mu.Lock()
 	defer mu.Unlock()
 	if _, exists := registered[l.name]; exists {
-		return fmt.Errorf("extension %q is already registered", l.name)
+		return nil, fmt.Errorf("extension %q is already registered", l.name)
 	}
 	if err := claimPolicyType(l.name, m.Policies.Type); err != nil {
-		return err
+		return nil, err
 	}
 
 	// 驱动先注册：撞名是最常见的拒绝原因，先查省得登记了一串资产类型再撤。
 	extDrivers, err := registerDrivers(l.name, m.DatabaseDrivers, l.plugin, l.translate)
 	if err != nil {
 		delete(policyTypeOwner, m.Policies.Type)
-		return err
+		return extDrivers, err
 	}
 
 	var done []string
-	rollback := func() {
+	rollback := func() []*extensionDriver {
 		for _, t := range done {
 			unregisterType(t)
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(l.name)
 		delete(policyTypeOwner, m.Policies.Type)
-		removeDrivers(releaseDrivers(extDrivers))
+		return releaseDrivers(extDrivers)
 	}
 
 	for _, at := range m.AssetTypes {
 		if err := registerType(l, at, help, description); err != nil {
-			rollback()
-			return err
+			return rollback(), err
 		}
 		done = append(done, at.Type)
 	}
 
 	if err := registerPolicyGroups(l.name, m); err != nil {
-		rollback()
-		return err
+		return rollback(), err
 	}
 
 	registered[l.name] = done
@@ -173,7 +179,7 @@ func register(l loaded, help, description string) error {
 	logger.Default().Info("extension registered",
 		zap.String("extension", l.name), zap.Strings("assetTypes", done),
 		zap.Strings("databaseDrivers", m.Capabilities.DatabaseDrivers))
-	return nil
+	return nil, nil
 }
 
 // Unregister 撤掉一个扩展写进宿主注册表的全部条目。未注册的名字是 no-op。它提供的数据库驱动

@@ -26,8 +26,9 @@ type invocation struct {
 	// the guest's.
 	asset *AssetRef
 	// reach is set for the calls of a database driver session: the reach path
-	// (tunnel, proxy chain, or direct) the host resolved for the session, which
-	// every TCP stream the guest opens takes. Its Dial is nil for a direct dial.
+	// (tunnel, proxy chain, or direct) the host resolved for the session, confined
+	// to the asset's address (Plugin.confineReach), which every TCP stream the
+	// guest opens takes.
 	reach *dbdriver.Transport
 }
 

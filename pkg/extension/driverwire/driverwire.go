@@ -66,6 +66,11 @@ type Call struct {
 	// and the cursor / writer ones).
 	Session uint64 `json:"session,omitempty"`
 	Args    Args   `json:"args"`
+	// ReleaseWriters are row statement writers of this instance the host no longer
+	// holds. A writer outlives its session, so the host hands their release along
+	// with the next call on their instance; the guest forgets them before it runs
+	// the operation.
+	ReleaseWriters []uint64 `json:"releaseWriters,omitempty"`
 }
 
 // Args are an operation's arguments, named as the dbdriver.Session parameters

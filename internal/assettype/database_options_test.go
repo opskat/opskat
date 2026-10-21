@@ -146,6 +146,18 @@ func TestDriverOptionsUpdate(t *testing.T) {
 		assert.Contains(t, err.Error(), `"nope"`)
 	})
 
+	t.Run("approval checks the merged options the commit will store", func(t *testing.T) {
+		// 清空必填项：审批前就拒绝，而不是用户点了同意之后落库时才失败。
+		args := map[string]any{"driver_options": map[string]any{"region": ""}}
+		_, err := h.AutomationUpdateContext(a, args)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"region"`)
+		require.Error(t, h.ApplyUpdateArgs(t.Context(), a, args))
+		// 口令类留空表示沿用：审批前同样不把它当成清空。
+		_, err = h.AutomationUpdateContext(a, map[string]any{"driver_options": map[string]any{"token": ""}})
+		require.NoError(t, err)
+	})
+
 	t.Run("an update without driver_options keeps them", func(t *testing.T) {
 		before, _ := a.GetDatabaseConfig()
 		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, map[string]any{"host": "fake-2.internal"}))
@@ -239,6 +251,17 @@ func TestDriverOptionsSafeView(t *testing.T) {
 	assert.NotContains(t, string(data), "s3cret")
 	cfg, _ := a.GetDatabaseConfig()
 	assert.NotContains(t, string(data), cfg.DriverOptions["token"].(string), "密文也不展示")
+}
+
+// 没有口令类取值的资产，视图里不出现「已设置的口令」这一项（而不是 null）。
+func TestDriverOptionsSafeViewWithoutSecrets(t *testing.T) {
+	registerOptionsDriver(t)
+	a, err := createWithOptions(t, map[string]any{"region": "eu"})
+	require.NoError(t, err)
+
+	view := (&databaseHandler{}).SafeView(a)
+	assert.Contains(t, view, "driver_options")
+	assert.NotContains(t, view, "driver_options_secrets_set")
 }
 
 func TestDriverOptionsHaveSecret(t *testing.T) {
