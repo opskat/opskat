@@ -23,7 +23,8 @@ type Config struct {
 	ReadOnly bool `json:"read_only,omitempty"`
 	// QueryTimeoutSeconds 是查询超时（秒），0 为默认值。
 	QueryTimeoutSeconds int `json:"query_timeout_seconds,omitempty"`
-	// SSHAssetID 是配置里的 SSH 资产（数据库文件所在的主机，如远端 SQLite）。
+	// SSHAssetID 是配置里的 SSH 资产：网络驱动的 SSH 隧道（宿主已解析进 OpenRequest.Transport），
+	// 或数据库文件所在的主机（如远端 SQLite）。它归宿主，不交给扩展提供的驱动。
 	SSHAssetID int64 `json:"ssh_asset_id,omitempty"`
 	// SQLiteSource 是 SQLite 文件来源。
 	SQLiteSource string `json:"sqlite_source,omitempty"`

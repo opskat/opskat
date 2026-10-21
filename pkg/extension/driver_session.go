@@ -70,6 +70,14 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 	if !slices.Contains(p.manifest.Capabilities.DatabaseDrivers, id) {
 		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
 	}
+	if req.Config != nil {
+		// The SSH asset is the host's: a tunnel it has already resolved into
+		// req.Transport (or a file host only a built-in SQLite reaches). It is not
+		// part of the config the extension is handed.
+		cfg := *req.Config
+		cfg.SSHAssetID = 0
+		req.Config = &cfg
+	}
 	s := &driverSession{plugin: p, driver: id, open: req, live: 1}
 	inst, err := s.login(ctx)
 	if err != nil {

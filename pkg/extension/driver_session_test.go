@@ -153,6 +153,28 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, []string{"s3cret"}, d.server.Logins())
 	})
 
+	// A database config's ssh_asset_id is the SSH tunnel the host resolves into the
+	// session's reach path (opsctl --ssh-asset / AI ssh_asset_id store it there); the
+	// tunnel is host-owned and stays out of the config the extension sees.
+	t.Run("the config the driver is handed carries no SSH tunnel asset", func(t *testing.T) {
+		d := newDriver()
+		cfg := &dbdriver.Config{
+			Driver: d.desc.ID, Host: "db.internal", Port: d.desc.DefaultPort, Username: "alice", Database: "app",
+			SSHAssetID: 42,
+		}
+		s, err := d.Open(ctx, dbdriver.OpenRequest{Config: cfg, Password: "s3cret"})
+		require.NoError(t, err)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		res, err := s.Execute(ctx, "SHOW OPEN CONFIG")
+		require.NoError(t, err)
+		var seen map[string]any
+		require.NoError(t, json.Unmarshal([]byte(res.Rows.Rows[0][0].(string)), &seen))
+		assert.Equal(t, "db.internal", seen["host"])
+		assert.NotContains(t, seen, "ssh_asset_id")
+		assert.Equal(t, int64(42), cfg.SSHAssetID, "the caller's config is left as it was")
+	})
+
 	t.Run("every instance of a session is handed the driver options when it logs in, and they are not logged", func(t *testing.T) {
 		const secret = "opt-s3cret"
 		logs := observeLogs(t)
