@@ -122,18 +122,12 @@ func rejectUndeclaredCertificateArgs(d dbdriver.Driver, args map[string]any) err
 
 // applyCertificateArgs 把请求里出现的证书字段写进 cfg；私钥内容加密落库。
 func applyCertificateArgs(cfg *asset_entity.DatabaseConfig, args map[string]any) error {
-	if _, ok := args[argTLS]; ok {
-		cfg.TLS = ArgBool(args, argTLS)
-	}
-	if _, ok := args[argTLSInsec]; ok {
-		cfg.TLSInsecure = ArgBool(args, argTLSInsec)
-	}
-	if _, ok := args[argTLSServer]; ok {
-		cfg.TLSServerName = ArgString(args, argTLSServer)
-	}
-	return applyTLSCertArgs(args, tlsCertStore{
-		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
-		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	return applyTLSArgs(args, tlsStore{
+		enabled: &cfg.TLS, insecure: &cfg.TLSInsecure, serverName: &cfg.TLSServerName,
+		certs: tlsCertStore{
+			caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+			caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+		},
 	})
 }
 

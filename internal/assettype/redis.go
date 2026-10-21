@@ -201,18 +201,12 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 
 // applyRedisTLSArgs 把请求里出现的 TLS 字段写进 cfg；单机、集群、哨兵共用这一套 TLS 设置。
 func applyRedisTLSArgs(cfg *asset_entity.RedisConfig, args map[string]any) error {
-	if _, ok := args["tls"]; ok {
-		cfg.TLS = ArgBool(args, "tls")
-	}
-	if _, ok := args["tls_insecure"]; ok {
-		cfg.TLSInsecure = ArgBool(args, "tls_insecure")
-	}
-	if _, ok := args["tls_server_name"]; ok {
-		cfg.TLSServerName = ArgString(args, "tls_server_name")
-	}
-	return applyTLSCertArgs(args, tlsCertStore{
-		caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
-		caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+	return applyTLSArgs(args, tlsStore{
+		enabled: &cfg.TLS, insecure: &cfg.TLSInsecure, serverName: &cfg.TLSServerName,
+		certs: tlsCertStore{
+			caFile: &cfg.TLSCAFile, certFile: &cfg.TLSCertFile, keyFile: &cfg.TLSKeyFile,
+			caPEM: &cfg.TLSCAPEM, certPEM: &cfg.TLSCertPEM, keyPEM: &cfg.TLSKeyPEM,
+		},
 	})
 }
 

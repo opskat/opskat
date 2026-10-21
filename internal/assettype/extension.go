@@ -269,18 +269,12 @@ func applyExtensionTLSArgs(args map[string]any, conn *asset_entity.ExtensionConn
 	if conn.TLS != nil {
 		tls = *conn.TLS
 	}
-	if _, ok := args[argTLS]; ok {
-		tls.Enabled = ArgBool(args, argTLS)
-	}
-	if _, ok := args[argTLSInsec]; ok {
-		tls.Insecure = ArgBool(args, argTLSInsec)
-	}
-	if _, ok := args[argTLSServer]; ok {
-		tls.ServerName = ArgString(args, argTLSServer)
-	}
-	if err := applyTLSCertArgs(args, tlsCertStore{
-		caFile: &tls.CAFile, certFile: &tls.CertFile, keyFile: &tls.KeyFile,
-		caPEM: &tls.CACert, certPEM: &tls.ClientCert, keyPEM: &tls.ClientKey,
+	if err := applyTLSArgs(args, tlsStore{
+		enabled: &tls.Enabled, insecure: &tls.Insecure, serverName: &tls.ServerName,
+		certs: tlsCertStore{
+			caFile: &tls.CAFile, certFile: &tls.CertFile, keyFile: &tls.KeyFile,
+			caPEM: &tls.CACert, certPEM: &tls.ClientCert, keyPEM: &tls.ClientKey,
+		},
 	}); err != nil {
 		return err
 	}

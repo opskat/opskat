@@ -245,7 +245,7 @@ func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
 		route := newRedirectRoute(t)
 		s := openRedirectSession(t, ext, "203.0.113.10", dbdriver.Transport{Dial: route.asset.Dial, DialAddr: route.byAddr.Dial, Direct: true})
 
-		local := []string{"127.0.0.1:7400", "127.8.0.1:7400", "[::1]:7400", "localhost:7400", "169.254.10.1:7400", "[fe80::1]:7400", "0.0.0.0:7400"}
+		local := []string{"127.0.0.1:7400", "127.8.0.1:7400", "[::1]:7400", "[::ffff:127.0.0.1]:7400", "localhost:7400", "169.254.10.1:7400", "[fe80::1]:7400", "0.0.0.0:7400"}
 		for _, addr := range local {
 			assert.Contains(t, probe(t, s, "DIAL "+addr), addr, "the refused address is named")
 		}
@@ -257,9 +257,31 @@ func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
 			}
 		}
 		assert.Equal(t, len(local), refused, "each refusal is a Warn")
+		assert.Empty(t, redirectLogs(t, logs), "a refused address is not logged as a redirect followed")
 
 		assert.Empty(t, probe(t, s, "DIAL 203.0.113.20:7400"))
 		assert.Equal(t, []string{"203.0.113.20:7400"}, route.byAddr.Dialed(), "any other address is dialed")
+	})
+
+	t.Run("a route without a by-address dial is direct: loopback redirects are refused", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = c.Close()
+			}
+		}()
+		route := newRedirectRoute(t)
+		s := openRedirectSession(t, ext, "203.0.113.10", dbdriver.Transport{Dial: route.asset.Dial})
+		addr := ln.Addr().String()
+		msg := probe(t, s, "DIAL "+addr)
+		assert.Contains(t, msg, addr, "the refused address is named")
+		assert.Contains(t, msg, "loopback", "a direct dial gets the direct route's check")
 	})
 
 	t.Run("on a direct route to a loopback asset, loopback redirects are allowed", func(t *testing.T) {

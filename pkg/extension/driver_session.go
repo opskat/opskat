@@ -138,10 +138,12 @@ func (p *Plugin) confineReach(driver string, req *dbdriver.OpenRequest) *dbdrive
 		driver:    driver,
 		assetID:   req.AssetID,
 		redirects: p.manifest.Capabilities.Network.DatabaseRedirects,
-		direct:    req.Transport.Direct,
-		dial:      orDirectDial(req.Transport.Dial),
-		dialAddr:  orDirectDial(req.Transport.DialAddr),
-		followed:  map[string]bool{},
+		// No by-address dial means a direct one (orDirectDial): it gets the direct
+		// route's check whatever Direct says.
+		direct:   req.Transport.Direct || req.Transport.DialAddr == nil,
+		dial:     orDirectDial(req.Transport.Dial),
+		dialAddr: orDirectDial(req.Transport.DialAddr),
+		followed: map[string]bool{},
 	}
 	if cfg := req.Config; cfg != nil {
 		g.assetHost = cfg.Host
@@ -203,7 +205,6 @@ func (g *reachGate) deny(ctx context.Context, addr string) {
 // driver at the user's own machine — unless the asset itself is such an address.
 // What is dialed is the address checked, not the name resolved again.
 func (g *reachGate) redirect(ctx context.Context, network, addr string) (net.Conn, error) {
-	g.logFirst(ctx, addr)
 	targets := []string{addr}
 	if g.direct {
 		var err error
@@ -211,6 +212,7 @@ func (g *reachGate) redirect(ctx context.Context, network, addr string) (net.Con
 			return nil, err
 		}
 	}
+	g.logFirst(ctx, addr)
 	var errs []error
 	for _, target := range targets {
 		conn, err := g.dialAddr(ctx, network, target)

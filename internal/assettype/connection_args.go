@@ -289,6 +289,27 @@ func encryptArg(plaintext string) (string, error) {
 	return credential_svc.Default().Encrypt(plaintext)
 }
 
+// tlsStore 指向一个类型存 TLS 设置的位置：启用开关、跳过校验、服务器名，与三份证书材料。
+type tlsStore struct {
+	enabled, insecure *bool
+	serverName        *string
+	certs             tlsCertStore
+}
+
+// applyTLSArgs 把请求里出现的 TLS 字段写进 store：没出现的不动，证书材料按 applyTLSCertArgs。
+func applyTLSArgs(args map[string]any, store tlsStore) error {
+	if _, ok := args[argTLS]; ok {
+		*store.enabled = ArgBool(args, argTLS)
+	}
+	if _, ok := args[argTLSInsec]; ok {
+		*store.insecure = ArgBool(args, argTLSInsec)
+	}
+	if _, ok := args[argTLSServer]; ok {
+		*store.serverName = ArgString(args, argTLSServer)
+	}
+	return applyTLSCertArgs(args, store.certs)
+}
+
 // tlsCertStore 指向一个类型存 TLS 证书材料的六个位置。
 type tlsCertStore struct {
 	caFile, certFile, keyFile *string
