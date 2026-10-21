@@ -408,17 +408,18 @@ func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
 	return info.Version, true
 }
 
-// InstalledExtensionDrivers returns the database driver ids the installed
-// extension named name declares, nil when it is not installed. `opsctl ext dev`
-// compares them with the incoming manifest to mark newly added drivers.
-func InstalledExtensionDrivers(e *Extension, name string) []string {
+// InstalledExtensionCapabilities returns the capabilities the installed
+// extension named name declares, the zero value when it is not installed.
+// `opsctl ext dev` compares them with the incoming manifest to mark what an
+// overwrite newly adds.
+func InstalledExtensionCapabilities(e *Extension, name string) extension.Capabilities {
 	if e.service == nil {
-		return nil
+		return extension.Capabilities{}
 	}
 	info, err := e.service.GetDetail(name, e.lang.Lang())
 	if err != nil {
 		// GetDetail's only failure is "not installed".
-		return nil
+		return extension.Capabilities{}
 	}
-	return info.Manifest.Capabilities.DatabaseDrivers
+	return info.Manifest.Capabilities
 }

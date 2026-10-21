@@ -23,8 +23,8 @@ import (
 type recordingDevInstaller struct {
 	installs  []string // directories handed to InstallExtensionDir
 	installed map[string]string
-	drivers   map[string][]string // driver ids declared by the installed version
-	manifest  *extension.Manifest // manifest read from the last installed directory
+	caps      map[string]extension.Capabilities // capabilities declared by the installed version
+	manifest  *extension.Manifest               // manifest read from the last installed directory
 	err       error
 }
 
@@ -33,8 +33,8 @@ func (i *recordingDevInstaller) InstalledExtensionVersion(_ context.Context, nam
 	return v, ok
 }
 
-func (i *recordingDevInstaller) InstalledExtensionDrivers(_ context.Context, name string) []string {
-	return i.drivers[name]
+func (i *recordingDevInstaller) InstalledExtensionCapabilities(_ context.Context, name string) extension.Capabilities {
+	return i.caps[name]
 }
 
 func (i *recordingDevInstaller) InstallExtensionDir(_ context.Context, sourceDir string) (string, string, error) {
@@ -418,7 +418,7 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	installer := &recordingDevInstaller{
 		installed: map[string]string{"vmysql": "1.0.0"},
-		drivers:   map[string][]string{"vmysql": {"vmysql"}},
+		caps:      map[string]extension.Capabilities{"vmysql": {DatabaseDrivers: []string{"vmysql"}}},
 	}
 	o := newDevOpsctl(installer, approver)
 
@@ -432,7 +432,7 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 // An extension that provides no driver gets exactly the dialog it always had.
 func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 	approver := &recordingApprover{approve: true}
-	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, drivers: map[string][]string{"oss": {"gone"}}}
+	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, caps: map[string]extension.Capabilities{"oss": {DatabaseDrivers: []string{"gone"}}}}
 	o := newDevOpsctl(installer, approver)
 
 	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
@@ -441,19 +441,41 @@ func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 		approver.prompts[0].Detail)
 }
 
-func TestHandleExtDevInstallListsDatabaseRedirectsMarkedNewOnOverwrite(t *testing.T) {
+func writeRedirectExtension(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vredir","version":"1.1.0","hostABI":"2.4",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
   "capabilities": {"databaseDrivers": ["vredir"], "network": {"databaseRedirects": true}}}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
-	approver := &recordingApprover{approve: true}
-	installer := &recordingDevInstaller{
-		installed: map[string]string{"vredir": "1.0.0"},
-		drivers:   map[string][]string{"vredir": {"vredir"}},
-	}
-	o := newDevOpsctl(installer, approver)
+	return dir
+}
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
-	require.Contains(t, approver.prompts[0].Detail, "network.databaseRedirects: true (new)")
+func TestHandleExtDevInstallDatabaseRedirectsNewMark(t *testing.T) {
+	declared := extension.Capabilities{DatabaseDrivers: []string{"vredir"}, Network: extension.NetworkCapability{DatabaseRedirects: true}}
+	undeclared := extension.Capabilities{DatabaseDrivers: []string{"vredir"}}
+	cases := []struct {
+		name      string
+		installed map[string]string
+		caps      map[string]extension.Capabilities
+		marked    bool
+	}{
+		{"added by overwrite", map[string]string{"vredir": "1.0.0"}, map[string]extension.Capabilities{"vredir": undeclared}, true},
+		{"already declared", map[string]string{"vredir": "1.0.0"}, map[string]extension.Capabilities{"vredir": declared}, false},
+		{"fresh install", nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			approver := &recordingApprover{approve: true}
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, caps: tc.caps}, approver)
+			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
+			detail := approver.prompts[0].Detail
+			require.Contains(t, detail, "network.databaseRedirects: true")
+			if tc.marked {
+				require.Contains(t, detail, "network.databaseRedirects: true (new)")
+			} else {
+				require.NotContains(t, detail, "network.databaseRedirects: true (new)")
+			}
+		})
+	}
 }

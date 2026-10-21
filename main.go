@@ -467,8 +467,8 @@ func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, nam
 	return extension.InstalledExtensionVersion(i.ext, name)
 }
 
-func (i desktopExtDevInstaller) InstalledExtensionDrivers(_ context.Context, name string) []string {
-	return extension.InstalledExtensionDrivers(i.ext, name)
+func (i desktopExtDevInstaller) InstalledExtensionCapabilities(_ context.Context, name string) extpkg.Capabilities {
+	return extension.InstalledExtensionCapabilities(i.ext, name)
 }
 
 func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
