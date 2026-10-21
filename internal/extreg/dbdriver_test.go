@@ -46,7 +46,7 @@ func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *extension.
 
 func registerManifest(t *testing.T, m *extension.Manifest, plugin pluginCaller) error {
 	t.Helper()
-	err := register(loaded{name: m.Name, manifest: m, plugin: plugin}, "help", "desc")
+	err := register(loaded{name: m.Name, manifest: m, plugin: plugin, translate: (&extension.Extension{}).Translate}, "help", "desc")
 	if err == nil {
 		t.Cleanup(func() { Unregister(m.Name) })
 	}
@@ -124,6 +124,32 @@ func TestDriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
 	assert.False(t, ok)
 	_, err = dbregistry.Lookup("betadb")
 	assert.NoError(t, err, "unregistering one extension leaves another's driver alone")
+}
+
+// The labels and descriptions of a driver's own fields go through the extension's
+// locales, in the language the caller asks for — as an extension asset type's
+// config fields do.
+func TestExtensionDriverFieldsAreLocalizedThroughItsLocales(t *testing.T) {
+	desc := driverDescriptor("acmedb")
+	desc.DriverFields = []dbdriver.DriverField{{
+		Key: "sid", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection, Label: "field.sid", Description: "field.sid.help",
+	}}
+	m := driverOnlyManifest("acme-db", desc)
+	require.NoError(t, Register(&extension.Extension{Name: m.Name, Manifest: m, Locales: map[string]map[string]string{
+		"zh-cn": {"field.sid": "实例 SID", "field.sid.help": "数据库实例标识"},
+		"en":    {"field.sid": "Instance SID"},
+	}}))
+	t.Cleanup(func() { Unregister(m.Name) })
+
+	d, err := dbregistry.Lookup("acmedb")
+	require.NoError(t, err)
+	zh := dbregistry.LocalizedDescriptor(d, "zh-CN").DriverFields[0]
+	assert.Equal(t, "实例 SID", zh.Label)
+	assert.Equal(t, "数据库实例标识", zh.Description)
+	en := dbregistry.LocalizedDescriptor(d, "en").DriverFields[0]
+	assert.Equal(t, "Instance SID", en.Label)
+	assert.Equal(t, "field.sid.help", en.Description, "a key without a translation stays as written")
+	assert.Equal(t, "field.sid", d.Descriptor().DriverFields[0].Label, "the registered descriptor is not rewritten")
 }
 
 func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {

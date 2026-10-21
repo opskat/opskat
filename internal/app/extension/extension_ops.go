@@ -210,7 +210,7 @@ func (e *Extension) assetRef(extName string, assetID int64) (*extension.AssetRef
 	if assetID == 0 {
 		return nil, nil
 	}
-	_, asset, err := e.service.OwnedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), extName, assetID)
+	_, asset, _, err := e.service.OwnedTypedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), extName, assetID)
 	if err != nil {
 		return nil, err
 	}

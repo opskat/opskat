@@ -80,7 +80,10 @@ func (d *Descriptor) validateAssetScope() error {
 		if len(d.Tools) > 0 {
 			return fmt.Errorf("describe(): tools require an asset type to be reached through; an extension that only provides database drivers declares none")
 		}
-		return nil
+		if d.Policies.Type == "" {
+			return nil
+		}
+		return d.validatePolicyType()
 	}
 	if len(d.AssetTypes) == 0 {
 		return fmt.Errorf("describe(): assetTypes must declare at least one asset type — extension tools are reached through exec on an asset")
@@ -124,9 +127,14 @@ func (d *Descriptor) validateAssetScope() error {
 	if d.Policies.Type == "" {
 		return fmt.Errorf("describe(): policies.type is required — it names the policy face the extension's asset types are checked under")
 	}
-	// The policy type is a namespace segment of the extension's policy group IDs
-	// (ext:<type>:<name>) and grants (ext:<type>:<action>:<resource>); a name that
-	// could itself contain ":" would let one face's namespace spell another's.
+	return d.validatePolicyType()
+}
+
+// validatePolicyType checks a declared policy type. It is a namespace segment of
+// the extension's policy group IDs (ext:<type>:<name>) and grants
+// (ext:<type>:<action>:<resource>); a name that could itself contain ":" would let
+// one face's namespace spell another's.
+func (d *Descriptor) validatePolicyType() error {
 	if !nameRe.MatchString(d.Policies.Type) {
 		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policies.Type)
 	}

@@ -632,6 +632,14 @@ func TestParseDescriptorDatabaseDrivers(t *testing.T) {
 			So(string(d.DatabaseDrivers[0].ID), ShouldEqual, "mysql-ext")
 		})
 
+		Convey("a policy type a driver-only extension does declare is held to the same rule", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],"policies":{"type":"a:b"}}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "policies.type")
+			_, err = ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],"policies":{"type":"mydb"}}`))
+			So(err, ShouldBeNil)
+		})
+
 		Convey("an extension without drivers still needs an asset type", func() {
 			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[]}`))
 			So(err, ShouldNotBeNil)

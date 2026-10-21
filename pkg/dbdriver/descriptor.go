@@ -79,9 +79,29 @@ type DriverField struct {
 	Default any `json:"default,omitempty"`
 	// Enum 是枚举类的取值，只有枚举类声明。
 	Enum []string `json:"enum,omitempty"`
-	// Label / Description 由扩展自己的多语言解析，宿主原样交给前端。
+	// Label / Description 可以是扩展多语言（locales/）里的键：宿主按调用方的语言用提供驱动的
+	// 扩展的翻译解析后交给前端（Descriptor.Localized），没有翻译的原样显示。
 	Label       string `json:"label,omitempty"`
 	Description string `json:"description,omitempty"`
+}
+
+// Localized 返回专属字段的标签与说明经 tr 翻译后的描述副本，不改 d。
+func (d Descriptor) Localized(tr func(key string) string) Descriptor {
+	if len(d.DriverFields) == 0 {
+		return d
+	}
+	fields := make([]DriverField, len(d.DriverFields))
+	for i, f := range d.DriverFields {
+		if f.Label != "" {
+			f.Label = tr(f.Label)
+		}
+		if f.Description != "" {
+			f.Description = tr(f.Description)
+		}
+		fields[i] = f
+	}
+	d.DriverFields = fields
+	return d
 }
 
 // Validate 检查描述自身是否合法；扩展加载时用它拒绝不合法的驱动。错误点名驱动 id 与出问题的键。

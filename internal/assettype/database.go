@@ -94,10 +94,8 @@ func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQuery
 func (h *databaseHandler) PolicyKind() string { return policy.PolicyKindQuery }
 
 func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[string]any) (map[string]any, error) {
-	if _, ok := args[argDriverOptions]; ok {
-		if err := h.checkUpdateDriverOptions(a, args); err != nil {
-			return nil, err
-		}
+	if err := h.checkUpdateDriverOptions(a, args); err != nil {
+		return nil, err
 	}
 	if _, ok := args["driver"]; ok {
 		return args, nil
@@ -116,15 +114,24 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 	return out, nil
 }
 
-// checkUpdateDriverOptions 在审批前按驱动的声明校验更新入参里的 driver_options。
+// checkUpdateDriverOptions 在审批前按驱动的声明校验更新入参里的 driver_options；切换驱动时
+// 新驱动的专属字段从头取值，必填也在这里查。既没带 driver_options 也没切换驱动时无事可查。
 func (h *databaseHandler) checkUpdateDriverOptions(a *asset_entity.Asset, args map[string]any) error {
+	_, given := args[argDriverOptions]
+	if !given && ArgString(args, "driver") == "" {
+		return nil
+	}
 	cfg, err := a.GetDatabaseConfig()
 	if err != nil {
 		return err
 	}
+	switched := switchesDriver(cfg, args)
+	if !given && !switched {
+		return nil
+	}
 	id := cfg.Driver
-	if v := ArgString(args, "driver"); v != "" {
-		id = asset_entity.DatabaseDriver(v)
+	if switched {
+		id = asset_entity.DatabaseDriver(ArgString(args, "driver"))
 	}
 	drv, err := dbregistry.Lookup(id)
 	if err != nil {
@@ -134,7 +141,19 @@ func (h *databaseHandler) checkUpdateDriverOptions(a *asset_entity.Asset, args m
 	if err != nil {
 		return err
 	}
-	return drv.Descriptor().CheckDriverOptions(opts)
+	if err := drv.Descriptor().CheckDriverOptions(opts); err != nil {
+		return err
+	}
+	if switched {
+		_, err = drv.Descriptor().CompleteDriverOptions(opts)
+	}
+	return err
+}
+
+// switchesDriver 报告更新入参是否把资产换到另一个驱动（带了与已存的不同的 driver）。
+func switchesDriver(cfg *asset_entity.DatabaseConfig, args map[string]any) bool {
+	v := ArgString(args, "driver")
+	return v != "" && asset_entity.DatabaseDriver(v) != cfg.Driver
 }
 
 func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
@@ -192,8 +211,11 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	if err != nil || cfg == nil {
 		return err
 	}
-	if v := ArgString(args, "driver"); v != "" {
-		cfg.Driver = asset_entity.DatabaseDriver(v)
+	switched := switchesDriver(cfg, args)
+	if switched {
+		cfg.Driver = asset_entity.DatabaseDriver(ArgString(args, "driver"))
+		// 专属字段属于驱动：旧驱动的取值不带进新驱动的配置，新驱动的取值按它自己的声明补齐。
+		cfg.DriverOptions = nil
 	}
 	drv, err := dbregistry.Lookup(cfg.Driver)
 	if err != nil {
@@ -222,7 +244,7 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	cfg.SetDriverConfig(driverCfg)
 	if updates, err := driverOptionsArg(args); err != nil {
 		return err
-	} else if updates != nil {
+	} else if updates != nil || switched {
 		if cfg.DriverOptions, err = mergeDriverOptions(drv.Descriptor(), cfg.DriverOptions, updates); err != nil {
 			return err
 		}

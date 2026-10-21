@@ -141,6 +141,21 @@ func List() []dbdriver.Driver {
 	return out
 }
 
+// Localizer 是描述里带着要翻译的文案的驱动（扩展驱动：专属字段的标签与说明是扩展多语言里的
+// 键）。内置驱动的描述没有这样的文案，不实现它。
+type Localizer interface {
+	// LocalizedDescriptor 返回按 lang（前端的 i18next 语言，如 "zh-CN"）翻译后的描述。
+	LocalizedDescriptor(lang string) dbdriver.Descriptor
+}
+
+// LocalizedDescriptor 是 d 交给界面的描述：实现了 Localizer 的按 lang 翻译，其余原样。
+func LocalizedDescriptor(d dbdriver.Driver, lang string) dbdriver.Descriptor {
+	if l, ok := d.(Localizer); ok {
+		return l.LocalizedDescriptor(lang)
+	}
+	return d.Descriptor()
+}
+
 // IDs 返回全部已注册的驱动 id，顺序同 List；给报错与帮助文本列出可用驱动用。
 func IDs() []string {
 	list := List()

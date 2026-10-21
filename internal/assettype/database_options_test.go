@@ -154,6 +154,53 @@ func TestDriverOptionsUpdate(t *testing.T) {
 	})
 }
 
+// 切换驱动时专属字段跟着驱动走：旧驱动的取值不写进新驱动的配置，新驱动的必填与默认值照创建时校验。
+func TestDriverOptionsDriverSwitch(t *testing.T) {
+	registerOptionsDriver(t)
+	other := dbdrivertest.NewFake()
+	other.Desc.ID, other.Desc.Name, other.Desc.Aliases = "otherdb", "OtherDB", nil
+	other.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "zone", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection, Required: true},
+		{Key: "level", Type: dbdriver.FieldTypeNumber, Tab: dbdriver.TabAdvanced, Default: 2},
+	}
+	dbdrivertest.Register(t, other)
+	h := &databaseHandler{}
+
+	t.Run("the new driver's required options are checked", func(t *testing.T) {
+		a, err := createWithOptions(t, map[string]any{"region": "eu", "token": "s3cret"})
+		require.NoError(t, err)
+		before := a.Config
+		_, err = h.AutomationUpdateContext(a, map[string]any{"driver": "otherdb"})
+		require.Error(t, err, "审批前就挡住")
+		assert.Contains(t, err.Error(), `"zone"`)
+		err = h.ApplyUpdateArgs(t.Context(), a, map[string]any{"driver": "otherdb"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"zone"`)
+		assert.Equal(t, before, a.Config)
+	})
+
+	t.Run("the old driver's options are dropped and the new defaults applied", func(t *testing.T) {
+		a, err := createWithOptions(t, map[string]any{"region": "eu", "token": "s3cret"})
+		require.NoError(t, err)
+		args := map[string]any{"driver": "otherdb", "driver_options": map[string]any{"zone": "z1"}}
+		_, err = h.AutomationUpdateContext(a, args)
+		require.NoError(t, err)
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, args))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"zone": "z1", "level": float64(2)}, cfg.DriverOptions)
+	})
+
+	t.Run("naming the same driver is not a switch", func(t *testing.T) {
+		a, err := createWithOptions(t, map[string]any{"region": "eu"})
+		require.NoError(t, err)
+		before, _ := a.GetDatabaseConfig()
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, map[string]any{"driver": "fakedb"}))
+		after, _ := a.GetDatabaseConfig()
+		assert.Equal(t, before.DriverOptions, after.DriverOptions)
+	})
+}
+
 func TestDriverOptionsKeptWhenDriverUnavailable(t *testing.T) {
 	registerOptionsDriver(t)
 	h := &databaseHandler{}

@@ -84,6 +84,8 @@ type loaded struct {
 	name     string
 	manifest *extension.Manifest
 	plugin   pluginCaller
+	// translate 解析扩展多语言里的键（数据库驱动专属字段的标签与说明）。
+	translate translateFunc
 }
 
 var (
@@ -118,7 +120,7 @@ func claimPolicyType(extName, policyType string) error {
 func Register(ext *extension.Extension) error {
 	localized := ext.Manifest.Localized(func(key string) string { return ext.Translate(helpLang, key) })
 	return register(
-		loaded{name: ext.Name, manifest: ext.Manifest, plugin: ext.Plugin},
+		loaded{name: ext.Name, manifest: ext.Manifest, plugin: ext.Plugin, translate: ext.Translate},
 		helpDocument(ext.SkillMD, ext.Name, localized),
 		skillDescription(ext),
 	)
@@ -136,7 +138,7 @@ func register(l loaded, help, description string) error {
 	}
 
 	// 驱动先注册：撞名是最常见的拒绝原因，先查省得登记了一串资产类型再撤。
-	extDrivers, err := registerDrivers(l.name, m.DatabaseDrivers, l.plugin)
+	extDrivers, err := registerDrivers(l.name, m.DatabaseDrivers, l.plugin, l.translate)
 	if err != nil {
 		delete(policyTypeOwner, m.Policies.Type)
 		return err

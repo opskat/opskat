@@ -73,6 +73,8 @@ function subscribeExtensionReady(): void {
  * type labels and policy titles keep the old language until reload.
  */
 function onLanguageChanged(): void {
+  // 扩展驱动专属字段的标签与说明同样由后端按语言翻译。
+  refreshDatabaseDrivers();
   void refreshExtensions();
 }
 

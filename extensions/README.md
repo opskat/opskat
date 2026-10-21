@@ -536,6 +536,11 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   dialect does not implement offers the user an entry point that fails. A read-only
   config is refused by the SDK unless the descriptor declares `CapReadOnly`, in which
   case `open` must make the connection read-only.
+- **Fields of the driver's own go in `DriverFields`.** Each one declares its key, type,
+  tab, whether it is required and its default; the values are stored in the asset's
+  `driver_options` and reach `open` as `req.DriverOptions`, password fields decrypted.
+  `Label` and `Description` may be keys of your `locales/` files: the host shows them in
+  the user's language.
 - **A session lives in an instance of its own.** The host opens each session in a
   module instance dedicated to it and keeps the instance — the `*sql.DB`, its open
   connections, a cursor half read — between calls, so later operations do not log in

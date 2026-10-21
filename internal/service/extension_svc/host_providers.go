@@ -51,7 +51,7 @@ type assetConfigGetter struct {
 func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	caller, asset, _, err := g.svc.ownedTypedAsset(ctx, g.extName, assetID)
+	caller, asset, _, err := g.svc.OwnedTypedAsset(ctx, g.extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 // Only the named fields are decrypted — a stored secret the active auth group
 // does not reference cannot fail the request.
 func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error) {
-	caller, asset, def, err := g.svc.ownedTypedAsset(ctx, g.extName, assetID)
+	caller, asset, def, err := g.svc.OwnedTypedAsset(ctx, g.extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,12 +150,13 @@ func databaseDriverOf(asset *HostAssetConfig) (string, error) {
 	return string(cfg.Driver), nil
 }
 
-// ownedTypedAsset is OwnedAsset for the paths that serve an asset of one of
+// OwnedTypedAsset is OwnedAsset for the paths that serve an asset of one of
 // extName's own asset types — its config, credentials, form and connection path,
-// all read through the type's describe() declaration. A database asset of a
+// all read through the type's describe() declaration, and the asset a call from
+// the extension's frontend is scoped to. A database asset of a
 // driver extName provides is extName's too, but its config, password and reach
 // path go to the driver only in the open call of a session.
-func (s *Service) ownedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
+func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
 	owner, asset, err := s.OwnedAsset(ctx, extName, assetID)
 	if err != nil {
 		return nil, nil, nil, err
@@ -194,7 +195,7 @@ func (s *kvStore) Set(key string, value []byte) error {
 // back) as a value. The form instead shows a withheld field as already set and
 // keeps its stored ciphertext on save.
 func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64) (string, error) {
-	owner, asset, _, err := s.ownedTypedAsset(ctx, extName, assetID)
+	owner, asset, _, err := s.OwnedTypedAsset(ctx, extName, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -353,7 +354,7 @@ func parseHostConnectionConfig(configJSON string) (*hostConnectionConfig, error)
 // responder the caller put on it (opsctl's terminal / desktop prompt), exactly as
 // for a built-in type dialed through the same tunnel.
 func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extension.DialContextFunc, *tls.Config, string, error) {
-	_, asset, def, err := d.svc.ownedTypedAsset(ctx, d.extName, assetID)
+	_, asset, def, err := d.svc.OwnedTypedAsset(ctx, d.extName, assetID)
 	if err != nil {
 		return nil, nil, "", err
 	}

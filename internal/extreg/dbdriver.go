@@ -37,6 +37,8 @@ type extensionDriver struct {
 	desc   dbdriver.Descriptor
 	ext    string
 	plugin driverOpener
+	// translate 按语言解析提供驱动的扩展的多语言键（Extension.Translate）。
+	translate translateFunc
 
 	// life 在驱动被移除时取消，取消原因是 unavailable()；每个操作的 ctx 都挂在它下面。
 	life context.Context
@@ -46,13 +48,17 @@ type extensionDriver struct {
 	sessions map[*extensionSession]struct{}
 }
 
-func newExtensionDriver(ext string, desc dbdriver.Descriptor, plugin driverOpener) *extensionDriver {
+// translateFunc 按语言解析扩展多语言里的键，没有翻译时返回键本身。
+type translateFunc func(lang, key string) string
+
+func newExtensionDriver(ext string, desc dbdriver.Descriptor, plugin driverOpener, translate translateFunc) *extensionDriver {
 	life, end := context.WithCancelCause(context.Background())
 	return &extensionDriver{
 		NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
 		desc:         desc,
 		ext:          ext,
 		plugin:       plugin,
+		translate:    translate,
 		life:         life,
 		end:          end,
 		sessions:     make(map[*extensionSession]struct{}),
@@ -60,6 +66,11 @@ func newExtensionDriver(ext string, desc dbdriver.Descriptor, plugin driverOpene
 }
 
 func (d *extensionDriver) Descriptor() dbdriver.Descriptor { return d.desc }
+
+// LocalizedDescriptor 让专属字段的标签与说明走扩展自己的多语言（dbregistry.Localizer）。
+func (d *extensionDriver) LocalizedDescriptor(lang string) dbdriver.Descriptor {
+	return d.desc.Localized(func(key string) string { return d.translate(lang, key) })
+}
 
 func (d *extensionDriver) SessionPerDatabase() bool { return true }
 
@@ -128,10 +139,10 @@ func (d *extensionDriver) remove() {
 // registerDrivers 把 ext 提供的驱动注册进驱动注册表，全有或全无：任何一个与内置驱动或别的
 // 扩展的驱动撞名（id 或别名），已注册的这几个撤回，返回点名冲突名字与占用者的错误。调用方
 // 持有 mu。
-func registerDrivers(ext string, descs []dbdriver.Descriptor, plugin driverOpener) ([]*extensionDriver, error) {
+func registerDrivers(ext string, descs []dbdriver.Descriptor, plugin driverOpener, translate translateFunc) ([]*extensionDriver, error) {
 	done := make([]*extensionDriver, 0, len(descs))
 	for _, desc := range descs {
-		d := newExtensionDriver(ext, desc, plugin)
+		d := newExtensionDriver(ext, desc, plugin, translate)
 		if err := dbregistry.TryRegister(d); err != nil {
 			removeDrivers(releaseDrivers(done))
 			return nil, fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, describeDriverClash(err))

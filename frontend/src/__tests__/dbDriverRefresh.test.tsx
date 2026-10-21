@@ -8,6 +8,8 @@ import { useTabStore } from "@/stores/tabStore";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { ListInstalledExtensions } from "../../wailsjs/go/extension/Extension";
 import { ListDatabaseDrivers, ListDatabases } from "../../wailsjs/go/query/Query";
+import { dbdriver } from "../../wailsjs/go/models";
+import i18n from "../i18n";
 import { BUILTIN_DRIVERS, EXT_DRIVER, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("../extension/inject", () => ({ injectExtensionAPI: vi.fn() }));
@@ -70,6 +72,32 @@ describe("驱动注册或移除后不重启即反映", () => {
       expect(screen.getByTestId("database-host-input")).toHaveValue("db.internal");
     }
   );
+
+  it("切换界面语言后,专属字段的标签换成后端按新语言翻译的描述", async () => {
+    provideDrivers([EXT_DRIVER, ...BUILTIN_DRIVERS]);
+    render(<DatabaseConfigSection ctx={{ isEdit: false, encryptPassword: vi.fn() }} onValidityChange={vi.fn()} />);
+    expect(await screen.findByLabelText("Service name *")).toBeInTheDocument();
+
+    const translated = new dbdriver.Descriptor({
+      ...EXT_DRIVER,
+      driverFields: EXT_DRIVER.driverFields.map((f) => (f.key === "service_name" ? { ...f, label: "服务名" } : f)),
+    });
+    registry(translated, ...BUILTIN_DRIVERS);
+    const before = i18n.language;
+    const next = before === "zh-CN" ? "en" : "zh-CN";
+    try {
+      await act(async () => {
+        await i18n.changeLanguage(next);
+      });
+      expect(await screen.findByLabelText("服务名 *")).toBeInTheDocument();
+      // 语言由前端点名,不依赖后端镜像的语言已经切过去。
+      expect(vi.mocked(ListDatabaseDrivers)).toHaveBeenLastCalledWith(next);
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage(before);
+      });
+    }
+  });
 
   it("已打开的查询标签页:驱动移除后显示「驱动不可用」,恢复后重新可用", async () => {
     provideDrivers([...BUILTIN_DRIVERS, EXT_DRIVER]);

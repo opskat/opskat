@@ -121,7 +121,7 @@ func RegisterDescribeOnly(info *extension.ManifestInfo) error {
 	}
 
 	// 驱动先注册，理由同 register：撞名最常见，先查。
-	extDrivers, err := registerDrivers(info.Name, m.DatabaseDrivers, notLoadedOpener{ext: info.Name})
+	extDrivers, err := registerDrivers(info.Name, m.DatabaseDrivers, notLoadedOpener{ext: info.Name}, info.Translate)
 	if err != nil {
 		delete(policyTypeOwner, m.Policies.Type)
 		return err
