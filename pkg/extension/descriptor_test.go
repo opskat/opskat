@@ -707,4 +707,27 @@ func TestDescribeIntoDatabaseDrivers(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "ghost")
 		})
 	})
+
+	Convey("A driver declaring the certificate field group needs the host ABI that hands it the TLS material", t, func() {
+		const certDriver = `{"id":"cert-ext","name":"Cert Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
+			`"form":[{"tab":"connection","fields":["host","port","username"]},{"tab":"tls","fields":["tls_cert"]}],` +
+			`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
+		loadAt := func(abi string) error {
+			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+certDriver+`]}`))
+			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"cert-ext"}}}
+			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
+			return err
+		}
+		Convey("on hostABI 2.3 the extension is refused, naming the driver and the reason", func() {
+			err := loadAt("2.3")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "cert-ext")
+			So(err.Error(), ShouldContainSubstring, "tls_cert")
+			So(err.Error(), ShouldContainSubstring, DatabaseExtrasMinHostABI)
+		})
+		Convey("on hostABI 2.4 it loads", func() {
+			So(loadAt(DatabaseExtrasMinHostABI), ShouldBeNil)
+		})
+	})
 }

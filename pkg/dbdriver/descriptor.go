@@ -117,7 +117,13 @@ func (d Descriptor) Validate() error {
 			if !slices.Contains(FormFields(), f) {
 				return fmt.Errorf("driver %q: unknown form field %q", d.ID, f)
 			}
+			if f == FieldTLSCert && tab.Tab != TabTLS {
+				return fmt.Errorf("driver %q: form field %q belongs on the %q tab, not %q", d.ID, f, TabTLS, tab.Tab)
+			}
 		}
+	}
+	if d.UsesField(FieldTLSCert) && d.UsesField(FieldTLS) {
+		return fmt.Errorf("driver %q: form field %q already includes the %q switch; declare only one of them", d.ID, FieldTLSCert, FieldTLS)
 	}
 	for _, c := range d.Capabilities {
 		if !slices.Contains(Capabilities(), c) {
@@ -317,9 +323,15 @@ const (
 	// FieldSSHAsset 是文件所在的 SSH 资产（远端 SQLite），不是 FieldTunnel 的隧道。
 	FieldSSHAsset FormField = "ssh_asset_id"
 	// FieldTunnel 是所有资产类型共用的隧道 / 代理链配置区。
-	FieldTunnel       FormField = "tunnel"
-	FieldSSLMode      FormField = "ssl_mode"
-	FieldTLS          FormField = "tls"
+	FieldTunnel  FormField = "tunnel"
+	FieldSSLMode FormField = "ssl_mode"
+	FieldTLS     FormField = "tls"
+	// FieldTLSCert 是证书字段组，与 FieldTunnel 一样不是单个配置键：启用 TLS（tls）、跳过证书
+	// 校验（tls_insecure）、服务器名（tls_server_name），CA 证书 / 客户端证书 / 客户端私钥各填
+	// 文件路径或粘贴内容（tls_{ca,cert,key}_{file,pem}），与 Redis 资产同名同义。只能声明在
+	// TLS Tab，且自带启用开关，不再与 FieldTLS 同时声明。声明了的驱动在资产启用 TLS 时，打开
+	// 会话就收到 OpenRequest.TLS。要求扩展的 hostABI 2.4 及以上。
+	FieldTLSCert      FormField = "tls_cert"
 	FieldParams       FormField = "params"
 	FieldReadOnly     FormField = "read_only"
 	FieldQueryTimeout FormField = "query_timeout_seconds"
@@ -330,7 +342,7 @@ func FormFields() []FormField {
 	return []FormField{
 		FieldHost, FieldPort, FieldUsername, FieldPassword, FieldDatabase,
 		FieldSQLiteSource, FieldPath, FieldSSHAsset, FieldTunnel,
-		FieldSSLMode, FieldTLS, FieldParams, FieldReadOnly, FieldQueryTimeout,
+		FieldSSLMode, FieldTLS, FieldTLSCert, FieldParams, FieldReadOnly, FieldQueryTimeout,
 	}
 }
 

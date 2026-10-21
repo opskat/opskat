@@ -28,15 +28,21 @@ func main() {}
 // descriptor declares a few capabilities whose sqldb pieces are small (views,
 // DDL, create / drop / truncate table, export as SQL); everything else stays
 // undeclared, so the conformance suites also see the refusals cross the boundary.
+// It declares the certificate field group, so the host hands it the asset's TLS
+// material (SHOW OPEN TLS answers what it got), and its manifest the host ABI
+// that does.
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",
 	Order:       900,
 	Aliases:     []string{},
 	DefaultPort: 7357,
-	Form: []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
-		dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldUsername, dbdriver.FieldPassword, dbdriver.FieldDatabase,
-	}}},
+	Form: []dbdriver.FormTabFields{
+		{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
+			dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldUsername, dbdriver.FieldPassword, dbdriver.FieldDatabase,
+		}},
+		{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}},
+	},
 	Capabilities: []dbdriver.Capability{
 		dbdriver.CapViews, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
 		dbdriver.CapTruncateTable, dbdriver.CapExportSQL,
@@ -59,6 +65,7 @@ func open(ctx context.Context, req dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect
 		password: req.Password,
 		config:   cfg,
 		options:  req.DriverOptions,
+		tls:      req.TLS,
 	})
 	if err := sqldb.Establish(ctx, db, nil); err != nil {
 		return nil, nil, err

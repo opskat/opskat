@@ -276,6 +276,7 @@ func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
 		Config:        a.Config,
 		Password:      a.Password,
 		DriverOptions: a.DriverOptions,
+		TLS:           a.TLS,
 		Transport:     dbdriver.Transport{Dial: opskat.DialContext},
 	})
 	if err != nil {

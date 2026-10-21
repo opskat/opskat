@@ -9,8 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 驱动看不到的字段：口令与凭据由宿主解析后单独交给驱动，代理由宿主解析成传输层。
-var hostOnlyDatabaseFields = []string{"password", "credential_id", "proxy", "proxy_chain", "driver_options"}
+// 驱动看不到的字段：口令与凭据由宿主解析后单独交给驱动，代理由宿主解析成传输层，证书字段组由宿主
+// 读成内容、解密私钥后放进 OpenRequest.TLS。
+var hostOnlyDatabaseFields = []string{"password", "credential_id", "proxy", "proxy_chain", "driver_options",
+	"tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "tls_ca_pem", "tls_cert_pem", "tls_key_pem"}
 
 // filledDatabaseConfig 给 DatabaseConfig 的每个字段填上非零值，新增字段也会被填上。
 func filledDatabaseConfig(t *testing.T) *DatabaseConfig {
@@ -61,7 +63,10 @@ func TestDriverConfigCarriesEveryFieldButCredentialsAndProxies(t *testing.T) {
 func TestSetDriverConfigWritesDriverFieldsAndKeepsCredentialsAndProxies(t *testing.T) {
 	cfg := filledDatabaseConfig(t)
 	keep := DatabaseConfig{Password: cfg.Password, CredentialID: cfg.CredentialID, Proxy: cfg.Proxy, ProxyChain: cfg.ProxyChain,
-		DriverOptions: cfg.DriverOptions}
+		DriverOptions: cfg.DriverOptions,
+		TLSInsecure:   cfg.TLSInsecure, TLSServerName: cfg.TLSServerName,
+		TLSCAFile: cfg.TLSCAFile, TLSCertFile: cfg.TLSCertFile, TLSKeyFile: cfg.TLSKeyFile,
+		TLSCAPEM: cfg.TLSCAPEM, TLSCertPEM: cfg.TLSCertPEM, TLSKeyPEM: cfg.TLSKeyPEM}
 
 	cfg.SetDriverConfig((&DatabaseConfig{}).DriverConfig())
 

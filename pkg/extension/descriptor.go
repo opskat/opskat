@@ -161,6 +161,9 @@ func (d *Descriptor) validateDatabaseDrivers() error {
 // checkDatabaseDrivers requires the merged manifest's driver descriptors to be
 // exactly the driver ids the manifest declared: the manifest is what the user
 // audited, the descriptor is what the code implements, and they may not disagree.
+// A driver that declares the certificate field group (dbdriver.FieldTLSCert) is
+// handed the asset's TLS material, which an older host would silently not do, so
+// it requires DatabaseExtrasMinHostABI.
 // The error names the offending driver; the caller adds the extension.
 func (m *Manifest) checkDatabaseDrivers() error {
 	described := make(map[string]struct{}, len(m.DatabaseDrivers))
@@ -169,6 +172,10 @@ func (m *Manifest) checkDatabaseDrivers() error {
 		described[id] = struct{}{}
 		if !slices.Contains(m.Capabilities.DatabaseDrivers, id) {
 			return fmt.Errorf("describe() provides database driver %q that manifest capabilities.databaseDrivers does not declare", id)
+		}
+		if drv.UsesField(dbdriver.FieldTLSCert) && !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
+			return fmt.Errorf("database driver %q declares the certificate field group (form field %q), which requires hostABI %s or newer (got %s)",
+				id, dbdriver.FieldTLSCert, DatabaseExtrasMinHostABI, m.HostABI)
 		}
 	}
 	for _, id := range m.Capabilities.DatabaseDrivers {

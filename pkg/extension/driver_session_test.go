@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -203,6 +205,45 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		}
 	})
 
+	t.Run("every instance of a session is handed the TLS material when it logs in, and it is not logged", func(t *testing.T) {
+		material := dbdriver.TLSMaterial{
+			Insecure: true, ServerName: "db.example.com",
+			CA: []byte("ca-pem"), Cert: []byte("cert-pem"), Key: []byte("key-pem-s3cret"),
+		}
+		logs := observeLogs(t)
+		d := newDriver()
+		s, err := d.Open(ctx, dbdriver.OpenRequest{
+			Config:   &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: desc.DefaultPort, Username: "alice", Database: "app"},
+			Password: "s3cret",
+			TLS:      &material,
+		})
+		require.NoError(t, err)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		assert.Equal(t, &material, openTLS(t, s), "the first instance")
+
+		// A cursor holds the first instance, so the next operation logs in a second one.
+		cursor, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
+		require.NoError(t, err)
+		require.True(t, cursor.Next())
+		assert.Equal(t, &material, openTLS(t, s), "a second instance of the same session")
+		require.NoError(t, cursor.Close())
+		require.Len(t, d.server.Logins(), 2)
+
+		for _, entry := range logs.All() {
+			line := fmt.Sprint(entry.Message, entry.ContextMap())
+			assert.NotContains(t, line, "key-pem-s3cret")
+			assert.NotContains(t, line, "cert-pem")
+		}
+	})
+
+	t.Run("a session opened without TLS material hands the driver none", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+		assert.Nil(t, openTLS(t, s))
+	})
+
 	t.Run("a driver the extension does not provide is refused", func(t *testing.T) {
 		_, err := ext.Plugin.OpenDriverSession(ctx, "otherdb", dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "otherdb"}})
 		require.Error(t, err)
@@ -228,6 +269,44 @@ func openOptions(t *testing.T, s dbdriver.Session) map[string]any {
 	var seen map[string]any
 	require.NoError(t, json.Unmarshal([]byte(res.Rows.Rows[0][0].(string)), &seen))
 	return seen
+}
+
+// openTLS asks the fixture's instance that runs the statement which TLS material
+// its driver was opened with (nil for none).
+func openTLS(t *testing.T, s dbdriver.Session) *dbdriver.TLSMaterial {
+	t.Helper()
+	res, err := s.Execute(context.Background(), "SHOW OPEN TLS")
+	require.NoError(t, err)
+	var seen *dbdriver.TLSMaterial
+	require.NoError(t, json.Unmarshal([]byte(res.Rows.Rows[0][0].(string)), &seen))
+	return seen
+}
+
+// The certificate field group is a host ABI 2.4 capability: the fixture driver
+// declares it, so the same extension on hostABI 2.3 is refused at load, naming
+// the driver and the reason.
+func TestExtensionDriverCertificateGroupNeedsHostABI24(t *testing.T) {
+	root := t.TempDir()
+	dir := extensiontest.InstallDBDriverFixture(t, root)
+	path := filepath.Join(dir, "manifest.json")
+	raw, err := os.ReadFile(path) //nolint:gosec // this test's own temp dir
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	m["hostABI"] = "2.3"
+	raw, err = json.Marshal(m)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+
+	mgr := extension.NewManager(root, func(string) extension.HostProvider {
+		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
+	}, zap.NewNop())
+	t.Cleanup(func() { mgr.Close(context.Background()) })
+	_, err = mgr.LoadExtension(context.Background(), dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), extensiontest.DBDriverFixtureDriver)
+	assert.Contains(t, err.Error(), string(dbdriver.FieldTLSCert))
+	assert.Contains(t, err.Error(), extension.DatabaseExtrasMinHostABI)
 }
 
 // observeLogs routes the app logger into memory for the test.

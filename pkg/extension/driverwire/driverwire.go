@@ -78,12 +78,15 @@ type Call struct {
 type Args struct {
 	// OpOpen: the driver, the config it is handed (the host-owned parts of an
 	// asset — tunnel, proxies, credential — are not in dbdriver.Config), the
-	// decrypted password and the driver options (password-type ones decrypted),
-	// which no other call carries.
-	Driver        dbdriver.DriverID `json:"driver,omitempty"`
-	Config        *dbdriver.Config  `json:"config,omitempty"`
-	Password      string            `json:"password,omitempty"`
-	DriverOptions map[string]any    `json:"driverOptions,omitempty"`
+	// decrypted password, the driver options (password-type ones decrypted) and,
+	// for a driver declaring the certificate field group on an asset with TLS on,
+	// the TLS material (key decrypted), which no other call carries. A guest built
+	// before TLS was added ignores it.
+	Driver        dbdriver.DriverID     `json:"driver,omitempty"`
+	Config        *dbdriver.Config      `json:"config,omitempty"`
+	Password      string                `json:"password,omitempty"`
+	DriverOptions map[string]any        `json:"driverOptions,omitempty"`
+	TLS           *dbdriver.TLSMaterial `json:"tls,omitempty"`
 
 	Statement   string                `json:"statement,omitempty"`
 	Page        dbdriver.Page         `json:"page"`

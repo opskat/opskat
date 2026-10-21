@@ -97,3 +97,35 @@ func TestDriverOptionsChecking(t *testing.T) {
 		assert.Contains(t, err.Error(), `"x"`)
 	})
 }
+
+// 证书字段组（FieldTLSCert）只能声明在 TLS Tab；它自带启用 TLS 的开关，所以不与单独的 tls
+// 开关同时声明。
+func TestDescriptorValidateTLSCertGroup(t *testing.T) {
+	withForm := func(tabs ...FormTabFields) Descriptor {
+		return Descriptor{ID: "extdb", Name: "ExtDB", Form: tabs}
+	}
+	t.Run("declared on the TLS tab", func(t *testing.T) {
+		d := withForm(FormTabFields{Tab: TabTLS, Fields: []FormField{FieldTLSCert}})
+		require.NoError(t, d.Validate())
+		assert.True(t, d.UsesField(FieldTLSCert))
+	})
+	t.Run("declared on another tab", func(t *testing.T) {
+		err := withForm(FormTabFields{Tab: TabAdvanced, Fields: []FormField{FieldTLSCert}}).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "extdb")
+		assert.Contains(t, err.Error(), string(FieldTLSCert))
+	})
+	t.Run("declared together with the separate tls switch", func(t *testing.T) {
+		err := withForm(
+			FormTabFields{Tab: TabAdvanced, Fields: []FormField{FieldTLS}},
+			FormTabFields{Tab: TabTLS, Fields: []FormField{FieldTLSCert}},
+		).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "extdb")
+		assert.Contains(t, err.Error(), `"tls"`)
+	})
+	t.Run("a driver field may not take the group's name", func(t *testing.T) {
+		err := descriptorWithFields(DriverField{Key: string(FieldTLSCert), Type: FieldTypeText, Tab: TabTLS}).Validate()
+		require.Error(t, err)
+	})
+}

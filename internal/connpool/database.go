@@ -62,9 +62,39 @@ func openDatabase(ctx context.Context, assetID int64, cfg *asset_entity.Database
 	if err != nil {
 		return nil, err
 	}
+	tlsMaterial, err := driverTLS(driver.Descriptor(), cfg)
+	if err != nil {
+		return nil, err
+	}
 	return driver.Open(ctx, dbdriver.OpenRequest{
 		Config: cfg.DriverConfig(), Password: password, DriverOptions: options, Transport: transport, AssetID: assetID,
+		TLS: tlsMaterial,
 	})
+}
+
+// driverTLS 是交给驱动的证书 TLS 设置：只给声明了证书字段组（FieldTLSCert）的驱动，且只在资产
+// 启用了 TLS 时给，否则为 nil。填的是路径的由本进程（桌面端或 opsctl）读成内容，私钥解密成明文，
+// 与口令一样只放进打开会话的请求；读不到或解不开就打不开，错误点名字段、不含内容。内容合不合法
+// 由驱动的 TLS 判定。
+func driverTLS(desc dbdriver.Descriptor, cfg *asset_entity.DatabaseConfig) (*dbdriver.TLSMaterial, error) {
+	if !cfg.TLS || !desc.UsesField(dbdriver.FieldTLSCert) {
+		return nil, nil
+	}
+	fields, err := decryptStoredKey(desc.Name, TLSFields{
+		CAFile: cfg.TLSCAFile, CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile,
+		CAPEM: cfg.TLSCAPEM, CertPEM: cfg.TLSCertPEM, KeyPEM: cfg.TLSKeyPEM,
+	})
+	if err != nil {
+		return nil, err
+	}
+	contents, err := readTLSContents(desc.Name, fields)
+	if err != nil {
+		return nil, err
+	}
+	return &dbdriver.TLSMaterial{
+		Insecure: cfg.TLSInsecure, ServerName: cfg.TLSServerName,
+		CA: contents.ca, Cert: contents.cert, Key: contents.key,
+	}, nil
 }
 
 // driverOptions 是交给驱动的专属字段取值，按驱动当前的声明整理：只交声明了的键（驱动升级删掉的

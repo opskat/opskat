@@ -57,9 +57,10 @@ var errDriverSessionClosed = errors.New("database driver session is closed")
 
 // OpenDriverSession opens a session of database driver id, which this extension
 // must declare in capabilities.databaseDrivers. req is handed to the driver — its
-// config, the decrypted password, the driver options and the reach path, which
-// every TCP connection the driver opens takes — each time an instance of the
-// session logs in. A driver that cannot connect fails with its own error.
+// config, the decrypted password, the driver options, the TLS material and the
+// reach path, which every TCP connection the driver opens takes — each time an
+// instance of the session logs in. A driver that cannot connect fails with its
+// own error.
 //
 // The session's calls are bounded only by ctx — the asset's query timeout and
 // the caller's cancellation — not by the plugin's tool timeout.
@@ -107,6 +108,7 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 	var opened driverwire.Opened
 	err = d.call(ctx, driverwire.Call{Op: driverwire.OpOpen, Args: driverwire.Args{
 		Driver: dbdriver.DriverID(driver), Config: req.Config, Password: req.Password, DriverOptions: req.DriverOptions,
+		TLS: req.TLS,
 	}}, &opened)
 	if err != nil {
 		d.inv.close()
