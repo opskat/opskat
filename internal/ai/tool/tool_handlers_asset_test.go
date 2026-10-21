@@ -6,10 +6,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_query_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -243,4 +245,35 @@ func mustJSON(t *testing.T, v any) []byte {
 	data, err := json.Marshal(v)
 	require.NoError(t, err)
 	return data
+}
+
+// 驱动专属字段：非口令类的取值与口令类的键（只表示已设置）随安全视图给出；口令的值
+// 与加密串都不出现。没有 driver_options 的资产视图不多出任何键。
+func TestToSafeViewDriverOptions(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "service_name", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection},
+		{Key: "wallet_secret", Type: dbdriver.FieldTypePassword, Tab: dbdriver.TabConnection},
+	}
+	dbdrivertest.Register(t, fake)
+	asset := &asset_entity.Asset{ID: 7, Name: "opts", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u",
+		DriverOptions: map[string]any{"service_name": "orcl", "wallet_secret": "ENCRYPTED-BLOB"},
+	}))
+
+	data, err := json.Marshal(toSafeView(asset))
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, map[string]any{"service_name": "orcl"}, got["driver_options"])
+	assert.Equal(t, []any{"wallet_secret"}, got["driver_options_secrets_set"])
+	assert.NotContains(t, string(data), "ENCRYPTED-BLOB")
+
+	plain := &asset_entity.Asset{ID: 8, Name: "plain", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, plain.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u"}))
+	data, err = json.Marshal(toSafeView(plain))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "driver_options")
 }

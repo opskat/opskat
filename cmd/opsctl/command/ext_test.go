@@ -858,6 +858,19 @@ func TestExtensionDriverFields_ManagedFromTheCommandLine(t *testing.T) {
 	assert.NotEmpty(t, cfg.DriverOptions["wallet_secret"])
 	assert.NotEqual(t, "top-secret-value", cfg.DriverOptions["wallet_secret"])
 
+	// Get: the plain option is shown, the password one only as set.
+	code, stdout, stderr = runCmd(t, func() int { return cmdGet(ctx, handlers, []string{"asset", "fx-opts"}) })
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	var view struct {
+		DriverOptions map[string]any `json:"driver_options"`
+		SecretsSet    []string       `json:"driver_options_secrets_set"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &view), stdout)
+	assert.Equal(t, map[string]any{"service_name": "orcl2"}, view.DriverOptions)
+	assert.Equal(t, []string{"wallet_secret"}, view.SecretsSet)
+	assert.NotContains(t, stdout+stderr, "top-secret-value")
+	assert.NotContains(t, stdout, cfg.DriverOptions["wallet_secret"])
+
 	// List shows the asset with its extension driver.
 	code, stdout, stderr = runCmd(t, func() int { return cmdList(ctx, handlers, []string{"assets", "--type", "database"}) })
 	require.Equal(t, 0, code, "stderr: %s", stderr)

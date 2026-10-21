@@ -45,6 +45,9 @@ type safeAssetView struct {
 	Driver   string `json:"driver,omitempty"`
 	Database string `json:"database,omitempty"`
 	ReadOnly bool   `json:"read_only,omitempty"`
+	// 驱动专属字段：非口令类的取值；口令类只列键（已设置），值不出库。
+	DriverOptions           map[string]any `json:"driver_options,omitempty"`
+	DriverOptionsSecretsSet []string       `json:"driver_options_secrets_set,omitempty"`
 	// Redis 专属：集群 / 哨兵资产额外显示部署模式、节点与主节点名称（单机不写 mode）
 	RedisDB         int      `json:"redis_db,omitempty"`
 	RedisMode       string   `json:"mode,omitempty"`
@@ -109,6 +112,12 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			}
 			if val, ok := fields["read_only"].(bool); ok {
 				v.ReadOnly = val
+			}
+			if val, ok := fields["driver_options"].(map[string]any); ok {
+				v.DriverOptions = val
+			}
+			if val, ok := fields["driver_options_secrets_set"].([]string); ok {
+				v.DriverOptionsSecretsSet = val
 			}
 			if val, ok := fields["redis_db"].(int); ok {
 				v.RedisDB = val
