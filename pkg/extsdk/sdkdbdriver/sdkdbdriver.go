@@ -24,8 +24,11 @@ import (
 // the driver's dialect; the SDK assembles the session from them with
 // pkg/dbdriver/sqldb, the same shared session the built-in drivers use.
 //
-// It is called once per session, in an instance dedicated to that session. It
-// must return only once the database is reachable (sqldb.Establish pings it), and
+// It is called once per instance of a session: the host runs a session on up to
+// three module instances of its own — operations that overlap get one each — and
+// logs in a new one in place of one it discarded, so open runs again there and
+// connection state (a current schema, a temporary table) is not shared between
+// them. It must return only once the database is reachable (sqldb.Establish pings it), and
 // a failure is returned as the driver's own error: the host shows it to the user
 // as is. req carries the connection config, the decrypted password — handed over
 // in this call only — and the reach path: every network connection must be made

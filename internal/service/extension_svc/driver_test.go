@@ -264,12 +264,13 @@ func TestDatabaseAssetBelongsToTheExtensionProvidingItsDriver(t *testing.T) {
 	assert.Contains(t, err.Error(), `"mydb"`)
 
 	// Its config and reach path go to the driver only through the session.
+	const onlyThroughSession = "only through its database driver session"
 	_, err = configGetterOf(svc, "mydb").GetAssetConfig(1)
-	require.Error(t, err)
+	require.ErrorContains(t, err, onlyThroughSession)
 	_, err = configGetterOf(svc, "mydb").AssetCredentialValues(ctx, 1, []string{"password"})
-	require.Error(t, err)
+	require.ErrorContains(t, err, onlyThroughSession)
 	_, err = svc.FormConfig(ctx, "mydb", 1)
-	require.Error(t, err)
+	require.ErrorContains(t, err, onlyThroughSession)
 	_, _, _, err = dialerOf(svc, "mydb").DialContextFor(ctx, 1)
-	require.Error(t, err)
+	require.ErrorContains(t, err, onlyThroughSession)
 }

@@ -34,8 +34,9 @@ type Meta struct {
 	DisplayName string
 	Description string
 	// PolicyType names the policy face the extension's asset types are checked
-	// under. Required: without it the host has no policy surface to attach the
-	// extension's permission groups to.
+	// under. Required when the extension registers asset types: without it the
+	// host has no policy surface to attach the extension's permission groups to.
+	// An extension that only provides database drivers may leave it empty.
 	PolicyType string
 }
 

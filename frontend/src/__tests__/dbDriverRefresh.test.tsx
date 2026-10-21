@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createRef } from "react";
+import type { AssetFormHandle } from "@/lib/assetTypes/formContract";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import { DatabasePanel } from "@/components/query/DatabasePanel";
 import { useQueryStore } from "@/stores/queryStore";
@@ -72,6 +74,48 @@ describe("驱动注册或移除后不重启即反映", () => {
       expect(screen.getByTestId("database-host-input")).toHaveValue("db.internal");
     }
   );
+
+  it("驱动描述更新后保存:按新描述写 driver_options(新增字段取它的默认值)", async () => {
+    provideDrivers([EXT_DRIVER, ...BUILTIN_DRIVERS]);
+    const user = userEvent.setup();
+    const ref = createRef<AssetFormHandle>();
+    const ctx = { isEdit: false, encryptPassword: async (p: string) => `enc(${p})` };
+    render(<DatabaseConfigSection ref={ref} ctx={ctx} onValidityChange={vi.fn()} />);
+    await user.type(await screen.findByLabelText("Service name *"), "ORCL");
+
+    const upgraded = new dbdriver.Descriptor({
+      ...EXT_DRIVER,
+      driverFields: [...EXT_DRIVER.driverFields, { key: "pool_size", type: "number", tab: "advanced", default: 8 }],
+    });
+    registry(upgraded, ...BUILTIN_DRIVERS);
+    await emit("ext:reload");
+    await user.click(await screen.findByTestId("config-tab-advanced"));
+    await screen.findByLabelText("pool_size");
+
+    const cfg = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    expect(cfg.driver_options).toMatchObject({ service_name: "ORCL", pool_size: 8 });
+  });
+
+  it("新建资产时所选驱动被移除:不能保存,驱动下拉仍在,可改选别的驱动", async () => {
+    provideDrivers([EXT_DRIVER, ...BUILTIN_DRIVERS]);
+    const user = userEvent.setup();
+    const onValidityChange = vi.fn();
+    render(
+      <DatabaseConfigSection ctx={{ isEdit: false, encryptPassword: vi.fn() }} onValidityChange={onValidityChange} />
+    );
+    await user.type(await screen.findByLabelText("Service name *"), "ORCL");
+    await user.type(screen.getByTestId("database-host-input"), "db.internal");
+
+    registry(...BUILTIN_DRIVERS);
+    await emit("ext:reload");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("asset.driverUnknown"));
+    expect(onValidityChange).toHaveBeenLastCalledWith(expect.objectContaining({ canSave: false, canTest: false }));
+
+    await user.click(screen.getByTestId("database-driver-select"));
+    await user.click(await screen.findByTestId("database-driver-option-mysql"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByTestId("database-host-input")).toBeInTheDocument();
+  });
 
   it("切换界面语言后,专属字段的标签换成后端按新语言翻译的描述", async () => {
     provideDrivers([EXT_DRIVER, ...BUILTIN_DRIVERS]);

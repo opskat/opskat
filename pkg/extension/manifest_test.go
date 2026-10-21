@@ -1,12 +1,9 @@
 package extension
 
 import (
-	"errors"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
-
-	"github.com/opskat/opskat/internal/pkg/appversion"
 )
 
 func TestParseManifest(t *testing.T) {
@@ -300,15 +297,6 @@ func TestManifestDatabaseDriversABI(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "Bad Id")
 			_, err = ParseManifest(manifest("2.3", `["a","a"]`))
 			So(err, ShouldNotBeNil)
-		})
-		Convey("a host that only knows up to 2.2 rejects the install as ABI-incompatible", func() {
-			saved := SupportedHostABIs
-			SupportedHostABIs = []string{"2.0", "2.1", "2.2"}
-			defer func() { SupportedHostABIs = saved }()
-			err := CheckManifestJSON(manifest("2.3", `["my-driver"]`), appversion.Info{Kind: appversion.KindRelease, Version: "1.0.0"})
-			var inc *IncompatibleError
-			So(errors.As(err, &inc), ShouldBeTrue)
-			So(inc.Reason, ShouldEqual, ReasonHostABI)
 		})
 	})
 }

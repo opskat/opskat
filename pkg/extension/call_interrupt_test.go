@@ -14,6 +14,8 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // callBound is how long a timed-out or canceled call may take to come back. It
@@ -457,4 +459,27 @@ func TestDriverCallCancelAndTimeout(t *testing.T) {
 		require.NoError(t, waitOp(t, op, callBound))
 		assert.GreaterOrEqual(t, time.Since(start), 4*toolTimeout)
 	})
+}
+
+// Closing a session closes its sessions in the guest, and a guest's close may talk
+// to the database (a logoff). A database that never answers must not hold the
+// close forever: closing runs when an extension is disabled, upgraded or removed,
+// and when an idle instance is reaped.
+func TestDriverSessionCloseIsBounded(t *testing.T) {
+	p := newDBDriverPlugin(t)
+	p.opts.driverCloseTimeout = 100 * time.Millisecond
+	srv := NewFixtureDBServer(t)
+	srv.Hold = "LOGOFF"
+	s, err := p.OpenDriverSession(context.Background(), "fixturedb", dbdriver.OpenRequest{
+		Config:        &dbdriver.Config{Driver: "fixturedb", Host: "db.internal", Port: 7357, Username: "alice", Database: "app"},
+		Password:      "s3cret",
+		DriverOptions: map[string]any{"logoff": true},
+		Transport:     dbdriver.Transport{Dial: srv.Dial},
+	})
+	require.NoError(t, err)
+
+	closed := driverOp(s.Close)
+	srv.WaitHeld(t)
+	require.ErrorIs(t, waitOp(t, closed, p.opts.driverCloseTimeout+driverInterruptBound), context.DeadlineExceeded,
+		"the close fails as a timeout instead of waiting for the database")
 }

@@ -22,7 +22,7 @@ import (
 )
 
 // A database driver an extension provides runs in the guest: the SDK assembles
-// its session there (pkg/extsdk DatabaseDriver), and the host holds a
+// its session there (pkg/extsdk/sdkdbdriver DatabaseDriver), and the host holds a
 // dbdriver.Session that forwards every operation across the boundary as JSON
 // (pkg/extension/driverwire). To shared code it is a session like any built-in
 // driver's.
@@ -213,11 +213,16 @@ func (d *driverInstance) discard(reason error) {
 
 // retire closes the instance's session in the guest — when the instance is
 // still usable — and its connections, and lets go of the instance; a writer
-// prepared on it keeps the module until the writer is collected.
+// prepared on it keeps the module until the writer is collected. Closing in the
+// guest is bounded by the plugin's driver close timeout: a driver's close may
+// wait on a database that no longer answers, and retiring runs when an extension
+// is disabled or removed and when an idle instance is reaped.
 func (d *driverInstance) retire() error {
 	var err error
 	if d.usable() {
-		err = d.call(context.Background(), driverwire.Call{Op: driverwire.OpClose, Session: d.session}, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), d.plugin.opts.driverCloseTimeout)
+		err = d.call(ctx, driverwire.Call{Op: driverwire.OpClose, Session: d.session}, nil)
+		cancel()
 	}
 	d.inv.close()
 	d.drop()

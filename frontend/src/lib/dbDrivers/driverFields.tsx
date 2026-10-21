@@ -47,9 +47,11 @@ export function driverOptionValues(driver: DriverDescriptor, state: DatabaseForm
   return out;
 }
 
+/** 取值是否是该字段声明的类型的一个值:数字只收整数,枚举只收声明里的取值(与后端 checkValue 一致)。 */
 function hasValue(f: DriverField, v: unknown): boolean {
-  if (f.type === "number") return typeof v === "number" && !Number.isNaN(v);
+  if (f.type === "number") return typeof v === "number" && Number.isInteger(v);
   if (f.type === "switch") return typeof v === "boolean";
+  if (f.type === "enum") return typeof v === "string" && (f.enum ?? []).includes(v);
   return typeof v === "string" && v.trim() !== "";
 }
 
@@ -58,6 +60,14 @@ export function missingRequiredDriverField(driver: DriverDescriptor, state: Data
   const values = driverOptionValues(driver, state);
   return driverFieldsOf(driver).some(
     (f) => f.required && !hasValue(f, values[f.key]) && !(isPassword(f) && storedSecret(driver, state, f.key) !== "")
+  );
+}
+
+/** 是否有填了却不合声明的数字类取值(如小数):保存时不能悄悄丢掉用户填的东西,先拦下。 */
+export function invalidDriverField(driver: DriverDescriptor, state: DatabaseFormState): boolean {
+  const values = driverOptionValues(driver, state);
+  return driverFieldsOf(driver).some(
+    (f) => f.type === "number" && values[f.key] != null && !hasValue(f, values[f.key])
   );
 }
 

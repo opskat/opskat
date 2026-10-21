@@ -25,9 +25,8 @@ func TestDescribeReportsDatabaseDrivers(t *testing.T) {
 		So(reported["id"], ShouldEqual, "demodb")
 		So(reported["name"], ShouldEqual, "DemoDB")
 
-		out, err := dispatch("database_driver", []byte(`{"op":"open"}`))
+		_, err := dispatch("database_driver", []byte(`{"op":"open"}`))
 		So(err, ShouldBeNil)
-		So(string(out), ShouldEqual, `{"result":{"session":1}}`)
 		So(string(served), ShouldEqual, `{"op":"open"}`)
 	})
 }

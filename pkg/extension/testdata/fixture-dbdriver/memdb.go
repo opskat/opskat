@@ -141,7 +141,14 @@ func (c *conn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("fixturedb: prepared statements are not supported")
 }
 
-func (c *conn) Close() error { return c.nc.Close() }
+// Close says goodbye first ("LOGOFF", awaiting the answer) when the session was
+// opened with the driver option "logoff": true, as a real database's logoff does.
+func (c *conn) Close() error {
+	if c.options["logoff"] == true {
+		_ = c.roundTrip("LOGOFF")
+	}
+	return c.nc.Close()
+}
 
 func (c *conn) Begin() (driver.Tx, error) { return tx{}, nil }
 

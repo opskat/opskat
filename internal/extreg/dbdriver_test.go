@@ -260,7 +260,7 @@ func TestUnregisteringAnExtensionClosesItsDriverSessions(t *testing.T) {
 	busy, idle := open(), open()
 	_, _, inner := plugin.opened()
 
-	// One operation in flight and one more behind it.
+	// Two operations in flight on the same session.
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {

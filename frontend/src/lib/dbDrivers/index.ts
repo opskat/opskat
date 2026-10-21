@@ -14,4 +14,10 @@ export {
   type DriverDescriptor,
 } from "./descriptors";
 export { driverFormGroups, registerDriverFormField } from "./formFields";
-export { buildDriverOptions, driverFieldsOf, driverOptionValues, missingRequiredDriverField } from "./driverFields";
+export {
+  buildDriverOptions,
+  driverFieldsOf,
+  driverOptionValues,
+  invalidDriverField,
+  missingRequiredDriverField,
+} from "./driverFields";

@@ -79,6 +79,31 @@ describe("DatabaseConfigSection 驱动专属字段", () => {
     );
   });
 
+  it("数字类专属字段只收整数:填了小数不能保存,改回整数即可", async () => {
+    const user = userEvent.setup();
+    const { onValidityChange } = renderSection();
+
+    await user.type(await screen.findByTestId("database-host-input"), "db.internal");
+    await user.type(screen.getByLabelText("Service name *"), "ORCL");
+    await user.click(screen.getByTestId("config-tab-advanced"));
+    const fetchSize = screen.getByLabelText("Fetch size");
+    await user.clear(fetchSize);
+    await user.type(fetchSize, "1.5");
+    await waitFor(() =>
+      expect(onValidityChange).toHaveBeenLastCalledWith({
+        canTest: false,
+        canSave: false,
+        saveDisabledReason: "asset.formInvalidDriverField",
+      })
+    );
+
+    await user.clear(fetchSize);
+    await user.type(fetchSize, "200");
+    await waitFor(() =>
+      expect(onValidityChange).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" })
+    );
+  });
+
   it("保存时写进 driver_options:口令类加密,未改动的取描述的默认值", async () => {
     const user = userEvent.setup();
     const { ref } = renderSection();

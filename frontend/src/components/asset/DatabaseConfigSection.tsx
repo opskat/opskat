@@ -9,6 +9,7 @@ import {
   buildDriverOptions,
   driverFormGroups,
   driverUsesField,
+  invalidDriverField,
   missingRequiredDriverField,
   findDatabaseDriver,
   useDatabaseDrivers,
@@ -58,19 +59,22 @@ function DatabaseConfigForm({
     validate: (s) => {
       const d = findDatabaseDriver(drivers, s.driver);
       // 资产存的驱动不在注册表里:表单显示未知驱动错误,配置原样保留,仍可保存通用字段;
-      // 测试连接交给后端,由它回答「驱动不可用」。
-      if (!d) return { canTest: true, canSave: true };
+      // 测试连接交给后端,由它回答「驱动不可用」。新建的资产没有存下的配置可保留(所选驱动
+      // 在填写途中被移除):不能保存也不能测试,改选别的驱动才行。
+      if (!d) return editAsset ? { canTest: true, canSave: true } : { canTest: false, canSave: false };
       const needsPath = driverUsesField(d, "path");
       const needsHost = driverUsesField(d, "host");
       const isRemote = driverUsesField(d, "sqlite_source") && s.sqliteSource === "remote_ssh_vfs";
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
       const baseOk =
         (!needsPath || !!s.path.trim()) && (!isRemote || s.sshTunnelId > 0) && (!needsHost || !!s.host.trim());
-      const driverFieldsOk = !missingRequiredDriverField(d, s);
+      const driverFieldInvalid = invalidDriverField(d, s);
+      const driverFieldsOk = !driverFieldInvalid && !missingRequiredDriverField(d, s);
       const canSave = baseOk && driverFieldsOk && !proxyChainError;
       let saveDisabledReason = "";
       if (!canSave) {
         if (proxyChainError) saveDisabledReason = proxyChainError;
+        else if (baseOk && driverFieldInvalid) saveDisabledReason = "asset.formInvalidDriverField";
         else if (baseOk) saveDisabledReason = "asset.formMissingDriverField";
         else if (isRemote && s.path.trim() && s.sshTunnelId <= 0) {
           saveDisabledReason = "asset.formMissingSQLiteSSH";
@@ -121,7 +125,8 @@ function DatabaseConfigForm({
         password: cred.value.password,
       };
     },
-    deps: [cred.value],
+    // build 按当前的驱动描述序列化:描述更新(扩展升级、换语言)后保存用的是新的那份。
+    deps: [cred.value, drivers],
     validityDeps: [drivers],
   });
 
@@ -133,14 +138,6 @@ function DatabaseConfigForm({
     // 只在挂载时同步一次,之后图标由用户切换驱动驱动。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  if (!driver) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {t("asset.driverUnknown", { driver: state.driver })}
-      </p>
-    );
-  }
 
   // driver 切换:section 自有字段复位(纯函数)+ 壳 icon 副作用(onIconChange)。
   const handleDriverChange = (id: string) => {
@@ -169,6 +166,22 @@ function DatabaseConfigForm({
       </Field>
     ),
   };
+
+  if (!driver) {
+    const unknown = (
+      <p role="alert" className="text-sm text-destructive">
+        {t("asset.driverUnknown", { driver: state.driver })}
+      </p>
+    );
+    if (editAsset) return unknown;
+    // 新建时所选驱动在填写途中被移除:留着驱动下拉,改选别的驱动即可继续。
+    return (
+      <div className="flex flex-col gap-3">
+        {unknown}
+        {driverSelect.render()}
+      </div>
+    );
+  }
 
   const groups = driverFormGroups(driver, [driverSelect]);
 

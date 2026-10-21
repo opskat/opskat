@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -108,8 +109,10 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		progress, err := s.Execute(ctx, "SHOW STREAM PROGRESS")
 		require.NoError(t, err)
 		require.Len(t, d.server.Logins(), 1)
-		produced := fmt.Sprint(progress.Rows.Rows[0][0])
-		assert.NotEqual(t, "1000", produced, "the guest cursor must not have been drained by the first read")
+		produced, err := strconv.Atoi(fmt.Sprint(progress.Rows.Rows[0][0]))
+		require.NoError(t, err)
+		assert.True(t, produced >= 1 && produced < 1000,
+			"the guest cursor must not have been drained by the first read (produced %d)", produced)
 
 		stream, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
 		require.NoError(t, err)
@@ -189,7 +192,8 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		s := d.open(t)
 		require.NoError(t, s.Close())
 		_, err := s.Execute(ctx, "SELECT 1")
-		assert.Error(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "session is closed")
 	})
 }
 

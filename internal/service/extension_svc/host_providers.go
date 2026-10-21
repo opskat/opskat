@@ -238,7 +238,7 @@ func withholdPasswordFields(raw json.RawMessage, assetType string, ext *extensio
 // decryptConfigPasswordFields decrypts the fields assetType's configSchema marks
 // format:"password". Whether the plaintext or an opaque handle comes back is
 // decided by ext — the extension the config is being handed to, which
-// OwnedAsset has already confirmed registers assetType.
+// OwnedTypedAsset has already confirmed registers assetType.
 func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
 	def := ext.Manifest.AssetTypeDef(assetType)
 	if def == nil || len(def.ConfigSchema) == 0 {

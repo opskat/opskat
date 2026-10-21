@@ -121,7 +121,8 @@ ciphertext, so "is it filled" checks work when editing.
 set. Extension tools are reached through `exec` on an asset, so an extension without
 one has no reachable entry point and is refused at load. The one exception is an
 extension that only provides database drivers: its entry point is the user's database
-asset, so it declares no asset type, no policy type and no tools.
+asset, so it needs no asset type and no policy type (one it declares is still
+checked), and it declares no tools.
 
 ### Schemas come from your Go types
 
@@ -541,10 +542,13 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   `driver_options` and reach `open` as `req.DriverOptions`, password fields decrypted.
   `Label` and `Description` may be keys of your `locales/` files: the host shows them in
   the user's language.
-- **A session lives in an instance of its own.** The host opens each session in a
-  module instance dedicated to it and keeps the instance — the `*sql.DB`, its open
-  connections, a cursor half read — between calls, so later operations do not log in
-  again and a whole-table export reads one cursor over many calls. Every operation and
+- **A session lives in instances of its own.** The host runs each session on up to
+  three module instances dedicated to it — operations that overlap get one each, later
+  ones wait — and keeps each instance — the `*sql.DB`, its open connections, a cursor
+  half read — between calls, so later operations do not log in again and a whole-table
+  export reads one cursor over many calls. `open` runs once per instance (again for one
+  that replaces an instance discarded after a failure), so connection state such as a
+  current schema is not shared between a session's instances. Every operation and
   result crosses the boundary as JSON ([`pkg/extension/driverwire`](../pkg/extension/driverwire));
   fields are only ever added, and an extension ignores the ones it does not know.
 

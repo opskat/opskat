@@ -117,7 +117,7 @@ func (s *Service) mergeAndGateTestPasswords(ctx context.Context, extName, assetT
 	}
 
 	if assetID > 0 {
-		_, asset, err := s.OwnedAsset(ctx, extName, assetID)
+		_, asset, _, err := s.OwnedTypedAsset(ctx, extName, assetID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("test connection: %w", err)
 		}

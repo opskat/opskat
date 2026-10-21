@@ -396,6 +396,7 @@
     "formMissingSQLiteSSH": "Select an SSH asset for the remote SQLite file.",
     "formMissingSSHTunnel": "Select the SSH asset to tunnel through.",
     "formMissingDriverField": "Fill in the required fields marked with *.",
+    "formInvalidDriverField": "A number field takes a whole number.",
     "formTunnelWithProxyChain": "Choose either the SSH tunnel or the proxy chain — add the SSH jump host as a hop in the chain.",
     "moveUp": "Move Up",
     "moveDown": "Move Down",
