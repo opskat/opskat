@@ -9,8 +9,15 @@ import {
   type ConnectionFormFields,
   type ProxyConfigJSON,
 } from "./proxyConfig";
+import {
+  TLS_CERT_DEFAULTS,
+  tlsCertsFromJSON,
+  tlsCertsToJSON,
+  type TLSCertFormFields,
+  type TLSCertJSON,
+} from "./tlsCertConfig";
 
-export interface DatabaseFormState extends ConnectionFormFields {
+export interface DatabaseFormState extends ConnectionFormFields, TLSCertFormFields {
   driver: string;
   sqliteSource: "local" | "remote_ssh_vfs";
   host: string;
@@ -19,6 +26,9 @@ export interface DatabaseFormState extends ConnectionFormFields {
   database: string;
   sslMode: string;
   tls: boolean;
+  /** 以下两项与证书材料(TLSCertFormFields)只对声明了证书字段组(tls_cert)的驱动有意义。 */
+  tlsInsecure: boolean;
+  tlsServerName: string;
   readOnly: boolean;
   params: string;
   path: string;
@@ -39,6 +49,8 @@ export const DATABASE_DEFAULTS: DatabaseFormState = {
   database: "",
   sslMode: "disable",
   tls: false,
+  tlsInsecure: false,
+  tlsServerName: "",
   readOnly: false,
   params: "",
   path: "",
@@ -46,9 +58,10 @@ export const DATABASE_DEFAULTS: DatabaseFormState = {
   driverOptions: {},
   storedDriverOptions: { driver: "", values: {} },
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
 };
 
-interface DatabaseConfig {
+interface DatabaseConfig extends TLSCertJSON {
   driver: string;
   host?: string;
   port?: number;
@@ -58,6 +71,8 @@ interface DatabaseConfig {
   database?: string;
   ssl_mode?: string;
   tls?: boolean;
+  tls_insecure?: boolean;
+  tls_server_name?: string;
   params?: string;
   read_only?: boolean;
   query_timeout_seconds?: number;
@@ -84,7 +99,8 @@ export function buildDatabaseConfig(
   cred: CredentialFragment,
   proxyPassword = "",
   proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
-  driverOptions?: Record<string, unknown>
+  driverOptions?: Record<string, unknown>,
+  tlsKey = ""
 ): string {
   const uses = (field: string) => driverUsesField(driver, field);
   const cfg: DatabaseConfig = { driver: state.driver };
@@ -106,6 +122,12 @@ export function buildDatabaseConfig(
   }
   if (uses("ssl_mode") && state.sslMode !== "disable") cfg.ssl_mode = state.sslMode;
   if (uses("tls") && state.tls) cfg.tls = true;
+  if (uses("tls_cert") && state.tls) {
+    cfg.tls = true;
+    if (state.tlsInsecure) cfg.tls_insecure = true;
+    if (state.tlsServerName) cfg.tls_server_name = state.tlsServerName;
+    Object.assign(cfg, tlsCertsToJSON(state, tlsKey));
+  }
   if (sharedTunnel) {
     const proxy = buildProxyJSON(state, proxyPassword);
     if (proxy) cfg.proxy = proxy;
@@ -134,12 +156,15 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
       database: cfg.database || "",
       sslMode: cfg.ssl_mode || "disable",
       tls: cfg.tls || false,
+      tlsInsecure: cfg.tls_insecure || false,
+      tlsServerName: cfg.tls_server_name || "",
       readOnly: cfg.read_only || false,
       params: cfg.params || "",
       path: cfg.path || "",
       queryTimeoutSeconds: cfg.query_timeout_seconds || 30,
       driverOptions: {},
       storedDriverOptions: { driver: cfg.driver ?? "", values: cfg.driver_options ?? {} },
+      ...tlsCertsFromJSON(cfg),
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {

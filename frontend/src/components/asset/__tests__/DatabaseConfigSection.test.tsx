@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
-import { asset_entity } from "../../../../wailsjs/go/models";
+import { asset_entity, dbdriver } from "../../../../wailsjs/go/models";
 import { ListDatabaseDrivers } from "../../../../wailsjs/go/query/Query";
 import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
 import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
@@ -196,5 +196,87 @@ describe("DatabaseConfigSection ref 契约", () => {
         saveDisabledReason: "asset.formMissingPath",
       })
     );
+  });
+});
+
+describe("DatabaseConfigSection 证书字段组(tls_cert)", () => {
+  const CERT_DRIVER = new dbdriver.Descriptor({
+    id: "certdb",
+    name: "CertDB",
+    icon: "database",
+    order: 901,
+    aliases: [],
+    defaultPort: 1234,
+    form: [
+      { tab: "connection", fields: ["host", "port", "username", "password"] },
+      { tab: "tls", fields: ["tls_cert"] },
+    ],
+    capabilities: [],
+  });
+  const STORED =
+    '{"driver":"certdb","host":"h","port":1234,"tls":true,"tls_insecure":true,"tls_server_name":"srv.example.com",' +
+    '"tls_ca_pem":"CA","tls_cert_pem":"CERT","tls_key_pem":"STOREDKEY"}';
+
+  beforeEach(() => {
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue([...BUILTIN_DRIVERS, CERT_DRIVER]);
+  });
+
+  async function renderEdit(config: string) {
+    const ref = createRef<AssetFormHandle>();
+    render(
+      <DatabaseConfigSection
+        ref={ref}
+        editAsset={new asset_entity.Asset({ Type: "database", Config: config })}
+        ctx={ctx}
+        onValidityChange={() => {}}
+      />
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    await userEvent.setup().click(await screen.findByTestId("config-tab-tls"));
+    return ref;
+  }
+
+  it("声明的驱动在 TLS Tab 显示证书字段并回填,私钥显示为已设置", async () => {
+    await renderEdit(STORED);
+    expect(await screen.findByTestId("tls-ca-pem")).toHaveValue("CA");
+    expect(screen.getByTestId("tls-cert-pem")).toHaveValue("CERT");
+    expect(screen.getByTestId("tls-key-pem")).toHaveValue("");
+    expect(screen.getByTestId("tls-key-pem")).toHaveAttribute("placeholder", "asset.passwordUnchanged");
+    expect(screen.getByText("asset.tlsInsecure")).toBeInTheDocument();
+    expect(screen.getByText("asset.tlsServerName")).toBeInTheDocument();
+  });
+
+  it("不改动直接保存与测试连接都带着全部证书键,已存私钥密文原样保留", async () => {
+    const ref = await renderEdit(STORED);
+    const want = {
+      driver: "certdb",
+      host: "h",
+      port: 1234,
+      tls: true,
+      tls_insecure: true,
+      tls_server_name: "srv.example.com",
+      tls_ca_pem: "CA",
+      tls_cert_pem: "CERT",
+      tls_key_pem: "STOREDKEY",
+    };
+    expect(JSON.parse((await ref.current!.buildConfig(ctx)).configJSON)).toMatchObject(want);
+    expect(JSON.parse((await ref.current!.buildTestConfig!(ctx)).configJSON)).toMatchObject(want);
+  });
+
+  it("新输入的私钥经 encryptPassword 加密后保存与测试", async () => {
+    const ref = await renderEdit(STORED);
+    await userEvent.setup().type(await screen.findByTestId("tls-key-pem"), "NEWKEY");
+    const save = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    const test = JSON.parse((await ref.current!.buildTestConfig!(ctx)).configJSON);
+    expect(save.tls_key_pem).toBe("enc(NEWKEY)");
+    expect(test.tls_key_pem).toBe("enc(NEWKEY)");
+  });
+
+  it("不声明证书字段组的驱动,TLS Tab 不出现证书字段,配置里的证书键不被写出", async () => {
+    const ref = await renderEdit(
+      '{"driver":"mysql","host":"h","port":3306,"tls":true,"tls_ca_pem":"CA","tls_key_pem":"K"}'
+    );
+    expect(screen.queryByTestId("tls-ca-pem")).toBeNull();
+    expect((await ref.current!.buildConfig(ctx)).configJSON).not.toContain("tls_");
   });
 });

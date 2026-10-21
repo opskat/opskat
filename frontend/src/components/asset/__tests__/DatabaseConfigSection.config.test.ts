@@ -7,6 +7,7 @@ import {
   type DatabaseFormState,
 } from "@/components/asset/DatabaseConfigSection.config";
 import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
+import { TLS_CERT_DEFAULTS } from "@/components/asset/tlsCertConfig";
 import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const driverFor = (id: string) => BUILTIN_DRIVERS.find((d) => d.id === id)!;
@@ -17,6 +18,9 @@ const build = (
 
 const FULL_MYSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
   driverOptions: {},
   storedDriverOptions: { driver: "", values: {} },
   driver: "mysql",
@@ -37,6 +41,9 @@ const FULL_MYSQL: DatabaseFormState = {
 
 const FULL_PG: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
   driverOptions: {},
   storedDriverOptions: { driver: "", values: {} },
   driver: "postgresql",
@@ -55,6 +62,9 @@ const FULL_PG: DatabaseFormState = {
 
 const FULL_MSSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
   driverOptions: {},
   storedDriverOptions: { driver: "", values: {} },
   driver: "mssql",
@@ -73,6 +83,9 @@ const FULL_MSSQL: DatabaseFormState = {
 
 const FULL_SQLITE: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
   driverOptions: {},
   storedDriverOptions: { driver: "", values: {} },
   driver: "sqlite",
@@ -270,6 +283,9 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       )
     ).toEqual({
       ...CONNECTION_DEFAULTS,
+      ...TLS_CERT_DEFAULTS,
+      tlsInsecure: false,
+      tlsServerName: "",
       driver: "mysql",
       sqliteSource: "local",
       host: "db.example.com",

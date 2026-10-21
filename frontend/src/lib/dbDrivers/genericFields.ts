@@ -1,3 +1,5 @@
+import { tlsCertFields } from "@/components/asset/tlsCertConfig";
+import type { DatabaseFormState } from "@/components/asset/DatabaseConfigSection.config";
 import { registerDriverFormField } from "./formFields";
 
 registerDriverFormField("host", [
@@ -55,6 +57,13 @@ registerDriverFormField("ssl_mode", [
   },
 ]);
 registerDriverFormField("tls", [{ kind: "switch", key: "tls", label: "TLS" }]);
+// 证书字段组自带启用开关,与 Redis 的 TLS 分组同款;其余控件在启用后才显示。
+registerDriverFormField("tls_cert", [
+  { kind: "switch", key: "tls", label: "asset.tls" },
+  { kind: "switch", key: "tlsInsecure", label: "asset.tlsInsecure", visibleWhen: (s) => s.tls },
+  { kind: "text", key: "tlsServerName", label: "asset.tlsServerName", visibleWhen: (s) => s.tls },
+  ...tlsCertFields<DatabaseFormState>((s) => s.tls),
+]);
 registerDriverFormField("params", [
   { kind: "text", key: "params", label: "asset.params", placeholder: "asset.paramsPlaceholder" },
 ]);

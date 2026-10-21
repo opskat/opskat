@@ -17,6 +17,7 @@ import {
 } from "@/lib/dbDrivers";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { resolveTLSKey } from "./tlsCertConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
   applyDriverChange,
@@ -96,7 +97,8 @@ function DatabaseConfigForm({
           await resolveSaveCredential(cred.value, ctx.encryptPassword),
           await resolveSaveProxyPassword(s, ctx.encryptPassword),
           await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
-          await buildDriverOptions(d, s, ctx.encryptPassword)
+          await buildDriverOptions(d, s, ctx.encryptPassword),
+          await resolveTLSKey(s, ctx.encryptPassword)
         ),
         sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
       };
@@ -120,7 +122,9 @@ function DatabaseConfigForm({
             s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
           ),
           // 测试连接与已存资产一样由后端解密口令类专属字段,所以这里同样给密文。
-          await buildDriverOptions(d, s, ctx.encryptPassword)
+          await buildDriverOptions(d, s, ctx.encryptPassword),
+          // 私钥同样给密文:后端只认密文。
+          await resolveTLSKey(s, ctx.encryptPassword)
         ),
         password: cred.value.password,
       };
