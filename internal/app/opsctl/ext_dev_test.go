@@ -302,7 +302,7 @@ func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := t.TempDir()
 	manifest := `{
-  "name": "oss", "version": "1.2.3", "hostABI": "2.4",
+  "name": "oss", "version": "1.2.3", "hostABI": "2.5",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
   "capabilities": {}
 }`
@@ -408,6 +408,7 @@ func TestHandleExtDevInstallListsDatabaseDriversWithPlaintextWarning(t *testing.
 	first := strings.SplitN(detail, "\n", 2)[0]
 	require.Contains(t, first, "databaseDrivers")
 	require.Contains(t, first, "plaintext")
+	require.Contains(t, first, "TLS client private key")
 	require.Contains(t, detail, "databaseDrivers: vmysql, vmaria")
 	require.NotContains(t, detail, "capabilities: none")
 	require.NotContains(t, detail, "(new)")
@@ -438,4 +439,21 @@ func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 
 	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\ncapabilities:\n  http: https://api.example.com/",
 		approver.prompts[0].Detail)
+}
+
+func TestHandleExtDevInstallListsDatabaseRedirectsMarkedNewOnOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vredir","version":"1.1.0","hostABI":"2.4",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"databaseDrivers": ["vredir"], "network": {"databaseRedirects": true}}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{
+		installed: map[string]string{"vredir": "1.0.0"},
+		drivers:   map[string][]string{"vredir": {"vredir"}},
+	}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.Contains(t, approver.prompts[0].Detail, "network.databaseRedirects: true (new)")
 }

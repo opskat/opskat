@@ -150,6 +150,20 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(screen.getByRole("dialog").querySelector("[data-slot=dialog-title]")?.textContent).toBe(title);
   });
 
+  it("lists the database-redirect capability with a label and marks it new on upgrade", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "network.databaseRedirects", value: "" }],
+      added: [{ kind: "network.databaseRedirects", value: "" }],
+    });
+
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-network.databaseRedirects");
+    expect(row).toHaveTextContent("extension.installConfirm.databaseRedirects");
+    expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
+  });
+
   it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);

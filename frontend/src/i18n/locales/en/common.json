@@ -2996,7 +2996,7 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
-    "databaseDriversWarning": "This extension provides database drivers. For assets that use them, the connection password is handed to the extension in plaintext. Keep it only if you trust its author.",
+    "databaseDriversWarning": "This extension provides database drivers. For assets that use them, the connection password and TLS client private key are handed to the extension in plaintext. Keep it only if you trust its author.",
     "installConfirm": {
       "title": "Install extension?",
       "titleUpdate": "Update extension?",
@@ -3013,6 +3013,7 @@
       "noCapabilities": "No capabilities beyond its own directory",
       "added": "New",
       "databaseDriver": "Provides database driver",
+      "databaseRedirects": "Follows database redirects via the asset's route",
       "downgrade": "Downgrade",
       "install": "Install",
       "update": "Update",

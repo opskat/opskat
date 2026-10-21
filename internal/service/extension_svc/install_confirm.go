@@ -31,6 +31,9 @@ const (
 	CapTunnel         = "tunnel"
 	CapAssetEndpoint  = "network.assetEndpoint"
 	CapDatabaseDriver = "databaseDriver"
+	// CapDatabaseRedirects: the driver may dial the other addresses a database
+	// redirects to, through the asset's route.
+	CapDatabaseRedirects = "network.databaseRedirects"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -152,6 +155,9 @@ func capabilityGrants(c extension.Capabilities) []CapabilityGrant {
 	}
 	if c.Network.AssetEndpoint {
 		out = append(out, CapabilityGrant{Kind: CapAssetEndpoint})
+	}
+	if c.Network.DatabaseRedirects {
+		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects})
 	}
 	// Only the ids are known here (manifest / signed store index); describe() has
 	// not run before an install is confirmed.

@@ -41,17 +41,27 @@ import (
 // plus the driver descriptors in describe()). An older host would not know to read
 // them and would load the extension as one with nothing to offer, so an extension
 // declaring drivers declares 2.3 and an older app refuses to install it.
-const HostABIVersion = "2.3"
+//
+// 2.4 adds two driver-extension capabilities an older host would silently ignore:
+// network.databaseRedirects (the driver may follow a database's redirect to another
+// address, dialed through the asset's route) and the certificate field group (the
+// driver is handed the asset's TLS material when it opens a session). An extension
+// using either declares 2.4 and an older app refuses to install it.
+const HostABIVersion = "2.4"
 
 // databaseDriversMinHostABI is the first host ABI that understands
 // capabilities.databaseDrivers.
 const databaseDriversMinHostABI = "2.3"
 
+// DatabaseExtrasMinHostABI is the first host ABI that understands the 2.4 driver
+// capabilities: network.databaseRedirects and the certificate field group.
+const DatabaseExtrasMinHostABI = "2.4"
+
 // SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
 // 2.2 stay listed so extensions built before host-ui, multi-resource
 // classification or database drivers keep loading unchanged; only a hostABI newer
 // than everything here (e.g. an extension declaring 2.4 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3"}
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -186,8 +196,14 @@ type Capabilities struct {
 // into that asset's format:"endpoint" config fields — private-network addresses
 // included, since the user configured them — over HTTP and TCP. Undeclared, HTTP
 // reach is exactly the static http allowlist and TCP stays ungated.
+//
+// DatabaseRedirects lets a database driver follow a redirect the database answers
+// with (a cluster node, a read replica, a routed listener) by dialing that other
+// address through the asset's own route. Only meaningful with databaseDrivers;
+// requires hostABI 2.4.
 type NetworkCapability struct {
-	AssetEndpoint bool `json:"assetEndpoint"`
+	AssetEndpoint     bool `json:"assetEndpoint"`
+	DatabaseRedirects bool `json:"databaseRedirects"`
 }
 
 // FSCapability lists filesystem path patterns an extension may access.
@@ -533,6 +549,14 @@ func (m *Manifest) validate() error {
 // unique, and only on a host ABI that reads them.
 func (m *Manifest) validateDatabaseDrivers() error {
 	ids := m.Capabilities.DatabaseDrivers
+	if m.Capabilities.Network.DatabaseRedirects {
+		if len(ids) == 0 {
+			return fmt.Errorf("manifest: capabilities.network.databaseRedirects only applies to an extension that declares capabilities.databaseDrivers")
+		}
+		if !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
+			return fmt.Errorf("manifest: capabilities.network.databaseRedirects requires hostABI %s or newer (got %s)", DatabaseExtrasMinHostABI, m.HostABI)
+		}
+	}
 	if len(ids) == 0 {
 		return nil
 	}

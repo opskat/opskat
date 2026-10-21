@@ -363,3 +363,21 @@ func TestNewInstallConfirm_FromStoreCandidate(t *testing.T) {
 		Added:        []CapabilityGrant{{Kind: CapCredentials, Value: extension.CredentialAccessRead}},
 	}, c)
 }
+
+func TestNewInstallConfirm_DatabaseRedirectsIsGrantAndUpgradeMarksIt(t *testing.T) {
+	stub := installDescribeStub(t)
+	svc := newConfirmTestService(t, t.TempDir())
+	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-redir", "1.0.0", map[string]any{})
+	_, err := svc.Install(langCtx, dir, nil)
+	require.NoError(t, err)
+
+	c := svc.NewInstallConfirm(InstallCandidate{
+		Name: "ext-redir", Version: "1.1.0", Source: InstallSourceStore,
+		Capabilities: extension.Capabilities{
+			DatabaseDrivers: []string{"d"},
+			Network:         extension.NetworkCapability{DatabaseRedirects: true},
+		},
+	})
+	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseRedirects})
+	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseRedirects})
+}

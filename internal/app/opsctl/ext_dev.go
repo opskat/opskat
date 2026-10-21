@@ -149,8 +149,8 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	}
 	if len(m.Capabilities.DatabaseDrivers) > 0 {
 		b.WriteString(i18n.Pick(lang,
-			"警告：databaseDrivers —— 使用这些驱动的数据库资产，其口令会以明文交给该扩展\n",
-			"WARNING: databaseDrivers — database assets using these drivers hand their passwords to this extension in plaintext\n"))
+			"警告：databaseDrivers —— 使用这些驱动的数据库资产，其口令与 TLS 客户端私钥会以明文交给该扩展\n",
+			"WARNING: databaseDrivers — database assets using these drivers hand their passwords and TLS client private keys to this extension in plaintext\n"))
 	}
 	fmt.Fprintf(&b, "extension: %s %s\n", m.Name, m.Version)
 	if overwrites {
@@ -182,6 +182,15 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	}
 	if c.Network.AssetEndpoint {
 		capLine("network.assetEndpoint", "true")
+	}
+	if c.Network.DatabaseRedirects {
+		// The installed copy's network capabilities are not known here; no build
+		// older than ABI 2.4 can declare this, so an overwrite shows it as new.
+		v := "true"
+		if overwrites {
+			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
+		}
+		capLine("network.databaseRedirects", v)
 	}
 	if len(c.DatabaseDrivers) > 0 {
 		mark := i18n.Pick(lang, "新增", "new")

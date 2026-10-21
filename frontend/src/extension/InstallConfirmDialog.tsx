@@ -58,6 +58,9 @@ const SOURCE_LABEL: Record<InstallConfirmRequest["source"], string> = {
 /** extension_svc.CapDatabaseDriver: one grant per driver id the extension provides. */
 const DATABASE_DRIVER_KIND = "databaseDriver";
 
+/** extension_svc.CapDatabaseRedirects: the driver may follow database redirects through the asset's route. */
+const DATABASE_REDIRECTS_KIND = "network.databaseRedirects";
+
 const sameGrant = (a: CapabilityGrant, b: CapabilityGrant) => a.kind === b.kind && a.value === b.value;
 
 /**
@@ -172,7 +175,11 @@ export function ExtensionInstallConfirmDialog() {
                         className="flex items-center gap-2 text-xs p-2 rounded bg-muted/50"
                       >
                         <span className="font-mono font-medium shrink-0">
-                          {cap.kind === DATABASE_DRIVER_KIND ? t("extension.installConfirm.databaseDriver") : cap.kind}
+                          {cap.kind === DATABASE_DRIVER_KIND
+                            ? t("extension.installConfirm.databaseDriver")
+                            : cap.kind === DATABASE_REDIRECTS_KIND
+                              ? t("extension.installConfirm.databaseRedirects")
+                              : cap.kind}
                         </span>
                         {cap.value && <span className="font-mono text-muted-foreground break-all">{cap.value}</span>}
                         {current.added.some((a) => sameGrant(a, cap)) && (

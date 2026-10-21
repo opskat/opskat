@@ -48,14 +48,16 @@ Everything else — tools, asset types, policies, pages, display strings — is 
 ```
 
 `hostABI` is checked as an exact-set membership, not a minimum: `pkg/extension.SupportedHostABIs`
-currently accepts `2.0` through `2.3`, so an already-built `2.0` extension keeps loading
+currently accepts `2.0` through `2.4`, so an already-built `2.0` extension keeps loading
 unchanged (it just doesn't get `@opskat/host-ui` — see below), while one declaring
-anything not in that set (`2.4`, `3.0`, …) is refused at load with the list of what is
+anything not in that set (`2.5`, `3.0`, …) is refused at load with the list of what is
 supported. Declare `2.2` when a tool classifies with `.PolicyResources` or refuses
 arguments with `.RejectArgs` (see [The policy face](#the-policy-face)): an older app
 would read either reply as a call on no resource at all, so it must refuse the extension
 instead. Declare `2.3` to provide a database driver (see
-[Providing a database driver](#providing-a-database-driver)).
+[Providing a database driver](#providing-a-database-driver)). Declare `2.4` for
+`network.databaseRedirects` or the certificate field group: an older app would ignore
+them, so it must refuse the extension instead.
 
 `capabilities` defaults to deny-all, and the notebook needs nothing: the host KV, the
 asset config and logging are available without a grant. Declare only what you use:
@@ -82,7 +84,11 @@ included, since the user typed them. The target's scheme, host and port must mat
 an endpoint field (a bare `host:port` admits http and https); anything else, a
 redirect off the endpoints included, is refused with "not an endpoint of the asset".
 Declaring it also puts TCP under that rule; without it TCP is ungated and HTTP reach
-is the static allowlist alone.
+is the static allowlist alone. `network.databaseRedirects` is for database-driver
+extensions: it lets the driver follow a redirect the database answers with (a cluster
+node, a replica) by dialing that other address through the asset's own route. It needs
+`capabilities.databaseDrivers` and `hostABI` `2.4`; otherwise the extension fails to
+load with the reason named. The install confirm lists it as a capability.
 
 **Everything else is answered by the module itself**, through `describe()`. You never
 write that answer: the SDK derives it from the registration calls, so the host's view
