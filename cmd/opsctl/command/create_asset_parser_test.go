@@ -45,6 +45,35 @@ func TestParseAssetCreateDriverOptionsPlaintextWarning(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
+// 驱动由 --driver 旗标给出时，--config / --config-file 里的口令类专属字段与驱动写在
+// --config 里一样计入明文告警；无口令类字段不告警；值不回显；内置口令告警不变。
+func TestParseAssetCreateDriverFlagPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretOpts := `{"driver_options":{"region":"eu","token":"flag-top-secret"}}`
+	plainOpts := `{"driver_options":{"region":"eu"}}`
+	base := []string{"--name", "x", "--type", "database", "--driver", "fakedb", "--host", "h"}
+	files := map[string][]byte{"s.json": []byte(secretOpts)}
+
+	_, stderr, err := parseAssetCreateForTest(t, append(base, "--config", secretOpts), nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "flag-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, append(base, "--config-file", "s.json"), nil, files)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+	assert.NotContains(t, stderr, "flag-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, append(base, "--config", plainOpts), nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+
+	_, stderr, err = parseAssetCreateForTest(t, append(base, "--config", `{"password":"builtin-top-secret"}`), nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "builtin-top-secret")
+}
+
 type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }

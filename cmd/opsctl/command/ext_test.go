@@ -848,6 +848,14 @@ func TestExtensionDriverFields_ManagedFromTheCommandLine(t *testing.T) {
 	})
 	require.Equal(t, 0, code, "stderr: %s", stderr)
 
+	// Update without a driver in --config: the stored asset's driver identifies the password option.
+	code, stdout, stderr = runCmd(t, func() int {
+		return cmdUpdate(ctx, handlers, []string{"asset", "fx-opts", "--config", `{"driver_options":{"wallet_secret":"update-top-secret"}}`}, "sess-ext")
+	})
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr+stdout, "update-top-secret")
+
 	// The stored config carries the updated option and the password option encrypted.
 	found, err := asset_repo.Asset().FindByName(ctx, "fx-opts")
 	require.NoError(t, err)
