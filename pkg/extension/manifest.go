@@ -47,7 +47,12 @@ import (
 // address, dialed through the asset's route) and the certificate field group (the
 // driver is handed the asset's TLS material when it opens a session). An extension
 // using either declares 2.4 and an older app refuses to install it.
-const HostABIVersion = "2.4"
+//
+// 2.5 adds capabilities.databaseKerberos (the driver may ask the host for Kerberos
+// tickets fetched with the asset's Kerberos credentials) and the statement
+// split/classify declaration. An extension using either declares 2.5 and an older
+// app refuses to install it.
+const HostABIVersion = "2.5"
 
 // databaseDriversMinHostABI is the first host ABI that understands
 // capabilities.databaseDrivers.
@@ -57,12 +62,16 @@ const databaseDriversMinHostABI = "2.3"
 // capabilities: network.databaseRedirects and the certificate field group.
 const DatabaseExtrasMinHostABI = "2.4"
 
+// DatabaseKerberosMinHostABI is the first host ABI that understands
+// capabilities.databaseKerberos.
+const DatabaseKerberosMinHostABI = "2.5"
+
 // SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
-// 2.3 stay listed so extensions built before host-ui, multi-resource
-// classification, database drivers or the 2.4 driver capabilities keep loading
+// 2.4 stay listed so extensions built before host-ui, multi-resource
+// classification, database drivers or the 2.4/2.5 driver capabilities keep loading
 // unchanged; only a hostABI newer than everything here (e.g. an extension
-// declaring 2.5 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4"}
+// declaring 2.6 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -188,6 +197,10 @@ type Capabilities struct {
 	// DatabaseDrivers lists the SQL database driver ids the extension provides.
 	// describe() must answer with exactly this set of drivers; requires hostABI 2.3.
 	DatabaseDrivers []string `json:"databaseDrivers"`
+	// DatabaseKerberos lets a database driver ask the host for Kerberos tickets
+	// fetched with the asset's Kerberos credentials. Only meaningful with
+	// databaseDrivers; requires hostABI 2.5.
+	DatabaseKerberos bool `json:"databaseKerberos"`
 }
 
 // NetworkCapability grants network reach that is decided per call rather than by
@@ -556,6 +569,14 @@ func (m *Manifest) validateDatabaseDrivers() error {
 		}
 		if !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
 			return fmt.Errorf("manifest: capabilities.network.databaseRedirects requires hostABI %s or newer (got %s)", DatabaseExtrasMinHostABI, m.HostABI)
+		}
+	}
+	if m.Capabilities.DatabaseKerberos {
+		if len(ids) == 0 {
+			return fmt.Errorf("manifest: capabilities.databaseKerberos only applies to an extension that declares capabilities.databaseDrivers")
+		}
+		if !hostABIAtLeast(m.HostABI, DatabaseKerberosMinHostABI) {
+			return fmt.Errorf("manifest: capabilities.databaseKerberos requires hostABI %s or newer (got %s)", DatabaseKerberosMinHostABI, m.HostABI)
 		}
 	}
 	if len(ids) == 0 {

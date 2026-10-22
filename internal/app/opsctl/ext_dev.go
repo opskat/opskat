@@ -193,6 +193,16 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 			" — the driver may connect to other addresses the database redirects to, through the asset's route")
 		capLine("network.databaseRedirects", v)
 	}
+	if c.DatabaseKerberos {
+		v := "true"
+		if overwrites && !installed.DatabaseKerberos {
+			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
+		}
+		v += i18n.Pick(lang,
+			" —— 驱动可以用资产里的 Kerberos 凭据为登录数据库取票",
+			" — the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
+		capLine("databaseKerberos", v)
+	}
 	if len(c.DatabaseDrivers) > 0 {
 		mark := i18n.Pick(lang, "新增", "new")
 		ids := make([]string, len(c.DatabaseDrivers))

@@ -61,6 +61,9 @@ const DATABASE_DRIVER_KIND = "databaseDriver";
 /** extension_svc.CapDatabaseRedirects: the driver may follow database redirects through the asset's route. */
 const DATABASE_REDIRECTS_KIND = "network.databaseRedirects";
 
+/** extension_svc.CapDatabaseKerberos: the driver may fetch Kerberos tickets with the asset's Kerberos credentials. */
+const DATABASE_KERBEROS_KIND = "databaseKerberos";
+
 const sameGrant = (a: CapabilityGrant, b: CapabilityGrant) => a.kind === b.kind && a.value === b.value;
 
 /**
@@ -179,7 +182,9 @@ export function ExtensionInstallConfirmDialog() {
                             ? t("extension.installConfirm.databaseDriver")
                             : cap.kind === DATABASE_REDIRECTS_KIND
                               ? t("extension.installConfirm.databaseRedirects")
-                              : cap.kind}
+                              : cap.kind === DATABASE_KERBEROS_KIND
+                                ? t("extension.installConfirm.databaseKerberos")
+                                : cap.kind}
                         </span>
                         {cap.value && <span className="font-mono text-muted-foreground break-all">{cap.value}</span>}
                         {current.added.some((a) => sameGrant(a, cap)) && (

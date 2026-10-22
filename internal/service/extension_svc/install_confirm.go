@@ -34,6 +34,9 @@ const (
 	// CapDatabaseRedirects: the driver may dial the other addresses a database
 	// redirects to, through the asset's route.
 	CapDatabaseRedirects = "network.databaseRedirects"
+	// CapDatabaseKerberos: the driver may ask the host for Kerberos tickets
+	// fetched with the asset's Kerberos credentials.
+	CapDatabaseKerberos = "databaseKerberos"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -158,6 +161,9 @@ func capabilityGrants(c extension.Capabilities) []CapabilityGrant {
 	}
 	if c.Network.DatabaseRedirects {
 		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects})
+	}
+	if c.DatabaseKerberos {
+		out = append(out, CapabilityGrant{Kind: CapDatabaseKerberos})
 	}
 	// Only the ids are known here (manifest / signed store index); describe() has
 	// not run before an install is confirmed.

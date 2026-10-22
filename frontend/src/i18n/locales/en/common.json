@@ -3014,6 +3014,7 @@
       "added": "New",
       "databaseDriver": "Provides database driver",
       "databaseRedirects": "Follows database redirects via the asset's route",
+      "databaseKerberos": "Fetches Kerberos tickets with the asset's Kerberos credentials to log in to the database",
       "downgrade": "Downgrade",
       "install": "Install",
       "update": "Update",

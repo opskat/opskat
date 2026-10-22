@@ -164,6 +164,20 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
+  it("lists the database-kerberos capability with a label and marks it new on upgrade", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "databaseKerberos", value: "" }],
+      added: [{ kind: "databaseKerberos", value: "" }],
+    });
+
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-databaseKerberos");
+    expect(row).toHaveTextContent("extension.installConfirm.databaseKerberos");
+    expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
+  });
+
   it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);

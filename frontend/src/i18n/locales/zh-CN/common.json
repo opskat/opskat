@@ -3014,6 +3014,7 @@
       "added": "新增",
       "databaseDriver": "提供数据库驱动",
       "databaseRedirects": "可连到数据库重定向的地址（经资产途径）",
+      "databaseKerberos": "可用资产里的 Kerberos 凭据为登录数据库取票",
       "downgrade": "降级",
       "install": "安装",
       "update": "更新",

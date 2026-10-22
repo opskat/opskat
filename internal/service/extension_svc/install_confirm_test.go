@@ -381,3 +381,18 @@ func TestNewInstallConfirm_DatabaseRedirectsIsGrantAndUpgradeMarksIt(t *testing.
 	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseRedirects})
 	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseRedirects})
 }
+
+func TestNewInstallConfirm_DatabaseKerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
+	stub := installDescribeStub(t)
+	svc := newConfirmTestService(t, t.TempDir())
+	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-krb", "1.0.0", map[string]any{})
+	_, err := svc.Install(langCtx, dir, nil)
+	require.NoError(t, err)
+
+	c := svc.NewInstallConfirm(InstallCandidate{
+		Name: "ext-krb", Version: "1.1.0", Source: InstallSourceStore,
+		Capabilities: extension.Capabilities{DatabaseDrivers: []string{"d"}, DatabaseKerberos: true},
+	})
+	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseKerberos})
+	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseKerberos})
+}

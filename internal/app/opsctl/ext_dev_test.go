@@ -302,7 +302,7 @@ func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := t.TempDir()
 	manifest := `{
-  "name": "oss", "version": "1.2.3", "hostABI": "2.5",
+  "name": "oss", "version": "1.2.3", "hostABI": "2.6",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
   "capabilities": {}
 }`
@@ -449,6 +449,46 @@ func writeRedirectExtension(t *testing.T) string {
   "capabilities": {"databaseDrivers": ["vredir"], "network": {"databaseRedirects": true}}}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
 	return dir
+}
+
+func writeKerberosExtension(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vkrb","version":"1.1.0","hostABI":"2.5",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"databaseDrivers": ["vkrb"], "databaseKerberos": true}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	return dir
+}
+
+func TestHandleExtDevInstallDatabaseKerberosNewMark(t *testing.T) {
+	declared := extension.Capabilities{DatabaseDrivers: []string{"vkrb"}, DatabaseKerberos: true}
+	undeclared := extension.Capabilities{DatabaseDrivers: []string{"vkrb"}}
+	cases := []struct {
+		name      string
+		installed map[string]string
+		caps      map[string]extension.Capabilities
+		marked    bool
+	}{
+		{"added by overwrite", map[string]string{"vkrb": "1.0.0"}, map[string]extension.Capabilities{"vkrb": undeclared}, true},
+		{"already declared", map[string]string{"vkrb": "1.0.0"}, map[string]extension.Capabilities{"vkrb": declared}, false},
+		{"fresh install", nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			approver := &recordingApprover{approve: true}
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, caps: tc.caps}, approver)
+			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
+			detail := approver.prompts[0].Detail
+			require.Contains(t, detail, "databaseKerberos: true")
+			require.Contains(t, detail, "the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
+			if tc.marked {
+				require.Contains(t, detail, "databaseKerberos: true (new)")
+			} else {
+				require.NotContains(t, detail, "databaseKerberos: true (new)")
+			}
+		})
+	}
 }
 
 func TestHandleExtDevInstallDatabaseRedirectsNewMark(t *testing.T) {
