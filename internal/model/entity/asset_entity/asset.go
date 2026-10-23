@@ -192,6 +192,13 @@ type DatabaseConfig struct {
 	TLSCAPEM      string `json:"tls_ca_pem,omitempty"`      // CA 证书内容（PEM），与路径二选一
 	TLSCertPEM    string `json:"tls_cert_pem,omitempty"`    // 客户端证书内容（PEM），与路径二选一
 	TLSKeyPEM     string `json:"tls_key_pem,omitempty"`     // 客户端私钥内容（PEM），credential_svc 加密，与路径二选一
+	// Kerberos 字段组（dbdriver.FieldKerberos）：只有声明了它的驱动使用，空认证方式即口令。
+	AuthMethod    string `json:"auth_method,omitempty"`     // 认证方式：空 = 口令，"kerberos"
+	KrbPrincipal  string `json:"krb_principal,omitempty"`   // 主体 user@REALM
+	KrbPassword   string `json:"krb_password,omitempty"`    // 主体口令，credential_svc 加密
+	KrbKeytabFile string `json:"krb_keytab_file,omitempty"` // keytab 文件路径（只存路径），填了就用 keytab
+	KrbKDC        string `json:"krb_kdc,omitempty"`         // KDC 地址，逗号分隔的 host[:port]，默认端口 88
+	KrbSPN        string `json:"krb_spn,omitempty"`         // 固定的服务主体 service/host[@REALM]，空表示按驱动要的取
 	Params        string `json:"params,omitempty"`          // 额外连接参数
 	ReadOnly      bool   `json:"read_only,omitempty"`       // 连接级只读
 	// QueryTimeoutSeconds 查询超时（秒），0 使用默认值 30s；元数据浏览与 SQL 查询共用。
@@ -1003,6 +1010,9 @@ func (a *Asset) validateDatabase() error {
 		return fmt.Errorf("数据库驱动 %s 不可用：未链接驱动注册表", cfg.Driver)
 	}
 	if err := databaseDriverConfigValidator(cfg.DriverConfig(), a.databaseRoute(cfg)); err != nil {
+		return err
+	}
+	if err := cfg.ValidateKerberos(); err != nil {
 		return err
 	}
 	// 0 表示使用默认值（30s）；显式配置时限定 5~600s。

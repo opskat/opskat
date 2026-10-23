@@ -66,9 +66,13 @@ func openDatabase(ctx context.Context, assetID int64, cfg *asset_entity.Database
 	if err != nil {
 		return nil, err
 	}
+	kerberosSource, err := driverKerberos(driver.Descriptor(), assetID, cfg, transport)
+	if err != nil {
+		return nil, err
+	}
 	return driver.Open(ctx, dbdriver.OpenRequest{
 		Config: cfg.DriverConfig(), Password: password, DriverOptions: options, Transport: transport, AssetID: assetID,
-		TLS: tlsMaterial,
+		TLS: tlsMaterial, Kerberos: kerberosSource,
 	})
 }
 

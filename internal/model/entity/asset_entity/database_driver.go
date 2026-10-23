@@ -1,6 +1,15 @@
 package asset_entity
 
-import "github.com/opskat/opskat/pkg/dbdriver"
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
+)
+
+// AuthMethodKerberos 是 DatabaseConfig.AuthMethod 选 Kerberos 的取值；空表示口令。
+const AuthMethodKerberos = "kerberos"
 
 // DatabaseDriverConfigValidator 校验数据库资产配置里由驱动决定的部分（必填字段、文件路径
 // 规则等）。驱动无关的规则（查询超时范围、代理链）留在 validateDatabase。
@@ -62,4 +71,70 @@ func (a *Asset) databaseRoute(cfg *DatabaseConfig) dbdriver.Route {
 		Proxy:       cfg.Proxy != nil,
 		ProxyChain:  cfg.ProxyChain != nil && len(cfg.ProxyChain.Layers) > 0,
 	}
+}
+
+// ValidateKerberos 校验 Kerberos 设置：认证方式为 Kerberos 时，主体须带 @REALM、至少一个 KDC 地址、
+// 口令与 keytab 至少填一个，固定的服务主体若带 realm 须与主体的一致；错误点名字段。认证方式为口令
+// 时不看 krb_* 字段（保留着，切回 Kerberos 时还在）。
+func (c *DatabaseConfig) ValidateKerberos() error {
+	switch c.AuthMethod {
+	case "":
+		return nil
+	case AuthMethodKerberos:
+	default:
+		return fmt.Errorf("auth_method 无效: %q", c.AuthMethod)
+	}
+	if _, err := kerberosRealm(c.KrbPrincipal); err != nil {
+		return err
+	}
+	if len(c.KerberosKDCs()) == 0 {
+		return errors.New("krb_kdc 不能为空：需要至少一个 KDC 地址")
+	}
+	if c.KrbPassword == "" && c.KrbKeytabFile == "" {
+		return errors.New("krb_password 与 krb_keytab_file 至少填一个")
+	}
+	_, err := c.KerberosPinnedSPN()
+	return err
+}
+
+// KerberosKDCs 是 krb_kdc 拆出的 KDC 地址（去空白与空项）。
+func (c *DatabaseConfig) KerberosKDCs() []string {
+	var out []string
+	for _, kdc := range strings.Split(c.KrbKDC, ",") {
+		if kdc = strings.TrimSpace(kdc); kdc != "" {
+			out = append(out, kdc)
+		}
+	}
+	return out
+}
+
+// KerberosPinnedSPN 返回固定的服务主体，去掉与主体同 realm 的 @REALM（宿主按 service/host 原样比较）；
+// 没固定返回空。realm 与主体的不同则报错点名 krb_spn。
+func (c *DatabaseConfig) KerberosPinnedSPN() (string, error) {
+	if c.KrbSPN == "" {
+		return "", nil
+	}
+	spn, realm, hasRealm := strings.Cut(c.KrbSPN, "@")
+	if spn == "" || strings.Contains(realm, "@") {
+		return "", errors.New("krb_spn 无效：应为 service/host 或 service/host@REALM")
+	}
+	if !hasRealm {
+		return spn, nil
+	}
+	want, err := kerberosRealm(c.KrbPrincipal)
+	if err != nil {
+		return "", err
+	}
+	if realm != want {
+		return "", fmt.Errorf("krb_spn 的 realm %q 与主体的 realm %q 不同", realm, want)
+	}
+	return spn, nil
+}
+
+func kerberosRealm(principal string) (string, error) {
+	i := strings.LastIndex(principal, "@")
+	if i <= 0 || i == len(principal)-1 {
+		return "", errors.New("krb_principal 须为 user@REALM")
+	}
+	return principal[i+1:], nil
 }
