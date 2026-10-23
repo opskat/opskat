@@ -400,6 +400,20 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 		assert.NotContains(t, fmt.Sprint(view), cfg.KrbPassword)
 	})
 
+	t.Run("declared: Kerberos create needs no asset password and stores none", func(t *testing.T) {
+		args := krbArgs()
+		delete(args, "password")
+		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		require.NoError(t, err)
+		a := &asset_entity.Asset{Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, h.ApplyCreateArgs(t.Context(), a, prepared.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Password)
+		assert.Zero(t, cfg.CredentialID)
+		assert.Equal(t, asset_entity.AuthMethodKerberos, cfg.AuthMethod)
+	})
+
 	t.Run("declared: update touches only the given fields", func(t *testing.T) {
 		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
 		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
