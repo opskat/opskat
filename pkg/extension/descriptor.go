@@ -163,7 +163,9 @@ func (d *Descriptor) validateDatabaseDrivers() error {
 // audited, the descriptor is what the code implements, and they may not disagree.
 // A driver that declares the certificate field group (dbdriver.FieldTLSCert) is
 // handed the asset's TLS material, which an older host would silently not do, so
-// it requires DatabaseExtrasMinHostABI.
+// it requires DatabaseExtrasMinHostABI. A driver that declares the Kerberos field
+// group (dbdriver.FieldKerberos) asks the host for tickets, which the user audits
+// as capabilities.databaseKerberos (itself hostABI DatabaseKerberosMinHostABI).
 // The error names the offending driver; the caller adds the extension.
 func (m *Manifest) checkDatabaseDrivers() error {
 	described := make(map[string]struct{}, len(m.DatabaseDrivers))
@@ -176,6 +178,10 @@ func (m *Manifest) checkDatabaseDrivers() error {
 		if drv.UsesField(dbdriver.FieldTLSCert) && !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
 			return fmt.Errorf("database driver %q declares the certificate field group (form field %q), which requires hostABI %s or newer (got %s)",
 				id, dbdriver.FieldTLSCert, DatabaseExtrasMinHostABI, m.HostABI)
+		}
+		if drv.UsesField(dbdriver.FieldKerberos) && !m.Capabilities.DatabaseKerberos {
+			return fmt.Errorf("database driver %q declares the Kerberos field group (form field %q), which requires manifest capabilities.databaseKerberos on hostABI %s or newer (got hostABI %s without it)",
+				id, dbdriver.FieldKerberos, DatabaseKerberosMinHostABI, m.HostABI)
 		}
 	}
 	for _, id := range m.Capabilities.DatabaseDrivers {

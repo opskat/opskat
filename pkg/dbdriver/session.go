@@ -44,6 +44,29 @@ type OpenRequest struct {
 	// 时给出，否则为 nil（内置驱动不声明，始终为 nil，照旧按 Config.TLS / SSLMode 处理）。
 	// 内容与 Password 一样只在打开会话时给出，不进日志。
 	TLS *TLSMaterial
+	// Kerberos 是资产的 Kerberos 票据来源：只在驱动声明了 Kerberos 字段组（FieldKerberos）且资产
+	// 的认证方式为 Kerberos 时给出，否则为 nil（内置驱动不声明，始终为 nil）。给出时 Password 不用：
+	// 驱动在登录握手中按数据库给的服务名与主机名经 Kerberos.Ticket 要票据。
+	Kerberos *Kerberos
+}
+
+// Kerberos 是一个资产登录数据库用的 Kerberos 票据来源。口令、keytab 与会话密钥都在 Ticket 背后，
+// 不在这里：打开会话的进程持有它们，驱动只拿到票据。
+type Kerberos struct {
+	// Principal 是资产的主体（user@REALM），只用来在宿主的日志里点名；扩展里的驱动拿到的为空。
+	Principal string
+	// SPN 是资产固定的服务主体（service/host，不带 realm）；为空表示按驱动要的取。扩展里的驱动
+	// 拿到的为空：要别的服务主体由宿主拒绝。
+	SPN string
+	// Ticket 返回登录服务主体 spn（KerberosSPN 的形式）用的票据（Kerberos AP-REQ 的字节），
+	// 原样写进数据库的登录握手；失败时返回可读的原因，不含口令、keytab 内容、票据或密钥。
+	Ticket func(ctx context.Context, spn string) ([]byte, error)
+}
+
+// KerberosSPN 是数据库在登录握手中给出的服务名 service 与主机名 host 对应的服务主体：service/host
+// （go-ora 的 Authenticate(server, service) 即 KerberosSPN(service, server)）。
+func KerberosSPN(service, host string) string {
+	return service + "/" + host
 }
 
 // TLSMaterial 是驱动自己完成 TLS 所需的设置与证书内容。填的是路径的，打开会话的进程已读成

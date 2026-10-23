@@ -201,6 +201,10 @@ func (w *wasmHostCaller) ActionEvent(eventType string, data []byte) {
 	_, _ = call("action.event", map[string]any{"type": eventType, "data": json.RawMessage(data)})
 }
 
+func (w *wasmHostCaller) KerberosTicket(spn string) ([]byte, error) {
+	return call("dbdriver.kerberos_ticket", map[string]string{"spn": spn})
+}
+
 func (w *wasmHostCaller) ActionShouldStop() bool {
 	payload, err := call("action.should_stop", nil)
 	if err != nil {

@@ -93,3 +93,7 @@ func (m *mockHostCaller) IOSetDeadline(handleID uint32, kind string, unixNanos i
 func (m *mockHostCaller) ActionShouldStop() bool {
 	return false
 }
+
+func (m *mockHostCaller) KerberosTicket(string) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}

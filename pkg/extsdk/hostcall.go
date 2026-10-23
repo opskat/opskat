@@ -19,6 +19,7 @@ type hostCaller interface {
 	KVSet(key string, value []byte) error
 	ActionEvent(eventType string, data []byte)
 	ActionShouldStop() bool
+	KerberosTicket(spn string) ([]byte, error)
 }
 
 // Package-level host call functions. All SDK code calls through these.
@@ -41,3 +42,4 @@ func hostKVGet(key string) ([]byte, error)          { return currentHost.KVGet(k
 func hostKVSet(key string, value []byte) error      { return currentHost.KVSet(key, value) }
 func hostActionEvent(eventType string, data []byte) { currentHost.ActionEvent(eventType, data) }
 func hostActionShouldStop() bool                    { return currentHost.ActionShouldStop() }
+func hostKerberosTicket(spn string) ([]byte, error) { return currentHost.KerberosTicket(spn) }

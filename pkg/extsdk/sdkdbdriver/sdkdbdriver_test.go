@@ -11,6 +11,7 @@ import (
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
+	opskat "github.com/opskat/opskat/pkg/extsdk"
 )
 
 var demoDriver = dbdriver.Descriptor{
@@ -104,6 +105,25 @@ func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
 			So(reply.Error, ShouldNotBeNil)
 			So(reply.Error.Code, ShouldEqual, "unsupported")
 			So(reply.Error.Message, ShouldContainSubstring, dbdriver.ErrUnsupported.Error())
+		})
+
+		Convey("a Kerberos asset's open carries a ticket source that asks the host, and a password asset's none", func() {
+			host := opskat.NewTestHost(opskat.WithKerberosTickets(func(spn string) ([]byte, error) {
+				return []byte("ticket:" + spn), nil
+			}))
+			defer host.Close()
+
+			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb","host":"db.internal"},"kerberos":true}}`)
+			So(reply.Error, ShouldBeNil)
+			So(opened.Kerberos, ShouldNotBeNil)
+			So(opened.Kerberos.Principal, ShouldBeEmpty)
+			ticket, err := opened.Kerberos.Ticket(context.Background(), dbdriver.KerberosSPN("demodb", "db.internal"))
+			So(err, ShouldBeNil)
+			So(string(ticket), ShouldEqual, "ticket:demodb/db.internal")
+
+			reply = callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb"},"password":"s3cret"}}`)
+			So(reply.Error, ShouldBeNil)
+			So(opened.Kerberos, ShouldBeNil)
 		})
 
 		Convey("a read-only config is refused before the opener runs when the driver does not declare it", func() {

@@ -2,11 +2,14 @@ package extension_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -294,6 +297,7 @@ func TestExtensionDriverCertificateGroupNeedsHostABI24(t *testing.T) {
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
 	m["hostABI"] = "2.3"
+	delete(m["capabilities"].(map[string]any), "databaseKerberos")
 	raw, err = json.Marshal(m)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
@@ -307,6 +311,201 @@ func TestExtensionDriverCertificateGroupNeedsHostABI24(t *testing.T) {
 	assert.Contains(t, err.Error(), extensiontest.DBDriverFixtureDriver)
 	assert.Contains(t, err.Error(), string(dbdriver.FieldTLSCert))
 	assert.Contains(t, err.Error(), extension.DatabaseExtrasMinHostABI)
+}
+
+// fakeTickets is a Kerberos ticket source as the caller of Open supplies it: it
+// answers "ticket:<spn>" for every SPN, or fail, and records the SPNs asked.
+type fakeTickets struct {
+	mu    sync.Mutex
+	asked []string
+	fail  error
+}
+
+func (f *fakeTickets) ticket(_ context.Context, spn string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, spn)
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	return []byte("ticket:" + spn), nil
+}
+
+func (f *fakeTickets) spns() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.asked...)
+}
+
+// krbLogin is the login line's password field of a fixture login with ticket.
+func krbLogin(ticket string) string { return "krb:" + hex.EncodeToString([]byte(ticket)) }
+
+// openAuth asks the fixture's instance what it was told about authentication
+// when it logged in: whether the asset uses Kerberos, and the password.
+func openAuth(t *testing.T, s dbdriver.Session) (kerberos bool, password string) {
+	t.Helper()
+	res, err := s.Execute(context.Background(), "SHOW OPEN AUTH")
+	require.NoError(t, err)
+	var seen struct {
+		Kerberos bool   `json:"kerberos"`
+		Password string `json:"password"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(res.Rows.Rows[0][0].(string)), &seen))
+	return seen.Kerberos, seen.Password
+}
+
+// askTicket runs the fixture's ticket probe inside a driver call: the guest asks
+// the host for the ticket of service on host, as during a login handshake. It
+// answers the ticket, or the error the guest got.
+func askTicket(t *testing.T, s dbdriver.Session, service, host string) (ticket, errMsg string) {
+	t.Helper()
+	res, err := s.Execute(context.Background(), "SHOW KERBEROS TICKET "+service+" "+host)
+	require.NoError(t, err)
+	raw, err := hex.DecodeString(res.Rows.Rows[0][0].(string))
+	require.NoError(t, err)
+	return string(raw), res.Rows.Rows[0][1].(string)
+}
+
+// ticketLogs counts, by SPN, the Info entries that record a session's first
+// ticket for it, checking each names the session and carries no secret.
+func ticketLogs(t *testing.T, logs *observer.ObservedLogs, secrets ...string) map[string]int {
+	t.Helper()
+	seen := map[string]int{}
+	for _, e := range logs.All() {
+		fields := e.ContextMap()
+		line := fmt.Sprint(e.Message, fields)
+		for _, secret := range secrets {
+			assert.NotContains(t, line, secret)
+		}
+		if e.Level != zap.InfoLevel || fields["spn"] == nil {
+			continue
+		}
+		assert.Equal(t, "fixture-dbdriver", fields["extension"])
+		assert.Equal(t, extensiontest.DBDriverFixtureDriver, fields["driver"])
+		assert.EqualValues(t, 42, fields["assetID"])
+		assert.Equal(t, "alice@EXAMPLE.COM", fields["principal"])
+		seen[fields["spn"].(string)]++
+	}
+	return seen
+}
+
+// A driver session of a Kerberos asset gets its tickets from the host: the
+// fixture driver asks for one in its login handshake (service "fixturedb" on the
+// asset's host) and logs in with it, and its ticket probe asks again from inside
+// a later call.
+func TestExtensionDriverKerberosTickets(t *testing.T) {
+	ext := extensiontest.LoadDBDriverFixture(t)
+	desc := ext.Manifest.DatabaseDrivers[0]
+	require.True(t, desc.UsesField(dbdriver.FieldKerberos), "the fixture declares the Kerberos field group")
+	ctx := context.Background()
+	open := func(t *testing.T, server *extension.FixtureDBServer, krb *dbdriver.Kerberos) (dbdriver.Session, error) {
+		t.Helper()
+		s, err := ext.Plugin.OpenDriverSession(ctx, string(desc.ID), dbdriver.OpenRequest{
+			Config:    &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: desc.DefaultPort, Username: "alice", Database: "app"},
+			Password:  "s3cret",
+			Transport: dbdriver.Transport{Dial: server.Dial},
+			AssetID:   42,
+			Kerberos:  krb,
+		})
+		if err == nil {
+			t.Cleanup(func() { assert.NoError(t, s.Close()) })
+		}
+		return s, err
+	}
+
+	t.Run("the driver logs in with the ticket for the SPN its server named, learning only that the asset uses Kerberos", func(t *testing.T) {
+		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"fixturedb/db.internal"}, tickets.spns(), "the SPN is service/host as the handshake named them")
+		assert.Equal(t, []string{krbLogin("ticket:fixturedb/db.internal")}, server.Logins(), "the AP-REQ bytes reach the database as they were")
+		kerberos, password := openAuth(t, s)
+		assert.True(t, kerberos)
+		assert.Empty(t, password, "a Kerberos asset's password is not handed to the extension")
+		res, err := s.Execute(ctx, "SHOW OPEN CONFIG")
+		require.NoError(t, err)
+		assert.Contains(t, res.Rows.Rows[0][0], `"username":"alice"`, "the username still is")
+	})
+
+	t.Run("an asset without Kerberos hands the driver no Kerberos, and its ticket calls are refused saying why", func(t *testing.T) {
+		server := extension.NewFixtureDBServer(t)
+		s, err := open(t, server, nil)
+		require.NoError(t, err)
+		kerberos, password := openAuth(t, s)
+		assert.False(t, kerberos)
+		assert.Equal(t, "s3cret", password)
+
+		ticket, msg := askTicket(t, s, "fixturedb", "db.internal")
+		assert.Empty(t, ticket)
+		assert.Contains(t, msg, "does not log in with Kerberos")
+	})
+
+	t.Run("a pinned SPN refuses any other, naming both, without asking the source", func(t *testing.T) {
+		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", SPN: "fixturedb/db.internal", Ticket: tickets.ticket})
+		require.NoError(t, err)
+
+		ticket, msg := askTicket(t, s, "oracle", "db2.internal")
+		assert.Empty(t, ticket)
+		assert.Contains(t, msg, "oracle/db2.internal")
+		assert.Contains(t, msg, "fixturedb/db.internal")
+		assert.Equal(t, []string{"fixturedb/db.internal"}, tickets.spns(), "only the pinned SPN was fetched, at login")
+
+		ticket, msg = askTicket(t, s, "fixturedb", "db.internal")
+		assert.Empty(t, msg)
+		assert.Equal(t, "ticket:fixturedb/db.internal", ticket)
+	})
+
+	t.Run("names that would spell another principal or realm are refused", func(t *testing.T) {
+		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
+		require.NoError(t, err)
+		for _, bad := range [][2]string{{"fixturedb", "db.internal@EVIL.REALM"}, {"fixturedb/x", "db.internal"}} {
+			ticket, msg := askTicket(t, s, bad[0], bad[1])
+			assert.Empty(t, ticket, bad)
+			assert.Contains(t, msg, "Kerberos", bad)
+		}
+		assert.Equal(t, []string{"fixturedb/db.internal"}, tickets.spns())
+	})
+
+	t.Run("each session logs its first ticket for each SPN once, with no secret in any log", func(t *testing.T) {
+		logs := observeLogs(t)
+		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
+		require.NoError(t, err)
+
+		for _, name := range [][2]string{{"fixturedb", "db.internal"}, {"fixturedb", "db.internal"}, {"other", "node2.internal"}} {
+			_, msg := askTicket(t, s, name[0], name[1])
+			require.Empty(t, msg)
+		}
+		// A cursor holds the first instance, so the next operation logs in a second
+		// one, asking for the login ticket again.
+		cursor, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
+		require.NoError(t, err)
+		require.True(t, cursor.Next())
+		_, msg := askTicket(t, s, "fixturedb", "db.internal")
+		require.Empty(t, msg)
+		require.NoError(t, cursor.Close())
+		require.Len(t, server.Logins(), 2)
+
+		secrets := []string{"s3cret", "ticket:", hex.EncodeToString([]byte("ticket:"))}
+		assert.Equal(t, map[string]int{"fixturedb/db.internal": 1, "other/node2.internal": 1}, ticketLogs(t, logs, secrets...))
+
+		_, err = open(t, extension.NewFixtureDBServer(t), &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{"fixturedb/db.internal": 2, "other/node2.internal": 1}, ticketLogs(t, logs, secrets...),
+			"another session logs its own first ticket")
+	})
+
+	t.Run("a source that cannot issue fails the login with its reason, never falling back to the password", func(t *testing.T) {
+		server := extension.NewFixtureDBServer(t)
+		tickets := &fakeTickets{fail: errors.New("KDC refused: KDC_ERR_PREAUTH_FAILED (wrong password or keytab)")}
+		_, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "KDC_ERR_PREAUTH_FAILED")
+		assert.Empty(t, server.Logins(), "no login was attempted")
+	})
 }
 
 // observeLogs routes the app logger into memory for the test.

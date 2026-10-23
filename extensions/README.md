@@ -567,6 +567,24 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   be read or a key that does not decrypt fails the open naming the field; invalid
   contents or a failed handshake are the driver's own TLS error, never a fallback to
   plaintext or to no verification.
+- **Kerberos tickets come from the host.** Declare `dbdriver.FieldKerberos` on the
+  `TabConnection` tab (the manifest must declare `capabilities.databaseKerberos`, which
+  needs `hostABI` `2.5`; otherwise the extension is refused at load, naming the driver)
+  and the asset form offers an authentication method: password or Kerberos. When the
+  asset uses Kerberos, `open` gets `req.Kerberos` and an empty `req.Password`; the
+  username is handed over as usual, the Kerberos password, keytab and keys never are.
+  In the login handshake, call `req.Kerberos.Ticket(ctx, dbdriver.KerberosSPN(service,
+  host))` with the service and host names the database sent (go-ora's
+  `Authenticate(server, service)`), and write the bytes it returns — the Kerberos
+  AP-REQ — into the handshake as they are; `opskat.KerberosTicket(spn)` is the same
+  call. The host fetches the ticket with the asset's Kerberos credentials and refuses,
+  with the reason, a request from outside a driver session or for an asset that does
+  not use Kerberos, a name that is not `service/host` (neither may contain `/` or
+  `@`), and a service principal other than the one the asset pins (naming both). A
+  failed ticket fails the login with the host's reason; nothing falls back to the
+  password. The first ticket for each service principal in a session is logged
+  (extension, driver, asset, principal, service principal), never a credential or a
+  ticket. In tests, `opskat.WithKerberosTickets` gives a `TestHost` a ticket source.
 - **The form is a network database's.** An extension driver is checked by the host's
   network rules (host, port and username required), so its `Form` must declare
   `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields

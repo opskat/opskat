@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,15 +94,32 @@ type connector struct {
 	config   dbdriver.Config
 	options  map[string]any
 	tls      *dbdriver.TLSMaterial
+	kerberos *dbdriver.Kerberos
 }
 
+// kerberosService is the service name memdb's login handshake gives a Kerberos
+// login, with the asset's host as the host name.
+const kerberosService = "fixturedb"
+
+// Connect logs in with the password, or — for a Kerberos asset — with the host's
+// ticket for kerberosService on the asset's host, sent as "krb:<hex>" where the
+// password would go.
 func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
+	secret := c.password
+	if c.kerberos != nil {
+		ticket, err := c.kerberos.Ticket(ctx, dbdriver.KerberosSPN(kerberosService, c.config.Host))
+		if err != nil {
+			return nil, err
+		}
+		secret = "krb:" + hex.EncodeToString(ticket)
+	}
 	nc, err := c.dial(ctx, "tcp", c.addr)
 	if err != nil {
 		return nil, err
 	}
-	cn := &conn{nc: nc, r: bufio.NewReader(nc), config: c.config, options: c.options, tls: c.tls}
-	if err := cn.roundTrip("LOGIN " + c.user + " " + c.password); err != nil {
+	cn := &conn{nc: nc, r: bufio.NewReader(nc), config: c.config, options: c.options, tls: c.tls,
+		auth: openAuth{Kerberos: c.kerberos != nil, Password: c.password}}
+	if err := cn.roundTrip("LOGIN " + c.user + " " + secret); err != nil {
 		_ = nc.Close()
 		return nil, err
 	}
@@ -125,6 +143,15 @@ type conn struct {
 	// tls is the TLS material the session was opened with, nil for none. memdb
 	// speaks plaintext: the material is only held for SHOW OPEN TLS to answer.
 	tls *dbdriver.TLSMaterial
+	// auth is what the session was told about authentication, for SHOW OPEN AUTH.
+	auth openAuth
+}
+
+// openAuth answers SHOW OPEN AUTH: whether the asset uses Kerberos, and the
+// password the driver was handed.
+type openAuth struct {
+	Kerberos bool   `json:"kerberos"`
+	Password string `json:"password"`
 }
 
 func (c *conn) roundTrip(line string) error {
@@ -192,8 +219,11 @@ var (
 	countAll  = regexp.MustCompile(`^SELECT COUNT\(\*\) FROM (\S+)$`)
 	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS) FROM \[([^\]]*)\]$`)
 	showHost  = regexp.MustCompile(`^SHOW HOST (\w+)(?: (\S+))?$`)
-	showOf    = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE) (\S+)$`)
-	tableRef  = regexp.MustCompile(`^(?:\[([^\]]*)\]\.)?\[([^\]]+)\]$`)
+	// showTicket asks the host for the Kerberos ticket of service on host, as a
+	// login handshake does, whether or not the session uses Kerberos.
+	showTicket = regexp.MustCompile(`^SHOW KERBEROS TICKET (\S+) (\S+)$`)
+	showOf     = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE) (\S+)$`)
+	tableRef   = regexp.MustCompile(`^(?:\[([^\]]*)\]\.)?\[([^\]]+)\]$`)
 )
 
 func (c *conn) query(q string) (driver.Rows, error) {
@@ -223,11 +253,20 @@ func (c *conn) query(q string) (driver.Rows, error) {
 			return nil, err
 		}
 		return values([]string{"tls"}, []driver.Value{string(raw)}), nil
+	case q == "SHOW OPEN AUTH":
+		raw, err := json.Marshal(c.auth)
+		if err != nil {
+			return nil, err
+		}
+		return values([]string{"auth"}, []driver.Value{string(raw)}), nil
 	case q == "SELECT PANIC", q == "SELECT TRAP", q == "SELECT OOM":
 		fault(q)
 	}
 	if m := showHost.FindStringSubmatch(q); m != nil {
 		return hostProbe(m[1], m[2]), nil
+	}
+	if m := showTicket.FindStringSubmatch(q); m != nil {
+		return ticketProbe(m[1], m[2]), nil
 	}
 	if m := countOf.FindStringSubmatch(q); m != nil {
 		return c.count(m[1])
@@ -448,6 +487,17 @@ func (r *memRows) Next(dest []driver.Value) error {
 		*r.produced++
 	}
 	return nil
+}
+
+// ticketProbe answers the ticket (hex) the host gave for service on host, or the
+// error it refused with.
+func ticketProbe(service, host string) driver.Rows {
+	ticket, err := opskat.KerberosTicket(dbdriver.KerberosSPN(service, host))
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	return values([]string{"ticket", "error"}, []driver.Value{hex.EncodeToString(ticket), msg})
 }
 
 // hostProbe makes the host call the test names from inside a driver call

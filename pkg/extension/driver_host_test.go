@@ -43,8 +43,7 @@ func (h *hostSpy) AssetCredentialValues(context.Context, int64, []string) (map[s
 
 // loadDriverFixture loads the fixture driver extension with a real host provider
 // whose capabilities all count their use. network, when set, is the manifest's
-// capabilities.network; declaring databaseRedirects raises its hostABI to the one
-// that reads it.
+// capabilities.network (the fixture's hostABI already reads databaseRedirects).
 func loadDriverFixture(t *testing.T, spy *hostSpy, network map[string]any) *extension.Extension {
 	t.Helper()
 	root := t.TempDir()
@@ -56,9 +55,6 @@ func loadDriverFixture(t *testing.T, spy *hostSpy, network map[string]any) *exte
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(raw, &m))
 		m["capabilities"].(map[string]any)["network"] = network
-		if network["databaseRedirects"] == true {
-			m["hostABI"] = extension.DatabaseExtrasMinHostABI
-		}
 		raw, err = json.Marshal(m)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(path, raw, 0o600))

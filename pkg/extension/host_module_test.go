@@ -44,3 +44,20 @@ func TestHostOpAssetGetConfig(t *testing.T) {
 		})
 	})
 }
+
+// A Kerberos ticket is a driver session's alone: a call of anything else — a
+// tool, an action, scoped to an asset or not — is refused saying why.
+func TestHostOpKerberosTicketOutsideDriverSession(t *testing.T) {
+	Convey("dbdriver.kerberos_ticket outside a database driver session is refused", t, func() {
+		host := newRecordedHost()
+		for _, inv := range []*invocation{
+			newInvocation("t#1", nil),
+			newInvocation("t#2", nil).scopedTo(&AssetRef{ID: 7, Type: "fixture"}),
+		} {
+			_, err := hostCall(withInvocation(context.Background(), inv), host,
+				[]byte(`{"op":"dbdriver.kerberos_ticket","params":{"spn":"oracle/db.internal"}}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not inside a database driver session")
+		}
+	})
+}

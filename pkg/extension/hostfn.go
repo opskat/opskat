@@ -61,13 +61,16 @@ func deadlineTime(unixNanos int64) time.Time {
 }
 
 func errUnavailableInDriverCall(what string) error {
-	return fmt.Errorf("%s is unavailable during driver calls: a database driver may only write logs and dial its database", what)
+	return fmt.Errorf("%s is unavailable during driver calls: a database driver may only write logs, dial its database and ask for its Kerberos tickets", what)
 }
 
-// driverCallOps are the host ops a driver call may make: logging, and the TCP
-// streams (with their deadlines) that carry its connection to the database.
-// Everything else (KV, file dialogs, asset config, action events) is refused.
-var driverCallOps = map[string]bool{"log": true, "io.open": true, "io.set_deadline": true, "action.should_stop": true}
+// driverCallOps are the host ops a driver call may make: logging, the TCP
+// streams (with their deadlines) that carry its connection to the database, and
+// the Kerberos tickets it logs in with. Everything else (KV, file dialogs, asset
+// config, action events) is refused.
+var driverCallOps = map[string]bool{
+	"log": true, "io.open": true, "io.set_deadline": true, "action.should_stop": true, "dbdriver.kerberos_ticket": true,
+}
 
 func init() {
 	for op, fn := range hostOps {

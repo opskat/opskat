@@ -129,3 +129,26 @@ func TestDescriptorValidateTLSCertGroup(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// Kerberos 字段组（FieldKerberos）只能声明在连接 Tab：认证方式与用户名、口令同处。
+func TestDescriptorValidateKerberosGroup(t *testing.T) {
+	withForm := func(tabs ...FormTabFields) Descriptor {
+		return Descriptor{ID: "extdb", Name: "ExtDB", Form: tabs}
+	}
+	t.Run("declared on the connection tab", func(t *testing.T) {
+		d := withForm(FormTabFields{Tab: TabConnection, Fields: []FormField{FieldHost, FieldUsername, FieldPassword, FieldKerberos}})
+		require.NoError(t, d.Validate())
+		assert.True(t, d.UsesField(FieldKerberos))
+	})
+	t.Run("declared on another tab", func(t *testing.T) {
+		err := withForm(FormTabFields{Tab: TabAdvanced, Fields: []FormField{FieldKerberos}}).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "extdb")
+		assert.Contains(t, err.Error(), string(FieldKerberos))
+		assert.Contains(t, err.Error(), string(TabConnection))
+	})
+	t.Run("a driver field may not take the group's name", func(t *testing.T) {
+		err := descriptorWithFields(DriverField{Key: string(FieldKerberos), Type: FieldTypeText, Tab: TabConnection}).Validate()
+		require.Error(t, err)
+	})
+}

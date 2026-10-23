@@ -117,8 +117,8 @@ func (d Descriptor) Validate() error {
 			if !slices.Contains(FormFields(), f) {
 				return fmt.Errorf("driver %q: unknown form field %q", d.ID, f)
 			}
-			if f == FieldTLSCert && tab.Tab != TabTLS {
-				return fmt.Errorf("driver %q: form field %q belongs on the %q tab, not %q", d.ID, f, TabTLS, tab.Tab)
+			if home, ok := groupTabs[f]; ok && tab.Tab != home {
+				return fmt.Errorf("driver %q: form field %q belongs on the %q tab, not %q", d.ID, f, home, tab.Tab)
 			}
 		}
 	}
@@ -331,7 +331,12 @@ const (
 	// 文件路径或粘贴内容（tls_{ca,cert,key}_{file,pem}），与 Redis 资产同名同义。只能声明在
 	// TLS Tab，且自带启用开关，不再与 FieldTLS 同时声明。声明了的驱动在资产启用 TLS 时，打开
 	// 会话就收到 OpenRequest.TLS。要求扩展的 hostABI 2.4 及以上。
-	FieldTLSCert      FormField = "tls_cert"
+	FieldTLSCert FormField = "tls_cert"
+	// FieldKerberos 是 Kerberos 字段组，也不是单个配置键：认证方式（口令或 Kerberos）与选了
+	// Kerberos 时的主体、凭据、KDC 地址、服务主体。只能声明在连接 Tab。声明了的驱动在资产的认证
+	// 方式为 Kerberos 时，打开会话就收到 OpenRequest.Kerberos。要求扩展在契约里声明
+	// capabilities.databaseKerberos（hostABI 2.5 及以上）。
+	FieldKerberos     FormField = "kerberos"
 	FieldParams       FormField = "params"
 	FieldReadOnly     FormField = "read_only"
 	FieldQueryTimeout FormField = "query_timeout_seconds"
@@ -342,9 +347,12 @@ func FormFields() []FormField {
 	return []FormField{
 		FieldHost, FieldPort, FieldUsername, FieldPassword, FieldDatabase,
 		FieldSQLiteSource, FieldPath, FieldSSHAsset, FieldTunnel,
-		FieldSSLMode, FieldTLS, FieldTLSCert, FieldParams, FieldReadOnly, FieldQueryTimeout,
+		FieldSSLMode, FieldTLS, FieldTLSCert, FieldKerberos, FieldParams, FieldReadOnly, FieldQueryTimeout,
 	}
 }
+
+// groupTabs 是只能声明在某一个 Tab 的字段组及其 Tab。
+var groupTabs = map[FormField]FormTab{FieldTLSCert: TabTLS, FieldKerberos: TabConnection}
 
 // FormTabFields 是一个 Tab 里驱动使用的字段，按展示顺序。
 type FormTabFields struct {

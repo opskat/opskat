@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,8 +80,14 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 		cfg.SSHAssetID = 0
 		req.Config = &cfg
 	}
+	if req.Kerberos != nil {
+		// A Kerberos asset logs in with the tickets the host fetches; its password
+		// is no more the extension's than the Kerberos credentials are.
+		req.Password = ""
+	}
 	s := &driverSession{plugin: p, driver: id, open: req, live: 1}
 	s.reach = p.confineReach(id, &s.open)
+	s.tickets = p.ticketGate(id, &s.open)
 	inst, err := s.login(ctx)
 	if err != nil {
 		return nil, err
@@ -91,8 +98,8 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 
 // openDriverInstance creates an instance and logs it in: the driver opens its
 // session in the guest and connects, every TCP stream taking the session's
-// confined reach path.
-func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbdriver.OpenRequest, reach *dbdriver.Transport) (*driverInstance, error) {
+// confined reach path and every Kerberos ticket the session's ticket gate.
+func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbdriver.OpenRequest, reach *dbdriver.Transport, tickets *ticketGate) (*driverInstance, error) {
 	if p.closed.Load() {
 		return nil, fmt.Errorf("plugin closed")
 	}
@@ -102,13 +109,14 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 	}
 	inv := newInvocation(p.nextInvocationID(), nil)
 	inv.reach = reach
+	inv.tickets = tickets
 	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv}
 	d.refs.Store(1)
 
 	var opened driverwire.Opened
 	err = d.call(ctx, driverwire.Call{Op: driverwire.OpOpen, Args: driverwire.Args{
 		Driver: dbdriver.DriverID(driver), Config: req.Config, Password: req.Password, DriverOptions: req.DriverOptions,
-		TLS: req.TLS,
+		TLS: req.TLS, Kerberos: req.Kerberos != nil,
 	}}, &opened)
 	if err != nil {
 		d.inv.close()
@@ -294,6 +302,64 @@ func sameEndpoint(allowed, addr string) bool {
 		return false
 	}
 	return allowed == net.JoinHostPort(canonicalHost(host), port)
+}
+
+// errTicketOutsideDriverSession refuses a Kerberos ticket request from a call
+// that is not a database driver session's.
+var errTicketOutsideDriverSession = errors.New("kerberos ticket refused: this call is not inside a database driver session; only a driver logging in to its Kerberos asset may ask for tickets")
+
+// ticketGate is how every instance of a session reaches the asset's Kerberos
+// tickets: the ticket source the caller of OpenDriverSession supplied, nil when
+// the asset does not log in with Kerberos. The guest only names the service
+// principal; the gate refuses one that is not service/host or that differs from
+// the asset's pinned one, and logs the session's first ticket for each — the
+// principal and SPN only, never a credential or a ticket.
+func (p *Plugin) ticketGate(driver string, req *dbdriver.OpenRequest) *ticketGate {
+	return &ticketGate{
+		extension: p.manifest.Name,
+		driver:    driver,
+		assetID:   req.AssetID,
+		source:    req.Kerberos,
+		issued:    map[string]bool{},
+	}
+}
+
+type ticketGate struct {
+	extension, driver string
+	assetID           int64
+	source            *dbdriver.Kerberos
+
+	mu sync.Mutex
+	// issued are the SPNs the session has been given a ticket for, logged on the
+	// first of each.
+	issued map[string]bool
+}
+
+func (g *ticketGate) ticket(ctx context.Context, spn string) ([]byte, error) {
+	if g.source == nil {
+		return nil, fmt.Errorf("kerberos ticket refused: database asset %d does not log in with Kerberos", g.assetID)
+	}
+	service, host, ok := strings.Cut(spn, "/")
+	if !ok || service == "" || host == "" || strings.Contains(service, "@") || strings.ContainsAny(host, "/@") {
+		return nil, fmt.Errorf("kerberos ticket refused: %q is not a Kerberos service principal of the form service/host (neither name may contain \"/\" or \"@\")", spn)
+	}
+	if g.source.SPN != "" && spn != g.source.SPN {
+		return nil, fmt.Errorf("kerberos ticket refused: the driver asked for service principal %q, but the database asset is pinned to %q", spn, g.source.SPN)
+	}
+	ticket, err := g.source.Ticket(ctx, spn)
+	if err != nil {
+		return nil, fmt.Errorf("kerberos ticket for %s: %w", spn, err)
+	}
+	g.mu.Lock()
+	first := !g.issued[spn]
+	g.issued[spn] = true
+	g.mu.Unlock()
+	if first {
+		logger.Ctx(ctx).Info("extension database driver got a Kerberos ticket",
+			zap.String("extension", g.extension), zap.String("driver", g.driver), zap.Int64("assetID", g.assetID),
+			zap.String("principal", g.source.Principal), zap.String("spn", spn))
+	}
+	return ticket, nil
 }
 
 // driverInstance is one module instance of a session, logged in to the database.
@@ -496,6 +562,9 @@ type driverSession struct {
 	// reach is the session's reach path as confined for the driver
 	// (Plugin.confineReach), shared by every instance.
 	reach *dbdriver.Transport
+	// tickets is the session's Kerberos ticket gate (Plugin.ticketGate), shared by
+	// every instance, so each SPN is logged once per session.
+	tickets *ticketGate
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -588,7 +657,7 @@ func (s *driverSession) forgo(g driverGrant) {
 
 // login logs in an instance the session has already counted in live.
 func (s *driverSession) login(ctx context.Context) (*driverInstance, error) {
-	inst, err := s.plugin.openDriverInstance(ctx, s.driver, &s.open, s.reach)
+	inst, err := s.plugin.openDriverInstance(ctx, s.driver, &s.open, s.reach, s.tickets)
 	if err != nil {
 		s.mu.Lock()
 		s.live--

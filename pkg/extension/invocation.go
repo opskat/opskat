@@ -31,6 +31,10 @@ type invocation struct {
 	// redirects to when the extension declares network.databaseRedirects — which
 	// every TCP stream the guest opens takes.
 	reach *dbdriver.Transport
+	// tickets is set for the calls of a database driver session too: the only way
+	// the guest gets the session's Kerberos tickets (Plugin.ticketGate). Outside a
+	// driver session it is nil and a ticket request is refused.
+	tickets *ticketGate
 }
 
 func newInvocation(id string, cancel *ActionCancellation) *invocation {

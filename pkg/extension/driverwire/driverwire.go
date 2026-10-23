@@ -81,12 +81,15 @@ type Args struct {
 	// decrypted password, the driver options (password-type ones decrypted) and,
 	// for a driver declaring the certificate field group on an asset with TLS on,
 	// the TLS material (key decrypted), which no other call carries. A guest built
-	// before TLS was added ignores it.
+	// before TLS was added ignores it. Kerberos says the asset logs in with Kerberos
+	// (the driver then asks the host for tickets in its login handshake); the
+	// Kerberos credentials stay in the host and Password is empty.
 	Driver        dbdriver.DriverID     `json:"driver,omitempty"`
 	Config        *dbdriver.Config      `json:"config,omitempty"`
 	Password      string                `json:"password,omitempty"`
 	DriverOptions map[string]any        `json:"driverOptions,omitempty"`
 	TLS           *dbdriver.TLSMaterial `json:"tls,omitempty"`
+	Kerberos      bool                  `json:"kerberos,omitempty"`
 
 	Statement   string                `json:"statement,omitempty"`
 	Page        dbdriver.Page         `json:"page"`

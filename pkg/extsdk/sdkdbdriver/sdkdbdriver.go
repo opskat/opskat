@@ -34,7 +34,12 @@ import (
 // in this call only — and the reach path: every network connection must be made
 // through req.Transport.Dial, which dials through the host along the asset's
 // tunnel / proxy chain. A read-only config only reaches open when the descriptor
-// declares dbdriver.CapReadOnly; open must then honor it.
+// declares dbdriver.CapReadOnly; open must then honor it. When the asset logs in
+// with Kerberos (the descriptor declares dbdriver.FieldKerberos) req.Kerberos is
+// set and req.Password empty: in the login handshake the driver asks
+// req.Kerberos.Ticket for dbdriver.KerberosSPN(service, host) of the names the
+// database sent, and writes the bytes it gets into the handshake; the Kerberos
+// credentials never reach the extension.
 type DriverOpen func(ctx context.Context, req dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error)
 
 type driverEntry struct {
@@ -272,19 +277,29 @@ func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
 	if a.Config.ReadOnly && !drv.desc.Supports(dbdriver.CapReadOnly) {
 		return nil, fmt.Errorf("%w: %s does not provide read-only connections", dbdriver.ErrUnsupported, a.Driver)
 	}
-	db, dialect, err := drv.open(ctx, dbdriver.OpenRequest{
+	req := dbdriver.OpenRequest{
 		Config:        a.Config,
 		Password:      a.Password,
 		DriverOptions: a.DriverOptions,
 		TLS:           a.TLS,
 		Transport:     dbdriver.Transport{Dial: opskat.DialContext},
-	})
+	}
+	if a.Kerberos {
+		req.Kerberos = &dbdriver.Kerberos{Ticket: hostKerberosTicket}
+	}
+	db, dialect, err := drv.open(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	id := driverHandles.id()
 	driverHandles.sessions[id] = sqldb.NewSession(db, dialect)
 	return driverwire.Opened{Session: id}, nil
+}
+
+// hostKerberosTicket is OpenRequest.Kerberos.Ticket in the guest: the host's
+// ticket for spn. The host bounds the request by the call it runs in.
+func hostKerberosTicket(_ context.Context, spn string) ([]byte, error) {
+	return opskat.KerberosTicket(spn)
 }
 
 // closeDriverSession closes the session's cursors, then the session. Its prepared

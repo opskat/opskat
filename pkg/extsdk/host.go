@@ -32,3 +32,15 @@ func KVGet(key string) ([]byte, error) {
 func KVSet(key string, value []byte) error {
 	return hostKVSet(key, value)
 }
+
+// KerberosTicket asks the host for the Kerberos ticket (the AP-REQ bytes, to be
+// written into the login handshake as they are) for service principal spn —
+// dbdriver.KerberosSPN(service, host) of the names the database sent. It only
+// answers inside a session of a database driver whose asset logs in with
+// Kerberos (the extension declares capabilities.databaseKerberos, the driver the
+// dbdriver.FieldKerberos field group); otherwise, or when the asset pins another
+// service principal, the host refuses with the reason. A driver usually reaches
+// it as OpenRequest.Kerberos.Ticket.
+func KerberosTicket(spn string) ([]byte, error) {
+	return hostKerberosTicket(spn)
+}

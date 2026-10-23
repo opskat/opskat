@@ -47,6 +47,12 @@ func WithActionCancel() TestOption {
 	return func(h *TestHost) { h.actionStopped.Store(true) }
 }
 
+// WithKerberosTickets installs the source KerberosTicket answers from, standing
+// in for the host's Kerberos client: it gets the SPN the driver asked for.
+func WithKerberosTickets(source func(spn string) ([]byte, error)) TestOption {
+	return func(h *TestHost) { h.kerberosTickets = source }
+}
+
 // TestHost simulates the host environment for extension unit testing.
 type TestHost struct {
 	assetConfigs  map[int64]json.RawMessage
@@ -59,6 +65,9 @@ type TestHost struct {
 	events        []TestEvent
 	eventCb       func(TestEvent)
 	mu            sync.Mutex
+
+	// kerberosTickets is the source set via WithKerberosTickets.
+	kerberosTickets func(spn string) ([]byte, error)
 }
 
 // NewTestHost creates a TestHost and installs it as the active host.
@@ -235,6 +244,15 @@ func (h *TestHost) IOSetDeadline(handleID uint32, kind string, unixNanos int64) 
 	default:
 		return fmt.Errorf("unknown deadline kind: %q", kind)
 	}
+}
+
+// KerberosTicket answers from the source set via WithKerberosTickets; without
+// one it refuses, as the host does for an asset that does not use Kerberos.
+func (h *TestHost) KerberosTicket(spn string) ([]byte, error) {
+	if h.kerberosTickets == nil {
+		return nil, fmt.Errorf("kerberos ticket refused: no ticket source in test (use WithKerberosTickets)")
+	}
+	return h.kerberosTickets(spn)
 }
 
 // ActionShouldStop returns the cancellation flag (default false; set via WithActionCancel).

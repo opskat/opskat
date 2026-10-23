@@ -40,5 +40,6 @@ func (n *nopHost) KVGet(key string) ([]byte, error)          { return nil, errNo
 func (n *nopHost) KVSet(key string, value []byte) error      { return errNotConfigured }
 func (n *nopHost) ActionEvent(eventType string, data []byte) {}
 func (n *nopHost) ActionShouldStop() bool                    { return false }
+func (n *nopHost) KerberosTicket(string) ([]byte, error)     { return nil, errNotConfigured }
 
 var errNotConfigured = fmt.Errorf("host not configured: use TestHost or run inside WASM")
