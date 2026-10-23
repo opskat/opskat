@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -377,9 +376,8 @@ func (g *ticketGate) ticket(ctx context.Context, spn string) ([]byte, error) {
 	if g.source == nil {
 		return nil, fmt.Errorf("kerberos ticket refused: database asset %d does not log in with Kerberos", g.assetID)
 	}
-	service, host, ok := strings.Cut(spn, "/")
-	if !ok || service == "" || host == "" || strings.Contains(service, "@") || strings.ContainsAny(host, "/@") {
-		return nil, fmt.Errorf("kerberos ticket refused: %q is not a Kerberos service principal of the form service/host (neither name may contain \"/\" or \"@\")", spn)
+	if err := dbdriver.CheckKerberosSPN(spn); err != nil {
+		return nil, fmt.Errorf("kerberos ticket refused: %w", err)
 	}
 	if g.source.SPN != "" && spn != g.source.SPN {
 		return nil, fmt.Errorf("kerberos ticket refused: the driver asked for service principal %q, but the database asset is pinned to %q", spn, g.source.SPN)

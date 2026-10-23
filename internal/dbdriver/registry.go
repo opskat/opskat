@@ -35,12 +35,18 @@ func init() {
 // validateConfig 跑配置所属驱动自己的规则。驱动没有注册时没有规则可跑，直接通过：这样的
 // 资产连不上、查不了（Lookup 处报 ErrDriverUnavailable），但仍要能改名、移动、保存——与扩展
 // 资产类型在扩展没加载时的做法一致（asset_entity.ValidateRegisteredConfig）。
+//
+// 认证方式只有声明了 Kerberos 字段组的驱动才有：别的驱动的配置带着它就拒绝，免得驱动规则
+// （如 NetworkRules 对 Kerberos 资产不要求用户名）按一个驱动根本不用的认证方式放行。
 func validateConfig(cfg *dbdriver.Config, route dbdriver.Route) error {
 	mu.RLock()
 	d, ok := drivers[cfg.Driver]
 	mu.RUnlock()
 	if !ok {
 		return nil
+	}
+	if cfg.AuthMethod != "" && !d.Descriptor().UsesField(dbdriver.FieldKerberos) {
+		return fmt.Errorf("auth_method %q is not applicable to %s: the driver does not declare Kerberos fields", cfg.AuthMethod, d.Descriptor().Name)
 	}
 	return d.ValidateConfig(cfg, route)
 }

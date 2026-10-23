@@ -457,6 +457,36 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 		assert.NotContains(t, err.Error(), "kpw-9")
 	})
 
+	// 换成不声明字段组的驱动：Kerberos 设置不随资产留下，新驱动照它自己的规则要用户名
+	t.Run("switching to a driver without the group drops the Kerberos settings", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase, GroupID: 1}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "fakedb", Host: "fake.internal", Port: 1, AuthMethod: asset_entity.AuthMethodKerberos,
+			KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENC", KrbKeytabFile: "/k", KrbKDC: "kdc", KrbSPN: "s/h",
+		}))
+		update := map[string]any{"driver": "mysql", "host": "db.internal", "port": 3306}
+		_, err := h.(*databaseHandler).AutomationUpdateContext(a, update)
+		require.NoError(t, err)
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, update))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, asset_entity.DatabaseConfig{}, asset_entity.DatabaseConfig{
+			AuthMethod: cfg.AuthMethod, KrbPrincipal: cfg.KrbPrincipal, KrbPassword: cfg.KrbPassword,
+			KrbKeytabFile: cfg.KrbKeytabFile, KrbKDC: cfg.KrbKDC, KrbSPN: cfg.KrbSPN,
+		})
+		require.ErrorContains(t, a.Validate(), "用户名")
+	})
+
+	// 认证方式只对声明了字段组的驱动有意义：别的驱动的资产带着 Kerberos 认证方式不能保存
+	t.Run("not declared: a stored Kerberos auth method fails validation naming the key", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase, GroupID: 1}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "mysql", Host: "h", Port: 3306, AuthMethod: asset_entity.AuthMethodKerberos,
+			KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENC", KrbKDC: "kdc",
+		}))
+		require.ErrorContains(t, a.Validate(), "auth_method")
+	})
+
 	t.Run("driver unavailable: renaming keeps the Kerberos fields", func(t *testing.T) {
 		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
 		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{

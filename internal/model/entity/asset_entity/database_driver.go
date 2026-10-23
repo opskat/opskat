@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
@@ -99,26 +100,24 @@ func (c *DatabaseConfig) ValidateKerberos() error {
 	return err
 }
 
-// KerberosKDCs 是 krb_kdc 拆出的 KDC 地址（去空白与空项）。
+// KerberosKDCs 是 krb_kdc 拆出的 KDC 地址：与桌面端表单一样按逗号、分号或空白分隔，丢弃空项。
 func (c *DatabaseConfig) KerberosKDCs() []string {
-	var out []string
-	for _, kdc := range strings.Split(c.KrbKDC, ",") {
-		if kdc = strings.TrimSpace(kdc); kdc != "" {
-			out = append(out, kdc)
-		}
-	}
-	return out
+	return strings.FieldsFunc(c.KrbKDC, func(r rune) bool { return r == ',' || r == ';' || unicode.IsSpace(r) })
 }
 
 // KerberosPinnedSPN 返回固定的服务主体，去掉与主体同 realm 的 @REALM（宿主按 service/host 原样比较）；
-// 没固定返回空。realm 与主体的不同则报错点名 krb_spn。
+// 没固定返回空。不是 service/host[@REALM] 形式（dbdriver.CheckKerberosSPN），或 realm 与主体的不同，
+// 报错点名 krb_spn。
 func (c *DatabaseConfig) KerberosPinnedSPN() (string, error) {
 	if c.KrbSPN == "" {
 		return "", nil
 	}
 	spn, realm, hasRealm := strings.Cut(c.KrbSPN, "@")
-	if spn == "" || strings.Contains(realm, "@") {
+	if strings.Contains(realm, "@") {
 		return "", errors.New("krb_spn 无效：应为 service/host 或 service/host@REALM")
+	}
+	if err := dbdriver.CheckKerberosSPN(spn); err != nil {
+		return "", fmt.Errorf("krb_spn 无效: %w", err)
 	}
 	if !hasRealm {
 		return spn, nil

@@ -37,7 +37,7 @@ func driverKerberos(desc dbdriver.Descriptor, assetID int64, cfg *asset_entity.D
 	}
 	settings := kerberos.Settings{
 		Principal: cfg.KrbPrincipal, Password: password, KeytabFile: cfg.KrbKeytabFile,
-		KDCs: cfg.KerberosKDCs(), SPN: pinned,
+		KDCs: cfg.KerberosKDCs(),
 	}
 	return &dbdriver.Kerberos{
 		Principal: cfg.KrbPrincipal,

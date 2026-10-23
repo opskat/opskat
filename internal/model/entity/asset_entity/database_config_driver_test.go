@@ -95,7 +95,8 @@ func TestValidateDatabaseSQLiteRejectsProxyChainWithLayers(t *testing.T) {
 // 缺主体 realm、缺 KDC、缺凭据的配置并点名字段。
 func TestValidateDatabaseKerberos(t *testing.T) {
 	valid := func() *DatabaseConfig {
-		return &DatabaseConfig{Driver: DriverSQLite, Path: "/tmp/x.db", AuthMethod: AuthMethodKerberos,
+		// 未注册的驱动（如未加载的扩展驱动）没有驱动规则，这里只看 Kerberos 字段本身的规则
+		return &DatabaseConfig{Driver: "krbdb", Host: "db.example.com", Port: 1521, AuthMethod: AuthMethodKerberos,
 			KrbPrincipal: "alice@EXAMPLE.COM", KrbPassword: "enc", KrbKDC: "kdc.example.com"}
 	}
 	validate := func(cfg *DatabaseConfig) error {
@@ -115,6 +116,10 @@ func TestValidateDatabaseKerberos(t *testing.T) {
 		"no credential":           {func(c *DatabaseConfig) { c.KrbPassword = "" }, "krb_password"},
 		"spn of another realm":    {func(c *DatabaseConfig) { c.KrbSPN = "oracle/db.example.com@OTHER.COM" }, "krb_spn"},
 		"unknown auth method":     {func(c *DatabaseConfig) { c.AuthMethod = "ldap" }, "auth_method"},
+		// 宿主只放行 service/host 形式的服务主体：固定成别的形式就永远登录不了，保存时就拒绝
+		"spn without host":    {func(c *DatabaseConfig) { c.KrbSPN = "oracle" }, "krb_spn"},
+		"spn with two hosts":  {func(c *DatabaseConfig) { c.KrbSPN = "oracle/db/x" }, "krb_spn"},
+		"spn without service": {func(c *DatabaseConfig) { c.KrbSPN = "/db.example.com" }, "krb_spn"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -131,6 +136,13 @@ func TestValidateDatabaseKerberos(t *testing.T) {
 		spn, err := cfg.KerberosPinnedSPN()
 		require.NoError(t, err)
 		assert.Equal(t, "oracle/db.example.com", spn)
+	})
+
+	// opsctl / AI 写的 krb_kdc 与桌面端表单一样可用逗号、分号或空白分隔
+	t.Run("kdc list accepts the separators the desktop form accepts", func(t *testing.T) {
+		cfg := valid()
+		cfg.KrbKDC = "kdc1.example.com kdc2.example.com:88;kdc3.example.com,\tkdc4"
+		assert.Equal(t, []string{"kdc1.example.com", "kdc2.example.com:88", "kdc3.example.com", "kdc4"}, cfg.KerberosKDCs())
 	})
 
 	t.Run("password authentication ignores stale kerberos fields", func(t *testing.T) {

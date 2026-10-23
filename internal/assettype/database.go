@@ -191,6 +191,11 @@ func applyKerberosArgs(cfg *asset_entity.DatabaseConfig, args map[string]any) er
 	return nil
 }
 
+// clearKerberos 清掉 cfg 的 Kerberos 字段组（认证方式回到口令）。
+func clearKerberos(cfg *asset_entity.DatabaseConfig) {
+	cfg.AuthMethod, cfg.KrbPrincipal, cfg.KrbPassword, cfg.KrbKeytabFile, cfg.KrbKDC, cfg.KrbSPN = "", "", "", "", "", ""
+}
+
 // applyCertificateArgs 把请求里出现的证书字段写进 cfg；私钥内容加密落库。
 func applyCertificateArgs(cfg *asset_entity.DatabaseConfig, args map[string]any) error {
 	return applyTLSArgs(args, tlsStore{
@@ -430,6 +435,9 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 		if err := applyKerberosArgs(cfg, args); err != nil {
 			return err
 		}
+	} else if switched {
+		// Kerberos 字段组同样属于声明它的驱动：换成不声明的驱动就不留认证方式与凭据。
+		clearKerberos(cfg)
 	}
 	if updates, err := driverOptionsArg(args); err != nil {
 		return err

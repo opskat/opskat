@@ -22,12 +22,11 @@ type Settings struct {
 	Password   string   // 口令；填了 KeytabFile 时不用
 	KeytabFile string   // keytab 文件路径；填了就用 keytab
 	KDCs       []string // 按顺序尝试的 host[:port]，默认端口 88
-	SPN        string   // 资产固定的服务主体；是否放行驱动要的服务主体由调用方判定，本包只把它当作设置的一部分
 }
 
 func (s Settings) equal(o Settings) bool {
 	return s.Principal == o.Principal && s.Password == o.Password && s.KeytabFile == o.KeytabFile &&
-		s.SPN == o.SPN && slices.Equal(s.KDCs, o.KDCs)
+		slices.Equal(s.KDCs, o.KDCs)
 }
 
 // DialFunc 是连 KDC 的拨号途径（直连、SSH 隧道、代理…），KDC 主机名由它解析。

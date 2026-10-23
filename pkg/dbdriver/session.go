@@ -3,9 +3,11 @@ package dbdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
+	"strings"
 )
 
 // ErrUnsupported 表示驱动不支持被要求的操作（没有声明对应的功能，或它的会话做不了这件事）。
@@ -67,6 +69,16 @@ type Kerberos struct {
 // （go-ora 的 Authenticate(server, service) 即 KerberosSPN(service, server)）。
 func KerberosSPN(service, host string) string {
 	return service + "/" + host
+}
+
+// CheckKerberosSPN 检查 spn 是否为宿主放行的服务主体形式 service/host（不带 realm）：两段都不为空，
+// 都不含 "/" 或 "@"。宿主拒绝别的形式的票据请求，资产固定的服务主体保存时按同一规则校验。
+func CheckKerberosSPN(spn string) error {
+	service, host, ok := strings.Cut(spn, "/")
+	if !ok || service == "" || host == "" || strings.Contains(service, "@") || strings.ContainsAny(host, "/@") {
+		return fmt.Errorf("%q is not a Kerberos service principal of the form service/host (neither name may contain \"/\" or \"@\")", spn)
+	}
+	return nil
 }
 
 // TLSMaterial 是驱动自己完成 TLS 所需的设置与证书内容。填的是路径的，打开会话的进程已读成
