@@ -142,6 +142,22 @@ func TestOpenDatabaseKerberosSharesTheAssetCacheAndInvalidatesOnChange(t *testin
 	assert.Greater(t, env.kdc.ASRequests(), firstLogin, "changed settings log in again")
 }
 
+// 没有资产 ID 的登录（桌面端测试连接）不进共用的按资产缓存：同样的设置也每次重新登录，
+// 不同资产的测试连接之间不会互相复用或挤掉票据。
+func TestOpenDatabaseKerberosWithoutAssetIDLogsInAfresh(t *testing.T) {
+	env := newKerberosEnv(t, true)
+	loginCount := func(id int64) int {
+		before := env.kdc.ASRequests()
+		req, err := openKerberos(t, id, env.config())
+		require.NoError(t, err)
+		requireTicket(t, env.kdc, req)
+		return env.kdc.ASRequests() - before
+	}
+	first := loginCount(0)
+	require.Positive(t, first)
+	assert.Equal(t, first, loginCount(0), "the second test connection logs in again instead of reusing a shared entry")
+}
+
 func TestOpenDatabaseKerberosPinnedSPNLosesItsRealm(t *testing.T) {
 	env := newKerberosEnv(t, true)
 	cfg := env.config()

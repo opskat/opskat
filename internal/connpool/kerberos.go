@@ -39,11 +39,16 @@ func driverKerberos(desc dbdriver.Descriptor, assetID int64, cfg *asset_entity.D
 		Principal: cfg.KrbPrincipal, Password: password, KeytabFile: cfg.KrbKeytabFile,
 		KDCs: cfg.KerberosKDCs(),
 	}
+	// 没有资产 ID 的登录（测试连接）不进共用缓存：它的票据只属于这一次打开，缓存只活在这次打开里。
+	cache := kerberosCache
+	if assetID == 0 {
+		cache = kerberos.NewCache()
+	}
 	return &dbdriver.Kerberos{
 		Principal: cfg.KrbPrincipal,
 		SPN:       pinned,
 		Ticket: func(ctx context.Context, spn string) ([]byte, error) {
-			return kerberosCache.Ticket(ctx, assetID, settings, spn, kerberos.DialFunc(transport.DialAddr))
+			return cache.Ticket(ctx, assetID, settings, spn, kerberos.DialFunc(transport.DialAddr))
 		},
 	}, nil
 }
