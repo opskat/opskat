@@ -28,6 +28,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
+	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
 // --- 测试脚手架 ---
@@ -603,4 +604,23 @@ func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
 	env.stderrBuf.Reset()
 	assert.NotEqual(t, 0, env.run("allow", "acme-1", "--", "object.nuke:prod-*"))
 	assert.Contains(t, env.stderrBuf.String(), "object.list")
+}
+
+// A permanent rule on a database asset is classified by the asset's driver; when an
+// extension provides that driver, opsctl (which only registers extensions describe-only
+// at boot) must activate it in this process before the rules are planned.
+func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) {
+	env := setupDriverExt(t)
+	swapGlobal(t, func() func() bool { return stdinIsTerminal }, func(f func() bool) { stdinIsTerminal = f }, func() bool { return true })
+	swapGlobal(t, func() func() bool { return stderrIsTerminal }, func(f func() bool) { stderrIsTerminal = f }, func() bool { return true })
+	var stderr bytes.Buffer
+	swapGlobal(t, func() func() (io.Reader, io.Writer) { return policyConfirmStreams },
+		func(f func() (io.Reader, io.Writer)) { policyConfirmStreams = f },
+		func() (io.Reader, io.Writer) { return strings.NewReader("y\n"), &stderr })
+	swapGlobal(t, func() audit.AuditWriter { return opsctlAuditWriter }, func(w audit.AuditWriter) { opsctlAuditWriter = w }, audit.AuditWriter(&recordingAuditWriter{}))
+
+	code := cmdPolicy(context.Background(), []string{"allow", "fx-db", "--", "SELECT * FROM users"}, "sess-1")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr.String())
+	assert.Equal(t, []string{extensiontest.DBDriverFixtureName}, env.activations)
 }
