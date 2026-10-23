@@ -280,3 +280,122 @@ describe("DatabaseConfigSection 证书字段组(tls_cert)", () => {
     expect((await ref.current!.buildConfig(ctx)).configJSON).not.toContain("tls_");
   });
 });
+
+describe("DatabaseConfigSection Kerberos 字段组(kerberos)", () => {
+  const KRB_DRIVER = new dbdriver.Descriptor({
+    id: "krbdb",
+    name: "KrbDB",
+    icon: "database",
+    order: 902,
+    aliases: [],
+    defaultPort: 1521,
+    form: [{ tab: "connection", fields: ["host", "port", "username", "password", "kerberos"] }],
+    capabilities: [],
+  });
+  const PLAIN = '{"driver":"krbdb","host":"h","port":1521,"username":"app","password":"STOREDPWD"}';
+  const KRB =
+    '{"driver":"krbdb","host":"h","port":1521,"username":"app","auth_method":"kerberos",' +
+    '"krb_principal":"app@EXAMPLE.COM","krb_password":"STOREDKRB","krb_kdc":"kdc1.example.com,kdc2:8888",' +
+    '"krb_spn":"oracle/db.example.com"}';
+
+  beforeEach(() => {
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue([...BUILTIN_DRIVERS, KRB_DRIVER]);
+  });
+
+  async function renderEdit(config: string, onValidity: (v: { saveDisabledReason?: string }) => void = () => {}) {
+    const ref = createRef<AssetFormHandle>();
+    render(
+      <DatabaseConfigSection
+        ref={ref}
+        editAsset={new asset_entity.Asset({ Type: "database", Config: config })}
+        ctx={ctx}
+        onValidityChange={onValidity}
+      />
+    );
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    return ref;
+  }
+
+  it("默认是口令认证:显示资产口令,不显示 Kerberos 字段,配置不带 Kerberos 键", async () => {
+    const ref = await renderEdit(PLAIN);
+    expect(await screen.findByTestId("krb-auth-kerberos")).toBeInTheDocument();
+    expect(screen.getByTestId("password-source-inline")).toBeInTheDocument();
+    expect(screen.queryByTestId("krb-principal")).toBeNull();
+    const cfg = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    expect(cfg.password).toBe("STOREDPWD");
+    expect(Object.keys(cfg).filter((k) => k === "auth_method" || k.startsWith("krb_"))).toEqual([]);
+  });
+
+  it("选 Kerberos 后显示 Kerberos 字段、隐藏资产口令,用户名仍在;存的设置回填且口令不回显", async () => {
+    await renderEdit(KRB);
+    expect(await screen.findByTestId("krb-principal")).toHaveValue("app@EXAMPLE.COM");
+    expect(screen.getByTestId("krb-kdc")).toHaveValue("kdc1.example.com,kdc2:8888");
+    expect(screen.getByTestId("krb-spn")).toHaveValue("oracle/db.example.com");
+    expect(screen.getByTestId("krb-password")).toHaveValue("");
+    expect(screen.getByTestId("krb-password")).toHaveAttribute("placeholder", "asset.passwordUnchanged");
+    expect(screen.queryByTestId("password-source-inline")).toBeNull();
+    expect(screen.getByTestId("database-username-input")).toBeInTheDocument();
+  });
+
+  it("保存与测试连接都写 Kerberos 键、不写资产口令,已存口令密文原样保留,新输入的经加密", async () => {
+    const ref = await renderEdit(KRB);
+    const want = {
+      auth_method: "kerberos",
+      krb_principal: "app@EXAMPLE.COM",
+      krb_password: "STOREDKRB",
+      krb_kdc: "kdc1.example.com,kdc2:8888",
+      krb_spn: "oracle/db.example.com",
+    };
+    const save = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    const test = JSON.parse((await ref.current!.buildTestConfig!(ctx)).configJSON);
+    expect(save).toMatchObject(want);
+    expect(test).toMatchObject(want);
+    expect(save.password).toBeUndefined();
+    expect(test.password).toBeUndefined();
+
+    await userEvent.setup().type(await screen.findByTestId("krb-password"), "NEW");
+    const save2 = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    const test2 = JSON.parse((await ref.current!.buildTestConfig!(ctx)).configJSON);
+    expect(save2.krb_password).toBe("enc(NEW)");
+    expect(test2.krb_password).toBe("enc(NEW)");
+  });
+
+  it("凭据选 keytab 时只写 keytab 路径,不写 Kerberos 口令", async () => {
+    const ref = await renderEdit(KRB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId("krb-credential-keytab"));
+    await user.type(screen.getByTestId("krb-keytab-file"), "/etc/app.keytab");
+    const cfg = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    expect(cfg.krb_keytab_file).toBe("/etc/app.keytab");
+    expect(cfg.krb_password).toBeUndefined();
+  });
+
+  it("主体缺 @REALM、没有 KDC、口令与 keytab 都没有时拒绝保存并点名字段", async () => {
+    const reasons: string[] = [];
+    await renderEdit(KRB, (v) => reasons.push(v.saveDisabledReason ?? ""));
+    const user = userEvent.setup();
+    const last = () => reasons[reasons.length - 1];
+
+    await user.clear(await screen.findByTestId("krb-principal"));
+    await user.type(screen.getByTestId("krb-principal"), "app");
+    await waitFor(() => expect(last()).toBe("asset.formKrbPrincipal"));
+    await user.type(screen.getByTestId("krb-principal"), "@EXAMPLE.COM");
+    await waitFor(() => expect(last()).toBe(""));
+
+    await user.clear(screen.getByTestId("krb-kdc"));
+    await waitFor(() => expect(last()).toBe("asset.formKrbKDC"));
+    await user.type(screen.getByTestId("krb-kdc"), "kdc1");
+    await waitFor(() => expect(last()).toBe(""));
+
+    await user.click(screen.getByTestId("krb-credential-keytab"));
+    await waitFor(() => expect(last()).toBe("asset.formKrbCredential"));
+  });
+
+  it("不声明 Kerberos 字段组的驱动:表单没有认证方式,配置里的 Kerberos 键不被写出", async () => {
+    const ref = await renderEdit(
+      '{"driver":"mysql","host":"h","port":3306,"auth_method":"kerberos","krb_principal":"a@B"}'
+    );
+    expect(screen.queryByTestId("krb-auth-kerberos")).toBeNull();
+    expect((await ref.current!.buildConfig(ctx)).configJSON).not.toContain("krb_");
+  });
+});

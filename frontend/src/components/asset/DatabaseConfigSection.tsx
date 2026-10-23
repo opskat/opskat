@@ -18,11 +18,14 @@ import {
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { resolveTLSKey } from "./tlsCertConfig";
+import { kerberosInvalidReason, resolveKrbPassword } from "./kerberosConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
   applyDriverChange,
   buildDatabaseConfig,
+  kerberosActive,
   parseDatabaseConfig,
+  withDriverAuthMethod,
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "./DatabaseConfigSection.config";
@@ -55,8 +58,12 @@ function DatabaseConfigForm({
     ref,
     editAsset,
     onValidityChange,
-    init: (a) =>
-      a ? parseDatabaseConfig(a.Config, a.sshTunnelId || 0) : applyDriverChange(DATABASE_DEFAULTS, drivers[0]),
+    init: (a) => {
+      if (!a) return applyDriverChange(DATABASE_DEFAULTS, drivers[0]);
+      const stored = parseDatabaseConfig(a.Config, a.sshTunnelId || 0);
+      const d = findDatabaseDriver(drivers, stored.driver);
+      return d ? withDriverAuthMethod(stored, d) : stored;
+    },
     validate: (s) => {
       const d = findDatabaseDriver(drivers, s.driver);
       // 资产存的驱动不在注册表里:表单显示未知驱动错误,配置原样保留,仍可保存通用字段;
@@ -71,12 +78,14 @@ function DatabaseConfigForm({
         (!needsPath || !!s.path.trim()) && (!isRemote || s.sshTunnelId > 0) && (!needsHost || !!s.host.trim());
       const driverFieldInvalid = invalidDriverField(d, s);
       const driverFieldsOk = !driverFieldInvalid && !missingRequiredDriverField(d, s);
-      const canSave = baseOk && driverFieldsOk && !proxyChainError;
+      const krbReason = kerberosActive(s, d) ? kerberosInvalidReason(s) : "";
+      const canSave = baseOk && driverFieldsOk && !proxyChainError && !krbReason;
       let saveDisabledReason = "";
       if (!canSave) {
         if (proxyChainError) saveDisabledReason = proxyChainError;
         else if (baseOk && driverFieldInvalid) saveDisabledReason = "asset.formInvalidDriverField";
-        else if (baseOk) saveDisabledReason = "asset.formMissingDriverField";
+        else if (baseOk && !driverFieldsOk) saveDisabledReason = "asset.formMissingDriverField";
+        else if (baseOk) saveDisabledReason = krbReason;
         else if (isRemote && s.path.trim() && s.sshTunnelId <= 0) {
           saveDisabledReason = "asset.formMissingSQLiteSSH";
         } else if (needsPath && !s.path.trim()) {
@@ -98,7 +107,8 @@ function DatabaseConfigForm({
           await resolveSaveProxyPassword(s, ctx.encryptPassword),
           await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
           await buildDriverOptions(d, s, ctx.encryptPassword),
-          await resolveTLSKey(s, ctx.encryptPassword)
+          await resolveTLSKey(s, ctx.encryptPassword),
+          await resolveKrbPassword(s, ctx.encryptPassword)
         ),
         sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
       };
@@ -124,9 +134,11 @@ function DatabaseConfigForm({
           // 测试连接与已存资产一样由后端解密口令类专属字段,所以这里同样给密文。
           await buildDriverOptions(d, s, ctx.encryptPassword),
           // 私钥同样给密文:后端只认密文。
-          await resolveTLSKey(s, ctx.encryptPassword)
+          await resolveTLSKey(s, ctx.encryptPassword),
+          await resolveKrbPassword(s, ctx.encryptPassword)
         ),
-        password: cred.value.password,
+        // Kerberos 认证不用资产口令。
+        password: kerberosActive(s, d) ? "" : cred.value.password,
       };
     },
     // build 按当前的驱动描述序列化:描述更新(扩展升级、换语言)后保存用的是新的那份。

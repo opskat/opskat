@@ -16,8 +16,15 @@ import {
   type TLSCertFormFields,
   type TLSCertJSON,
 } from "./tlsCertConfig";
+import {
+  KERBEROS_DEFAULTS,
+  kerberosFromJSON,
+  kerberosToJSON,
+  type KerberosFormFields,
+  type KerberosJSON,
+} from "./kerberosConfig";
 
-export interface DatabaseFormState extends ConnectionFormFields, TLSCertFormFields {
+export interface DatabaseFormState extends ConnectionFormFields, TLSCertFormFields, KerberosFormFields {
   driver: string;
   sqliteSource: "local" | "remote_ssh_vfs";
   host: string;
@@ -59,9 +66,10 @@ export const DATABASE_DEFAULTS: DatabaseFormState = {
   storedDriverOptions: { driver: "", values: {} },
   ...CONNECTION_DEFAULTS,
   ...TLS_CERT_DEFAULTS,
+  ...KERBEROS_DEFAULTS,
 };
 
-interface DatabaseConfig extends TLSCertJSON {
+interface DatabaseConfig extends TLSCertJSON, KerberosJSON {
   driver: string;
   host?: string;
   port?: number;
@@ -100,9 +108,11 @@ export function buildDatabaseConfig(
   proxyPassword = "",
   proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
   driverOptions?: Record<string, unknown>,
-  tlsKey = ""
+  tlsKey = "",
+  krbPassword = ""
 ): string {
   const uses = (field: string) => driverUsesField(driver, field);
+  const kerberos = kerberosActive(state, driver);
   const cfg: DatabaseConfig = { driver: state.driver };
   if (uses("sqlite_source") && state.sqliteSource === "remote_ssh_vfs") {
     cfg.sqlite_source = "remote_ssh_vfs";
@@ -112,7 +122,9 @@ export function buildDatabaseConfig(
   if (uses("host")) cfg.host = state.host;
   if (uses("port")) cfg.port = state.port;
   if (uses("username")) cfg.username = state.username;
-  if (uses("password")) {
+  // Kerberos 认证隐藏资产口令:口令字段里的旧值不随配置写出。
+  if (kerberos) Object.assign(cfg, kerberosToJSON(state, krbPassword));
+  else if (uses("password")) {
     if (cred.credential_id) cfg.credential_id = cred.credential_id;
     else if (cred.password) cfg.password = cred.password;
   }
@@ -142,6 +154,16 @@ export function buildDatabaseConfig(
   return JSON.stringify(cfg);
 }
 
+/** 这份表单是否按 Kerberos 认证提交:驱动声明了 Kerberos 字段组且用户选了 Kerberos。 */
+export function kerberosActive(state: KerberosFormFields, driver: DriverDescriptor): boolean {
+  return state.authMethod === "kerberos" && driverUsesField(driver, "kerberos");
+}
+
+/** 认证方式只对声明了 Kerberos 字段组的驱动有意义:不声明的驱动一律回到口令认证。 */
+export function withDriverAuthMethod(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
+  return driverUsesField(driver, "kerberos") ? state : { ...state, authMethod: "" };
+}
+
 /** 编辑态回填(镜像旧 loadDatabaseConfig 非凭据字段;connectionType 派生需要 asset 顶层
  *  sshTunnelId 优先(镜像旧 `asset.sshTunnelId || cfg.ssh_asset_id || 0`),故由 section 传入)。 */
 export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): DatabaseFormState {
@@ -165,6 +187,7 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
       driverOptions: {},
       storedDriverOptions: { driver: cfg.driver ?? "", values: cfg.driver_options ?? {} },
       ...tlsCertsFromJSON(cfg),
+      ...kerberosFromJSON(cfg),
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
@@ -179,6 +202,10 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
  * 专属字段是各驱动自己的:改过的取值清空,新驱动的字段从已存值或默认值起步。
  */
 export function applyDriverChange(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
+  return withDriverAuthMethod(applyDriverFields(state, driver), driver);
+}
+
+function applyDriverFields(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
   if (!driverUsesField(driver, "host")) {
     return {
       ...state,

@@ -1,4 +1,5 @@
 import { tlsCertFields } from "@/components/asset/tlsCertConfig";
+import { kerberosFields } from "@/components/asset/kerberosConfig";
 import type { DatabaseFormState } from "@/components/asset/DatabaseConfigSection.config";
 import { registerDriverFormField } from "./formFields";
 
@@ -32,7 +33,9 @@ registerDriverFormField("port", [
 registerDriverFormField("username", [
   { kind: "text", key: "username", label: "asset.username", testid: "database-username-input" },
 ]);
-registerDriverFormField("password", [{ kind: "password" }]);
+// 选了 Kerberos 认证就隐藏资产口令(认证方式由 kerberos 字段组提供)。
+registerDriverFormField("password", [{ kind: "password", visibleWhen: (s) => s.authMethod !== "kerberos" }]);
+registerDriverFormField("kerberos", kerberosFields<DatabaseFormState>());
 registerDriverFormField("database", [
   {
     kind: "text",
