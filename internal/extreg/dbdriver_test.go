@@ -520,3 +520,40 @@ func TestDescribeOnlyDriverCannotClassify(t *testing.T) {
 	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), `"describesplit"`)
 }
+
+// kerberosDescriptor is a driver that declares the Kerberos field group.
+func kerberosDescriptor(id string) dbdriver.Descriptor {
+	desc := driverDescriptor(id)
+	desc.Form = append(desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{dbdriver.FieldKerberos}})
+	return desc
+}
+
+// Under Kerberos the asset logs in with the principal's tickets: the username
+// stays on the form but may be left empty, on save as on opsctl / AI create.
+// Password authentication still needs it.
+func TestExtensionDriverKerberosAssetMayLeaveTheUsernameEmpty(t *testing.T) {
+	m := driverOnlyManifest("krb-db", kerberosDescriptor("krbdb"))
+	m.Capabilities.DatabaseKerberos = true
+	require.NoError(t, registerManifest(t, m, newFakeDriverPlugin()))
+
+	asset := func(cfg *asset_entity.DatabaseConfig) *asset_entity.Asset {
+		a := &asset_entity.Asset{Name: "krb", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(cfg))
+		return a
+	}
+	kerberos := &asset_entity.DatabaseConfig{
+		Driver: "krbdb", Host: "db.example.com", Port: 1521, AuthMethod: asset_entity.AuthMethodKerberos,
+		KrbPrincipal: "alice@EXAMPLE.COM", KrbKeytabFile: "/etc/alice.keytab", KrbKDC: "kdc.example.com",
+	}
+	require.NoError(t, asset(kerberos).Validate())
+	_, err := assettype.PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+		"driver": "krbdb", "host": "db.example.com", "auth_method": "kerberos",
+		"krb_principal": "alice@EXAMPLE.COM", "krb_keytab_file": "/etc/alice.keytab", "krb_kdc": "kdc.example.com",
+	})
+	require.NoError(t, err)
+
+	password := &asset_entity.DatabaseConfig{Driver: "krbdb", Host: "db.example.com", Port: 1521}
+	require.Error(t, asset(password).Validate())
+	_, err = assettype.PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{"driver": "krbdb", "host": "db.example.com"})
+	require.ErrorContains(t, err, "username")
+}

@@ -35,7 +35,7 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `driver` | string | yes | `"mysql"`, `"postgresql"`, `"mssql"`, or `"sqlite"` |
 | `host` | string | non-SQLite | Hostname or IP |
 | `port` | number | no | Defaults by driver: 3306 / 5432 / 1433 |
-| `username` | string | non-SQLite | Database account name |
+| `username` | string | non-SQLite | Database account name; may be left empty under Kerberos (`auth_method: "kerberos"`) |
 | `password` | string | no | **Write-only.** For non-SQLite, encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID; rejected for SQLite |
 | `database` | string | no | Default database |

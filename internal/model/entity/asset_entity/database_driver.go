@@ -9,7 +9,7 @@ import (
 )
 
 // AuthMethodKerberos 是 DatabaseConfig.AuthMethod 选 Kerberos 的取值；空表示口令。
-const AuthMethodKerberos = "kerberos"
+const AuthMethodKerberos = dbdriver.AuthMethodKerberos
 
 // DatabaseDriverConfigValidator 校验数据库资产配置里由驱动决定的部分（必填字段、文件路径
 // 规则等）。驱动无关的规则（查询超时范围、代理链）留在 validateDatabase。
@@ -38,6 +38,7 @@ func (c *DatabaseConfig) DriverConfig() *dbdriver.Config {
 		Database:            c.Database,
 		SSLMode:             c.SSLMode,
 		TLS:                 c.TLS,
+		AuthMethod:          c.AuthMethod,
 		Params:              c.Params,
 		ReadOnly:            c.ReadOnly,
 		QueryTimeoutSeconds: c.QueryTimeoutSeconds,
@@ -56,6 +57,7 @@ func (c *DatabaseConfig) SetDriverConfig(d *dbdriver.Config) {
 	c.Database = d.Database
 	c.SSLMode = d.SSLMode
 	c.TLS = d.TLS
+	c.AuthMethod = d.AuthMethod
 	c.Params = d.Params
 	c.ReadOnly = d.ReadOnly
 	c.QueryTimeoutSeconds = d.QueryTimeoutSeconds

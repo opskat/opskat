@@ -17,6 +17,9 @@ type Config struct {
 	Database string `json:"database,omitempty"`
 	SSLMode  string `json:"ssl_mode,omitempty"`
 	TLS      bool   `json:"tls,omitempty"`
+	// AuthMethod 是认证方式：空为口令，AuthMethodKerberos 为 Kerberos（只有声明了 Kerberos 字段组
+	// FieldKerberos 的驱动的资产会选它）。Kerberos 的主体、凭据与 KDC 归宿主，不在这里。
+	AuthMethod string `json:"auth_method,omitempty"`
 	// Params 是额外的连接参数。
 	Params string `json:"params,omitempty"`
 	// ReadOnly 要求连接级只读。
@@ -31,6 +34,10 @@ type Config struct {
 	// Path 是数据库文件的路径。
 	Path string `json:"path,omitempty"`
 }
+
+// AuthMethodKerberos 是 Config.AuthMethod 选 Kerberos 的取值：资产凭主体的票据登录，不用资产口令，
+// 用户名可以不填。
+const AuthMethodKerberos = "kerberos"
 
 // Route 是资产到达数据库的途径配置的摘要，供 ConfigRules.ValidateConfig 判断驱动支不支持。
 // 途径本身（隧道、代理的地址与凭据）只有宿主知道。

@@ -10,10 +10,11 @@ import (
 )
 
 // 驱动看不到的字段：口令与凭据由宿主解析后单独交给驱动，代理由宿主解析成传输层，证书字段组由宿主
-// 读成内容、解密私钥后放进 OpenRequest.TLS。
+// 读成内容、解密私钥后放进 OpenRequest.TLS，Kerberos 的主体与凭据留在宿主、只交出票据（认证方式
+// auth_method 与 tls 开关一样驱动看得到）。
 var hostOnlyDatabaseFields = []string{"password", "credential_id", "proxy", "proxy_chain", "driver_options",
 	"tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "tls_ca_pem", "tls_cert_pem", "tls_key_pem",
-	"auth_method", "krb_principal", "krb_password", "krb_keytab_file", "krb_kdc", "krb_spn"}
+	"krb_principal", "krb_password", "krb_keytab_file", "krb_kdc", "krb_spn"}
 
 // filledDatabaseConfig 给 DatabaseConfig 的每个字段填上非零值，新增字段也会被填上。
 func filledDatabaseConfig(t *testing.T) *DatabaseConfig {
@@ -68,7 +69,7 @@ func TestSetDriverConfigWritesDriverFieldsAndKeepsCredentialsAndProxies(t *testi
 		TLSInsecure:   cfg.TLSInsecure, TLSServerName: cfg.TLSServerName,
 		TLSCAFile: cfg.TLSCAFile, TLSCertFile: cfg.TLSCertFile, TLSKeyFile: cfg.TLSKeyFile,
 		TLSCAPEM: cfg.TLSCAPEM, TLSCertPEM: cfg.TLSCertPEM, TLSKeyPEM: cfg.TLSKeyPEM,
-		AuthMethod: cfg.AuthMethod, KrbPrincipal: cfg.KrbPrincipal, KrbPassword: cfg.KrbPassword,
+		KrbPrincipal: cfg.KrbPrincipal, KrbPassword: cfg.KrbPassword,
 		KrbKeytabFile: cfg.KrbKeytabFile, KrbKDC: cfg.KrbKDC, KrbSPN: cfg.KrbSPN}
 
 	cfg.SetDriverConfig((&DatabaseConfig{}).DriverConfig())

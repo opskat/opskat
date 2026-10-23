@@ -16,7 +16,8 @@ func (r NetworkRules) ValidateConfig(cfg *Config, _ Route) error {
 	if cfg.Port <= 0 {
 		return errors.New("数据库端口无效")
 	}
-	if cfg.Username == "" {
+	// Kerberos 资产凭主体的票据登录，用户名可以不填。
+	if cfg.Username == "" && cfg.AuthMethod != AuthMethodKerberos {
 		return errors.New("数据库用户名不能为空")
 	}
 	return nil
@@ -30,6 +31,12 @@ func (r NetworkRules) CreateDefaults(args Args) map[string]any {
 }
 
 func (r NetworkRules) ValidateCreateArgs(args Args) error {
+	if args.String("auth_method") == AuthMethodKerberos {
+		if args.String("host") == "" || args.Int("port") == 0 {
+			return errors.New("missing required parameters: host, port")
+		}
+		return nil
+	}
 	if args.String("host") == "" || args.Int("port") == 0 || args.String("username") == "" {
 		return errors.New("missing required parameters: host, port, username")
 	}

@@ -572,8 +572,10 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   `TabConnection` tab (the manifest must declare `capabilities.databaseKerberos`, which
   needs `hostABI` `2.5`; otherwise the extension is refused at load, naming the driver)
   and the asset form offers an authentication method: password or Kerberos. When the
-  asset uses Kerberos, `open` gets `req.Kerberos` and an empty `req.Password`; the
-  username is handed over as usual, the Kerberos password, keytab and keys never are.
+  asset uses Kerberos, `open` gets `req.Kerberos`, `req.Config.AuthMethod` set to
+  `dbdriver.AuthMethodKerberos` and an empty `req.Password`; the username is handed over
+  as usual (the user may leave it empty under Kerberos), the Kerberos password, keytab
+  and keys never are.
   In the login handshake, call `req.Kerberos.Ticket(ctx, dbdriver.KerberosSPN(service,
   host))` with the service and host names the database sent (go-ora's
   `Authenticate(server, service)`), and write the bytes it returns — the Kerberos
