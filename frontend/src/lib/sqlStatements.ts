@@ -148,6 +148,8 @@ export function statementAtOffset<T extends SqlStatement>(all: T[], textLength: 
 
 /** 不带 WHERE 的 UPDATE 的危险原因（Go 侧 dbdriver.ReasonNoWhereUpdate）。 */
 const NO_WHERE_UPDATE = "no_where_update";
+/** 不带 WHERE 的 DELETE 的危险原因（Go 侧 dbdriver.ReasonNoWhereDelete）。 */
+const NO_WHERE_DELETE = "no_where_delete";
 
 /** 一条语句的类型与危险标记：驱动给出的，或默认切分从语句开头推出的。 */
 export interface StatementKind {
@@ -169,12 +171,13 @@ export interface DriverStatement extends StatementKind {
 export type ClassifiedSqlStatement = SqlStatement & StatementKind;
 
 /**
- * 查询面板确认框的判定：DELETE / DROP / TRUNCATE / ALTER 类语句，或不带 WHERE 的 UPDATE。
- * 不带 WHERE 的 DELETE 已在 DELETE 类里；预编译执行与调用存储过程不在此列（与按分号切分时一致）。
+ * 查询面板确认框的判定：DELETE / DROP / TRUNCATE / ALTER 类语句，或标了不带 WHERE 的 UPDATE /
+ * DELETE 的语句（驱动自己的类型如 PL/SQL 块也按原因算）；预编译执行与调用存储过程不在此列
+ * （与按分号切分时一致）。
  */
 export function isDangerousStatement(s: StatementKind): boolean {
   if (/^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(s.type)) return true;
-  return s.dangerous && s.reason === NO_WHERE_UPDATE;
+  return s.dangerous && (s.reason === NO_WHERE_UPDATE || s.reason === NO_WHERE_DELETE);
 }
 
 /** 一个 UTF-16 码点在 UTF-8 里占的字节数；孤立的代理项按 Go 的 U+FFFD 算 3 字节。 */

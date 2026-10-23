@@ -607,26 +607,12 @@ func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
 	assert.Contains(t, env.stderrBuf.String(), "object.list")
 }
 
-// interactivePolicyTerminal makes the policy write commands see a terminal that answers
-// "y" at the confirmation, with audit rows swallowed; it returns the confirmation output.
-func interactivePolicyTerminal(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	swapGlobal(t, func() func() bool { return stdinIsTerminal }, func(f func() bool) { stdinIsTerminal = f }, func() bool { return true })
-	swapGlobal(t, func() func() bool { return stderrIsTerminal }, func(f func() bool) { stderrIsTerminal = f }, func() bool { return true })
-	var stderr bytes.Buffer
-	swapGlobal(t, func() func() (io.Reader, io.Writer) { return policyConfirmStreams },
-		func(f func() (io.Reader, io.Writer)) { policyConfirmStreams = f },
-		func() (io.Reader, io.Writer) { return strings.NewReader("y\n"), &stderr })
-	swapGlobal(t, func() audit.AuditWriter { return opsctlAuditWriter }, func(w audit.AuditWriter) { opsctlAuditWriter = w }, audit.AuditWriter(&recordingAuditWriter{}))
-	return &stderr
-}
-
 // A permanent rule on a database asset is classified by the asset's driver; when an
 // extension provides that driver, opsctl (which only registers extensions describe-only
 // at boot) must activate it in this process before the rules are planned.
 func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) {
 	env := setupDriverExt(t)
-	stderr := interactivePolicyTerminal(t)
+	stderr := interactiveTerminal(t, "")
 
 	code := cmdPolicy(context.Background(), []string{"allow", "fx-db", "--", "SELECT * FROM users"}, "sess-1")
 
@@ -638,7 +624,7 @@ func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) 
 // the driver and the disabled extension, and nothing is written.
 func TestPolicyWriteOnDisabledExtensionDriverIsRefusedNamingIt(t *testing.T) {
 	setupDriverExt(t, &extension_state_entity.ExtensionState{Name: extensiontest.DBDriverFixtureName, Enabled: false})
-	confirm := interactivePolicyTerminal(t)
+	confirm := interactiveTerminal(t, "")
 
 	for _, verb := range []string{"allow", "deny"} {
 		var code int

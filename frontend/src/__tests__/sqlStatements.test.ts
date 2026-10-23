@@ -215,6 +215,9 @@ describe("isDangerousStatement", () => {
     ["TRUNCATE", undefined],
     ["ALTER TABLE", undefined],
     ["UPDATE", "no_where_update"],
+    // 驱动自己的类型(如 PL/SQL 块)里有不带 WHERE 的 UPDATE / DELETE,由原因标出
+    ["PLSQL BLOCK", "no_where_update"],
+    ["PLSQL BLOCK", "no_where_delete"],
   ])("flags %s (reason %s)", (type, reason) => {
     expect(isDangerousStatement({ type, dangerous: reason !== undefined, reason })).toBe(true);
   });

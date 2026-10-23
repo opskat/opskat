@@ -604,7 +604,8 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   treats one breaking a rule, like an error `classify` returns for text it cannot split,
   as SQL it cannot split, naming the driver and the reason.
 - **The form is a network database's.** An extension driver is checked by the host's
-  network rules (host, port and username required), so its `Form` must declare
+  network rules (host and port required, and a username unless the asset logs in with
+  Kerberos), so its `Form` must declare
   `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields
   (`FieldSQLiteSource`, `FieldPath`, `FieldSSHAsset`); otherwise the extension is
   refused when it registers, naming the driver.
