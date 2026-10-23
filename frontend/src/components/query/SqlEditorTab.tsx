@@ -34,7 +34,15 @@ import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
 import { buildSqlCompletions, resolveScopeTables, type SqlColumn } from "@/lib/sql-context";
-import { isDangerousSql, statementAt } from "@/lib/sqlStatements";
+import {
+  isDangerousSql,
+  isDangerousStatement,
+  statementAt,
+  statementAtOffset,
+  type SqlStatement,
+} from "@/lib/sqlStatements";
+import { driverHasCapability, findDatabaseDriver, loadDatabaseDrivers, useDatabaseDrivers } from "@/lib/dbDrivers";
+import { useDriverStatements } from "./useDriverStatements";
 import { formatModKey } from "@/stores/shortcutStore";
 
 interface SqlEditorTabProps {
@@ -62,6 +70,20 @@ const CURRENT_STATEMENT_DECORATION = {
   linesDecorationsClassName: "sql-current-statement-bar",
 };
 type RunMode = "current" | "all";
+// 驱动描述里「自己切分并分类 SQL」的功能名(Go 侧 dbdriver.CapClassifyStatements)。
+const CLASSIFY_STATEMENTS = "classify_statements";
+
+/** 要执行的来源：current 模式且无选区时是整段文本与光标位置，否则是要执行的文本本身。 */
+interface ExecutionSource {
+  text: string;
+  cursor?: number;
+}
+
+/** 驱动 driverId 是否声明了语句切分分类；以执行这一刻的驱动描述为准。 */
+async function driverSplitsStatements(driverId: string | undefined): Promise<boolean> {
+  if (!driverId) return false;
+  return driverHasCapability(findDatabaseDriver(await loadDatabaseDrivers(), driverId), CLASSIFY_STATEMENTS);
+}
 
 // props 为稳定字符串 —— memo 可阻止父组件的 innerTabs 结构变化传导进来
 export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
@@ -76,6 +98,14 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const editorRef = useRef<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
 
   const assetId = queryMeta?.assetId ?? 0;
+  const driverId = queryMeta?.driver;
+  // 声明了语句切分分类的驱动:当前语句、可执行状态与危险确认按驱动的切分;其余照旧按分号切分。
+  const drivers = useDatabaseDrivers();
+  const driverSplits =
+    drivers.status === "ready" &&
+    !!driverId &&
+    driverHasCapability(findDatabaseDriver(drivers.drivers, driverId), CLASSIFY_STATEMENTS);
+  const driverStatements = useDriverStatements(assetId, driverSplits);
   const databases = useMemo(() => dbState?.databases || [], [dbState?.databases]);
 
   // 只在 mount 时读一次持久化内容 —— 之后编辑器内容由 Monaco 自管（非受控）
@@ -178,15 +208,15 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     if (rowIdxs.length > 0) setDetailRowIdx(rowIdxs.length === 1 ? rowIdxs[0] : null);
   }, []);
 
-  // ⌘↵:有选区执行选区,否则执行光标所在语句;⇧⌘↵:执行编辑器全部内容。
-  const getExecutableSQL = useCallback((mode: RunMode) => {
+  // ⌘↵:有选区执行选区,否则执行光标所在语句;⇧⌘↵:执行编辑器全部内容。按下那一刻读编辑器。
+  const getExecutionSource = useCallback((mode: RunMode): ExecutionSource | null => {
     const editor = editorRef.current;
     const model = editor?.getModel();
-    if (!editor || !model) return "";
-    if (mode === "all") return model.getValue().trim();
+    if (!editor || !model) return null;
+    if (mode === "all") return { text: model.getValue().trim() };
     const sel = editor.getSelection();
-    if (sel && !sel.isEmpty()) return model.getValueInRange(sel).trim();
-    return statementAt(model.getValue(), model.getOffsetAt(editor.getPosition()!))?.text ?? "";
+    if (sel && !sel.isEmpty()) return { text: model.getValueInRange(sel).trim() };
+    return { text: model.getValue(), cursor: model.getOffsetAt(editor.getPosition()!) };
   }, []);
 
   const fetchPage = useCallback(
@@ -265,17 +295,43 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     toast.info(t("query.stopLoadingToast"));
   }, [t]);
 
+  // 按执行这一刻的文本定出要执行的 SQL 与是否危险。驱动切分时语句与类型取自驱动(执行时重新取),
+  // 驱动出错或不可用时抛出它给的原因,不退回按分号切分。
+  const resolveExecution = useCallback(
+    async (source: ExecutionSource): Promise<{ sql: string; dangerous: boolean }> => {
+      if (!(await driverSplitsStatements(driverId))) {
+        const sql = source.cursor === undefined ? source.text : (statementAt(source.text, source.cursor)?.text ?? "");
+        return { sql, dangerous: isDangerousSql(sql) };
+      }
+      const statements = await driverStatements.split(source.text);
+      if (source.cursor === undefined) {
+        return { sql: source.text, dangerous: statements.some(isDangerousStatement) };
+      }
+      const current = statementAtOffset(statements, source.text.length, source.cursor);
+      return { sql: current?.text ?? "", dangerous: !!current && isDangerousStatement(current) };
+    },
+    [driverId, driverStatements]
+  );
+
   const execute = useCallback(
-    (mode: RunMode) => {
-      const execSql = getExecutableSQL(mode);
-      if (!execSql || !assetId) return;
-      if (isDangerousSql(execSql)) {
-        setPendingDangerSql(execSql);
+    async (mode: RunMode) => {
+      const source = getExecutionSource(mode);
+      if (!source?.text.trim() || !assetId) return;
+      let resolved: { sql: string; dangerous: boolean };
+      try {
+        resolved = await resolveExecution(source);
+      } catch (e) {
+        toast.error(t("query.statementSplitFailed"), { description: String(e) });
+        return;
+      }
+      if (!resolved.sql) return;
+      if (resolved.dangerous) {
+        setPendingDangerSql(resolved.sql);
       } else {
-        void doExecute(execSql);
+        void doExecute(resolved.sql);
       }
     },
-    [getExecutableSQL, assetId, doExecute]
+    [getExecutionSource, assetId, resolveExecution, doExecute, t]
   );
 
   // Monaco 命令是在 onMount 时一次性注册的，闭包里拿到的 execute 会过期；
@@ -289,79 +345,107 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const prefetchColumnsRef = useRef<(sql: string) => void>(() => {});
   const inflightMetaRef = useRef<Set<string>>(new Set());
 
-  const handleEditorMount = useCallback((editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: typeof MonacoNS) => {
-    editorRef.current = editor;
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-      executeRef.current("current");
-    });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
-      executeRef.current("all");
-    });
-
-    // 光标 / 选区 / 焦点变化:刷新"可执行"状态与当前语句高亮。
-    const decorations = editor.createDecorationsCollection();
-    let focused = editor.hasTextFocus();
-    const syncCursorState = () => {
-      const model = editor.getModel();
-      const position = editor.getPosition();
-      if (!model || !position) return;
-      const sel = editor.getSelection();
-      const selected = !!sel && !sel.isEmpty();
-      const current = selected ? null : statementAt(model.getValue(), model.getOffsetAt(position));
-      setHasSelection(selected);
-      setRunnable(selected ? model.getValueInRange(sel).trim() !== "" : current !== null);
-      if (focused && current) {
-        decorations.set([
-          {
-            range: {
-              startLineNumber: model.getPositionAt(current.start).lineNumber,
-              startColumn: 1,
-              endLineNumber: model.getPositionAt(current.end).lineNumber,
-              endColumn: 1,
-            },
-            options: CURRENT_STATEMENT_DECORATION,
-          },
-        ]);
-      } else {
-        decorations.clear();
-      }
-    };
-    editor.onDidChangeCursorSelection(syncCursorState);
-    editor.onDidFocusEditorWidget(() => {
-      focused = true;
-      syncCursorState();
-    });
-    syncCursorState();
-
-    // 订阅内容变化：更新 ref + 维护 isEmpty + debounce 300ms 回写 store
-    const model = editor.getModel();
-    if (model) {
-      let prevEmpty = model.getValue().length === 0;
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      model.onDidChangeContent(() => {
-        const val = model.getValue();
-        sqlRef.current = val;
-        const nowEmpty = val.length === 0;
-        if (nowEmpty !== prevEmpty) {
-          prevEmpty = nowEmpty;
-          setIsEmpty(nowEmpty);
-        }
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          timer = null;
-          commitSqlRef.current();
-          prefetchColumnsRef.current(sqlRef.current);
-        }, 300);
+  const handleEditorMount = useCallback(
+    (editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: typeof MonacoNS) => {
+      editorRef.current = editor;
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+        void executeRef.current("current");
       });
-    }
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+        void executeRef.current("all");
+      });
 
-    // 失焦立即提交，避免等 300ms debounce
-    editor.onDidBlurEditorWidget(() => {
-      focused = false;
+      // 光标 / 选区 / 焦点变化:刷新"可执行"状态与当前语句高亮。
+      const decorations = editor.createDecorationsCollection();
+      let focused = editor.hasTextFocus();
+      // 光标处的语句。驱动切分时取与当前文本对应的驱动结果:还没取到(输入后尚未停顿)返回 undefined,
+      // 保持现有高亮与可执行状态等它;驱动出错时没有当前语句,但仍可执行,执行时提示原因。
+      const currentStatement = (text: string, offset: number): { statement: SqlStatement | null } | undefined => {
+        if (!driverStatements.enabled()) return { statement: statementAt(text, offset) };
+        const split = driverStatements.resultFor(text);
+        if (!split) return undefined;
+        if (split.error !== undefined) return { statement: null };
+        return { statement: statementAtOffset(split.statements, text.length, offset) };
+      };
+      const syncCursorState = () => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) return;
+        const sel = editor.getSelection();
+        const selected = !!sel && !sel.isEmpty();
+        setHasSelection(selected);
+        if (selected) {
+          setRunnable(model.getValueInRange(sel).trim() !== "");
+          decorations.clear();
+          return;
+        }
+        const text = model.getValue();
+        const found = currentStatement(text, model.getOffsetAt(position));
+        if (!found) return;
+        const current = found.statement;
+        const splitFailed = driverStatements.enabled() && driverStatements.resultFor(text)?.error !== undefined;
+        setRunnable(current !== null || (splitFailed && text.trim() !== ""));
+        if (focused && current) {
+          decorations.set([
+            {
+              range: {
+                startLineNumber: model.getPositionAt(current.start).lineNumber,
+                startColumn: 1,
+                endLineNumber: model.getPositionAt(current.end).lineNumber,
+                endColumn: 1,
+              },
+              options: CURRENT_STATEMENT_DECORATION,
+            },
+          ]);
+        } else {
+          decorations.clear();
+        }
+      };
+      editor.onDidChangeCursorSelection(syncCursorState);
+      driverStatements.onChange(syncCursorState);
+      editor.onDidFocusEditorWidget(() => {
+        focused = true;
+        syncCursorState();
+      });
       syncCursorState();
-      commitSqlRef.current();
-    });
-  }, []);
+
+      // 订阅内容变化：更新 ref + 维护 isEmpty + debounce 300ms 回写 store
+      const model = editor.getModel();
+      if (model) {
+        let prevEmpty = model.getValue().length === 0;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        model.onDidChangeContent(() => {
+          const val = model.getValue();
+          sqlRef.current = val;
+          const nowEmpty = val.length === 0;
+          if (nowEmpty !== prevEmpty) {
+            prevEmpty = nowEmpty;
+            setIsEmpty(nowEmpty);
+          }
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            timer = null;
+            commitSqlRef.current();
+            prefetchColumnsRef.current(sqlRef.current);
+            driverStatements.refresh(sqlRef.current);
+          }, 300);
+        });
+      }
+
+      // 失焦立即提交，避免等 300ms debounce
+      editor.onDidBlurEditorWidget(() => {
+        focused = false;
+        syncCursorState();
+        commitSqlRef.current();
+      });
+    },
+    [driverStatements]
+  );
+
+  // 驱动切分启用(驱动描述加载完成)或换了资产时,先按编辑器现有文本取一次切分。
+  useEffect(() => {
+    if (driverSplits) driverStatements.refresh(sqlRef.current);
+  }, [driverSplits, assetId, driverStatements]);
 
   // Insert snippet text at the current Monaco selection / cursor, without auto-execute.
   const handleSnippetInsert = useCallback((content: string) => {
@@ -471,7 +555,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
               size="sm"
               data-testid="sql-execute-button"
               className="h-7 text-xs gap-1 rounded-r-none"
-              onClick={() => execute("current")}
+              onClick={() => void execute("current")}
               disabled={loading || !runnable}
             >
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
@@ -498,7 +582,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
                 <DropdownMenuItem
                   className="text-xs justify-between gap-4"
                   disabled={!runnable}
-                  onSelect={() => execute("current")}
+                  onSelect={() => void execute("current")}
                 >
                   {hasSelection ? t("query.executeSelection") : t("query.executeCurrent")}
                   <span className="text-muted-foreground">{formatModKey("Enter")}</span>
@@ -506,7 +590,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
                 <DropdownMenuItem
                   className="text-xs justify-between gap-4"
                   disabled={isEmpty}
-                  onSelect={() => execute("all")}
+                  onSelect={() => void execute("all")}
                 >
                   {t("query.executeAll")}
                   <span className="text-muted-foreground">{formatModKey("Enter", { shift: true })}</span>

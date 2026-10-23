@@ -6,6 +6,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../wailsjs/go/query/Query";
 import { isMac } from "@/stores/shortcutStore";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", async () => ({
   CodeEditor: (await import("../components/query/__tests__/FakeCodeEditor")).FakeCodeEditor,
@@ -72,6 +73,7 @@ const resultEditor = () =>
 describe("SqlEditorTab result views", () => {
   beforeEach(() => {
     vi.mocked(ExecuteSQLPaged).mockReset();
+    provideDrivers(BUILTIN_DRIVERS);
     setupStores();
   });
 

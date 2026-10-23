@@ -2753,6 +2753,7 @@
     "deleteElementDesc": "Are you sure you want to delete \"{{name}}\"? This cannot be undone.",
     "dangerousSqlTitle": "Dangerous SQL Statement",
     "dangerousSqlDesc": "This statement contains a destructive operation (DELETE/DROP/TRUNCATE/ALTER). Are you sure you want to execute it?",
+    "statementSplitFailed": "Couldn't work out which statements to run",
     "dropTable": "Drop Table",
     "truncateTable": "Truncate Table",
     "dropTableConfirmTitle": "Confirm drop",

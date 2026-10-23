@@ -2753,6 +2753,7 @@
     "deleteElementDesc": "确定要删除 \"{{name}}\" 吗？此操作不可撤销。",
     "dangerousSqlTitle": "危险 SQL 语句",
     "dangerousSqlDesc": "该语句包含破坏性操作（DELETE/DROP/TRUNCATE/ALTER），确定要执行吗？",
+    "statementSplitFailed": "没能确定要执行的语句",
     "dropTable": "删除表",
     "truncateTable": "清空表",
     "dropTableConfirmTitle": "确认删除表？",
