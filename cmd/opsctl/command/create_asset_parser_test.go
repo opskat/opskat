@@ -45,6 +45,29 @@ func TestParseAssetCreateDriverOptionsPlaintextWarning(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
+// Kerberos 口令与资产口令一样是明文：出现在 --config / --config-file 里计入告警，值不回显；
+// 主体、KDC 等非机密键不算。
+func TestParseAssetCreateKerberosPasswordPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretConfig := `{"driver":"fakedb","host":"h","auth_method":"kerberos","krb_principal":"a@B","krb_password":"krb-top-secret"}`
+	plainConfig := `{"driver":"fakedb","host":"h","auth_method":"kerberos","krb_principal":"a@B","krb_kdc":"kdc","krb_keytab_file":"/k.keytab"}`
+
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", secretConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "krb-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config-file", "a.json"}, nil,
+		map[string][]byte{"a.json": []byte(secretConfig)})
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+	assert.NotContains(t, stderr, "krb-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", plainConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
+
 // TLS 私钥内容与口令一样是明文：出现在 --config / --config-file 里计入告警，值不回显；
 // 其余证书字段（服务器名、CA 内容）不算。
 func TestParseAssetCreateTLSKeyContentPlaintextWarning(t *testing.T) {

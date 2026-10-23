@@ -54,6 +54,26 @@ func tlsApprovalArgs() []string {
 	return out
 }
 
+// Kerberos 字段组的键（数据库资产，按驱动是否声明 dbdriver.FieldKerberos 适用）。
+// krb_password 是密文字段，write-only：不进审批视图，查看资产时只显示 krb_password_set。
+const (
+	argAuthMethod    = "auth_method"
+	argKrbPrincipal  = "krb_principal"
+	argKrbPassword   = "krb_password"
+	argKrbKeytabFile = "krb_keytab_file"
+	argKrbKDC        = "krb_kdc"
+	argKrbSPN        = "krb_spn"
+)
+
+// kerberosConfigArgs 返回 Kerberos 字段组接受的全部键；kerberosApprovalArgs 是其中可进审批视图的部分。
+func kerberosConfigArgs() []string {
+	return []string{argAuthMethod, argKrbPrincipal, argKrbPassword, argKrbKeytabFile, argKrbKDC, argKrbSPN}
+}
+
+func kerberosApprovalArgs() []string {
+	return []string{argAuthMethod, argKrbPrincipal, argKrbKeytabFile, argKrbKDC, argKrbSPN}
+}
+
 // withFields 返回 base 追加 extra 后的新切片，不改 base。
 func withFields(base []string, extra ...string) []string {
 	return append(append([]string(nil), base...), extra...)

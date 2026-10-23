@@ -318,3 +318,29 @@ func TestToSafeViewCertificateFields(t *testing.T) {
 	assert.Equal(t, "/etc/k.pem", got["tls_key_file"])
 	assert.NotContains(t, got, "tls_key_pem_set")
 }
+
+// 声明了 Kerberos 字段组的驱动：get_asset 展示认证方式、主体、KDC，口令只显示为已设置。
+func TestToSafeViewKerberosFields(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{dbdriver.FieldKerberos}})
+	dbdrivertest.Register(t, fake)
+	asset := &asset_entity.Asset{ID: 9, Name: "krb", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1,
+		AuthMethod: asset_entity.AuthMethodKerberos, KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENCRYPTED-KRB",
+		KrbKeytabFile: "/etc/svc.keytab", KrbKDC: "kdc.example.com", KrbSPN: "oracle/db",
+	}))
+
+	data, err := json.Marshal(toSafeView(asset))
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "kerberos", got["auth_method"])
+	assert.Equal(t, "svc@EXAMPLE.COM", got["krb_principal"])
+	assert.Equal(t, "/etc/svc.keytab", got["krb_keytab_file"])
+	assert.Equal(t, "kdc.example.com", got["krb_kdc"])
+	assert.Equal(t, "oracle/db", got["krb_spn"])
+	assert.Equal(t, true, got["krb_password_set"])
+	assert.NotContains(t, string(data), "ENCRYPTED-KRB")
+}

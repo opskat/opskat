@@ -71,6 +71,9 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	if drv.Descriptor().UsesField(dbdriver.FieldTLSCert) {
 		maps.Copy(view, certificateView(cfg))
 	}
+	if drv.Descriptor().UsesField(dbdriver.FieldKerberos) {
+		maps.Copy(view, kerberosView(cfg))
+	}
 	if len(cfg.DriverOptions) > 0 {
 		values, secretsSet := viewDriverOptions(drv.Descriptor(), cfg.DriverOptions)
 		view[argDriverOptions] = values
@@ -102,14 +105,32 @@ func certificateView(cfg *asset_entity.DatabaseConfig) map[string]any {
 	return view
 }
 
-// rejectUndeclaredCertificateArgs 拒绝给没有声明证书字段组的驱动带 TLS 键（含 tls 开关）：
-// 键在数据库契约里是固定的，是否适用由驱动的描述决定，错误点名被拒的键。
-func rejectUndeclaredCertificateArgs(d dbdriver.Driver, args map[string]any) error {
-	if d.Descriptor().UsesField(dbdriver.FieldTLSCert) {
+// kerberosView 是 Kerberos 字段组的安全视图：认证方式、主体、keytab 路径、KDC 与服务主体照常给出；
+// 口令是密文，只报告是否已设置。
+func kerberosView(cfg *asset_entity.DatabaseConfig) map[string]any {
+	view := map[string]any{}
+	for key, value := range map[string]string{
+		argAuthMethod: cfg.AuthMethod, argKrbPrincipal: cfg.KrbPrincipal, argKrbKeytabFile: cfg.KrbKeytabFile,
+		argKrbKDC: cfg.KrbKDC, argKrbSPN: cfg.KrbSPN,
+	} {
+		if value != "" {
+			view[key] = value
+		}
+	}
+	if cfg.KrbPassword != "" {
+		view[argKrbPassword+"_set"] = true
+	}
+	return view
+}
+
+// rejectUndeclaredGroupArgs 拒绝给没有声明某字段组的驱动带该组的键：键在数据库契约里是固定的，
+// 是否适用由驱动的描述决定，错误点名被拒的键。
+func rejectUndeclaredGroupArgs(d dbdriver.Driver, args map[string]any, group dbdriver.FormField, keys []string, what string) error {
+	if d.Descriptor().UsesField(group) {
 		return nil
 	}
 	var given []string
-	for _, key := range tlsConfigArgs() {
+	for _, key := range keys {
 		if _, ok := args[key]; ok {
 			given = append(given, key)
 		}
@@ -117,7 +138,57 @@ func rejectUndeclaredCertificateArgs(d dbdriver.Driver, args map[string]any) err
 	if len(given) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s is not applicable to %s: the driver does not declare certificate fields", strings.Join(given, ", "), d.Descriptor().Name)
+	return fmt.Errorf("%s is not applicable to %s: the driver does not declare %s", strings.Join(given, ", "), d.Descriptor().Name, what)
+}
+
+// rejectUndeclaredCertificateArgs 拒绝给没有声明证书字段组的驱动带 TLS 键（含 tls 开关）。
+func rejectUndeclaredCertificateArgs(d dbdriver.Driver, args map[string]any) error {
+	return rejectUndeclaredGroupArgs(d, args, dbdriver.FieldTLSCert, tlsConfigArgs(), "certificate fields")
+}
+
+// rejectUndeclaredKerberosArgs 拒绝给没有声明 Kerberos 字段组的驱动带 auth_method / krb_* 键。
+func rejectUndeclaredKerberosArgs(d dbdriver.Driver, args map[string]any) error {
+	return rejectUndeclaredGroupArgs(d, args, dbdriver.FieldKerberos, kerberosConfigArgs(), "Kerberos fields")
+}
+
+// validateAuthMethodArg 校验 auth_method 的取值：空（口令）或 kerberos。
+func validateAuthMethodArg(args map[string]any) error {
+	method := ArgString(args, argAuthMethod)
+	if method != "" && method != asset_entity.AuthMethodKerberos {
+		return fmt.Errorf("%s must be %q or empty (password), got %q", argAuthMethod, asset_entity.AuthMethodKerberos, method)
+	}
+	return nil
+}
+
+// applyKerberosArgs 把请求里出现的 Kerberos 字段写进 cfg；口令加密落库。
+func applyKerberosArgs(cfg *asset_entity.DatabaseConfig, args map[string]any) error {
+	if err := validateAuthMethodArg(args); err != nil {
+		return err
+	}
+	if _, ok := args[argAuthMethod]; ok {
+		cfg.AuthMethod = ArgString(args, argAuthMethod)
+	}
+	for key, dst := range map[string]*string{
+		argKrbPrincipal: &cfg.KrbPrincipal, argKrbKeytabFile: &cfg.KrbKeytabFile,
+		argKrbKDC: &cfg.KrbKDC, argKrbSPN: &cfg.KrbSPN,
+	} {
+		if _, ok := args[key]; ok {
+			*dst = ArgString(args, key)
+		}
+	}
+	if _, ok := args[argKrbPassword]; ok {
+		password := ArgString(args, argKrbPassword)
+		if password == "" {
+			cfg.KrbPassword = ""
+			return nil
+		}
+		encrypted, err := credential_svc.Default().Encrypt(password)
+		if err != nil {
+			return fmt.Errorf("encrypt %s: %w", argKrbPassword, err)
+		}
+		cfg.KrbPassword = encrypted
+	}
+	return nil
 }
 
 // applyCertificateArgs 把请求里出现的证书字段写进 cfg；私钥内容加密落库。
@@ -154,6 +225,9 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 	if err := h.checkUpdateCertificateArgs(a, args); err != nil {
 		return nil, err
 	}
+	if err := h.checkUpdateKerberosArgs(a, args); err != nil {
+		return nil, err
+	}
 	if err := h.checkUpdateDriverOptions(a, args); err != nil {
 		return nil, err
 	}
@@ -176,7 +250,16 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 
 // checkUpdateCertificateArgs 在审批前按更新后的驱动（入参指定的，否则资产现有的）判断 TLS 键是否适用。
 func (h *databaseHandler) checkUpdateCertificateArgs(a *asset_entity.Asset, args map[string]any) error {
-	if !slices.ContainsFunc(tlsConfigArgs(), func(key string) bool { _, ok := args[key]; return ok }) {
+	return h.checkUpdateGroupArgs(a, args, tlsConfigArgs(), rejectUndeclaredCertificateArgs)
+}
+
+// checkUpdateKerberosArgs 同上，判断 auth_method / krb_* 键是否适用。
+func (h *databaseHandler) checkUpdateKerberosArgs(a *asset_entity.Asset, args map[string]any) error {
+	return h.checkUpdateGroupArgs(a, args, kerberosConfigArgs(), rejectUndeclaredKerberosArgs)
+}
+
+func (h *databaseHandler) checkUpdateGroupArgs(a *asset_entity.Asset, args map[string]any, keys []string, reject func(dbdriver.Driver, map[string]any) error) error {
+	if !slices.ContainsFunc(keys, func(key string) bool { _, ok := args[key]; return ok }) {
 		return nil
 	}
 	cfg, err := a.GetDatabaseConfig()
@@ -191,7 +274,7 @@ func (h *databaseHandler) checkUpdateCertificateArgs(a *asset_entity.Asset, args
 	if err != nil {
 		return err
 	}
-	return rejectUndeclaredCertificateArgs(drv, args)
+	return reject(drv, args)
 }
 
 // checkUpdateDriverOptions 在审批前按驱动的声明校验更新后的 driver_options：入参叠加到已存取值上
@@ -245,6 +328,12 @@ func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
 	if err := rejectUndeclaredCertificateArgs(drv, args); err != nil {
 		return err
 	}
+	if err := rejectUndeclaredKerberosArgs(drv, args); err != nil {
+		return err
+	}
+	if err := validateAuthMethodArg(args); err != nil {
+		return err
+	}
 	if err := drv.ValidateCreateArgs(driverArgs(args)); err != nil {
 		return err
 	}
@@ -269,6 +358,9 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 	drv.ApplyCreateArgs(driverCfg, driverArgs(args))
 	cfg.SetDriverConfig(driverCfg)
 	if err := applyCertificateArgs(cfg, args); err != nil {
+		return err
+	}
+	if err := applyKerberosArgs(cfg, args); err != nil {
 		return err
 	}
 	opts, err := validateCreateDriverOptions(drv.Descriptor(), args)
@@ -331,6 +423,11 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	cfg.SetDriverConfig(driverCfg)
 	if drv.Descriptor().UsesField(dbdriver.FieldTLSCert) {
 		if err := applyCertificateArgs(cfg, args); err != nil {
+			return err
+		}
+	}
+	if drv.Descriptor().UsesField(dbdriver.FieldKerberos) {
+		if err := applyKerberosArgs(cfg, args); err != nil {
 			return err
 		}
 	}
