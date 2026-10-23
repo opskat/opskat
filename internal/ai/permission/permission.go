@@ -115,9 +115,11 @@ func checkDatabasePermission(ctx context.Context, assetID int64, sqlText string)
 	// 先解析一次 SQL，再把每条语句单独送入组通用/类型策略与 Grant 匹配。
 	// 整串传入会被 `SELECT *` 一类的组规则一次性放行，让 `SELECT 1; UPDATE users ...`
 	// 把后续高危语句藏进分号后绕过；`UPDATE *` 类 deny 同样命中不到尾部语句。
-	stmts, err := policy.ClassifyStatements(sqlText)
+	// 资产的驱动声明了语句切分分类时，由驱动给出每条语句（见 policy.ClassifyForAsset）。
+	asset := resolveAssetForPolicy(ctx, assetID)
+	stmts, err := policy.ClassifyForAsset(ctx, asset, sqlText)
 	if err != nil {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyFmt(ctx, "SQL parse failed, execution denied: %v", "SQL 解析失败，拒绝执行: %v", err)}
+		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.ClassifyDenyMessage(ctx, err)}
 	}
 
 	stmtTexts := policy.StmtRawTexts(stmts)
@@ -130,7 +132,6 @@ func checkDatabasePermission(ctx context.Context, assetID int64, sqlText string)
 		return groupResult
 	}
 
-	asset := resolveAssetForPolicy(ctx, assetID)
 	mergedPolicy := collectQueryPolicies(ctx, asset)
 	result := policy.CheckQueryPolicy(ctx, mergedPolicy, stmts)
 

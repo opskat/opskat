@@ -23,7 +23,9 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 - Reads (`SELECT` / `SHOW` / `DESCRIBE` / `EXPLAIN`) return rows as JSON;
   writes return an affected-row count.
 - Multi-statement input is split and each statement is policy-checked
-  separately, so a read cannot smuggle a write past approval.
+  separately, so a read cannot smuggle a write past approval. Drivers may
+  report their own statement types (e.g. `MERGE`); a type missing from the
+  allow list needs confirmation unless the list contains `*`.
 - Credentials are resolved automatically; never ask the user for a password.
 
 ## Asset config (for put_asset)
