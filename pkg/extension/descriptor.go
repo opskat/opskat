@@ -166,6 +166,10 @@ func (d *Descriptor) validateDatabaseDrivers() error {
 // it requires DatabaseExtrasMinHostABI. A driver that declares the Kerberos field
 // group (dbdriver.FieldKerberos) asks the host for tickets, which the user audits
 // as capabilities.databaseKerberos (itself hostABI DatabaseKerberosMinHostABI).
+// A driver that declares statement splitting and classification
+// (dbdriver.CapClassifyStatements) is asked to split SQL the host would otherwise
+// parse itself, which an older host would silently not do, so it requires
+// DatabaseKerberosMinHostABI too (the ABI that added both).
 // The error names the offending driver; the caller adds the extension.
 func (m *Manifest) checkDatabaseDrivers() error {
 	described := make(map[string]struct{}, len(m.DatabaseDrivers))
@@ -182,6 +186,10 @@ func (m *Manifest) checkDatabaseDrivers() error {
 		if drv.UsesField(dbdriver.FieldKerberos) && !m.Capabilities.DatabaseKerberos {
 			return fmt.Errorf("database driver %q declares the Kerberos field group (form field %q), which requires manifest capabilities.databaseKerberos on hostABI %s or newer (got hostABI %s without it)",
 				id, dbdriver.FieldKerberos, DatabaseKerberosMinHostABI, m.HostABI)
+		}
+		if drv.Supports(dbdriver.CapClassifyStatements) && !hostABIAtLeast(m.HostABI, DatabaseKerberosMinHostABI) {
+			return fmt.Errorf("database driver %q declares statement splitting and classification (capability %q), which requires hostABI %s or newer (got %s)",
+				id, dbdriver.CapClassifyStatements, DatabaseKerberosMinHostABI, m.HostABI)
 		}
 	}
 	for _, id := range m.Capabilities.DatabaseDrivers {

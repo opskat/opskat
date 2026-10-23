@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -424,4 +425,98 @@ func TestRemovingADriverClosesItsSessionsSideBySide(t *testing.T) {
 	}
 	close(release)
 	<-removed
+}
+
+// splittingDescriptor is a driver that declares statement splitting.
+func splittingDescriptor(id string) dbdriver.Descriptor {
+	desc := driverDescriptor(id)
+	desc.Capabilities = []dbdriver.Capability{dbdriver.CapClassifyStatements}
+	return desc
+}
+
+// A registry driver of an extension splits SQL through the plugin — no session is
+// opened — and its answer is checked like any driver's.
+func TestExtensionDriverClassifiesStatementsThroughThePlugin(t *testing.T) {
+	p := newFakeDriverPlugin()
+	var asked []string
+	answer := []dbdriver.Statement{{Start: 0, End: 8, Text: "SELECT 1", Type: "SELECT"}}
+	p.classify = func(_ context.Context, id, sql string) ([]dbdriver.Statement, error) {
+		asked = append(asked, id+": "+sql)
+		return answer, nil
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("split-db", splittingDescriptor("splitdb")), p))
+	d, err := dbregistry.Lookup("splitdb")
+	require.NoError(t, err)
+
+	got, err := dbdriver.ClassifyStatements(context.Background(), d, "SELECT 1")
+	require.NoError(t, err)
+	assert.Equal(t, answer, got)
+	assert.Equal(t, []string{"splitdb: SELECT 1"}, asked)
+	ids, _, _ := p.opened()
+	assert.Empty(t, ids, "splitting opens no session")
+
+	answer = []dbdriver.Statement{{Start: 0, End: 8, Text: "SELECT 1", Type: "select"}}
+	_, err = dbdriver.ClassifyStatements(context.Background(), d, "SELECT 1")
+	require.ErrorIs(t, err, dbdriver.ErrCannotSplit)
+	assert.Contains(t, err.Error(), `"splitdb"`)
+	assert.Contains(t, err.Error(), "not uppercase")
+}
+
+// Once its extension is disabled or uninstalled, a driver someone still holds
+// reports itself unavailable instead of asking an extension that is gone; so does
+// a split in flight when it goes.
+func TestRemovedExtensionDriverCannotClassify(t *testing.T) {
+	p := newFakeDriverPlugin()
+	var calls atomic.Int32
+	started := make(chan struct{})
+	p.classify = func(ctx context.Context, _, sql string) ([]dbdriver.Statement, error) {
+		calls.Add(1)
+		if sql == "SLOW" {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("split-db", splittingDescriptor("splitdb")), p))
+	d, err := dbregistry.Lookup("splitdb")
+	require.NoError(t, err)
+
+	inFlight := make(chan error, 1)
+	go func() {
+		_, err := dbdriver.ClassifyStatements(context.Background(), d, "SLOW")
+		inFlight <- err
+	}()
+	select {
+	case <-started:
+	case err := <-inFlight:
+		t.Fatalf("the split ended before it reached the extension: %v", err)
+	}
+
+	Unregister("split-db")
+
+	select {
+	case err := <-inFlight:
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+		assert.Contains(t, err.Error(), `"splitdb"`)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a split in flight when the driver went away did not end")
+	}
+	_, err = dbdriver.ClassifyStatements(context.Background(), d, "SELECT 1")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+	assert.Contains(t, err.Error(), `"splitdb"`)
+	assert.EqualValues(t, 1, calls.Load(), "a removed driver does not ask its extension")
+}
+
+// A driver only described in this process (its extension not loaded) cannot split.
+func TestDescribeOnlyDriverCannotClassify(t *testing.T) {
+	m := driverOnlyManifest("describe-only-split", splittingDescriptor("describesplit"))
+	require.NoError(t, RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
+	t.Cleanup(func() { Unregister(m.Name) })
+	d, err := dbregistry.Lookup("describesplit")
+	require.NoError(t, err)
+
+	_, err = dbdriver.ClassifyStatements(context.Background(), d, "SELECT 1")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+	assert.Contains(t, err.Error(), `"describesplit"`)
 }

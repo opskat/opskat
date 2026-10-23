@@ -1,6 +1,7 @@
 // Package driverwire is the JSON a host and an extension exchange to run a
 // database driver the extension provides: the host side is
-// pkg/extension.(*Plugin).OpenDriverSession, the guest side the SDK's
+// pkg/extension.(*Plugin).OpenDriverSession (and ClassifyStatements, which
+// needs no session), the guest side the SDK's
 // DatabaseDriver (pkg/extsdk). Every call is the guest function Function with a
 // Call as input, answered by a Reply.
 //
@@ -57,13 +58,18 @@ const (
 	// OpRowStatements generates statements with a prepared writer. A writer
 	// outlives the session it was prepared on: it no longer touches the database.
 	OpRowStatements = "rowStatements"
+
+	// OpClassifyStatements splits and classifies Args.Statement with driver
+	// Args.Driver (dbdriver.StatementClassifier), answering []dbdriver.Statement.
+	// It runs on no session: the driver does not touch the database to answer.
+	OpClassifyStatements = "classifyStatements"
 )
 
 // Call is the input of Function.
 type Call struct {
 	Op string `json:"op"`
-	// Session is the session the operation runs on (every operation but OpOpen
-	// and the cursor / writer ones).
+	// Session is the session the operation runs on (every operation but OpOpen,
+	// OpClassifyStatements and the cursor / writer ones).
 	Session uint64 `json:"session,omitempty"`
 	Args    Args   `json:"args"`
 	// ReleaseWriters are row statement writers of this instance the host no longer
@@ -91,6 +97,8 @@ type Args struct {
 	TLS           *dbdriver.TLSMaterial `json:"tls,omitempty"`
 	Kerberos      bool                  `json:"kerberos,omitempty"`
 
+	// Statement is the SQL of OpExecute / OpExecutePaged; with Driver, the SQL
+	// text OpClassifyStatements splits.
 	Statement   string                `json:"statement,omitempty"`
 	Page        dbdriver.Page         `json:"page"`
 	Database    string                `json:"database,omitempty"`

@@ -300,3 +300,63 @@ func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
 		assert.Contains(t, msg, "connection refused")
 	})
 }
+
+// classifyingDriver is the registry's view of the fixture driver for splitting:
+// its descriptor, and a classifier that asks the extension.
+type classifyingDriver struct {
+	dbdriver.Driver // only Descriptor and ClassifyStatements are called
+	desc            dbdriver.Descriptor
+	plugin          *extension.Plugin
+}
+
+func (d classifyingDriver) Descriptor() dbdriver.Descriptor { return d.desc }
+
+func (d classifyingDriver) ClassifyStatements(ctx context.Context, sql string) ([]dbdriver.Statement, error) {
+	return d.plugin.ClassifyStatements(ctx, string(d.desc.ID), sql)
+}
+
+func TestDriverClassifiesStatementsWithoutASession(t *testing.T) {
+	ext := loadDriverFixture(t, &hostSpy{}, nil)
+	desc := ext.Manifest.DatabaseDrivers[0]
+	require.True(t, desc.Supports(dbdriver.CapClassifyStatements), "the fixture declares splitting")
+	drv := classifyingDriver{desc: desc, plugin: ext.Plugin}
+	ctx := context.Background()
+
+	t.Run("the driver's statements come back with positions, text, type and danger", func(t *testing.T) {
+		const sql = "SELECT 'a;b' FROM t;\n  delete from t;CALL p()"
+		got, err := dbdriver.ClassifyStatements(ctx, drv, sql)
+		require.NoError(t, err)
+		assert.Equal(t, []dbdriver.Statement{
+			{Start: 0, End: 19, Text: "SELECT 'a;b' FROM t", Type: "SELECT"},
+			{Start: 23, End: 36, Text: "delete from t", Type: "DELETE", Dangerous: true, Reason: dbdriver.ReasonNoWhereDelete},
+			{Start: 37, End: 45, Text: "CALL p()", Type: "CALL", Dangerous: true, Reason: dbdriver.ReasonCall},
+		}, got)
+	})
+
+	t.Run("text the driver cannot split fails with the driver's reason", func(t *testing.T) {
+		_, err := dbdriver.ClassifyStatements(ctx, drv, "SELECT 1; SELECT 'x")
+		require.ErrorIs(t, err, dbdriver.ErrCannotSplit)
+		assert.Contains(t, err.Error(), `"fixturedb"`)
+		assert.Contains(t, err.Error(), "unterminated string literal at byte 17")
+	})
+
+	t.Run("output violating the contract fails naming the driver and the constraint", func(t *testing.T) {
+		for sql, want := range map[string]string{
+			"VIOLATE lowercase":         `type "violate" is not uppercase`,
+			"VIOLATE reason":            `reason "risky"`,
+			"VIOLATE range":             "inside the 13-byte input",
+			"SELECT 1; VIOLATE overlap": "must not overlap",
+		} {
+			_, err := dbdriver.ClassifyStatements(ctx, drv, sql)
+			require.ErrorIs(t, err, dbdriver.ErrCannotSplit, sql)
+			assert.Contains(t, err.Error(), `"fixturedb"`, sql)
+			assert.Contains(t, err.Error(), want, sql)
+		}
+	})
+
+	t.Run("a driver the extension does not provide is refused", func(t *testing.T) {
+		_, err := ext.Plugin.ClassifyStatements(ctx, "otherdb", "SELECT 1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"otherdb"`)
+	})
+}

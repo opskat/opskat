@@ -42,9 +42,28 @@ import (
 // credentials never reach the extension.
 type DriverOpen func(ctx context.Context, req dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error)
 
+// StatementClassifier splits a SQL text into statements and classifies each,
+// without touching the database (dbdriver.StatementClassifier): the host asks it
+// for the SQL the AI or opsctl runs on an asset of the driver and for the query
+// panel's current statement, outside any session. The host checks what it
+// answers (dbdriver.Statement documents the rules) and treats an answer breaking
+// them, like an error, as text the driver cannot split.
+type StatementClassifier func(ctx context.Context, sql string) ([]dbdriver.Statement, error)
+
+// DriverOption is an optional part of a database driver.
+type DriverOption func(*driverEntry)
+
+// WithStatementClassifier gives the driver its own statement splitting and
+// classification. The descriptor must declare dbdriver.CapClassifyStatements
+// (hostABI 2.5), and a descriptor that declares it must come with this option.
+func WithStatementClassifier(classify StatementClassifier) DriverOption {
+	return func(e *driverEntry) { e.classify = classify }
+}
+
 type driverEntry struct {
-	desc dbdriver.Descriptor
-	open DriverOpen
+	desc     dbdriver.Descriptor
+	open     DriverOpen
+	classify StatementClassifier
 }
 
 // DatabaseDriver declares a SQL database driver this extension provides: the
@@ -55,15 +74,23 @@ type driverEntry struct {
 //
 // The dialect decides which session operations exist (see sqldb.NewSession and
 // the optional dialect interfaces); declare in the descriptor exactly the
-// capabilities the dialect implements.
-func DatabaseDriver(d dbdriver.Descriptor, open DriverOpen) {
+// capabilities the dialect implements. Parts that are not session operations
+// come as options (WithStatementClassifier), each matching a capability of its own.
+func DatabaseDriver(d dbdriver.Descriptor, open DriverOpen, opts ...DriverOption) {
 	if open == nil {
 		panic(fmt.Sprintf("opskat: database driver %q has no open function", d.ID))
 	}
 	if slices.ContainsFunc(drivers, func(e *driverEntry) bool { return e.desc.ID == d.ID }) {
 		panic(fmt.Sprintf("opskat: database driver %q is already registered", d.ID))
 	}
-	drivers = append(drivers, &driverEntry{desc: d, open: open})
+	entry := &driverEntry{desc: d, open: open}
+	for _, opt := range opts {
+		opt(entry)
+	}
+	if declared := d.Supports(dbdriver.CapClassifyStatements); declared != (entry.classify != nil) {
+		panic(fmt.Sprintf("opskat: database driver %q must declare capability %q exactly when it is given WithStatementClassifier", d.ID, dbdriver.CapClassifyStatements))
+	}
+	drivers = append(drivers, entry)
 	opskat.RegisterDatabaseDriver(d, serve)
 }
 
@@ -137,6 +164,8 @@ func runDriverOp(ctx context.Context, call driverwire.Call) (any, error) {
 	switch call.Op {
 	case driverwire.OpOpen:
 		return openDriverSession(ctx, a)
+	case driverwire.OpClassifyStatements:
+		return classifyStatements(ctx, a)
 	case driverwire.OpStreamNext:
 		return streamNext(a)
 	case driverwire.OpStreamClose:
@@ -265,12 +294,31 @@ func withDriverRequest[T, R any](raw json.RawMessage, run func(T) (R, error)) (a
 	return run(req)
 }
 
-func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
-	i := slices.IndexFunc(drivers, func(e *driverEntry) bool { return e.desc.ID == a.Driver })
+// driverByID is the registered driver id names.
+func driverByID(id dbdriver.DriverID) (*driverEntry, error) {
+	i := slices.IndexFunc(drivers, func(e *driverEntry) bool { return e.desc.ID == id })
 	if i < 0 {
-		return nil, fmt.Errorf("this extension provides no database driver %q", a.Driver)
+		return nil, fmt.Errorf("this extension provides no database driver %q", id)
 	}
-	drv := drivers[i]
+	return drivers[i], nil
+}
+
+func classifyStatements(ctx context.Context, a driverwire.Args) (any, error) {
+	drv, err := driverByID(a.Driver)
+	if err != nil {
+		return nil, err
+	}
+	if drv.classify == nil {
+		return nil, fmt.Errorf("%w: %s does not split and classify statements", dbdriver.ErrUnsupported, a.Driver)
+	}
+	return drv.classify(ctx, a.Statement)
+}
+
+func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
+	drv, err := driverByID(a.Driver)
+	if err != nil {
+		return nil, err
+	}
 	if a.Config == nil {
 		return nil, fmt.Errorf("open %s: no connection config", a.Driver)
 	}

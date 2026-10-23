@@ -71,6 +71,8 @@ type fakePlugin struct {
 
 	// openDriver answers OpenDriverSession; nil means the extension provides no driver.
 	openDriver func(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
+	// classify answers ClassifyStatements; nil means no driver of the extension splits SQL.
+	classify func(ctx context.Context, id, sql string) ([]dbdriver.Statement, error)
 }
 
 func (p *fakePlugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
@@ -78,6 +80,13 @@ func (p *fakePlugin) OpenDriverSession(ctx context.Context, id string, req dbdri
 		return nil, fmt.Errorf("fake plugin provides no database driver %q", id)
 	}
 	return p.openDriver(ctx, id, req)
+}
+
+func (p *fakePlugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	if p.classify == nil {
+		return nil, fmt.Errorf("fake plugin provides no database driver %q that splits SQL", id)
+	}
+	return p.classify(ctx, id, sql)
 }
 
 func (p *fakePlugin) TestConnection(_ context.Context, assetType string, adhoc *extension.AdHocAssetConfig) error {

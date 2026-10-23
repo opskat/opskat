@@ -165,11 +165,19 @@ func registerDescribeOnlyLocked(info *extension.ManifestInfo, help string) ([]*e
 }
 
 // notLoadedOpener 是仅描述注册里驱动背后的"插件"：驱动的描述与专属字段已可用，但这个进程没有
-// 加载扩展，打开会话报驱动不可用。需要执行的调用方先激活扩展（Unregister + 完整 Register）。
+// 加载扩展，打开会话与切分语句都报驱动不可用。需要执行的调用方先激活扩展（Unregister + 完整 Register）。
 type notLoadedOpener struct{ ext string }
 
 func (o notLoadedOpener) OpenDriverSession(_ context.Context, id string, _ dbdriver.OpenRequest) (dbdriver.Session, error) {
-	return nil, fmt.Errorf("%w: %q (its extension %q is not loaded in this process)", dbregistry.ErrDriverUnavailable, id, o.ext)
+	return nil, o.unavailable(id)
+}
+
+func (o notLoadedOpener) ClassifyStatements(_ context.Context, id, _ string) ([]dbdriver.Statement, error) {
+	return nil, o.unavailable(id)
+}
+
+func (o notLoadedOpener) unavailable(id string) error {
+	return fmt.Errorf("%w: %q (its extension %q is not loaded in this process)", dbregistry.ErrDriverUnavailable, id, o.ext)
 }
 
 func registerDescribeOnlyType(extName string, m *extension.Manifest, at extension.AssetTypeDef, help string) error {

@@ -384,6 +384,10 @@ const (
 	CapCopySQL       Capability = "copy_sql"
 	// CapReadOnly：连接级只读。
 	CapReadOnly Capability = "read_only"
+	// CapClassifyStatements：驱动自己切分并分类 SQL（StatementClassifier，经 ClassifyStatements
+	// 取用），AI / opsctl 的权限判断与查询面板按它的结果，而不是宿主通用的 SQL 解析。扩展驱动
+	// 声明它要求扩展的 hostABI 2.5 及以上。
+	CapClassifyStatements Capability = "classify_statements"
 )
 
 // Capabilities 是全部已知的功能。
@@ -392,7 +396,7 @@ func Capabilities() []Capability {
 		CapSchemas, CapCreateDatabase, CapViewDDL,
 		CapViews, CapProcedures, CapFunctions, CapTriggers,
 		CapGridEdit, CapCreateTable, CapAlterTable, CapDropTable, CapTruncateTable,
-		CapImport, CapExportSQL, CapCopySQL, CapReadOnly,
+		CapImport, CapExportSQL, CapCopySQL, CapReadOnly, CapClassifyStatements,
 	}
 }
 

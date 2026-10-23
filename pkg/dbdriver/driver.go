@@ -4,7 +4,8 @@
 //
 // 驱动的实现分三部分：描述、资产配置规则（ConfigRules）、建立会话（Connector）。连接归
 // 驱动所有，共享代码只拿到一条 Session，经它执行并取回结构化结果（见 session.go）。
-// database/sql 之上的驱动用子包 sqldb 组装会话。
+// database/sql 之上的驱动用子包 sqldb 组装会话。声明了 CapClassifyStatements 的驱动另外
+// 实现 StatementClassifier，自己切分并分类 SQL（见 statement.go）。
 //
 // 本包与 sqldb 只依赖标准库与公开的第三方库，不依赖任何 internal/ 包，并且能编译到
 // GOOS=wasip1：扩展与宿主共用这份契约。驱动看到的资产配置是本包的 Config，与资产实体

@@ -58,7 +58,8 @@ instead. Declare `2.3` to provide a database driver (see
 [Providing a database driver](#providing-a-database-driver)). Declare `2.4` for
 `network.databaseRedirects` or the certificate field group: an older app would ignore
 them, so it must refuse the extension instead. Declare `2.5` for
-`capabilities.databaseKerberos`, for the same reason.
+`capabilities.databaseKerberos` or a driver that splits and classifies statements
+(`dbdriver.CapClassifyStatements`), for the same reason.
 
 `capabilities` defaults to deny-all, and the notebook needs nothing: the host KV, the
 asset config and logging are available without a grant. Declare only what you use:
@@ -585,6 +586,21 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   password. The first ticket for each service principal in a session is logged
   (extension, driver, asset, principal, service principal), never a credential or a
   ticket. In tests, `opskat.WithKerberosTickets` gives a `TestHost` a ticket source.
+- **The driver can split and classify SQL itself.** Declare
+  `dbdriver.CapClassifyStatements` (needs `hostABI` `2.5`; otherwise the extension is
+  refused at load, naming the driver) and pass
+  `sdkdbdriver.WithStatementClassifier(classify)` to `DatabaseDriver` — one without the
+  other panics at init. `classify(ctx, sql)` returns each statement of the text as a
+  `dbdriver.Statement`: byte offsets `Start` / `End` into the input, `Text`, an
+  uppercase `Type`, and `Dangerous` with a `Reason` from `dbdriver.DangerReasons()`. It
+  must not touch the database: the host calls it outside any session. The AI / opsctl
+  permission check and the query panel then go by these statements instead of the
+  host's own SQL parsing. Use the host's type names (`SELECT`, `UPDATE`, `DROP TABLE`,
+  ...) only for the same kind of statement and a name of your own (`MERGE`, a PL/SQL
+  block) otherwise. The host checks the answer — offsets inside the input, in order and
+  not overlapping, type uppercase, a known reason only on a dangerous statement — and
+  treats one breaking a rule, like an error `classify` returns for text it cannot split,
+  as SQL it cannot split, naming the driver and the reason.
 - **The form is a network database's.** An extension driver is checked by the host's
   network rules (host, port and username required), so its `Form` must declare
   `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields

@@ -22,9 +22,11 @@ import (
 // 点名该驱动的 dbregistry.ErrDriverUnavailable，而不是扩展实例关闭后各种各样的报错。重新
 // 启用注册的是新的 extensionDriver，与作废的会话无关。
 
-// driverOpener 是扩展驱动用到的插件能力（*extension.Plugin 满足它）。
+// driverOpener 是扩展驱动用到的插件能力（*extension.Plugin 满足它）：打开会话，以及不经会话
+// 的语句切分分类。
 type driverOpener interface {
 	OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
+	ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error)
 }
 
 // driverOwner 记录每个已注册的扩展驱动 id 归哪个扩展，撞名时据此点名占用者。调用方持有 mu。
@@ -100,6 +102,25 @@ func (d *extensionDriver) Open(ctx context.Context, req dbdriver.OpenRequest) (d
 		return nil, gone
 	}
 	return s, nil
+}
+
+// ClassifyStatements 让扩展切分并分类 sql（dbdriver.StatementClassifier），不打开会话。共享代码
+// 经 dbdriver.ClassifyStatements 调它，那里先看描述是否声明了 CapClassifyStatements、事后校验
+// 输出。驱动已移除（扩展停用、升级或卸载）时，与执行中的切分一样报 unavailable()。
+func (d *extensionDriver) ClassifyStatements(ctx context.Context, sql string) ([]dbdriver.Statement, error) {
+	ctx, done := d.operation(ctx)
+	defer done()
+	if err := d.removed(); err != nil {
+		return nil, err
+	}
+	stmts, err := d.plugin.ClassifyStatements(ctx, string(d.desc.ID), sql)
+	if err != nil {
+		if gone := d.removed(); gone != nil {
+			return nil, gone
+		}
+		return nil, err
+	}
+	return stmts, nil
 }
 
 // unavailable 是驱动移除后每个操作的错误：点名驱动与提供它的扩展。

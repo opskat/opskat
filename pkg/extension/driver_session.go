@@ -96,6 +96,44 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 	return s, nil
 }
 
+// ClassifyStatements splits and classifies sql with database driver id
+// (dbdriver.StatementClassifier), which this extension must declare in
+// capabilities.databaseDrivers. No session is involved: the driver does not touch
+// the database to answer, so the call runs on a pooled instance like
+// CheckPolicy, with no asset, no reach path and the plugin's tool timeout. The
+// statements are the driver's as it answered them; dbdriver.ClassifyStatements
+// checks them. A failure the driver answers — text it cannot split — wraps
+// dbdriver.ErrCannotSplit with the driver's own reason.
+func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	if !slices.Contains(p.manifest.Capabilities.DatabaseDrivers, id) {
+		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
+	}
+	input, err := json.Marshal(driverwire.Call{Op: driverwire.OpClassifyStatements, Args: driverwire.Args{
+		Driver: dbdriver.DriverID(id), Statement: sql,
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("marshal database driver %s: %w", driverwire.OpClassifyStatements, err)
+	}
+	raw, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), driverwire.Function, input, p.opts.toolTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var reply driverwire.Reply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, fmt.Errorf("parse database driver %s reply: %w", driverwire.OpClassifyStatements, err)
+	}
+	if reply.Error != nil {
+		return nil, fmt.Errorf("%w: %w", dbdriver.ErrCannotSplit, &driverError{message: reply.Error.Message, code: reply.Error.Code})
+	}
+	var stmts []dbdriver.Statement
+	if len(reply.Result) > 0 {
+		if err := json.Unmarshal(reply.Result, &stmts); err != nil {
+			return nil, fmt.Errorf("parse database driver %s result: %w", driverwire.OpClassifyStatements, err)
+		}
+	}
+	return stmts, nil
+}
+
 // openDriverInstance creates an instance and logs it in: the driver opens its
 // session in the guest and connects, every TCP stream taking the session's
 // confined reach path and every Kerberos ticket the session's ticket gate.

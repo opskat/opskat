@@ -32,7 +32,8 @@ func main() {}
 // material (SHOW OPEN TLS answers what it got), and the Kerberos field group,
 // so a Kerberos asset's session logs in with a host ticket (SHOW OPEN AUTH and
 // SHOW KERBEROS TICKET probe it); its manifest declares the host ABI and the
-// capability both need.
+// capability both need. It splits and classifies statements itself (split.go),
+// which needs that host ABI too.
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",
@@ -48,13 +49,13 @@ var descriptor = dbdriver.Descriptor{
 	},
 	Capabilities: []dbdriver.Capability{
 		dbdriver.CapViews, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
-		dbdriver.CapTruncateTable, dbdriver.CapExportSQL,
+		dbdriver.CapTruncateTable, dbdriver.CapExportSQL, dbdriver.CapClassifyStatements,
 	},
 }
 
 func init() {
 	opskat.Extension(opskat.Meta{Icon: "database", DisplayName: "Fixture DB", Description: "Test fixture database driver"})
-	sdkdbdriver.DatabaseDriver(descriptor, open)
+	sdkdbdriver.DatabaseDriver(descriptor, open, sdkdbdriver.WithStatementClassifier(classify))
 }
 
 // open logs in through the reach path the host handed over and confirms the
