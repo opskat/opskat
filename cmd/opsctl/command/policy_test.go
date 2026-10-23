@@ -18,6 +18,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -606,11 +607,10 @@ func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
 	assert.Contains(t, env.stderrBuf.String(), "object.list")
 }
 
-// A permanent rule on a database asset is classified by the asset's driver; when an
-// extension provides that driver, opsctl (which only registers extensions describe-only
-// at boot) must activate it in this process before the rules are planned.
-func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) {
-	env := setupDriverExt(t)
+// interactivePolicyTerminal makes the policy write commands see a terminal that answers
+// "y" at the confirmation, with audit rows swallowed; it returns the confirmation output.
+func interactivePolicyTerminal(t *testing.T) *bytes.Buffer {
+	t.Helper()
 	swapGlobal(t, func() func() bool { return stdinIsTerminal }, func(f func() bool) { stdinIsTerminal = f }, func() bool { return true })
 	swapGlobal(t, func() func() bool { return stderrIsTerminal }, func(f func() bool) { stderrIsTerminal = f }, func() bool { return true })
 	var stderr bytes.Buffer
@@ -618,9 +618,39 @@ func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) 
 		func(f func() (io.Reader, io.Writer)) { policyConfirmStreams = f },
 		func() (io.Reader, io.Writer) { return strings.NewReader("y\n"), &stderr })
 	swapGlobal(t, func() audit.AuditWriter { return opsctlAuditWriter }, func(w audit.AuditWriter) { opsctlAuditWriter = w }, audit.AuditWriter(&recordingAuditWriter{}))
+	return &stderr
+}
+
+// A permanent rule on a database asset is classified by the asset's driver; when an
+// extension provides that driver, opsctl (which only registers extensions describe-only
+// at boot) must activate it in this process before the rules are planned.
+func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) {
+	env := setupDriverExt(t)
+	stderr := interactivePolicyTerminal(t)
 
 	code := cmdPolicy(context.Background(), []string{"allow", "fx-db", "--", "SELECT * FROM users"}, "sess-1")
 
 	require.Equal(t, 0, code, "stderr: %s", stderr.String())
 	assert.Equal(t, []string{extensiontest.DBDriverFixtureName}, env.activations)
+}
+
+// A driver whose extension is disabled cannot classify, so the rule is refused naming
+// the driver and the disabled extension, and nothing is written.
+func TestPolicyWriteOnDisabledExtensionDriverIsRefusedNamingIt(t *testing.T) {
+	setupDriverExt(t, &extension_state_entity.ExtensionState{Name: extensiontest.DBDriverFixtureName, Enabled: false})
+	confirm := interactivePolicyTerminal(t)
+
+	for _, verb := range []string{"allow", "deny"} {
+		var code int
+		out := captureStderr(t, func() {
+			code = cmdPolicy(context.Background(), []string{verb, "fx-db", "--", "SELECT * FROM users"}, "sess-1")
+		})
+
+		assert.Equal(t, 1, code, verb)
+		assert.Contains(t, out, "driver unavailable", verb)
+		assert.Contains(t, out, "fixturedb", verb)
+		assert.Contains(t, out, extensiontest.DBDriverFixtureName, verb)
+		assert.Contains(t, out, "disabled", verb)
+	}
+	assert.Empty(t, confirm.String(), "refused before any confirmation prompt")
 }
