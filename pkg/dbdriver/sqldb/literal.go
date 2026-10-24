@@ -23,8 +23,8 @@ type Literals struct {
 	// 写进二进制列的文本（表格里带回的值、导入里没按二进制解码的值）照字符串写（MySQL 一直这样写）。
 	BinaryBytesOnly bool
 	// Converted 报告这种列类型的文本要经函数转换才写得进去，并给出包在字符串字面量前后的写法
-	// （Oracle 带本地时区的时间戳：TO_TIMESTAMP_TZ('…', '…TZH:TZM')，否则会话的时间戳格式不认
-	// 表格显示的时区）；nil 表示方言由数据库按列的类型转换字符串。
+	// （Oracle 带时区的时间戳：TO_TIMESTAMP_TZ('…', '…TZH:TZM')，否则本地时区的列不认表格显示的
+	// 时区、没有小数秒的负时区会丢掉符号）；nil 表示方言由数据库按列的类型转换字符串。
 	Converted func(columnType string) (prefix, suffix string, ok bool)
 }
 
