@@ -159,7 +159,11 @@ func (s *Session) TableRows(ctx context.Context, database, table string, query d
 	if err != nil {
 		return nil, err
 	}
-	where, err := FilterWhere(query.Filters, s.filterSyntax(tables))
+	syntax, err := s.filterSyntax(ctx, tables, database, table, query.Filters)
+	if err != nil {
+		return nil, err
+	}
+	where, err := FilterWhere(query.Filters, syntax)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +186,11 @@ func (s *Session) StreamTableRows(ctx context.Context, database, table string, q
 	if err != nil {
 		return nil, err
 	}
-	where, err := FilterWhere(query.Filters, s.filterSyntax(tables))
+	syntax, err := s.filterSyntax(ctx, tables, database, table, query.Filters)
+	if err != nil {
+		return nil, err
+	}
+	where, err := FilterWhere(query.Filters, syntax)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +245,11 @@ func (s *Session) CountTableRows(ctx context.Context, database, table string, fi
 	if err != nil {
 		return 0, err
 	}
-	where, err := FilterWhere(filters, s.filterSyntax(tables))
+	syntax, err := s.filterSyntax(ctx, tables, database, table, filters)
+	if err != nil {
+		return 0, err
+	}
+	where, err := FilterWhere(filters, syntax)
 	if err != nil {
 		return 0, err
 	}

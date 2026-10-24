@@ -303,3 +303,94 @@ func TestQueryTableColumnsReadsAutoIncrementFlags(t *testing.T) {
 		"mssql": {true, true}, "null": {false, false}, "text": {true, false},
 	}, got)
 }
+
+// typedFiltersDialect 声明筛选值按列类型写：ltz 列的值包进 TO_TS(…)，好与任何真实方言区分。
+type typedFiltersDialect struct{ rowsDialect }
+
+func (typedFiltersDialect) TypedFilterValues() bool { return true }
+
+func (typedFiltersDialect) Literals(context.Context, *sql.Conn) (Literals, error) {
+	return Literals{Converted: func(columnType string) (string, string, bool) {
+		return "TO_TS(", ")", columnType == "ltz"
+	}}, nil
+}
+
+func newTypedFiltersSession(t *testing.T) (*Session, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	return NewSession(db, typedFiltersDialect{}), mock
+}
+
+func expectLTZColumns(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("COLUMNS").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type"}).
+		AddRow("at", "ltz").AddRow("name", "text"))
+}
+
+// 声明了按列类型写筛选值的方言：表数据、计数与整表读取先查表的列，比较、区间、列表的值按列类型
+// 写字面量；文本匹配的值仍是字符串。
+func TestTypedFilterValuesAreWrittenByColumnType(t *testing.T) {
+	session, mock := newTypedFiltersSession(t)
+	ctx := context.Background()
+	filters := []dbdriver.FilterItem{
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpEqual, Value: "2026-10-26 08:00:00 +00:00"},
+		{Kind: dbdriver.FilterGroup, Join: dbdriver.JoinAnd, Items: []dbdriver.FilterItem{
+			{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinOr, Column: "at", Operator: dbdriver.OpBetween, Value: []any{"a", "b"}},
+			{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpInList, Value: "c, d"},
+		}},
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "name", Operator: dbdriver.OpContains, Value: "x"},
+	}
+	where := "<at> = TO_TS('2026-10-26 08:00:00 +00:00') AND (<at> BETWEEN TO_TS('a') AND TO_TS('b') OR <at> IN (TO_TS('c'), TO_TS('d'))) AND <name> LIKE '%x%'"
+
+	expectLTZColumns(mock)
+	mock.ExpectQuery("SELECT * FROM <db>.<t> WHERE " + where + " LIMIT 10 OFFSET 0").
+		WillReturnRows(sqlmock.NewRows([]string{"at"}))
+	_, err := session.TableRows(ctx, "db", "t", dbdriver.TableQuery{Filters: filters}, dbdriver.Page{Size: 10})
+	require.NoError(t, err)
+
+	expectLTZColumns(mock)
+	mock.ExpectQuery("SELECT COUNT(*) FROM <db>.<t> WHERE " + where).WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(1))
+	total, err := session.CountTableRows(ctx, "db", "t", filters)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+
+	expectLTZColumns(mock)
+	mock.ExpectQuery("SELECT * FROM <db>.<t> WHERE " + where).WillReturnRows(sqlmock.NewRows([]string{"at"}))
+	stream, err := session.StreamTableRows(ctx, "db", "t", dbdriver.TableQuery{Filters: filters})
+	require.NoError(t, err)
+	require.NoError(t, stream.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 没有要写值的条件（没有筛选、只有「为空」这类、停用或未填值的条件）时不查表的列。
+func TestTypedFilterValuesSkipTheColumnLookupWithoutValues(t *testing.T) {
+	session, mock := newTypedFiltersSession(t)
+	filters := []dbdriver.FilterItem{
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpIsEmpty},
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpEqual, Value: "a", Disabled: true},
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpEqual, Unset: true},
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpEqual, Value: nil},
+	}
+	mock.ExpectQuery("SELECT * FROM <db>.<t> WHERE (<at> IS NULL OR <at> = '') AND <at> IS NULL LIMIT 10 OFFSET 0").
+		WillReturnRows(sqlmock.NewRows([]string{"at"}))
+	_, err := session.TableRows(context.Background(), "db", "t", dbdriver.TableQuery{Filters: filters}, dbdriver.Page{Size: 10})
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT COUNT(*) FROM <db>.<t>").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(3))
+	_, err = session.CountTableRows(context.Background(), "db", "t", nil)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 查列失败时整个请求失败，带着数据库的错误。
+func TestTypedFilterValuesReturnTheColumnLookupError(t *testing.T) {
+	session, mock := newTypedFiltersSession(t)
+	boom := errors.New("dictionary unavailable")
+	mock.ExpectQuery("COLUMNS").WillReturnError(boom)
+	_, err := session.CountTableRows(context.Background(), "db", "t", []dbdriver.FilterItem{
+		{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "at", Operator: dbdriver.OpEqual, Value: "a"},
+	})
+	require.ErrorIs(t, err, boom)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
