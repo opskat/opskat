@@ -54,20 +54,21 @@ func (s *Session) CreateTableStatements(_ context.Context, database string, req 
 	return []string{fmt.Sprintf("CREATE TABLE %s (\n  %s\n)", tables.TableRef(database, req.Name), strings.Join(defs, ",\n  "))}, nil
 }
 
-// ColumnDefinitionSQL 是建表与新增列时的列定义：名称加引号、类型文本原样（首尾空白除外）、不可空时
-// NOT NULL、有默认值时 DEFAULT（写法见 Literals.Default）。注释不在其中：各方言写法不同。
+// ColumnDefinitionSQL 是建表与新增列时的列定义：名称加引号、类型文本原样（首尾空白除外）、有默认值时
+// DEFAULT（写法见 Literals.Default）、不可空时 NOT NULL。DEFAULT 在 NOT NULL 之前：Oracle 只接受这个
+// 次序（反过来报 ORA-00907），其余方言两种次序都接受。注释不在其中：各方言写法不同。
 func ColumnDefinitionSQL(literals Literals, quote func(string) string, column dbdriver.ColumnDefinition) (string, error) {
 	columnType := strings.TrimSpace(column.Type)
 	def := quote(strings.TrimSpace(column.Name)) + " " + columnType
-	if !column.Nullable {
-		def += " NOT NULL"
-	}
 	if strings.TrimSpace(column.DefaultValue) != "" {
 		literal, err := literals.Default(column.DefaultValue, columnType)
 		if err != nil {
 			return "", err
 		}
 		def += " DEFAULT " + literal
+	}
+	if !column.Nullable {
+		def += " NOT NULL"
 	}
 	return def, nil
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // 建表 / 删表 / 清空 / 建库：与改动前前端生成的文本逐字一致（原 CreateTableDialog.test.ts、
-// DatabaseTree.test.tsx 的断言）。
+// DatabaseTree.test.tsx 的断言），只是列定义里 DEFAULT 改在 NOT NULL 之前。
 func TestSchemaStatementsForMySQL(t *testing.T) {
 	session, _ := newMock(t)
 	ctx := context.Background()
@@ -30,9 +30,9 @@ func TestSchemaStatementsForMySQL(t *testing.T) {
 	assert.Equal(t, []string{"CREATE TABLE `appdb`.`users` (\n" +
 		"  `id` BIGINT NOT NULL,\n" +
 		"  `age` INT DEFAULT 18,\n" +
-		"  `name` VARCHAR(100) NOT NULL DEFAULT 'anon',\n" +
+		"  `name` VARCHAR(100) DEFAULT 'anon' NOT NULL,\n" +
 		"  `active` BOOLEAN DEFAULT TRUE,\n" +
-		"  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\n)"}, statements)
+		"  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL\n)"}, statements)
 
 	statements, err = session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{
 		Name: "we`ird", Columns: []dbdriver.NewColumn{{Name: "col`1", Type: "INT", Nullable: true}},

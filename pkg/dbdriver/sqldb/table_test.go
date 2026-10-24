@@ -200,7 +200,7 @@ func TestFilterNumbersAreWrittenAsTheGridShowsThem(t *testing.T) {
 	} {
 		where, err := FilterWhere([]dbdriver.FilterItem{
 			{Kind: dbdriver.FilterCondition, Join: dbdriver.JoinAnd, Column: "n", Operator: dbdriver.OpEqual, Value: value},
-		}, angle)
+		}, FilterSyntax{Quote: angle})
 		require.NoError(t, err)
 		assert.Equal(t, "<n> = "+want, where)
 	}

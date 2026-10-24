@@ -11,7 +11,7 @@ import (
 
 // Tables 是方言里「怎么浏览一张表的数据」的那一半：标识符与表引用怎么写、主键与列定义
 // 怎么查、分页用什么语法。筛选条件与排序项怎么变成表达式各方言相同（FilterWhere /
-// SortOrderBy），Session 用这里给的引号生成。
+// SortOrderBy），Session 用这里给的引号生成（空串就是 NULL 的方言另见 EmptyStringNull）。
 //
 // 实现 Dialect 的类型同时实现 Tables 才提供表浏览；没实现的方言，Session 的表浏览方法
 // 一律返回 dbdriver.ErrUnsupported。
@@ -159,7 +159,7 @@ func (s *Session) TableRows(ctx context.Context, database, table string, query d
 	if err != nil {
 		return nil, err
 	}
-	where, err := FilterWhere(query.Filters, tables.QuoteIdent)
+	where, err := FilterWhere(query.Filters, s.filterSyntax(tables))
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (s *Session) StreamTableRows(ctx context.Context, database, table string, q
 	if err != nil {
 		return nil, err
 	}
-	where, err := FilterWhere(query.Filters, tables.QuoteIdent)
+	where, err := FilterWhere(query.Filters, s.filterSyntax(tables))
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (s *Session) CountTableRows(ctx context.Context, database, table string, fi
 	if err != nil {
 		return 0, err
 	}
-	where, err := FilterWhere(filters, tables.QuoteIdent)
+	where, err := FilterWhere(filters, s.filterSyntax(tables))
 	if err != nil {
 		return 0, err
 	}

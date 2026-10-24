@@ -61,14 +61,7 @@ func (s *Session) GridEditStatements(ctx context.Context, database, table string
 			byName[column.Name] = column
 		}
 		g := gridSQL{
-			rowSQL: rowSQL{
-				tableRef: tables.TableRef(database, table),
-				quote:    tables.QuoteIdent,
-				literal: func(column string, value any) (string, error) {
-					return literals.Literal(value, byName[column].Type)
-				},
-				update: writer.UpdateRowSQL,
-			},
+			rowSQL:  s.rowSQL(tables, writer, tables.TableRef(database, table), columns, literals),
 			editor:  editor,
 			columns: byName,
 			table:   table,

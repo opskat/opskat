@@ -9,16 +9,43 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-// 结构化的筛选条件与排序项怎么变成 SQL：这一部分在各方言里相同，只有标识符的引号不同，
-// 由调用它的驱动给出。值一律写成字符串字面量（数字也是），与数据库比较时由数据库转换。
+// 结构化的筛选条件与排序项怎么变成 SQL：这一部分在各方言里相同，只有标识符的引号、以及空串是否
+// 就是 NULL 不同，由调用它的驱动给出。值一律写成字符串字面量（数字也是），与数据库比较时由数据库
+// 转换。
+
+// EmptyStringNull 是方言里「空串就是 NULL」（Oracle）：EmptyStringIsNull 为真时，筛选的「为空」写成
+// col IS NULL、「不为空」写成 col IS NOT NULL，不再与空串字面量比较——在这样的数据库里「不等于空串」
+// 永远不成立，照常的写法让「不为空」一行也匹配不到。没实现的方言照常写成「是 NULL 或等于空串」与
+// 「不是 NULL 且不等于空串」。
+type EmptyStringNull interface {
+	// EmptyStringIsNull 为真表示数据库把空串当作 NULL 存放与比较。
+	EmptyStringIsNull() bool
+}
+
+// FilterSyntax 是筛选条件写成 SQL 时随方言变化的部分。
+type FilterSyntax struct {
+	// Quote 给一个标识符加上方言的引号。
+	Quote func(string) string
+	// EmptyStringIsNull 为真表示方言里空串就是 NULL（见 EmptyStringNull）。
+	EmptyStringIsNull bool
+}
+
+// filterSyntax 是会话方言的筛选写法：引号取自 Tables，空串是否就是 NULL 取自 EmptyStringNull。
+func (s *Session) filterSyntax(tables Tables) FilterSyntax {
+	syntax := FilterSyntax{Quote: tables.QuoteIdent}
+	if empty, ok := s.dialect.(EmptyStringNull); ok {
+		syntax.EmptyStringIsNull = empty.EmptyStringIsNull()
+	}
+	return syntax
+}
 
 // FilterWhere 把筛选条件树变成 WHERE 后面的表达式（不含 WHERE）。没有任何有效条件时返回
-// 空串。quote 给一个标识符加上方言的引号。
-func FilterWhere(items []dbdriver.FilterItem, quote func(string) string) (string, error) {
+// 空串。
+func FilterWhere(items []dbdriver.FilterItem, syntax FilterSyntax) (string, error) {
 	var b strings.Builder
 	var join dbdriver.FilterJoin
 	for _, item := range items {
-		expr, err := filterItemSQL(item, quote)
+		expr, err := filterItemSQL(item, syntax)
 		if err != nil {
 			return "", err
 		}
@@ -65,18 +92,18 @@ func joinKeyword(join dbdriver.FilterJoin) (string, error) {
 	}
 }
 
-func filterItemSQL(item dbdriver.FilterItem, quote func(string) string) (string, error) {
+func filterItemSQL(item dbdriver.FilterItem, syntax FilterSyntax) (string, error) {
 	switch item.Kind {
 	case dbdriver.FilterCondition:
 		if item.Disabled {
 			return "", nil
 		}
-		return conditionSQL(item, quote(item.Column))
+		return conditionSQL(item, syntax.Quote(item.Column), syntax.EmptyStringIsNull)
 	case dbdriver.FilterGroup:
 		if item.Disabled {
 			return "", nil
 		}
-		inner, err := FilterWhere(item.Items, quote)
+		inner, err := FilterWhere(item.Items, syntax)
 		if err != nil || inner == "" {
 			return "", err
 		}
@@ -114,16 +141,23 @@ var likeSQL = map[dbdriver.FilterOperator]struct {
 	dbdriver.OpNotEndsWith:   {"NOT LIKE", "%", ""},
 }
 
-// conditionSQL 生成一个条件；column 已加引号。条件不产生限制时返回空串。
-func conditionSQL(item dbdriver.FilterItem, column string) (string, error) {
+// conditionSQL 生成一个条件；column 已加引号。条件不产生限制时返回空串。emptyStringIsNull 见
+// FilterSyntax。
+func conditionSQL(item dbdriver.FilterItem, column string, emptyStringIsNull bool) (string, error) {
 	switch item.Operator {
 	case dbdriver.OpIsNull:
 		return column + " IS NULL", nil
 	case dbdriver.OpIsNotNull:
 		return column + " IS NOT NULL", nil
 	case dbdriver.OpIsEmpty:
+		if emptyStringIsNull {
+			return column + " IS NULL", nil
+		}
 		return "(" + column + " IS NULL OR " + column + " = '')", nil
 	case dbdriver.OpIsNotEmpty:
+		if emptyStringIsNull {
+			return column + " IS NOT NULL", nil
+		}
 		return "(" + column + " IS NOT NULL AND " + column + " <> '')", nil
 	}
 

@@ -1,5 +1,6 @@
-// Package sqldbtest 是建在 sqldb 之上的驱动共用的测试：筛选条件的语义在各方言里相同，
-// 每个驱动都用自己的会话跑一遍，把它实际发给数据库的语句钉住。
+// Package sqldbtest 是建在 sqldb 之上的驱动共用的测试：筛选条件的语义在各方言里相同（只有空串
+// 就是 NULL 的方言写「为空 / 不为空」不同），每个驱动都用自己的会话跑一遍，把它实际发给数据库的
+// 语句钉住。
 package sqldbtest
 
 import (
@@ -22,6 +23,9 @@ type Dialect struct {
 	Quote func(name string) string
 	// Database / Table 是传给会话的库名与表名，TableRef 是它们在 FROM 里应有的写法。
 	Database, Table, TableRef string
+	// EmptyStringIsNull 为真表示该方言里空串就是 NULL（Oracle）：「为空」应是 IS NULL、「不为空」
+	// 应是 IS NOT NULL，不与 '' 比较。
+	EmptyStringIsNull bool
 }
 
 func condition(column string, op dbdriver.FilterOperator, value any) dbdriver.FilterItem {
@@ -58,8 +62,12 @@ type filterCase struct {
 	where string
 }
 
-func filterCases(q func(string) string) []filterCase {
+func filterCases(q func(string) string, emptyStringIsNull bool) []filterCase {
 	name, email, age, memo := q("name"), q("email"), q("age"), q("memo")
+	isEmpty, isNotEmpty := "("+memo+" IS NULL OR "+memo+" = '')", "("+memo+" IS NOT NULL AND "+memo+" <> '')"
+	if emptyStringIsNull {
+		isEmpty, isNotEmpty = memo+" IS NULL", memo+" IS NOT NULL"
+	}
 	one := func(item dbdriver.FilterItem) []dbdriver.FilterItem { return []dbdriver.FilterItem{item} }
 	return []filterCase{
 		// --- 每个运算符 ---
@@ -79,8 +87,8 @@ func filterCases(q func(string) string) []filterCase {
 		{"not ends with", one(condition("name", dbdriver.OpNotEndsWith, "ce")), name + " NOT LIKE '%ce'"},
 		{"is null", one(condition("memo", dbdriver.OpIsNull, nil)), memo + " IS NULL"},
 		{"is not null", one(condition("memo", dbdriver.OpIsNotNull, nil)), memo + " IS NOT NULL"},
-		{"is empty", one(condition("memo", dbdriver.OpIsEmpty, nil)), "(" + memo + " IS NULL OR " + memo + " = '')"},
-		{"is not empty", one(condition("memo", dbdriver.OpIsNotEmpty, nil)), "(" + memo + " IS NOT NULL AND " + memo + " <> '')"},
+		{"is empty", one(condition("memo", dbdriver.OpIsEmpty, nil)), isEmpty},
+		{"is not empty", one(condition("memo", dbdriver.OpIsNotEmpty, nil)), isNotEmpty},
 		{"between", one(condition("age", dbdriver.OpBetween, []any{18, 30})), age + " BETWEEN '18' AND '30'"},
 		{"not between", one(condition("age", dbdriver.OpNotBetween, []any{18, 30})), age + " NOT BETWEEN '18' AND '30'"},
 		{"in list", one(condition("name", dbdriver.OpInList, []any{"active", "pending"})), name + " IN ('active', 'pending')"},
@@ -153,7 +161,7 @@ func filterCases(q func(string) string) []filterCase {
 				)),
 				condition("memo", dbdriver.OpIsEmpty, nil),
 			},
-			name + " = 'A' AND NOT (" + name + " = 'B' OR " + age + " > '100') AND (" + memo + " IS NULL OR " + memo + " = '')"},
+			name + " = 'A' AND NOT (" + name + " = 'B' OR " + age + " > '100') AND " + isEmpty},
 		{"groups nest",
 			[]dbdriver.FilterItem{group(or(condition("name", dbdriver.OpEqual, "A")), negated(group(condition("age", dbdriver.OpLess, 3))))},
 			"(" + name + " = 'A' OR NOT (" + age + " < '3'))"},
@@ -164,7 +172,7 @@ func filterCases(q func(string) string) []filterCase {
 // 正是预期的那一条：每个运算符、值怎么写成字面量、NULL 与缺值、连接、停用、分组与取反。
 func RunFilterSemantics(t *testing.T, d Dialect) {
 	t.Helper()
-	for _, tc := range filterCases(d.Quote) {
+	for _, tc := range filterCases(d.Quote, d.EmptyStringIsNull) {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 			require.NoError(t, err)
