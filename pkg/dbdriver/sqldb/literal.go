@@ -22,11 +22,16 @@ type Literals struct {
 	// BinaryBytesOnly 为真表示只有字节值（[]byte，如导入按二进制解码出的值）写成十六进制字面量；
 	// 写进二进制列的文本（表格里带回的值、导入里没按二进制解码的值）照字符串写（MySQL 一直这样写）。
 	BinaryBytesOnly bool
+	// Converted 报告这种列类型的文本要经函数转换才写得进去，并给出包在字符串字面量前后的写法
+	// （Oracle 带本地时区的时间戳：TO_TIMESTAMP_TZ('…', '…TZH:TZM')，否则会话的时间戳格式不认
+	// 表格显示的时区）；nil 表示方言由数据库按列的类型转换字符串。
+	Converted func(columnType string) (prefix, suffix string, ok bool)
 }
 
 // Literal 把要写进 columnType 列的值写成字面量。nil 是 NULL；二进制列写成方言的十六进制字面量
 // （文本按它的字节）；其余写成字符串字面量——数字、布尔、日期文本也一样，由数据库按列的类型
-// 转换，数字照表格显示它的样子（见 valueText）。BinaryBytesOnly 时二进制列只有字节值写成十六进制。
+// 转换，数字照表格显示它的样子（见 valueText）；方言声明了 Converted 的列类型，字符串字面量再包进
+// 它的转换写法。BinaryBytesOnly 时二进制列只有字节值写成十六进制。
 // 列类型是驱动目录里给出的写法；不认识的类型（包括空串）照文本写。
 func (l Literals) Literal(value any, columnType string) (string, error) {
 	if value == nil {
@@ -52,7 +57,12 @@ func (l Literals) Literal(value any, columnType string) (string, error) {
 	}
 	quoted := quoteString(text)
 	if l.UnicodeText != nil && l.UnicodeText(columnType) {
-		return "N" + quoted, nil
+		quoted = "N" + quoted
+	}
+	if l.Converted != nil {
+		if prefix, suffix, ok := l.Converted(columnType); ok {
+			return prefix + quoted + suffix, nil
+		}
 	}
 	return quoted, nil
 }

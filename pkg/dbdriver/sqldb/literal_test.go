@@ -80,6 +80,35 @@ func TestLiteralWritesBinaryColumnsAsHex(t *testing.T) {
 	assert.Equal(t, "'AB'", got)
 }
 
+// 方言声明要经函数转换的列类型，字符串字面量包进它的转换写法（Oracle 带本地时区的时间戳按
+// TO_TIMESTAMP_TZ 读带时区的文本）；其他列、NULL 与写成十六进制的二进制列不包。
+func TestLiteralWrapsConvertedColumns(t *testing.T) {
+	literals := Literals{
+		Converted: func(columnType string) (string, string, bool) {
+			return "TO_TIMESTAMP_TZ(", ", 'YYYY-MM-DD HH24:MI:SS.FF TZH:TZM')", strings.Contains(columnType, "LOCAL TIME ZONE")
+		},
+		Binary: func(columnType string) (string, string, bool) {
+			return "HEXTORAW('", "')", columnType == "RAW(16)"
+		},
+	}
+
+	got, err := literals.Literal("2026-10-24 10:11:12.123456 +00:00", "TIMESTAMP(6) WITH LOCAL TIME ZONE")
+	require.NoError(t, err)
+	assert.Equal(t, "TO_TIMESTAMP_TZ('2026-10-24 10:11:12.123456 +00:00', 'YYYY-MM-DD HH24:MI:SS.FF TZH:TZM')", got)
+
+	got, err = literals.Literal(nil, "TIMESTAMP(6) WITH LOCAL TIME ZONE")
+	require.NoError(t, err)
+	assert.Equal(t, "NULL", got)
+
+	got, err = literals.Literal("2026-10-24 10:11:12", "TIMESTAMP(6)")
+	require.NoError(t, err)
+	assert.Equal(t, "'2026-10-24 10:11:12'", got)
+
+	got, err = literals.Literal("AB", "RAW(16)")
+	require.NoError(t, err)
+	assert.Equal(t, "HEXTORAW('4142')", got)
+}
+
 func TestLiteralRejectsValuesThatAreNotCellValues(t *testing.T) {
 	_, err := Literals{}.Literal(map[string]any{"a": 1}, "text")
 	require.Error(t, err)
