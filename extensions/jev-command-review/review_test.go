@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,4 +128,42 @@ func TestReviewMapsServiceErrors(t *testing.T) {
 			assert.Equal(t, reason, out[0].Reason)
 		})
 	}
+}
+
+// 扩展里不重试：超时由宿主控制（到时取消这次调用、重试一次）。扩展自己按 Retry-After 等，
+// 会一直等到宿主超时，结果是"超时"，而不是很快报"服务不可用"。
+func TestReviewDoesNotRetryInsideTheExtension(t *testing.T) {
+	calls := 0
+	host := opskat.NewTestHost(opskat.WithMockHTTP(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "10")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer host.Close()
+	host.SetSettings(configured(nil))
+
+	start := time.Now()
+	out, err := review(nil, []opskat.ReviewItem{item})
+	require.NoError(t, err)
+	assert.Equal(t, opskat.ReviewError, out[0].Outcome)
+	assert.Equal(t, jevreview.ReasonUnavailable, out[0].Reason)
+	assert.Equal(t, 1, calls)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// 只按声明的题目判定：兼容服务多回一个没问过的答案，不能算进未通过——
+// 宿主会把带未声明题目的结果判成无效，整批审核失败。
+func TestReviewJudgesOnlyTheDeclaredQuestions(t *testing.T) {
+	host := opskat.NewTestHost(opskat.WithMockHTTP(func(w http.ResponseWriter, _ *http.Request) {
+		probs := allQuestions(0.01)
+		probs["extra"] = 0.99
+		jevAnswer(t, w, probs)
+	}))
+	defer host.Close()
+	host.SetSettings(configured(nil))
+
+	out, err := review(nil, []opskat.ReviewItem{item})
+	require.NoError(t, err)
+	assert.Equal(t, opskat.ReviewPass, out[0].Outcome)
+	assert.Empty(t, out[0].Failed)
 }

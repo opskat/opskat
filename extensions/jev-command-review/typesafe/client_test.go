@@ -19,7 +19,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return New("test-key", WithBaseURL(srv.URL), WithBackoff(func(int) time.Duration { return time.Millisecond }))
+	return New("test-key", WithBaseURL(srv.URL))
 }
 
 func TestEvaluateSendsRequestAndParsesNoulAnswers(t *testing.T) {
@@ -55,43 +55,11 @@ func TestEvaluateSendsRequestAndParsesNoulAnswers(t *testing.T) {
 	assert.Equal(t, 120, resp.Usage.InputTokens)
 }
 
-func TestEvaluateRetriesRateLimitedAndOverloaded(t *testing.T) {
-	var calls atomic.Int32
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch calls.Add(1) {
-		case 1:
-			w.WriteHeader(http.StatusTooManyRequests)
-		case 2:
-			w.WriteHeader(529)
-		default:
-			_, _ = w.Write([]byte(`{"model":"jev-latest","answers":{"q":{"type":"noul","noul":0.1}}}`))
-		}
-	})
-
-	resp, err := c.Evaluate(context.Background(), Request{Model: "jev-latest", State: "x", Questions: map[string]Question{"q": {Type: QuestionNoul, Instructions: "?"}}})
-	require.NoError(t, err)
-	assert.Equal(t, int32(3), calls.Load())
-	assert.InDelta(t, 0.1, resp.Answers["q"].Noul, 1e-9)
-}
-
-func TestEvaluateGivesUpAfterMaxRetries(t *testing.T) {
+func TestEvaluateReturnsAPIErrorsWithoutRetrying(t *testing.T) {
 	var calls atomic.Int32
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(http.StatusTooManyRequests)
-	})
-
-	_, err := c.Evaluate(context.Background(), Request{Model: "m", State: "x", Questions: map[string]Question{"q": {Type: QuestionNoul, Instructions: "?"}}})
-	var apiErr *APIError
-	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
-	assert.Equal(t, int32(defaultMaxRetries+1), calls.Load())
-}
-
-func TestEvaluateDoesNotRetryClientErrors(t *testing.T) {
-	var calls atomic.Int32
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
+		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"detail":"invalid api key"}`))
 	})

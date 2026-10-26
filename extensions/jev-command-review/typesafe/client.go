@@ -11,20 +11,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
-	"time"
 )
 
 // DefaultBaseURL 是 TypeSafe 官方 API 地址。
 const DefaultBaseURL = "https://api.typesafe.ai"
 
-const (
-	defaultMaxRetries = 3
-	// statusOverloaded 是 TypeSafe 过载时返回的非标准状态码。
-	statusOverloaded = 529
-	// maxErrorBody 限制错误响应体的读取长度，只用于错误信息展示。
-	maxErrorBody = 4096
-)
+// maxErrorBody 限制错误响应体的读取长度，只用于错误信息展示。
+const maxErrorBody = 4096
 
 // QuestionNoul 是是/否题：答案为"是"的概率（0~1）。
 const QuestionNoul = "noul"
@@ -112,8 +105,6 @@ type Client struct {
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
-	maxRetries int
-	backoff    func(attempt int) time.Duration
 }
 
 // Option 配置 Client。
@@ -125,19 +116,12 @@ func WithBaseURL(u string) Option { return func(c *Client) { c.baseURL = u } }
 // WithHTTPClient 替换底层 http.Client。
 func WithHTTPClient(hc *http.Client) Option { return func(c *Client) { c.httpClient = hc } }
 
-// WithBackoff 替换重试间隔（attempt 从 1 开始）。
-func WithBackoff(f func(attempt int) time.Duration) Option {
-	return func(c *Client) { c.backoff = f }
-}
-
 // New 创建客户端。超时由调用方通过 ctx 控制。
 func New(apiKey string, opts ...Option) *Client {
 	c := &Client{
 		apiKey:     apiKey,
 		baseURL:    DefaultBaseURL,
 		httpClient: &http.Client{Transport: http.DefaultTransport},
-		maxRetries: defaultMaxRetries,
-		backoff:    func(attempt int) time.Duration { return time.Duration(attempt) * 500 * time.Millisecond },
 	}
 	for _, o := range opts {
 		o(c)
@@ -145,81 +129,53 @@ func New(apiKey string, opts ...Option) *Client {
 	return c
 }
 
-// Evaluate 发送一次评估请求。429 / 529 按退避重试；其余非 2xx 直接返回 *APIError。
-// 返回的 Response 保证包含请求里的每一道题，且每个答案的题型和取值都合法——服务地址可以是
-// 任意兼容的服务，答案不合法时报错，不交给调用方当成正常的评分。
+// Evaluate 发送一次评估请求，不重试：超时与重试由调用方决定（命令审核里是宿主）。
+// 非 2xx 返回 *APIError。返回的 Response 保证包含请求里的每一道题，且每个答案的题型和取值都合法——
+// 服务地址可以是任意兼容的服务，答案不合法时报错，不交给调用方当成正常的评分。
 func (c *Client) Evaluate(ctx context.Context, req Request) (*Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("typesafe: encode request: %w", err)
 	}
-
-	for attempt := 0; ; attempt++ {
-		resp, retryAfter, err := c.post(ctx, body)
-		if err == nil {
-			for id, q := range req.Questions {
-				a, ok := resp.Answers[id]
-				if !ok {
-					return nil, fmt.Errorf("typesafe: missing answer %q in response", id)
-				}
-				if err := a.check(q); err != nil {
-					return nil, fmt.Errorf("typesafe: invalid answer %q: %w", id, err)
-				}
-			}
-			return resp, nil
+	resp, err := c.post(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	for id, q := range req.Questions {
+		a, ok := resp.Answers[id]
+		if !ok {
+			return nil, fmt.Errorf("typesafe: missing answer %q in response", id)
 		}
-		apiErr, ok := err.(*APIError)
-		if !ok || !retryable(apiErr.StatusCode) || attempt >= c.maxRetries {
-			return nil, err
-		}
-		wait := c.backoff(attempt + 1)
-		if retryAfter > 0 {
-			wait = retryAfter
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(wait):
+		if err := a.check(q); err != nil {
+			return nil, fmt.Errorf("typesafe: invalid answer %q: %w", id, err)
 		}
 	}
+	return resp, nil
 }
 
-func retryable(status int) bool {
-	return status == http.StatusTooManyRequests || status == statusOverloaded
-}
-
-// post 发送一次请求；失败时返回 *APIError 或传输错误，以及服务端建议的重试间隔。
-func (c *Client) post(ctx context.Context, body []byte) (*Response, time.Duration, error) {
+// post 发送一次请求；失败时返回 *APIError 或传输错误。
+func (c *Client) post(ctx context.Context, body []byte) (*Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/systemone", bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, fmt.Errorf("typesafe: build request: %w", err)
+		return nil, fmt.Errorf("typesafe: build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, 0, fmt.Errorf("typesafe: send request: %w", err)
+		return nil, fmt.Errorf("typesafe: send request: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxErrorBody))
-		return nil, parseRetryAfter(httpResp.Header.Get("Retry-After")), &APIError{StatusCode: httpResp.StatusCode, Body: string(msg)}
+		return nil, &APIError{StatusCode: httpResp.StatusCode, Body: string(msg)}
 	}
 
 	var out Response
 	if err := json.NewDecoder(httpResp.Body).Decode(&out); err != nil {
-		return nil, 0, fmt.Errorf("typesafe: decode response: %w", err)
+		return nil, fmt.Errorf("typesafe: decode response: %w", err)
 	}
-	return &out, 0, nil
-}
-
-// parseRetryAfter 只识别秒数形式；无法识别时返回 0，由退避策略决定间隔。
-func parseRetryAfter(v string) time.Duration {
-	secs, err := strconv.Atoi(v)
-	if err != nil || secs <= 0 {
-		return 0
-	}
-	return time.Duration(secs) * time.Second
+	return &out, nil
 }

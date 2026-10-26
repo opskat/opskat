@@ -93,7 +93,7 @@ func loadConfig() (config, bool) {
 	return cfg, cfg.apiKey != "" && cfg.baseURL != ""
 }
 
-// reviewOne 审一条命令。超时由宿主控制（到时取消这次调用并重试一次），这里不再重试。
+// reviewOne 审一条命令。超时与重试由宿主控制（到时取消这次调用并重试一次），这里不重试。
 func reviewOne(cfg config, item opskat.ReviewItem) opskat.ReviewResult {
 	client := typesafe.New(cfg.apiKey,
 		typesafe.WithBaseURL(cfg.baseURL),
@@ -104,9 +104,11 @@ func reviewOne(cfg config, item opskat.ReviewItem) opskat.ReviewResult {
 		opskat.Log("warn", "evaluate: "+err.Error())
 		return opskat.ReviewResult{Outcome: opskat.ReviewError, Reason: jevreview.FailReason(err)}
 	}
-	scores := make(map[string]float64, len(resp.Answers))
-	for id, a := range resp.Answers {
-		scores[id] = a.Noul
+	// 只取声明过的题目：兼容服务多回的答案不算，宿主会把未声明的题目判成无效结果。
+	// 声明过的每一题 Evaluate 都保证有答案。
+	scores := make(map[string]float64, len(jevreview.Questions))
+	for id := range jevreview.Questions {
+		scores[id] = resp.Answers[id].Noul
 	}
 	failed := jevreview.Failed(scores, cfg.threshold)
 	if len(failed) == 0 {
