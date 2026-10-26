@@ -37,25 +37,27 @@ func reviewerEligible(state *extension_state_entity.ExtensionState, wasmSHA256 s
 	}
 }
 
-// recordProvenance 写入或覆盖安装来源与包摘要，同时设置启用状态。
+// recordProvenance 写入或覆盖安装来源与包摘要，同时设置启用状态，返回被覆盖的旧记录
+// （之前没有时为 nil），安装失败时据此恢复。
 // 写库失败时返回错误：装完却没有来源记录，审核器资格就无从判断。
-func (s *Service) recordProvenance(ctx context.Context, name, source, sha256 string, enabled bool) error {
+func (s *Service) recordProvenance(ctx context.Context, name, source, sha256 string, enabled bool) (*extension_state_entity.ExtensionState, error) {
 	state, err := s.stateRepo.Find(ctx, name)
 	if err != nil {
 		if err := s.stateRepo.Create(ctx, &extension_state_entity.ExtensionState{
 			Name: name, Enabled: enabled, Source: source, PackageSHA256: sha256,
 		}); err != nil {
-			return fmt.Errorf("create extension state: %w", err)
+			return nil, fmt.Errorf("create extension state: %w", err)
 		}
-		return nil
+		return nil, nil
 	}
+	prev := *state
 	state.Enabled = enabled
 	state.Source = source
 	state.PackageSHA256 = sha256
 	if err := s.stateRepo.Update(ctx, state); err != nil {
-		return fmt.Errorf("update extension state: %w", err)
+		return nil, fmt.Errorf("update extension state: %w", err)
 	}
-	return nil
+	return &prev, nil
 }
 
 // CheckReviewerProvenance 重算已安装扩展的包摘要，并按当前构建判断能否当审核器。

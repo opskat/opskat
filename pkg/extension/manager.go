@@ -494,6 +494,12 @@ func (s *StagedInstall) Extension() *Extension { return s.ext }
 // Manifest returns the staged version's manifest, functional face included.
 func (s *StagedInstall) Manifest() *Manifest { return s.ext.Manifest }
 
+// PackageSHA256 is the staged version's package digest (PackageSHA256), taken from
+// the staged files so it can be recorded before Commit puts them in place.
+func (s *StagedInstall) PackageSHA256() (string, error) {
+	return PackageSHA256(s.newDir, s.ext.Manifest.Backend.Binary)
+}
+
 // Stage unpacks sourcePath (a directory or a .zip) into a staging area inside the
 // extensions directory and loads it there. On failure the staging area is gone and
 // the installed version, if any, is exactly as it was.
