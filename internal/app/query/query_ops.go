@@ -11,13 +11,14 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/connpool"
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/query_svc"
 	"github.com/opskat/opskat/internal/service/redis_svc"
 	"github.com/opskat/opskat/internal/service/testreg"
+	"github.com/opskat/opskat/pkg/dbdriver"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/redis/go-redis/v9"
@@ -53,9 +54,9 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 
 // panelDBCacheKey 返回面板缓存里这条会话的键。粒度由驱动声明：一条会话只连一个库的驱动
 // 按「资产 + 库」缓存，一条会话覆盖整个资产的驱动（SQLite）按资产缓存。驱动未注册时返回
-// 点名该驱动的 dbdriver.ErrDriverUnavailable。
+// 点名该驱动的 dbregistry.ErrDriverUnavailable。
 func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) (string, error) {
-	driver, err := dbdriver.Lookup(cfg.Driver)
+	driver, err := dbregistry.Lookup(cfg.Driver)
 	if err != nil {
 		return "", err
 	}

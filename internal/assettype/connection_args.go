@@ -54,6 +54,26 @@ func tlsApprovalArgs() []string {
 	return out
 }
 
+// Kerberos 字段组的键（数据库资产，按驱动是否声明 dbdriver.FieldKerberos 适用）。
+// krb_password 是密文字段，write-only：不进审批视图，查看资产时只显示 krb_password_set。
+const (
+	argAuthMethod    = "auth_method"
+	argKrbPrincipal  = "krb_principal"
+	argKrbPassword   = "krb_password"
+	argKrbKeytabFile = "krb_keytab_file"
+	argKrbKDC        = "krb_kdc"
+	argKrbSPN        = "krb_spn"
+)
+
+// kerberosConfigArgs 返回 Kerberos 字段组接受的全部键；kerberosApprovalArgs 是其中可进审批视图的部分。
+func kerberosConfigArgs() []string {
+	return []string{argAuthMethod, argKrbPrincipal, argKrbPassword, argKrbKeytabFile, argKrbKDC, argKrbSPN}
+}
+
+func kerberosApprovalArgs() []string {
+	return []string{argAuthMethod, argKrbPrincipal, argKrbKeytabFile, argKrbKDC, argKrbSPN}
+}
+
 // withFields 返回 base 追加 extra 后的新切片，不改 base。
 func withFields(base []string, extra ...string) []string {
 	return append(append([]string(nil), base...), extra...)
@@ -287,6 +307,27 @@ func encryptArg(plaintext string) (string, error) {
 		return "", nil
 	}
 	return credential_svc.Default().Encrypt(plaintext)
+}
+
+// tlsStore 指向一个类型存 TLS 设置的位置：启用开关、跳过校验、服务器名，与三份证书材料。
+type tlsStore struct {
+	enabled, insecure *bool
+	serverName        *string
+	certs             tlsCertStore
+}
+
+// applyTLSArgs 把请求里出现的 TLS 字段写进 store：没出现的不动，证书材料按 applyTLSCertArgs。
+func applyTLSArgs(args map[string]any, store tlsStore) error {
+	if _, ok := args[argTLS]; ok {
+		*store.enabled = ArgBool(args, argTLS)
+	}
+	if _, ok := args[argTLSInsec]; ok {
+		*store.insecure = ArgBool(args, argTLSInsec)
+	}
+	if _, ok := args[argTLSServer]; ok {
+		*store.serverName = ArgString(args, argTLSServer)
+	}
+	return applyTLSCertArgs(args, store.certs)
 }
 
 // tlsCertStore 指向一个类型存 TLS 证书材料的六个位置。

@@ -7,6 +7,8 @@ import {
   type DatabaseFormState,
 } from "@/components/asset/DatabaseConfigSection.config";
 import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
+import { TLS_CERT_DEFAULTS } from "@/components/asset/tlsCertConfig";
+import { KERBEROS_DEFAULTS } from "@/components/asset/kerberosConfig";
 import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const driverFor = (id: string) => BUILTIN_DRIVERS.find((d) => d.id === id)!;
@@ -17,6 +19,12 @@ const build = (
 
 const FULL_MYSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  ...KERBEROS_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
+  driverOptions: {},
+  storedDriverOptions: { driver: "", values: {} },
   driver: "mysql",
   sqliteSource: "local",
   host: "db.example.com",
@@ -35,6 +43,12 @@ const FULL_MYSQL: DatabaseFormState = {
 
 const FULL_PG: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  ...KERBEROS_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
+  driverOptions: {},
+  storedDriverOptions: { driver: "", values: {} },
   driver: "postgresql",
   sqliteSource: "local",
   host: "pg.example.com",
@@ -51,6 +65,12 @@ const FULL_PG: DatabaseFormState = {
 
 const FULL_MSSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  ...KERBEROS_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
+  driverOptions: {},
+  storedDriverOptions: { driver: "", values: {} },
   driver: "mssql",
   sqliteSource: "local",
   host: "mssql.example.com",
@@ -67,6 +87,12 @@ const FULL_MSSQL: DatabaseFormState = {
 
 const FULL_SQLITE: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  ...KERBEROS_DEFAULTS,
+  tlsInsecure: false,
+  tlsServerName: "",
+  driverOptions: {},
+  storedDriverOptions: { driver: "", values: {} },
   driver: "sqlite",
   sqliteSource: "local",
   host: "ignored.example.com",
@@ -262,6 +288,10 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       )
     ).toEqual({
       ...CONNECTION_DEFAULTS,
+      ...TLS_CERT_DEFAULTS,
+      ...KERBEROS_DEFAULTS,
+      tlsInsecure: false,
+      tlsServerName: "",
       driver: "mysql",
       sqliteSource: "local",
       host: "db.example.com",
@@ -274,6 +304,8 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       params: "charset=utf8mb4",
       path: "",
       queryTimeoutSeconds: 30,
+      driverOptions: {},
+      storedDriverOptions: { driver: "mysql", values: {} },
       connectionType: "jumphost",
       sshTunnelId: 5,
       proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],

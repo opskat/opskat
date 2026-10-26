@@ -23,13 +23,18 @@ import (
 type recordingDevInstaller struct {
 	installs  []string // directories handed to InstallExtensionDir
 	installed map[string]string
-	manifest  *extension.Manifest // manifest read from the last installed directory
+	caps      map[string]extension.Capabilities // capabilities declared by the installed version
+	manifest  *extension.Manifest               // manifest read from the last installed directory
 	err       error
 }
 
 func (i *recordingDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
 	v, ok := i.installed[name]
 	return v, ok
+}
+
+func (i *recordingDevInstaller) InstalledExtensionCapabilities(_ context.Context, name string) extension.Capabilities {
+	return i.caps[name]
 }
 
 func (i *recordingDevInstaller) InstallExtensionDir(_ context.Context, sourceDir string) (string, string, error) {
@@ -297,7 +302,7 @@ func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := t.TempDir()
 	manifest := `{
-  "name": "oss", "version": "1.2.3", "hostABI": "2.4",
+  "name": "oss", "version": "1.2.3", "hostABI": "2.6",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
   "capabilities": {}
 }`
@@ -372,4 +377,147 @@ func TestHandleExtDevInstallIgnoresMinAppVersionOnDevBuild(t *testing.T) {
 	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
 
 	require.True(t, resp.Approved, resp.Reason)
+}
+
+func writeDriverExtension(t *testing.T, name string, ids ...string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "dist")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	quoted := make([]string, len(ids))
+	for i, id := range ids {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	manifest := fmt.Sprintf(`{"name": %q, "version": "1.1.0", "hostABI": "2.3",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"databaseDrivers": [%s]}}`, name, strings.Join(quoted, ","))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	return dir
+}
+
+// A database driver receives the plaintext password of every asset that uses it,
+// so the dialog names each driver and leads with the same kind of warning as
+// credentials: read.
+func TestHandleExtDevInstallListsDatabaseDriversWithPlaintextWarning(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	o := newDevOpsctl(&recordingDevInstaller{}, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
+
+	detail := approver.prompts[0].Detail
+	first := strings.SplitN(detail, "\n", 2)[0]
+	require.Contains(t, first, "databaseDrivers")
+	require.Contains(t, first, "plaintext")
+	require.Contains(t, first, "TLS client private key")
+	require.Contains(t, detail, "databaseDrivers: vmysql, vmaria")
+	require.NotContains(t, detail, "capabilities: none")
+	require.NotContains(t, detail, "(new)")
+}
+
+func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{
+		installed: map[string]string{"vmysql": "1.0.0"},
+		caps:      map[string]extension.Capabilities{"vmysql": {DatabaseDrivers: []string{"vmysql"}}},
+	}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
+
+	detail := approver.prompts[0].Detail
+	require.Contains(t, detail, "overwrites installed: vmysql 1.0.0")
+	require.Contains(t, detail, "databaseDrivers: vmysql, vmaria (new)")
+}
+
+// An extension that provides no driver gets exactly the dialog it always had.
+func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, caps: map[string]extension.Capabilities{"oss": {DatabaseDrivers: []string{"gone"}}}}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
+
+	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\ncapabilities:\n  http: https://api.example.com/",
+		approver.prompts[0].Detail)
+}
+
+func writeRedirectExtension(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vredir","version":"1.1.0","hostABI":"2.4",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"databaseDrivers": ["vredir"], "network": {"databaseRedirects": true}}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	return dir
+}
+
+func writeKerberosExtension(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vkrb","version":"1.1.0","hostABI":"2.5",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "capabilities": {"databaseDrivers": ["vkrb"], "databaseKerberos": true}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	return dir
+}
+
+func TestHandleExtDevInstallDatabaseKerberosNewMark(t *testing.T) {
+	declared := extension.Capabilities{DatabaseDrivers: []string{"vkrb"}, DatabaseKerberos: true}
+	undeclared := extension.Capabilities{DatabaseDrivers: []string{"vkrb"}}
+	cases := []struct {
+		name      string
+		installed map[string]string
+		caps      map[string]extension.Capabilities
+		marked    bool
+	}{
+		{"added by overwrite", map[string]string{"vkrb": "1.0.0"}, map[string]extension.Capabilities{"vkrb": undeclared}, true},
+		{"already declared", map[string]string{"vkrb": "1.0.0"}, map[string]extension.Capabilities{"vkrb": declared}, false},
+		{"fresh install", nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			approver := &recordingApprover{approve: true}
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, caps: tc.caps}, approver)
+			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
+			detail := approver.prompts[0].Detail
+			require.Contains(t, detail, "databaseKerberos: true")
+			require.Contains(t, detail, "the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
+			if tc.marked {
+				require.Contains(t, detail, "databaseKerberos: true (new)")
+			} else {
+				require.NotContains(t, detail, "databaseKerberos: true (new)")
+			}
+		})
+	}
+}
+
+func TestHandleExtDevInstallDatabaseRedirectsNewMark(t *testing.T) {
+	declared := extension.Capabilities{DatabaseDrivers: []string{"vredir"}, Network: extension.NetworkCapability{DatabaseRedirects: true}}
+	undeclared := extension.Capabilities{DatabaseDrivers: []string{"vredir"}}
+	cases := []struct {
+		name      string
+		installed map[string]string
+		caps      map[string]extension.Capabilities
+		marked    bool
+	}{
+		{"added by overwrite", map[string]string{"vredir": "1.0.0"}, map[string]extension.Capabilities{"vredir": undeclared}, true},
+		{"already declared", map[string]string{"vredir": "1.0.0"}, map[string]extension.Capabilities{"vredir": declared}, false},
+		{"fresh install", nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			approver := &recordingApprover{approve: true}
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, caps: tc.caps}, approver)
+			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
+			detail := approver.prompts[0].Detail
+			require.Contains(t, detail, "network.databaseRedirects: true")
+			// 与桌面端确认一样说明这项能力的含义，而不只列出键。
+			require.Contains(t, detail, "the driver may connect to other addresses the database redirects to, through the asset's route")
+			if tc.marked {
+				require.Contains(t, detail, "network.databaseRedirects: true (new)")
+			} else {
+				require.NotContains(t, detail, "network.databaseRedirects: true (new)")
+			}
+		})
+	}
 }

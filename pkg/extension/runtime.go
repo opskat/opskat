@@ -54,6 +54,13 @@ const (
 	// result over it fails the call: a truncated result would be read as a
 	// complete one by the model or page that asked.
 	defaultMaxResultBytes = 16 << 20
+	// defaultDriverIdleTimeout is how long an instance of a database driver
+	// session may stay idle before it is closed, unless it is the session's
+	// last one (see driver_session.go).
+	defaultDriverIdleTimeout = time.Minute
+	// defaultDriverCloseTimeout bounds closing an instance's session in the guest:
+	// a driver's close may talk to a database that no longer answers.
+	defaultDriverCloseTimeout = 10 * time.Second
 )
 
 // Plugin represents a loaded WASM extension.
@@ -87,6 +94,10 @@ type pluginOptions struct {
 	maxInstanceCalls int
 	toolTimeout      time.Duration
 	maxResultBytes   int
+	// driverIdleTimeout is defaultDriverIdleTimeout; tests shorten it.
+	driverIdleTimeout time.Duration
+	// driverCloseTimeout is defaultDriverCloseTimeout; tests shorten it.
+	driverCloseTimeout time.Duration
 }
 
 // PluginOption customizes plugin execution.
@@ -126,10 +137,12 @@ type instance struct {
 // If cache is non-nil, compiled modules are cached to disk for faster subsequent loads.
 func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host HostProvider, cache wazero.CompilationCache, opts ...PluginOption) (*Plugin, error) {
 	o := pluginOptions{
-		maxInstances:     defaultMaxInstances,
-		maxInstanceCalls: defaultMaxInstanceCalls,
-		toolTimeout:      defaultToolTimeout,
-		maxResultBytes:   defaultMaxResultBytes,
+		maxInstances:       defaultMaxInstances,
+		maxInstanceCalls:   defaultMaxInstanceCalls,
+		toolTimeout:        defaultToolTimeout,
+		maxResultBytes:     defaultMaxResultBytes,
+		driverIdleTimeout:  defaultDriverIdleTimeout,
+		driverCloseTimeout: defaultDriverCloseTimeout,
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -452,12 +465,9 @@ func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input
 		return nil, fmt.Errorf("plugin closed")
 	}
 
-	req, err := json.Marshal(map[string]any{
-		"fn":    fnName,
-		"input": json.RawMessage(input),
-	})
+	req, err := callRequest(fnName, input)
 	if err != nil {
-		return nil, fmt.Errorf("marshal %s envelope: %w", fnName, err)
+		return nil, err
 	}
 
 	callCtx := ctx
@@ -493,6 +503,18 @@ func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input
 		return nil, fmt.Errorf("call %s: %w", fnName, callErr)
 	}
 	return out, nil
+}
+
+// callRequest is the opskat_call envelope: the guest function and its input.
+func callRequest(fnName string, input []byte) ([]byte, error) {
+	req, err := json.Marshal(map[string]any{
+		"fn":    fnName,
+		"input": json.RawMessage(input),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s envelope: %w", fnName, err)
+	}
+	return req, nil
 }
 
 // acquire takes a pool slot, instantiating a module if the slot is empty.

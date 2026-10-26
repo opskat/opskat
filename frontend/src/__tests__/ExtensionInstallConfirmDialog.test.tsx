@@ -163,4 +163,55 @@ describe("ExtensionInstallConfirmDialog", () => {
     fire(handlers, "ext:install-confirm", { ...upgrade, ...patch });
     expect(screen.getByRole("dialog").querySelector("[data-slot=dialog-title]")?.textContent).toBe(title);
   });
+
+  it("lists the database-redirect capability with a label and marks it new on upgrade", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "network.databaseRedirects", value: "" }],
+      added: [{ kind: "network.databaseRedirects", value: "" }],
+    });
+
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-network.databaseRedirects");
+    expect(row).toHaveTextContent("extension.installConfirm.databaseRedirects");
+    expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
+  });
+
+  it("lists the database-kerberos capability with a label and marks it new on upgrade", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "databaseKerberos", value: "" }],
+      added: [{ kind: "databaseKerberos", value: "" }],
+    });
+
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-databaseKerberos");
+    expect(row).toHaveTextContent("extension.installConfirm.databaseKerberos");
+    expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
+  });
+
+  it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [
+        { kind: "databaseDriver", value: "oracle" },
+        { kind: "databaseDriver", value: "dm" },
+      ],
+      added: [{ kind: "databaseDriver", value: "dm" }],
+    });
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("extension.databaseDriversWarning");
+    const rows = within(dialog).getAllByTestId("ext-install-cap-databaseDriver");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("extension.installConfirm.databaseDriver");
+    expect(rows[0]).toHaveTextContent("oracle");
+    expect(within(rows[0]).queryByText("extension.installConfirm.added")).toBeNull();
+    expect(rows[1]).toHaveTextContent("dm");
+    expect(within(rows[1]).getByText("extension.installConfirm.added")).toBeInTheDocument();
+  });
 });

@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 整批执行时关闭外键检查：PRAGMA foreign_keys 作用于这条连接，在事务里切换不起作用——sqldb

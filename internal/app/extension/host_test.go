@@ -54,6 +54,21 @@ func TestFrontendCallsScopeAssetToExtension(t *testing.T) {
 			So(ref, ShouldBeNil)
 		})
 
+		Convey("assetRef refuses a database asset of a driver the extension provides", func() {
+			svc := e.service
+			svc.Bridge().Register(&extension.Extension{Name: "mydb", Manifest: &extension.Manifest{
+				Name: "mydb", AssetTypes: []extension.AssetTypeDef{{Type: "mydb-console"}},
+				Capabilities: extension.Capabilities{DatabaseDrivers: []string{"mydb"}},
+			}})
+			assets.EXPECT().Find(gomock.Any(), int64(3)).Return(&asset_entity.Asset{
+				ID: 3, Name: "orders", Type: asset_entity.AssetTypeDatabase, Config: `{"driver":"mydb","host":"h","port":1}`,
+			}, nil)
+			// 驱动只经会话碰到它的资产；扩展页面发起的调用不能以它为作用域。
+			ref, err := e.assetRef("mydb", 3)
+			So(err, ShouldNotBeNil)
+			So(ref, ShouldBeNil)
+		})
+
 		Convey("assetRef names an owned asset", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(1)).
 				Return(&asset_entity.Asset{ID: 1, Name: "store", Type: "acme-store"}, nil)

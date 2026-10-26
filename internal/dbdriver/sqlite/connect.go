@@ -12,14 +12,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/connpool/sqlitevfs"
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // Open 打开一条 SQLite 会话：本地文件直接打开，远端文件经传输层给的文件系统打开。
 func (driver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session, error) {
-	if req.Config.SQLiteSource == asset_entity.SQLiteSourceRemoteSSHVFS {
+	if req.Config.SQLiteSource == sourceRemoteSSH {
 		return openRemote(ctx, req)
 	}
 	db, err := openLocal(ctx, req.Config)
@@ -35,7 +34,7 @@ func (driver) SessionPerDatabase() bool { return false }
 
 // openLocal 打开本地文件。只读已经由 dsn 用 _pragma=query_only(1) 写进连接串（对每条
 // 连接生效），这里不需要再单独设置。
-func openLocal(ctx context.Context, cfg *asset_entity.DatabaseConfig) (*sql.DB, error) {
+func openLocal(ctx context.Context, cfg *dbdriver.Config) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dsn(cfg))
 	if err != nil {
 		return nil, err
@@ -46,7 +45,7 @@ func openLocal(ctx context.Context, cfg *asset_entity.DatabaseConfig) (*sql.DB, 
 	return db, nil
 }
 
-func dsn(cfg *asset_entity.DatabaseConfig) string {
+func dsn(cfg *dbdriver.Config) string {
 	connStr := "file:" + cfg.Path
 	var query []string
 	if cfg.Params != "" {

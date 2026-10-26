@@ -10,9 +10,8 @@ import (
 	mssqldb "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // Open 打开一条 SQL Server 会话。
@@ -51,7 +50,7 @@ func open(connStr string, dial dbdriver.DialFunc) (*sql.DB, error) {
 	return sql.OpenDB(connector), nil
 }
 
-func dsn(cfg *asset_entity.DatabaseConfig, password string) string {
+func dsn(cfg *dbdriver.Config, password string) string {
 	q := url.Values{}
 	if cfg.Database != "" {
 		q.Set("database", cfg.Database)

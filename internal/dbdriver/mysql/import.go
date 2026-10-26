@@ -3,8 +3,8 @@ package mysql
 import (
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 导入：追加/更新用 ON DUPLICATE KEY UPDATE，追加/跳过用 INSERT IGNORE。列的类别按 SHOW FULL

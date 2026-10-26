@@ -15,13 +15,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestMSSQLPassesConformance(t *testing.T) {
-	d, err := dbdriver.Lookup(asset_entity.DriverMSSQL)
+	d, err := dbregistry.Lookup(asset_entity.DriverMSSQL)
 	require.NoError(t, err)
 
 	dbdrivertest.RunConformance(t, d, func(t *testing.T) dbdriver.Session {
@@ -45,7 +46,7 @@ func TestOpenDialsThroughTheTransport(t *testing.T) {
 	defer cancel()
 
 	_, err := driver{}.Open(ctx, dbdriver.OpenRequest{
-		Config:   &asset_entity.DatabaseConfig{Driver: asset_entity.DriverMSSQL, Host: "10.9.8.7", Port: 1434, Username: "u", Database: "d"},
+		Config:   &dbdriver.Config{Driver: asset_entity.DriverMSSQL, Host: "10.9.8.7", Port: 1434, Username: "u", Database: "d"},
 		Password: "pw",
 		Transport: dbdriver.Transport{Dial: func(_ context.Context, network, addr string) (net.Conn, error) {
 			dialed.Store(network + " " + addr)
@@ -59,7 +60,7 @@ func TestOpenDialsThroughTheTransport(t *testing.T) {
 
 func TestDSN(t *testing.T) {
 	Convey("MSSQL DSN", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
+		cfg := &dbdriver.Config{
 			Driver:   asset_entity.DriverMSSQL,
 			Host:     "sql.example.com",
 			Port:     1433,
@@ -78,7 +79,7 @@ func TestDSN(t *testing.T) {
 	})
 
 	Convey("MSSQL DSN with TLS", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
+		cfg := &dbdriver.Config{
 			Driver: asset_entity.DriverMSSQL, Host: "h", Port: 1433,
 			Username: "u", Database: "d", TLS: true,
 		}

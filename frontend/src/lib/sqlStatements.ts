@@ -1,5 +1,7 @@
-// 方言无关的 SQL 语句切分与危险语句判断。只识别引号、注释、`$tag$` 块与分号，
-// 不按驱动分支；SQL Server 的 GO 批分隔符不识别。
+// SQL 语句切分与危险语句判断。默认的切分方言无关：只识别引号、注释、`$tag$` 块与分号，
+// 不按驱动分支；SQL Server 的 GO 批分隔符不识别。声明了语句切分分类的驱动自己切分
+// （Query.ClassifySQLStatements），它的结果经 fromDriverStatements 换成编辑器位置后与默认切分
+// 同样定位当前语句，危险判断两边共用 isDangerousStatement。
 
 export interface SqlStatement {
   /** 语句文本（去掉首尾空白与分号，保留内部注释）。 */
@@ -128,14 +130,95 @@ export function splitStatements(sql: string): SqlStatement[] {
  * 空白或注释都归上一条语句；第一条之前的内容归第一条。没有语句或偏移越界返回 null。
  */
 export function statementAt(sql: string, offset: number): SqlStatement | null {
-  if (offset < 0 || offset > sql.length) return null;
-  const all = splitStatements(sql);
-  if (all.length === 0) return null;
+  return statementAtOffset(splitStatements(sql), sql.length, offset);
+}
+
+/**
+ * 在按顺序排列的语句 all（来自长 textLength 的文本）里找 offset 所在的那条，归属规则同 statementAt。
+ * 默认切分与驱动切分都经它定位当前语句。
+ */
+export function statementAtOffset<T extends SqlStatement>(all: T[], textLength: number, offset: number): T | null {
+  if (offset < 0 || offset > textLength || all.length === 0) return null;
   let hit = all[0];
   for (const s of all) {
     if (s.start <= offset) hit = s;
   }
   return hit;
+}
+
+/** 不带 WHERE 的 UPDATE 的危险原因（Go 侧 dbdriver.ReasonNoWhereUpdate）。 */
+const NO_WHERE_UPDATE = "no_where_update";
+/** 不带 WHERE 的 DELETE 的危险原因（Go 侧 dbdriver.ReasonNoWhereDelete）。 */
+const NO_WHERE_DELETE = "no_where_delete";
+
+/** 一条语句的类型与危险标记：驱动给出的，或默认切分从语句开头推出的。 */
+export interface StatementKind {
+  /** 语句类型，大写（如 SELECT、DROP TABLE、驱动自己的 PL/SQL 块类型）。 */
+  type: string;
+  dangerous: boolean;
+  /** 危险原因（Go 侧 dbdriver.DangerReasons 之一）；不危险时没有。 */
+  reason?: string;
+}
+
+/** 驱动切分出的一条语句（Go 侧 dbdriver.Statement）：start / end 是 UTF-8 字节偏移。 */
+export interface DriverStatement extends StatementKind {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** 驱动切分出的一条语句，偏移已换成编辑器的字符（UTF-16）偏移。 */
+export type ClassifiedSqlStatement = SqlStatement & StatementKind;
+
+/**
+ * 查询面板确认框的判定：DELETE / DROP / TRUNCATE / ALTER 类语句，或标了不带 WHERE 的 UPDATE /
+ * DELETE 的语句（驱动自己的类型如 PL/SQL 块也按原因算）；预编译执行与调用存储过程不在此列
+ * （与按分号切分时一致）。
+ */
+export function isDangerousStatement(s: StatementKind): boolean {
+  if (/^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(s.type)) return true;
+  return s.dangerous && (s.reason === NO_WHERE_UPDATE || s.reason === NO_WHERE_DELETE);
+}
+
+/** 一个 UTF-16 码点在 UTF-8 里占的字节数；孤立的代理项按 Go 的 U+FFFD 算 3 字节。 */
+function utf8Length(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  if (codePoint < 0x10000) return 3;
+  return 4;
+}
+
+/**
+ * 把驱动给的语句（sql 里的 UTF-8 字节偏移）换成编辑器的字符偏移。驱动的输出已由宿主校验：
+ * 按顺序、不重叠、不切开字符，所以一趟从头走到尾即可。
+ */
+export function fromDriverStatements(sql: string, statements: DriverStatement[]): ClassifiedSqlStatement[] {
+  let index = 0;
+  let bytes = 0;
+  const toIndex = (target: number) => {
+    while (bytes < target) {
+      const cp = sql.codePointAt(index)!;
+      bytes += utf8Length(cp);
+      index += cp > 0xffff ? 2 : 1;
+    }
+    return index;
+  };
+  return statements.map(({ start, end, text, type, dangerous, reason }) => ({
+    start: toIndex(start),
+    end: toIndex(end),
+    text,
+    type,
+    dangerous,
+    reason,
+  }));
+}
+
+/** 从掩码后的语句开头推出它的类型（首个词），以及不带 WHERE 的 UPDATE 的危险标记。 */
+function kindOf(maskedStatement: string): StatementKind {
+  const stmt = maskedStatement.toUpperCase();
+  const type = /^\w*/.exec(stmt)![0];
+  const noWhereUpdate = type === "UPDATE" && !/\bWHERE\b/.test(stmt);
+  return noWhereUpdate ? { type, dangerous: true, reason: NO_WHERE_UPDATE } : { type, dangerous: false };
 }
 
 /**
@@ -146,10 +229,6 @@ export function statementAt(sql: string, offset: number): SqlStatement | null {
 export function isDangerousSql(sql: string): boolean {
   return [true, false].some((backslashEscapes) => {
     const masked = maskNonCode(sql, backslashEscapes);
-    return fragments(masked).some(({ start, end }) => {
-      const stmt = masked.slice(start, end).toUpperCase();
-      if (/^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(stmt)) return true;
-      return /^UPDATE\b/.test(stmt) && !/\bWHERE\b/.test(stmt);
-    });
+    return fragments(masked).some(({ start, end }) => isDangerousStatement(kindOf(masked.slice(start, end))));
   });
 }

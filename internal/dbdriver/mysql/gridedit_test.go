@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 表格编辑：新增行只写填写过的列，一列都没填写成 () VALUES ()；改动与删除有没有主键都带 LIMIT 1，

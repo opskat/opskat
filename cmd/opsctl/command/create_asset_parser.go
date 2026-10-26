@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/policy"
@@ -119,31 +120,9 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		return nil, fmt.Errorf("credential and plaintext secret sources are mutually exclusive")
 	}
 
-	// 明文告警与 update 同源：凭据字段之外，类型声明的只写字段（如 Redis 的 sentinel_password）
-	// 同样算明文。--password 与 --config 同时带明文时 argv 告警只打一次。
-	configHasSecret := secretInConfig != "" || writeOnlyFieldPresent(*assetType, config)
-	if visited["password"] || (configSource == "--config" && configHasSecret) {
-		if err := warnArgvPlaintext(deps.stderr); err != nil {
-			return nil, err
-		}
-	}
-	if configSource == "--config-file" && configHasSecret {
-		if err := warnConfigFilePlaintext(deps.stderr); err != nil {
-			return nil, err
-		}
-	}
-
-	if visited["credential-id"] {
-		config["credential_id"] = *credentialID
-	}
-	plaintextField := plaintextConfigField(*assetType)
-	if visited["password"] {
-		if *password == "" {
-			return nil, fmt.Errorf("--password must not be empty")
-		}
-		config[plaintextField] = *password
-	}
-
+	// 兼容 flag 先并入有效配置，再判明文：驱动可能由 --driver 给出，口令类专属字段要按它认。
+	// 只写字段取并入前的 --config 内容判断——旗标本身带的值（如 --kubeconfig）不算 config 明文。
+	fileConfig := maps.Clone(config)
 	legacy := map[string]any{
 		"host":                  *host,
 		"port":                  *port,
@@ -172,6 +151,32 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		}
 		config[key] = value
 	}
+	// 明文告警与 update 同源：凭据字段之外，类型声明的只写字段（如 Redis 的 sentinel_password）
+	// 同样算明文。--password 与 --config 同时带明文时 argv 告警只打一次。
+	configHasSecret := secretInConfig != "" || writeOnlyFieldPresent(*assetType, fileConfig) ||
+		assettype.DriverOptionsHaveSecret(config, nil)
+	if visited["password"] || (configSource == "--config" && configHasSecret) {
+		if err := warnArgvPlaintext(deps.stderr); err != nil {
+			return nil, err
+		}
+	}
+	if configSource == "--config-file" && configHasSecret {
+		if err := warnConfigFilePlaintext(deps.stderr); err != nil {
+			return nil, err
+		}
+	}
+
+	if visited["credential-id"] {
+		config["credential_id"] = *credentialID
+	}
+	plaintextField := plaintextConfigField(*assetType)
+	if visited["password"] {
+		if *password == "" {
+			return nil, fmt.Errorf("--password must not be empty")
+		}
+		config[plaintextField] = *password
+	}
+
 	if visited["ssh-asset"] {
 		id, err := deps.resolveAssetID(ctx, *sshAsset)
 		if err != nil {

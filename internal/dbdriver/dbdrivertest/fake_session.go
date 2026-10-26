@@ -9,8 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 var (
@@ -53,7 +52,7 @@ func FakeSessions(f *Fake) SessionFactory {
 	return func(t *testing.T) dbdriver.Session {
 		t.Helper()
 		session, err := f.Open(context.Background(), dbdriver.OpenRequest{
-			Config: &asset_entity.DatabaseConfig{Driver: f.Desc.ID, Host: "fake.internal", Port: f.Desc.DefaultPort},
+			Config: &dbdriver.Config{Driver: f.Desc.ID, Host: "fake.internal", Port: f.Desc.DefaultPort},
 		})
 		if err != nil {
 			t.Fatalf("open fake session: %v", err)

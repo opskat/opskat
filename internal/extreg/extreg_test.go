@@ -3,6 +3,7 @@ package extreg
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 	"github.com/opskat/opskat/internal/service/conntest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -66,6 +68,25 @@ type fakePlugin struct {
 	testConnErr        error
 	lastTestConnType   string
 	lastTestConnConfig *extension.AdHocAssetConfig
+
+	// openDriver answers OpenDriverSession; nil means the extension provides no driver.
+	openDriver func(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
+	// classify answers ClassifyStatements; nil means no driver of the extension splits SQL.
+	classify func(ctx context.Context, id, sql string) ([]dbdriver.Statement, error)
+}
+
+func (p *fakePlugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	if p.openDriver == nil {
+		return nil, fmt.Errorf("fake plugin provides no database driver %q", id)
+	}
+	return p.openDriver(ctx, id, req)
+}
+
+func (p *fakePlugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	if p.classify == nil {
+		return nil, fmt.Errorf("fake plugin provides no database driver %q that splits SQL", id)
+	}
+	return p.classify(ctx, id, sql)
 }
 
 func (p *fakePlugin) TestConnection(_ context.Context, assetType string, adhoc *extension.AdHocAssetConfig) error {

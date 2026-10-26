@@ -8,8 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestFakeDriverPassesConformance(t *testing.T) {
@@ -103,7 +102,7 @@ func (lenientSession) ObjectSource(context.Context, string, string, string, stri
 // 浏览的一致性检查也得能失败：没声明的对象类型被放行时要点出来。
 func TestConformanceReportsAnUndeclaredObjectTypeBeingServed(t *testing.T) {
 	fake := NewFake() // 只声明了视图
-	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}})
+	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "fakedb", Host: "h"}})
 	require.NoError(t, err)
 
 	problems := sessionProblems(fake.Desc, lenientSession{session})
@@ -116,7 +115,7 @@ func TestConformanceReportsAnUndeclaredObjectTypeBeingServed(t *testing.T) {
 func TestConformanceChecksTableDDLAgainstTheDeclaration(t *testing.T) {
 	open := func(t *testing.T, fake *Fake) dbdriver.Session {
 		t.Helper()
-		session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}})
+		session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "fakedb", Host: "h"}})
 		require.NoError(t, err)
 		return session
 	}
@@ -144,7 +143,7 @@ func TestConformanceChecksTableDDLAgainstTheDeclaration(t *testing.T) {
 // 没声明能关闭外键检查的驱动，会话放行关闭外键检查时要点出来。
 func TestConformanceReportsAnUndeclaredForeignKeyToggleBeingServed(t *testing.T) {
 	fake := NewFake()
-	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"}})
+	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "fakedb", Host: "h"}})
 	require.NoError(t, err)
 
 	problems := sessionProblems(fake.Desc, lenientBatchSession{session})

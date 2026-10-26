@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // ConformanceStatement 是一致性测试在会话上执行的语句：先 Execute，再用 ExecutePaged 取
@@ -42,6 +42,9 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
+	if err := d.Descriptor().Validate(); err != nil {
+		t.Errorf("descriptor: %v", err)
+	}
 	for _, problem := range descriptorProblems(d.Descriptor()) {
 		t.Errorf("descriptor: %s", problem)
 	}
@@ -64,7 +67,7 @@ func readOnlyProblems(d dbdriver.Driver) []string {
 		return nil
 	}
 	session, err := d.Open(context.Background(), dbdriver.OpenRequest{
-		Config: &asset_entity.DatabaseConfig{Driver: desc.ID, ReadOnly: true},
+		Config: &dbdriver.Config{Driver: desc.ID, ReadOnly: true},
 	})
 	if err == nil {
 		problem := fmt.Sprintf("the driver does not declare %q, yet opened a session for a read-only config", dbdriver.CapReadOnly)
@@ -908,13 +911,13 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 func registrationProblems(d dbdriver.Driver) []string {
 	var problems []string
 	desc := d.Descriptor()
-	if got, err := dbdriver.Lookup(desc.ID); err != nil {
+	if got, err := dbregistry.Lookup(desc.ID); err != nil {
 		problems = append(problems, fmt.Sprintf("Lookup(%q): %v", desc.ID, err))
 	} else if got != d {
 		problems = append(problems, fmt.Sprintf("Lookup(%q) returns a different driver", desc.ID))
 	}
 	for _, name := range desc.Names() {
-		if got, ok := dbdriver.ByName(name); !ok || got != d {
+		if got, ok := dbregistry.ByName(name); !ok || got != d {
 			problems = append(problems, fmt.Sprintf("ByName(%q) does not resolve to this driver", name))
 		}
 	}

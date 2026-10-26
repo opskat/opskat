@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 表浏览：库名是 schema 名，有值时表以 "schema"."table" 引用，为空时只引用表名（没有 schema

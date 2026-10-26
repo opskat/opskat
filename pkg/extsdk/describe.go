@@ -1,6 +1,10 @@
 package opskat
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
+)
 
 // describe() is the guest's answer to "what can you do".
 //
@@ -23,6 +27,8 @@ type descriptor struct {
 	Snippets       *descSnippets   `json:"snippets,omitempty"`
 	Reviewer       *descReviewer   `json:"reviewer,omitempty"`
 	SettingsSchema map[string]any  `json:"settingsSchema,omitempty"`
+	// DatabaseDrivers are the driver descriptors registered with DatabaseDriver.
+	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers,omitempty"`
 }
 
 type descI18n struct {
@@ -131,6 +137,8 @@ func dispatchDescribe() (json.RawMessage, error) {
 		Icon:     meta.Icon,
 		I18n:     descI18n{DisplayName: meta.DisplayName, Description: meta.Description},
 		Policies: descPolicies{Type: meta.PolicyType},
+
+		DatabaseDrivers: databaseDrivers,
 	}
 
 	for _, at := range assetTypes {

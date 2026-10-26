@@ -16,7 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
@@ -108,6 +108,13 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
+	}
+
+	// 数据库资产的驱动由扩展提供时，同样只激活这一个扩展，且早于审批：驱动不可用
+	// （扩展在桌面端被停用）不该让用户为一条注定失败的命令点头。
+	if err := activateDriverExtension(ctx, asset, activateExtensionFn); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
 	}
 
 	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
@@ -271,7 +278,7 @@ func buildExecAuditResult(exitCode int, stdout, stderr string) string {
 // driverTypeNames 列出可作 --type 值的数据库驱动名：注册表里每个驱动的 id 与别名。
 func driverTypeNames() string {
 	var names []string
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		names = append(names, d.Descriptor().Names()...)
 	}
 	return strings.Join(names, ", ")

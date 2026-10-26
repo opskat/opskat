@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/assetconn"
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -266,8 +266,8 @@ func TestAssetSvc_Update_InvalidatesConnections(t *testing.T) {
 func TestAssetSvc_Update_KeepsAnAssetWithAnUnregisteredDatabaseDriverEditable(t *testing.T) {
 	ctx, mockRepo := setupTest(t)
 	const driver = "asset_svc_test_ghostdb"
-	_, err := dbdriver.Lookup(driver)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable, "the test needs a driver id that is not registered")
+	_, err := dbregistry.Lookup(driver)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable, "the test needs a driver id that is not registered")
 
 	t.Run("renaming it is written with the stored config untouched", func(t *testing.T) {
 		const stored = `{"driver":"asset_svc_test_ghostdb","host":"10.0.0.5","port":1521,"username":"app"}`

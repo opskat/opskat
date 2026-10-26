@@ -9,7 +9,128 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
+
+func registerDriverOptionsFake(t *testing.T) {
+	t.Helper()
+	fake := dbdrivertest.NewFake()
+	fake.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "region", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection},
+		{Key: "token", Type: dbdriver.FieldTypePassword, Tab: dbdriver.TabConnection},
+	}
+	dbdrivertest.Register(t, fake)
+}
+
+// 口令类的 driver_options 与内置口令一样计入明文告警；非口令类的不算，值也不回显。
+func TestParseAssetCreateDriverOptionsPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretConfig := `{"driver":"fakedb","host":"h","driver_options":{"region":"eu","token":"opt-top-secret"}}`
+	plainConfig := `{"driver":"fakedb","host":"h","driver_options":{"region":"eu"}}`
+
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", secretConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "opt-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config-file", "a.json"}, nil,
+		map[string][]byte{"a.json": []byte(secretConfig)})
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", plainConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
+
+// Kerberos 口令与资产口令一样是明文：出现在 --config / --config-file 里计入告警，值不回显；
+// 主体、KDC 等非机密键不算。
+func TestParseAssetCreateKerberosPasswordPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretConfig := `{"driver":"fakedb","host":"h","auth_method":"kerberos","krb_principal":"a@B","krb_password":"krb-top-secret"}`
+	plainConfig := `{"driver":"fakedb","host":"h","auth_method":"kerberos","krb_principal":"a@B","krb_kdc":"kdc","krb_keytab_file":"/k.keytab"}`
+
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", secretConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "krb-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config-file", "a.json"}, nil,
+		map[string][]byte{"a.json": []byte(secretConfig)})
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+	assert.NotContains(t, stderr, "krb-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", plainConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
+
+// TLS 私钥内容与口令一样是明文：出现在 --config / --config-file 里计入告警，值不回显；
+// 其余证书字段（服务器名、CA 内容）不算。
+func TestParseAssetCreateTLSKeyContentPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretConfig := `{"driver":"fakedb","host":"h","tls":true,"tls_key_pem":"KEY-top-secret"}`
+	plainConfig := `{"driver":"fakedb","host":"h","tls":true,"tls_server_name":"db","tls_ca_pem":"CA"}`
+
+	_, stderr, err := parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", secretConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "KEY-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config-file", "a.json"}, nil,
+		map[string][]byte{"a.json": []byte(secretConfig)})
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+	assert.NotContains(t, stderr, "KEY-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, []string{"--name", "x", "--type", "database", "--config", plainConfig}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
+
+// 驱动由 --driver 旗标给出时，--config / --config-file 里的口令类专属字段与驱动写在
+// --config 里一样计入明文告警；无口令类字段不告警；值不回显；内置口令告警不变。
+func TestParseAssetCreateDriverFlagPlaintextWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	secretOpts := `{"driver_options":{"region":"eu","token":"flag-top-secret"}}`
+	plainOpts := `{"driver_options":{"region":"eu"}}`
+	base := []string{"--name", "x", "--type", "database", "--driver", "fakedb", "--host", "h"}
+	files := map[string][]byte{"s.json": []byte(secretOpts)}
+
+	_, stderr, err := parseAssetCreateForTest(t, append(base, "--config", secretOpts), nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "flag-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, append(base, "--config-file", "s.json"), nil, files)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "restrictive permissions")
+	assert.NotContains(t, stderr, "flag-top-secret")
+
+	_, stderr, err = parseAssetCreateForTest(t, append(base, "--config", plainOpts), nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+
+	_, stderr, err = parseAssetCreateForTest(t, append(base, "--config", `{"password":"builtin-top-secret"}`), nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr, "builtin-top-secret")
+}
+
+// 告警按合并了旗标之后的有效驱动判断：--config 写的驱动被 --driver 覆盖时，按旧驱动的声明
+// 认作口令的字段不再告警（有效驱动没有口令类专属字段）。
+func TestParseAssetCreateDriverFlagOverridesConfigDriverForWarning(t *testing.T) {
+	registerDriverOptionsFake(t)
+	args := []string{"--name", "x", "--type", "database", "--driver", "mysql", "--host", "h",
+		"--config", `{"driver":"fakedb","driver_options":{"token":"not-a-secret-for-mysql"}}`}
+
+	_, stderr, err := parseAssetCreateForTest(t, args, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+}
 
 type failingWriter struct{ err error }
 

@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/query_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 树的浏览（列库、列表、表元数据、对象列表、对象源码）由驱动在自己的会话上完成，

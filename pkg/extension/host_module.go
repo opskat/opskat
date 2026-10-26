@@ -68,6 +68,8 @@ var hostOps = map[string]hostOpFunc{
 	"io.open":          opIOOpen,
 	"io.set_deadline":  opIOSetDeadline,
 	"action.event":     opActionEvent,
+	// dbdriver.kerberos_ticket answers the raw AP-REQ bytes.
+	"dbdriver.kerberos_ticket": opKerberosTicket,
 	"action.should_stop": func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
 		if env.inv.shouldStop() {
 			return []byte{1}, nil
@@ -237,7 +239,15 @@ func opIOOpen(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	epoch := env.inv.io.Epoch()
-	res, err := env.host.OpenIO(env.ctx, env.inv.asset, p)
+	var res *IOResource
+	var err error
+	if p.Type == "tcp" && env.inv.reach != nil {
+		// A database driver reaches its database along the session's reach path,
+		// not along an asset endpoint of the extension's own.
+		res, err = openTCP(env.ctx, DialContextFunc(env.inv.reach.Dial), nil, p, nil)
+	} else {
+		res, err = env.host.OpenIO(env.ctx, env.inv.asset, p)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -258,6 +268,23 @@ func opIOSetDeadline(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	return nil, env.inv.io.SetDeadline(p.Handle, p.Kind, deadlineTime(p.UnixNanos))
+}
+
+// opKerberosTicket hands a database driver the ticket it logs in with: the
+// Kerberos AP-REQ for the service principal it names (service/host, as the
+// database's login handshake gave them), from its session's ticket gate. It
+// names no asset: the session's is the only one whose tickets it may get.
+func opKerberosTicket(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+	var p struct {
+		SPN string `json:"spn"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	if env.inv.tickets == nil {
+		return nil, errTicketOutsideDriverSession
+	}
+	return env.inv.tickets.ticket(env.ctx, p.SPN)
 }
 
 func opActionEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {

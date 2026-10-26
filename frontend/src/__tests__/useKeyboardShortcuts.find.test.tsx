@@ -6,6 +6,7 @@ import { useLayoutStore } from "../stores/layoutStore";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { SqlEditorTab } from "../components/query/SqlEditorTab";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", async () => ({
   CodeEditor: (await import("../components/query/__tests__/FakeCodeEditor")).FakeCodeEditor,
@@ -46,6 +47,7 @@ function monacoFocusTarget(parent: HTMLElement = document.body): HTMLElement {
 }
 
 function renderSqlEditorTab() {
+  provideDrivers(BUILTIN_DRIVERS);
   useTabStore.setState({
     tabs: [
       {

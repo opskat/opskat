@@ -1,3 +1,6 @@
+import { tlsCertFields } from "@/components/asset/tlsCertConfig";
+import { kerberosFields } from "@/components/asset/kerberosConfig";
+import type { DatabaseFormState } from "@/components/asset/DatabaseConfigSection.config";
 import { registerDriverFormField } from "./formFields";
 
 registerDriverFormField("host", [
@@ -30,7 +33,9 @@ registerDriverFormField("port", [
 registerDriverFormField("username", [
   { kind: "text", key: "username", label: "asset.username", testid: "database-username-input" },
 ]);
-registerDriverFormField("password", [{ kind: "password" }]);
+// 选了 Kerberos 认证就隐藏资产口令(认证方式由 kerberos 字段组提供)。
+registerDriverFormField("password", [{ kind: "password", visibleWhen: (s) => s.authMethod !== "kerberos" }]);
+registerDriverFormField("kerberos", kerberosFields<DatabaseFormState>());
 registerDriverFormField("database", [
   {
     kind: "text",
@@ -55,6 +60,13 @@ registerDriverFormField("ssl_mode", [
   },
 ]);
 registerDriverFormField("tls", [{ kind: "switch", key: "tls", label: "TLS" }]);
+// 证书字段组自带启用开关,与 Redis 的 TLS 分组同款;其余控件在启用后才显示。
+registerDriverFormField("tls_cert", [
+  { kind: "switch", key: "tls", label: "asset.tls" },
+  { kind: "switch", key: "tlsInsecure", label: "asset.tlsInsecure", visibleWhen: (s) => s.tls },
+  { kind: "text", key: "tlsServerName", label: "asset.tlsServerName", visibleWhen: (s) => s.tls },
+  ...tlsCertFields<DatabaseFormState>((s) => s.tls),
+]);
 registerDriverFormField("params", [
   { kind: "text", key: "params", label: "asset.params", placeholder: "asset.paramsPlaceholder" },
 ]);

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 整批执行时关闭外键检查：SQL Server 没有会话级的开关，停用的是批写入的那张表上当前启用着的外键

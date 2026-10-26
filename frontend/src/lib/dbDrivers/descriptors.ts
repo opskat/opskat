@@ -1,16 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+// 应用的 i18n（src/i18n）初始化的就是 i18next 的默认实例；这里只读当前语言，不引入它的初始化副作用。
+import i18n from "i18next";
 import { ListDatabaseDrivers } from "../../../wailsjs/go/query/Query";
 import type { dbdriver } from "../../../wailsjs/go/models";
 
-/** 后端驱动注册表里一个驱动的自我描述(原样来自 Query.ListDatabaseDrivers)。 */
+/** 后端驱动注册表里一个驱动的自我描述(原样来自 Query.ListDatabaseDrivers,专属字段的文案已按当前语言翻译)。 */
 export type DriverDescriptor = dbdriver.Descriptor;
 
 let cached: Promise<DriverDescriptor[]> | null = null;
+let generation = 0;
+const listeners = new Set<() => void>();
 
-/** 取全部驱动描述,顺序即后端返回的展示顺序。成功结果在进程内复用;失败不缓存,下次调用重试。 */
+/**
+ * 取全部驱动描述,顺序即后端返回的展示顺序。成功结果复用到注册表或界面语言下次变化;
+ * 失败不缓存,下次调用重试。
+ */
 export function loadDatabaseDrivers(): Promise<DriverDescriptor[]> {
   if (!cached) {
-    const pending = ListDatabaseDrivers();
+    const pending = ListDatabaseDrivers(i18n.language);
     cached = pending;
     pending.catch(() => {
       if (cached === pending) cached = null;
@@ -19,16 +26,34 @@ export function loadDatabaseDrivers(): Promise<DriverDescriptor[]> {
   return cached;
 }
 
-/** 丢弃缓存的描述列表(测试里换一份描述时用)。 */
-export function resetDatabaseDriverCache(): void {
+/**
+ * 后端注册表变了(扩展加载完成、启用、停用、安装、升级、卸载)或界面换了语言:丢弃缓存的描述,
+ * 已挂载的 useDatabaseDrivers 重新取一次。
+ */
+export function refreshDatabaseDrivers(): void {
   cached = null;
+  generation++;
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function currentGeneration(): number {
+  return generation;
 }
 
 export type DatabaseDriversState =
   { status: "loading" } | { status: "ready"; drivers: DriverDescriptor[] } | { status: "error"; error: string };
 
-/** 加载驱动描述;加载失败时给出错误文案,不提供任何替代列表。 */
+/**
+ * 加载驱动描述,并在注册表变化后换成新的列表;加载失败时给出错误文案,不提供任何替代列表。
+ * 重新取的过程中仍给出上一份列表,使用方(表单、查询面板)不会被卸载重来。
+ */
 export function useDatabaseDrivers(): DatabaseDriversState {
+  const gen = useSyncExternalStore(subscribe, currentGeneration);
   const [state, setState] = useState<DatabaseDriversState>({ status: "loading" });
   useEffect(() => {
     let alive = true;
@@ -39,7 +64,7 @@ export function useDatabaseDrivers(): DatabaseDriversState {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [gen]);
   return state;
 }
 

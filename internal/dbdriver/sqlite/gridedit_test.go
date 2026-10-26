@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 表格编辑：有主键时按主键定位；没有主键时用 rowid 把全列匹配到的几行收敛成物理上的一行；一列

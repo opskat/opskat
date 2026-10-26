@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 )
 
 // 两份给 AI / opsctl 用户看的静态文本（SKILL.md、commands.md）手写了驱动名单，没法由注册表生成。
@@ -54,7 +54,7 @@ func TestDatabaseSkillDriverListMatchesRegistry(t *testing.T) {
 		listed = append(listed, m[1])
 	}
 	got := sortedUnique(listed)
-	if want := sortedUnique(dbdriver.IDs()); !slices.Equal(got, want) {
+	if want := sortedUnique(dbregistry.IDs()); !slices.Equal(got, want) {
 		t.Errorf("%s 的 driver 行列出 %v，注册表是 %v", file, got, want)
 	}
 
@@ -67,7 +67,7 @@ func TestDatabaseSkillDriverListMatchesRegistry(t *testing.T) {
 		listedPorts = append(listedPorts, n)
 	}
 	var wantPorts []int
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		if p := d.Descriptor().DefaultPort; p != 0 {
 			wantPorts = append(wantPorts, p)
 		}
@@ -100,7 +100,7 @@ func TestOpsctlCommandsDriverNamesMatchRegistry(t *testing.T) {
 	}
 
 	var want []string
-	for _, d := range dbdriver.List() {
+	for _, d := range dbregistry.List() {
 		want = append(want, d.Descriptor().Names()...)
 	}
 	if !slices.Equal(sortedUnique(listed), sortedUnique(want)) {

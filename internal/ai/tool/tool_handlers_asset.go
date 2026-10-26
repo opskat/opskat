@@ -45,6 +45,24 @@ type safeAssetView struct {
 	Driver   string `json:"driver,omitempty"`
 	Database string `json:"database,omitempty"`
 	ReadOnly bool   `json:"read_only,omitempty"`
+	// 驱动专属字段：非口令类的取值；口令类只列键（已设置），值不出库。
+	DriverOptions           map[string]any `json:"driver_options,omitempty"`
+	DriverOptionsSecretsSet []string       `json:"driver_options_secrets_set,omitempty"`
+	// 证书 TLS 设置：开关、校验设置与路径照常给出；私钥内容只报告已设置，证书内容不出库。
+	TLS           bool   `json:"tls,omitempty"`
+	TLSInsecure   bool   `json:"tls_insecure,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	TLSCAFile     string `json:"tls_ca_file,omitempty"`
+	TLSCertFile   string `json:"tls_cert_file,omitempty"`
+	TLSKeyFile    string `json:"tls_key_file,omitempty"`
+	TLSKeyPEMSet  bool   `json:"tls_key_pem_set,omitempty"`
+	// Kerberos 设置：认证方式、主体、keytab 路径、KDC 与服务主体照常给出；口令只报告已设置。
+	AuthMethod     string `json:"auth_method,omitempty"`
+	KrbPrincipal   string `json:"krb_principal,omitempty"`
+	KrbKeytabFile  string `json:"krb_keytab_file,omitempty"`
+	KrbKDC         string `json:"krb_kdc,omitempty"`
+	KrbSPN         string `json:"krb_spn,omitempty"`
+	KrbPasswordSet bool   `json:"krb_password_set,omitempty"`
 	// Redis 专属：集群 / 哨兵资产额外显示部署模式、节点与主节点名称（单机不写 mode）
 	RedisDB         int      `json:"redis_db,omitempty"`
 	RedisMode       string   `json:"mode,omitempty"`
@@ -109,6 +127,51 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			}
 			if val, ok := fields["read_only"].(bool); ok {
 				v.ReadOnly = val
+			}
+			if val, ok := fields["driver_options"].(map[string]any); ok {
+				v.DriverOptions = val
+			}
+			if val, ok := fields["driver_options_secrets_set"].([]string); ok {
+				v.DriverOptionsSecretsSet = val
+			}
+			if val, ok := fields["tls"].(bool); ok {
+				v.TLS = val
+			}
+			if val, ok := fields["tls_insecure"].(bool); ok {
+				v.TLSInsecure = val
+			}
+			if val, ok := fields["tls_server_name"].(string); ok {
+				v.TLSServerName = val
+			}
+			if val, ok := fields["tls_ca_file"].(string); ok {
+				v.TLSCAFile = val
+			}
+			if val, ok := fields["tls_cert_file"].(string); ok {
+				v.TLSCertFile = val
+			}
+			if val, ok := fields["tls_key_file"].(string); ok {
+				v.TLSKeyFile = val
+			}
+			if val, ok := fields["tls_key_pem_set"].(bool); ok {
+				v.TLSKeyPEMSet = val
+			}
+			if val, ok := fields["auth_method"].(string); ok {
+				v.AuthMethod = val
+			}
+			if val, ok := fields["krb_principal"].(string); ok {
+				v.KrbPrincipal = val
+			}
+			if val, ok := fields["krb_keytab_file"].(string); ok {
+				v.KrbKeytabFile = val
+			}
+			if val, ok := fields["krb_kdc"].(string); ok {
+				v.KrbKDC = val
+			}
+			if val, ok := fields["krb_spn"].(string); ok {
+				v.KrbSPN = val
+			}
+			if val, ok := fields["krb_password_set"].(bool); ok {
+				v.KrbPasswordSet = val
 			}
 			if val, ok := fields["redis_db"].(int); ok {
 				v.RedisDB = val

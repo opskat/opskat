@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // ErrFakeHostRequired 是假驱动自己的规则报出的错误：见到它就说明走的确实是假驱动的规则，
@@ -116,13 +116,13 @@ func NewFake() *Fake {
 // Register 注册驱动，并在测试结束时注销。
 func Register(t testing.TB, d dbdriver.Driver) {
 	t.Helper()
-	dbdriver.Register(d)
-	t.Cleanup(func() { dbdriver.Unregister(d.Descriptor().ID) })
+	dbregistry.Register(d)
+	t.Cleanup(func() { dbregistry.Unregister(d.Descriptor().ID) })
 }
 
 func (f *Fake) Descriptor() dbdriver.Descriptor { return f.Desc }
 
-func (f *Fake) ValidateConfig(_ *asset_entity.Asset, cfg *asset_entity.DatabaseConfig) error {
+func (f *Fake) ValidateConfig(cfg *dbdriver.Config, _ dbdriver.Route) error {
 	if cfg.Host == "" {
 		return ErrFakeHostRequired
 	}
@@ -143,12 +143,12 @@ func (f *Fake) ValidateCreateArgs(args dbdriver.Args) error {
 	return nil
 }
 
-func (f *Fake) ApplyCreateArgs(cfg *asset_entity.DatabaseConfig, args dbdriver.Args) {
+func (f *Fake) ApplyCreateArgs(cfg *dbdriver.Config, args dbdriver.Args) {
 	cfg.Host = args.String("host")
 	cfg.Port = args.Int("port")
 }
 
-func (f *Fake) ApplyUpdateArgs(cfg *asset_entity.DatabaseConfig, args dbdriver.Args) {
+func (f *Fake) ApplyUpdateArgs(cfg *dbdriver.Config, args dbdriver.Args) {
 	if args.Has("host") {
 		cfg.Host = args.String("host")
 	}
@@ -157,6 +157,6 @@ func (f *Fake) ApplyUpdateArgs(cfg *asset_entity.DatabaseConfig, args dbdriver.A
 	}
 }
 
-func (f *Fake) ConnectionView(cfg *asset_entity.DatabaseConfig) map[string]any {
+func (f *Fake) ConnectionView(cfg *dbdriver.Config) map[string]any {
 	return map[string]any{"host": cfg.Host, "port": cfg.Port}
 }

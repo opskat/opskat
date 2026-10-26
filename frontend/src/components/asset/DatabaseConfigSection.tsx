@@ -6,19 +6,26 @@ import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups } from "@/components/asset/configFields";
 import {
+  buildDriverOptions,
   driverFormGroups,
   driverUsesField,
+  invalidDriverField,
+  missingRequiredDriverField,
   findDatabaseDriver,
   useDatabaseDrivers,
   type DriverDescriptor,
 } from "@/lib/dbDrivers";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { resolveTLSKey } from "./tlsCertConfig";
+import { kerberosInvalidReason, resolveKrbPassword } from "./kerberosConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
   applyDriverChange,
   buildDatabaseConfig,
+  kerberosActive,
   parseDatabaseConfig,
+  withDriverAuthMethod,
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "./DatabaseConfigSection.config";
@@ -51,23 +58,34 @@ function DatabaseConfigForm({
     ref,
     editAsset,
     onValidityChange,
-    init: (a) =>
-      a ? parseDatabaseConfig(a.Config, a.sshTunnelId || 0) : applyDriverChange(DATABASE_DEFAULTS, drivers[0]),
+    init: (a) => {
+      if (!a) return applyDriverChange(DATABASE_DEFAULTS, drivers[0]);
+      const stored = parseDatabaseConfig(a.Config, a.sshTunnelId || 0);
+      const d = findDatabaseDriver(drivers, stored.driver);
+      return d ? withDriverAuthMethod(stored, d) : stored;
+    },
     validate: (s) => {
       const d = findDatabaseDriver(drivers, s.driver);
       // 资产存的驱动不在注册表里:表单显示未知驱动错误,配置原样保留,仍可保存通用字段;
-      // 测试连接交给后端,由它回答「驱动不可用」。
-      if (!d) return { canTest: true, canSave: true };
+      // 测试连接交给后端,由它回答「驱动不可用」。新建的资产没有存下的配置可保留(所选驱动
+      // 在填写途中被移除):不能保存也不能测试,改选别的驱动才行。
+      if (!d) return editAsset ? { canTest: true, canSave: true } : { canTest: false, canSave: false };
       const needsPath = driverUsesField(d, "path");
       const needsHost = driverUsesField(d, "host");
       const isRemote = driverUsesField(d, "sqlite_source") && s.sqliteSource === "remote_ssh_vfs";
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
       const baseOk =
         (!needsPath || !!s.path.trim()) && (!isRemote || s.sshTunnelId > 0) && (!needsHost || !!s.host.trim());
-      const canSave = baseOk && !proxyChainError;
+      const driverFieldInvalid = invalidDriverField(d, s);
+      const driverFieldsOk = !driverFieldInvalid && !missingRequiredDriverField(d, s);
+      const krbReason = kerberosActive(s, d) ? kerberosInvalidReason(s) : "";
+      const canSave = baseOk && driverFieldsOk && !proxyChainError && !krbReason;
       let saveDisabledReason = "";
       if (!canSave) {
         if (proxyChainError) saveDisabledReason = proxyChainError;
+        else if (baseOk && driverFieldInvalid) saveDisabledReason = "asset.formInvalidDriverField";
+        else if (baseOk && !driverFieldsOk) saveDisabledReason = "asset.formMissingDriverField";
+        else if (baseOk) saveDisabledReason = krbReason;
         else if (isRemote && s.path.trim() && s.sshTunnelId <= 0) {
           saveDisabledReason = "asset.formMissingSQLiteSSH";
         } else if (needsPath && !s.path.trim()) {
@@ -87,12 +105,15 @@ function DatabaseConfigForm({
           d,
           await resolveSaveCredential(cred.value, ctx.encryptPassword),
           await resolveSaveProxyPassword(s, ctx.encryptPassword),
-          await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+          await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
+          await buildDriverOptions(d, s, ctx.encryptPassword),
+          await resolveTLSKey(s, ctx.encryptPassword),
+          await resolveKrbPassword(s, ctx.encryptPassword)
         ),
         sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
       };
     },
-    buildTest: async (s) => {
+    buildTest: async (s, ctx) => {
       const d = findDatabaseDriver(drivers, s.driver);
       if (!d)
         return {
@@ -109,12 +130,19 @@ function DatabaseConfigForm({
           s.proxyPassword,
           Object.fromEntries(
             s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
-          )
+          ),
+          // 测试连接与已存资产一样由后端解密口令类专属字段,所以这里同样给密文。
+          await buildDriverOptions(d, s, ctx.encryptPassword),
+          // 私钥同样给密文:后端只认密文。
+          await resolveTLSKey(s, ctx.encryptPassword),
+          await resolveKrbPassword(s, ctx.encryptPassword)
         ),
-        password: cred.value.password,
+        // Kerberos 认证不用资产口令。
+        password: kerberosActive(s, d) ? "" : cred.value.password,
       };
     },
-    deps: [cred.value],
+    // build 按当前的驱动描述序列化:描述更新(扩展升级、换语言)后保存用的是新的那份。
+    deps: [cred.value, drivers],
     validityDeps: [drivers],
   });
 
@@ -126,14 +154,6 @@ function DatabaseConfigForm({
     // 只在挂载时同步一次,之后图标由用户切换驱动驱动。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  if (!driver) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {t("asset.driverUnknown", { driver: state.driver })}
-      </p>
-    );
-  }
 
   // driver 切换:section 自有字段复位(纯函数)+ 壳 icon 副作用(onIconChange)。
   const handleDriverChange = (id: string) => {
@@ -162,6 +182,22 @@ function DatabaseConfigForm({
       </Field>
     ),
   };
+
+  if (!driver) {
+    const unknown = (
+      <p role="alert" className="text-sm text-destructive">
+        {t("asset.driverUnknown", { driver: state.driver })}
+      </p>
+    );
+    if (editAsset) return unknown;
+    // 新建时所选驱动在填写途中被移除:留着驱动下拉,改选别的驱动即可继续。
+    return (
+      <div className="flex flex-col gap-3">
+        {unknown}
+        {driverSelect.render()}
+      </div>
+    );
+  }
 
   const groups = driverFormGroups(driver, [driverSelect]);
 

@@ -1,6 +1,7 @@
 import type { ConfigGroupSchema, FieldDesc } from "@/components/asset/configFields";
 import type { DatabaseFormState } from "@/components/asset/DatabaseConfigSection.config";
 import type { DriverDescriptor } from "./descriptors";
+import { driverFieldsForTab, driverFieldsOf } from "./driverFields";
 
 type DriverFieldDescs = FieldDesc<DatabaseFormState>[];
 
@@ -24,19 +25,26 @@ const TAB_LABELS: Record<string, string> = {
 /**
  * 按驱动描述生成表单各 Tab 的声明式分组(Tab 与字段顺序都以描述为准)。
  * connectionLead 排在连接 Tab 最前(驱动下拉)。端口与主机在同一 Tab 里同行显示,由主机字段的控件携带。
+ * 驱动专属字段排在所在 Tab 的内置字段之后;表单没声明的 Tab 由专属字段带出,按 Tab 的固定次序排在后面。
  */
 export function driverFormGroups(
   driver: DriverDescriptor,
   connectionLead: DriverFieldDescs
 ): ConfigGroupSchema<DatabaseFormState>[] {
-  return driver.form.map((tab) => {
-    const fields = tab.fields
-      .filter((f) => !(f === "port" && tab.fields.includes("host")))
-      .flatMap((f) => registry.get(f) ?? []);
+  const formTabs = driver.form.map((tab) => tab.tab);
+  const extraTabs = Object.keys(TAB_LABELS).filter(
+    (tab) => !formTabs.includes(tab) && driverFieldsOf(driver).some((f) => f.tab === tab)
+  );
+  const builtin = (tab: string) => {
+    const fields = driver.form.find((t) => t.tab === tab)?.fields ?? [];
+    return fields.filter((f) => !(f === "port" && fields.includes("host"))).flatMap((f) => registry.get(f) ?? []);
+  };
+  return [...formTabs, ...extraTabs].map((tab) => {
+    const fields = [...builtin(tab), ...driverFieldsForTab(driver, tab)];
     return {
-      key: tab.tab,
-      label: TAB_LABELS[tab.tab],
-      fields: tab.tab === "connection" ? [...connectionLead, ...fields] : fields,
+      key: tab,
+      label: TAB_LABELS[tab],
+      fields: tab === "connection" ? [...connectionLead, ...fields] : fields,
     };
   });
 }

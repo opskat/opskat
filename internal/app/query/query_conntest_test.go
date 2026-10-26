@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 )
 
@@ -45,7 +45,7 @@ func TestDatabaseConnectionTestRejectsUnregisteredDriver(t *testing.T) {
 	q := &Query{}
 	err := q.testDatabaseConnection(context.Background(),
 		`{"driver":"oracle","host":"127.0.0.1","port":1521,"username":"u"}`, "pw")
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 }
 

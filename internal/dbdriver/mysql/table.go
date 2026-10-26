@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 表浏览：表以 `db`.`table` 引用，主键与列定义用 SHOW KEYS / SHOW FULL COLUMNS（带列注释），分页用共用的

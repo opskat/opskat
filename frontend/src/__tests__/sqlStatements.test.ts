@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isDangerousSql, splitStatements, statementAt } from "@/lib/sqlStatements";
+import {
+  fromDriverStatements,
+  isDangerousSql,
+  isDangerousStatement,
+  splitStatements,
+  statementAt,
+  statementAtOffset,
+  type DriverStatement,
+} from "@/lib/sqlStatements";
 
 const texts = (sql: string) => splitStatements(sql).map((s) => s.text);
 
@@ -139,5 +147,90 @@ describe("isDangerousSql", () => {
     expect(isDangerousSql('SELECT "C:\\"; DROP TABLE x;')).toBe(true);
     // MySQL-style escaped quotes inside an ordinary string stay harmless.
     expect(isDangerousSql("SELECT 'it\\'s fine'")).toBe(false);
+  });
+});
+
+/** 按 Go 的方式给出 text 在 sql 里的 UTF-8 字节区间（测试用 sql 里每段 text 只出现一次）。 */
+function driverStatement(sql: string, text: string, type: string, reason?: string): DriverStatement {
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+  const at = sql.indexOf(text);
+  const start = bytes(sql.slice(0, at));
+  return { start, end: start + bytes(text), text, type, dangerous: reason !== undefined, reason };
+}
+
+describe("fromDriverStatements", () => {
+  it.each([
+    ["ASCII", "SELECT 1;\nSELECT 2;", ["SELECT 1", "SELECT 2"]],
+    ["Chinese", "SELECT '中文' FROM t;\nSELECT '再见';", ["SELECT '中文' FROM t", "SELECT '再见'"]],
+    ["emoji", "SELECT '😀👍' FROM t; SELECT 2;", ["SELECT '😀👍' FROM t", "SELECT 2"]],
+    [
+      "mixed, ending at the very end",
+      "-- 注释 😀\nBEGIN NULL; END;\nSELECT 'é😀中'",
+      ["BEGIN NULL; END;", "SELECT 'é😀中'"],
+    ],
+  ])("turns the driver's byte offsets into editor offsets for %s text", (_n, sql, parts) => {
+    const out = fromDriverStatements(
+      sql,
+      parts.map((p) => driverStatement(sql, p, "SELECT"))
+    );
+    expect(out.map((s) => sql.slice(s.start, s.end))).toEqual(parts);
+    expect(out.map((s) => s.text)).toEqual(parts);
+  });
+
+  it("keeps the driver's type and danger marks", () => {
+    const sql = "DELETE FROM 表";
+    const [s] = fromDriverStatements(sql, [driverStatement(sql, sql, "DELETE", "no_where_delete")]);
+    expect(s).toMatchObject({ start: 0, end: sql.length, type: "DELETE", dangerous: true, reason: "no_where_delete" });
+  });
+});
+
+describe("statementAtOffset", () => {
+  const sql = "BEGIN x; y; END;\n\nSELECT 1";
+  const all = fromDriverStatements(sql, [
+    driverStatement(sql, "BEGIN x; y; END;", "PLSQL BLOCK"),
+    driverStatement(sql, "SELECT 1", "SELECT"),
+  ]);
+
+  it("finds the driver statement under the cursor, a PL/SQL block as a whole", () => {
+    expect(statementAtOffset(all, sql.length, 7)?.text).toBe("BEGIN x; y; END;");
+    expect(statementAtOffset(all, sql.length, sql.length)?.text).toBe("SELECT 1");
+  });
+
+  it("gives the gap after a statement to that statement, like the semicolon split", () => {
+    expect(statementAtOffset(all, sql.length, 17)?.text).toBe("BEGIN x; y; END;");
+  });
+
+  it("finds nothing without statements or outside the text", () => {
+    expect(statementAtOffset([], 5, 0)).toBeNull();
+    expect(statementAtOffset(all, sql.length, sql.length + 1)).toBeNull();
+  });
+});
+
+describe("isDangerousStatement", () => {
+  it.each([
+    ["DELETE", undefined],
+    ["DELETE", "no_where_delete"],
+    ["DROP TABLE", undefined],
+    ["DROP INDEX", undefined],
+    ["TRUNCATE", undefined],
+    ["ALTER TABLE", undefined],
+    ["UPDATE", "no_where_update"],
+    // 驱动自己的类型(如 PL/SQL 块)里有不带 WHERE 的 UPDATE / DELETE,由原因标出
+    ["PLSQL BLOCK", "no_where_update"],
+    ["PLSQL BLOCK", "no_where_delete"],
+  ])("flags %s (reason %s)", (type, reason) => {
+    expect(isDangerousStatement({ type, dangerous: reason !== undefined, reason })).toBe(true);
+  });
+
+  it.each([
+    ["UPDATE", undefined],
+    ["SELECT", undefined],
+    ["MERGE", undefined],
+    ["PLSQL BLOCK", undefined],
+    ["CALL", "call"],
+    ["EXECUTE", "prepare"],
+    ["DELETED_ROWS", undefined],
+  ])("does not flag %s (reason %s)", (type, reason) => {
+    expect(isDangerousStatement({ type, dangerous: reason !== undefined, reason })).toBe(false);
   });
 });

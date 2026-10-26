@@ -98,6 +98,9 @@ func (m *Manifest) validateReviewer() error {
 	case !declared && reported:
 		return fmt.Errorf("describe() reports a reviewer section but capabilities.commandReview is not declared")
 	case declared:
+		if !hostABIAtLeast(m.HostABI, reviewCommandsMinHostABI) {
+			return fmt.Errorf("manifest: capabilities.commandReview requires hostABI %s or newer (got %s)", reviewCommandsMinHostABI, m.HostABI)
+		}
 		if err := m.Reviewer.validate(); err != nil {
 			return err
 		}

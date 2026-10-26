@@ -1,23 +1,34 @@
 package command
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
@@ -495,4 +506,382 @@ func TestRegisterExtensionAssetTypes_DisabledExtensionIsNotDescribed(t *testing.
 	_, payload, err := repoDescribeCache{}.LoadDescriptor(extensiontest.FixtureName)
 	require.NoError(t, err)
 	assert.Empty(t, payload, "a disabled extension is not loaded, so nothing is cached")
+}
+
+// --- extension-provided database drivers ---------------------------------------
+
+// driverExtEnv is the fixture environment plus the database-driver fixture installed
+// and described on this machine, a TCP "database" it can reach, and a database asset
+// whose driver the extension provides. No desktop app, no terminal.
+type driverExtEnv struct {
+	*localExtEnv
+	asset       *asset_entity.Asset
+	db          *driverFixtureDB
+	activations []string
+	approvals   []approval.ApprovalRequest
+}
+
+// driverFixtureDB answers the fixture driver's wire protocol on a real TCP port.
+type driverFixtureDB struct {
+	addr   string
+	mu     sync.Mutex
+	logins int
+	lines  []string
+}
+
+func newDriverFixtureDB(t *testing.T) *driverFixtureDB {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	d := &driverFixtureDB{addr: ln.Addr().String()}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimSpace(line)
+					d.mu.Lock()
+					if strings.HasPrefix(line, "LOGIN ") {
+						d.logins++
+					} else {
+						d.lines = append(d.lines, line)
+					}
+					d.mu.Unlock()
+					if _, err := c.Write([]byte("OK\n")); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return d
+}
+
+func (d *driverFixtureDB) loginCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.logins
+}
+
+func (d *driverFixtureDB) statements() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.lines...)
+}
+
+// setupDriverExt installs the driver fixture next to the asset-type fixture, as a
+// machine whose desktop app described it once, then runs opsctl's boot registration.
+func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionState) *driverExtEnv {
+	t.Helper()
+	base := setupLocalExtExec(t)
+	ctx := context.Background()
+	root := extensionsDirFn()
+	dir := extensiontest.InstallDBDriverFixture(t, root)
+	mgr := extension.NewManager(root, func(string) extension.HostProvider {
+		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
+	}, zap.NewNop())
+	_, err := mgr.LoadExtension(ctx, dir)
+	require.NoError(t, err)
+	mgr.Close(ctx)
+	for _, s := range states {
+		enabled := s.Enabled
+		require.NoError(t, extension_state_repo.ExtensionState().Create(ctx, s))
+		// The column defaults to enabled; a disable is an update of the existing row.
+		s.Enabled = enabled
+		require.NoError(t, extension_state_repo.ExtensionState().Update(ctx, s))
+	}
+	extreg.Unregister(extensiontest.FixtureName)
+	t.Cleanup(func() {
+		releaseExtensions(ctx)
+		extreg.Unregister(extensiontest.DBDriverFixtureName)
+	})
+	registerExtensionAssetTypes()
+
+	env := &driverExtEnv{localExtEnv: base, db: newDriverFixtureDB(t)}
+	host, port, err := net.SplitHostPort(env.db.addr)
+	require.NoError(t, err)
+	portNum, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	env.asset = &asset_entity.Asset{Name: "fx-db", Type: asset_entity.AssetTypeDatabase, Status: asset_entity.StatusActive, Createtime: 1}
+	encrypted, err := credential_svc.Default().Encrypt("s3cret")
+	require.NoError(t, err)
+	require.NoError(t, env.asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: "fixturedb", Host: host, Port: portNum, Username: "alice", Password: encrypted, Database: "app",
+	}))
+	require.NoError(t, asset_repo.Asset().Create(ctx, env.asset))
+
+	swapGlobal(t, func() func(context.Context, string) error { return activateExtensionFn },
+		func(f func(context.Context, string) error) { activateExtensionFn = f },
+		func(ctx context.Context, name string) error {
+			env.activations = append(env.activations, name)
+			return activateExtension(ctx, name)
+		})
+	swapGlobal(t, func() func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) { return execApprovalFn },
+		func(f func(context.Context, approval.ApprovalRequest) (ApprovalResult, error)) { execApprovalFn = f },
+		func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+			env.approvals = append(env.approvals, req)
+			return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-ext"}, nil
+		})
+	return env
+}
+
+// A driver-only extension is not "a missing describe cache": the boot registration
+// knows its driver from the cached answer, so opsctl sees it with no WASM compiled.
+func TestRegisterExtensionAssetTypes_DriverOnlyExtensionRegistersItsDriverFromTheCache(t *testing.T) {
+	setupDriverExt(t)
+	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	var described []string
+	swapGlobal(t, func() func(context.Context, string) (*extension.ManifestInfo, error) { return describeExtensionFn },
+		func(f func(context.Context, string) (*extension.ManifestInfo, error)) { describeExtensionFn = f },
+		func(ctx context.Context, dir string) (*extension.ManifestInfo, error) {
+			described = append(described, filepath.Base(dir))
+			return describeExtension(ctx, dir)
+		})
+
+	registerExtensionAssetTypes()
+
+	assert.NotContains(t, described, extensiontest.DBDriverFixtureName, "the cached answer is enough: no WASM is compiled")
+
+	owner, ok := extreg.DriverOwnerOf("fixturedb")
+	require.True(t, ok, "the driver must be registered from the cached describe() answer")
+	assert.Equal(t, extensiontest.DBDriverFixtureName, owner)
+	d, ok := dbregistry.ByName("fixturedb")
+	require.True(t, ok)
+	assert.Equal(t, "FixtureDB", d.Descriptor().Name)
+}
+
+func TestCmdCreateAsset_ExtensionDriverIsValidatedByTheDriversOwnRules(t *testing.T) {
+	setupDriverExt(t)
+	create := func(args ...string) (int, string) {
+		var code int
+		stderr := captureStderr(t, func() {
+			captureStdout(t, func() {
+				code = cmdCreate(context.Background(), buildHandlerMap(),
+					append([]string{"asset", "--type", "database", "--driver", "fixturedb", "--name", "fx-db-2"}, args...), "sess-ext")
+			})
+		})
+		return code, stderr
+	}
+
+	// The driver's own config rules run: a network driver needs a host.
+	code, stderr := create("--port", "7357", "--username", "alice")
+	assert.Equal(t, 1, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "host")
+
+	// A valid config gets past validation to the approval step, which nothing here can answer.
+	code, stderr = create("--host", "db.internal", "--port", "7357", "--username", "alice")
+	assert.Equal(t, 3, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "NEEDS TTY")
+}
+
+// With no desktop app on the data dir, `opsctl exec` on a database asset whose driver
+// an extension provides activates that extension in this process and runs the SQL
+// through its session; approval and audit are the database flow's own.
+func TestCmdExec_ExtensionDriverAssetRunsSQLInOpsctlWithoutDesktop(t *testing.T) {
+	env := setupDriverExt(t)
+
+	code, stdout, stderr := env.exec(t, "fx-db", "--", "SELECT * FROM [app].[users]")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "alice")
+	assert.Equal(t, []string{extensiontest.DBDriverFixtureName}, env.activations)
+	assert.Equal(t, 1, env.db.loginCount(), "the extension's session logged in to the database once")
+
+	require.Len(t, env.approvals, 1, "the existing database approval flow asked once")
+	assert.Equal(t, "sql", env.approvals[0].Type)
+	assert.Equal(t, env.asset.ID, env.approvals[0].AssetID)
+	assert.Equal(t, "SELECT * FROM [app].[users]", env.approvals[0].Command)
+
+	var rows []audit_entity.AuditLog
+	require.NoError(t, env.gdb.Order("id").Find(&rows).Error)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "opsctl", rows[0].Source)
+	assert.Equal(t, env.asset.ID, rows[0].AssetID)
+	assert.Equal(t, "SELECT * FROM [app].[users]", rows[0].Command)
+	assert.Equal(t, 1, rows[0].Success)
+}
+
+// An extension disabled in the desktop app is unavailable to opsctl the same way: the
+// error names the driver, no extension is loaded and nothing is asked or run.
+func TestCmdExec_ExtensionDriverDisabledInDesktopIsDriverUnavailable(t *testing.T) {
+	env := setupDriverExt(t, &extension_state_entity.ExtensionState{Name: extensiontest.DBDriverFixtureName, Enabled: false})
+
+	code, stdout, stderr := env.exec(t, "fx-db", "--", "SELECT * FROM [app].[users]")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "driver unavailable")
+	assert.Contains(t, stderr, "fixturedb")
+	assert.Contains(t, stderr, "disabled")
+	assert.Zero(t, env.db.loginCount())
+	assert.Empty(t, env.approvals, "an unavailable driver is refused before any approval is asked")
+}
+
+// Built-in drivers never trigger an extension activation.
+func TestCmdExec_BuiltinDriverAssetActivatesNoExtension(t *testing.T) {
+	env := setupDriverExt(t)
+	builtin := &asset_entity.Asset{Name: "sqlite-db", Type: asset_entity.AssetTypeDatabase, Status: asset_entity.StatusActive, Createtime: 1}
+	require.NoError(t, builtin.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "x.db")}))
+	require.NoError(t, asset_repo.Asset().Create(context.Background(), builtin))
+
+	env.exec(t, "sqlite-db", "--", "SELECT 1")
+
+	assert.Empty(t, env.activations)
+}
+
+// Batch items on extension-driver assets activate the providing extension once for
+// the whole batch and each run through its session.
+func TestCmdBatch_ExtensionDriverItemsActivateTheExtensionOnce(t *testing.T) {
+	env := setupDriverExt(t)
+	swapGlobal(t, func() func([]approval.BatchItem, string) (ApprovalResult, error) { return requireBatchApprovalFn },
+		func(f func([]approval.BatchItem, string) (ApprovalResult, error)) { requireBatchApprovalFn = f },
+		func(_ []approval.BatchItem, session string) (ApprovalResult, error) {
+			return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: session}, nil
+		})
+
+	var code int
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			code = cmdBatch(context.Background(), buildHandlerMap(),
+				[]string{"sql:fx-db:SELECT 1", "sql:fx-db:SELECT 1"}, "sess-batch")
+		})
+	})
+
+	require.Equal(t, 0, code, "stdout: %s\nstderr: %s", stdout, stderr)
+	assert.Equal(t, []string{extensiontest.DBDriverFixtureName}, env.activations, "one activation for the whole batch")
+	assert.Equal(t, 2, strings.Count(stdout, `\"columns\"`), "both items returned a result: %s", stdout)
+	assert.GreaterOrEqual(t, len(env.db.statements()), 2, "both items reached the database through the extension")
+}
+
+// --- driver fields through an extension driver, managed from the command line ------
+
+// withDriverFields rewrites the describe() answer the desktop app cached for the driver
+// fixture so its driver declares fields of its own (the fixture source declares none),
+// then redoes opsctl's boot registration from that cache.
+func withDriverFields(t *testing.T) {
+	t.Helper()
+	hash, payload, err := repoDescribeCache{}.LoadDescriptor(extensiontest.DBDriverFixtureName)
+	require.NoError(t, err)
+	var desc map[string]any
+	require.NoError(t, json.Unmarshal(payload, &desc))
+	drivers := desc["databaseDrivers"].([]any)
+	drivers[0].(map[string]any)["driverFields"] = []map[string]any{
+		{"key": "service_name", "type": "text", "tab": "connection", "required": true},
+		{"key": "wallet_secret", "type": "password", "tab": "connection"},
+	}
+	patched, err := json.Marshal(desc)
+	require.NoError(t, err)
+	require.NoError(t, repoDescribeCache{}.StoreDescriptor(extensiontest.DBDriverFixtureName, hash, patched))
+	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	registerExtensionAssetTypes()
+	d, ok := dbregistry.ByName("fixturedb")
+	require.True(t, ok)
+	require.Len(t, d.Descriptor().DriverFields, 2, "the cached driver fields reach the describe-only registration")
+}
+
+func allowAssetWrites(t *testing.T) {
+	t.Helper()
+	allow := func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-ext"}, nil
+	}
+	swapGlobal(t, func() func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return requireCreateApproval
+	},
+		func(f func(context.Context, approval.ApprovalRequest) (ApprovalResult, error)) {
+			requireCreateApproval = f
+		}, allow)
+	swapGlobal(t, func() func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return requireUpdateApproval
+	},
+		func(f func(context.Context, approval.ApprovalRequest) (ApprovalResult, error)) {
+			requireUpdateApproval = f
+		}, allow)
+}
+
+func runCmd(t *testing.T, fn func() int) (code int, stdout, stderr string) {
+	t.Helper()
+	stderr = captureStderr(t, func() { stdout = captureStdout(t, func() { code = fn() }) })
+	return code, stdout, stderr
+}
+
+func TestExtensionDriverFields_ManagedFromTheCommandLine(t *testing.T) {
+	setupDriverExt(t)
+	withDriverFields(t)
+	allowAssetWrites(t)
+	ctx := context.Background()
+	handlers := buildHandlerMap()
+	create := func(options string) (int, string, string) {
+		cfg := `{"driver":"fixturedb","host":"db.internal","port":7357,"username":"alice","driver_options":` + options + `}`
+		return runCmd(t, func() int {
+			return cmdCreate(ctx, handlers, []string{"asset", "--type", "database", "--name", "fx-opts", "--config", cfg}, "sess-ext")
+		})
+	}
+
+	// Validation by the driver's declarations.
+	code, _, stderr := create(`{"service_name":"orcl","bogus":1}`)
+	assert.Equal(t, 1, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "bogus")
+	code, _, stderr = create(`{}`)
+	assert.Equal(t, 1, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "service_name")
+
+	// Valid, with a password-type option: plaintext warning, created.
+	code, stdout, stderr := create(`{"service_name":"orcl","wallet_secret":"top-secret-value"}`)
+	require.Equal(t, 0, code, "stderr: %s\nstdout: %s", stderr, stdout)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr+stdout, "top-secret-value")
+
+	// Update changes a driver option.
+	code, _, stderr = runCmd(t, func() int {
+		return cmdUpdate(ctx, handlers, []string{"asset", "fx-opts", "--config", `{"driver_options":{"service_name":"orcl2"}}`}, "sess-ext")
+	})
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	// Update without a driver in --config: the stored asset's driver identifies the password option.
+	code, stdout, stderr = runCmd(t, func() int {
+		return cmdUpdate(ctx, handlers, []string{"asset", "fx-opts", "--config", `{"driver_options":{"wallet_secret":"update-top-secret"}}`}, "sess-ext")
+	})
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, stderr, "shell history")
+	assert.NotContains(t, stderr+stdout, "update-top-secret")
+
+	// The stored config carries the updated option and the password option encrypted.
+	found, err := asset_repo.Asset().FindByName(ctx, "fx-opts")
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	cfg, err := found[0].GetDatabaseConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "orcl2", cfg.DriverOptions["service_name"])
+	assert.NotEmpty(t, cfg.DriverOptions["wallet_secret"])
+	assert.NotEqual(t, "top-secret-value", cfg.DriverOptions["wallet_secret"])
+
+	// Get: the plain option is shown, the password one only as set.
+	code, stdout, stderr = runCmd(t, func() int { return cmdGet(ctx, handlers, []string{"asset", "fx-opts"}) })
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	var view struct {
+		DriverOptions map[string]any `json:"driver_options"`
+		SecretsSet    []string       `json:"driver_options_secrets_set"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &view), stdout)
+	assert.Equal(t, map[string]any{"service_name": "orcl2"}, view.DriverOptions)
+	assert.Equal(t, []string{"wallet_secret"}, view.SecretsSet)
+	assert.NotContains(t, stdout+stderr, "top-secret-value")
+	assert.NotContains(t, stdout, cfg.DriverOptions["wallet_secret"])
+
+	// List shows the asset with its extension driver.
+	code, stdout, stderr = runCmd(t, func() int { return cmdList(ctx, handlers, []string{"assets", "--type", "database"}) })
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "fx-opts")
+	assert.Contains(t, stdout, "fixturedb")
 }

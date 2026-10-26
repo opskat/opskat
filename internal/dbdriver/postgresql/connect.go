@@ -11,9 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // Open 打开一条 PostgreSQL 会话。
@@ -46,7 +45,7 @@ func newSession(db *sql.DB) dbdriver.Session {
 	return sqldb.NewSession(db, dialect{})
 }
 
-func dsn(cfg *asset_entity.DatabaseConfig, password string) string {
+func dsn(cfg *dbdriver.Config, password string) string {
 	sslMode := cfg.SSLMode
 	if sslMode == "" {
 		sslMode = "disable"

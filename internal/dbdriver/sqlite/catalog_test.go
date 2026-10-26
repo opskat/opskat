@@ -9,14 +9,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func newDatabase(t *testing.T, statements ...string) dbdriver.Session {
 	t.Helper()
-	session := openLocalSession(t, &asset_entity.DatabaseConfig{
+	session := openLocalSession(t, &dbdriver.Config{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "browse.db"),
 	})
 	for _, statement := range statements {
@@ -27,11 +28,11 @@ func newDatabase(t *testing.T, statements ...string) dbdriver.Session {
 }
 
 func TestSQLitePassesBrowseConformance(t *testing.T) {
-	d, err := dbdriver.Lookup(asset_entity.DriverSQLite)
+	d, err := dbregistry.Lookup(asset_entity.DriverSQLite)
 	require.NoError(t, err)
 
 	dbdrivertest.RunBrowseConformance(t, d, func(t *testing.T) dbdriver.Session {
-		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{
+		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "browse.db"),
 		}})
 		require.NoError(t, err)

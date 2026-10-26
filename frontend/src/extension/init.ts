@@ -7,6 +7,7 @@ import { useExtensionStore } from "./store";
 import { injectExtensionAPI } from "./inject";
 import { createExtensionAPI } from "./api";
 import { clearExtensionCache } from "./loader";
+import { refreshDatabaseDrivers } from "../lib/dbDrivers/descriptors";
 import type { ExtManifest } from "./types";
 
 let _bootstrapped = false;
@@ -42,6 +43,8 @@ export function subscribeExtensionReload(): () => void {
   _subscribed = true;
   const cancel = EventsOn("ext:reload", () => {
     _bundlesStale = true;
+    // 扩展提供的数据库驱动随扩展注册 / 移除:驱动下拉、表单与查询面板换成新的驱动列表。
+    refreshDatabaseDrivers();
     void refreshExtensions();
   });
   return cancel;
@@ -57,6 +60,8 @@ function subscribeExtensionReady(): void {
   if (_readySubscribed) return;
   _readySubscribed = true;
   EventsOn("ext:ready", async () => {
+    // 启动时扩展在后台加载,它们的驱动在此之后才注册。
+    refreshDatabaseDrivers();
     await refreshExtensions();
     useExtensionStore.getState().setReady(true);
   });
@@ -68,6 +73,8 @@ function subscribeExtensionReady(): void {
  * type labels and policy titles keep the old language until reload.
  */
 function onLanguageChanged(): void {
+  // 扩展驱动专属字段的标签与说明同样由后端按语言翻译。
+  refreshDatabaseDrivers();
   void refreshExtensions();
 }
 

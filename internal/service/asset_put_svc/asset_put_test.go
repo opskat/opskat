@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/assettype"
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
@@ -417,8 +417,8 @@ func TestPutUpdateKeepsAnAssetWithAnUnregisteredDatabaseDriverEditable(t *testin
 	const storedConfig = `{"driver":"asset_put_test_ghostdb","host":"10.0.0.5","port":1521,"username":"app"}`
 	seed := func(t *testing.T, env *putTestEnv) *asset_entity.Asset {
 		t.Helper()
-		_, err := dbdriver.Lookup(driver)
-		require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable, "the test needs a driver id that is not registered")
+		_, err := dbregistry.Lookup(driver)
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable, "the test needs a driver id that is not registered")
 		asset := &asset_entity.Asset{
 			Name: "orders-db", Type: asset_entity.AssetTypeDatabase, Status: asset_entity.StatusActive, Config: storedConfig,
 		}
@@ -450,7 +450,7 @@ func TestPutUpdateKeepsAnAssetWithAnUnregisteredDatabaseDriverEditable(t *testin
 		candidate := *asset
 		candidate.Name = "orders-db-renamed"
 		_, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{"host": "10.0.0.6"}})
-		require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 		assert.Contains(t, err.Error(), driver)
 
 		stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)

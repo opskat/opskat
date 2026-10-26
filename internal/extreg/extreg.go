@@ -48,6 +48,7 @@ type pluginCaller interface {
 	CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action string, resources []string, err error)
 	ValidateConfig(ctx context.Context, config json.RawMessage) ([]extension.ValidationError, error)
 	TestConnectionCaller
+	driverOpener
 }
 
 // TestConnectionCaller is the one plugin capability a conntest tester needs:
@@ -83,11 +84,14 @@ type loaded struct {
 	name     string
 	manifest *extension.Manifest
 	plugin   pluginCaller
+	// translate 解析扩展多语言里的键（数据库驱动专属字段的标签与说明）。
+	translate translateFunc
 }
 
 var (
 	mu         sync.Mutex
 	registered = make(map[string][]string)            // extension name → registered asset types
+	drivers    = make(map[string][]*extensionDriver)  // extension name → its registered database drivers
 	manifests  = make(map[string]*extension.Manifest) // extension name → its manifest, for ExpandFileFlags
 	// policyTypeOwner 记录每个策略面（manifest 的 policies.type）归哪个扩展。策略面是
 	// 权限组 ID（ext:<policyType>:<name>）的命名空间段、组上扩展永久规则的落点键，也是
@@ -96,8 +100,8 @@ var (
 	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
 
-// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。调用方持有 mu。
-// 纯审核扩展没有策略面（policyType 为空），不占用任何策略类型。
+// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。纯审核扩展和
+// 只提供数据库驱动的扩展都没有策略面（policyType 为空），无可占用。调用方持有 mu。
 func claimPolicyType(extName, policyType string) error {
 	if policyType == "" {
 		return nil
@@ -112,64 +116,88 @@ func claimPolicyType(extName, policyType string) error {
 	return nil
 }
 
-// Register 把 ext 声明的每个资产类型接进宿主注册表。
+// Register 把 ext 声明的每个资产类型与数据库驱动接进宿主注册表。
 func Register(ext *extension.Extension) error {
 	localized := ext.Manifest.Localized(func(key string) string { return ext.Translate(helpLang, key) })
 	return register(
-		loaded{name: ext.Name, manifest: ext.Manifest, plugin: ext.Plugin},
+		loaded{name: ext.Name, manifest: ext.Manifest, plugin: ext.Plugin, translate: ext.Translate},
 		helpDocument(ext.SkillMD, ext.Name, localized),
 		skillDescription(ext),
 	)
 }
 
 func register(l loaded, help, description string) error {
+	withdrawn, err := registerLocked(l, help, description)
+	// 撤回的驱动在 mu 之外作废会话：关闭要等扩展里执行中的调用停下。
+	removeDrivers(withdrawn)
+	return err
+}
+
+// registerLocked 持 mu 做 register 的登记。失败时返回已移出驱动注册表、会话待作废的驱动。
+func registerLocked(l loaded, help, description string) ([]*extensionDriver, error) {
 	m := l.manifest
 	mu.Lock()
 	defer mu.Unlock()
 	if _, exists := registered[l.name]; exists {
-		return fmt.Errorf("extension %q is already registered", l.name)
+		return nil, fmt.Errorf("extension %q is already registered", l.name)
 	}
 	if err := claimPolicyType(l.name, m.Policies.Type); err != nil {
-		return err
+		return nil, err
+	}
+
+	// 驱动先注册：撞名是最常见的拒绝原因，先查省得登记了一串资产类型再撤。
+	extDrivers, err := registerDrivers(l.name, m.DatabaseDrivers, l.plugin, l.translate)
+	if err != nil {
+		delete(policyTypeOwner, m.Policies.Type)
+		return extDrivers, err
 	}
 
 	var done []string
-	rollback := func() {
+	rollback := func() []*extensionDriver {
 		for _, t := range done {
 			unregisterType(t)
 		}
 		policy_group_entity.UnregisterExtensionGroupsByExtension(l.name)
 		delete(policyTypeOwner, m.Policies.Type)
+		return releaseDrivers(extDrivers)
 	}
 
 	for _, at := range m.AssetTypes {
 		if err := registerType(l, at, help, description); err != nil {
-			rollback()
-			return err
+			return rollback(), err
 		}
 		done = append(done, at.Type)
 	}
 
 	if err := registerPolicyGroups(l.name, m); err != nil {
-		rollback()
-		return err
+		return rollback(), err
 	}
 
 	registered[l.name] = done
+	drivers[l.name] = extDrivers
 	manifests[l.name] = m
 	logger.Default().Info("extension registered",
-		zap.String("extension", l.name), zap.Strings("assetTypes", done))
-	return nil
+		zap.String("extension", l.name), zap.Strings("assetTypes", done),
+		zap.Strings("databaseDrivers", m.Capabilities.DatabaseDrivers))
+	return nil, nil
 }
 
-// Unregister 撤掉一个扩展写进宿主注册表的全部条目。未注册的名字是 no-op。
+// Unregister 撤掉一个扩展写进宿主注册表的全部条目。未注册的名字是 no-op。它提供的数据库驱动
+// 移出驱动注册表，打开着的会话全部关闭，执行中与排队的操作以「驱动不可用」失败。
 func Unregister(name string) {
+	removeDrivers(unregister(name))
+}
+
+// unregister 撤掉注册表条目，返回已移出驱动注册表、会话还待作废的驱动。
+func unregister(name string) []*extensionDriver {
 	mu.Lock()
 	defer mu.Unlock()
 	types, ok := registered[name]
 	if !ok {
-		return
+		return nil
 	}
+	extDrivers := releaseDrivers(drivers[name])
+	delete(drivers, name)
 	for _, t := range types {
 		unregisterType(t)
 	}
@@ -183,6 +211,7 @@ func Unregister(name string) {
 	delete(manifests, name)
 	logger.Default().Info("extension unregistered",
 		zap.String("extension", name), zap.Strings("assetTypes", types))
+	return extDrivers
 }
 
 func registerType(l loaded, at extension.AssetTypeDef, help, description string) error {

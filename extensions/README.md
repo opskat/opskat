@@ -53,13 +53,18 @@ Everything else — tools, asset types, policies, pages, display strings — is 
 ```
 
 `hostABI` is checked as an exact-set membership, not a minimum: `pkg/extension.SupportedHostABIs`
-currently accepts `2.0`, `2.1` and `2.2`, so an already-built `2.0` extension keeps loading
+currently accepts `2.0` through `2.5`, so an already-built `2.0` extension keeps loading
 unchanged (it just doesn't get `@opskat/host-ui` — see below), while one declaring
-anything not in that set (`2.3`, `3.0`, …) is refused at load with the list of what is
+anything not in that set (`2.6`, `3.0`, …) is refused at load with the list of what is
 supported. Declare `2.2` when a tool classifies with `.PolicyResources` or refuses
 arguments with `.RejectArgs` (see [The policy face](#the-policy-face)): an older app
 would read either reply as a call on no resource at all, so it must refuse the extension
-instead.
+instead. Declare `2.3` to provide a database driver (see
+[Providing a database driver](#providing-a-database-driver)). Declare `2.4` for
+`network.databaseRedirects` or the certificate field group: an older app would ignore
+them, so it must refuse the extension instead. Declare `2.5` for
+`capabilities.databaseKerberos` or a driver that splits and classifies statements
+(`dbdriver.CapClassifyStatements`), for the same reason.
 
 `capabilities` defaults to deny-all, and the notebook needs nothing: the host KV, the
 asset config and logging are available without a grant. Declare only what you use:
@@ -86,7 +91,15 @@ included, since the user typed them. The target's scheme, host and port must mat
 an endpoint field (a bare `host:port` admits http and https); anything else, a
 redirect off the endpoints included, is refused with "not an endpoint of the asset".
 Declaring it also puts TCP under that rule; without it TCP is ungated and HTTP reach
-is the static allowlist alone.
+is the static allowlist alone. `network.databaseRedirects` is for database-driver
+extensions: it lets the driver follow a redirect the database answers with (a cluster
+node, a replica) by dialing that other address through the asset's own route. It needs
+`capabilities.databaseDrivers` and `hostABI` `2.4`; otherwise the extension fails to
+load with the reason named. The install confirm lists it as a capability.
+`capabilities.databaseKerberos` (a top-level boolean, not under `network`) declares that
+the driver may log in with Kerberos tickets the host fetches with the asset's Kerberos
+credentials. It likewise needs `capabilities.databaseDrivers` and `hostABI` `2.5`, and
+the install confirm and `opsctl ext dev` list it, marked new when an upgrade adds it.
 
 **Everything else is answered by the module itself**, through `describe()`. You never
 write that answer: the SDK derives it from the registration calls, so the host's view
@@ -123,7 +136,10 @@ ciphertext, so "is it filled" checks work when editing.
 
 **An extension must declare at least one asset type**, and `Meta.PolicyType` must be
 set. Extension tools are reached through `exec` on an asset, so an extension without
-one has no reachable entry point and is refused at load.
+one has no reachable entry point and is refused at load. The one exception is an
+extension that only provides database drivers: its entry point is the user's database
+asset, so it needs no asset type and no policy type (one it declares is still
+checked), and it declares no tools.
 
 ### Schemas come from your Go types
 
@@ -480,6 +496,147 @@ A policy type belongs to one extension: loading a second extension that claims t
 policy type, or a group id that is already registered, is refused. The action set itself
 is never declared separately — the host derives it from the tools' `.Policy` actions
 and `.PolicyFunc` / `.PolicyResources` action sets.
+
+## Providing a database driver
+
+An extension can provide a driver for the `database` asset type — a SQL database the
+app has no built-in driver for. The driver contract is the public `pkg/dbdriver`, the
+same one the built-in drivers implement; how a driver is shaped (descriptor, form
+fields, capabilities, the session's operations) is in
+[docs/references/adding-a-database-driver.md](../docs/references/adding-a-database-driver.md#provided-by-an-extension).
+This section is what is different in an extension.
+
+The manifest declares the driver ids, which needs `hostABI` `2.3`; `describe()` must
+answer with exactly those drivers or the extension is refused at load:
+
+```json
+{
+  "name": "mydb-driver",
+  "version": "0.1.0",
+  "hostABI": "2.3",
+  "backend": { "runtime": "wasm", "binary": "main.wasm" },
+  "capabilities": { "databaseDrivers": ["mydb"] }
+}
+```
+
+The driver registers its descriptor and how a session connects with
+`sdkdbdriver.DatabaseDriver` (`pkg/extsdk/sdkdbdriver`). It is a package of its own:
+serving a driver links `database/sql` and `pkg/dbdriver/sqldb`, and an extension that
+does not import it carries neither. The SDK assembles the session from what `open`
+returns with `sqldb`, so the extension writes a `database/sql` driver (or embeds one
+compiled for `wasip1`) and the dialect, nothing else:
+
+```go
+opskat.Extension(opskat.Meta{Icon: "database", DisplayName: "extension.displayName"})
+sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
+    ID: "mydb", Name: "MyDB", Order: 500, Aliases: []string{}, DefaultPort: 4000,
+    Form: []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{
+        dbdriver.FieldHost, dbdriver.FieldPort, dbdriver.FieldUsername, dbdriver.FieldPassword, dbdriver.FieldDatabase,
+    }}},
+    Capabilities: []dbdriver.Capability{dbdriver.CapViewDDL},
+}, func(ctx context.Context, req dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) {
+    db := sql.OpenDB(newConnector(req)) // dials with req.Transport.Dial
+    if err := sqldb.Establish(ctx, db, nil); err != nil {
+        return nil, nil, err
+    }
+    return db, myDialect{}, nil
+})
+```
+
+- **`open` gets the config, the password and the reach path.** `req.Config` is the
+  asset's connection config without what the host keeps to itself (tunnel, proxies,
+  credential); `req.Password` is the decrypted password, handed over in this call only.
+  Every network connection must be made with `req.Transport.Dial`: the host dials it
+  along the asset's SSH tunnel or proxy chain. `open` returns once the database
+  answers; its error is shown to the user as the driver's error.
+- **The driver reaches the asset's `host:port`, and redirects only when declared.**
+  Without `network.databaseRedirects` the host dials only the asset's own `host:port`;
+  any other address fails naming it and saying the extension does not declare following
+  database redirects. With it, any other `host:port` (a cluster node, a replica, a
+  routed listener the database answers with) is dialed along the asset's route —
+  direct, SSH tunnel, proxy or proxy chain — to that address itself: through a tunnel,
+  proxy or chain the name resolves at the far end, directly it resolves on the user's
+  machine, and then a loopback (`127.0.0.0/8`, `::1`, `localhost`), unspecified
+  (`0.0.0.0`, `::`) or link-local target is refused unless the asset's own address is one. The first dial of each such
+  address in a session is logged (extension, driver, asset, address); one the route
+  cannot reach fails with the route's error naming the address.
+- **Certificate TLS is the driver's own.** Declare `dbdriver.FieldTLSCert` on the
+  `TabTLS` tab (not together with `FieldTLS`; needs `hostABI` `2.4`) and the asset form
+  shows the same certificate fields as a Redis asset: enable TLS, skip verification,
+  server name, and the CA certificate, client certificate and client key, each a file
+  path or pasted content. When the asset has TLS on, `open` gets them as `req.TLS`
+  (`*dbdriver.TLSMaterial`): `Insecure`, `ServerName` and the `CA` / `Cert` / `Key`
+  contents — paths already read by the process opening the session, the key decrypted —
+  handed over like the password, only in this call; with TLS off `req.TLS` is `nil`.
+  The driver builds its own `tls.Config` from them (its database library may start or
+  redo TLS mid-protocol); the host never wraps the connection in TLS. A file that cannot
+  be read or a key that does not decrypt fails the open naming the field; invalid
+  contents or a failed handshake are the driver's own TLS error, never a fallback to
+  plaintext or to no verification.
+- **Kerberos tickets come from the host.** Declare `dbdriver.FieldKerberos` on the
+  `TabConnection` tab (the manifest must declare `capabilities.databaseKerberos`, which
+  needs `hostABI` `2.5`; otherwise the extension is refused at load, naming the driver)
+  and the asset form offers an authentication method: password or Kerberos. When the
+  asset uses Kerberos, `open` gets `req.Kerberos`, `req.Config.AuthMethod` set to
+  `dbdriver.AuthMethodKerberos` and an empty `req.Password`; the username is handed over
+  as usual (the user may leave it empty under Kerberos), the Kerberos password, keytab
+  and keys never are.
+  In the login handshake, call `req.Kerberos.Ticket(ctx, dbdriver.KerberosSPN(service,
+  host))` with the service and host names the database sent (go-ora's
+  `Authenticate(server, service)`), and write the bytes it returns — the Kerberos
+  AP-REQ — into the handshake as they are; `opskat.KerberosTicket(spn)` is the same
+  call. The host fetches the ticket with the asset's Kerberos credentials and refuses,
+  with the reason, a request from outside a driver session or for an asset that does
+  not use Kerberos, a name that is not `service/host` (neither may contain `/` or
+  `@`), and a service principal other than the one the asset pins (naming both). A
+  failed ticket fails the login with the host's reason; nothing falls back to the
+  password. The first ticket for each service principal in a session is logged
+  (extension, driver, asset, principal, service principal), never a credential or a
+  ticket. In tests, `opskat.WithKerberosTickets` gives a `TestHost` a ticket source.
+- **The driver can split and classify SQL itself.** Declare
+  `dbdriver.CapClassifyStatements` (needs `hostABI` `2.5`; otherwise the extension is
+  refused at load, naming the driver) and pass
+  `sdkdbdriver.WithStatementClassifier(classify)` to `DatabaseDriver` — one without the
+  other panics at init. `classify(ctx, sql)` returns each statement of the text as a
+  `dbdriver.Statement`: byte offsets `Start` / `End` into the input, `Text`, an
+  uppercase `Type`, and `Dangerous` with a `Reason` from `dbdriver.DangerReasons()`. It
+  must not touch the database: the host calls it outside any session. The AI / opsctl
+  permission check and the query panel then go by these statements instead of the
+  host's own SQL parsing. Use the host's type names (`SELECT`, `UPDATE`, `DROP TABLE`,
+  ...) only for the same kind of statement and a name of your own (`MERGE`, a PL/SQL
+  block) otherwise. The host checks the answer — offsets inside the input, in order and
+  not overlapping, type uppercase, a known reason only on a dangerous statement — and
+  treats one breaking a rule, like an error `classify` returns for text it cannot split,
+  as SQL it cannot split, naming the driver and the reason.
+- **The form is a network database's.** An extension driver is checked by the host's
+  network rules (host and port required, and a username unless the asset logs in with
+  Kerberos), so its `Form` must declare
+  `FieldHost`, `FieldPort` and `FieldUsername` and none of the database-file fields
+  (`FieldSQLiteSource`, `FieldPath`, `FieldSSHAsset`); otherwise the extension is
+  refused when it registers, naming the driver.
+- **Declare exactly what the dialect implements.** The optional `sqldb` dialect
+  interfaces decide which session operations exist; a capability in the descriptor the
+  dialect does not implement offers the user an entry point that fails. A read-only
+  config is refused by the SDK unless the descriptor declares `CapReadOnly`, in which
+  case `open` must make the connection read-only.
+- **Fields of the driver's own go in `DriverFields`.** Each one declares its key, type,
+  tab, whether it is required and its default; the values are stored in the asset's
+  `driver_options` and reach `open` as `req.DriverOptions`, password fields decrypted.
+  `Label` and `Description` may be keys of your `locales/` files: the host shows them in
+  the user's language.
+- **A session lives in instances of its own.** The host runs each session on up to
+  three module instances dedicated to it — operations that overlap get one each, later
+  ones wait — and keeps each instance — the `*sql.DB`, its open connections, a cursor
+  half read — between calls, so later operations do not log in again and a whole-table
+  export reads one cursor over many calls. `open` runs once per instance (again for one
+  that replaces an instance discarded after a failure), so connection state such as a
+  current schema is not shared between a session's instances. Every operation and
+  result crosses the boundary as JSON ([`pkg/extension/driverwire`](../pkg/extension/driverwire));
+  fields are only ever added, and an extension ignores the ones it does not know.
+
+`pkg/extension/testdata/fixture-dbdriver` is a complete driver over an in-memory
+`database/sql` driver; the host's tests run the driver conformance suites against it
+through the boundary (`pkg/extension/driver_session_test.go`).
 
 ## SKILL.md and locales
 

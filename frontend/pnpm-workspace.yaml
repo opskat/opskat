@@ -1,5 +1,8 @@
 packages:
   - 'packages/*'
 
+allowBuilds:
+  esbuild: set this to true or false
+
 overrides:
   dompurify: ^3.4.12

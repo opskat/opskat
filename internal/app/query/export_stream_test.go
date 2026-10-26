@@ -13,9 +13,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 整表的 CSV / TSV 导出：一次对驱动的读取（一个游标），分批交给前端；批数再多也只有一次取数。
@@ -144,7 +145,7 @@ func (d singleConnectionSQLite) Descriptor() dbdriver.Descriptor {
 
 func (d singleConnectionSQLite) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session, error) {
 	cfg := *req.Config
-	cfg.Driver, cfg.SQLiteSource = asset_entity.DriverSQLite, asset_entity.SQLiteSourceRemoteSSHVFS
+	cfg.Driver, cfg.SQLiteSource = asset_entity.DriverSQLite, string(asset_entity.SQLiteSourceRemoteSSHVFS)
 	req.Config = &cfg
 	req.Transport.RemoteFS = func(context.Context) (dbdriver.RemoteFS, error) { return localFS{}, nil }
 	return d.Driver.Open(ctx, req)
@@ -163,7 +164,7 @@ func (localFS) Close() error                          { return nil }
 // 第二条连接，否则要等到查询超时，导出失败（「打开数据库会话失败: context deadline exceeded」）。
 // 游标交出的语句与 GetRowStatements 对前端拿到的同样几行给出的一字不差。
 func TestExportAllAsSQLNeedsNoSecondConnection(t *testing.T) {
-	inner, err := dbdriver.Lookup(asset_entity.DriverSQLite)
+	inner, err := dbregistry.Lookup(asset_entity.DriverSQLite)
 	require.NoError(t, err)
 	dbdrivertest.Register(t, singleConnectionSQLite{inner})
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{

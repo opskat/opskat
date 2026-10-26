@@ -2,15 +2,17 @@ package query_svc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/xuri/excelize/v2"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 const xlsxSheetName = "Sheet1"
@@ -145,6 +147,8 @@ func setXlsxRow(sw *excelize.StreamWriter, rowIdx int, record []any) error {
 // xlsxCellValue normalizes a scanned SQL value into a type excelize accepts.
 // []byte (BLOB/TEXT) becomes a string; NULL becomes an empty cell; time.Time
 // and primitive types are written as-is so excelize formats them natively.
+// json.Number (an extension driver's numbers, decoded keeping their digits)
+// becomes a numeric cell too.
 func xlsxCellValue(v any) any {
 	switch val := v.(type) {
 	case nil:
@@ -153,7 +157,23 @@ func xlsxCellValue(v any) any {
 		return string(val)
 	case time.Time:
 		return val
+	case json.Number:
+		return xlsxNumber(val)
 	default:
 		return val
 	}
+}
+
+// xlsxNumber writes an integer as an integer and a fraction as a float. An
+// integer past int64 stays its digits: as a float it would lose them.
+func xlsxNumber(n json.Number) any {
+	if i, err := n.Int64(); err == nil {
+		return i
+	}
+	if strings.ContainsAny(string(n), ".eE") {
+		if f, err := n.Float64(); err == nil {
+			return f
+		}
+	}
+	return n.String()
 }

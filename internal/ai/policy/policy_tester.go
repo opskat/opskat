@@ -42,8 +42,8 @@ func TestPolicy(ctx context.Context, input PolicyTestInput, command string) Poli
 	if !ok {
 		return PolicyTestOutput{Decision: aictx.NeedConfirm}
 	}
-	groups := resolveGroupChainForTest(ctx, input.AssetID, input.GroupID)
-	return h.test(ctx, input.Current, groups, command)
+	asset, groups := resolveTestScope(ctx, input.AssetID, input.GroupID)
+	return h.test(ctx, asset, input.Current, groups, command)
 }
 
 // --- 通用组规则收集 ---
@@ -216,14 +216,20 @@ func testSSHPolicy(ctx context.Context, current *asset_entity.CommandPolicy, gro
 
 // --- Database ---
 
+// testQueryPolicy 是只有组（没有资产）的测试：SQL 一律走宿主的 TiDB 解析。
 func testQueryPolicy(ctx context.Context, current *asset_entity.QueryPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
+	return testQueryPolicyForAsset(ctx, nil, current, groups, command)
+}
+
+// testQueryPolicyForAsset 给定资产时由资产的驱动切分分类 SQL（见 ClassifyForAsset）。
+func testQueryPolicyForAsset(ctx context.Context, asset *asset_entity.Asset, current *asset_entity.QueryPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
 	// 先解析 SQL，按每条语句各自送进组通用策略；整串送会让 `SELECT *` 这种宽规则一次性
 	// 放行 `SELECT 1; UPDATE users ...`，同时 `UPDATE *` 类 deny 也命中不到尾部。
-	stmts, err := ClassifyStatements(command)
+	stmts, err := ClassifyForAsset(ctx, asset, command)
 	if err != nil {
 		return PolicyTestOutput{
 			Decision: aictx.Deny,
-			Message:  PolicyFmt(ctx, "SQL parse failed, execution denied: %v", "SQL 解析失败，拒绝执行: %v", err),
+			Message:  ClassifyDenyMessage(ctx, err),
 		}
 	}
 
@@ -700,13 +706,16 @@ func mergeOSSPoliciesForTest(ctx context.Context, current *asset_entity.OSSPolic
 
 // --- 通用组链解析 ---
 
-// resolveGroupChainForTest 根据 assetID 或 groupID 解析组链。
-func resolveGroupChainForTest(ctx context.Context, assetID, groupID int64) []*group_entity.Group {
+// resolveTestScope 根据 assetID 或 groupID 解析被测资产（只给组时为 nil）与组链。
+// 资产要一并返回：数据库资产的驱动可能自己切分分类 SQL（ClassifyForAsset）。
+func resolveTestScope(ctx context.Context, assetID, groupID int64) (*asset_entity.Asset, []*group_entity.Group) {
 	var startGroupID int64
+	var asset *asset_entity.Asset
 
 	if assetID > 0 {
-		asset, err := asset_svc.Asset().Get(ctx, assetID)
-		if err == nil && asset != nil {
+		a, err := asset_svc.Asset().Get(ctx, assetID)
+		if err == nil && a != nil {
+			asset = a
 			startGroupID = asset.GroupID
 		}
 	} else if groupID > 0 {
@@ -718,7 +727,7 @@ func resolveGroupChainForTest(ctx context.Context, assetID, groupID int64) []*gr
 	}
 
 	if startGroupID == 0 {
-		return nil
+		return asset, nil
 	}
 
 	var chain []*group_entity.Group
@@ -731,7 +740,7 @@ func resolveGroupChainForTest(ctx context.Context, assetID, groupID int64) []*gr
 		chain = append(chain, g)
 		currentID = g.ParentID
 	}
-	return chain
+	return asset, chain
 }
 
 // CheckGroupGenericPolicy 在真实执行路径中检查组的通用策略（CmdPolicy）。

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // The registration API is the single place an extension declares what it can do.
@@ -32,8 +34,9 @@ type Meta struct {
 	DisplayName string
 	Description string
 	// PolicyType names the policy face the extension's asset types are checked
-	// under. Required: without it the host has no policy surface to attach the
-	// extension's permission groups to.
+	// under. Required when the extension registers asset types: without it the
+	// host has no policy surface to attach the extension's permission groups to.
+	// An extension that only provides database drivers may leave it empty.
 	PolicyType string
 }
 
@@ -126,6 +129,7 @@ var (
 	snippetSeeds    []Seed
 	actions         = map[string]ActionHandler{}
 	configValidator ConfigValidator
+	databaseDrivers []dbdriver.Descriptor
 )
 
 // Extension declares the extension's presentation metadata and policy face.
@@ -572,6 +576,8 @@ func resetRegistries() {
 	frontendSpec = FrontendSpec{}
 	snippetCats = nil
 	snippetSeeds = nil
+	databaseDrivers = nil
+	databaseDriverServe = nil
 	actions = map[string]ActionHandler{}
 	configValidator = nil
 	commandReviewer = nil

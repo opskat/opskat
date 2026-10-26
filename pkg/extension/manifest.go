@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // HostABIVersion is the current host ABI contract version.
@@ -36,16 +38,46 @@ import (
 // tool refusing the call's arguments, which the host denies without asking.
 //
 // 2.3 adds the command-review guest entry review_commands and the describe()
-// reviewer section. An older host cannot read either, so a reviewer extension
-// declares 2.3 and an older app refuses to load it instead of installing an
-// extension whose reviewer it would silently ignore.
-const HostABIVersion = "2.3"
+// reviewer section, and lets an extension provide SQL database drivers
+// (capabilities.databaseDrivers plus the driver descriptors in describe()).
+// An older host cannot read either, so a reviewer or driver extension declares
+// 2.3 and an older app refuses to load it instead of installing an extension
+// whose reviewer or drivers it would silently ignore.
+//
+// 2.4 adds two driver-extension capabilities an older host would silently ignore:
+// network.databaseRedirects (the driver may follow a database's redirect to another
+// address, dialed through the asset's route) and the certificate field group (the
+// driver is handed the asset's TLS material when it opens a session). An extension
+// using either declares 2.4 and an older app refuses to install it.
+//
+// 2.5 adds capabilities.databaseKerberos (the driver may ask the host for Kerberos
+// tickets fetched with the asset's Kerberos credentials) and the statement
+// split/classify declaration. An extension using either declares 2.5 and an
+// older app refuses to install it.
+const HostABIVersion = "2.5"
 
-// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0, 2.1 and
-// 2.2 stay listed so extensions built before command review keep loading unchanged;
-// only a hostABI newer than everything here (e.g. an extension declaring 2.4 or
-// 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3"}
+// reviewCommandsMinHostABI is the first host ABI that understands the
+// command-review guest entry review_commands and the describe() reviewer section.
+const reviewCommandsMinHostABI = "2.3"
+
+// databaseDriversMinHostABI is the first host ABI that understands
+// capabilities.databaseDrivers.
+const databaseDriversMinHostABI = "2.3"
+
+// DatabaseExtrasMinHostABI is the first host ABI that understands the 2.4 driver
+// capabilities: network.databaseRedirects and the certificate field group.
+const DatabaseExtrasMinHostABI = "2.4"
+
+// DatabaseKerberosMinHostABI is the first host ABI that understands
+// capabilities.databaseKerberos.
+const DatabaseKerberosMinHostABI = "2.5"
+
+// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
+// 2.5 stay listed so extensions built before host-ui, multi-resource
+// classification, command review, database drivers or the 2.4/2.5 driver
+// capabilities keep loading unchanged; only a hostABI newer than everything here
+// (e.g. an extension declaring 2.6 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -100,6 +132,8 @@ type Manifest struct {
 	Policies   PoliciesDef    `json:"policies"`
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
+	// DatabaseDrivers are the driver descriptors, one per capabilities.databaseDrivers id.
+	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
 	// Reviewer is the command-review face from describe(). It is set only when the
 	// guest reports one; together with Capabilities.CommandReview it makes the
 	// extension a reviewer (see validateReviewer).
@@ -177,6 +211,13 @@ type Capabilities struct {
 	// together with a reviewer section from describe() (see validateReviewer).
 	CommandReview bool              `json:"commandReview"`
 	Network       NetworkCapability `json:"network"`
+	// DatabaseDrivers lists the SQL database driver ids the extension provides.
+	// describe() must answer with exactly this set of drivers; requires hostABI 2.3.
+	DatabaseDrivers []string `json:"databaseDrivers"`
+	// DatabaseKerberos lets a database driver ask the host for Kerberos tickets
+	// fetched with the asset's Kerberos credentials. Only meaningful with
+	// databaseDrivers; requires hostABI 2.5.
+	DatabaseKerberos bool `json:"databaseKerberos"`
 }
 
 // NetworkCapability grants network reach that is decided per call rather than by
@@ -186,8 +227,14 @@ type Capabilities struct {
 // into that asset's format:"endpoint" config fields — private-network addresses
 // included, since the user configured them — over HTTP and TCP. Undeclared, HTTP
 // reach is exactly the static http allowlist and TCP stays ungated.
+//
+// DatabaseRedirects lets a database driver follow a redirect the database answers
+// with (a cluster node, a read replica, a routed listener) by dialing that other
+// address through the asset's own route. Only meaningful with databaseDrivers;
+// requires hostABI 2.4.
 type NetworkCapability struct {
-	AssetEndpoint bool `json:"assetEndpoint"`
+	AssetEndpoint     bool `json:"assetEndpoint"`
+	DatabaseRedirects bool `json:"databaseRedirects"`
 }
 
 // FSCapability lists filesystem path patterns an extension may access.
@@ -269,16 +316,20 @@ func (at AssetTypeDef) bindsEndpoint() bool {
 // runs once describe() is merged in, since the declaration comes from the guest
 // and the capability from manifest.json.
 // validateDescribed checks the face describe() just merged against the security
-// contract: endpoint bindings need network.assetEndpoint, and a reviewer needs
-// both the capability and the reviewer section.
+// contract: endpoint bindings need network.assetEndpoint, a reviewer needs
+// both the capability and the reviewer section, and the database driver ids the
+// manifest declares are compared with the ones describe() provided (see
+// checkDatabaseDrivers).
 func (m *Manifest) validateDescribed() error {
 	if err := m.validateEndpointBindings(); err != nil {
 		return err
 	}
 	return m.validateReviewer()
 }
-
 func (m *Manifest) validateEndpointBindings() error {
+	if err := m.checkDatabaseDrivers(); err != nil {
+		return err
+	}
 	if m.Capabilities.Network.AssetEndpoint {
 		return nil
 	}
@@ -533,7 +584,59 @@ func (m *Manifest) validate() error {
 	if m.Backend.Binary == "" {
 		return fmt.Errorf("manifest: backend.binary is required — it names the WASM module the host loads")
 	}
+	return m.validateDatabaseDrivers()
+}
+
+// validateDatabaseDrivers checks the driver ids the manifest declares: well-formed,
+// unique, and only on a host ABI that reads them.
+func (m *Manifest) validateDatabaseDrivers() error {
+	ids := m.Capabilities.DatabaseDrivers
+	if m.Capabilities.Network.DatabaseRedirects {
+		if len(ids) == 0 {
+			return fmt.Errorf("manifest: capabilities.network.databaseRedirects only applies to an extension that declares capabilities.databaseDrivers")
+		}
+		if !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
+			return fmt.Errorf("manifest: capabilities.network.databaseRedirects requires hostABI %s or newer (got %s)", DatabaseExtrasMinHostABI, m.HostABI)
+		}
+	}
+	if m.Capabilities.DatabaseKerberos {
+		if len(ids) == 0 {
+			return fmt.Errorf("manifest: capabilities.databaseKerberos only applies to an extension that declares capabilities.databaseDrivers")
+		}
+		if !hostABIAtLeast(m.HostABI, DatabaseKerberosMinHostABI) {
+			return fmt.Errorf("manifest: capabilities.databaseKerberos requires hostABI %s or newer (got %s)", DatabaseKerberosMinHostABI, m.HostABI)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if !hostABIAtLeast(m.HostABI, databaseDriversMinHostABI) {
+		return fmt.Errorf("manifest: capabilities.databaseDrivers requires hostABI %s or newer (got %s)", databaseDriversMinHostABI, m.HostABI)
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if !nameRe.MatchString(id) {
+			return fmt.Errorf("manifest: capabilities.databaseDrivers id %q must match %s", id, nameRe.String())
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("manifest: capabilities.databaseDrivers lists %q twice", id)
+		}
+		seen[id] = struct{}{}
+	}
 	return nil
+}
+
+// hostABIAtLeast compares "major.minor" host ABI versions. Both are known-good
+// here (the caller has already checked abi against SupportedHostABIs).
+func hostABIAtLeast(abi, floor string) bool {
+	var aMaj, aMin, fMaj, fMin int
+	if _, err := fmt.Sscanf(abi, "%d.%d", &aMaj, &aMin); err != nil {
+		return false
+	}
+	if _, err := fmt.Sscanf(floor, "%d.%d", &fMaj, &fMin); err != nil {
+		return false
+	}
+	return aMaj > fMaj || (aMaj == fMaj && aMin >= fMin)
 }
 
 func isSupportedHostABI(abi string) bool {

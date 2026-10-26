@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 导入时忽略外键：连接在检查外键时，PRAGMA foreign_keys 在事务里不起作用，所以在批的那条连接上、
@@ -38,7 +38,7 @@ func TestExecuteBatchTogglesForeignKeysOutsideTheTransaction(t *testing.T) {
 // 在真实的库文件上：SQLite 默认不检查外键。忽略外键的导入结束后，这条连接回到导入前的样子——
 // 不能被「恢复」成检查外键，否则连接池里只有这一条连接开始拒绝、级联外键。
 func TestExecuteBatchLeavesForeignKeysAsTheyWereOnARealDatabase(t *testing.T) {
-	session := openLocalSession(t, &asset_entity.DatabaseConfig{
+	session := openLocalSession(t, &dbdriver.Config{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "fk.db"),
 	})
 	ctx := context.Background()
@@ -66,7 +66,7 @@ func TestExecuteBatchLeavesForeignKeysAsTheyWereOnARealDatabase(t *testing.T) {
 
 // 在真实的库文件上：连接串打开了外键检查时，忽略外键的导入照样写进孤儿行，结束后检查恢复。
 func TestExecuteBatchDisablesAndRestoresEnabledForeignKeysOnARealDatabase(t *testing.T) {
-	session := openLocalSession(t, &asset_entity.DatabaseConfig{
+	session := openLocalSession(t, &dbdriver.Config{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "fk-on.db"), Params: "_pragma=foreign_keys(1)",
 	})
 	ctx := context.Background()
@@ -88,7 +88,7 @@ func TestExecuteBatchDisablesAndRestoresEnabledForeignKeysOnARealDatabase(t *tes
 
 // 在真实的库文件上：整批里一条失败，前面已经写进去的行随回滚一起撤销。
 func TestExecuteBatchRollsBackOnARealDatabase(t *testing.T) {
-	session := openLocalSession(t, &asset_entity.DatabaseConfig{
+	session := openLocalSession(t, &dbdriver.Config{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "batch.db"),
 	})
 	ctx := context.Background()

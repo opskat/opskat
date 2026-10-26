@@ -787,6 +787,46 @@ func TestCmdUpdateAssetWarnsOnPlaintextSentinelPassword(t *testing.T) {
 	}
 }
 
+// 局部更新不带 driver：口令类 driver_options 的明文告警按已存资产的驱动判断。
+func TestCmdUpdateAssetWarnsOnPlaintextDriverOptionPassword(t *testing.T) {
+	registerDriverOptionsFake(t)
+	for _, tc := range []struct {
+		name   string
+		config string
+		warns  bool
+	}{
+		{"password option", `{"driver_options":{"token":"s3cret"}}`, true},
+		{"plain option", `{"driver_options":{"region":"eu"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			t.Cleanup(ctrl.Finish)
+			registerMockAssetRepo(t, ctrl, []*asset_entity.Asset{{
+				ID: 9, Name: "ext-db", Type: asset_entity.AssetTypeDatabase,
+				Config: `{"driver":"fakedb","host":"h","port":7777}`,
+			}})
+			preserveCreateSeams(t)
+			origWriter := opsctlAuditWriter
+			opsctlAuditWriter = &mockAuditWriter{}
+			t.Cleanup(func() { opsctlAuditWriter = origWriter })
+			requireUpdateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+				return ApprovalResult{Decision: aictx.Deny}, errors.New("denied")
+			}
+			notifyAssetChanged = func() {}
+
+			var stdout, stderr bytes.Buffer
+			updateAsset(context.Background(), []string{"ext-db", "--config", tc.config}, "sess-update",
+				commandIO{stdout: &stdout, stderr: &stderr})
+			if tc.warns {
+				assert.Contains(t, stderr.String(), "plaintext supplied in argv")
+			} else {
+				assert.NotContains(t, stderr.String(), "plaintext supplied in argv")
+			}
+			assert.NotContains(t, stderr.String(), "s3cret")
+		})
+	}
+}
+
 // TestCmdUpdateAssetRedisConfigApprovalAndAuditExcludeSentinelPassword 用真实 Prepare()
 // （不打桩）证明 sentinel_password 这类 write-only 密钥既不出现在审批 Detail 里，也不出现在
 // put_asset 审计的 ArgsJSON/Result 里——同一份 asset_put_svc 去密投影（approvalView 的

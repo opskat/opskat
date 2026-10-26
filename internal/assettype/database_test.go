@@ -2,17 +2,19 @@ package assettype
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 func TestDatabaseHandlerApplyCreateArgsSQLite(t *testing.T) {
@@ -208,12 +210,12 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 	args := map[string]any{"driver": "oracle", "host": "ora.internal", "port": float64(1521), "username": "system"}
 
 	_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 
-	require.ErrorIs(t, h.ValidateCreateArgs(args), dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, h.ValidateCreateArgs(args), dbregistry.ErrDriverUnavailable)
 	err = h.ApplyCreateArgs(t.Context(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 
 	// 已经存着一个不可用驱动的资产（例如提供它的扩展没加载）：带连接配置的更新同样报错，而
 	// 不是按网络驱动合并字段。
@@ -223,7 +225,7 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 	}))
 	storedConfig := stored.Config
 	err = h.ApplyUpdateArgs(t.Context(), stored, map[string]any{"host": "ora-2.internal"})
-	require.ErrorIs(t, err, dbdriver.ErrDriverUnavailable)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 	assert.Equal(t, storedConfig, stored.Config)
 
@@ -253,4 +255,245 @@ func TestMissingDriverParameterListsRegisteredDrivers(t *testing.T) {
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "database type requires driver parameter (mysql, postgresql, mssql, sqlite, fakedb)", name)
 	}
+}
+
+// certFake 注册一个声明了证书字段组的假驱动。
+func certFake(t *testing.T) {
+	t.Helper()
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}})
+	dbdrivertest.Register(t, fake)
+}
+
+const testKeyPEM = "-----BEGIN PRIVATE KEY-----\nSECRETKEYBODY\n-----END PRIVATE KEY-----"
+
+func TestDatabaseHandlerCertificateFieldsFollowTheDriverDeclaration(t *testing.T) {
+	h, ok := Get(asset_entity.AssetTypeDatabase)
+	require.True(t, ok)
+	certFake(t)
+
+	t.Run("declared: create stores the fields and encrypts the key", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+			"driver": "fakedb", "host": "fake.internal", "password": "pw",
+			"tls": true, "tls_insecure": true, "tls_server_name": "db.example",
+			"tls_ca_pem": "CA", "tls_cert_pem": "CERT", "tls_key_pem": testKeyPEM,
+		})
+		require.NoError(t, err)
+		assert.NotContains(t, prepared.Approval, "tls_key_pem", "key content never reaches the approval view")
+		assert.Equal(t, "db.example", prepared.Approval["tls_server_name"])
+
+		a := &asset_entity.Asset{Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, h.ApplyCreateArgs(t.Context(), a, prepared.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.True(t, cfg.TLS)
+		assert.True(t, cfg.TLSInsecure)
+		assert.Equal(t, "db.example", cfg.TLSServerName)
+		assert.Equal(t, "CA", cfg.TLSCAPEM)
+		assert.Equal(t, "CERT", cfg.TLSCertPEM)
+		assert.NotEqual(t, testKeyPEM, cfg.TLSKeyPEM)
+		plain, err := credential_svc.Default().Decrypt(cfg.TLSKeyPEM)
+		require.NoError(t, err)
+		assert.Equal(t, testKeyPEM, plain)
+
+		view := h.SafeView(a)
+		assert.Equal(t, true, view["tls_key_pem_set"])
+		assert.NotContains(t, view, "tls_key_pem")
+		assert.NotContains(t, fmt.Sprint(view), "SECRETKEYBODY")
+		assert.NotContains(t, fmt.Sprint(view), cfg.TLSKeyPEM)
+	})
+
+	t.Run("declared: update touches only the given fields", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "fakedb", Host: "fake.internal", Port: 1, TLS: true, TLSCAPEM: "CA", TLSKeyPEM: "ENC",
+		}))
+		update, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"tls_server_name": "n"})
+		require.NoError(t, err)
+		_, err = h.(*databaseHandler).AutomationUpdateContext(a, update.Config)
+		require.NoError(t, err)
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, update.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, "n", cfg.TLSServerName)
+		assert.Equal(t, "CA", cfg.TLSCAPEM)
+		assert.Equal(t, "ENC", cfg.TLSKeyPEM)
+		assert.True(t, cfg.TLS)
+	})
+
+	t.Run("not declared: refused naming the keys, built-in drivers included", func(t *testing.T) {
+		for _, driver := range []string{"mysql", "postgresql", "sqlite"} {
+			args := map[string]any{"driver": driver, "host": "h", "username": "u", "path": "/tmp/x.db", "tls_ca_pem": "CA", "tls_server_name": "n"}
+			_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+			require.Error(t, err, driver)
+			assert.Contains(t, err.Error(), "tls_ca_pem", driver)
+			assert.Contains(t, err.Error(), "tls_server_name", driver)
+		}
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: "mysql", Host: "h", Port: 3306, Username: "u"}))
+		_, err := h.(*databaseHandler).AutomationUpdateContext(a, map[string]any{"tls_key_pem": testKeyPEM})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tls_key_pem")
+		assert.NotContains(t, err.Error(), "SECRETKEYBODY")
+	})
+
+	t.Run("driver unavailable: renaming keeps the certificate fields", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "gone", Host: "h", Port: 1, TLS: true, TLSCAPEM: "CA", TLSKeyPEM: "ENC",
+		}))
+		before := a.Config
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, map[string]any{}))
+		assert.Equal(t, before, a.Config)
+	})
+}
+
+// kerberosFake 注册一个声明了 Kerberos 字段组的假驱动。
+func kerberosFake(t *testing.T) {
+	t.Helper()
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{dbdriver.FieldKerberos}})
+	dbdrivertest.Register(t, fake)
+}
+
+func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
+	h, ok := Get(asset_entity.AssetTypeDatabase)
+	require.True(t, ok)
+	kerberosFake(t)
+	krbArgs := func() map[string]any {
+		return map[string]any{
+			"driver": "fakedb", "host": "fake.internal", "auth_method": "kerberos",
+			"krb_principal": "svc@EXAMPLE.COM", argKrbPassword: "kpw-9",
+			"krb_keytab_file": "/etc/svc.keytab", "krb_kdc": "kdc1.example.com,kdc2.example.com:8888",
+			"krb_spn": "oracle/db.example.com",
+		}
+	}
+
+	t.Run("declared: create stores the fields, encrypts the password, keeps it out of approval and view", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, krbArgs())
+		require.NoError(t, err)
+		assert.NotContains(t, prepared.Approval, "krb_password")
+		assert.NotContains(t, fmt.Sprint(prepared.Approval), "kpw-9")
+		assert.Equal(t, "svc@EXAMPLE.COM", prepared.Approval["krb_principal"])
+
+		a := &asset_entity.Asset{Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, h.ApplyCreateArgs(t.Context(), a, prepared.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, asset_entity.AuthMethodKerberos, cfg.AuthMethod)
+		assert.Equal(t, "svc@EXAMPLE.COM", cfg.KrbPrincipal)
+		assert.Equal(t, "/etc/svc.keytab", cfg.KrbKeytabFile)
+		assert.Equal(t, "kdc1.example.com,kdc2.example.com:8888", cfg.KrbKDC)
+		assert.Equal(t, "oracle/db.example.com", cfg.KrbSPN)
+		assert.NotEqual(t, "kpw-9", cfg.KrbPassword)
+		plain, err := credential_svc.Default().Decrypt(cfg.KrbPassword)
+		require.NoError(t, err)
+		assert.Equal(t, "kpw-9", plain)
+
+		view := h.SafeView(a)
+		assert.Equal(t, true, view["krb_password_set"])
+		assert.Equal(t, "kerberos", view["auth_method"])
+		assert.Equal(t, "svc@EXAMPLE.COM", view["krb_principal"])
+		assert.Equal(t, "kdc1.example.com,kdc2.example.com:8888", view["krb_kdc"])
+		assert.NotContains(t, view, "krb_password")
+		assert.NotContains(t, fmt.Sprint(view), "kpw-9")
+		assert.NotContains(t, fmt.Sprint(view), cfg.KrbPassword)
+	})
+
+	t.Run("declared: Kerberos create needs no asset password and stores none", func(t *testing.T) {
+		args := krbArgs()
+		delete(args, "password")
+		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		require.NoError(t, err)
+		a := &asset_entity.Asset{Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, h.ApplyCreateArgs(t.Context(), a, prepared.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Password)
+		assert.Zero(t, cfg.CredentialID)
+		assert.Equal(t, asset_entity.AuthMethodKerberos, cfg.AuthMethod)
+	})
+
+	t.Run("declared: update touches only the given fields", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "fakedb", Host: "fake.internal", Port: 1, AuthMethod: asset_entity.AuthMethodKerberos,
+			KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENC", KrbKDC: "kdc",
+		}))
+		update, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"krb_kdc": "other-kdc"})
+		require.NoError(t, err)
+		_, err = h.(*databaseHandler).AutomationUpdateContext(a, update.Config)
+		require.NoError(t, err)
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, update.Config))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, "other-kdc", cfg.KrbKDC)
+		assert.Equal(t, "ENC", cfg.KrbPassword)
+		assert.Equal(t, "svc@EXAMPLE.COM", cfg.KrbPrincipal)
+		assert.Equal(t, asset_entity.AuthMethodKerberos, cfg.AuthMethod)
+	})
+
+	t.Run("declared: unknown auth method is refused naming the key", func(t *testing.T) {
+		args := krbArgs()
+		args["auth_method"] = "ntlm"
+		_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "auth_method")
+	})
+
+	t.Run("not declared: refused naming the keys, built-in drivers included", func(t *testing.T) {
+		for _, driver := range []string{"mysql", "postgresql", "sqlite"} {
+			args := map[string]any{"driver": driver, "host": "h", "username": "u", "path": "/tmp/x.db", "auth_method": "kerberos", "krb_kdc": "k"}
+			_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+			require.Error(t, err, driver)
+			assert.Contains(t, err.Error(), "auth_method", driver)
+			assert.Contains(t, err.Error(), "krb_kdc", driver)
+		}
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: "mysql", Host: "h", Port: 3306, Username: "u"}))
+		_, err := h.(*databaseHandler).AutomationUpdateContext(a, map[string]any{argKrbPassword: "kpw-9"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "krb_password")
+		assert.NotContains(t, err.Error(), "kpw-9")
+	})
+
+	// 换成不声明字段组的驱动：Kerberos 设置不随资产留下，新驱动照它自己的规则要用户名
+	t.Run("switching to a driver without the group drops the Kerberos settings", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase, GroupID: 1}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "fakedb", Host: "fake.internal", Port: 1, AuthMethod: asset_entity.AuthMethodKerberos,
+			KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENC", KrbKeytabFile: "/k", KrbKDC: "kdc", KrbSPN: "s/h",
+		}))
+		update := map[string]any{"driver": "mysql", "host": "db.internal", "port": 3306}
+		_, err := h.(*databaseHandler).AutomationUpdateContext(a, update)
+		require.NoError(t, err)
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, update))
+		cfg, err := a.GetDatabaseConfig()
+		require.NoError(t, err)
+		assert.Equal(t, asset_entity.DatabaseConfig{}, asset_entity.DatabaseConfig{
+			AuthMethod: cfg.AuthMethod, KrbPrincipal: cfg.KrbPrincipal, KrbPassword: cfg.KrbPassword,
+			KrbKeytabFile: cfg.KrbKeytabFile, KrbKDC: cfg.KrbKDC, KrbSPN: cfg.KrbSPN,
+		})
+		require.ErrorContains(t, a.Validate(), "用户名")
+	})
+
+	// 认证方式只对声明了字段组的驱动有意义：别的驱动的资产带着 Kerberos 认证方式不能保存
+	t.Run("not declared: a stored Kerberos auth method fails validation naming the key", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase, GroupID: 1}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "mysql", Host: "h", Port: 3306, AuthMethod: asset_entity.AuthMethodKerberos,
+			KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENC", KrbKDC: "kdc",
+		}))
+		require.ErrorContains(t, a.Validate(), "auth_method")
+	})
+
+	t.Run("driver unavailable: renaming keeps the Kerberos fields", func(t *testing.T) {
+		a := &asset_entity.Asset{ID: 1, Name: "x", Type: asset_entity.AssetTypeDatabase}
+		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: "gone", Host: "h", Port: 1, AuthMethod: asset_entity.AuthMethodKerberos, KrbPrincipal: "a@B", KrbPassword: "ENC",
+		}))
+		before := a.Config
+		require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, map[string]any{}))
+		assert.Equal(t, before, a.Config)
+	})
 }

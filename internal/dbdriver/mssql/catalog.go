@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 浏览用 sys.* 与 INFORMATION_SCHEMA。库名写在连接串里，一条会话只连一个库；表与对象以

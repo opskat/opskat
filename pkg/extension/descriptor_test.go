@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -615,5 +616,167 @@ func TestParseDescriptorEnumPresentation(t *testing.T) {
 		auth := out["properties"].(map[string]any)["auth"].(map[string]any)
 		So(auth["enumLabels"], ShouldResemble, []any{"T:k.a"})
 		So(auth["enum"], ShouldResemble, []any{"a"})
+	})
+}
+
+const driverDescriptorJSON = `{"id":"mysql-ext","name":"MySQL Ext","icon":"x","order":50,"aliases":[],"defaultPort":3306,` +
+	`"form":[{"tab":"connection","fields":["host","port"]}],"capabilities":["schemas"],` +
+	`"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
+
+func TestParseDescriptorDatabaseDrivers(t *testing.T) {
+	Convey("A descriptor may provide SQL database drivers", t, func() {
+		Convey("a driver-only extension needs neither an asset type nor a policy type", func() {
+			d, err := ParseDescriptor([]byte(`{"icon":"mysql","databaseDrivers":[` + driverDescriptorJSON + `]}`))
+			So(err, ShouldBeNil)
+			So(d.DatabaseDrivers, ShouldHaveLength, 1)
+			So(string(d.DatabaseDrivers[0].ID), ShouldEqual, "mysql-ext")
+		})
+
+		Convey("a policy type a driver-only extension does declare is held to the same rule", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],"policies":{"type":"a:b"}}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "policies.type")
+			_, err = ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],"policies":{"type":"mydb"}}`))
+			So(err, ShouldBeNil)
+		})
+
+		Convey("an extension without drivers still needs an asset type", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "assetTypes")
+		})
+
+		Convey("tools are unreachable without an asset type, drivers or not", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],` +
+				`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "tools")
+		})
+
+		Convey("an extension may mix asset types and drivers", func() {
+			_, err := ParseDescriptor(desc(`"databaseDrivers":[` + driverDescriptorJSON + `]`))
+			So(err, ShouldBeNil)
+		})
+
+		Convey("an invalid driver descriptor fails naming the driver id", func() {
+			for _, bad := range []string{
+				`"form":[{"tab":"connection","fields":["nope"]}]`,
+				`"capabilities":["teleport"]`,
+				`"form":[{"tab":"nowhere","fields":["host"]}]`,
+				`"driverFields":[{"key":"host","type":"text","tab":"connection"}]`,
+			} {
+				_, err := ParseDescriptor([]byte(`{"databaseDrivers":[{"id":"bad-one",` + bad + `}]}`))
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "bad-one")
+			}
+		})
+
+		Convey("duplicate driver ids in one descriptor are refused", func() {
+			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `,` + driverDescriptorJSON + `]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "mysql-ext")
+		})
+	})
+}
+
+func TestDescribeIntoDatabaseDrivers(t *testing.T) {
+	const drivers = `"databaseDrivers":[` + driverDescriptorJSON + `]`
+	load := func(declared []string, payload string) (*Manifest, error) {
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, payload))
+		m := &Manifest{Name: "ext-a", HostABI: HostABIVersion, Capabilities: Capabilities{DatabaseDrivers: declared}}
+		_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
+		return m, err
+	}
+	Convey("The manifest's driver ids and describe()'s must be the same set", t, func() {
+		Convey("matching sets load, and the driver icon is the extension's", func() {
+			m, err := load([]string{"mysql-ext"}, `{"icon":"ext-icon",`+drivers+`}`)
+			So(err, ShouldBeNil)
+			So(m.DatabaseDrivers, ShouldHaveLength, 1)
+			So(m.DatabaseDrivers[0].Icon, ShouldEqual, "ext-icon")
+		})
+		Convey("a driver described but not declared", func() {
+			_, err := load(nil, `{`+drivers+`}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "mysql-ext")
+		})
+		Convey("a driver declared but not described", func() {
+			_, err := load([]string{"mysql-ext", "ghost"}, `{`+drivers+`}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "ghost")
+		})
+	})
+
+	Convey("A driver declaring the certificate field group needs the host ABI that hands it the TLS material", t, func() {
+		const certDriver = `{"id":"cert-ext","name":"Cert Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
+			`"form":[{"tab":"connection","fields":["host","port","username"]},{"tab":"tls","fields":["tls_cert"]}],` +
+			`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
+		loadAt := func(abi string) error {
+			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+certDriver+`]}`))
+			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"cert-ext"}}}
+			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
+			return err
+		}
+		Convey("on hostABI 2.3 the extension is refused, naming the driver and the reason", func() {
+			err := loadAt("2.3")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "cert-ext")
+			So(err.Error(), ShouldContainSubstring, "tls_cert")
+			So(err.Error(), ShouldContainSubstring, DatabaseExtrasMinHostABI)
+		})
+		Convey("on hostABI 2.4 it loads", func() {
+			So(loadAt(DatabaseExtrasMinHostABI), ShouldBeNil)
+		})
+	})
+
+	Convey("A driver declaring the Kerberos field group needs the manifest capability that lets it ask for tickets", t, func() {
+		const krbDriver = `{"id":"krb-ext","name":"Krb Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
+			`"form":[{"tab":"connection","fields":["host","port","username","password","kerberos"]}],` +
+			`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
+		loadWith := func(abi string, kerberos bool) error {
+			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+krbDriver+`]}`))
+			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"krb-ext"}, DatabaseKerberos: kerberos}}
+			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
+			return err
+		}
+		for _, abi := range []string{DatabaseExtrasMinHostABI, DatabaseKerberosMinHostABI} {
+			Convey("without capabilities.databaseKerberos on hostABI "+abi+" the extension is refused, naming the driver and the reason", func() {
+				err := loadWith(abi, false)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "ext-a")
+				So(err.Error(), ShouldContainSubstring, "krb-ext")
+				So(err.Error(), ShouldContainSubstring, `"kerberos"`)
+				So(err.Error(), ShouldContainSubstring, "capabilities.databaseKerberos")
+				So(err.Error(), ShouldContainSubstring, DatabaseKerberosMinHostABI)
+			})
+		}
+		Convey("with the capability (hostABI 2.5) it loads", func() {
+			So(loadWith(DatabaseKerberosMinHostABI, true), ShouldBeNil)
+		})
+	})
+
+	Convey("A driver declaring statement splitting and classification needs the host ABI that asks it", t, func() {
+		const splitDriver = `{"id":"split-ext","name":"Split Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
+			`"form":[{"tab":"connection","fields":["host","port","username"]}],` +
+			`"capabilities":["classify_statements"],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
+		loadAt := func(abi string) error {
+			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+splitDriver+`]}`))
+			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"split-ext"}}}
+			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
+			return err
+		}
+		Convey("on hostABI 2.4 the extension is refused, naming the driver and the reason", func() {
+			err := loadAt(DatabaseExtrasMinHostABI)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ext-a")
+			So(err.Error(), ShouldContainSubstring, "split-ext")
+			So(err.Error(), ShouldContainSubstring, `"classify_statements"`)
+			So(err.Error(), ShouldContainSubstring, DatabaseKerberosMinHostABI)
+		})
+		Convey("on hostABI 2.5 it loads", func() {
+			So(loadAt(DatabaseKerberosMinHostABI), ShouldBeNil)
+		})
 	})
 }

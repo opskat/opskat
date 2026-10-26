@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/dbdriver/sqldb"
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 // 改表：列按表所在的 schema 查 INFORMATION_SCHEMA（裸名按 dbo），类型写成完整的类型（见 columnTypeText）。改表名与

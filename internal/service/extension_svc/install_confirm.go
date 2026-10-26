@@ -42,12 +42,19 @@ func installOriginOf(source InstallSource, devInstall bool) string {
 // Capability grant kinds, one per independently granted thing in
 // extension.Capabilities.
 const (
-	CapFSRead        = "fs.read"
-	CapFSWrite       = "fs.write"
-	CapHTTP          = "http"
-	CapCredentials   = "credentials"
-	CapTunnel        = "tunnel"
-	CapAssetEndpoint = "network.assetEndpoint"
+	CapFSRead         = "fs.read"
+	CapFSWrite        = "fs.write"
+	CapHTTP           = "http"
+	CapCredentials    = "credentials"
+	CapTunnel         = "tunnel"
+	CapAssetEndpoint  = "network.assetEndpoint"
+	CapDatabaseDriver = "databaseDriver"
+	// CapDatabaseRedirects: the driver may dial the other addresses a database
+	// redirects to, through the asset's route.
+	CapDatabaseRedirects = "network.databaseRedirects"
+	// CapDatabaseKerberos: the driver may ask the host for Kerberos tickets
+	// fetched with the asset's Kerberos credentials.
+	CapDatabaseKerberos = "databaseKerberos"
 	// CapCommandReview 表示扩展可以自动放行命令。安装确认单独列出它。
 	CapCommandReview = "commandReview"
 )
@@ -174,6 +181,17 @@ func capabilityGrants(c extension.Capabilities) []CapabilityGrant {
 	}
 	if c.CommandReview {
 		out = append(out, CapabilityGrant{Kind: CapCommandReview})
+	}
+	if c.Network.DatabaseRedirects {
+		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects})
+	}
+	if c.DatabaseKerberos {
+		out = append(out, CapabilityGrant{Kind: CapDatabaseKerberos})
+	}
+	// Only the ids are known here (manifest / signed store index); describe() has
+	// not run before an install is confirmed.
+	for _, id := range c.DatabaseDrivers {
+		out = append(out, CapabilityGrant{Kind: CapDatabaseDriver, Value: id})
 	}
 	return out
 }

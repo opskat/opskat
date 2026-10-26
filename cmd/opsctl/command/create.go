@@ -325,7 +325,7 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 			return 1
 		}
 	}
-	if writeOnlyFieldPresent(asset.Type, config) {
+	if writeOnlyFieldPresent(asset.Type, config) || assettype.DriverOptionsHaveSecret(config, asset) {
 		switch configSource {
 		case "--config":
 			if err := warnArgvPlaintext(streams.stderr); err != nil {
@@ -408,7 +408,8 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 // writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段：由类型自己的
 // AutomationContract 声明——接受（ConfigFields）但不进审批（ApprovalFields）的字段，
 // 如 password / credential_id / Redis 的 sentinel_password / tls_key_pem；外加 proxy_chain
-// 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。
+// 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。driver_options 里口令类的取值
+// 要按有效驱动认，由调用方另用 assettype.DriverOptionsHaveSecret 判断。
 func writeOnlyFieldPresent(assetType string, config map[string]any) bool {
 	handler, ok := assettype.Get(assetType)
 	if !ok {

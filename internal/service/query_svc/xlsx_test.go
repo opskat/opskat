@@ -3,15 +3,17 @@ package query_svc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 
-	"github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // fakeSession 打开假驱动的一条会话：它不是 *sql.DB，导出只能经会话的表浏览方法取数。
@@ -129,4 +131,33 @@ func TestExportTableRowsToXlsxReturnsTheDriversError(t *testing.T) {
 			assert.Empty(t, session.Statements())
 		})
 	}
+}
+
+// 扩展驱动的会话跨边界带回的数字是 json.Number（保住 BIGINT 的位数）：写进工作簿仍是数字
+// 单元格，与内置驱动的整数、浮点一样，不是文本。
+func TestExportTableRowsToXlsxWritesNumbersFromAnExtensionDriverAsNumbers(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"id", "ratio", "huge"}
+	fake.Rows = [][]any{{json.Number("9007199254740993"), json.Number("0.25"), json.Number("123456789012345678901234567890")}}
+	session := fakeSession(t, fake)
+
+	var buf bytes.Buffer
+	require.NoError(t, ExportTableRowsToXlsx(context.Background(), session, "reporting", "users",
+		TableExportRequest{Scope: ExportScopeAll}, &buf))
+	f, err := excelize.OpenReader(&buf)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	for _, cell := range []string{"A2", "B2"} {
+		typ, err := f.GetCellType(xlsxSheetName, cell)
+		require.NoError(t, err)
+		// 数字单元格不带字符串类型（excelize 读回 Unset 或 Number）；文本是 InlineString。
+		assert.Contains(t, []excelize.CellType{excelize.CellTypeUnset, excelize.CellTypeNumber}, typ, "cell %s", cell)
+	}
+	id, err := f.GetCellValue(xlsxSheetName, "A2", excelize.Options{RawCellValue: true})
+	require.NoError(t, err)
+	assert.Equal(t, "9007199254740993", id, "an integer keeps every digit")
+	huge, err := f.GetCellValue(xlsxSheetName, "C2")
+	require.NoError(t, err)
+	assert.Equal(t, "123456789012345678901234567890", huge, "a number no cell type holds exactly stays its digits")
 }

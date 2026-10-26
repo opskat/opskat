@@ -12,12 +12,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-func openLocalSession(t *testing.T, cfg *asset_entity.DatabaseConfig) dbdriver.Session {
+func openLocalSession(t *testing.T, cfg *dbdriver.Config) dbdriver.Session {
 	t.Helper()
 	session, err := driver{}.Open(context.Background(), dbdriver.OpenRequest{Config: cfg})
 	require.NoError(t, err)
@@ -26,11 +27,11 @@ func openLocalSession(t *testing.T, cfg *asset_entity.DatabaseConfig) dbdriver.S
 }
 
 func TestSQLitePassesConformance(t *testing.T) {
-	d, err := dbdriver.Lookup(asset_entity.DriverSQLite)
+	d, err := dbregistry.Lookup(asset_entity.DriverSQLite)
 	require.NoError(t, err)
 
 	dbdrivertest.RunConformance(t, d, func(t *testing.T) dbdriver.Session {
-		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{
+		session, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "conformance.db"),
 		}})
 		require.NoError(t, err)
@@ -40,7 +41,7 @@ func TestSQLitePassesConformance(t *testing.T) {
 
 func TestDSN(t *testing.T) {
 	Convey("SQLite DSN", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
+		cfg := &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite,
 			Path:   "/tmp/test.db",
 		}
@@ -48,7 +49,7 @@ func TestDSN(t *testing.T) {
 	})
 
 	Convey("SQLite DSN with params", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
+		cfg := &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: "/tmp/x.db",
 			Params: "_pragma=busy_timeout(5000)",
 		}
@@ -56,7 +57,7 @@ func TestDSN(t *testing.T) {
 	})
 
 	Convey("SQLite 只读写进 DSN，对每条连接生效", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
+		cfg := &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: "/tmp/x.db",
 			Params: "_pragma=busy_timeout(5000)", ReadOnly: true,
 		}
@@ -69,7 +70,7 @@ func TestOpenLocal(t *testing.T) {
 
 	Convey("SQLite 本地文件直连", t, func() {
 		dbPath := filepath.Join(t.TempDir(), "test.db")
-		session := openLocalSession(t, &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath})
+		session := openLocalSession(t, &dbdriver.Config{Driver: asset_entity.DriverSQLite, Path: dbPath})
 
 		_, execErr := session.Execute(ctx, "CREATE TABLE t (id INTEGER)")
 		So(execErr, ShouldBeNil)
@@ -80,13 +81,13 @@ func TestOpenLocal(t *testing.T) {
 	Convey("SQLite ReadOnly 用 PRAGMA query_only", t, func() {
 		dbPath := filepath.Join(t.TempDir(), "test.db")
 		// 先建表
-		rw := openLocalSession(t, &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath})
+		rw := openLocalSession(t, &dbdriver.Config{Driver: asset_entity.DriverSQLite, Path: dbPath})
 		_, err := rw.Execute(ctx, "CREATE TABLE t (id INTEGER)")
 		So(err, ShouldBeNil)
 		So(rw.Close(), ShouldBeNil)
 
 		// 再以 ReadOnly 打开
-		ro := openLocalSession(t, &asset_entity.DatabaseConfig{
+		ro := openLocalSession(t, &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: dbPath, ReadOnly: true,
 		})
 		_, execErr := ro.Execute(ctx, "INSERT INTO t VALUES (1)")
@@ -96,12 +97,12 @@ func TestOpenLocal(t *testing.T) {
 
 	Convey("SQLite ReadOnly 对连接池里新建的连接同样生效", t, func() {
 		dbPath := filepath.Join(t.TempDir(), "test.db")
-		rw := openLocalSession(t, &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath})
+		rw := openLocalSession(t, &dbdriver.Config{Driver: asset_entity.DriverSQLite, Path: dbPath})
 		_, err := rw.Execute(ctx, "CREATE TABLE t (id INTEGER)")
 		So(err, ShouldBeNil)
 		So(rw.Close(), ShouldBeNil)
 
-		roDB, err := openLocal(ctx, &asset_entity.DatabaseConfig{
+		roDB, err := openLocal(ctx, &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: dbPath, ReadOnly: true,
 		})
 		So(err, ShouldBeNil)
@@ -121,7 +122,7 @@ func TestOpenLocal(t *testing.T) {
 
 func TestExecuteSQLitePragmaQuery(t *testing.T) {
 	Convey("Execute treats SQLite PRAGMA as a row-returning query", t, func() {
-		session := openLocalSession(t, &asset_entity.DatabaseConfig{
+		session := openLocalSession(t, &dbdriver.Config{
 			Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "pragma.db"),
 		})
 		_, err := session.Execute(context.Background(), `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
@@ -137,7 +138,7 @@ func TestExecuteSQLitePragmaQuery(t *testing.T) {
 
 func TestExecutePagedPagesARealDatabase(t *testing.T) {
 	ctx := context.Background()
-	session := openLocalSession(t, &asset_entity.DatabaseConfig{
+	session := openLocalSession(t, &dbdriver.Config{
 		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "paged.db"),
 	})
 	_, err := session.Execute(ctx, "CREATE TABLE t (id INTEGER)")
@@ -184,7 +185,7 @@ func (r *localRemote) fullPath(name string) string {
 	return filepath.Join(r.root, filepath.FromSlash(strings.TrimPrefix(name, "/")))
 }
 
-func remoteRequest(cfg *asset_entity.DatabaseConfig, remote *localRemote) dbdriver.OpenRequest {
+func remoteRequest(cfg *dbdriver.Config, remote *localRemote) dbdriver.OpenRequest {
 	return dbdriver.OpenRequest{
 		Config: cfg,
 		Transport: dbdriver.Transport{RemoteFS: func(context.Context) (dbdriver.RemoteFS, error) {
@@ -197,8 +198,8 @@ func remoteRequest(cfg *asset_entity.DatabaseConfig, remote *localRemote) dbdriv
 func TestOpenRemoteUsesTheTransportFileSystem(t *testing.T) {
 	ctx := context.Background()
 	remote := &localRemote{root: t.TempDir()}
-	cfg := &asset_entity.DatabaseConfig{
-		Driver: asset_entity.DriverSQLite, SQLiteSource: asset_entity.SQLiteSourceRemoteSSHVFS, Path: "/app.db",
+	cfg := &dbdriver.Config{
+		Driver: asset_entity.DriverSQLite, SQLiteSource: sourceRemoteSSH, Path: "/app.db",
 	}
 
 	session, err := driver{}.Open(ctx, remoteRequest(cfg, remote))
@@ -229,8 +230,8 @@ func TestOpenRemoteUsesTheTransportFileSystem(t *testing.T) {
 func TestOpenRemoteReturnsTheFileSystemWhenTheDatabaseCannotBeOpened(t *testing.T) {
 	remote := &localRemote{root: t.TempDir()}
 	// 只读打开一个不存在的远端文件：打不开。
-	cfg := &asset_entity.DatabaseConfig{
-		Driver: asset_entity.DriverSQLite, SQLiteSource: asset_entity.SQLiteSourceRemoteSSHVFS,
+	cfg := &dbdriver.Config{
+		Driver: asset_entity.DriverSQLite, SQLiteSource: sourceRemoteSSH,
 		Path: "/missing.db", ReadOnly: true,
 	}
 
@@ -240,8 +241,8 @@ func TestOpenRemoteReturnsTheFileSystemWhenTheDatabaseCannotBeOpened(t *testing.
 }
 
 func TestOpenRemoteFailures(t *testing.T) {
-	cfg := &asset_entity.DatabaseConfig{
-		Driver: asset_entity.DriverSQLite, SQLiteSource: asset_entity.SQLiteSourceRemoteSSHVFS,
+	cfg := &dbdriver.Config{
+		Driver: asset_entity.DriverSQLite, SQLiteSource: sourceRemoteSSH,
 		Path: "/tmp/remote.db",
 	}
 

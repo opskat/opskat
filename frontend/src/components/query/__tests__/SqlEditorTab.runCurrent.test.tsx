@@ -7,6 +7,7 @@ import { useTabStore } from "@/stores/tabStore";
 import { formatModKey } from "@/stores/shortcutStore";
 import { ExecuteSQLPaged } from "../../../../wailsjs/go/query/Query";
 import { mounted } from "./fakeSqlEditor";
+import { BUILTIN_DRIVERS, provideDrivers } from "@/__tests__/dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", async () => ({
   CodeEditor: (await import("./FakeCodeEditor")).FakeCodeEditor,
@@ -54,6 +55,7 @@ const history = () => {
 describe("SqlEditorTab run current statement", () => {
   beforeEach(() => {
     vi.mocked(ExecuteSQLPaged).mockReset();
+    provideDrivers(BUILTIN_DRIVERS);
     vi.mocked(ExecuteSQLPaged).mockResolvedValue(
       JSON.stringify({ columns: ["id"], rows: [{ id: 1 }], total_count: 1 })
     );

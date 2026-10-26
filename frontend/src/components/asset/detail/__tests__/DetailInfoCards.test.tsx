@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, within, screen } from "@testing-library/react";
 import { asset_entity, system } from "../../../../../wailsjs/go/models";
 import { ListDatabaseDrivers } from "../../../../../wailsjs/go/query/Query";
-import { resetDatabaseDriverCache } from "@/lib/dbDrivers";
-import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
+import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
+import { BUILTIN_DRIVERS, EXT_DRIVER } from "@/__tests__/dbDriverFixtures";
 import { SSHDetailInfoCard } from "../SSHDetailInfoCard";
 import { DatabaseDetailInfoCard } from "../DatabaseDetailInfoCard";
 import { RedisDetailInfoCard } from "../RedisDetailInfoCard";
@@ -192,7 +192,7 @@ describe("SSHDetailInfoCard Agent 认证", () => {
 
 describe("DatabaseDetailInfoCard", () => {
   beforeEach(() => {
-    resetDatabaseDriverCache();
+    refreshDatabaseDrivers();
     vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
   });
 
@@ -263,6 +263,38 @@ describe("DatabaseDetailInfoCard", () => {
     );
     const { getByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
     expect(getByText("db-bastion")).toBeInTheDocument();
+  });
+
+  it("lists the driver's non-password driver fields after the built-in connection info", async () => {
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue([...BUILTIN_DRIVERS, EXT_DRIVER]);
+    const asset = makeAsset("database", {
+      driver: "extdb",
+      host: "db.internal",
+      port: 7357,
+      username: "app",
+      database: "sales",
+      driver_options: {
+        service_name: "ORCL",
+        wallet_password: "STORED-CIPHERTEXT",
+        role: "sysdba",
+        native_encryption: true,
+      },
+    });
+    render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+
+    const serviceName = await screen.findByText("Service name");
+    expect(screen.getByText("ORCL")).toBeInTheDocument();
+    expect(screen.getByText("Role")).toBeInTheDocument();
+    expect(screen.getByText("sysdba")).toBeInTheDocument();
+    expect(screen.getByText("Native encryption")).toBeInTheDocument();
+    // Built-in connection info comes first.
+    const database = screen.getByText("sales");
+    expect(database.compareDocumentPosition(serviceName) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Password-type fields are not listed at all, not even masked.
+    expect(screen.queryByText("Wallet password")).not.toBeInTheDocument();
+    expect(screen.queryByText("STORED-CIPHERTEXT")).not.toBeInTheDocument();
+    // Declared but unset fields are not listed.
+    expect(screen.queryByText("Fetch size")).not.toBeInTheDocument();
   });
 
   it("handles empty config without crashing", () => {

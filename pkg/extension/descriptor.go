@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // Descriptor is what the guest answers to describe(): everything an extension can
@@ -31,6 +33,9 @@ type Descriptor struct {
 	Reviewer *ReviewerDef `json:"reviewer,omitempty"`
 	// SettingsSchema 是扩展级设置的 JSON Schema。空表示该扩展没有设置。
 	SettingsSchema map[string]any `json:"settingsSchema,omitempty"`
+	// DatabaseDrivers are the SQL database drivers the extension provides, one
+	// descriptor per id the manifest lists in capabilities.databaseDrivers.
+	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
 }
 
 // ParseDescriptor decodes and validates a describe() payload.
@@ -50,6 +55,9 @@ func ParseDescriptor(data []byte) (*Descriptor, error) {
 }
 
 func (d *Descriptor) validate() error {
+	if err := d.validateDatabaseDrivers(); err != nil {
+		return err
+	}
 	if err := d.validateAssetScope(); err != nil {
 		return err
 	}
@@ -71,15 +79,20 @@ func (d *Descriptor) validate() error {
 // do, and the entry to that path is an *asset*. A missing declaration is therefore not "an optional field left out"
 // but "this extension has no reachable entry point", and must be said at load time.
 //
-// The one exception is a reviewer-only extension: its entry point is review_commands,
-// which the host calls itself, so it needs no asset type and no policy face — and having
-// no asset, it can declare no tools either.
+// The exceptions are a reviewer-only extension and an extension that only
+// provides database drivers: the reviewer's entry point is review_commands,
+// which the host calls itself, and the driver's is the database asset the user
+// already has — so both may declare no asset types and no policy type, and
+// having no asset of their own they can declare no tools either.
 func (d *Descriptor) validateAssetScope() error {
-	if len(d.AssetTypes) == 0 && d.Reviewer != nil {
+	if len(d.AssetTypes) == 0 && (d.Reviewer != nil || len(d.DatabaseDrivers) > 0) {
 		if len(d.Tools) > 0 {
-			return fmt.Errorf("describe(): tools need assetTypes — extension tools are reached through exec on an asset, and a reviewer-only extension has none")
+			return fmt.Errorf("describe(): tools need assetTypes — extension tools are reached through exec on an asset, and a reviewer-only or driver-only extension has none")
 		}
-		return nil
+		if d.Policies.Type == "" {
+			return nil
+		}
+		return d.validatePolicyType()
 	}
 	if len(d.AssetTypes) == 0 {
 		return fmt.Errorf("describe(): assetTypes must declare at least one asset type — extension tools are reached through exec on an asset")
@@ -123,11 +136,75 @@ func (d *Descriptor) validateAssetScope() error {
 	if d.Policies.Type == "" {
 		return fmt.Errorf("describe(): policies.type is required — it names the policy face the extension's asset types are checked under")
 	}
-	// The policy type is a namespace segment of the extension's policy group IDs
-	// (ext:<type>:<name>) and grants (ext:<type>:<action>:<resource>); a name that
-	// could itself contain ":" would let one face's namespace spell another's.
+	return d.validatePolicyType()
+}
+
+// validatePolicyType checks a declared policy type. It is a namespace segment of
+// the extension's policy group IDs (ext:<type>:<name>) and grants
+// (ext:<type>:<action>:<resource>); a name that could itself contain ":" would let
+// one face's namespace spell another's.
+func (d *Descriptor) validatePolicyType() error {
 	if !nameRe.MatchString(d.Policies.Type) {
 		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policies.Type)
+	}
+	return nil
+}
+
+// validateDatabaseDrivers checks every driver descriptor on its own (dbdriver
+// validation: known fields, capabilities and tabs, driver fields clear of the
+// built-in ones) and that no id appears twice. Errors name the driver id.
+func (d *Descriptor) validateDatabaseDrivers() error {
+	seen := make(map[dbdriver.DriverID]struct{}, len(d.DatabaseDrivers))
+	for _, drv := range d.DatabaseDrivers {
+		if err := drv.Validate(); err != nil {
+			return fmt.Errorf("describe(): databaseDrivers: %w", err)
+		}
+		if _, dup := seen[drv.ID]; dup {
+			return fmt.Errorf("describe(): databaseDrivers: duplicate driver %q", drv.ID)
+		}
+		seen[drv.ID] = struct{}{}
+	}
+	return nil
+}
+
+// checkDatabaseDrivers requires the merged manifest's driver descriptors to be
+// exactly the driver ids the manifest declared: the manifest is what the user
+// audited, the descriptor is what the code implements, and they may not disagree.
+// A driver that declares the certificate field group (dbdriver.FieldTLSCert) is
+// handed the asset's TLS material, which an older host would silently not do, so
+// it requires DatabaseExtrasMinHostABI. A driver that declares the Kerberos field
+// group (dbdriver.FieldKerberos) asks the host for tickets, which the user audits
+// as capabilities.databaseKerberos (itself hostABI DatabaseKerberosMinHostABI).
+// A driver that declares statement splitting and classification
+// (dbdriver.CapClassifyStatements) is asked to split SQL the host would otherwise
+// parse itself, which an older host would silently not do, so it requires
+// DatabaseKerberosMinHostABI too (the ABI that added both).
+// The error names the offending driver; the caller adds the extension.
+func (m *Manifest) checkDatabaseDrivers() error {
+	described := make(map[string]struct{}, len(m.DatabaseDrivers))
+	for _, drv := range m.DatabaseDrivers {
+		id := string(drv.ID)
+		described[id] = struct{}{}
+		if !slices.Contains(m.Capabilities.DatabaseDrivers, id) {
+			return fmt.Errorf("describe() provides database driver %q that manifest capabilities.databaseDrivers does not declare", id)
+		}
+		if drv.UsesField(dbdriver.FieldTLSCert) && !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
+			return fmt.Errorf("database driver %q declares the certificate field group (form field %q), which requires hostABI %s or newer (got %s)",
+				id, dbdriver.FieldTLSCert, DatabaseExtrasMinHostABI, m.HostABI)
+		}
+		if drv.UsesField(dbdriver.FieldKerberos) && !m.Capabilities.DatabaseKerberos {
+			return fmt.Errorf("database driver %q declares the Kerberos field group (form field %q), which requires manifest capabilities.databaseKerberos on hostABI %s or newer (got hostABI %s without it)",
+				id, dbdriver.FieldKerberos, DatabaseKerberosMinHostABI, m.HostABI)
+		}
+		if drv.Supports(dbdriver.CapClassifyStatements) && !hostABIAtLeast(m.HostABI, DatabaseKerberosMinHostABI) {
+			return fmt.Errorf("database driver %q declares statement splitting and classification (capability %q), which requires hostABI %s or newer (got %s)",
+				id, dbdriver.CapClassifyStatements, DatabaseKerberosMinHostABI, m.HostABI)
+		}
+	}
+	for _, id := range m.Capabilities.DatabaseDrivers {
+		if _, ok := described[id]; !ok {
+			return fmt.Errorf("manifest declares database driver %q but describe() does not provide it", id)
+		}
 	}
 	return nil
 }
@@ -366,6 +443,12 @@ func (m *Manifest) apply(d *Descriptor) {
 	m.Snippets = d.Snippets
 	m.Reviewer = d.Reviewer
 	m.SettingsSchema = d.SettingsSchema
+	// A driver's icon is the extension's: it is the one icon the user sees on it.
+	m.DatabaseDrivers = make([]dbdriver.Descriptor, len(d.DatabaseDrivers))
+	for i, drv := range d.DatabaseDrivers {
+		drv.Icon = d.Icon
+		m.DatabaseDrivers[i] = drv
+	}
 }
 
 func policyActions(tools []ToolDef) []string {

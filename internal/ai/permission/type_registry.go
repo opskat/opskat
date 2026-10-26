@@ -282,7 +282,7 @@ func init() {
 		shape: k8sShape, refPolicyType: policyKindCommand, land: identityLand,
 		match: policy.MatchCommandRule, generic: policy.MatchCommandRule})
 	registerRuleSink(asset_entity.AssetTypeDatabase, &ruleLanding{
-		shape: queryShape, refPolicyType: policyKindQuery, land: queryLand,
+		shape: queryShape, refPolicyType: policyKindQuery, landFor: queryLandForHolder,
 		match: queryTypeMatch, generic: policy.MatchCommandRule})
 	registerRuleSink(asset_entity.AssetTypeRedis, &ruleLanding{
 		shape: redisShape, refPolicyType: policyKindRedis, land: identityLand,

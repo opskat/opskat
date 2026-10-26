@@ -10,11 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-func openFake(t *testing.T, fake *Fake, cfg *asset_entity.DatabaseConfig) *FakeSession {
+func openFake(t *testing.T, fake *Fake, cfg *dbdriver.Config) *FakeSession {
 	t.Helper()
 	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: cfg})
 	require.NoError(t, err)
@@ -25,7 +24,7 @@ func openFake(t *testing.T, fake *Fake, cfg *asset_entity.DatabaseConfig) *FakeS
 // 假驱动的会话不是 database/sql 的句柄：它只有驱动契约上的方法，结果直接来自内存里的表。
 func TestFakeSessionExecutesWithoutADatabaseHandle(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Database: "app"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h", Database: "app"})
 	ctx := context.Background()
 
 	res, err := session.Execute(ctx, "SELECT * FROM t")
@@ -46,7 +45,7 @@ func TestFakeSessionExecutesWithoutADatabaseHandle(t *testing.T) {
 
 func TestFakeSessionPagesItsRows(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	require.Len(t, fake.Rows, 3)
 
 	res, err := session.ExecutePaged(context.Background(), "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2})
@@ -64,7 +63,7 @@ func TestFakeSessionPagesItsRows(t *testing.T) {
 
 // 连接级只读由驱动落实：假驱动的只读会话拒绝写语句。
 func TestFakeSessionEnforcesReadOnlyItself(t *testing.T) {
-	session := openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", ReadOnly: true})
+	session := openFake(t, NewFake(), &dbdriver.Config{Driver: "fakedb", Host: "h", ReadOnly: true})
 
 	_, err := session.Execute(context.Background(), "DELETE FROM t")
 	require.ErrorIs(t, err, ErrFakeReadOnly)
@@ -74,7 +73,7 @@ func TestFakeSessionEnforcesReadOnlyItself(t *testing.T) {
 
 func TestFakeSessionRefusesWorkAfterClose(t *testing.T) {
 	fake := NewFake()
-	session := openFake(t, fake, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
 	require.NoError(t, session.Close())
 
 	assert.True(t, session.Closed())
@@ -87,7 +86,7 @@ func TestFakeOpenReturnsItsConnectionError(t *testing.T) {
 	fake := NewFake()
 	fake.OpenErr = errors.New("fakedb: connection refused")
 
-	_, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &asset_entity.DatabaseConfig{Driver: "fakedb"}})
+	_, err := fake.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "fakedb"}})
 	require.ErrorIs(t, err, fake.OpenErr)
 	assert.Empty(t, fake.Sessions())
 }
@@ -100,7 +99,7 @@ func TestFakeWithoutReadOnlyRefusesReadOnlyConfig(t *testing.T) {
 	fake.Desc.Form = fake.Desc.Form[:1]
 
 	_, err := fake.Open(context.Background(), dbdriver.OpenRequest{
-		Config: &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", ReadOnly: true},
+		Config: &dbdriver.Config{Driver: "fakedb", Host: "h", ReadOnly: true},
 	})
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	assert.Empty(t, fake.Sessions())
@@ -264,7 +263,7 @@ func TestConformanceReportsBrokenSessions(t *testing.T) {
 		"undeclared create database generated": {brokenSession{schemaWrites: true}, "CreateDatabaseStatements"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			tt.broken.Session = openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+			tt.broken.Session = openFake(t, NewFake(), &dbdriver.Config{Driver: "fakedb", Host: "h"})
 			problems := sessionProblems(NewFake().Desc, tt.broken)
 			require.NotEmpty(t, problems)
 			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
@@ -316,7 +315,7 @@ func TestConformanceReportsDeclaredSchemaWritesBeingRefused(t *testing.T) {
 	desc := NewFake().Desc
 	desc.Capabilities = append(desc.Capabilities,
 		dbdriver.CapCreateTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable, dbdriver.CapCreateDatabase)
-	session := openFake(t, NewFake(), &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h"})
+	session := openFake(t, NewFake(), &dbdriver.Config{Driver: "fakedb", Host: "h"})
 
 	joined := strings.Join(schemaWriteProblems(context.Background(), desc, session), "\n")
 	for _, name := range []string{"CreateTableStatements", "DropTableStatements", "TruncateTableStatements", "CreateDatabaseStatements"} {

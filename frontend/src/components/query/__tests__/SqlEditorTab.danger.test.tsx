@@ -6,6 +6,7 @@ import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../../wailsjs/go/query/Query";
 import { act } from "@testing-library/react";
 import { mounted } from "./fakeSqlEditor";
+import { BUILTIN_DRIVERS, provideDrivers } from "@/__tests__/dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", async () => ({
   CodeEditor: (await import("./FakeCodeEditor")).FakeCodeEditor,
@@ -51,6 +52,7 @@ async function clickExecute(sql: string) {
 describe("SqlEditorTab dangerous SQL confirmation", () => {
   beforeEach(() => {
     vi.mocked(ExecuteSQLPaged).mockReset();
+    provideDrivers(BUILTIN_DRIVERS);
   });
 
   it.each([

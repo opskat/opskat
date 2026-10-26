@@ -210,7 +210,7 @@ func (e *Extension) assetRef(extName string, assetID int64) (*extension.AssetRef
 	if assetID == 0 {
 		return nil, nil
 	}
-	_, asset, err := e.service.OwnedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), extName, assetID)
+	_, asset, _, err := e.service.OwnedTypedAsset(i18n.Ctx(e.ctx, e.lang.Lang()), extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -406,4 +406,20 @@ func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
 		return "", false
 	}
 	return info.Version, true
+}
+
+// InstalledExtensionCapabilities returns the capabilities the installed
+// extension named name declares, the zero value when it is not installed.
+// `opsctl ext dev` compares them with the incoming manifest to mark what an
+// overwrite newly adds.
+func InstalledExtensionCapabilities(e *Extension, name string) extension.Capabilities {
+	if e.service == nil {
+		return extension.Capabilities{}
+	}
+	info, err := e.service.GetDetail(name, e.lang.Lang())
+	if err != nil {
+		// GetDetail's only failure is "not installed".
+		return extension.Capabilities{}
+	}
+	return info.Manifest.Capabilities
 }

@@ -3,7 +3,7 @@ package permission
 import (
 	"fmt"
 
-	"github.com/opskat/opskat/internal/dbdriver"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -32,7 +32,7 @@ func resolveDeclaredType(name string) (canonical string, driver asset_entity.Dat
 	if handler, found := permissionTypeFor(name); found {
 		return handler.canonical, "", true
 	}
-	if d, found := dbdriver.ByName(name); found {
+	if d, found := dbregistry.ByName(name); found {
 		return asset_entity.AssetTypeDatabase, d.Descriptor().ID, true
 	}
 	return "", "", false
