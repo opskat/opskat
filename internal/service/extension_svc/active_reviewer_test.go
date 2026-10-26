@@ -208,13 +208,23 @@ func TestCommandReviewerNamePicksTheOnlyEnabledReviewer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "rev-a", name)
 
+	// 选过的审核扩展被停用或卸载后，选择不再算数：设置里的选择没人去清，
+	// 照它用就每次审核都失败，而只剩一个审核扩展时设置页不显示选择器，用户改不回来。
 	name, err = svc.CommandReviewerName(ctx, "rev-off")
 	require.NoError(t, err)
-	assert.Equal(t, "rev-off", name, "选了哪个就用哪个，能不能用由加载时检查")
+	assert.Equal(t, "rev-a", name, "选的已停用，用唯一启用中的")
+	name, err = svc.CommandReviewerName(ctx, "gone")
+	require.NoError(t, err)
+	assert.Equal(t, "rev-a", name, "选的已卸载，用唯一启用中的")
 
 	writeManifest(t, root, "rev-b", true)
 	_, err = svc.CommandReviewerName(ctx, "")
 	assert.ErrorIs(t, err, ErrSeveralCommandReviewers)
+	name, err = svc.CommandReviewerName(ctx, "rev-b")
+	require.NoError(t, err)
+	assert.Equal(t, "rev-b", name, "选了启用中的就用它")
+	_, err = svc.CommandReviewerName(ctx, "gone")
+	assert.ErrorIs(t, err, ErrSeveralCommandReviewers, "选的已卸载、启用中的有好几个，要用户重选")
 
 	empty := &Service{manager: extension.NewManager(t.TempDir(), func(string) extension.HostProvider { return nil }, nopLogger()), stateRepo: repo, logger: nopLogger()}
 	_, err = empty.CommandReviewerName(ctx, "")
@@ -239,8 +249,9 @@ func TestCommandReviewStateTellsWhichReviewerIsInUse(t *testing.T) {
 	require.Len(t, st.Reviewers, 1)
 
 	st = svc.CommandReviewState(ctx, "en", "gone")
-	assert.Empty(t, st.Active)
-	assert.Equal(t, "reviewer_unavailable", st.Problem, "选了一个不存在的")
+	assert.Equal(t, "rev", st.Active, "选的已卸载，用唯一的那个")
+	assert.Empty(t, st.Selected, "已卸载的选择不再报告为选中")
+	assert.Empty(t, st.Problem)
 
 	repo.rows["rev"].PackageSHA256 = "dead"
 	st = svc.CommandReviewState(ctx, "en", "")

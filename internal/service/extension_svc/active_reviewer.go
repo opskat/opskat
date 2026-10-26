@@ -159,14 +159,12 @@ var (
 	ErrSeveralCommandReviewers = errors.New("several command review extensions are enabled; select one in settings")
 )
 
-// CommandReviewerName 是这次要用的审核扩展的名字。selected 是设置里选的，选了就用它
-// （能不能用由 ActiveCommandReviewer 检查）；没选时，启用中的审核扩展只有一个就用它。
+// CommandReviewerName 是这次要用的审核扩展的名字。selected 是设置里选的，它是启用中的
+// 审核扩展就用它（能不能用由 ActiveCommandReviewer 检查）；没选、或选的已停用或卸载时，
+// 启用中的审核扩展只有一个就用它。停用、卸载都不会清掉设置里的选择，所以不能照它用。
 // 判断"是不是审核扩展"只读 manifest.json 的 capabilities.commandReview，不用加载扩展，
 // 所以 opsctl 也能这样选。
 func (s *Service) CommandReviewerName(ctx context.Context, selected string) (string, error) {
-	if selected != "" {
-		return selected, nil
-	}
 	infos, err := s.manager.ScanManifests()
 	if err != nil {
 		return "", err
@@ -182,6 +180,9 @@ func (s *Service) CommandReviewerName(ctx context.Context, selected string) (str
 	var names []string
 	for _, info := range infos {
 		if info.Manifest.Capabilities.CommandReview && !disabled[info.Name] {
+			if info.Name == selected {
+				return selected, nil
+			}
 			names = append(names, info.Name)
 		}
 	}
@@ -199,7 +200,8 @@ func (s *Service) CommandReviewerName(ctx context.Context, selected string) (str
 // CommandReviewState 是设置页和权限模式卡片看到的审核状态。
 type CommandReviewState struct {
 	Reviewers []CommandReviewerInfo `json:"reviewers"`
-	// Selected 是设置里选的审核扩展；空表示没选（启用中的只有一个时自动用它）。
+	// Selected 是设置里选的、仍启用中的审核扩展；空表示没选或选的已停用、卸载
+	// （启用中的只有一个时自动用它）。
 	Selected string `json:"selected"`
 	// Active 是实际在用的审核扩展；没有可用的时为空，Problem 说明原因
 	// （与审核失败原因同名：no_reviewer / reviewer_unavailable）。
@@ -209,8 +211,11 @@ type CommandReviewState struct {
 
 // CommandReviewState 按审核时同一套规则算出要用的审核扩展，并检查它现在能不能用。
 func (s *Service) CommandReviewState(ctx context.Context, lang, selected string) CommandReviewState {
-	st := CommandReviewState{Reviewers: s.ListCommandReviewers(ctx, lang), Selected: selected}
+	st := CommandReviewState{Reviewers: s.ListCommandReviewers(ctx, lang)}
 	name, err := s.CommandReviewerName(ctx, selected)
+	if err == nil && name == selected {
+		st.Selected = selected
+	}
 	switch {
 	case errors.Is(err, ErrNoCommandReviewer) || errors.Is(err, ErrSeveralCommandReviewers):
 		st.Problem = command_review_svc.ReasonNoReviewer
