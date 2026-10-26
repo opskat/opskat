@@ -17,7 +17,8 @@ import (
 type CommandReviewRepo interface {
 	// Get 返回 now 时刻仍有效的缓存；找不到或已过期时返回 (nil, nil)。
 	Get(ctx context.Context, cacheKey string, now int64) (*command_review_entity.CommandReview, error)
-	// Put 写入缓存，同一个 CacheKey 覆盖旧值。
+	// Put 写入缓存，同一个 CacheKey 覆盖旧值；顺带删掉到 r.Createtime 已过期的缓存——
+	// 每条命令几乎都不一样，过期的没人再读，不删表会一直长。
 	Put(ctx context.Context, r *command_review_entity.CommandReview) error
 }
 
@@ -51,8 +52,13 @@ func (r *commandReviewRepo) Get(ctx context.Context, cacheKey string, now int64)
 }
 
 func (r *commandReviewRepo) Put(ctx context.Context, e *command_review_entity.CommandReview) error {
-	return db.Ctx(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "cache_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"result", "createtime", "expiretime"}),
-	}).Create(e).Error
+	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("expiretime <= ?", e.Createtime).Delete(&command_review_entity.CommandReview{}).Error; err != nil {
+			return err
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "cache_key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"result", "createtime", "expiretime"}),
+		}).Create(e).Error
+	})
 }

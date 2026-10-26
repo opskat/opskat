@@ -62,3 +62,15 @@ func TestPutReplacesExistingKey(t *testing.T) {
 	require.NoError(t, db.Ctx(ctx).Model(&command_review_entity.CommandReview{}).Count(&count).Error)
 	assert.Equal(t, int64(1), count)
 }
+
+// 每条命令几乎都不一样，过期的缓存没人再读；不删的话表会一直长。写入时顺带删掉已过期的。
+func TestPutDeletesExpiredEntries(t *testing.T) {
+	ctx, r := setupRepo(t)
+	require.NoError(t, r.Put(ctx, &command_review_entity.CommandReview{CacheKey: "old", Result: "{}", Createtime: 100, Expiretime: 200}))
+	require.NoError(t, r.Put(ctx, &command_review_entity.CommandReview{CacheKey: "live", Result: "{}", Createtime: 150, Expiretime: 400}))
+	require.NoError(t, r.Put(ctx, &command_review_entity.CommandReview{CacheKey: "new", Result: "{}", Createtime: 300, Expiretime: 500}))
+
+	var keys []string
+	require.NoError(t, db.Ctx(ctx).Model(&command_review_entity.CommandReview{}).Order("cache_key").Pluck("cache_key", &keys).Error)
+	assert.Equal(t, []string{"live", "new"}, keys)
+}
