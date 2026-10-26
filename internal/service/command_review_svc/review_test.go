@@ -525,3 +525,34 @@ func TestTestReviewerBypassesTheCache(t *testing.T) {
 	assert.Len(t, rev.calls, 2, "测的是传进来的那个扩展，不是在用的那个")
 	assert.Empty(t, cache.m)
 }
+
+// 测试审核扩展（扩展设置页的"保存并测试"）测的未必是在用的那个，结果只回给测试的人：
+// 不改设置页显示的最近失败，也不触发设置问题的提醒。
+func TestTestReviewerLeavesTheReviewStatusAlone(t *testing.T) {
+	broken := newReviewer()
+	broken.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+		return []extension.ReviewCommandResult{{Outcome: extension.ReviewOutcomeError, Reason: ReasonNotConfigured}}, nil
+	}
+	s, _ := newService(broken)
+	var notified []string
+	s.SetConfigErrorListener(func(reason string) { notified = append(notified, reason) })
+
+	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
+	require.Equal(t, ReasonNotConfigured, s.Status().LastFailReason)
+	require.Equal(t, []string{ReasonNotConfigured}, notified)
+
+	other := newReviewer()
+	other.name = "other"
+	assert.Equal(t, OutcomePass, s.TestReviewer(context.Background(), other).Outcome)
+	assert.Equal(t, ReasonNotConfigured, s.Status().LastFailReason, "测试别的扩展通过，不能清掉在用扩展的失败")
+
+	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
+	assert.Equal(t, []string{ReasonNotConfigured}, notified, "在用的扩展还没恢复过，同一种问题不再提醒")
+
+	fresh, _ := newService(newReviewer())
+	var freshNotified []string
+	fresh.SetConfigErrorListener(func(reason string) { freshNotified = append(freshNotified, reason) })
+	assert.Equal(t, OutcomeFail, fresh.TestReviewer(context.Background(), broken).Outcome)
+	assert.Equal(t, Status{}, fresh.Status(), "测试一个没配置好的扩展，不记成全局最近失败")
+	assert.Empty(t, freshNotified, "也不弹设置问题的提醒")
+}

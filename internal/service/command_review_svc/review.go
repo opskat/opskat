@@ -184,8 +184,22 @@ func (s *service) SetConfigErrorListener(fn func(reason string)) {
 	s.listener = fn
 }
 
+// record 按一批正式审核的结果更新状态：失败记下（设置问题通知一次）；扩展真的给出了
+// 判断就算恢复——只是调用成功、回答却是"API key 无效"之类不算，命中缓存也不算。
+// 测试审核扩展不走这里：测的未必是在用的那个。
+func (s *service) record(results []Result) {
+	for _, r := range results {
+		switch {
+		case r.Outcome == OutcomeFail:
+			s.recordFailure(r)
+		case !r.Cached:
+			s.recordSuccess()
+		}
+	}
+}
+
 // recordFailure 记下审核失败；设置问题通知一次。
-func (s *service) recordFailure(r Result) Result {
+func (s *service) recordFailure(r Result) {
 	s.mu.Lock()
 	s.status = Status{LastFailReason: r.Reason, LastFailAt: time.Now()}
 	var notify func(string)
@@ -197,7 +211,6 @@ func (s *service) recordFailure(r Result) Result {
 	if notify != nil {
 		notify(r.Reason)
 	}
-	return r
 }
 
 // recordSuccess 清掉最近一次失败：设置页只显示还没恢复的失败。
@@ -224,11 +237,12 @@ func (s *service) Review(ctx context.Context, in Input) Result {
 // ReviewBatch 审核多条命令，结果与输入一一对应。读写缓存按顺序做（SQLite 不适合并发写），
 // 只有调用审核扩展这一步并行，最多 maxParallelReviews 路同时进行。
 func (s *service) ReviewBatch(ctx context.Context, ins []Input) []Result {
-	rev, failed := s.resolve(ctx, len(ins))
-	if failed != nil {
-		return failed
+	rev, results := s.resolve(ctx, len(ins))
+	if results == nil {
+		results = s.reviewWith(ctx, rev, ins, true)
 	}
-	return s.reviewWith(ctx, rev, ins, true)
+	s.record(results)
+	return results
 }
 
 // testCommand 是测试审核服务时送审的命令：只读、无害，正常的审核服务应当判它通过。
@@ -251,7 +265,7 @@ func (s *service) resolve(ctx context.Context, n int) (ExtensionReviewer, []Resu
 	logger.Ctx(ctx).Warn("command reviewer unavailable", zap.String("reason", reason), zap.Error(err))
 	results := make([]Result, n)
 	for i := range results {
-		results[i] = s.recordFailure(Result{Outcome: OutcomeFail, Reason: reason})
+		results[i] = Result{Outcome: OutcomeFail, Reason: reason}
 	}
 	return nil, results
 }
@@ -279,17 +293,17 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 				reason = ReasonUndecodable
 			}
 			logger.Ctx(ctx).Warn("prepare command for review", zap.String("assetType", in.AssetType), zap.String("reason", reason), zap.Error(err))
-			results[i] = s.recordFailure(Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version})
+			results[i] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version}
 			continue
 		}
 		command, err := RedactSensitive(in.Syntax, reviewed)
 		if err != nil {
 			logger.Ctx(ctx).Warn("redact command for review", zap.String("assetType", in.AssetType), zap.Error(err))
-			results[i] = s.recordFailure(Result{Outcome: OutcomeFail, Reason: ReasonUnparseable, Extension: name, Version: version})
+			results[i] = Result{Outcome: OutcomeFail, Reason: ReasonUnparseable, Extension: name, Version: version}
 			continue
 		}
 		if len(command) > maxLen {
-			results[i] = s.recordFailure(Result{Outcome: OutcomeFail, Reason: ReasonTooLong, Extension: name, Version: version})
+			results[i] = Result{Outcome: OutcomeFail, Reason: ReasonTooLong, Extension: name, Version: version}
 			continue
 		}
 		key := extensionCacheKey(name, version, settingsHash, in.AssetType, cacheKeyCommand(in.Command, reviewed))
@@ -358,26 +372,19 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 			}
 			logger.Ctx(ctx).Warn("extension command review failed", zap.String("extension", name), zap.String("reason", reason), zap.Error(c.err))
 			for _, p := range batch {
-				results[p.idx] = s.recordFailure(Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version, Duration: c.elapsed, Attempts: c.attempts})
+				results[p.idx] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version, Duration: c.elapsed, Attempts: c.attempts}
 			}
 			continue
 		}
 		for i, p := range batch {
 			r := extensionResult(name, version, questions, c.out[i], c.elapsed, c.attempts)
-			if r.Outcome == OutcomeFail {
-				results[p.idx] = s.recordFailure(r)
-				continue
-			}
-			// 扩展真的给出了判断才算恢复；只是调用成功、回答却是"API key 无效"之类不算。
-			s.recordSuccess()
-			if !useCache {
-				results[p.idx] = r
+			results[p.idx] = r
+			if r.Outcome == OutcomeFail || !useCache {
 				continue
 			}
 			if err := s.cache.Put(ctx, p.key, r, cacheTTL); err != nil {
 				logger.Ctx(ctx).Warn("write command review cache", zap.String("extension", name), zap.Error(err))
 			}
-			results[p.idx] = r
 		}
 	}
 	return results
