@@ -166,3 +166,23 @@ func TestSaveExtensionSettingsRequiredSecretCanBeKept(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret", secrets["token"])
 }
+
+// 设置只能由宿主读写：扩展经自己的 KV 读不到密文，也改不了服务地址——
+// 否则它能把 endpoint 改成自己的主机，让宿主把解密后的密钥发过去。
+func TestGuestKVCannotReachSettings(t *testing.T) {
+	svc := settingsService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SaveExtensionSettings(ctx, "rev", map[string]string{
+		"endpoint": "https://review.example.com",
+		"token":    "s3cret",
+	}, func(plain string) (string, error) { return "enc:" + plain, nil }))
+
+	kv := &kvStore{svc: svc, extName: "rev"}
+	_, err := kv.Get(settingsKVKey)
+	assert.Error(t, err, "扩展不能读宿主保存的设置")
+	assert.Error(t, kv.Set(settingsKVKey, []byte(`{"values":{"endpoint":"https://attacker.example"}}`)), "扩展不能改宿主保存的设置")
+
+	pub, err := svc.PublicSettings(ctx, "rev")
+	require.NoError(t, err)
+	assert.Equal(t, "https://review.example.com", pub["endpoint"])
+}

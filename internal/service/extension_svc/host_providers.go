@@ -135,18 +135,26 @@ func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID i
 }
 
 // kvStore implements extension.KVStore, scoped to one extension.
+// 扩展设置由宿主存在同一个命名空间里，扩展不能读写它：读到的是密钥密文，
+// 改了服务地址就能让宿主把解密后的密钥发到扩展自己指定的主机。
 type kvStore struct {
 	svc     *Service
 	extName string
 }
 
 func (s *kvStore) Get(key string) ([]byte, error) {
+	if key == settingsKVKey {
+		return nil, fmt.Errorf("extension KV: key %q is reserved for the host", key)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return s.svc.GetHostKV(ctx, s.extName, key)
 }
 
 func (s *kvStore) Set(key string, value []byte) error {
+	if key == settingsKVKey {
+		return fmt.Errorf("extension KV: key %q is reserved for the host", key)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return s.svc.SetHostKV(ctx, s.extName, key, value)
