@@ -186,3 +186,23 @@ func TestGuestKVCannotReachSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https://review.example.com", pub["endpoint"])
 }
+
+// 不知道哪些字段是密钥（扩展不在已加载列表里、拿不到 schema）时，不能把存的值原样交给扩展：
+// 密钥字段存的是密文，原样给出去就泄露了，扩展拿它写请求头也用不了。
+func TestPublicSettingsFailsClosedWithoutTheSchema(t *testing.T) {
+	svc := settingsService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.SaveExtensionSettings(ctx, "rev", map[string]string{
+		"endpoint": "https://review.example.com",
+		"token":    "s3cret",
+	}, func(plain string) (string, error) { return "enc:" + plain, nil }))
+
+	unloaded := &Service{
+		manager:  extension.NewManager(t.TempDir(), func(string) extension.HostProvider { return nil }, nopLogger()),
+		dataRepo: svc.dataRepo,
+		logger:   nopLogger(),
+	}
+	pub, err := unloaded.PublicSettings(ctx, "rev")
+	assert.Error(t, err)
+	assert.NotContains(t, pub, "token")
+}

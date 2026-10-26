@@ -71,10 +71,14 @@ func (s *Service) SaveExtensionSettings(ctx context.Context, name string, values
 
 // PublicSettings 是 settings_get 给扩展的设置：非密钥字段给值；已设置的密钥字段只给它的占位
 // {{setting.<field>}}（扩展拿它写请求头，宿主发出前替换），没设置的不出现，扩展据此知道还没配置。
+// 拿不到 schema（扩展还没加载）时不知道哪些是密钥字段，返回错误而不是把密文当普通值给出去。
 func (s *Service) PublicSettings(ctx context.Context, name string) (map[string]string, error) {
 	stored, schema, err := s.loadSettings(ctx, name)
 	if err != nil || stored == nil {
 		return map[string]string{}, err
+	}
+	if schema == nil {
+		return nil, fmt.Errorf("settings of extension %q: settings schema unknown (extension not loaded)", name)
 	}
 	secrets := map[string]struct{}{}
 	for _, f := range extension.PasswordFieldsFromSchema(schema) {
