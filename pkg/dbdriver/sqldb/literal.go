@@ -84,6 +84,5 @@ func (l Literals) Default(value, columnType string) (string, error) {
 	case keywordPattern.MatchString(v):
 		return strings.ToUpper(v), nil
 	}
-	typeName, _, _ := strings.Cut(columnType, "(")
-	return l.Literal(v, strings.TrimSpace(typeName))
+	return l.Literal(v, typeName(columnType))
 }

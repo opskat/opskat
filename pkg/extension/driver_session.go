@@ -84,7 +84,7 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 		// is no more the extension's than the Kerberos credentials are.
 		req.Password = ""
 	}
-	s := &driverSession{plugin: p, driver: id, open: req, live: 1}
+	s := &driverSession{plugin: p, driver: id, open: req, live: 1, columns: p.driverColumnFeatures(id)}
 	s.reach = p.confineReach(id, &s.open)
 	s.tickets = p.ticketGate(id, &s.open)
 	inst, err := s.login(ctx)
@@ -93,6 +93,18 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 	}
 	s.release(inst)
 	return s, nil
+}
+
+// driverColumnFeatures is what the descriptor of driver id declares for the
+// columns of create and alter table requests; a driver that is not described
+// declares nothing.
+func (p *Plugin) driverColumnFeatures(id string) dbdriver.ColumnFeatures {
+	for _, desc := range p.manifest.DatabaseDrivers {
+		if string(desc.ID) == id {
+			return desc.ColumnFeatures()
+		}
+	}
+	return dbdriver.ColumnFeatures{}
 }
 
 // ClassifyStatements splits and classifies sql with database driver id
@@ -601,6 +613,11 @@ type driverSession struct {
 	// tickets is the session's Kerberos ticket gate (Plugin.ticketGate), shared by
 	// every instance, so each SPN is logged once per session.
 	tickets *ticketGate
+	// columns is what the driver's descriptor declares for the columns of create
+	// and alter table requests. A request that uses more is refused here and not
+	// sent: an extension built before a field existed ignores it (driverwire), so
+	// the change would be dropped without a word.
+	columns dbdriver.ColumnFeatures
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -916,7 +933,19 @@ func (s *driverSession) GridEditStatements(ctx context.Context, database, table 
 }
 
 func (s *driverSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	if err := s.checkColumns(req.Definitions()); err != nil {
+		return nil, err
+	}
 	return forwardRequest[[]string](ctx, s, driverwire.OpCreateTableStatements, driverwire.Args{Database: database}, req)
+}
+
+// checkColumns refuses, before anything is sent, a request whose columns use a
+// feature the driver does not declare (see driverSession.columns).
+func (s *driverSession) checkColumns(columns []dbdriver.ColumnDefinition) error {
+	if err := s.columns.Check(columns...); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)
+	}
+	return nil
 }
 
 func (s *driverSession) DropTableStatements(ctx context.Context, database, table string) ([]string, error) {
@@ -936,6 +965,9 @@ func (s *driverSession) AlterTableModel(ctx context.Context, database, table str
 }
 
 func (s *driverSession) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	if err := s.checkColumns(req.Definitions()); err != nil {
+		return nil, err
+	}
 	return forwardRequest[*dbdriver.AlterTableStatements](ctx, s, driverwire.OpAlterTableStatements, driverwire.Args{Database: database, Table: table}, req)
 }
 

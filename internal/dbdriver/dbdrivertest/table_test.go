@@ -611,11 +611,100 @@ func TestFakeSessionAltersTablesWithoutExecuting(t *testing.T) {
 	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
 }
 
+// 假会话的列能力跟着声明走：没声明时带写法、要自增的请求被拒绝且什么也没记下；声明了，读出的列带
+// 写法（有默认值是值，没有是无）与自增现状（ColumnRules），已有列的自增不能改，新列可以自增。
+func TestFakeSessionFollowsItsColumnFeatures(t *testing.T) {
+	ctx := context.Background()
+	kind := dbdriver.NewColumn{Name: "at", Type: "text", DefaultKind: dbdriver.DefaultKindExpression, DefaultValue: "now()"}
+	auto := dbdriver.NewColumn{Name: "id", Type: "int", AutoIncrement: true}
+
+	undeclared := withSchemaWrites()
+	session := openFake(t, undeclared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	for _, column := range []dbdriver.NewColumn{kind, auto} {
+		_, err := session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{column}})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported, column.Name)
+		_, err = session.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{Columns: []dbdriver.AlterColumn{{
+			Name: column.Name, Type: column.Type, DefaultKind: column.DefaultKind, DefaultValue: column.DefaultValue, AutoIncrement: column.AutoIncrement,
+		}}})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported, column.Name)
+	}
+	assert.Empty(t, session.TableCalls())
+	model, err := session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	for _, column := range model.Columns {
+		assert.Empty(t, column.DefaultKind)
+		assert.False(t, column.AutoIncrement)
+	}
+
+	declared := withColumnFeatures()
+	session = openFake(t, declared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	_, err = session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{kind, auto}})
+	require.NoError(t, err)
+	model, err = session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.ColumnDefinition{
+		{Name: "id", Type: "int", Comment: "primary key", DefaultKind: dbdriver.DefaultKindNone, AutoIncrement: true},
+		{Name: "name", Type: "text", Nullable: true, DefaultKind: dbdriver.DefaultKindValue, DefaultValue: "anon"},
+	}, model.Columns)
+
+	req := dbdriver.AlterTableRequest{Name: "users"}
+	for _, column := range model.Columns {
+		req.Columns = append(req.Columns, dbdriver.AlterColumn{
+			OriginalName: column.Name, Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+			DefaultValue: column.DefaultValue, Comment: column.Comment, DefaultKind: column.DefaultKind, AutoIncrement: column.AutoIncrement,
+		})
+	}
+	result, err := session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err)
+	assert.Empty(t, result.Statements)
+	req.Columns = append(req.Columns, dbdriver.AlterColumn{Name: "seq", Type: "int", AutoIncrement: true})
+	result, err = session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Statements)
+	req.Columns[0].AutoIncrement = false
+	_, err = session.AlterTableStatements(ctx, "app", "users", req)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported, "已有列的自增不能改")
+}
+
+// 列能力的改表一致性检查也得能失败。
+func TestTableConformanceReportsBrokenColumnFeatures(t *testing.T) {
+	for name, tt := range map[string]struct {
+		fake   *Fake
+		broken brokenAlter
+		want   string
+	}{
+		"undeclared default kinds in the model": {withSchemaWrites(), brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns[1].DefaultKind = dbdriver.DefaultKindValue
+			return m
+		}}, "does not declare explicitDefaults"},
+		"undeclared auto-increment in the model": {withSchemaWrites(), brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns[0].AutoIncrement = true
+			return m
+		}}, "does not declare autoIncrement"},
+		"declared default kinds missing from the model": {withColumnFeatures(), brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns[0].DefaultKind = ""
+			return m
+		}}, "default kind"},
+		"auto-increment of an existing column changed": {withColumnFeatures(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+			return r
+		}, lenientAutoIncrement: true}, "auto-increment of existing column"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tt.broken.Session = openFake(t, tt.fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+			problems := tableProblems(tt.fake.Desc, tt.broken, "app", "users")
+			require.NotEmpty(t, problems)
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+}
+
 // brokenAlter 在假会话的改表之上按需改坏一处。
 type brokenAlter struct {
 	dbdriver.Session
 	model func(*dbdriver.AlterTableModel) *dbdriver.AlterTableModel
 	stmts func(*dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements
+	// lenientAutoIncrement 让改已有列自增的请求照样给出语句，而不是被拒绝。
+	lenientAutoIncrement bool
 }
 
 func (b brokenAlter) AlterTableModel(ctx context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
@@ -628,6 +717,9 @@ func (b brokenAlter) AlterTableModel(ctx context.Context, database, table string
 
 func (b brokenAlter) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
 	result, err := b.Session.AlterTableStatements(ctx, database, table, req)
+	if b.lenientAutoIncrement && errors.Is(err, dbdriver.ErrUnsupported) && strings.Contains(err.Error(), "auto-increment") {
+		return &dbdriver.AlterTableStatements{Statements: []string{"ALTER TABLE users"}, Table: table}, nil
+	}
 	if b.stmts != nil && err == nil {
 		return b.stmts(result), nil
 	}

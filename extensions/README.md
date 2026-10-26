@@ -614,6 +614,19 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   dialect does not implement offers the user an entry point that fails. A read-only
   config is refused by the SDK unless the descriptor declares `CapReadOnly`, in which
   case `open` must make the connection read-only.
+- **The table designer's column features are opt-in.** A descriptor may declare
+  `ColumnTypes` (grouped common types and the presets for a new column and a new
+  table's `id`; group labels may be keys of your `locales/` files), `NameFolding`
+  (`NameFoldUpper` for a database that stores unquoted names in upper case), and the
+  two that change requests: `ExplicitDefaults` (defaults given as none / NULL / value /
+  expression) and `AutoIncrement` (new tables and new columns). Switch those two on in
+  the dialect — `sqldb.DefaultClassifier` (judge an existing column's default) and
+  `sqldb.AutoIncrementer` (the clause after the type) — and set the descriptor fields
+  from `sqldb.ClassifiesDefaults(dialect)` / `sqldb.AutoIncrements(dialect)`, so the
+  declaration cannot drift from the implementation. The host refuses, before sending,
+  a request using one the descriptor does not declare; an extension built before these
+  fields existed keeps creating and altering tables as it did and simply does not get
+  them. None of them needs a newer `hostABI`.
 - **Fields of the driver's own go in `DriverFields`.** Each one declares its key, type,
   tab, whether it is required and its default; the values are stored in the asset's
   `driver_options` and reach `open` as `req.DriverOptions`, password fields decrypted.

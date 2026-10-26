@@ -218,8 +218,9 @@ type Session interface {
 	GridEditStatements(ctx context.Context, database, table string, req GridEditRequest) (*GridEditStatements, error)
 
 	// CreateTableStatements 生成建表语句（只生成、不执行）：表名、列名按方言加引号，列的类型文本
-	// 原样写入，默认值的写法见 NewColumn.DefaultValue。req.Name 用 ListTables 给出的形式。驱动没有
-	// 声明 CapCreateTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	// 原样写入，默认值的写法见 NewColumn.DefaultValue 与 DefaultKind。req.Name 用 ListTables 给出的形式。
+	// 驱动没有声明 CapCreateTable、或列用到驱动没声明的列能力（ColumnFeatures.Check）时返回包着
+	// ErrUnsupported 的错误，且不执行任何语句。
 	CreateTableStatements(ctx context.Context, database string, req CreateTableRequest) ([]string, error)
 
 	// DropTableStatements 生成删除一张表的语句（只生成、不执行）。驱动没有声明 CapDropTable 时返回
@@ -236,15 +237,17 @@ type Session interface {
 	CreateDatabaseStatements(ctx context.Context, req CreateDatabaseRequest) ([]string, error)
 
 	// AlterTableModel 读出改表对话框打开时的这张表：不带 schema 的表名、表注释，以及各列的名称、
-	// 类型、可空、默认值与注释，按列在表里的次序（见 AlterTableModel）。表不存在时返回 error。驱动
-	// 没有声明 CapAlterTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	// 类型、可空、默认值与注释（声明了的驱动还有默认值写法与自增现状，见 ColumnDefinition），按列在表里
+	// 的次序（见 AlterTableModel）。表不存在时返回 error。驱动没有声明 CapAlterTable 时返回包着
+	// ErrUnsupported 的错误，且不执行任何语句。
 	AlterTableModel(ctx context.Context, database, table string) (*AlterTableModel, error)
 
 	// AlterTableStatements 生成把表改成 req 的语句（只生成、不执行），按执行的次序；没有任何改动时
 	// 语句为空列表。驱动在自己的会话上读这张表现在的定义，与 req 比较得出改动（比较的方式同
 	// AlterTableRequest 的说明），改列时保留对话框里不显示、用户也没有改的列定义。req 要改驱动没有
 	// 声明可改的属性（Descriptor.AlterTableAttributes），或说到的列不在表中（表已不存在）时返回
-	// error。驱动没有声明 CapAlterTable 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	// error；要改已有列的自增时返回包着 ErrUnsupported 的错误。驱动没有声明 CapAlterTable、或列用到
+	// 驱动没声明的列能力（ColumnFeatures.Check）时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	AlterTableStatements(ctx context.Context, database, table string, req AlterTableRequest) (*AlterTableStatements, error)
 
 	// ImportStatements 生成导入要执行的语句（只生成、不执行），按执行的次序：各导入模式的写法（见
@@ -346,15 +349,102 @@ type NewColumn struct {
 	// Type 是类型文本，原样写入（首尾空白除外）。
 	Type     string `json:"type"`
 	Nullable bool   `json:"nullable"`
-	// DefaultValue 是用户填的默认值文本，空表示没有默认值。数字、TRUE / FALSE / NULL、
-	// CURRENT_TIMESTAMP / NOW() 原样写入，其余当作字符串加引号。
+	// DefaultValue 是用户填的默认值文本。DefaultKind 为空时空表示没有默认值，数字、TRUE / FALSE / NULL、
+	// CURRENT_TIMESTAMP / NOW() 原样写入，其余当作字符串加引号；DefaultKind 非空时按写法写（见 DefaultKind）。
 	DefaultValue string `json:"defaultValue"`
+	// DefaultKind 是默认值的写法；空表示没有按写法给出，DefaultValue 照上面的规则猜写法。只有声明了
+	// Descriptor.ExplicitDefaults 的驱动接受非空的写法。新增字段，为空时序列化省略，旧扩展收到的请求不变。
+	DefaultKind DefaultKind `json:"defaultKind,omitempty"`
+	// AutoIncrement 要求这一列自增。只有声明了 Descriptor.AutoIncrement 的驱动接受。
+	AutoIncrement bool `json:"autoIncrement,omitempty"`
+}
+
+// Definition 是这一列的列定义。
+func (c NewColumn) Definition() ColumnDefinition {
+	return ColumnDefinition{
+		Name: c.Name, Type: c.Type, Nullable: c.Nullable, DefaultValue: c.DefaultValue,
+		DefaultKind: c.DefaultKind, AutoIncrement: c.AutoIncrement,
+	}
 }
 
 // CreateTableRequest 是 Session.CreateTableStatements 要生成的建表语句。
 type CreateTableRequest struct {
 	Name    string      `json:"name"`
 	Columns []NewColumn `json:"columns"`
+}
+
+// Definitions 是各列的列定义，按请求里的次序。
+func (r CreateTableRequest) Definitions() []ColumnDefinition {
+	definitions := make([]ColumnDefinition, len(r.Columns))
+	for i, column := range r.Columns {
+		definitions[i] = column.Definition()
+	}
+	return definitions
+}
+
+// DefaultKind 是列默认值的写法。
+type DefaultKind string
+
+const (
+	// DefaultKindNone：没有默认值。DefaultValue 为空。
+	DefaultKindNone DefaultKind = "none"
+	// DefaultKindNull：DEFAULT NULL。DefaultValue 为空。
+	DefaultKindNull DefaultKind = "null"
+	// DefaultKindValue：DefaultValue 是值的原文，按字面量写入（字符串加引号，按列类型怎么写由驱动决定）；
+	// 空串就是空串字面量。
+	DefaultKindValue DefaultKind = "value"
+	// DefaultKindExpression：DefaultValue 是表达式，原样写入（首尾空白除外），不能为空。
+	DefaultKindExpression DefaultKind = "expression"
+)
+
+// DefaultKinds 是全部已知的默认值写法。
+func DefaultKinds() []DefaultKind {
+	return []DefaultKind{DefaultKindNone, DefaultKindNull, DefaultKindValue, DefaultKindExpression}
+}
+
+// ColumnFeatures 是驱动对建表 / 改表请求里列的两项声明（Descriptor 上同名的 ExplicitDefaults 与
+// AutoIncrement）。会话、宿主转给扩展之前都按它检查请求。
+type ColumnFeatures struct {
+	ExplicitDefaults bool
+	AutoIncrement    bool
+}
+
+// Check 检查请求里的列只用了声明了的能力：没有声明 ExplicitDefaults 时列不能给出默认值写法，没有
+// 声明 AutoIncrement 时列不能自增，都以包着 ErrUnsupported 的错误拒绝；给出的写法必须是已知的，无 /
+// NULL 不带值，表达式不为空。错误点名列。
+func (f ColumnFeatures) Check(columns ...ColumnDefinition) error {
+	for _, column := range columns {
+		if column.DefaultKind != "" {
+			if !f.ExplicitDefaults {
+				return fmt.Errorf("%w: this driver does not declare explicit default kinds, but column %q gives one (%q)",
+					ErrUnsupported, column.Name, column.DefaultKind)
+			}
+			if err := column.checkDefault(); err != nil {
+				return err
+			}
+		}
+		if column.AutoIncrement && !f.AutoIncrement {
+			return fmt.Errorf("%w: this driver does not declare auto-increment, but column %q asks for it", ErrUnsupported, column.Name)
+		}
+	}
+	return nil
+}
+
+func (c ColumnDefinition) checkDefault() error {
+	switch c.DefaultKind {
+	case DefaultKindNone, DefaultKindNull:
+		if c.DefaultValue != "" {
+			return fmt.Errorf("column %q: default kind %q takes no value, got %q", c.Name, c.DefaultKind, c.DefaultValue)
+		}
+	case DefaultKindValue:
+	case DefaultKindExpression:
+		if strings.TrimSpace(c.DefaultValue) == "" {
+			return fmt.Errorf("column %q: the default expression is empty", c.Name)
+		}
+	default:
+		return fmt.Errorf("column %q has unknown default kind %q", c.Name, c.DefaultKind)
+	}
+	return nil
 }
 
 // CreateDatabaseRequest 是 Session.CreateDatabaseStatements 要生成的建库语句。
@@ -370,10 +460,16 @@ type ColumnDefinition struct {
 	// Type 是类型文本，写进语句时原样（首尾空白除外）。
 	Type     string `json:"type"`
 	Nullable bool   `json:"nullable"`
-	// DefaultValue 是默认值文本，空表示没有默认值；写进语句的规则同 NewColumn.DefaultValue。
+	// DefaultValue 是默认值文本；与 DefaultKind 一起写进语句的规则同 NewColumn.DefaultValue。
 	DefaultValue string `json:"defaultValue"`
 	// Comment 是列注释，空表示没有注释。
 	Comment string `json:"comment"`
+	// DefaultKind 是默认值的写法，见 NewColumn.DefaultKind。改表读出的列：声明了 ExplicitDefaults 的
+	// 驱动给出每一列的写法（DefaultValue 是按写法的值），没声明的为空。
+	DefaultKind DefaultKind `json:"defaultKind,omitempty"`
+	// AutoIncrement 是这一列自增。改表读出的列：声明了 Descriptor.AutoIncrement 的驱动给出现状，没声明的
+	// 为假。只有新表与新增的列能设；已有列的自增不能改。
+	AutoIncrement bool `json:"autoIncrement,omitempty"`
 }
 
 // AlterTableModel 是改表对话框打开时看到的表。
@@ -389,7 +485,8 @@ type AlterTableModel struct {
 // AlterTableRequest 是改表对话框提交的改动：改完之后这张表的样子。
 //
 // 已有的列按 OriginalName 对到表里现在的那一列，与它比较：名称不同是改名，类型去掉首尾空白后
-// 不分大小写比较，默认值与注释去掉首尾空白后比较。都相同的列不生成语句。
+// 不分大小写比较，默认值与注释去掉首尾空白后比较（给出了默认值写法时，写法不同即改动，同为「值」时
+// 比较原文）。自增与现在的不同时以 ErrUnsupported 拒绝：已有列的自增不能改。都相同的列不生成语句。
 type AlterTableRequest struct {
 	// Name 是新表名，不带 schema（改名后表仍在原 schema）；为空或与现在的相同表示不改名。
 	Name string `json:"name"`
@@ -411,11 +508,26 @@ type AlterColumn struct {
 	Nullable     bool   `json:"nullable"`
 	DefaultValue string `json:"defaultValue"`
 	Comment      string `json:"comment"`
+	// DefaultKind / AutoIncrement 是新增字段，为零值时序列化省略，旧扩展收到的请求不变。
+	DefaultKind   DefaultKind `json:"defaultKind,omitempty"`
+	AutoIncrement bool        `json:"autoIncrement,omitempty"`
 }
 
 // Definition 是这一列改表之后的样子。
 func (c AlterColumn) Definition() ColumnDefinition {
-	return ColumnDefinition{Name: c.Name, Type: c.Type, Nullable: c.Nullable, DefaultValue: c.DefaultValue, Comment: c.Comment}
+	return ColumnDefinition{
+		Name: c.Name, Type: c.Type, Nullable: c.Nullable, DefaultValue: c.DefaultValue, Comment: c.Comment,
+		DefaultKind: c.DefaultKind, AutoIncrement: c.AutoIncrement,
+	}
+}
+
+// Definitions 是保留与新增的各列改表之后的样子，按请求里的次序。
+func (r AlterTableRequest) Definitions() []ColumnDefinition {
+	definitions := make([]ColumnDefinition, len(r.Columns))
+	for i, column := range r.Columns {
+		definitions[i] = column.Definition()
+	}
+	return definitions
 }
 
 // AlterTableStatements 是改表的语句。

@@ -131,6 +131,38 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, 1000, read)
 	})
 
+	// The fixture declares none of the table designer's column features, like
+	// an extension built before they existed, which would ignore the fields.
+	t.Run("a request using a column feature the driver does not declare is refused, not sent", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		for name, column := range map[string]dbdriver.NewColumn{
+			"default kind":   {Name: "at", Type: "TEXT", Nullable: true, DefaultKind: dbdriver.DefaultKindExpression, DefaultValue: "now()"},
+			"auto-increment": {Name: "id", Type: "INT", AutoIncrement: true},
+		} {
+			_, err := s.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{column}})
+			require.ErrorIs(t, err, dbdriver.ErrUnsupported, name)
+			assert.Contains(t, err.Error(), "not sent to the extension", name)
+			assert.Contains(t, err.Error(), extensiontest.DBDriverFixtureDriver, name)
+
+			_, err = s.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{Columns: []dbdriver.AlterColumn{{
+				Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+				DefaultKind: column.DefaultKind, DefaultValue: column.DefaultValue, AutoIncrement: column.AutoIncrement,
+			}}})
+			require.ErrorIs(t, err, dbdriver.ErrUnsupported, name)
+			assert.Contains(t, err.Error(), "not sent to the extension", name)
+		}
+
+		statements, err := s.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT", Nullable: true, DefaultValue: "anon"},
+		}})
+		require.NoError(t, err, "a request without the new fields is sent as before")
+		assert.Equal(t, []string{"CREATE TABLE [app].[t] (\n  [id] INT NOT NULL,\n  [name] TEXT DEFAULT 'anon'\n)"}, statements)
+	})
+
 	t.Run("an open that cannot log in fails with the driver's error", func(t *testing.T) {
 		d := newDriver()
 		d.server.Refuse = "access denied for user alice"
@@ -261,6 +293,31 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "session is closed")
 	})
+}
+
+// A create or alter table request that uses none of the column features is
+// forwarded as the same JSON as before they existed (driverwire.Args.Request
+// is the request marshaled as it is): an extension built against the older
+// types receives exactly what it always has.
+func TestOldStyleSchemaRequestsAreForwardedAsBefore(t *testing.T) {
+	create, err := json.Marshal(dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{
+		{Name: "id", Type: "INT"},
+		{Name: "name", Type: "TEXT", Nullable: true, DefaultValue: "anon"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, `{"name":"t","columns":[`+
+		`{"name":"id","type":"INT","nullable":false,"defaultValue":""},`+
+		`{"name":"name","type":"TEXT","nullable":true,"defaultValue":"anon"}]}`, string(create))
+
+	alter, err := json.Marshal(dbdriver.AlterTableRequest{Name: "people", Comment: "c", Columns: []dbdriver.AlterColumn{
+		{OriginalName: "id", Name: "id", Type: "INT"},
+		{Name: "age", Type: "INT", Nullable: true, DefaultValue: "0", Comment: "years"},
+	}, Drops: []string{"old"}})
+	require.NoError(t, err)
+	assert.Equal(t, `{"name":"people","comment":"c","columns":[`+
+		`{"originalName":"id","name":"id","type":"INT","nullable":false,"defaultValue":"","comment":""},`+
+		`{"originalName":"","name":"age","type":"INT","nullable":true,"defaultValue":"0","comment":"years"}],`+
+		`"drops":["old"]}`, string(alter))
 }
 
 // openOptions asks the fixture's instance that runs the statement which driver

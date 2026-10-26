@@ -349,8 +349,12 @@ func (s *FakeSession) writeStatement(capability dbdriver.Capability, call TableC
 	return []string{statement}, nil
 }
 
-// CreateTableStatements 记下收到的请求（Op "create_table"）。
+// CreateTableStatements 记下收到的请求（Op "create_table"）。请求用到驱动没声明的列能力（默认值写法、
+// 自增）时以 ErrUnsupported 拒绝，什么也不记。
 func (s *FakeSession) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	if err := s.fake.Desc.ColumnFeatures().Check(req.Definitions()...); err != nil {
+		return nil, err
+	}
 	return s.writeStatement(dbdriver.CapCreateTable,
 		TableCall{Op: "create_table", Database: database, Table: req.Name, CreateTable: &req},
 		fmt.Sprintf("FAKE CREATE TABLE %s.%s", database, req.Name))
@@ -463,7 +467,8 @@ func (s *FakeSession) record(statement string) (isQuery bool, err error) {
 }
 
 // AlterTableModel 记下收到的请求（Op "alter_model"），把假库的表元数据（Metadata 的列）当作这张表给出，
-// 表名原样、没有表注释。驱动没有声明改表时以 ErrUnsupported 拒绝，什么也不记、不执行。
+// 表名原样、没有表注释；驱动声明了默认值写法时有默认值的列是「值」、没有的是「无」，声明了自增时自增
+// 现状取自 ColumnRules。驱动没有声明改表时以 ErrUnsupported 拒绝，什么也不记、不执行。
 func (s *FakeSession) AlterTableModel(_ context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
 	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
 		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
@@ -481,17 +486,38 @@ func (s *FakeSession) alterModel(table string) *dbdriver.AlterTableModel {
 		if column.Default != nil {
 			definition.DefaultValue = *column.Default
 		}
+		if s.fake.Desc.ExplicitDefaults {
+			definition.DefaultKind = dbdriver.DefaultKindNone
+			if column.Default != nil {
+				definition.DefaultKind = dbdriver.DefaultKindValue
+			}
+		}
+		if s.fake.Desc.AutoIncrement {
+			definition.AutoIncrement = slices.ContainsFunc(s.fake.ColumnRules, func(rule dbdriver.TableColumnRule) bool {
+				return rule.Name == column.Name && rule.AutoIncrement
+			})
+		}
 		model.Columns = append(model.Columns, definition)
 	}
 	return model
 }
 
 // AlterTableStatements 记下收到的请求（Op "alter_table"）：请求与 AlterTableModel 给出的样子相同时没有
-// 语句，否则给出一条一眼能与任何真实方言区分的语句；改了名时表名是新名字。驱动没有声明改表时以
-// ErrUnsupported 拒绝，什么也不记、不执行。
+// 语句，否则给出一条一眼能与任何真实方言区分的语句；改了名时表名是新名字。驱动没有声明改表、请求用到
+// 驱动没声明的列能力或要改已有列的自增时以 ErrUnsupported 拒绝，什么也不记、不执行。
 func (s *FakeSession) AlterTableStatements(_ context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
 	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
 		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
+	}
+	if err := s.fake.Desc.ColumnFeatures().Check(req.Definitions()...); err != nil {
+		return nil, err
+	}
+	model := s.alterModel(table)
+	for _, column := range req.Columns {
+		i := slices.IndexFunc(model.Columns, func(c dbdriver.ColumnDefinition) bool { return c.Name == column.OriginalName })
+		if i >= 0 && model.Columns[i].AutoIncrement != column.AutoIncrement {
+			return nil, fmt.Errorf("%w: the auto-increment of existing column %q cannot be changed", dbdriver.ErrUnsupported, column.OriginalName)
+		}
 	}
 	if err := s.tableCall(TableCall{Op: "alter_table", Database: database, Table: table, AlterTable: &req}); err != nil {
 		return nil, err
@@ -500,7 +526,6 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 	if req.Name != "" && req.Name != table {
 		result.Table = req.Name
 	}
-	model := s.alterModel(table)
 	unchanged := result.Table == table && req.Comment == model.Comment && len(req.Drops) == 0 && len(req.Columns) == len(model.Columns)
 	for i := 0; unchanged && i < len(req.Columns); i++ {
 		unchanged = req.Columns[i].OriginalName == model.Columns[i].Name && req.Columns[i].Definition() == model.Columns[i]

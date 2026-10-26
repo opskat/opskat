@@ -152,3 +152,129 @@ func TestDescriptorValidateKerberosGroup(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// 表设计器的细项声明：常用类型与名称折叠写错了，描述就不合法，错误点名驱动 id 与出问题的地方。
+func TestDescriptorValidateColumnDeclarations(t *testing.T) {
+	valid := func() Descriptor {
+		return Descriptor{ID: "extdb", Name: "ExtDB", ColumnTypes: &ColumnTypes{
+			Groups: []ColumnTypeGroup{
+				{Label: "typeGroup.numeric", Types: []string{"INT", "BIGINT"}},
+				{Label: "typeGroup.text", Types: []string{"VARCHAR(255)", "TEXT"}},
+			},
+			NewColumn: "VARCHAR(255)", PrimaryKey: "BIGINT",
+		}, NameFolding: NameFoldUpper, ExplicitDefaults: true, AutoIncrement: true}
+	}
+	require.NoError(t, valid().Validate())
+	require.NoError(t, Descriptor{ID: "extdb", ColumnTypes: &ColumnTypes{NewColumn: "TEXT"}}.Validate(), "只声明预填类型、没有下拉也可以")
+	require.NoError(t, Descriptor{ID: "extdb", NameFolding: NameFoldLower}.Validate())
+
+	for name, tc := range map[string]struct {
+		mutate  func(*Descriptor)
+		wantErr string
+	}{
+		"column types declaring nothing": {func(d *Descriptor) { d.ColumnTypes = &ColumnTypes{} }, "column types"},
+		"group without label":            {func(d *Descriptor) { d.ColumnTypes.Groups[0].Label = " " }, "label"},
+		"group without types":            {func(d *Descriptor) { d.ColumnTypes.Groups[1].Types = nil }, "typeGroup.text"},
+		"blank type":                     {func(d *Descriptor) { d.ColumnTypes.Groups[0].Types[1] = "  " }, "typeGroup.numeric"},
+		"type with surrounding blanks":   {func(d *Descriptor) { d.ColumnTypes.Groups[0].Types[1] = " BIGINT" }, `" BIGINT"`},
+		"type listed twice":              {func(d *Descriptor) { d.ColumnTypes.Groups[1].Types[1] = "int" }, `"int"`},
+		"blank new column type":          {func(d *Descriptor) { d.ColumnTypes.NewColumn = " " }, "new column"},
+		"primary key type with blanks":   {func(d *Descriptor) { d.ColumnTypes.PrimaryKey = "BIGINT " }, "primary key"},
+		"unknown name folding":           {func(d *Descriptor) { d.NameFolding = "title" }, `"title"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := valid()
+			tc.mutate(&d)
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			assert.Contains(t, err.Error(), "extdb", "错误点名驱动 id")
+		})
+	}
+}
+
+// 常用类型的分组名与专属字段的标签一样可以是扩展多语言里的键：Localized 一并翻译，不改原描述。
+func TestDescriptorLocalizedTranslatesColumnTypeGroups(t *testing.T) {
+	d := Descriptor{ID: "extdb", ColumnTypes: &ColumnTypes{
+		Groups:    []ColumnTypeGroup{{Label: "types.numeric", Types: []string{"NUMBER"}}},
+		NewColumn: "VARCHAR2(255)",
+	}}
+	got := d.Localized(func(key string) string { return "<" + key + ">" })
+	assert.Equal(t, &ColumnTypes{
+		Groups:    []ColumnTypeGroup{{Label: "<types.numeric>", Types: []string{"NUMBER"}}},
+		NewColumn: "VARCHAR2(255)",
+	}, got.ColumnTypes)
+	assert.Equal(t, "types.numeric", d.ColumnTypes.Groups[0].Label, "原描述不变")
+}
+
+// 请求里的列只能用驱动声明了的能力：没声明的以 ErrUnsupported 拒绝；写法本身不合法的是普通错误。
+func TestColumnFeaturesCheck(t *testing.T) {
+	plain := ColumnDefinition{Name: "name", Type: "TEXT", DefaultValue: "anon"}
+	withKind := func(kind DefaultKind, value string) ColumnDefinition {
+		return ColumnDefinition{Name: "c", Type: "TEXT", DefaultKind: kind, DefaultValue: value}
+	}
+	autoIncrement := ColumnDefinition{Name: "id", Type: "INT", AutoIncrement: true}
+
+	t.Run("a driver that declares nothing takes the request as it always has", func(t *testing.T) {
+		require.NoError(t, ColumnFeatures{}.Check(plain))
+	})
+	t.Run("an undeclared default kind is unsupported", func(t *testing.T) {
+		for _, kind := range DefaultKinds() {
+			err := ColumnFeatures{AutoIncrement: true}.Check(plain, withKind(kind, ""))
+			require.ErrorIs(t, err, ErrUnsupported, kind)
+			assert.Contains(t, err.Error(), `"c"`)
+		}
+	})
+	t.Run("an undeclared auto-increment is unsupported", func(t *testing.T) {
+		err := ColumnFeatures{ExplicitDefaults: true}.Check(autoIncrement)
+		require.ErrorIs(t, err, ErrUnsupported)
+		assert.Contains(t, err.Error(), `"id"`)
+	})
+	t.Run("declared features are accepted", func(t *testing.T) {
+		require.NoError(t, ColumnFeatures{ExplicitDefaults: true, AutoIncrement: true}.Check(
+			plain, autoIncrement,
+			withKind(DefaultKindNone, ""), withKind(DefaultKindNull, ""),
+			withKind(DefaultKindValue, ""), withKind(DefaultKindValue, " it's "),
+			withKind(DefaultKindExpression, "CURRENT_TIMESTAMP"),
+		))
+	})
+	t.Run("a malformed default is an error of its own", func(t *testing.T) {
+		declared := ColumnFeatures{ExplicitDefaults: true}
+		for name, column := range map[string]ColumnDefinition{
+			"unknown kind":      withKind("function", "now()"),
+			"none with a value": withKind(DefaultKindNone, "x"),
+			"null with a value": withKind(DefaultKindNull, "NULL"),
+			"empty expression":  withKind(DefaultKindExpression, " "),
+		} {
+			err := declared.Check(column)
+			require.Error(t, err, name)
+			assert.NotErrorIs(t, err, ErrUnsupported, name)
+			assert.Contains(t, err.Error(), `"c"`, name)
+		}
+	})
+	t.Run("the descriptor's declarations are its column features", func(t *testing.T) {
+		assert.Equal(t, ColumnFeatures{ExplicitDefaults: true}, Descriptor{ExplicitDefaults: true}.ColumnFeatures())
+		assert.Equal(t, ColumnFeatures{AutoIncrement: true}, Descriptor{AutoIncrement: true}.ColumnFeatures())
+	})
+}
+
+// 建表与改表请求里的列连同默认值写法与自增一起交给检查与方言。
+func TestRequestDefinitionsCarryTheColumnFeatures(t *testing.T) {
+	create := CreateTableRequest{Name: "t", Columns: []NewColumn{
+		{Name: "id", Type: "INT", AutoIncrement: true},
+		{Name: "at", Type: "TIMESTAMP", Nullable: true, DefaultKind: DefaultKindExpression, DefaultValue: "now()"},
+	}}
+	assert.Equal(t, []ColumnDefinition{
+		{Name: "id", Type: "INT", AutoIncrement: true},
+		{Name: "at", Type: "TIMESTAMP", Nullable: true, DefaultKind: DefaultKindExpression, DefaultValue: "now()"},
+	}, create.Definitions())
+
+	alter := AlterTableRequest{Columns: []AlterColumn{
+		{OriginalName: "a", Name: "b", Type: "TEXT", DefaultKind: DefaultKindValue, DefaultValue: "x", Comment: "c"},
+		{Name: "id", Type: "INT", AutoIncrement: true},
+	}}
+	assert.Equal(t, []ColumnDefinition{
+		{Name: "b", Type: "TEXT", DefaultKind: DefaultKindValue, DefaultValue: "x", Comment: "c"},
+		{Name: "id", Type: "INT", AutoIncrement: true},
+	}, alter.Definitions())
+}

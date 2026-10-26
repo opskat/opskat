@@ -5,6 +5,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 )
 
 // Descriptor 是一个驱动的自我描述，原样经绑定交给前端。它只有可序列化的普通数据。
@@ -43,6 +44,24 @@ type Descriptor struct {
 	// AlterTableAttributes 是改表（CapAlterTable）时，除了改表名、给列改名、新增与删除列之外还能
 	// 改的属性。改表对话框锁定没有声明的属性的输入；会话拒绝改动它们。
 	AlterTableAttributes []AlterAttribute `json:"alterTableAttributes"`
+
+	// 以下是表设计器（建表 / 改表）里列与名称的细项声明，只在声明了 CapCreateTable 或 CapAlterTable 时
+	// 有意义。都可以不声明：缺省即不支持，序列化时省略，没声明它们的驱动（包括按旧版本构建的扩展）照旧。
+
+	// ColumnTypes 是类型输入框下拉里的常用类型与新列、新表主键的预填类型；没声明时只有输入框，新列
+	// 不预填类型。
+	ColumnTypes *ColumnTypes `json:"columnTypes,omitempty"`
+	// ExplicitDefaults 声明列的默认值按写法给出（ColumnDefinition.DefaultKind：无 / NULL / 值 / 表达式），
+	// 改表读出的已有列也带写法。没声明时默认值是一段文本，按 NewColumn.DefaultValue 的规则猜写法；会话
+	// 以 ErrUnsupported 拒绝带写法的请求。sqldb 的方言实现 DefaultClassifier 即开启（sqldb.ClassifiesDefaults）。
+	ExplicitDefaults bool `json:"explicitDefaults,omitempty"`
+	// AutoIncrement 声明新表与新列可以设自增（ColumnDefinition.AutoIncrement），改表读出的已有列也带自增
+	// 现状；已有列的自增不能改。没声明时会话以 ErrUnsupported 拒绝要自增的列，读出的列也不带自增。
+	// sqldb 的方言实现 AutoIncrementer 即开启（sqldb.AutoIncrements）。
+	AutoIncrement bool `json:"autoIncrement,omitempty"`
+	// NameFolding 是数据库把不加引号的名称折叠成的大小写：表设计器据此提醒与它不符的表名、列名、
+	// 索引名之后要加引号才能访问（只提醒，不阻止保存、不改写）。空表示不折叠，不提醒。
+	NameFolding NameFolding `json:"nameFolding,omitempty"`
 
 	// DriverFields 是驱动专属的配置字段：值存在资产配置的 driver_options 里，按这里的声明校验。
 	// 内置驱动不声明。
@@ -85,22 +104,30 @@ type DriverField struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Localized 返回专属字段的标签与说明经 tr 翻译后的描述副本，不改 d。
+// Localized 返回专属字段的标签与说明、常用类型的分组名经 tr 翻译后的描述副本，不改 d。
 func (d Descriptor) Localized(tr func(key string) string) Descriptor {
-	if len(d.DriverFields) == 0 {
-		return d
-	}
-	fields := make([]DriverField, len(d.DriverFields))
-	for i, f := range d.DriverFields {
-		if f.Label != "" {
-			f.Label = tr(f.Label)
+	if len(d.DriverFields) > 0 {
+		fields := make([]DriverField, len(d.DriverFields))
+		for i, f := range d.DriverFields {
+			if f.Label != "" {
+				f.Label = tr(f.Label)
+			}
+			if f.Description != "" {
+				f.Description = tr(f.Description)
+			}
+			fields[i] = f
 		}
-		if f.Description != "" {
-			f.Description = tr(f.Description)
-		}
-		fields[i] = f
+		d.DriverFields = fields
 	}
-	d.DriverFields = fields
+	if d.ColumnTypes != nil && len(d.ColumnTypes.Groups) > 0 {
+		types := *d.ColumnTypes
+		types.Groups = make([]ColumnTypeGroup, len(d.ColumnTypes.Groups))
+		for i, group := range d.ColumnTypes.Groups {
+			group.Label = tr(group.Label)
+			types.Groups[i] = group
+		}
+		d.ColumnTypes = &types
+	}
 	return d
 }
 
@@ -139,6 +166,14 @@ func (d Descriptor) Validate() error {
 			return fmt.Errorf("driver %q: duplicate driver field %q", d.ID, f.Key)
 		}
 		seen[f.Key] = true
+	}
+	if d.ColumnTypes != nil {
+		if err := d.ColumnTypes.validate(); err != nil {
+			return fmt.Errorf("driver %q: %w", d.ID, err)
+		}
+	}
+	if d.NameFolding != "" && !slices.Contains(NameFoldings(), d.NameFolding) {
+		return fmt.Errorf("driver %q: unknown name folding %q", d.ID, d.NameFolding)
 	}
 	return nil
 }
@@ -275,6 +310,80 @@ const (
 // AlterAttributes 是全部已知的改表属性。
 func AlterAttributes() []AlterAttribute {
 	return []AlterAttribute{AlterTableComment, AlterColumnType, AlterColumnNullable, AlterColumnDefault, AlterColumnComment}
+}
+
+// ColumnTypes 是表设计器里类型输入框的常用类型。下拉只是提示：输入任何类型文本都原样采用。
+type ColumnTypes struct {
+	// Groups 是下拉里的分组，按下拉里的次序；可以为空（只声明预填类型）。
+	Groups []ColumnTypeGroup `json:"groups"`
+	// NewColumn 是新列预填的类型；空表示不预填，要用户填写。
+	NewColumn string `json:"newColumn,omitempty"`
+	// PrimaryKey 是新表预置的自增主键 id 的类型；空表示不预填。
+	PrimaryKey string `json:"primaryKey,omitempty"`
+}
+
+// ColumnTypeGroup 是下拉里的一组常用类型。
+type ColumnTypeGroup struct {
+	// Label 是分组的显示名：宿主多语言里的键，或（扩展驱动）扩展多语言（locales/）里的键，同
+	// DriverField.Label 经 Descriptor.Localized 解析，没有翻译的原样显示。
+	Label string `json:"label"`
+	// Types 是这一组的类型文本，按下拉里的次序。
+	Types []string `json:"types"`
+}
+
+// validate 检查常用类型：要声明点什么；分组有名字、有类型；类型文本非空、没有首尾空白、不分大小写
+// 不重复（下拉里两个一样的选项分不清）。
+func (c ColumnTypes) validate() error {
+	if len(c.Groups) == 0 && c.NewColumn == "" && c.PrimaryKey == "" {
+		return fmt.Errorf("column types declare no group and no default type; leave them out instead")
+	}
+	seen := map[string]bool{}
+	for _, group := range c.Groups {
+		if strings.TrimSpace(group.Label) == "" {
+			return fmt.Errorf("a column type group has an empty label")
+		}
+		if len(group.Types) == 0 {
+			return fmt.Errorf("column type group %q has no types", group.Label)
+		}
+		for _, columnType := range group.Types {
+			if strings.TrimSpace(columnType) == "" {
+				return fmt.Errorf("column type group %q has an empty type", group.Label)
+			}
+			if strings.TrimSpace(columnType) != columnType {
+				return fmt.Errorf("column type %q has surrounding blanks", columnType)
+			}
+			if seen[strings.ToLower(columnType)] {
+				return fmt.Errorf("column type %q is listed more than once", columnType)
+			}
+			seen[strings.ToLower(columnType)] = true
+		}
+	}
+	for _, preset := range []struct{ what, columnType string }{{"new column", c.NewColumn}, {"primary key", c.PrimaryKey}} {
+		if preset.columnType != "" && (strings.TrimSpace(preset.columnType) == "" || strings.TrimSpace(preset.columnType) != preset.columnType) {
+			return fmt.Errorf("the %s type %q is blank or has surrounding blanks", preset.what, preset.columnType)
+		}
+	}
+	return nil
+}
+
+// NameFolding 是数据库把不加引号的名称折叠成的大小写。
+type NameFolding string
+
+const (
+	// NameFoldUpper：不加引号的名称按大写存（Oracle）。
+	NameFoldUpper NameFolding = "upper"
+	// NameFoldLower：不加引号的名称按小写存（PostgreSQL）。
+	NameFoldLower NameFolding = "lower"
+)
+
+// NameFoldings 是全部已知的名称折叠；不折叠不声明。
+func NameFoldings() []NameFolding {
+	return []NameFolding{NameFoldUpper, NameFoldLower}
+}
+
+// ColumnFeatures 返回描述对建表 / 改表请求里列的两项声明。
+func (d Descriptor) ColumnFeatures() ColumnFeatures {
+	return ColumnFeatures{ExplicitDefaults: d.ExplicitDefaults, AutoIncrement: d.AutoIncrement}
 }
 
 // DatabaseOption 是新建数据库的一个选项字段。

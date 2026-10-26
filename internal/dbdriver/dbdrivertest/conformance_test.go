@@ -68,6 +68,14 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 			d.Capabilities = append(d.Capabilities, dbdriver.CapAlterTable)
 			d.AlterTableAttributes = []dbdriver.AlterAttribute{dbdriver.AlterColumnType, dbdriver.AlterColumnType}
 		}, "column_type"},
+		"column types without create or alter table": {func(d *dbdriver.Descriptor) {
+			d.ColumnTypes = &dbdriver.ColumnTypes{NewColumn: "TEXT"}
+		}, "columnTypes"},
+		"explicit defaults without create or alter table": {func(d *dbdriver.Descriptor) { d.ExplicitDefaults = true }, "explicitDefaults"},
+		"auto-increment without create or alter table":    {func(d *dbdriver.Descriptor) { d.AutoIncrement = true }, "autoIncrement"},
+		"name folding without create or alter table": {func(d *dbdriver.Descriptor) {
+			d.NameFolding = dbdriver.NameFoldUpper
+		}, "nameFolding"},
 		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
 		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
 		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},
@@ -165,6 +173,73 @@ type ddlSession struct {
 }
 
 func (s ddlSession) TableDDL(context.Context, string, string) (string, error) { return s.ddl, s.err }
+
+// withSchemaWrites 是声明了建表与改表的假驱动。
+func withSchemaWrites() *Fake {
+	fake := NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapCreateTable, dbdriver.CapAlterTable)
+	return fake
+}
+
+// withColumnFeatures 是另外声明了表设计器列能力的假驱动。
+func withColumnFeatures() *Fake {
+	fake := withSchemaWrites()
+	fake.Desc.ExplicitDefaults = true
+	fake.Desc.AutoIncrement = true
+	fake.Desc.ColumnTypes = &dbdriver.ColumnTypes{
+		Groups:    []dbdriver.ColumnTypeGroup{{Label: "numeric", Types: []string{"int", "bigint"}}},
+		NewColumn: "text", PrimaryKey: "bigint",
+	}
+	fake.Desc.NameFolding = dbdriver.NameFoldLower
+	return fake
+}
+
+// 假驱动的列能力与它的声明一致：没声明时拒绝、声明了就接受，两种都通过一致性测试。
+func TestFakeDriverColumnFeaturesPassConformance(t *testing.T) {
+	for name, fake := range map[string]*Fake{"undeclared": withSchemaWrites(), "declared": withColumnFeatures()} {
+		t.Run(name, func(t *testing.T) {
+			Register(t, fake)
+			RunConformance(t, fake, FakeSessions(fake))
+			RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+		})
+	}
+}
+
+// lenientColumnsSession 接受任何列能力，不管驱动声明了什么：就像按旧版本构建、忽略不认识字段的扩展。
+type lenientColumnsSession struct{ dbdriver.Session }
+
+func (lenientColumnsSession) CreateTableStatements(context.Context, string, dbdriver.CreateTableRequest) ([]string, error) {
+	return []string{"CREATE TABLE x"}, nil
+}
+
+func (lenientColumnsSession) AlterTableStatements(_ context.Context, _, table string, _ dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	return &dbdriver.AlterTableStatements{Statements: []string{"ALTER TABLE x"}, Table: table}, nil
+}
+
+// refusingColumnsSession 拒绝任何列能力，不管驱动声明了什么。
+type refusingColumnsSession struct{ dbdriver.Session }
+
+func (s refusingColumnsSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	if err := (dbdriver.ColumnFeatures{}).Check(req.Definitions()...); err != nil {
+		return nil, err
+	}
+	return s.Session.CreateTableStatements(ctx, database, req)
+}
+
+// 列能力的声明与会话行为必须一致：没声明却放行、声明了却拒绝都要点出来。
+func TestConformanceChecksColumnFeaturesAgainstTheDeclaration(t *testing.T) {
+	undeclared := withSchemaWrites()
+	problems := strings.Join(sessionProblems(undeclared.Desc, lenientColumnsSession{openFake(t, undeclared, &dbdriver.Config{Driver: "fakedb", Host: "h"})}), "\n")
+	assert.Contains(t, problems, "CreateTableStatements with default kinds")
+	assert.Contains(t, problems, "CreateTableStatements with an auto-increment column")
+	assert.Contains(t, problems, "AlterTableStatements with default kinds")
+	assert.Contains(t, problems, "AlterTableStatements with an auto-increment column")
+
+	declared := withColumnFeatures()
+	problems = strings.Join(sessionProblems(declared.Desc, refusingColumnsSession{openFake(t, declared, &dbdriver.Config{Driver: "fakedb", Host: "h"})}), "\n")
+	assert.Contains(t, problems, "CreateTableStatements with default kinds: declared explicitDefaults but refused")
+	assert.Contains(t, problems, "CreateTableStatements with an auto-increment column: declared autoIncrement but refused")
+}
 
 // 列元数据必须带 comment（字符串）与 default（字符串或 null）两个键；缺了或类型不对要点出来。
 func TestConformanceChecksColumnCommentAndDefaultShape(t *testing.T) {

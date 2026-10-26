@@ -35,7 +35,8 @@ type AlterableTable struct {
 	Columns []AlterableColumn
 }
 
-// AlterableColumn 是改表对话框里的一列。
+// AlterableColumn 是改表对话框里的一列。开启了自增的方言（AutoIncrementer）在 AutoIncrement 里给出现状；
+// 开启了默认值写法的方言（DefaultClassifier）在这里给目录里的默认值原文，写法由 Session 经它判定后填上。
 type AlterableColumn struct {
 	dbdriver.ColumnDefinition
 	// Row 是方言读这一列时取到的原始一行（按结果列名）：改列时方言据此保留对话框里不显示、用户也
@@ -126,6 +127,9 @@ func (s *Session) AlterTableStatements(ctx context.Context, database, table stri
 	if err != nil {
 		return nil, err
 	}
+	if err := columnFeatures(s.dialect).Check(req.Definitions()...); err != nil {
+		return nil, err
+	}
 	return onConn(ctx, s, func(conn *sql.Conn) (*dbdriver.AlterTableStatements, error) {
 		current, err := loadAlterableTable(ctx, conn, alterer, database, table)
 		if err != nil {
@@ -156,6 +160,11 @@ func loadAlterableTable(ctx context.Context, conn *sql.Conn, alterer TableAltere
 	}
 	if !strings.HasSuffix(table, current.Name) {
 		return nil, fmt.Errorf("the dialect names table %s %q, which is not the end of its name", table, current.Name)
+	}
+	if classifier, ok := alterer.(DefaultClassifier); ok {
+		for i := range current.Columns {
+			current.Columns[i].DefaultKind, current.Columns[i].DefaultValue = classifier.ClassifyDefault(current.Columns[i])
+		}
 	}
 	return current, nil
 }
@@ -213,13 +222,16 @@ func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, databa
 			return nil, fmt.Errorf("column %q of table %s is given more than once", existing.Name, table)
 		}
 		kept[existing.Name] = true
+		if column.AutoIncrement != existing.AutoIncrement {
+			return nil, fmt.Errorf("%w: the auto-increment of existing column %q cannot be changed", dbdriver.ErrUnsupported, existing.Name)
+		}
 		c := ColumnChange{
 			Current:         existing,
 			Column:          column,
 			Renamed:         column.Name != existing.Name,
 			TypeChanged:     !strings.EqualFold(strings.TrimSpace(column.Type), strings.TrimSpace(existing.Type)),
 			NullableChanged: column.Nullable != existing.Nullable,
-			DefaultChanged:  strings.TrimSpace(column.DefaultValue) != strings.TrimSpace(existing.DefaultValue),
+			DefaultChanged:  defaultChanged(column, existing.ColumnDefinition),
 			CommentChanged:  strings.TrimSpace(column.Comment) != strings.TrimSpace(existing.Comment),
 		}
 		for _, attribute := range []struct {
@@ -255,4 +267,22 @@ func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, databa
 		change.Drops = append(change.Drops, name)
 	}
 	return change, nil
+}
+
+// defaultChanged 比较默认值（见 dbdriver.AlterTableRequest）：请求没给写法时照旧比较去掉首尾空白的文本；
+// 给了写法时写法不同即改动，同为「值」时比较原文，同为表达式时比较去掉首尾空白的文本。
+func defaultChanged(requested, current dbdriver.ColumnDefinition) bool {
+	if requested.DefaultKind == "" {
+		return strings.TrimSpace(requested.DefaultValue) != strings.TrimSpace(current.DefaultValue)
+	}
+	if requested.DefaultKind != current.DefaultKind {
+		return true
+	}
+	switch requested.DefaultKind {
+	case dbdriver.DefaultKindValue:
+		return requested.DefaultValue != current.DefaultValue
+	case dbdriver.DefaultKindExpression:
+		return strings.TrimSpace(requested.DefaultValue) != strings.TrimSpace(current.DefaultValue)
+	}
+	return false
 }

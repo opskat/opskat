@@ -35,17 +35,20 @@ type DatabaseCreator interface {
 // 的值（RowWriter.Literals）。
 var DefinitionLiterals = Literals{}
 
-// CreateTableStatements 生成建表语句：表引用与列名按方言加引号，类型文本原样写入。不碰数据库。
+// CreateTableStatements 生成建表语句：表引用与列名按方言加引号，类型文本原样写入，默认值与自增见
+// NewColumnSQL。请求用到方言没开启的列能力时以 ErrUnsupported 拒绝。不碰数据库。
 func (s *Session) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
 	tables, err := s.tables()
 	if err != nil {
 		return nil, err
 	}
-	defs := make([]string, 0, len(req.Columns))
-	for _, column := range req.Columns {
-		def, err := ColumnDefinitionSQL(DefinitionLiterals, tables.QuoteIdent, dbdriver.ColumnDefinition{
-			Name: column.Name, Type: column.Type, Nullable: column.Nullable, DefaultValue: column.DefaultValue,
-		})
+	columns := req.Definitions()
+	if err := columnFeatures(s.dialect).Check(columns...); err != nil {
+		return nil, err
+	}
+	defs := make([]string, 0, len(columns))
+	for _, column := range columns {
+		def, err := NewColumnSQL(s.dialect, DefinitionLiterals, tables.QuoteIdent, column)
 		if err != nil {
 			return nil, err
 		}
@@ -55,16 +58,28 @@ func (s *Session) CreateTableStatements(_ context.Context, database string, req 
 }
 
 // ColumnDefinitionSQL 是建表与新增列时的列定义：名称加引号、类型文本原样（首尾空白除外）、有默认值时
-// DEFAULT（写法见 Literals.Default）、不可空时 NOT NULL。DEFAULT 在 NOT NULL 之前：Oracle 只接受这个
-// 次序（反过来报 ORA-00907），其余方言两种次序都接受。注释不在其中：各方言写法不同。
+// DEFAULT（写法见 DefaultSQL）、不可空时 NOT NULL。DEFAULT 在 NOT NULL 之前：Oracle 只接受这个
+// 次序（反过来报 ORA-00907），其余方言两种次序都接受。注释不在其中：各方言写法不同。自增的写法在方言
+// 里：要自增的列用 NewColumnSQL，这里以 ErrUnsupported 拒绝，而不是悄悄丢掉自增。
 func ColumnDefinitionSQL(literals Literals, quote func(string) string, column dbdriver.ColumnDefinition) (string, error) {
-	columnType := strings.TrimSpace(column.Type)
-	def := quote(strings.TrimSpace(column.Name)) + " " + columnType
-	if strings.TrimSpace(column.DefaultValue) != "" {
-		literal, err := literals.Default(column.DefaultValue, columnType)
-		if err != nil {
-			return "", err
-		}
+	if column.AutoIncrement {
+		return "", autoIncrementUnsupported(column)
+	}
+	return columnDefinitionSQL(literals, quote, column, "")
+}
+
+// columnDefinitionSQL 写列定义；autoIncrement 是方言的自增子句，写在类型之后，空表示不自增。
+func columnDefinitionSQL(literals Literals, quote func(string) string, column dbdriver.ColumnDefinition, autoIncrement string) (string, error) {
+	column.Type = strings.TrimSpace(column.Type)
+	def := quote(strings.TrimSpace(column.Name)) + " " + column.Type
+	if autoIncrement != "" {
+		def += " " + autoIncrement
+	}
+	literal, ok, err := DefaultSQL(literals, column)
+	if err != nil {
+		return "", err
+	}
+	if ok {
 		def += " DEFAULT " + literal
 	}
 	if !column.Nullable {
