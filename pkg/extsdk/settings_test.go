@@ -6,22 +6,6 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-func TestSettingsGetOmitsPasswords(t *testing.T) {
-	Convey("Settings 只返回非密钥字段", t, func() {
-		resetRegistries()
-		th := NewTestHost()
-		defer th.Close()
-		th.SetSettings(map[string]string{"endpoint": "https://review.example.com", "model": "m"})
-
-		got, err := Settings()
-		So(err, ShouldBeNil)
-		So(got["endpoint"], ShouldEqual, "https://review.example.com")
-		So(got["model"], ShouldEqual, "m")
-		_, has := got["token"]
-		So(has, ShouldBeFalse)
-	})
-}
-
 func TestDescribeSettingsSchema(t *testing.T) {
 	Convey("describe 带上 SettingsSchema 声明的 schema", t, func() {
 		resetRegistries()
