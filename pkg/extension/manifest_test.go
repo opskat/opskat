@@ -104,17 +104,17 @@ func TestParseManifest(t *testing.T) {
 			So(m.HostABI, ShouldEqual, "2.0")
 		})
 
-		Convey("should accept the 2.3 hostABI that adds command review", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "2.3",` +
+		Convey("should accept the 2.6 hostABI that adds command review", func() {
+			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "2.6",` +
 				`"backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":{"commandReview":true}}`)
 			m, err := ParseManifest(data)
 			So(err, ShouldBeNil)
-			So(m.HostABI, ShouldEqual, "2.3")
+			So(m.HostABI, ShouldEqual, "2.6")
 			So(m.Capabilities.CommandReview, ShouldBeTrue)
 		})
 
 		Convey("should reject an hostABI newer than anything this runtime supports", func() {
-			for _, abi := range []string{"2.6", "3.0"} {
+			for _, abi := range []string{"2.7", "3.0"} {
 				data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "` + abi + `"}`)
 				_, err := ParseManifest(data)
 				So(err, ShouldNotBeNil)
@@ -367,8 +367,8 @@ func TestManifestDatabaseKerberos(t *testing.T) {
 			_, err := ParseManifest(manifest("2.4", `{"databaseDrivers":["d"]}`))
 			So(err, ShouldBeNil)
 		})
-		Convey("host ABI 2.6 is still refused as newer than the host", func() {
-			_, err := ParseManifest(manifest("2.6", `{"databaseDrivers":["d"]}`))
+		Convey("host ABI 2.7 is still refused as newer than the host", func() {
+			_, err := ParseManifest(manifest("2.7", `{"databaseDrivers":["d"]}`))
 			So(err, ShouldNotBeNil)
 		})
 	})

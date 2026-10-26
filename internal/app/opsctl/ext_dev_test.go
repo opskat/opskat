@@ -302,7 +302,7 @@ func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := t.TempDir()
 	manifest := `{
-  "name": "oss", "version": "1.2.3", "hostABI": "2.6",
+  "name": "oss", "version": "1.2.3", "hostABI": "2.7",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
   "capabilities": {}
 }`

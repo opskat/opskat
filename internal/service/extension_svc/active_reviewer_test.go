@@ -70,7 +70,7 @@ func writeReviewerPackage(t *testing.T, root, name string) string {
 	require.NoError(t, os.MkdirAll(extDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(extDir, "main.wasm"), []byte("wasm"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(extDir, "manifest.json"),
-		[]byte(`{"name":"`+name+`","version":"1.0.0","hostABI":"2.3","backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":{"commandReview":true}}`), 0o600))
+		[]byte(`{"name":"`+name+`","version":"1.0.0","hostABI":"2.6","backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":{"commandReview":true}}`), 0o600))
 	sum, err := extension.PackageSHA256(extDir, "main.wasm")
 	require.NoError(t, err)
 	return sum
@@ -196,7 +196,7 @@ func writeManifest(t *testing.T, root, name string, commandReview bool) {
 		caps = `{"commandReview":true}`
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"),
-		[]byte(`{"name":"`+name+`","version":"1.0.0","hostABI":"2.3","backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":`+caps+`}`), 0o600))
+		[]byte(`{"name":"`+name+`","version":"1.0.0","hostABI":"2.6","backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":`+caps+`}`), 0o600))
 }
 
 // 没选审核扩展时：只装了一个启用中的就用它；一个都没有、或有好几个都要用户处理。

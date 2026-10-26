@@ -63,7 +63,7 @@ func TestReviewerDescriptor(t *testing.T) {
 func TestCommandReviewCapabilityPair(t *testing.T) {
 	reviewer := &ReviewerDef{Questions: []ReviewQuestion{{ID: "destructive", I18n: I18nNames{Name: map[string]string{"en": "Destroys data"}}}}, MaxItems: 8, MaxCommandLen: 100}
 	base := func() *Manifest {
-		m, err := ParseManifest([]byte(`{"name":"rev","version":"1.0.0","hostABI":"2.3","backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":{"commandReview":true}}`))
+		m, err := ParseManifest([]byte(`{"name":"rev","version":"1.0.0","hostABI":"2.6","backend":{"runtime":"wasm","binary":"main.wasm"},"capabilities":{"commandReview":true}}`))
 		So(err, ShouldBeNil)
 		m.apply(&Descriptor{
 			AssetTypes: []AssetTypeDef{{Type: "x", ConfigSchema: map[string]any{"type": "object", "properties": map[string]any{"e": map[string]any{"type": "string"}}}}},
@@ -78,6 +78,16 @@ func TestCommandReviewCapabilityPair(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "commandReview")
 			So(err.Error(), ShouldContainSubstring, "reviewer")
+		})
+
+		// 审核是 2.6 加的：2.3–2.5 是数据库驱动的几步，那时的宿主不认识审核。
+		Convey("声明审核能力要 hostABI 2.6", func() {
+			m := base()
+			m.HostABI = "2.5"
+			m.Reviewer = reviewer
+			err := m.validateReviewer()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "2.6")
 		})
 
 		Convey("有 reviewer 却没有能力", func() {

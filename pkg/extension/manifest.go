@@ -37,12 +37,10 @@ import (
 // also lets check_policy answer {"reject":"<reason>"} (the SDK's RejectArgs): the
 // tool refusing the call's arguments, which the host denies without asking.
 //
-// 2.3 adds the command-review guest entry review_commands and the describe()
-// reviewer section, and lets an extension provide SQL database drivers
-// (capabilities.databaseDrivers plus the driver descriptors in describe()).
-// An older host cannot read either, so a reviewer or driver extension declares
-// 2.3 and an older app refuses to load it instead of installing an extension
-// whose reviewer or drivers it would silently ignore.
+// 2.3 lets an extension provide SQL database drivers (capabilities.databaseDrivers
+// plus the driver descriptors in describe()). An older host would not know to read
+// them and would load the extension as one with nothing to offer, so an extension
+// declaring drivers declares 2.3 and an older app refuses to install it.
 //
 // 2.4 adds two driver-extension capabilities an older host would silently ignore:
 // network.databaseRedirects (the driver may follow a database's redirect to another
@@ -54,11 +52,18 @@ import (
 // tickets fetched with the asset's Kerberos credentials) and the statement
 // split/classify declaration. An extension using either declares 2.5 and an
 // older app refuses to install it.
-const HostABIVersion = "2.5"
+//
+// 2.6 adds command review: capabilities.commandReview, the guest entry
+// review_commands and the describe() reviewer section, plus extension settings
+// (describe() settingsSchema, settings_get, {{setting.<field>}} header
+// placeholders). An older host cannot read them, so a reviewer declares 2.6 and an
+// older app refuses to install it instead of installing a reviewer it would
+// silently ignore.
+const HostABIVersion = "2.6"
 
 // reviewCommandsMinHostABI is the first host ABI that understands the
 // command-review guest entry review_commands and the describe() reviewer section.
-const reviewCommandsMinHostABI = "2.3"
+const reviewCommandsMinHostABI = "2.6"
 
 // databaseDriversMinHostABI is the first host ABI that understands
 // capabilities.databaseDrivers.
@@ -74,10 +79,10 @@ const DatabaseKerberosMinHostABI = "2.5"
 
 // SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
 // 2.5 stay listed so extensions built before host-ui, multi-resource
-// classification, command review, database drivers or the 2.4/2.5 driver
-// capabilities keep loading unchanged; only a hostABI newer than everything here
-// (e.g. an extension declaring 2.6 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5"}
+// classification, database drivers, the 2.4/2.5 driver capabilities or command
+// review keep loading unchanged; only a hostABI newer than everything here (e.g.
+// an extension declaring 2.7 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)

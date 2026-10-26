@@ -1,7 +1,7 @@
 {
   "name": "fixture-ext",
   "version": "1.0.0",
-  "hostABI": "2.3",
+  "hostABI": "2.6",
   "backend": {
     "runtime": "wasm",
     "binary": "main.wasm"
