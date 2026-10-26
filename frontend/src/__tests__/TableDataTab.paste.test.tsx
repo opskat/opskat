@@ -114,6 +114,23 @@ describe("TableDataTab keyboard paste", () => {
     expect(insertCalls()[0]).toContain('{"id":"9","name":"zoe"}');
   });
 
+  it("opens the confirmation when changes are applied as soon as the pasted values show", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
+    readText.mockResolvedValue("9	zoe");
+    await renderLoaded();
+
+    fireEvent.click(screen.getByTitle("query.addRow"));
+    fireEvent.keyDown(document.querySelector('[data-cell-key="2:id"] input') as HTMLInputElement, { key: "Escape" });
+    fireEvent.keyDown(gridContainer(), pasteKey);
+
+    // Step one scheduler tick at a time and apply in the first tick the pasted values are on
+    // screen, before React's deferred work for that render has run.
+    while (!cell("2:id").textContent?.includes("9")) await new Promise((resolve) => setImmediate(resolve));
+    fireEvent.click(screen.getByTitle("query.applyChanges"));
+
+    expect(await screen.findByText("query.confirmExecute")).toBeInTheDocument();
+  });
+
   it("pastes into a newly added row right after its editor is closed", async () => {
     readText.mockResolvedValue("9\tzoe");
     await renderLoaded();
