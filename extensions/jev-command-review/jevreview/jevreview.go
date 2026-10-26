@@ -1,6 +1,5 @@
 // Package jevreview 是用 TypeSafe Jev 模型审核一条命令的纯逻辑：题目、发给模型的上下文、
-// 按阈值判定、失败原因归类。不依赖数据库和宿主，内置审核（command_review_svc）和
-// 命令审核扩展（extensions/jev-command-review，编译成 WASM）共用这一份。
+// 按阈值判定、失败原因归类。不依赖宿主，命令审核扩展 jev-command-review 编译成 WASM 时用它。
 package jevreview
 
 import (
@@ -8,7 +7,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/opskat/opskat/internal/pkg/typesafe"
+	"github.com/opskat/opskat/extensions/jev-command-review/typesafe"
 )
 
 // 题目 ID 只给代码用，不会发给模型；题目的完整含义写在 instructions 里。

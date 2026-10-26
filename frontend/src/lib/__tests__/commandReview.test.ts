@@ -19,14 +19,10 @@ describe("reviewSummary", () => {
     expect(reviewSummary(t, { mode: "assisted", outcome: "pass" }, "zh-CN")).toBe("commandReview.summary.pass");
   });
 
-  it("审核未通过时列出没满足的题目", () => {
+  it("审核未通过时列出没满足的题目，扩展没声明名称的显示题目 id", () => {
     expect(
       reviewSummary(t, { mode: "assisted", outcome: "reject", failed: ["disruptive", "remote_code"] }, "zh-CN")
-    ).toBe(
-      "commandReview.summary.reject(commandReview.question.disruptive" +
-        "commandReview.listSeparator" +
-        "commandReview.question.remote_code)"
-    );
+    ).toBe("commandReview.summary.reject(disruptive" + "commandReview.listSeparator" + "remote_code)");
   });
 
   it("审核失败时写明原因，未知原因按服务不可用显示", () => {

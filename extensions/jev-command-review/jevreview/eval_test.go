@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opskat/opskat/internal/pkg/typesafe"
+	"github.com/opskat/opskat/extensions/jev-command-review/typesafe"
 	"github.com/stretchr/testify/require"
 )
 

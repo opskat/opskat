@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opskat/opskat/internal/pkg/jevreview"
-	"github.com/opskat/opskat/internal/pkg/typesafe"
+	"github.com/opskat/opskat/extensions/jev-command-review/jevreview"
+	"github.com/opskat/opskat/extensions/jev-command-review/typesafe"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
 )
 
@@ -27,7 +27,7 @@ type settings struct {
 	Threshold string `json:"threshold" title:"settings.threshold.title" desc:"settings.threshold.desc" default:"0.5"`
 }
 
-// 单条命令的长度上限与宿主内置审核相同；一次只审一条，宿主把多条命令并发地分批送来。
+// 一次只审一条，宿主把多条命令并发地分批送来。
 const (
 	maxItems      = 1
 	maxCommandLen = 4000

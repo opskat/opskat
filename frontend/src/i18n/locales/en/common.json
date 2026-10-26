@@ -3419,11 +3419,6 @@
       "reject": "Model review did not pass ({{detail}})",
       "fail": "Model review failed ({{detail}})"
     },
-    "question": {
-      "destructive": "may destroy or irreversibly change data",
-      "disruptive": "may interrupt services",
-      "remote_code": "downloads and runs code"
-    },
     "reason": {
       "not_configured": "the command review extension is not configured",
       "invalid_api_key": "the command review API key is invalid",
@@ -3493,11 +3488,6 @@
     },
     "scores": "Scores",
     "retried": "Retried automatically: {{attempts}} requests in total",
-    "reviewedBy": "Judged by review extension {{name}} {{version}}",
-    "scoreName": {
-      "destructive": "Destroys data",
-      "disruptive": "Interrupts services",
-      "remote_code": "Runs downloaded code"
-    }
+    "reviewedBy": "Judged by review extension {{name}} {{version}}"
   }
 }

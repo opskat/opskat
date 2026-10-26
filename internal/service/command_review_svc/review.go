@@ -326,7 +326,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 		batches = append(batches, pending[start:min(start+maxItems, len(pending))])
 	}
 
-	// 和内置审核一样：只有调用这一步并行（扩展的实例池最多 maxParallelReviews 个），
+	// 只有调用这一步并行（扩展的实例池最多 maxParallelReviews 个），
 	// 每次调用单独计时，超时重试一次；读写缓存按顺序做。
 	type call struct {
 		out      []extension.ReviewCommandResult

@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { cn } from "@opskat/ui";
 import { ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
-import { questionLabel, REVIEW_QUESTIONS, reviewSummary, reviewWithMode, type ReviewInfo } from "@/lib/commandReview";
+import { questionLabel, reviewSummary, reviewWithMode, type ReviewInfo } from "@/lib/commandReview";
 
 function reviewIcon(outcome: string) {
   if (outcome === "pass") return { Icon: ShieldCheck, tone: "text-success" };
@@ -52,26 +52,17 @@ export function ReviewScores({ review }: { review: ReviewInfo }) {
   const { scores } = review;
   if (!scores) return null;
   const failed = new Set(review.failed ?? []);
-  const ids = [
-    ...REVIEW_QUESTIONS.filter((q) => q in scores),
-    ...Object.keys(scores).filter((q) => !REVIEW_QUESTIONS.includes(q)),
-  ];
   return (
     <div data-testid="review-scores" className="text-xs">
       <div className="text-muted-foreground">{t("commandReview.scores")}</div>
       <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-        {ids.map((q) => (
+        {Object.keys(scores).map((q) => (
           <li
             key={q}
             data-failed={failed.has(q)}
             className={cn(failed.has(q) ? "font-medium text-warning" : "text-foreground")}
           >
-            {review.failed_names?.[q]
-              ? questionLabel(t, review, q, i18n.language)
-              : REVIEW_QUESTIONS.includes(q)
-                ? t(`commandReview.scoreName.${q}`)
-                : q}{" "}
-            <span className="font-mono">{scores[q].toFixed(2)}</span>
+            {questionLabel(review, q, i18n.language)} <span className="font-mono">{scores[q].toFixed(2)}</span>
           </li>
         ))}
       </ul>

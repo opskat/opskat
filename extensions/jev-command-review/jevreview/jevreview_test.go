@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/opskat/opskat/internal/pkg/typesafe"
+	"github.com/opskat/opskat/extensions/jev-command-review/typesafe"
 )
 
 func TestFailedReturnsQuestionsAtOrAboveTheThresholdSorted(t *testing.T) {

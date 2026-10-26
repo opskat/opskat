@@ -3419,11 +3419,6 @@
       "reject": "模型审核未通过（{{detail}}）",
       "fail": "模型审核失败（{{detail}}）"
     },
-    "question": {
-      "destructive": "可能破坏或不可恢复地修改数据",
-      "disruptive": "可能中断服务",
-      "remote_code": "会下载并执行代码"
-    },
     "reason": {
       "not_configured": "命令审核扩展还没配置好",
       "invalid_api_key": "命令审核的 API key 无效",
@@ -3493,11 +3488,6 @@
     },
     "scores": "评分",
     "retried": "自动重试过：共请求 {{attempts}} 次",
-    "reviewedBy": "由审核扩展 {{name}} {{version}} 判断",
-    "scoreName": {
-      "destructive": "破坏数据",
-      "disruptive": "中断服务",
-      "remote_code": "下载并执行代码"
-    }
+    "reviewedBy": "由审核扩展 {{name}} {{version}} 判断"
   }
 }

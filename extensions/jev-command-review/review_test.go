@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/internal/pkg/jevreview"
+	"github.com/opskat/opskat/extensions/jev-command-review/jevreview"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
 )
 

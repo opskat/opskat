@@ -108,7 +108,7 @@ describe("AuditLogPage result status", () => {
           MatchedPattern: "",
           Review:
             '{"mode":"autopilot","outcome":"reject","failed":["disruptive"],' +
-            '"scores":{"disruptive":0.91},"attempts":2}',
+            '"scores":{"disruptive":0.91},"attempts":2,"failed_names":{"disruptive":{"en":"Interrupts services"}}}',
           Createtime: 1,
         },
       ],
@@ -128,10 +128,12 @@ describe("AuditLogPage result status", () => {
     // 只列未通过题目的评分
     const scores = screen.getByTestId("review-scores");
     expect(scores).toHaveTextContent("commandReview.scores");
-    const disruptive = within(scores).getByText("commandReview.scoreName.disruptive").closest("li") as HTMLElement;
+    const disruptive = within(scores)
+      .getByText(/Interrupts services/)
+      .closest("li") as HTMLElement;
     expect(disruptive).toHaveTextContent("0.91");
     expect(disruptive).toHaveAttribute("data-failed", "true");
-    expect(within(scores).queryByText("commandReview.scoreName.destructive")).toBeNull();
+    expect(within(scores).getAllByRole("listitem")).toHaveLength(1);
 
     // 第一次请求超时、自动重试过的，详情里写明请求了几次
     expect(screen.getByTestId("review-attempts")).toHaveTextContent("commandReview.retried");

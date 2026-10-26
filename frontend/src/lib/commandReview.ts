@@ -18,13 +18,11 @@ export interface ReviewInfo {
   duration_ms?: number;
   cached?: boolean;
   attempts?: number; // 调用模型的次数，超时或连接出错时会重试
-  extension?: string; // 做出判断的审核扩展；内置审核为空
+  extension?: string; // 做出判断的审核扩展
   version?: string;
   failed_names?: Record<string, Record<string, string>>; // 审核扩展为未通过的题目声明的名称：题目 id → 语言 → 名称
 }
 
-/** 审核题目，顺序即界面上的显示顺序。与后端 command_review_svc 的题目 ID 一致。 */
-export const REVIEW_QUESTIONS: readonly string[] = ["destructive", "disruptive", "remote_code"];
 const REVIEW_FAIL_REASONS: readonly string[] = [
   "not_configured",
   "invalid_api_key",
@@ -39,13 +37,11 @@ const REVIEW_FAIL_REASONS: readonly string[] = [
 ];
 
 /**
- * 题目的显示名：审核扩展声明了名称时按界面语言取（没有这种语言时用英文，与后端 reviewQuestionLabel 一致），
- * 否则是内置题目的名称，都没有就显示题目 id。
+ * 题目的显示名：按界面语言取审核扩展声明的名称（没有这种语言时用英文，与后端 reviewQuestionLabel 一致），
+ * 都没有就显示题目 id。
  */
-export function questionLabel(t: TFunction, review: ReviewInfo, question: string, lang: string): string {
-  const name = localizedName(review.failed_names?.[question], lang);
-  if (name) return name;
-  return REVIEW_QUESTIONS.includes(question) ? t(`commandReview.question.${question}`) : question;
+export function questionLabel(review: ReviewInfo, question: string, lang: string): string {
+  return localizedName(review.failed_names?.[question], lang) ?? question;
 }
 
 /** 审核扩展声明的题目名称按界面语言取：中文界面优先 zh-CN，否则用英文；都没有时为 undefined。 */
@@ -60,7 +56,7 @@ export function reviewSummary(t: TFunction, review: ReviewInfo, lang: string): s
   if (review.outcome === "pass") return t("commandReview.summary.pass");
   if (review.outcome === "reject") {
     const detail = (review.failed ?? [])
-      .map((q) => questionLabel(t, review, q, lang))
+      .map((q) => questionLabel(review, q, lang))
       .join(t("commandReview.listSeparator"));
     return t("commandReview.summary.reject", { detail });
   }
