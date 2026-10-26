@@ -36,21 +36,22 @@ func TestSettingsSchemaValidation(t *testing.T) {
 
 func TestSubstituteSettingHeaders(t *testing.T) {
 	secrets := map[string]string{"token": "s3cret"}
-	endpoints := []string{"https://review.example.com"}
+	ep, _ := parseEndpoint("https://review.example.com")
+	endpoints := endpointSet{ep}
 
 	Convey("{{setting.x}} 只替换发往声明地址的请求头", t, func() {
 		headers := map[string]string{"Authorization": "Bearer {{setting.token}}", "X-Plain": "ok"}
-		got, err := SubstituteSettingHeaders("https://review.example.com/v1", headers, secrets, endpoints)
+		got, err := substituteSettingHeaders("https://review.example.com/v1", headers, secrets, endpoints)
 		So(err, ShouldBeNil)
 		So(got["Authorization"], ShouldEqual, "Bearer s3cret")
 		So(got["X-Plain"], ShouldEqual, "ok")
 
-		_, err = SubstituteSettingHeaders("https://evil.example.com/v1", headers, secrets, endpoints)
+		_, err = substituteSettingHeaders("https://evil.example.com/v1", headers, secrets, endpoints)
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "setting.token")
 
 		plain := map[string]string{"X-Plain": "ok"}
-		got, err = SubstituteSettingHeaders("https://evil.example.com/v1", plain, secrets, endpoints)
+		got, err = substituteSettingHeaders("https://evil.example.com/v1", plain, secrets, endpoints)
 		So(err, ShouldBeNil)
 		So(got["X-Plain"], ShouldEqual, "ok")
 	})

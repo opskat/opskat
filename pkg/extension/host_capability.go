@@ -105,7 +105,11 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool
 		}
 	}
 	if err := c.manifest.CheckHTTPURL(params.URL, c.manifest.Capabilities.Tunnel); err != nil {
-		if c.admitSettingsEndpoint(params.URL) {
+		eps, readErr := c.settingsEndpoints()
+		if readErr != nil {
+			return false, readErr
+		}
+		if u, parseErr := url.Parse(params.URL); parseErr == nil && eps.allowURL(u) {
 			params.AllowPrivate = c.manifest.Capabilities.Tunnel
 			return false, nil
 		}
@@ -119,27 +123,24 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool
 	return false, nil
 }
 
-// admitSettingsEndpoint 报告 URL 是否落在设置里 format:"endpoint" 字段声明的地址上。
-// 与静态 allowlist 并列；私网仍要 manifest 声明 tunnel。
-func (c *capHost) admitSettingsEndpoint(rawURL string) bool {
-	if c.manifest.SettingsSchema == nil {
-		return false
+// settingsEndpoints 是设置里 format:"endpoint" 字段的值，按资产端点同一套规则解析：
+// 与静态 allowlist 并列放行，也是带着密钥的请求唯一能去的地方；私网仍要 manifest 声明 tunnel。
+func (c *capHost) settingsEndpoints() (endpointSet, error) {
+	fields := EndpointFieldsFromSchema(c.manifest.SettingsSchema)
+	if len(fields) == 0 {
+		return nil, nil
 	}
 	plain, err := c.SettingsGet()
-	if err != nil || len(plain) == 0 {
-		return false
+	if err != nil {
+		return nil, fmt.Errorf("read settings endpoints: %w", err)
 	}
-	var endpoints []string
-	for _, name := range EndpointFieldsFromSchema(c.manifest.SettingsSchema) {
-		if v := plain[name]; v != "" {
-			endpoints = append(endpoints, v)
+	var eps endpointSet
+	for _, name := range fields {
+		if ep, ok := parseEndpoint(plain[name]); ok {
+			eps = append(eps, ep)
 		}
 	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return urlMatchesEndpoints(u, endpoints)
+	return eps, nil
 }
 
 // gateTCP admits a connection only to one of the asset's endpoints.
@@ -173,11 +174,15 @@ func (c *capHost) substituteSettings(params *IOOpenParams) error {
 	if !needs {
 		return nil
 	}
-	secrets, endpoints, err := c.settingSecrets()
+	secrets, err := c.SettingSecrets(PasswordFieldsFromSchema(c.manifest.SettingsSchema))
 	if err != nil {
 		return err
 	}
-	replaced, err := SubstituteSettingHeaders(params.URL, params.Headers, secrets, endpoints)
+	endpoints, err := c.settingsEndpoints()
+	if err != nil {
+		return err
+	}
+	replaced, err := substituteSettingHeaders(params.URL, params.Headers, secrets, endpoints)
 	if err != nil {
 		return err
 	}
@@ -186,7 +191,7 @@ func (c *capHost) substituteSettings(params *IOOpenParams) error {
 	// 会原样带过去，所以带着密钥的请求只能在声明地址之内重定向。
 	prev := params.RedirectGuard
 	params.RedirectGuard = func(target *url.URL) error {
-		if !urlMatchesEndpoints(target, endpoints) {
+		if !endpoints.allowURL(target) {
 			return fmt.Errorf("http redirect denied: a request carrying a settings secret may only be redirected to a declared endpoint, not %s://%s", target.Scheme, target.Host)
 		}
 		if prev != nil {
@@ -195,26 +200,6 @@ func (c *capHost) substituteSettings(params *IOOpenParams) error {
 		return nil
 	}
 	return nil
-}
-
-// settingSecrets 读取密钥字段的明文，以及声明为 endpoint 的设置值。
-// 明文只用于请求头替换，不返回给 guest。
-func (c *capHost) settingSecrets() (secrets map[string]string, endpoints []string, err error) {
-	fields := PasswordFieldsFromSchema(c.manifest.SettingsSchema)
-	values, err := c.SettingSecrets(fields)
-	if err != nil {
-		return nil, nil, err
-	}
-	plain, err := c.SettingsGet()
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, name := range EndpointFieldsFromSchema(c.manifest.SettingsSchema) {
-		if v := plain[name]; v != "" {
-			endpoints = append(endpoints, v)
-		}
-	}
-	return values, endpoints, nil
 }
 
 func (c *capHost) logDenied(ctx context.Context, asset *AssetRef, ioType string, err error) {
