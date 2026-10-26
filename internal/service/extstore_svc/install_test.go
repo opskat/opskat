@@ -144,7 +144,7 @@ func grants(c extension.Capabilities) []extension_svc.CapabilityGrant {
 	return out
 }
 
-func (f *fakeInstaller) Install(ctx context.Context, path string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error) {
+func (f *fakeInstaller) InstallStorePackage(ctx context.Context, path string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error) {
 	f.installPath = path
 	data, err := os.ReadFile(path) //nolint:gosec // test temp path
 	require.NoError(f.t, err)

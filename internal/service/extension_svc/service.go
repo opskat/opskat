@@ -184,20 +184,25 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 // A nil confirm installs without asking: the caller already has the user's
 // consent (`opsctl ext dev` asks in its own approval dialog).
 func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
-	return s.install(ctx, sourcePath, confirm, false)
+	return s.install(ctx, sourcePath, confirm, InstallOriginLocal)
+}
+
+// InstallStorePackage 与 Install 相同，但把来源记为 store。只给商店安装用：
+// 商店包也是先下载到本地再装，来源没法从路径看出来。
+func (s *Service) InstallStorePackage(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, confirm, InstallOriginStore)
 }
 
 // InstallDev 与 Install 相同，但把来源记为 dev。只给 opsctl ext dev 用。
 func (s *Service) InstallDev(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
-	return s.install(ctx, sourcePath, nil, true)
+	return s.install(ctx, sourcePath, nil, InstallOriginDev)
 }
 
-func (s *Service) install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc, dev bool) (*extension.Manifest, error) {
+func (s *Service) install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc, origin string) (*extension.Manifest, error) {
 	staged, ask, err := s.stage(ctx, sourcePath)
 	if err != nil {
 		return nil, err
 	}
-	origin := installOriginOf(ask.Source, dev)
 	if confirm == nil {
 		return s.commit(ctx, staged, nil, origin)
 	}

@@ -27,7 +27,7 @@ const progressInterval = 100 * time.Millisecond
 // *extension_svc.Service.
 type Installer interface {
 	NewInstallConfirm(c extension_svc.InstallCandidate) extension_svc.InstallConfirm
-	Install(ctx context.Context, sourcePath string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error)
+	InstallStorePackage(ctx context.Context, sourcePath string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error)
 }
 
 // InstallOptions are what InstallFromStore needs from its caller.
@@ -121,7 +121,7 @@ func installErr(kind InstallErrorKind, err error) *InstallError {
 //  2. The package is pulled from PullRegistry() — the ref's repository, not the
 //     host in the ref — bounded by the index size and checked against the
 //     index sha256 (the signed index is the trust root).
-//  3. opts.Installer.Install stages it (compatibility check included) and,
+//  3. opts.Installer.InstallStorePackage stages it (compatibility check included) and,
 //     without asking again, refuses it unless it is exactly the change the user
 //     confirmed; then commits.
 //
@@ -159,7 +159,7 @@ func (s *Service) InstallFromStore(ctx context.Context, name string, opts Instal
 		zap.String("registry", reg.Host), zap.String("prefix", reg.Prefix), zap.Bool("plainHTTP", reg.PlainHTTP), zap.String("ref", v.Source.Ref))
 	log.Info("extension store install started")
 	manifest, err := s.download(ctx, reg, name, v, opts, func(path string) (*extension.Manifest, error) {
-		return opts.Installer.Install(ctx, path, func(_ context.Context, staged extension_svc.InstallConfirm) error {
+		return opts.Installer.InstallStorePackage(ctx, path, func(_ context.Context, staged extension_svc.InstallConfirm) error {
 			if err := sameChange(approved, staged); err != nil {
 				return err
 			}

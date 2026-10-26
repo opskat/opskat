@@ -21,23 +21,12 @@ const (
 	InstallSourceDir   InstallSource = "dir"
 )
 
-// 持久化的安装来源。与安装确认里的 file/dir 不同：两者都是本地安装。
+// 持久化的安装来源，由安装入口决定。与安装确认里的 file/dir 不同：两者都是本地安装。
 const (
 	InstallOriginStore = "store"
 	InstallOriginLocal = "local"
 	InstallOriginDev   = "dev"
 )
-
-// installOriginOf 把确认来源收成要落库的三类。devInstall 只用于 opsctl ext dev。
-func installOriginOf(source InstallSource, devInstall bool) string {
-	if devInstall {
-		return InstallOriginDev
-	}
-	if source == InstallSourceStore {
-		return InstallOriginStore
-	}
-	return InstallOriginLocal
-}
 
 // Capability grant kinds, one per independently granted thing in
 // extension.Capabilities.

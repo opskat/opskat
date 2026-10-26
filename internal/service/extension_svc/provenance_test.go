@@ -91,13 +91,6 @@ func TestReviewerEligible(t *testing.T) {
 	assert.NoError(t, reviewerEligible(store, "abc", nightly))
 }
 
-func TestInstallOriginOf(t *testing.T) {
-	assert.Equal(t, InstallOriginStore, installOriginOf(InstallSourceStore, false))
-	assert.Equal(t, InstallOriginLocal, installOriginOf(InstallSourceFile, false))
-	assert.Equal(t, InstallOriginLocal, installOriginOf(InstallSourceDir, false))
-	assert.Equal(t, InstallOriginDev, installOriginOf(InstallSourceDir, true))
-}
-
 func TestRecordProvenanceKeepsSourceAcrossEnable(t *testing.T) {
 	repo := &memStateRepo{rows: map[string]*extension_state_entity.ExtensionState{}}
 	svc := &Service{stateRepo: repo, logger: nopLogger()}

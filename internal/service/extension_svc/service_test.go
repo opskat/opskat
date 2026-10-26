@@ -342,6 +342,31 @@ func TestService(t *testing.T) {
 			So(svc.Manager().GetExtension("ext-upgrade"), ShouldNotBeNil)
 		})
 
+		// 来源决定扩展能否当命令审核器（正式版只认商店安装），所以要按安装入口落库，
+		// 不能从安装包路径推断：商店安装同样是先下载到本地再装。
+		Convey("Install records where the package came from", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-origin")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+
+			var recorded []string
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-origin").Return(nil, fmt.Errorf("not found")).AnyTimes()
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, state *extension_state_entity.ExtensionState) error {
+					recorded = append(recorded, state.Source)
+					return nil
+				}).AnyTimes()
+
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-origin"), nil)
+			So(err, ShouldBeNil)
+			_, err = svc.InstallStorePackage(ctx, filepath.Join(sourceDir, "ext-origin"), nil)
+			So(err, ShouldBeNil)
+			_, err = svc.InstallDev(ctx, filepath.Join(sourceDir, "ext-origin"))
+			So(err, ShouldBeNil)
+			So(recorded, ShouldResemble, []string{InstallOriginLocal, InstallOriginStore, InstallOriginDev})
+		})
+
 		// `opsctl ext dev` reinstalls on every rebuild, so a broken build is routine.
 		// It must not take the running version down with it: the old module stays
 		// loaded, registered and callable, its files and cached descriptor intact.
