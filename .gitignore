@@ -63,3 +63,6 @@ docs/verification/
 # 仓内示例扩展的构建产物（make build-ext）
 extensions/*/dist/
 .pi/
+
+# Local scratch (screenshots, drafts)
+.scratch/
