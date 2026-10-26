@@ -20,6 +20,7 @@ type Extension struct {
 	Dir              string
 	Manifest         *Manifest
 	Plugin           *Plugin
+	PackageSHA256    string                       // PackageSHA256 of the wasm and manifest.json bytes this Plugin was loaded from
 	SkillMD          string                       // Body of SKILL.md (frontmatter stripped)
 	SkillDescription string                       // description from SKILL.md frontmatter, if any
 	Locales          map[string]map[string]string // lang → key → translated text
@@ -405,6 +406,7 @@ func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Ex
 		Dir:              extDir,
 		Manifest:         manifest,
 		Plugin:           plugin,
+		PackageSHA256:    packageDigest(wasmBytes, data),
 		SkillMD:          skillMD,
 		SkillDescription: skillDescription,
 		Locales:          locales,
@@ -493,12 +495,6 @@ func (s *StagedInstall) Extension() *Extension { return s.ext }
 
 // Manifest returns the staged version's manifest, functional face included.
 func (s *StagedInstall) Manifest() *Manifest { return s.ext.Manifest }
-
-// PackageSHA256 is the staged version's package digest (PackageSHA256), taken from
-// the staged files so it can be recorded before Commit puts them in place.
-func (s *StagedInstall) PackageSHA256() (string, error) {
-	return PackageSHA256(s.newDir, s.ext.Manifest.Backend.Binary)
-}
 
 // Stage unpacks sourcePath (a directory or a .zip) into a staging area inside the
 // extensions directory and loads it there. On failure the staging area is gone and

@@ -10,7 +10,6 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/pkg/extension"
 )
 
 // ErrReviewerUnsigned 表示非正式版上本地或开发安装的审核器可用，但未经签名。
@@ -60,19 +59,16 @@ func (s *Service) recordProvenance(ctx context.Context, name, source, sha256 str
 	return &prev, nil
 }
 
-// CheckReviewerProvenance 重算已安装扩展的包摘要，并按当前构建判断能否当审核器。
+// CheckReviewerProvenance 拿包摘要 sum 与安装记录比对，并按当前构建判断能否当审核器。
+// 已加载的扩展传它加载时的摘要（Extension.PackageSHA256），还没加载的传磁盘上算出的。
 // 非正式版上本地安装、未经签名的审核器可以用；摘要不符或来源不合格时返回错误，调用方按审核失败处理。
-func (s *Service) CheckReviewerProvenance(ctx context.Context, name, dir, binary string) error {
-	_, err := s.reviewerProvenance(ctx, name, dir, binary)
+func (s *Service) CheckReviewerProvenance(ctx context.Context, name, sum string) error {
+	_, err := s.reviewerProvenance(ctx, name, sum)
 	return err
 }
 
 // reviewerProvenance 同 CheckReviewerProvenance，另外报告审核器是否经过官方签名。
-func (s *Service) reviewerProvenance(ctx context.Context, name, dir, binary string) (signed bool, err error) {
-	sum, err := extension.PackageSHA256(dir, binary)
-	if err != nil {
-		return false, err
-	}
+func (s *Service) reviewerProvenance(ctx context.Context, name, sum string) (signed bool, err error) {
 	state, err := s.stateRepo.Find(ctx, name)
 	if err != nil {
 		return false, fmt.Errorf("command reviewer %q has no install record: %w", name, err)

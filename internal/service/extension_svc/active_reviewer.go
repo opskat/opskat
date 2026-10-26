@@ -58,7 +58,7 @@ func (s *Service) ActiveCommandReviewer(ctx context.Context, name string) (*Acti
 	if ext == nil || ext.Plugin == nil || !ext.Manifest.IsCommandReviewer() {
 		return nil, fmt.Errorf("extension %q is not a loaded command reviewer", name)
 	}
-	if err := s.CheckReviewerProvenance(ctx, name, ext.Dir, ext.Manifest.Backend.Binary); err != nil {
+	if err := s.CheckReviewerProvenance(ctx, name, ext.PackageSHA256); err != nil {
 		return nil, err
 	}
 	hash, err := s.SettingsHash(ctx, name)
@@ -106,7 +106,11 @@ func (s *Service) loadReviewer(ctx context.Context, name string) (*extension.Ext
 	if err != nil {
 		return nil, fmt.Errorf("read command reviewer %q: %w", name, err)
 	}
-	if err := s.CheckReviewerProvenance(ctx, name, dir, info.Manifest.Backend.Binary); err != nil {
+	sum, err := extension.PackageSHA256(dir, info.Manifest.Backend.Binary)
+	if err != nil {
+		return nil, fmt.Errorf("read command reviewer %q: %w", name, err)
+	}
+	if err := s.CheckReviewerProvenance(ctx, name, sum); err != nil {
 		return nil, err
 	}
 	if err := s.reviewerLoader(ctx, dir); err != nil {
@@ -141,7 +145,7 @@ func (s *Service) ListCommandReviewers(ctx context.Context, lang string) []Comma
 			Name: ext.Name, DisplayName: localized.I18n.DisplayName, Version: ext.Manifest.Version,
 			HasSettings: ext.Manifest.SettingsSchema != nil,
 		}
-		signed, err := s.reviewerProvenance(ctx, ext.Name, ext.Dir, ext.Manifest.Backend.Binary)
+		signed, err := s.reviewerProvenance(ctx, ext.Name, ext.PackageSHA256)
 		if err != nil {
 			info.Reason = err.Error()
 		} else {

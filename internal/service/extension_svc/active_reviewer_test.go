@@ -26,8 +26,9 @@ func TestActiveCommandReviewerRequiresLoadedReviewer(t *testing.T) {
 
 	mgr := extension.NewManager(dir, func(string) extension.HostProvider { return nil }, nopLogger())
 	mgr.PutForTest(&extension.Extension{
-		Name: "rev",
-		Dir:  extDir,
+		Name:          "rev",
+		Dir:           extDir,
+		PackageSHA256: sum,
 		Manifest: &extension.Manifest{
 			Name:         "rev",
 			Version:      "1.0.0",
@@ -51,6 +52,12 @@ func TestActiveCommandReviewerRequiresLoadedReviewer(t *testing.T) {
 	require.Equal(t, "rev", got.Name)
 	require.Equal(t, 4, got.MaxItems)
 
+	// 审核跑的是加载时读进来、已编译好的代码：比对的是那份字节的摘要，每次审核不再重读磁盘上的包。
+	require.NoError(t, os.Remove(filepath.Join(extDir, "main.wasm")))
+	_, err = svc.ActiveCommandReviewer(context.Background(), "rev")
+	require.NoError(t, err)
+	assert.True(t, svc.ListCommandReviewers(context.Background(), "en")[0].Usable)
+
 	repo.rows["rev"].PackageSHA256 = "dead"
 	_, err = svc.ActiveCommandReviewer(context.Background(), "rev")
 	require.Error(t, err)
@@ -69,10 +76,11 @@ func writeReviewerPackage(t *testing.T, root, name string) string {
 	return sum
 }
 
-func reviewerExtension(name, dir string) *extension.Extension {
+func reviewerExtension(name, dir, sum string) *extension.Extension {
 	return &extension.Extension{
-		Name: name,
-		Dir:  dir,
+		Name:          name,
+		Dir:           dir,
+		PackageSHA256: sum,
 		Manifest: &extension.Manifest{
 			Name:         name,
 			Version:      "1.0.0",
@@ -99,7 +107,7 @@ func TestActiveCommandReviewerLoadsOnDemand(t *testing.T) {
 	svc := &Service{manager: mgr, stateRepo: repo, logger: nopLogger(),
 		reviewerLoader: func(_ context.Context, dir string) error {
 			loads = append(loads, dir)
-			mgr.PutForTest(reviewerExtension("rev", dir))
+			mgr.PutForTest(reviewerExtension("rev", dir, sum))
 			return nil
 		}}
 
@@ -155,7 +163,7 @@ func TestActiveCommandReviewerAcceptsUnsignedOnNonRelease(t *testing.T) {
 	root := t.TempDir()
 	sum := writeReviewerPackage(t, root, "rev")
 	mgr := extension.NewManager(root, func(string) extension.HostProvider { return nil }, nopLogger())
-	mgr.PutForTest(reviewerExtension("rev", mgr.ExtDir("rev")))
+	mgr.PutForTest(reviewerExtension("rev", mgr.ExtDir("rev"), sum))
 	repo := &memStateRepo{rows: map[string]*extension_state_entity.ExtensionState{
 		"rev": {Name: "rev", Enabled: true, Source: InstallOriginLocal, PackageSHA256: sum},
 	}}
@@ -236,7 +244,7 @@ func TestCommandReviewStateTellsWhichReviewerIsInUse(t *testing.T) {
 	root := t.TempDir()
 	sum := writeReviewerPackage(t, root, "rev")
 	mgr := extension.NewManager(root, func(string) extension.HostProvider { return nil }, nopLogger())
-	mgr.PutForTest(reviewerExtension("rev", mgr.ExtDir("rev")))
+	mgr.PutForTest(reviewerExtension("rev", mgr.ExtDir("rev"), sum))
 	repo := &memStateRepo{rows: map[string]*extension_state_entity.ExtensionState{
 		"rev": {Name: "rev", Enabled: true, Source: InstallOriginStore, PackageSHA256: sum},
 	}}

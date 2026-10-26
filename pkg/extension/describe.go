@@ -56,7 +56,7 @@ func WasmHash(wasmBytes []byte) string {
 
 // PackageSHA256 是已安装扩展的包摘要：WASM 与 manifest.json 一起哈希。
 // manifest 带着能力声明（网络白名单、tunnel、commandReview），只哈希 WASM 挡不住改能力后沿用旧摘要。
-// 加载审核器前重算并与安装时记下的值比对。
+// 加载审核器前重算并与安装时记下的值比对；已加载的扩展用 Extension.PackageSHA256。
 func PackageSHA256(dir, binary string) (string, error) {
 	wasm, err := os.ReadFile(filepath.Join(dir, binary)) //nolint:gosec // 路径来自已安装扩展目录
 	if err != nil {
@@ -66,11 +66,15 @@ func PackageSHA256(dir, binary string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read manifest for package digest: %w", err)
 	}
+	return packageDigest(wasm, manifest), nil
+}
+
+func packageDigest(wasm, manifest []byte) string {
 	h := sha256.New()
 	_, _ = h.Write(wasm)
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write(manifest)
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // cachedDescriptor returns the stored descriptor for name when it was produced by

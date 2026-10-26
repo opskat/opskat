@@ -282,12 +282,7 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	// The install record (source, package digest) is written before anything is
 	// swapped: once the new version is in place a failed write could not be undone,
 	// leaving it running without a record — never eligible as a reviewer.
-	sum, err := staged.PackageSHA256()
-	if err != nil {
-		staged.Abort(ctx)
-		return nil, fmt.Errorf("install extension: %w", err)
-	}
-	prevState, err := s.recordProvenance(ctx, manifest.Name, origin, sum, true)
+	prevState, err := s.recordProvenance(ctx, manifest.Name, origin, staged.Extension().PackageSHA256, true)
 	if err != nil {
 		staged.Abort(ctx)
 		return nil, fmt.Errorf("install extension: %w", err)
