@@ -436,7 +436,7 @@ func initExtensionSystem(
 	extreg.SetConnTestRegistrar(extSvc.ConnTestRegistrar())
 
 	extB.SetService(extSvc)
-	bootstrap.SetExtensionService(extSvc)
+	bootstrap.SetExtensionService(func() *extension_svc.Service { return extSvc })
 	aiB.SetExtensionService(extSvc)
 	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
 

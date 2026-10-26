@@ -42,21 +42,28 @@ var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDat
 // 内置类型走同一条 requireApproval → callHandler 路径。变量化同上一套路。
 var activateExtensionFn = activateExtension
 
-// extensionHost 是本进程的扩展宿主：第一次激活时才建，只装被激活的扩展
-// （spec 决策 3：opsctl 只加载目标资产所属的扩展），由 releaseExtensions 在命令结束时释放。
+// extensionHost 是本进程的扩展宿主：第一次激活扩展或审核命令时才建，只装被激活的扩展
+// 和选中的审核器（spec 决策 3：opsctl 只加载目标资产所属的扩展），由 releaseExtensions
+// 在命令结束时释放。
 var extensionHost struct {
 	mu  sync.Mutex
 	svc *extension_svc.Service
 }
 
-func activateExtension(ctx context.Context, extName string) error {
+// ensureExtensionHost 返回本进程的扩展宿主，没有就建一个。执行扩展和命令审核共用它：
+// 来源、摘要和设置都由它读，选中的审核器只在真正要审核时加载。
+func ensureExtensionHost() *extension_svc.Service {
 	extensionHost.mu.Lock()
+	defer extensionHost.mu.Unlock()
 	if extensionHost.svc == nil {
 		extensionHost.svc = newExtensionHost()
+		extensionHost.svc.LoadReviewersOnDemand()
 	}
-	svc := extensionHost.svc
-	extensionHost.mu.Unlock()
-	return svc.Activate(ctx, extName)
+	return extensionHost.svc
+}
+
+func activateExtension(ctx context.Context, extName string) error {
+	return ensureExtensionHost().Activate(ctx, extName)
 }
 
 // newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：
@@ -311,15 +318,7 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // too old to accept) must not take down every unrelated opsctl command.
 func registerExtensionAssetTypes() {
 	extensionDescribeFailures = nil
-	// 命令审核走与执行扩展同一个宿主：来源、摘要和设置都由它读，选中的审核器只在真正要审核时加载。
-	extensionHost.mu.Lock()
-	if extensionHost.svc == nil {
-		extensionHost.svc = newExtensionHost()
-	}
-	svc := extensionHost.svc
-	extensionHost.mu.Unlock()
-	svc.LoadReviewersOnDemand()
-	bootstrap.SetExtensionService(svc)
+	bootstrap.SetExtensionService(ensureExtensionHost)
 	scanned, err := scanExtensionDirs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
