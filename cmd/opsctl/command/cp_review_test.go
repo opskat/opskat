@@ -56,3 +56,33 @@ func TestRequireCpBatchApprovalKeepsReviewForAudit(t *testing.T) {
 		})
 	}
 }
+
+// 多源 cp 的各条主体一次送审：审核是并行的，逐条送就成了串行，每条最多要等两倍超时。
+func TestRequireCpBatchApprovalReviewsAllSubjectsInOneBatch(t *testing.T) {
+	restoreAssetRepoAfter(t)
+	env := setupOpsctlExecAssets(t)
+	setAssetPermissionMode(t, env, "web-1", policyent.PermissionModeAssisted)
+
+	reviewer := &fakeReviewer{result: command_review_svc.Result{
+		Outcome: command_review_svc.OutcomeReject, Failed: []string{"destructive"},
+	}}
+	origReviewer := command_review_svc.Default()
+	command_review_svc.Register(reviewer)
+	t.Cleanup(func() { command_review_svc.Register(origReviewer) })
+
+	origSend := cpBatchSendFn
+	cpBatchSendFn = func(items []approval.BatchItem, session string) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: session}, nil
+	}
+	t.Cleanup(func() { cpBatchSendFn = origSend })
+
+	_, _ = requireCpBatchApproval(context.Background(), []cpSubject{
+		{approvalType: "cp:write", assetID: 2, assetName: "web-1", command: "/etc/app/a.conf"},
+		{approvalType: "cp:write", assetID: 2, assetName: "web-1", command: "/etc/app/b.conf"},
+		{approvalType: "cp:write", assetID: 2, assetName: "web-1", command: "/etc/app/c.conf"},
+	}, "./conf/ → web-1:/etc/app/")
+
+	if reviewer.reviewed != 3 || reviewer.batches != 1 {
+		t.Fatalf("reviewed %d subjects in %d batches, want 3 in 1", reviewer.reviewed, reviewer.batches)
+	}
+}

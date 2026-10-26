@@ -435,8 +435,14 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 	session := aictx.GetSessionID(ctx)
 	items := make([]approval.BatchItem, 0, len(subjects))
 	var allowed aictx.CheckResult
-	for _, subject := range subjects {
-		result := permission.CheckPermission(ctx, subject.approvalType, subject.assetID, subject.command)
+	// 全部主体一次查完：辅助审批 / Autopilot 下要送模型审核，一次送审才能并行。
+	reqs := make([]permission.PermissionRequest, len(subjects))
+	for i, subject := range subjects {
+		reqs[i] = permission.PermissionRequest{AssetType: subject.approvalType, AssetID: subject.assetID, Command: subject.command}
+	}
+	results := permission.CheckPermissions(ctx, reqs)
+	for i, subject := range subjects {
+		result := results[i]
 		switch result.Decision {
 		case aictx.Deny:
 			return ApprovalResult{

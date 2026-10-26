@@ -306,39 +306,52 @@ func checkAccessBatch(
 		typ, assetName, command, detail string
 		assetID                         int64
 	}
-	items := make([]permission.ApprovalItem, 0, len(accesses))
-	seen := make(map[seenKey]bool, len(accesses))
+	// 全部主体一次查完：辅助审批 / Autopilot 下要送模型审核，一次送审才能并行。
+	type subject struct {
+		access cpAccess
+		target helper.ApprovalTarget
+	}
+	var subjects []subject
+	var reqs []permission.PermissionRequest
 	for _, access := range accesses {
 		if !access.ep.isRemote() {
 			continue
 		}
 		for _, target := range helper.ApprovalSubjectsFor(access.ep.adapter, access.path, access.dir) {
-			result := permission.CheckPermission(ctx, target.ApprovalType, access.ep.asset.ID, target.Subject)
-			aictx.RecordDecision(ctx, result)
-			switch result.Decision {
-			case aictx.Deny:
-				return false, fmt.Errorf("%s", result.Message)
-			case aictx.Allow:
-				continue
-			}
-
-			item := permission.ApprovalItem{
-				Type:      permission.ApprovalTypeFor(target.ApprovalType),
-				AssetID:   access.ep.asset.ID,
-				AssetName: access.ep.asset.Name,
-				Command:   target.Subject,
-				Detail:    detail,
-			}
-			// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同。
-			key := seenKey{typ: item.Type, assetName: item.AssetName, command: item.Command, detail: item.Detail, assetID: item.AssetID}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			item.Review = result.Review
-
-			items = append(items, item)
+			subjects = append(subjects, subject{access: access, target: target})
+			reqs = append(reqs, permission.PermissionRequest{AssetType: target.ApprovalType, AssetID: access.ep.asset.ID, Command: target.Subject})
 		}
+	}
+	results := permission.CheckPermissions(ctx, reqs)
+
+	items := make([]permission.ApprovalItem, 0, len(subjects))
+	seen := make(map[seenKey]bool, len(subjects))
+	for i, sub := range subjects {
+		result := results[i]
+		aictx.RecordDecision(ctx, result)
+		switch result.Decision {
+		case aictx.Deny:
+			return false, fmt.Errorf("%s", result.Message)
+		case aictx.Allow:
+			continue
+		}
+
+		item := permission.ApprovalItem{
+			Type:      permission.ApprovalTypeFor(sub.target.ApprovalType),
+			AssetID:   sub.access.ep.asset.ID,
+			AssetName: sub.access.ep.asset.Name,
+			Command:   sub.target.Subject,
+			Detail:    detail,
+		}
+		// 同一条主体只出现一次：源与目的落在同一个前缀上时读写主体逐字相同。
+		key := seenKey{typ: item.Type, assetName: item.AssetName, command: item.Command, detail: item.Detail, assetID: item.AssetID}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		item.Review = result.Review
+
+		items = append(items, item)
 	}
 	if len(items) == 0 {
 		return false, nil

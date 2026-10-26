@@ -85,3 +85,34 @@ func TestCpBatchConfirmationKeepsReviewForAudit(t *testing.T) {
 		})
 	}
 }
+
+// countingReviewer 同 rejectReviewer，另外数 ReviewBatch 被调用了几次、共审了几条。
+type countingReviewer struct {
+	rejectReviewer
+	batches, reviewed int
+}
+
+func (r *countingReviewer) ReviewBatch(ctx context.Context, ins []command_review_svc.Input) []command_review_svc.Result {
+	r.batches++
+	r.reviewed += len(ins)
+	return r.rejectReviewer.ReviewBatch(ctx, ins)
+}
+
+func (r *countingReviewer) Review(ctx context.Context, in command_review_svc.Input) command_review_svc.Result {
+	return r.ReviewBatch(ctx, []command_review_svc.Input{in})[0]
+}
+
+// 一次传输的各条主体一次送审：审核是并行的，逐条送就成了串行，每条最多要等两倍超时。
+func TestCpReviewsAllSubjectsInOneBatch(t *testing.T) {
+	Convey("源与目的都在辅助审批资产上的递归 cp，读写两条主体一次送审", t, func() {
+		ctx, _ := setupCpDialogs(t, "allow", "allow")
+		useAssistedSink(t)
+		reviewer := &countingReviewer{}
+		command_review_svc.Register(reviewer)
+		seedCpSource("a.log", "b.log")
+
+		_, _ = handleCp(ctx, map[string]any{"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true})
+		So(reviewer.reviewed, ShouldBeGreaterThan, 1)
+		So(reviewer.batches, ShouldEqual, 1)
+	})
+}

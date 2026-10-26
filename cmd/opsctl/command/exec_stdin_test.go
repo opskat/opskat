@@ -121,6 +121,7 @@ func TestInspectStdin(t *testing.T) {
 type fakeReviewer struct {
 	result   command_review_svc.Result
 	reviewed int
+	batches  int // ReviewBatch 被调用的次数
 }
 
 func (r *fakeReviewer) Review(ctx context.Context, in command_review_svc.Input) command_review_svc.Result {
@@ -129,6 +130,7 @@ func (r *fakeReviewer) Review(ctx context.Context, in command_review_svc.Input) 
 
 func (r *fakeReviewer) ReviewBatch(_ context.Context, ins []command_review_svc.Input) []command_review_svc.Result {
 	r.reviewed += len(ins)
+	r.batches++
 	out := make([]command_review_svc.Result, len(ins))
 	for i := range out {
 		out[i] = r.result
