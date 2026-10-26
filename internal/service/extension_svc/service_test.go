@@ -382,9 +382,9 @@ func TestService(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			manifestPath := filepath.Join(sourceDir, "ext-prov", "manifest.json")
-			data, err := os.ReadFile(manifestPath)
+			data, err := os.ReadFile(manifestPath) //nolint:gosec // test temp dir
 			So(err, ShouldBeNil)
-			So(os.WriteFile(manifestPath, []byte(strings.Replace(string(data), `"1.0.0"`, `"2.0.0"`, 1)), 0o644), ShouldBeNil)
+			So(os.WriteFile(manifestPath, []byte(strings.Replace(string(data), `"1.0.0"`, `"2.0.0"`, 1)), 0o600), ShouldBeNil) //nolint:gosec // test temp dir
 
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-prov").Return(
 				&extension_state_entity.ExtensionState{Name: "ext-prov", Enabled: true, Source: InstallOriginLocal}, nil).AnyTimes()
@@ -394,7 +394,7 @@ func TestService(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(svc.Manager().GetExtension("ext-prov").Manifest.Version, ShouldEqual, "1.0.0")
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-prov"})
-			installed, err := os.ReadFile(filepath.Join(dir, "ext-prov", "manifest.json"))
+			installed, err := os.ReadFile(filepath.Join(dir, "ext-prov", "manifest.json")) //nolint:gosec // test temp dir
 			So(err, ShouldBeNil)
 			So(string(installed), ShouldContainSubstring, `"1.0.0"`)
 			So(reloadCalled, ShouldEqual, 0)
