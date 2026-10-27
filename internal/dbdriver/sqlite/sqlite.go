@@ -10,6 +10,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 var descriptor = dbdriver.Descriptor{
@@ -39,6 +40,13 @@ var descriptor = dbdriver.Descriptor{
 	// 没有主键的表按 rowid 定位单行。
 	LocatesRowWithoutPrimaryKey: true,
 	AlterTableAttributes:        alterAttributes,
+	ColumnTypes:                 columnTypes,
+	ExplicitDefaults:            sqldb.ClassifiesDefaults(dialect{}),
+	AutoIncrement:               sqldb.AutoIncrements(dialect{}),
+	AutoIncrementNewTablesOnly:  sqldb.AutoIncrementsNewTablesOnly(dialect{}),
+	IndexEditing:                sqldb.IndexEditing(dialect{}),
+	// DDL 可以在事务里执行，失败整批回滚。
+	TransactionalDDL: true,
 }
 
 // 文件来源（Config.SQLiteSource）的取值，与资产实体的定义同源。

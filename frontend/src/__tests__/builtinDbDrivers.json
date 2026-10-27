@@ -423,6 +423,58 @@
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": true,
     "createDatabaseOptions": null,
-    "alterTableAttributes": []
+    "alterTableAttributes": [],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["INTEGER", "REAL", "NUMERIC"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["TEXT", "VARCHAR(255)"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["DATETIME", "DATE"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["BLOB"]
+        },
+        {
+          "label": "query.designer.typeGroup.json",
+          "types": ["JSON"]
+        },
+        {
+          "label": "query.designer.typeGroup.other",
+          "types": ["BOOLEAN"]
+        }
+      ],
+      "newColumn": "TEXT",
+      "primaryKey": "INTEGER"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "autoIncrementNewTablesOnly": true,
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "descending": true,
+      "nameScope": "database"
+    },
+    "transactionalDDL": true
   }
 ]
