@@ -19,7 +19,7 @@ import (
 // host renders its bindings from the asset's config — password fields decrypted
 // host-side — and injects them into every HTTP request the extension sends to
 // that asset's endpoint. The plaintext never crosses into the guest, which is
-// what lets an HTTP extension authenticate without capabilities.credentials.
+// what lets an HTTP extension authenticate without permissions.credentials.
 //
 // Selector names the config field whose value picks the active group (e.g.
 // authType); a value no group names means "no credentials". Without a selector

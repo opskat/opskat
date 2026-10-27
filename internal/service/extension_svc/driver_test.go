@@ -27,6 +27,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 const (
@@ -240,7 +241,7 @@ func TestUninstallGoesAheadWhenNoAssetUsesItsDriver(t *testing.T) {
 func TestDatabaseAssetReachesItsDriverExtensionOnlyThroughTheSession(t *testing.T) {
 	svc, assets := newHostTestService(t)
 	svc.Bridge().Register(&extension.Extension{Name: "mydb", Manifest: &extension.Manifest{
-		Name: "mydb", Capabilities: extension.Capabilities{DatabaseDrivers: []string{"mydb"}},
+		Manifest: extmanifest.Manifest{Name: "mydb", Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"mydb"}}},
 	}})
 	assets.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{
 		ID: 1, Name: "db", Type: asset_entity.AssetTypeDatabase,

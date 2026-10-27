@@ -10,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -82,7 +83,7 @@ func TestTestConnectionKeepsCredentialsForInjectionWithoutCredentialsRead(t *tes
 	Convey("given an extension without credentials:read", t, func() {
 		svc, assets := newHostTestService(t)
 		manifest := &extension.Manifest{
-			Name:       "other",
+			Manifest:   extmanifest.Manifest{Name: "other"},
 			AssetTypes: []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}},
 		}
 

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -275,9 +277,9 @@ func TestParseDescriptorSnippets(t *testing.T) {
 
 func TestApplyDescriptor(t *testing.T) {
 	Convey("Merging describe() onto the manifest", t, func() {
-		m, err := ParseManifest([]byte(`{"name":"oss","version":"1.0.0","hostABI":"2.0",` +
+		m, err := ParseManifest([]byte(`{"name":"oss","version":"1.0.0","hostABI":"1.0",` +
 			`"backend":{"runtime":"wasm","binary":"main.wasm"},` +
-			`"capabilities":{"credentials":"read"}}`))
+			`"permissions":{"credentials":"read"}}`))
 		So(err, ShouldBeNil)
 
 		d, err := ParseDescriptor(desc(`"icon":"cloud-storage",` +
@@ -293,7 +295,7 @@ func TestApplyDescriptor(t *testing.T) {
 
 		Convey("the security contract is untouched", func() {
 			So(m.Name, ShouldEqual, "oss")
-			So(m.Capabilities.Credentials, ShouldEqual, CredentialAccessRead)
+			So(m.Permissions.Credentials, ShouldEqual, extmanifest.CredentialAccessRead)
 			So(m.Backend.Binary, ShouldEqual, "main.wasm")
 		})
 
@@ -505,7 +507,7 @@ func TestParseDescriptorPolicyActionSets(t *testing.T) {
 		}
 
 		Convey("a classified tool's action set feeds policies.actions alongside fixed actions", func() {
-			m, err := ParseManifest([]byte(`{"name":"x","version":"1.0.0","hostABI":"2.0",` +
+			m, err := ParseManifest([]byte(`{"name":"x","version":"1.0.0","hostABI":"1.0",` +
 				`"backend":{"runtime":"wasm","binary":"main.wasm"}}`))
 			So(err, ShouldBeNil)
 			d, err := ParseDescriptor(desc(`"tools":[` +
@@ -683,7 +685,11 @@ func TestDescribeIntoDatabaseDrivers(t *testing.T) {
 	const drivers = `"databaseDrivers":[` + driverDescriptorJSON + `]`
 	load := func(declared []string, payload string) (*Manifest, error) {
 		useDescribeCache(t, newFakeDescribeCache(stubWasm, payload))
-		m := &Manifest{Name: "ext-a", HostABI: HostABIVersion, Capabilities: Capabilities{DatabaseDrivers: declared}}
+		m := &Manifest{Manifest: extmanifest.Manifest{
+			Name:        "ext-a",
+			HostABI:     extmanifest.HostABIVersion,
+			Contributes: extmanifest.Contributes{DatabaseDrivers: declared},
+		}}
 		_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
 		return m, err
 	}
@@ -708,75 +714,31 @@ func TestDescribeIntoDatabaseDrivers(t *testing.T) {
 		})
 	})
 
-	Convey("A driver declaring the certificate field group needs the host ABI that hands it the TLS material", t, func() {
-		const certDriver = `{"id":"cert-ext","name":"Cert Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
-			`"form":[{"tab":"connection","fields":["host","port","username"]},{"tab":"tls","fields":["tls_cert"]}],` +
-			`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
-		loadAt := func(abi string) error {
-			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+certDriver+`]}`))
-			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"cert-ext"}}}
-			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
-			return err
-		}
-		Convey("on hostABI 2.3 the extension is refused, naming the driver and the reason", func() {
-			err := loadAt("2.3")
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "ext-a")
-			So(err.Error(), ShouldContainSubstring, "cert-ext")
-			So(err.Error(), ShouldContainSubstring, "tls_cert")
-			So(err.Error(), ShouldContainSubstring, DatabaseExtrasMinHostABI)
-		})
-		Convey("on hostABI 2.4 it loads", func() {
-			So(loadAt(DatabaseExtrasMinHostABI), ShouldBeNil)
-		})
-	})
-
-	Convey("A driver declaring the Kerberos field group needs the manifest capability that lets it ask for tickets", t, func() {
+	Convey("A driver declaring the Kerberos field group needs the manifest permission that lets it ask for tickets", t, func() {
 		const krbDriver = `{"id":"krb-ext","name":"Krb Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
 			`"form":[{"tab":"connection","fields":["host","port","username","password","kerberos"]}],` +
 			`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
-		loadWith := func(abi string, kerberos bool) error {
+		loadWith := func(kerberos bool) error {
 			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+krbDriver+`]}`))
-			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"krb-ext"}, DatabaseKerberos: kerberos}}
+			m := &Manifest{Manifest: extmanifest.Manifest{
+				Name:        "ext-a",
+				HostABI:     extmanifest.HostABIVersion,
+				Permissions: extmanifest.Permissions{Kerberos: kerberos},
+				Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"krb-ext"}},
+			}}
 			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
 			return err
 		}
-		for _, abi := range []string{DatabaseExtrasMinHostABI, DatabaseKerberosMinHostABI} {
-			Convey("without capabilities.databaseKerberos on hostABI "+abi+" the extension is refused, naming the driver and the reason", func() {
-				err := loadWith(abi, false)
-				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "ext-a")
-				So(err.Error(), ShouldContainSubstring, "krb-ext")
-				So(err.Error(), ShouldContainSubstring, `"kerberos"`)
-				So(err.Error(), ShouldContainSubstring, "capabilities.databaseKerberos")
-				So(err.Error(), ShouldContainSubstring, DatabaseKerberosMinHostABI)
-			})
-		}
-		Convey("with the capability (hostABI 2.5) it loads", func() {
-			So(loadWith(DatabaseKerberosMinHostABI, true), ShouldBeNil)
-		})
-	})
-
-	Convey("A driver declaring statement splitting and classification needs the host ABI that asks it", t, func() {
-		const splitDriver = `{"id":"split-ext","name":"Split Ext","icon":"x","order":50,"aliases":[],"defaultPort":1521,` +
-			`"form":[{"tab":"connection","fields":["host","port","username"]}],` +
-			`"capabilities":["classify_statements"],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
-		loadAt := func(abi string) error {
-			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+splitDriver+`]}`))
-			m := &Manifest{Name: "ext-a", HostABI: abi, Capabilities: Capabilities{DatabaseDrivers: []string{"split-ext"}}}
-			_, err := (&Manager{}).describeInto(context.Background(), m, nil, stubWasm)
-			return err
-		}
-		Convey("on hostABI 2.4 the extension is refused, naming the driver and the reason", func() {
-			err := loadAt(DatabaseExtrasMinHostABI)
+		Convey("without permissions.kerberos the extension is refused, naming the driver and the reason", func() {
+			err := loadWith(false)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "ext-a")
-			So(err.Error(), ShouldContainSubstring, "split-ext")
-			So(err.Error(), ShouldContainSubstring, `"classify_statements"`)
-			So(err.Error(), ShouldContainSubstring, DatabaseKerberosMinHostABI)
+			So(err.Error(), ShouldContainSubstring, "krb-ext")
+			So(err.Error(), ShouldContainSubstring, `"kerberos"`)
+			So(err.Error(), ShouldContainSubstring, "permissions.kerberos")
 		})
-		Convey("on hostABI 2.5 it loads", func() {
-			So(loadAt(DatabaseKerberosMinHostABI), ShouldBeNil)
+		Convey("with the permission it loads", func() {
+			So(loadWith(true), ShouldBeNil)
 		})
 	})
 }

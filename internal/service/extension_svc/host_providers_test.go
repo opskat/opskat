@@ -9,6 +9,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
@@ -29,9 +30,8 @@ func registeredExt(name, assetType, credentials string) *extension.Extension {
 	return &extension.Extension{
 		Name: name,
 		Manifest: &extension.Manifest{
-			Name:         name,
-			AssetTypes:   []extension.AssetTypeDef{{Type: assetType, ConfigSchema: passwordSchema}},
-			Capabilities: extension.Capabilities{Credentials: credentials},
+			Manifest:   extmanifest.Manifest{Name: name, Permissions: extmanifest.Permissions{Credentials: credentials}},
+			AssetTypes: []extension.AssetTypeDef{{Type: assetType, ConfigSchema: passwordSchema}},
 		},
 	}
 }
@@ -43,7 +43,7 @@ func newHostTestService(t *testing.T) (*Service, *mock_asset_repo.MockAssetRepo)
 	ctrl := gomock.NewController(t)
 	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
 	svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
-	svc.Bridge().Register(registeredExt("acme", "acme-store", extension.CredentialAccessRead))
+	svc.Bridge().Register(registeredExt("acme", "acme-store", extmanifest.CredentialAccessRead))
 	svc.Bridge().Register(registeredExt("other", "other-store", ""))
 	credential_svc.SetDefault(credential_svc.New("host-test-key", []byte("0123456789abcdef")))
 	return svc, assets

@@ -30,7 +30,7 @@ type Descriptor struct {
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
 	// DatabaseDrivers are the SQL database drivers the extension provides, one
-	// descriptor per id the manifest lists in capabilities.databaseDrivers.
+	// descriptor per id the manifest lists in contributes.databaseDrivers.
 	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
 }
 
@@ -161,38 +161,23 @@ func (d *Descriptor) validateDatabaseDrivers() error {
 // checkDatabaseDrivers requires the merged manifest's driver descriptors to be
 // exactly the driver ids the manifest declared: the manifest is what the user
 // audited, the descriptor is what the code implements, and they may not disagree.
-// A driver that declares the certificate field group (dbdriver.FieldTLSCert) is
-// handed the asset's TLS material, which an older host would silently not do, so
-// it requires DatabaseExtrasMinHostABI. A driver that declares the Kerberos field
-// group (dbdriver.FieldKerberos) asks the host for tickets, which the user audits
-// as capabilities.databaseKerberos (itself hostABI DatabaseKerberosMinHostABI).
-// A driver that declares statement splitting and classification
-// (dbdriver.CapClassifyStatements) is asked to split SQL the host would otherwise
-// parse itself, which an older host would silently not do, so it requires
-// DatabaseKerberosMinHostABI too (the ABI that added both).
+// A driver that declares the Kerberos field group (dbdriver.FieldKerberos) asks
+// the host for tickets, which the user audits as permissions.kerberos.
 // The error names the offending driver; the caller adds the extension.
 func (m *Manifest) checkDatabaseDrivers() error {
 	described := make(map[string]struct{}, len(m.DatabaseDrivers))
 	for _, drv := range m.DatabaseDrivers {
 		id := string(drv.ID)
 		described[id] = struct{}{}
-		if !slices.Contains(m.Capabilities.DatabaseDrivers, id) {
-			return fmt.Errorf("describe() provides database driver %q that manifest capabilities.databaseDrivers does not declare", id)
+		if !slices.Contains(m.Contributes.DatabaseDrivers, id) {
+			return fmt.Errorf("describe() provides database driver %q that manifest contributes.databaseDrivers does not declare", id)
 		}
-		if drv.UsesField(dbdriver.FieldTLSCert) && !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
-			return fmt.Errorf("database driver %q declares the certificate field group (form field %q), which requires hostABI %s or newer (got %s)",
-				id, dbdriver.FieldTLSCert, DatabaseExtrasMinHostABI, m.HostABI)
-		}
-		if drv.UsesField(dbdriver.FieldKerberos) && !m.Capabilities.DatabaseKerberos {
-			return fmt.Errorf("database driver %q declares the Kerberos field group (form field %q), which requires manifest capabilities.databaseKerberos on hostABI %s or newer (got hostABI %s without it)",
-				id, dbdriver.FieldKerberos, DatabaseKerberosMinHostABI, m.HostABI)
-		}
-		if drv.Supports(dbdriver.CapClassifyStatements) && !hostABIAtLeast(m.HostABI, DatabaseKerberosMinHostABI) {
-			return fmt.Errorf("database driver %q declares statement splitting and classification (capability %q), which requires hostABI %s or newer (got %s)",
-				id, dbdriver.CapClassifyStatements, DatabaseKerberosMinHostABI, m.HostABI)
+		if drv.UsesField(dbdriver.FieldKerberos) && !m.Permissions.Kerberos {
+			return fmt.Errorf("database driver %q declares the Kerberos field group (form field %q), which requires manifest permissions.kerberos",
+				id, dbdriver.FieldKerberos)
 		}
 	}
-	for _, id := range m.Capabilities.DatabaseDrivers {
+	for _, id := range m.Contributes.DatabaseDrivers {
 		if _, ok := described[id]; !ok {
 			return fmt.Errorf("manifest declares database driver %q but describe() does not provide it", id)
 		}

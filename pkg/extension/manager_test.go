@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	cagologger "github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
@@ -72,7 +74,7 @@ func writeMinimalExtension(t *testing.T, extDir, extName string) {
 	manifest := map[string]any{
 		"name":    extName,
 		"version": "1.0.0",
-		"hostABI": HostABIVersion,
+		"hostABI": extmanifest.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 	}
 	data, err := json.Marshal(manifest)
@@ -362,9 +364,9 @@ func TestManagerRefusesEndpointBindingsWithoutAnEndpoint(t *testing.T) {
 		writeMinimalExtension(t, extDir, "bound")
 		if assetEndpoint {
 			manifest := map[string]any{
-				"name": "bound", "version": "1.0.0", "hostABI": HostABIVersion,
-				"backend":      map[string]any{"runtime": "wasm", "binary": "main.wasm"},
-				"capabilities": map[string]any{"network": map[string]any{"assetEndpoint": true}},
+				"name": "bound", "version": "1.0.0", "hostABI": extmanifest.HostABIVersion,
+				"backend":     map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+				"permissions": map[string]any{"network": map[string]any{"assetEndpoint": true}},
 			}
 			data, err := json.Marshal(manifest)
 			if err != nil {

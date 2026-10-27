@@ -52,6 +52,7 @@ import (
 	"github.com/opskat/opskat/internal/service/vnc_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 	extpkg "github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	skillplugin "github.com/opskat/opskat/plugin"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -467,8 +468,8 @@ func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, nam
 	return extension.InstalledExtensionVersion(i.ext, name)
 }
 
-func (i desktopExtDevInstaller) InstalledExtensionCapabilities(_ context.Context, name string) extpkg.Capabilities {
-	return extension.InstalledExtensionCapabilities(i.ext, name)
+func (i desktopExtDevInstaller) InstalledExtensionManifest(_ context.Context, name string) extmanifest.Manifest {
+	return extension.InstalledExtensionManifest(i.ext, name)
 }
 
 func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {

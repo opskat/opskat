@@ -18,6 +18,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"go.uber.org/zap"
 )
 
@@ -203,8 +204,8 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 
 	// Judge compatibility from the source's manifest before staging: Stage loads the
 	// WASM and rejects a manifest this app cannot read with a bare validation error.
-	if err := extension.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
-		var inc *extension.IncompatibleError
+	if err := extmanifest.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
+		var inc *extmanifest.IncompatibleError
 		if errors.As(err, &inc) {
 			return nil, InstallConfirm{}, LocalizeIncompatible(ctx, inc)
 		}
@@ -222,13 +223,14 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	ext := staged.Extension()
 	manifest := staged.Manifest()
 	ask := s.NewInstallConfirm(InstallCandidate{
-		Name:         manifest.Name,
-		DisplayName:  ext.Translate(aictx.GetPolicyLang(ctx), manifest.I18n.DisplayName),
-		Icon:         manifest.Icon,
-		Version:      manifest.Version,
-		Capabilities: manifest.Capabilities,
-		Source:       source,
-		Size:         size,
+		Name:        manifest.Name,
+		DisplayName: ext.Translate(aictx.GetPolicyLang(ctx), manifest.I18n.DisplayName),
+		Icon:        manifest.Icon,
+		Version:     manifest.Version,
+		Permissions: manifest.Permissions,
+		Contributes: manifest.Contributes,
+		Source:      source,
+		Size:        size,
 	})
 	return staged, ask, nil
 }
@@ -584,7 +586,7 @@ func (s *Service) register(ext *extension.Extension) error {
 func (s *Service) unregister(ctx context.Context, name string) {
 	var drivers []string
 	if ext := s.bridge.Get(name); ext != nil {
-		drivers = ext.Manifest.Capabilities.DatabaseDrivers
+		drivers = ext.Manifest.Contributes.DatabaseDrivers
 	}
 	extreg.Unregister(name)
 	s.bridge.Unregister(name)
@@ -612,7 +614,7 @@ func (s *Service) checkDriverAssets(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("cannot uninstall %q: read its manifest to check the database assets using its drivers: %w; use force uninstall to remove it anyway", name, err)
 	}
-	for _, driver := range info.Manifest.Capabilities.DatabaseDrivers {
+	for _, driver := range info.Manifest.Contributes.DatabaseDrivers {
 		assets, err := s.assetRepo.List(ctx, asset_repo.ListOptions{DatabaseDriver: driver})
 		if err != nil {
 			return fmt.Errorf("cannot uninstall %q: list the database assets using its driver %q: %w", name, driver, err)

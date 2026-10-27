@@ -56,7 +56,7 @@ const (
 var errDriverSessionClosed = errors.New("database driver session is closed")
 
 // OpenDriverSession opens a session of database driver id, which this extension
-// must declare in capabilities.databaseDrivers. req is handed to the driver — its
+// must declare in contributes.databaseDrivers. req is handed to the driver — its
 // config, the decrypted password, the driver options, the TLS material and the
 // reach path, which every TCP connection the driver opens takes — each time an
 // instance of the session logs in. A driver that cannot connect fails with its
@@ -68,7 +68,7 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 	if p.closed.Load() {
 		return nil, fmt.Errorf("plugin closed")
 	}
-	if !slices.Contains(p.manifest.Capabilities.DatabaseDrivers, id) {
+	if !slices.Contains(p.manifest.Contributes.DatabaseDrivers, id) {
 		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
 	}
 	if req.Config != nil {
@@ -97,14 +97,14 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 
 // ClassifyStatements splits and classifies sql with database driver id
 // (dbdriver.StatementClassifier), which this extension must declare in
-// capabilities.databaseDrivers. No session is involved: the driver does not touch
+// contributes.databaseDrivers. No session is involved: the driver does not touch
 // the database to answer, so the call runs on a pooled instance like
 // CheckPolicy, with no asset, no reach path and the plugin's tool timeout. The
 // statements are the driver's as it answered them; dbdriver.ClassifyStatements
 // checks them. A failure the driver answers — text it cannot split — wraps
 // dbdriver.ErrCannotSplit with the driver's own reason.
 func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
-	if !slices.Contains(p.manifest.Capabilities.DatabaseDrivers, id) {
+	if !slices.Contains(p.manifest.Contributes.DatabaseDrivers, id) {
 		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
 	}
 	input, err := json.Marshal(driverwire.Call{Op: driverwire.OpClassifyStatements, Args: driverwire.Args{
@@ -171,7 +171,7 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 // confineReach is the reach path every instance of a session dials through: the
 // session's own, narrowed by a reachGate. The asset's own address takes the
 // route's Dial, as a built-in driver's connection does. Any other address is
-// refused unless the extension declares capabilities.network.databaseRedirects;
+// refused unless the extension declares permissions.network.assetRoute;
 // then it is a redirect the database answered with, dialed by address along the
 // same route (see reachGate.redirect). A refused address is named in the error
 // the guest gets and logged; the logs carry no credential, only the addresses.
@@ -182,7 +182,7 @@ func (p *Plugin) confineReach(driver string, req *dbdriver.OpenRequest) *dbdrive
 		extension: p.manifest.Name,
 		driver:    driver,
 		assetID:   req.AssetID,
-		redirects: p.manifest.Capabilities.Network.DatabaseRedirects,
+		redirects: p.manifest.Permissions.Network.AssetRoute,
 		// No by-address dial means a direct one (orDirectDial): it gets the direct
 		// route's check whatever Direct says.
 		direct:   req.Transport.Direct || req.Transport.DialAddr == nil,
@@ -212,7 +212,7 @@ type reachGate struct {
 	// assetHost is the asset's host as configured; allowed is its host:port as
 	// sameEndpoint compares it.
 	assetHost, allowed string
-	// redirects is the extension's capabilities.network.databaseRedirects.
+	// redirects is the extension's permissions.network.assetRoute.
 	redirects bool
 	// direct reports a direct route: names resolve on this machine.
 	direct         bool
@@ -230,7 +230,7 @@ func (g *reachGate) dialContext(ctx context.Context, network, addr string) (net.
 	}
 	if !g.redirects {
 		g.deny(ctx, addr)
-		return nil, fmt.Errorf("dial denied: %q is not the address of the database asset (%s), and extension %q does not declare following database redirects (capabilities.network.databaseRedirects)",
+		return nil, fmt.Errorf("dial denied: %q is not the address of the database asset (%s), and extension %q does not declare following database redirects (permissions.network.assetRoute)",
 			addr, g.allowed, g.extension)
 	}
 	return g.redirect(ctx, network, addr)

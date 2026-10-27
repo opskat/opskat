@@ -6,23 +6,27 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 func TestParseCommand(t *testing.T) {
 	// 扩展名不再出现在命令里：资产类型 → 扩展是一对一的，工具名就是第一个词。
-	m := &extension.Manifest{Name: "oss", Tools: []extension.ToolDef{{
-		Name: "list_objects", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"bucket":  map[string]any{"type": "string"},
-				"maxKeys": map[string]any{"type": "integer"},
-				"keys":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"force":   map[string]any{"type": "boolean"},
-				"ratio":   map[string]any{"type": "number"},
+	m := &extension.Manifest{
+		Manifest: extmanifest.Manifest{Name: "oss"},
+		Tools: []extension.ToolDef{{
+			Name: "list_objects", Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"bucket":  map[string]any{"type": "string"},
+					"maxKeys": map[string]any{"type": "integer"},
+					"keys":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"force":   map[string]any{"type": "boolean"},
+					"ratio":   map[string]any{"type": "number"},
+				},
+				"required": []any{"bucket"},
 			},
-			"required": []any{"bucket"},
-		},
-	}}}
+		}},
+	}
 
 	t.Run("按声明类型转换", func(t *testing.T) {
 		// cmdline 的默认 flag 语法是 --k=v 或裸 --k（见 internal/ai/cmdline 文档注释），
@@ -241,17 +245,20 @@ func TestParseCommand(t *testing.T) {
 // must not come out as a bare flag that the space-separated form then reads as
 // "take the next word".
 func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
-	m := &extension.Manifest{Name: "notes", Tools: []extension.ToolDef{{
-		Name: "put", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"a":     map[string]any{"type": "string"},
-				"b":     map[string]any{"type": "string"},
-				"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"force": map[string]any{"type": "boolean"},
+	m := &extension.Manifest{
+		Manifest: extmanifest.Manifest{Name: "notes"},
+		Tools: []extension.ToolDef{{
+			Name: "put", Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"a":     map[string]any{"type": "string"},
+					"b":     map[string]any{"type": "string"},
+					"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"force": map[string]any{"type": "boolean"},
+				},
 			},
-		},
-	}}}
+		}},
+	}
 	for _, command := range []string{
 		`put --a=true --b=x`,
 		`put --b=true`,

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	cagologger "github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +37,7 @@ func TestLoadPlugin(t *testing.T) {
 		host := newRecordedHost()
 
 		Convey("should reject invalid WASM bytes", func() {
-			manifest := &Manifest{Name: "test", Version: "1.0.0"}
+			manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "test", Version: "1.0.0"}}
 			_, err := LoadPlugin(ctx, manifest, []byte("not wasm"), host, nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "compile wasm")
@@ -44,7 +46,7 @@ func TestLoadPlugin(t *testing.T) {
 		Convey("a module without the reactor exports fails loudly on first call", func() {
 			// Minimal valid WASM module (magic + version, empty)
 			minimalWasm := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
-			manifest := &Manifest{Name: "test", Version: "1.0.0"}
+			manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "test", Version: "1.0.0"}}
 			p, err := LoadPlugin(ctx, manifest, minimalWasm, host, nil)
 			So(err, ShouldBeNil)
 			So(p.Manifest().Name, ShouldEqual, "test")
@@ -590,7 +592,7 @@ func benchmarkFixtureTool(b *testing.B, opts ...PluginOption) {
 	if t.Failed() {
 		b.Fatal("fixture build failed")
 	}
-	manifest := &Manifest{Name: "fixture-ext", Version: "1.0.0"}
+	manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "fixture-ext", Version: "1.0.0"}}
 	p, err := LoadPlugin(context.Background(), manifest, wasm, newRecordedHost(), nil, opts...)
 	if err != nil {
 		b.Fatal(err)

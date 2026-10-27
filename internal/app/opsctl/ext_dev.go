@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -80,9 +81,9 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: fmt.Sprintf("read manifest: %v", err)}
 	}
 	// 同一条兼容规则：不兼容的构建在弹窗之前就拒绝，并说明需要更新 OpsKat。
-	if err := extension.CheckManifestJSON(data, currentApp()); err != nil {
+	if err := extmanifest.CheckManifestJSON(data, currentApp()); err != nil {
 		log.Warn("extension dev install refused", zap.Error(err))
-		var inc *extension.IncompatibleError
+		var inc *extmanifest.IncompatibleError
 		if errors.As(err, &inc) {
 			return approval.ApprovalResponse{Approved: false, Reason: extension_svc.IncompatibleMessage(i18n.Ctx(o.ctx, o.lang.Lang()), inc)}
 		}
@@ -96,21 +97,21 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
 	installedVersion, overwrites := o.extDevInstaller.InstalledExtensionVersion(ctx, manifest.Name)
-	var installed extension.Capabilities
+	var installed extmanifest.Manifest
 	if overwrites {
-		installed = o.extDevInstaller.InstalledExtensionCapabilities(ctx, manifest.Name)
+		installed = o.extDevInstaller.InstalledExtensionManifest(ctx, manifest.Name)
 	}
 	log = log.With(
 		zap.String("extension", manifest.Name),
 		zap.String("version", manifest.Version),
 		zap.Bool("overwrites", overwrites),
 		zap.String("installedVersion", installedVersion),
-		zap.String("credentials", manifest.Capabilities.Credentials),
-		zap.Bool("tunnel", manifest.Capabilities.Tunnel),
-		zap.Bool("assetEndpoint", manifest.Capabilities.Network.AssetEndpoint),
+		zap.String("credentials", manifest.Permissions.Credentials),
+		zap.Bool("allowPrivate", manifest.Permissions.Network.AllowPrivate),
+		zap.Bool("assetEndpoint", manifest.Permissions.Network.AssetEndpoint),
 	)
 
-	key := extDevApprovalKey{dir: sourceDir, name: manifest.Name, capabilities: capabilitiesFingerprint(manifest.Capabilities)}
+	key := extDevApprovalKey{dir: sourceDir, name: manifest.Name, grants: grantsFingerprint(manifest.Manifest)}
 	if o.extDevApprovals.has(key) {
 		log.Info("extension dev install approved", zap.String("decision", "remembered"))
 	} else {
@@ -139,15 +140,15 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 
 // extDevApprovalDetail 是弹窗里除来源目录之外的全部内容：用户据此判断要不要放行。
 // credentials: read 会把扩展资产里保存的每个密码以明文交给它，所以放在第一行醒目提示，
-// 而不是混在能力列表里。
-func extDevApprovalDetail(m *extension.Manifest, installedVersion string, installed extension.Capabilities, overwrites bool, lang string) string {
+// 而不是混在权限列表里。
+func extDevApprovalDetail(m *extension.Manifest, installedVersion string, installed extmanifest.Manifest, overwrites bool, lang string) string {
 	var b strings.Builder
-	if m.Capabilities.Credentials == extension.CredentialAccessRead {
+	if m.Permissions.Credentials == extmanifest.CredentialAccessRead {
 		b.WriteString(i18n.Pick(lang,
 			"警告：credentials: read —— 该扩展能以明文读取其资产里保存的全部密码\n",
 			"WARNING: credentials: read — this extension can read every password stored in its assets in plaintext\n"))
 	}
-	if len(m.Capabilities.DatabaseDrivers) > 0 {
+	if len(m.Contributes.DatabaseDrivers) > 0 {
 		b.WriteString(i18n.Pick(lang,
 			"警告：databaseDrivers —— 使用这些驱动的数据库资产，其口令与 TLS 客户端私钥会以明文交给该扩展\n",
 			"WARNING: databaseDrivers — database assets using these drivers hand their passwords and TLS client private keys to this extension in plaintext\n"))
@@ -158,57 +159,57 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	} else {
 		b.WriteString("new install\n")
 	}
-	c := m.Capabilities
-	b.WriteString("capabilities:")
+	p := m.Permissions
+	b.WriteString("permissions:")
 	lines := 0
 	capLine := func(label, value string) {
 		fmt.Fprintf(&b, "\n  %s: %s", label, value)
 		lines++
 	}
-	if len(c.FS.Read) > 0 {
-		capLine("fs.read", strings.Join(c.FS.Read, ", "))
+	if len(p.FS.Read) > 0 {
+		capLine("fs.read", strings.Join(p.FS.Read, ", "))
 	}
-	if len(c.FS.Write) > 0 {
-		capLine("fs.write", strings.Join(c.FS.Write, ", "))
+	if len(p.FS.Write) > 0 {
+		capLine("fs.write", strings.Join(p.FS.Write, ", "))
 	}
-	if len(c.HTTP.Allowlist) > 0 {
-		capLine("http", strings.Join(c.HTTP.Allowlist, ", "))
+	if len(p.Network.HTTP) > 0 {
+		capLine("network.http", strings.Join(p.Network.HTTP, ", "))
 	}
-	if c.Credentials != "" {
-		capLine("credentials", c.Credentials)
+	if p.Credentials != "" {
+		capLine("credentials", p.Credentials)
 	}
-	if c.Tunnel {
-		capLine("tunnel", "true")
+	if p.Network.AllowPrivate {
+		capLine("network.allowPrivate", "true")
 	}
-	if c.Network.AssetEndpoint {
+	if p.Network.AssetEndpoint {
 		capLine("network.assetEndpoint", "true")
 	}
-	if c.Network.DatabaseRedirects {
+	if p.Network.AssetRoute {
 		v := "true"
-		if overwrites && !installed.Network.DatabaseRedirects {
+		if overwrites && !installed.Permissions.Network.AssetRoute {
 			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
 		}
 		v += i18n.Pick(lang,
 			" —— 驱动可以连到数据库重定向到的其他地址，经资产的到达途径",
 			" — the driver may connect to other addresses the database redirects to, through the asset's route")
-		capLine("network.databaseRedirects", v)
+		capLine("network.assetRoute", v)
 	}
-	if c.DatabaseKerberos {
+	if p.Kerberos {
 		v := "true"
-		if overwrites && !installed.DatabaseKerberos {
+		if overwrites && !installed.Permissions.Kerberos {
 			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
 		}
 		v += i18n.Pick(lang,
 			" —— 驱动可以用资产里的 Kerberos 凭据为登录数据库取票",
 			" — the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
-		capLine("databaseKerberos", v)
+		capLine("kerberos", v)
 	}
-	if len(c.DatabaseDrivers) > 0 {
+	if drivers := m.Contributes.DatabaseDrivers; len(drivers) > 0 {
 		mark := i18n.Pick(lang, "新增", "new")
-		ids := make([]string, len(c.DatabaseDrivers))
-		for i, id := range c.DatabaseDrivers {
+		ids := make([]string, len(drivers))
+		for i, id := range drivers {
 			ids[i] = id
-			if overwrites && !slices.Contains(installed.DatabaseDrivers, id) {
+			if overwrites && !slices.Contains(installed.Contributes.DatabaseDrivers, id) {
 				ids[i] += " (" + mark + ")"
 			}
 		}
@@ -220,16 +221,16 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	return b.String()
 }
 
-// extDevApprovalKey 是一次 ext dev 确认覆盖的范围。能力也在键里：重建后能力变宽是
-// 一个新的决定，不是一次重载。
+// extDevApprovalKey 是一次 ext dev 确认覆盖的范围。权限与驱动 id 也在键里：重建后
+// 要的更多是一个新的决定，不是一次重载。
 type extDevApprovalKey struct {
-	dir          string
-	name         string
-	capabilities string
+	dir    string
+	name   string
+	grants string
 }
 
-func capabilitiesFingerprint(c extension.Capabilities) string {
-	return fmt.Sprintf("%+v", c)
+func grantsFingerprint(m extmanifest.Manifest) string {
+	return fmt.Sprintf("%+v %+v", m.Permissions, m.Contributes)
 }
 
 // extDevApprovalMemory 只活在内存里：桌面进程退出即失效，下一次运行重新询问。

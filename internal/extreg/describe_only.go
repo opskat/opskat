@@ -160,7 +160,7 @@ func registerDescribeOnlyLocked(info *extension.ManifestInfo, help string) ([]*e
 	manifests[info.Name] = m
 	logger.Default().Info("extension registered from cached descriptor",
 		zap.String("extension", info.Name), zap.Strings("assetTypes", done),
-		zap.Strings("databaseDrivers", m.Capabilities.DatabaseDrivers))
+		zap.Strings("databaseDrivers", m.Contributes.DatabaseDrivers))
 	return nil, nil
 }
 

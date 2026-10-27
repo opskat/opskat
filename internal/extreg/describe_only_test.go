@@ -10,6 +10,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // An extension that provides database drivers and nothing else is a complete
@@ -55,7 +56,7 @@ func TestRegisterDescribeOnly_DriverNameClashRegistersNothing(t *testing.T) {
 }
 
 func TestRegisterDescribeOnly_NothingDescribedIsStillRejected(t *testing.T) {
-	m := &extension.Manifest{Name: "describe-only-empty", Version: "1.0.0"}
+	m := &extension.Manifest{Manifest: extmanifest.Manifest{Name: "describe-only-empty", Version: "1.0.0"}}
 	err := RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m})
 	require.Error(t, err)
 }

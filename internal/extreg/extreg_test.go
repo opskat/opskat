@@ -25,6 +25,7 @@ import (
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // fakeConnTestRegistrar stands in for internal/app/extension's real
@@ -123,9 +124,8 @@ func (p *fakePlugin) CheckPolicy(_ context.Context, _ string, _ json.RawMessage)
 
 func testManifest() *extension.Manifest {
 	return &extension.Manifest{
-		Name:    "acme",
-		Version: "1.0.0",
-		I18n:    extension.ManifestI18n{Description: "Acme object store"},
+		Manifest: extmanifest.Manifest{Name: "acme", Version: "1.0.0"},
+		I18n:     extension.ManifestI18n{Description: "Acme object store"},
 		AssetTypes: []extension.AssetTypeDef{{
 			Type: "acme-store",
 			I18n: extension.I18nName{Name: "Acme"},

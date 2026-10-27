@@ -28,7 +28,7 @@ type invocation struct {
 	// reach is set for the calls of a database driver session: the reach path
 	// (tunnel, proxy chain, or direct) the host resolved for the session, gated by
 	// Plugin.confineReach — the asset's address, plus the addresses a database
-	// redirects to when the extension declares network.databaseRedirects — which
+	// redirects to when the extension declares network.assetRoute — which
 	// every TCP stream the guest opens takes.
 	reach *dbdriver.Transport
 	// tickets is set for the calls of a database driver session too: the only way

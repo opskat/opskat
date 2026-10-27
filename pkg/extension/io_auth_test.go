@@ -61,9 +61,9 @@ func (r *authRecorder) requests() []authSeen {
 func newAuthFixture(t *testing.T, endpoint, other, authType string) *Plugin {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = true
-	manifest.Capabilities.Tunnel = true
-	manifest.Capabilities.HTTP.Allowlist = []string{other + "/"}
+	manifest.Permissions.Network.AssetEndpoint = true
+	manifest.Permissions.Network.AllowPrivate = true
+	manifest.Permissions.Network.HTTP = []string{other + "/"}
 	inner := NewDefaultHostProvider(DefaultHostConfig{
 		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, map[string]any{
 			"endpoint": endpoint, "authType": authType, "username": "elastic", "password": "s3cret",
@@ -126,7 +126,7 @@ func TestAssetAuthInjection(t *testing.T) {
 
 		Convey("credentials that cannot be decrypted fail the request before it is sent", func() {
 			manifest := fixtureManifest(t)
-			manifest.Capabilities.Network.AssetEndpoint = true
+			manifest.Permissions.Network.AssetEndpoint = true
 			inner := NewDefaultHostProvider(DefaultHostConfig{AssetConfigs: undecryptable{assetConfigs{
 				fixtureAsset.ID: mustJSON(t, map[string]any{"endpoint": endpoint.URL, "authType": "basic", "username": "elastic", "password": "garbled"}),
 			}}})

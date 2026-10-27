@@ -29,6 +29,7 @@ import (
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/extstore_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -72,7 +73,7 @@ func newStoreWorld(t *testing.T, name, indexSHA string) *storeWorld {
 	// The store's package: the same stub at 2.0.0.
 	pkgDir := t.TempDir()
 	manifest := fmt.Sprintf(`{"name":%q,"version":"2.0.0","hostABI":%q,"backend":{"runtime":"wasm","binary":"main.wasm"}}`,
-		name, extension.HostABIVersion)
+		name, extmanifest.HostABIVersion)
 	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "manifest.json"), []byte(manifest), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "main.wasm"), stubWASM, 0o600))
 	pkg := zipDir(t, pkgDir)
@@ -103,9 +104,9 @@ func newStoreWorld(t *testing.T, name, indexSHA string) *storeWorld {
 	raw, err := json.Marshal(map[string]any{"format": extstore.FormatVersion, "extensions": []any{map[string]any{
 		"name": name, "display": map[string]any{"en": map[string]any{"name": "Stub"}},
 		"versions": []any{map[string]any{
-			"version": "2.0.0", "hostABI": extension.HostABIVersion, "size": len(pkg),
-			"capabilities": map[string]any{},
-			"source":       map[string]any{"ref": "ghcr.io/opskat/extensions/" + name + ":2.0.0", "sha256": indexSHA},
+			"version": "2.0.0", "hostABI": extmanifest.HostABIVersion, "size": len(pkg),
+			"permissions": map[string]any{},
+			"source":      map[string]any{"ref": "ghcr.io/opskat/extensions/" + name + ":2.0.0", "sha256": indexSHA},
 		}},
 	}}})
 	require.NoError(t, err)

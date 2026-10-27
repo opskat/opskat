@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -283,34 +281,6 @@ func openTLS(t *testing.T, s dbdriver.Session) *dbdriver.TLSMaterial {
 	var seen *dbdriver.TLSMaterial
 	require.NoError(t, json.Unmarshal([]byte(res.Rows.Rows[0][0].(string)), &seen))
 	return seen
-}
-
-// The certificate field group is a host ABI 2.4 capability: the fixture driver
-// declares it, so the same extension on hostABI 2.3 is refused at load, naming
-// the driver and the reason.
-func TestExtensionDriverCertificateGroupNeedsHostABI24(t *testing.T) {
-	root := t.TempDir()
-	dir := extensiontest.InstallDBDriverFixture(t, root)
-	path := filepath.Join(dir, "manifest.json")
-	raw, err := os.ReadFile(path) //nolint:gosec // this test's own temp dir
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	m["hostABI"] = "2.3"
-	delete(m["capabilities"].(map[string]any), "databaseKerberos")
-	raw, err = json.Marshal(m)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, raw, 0o600))
-
-	mgr := extension.NewManager(root, func(string) extension.HostProvider {
-		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, zap.NewNop())
-	t.Cleanup(func() { mgr.Close(context.Background()) })
-	_, err = mgr.LoadExtension(context.Background(), dir)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), extensiontest.DBDriverFixtureDriver)
-	assert.Contains(t, err.Error(), string(dbdriver.FieldTLSCert))
-	assert.Contains(t, err.Error(), extension.DatabaseExtrasMinHostABI)
 }
 
 // fakeTickets is a Kerberos ticket source as the caller of Open supplies it: it

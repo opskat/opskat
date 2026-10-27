@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -408,18 +409,18 @@ func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
 	return info.Version, true
 }
 
-// InstalledExtensionCapabilities returns the capabilities the installed
-// extension named name declares, the zero value when it is not installed.
-// `opsctl ext dev` compares them with the incoming manifest to mark what an
-// overwrite newly adds.
-func InstalledExtensionCapabilities(e *Extension, name string) extension.Capabilities {
+// InstalledExtensionManifest returns the manifest.json contract (permissions and
+// driver ids) of the installed extension named name, the zero value when it is
+// not installed. `opsctl ext dev` compares it with the incoming manifest to mark
+// what an overwrite newly adds.
+func InstalledExtensionManifest(e *Extension, name string) extmanifest.Manifest {
 	if e.service == nil {
-		return extension.Capabilities{}
+		return extmanifest.Manifest{}
 	}
 	info, err := e.service.GetDetail(name, e.lang.Lang())
 	if err != nil {
 		// GetDetail's only failure is "not installed".
-		return extension.Capabilities{}
+		return extmanifest.Manifest{}
 	}
-	return info.Manifest.Capabilities
+	return info.Manifest.Manifest
 }

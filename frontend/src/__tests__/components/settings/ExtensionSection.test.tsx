@@ -11,7 +11,7 @@ function installed(name: string, credentials: string) {
     displayName: name,
     description: "",
     enabled: true,
-    manifest: { name, version: "1.0.0", capabilities: { credentials } },
+    manifest: { name, version: "1.0.0", permissions: { credentials } },
   };
 }
 

@@ -158,7 +158,7 @@ func (f *fakeAssetDialer) dialed() ([]int64, []string) {
 func newDialFixture(t *testing.T, dialer AssetDialer, config map[string]any) (*Plugin, *Manifest) {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = true
+	manifest.Permissions.Network.AssetEndpoint = true
 	inner := NewDefaultHostProvider(DefaultHostConfig{
 		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, config)},
 		AssetDialer:  dialer,
@@ -220,8 +220,8 @@ func TestAssetConnectionPath(t *testing.T) {
 			defer direct.Close()
 			dialer := &fakeAssetDialer{farSide: server.Listener.Addr().String()}
 			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": esURL})
-			m.Capabilities.HTTP.Allowlist = []string{direct.URL + "/"}
-			m.Capabilities.Tunnel = true // the allowlisted server is loopback
+			m.Permissions.Network.HTTP = []string{direct.URL + "/"}
+			m.Permissions.Network.AllowPrivate = true // the allowlisted server is loopback
 
 			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": direct.URL + "/"})
 

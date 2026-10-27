@@ -21,20 +21,25 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // writeVersionedExtension writes an extension source <parent>/<name> at version
-// with caps, and seeds its describe() answer (display name key + icon + locale).
-func writeVersionedExtension(t *testing.T, stub *describeCacheStub, parent, name, version string, caps map[string]any) string {
+// with perms and the database driver ids drivers, and seeds its describe() answer
+// (display name key + icon + locale).
+func writeVersionedExtension(t *testing.T, stub *describeCacheStub, parent, name, version string, perms map[string]any, drivers ...string) string {
 	t.Helper()
 	dir := filepath.Join(parent, name)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "locales"), 0o755))
 	manifest := map[string]any{
-		"name":         name,
-		"version":      version,
-		"hostABI":      extension.HostABIVersion,
-		"backend":      map[string]any{"runtime": "wasm", "binary": "main.wasm"},
-		"capabilities": caps,
+		"name":        name,
+		"version":     version,
+		"hostABI":     extmanifest.HostABIVersion,
+		"backend":     map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+		"permissions": perms,
+	}
+	if len(drivers) > 0 {
+		manifest["contributes"] = map[string]any{"databaseDrivers": drivers}
 	}
 	data, err := json.Marshal(manifest)
 	require.NoError(t, err)
@@ -136,14 +141,14 @@ func extDirEntries(t *testing.T, extDir string) []string {
 var langCtx = aictx.WithPolicyLang(context.Background(), "zh-CN")
 
 // A local directory install shows the confirm after staging — the package's
-// display name, icon and capabilities are known — and lands nothing until the
+// display name, icon and permissions are known — and lands nothing until the
 // user accepts. The service lock is not held while the user decides.
 func TestInstallConfirmBeforeCommit_Directory(t *testing.T) {
 	stub := installDescribeStub(t)
 	extDir := t.TempDir()
 	svc := newConfirmTestService(t, extDir)
 	src := writeVersionedExtension(t, stub, t.TempDir(), "ext-confirm", "1.2.0", map[string]any{
-		"http":        map[string]any{"allowlist": []string{"https://api.example.com/"}},
+		"network":     map[string]any{"http": []string{"https://api.example.com/"}},
 		"credentials": "read",
 	})
 
@@ -180,7 +185,7 @@ func TestInstallConfirmBeforeCommit_Directory(t *testing.T) {
 	assert.Equal(t, dirContentSize(t, src), got.Size)
 	assert.ElementsMatch(t, []CapabilityGrant{
 		{Kind: CapHTTP, Value: "https://api.example.com/"},
-		{Kind: CapCredentials, Value: extension.CredentialAccessRead},
+		{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead},
 	}, got.Capabilities)
 	assert.Empty(t, got.Added, "a fresh install has nothing to compare against")
 
@@ -211,15 +216,17 @@ func TestInstallConfirm_UpgradeAddedAndDowngrade(t *testing.T) {
 	stub := installDescribeStub(t)
 	extDir := t.TempDir()
 	svc := newConfirmTestService(t, extDir)
-	oldCaps := map[string]any{"http": map[string]any{"allowlist": []string{"https://a.example.com/"}}}
+	oldCaps := map[string]any{"network": map[string]any{"http": []string{"https://a.example.com/"}}}
 	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-up", "1.0.0", oldCaps), nil)
 	require.NoError(t, err)
 
 	newCaps := map[string]any{
-		"http":    map[string]any{"allowlist": []string{"https://a.example.com/", "https://b.example.com/"}},
-		"fs":      map[string]any{"read": []string{"/tmp/x"}},
-		"tunnel":  true,
-		"network": map[string]any{"assetEndpoint": true},
+		"fs": map[string]any{"read": []string{"/tmp/x"}},
+		"network": map[string]any{
+			"http":          []string{"https://a.example.com/", "https://b.example.com/"},
+			"allowPrivate":  true,
+			"assetEndpoint": true,
+		},
 	}
 	var up InstallConfirm
 	_, err = svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-up", "1.10.0", newCaps),
@@ -307,7 +314,7 @@ func TestInstallConfirm_IncompatibleNeverAsks(t *testing.T) {
 		t.Error("an incompatible package must not reach the confirm")
 		return nil
 	})
-	var inc *extension.IncompatibleError
+	var inc *extmanifest.IncompatibleError
 	require.True(t, errors.As(err, &inc))
 }
 
@@ -316,8 +323,7 @@ func TestInstallConfirm_IncompatibleNeverAsks(t *testing.T) {
 func TestNewInstallConfirm_DatabaseDriversAreGrantsAndUpgradeMarksNewOnes(t *testing.T) {
 	stub := installDescribeStub(t)
 	svc := newConfirmTestService(t, t.TempDir())
-	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-drv", "1.0.0",
-		map[string]any{"databaseDrivers": []string{"oracle"}})
+	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-drv", "1.0.0", nil, "oracle")
 	stub.put("ext-drv", map[string]any{
 		"icon": "database",
 		"i18n": map[string]any{"displayName": "ext.name", "description": "ext.name"},
@@ -333,7 +339,7 @@ func TestNewInstallConfirm_DatabaseDriversAreGrantsAndUpgradeMarksNewOnes(t *tes
 
 	c := svc.NewInstallConfirm(InstallCandidate{
 		Name: "ext-drv", Version: "1.1.0", Source: InstallSourceStore,
-		Capabilities: extension.Capabilities{DatabaseDrivers: []string{"oracle", "dm"}},
+		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"oracle", "dm"}},
 	})
 	assert.Equal(t, []CapabilityGrant{
 		{Kind: CapDatabaseDriver, Value: "oracle"},
@@ -353,18 +359,18 @@ func TestNewInstallConfirm_FromStoreCandidate(t *testing.T) {
 
 	c := svc.NewInstallConfirm(InstallCandidate{
 		Name: "ext-store", DisplayName: "Store Ext", Icon: "cloud", Version: "2.1.0",
-		Capabilities: extension.Capabilities{Credentials: extension.CredentialAccessRead},
-		Source:       InstallSourceStore, Size: 4096,
+		Permissions: extmanifest.Permissions{Credentials: extmanifest.CredentialAccessRead},
+		Source:      InstallSourceStore, Size: 4096,
 	})
 	assert.Equal(t, InstallConfirm{
 		Name: "ext-store", DisplayName: "Store Ext", Icon: "cloud", From: "2.0.0", To: "2.1.0",
 		Source: InstallSourceStore, Size: 4096,
-		Capabilities: []CapabilityGrant{{Kind: CapCredentials, Value: extension.CredentialAccessRead}},
-		Added:        []CapabilityGrant{{Kind: CapCredentials, Value: extension.CredentialAccessRead}},
+		Capabilities: []CapabilityGrant{{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead}},
+		Added:        []CapabilityGrant{{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead}},
 	}, c)
 }
 
-func TestNewInstallConfirm_DatabaseRedirectsIsGrantAndUpgradeMarksIt(t *testing.T) {
+func TestNewInstallConfirm_AssetRouteIsGrantAndUpgradeMarksIt(t *testing.T) {
 	stub := installDescribeStub(t)
 	svc := newConfirmTestService(t, t.TempDir())
 	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-redir", "1.0.0", map[string]any{})
@@ -373,16 +379,14 @@ func TestNewInstallConfirm_DatabaseRedirectsIsGrantAndUpgradeMarksIt(t *testing.
 
 	c := svc.NewInstallConfirm(InstallCandidate{
 		Name: "ext-redir", Version: "1.1.0", Source: InstallSourceStore,
-		Capabilities: extension.Capabilities{
-			DatabaseDrivers: []string{"d"},
-			Network:         extension.NetworkCapability{DatabaseRedirects: true},
-		},
+		Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetRoute: true}},
+		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"d"}},
 	})
 	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseRedirects})
 	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseRedirects})
 }
 
-func TestNewInstallConfirm_DatabaseKerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
+func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
 	stub := installDescribeStub(t)
 	svc := newConfirmTestService(t, t.TempDir())
 	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-krb", "1.0.0", map[string]any{})
@@ -391,7 +395,8 @@ func TestNewInstallConfirm_DatabaseKerberosIsGrantAndUpgradeMarksIt(t *testing.T
 
 	c := svc.NewInstallConfirm(InstallCandidate{
 		Name: "ext-krb", Version: "1.1.0", Source: InstallSourceStore,
-		Capabilities: extension.Capabilities{DatabaseDrivers: []string{"d"}, DatabaseKerberos: true},
+		Permissions: extmanifest.Permissions{Kerberos: true},
+		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"d"}},
 	})
 	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseKerberos})
 	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseKerberos})

@@ -2936,7 +2936,7 @@
       "unavailable": "Can't install",
       "installedVersion": "{{version}} installed",
       "reason": {
-        "hostABI": "Needs a newer OpsKat (hostABI {{hostABI}})",
+        "hostABI": "Built for hostABI {{hostABI}}; this OpsKat supports {{supported}}",
         "minAppVersion": "Needs OpsKat {{version}} or later",
         "source": "Needs a newer OpsKat to download this package"
       },
@@ -2984,7 +2984,7 @@
       "fsRead": "Reads local files",
       "fsWrite": "Writes local files",
       "http": "Internet access",
-      "tunnel": "Private network"
+      "allowPrivate": "Private network"
     },
     "installed": "Installed Extensions",
     "noExtensions": "No extensions installed",

@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -30,7 +32,7 @@ func (r *recordingHost) OpenIO(_ context.Context, _ *AssetRef, params IOOpenPara
 func TestCapHostTCPPassthrough(t *testing.T) {
 	Convey("Given a capHost wrapping a manifest with no capabilities", t, func() {
 		inner := &recordingHost{}
-		manifest := &Manifest{Name: "no-caps", Version: "1.0.0"}
+		manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "no-caps", Version: "1.0.0"}}
 		ch := NewCapabilityHost(inner, manifest, "/tmp/ext")
 
 		Convey("OpenIO(type=tcp) is not blocked and is delegated to the inner host", func() {
@@ -63,8 +65,11 @@ func (h *configHost) GetAssetConfig(int64) (json.RawMessage, error) { return h.c
 
 func endpointManifest(schemaProps map[string]any) *Manifest {
 	return &Manifest{
-		Name: "ep", Version: "1.0.0",
-		Capabilities: Capabilities{Network: NetworkCapability{AssetEndpoint: true}},
+		Manifest: extmanifest.Manifest{
+			Name:        "ep",
+			Version:     "1.0.0",
+			Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetEndpoint: true}},
+		},
 		AssetTypes: []AssetTypeDef{{
 			Type:         "ep",
 			ConfigSchema: map[string]any{"type": "object", "properties": schemaProps},
@@ -166,7 +171,7 @@ func TestCapHostAssetEndpointGate(t *testing.T) {
 		})
 
 		Convey("the static allowlist still admits its URLs, without private reach", func() {
-			manifest.Capabilities.HTTP.Allowlist = []string{"https://public.example.com/"}
+			manifest.Permissions.Network.HTTP = []string{"https://public.example.com/"}
 			So(open(IOOpenParams{Type: "http", URL: "https://public.example.com/x", AllowPrivate: true}), ShouldBeNil)
 			So(inner.lastParams.AllowPrivate, ShouldBeFalse)
 			So(inner.lastParams.RedirectGuard, ShouldBeNil)

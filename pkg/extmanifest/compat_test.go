@@ -1,4 +1,4 @@
-package extension
+package extmanifest
 
 import (
 	"archive/zip"
@@ -24,16 +24,18 @@ func TestCheckCompatible(t *testing.T) {
 		app           appversion.Info
 		reason        IncompatibleReason // zero = compatible
 	}{
-		{"supported abi, no min", "2.2", "", release, ""},
-		{"min equals app", "2.2", "1.5.0", release, ""},
-		{"min below app", "2.0", "1.4.9", release, ""},
+		{"supported abi, no min", "1.0", "", release, ""},
+		{"min equals app", "1.0", "1.5.0", release, ""},
+		{"min below app", "1.0", "1.4.9", release, ""},
 		{"unsupported abi", "9.0", "", release, ReasonHostABI},
+		{"nightly-era abi 2.0", "2.0", "", release, ReasonHostABI},
+		{"nightly-era abi 2.5", "2.5", "", nightly, ReasonHostABI},
 		{"unsupported abi on nightly", "9.0", "", nightly, ReasonHostABI},
 		{"unsupported abi on dev", "9.0", "", dev, ReasonHostABI},
-		{"release below min", "2.2", "1.6.0", release, ReasonMinAppVersion},
-		{"beta release below its own base", "2.2", "1.5.0", appversion.Info{Version: "1.5.0-beta.1", Kind: appversion.KindRelease}, ReasonMinAppVersion},
-		{"nightly ignores min", "2.2", "9.0.0", nightly, ""},
-		{"dev ignores min", "2.2", "9.0.0", dev, ""},
+		{"release below min", "1.0", "1.6.0", release, ReasonMinAppVersion},
+		{"beta release below its own base", "1.0", "1.5.0", appversion.Info{Version: "1.5.0-beta.1", Kind: appversion.KindRelease}, ReasonMinAppVersion},
+		{"nightly ignores min", "1.0", "9.0.0", nightly, ""},
+		{"dev ignores min", "1.0", "9.0.0", dev, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,11 +80,11 @@ func TestCheckSourceCompatible(t *testing.T) {
 	}
 	var inc *IncompatibleError
 	for name, src := range map[string]func([]byte) string{"dir": dir, "zip": zipOf} {
-		require.NoError(t, CheckSourceCompatible(src(manifest("2.2", "")), release), name)
+		require.NoError(t, CheckSourceCompatible(src(manifest("1.0", "")), release), name)
 		err := CheckSourceCompatible(src(manifest("3.0", "")), release)
 		require.True(t, errors.As(err, &inc), "%s: %v", name, err)
 		assert.Equal(t, ReasonHostABI, inc.Reason)
-		err = CheckSourceCompatible(src(manifest("2.2", "2.0.0")), release)
+		err = CheckSourceCompatible(src(manifest("1.0", "2.0.0")), release)
 		require.True(t, errors.As(err, &inc), "%s: %v", name, err)
 		assert.Equal(t, ReasonMinAppVersion, inc.Reason)
 	}

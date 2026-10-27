@@ -7,6 +7,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -24,9 +25,11 @@ var connectionPasswordSchema = map[string]any{
 
 func acmeManifest() *extension.Manifest {
 	return &extension.Manifest{
-		Name:         "acme",
-		AssetTypes:   []extension.AssetTypeDef{{Type: "acme-store", ConfigSchema: connectionPasswordSchema}},
-		Capabilities: extension.Capabilities{Credentials: extension.CredentialAccessRead},
+		Manifest: extmanifest.Manifest{
+			Name:        "acme",
+			Permissions: extmanifest.Permissions{Credentials: extmanifest.CredentialAccessRead},
+		},
+		AssetTypes: []extension.AssetTypeDef{{Type: "acme-store", ConfigSchema: connectionPasswordSchema}},
 	}
 }
 
@@ -123,9 +126,8 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 	Convey("Given an extension without credentials:read", t, func() {
 		svc, assets := newHostTestService(t)
 		manifest := &extension.Manifest{
-			Name:         "other",
-			AssetTypes:   []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema}},
-			Capabilities: extension.Capabilities{},
+			Manifest:   extmanifest.Manifest{Name: "other", Permissions: extmanifest.Permissions{}},
+			AssetTypes: []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema}},
 		}
 
 		Convey("the password field never reaches the guest, merged or not", func() {

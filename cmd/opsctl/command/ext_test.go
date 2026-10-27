@@ -31,6 +31,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // --- fixtures ----------------------------------------------------------------
@@ -94,7 +95,7 @@ func writeExtManifest(t *testing.T, stub *describeCacheStub, dir, name, assetTyp
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
-		"hostABI": extension.HostABIVersion,
+		"hostABI": extmanifest.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 	}
 	data, err := json.Marshal(manifest)

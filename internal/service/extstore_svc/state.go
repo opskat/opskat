@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -51,20 +51,21 @@ type Card struct {
 	Action           extstore.Action `json:"action"`
 	// Unavailable says why, for ActionUnavailable only.
 	Unavailable *Unavailable `json:"unavailable"`
-	// Capabilities and Size are those of the index entry for Version (zero
+	// Permissions and Size are those of the index entry for Version (zero
 	// when an installed version is not in the index).
-	Capabilities extension.Capabilities `json:"capabilities"`
-	Size         int64                  `json:"size"`
+	Permissions extmanifest.Permissions `json:"permissions"`
+	Size        int64                   `json:"size"`
 }
 
-// Unavailable is why no version can be installed; the remedy is always to
-// update OpsKat. HostABI / MinAppVersion / SourceType are what the newest
-// version needs, whichever the reason names.
+// Unavailable is why no version can be installed. HostABI / MinAppVersion /
+// SourceType are what the newest version needs, whichever the reason names;
+// SupportedHostABIs are the hostABIs this app runs, for ReasonHostABI.
 type Unavailable struct {
-	Reason        UnavailableReason `json:"reason"`
-	HostABI       string            `json:"hostABI"`
-	MinAppVersion string            `json:"minAppVersion"`
-	SourceType    string            `json:"sourceType"`
+	Reason            UnavailableReason `json:"reason"`
+	HostABI           string            `json:"hostABI"`
+	SupportedHostABIs []string          `json:"supportedHostABIs"`
+	MinAppVersion     string            `json:"minAppVersion"`
+	SourceType        string            `json:"sourceType"`
 }
 
 // State describes the store in lang (display names and descriptions follow lang,
@@ -119,7 +120,7 @@ func card(ext extstore.Extension, lang string, app appversion.Info, installed st
 		c.Unavailable = unavailable(reason)
 	}
 	if shown != nil {
-		c.Version, c.Capabilities, c.Size = shown.Version, shown.Capabilities, shown.Size
+		c.Version, c.Permissions, c.Size = shown.Version, shown.Permissions, shown.Size
 	}
 	return c
 }
@@ -173,13 +174,14 @@ func newest(ext extstore.Extension) *extstore.Version {
 }
 
 // unavailable maps SelectInstallable's reason, which is always an
-// *extstore.UnsupportedSourceError or an *extension.IncompatibleError.
+// *extstore.UnsupportedSourceError or an *extmanifest.IncompatibleError.
 func unavailable(reason error) *Unavailable {
 	var se *extstore.UnsupportedSourceError
 	if errors.As(reason, &se) {
 		return &Unavailable{Reason: ReasonSource, SourceType: se.Type}
 	}
-	var ie *extension.IncompatibleError
+	var ie *extmanifest.IncompatibleError
 	errors.As(reason, &ie)
-	return &Unavailable{Reason: UnavailableReason(ie.Reason), HostABI: ie.HostABI, MinAppVersion: ie.MinAppVersion}
+	return &Unavailable{Reason: UnavailableReason(ie.Reason), HostABI: ie.HostABI,
+		SupportedHostABIs: ie.SupportedHostABIs, MinAppVersion: ie.MinAppVersion}
 }

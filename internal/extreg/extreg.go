@@ -178,7 +178,7 @@ func registerLocked(l loaded, help, description string) ([]*extensionDriver, err
 	manifests[l.name] = m
 	logger.Default().Info("extension registered",
 		zap.String("extension", l.name), zap.Strings("assetTypes", done),
-		zap.Strings("databaseDrivers", m.Capabilities.DatabaseDrivers))
+		zap.Strings("databaseDrivers", m.Contributes.DatabaseDrivers))
 	return nil, nil
 }
 

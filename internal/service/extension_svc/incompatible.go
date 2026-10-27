@@ -5,18 +5,20 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/policy"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // IncompatibleMessage renders why an extension cannot be installed, in ctx's
-// language (aictx policy lang). The remedy is always the same, update OpsKat, so
-// the text names what to update to. Every install path that refuses an
+// language (aictx policy lang). A hostABI mismatch names the declared and the
+// supported versions — the extension may be older than this OpsKat (a nightly-era
+// 2.x build) as well as newer, so no single remedy fits; a minAppVersion one names
+// the OpsKat release to update to. Every install path that refuses an
 // incompatible extension — local, store, opsctl ext dev — says it with this.
-func IncompatibleMessage(ctx context.Context, e *extension.IncompatibleError) string {
-	if e.Reason == extension.ReasonHostABI {
+func IncompatibleMessage(ctx context.Context, e *extmanifest.IncompatibleError) string {
+	if e.Reason == extmanifest.ReasonHostABI {
 		return policy.PolicyFmt(ctx,
-			"This extension needs hostABI %s, but this OpsKat only supports %s. Update OpsKat to install it.",
-			"此扩展需要 hostABI %s，当前 OpsKat 仅支持 %s。请更新 OpsKat 后再安装。",
+			"This extension declares hostABI %s, but this OpsKat supports only %s, so it can't be installed. Use a version of the extension built for this OpsKat.",
+			"此扩展声明 hostABI %s，当前 OpsKat 仅支持 %s，无法安装。请改用适配当前 OpsKat 的扩展版本。",
 			e.HostABI, strings.Join(e.SupportedHostABIs, policy.PolicyMsg(ctx, ", ", "、")))
 	}
 	return policy.PolicyFmt(ctx,
@@ -27,7 +29,7 @@ func IncompatibleMessage(ctx context.Context, e *extension.IncompatibleError) st
 
 // LocalizeIncompatible is e with IncompatibleMessage as its message; errors.As
 // still finds e.
-func LocalizeIncompatible(ctx context.Context, e *extension.IncompatibleError) error {
+func LocalizeIncompatible(ctx context.Context, e *extmanifest.IncompatibleError) error {
 	return &localizedError{msg: IncompatibleMessage(ctx, e), err: e}
 }
 

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -57,7 +59,7 @@ func TestDecodePolicyDecision(t *testing.T) {
 	})
 }
 
-// HOST_UI_VERSION in the frontend is hand-kept in step with HostABIVersion (no
+// HOST_UI_VERSION in the frontend is hand-kept in step with extmanifest.HostABIVersion (no
 // generated Go→TS binding exists for a constant); two independent sources of the
 // same contract version.
 func TestHostUIVersionMirrorsHostABI(t *testing.T) {
@@ -69,7 +71,7 @@ func TestHostUIVersionMirrorsHostABI(t *testing.T) {
 	if m == nil {
 		t.Fatal("HOST_UI_VERSION not found in frontend/src/extension/inject.ts")
 	}
-	if got := string(m[1]); got != HostABIVersion {
-		t.Fatalf("frontend HOST_UI_VERSION = %q, HostABIVersion = %q: bump both together", got, HostABIVersion)
+	if got := string(m[1]); got != extmanifest.HostABIVersion {
+		t.Fatalf("frontend HOST_UI_VERSION = %q, extmanifest.HostABIVersion = %q: bump both together", got, extmanifest.HostABIVersion)
 	}
 }

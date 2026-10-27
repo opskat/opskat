@@ -22,6 +22,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // driverDescriptor is a driver an extension provides in these tests.
@@ -38,9 +39,9 @@ func driverDescriptor(id string, aliases ...string) dbdriver.Descriptor {
 // driverOnlyManifest is the merged manifest of an extension that provides drivers
 // and nothing else: no asset type, no policy type.
 func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *extension.Manifest {
-	m := &extension.Manifest{Name: name, Version: "1.0.0", DatabaseDrivers: drivers}
+	m := &extension.Manifest{Manifest: extmanifest.Manifest{Name: name, Version: "1.0.0"}, DatabaseDrivers: drivers}
 	for _, d := range drivers {
-		m.Capabilities.DatabaseDrivers = append(m.Capabilities.DatabaseDrivers, string(d.ID))
+		m.Contributes.DatabaseDrivers = append(m.Contributes.DatabaseDrivers, string(d.ID))
 	}
 	return m
 }
@@ -158,7 +159,7 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 		dbdrivertest.Register(t, dbdrivertest.NewFake()) // stands in for a built-in: fakedb, alias fake
 		m := testManifest()
 		m.DatabaseDrivers = []dbdriver.Descriptor{driverDescriptor("acmedb", "fake")}
-		m.Capabilities.DatabaseDrivers = []string{"acmedb"}
+		m.Contributes.DatabaseDrivers = []string{"acmedb"}
 
 		var err error
 		require.NotPanics(t, func() { err = registerManifest(t, m, newFakeDriverPlugin()) })
@@ -533,7 +534,7 @@ func kerberosDescriptor(id string) dbdriver.Descriptor {
 // Password authentication still needs it.
 func TestExtensionDriverKerberosAssetMayLeaveTheUsernameEmpty(t *testing.T) {
 	m := driverOnlyManifest("krb-db", kerberosDescriptor("krbdb"))
-	m.Capabilities.DatabaseKerberos = true
+	m.Permissions.Kerberos = true
 	require.NoError(t, registerManifest(t, m, newFakeDriverPlugin()))
 
 	asset := func(cfg *asset_entity.DatabaseConfig) *asset_entity.Asset {

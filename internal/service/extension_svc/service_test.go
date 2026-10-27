@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -121,7 +122,7 @@ func writeSlimManifest(dir, name string) {
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
-		"hostABI": extension.HostABIVersion,
+		"hostABI": extmanifest.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 	}
 	data, _ := json.Marshal(manifest)

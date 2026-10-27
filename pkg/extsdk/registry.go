@@ -266,9 +266,7 @@ func (r *ToolReg[T]) PolicyFunc(actions []string, fn func(args T) (action, resou
 // about otherwise. Zero resources is judged like PolicyFunc's empty resource.
 //
 // actions is the set fn can return, as for PolicyFunc. The reply is
-// {"action","resources"}, which only a host speaking hostABI 2.2 understands — an
-// extension using PolicyResources must declare hostABI "2.2" so an older app
-// refuses it instead of judging the call on no resource at all.
+// {"action","resources"}.
 func (r *ToolReg[T]) PolicyResources(actions []string, fn func(args T) (action string, resources []string)) *ToolReg[T] {
 	r.setClassify("PolicyResources", actions, true, fn)
 	return r
@@ -310,9 +308,8 @@ func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource 
 // as they always have.
 //
 // Reserve it for arguments that are wrong whatever the user's rules say; what a
-// user may or may not do is the policy's to decide. The {"reject"} reply is part
-// of hostABI 2.2: an extension using RejectArgs must declare "2.2", like
-// PolicyResources. It panics when the tool already declares one.
+// user may or may not do is the policy's to decide. It panics when the tool
+// already declares one.
 func (r *ToolReg[T]) RejectArgs(fn func(args T) error) *ToolReg[T] {
 	if r.e.reject != nil {
 		panic(fmt.Sprintf("opskat: tool %q already declares RejectArgs", r.e.name))

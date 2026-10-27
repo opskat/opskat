@@ -51,7 +51,7 @@ var fixtureAsset = &AssetRef{ID: 1, Name: "fixture-1", Type: "fixture"}
 func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any) *Plugin {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = assetEndpoint
+	manifest.Permissions.Network.AssetEndpoint = assetEndpoint
 	inner := NewDefaultHostProvider(DefaultHostConfig{
 		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, config)},
 	})
@@ -187,9 +187,9 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			// an endpoint request, so whatever client serves it must not be the one
 			// the endpoint's later requests reuse.
 			manifest := fixtureManifest(t)
-			manifest.Capabilities.Network.AssetEndpoint = true
-			manifest.Capabilities.HTTP.Allowlist = []string{other.URL + "/"}
-			manifest.Capabilities.Tunnel = true // the allowlisted server is loopback
+			manifest.Permissions.Network.AssetEndpoint = true
+			manifest.Permissions.Network.HTTP = []string{other.URL + "/"}
+			manifest.Permissions.Network.AllowPrivate = true // the allowlisted server is loopback
 			p := loadDescribedFixture(t, manifest, NewDefaultHostProvider(DefaultHostConfig{
 				AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, httpConfig)},
 			}))
@@ -209,7 +209,7 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			Convey("the endpoint URL is refused by the allowlist", func() {
 				_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), fixtureAsset)
 				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "not in capabilities.http.allowlist")
+				So(err.Error(), ShouldContainSubstring, "not in permissions.network.http")
 			})
 
 			Convey("TCP stays ungated", func() {

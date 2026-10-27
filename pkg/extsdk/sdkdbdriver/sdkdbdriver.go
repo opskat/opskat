@@ -54,8 +54,8 @@ type StatementClassifier func(ctx context.Context, sql string) ([]dbdriver.State
 type DriverOption func(*driverEntry)
 
 // WithStatementClassifier gives the driver its own statement splitting and
-// classification. The descriptor must declare dbdriver.CapClassifyStatements
-// (hostABI 2.5), and a descriptor that declares it must come with this option.
+// classification. The descriptor must declare dbdriver.CapClassifyStatements,
+// and a descriptor that declares it must come with this option.
 func WithStatementClassifier(classify StatementClassifier) DriverOption {
 	return func(e *driverEntry) { e.classify = classify }
 }
@@ -68,8 +68,8 @@ type driverEntry struct {
 
 // DatabaseDriver declares a SQL database driver this extension provides: the
 // descriptor describe() reports for it, and how a session of it is opened. The
-// driver id must also be listed in the manifest's capabilities.databaseDrivers,
-// which needs hostABI 2.3; the host refuses to load an extension whose two lists
+// driver id must also be listed in the manifest's contributes.databaseDrivers;
+// the host refuses to load an extension whose two lists
 // differ. The driver's icon is the extension's (Meta.Icon), not the descriptor's.
 //
 // The dialect decides which session operations exist (see sqldb.NewSession and

@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // emitted is one event the binder sent to the frontend.
@@ -204,7 +205,7 @@ func writeStubExtension(t *testing.T, name string) (string, describeStub) {
 	dir := filepath.Join(t.TempDir(), name)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	manifest := fmt.Sprintf(`{"name":%q,"version":"1.0.0","hostABI":%q,"backend":{"runtime":"wasm","binary":"main.wasm"}}`,
-		name, extension.HostABIVersion)
+		name, extmanifest.HostABIVersion)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), stubWASM, 0o600))
 	desc := fmt.Sprintf(`{"i18n":{"displayName":%q},"assetTypes":[{"type":%q,"i18n":{"name":%q},`+

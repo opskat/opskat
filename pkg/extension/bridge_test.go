@@ -3,6 +3,8 @@ package extension
 import (
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -13,8 +15,7 @@ func TestBridge(t *testing.T) {
 		ext := &Extension{
 			Name: "oss",
 			Manifest: &Manifest{
-				Name:       "oss",
-				Version:    "1.0.0",
+				Manifest:   extmanifest.Manifest{Name: "oss", Version: "1.0.0"},
 				AssetTypes: []AssetTypeDef{{Type: "oss", I18n: I18nName{Name: "assetType.oss.name"}}},
 				Policies:   PoliciesDef{Type: "ext:oss"},
 			},

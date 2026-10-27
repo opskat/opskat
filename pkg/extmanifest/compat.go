@@ -1,4 +1,4 @@
-package extension
+package extmanifest
 
 import (
 	"archive/zip"
@@ -24,8 +24,11 @@ const (
 )
 
 // IncompatibleError is returned when an extension cannot run on this app. It
-// carries the facts a caller needs to say so in the user's language: the user's
-// remedy is always "update OpsKat", plus what to update to.
+// carries the facts a caller needs to say so in the user's language: for
+// ReasonHostABI the hostABI the extension declares and the ones this app
+// supports (a 2.x extension predates the 1.0 reset, so the remedy is not
+// necessarily a newer OpsKat), for ReasonMinAppVersion the OpsKat release to
+// update to.
 type IncompatibleError struct {
 	Reason            IncompatibleReason
 	HostABI           string
@@ -37,7 +40,7 @@ type IncompatibleError struct {
 func (e *IncompatibleError) Error() string {
 	switch e.Reason {
 	case ReasonHostABI:
-		return fmt.Sprintf("extension needs hostABI %s, this OpsKat supports %s: update OpsKat",
+		return fmt.Sprintf("extension declares hostABI %s, this OpsKat supports only %s",
 			e.HostABI, strings.Join(e.SupportedHostABIs, ", "))
 	default:
 		return fmt.Sprintf("extension needs OpsKat %s or newer, this is %s: update OpsKat",

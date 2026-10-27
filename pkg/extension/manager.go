@@ -370,7 +370,7 @@ func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Ex
 	}
 
 	host := m.newHost(manifest.Name)
-	host = NewCapabilityHost(host, manifest, extDir) // enforce capabilities declared in manifest
+	host = NewCapabilityHost(host, manifest, extDir) // enforce permissions declared in manifest
 	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host, m.wasmCache)
 	if err != nil {
 		return nil, pendingDescriptor{}, fmt.Errorf("load plugin: %w", err)

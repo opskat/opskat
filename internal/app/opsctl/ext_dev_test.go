@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // recordingDevInstaller stands in for extension_svc.Install. It reads the
@@ -23,8 +24,8 @@ import (
 type recordingDevInstaller struct {
 	installs  []string // directories handed to InstallExtensionDir
 	installed map[string]string
-	caps      map[string]extension.Capabilities // capabilities declared by the installed version
-	manifest  *extension.Manifest               // manifest read from the last installed directory
+	contracts map[string]extmanifest.Manifest // manifest.json contract of the installed version
+	manifest  *extension.Manifest             // manifest read from the last installed directory
 	err       error
 }
 
@@ -33,8 +34,8 @@ func (i *recordingDevInstaller) InstalledExtensionVersion(_ context.Context, nam
 	return v, ok
 }
 
-func (i *recordingDevInstaller) InstalledExtensionCapabilities(_ context.Context, name string) extension.Capabilities {
-	return i.caps[name]
+func (i *recordingDevInstaller) InstalledExtensionManifest(_ context.Context, name string) extmanifest.Manifest {
+	return i.contracts[name]
 }
 
 func (i *recordingDevInstaller) InstallExtensionDir(_ context.Context, sourceDir string) (string, string, error) {
@@ -85,9 +86,9 @@ func newDevOpsctl(installer ExtDevInstaller, approver *recordingApprover) *Opsct
 const devManifest = `{
   "name": %q,
   "version": "1.2.3",
-  "hostABI": "2.0",
+  "hostABI": "1.0",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
-  "capabilities": {"credentials": %q, "http": {"allowlist": ["https://api.example.com/"]}}
+  "permissions": {"credentials": %q, "network": {"http": ["https://api.example.com/"]}}
 }`
 
 func writeDevExtension(t *testing.T, dir, name, credentials string) {
@@ -171,8 +172,8 @@ func TestHandleExtDevInstallInstallsTheApprovedSnapshot(t *testing.T) {
 
 	require.True(t, resp.Approved, resp.Reason)
 	require.NotNil(t, installer.manifest)
-	require.Empty(t, installer.manifest.Capabilities.Credentials,
-		"a capability added after approval must not be installed")
+	require.Empty(t, installer.manifest.Permissions.Credentials,
+		"a permission added after approval must not be installed")
 }
 
 // Re-running `opsctl ext dev <dir>` after each build is the hot-reload loop, so an
@@ -283,9 +284,9 @@ func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
 	require.NotContains(t, approver.prompts[0].Detail, "network.assetEndpoint")
 
 	manifest := `{
-  "name": "oss", "version": "1.2.3", "hostABI": "2.0",
+  "name": "oss", "version": "1.2.3", "hostABI": "1.0",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
-  "capabilities": {"credentials": "", "http": {"allowlist": ["https://api.example.com/"]}, "network": {"assetEndpoint": true}}
+  "permissions": {"credentials": "", "network": {"http": ["https://api.example.com/"], "assetEndpoint": true}}
 }`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
@@ -294,15 +295,15 @@ func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
 	require.Contains(t, approver.prompts[1].Detail, "network.assetEndpoint: true")
 }
 
-// A dev extension declaring a hostABI newer than this runtime supports (e.g. one
-// built against a future host-ui revision) is refused at the same install gate a
-// stale 1.x extension already is — not installed silently with hostUI missing.
-func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
+// A dev extension declaring a hostABI this runtime does not support (a future
+// revision, or a nightly-era 2.x build) is refused at the install gate — not
+// installed silently.
+func TestHandleExtDevInstallRefusesUnsupportedHostABI(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := t.TempDir()
 	manifest := `{
-  "name": "oss", "version": "1.2.3", "hostABI": "2.6",
+  "name": "oss", "version": "1.2.3", "hostABI": "2.5",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
   "capabilities": {}
 }`
@@ -312,7 +313,8 @@ func TestHandleExtDevInstallRefusesNewerHostABI(t *testing.T) {
 	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
 
 	require.False(t, resp.Approved)
-	require.Contains(t, resp.Reason, "hostABI")
+	require.Contains(t, resp.Reason, "hostABI 2.5")
+	require.Contains(t, resp.Reason, "1.0")
 	require.Empty(t, approver.prompts, "a rejected manifest must not reach the approval prompt")
 }
 
@@ -334,7 +336,7 @@ func TestHandleExtDevInstallLeadsWithCredentialsReadWarning(t *testing.T) {
 }
 
 // A build the app cannot run is refused before the user is even asked, and the
-// reason says to update OpsKat and what to update to.
+// reason names what it needs.
 func TestHandleExtDevInstallRejectsIncompatibleExtension(t *testing.T) {
 	prev := currentApp
 	currentApp = func() appversion.Info { return appversion.Info{Version: "1.5.0", Kind: appversion.KindRelease} }
@@ -342,7 +344,7 @@ func TestHandleExtDevInstallRejectsIncompatibleExtension(t *testing.T) {
 
 	cases := map[string]struct{ manifest, want string }{
 		"hostABI":       {`{"name":"oss","version":"1.0.0","hostABI":"9.0"}`, "hostABI 9.0"},
-		"minAppVersion": {`{"name":"oss","version":"1.0.0","hostABI":"2.2","minAppVersion":"2.0.0"}`, "2.0.0"},
+		"minAppVersion": {`{"name":"oss","version":"1.0.0","hostABI":"1.0","minAppVersion":"2.0.0"}`, "Update OpsKat"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -355,7 +357,6 @@ func TestHandleExtDevInstallRejectsIncompatibleExtension(t *testing.T) {
 			resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
 
 			require.False(t, resp.Approved)
-			require.Contains(t, resp.Reason, "Update OpsKat")
 			require.Contains(t, resp.Reason, tc.want)
 			require.Empty(t, approver.prompts, "an incompatible build must be refused before asking the user")
 			require.Empty(t, installer.installs)
@@ -371,7 +372,7 @@ func TestHandleExtDevInstallIgnoresMinAppVersionOnDevBuild(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := t.TempDir()
-	manifest := `{"name":"oss","version":"1.0.0","hostABI":"2.0","minAppVersion":"9.0.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`
+	manifest := `{"name":"oss","version":"1.0.0","hostABI":"1.0","minAppVersion":"9.0.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 
 	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
@@ -387,9 +388,9 @@ func writeDriverExtension(t *testing.T, name string, ids ...string) string {
 	for i, id := range ids {
 		quoted[i] = fmt.Sprintf("%q", id)
 	}
-	manifest := fmt.Sprintf(`{"name": %q, "version": "1.1.0", "hostABI": "2.3",
+	manifest := fmt.Sprintf(`{"name": %q, "version": "1.1.0", "hostABI": "1.0",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
-  "capabilities": {"databaseDrivers": [%s]}}`, name, strings.Join(quoted, ","))
+  "contributes": {"databaseDrivers": [%s]}}`, name, strings.Join(quoted, ","))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
 	return dir
@@ -410,7 +411,7 @@ func TestHandleExtDevInstallListsDatabaseDriversWithPlaintextWarning(t *testing.
 	require.Contains(t, first, "plaintext")
 	require.Contains(t, first, "TLS client private key")
 	require.Contains(t, detail, "databaseDrivers: vmysql, vmaria")
-	require.NotContains(t, detail, "capabilities: none")
+	require.NotContains(t, detail, "permissions: none")
 	require.NotContains(t, detail, "(new)")
 }
 
@@ -418,7 +419,7 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	installer := &recordingDevInstaller{
 		installed: map[string]string{"vmysql": "1.0.0"},
-		caps:      map[string]extension.Capabilities{"vmysql": {DatabaseDrivers: []string{"vmysql"}}},
+		contracts: map[string]extmanifest.Manifest{"vmysql": {Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"vmysql"}}}},
 	}
 	o := newDevOpsctl(installer, approver)
 
@@ -432,21 +433,22 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 // An extension that provides no driver gets exactly the dialog it always had.
 func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 	approver := &recordingApprover{approve: true}
-	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, caps: map[string]extension.Capabilities{"oss": {DatabaseDrivers: []string{"gone"}}}}
+	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"},
+		contracts: map[string]extmanifest.Manifest{"oss": {Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"gone"}}}}}
 	o := newDevOpsctl(installer, approver)
 
 	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
 
-	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\ncapabilities:\n  http: https://api.example.com/",
+	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\npermissions:\n  network.http: https://api.example.com/",
 		approver.prompts[0].Detail)
 }
 
 func writeRedirectExtension(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vredir","version":"1.1.0","hostABI":"2.4",
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vredir","version":"1.1.0","hostABI":"1.0",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
-  "capabilities": {"databaseDrivers": ["vredir"], "network": {"databaseRedirects": true}}}`), 0o600))
+  "permissions": {"network": {"assetRoute": true}}, "contributes": {"databaseDrivers": ["vredir"]}}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
 	return dir
 }
@@ -454,69 +456,74 @@ func writeRedirectExtension(t *testing.T) string {
 func writeKerberosExtension(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vkrb","version":"1.1.0","hostABI":"2.5",
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"vkrb","version":"1.1.0","hostABI":"1.0",
   "backend": {"runtime": "wasm", "binary": "main.wasm"},
-  "capabilities": {"databaseDrivers": ["vkrb"], "databaseKerberos": true}}`), 0o600))
+  "permissions": {"kerberos": true}, "contributes": {"databaseDrivers": ["vkrb"]}}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
 	return dir
 }
 
-func TestHandleExtDevInstallDatabaseKerberosNewMark(t *testing.T) {
-	declared := extension.Capabilities{DatabaseDrivers: []string{"vkrb"}, DatabaseKerberos: true}
-	undeclared := extension.Capabilities{DatabaseDrivers: []string{"vkrb"}}
+func TestHandleExtDevInstallKerberosNewMark(t *testing.T) {
+	drivers := extmanifest.Contributes{DatabaseDrivers: []string{"vkrb"}}
+	declared := extmanifest.Manifest{Permissions: extmanifest.Permissions{Kerberos: true}, Contributes: drivers}
+	undeclared := extmanifest.Manifest{Contributes: drivers}
 	cases := []struct {
 		name      string
 		installed map[string]string
-		caps      map[string]extension.Capabilities
+		contracts map[string]extmanifest.Manifest
 		marked    bool
 	}{
-		{"added by overwrite", map[string]string{"vkrb": "1.0.0"}, map[string]extension.Capabilities{"vkrb": undeclared}, true},
-		{"already declared", map[string]string{"vkrb": "1.0.0"}, map[string]extension.Capabilities{"vkrb": declared}, false},
+		{"added by overwrite", map[string]string{"vkrb": "1.0.0"}, map[string]extmanifest.Manifest{"vkrb": undeclared}, true},
+		{"already declared", map[string]string{"vkrb": "1.0.0"}, map[string]extmanifest.Manifest{"vkrb": declared}, false},
 		{"fresh install", nil, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
-			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, caps: tc.caps}, approver)
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, contracts: tc.contracts}, approver)
 			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
-			require.Contains(t, detail, "databaseKerberos: true")
+			require.Contains(t, detail, "kerberos: true")
 			require.Contains(t, detail, "the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
 			if tc.marked {
-				require.Contains(t, detail, "databaseKerberos: true (new)")
+				require.Contains(t, detail, "kerberos: true (new)")
 			} else {
-				require.NotContains(t, detail, "databaseKerberos: true (new)")
+				require.NotContains(t, detail, "kerberos: true (new)")
 			}
 		})
 	}
 }
 
-func TestHandleExtDevInstallDatabaseRedirectsNewMark(t *testing.T) {
-	declared := extension.Capabilities{DatabaseDrivers: []string{"vredir"}, Network: extension.NetworkCapability{DatabaseRedirects: true}}
-	undeclared := extension.Capabilities{DatabaseDrivers: []string{"vredir"}}
+func TestHandleExtDevInstallAssetRouteNewMark(t *testing.T) {
+	drivers := extmanifest.Contributes{DatabaseDrivers: []string{"vredir"}}
+	declared := extmanifest.Manifest{
+		Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetRoute: true}},
+		Contributes: drivers,
+	}
+	undeclared := extmanifest.Manifest{Contributes: drivers}
 	cases := []struct {
 		name      string
 		installed map[string]string
-		caps      map[string]extension.Capabilities
+		contracts map[string]extmanifest.Manifest
 		marked    bool
 	}{
-		{"added by overwrite", map[string]string{"vredir": "1.0.0"}, map[string]extension.Capabilities{"vredir": undeclared}, true},
-		{"already declared", map[string]string{"vredir": "1.0.0"}, map[string]extension.Capabilities{"vredir": declared}, false},
+		{"added by overwrite", map[string]string{"vredir": "1.0.0"}, map[string]extmanifest.Manifest{"vredir": undeclared}, true},
+		{"already declared", map[string]string{"vredir": "1.0.0"}, map[string]extmanifest.Manifest{"vredir": declared}, false},
 		{"fresh install", nil, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
-			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, caps: tc.caps}, approver)
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, contracts: tc.contracts}, approver)
 			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
-			require.Contains(t, detail, "network.databaseRedirects: true")
+			require.Contains(t, detail, "network.assetRoute: true")
 			// 与桌面端确认一样说明这项能力的含义，而不只列出键。
 			require.Contains(t, detail, "the driver may connect to other addresses the database redirects to, through the asset's route")
 			if tc.marked {
-				require.Contains(t, detail, "network.databaseRedirects: true (new)")
+				require.Contains(t, detail, "network.assetRoute: true (new)")
 			} else {
-				require.NotContains(t, detail, "network.databaseRedirects: true (new)")
+				require.NotContains(t, detail, "network.assetRoute: true (new)")
 			}
 		})
 	}

@@ -23,16 +23,16 @@ const sampleIndex = `{
     "versions": [
       {
         "version": "1.0.0",
-        "hostABI": "2.2",
+        "hostABI": "1.0",
         "minAppVersion": "1.14.0",
-        "capabilities": {"http": {"allowlist": ["https://example.com/"]}, "network": {"assetEndpoint": true}},
+        "permissions": {"network": {"http": ["https://example.com/"], "assetEndpoint": true}},
         "size": 1024,
         "publishedAt": "2026-10-04T08:00:00Z",
         "source": {"type": "oci", "ref": "ghcr.io/opskat/extensions/es:1.0.0", "sha256": "abc123"}
       },
       {
         "version": "1.1.0",
-        "hostABI": "2.2",
+        "hostABI": "1.0",
         "size": 2048,
         "publishedAt": "2026-10-05T08:00:00Z",
         "source": {"ref": "ghcr.io/opskat/extensions/es:1.1.0", "sha256": "def456"}
@@ -54,10 +54,10 @@ func TestParseIndex(t *testing.T) {
 		require.Len(t, ext.Versions, 2)
 		v := ext.Versions[0]
 		assert.Equal(t, "1.0.0", v.Version)
-		assert.Equal(t, "2.2", v.HostABI)
+		assert.Equal(t, "1.0", v.HostABI)
 		assert.Equal(t, "1.14.0", v.MinAppVersion)
-		assert.Equal(t, []string{"https://example.com/"}, v.Capabilities.HTTP.Allowlist)
-		assert.True(t, v.Capabilities.Network.AssetEndpoint)
+		assert.Equal(t, []string{"https://example.com/"}, v.Permissions.Network.HTTP)
+		assert.True(t, v.Permissions.Network.AssetEndpoint)
 		assert.Equal(t, int64(1024), v.Size)
 		assert.True(t, v.PublishedAt.Equal(time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)))
 		assert.Equal(t, Source{Type: SourceOCI, Ref: "ghcr.io/opskat/extensions/es:1.0.0", SHA256: "abc123"}, v.Source)

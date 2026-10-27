@@ -58,7 +58,7 @@ func (c *capHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenPara
 		// Without network.assetEndpoint TCP stays ungated: it is reserved for
 		// first-party extensions (e.g. Kafka) that predate the capability. Do not
 		// treat that path as safe for third-party extensions.
-		if !c.manifest.Capabilities.Network.AssetEndpoint {
+		if !c.manifest.Permissions.Network.AssetEndpoint {
 			asset = nil
 			break
 		}
@@ -80,7 +80,7 @@ func (c *capHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenPara
 // static allowlist admits, with private reach only through a declared tunnel.
 // endpoint reports which of the two admitted it.
 func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool, err error) {
-	endpointScoped := c.manifest.Capabilities.Network.AssetEndpoint && asset != nil
+	endpointScoped := c.manifest.Permissions.Network.AssetEndpoint && asset != nil
 	if endpointScoped {
 		eps, err := c.assetEndpoints(asset)
 		if err != nil {
@@ -100,14 +100,14 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool
 			return true, nil
 		}
 	}
-	if err := c.manifest.CheckHTTPURL(params.URL, c.manifest.Capabilities.Tunnel); err != nil {
+	if err := c.manifest.CheckHTTPURL(params.URL, c.manifest.Permissions.Network.AllowPrivate); err != nil {
 		if endpointScoped {
 			return false, fmt.Errorf("http denied: target is not an endpoint of the asset %q, and %w", asset.Name, err)
 		}
 		return false, err
 	}
-	// Pass tunnel capability to dial-time guard.
-	params.AllowPrivate = c.manifest.Capabilities.Tunnel
+	// Pass the allowPrivate permission to the dial-time guard.
+	params.AllowPrivate = c.manifest.Permissions.Network.AllowPrivate
 	return false, nil
 }
 

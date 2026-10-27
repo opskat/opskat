@@ -60,7 +60,7 @@ import { ExtensionStore, InstallFailed, InstallProgress, type CardInstall, type 
 import { useStoreInstalls } from "./useStoreInstalls";
 import { syncExtensionUpdates, useExtensionUpdates } from "./extensionUpdates";
 import { Segmented } from "@/components/asset/fields";
-import type { ExtCapabilities } from "@/extension/types";
+import type { ExtPermissions } from "@/extension/types";
 
 interface ExtInfo {
   name: string;
@@ -70,7 +70,7 @@ interface ExtInfo {
   description: string;
   enabled: boolean;
   manifest?: {
-    capabilities?: ExtCapabilities;
+    permissions?: ExtPermissions;
     tools?: { name: string; i18n?: { description?: string } }[];
     policies?: {
       groups?: {
@@ -416,7 +416,7 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
   const policyGroups: { id: string; i18n?: { name?: string }; policy?: Record<string, string[]> }[] =
     manifest?.policies?.groups || [];
   const pages: { id: string; i18n?: { name?: string }; slot?: string }[] = manifest?.frontend?.pages || [];
-  const credentialsRead = ext.manifest?.capabilities?.credentials === "read";
+  const credentialsRead = ext.manifest?.permissions?.credentials === "read";
 
   return (
     <div className="space-y-4">

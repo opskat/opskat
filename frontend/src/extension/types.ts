@@ -13,15 +13,15 @@ export interface ExtManifest {
   minAppVersion?: string;
   i18n: { displayName: string; description: string };
   backend?: { runtime: string; binary: string };
-  capabilities?: ExtCapabilities;
+  permissions?: ExtPermissions;
   assetTypes?: ExtAssetType[];
   tools?: ExtToolDef[];
   policies?: ExtPolicies;
   frontend?: ExtFrontend;
 }
 
-/** The capability grants from manifest.json (the subset the frontend reads). */
-export interface ExtCapabilities {
+/** The permission grants from manifest.json (the subset the frontend reads). */
+export interface ExtPermissions {
   /** "read" hands the extension the plaintext of its assets' password fields. */
   credentials: string;
 }

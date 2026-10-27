@@ -2936,7 +2936,7 @@
       "unavailable": "无法安装",
       "installedVersion": "已装 {{version}}",
       "reason": {
-        "hostABI": "需要更新 OpsKat（需 hostABI {{hostABI}}）",
+        "hostABI": "该版本声明 hostABI {{hostABI}}，当前 OpsKat 仅支持 {{supported}}",
         "minAppVersion": "需要 OpsKat {{version}} 及以上版本",
         "source": "需要更新 OpsKat 才能下载此扩展包"
       },
@@ -2984,7 +2984,7 @@
       "fsRead": "读取本地文件",
       "fsWrite": "写入本地文件",
       "http": "访问网络",
-      "tunnel": "访问内网"
+      "allowPrivate": "访问内网"
     },
     "installed": "已安装扩展",
     "noExtensions": "未安装扩展",

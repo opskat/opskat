@@ -12,12 +12,11 @@ import { notifySuccess } from "../../../lib/notify";
 vi.mock("../../../lib/notify", () => ({ notifySuccess: vi.fn(), notifyCopied: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
 
-const caps = (over: Record<string, unknown> = {}) => ({
+const perms = (over: Record<string, unknown> = {}) => ({
   fs: { read: [], write: [] },
-  http: { allowlist: [] },
   credentials: "",
-  tunnel: false,
-  network: { assetEndpoint: false },
+  kerberos: false,
+  network: { http: [], allowPrivate: false, assetEndpoint: false, assetRoute: false },
   ...over,
 });
 
@@ -30,7 +29,7 @@ const card = (name: string, over: Record<string, unknown> = {}) => ({
   installedVersion: "",
   action: "install",
   unavailable: null,
-  capabilities: caps(),
+  permissions: perms(),
   size: 2048,
   ...over,
 });
@@ -56,14 +55,17 @@ const notLoaded = { updatedAt: 0, verified: false, error: null, extensions: [], 
 const sample = [
   card("es", {
     version: "0.2.0",
-    capabilities: caps({ credentials: "read", network: { assetEndpoint: true } }),
+    permissions: perms({
+      credentials: "read",
+      network: { http: [], allowPrivate: false, assetEndpoint: true, assetRoute: false },
+    }),
   }),
   card("kafka", { action: "update", version: "0.4.1", installedVersion: "0.1.0" }),
   card("notebook", { action: "installed", installedVersion: "1.0.0" }),
   card("pgdoctor", {
     action: "unavailable",
     version: "0.6.0",
-    unavailable: { reason: "hostABI", hostABI: "9.1", minAppVersion: "", sourceType: "" },
+    unavailable: { reason: "hostABI", hostABI: "2.5", supportedHostABIs: ["1.0"], minAppVersion: "", sourceType: "" },
   }),
 ];
 
@@ -153,7 +155,7 @@ describe("ExtensionStore", () => {
     expect(status).toHaveTextContent("extension.store.verified");
   });
 
-  it("each card shows name, version, description, capabilities, size and its status button", async () => {
+  it("each card shows name, version, description, permissions, size and its status button", async () => {
     serve(verified(sample));
     renderStore();
     await screen.findByTestId("ext-store-card-es");

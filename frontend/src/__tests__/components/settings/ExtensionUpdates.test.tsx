@@ -30,12 +30,11 @@ vi.mock("../../../components/settings/UpdateSection", () => ({ UpdateSection: ()
 vi.mock("../../../components/settings/SystemStatusSection", () => ({ SystemStatusSection: () => null }));
 vi.mock("../../../components/settings/ExternalEditSection", () => ({ ExternalEditSection: () => null }));
 
-const caps = {
+const perms = {
   fs: { read: [], write: [] },
-  http: { allowlist: [] },
   credentials: "",
-  tunnel: false,
-  network: { assetEndpoint: false },
+  kerberos: false,
+  network: { http: [], allowPrivate: false, assetEndpoint: false, assetRoute: false },
 };
 
 const card = (name: string, over: Record<string, unknown> = {}) => ({
@@ -47,7 +46,7 @@ const card = (name: string, over: Record<string, unknown> = {}) => ({
   installedVersion: "0.1.0",
   action: "update",
   unavailable: null,
-  capabilities: caps,
+  permissions: perms,
   size: 2048,
   ...over,
 });
@@ -67,7 +66,7 @@ const installedExt = (name: string, version = "0.1.0") => ({
   displayName: name,
   description: "",
   enabled: true,
-  manifest: { name, version, capabilities: {} },
+  manifest: { name, version, permissions: {} },
 });
 
 const landed = (name: string) => ({ name, version: "0.4.1", canceled: false, error: null });

@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -31,7 +32,7 @@ func connectionExt(name, assetType string, conn *extension.ConnectionDef) *exten
 	return &extension.Extension{
 		Name: name,
 		Manifest: &extension.Manifest{
-			Name:       name,
+			Manifest:   extmanifest.Manifest{Name: name},
 			AssetTypes: []extension.AssetTypeDef{{Type: assetType, ConfigSchema: endpointSchema, Connection: conn}},
 		},
 	}

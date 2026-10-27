@@ -159,7 +159,7 @@ func driverExtensionOf(asset *asset_entity.Asset) (extName string, driverID dbdr
 		return "", id, false, err
 	}
 	for _, ext := range scanned {
-		if slices.Contains(ext.info.Manifest.Capabilities.DatabaseDrivers, string(id)) {
+		if slices.Contains(ext.info.Manifest.Contributes.DatabaseDrivers, string(id)) {
 			return ext.info.Name, id, true, nil
 		}
 	}

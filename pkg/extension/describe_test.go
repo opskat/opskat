@@ -47,7 +47,7 @@ func newFixtureManager(t *testing.T, root string) *Manager {
 // this design: the fixture's manifest.json declares no tools, no asset types and no
 // policy face at all, and the extension still loads, registers and answers calls.
 func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
-	Convey("Given an extension whose manifest carries only capabilities", t, func() {
+	Convey("Given an extension whose manifest carries only permissions", t, func() {
 		ctx := context.Background()
 		root, extDir := installFixture(t)
 		mgr := newFixtureManager(t, root)
@@ -99,7 +99,7 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 }
 
 // TestLoadExtensionRefusesAModuleThatIsNotAReactor covers the other half of the
-// ABI gate: the manifest may claim hostABI 2.0, but a module that cannot answer
+// ABI gate: the manifest may claim hostABI 1.0, but a module that cannot answer
 // describe() is refused while loading rather than on the first tool call.
 func TestLoadExtensionRefusesAModuleThatIsNotAReactor(t *testing.T) {
 	Convey("An extension whose module is not a reactor fails to load", t, func() {

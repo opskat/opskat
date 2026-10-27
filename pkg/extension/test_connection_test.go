@@ -15,7 +15,7 @@ import (
 func newTestConnectionFixture(t *testing.T, dialer AssetDialer) *Plugin {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = true
+	manifest.Permissions.Network.AssetEndpoint = true
 	inner := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: dialer})
 	return loadDescribedFixture(t, manifest, inner)
 }
