@@ -142,7 +142,7 @@ func (s *Session) AlterTableStatements(ctx context.Context, database, table stri
 	if err != nil {
 		return nil, err
 	}
-	if err := columnFeatures(s.dialect).Check(req.Definitions()...); err != nil {
+	if err := columnFeatures(s.dialect).CheckAlter(req); err != nil {
 		return nil, err
 	}
 	if err := IndexEditing(s.dialect).CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {

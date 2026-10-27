@@ -196,9 +196,18 @@ func withColumnFeatures() *Fake {
 	return fake
 }
 
+// withNewTablesOnly 另声明自增只能在新表上设（同 SQLite）。
+func withNewTablesOnly() *Fake {
+	fake := withColumnFeatures()
+	fake.Desc.AutoIncrementNewTablesOnly = true
+	return fake
+}
+
 // 假驱动的列能力与它的声明一致：没声明时拒绝、声明了就接受，两种都通过一致性测试。
 func TestFakeDriverColumnFeaturesPassConformance(t *testing.T) {
-	for name, fake := range map[string]*Fake{"undeclared": withSchemaWrites(), "declared": withColumnFeatures()} {
+	for name, fake := range map[string]*Fake{
+		"undeclared": withSchemaWrites(), "declared": withColumnFeatures(), "new tables only": withNewTablesOnly(),
+	} {
 		t.Run(name, func(t *testing.T) {
 			Register(t, fake)
 			RunConformance(t, fake, FakeSessions(fake))

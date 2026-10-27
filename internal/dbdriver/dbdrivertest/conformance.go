@@ -883,8 +883,16 @@ func alterProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Ses
 	if desc.ExplicitDefaults {
 		added = append(added, defaultKindColumns(desc)...)
 	}
-	if desc.AutoIncrement {
+	if desc.AutoIncrement && !desc.AutoIncrementNewTablesOnly {
 		added = append(added, autoIncrementColumn(desc))
+	}
+	if desc.AutoIncrementNewTablesOnly {
+		// 自增只能在新表上设：已有表上新增的自增列要以 ErrUnsupported 拒绝，而不是写出一条执行必败的语句。
+		extended := req
+		extended.Columns = append(slices.Clone(req.Columns), asAlterColumns(autoIncrementColumn(desc))...)
+		if _, err := s.AlterTableStatements(ctx, database, table, extended); !errors.Is(err, dbdriver.ErrUnsupported) {
+			report("AlterTableStatements adding an auto-increment column: auto-increment is declared only on new tables, so it must be refused with ErrUnsupported, got: %v", err)
+		}
 	}
 	if len(added) > 0 {
 		extended := req

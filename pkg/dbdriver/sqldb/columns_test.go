@@ -259,6 +259,26 @@ func TestAlterTableWithoutColumnFeatures(t *testing.T) {
 	assert.Equal(t, []string{"SET DEFAULT name 'x'"}, result.Statements)
 }
 
+// newTablesOnlyDialect 只在新表上自增（同 SQLite）。
+type newTablesOnlyDialect struct{ designerAlterDialect }
+
+func (newTablesOnlyDialect) AutoIncrementsNewTablesOnly() bool { return true }
+
+// 自增只能在新表上设的方言：声明由同一个方言给出；改表时新增的列要自增，在读表之前以 ErrUnsupported 拒绝。
+func TestAlterTableRefusesAutoIncrementOnANewColumnForNewTablesOnly(t *testing.T) {
+	assert.True(t, AutoIncrementsNewTablesOnly(newTablesOnlyDialect{}))
+	assert.False(t, AutoIncrementsNewTablesOnly(designerAlterDialect{}))
+
+	reads := 0
+	session := newAlterSession(t, newTablesOnlyDialect{designerAlterDialect{alterer: alterer{reads: &reads}}})
+	_, err := session.AlterTableStatements(context.Background(), "db", "t", dbdriver.AlterTableRequest{
+		Columns: []dbdriver.AlterColumn{{Name: "seq", Type: "int", AutoIncrement: true}},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Contains(t, err.Error(), `"seq"`)
+	assert.Zero(t, reads, "在读表之前拒绝")
+}
+
 // 开启了列能力的方言：读出的列带方言判定的写法与自增现状，原样交回没有语句；改写法（值换成同样文本的
 // 表达式）是改动；已有列的自增不能改；新列可以自增。
 func TestAlterTableWithColumnFeatures(t *testing.T) {

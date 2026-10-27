@@ -42,8 +42,25 @@ func AutoIncrements(dialect Dialect) bool {
 	return ok
 }
 
+// NewTableAutoIncrementer 是开启了自增、但只能在新表上设的方言（如 SQLite：只有 INTEGER PRIMARY KEY
+// 自增，ADD COLUMN 加不出主键）：改表时新增的列要自增，会话以 dbdriver.ErrUnsupported 拒绝。驱动描述的
+// AutoIncrementNewTablesOnly 用 AutoIncrementsNewTablesOnly(dialect) 从同一个方言得出。
+type NewTableAutoIncrementer interface {
+	AutoIncrementer
+	AutoIncrementsNewTablesOnly() bool
+}
+
+// AutoIncrementsNewTablesOnly 报告方言的自增只能在新表上设，即驱动描述的 AutoIncrementNewTablesOnly。
+func AutoIncrementsNewTablesOnly(dialect Dialect) bool {
+	limited, ok := dialect.(NewTableAutoIncrementer)
+	return ok && limited.AutoIncrementsNewTablesOnly()
+}
+
 func columnFeatures(dialect Dialect) dbdriver.ColumnFeatures {
-	return dbdriver.ColumnFeatures{ExplicitDefaults: ClassifiesDefaults(dialect), AutoIncrement: AutoIncrements(dialect)}
+	return dbdriver.ColumnFeatures{
+		ExplicitDefaults: ClassifiesDefaults(dialect), AutoIncrement: AutoIncrements(dialect),
+		NewTablesOnly: AutoIncrementsNewTablesOnly(dialect),
+	}
 }
 
 // DefaultSQL 把列的默认值写成 DEFAULT 后面的内容；没有默认值时 ok 为假。按写法写：无没有默认值，NULL 写

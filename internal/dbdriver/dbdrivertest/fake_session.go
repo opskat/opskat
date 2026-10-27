@@ -544,7 +544,7 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
 		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
 	}
-	if err := s.fake.Desc.ColumnFeatures().Check(req.Definitions()...); err != nil {
+	if err := s.fake.Desc.ColumnFeatures().CheckAlter(req); err != nil {
 		return nil, err
 	}
 	if err := s.fake.Desc.IndexEditing.CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {

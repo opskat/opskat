@@ -692,6 +692,9 @@ func TestTableConformanceReportsBrokenColumnFeatures(t *testing.T) {
 		"an existing column made auto-increment": {withColumnFeatures(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
 			return r
 		}, lenientAutoIncrement: true}, "cannot become auto-increment"},
+		"a new auto-increment column accepted although declared for new tables only": {withNewTablesOnly(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+			return r
+		}, lenientAutoIncrement: true}, "only on new tables"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tt.broken.Session = openFake(t, tt.fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})

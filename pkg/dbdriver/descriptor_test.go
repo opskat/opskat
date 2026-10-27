@@ -545,3 +545,31 @@ func TestDescriptorTransactionalDDLIsOmittedUnlessDeclared(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	assert.True(t, decoded.TransactionalDDL)
 }
+
+// 自增只能在新表上设的驱动（如 SQLite：只有 INTEGER PRIMARY KEY 自增，加列加不出主键）：改表时新增的列不能
+// 自增，已有列照旧（不带表示照旧），建表照常。
+func TestColumnFeaturesCheckAlterForNewTablesOnly(t *testing.T) {
+	newTablesOnly := Descriptor{AutoIncrement: true, AutoIncrementNewTablesOnly: true}.ColumnFeatures()
+	addAutoIncrement := AlterTableRequest{Columns: []AlterColumn{
+		{OriginalName: "id", Name: "id", Type: "INTEGER", AutoIncrement: true},
+		{Name: "seq", Type: "INTEGER", AutoIncrement: true},
+	}}
+	err := newTablesOnly.CheckAlter(addAutoIncrement)
+	require.ErrorIs(t, err, ErrUnsupported)
+	assert.Contains(t, err.Error(), `"seq"`)
+
+	keep := AlterTableRequest{Columns: addAutoIncrement.Columns[:1]}
+	require.NoError(t, newTablesOnly.CheckAlter(keep), "已有列的自增照旧")
+	require.NoError(t, newTablesOnly.Check(ColumnDefinition{Name: "id", Type: "INTEGER", AutoIncrement: true}), "建表照常")
+
+	anywhere := Descriptor{AutoIncrement: true}.ColumnFeatures()
+	require.NoError(t, anywhere.CheckAlter(addAutoIncrement), "没限定的驱动新列可以自增")
+	require.ErrorIs(t, ColumnFeatures{}.CheckAlter(addAutoIncrement), ErrUnsupported, "没声明自增照样拒绝")
+}
+
+func TestDescriptorValidateNewTablesOnlyNeedsAutoIncrement(t *testing.T) {
+	err := Descriptor{ID: "extdb", AutoIncrementNewTablesOnly: true}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "extdb")
+	require.NoError(t, Descriptor{ID: "extdb", AutoIncrement: true, AutoIncrementNewTablesOnly: true}.Validate())
+}

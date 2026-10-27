@@ -59,6 +59,11 @@ type Descriptor struct {
 	// 现状；已有列的自增不能改。没声明时会话以 ErrUnsupported 拒绝要自增的列，读出的列也不带自增。
 	// sqldb 的方言实现 AutoIncrementer 即开启（sqldb.AutoIncrements）。
 	AutoIncrement bool `json:"autoIncrement,omitempty"`
+	// AutoIncrementNewTablesOnly 声明自增只能在新表上设：改表时新增的列不能自增（如 SQLite 只有 INTEGER
+	// PRIMARY KEY 自增，而 ADD COLUMN 加不出主键）。设计器不在已有表的新列上提供自增，会话以 ErrUnsupported
+	// 拒绝。只与 AutoIncrement 一起声明；sqldb 的方言实现 NewTableAutoIncrementer 即声明
+	// （sqldb.AutoIncrementsNewTablesOnly）。
+	AutoIncrementNewTablesOnly bool `json:"autoIncrementNewTablesOnly,omitempty"`
 	// NameFolding 是数据库把不加引号的名称折叠成的大小写：表设计器据此提醒与它不符的表名、列名、
 	// 索引名之后要加引号才能访问（只提醒，不阻止保存、不改写）。空表示不折叠，不提醒。
 	NameFolding NameFolding `json:"nameFolding,omitempty"`
@@ -198,6 +203,9 @@ func (d Descriptor) Validate() error {
 		if err := d.ColumnTypes.validate(); err != nil {
 			return fmt.Errorf("driver %q: %w", d.ID, err)
 		}
+	}
+	if d.AutoIncrementNewTablesOnly && !d.AutoIncrement {
+		return fmt.Errorf("driver %q: auto-increment limited to new tables is declared without auto-increment", d.ID)
 	}
 	if d.NameFolding != "" && !slices.Contains(NameFoldings(), d.NameFolding) {
 		return fmt.Errorf("driver %q: unknown name folding %q", d.ID, d.NameFolding)
@@ -413,9 +421,11 @@ func NameFoldings() []NameFolding {
 	return []NameFolding{NameFoldUpper, NameFoldLower}
 }
 
-// ColumnFeatures 返回描述对建表 / 改表请求里列的两项声明。
+// ColumnFeatures 返回描述对建表 / 改表请求里列的声明。
 func (d Descriptor) ColumnFeatures() ColumnFeatures {
-	return ColumnFeatures{ExplicitDefaults: d.ExplicitDefaults, AutoIncrement: d.AutoIncrement}
+	return ColumnFeatures{
+		ExplicitDefaults: d.ExplicitDefaults, AutoIncrement: d.AutoIncrement, NewTablesOnly: d.AutoIncrementNewTablesOnly,
+	}
 }
 
 // IndexType 是索引类型的标识：内置的见 IndexType 常量，扩展可以声明自己的 id（如 Oracle 的

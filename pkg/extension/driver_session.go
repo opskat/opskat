@@ -969,6 +969,16 @@ func (s *driverSession) checkColumns(columns []dbdriver.ColumnDefinition) error 
 	return nil
 }
 
+// checkAlterColumns is checkColumns for an alter table request, which also
+// refuses a new auto-increment column when the driver sets auto-increment only on
+// new tables (dbdriver.ColumnFeatures.CheckAlter).
+func (s *driverSession) checkAlterColumns(req dbdriver.AlterTableRequest) error {
+	if err := s.columns.CheckAlter(req); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)
+	}
+	return nil
+}
+
 // checkCreateIndexes refuses, before anything is sent, a create table request whose
 // indexes use a feature the driver does not declare (see driverSession.indexes): an
 // extension built before a field existed would drop the index without a word.
@@ -1008,7 +1018,7 @@ func (s *driverSession) AlterTableModel(ctx context.Context, database, table str
 }
 
 func (s *driverSession) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
-	if err := s.checkColumns(req.Definitions()); err != nil {
+	if err := s.checkAlterColumns(req); err != nil {
 		return nil, err
 	}
 	if err := s.checkAlterIndexes(req); err != nil {

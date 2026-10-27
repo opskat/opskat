@@ -414,11 +414,31 @@ func DefaultKinds() []DefaultKind {
 	return []DefaultKind{DefaultKindNone, DefaultKindNull, DefaultKindValue, DefaultKindExpression}
 }
 
-// ColumnFeatures 是驱动对建表 / 改表请求里列的两项声明（Descriptor 上同名的 ExplicitDefaults 与
-// AutoIncrement）。会话、宿主转给扩展之前都按它检查请求。
+// ColumnFeatures 是驱动对建表 / 改表请求里列的声明（Descriptor 上的 ExplicitDefaults、AutoIncrement 与
+// AutoIncrementNewTablesOnly）。会话、宿主转给扩展之前都按它检查请求。
 type ColumnFeatures struct {
 	ExplicitDefaults bool
 	AutoIncrement    bool
+	// NewTablesOnly 是 Descriptor.AutoIncrementNewTablesOnly：改表时新增的列不能自增。
+	NewTablesOnly bool
+}
+
+// CheckAlter 检查改表请求里的列：同 Check，另外声明了自增只能在新表上设时，新增的列不能自增（已有列的
+// 自增照旧，见 AlterTableRequest）。
+func (f ColumnFeatures) CheckAlter(req AlterTableRequest) error {
+	if err := f.Check(req.Definitions()...); err != nil {
+		return err
+	}
+	if !f.NewTablesOnly {
+		return nil
+	}
+	for _, column := range req.Columns {
+		if column.OriginalName == "" && column.AutoIncrement {
+			return fmt.Errorf("%w: this driver sets auto-increment only on new tables, but new column %q asks for it",
+				ErrUnsupported, column.Name)
+		}
+	}
+	return nil
 }
 
 // Check 检查请求里的列只用了声明了的能力：没有声明 ExplicitDefaults 时列不能给出默认值写法，没有
