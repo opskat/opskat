@@ -615,6 +615,43 @@ func TestAlterTableRefusesAnIndexNamingADroppedColumn(t *testing.T) {
 	assert.Contains(t, err.Error(), `"at"`)
 }
 
+// 声明为独占的开关（如 SQL Server 的聚集）一张表至多一个索引打开：改完之后的表上算——留下的、改动的与新增的。
+func TestAlterTableRefusesTwoIndexesWithAnExclusiveOption(t *testing.T) {
+	ctx := context.Background()
+	declared := indexEditingDeclaration()
+	declared.Options[1].Exclusive = true
+	session := newIndexSession(t, &indexerDialect{declared: declared})
+	model, err := session.AlterTableModel(ctx, "db", "t")
+	require.NoError(t, err)
+
+	clustered := func(name, column string) dbdriver.AlterIndex {
+		return dbdriver.AlterIndex{IndexDefinition: dbdriver.IndexDefinition{
+			Name: name, Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: column}},
+			Options: map[string]any{"clustered": true},
+		}}
+	}
+	one := indexModelRequest(model)
+	one.Indexes = append(one.Indexes, clustered("ix_c1", "name"))
+	_, err = session.AlterTableStatements(ctx, "db", "t", one)
+	require.NoError(t, err, "一个打开没有问题")
+
+	two := indexModelRequest(model)
+	two.Indexes = append(two.Indexes, clustered("ix_c1", "name"), clustered("ix_c2", "at"))
+	_, err = session.AlterTableStatements(ctx, "db", "t", two)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clustered")
+	assert.Contains(t, err.Error(), "ix_c1")
+	assert.Contains(t, err.Error(), "ix_c2")
+
+	// 关掉的开关（false）不算。
+	off := indexModelRequest(model)
+	second := clustered("ix_c2", "at")
+	second.Options = map[string]any{"clustered": false}
+	off.Indexes = append(off.Indexes, clustered("ix_c1", "name"), second)
+	_, err = session.AlterTableStatements(ctx, "db", "t", off)
+	require.NoError(t, err)
+}
+
 // includeDialect 的表另有一个只在 INCLUDE 里用到 note 的索引。
 type includeDialect struct{ indexerDialect }
 

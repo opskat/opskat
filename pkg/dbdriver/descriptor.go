@@ -476,6 +476,9 @@ type IndexOptionDecl struct {
 	Type DriverFieldType `json:"type"`
 	// Enum 是枚举的取值，按编辑区下拉里的次序；只有 FieldTypeEnum 声明。
 	Enum []string `json:"enum,omitempty"`
+	// Exclusive 声明这个开关一张表至多一个索引打开（如 SQL Server 的聚集）：设计器就地报错，会话拒绝改完
+	// 之后有两个索引打开它的请求。只有 FieldTypeSwitch 可以声明。
+	Exclusive bool `json:"exclusive,omitempty"`
 }
 
 // IndexEditing 是表设计器里的索引编辑声明，见 Descriptor.IndexEditing。
@@ -552,6 +555,9 @@ func (i IndexEditing) validate() error {
 					return fmt.Errorf("index option %q lists the enum value %q more than once", option.Key, value)
 				}
 				seenValues[value] = true
+			}
+			if option.Exclusive {
+				return fmt.Errorf("index option %q is an enum and cannot be exclusive; only a switch can", option.Key)
 			}
 		case FieldTypeSwitch:
 			if len(option.Enum) > 0 {

@@ -273,7 +273,7 @@ func TestDescriptorValidateIndexEditing(t *testing.T) {
 			NameScope: IndexScopeSchema,
 			Options: []IndexOptionDecl{
 				{Key: "method", Label: "indexOption.method", Type: FieldTypeEnum, Enum: []string{"btree", "hash"}},
-				{Key: "clustered", Label: "indexOption.clustered", Type: FieldTypeSwitch},
+				{Key: "clustered", Label: "indexOption.clustered", Type: FieldTypeSwitch, Exclusive: true},
 			},
 		}}
 	}
@@ -299,6 +299,7 @@ func TestDescriptorValidateIndexEditing(t *testing.T) {
 		"enum without values":     {func(d *Descriptor) { d.IndexEditing.Options[0].Enum = nil }, `"method"`},
 		"enum with a blank value": {func(d *Descriptor) { d.IndexEditing.Options[0].Enum[1] = " " }, `"method"`},
 		"switch with enum values": {func(d *Descriptor) { d.IndexEditing.Options[1].Enum = []string{"on"} }, "clustered"},
+		"exclusive enum":          {func(d *Descriptor) { d.IndexEditing.Options[0].Exclusive = true }, `"method"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := valid()
