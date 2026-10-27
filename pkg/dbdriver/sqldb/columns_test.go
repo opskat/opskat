@@ -134,6 +134,8 @@ func alterTable() *AlterableTable {
 // 新列经 NewColumnSQL、默认值经 DefaultSQL 写。reads 记下读表的次数。
 type alterer struct {
 	reads *int
+	// seen 非 nil 时收到交给方言的改动。
+	seen func(TableChange)
 }
 
 func (alterer) AlterAttributes() []dbdriver.AlterAttribute {
@@ -147,7 +149,10 @@ func (a alterer) read(autoIncrementID bool) *AlterableTable {
 	return table
 }
 
-func (alterer) write(dialect Dialect, change TableChange) ([]string, error) {
+func (a alterer) write(dialect Dialect, change TableChange) ([]string, error) {
+	if a.seen != nil {
+		a.seen(change)
+	}
 	var statements []string
 	for _, column := range change.Columns {
 		if column.IsNew() {
@@ -296,14 +301,31 @@ func TestAlterTableWithColumnFeatures(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, result.Statements, "不带写法的请求照旧比较文本")
 
-	for _, autoIncrement := range []bool{false, true} {
-		req := modelRequest(model)
-		req.Columns[0].AutoIncrement = autoIncrement
-		req.Columns[1].AutoIncrement = autoIncrement
-		_, err = session.AlterTableStatements(ctx, "db", "t", req)
-		require.ErrorIs(t, err, dbdriver.ErrUnsupported, "已有列的自增不能改")
-		assert.Contains(t, err.Error(), "auto-increment")
-	}
+	// 已有列不能开启自增。
+	turnOn := modelRequest(model)
+	turnOn.Columns[1].AutoIncrement = true
+	_, err = session.AlterTableStatements(ctx, "db", "t", turnOn)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported, "已有列的自增不能改")
+	assert.Contains(t, err.Error(), "auto-increment")
+
+	// 不带自增（旧的改表对话框、没勾选的已有列）表示照旧：自增列不产生语句，改它的其他属性时方言
+	// 拿到的仍是自增的现状，好在重写列定义时保留它。
+	keep := modelRequest(model)
+	keep.Columns[0].AutoIncrement = false
+	result, err = session.AlterTableStatements(ctx, "db", "t", keep)
+	require.NoError(t, err)
+	assert.Empty(t, result.Statements, "不带自增的请求不改自增")
+
+	reads = 0
+	keep.Columns[0].DefaultKind, keep.Columns[0].DefaultValue = dbdriver.DefaultKindValue, "1"
+	var seen *dbdriver.ColumnDefinition
+	recorder := designerAlterDialect{alterer: alterer{reads: &reads, seen: func(change TableChange) {
+		seen = &change.Columns[0].Column
+	}}}
+	_, err = newAlterSession(t, recorder).AlterTableStatements(ctx, "db", "t", keep)
+	require.NoError(t, err)
+	require.NotNil(t, seen)
+	assert.True(t, seen.AutoIncrement, "方言拿到的列定义保留自增现状")
 }
 
 // DefaultSQL 是 DEFAULT 后面的内容：按写法写，没给写法时照旧猜；没有默认值时 ok 为假。

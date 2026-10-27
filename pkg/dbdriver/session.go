@@ -250,7 +250,7 @@ type Session interface {
 	// AlterTableRequest 的说明），改列时保留对话框里不显示、用户也没有改的列定义；改索引时只读的只能
 	// 删除、不可删除的删不得、主键的改动要声明了主键可改（见 IndexEditing），引用被删列的索引随列一起
 	// 删除（语句在删列之前）。req 要改驱动没有声明可改的属性（Descriptor.AlterTableAttributes），或说到
-	// 的列不在表中（表已不存在）时返回 error；要改已有列的自增时返回包着 ErrUnsupported 的错误。驱动没有
+	// 的列不在表中（表已不存在）时返回 error；要开启已有列的自增时返回包着 ErrUnsupported 的错误。驱动没有
 	// 声明 CapAlterTable、或列 / 索引用到驱动没声明的表设计器能力（ColumnFeatures.Check、
 	// IndexEditing.CheckAlterIndexes）时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	AlterTableStatements(ctx context.Context, database, table string, req AlterTableRequest) (*AlterTableStatements, error)
@@ -505,7 +505,8 @@ type AlterTableModel struct {
 //
 // 已有的列按 OriginalName 对到表里现在的那一列，与它比较：名称不同是改名，类型去掉首尾空白后
 // 不分大小写比较，默认值与注释去掉首尾空白后比较（给出了默认值写法时，写法不同即改动，同为「值」时
-// 比较原文）。自增与现在的不同时以 ErrUnsupported 拒绝：已有列的自增不能改。都相同的列不生成语句。
+// 比较原文）。已有列的自增不能开启（以 ErrUnsupported 拒绝）；不带自增表示照旧，
+// 不会关掉已有的自增。都相同的列不生成语句。
 //
 // 已有的索引同样按 OriginalName 对到表里现在的那个索引，与它比较的规则见 IndexDefinition.Equal；
 // 都相同的不生成语句，改动的由驱动写成删除后重建（或它支持的等价语句）。只读的索引只能删除，

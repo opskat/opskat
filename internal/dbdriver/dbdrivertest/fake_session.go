@@ -553,8 +553,9 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 	model := s.alterModel(table)
 	for _, column := range req.Columns {
 		i := slices.IndexFunc(model.Columns, func(c dbdriver.ColumnDefinition) bool { return c.Name == column.OriginalName })
-		if i >= 0 && model.Columns[i].AutoIncrement != column.AutoIncrement {
-			return nil, fmt.Errorf("%w: the auto-increment of existing column %q cannot be changed", dbdriver.ErrUnsupported, column.OriginalName)
+		// 已有列不能开启自增；不带自增表示照旧。
+		if i >= 0 && column.AutoIncrement && !model.Columns[i].AutoIncrement {
+			return nil, fmt.Errorf("%w: existing column %q cannot become auto-increment", dbdriver.ErrUnsupported, column.OriginalName)
 		}
 	}
 	if s.fake.Desc.IndexEditing != nil && !indexesUnchanged(model.Indexes, req) {
@@ -572,7 +573,10 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 	unchanged := result.Table == table && req.Comment == model.Comment && len(req.Drops) == 0 && len(req.Columns) == len(model.Columns) &&
 		(s.fake.Desc.IndexEditing == nil || indexesUnchanged(model.Indexes, req))
 	for i := 0; unchanged && i < len(req.Columns); i++ {
-		unchanged = req.Columns[i].OriginalName == model.Columns[i].Name && req.Columns[i].Definition() == model.Columns[i]
+		// 不带自增表示照旧（上面已拒绝开启），比较时取现状。
+		requested := req.Columns[i].Definition()
+		requested.AutoIncrement = model.Columns[i].AutoIncrement
+		unchanged = req.Columns[i].OriginalName == model.Columns[i].Name && requested == model.Columns[i]
 	}
 	if !unchanged {
 		result.Statements = []string{fmt.Sprintf("FAKE ALTER TABLE %s.%s", database, table)}

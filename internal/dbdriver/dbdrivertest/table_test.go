@@ -664,7 +664,10 @@ func TestFakeSessionFollowsItsColumnFeatures(t *testing.T) {
 	assert.NotEmpty(t, result.Statements)
 	req.Columns[0].AutoIncrement = false
 	_, err = session.AlterTableStatements(ctx, "app", "users", req)
-	require.ErrorIs(t, err, dbdriver.ErrUnsupported, "已有列的自增不能改")
+	require.NoError(t, err, "不带自增表示照旧")
+	req.Columns[1].AutoIncrement = true
+	_, err = session.AlterTableStatements(ctx, "app", "users", req)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported, "已有列不能开启自增")
 }
 
 // 列能力的改表一致性检查也得能失败。
@@ -686,9 +689,9 @@ func TestTableConformanceReportsBrokenColumnFeatures(t *testing.T) {
 			m.Columns[0].DefaultKind = ""
 			return m
 		}}, "default kind"},
-		"auto-increment of an existing column changed": {withColumnFeatures(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+		"an existing column made auto-increment": {withColumnFeatures(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
 			return r
-		}, lenientAutoIncrement: true}, "auto-increment of existing column"},
+		}, lenientAutoIncrement: true}, "cannot become auto-increment"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tt.broken.Session = openFake(t, tt.fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})

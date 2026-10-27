@@ -240,9 +240,12 @@ func planTableChange(tables Tables, dialect Dialect, attributes []dbdriver.Alter
 			return nil, fmt.Errorf("column %q of table %s is given more than once", existing.Name, table)
 		}
 		kept[existing.Name] = true
-		if column.AutoIncrement != existing.AutoIncrement {
-			return nil, fmt.Errorf("%w: the auto-increment of existing column %q cannot be changed", dbdriver.ErrUnsupported, existing.Name)
+		// 已有列的自增不能开启；请求不带自增（旧的改表对话框、扩展、设计器里已有列都不勾选）表示照旧，
+		// 交给方言的列定义带上现状，重写列定义时才不会丢掉它。
+		if column.AutoIncrement && !existing.AutoIncrement {
+			return nil, fmt.Errorf("%w: existing column %q cannot become auto-increment", dbdriver.ErrUnsupported, existing.Name)
 		}
+		column.AutoIncrement = existing.AutoIncrement
 		c := ColumnChange{
 			Current:         existing,
 			Column:          column,

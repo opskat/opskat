@@ -855,11 +855,28 @@ func alterProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Ses
 		report("AlterTableStatements with the table as it is: the table is now named %q, not %q", result.Table, table)
 	}
 
-	toggled := req
-	toggled.Columns = slices.Clone(req.Columns)
-	toggled.Columns[0].AutoIncrement = !toggled.Columns[0].AutoIncrement
-	if _, err := s.AlterTableStatements(ctx, database, table, toggled); !errors.Is(err, dbdriver.ErrUnsupported) {
-		report("AlterTableStatements: the auto-increment of existing column %q cannot be changed, so it must be refused with ErrUnsupported, got: %v", toggled.Columns[0].Name, err)
+	// 已有列不能开启自增；不带自增表示照旧（旧的改表对话框就这样提交），交回不产生语句。
+	if i := slices.IndexFunc(req.Columns, func(c dbdriver.AlterColumn) bool { return !c.AutoIncrement }); i >= 0 {
+		turnedOn := req
+		turnedOn.Columns = slices.Clone(req.Columns)
+		turnedOn.Columns[i].AutoIncrement = true
+		if _, err := s.AlterTableStatements(ctx, database, table, turnedOn); !errors.Is(err, dbdriver.ErrUnsupported) {
+			report("AlterTableStatements: an existing column (%q) cannot become auto-increment, so it must be refused with ErrUnsupported, got: %v", turnedOn.Columns[i].Name, err)
+		}
+	}
+	if slices.ContainsFunc(req.Columns, func(c dbdriver.AlterColumn) bool { return c.AutoIncrement }) {
+		omitted := req
+		omitted.Columns = slices.Clone(req.Columns)
+		for i := range omitted.Columns {
+			omitted.Columns[i].AutoIncrement = false
+		}
+		result, err := s.AlterTableStatements(ctx, database, table, omitted)
+		switch {
+		case err != nil:
+			report("AlterTableStatements without autoIncrement on the existing columns (it means keep): %v", err)
+		case result != nil && len(result.Statements) > 0:
+			report("AlterTableStatements without autoIncrement on the existing columns (it means keep): generated %q; there must be no statements", result.Statements)
+		}
 	}
 
 	var added []dbdriver.NewColumn
