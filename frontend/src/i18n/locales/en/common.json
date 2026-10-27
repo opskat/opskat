@@ -2401,7 +2401,8 @@
         "string": "String",
         "datetime": "Date & time",
         "binary": "Binary",
-        "json": "JSON"
+        "json": "JSON",
+        "other": "Other"
       },
       "yes": "Yes",
       "no": "No",

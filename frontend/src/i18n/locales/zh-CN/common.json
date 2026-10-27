@@ -2401,7 +2401,8 @@
         "string": "字符串",
         "datetime": "日期时间",
         "binary": "二进制",
-        "json": "JSON"
+        "json": "JSON",
+        "other": "其他"
       },
       "yes": "是",
       "no": "否",
