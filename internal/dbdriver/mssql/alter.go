@@ -13,11 +13,13 @@ import (
 // 改表：列按表所在的 schema 查 INFORMATION_SCHEMA（裸名按 dbo），类型写成完整的类型（见 columnTypeText）。改表名与
 // 列名用 sp_rename（新表名不带 schema，表留在原 schema），新增列 ADD
 // 不带 COLUMN 关键字，改类型与可空性用 ALTER COLUMN（必须同时给出类型）。默认值要经命名约束、注释要经
-// 扩展属性，都不在此修改，所以只能改已有列的类型与可空性，注释也不读。
+// 扩展属性，都不在此修改，所以只能改已有列的类型与可空性，注释也不读。IDENTITY 列报告自增现状（只显示，已有列
+// 的自增不能改）。索引照 indexesSQL 读（见 readIndexes），删索引写在列的改动之前、建索引写在之后（见 alterIndexes）。
 var _ sqldb.TableAlterer = dialect{}
 
 const alterColumnsSQL = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, " +
-	"DATETIME_PRECISION, IS_NULLABLE, COLUMN_DEFAULT " +
+	"DATETIME_PRECISION, IS_NULLABLE, COLUMN_DEFAULT, " +
+	"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY " +
 	"FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 ORDER BY ORDINAL_POSITION"
 
 var alterAttributes = []dbdriver.AlterAttribute{dbdriver.AlterColumnType, dbdriver.AlterColumnNullable}
@@ -35,13 +37,21 @@ func (dialect) AlterableTable(ctx context.Context, conn *sql.Conn, _, table stri
 		columnType := columnTypeText(row)
 		out.Columns = append(out.Columns, sqldb.AlterableColumn{
 			ColumnDefinition: dbdriver.ColumnDefinition{
-				Name:         sqldb.PickString(row, "COLUMN_NAME"),
-				Type:         columnType,
-				Nullable:     strings.EqualFold(sqldb.PickString(row, "IS_NULLABLE"), "YES"),
-				DefaultValue: sqldb.PickString(row, "COLUMN_DEFAULT"),
+				Name:          sqldb.PickString(row, "COLUMN_NAME"),
+				Type:          columnType,
+				Nullable:      strings.EqualFold(sqldb.PickString(row, "IS_NULLABLE"), "YES"),
+				DefaultValue:  sqldb.PickString(row, "COLUMN_DEFAULT"),
+				AutoIncrement: sqldb.PickString(row, "IS_IDENTITY") == "1",
 			},
 			Row: row,
 		})
+	}
+	indexes, err := readIndexes(ctx, conn, schema, name)
+	if err != nil {
+		return nil, fmt.Errorf("indexes: %w", err)
+	}
+	for _, index := range indexes {
+		out.Indexes = append(out.Indexes, index.indexDefinition())
 	}
 	return out, nil
 }
@@ -72,9 +82,8 @@ func columnTypeText(row map[string]any) string {
 	return dataType
 }
 
-func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableChange) ([]string, error) {
-	literals := sqldb.DefinitionLiterals
-	name := func(text string) (string, error) { return literals.Literal(text, "") }
+func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb.TableChange) ([]string, error) {
+	name := func(text string) (string, error) { return sqldb.DefinitionLiterals.Literal(text, "") }
 	target := change.TargetRef
 
 	var statements, renames, modifications []string
@@ -89,10 +98,16 @@ func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableC
 		}
 		statements = append(statements, fmt.Sprintf("EXEC sp_rename %s, %s", from, to))
 	}
+	indexDrops, indexCreates, err := alterIndexes(ctx, conn, change)
+	if err != nil {
+		return nil, err
+	}
+	statements = append(statements, indexDrops...)
 	for _, column := range change.Columns {
 		c := column.Column
 		if column.IsNew() {
-			definition, err := sqldb.ColumnDefinitionSQL(literals, quoteIdent, c)
+			// 自增与按写法的默认值见 NewColumnSQL；没给写法的照旧按文本猜。
+			definition, err := sqldb.NewColumnSQL(d, definitionLiterals(c), quoteIdent, c)
 			if err != nil {
 				return nil, err
 			}
@@ -124,5 +139,5 @@ func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableC
 	for _, drop := range change.Drops {
 		statements = append(statements, "ALTER TABLE "+target+" DROP COLUMN "+quoteIdent(drop))
 	}
-	return statements, nil
+	return append(statements, indexCreates...), nil
 }

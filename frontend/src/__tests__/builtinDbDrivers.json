@@ -315,7 +315,63 @@
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
     "createDatabaseOptions": [{ "key": "collation", "default": "" }],
-    "alterTableAttributes": ["column_type", "column_nullable"]
+    "alterTableAttributes": ["column_type", "column_nullable"],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["tinyint", "smallint", "int", "bigint", "decimal(18,2)", "float", "real", "money"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["nvarchar(255)", "nvarchar(max)", "varchar(255)", "varchar(max)", "nchar(10)", "char(10)", "uniqueidentifier"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["date", "time", "datetime2", "datetimeoffset", "datetime", "smalldatetime"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["varbinary(max)", "varbinary(255)", "binary(16)"]
+        },
+        {
+          "label": "query.designer.typeGroup.other",
+          "types": ["bit", "xml", "sql_variant", "hierarchyid", "geography", "geometry", "rowversion"]
+        }
+      ],
+      "newColumn": "nvarchar(255)",
+      "primaryKey": "bigint"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "alterPrimaryKey": true,
+      "descending": true,
+      "nameScope": "table",
+      "options": [
+        {
+          "key": "clustered",
+          "label": "query.designer.indexOption.clustered",
+          "type": "switch",
+          "exclusive": true
+        }
+      ]
+    },
+    "transactionalDDL": true
   },
   {
     "id": "sqlite",
