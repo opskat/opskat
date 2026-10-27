@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -15,48 +16,54 @@ import (
 // only way its tools are reachable) and the policy face they are checked under.
 const baseDescriptor = `"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
 	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
-	`"policies":{"type":"x"}`
+	`"policy":{"type":"x"}`
 
+// desc is the base descriptor plus extra contributes entries.
 func desc(extra string) []byte {
 	if extra != "" {
 		extra = "," + extra
 	}
-	return []byte("{" + baseDescriptor + extra + "}")
+	return describeJSON(baseDescriptor + extra)
+}
+
+// describeJSON is a describe() answer contributing exactly the given entries.
+func describeJSON(contributes string) []byte {
+	return []byte(`{"contributes":{` + contributes + `}}`)
 }
 
 func TestParseDescriptorAssetScope(t *testing.T) {
 	Convey("A descriptor has to give its tools a reachable entry point", t, func() {
 		Convey("no asset type at all", func() {
-			_, err := ParseDescriptor([]byte(`{"policies":{"type":"x"}}`))
+			_, err := ParseDescriptor(describeJSON(`"policy":{"type":"x"}`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "assetTypes")
 		})
 
 		Convey("no policy face", func() {
-			_, err := ParseDescriptor([]byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
-				`"configSchema":{"type":"object","properties":{"e":{"type":"string"}}}}]}`))
+			_, err := ParseDescriptor(describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+				`"configSchema":{"type":"object","properties":{"e":{"type":"string"}}}}]`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "policies.type")
 		})
 
 		Convey("asset type without config properties", func() {
-			_, err := ParseDescriptor([]byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
-				`"configSchema":{"type":"object"}}],"policies":{"type":"x"}}`))
+			_, err := ParseDescriptor(describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+				`"configSchema":{"type":"object"}}],"policy":{"type":"x"}`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "configSchema")
 		})
 
 		Convey("duplicate asset type", func() {
-			_, err := ParseDescriptor([]byte(`{"assetTypes":[` +
+			_, err := ParseDescriptor(describeJSON(`"assetTypes":[` +
 				`{"type":"x","i18n":{"name":"n"},"configSchema":{"type":"object","properties":{"e":{"type":"string"}}}},` +
 				`{"type":"x","i18n":{"name":"n"},"configSchema":{"type":"object","properties":{"e":{"type":"string"}}}}` +
-				`],"policies":{"type":"x"}}`))
+				`],"policy":{"type":"x"}`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "duplicate")
 		})
 
 		Convey("policy group outside the ext: namespace", func() {
-			_, err := ParseDescriptor(desc(`"policies":{"type":"x","groups":[{"id":"nope:bad",` +
+			_, err := ParseDescriptor(desc(`"policy":{"type":"x","groups":[{"id":"nope:bad",` +
 				`"i18n":{"name":"n","description":"d"},"policy":{"allow_list":["read"]}}]}`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "ext:")
@@ -282,13 +289,13 @@ func TestApplyDescriptor(t *testing.T) {
 			`"permissions":{"credentials":"read"}}`))
 		So(err, ShouldBeNil)
 
-		d, err := ParseDescriptor(desc(`"icon":"cloud-storage",` +
+		d, err := ParseDescriptor([]byte(`{"icon":"cloud-storage",` +
 			`"i18n":{"displayName":"manifest.displayName","description":"manifest.description"},` +
-			`"frontend":{"entry":"frontend/index.js","pages":[{"id":"browser","slot":"asset.connect","i18n":{"name":"pages.browser.name"},"component":"BrowserPage"}]},` +
+			`"contributes":{` + baseDescriptor + `,"pages":{"entry":"frontend/index.js","pages":[{"id":"browser","slot":"asset.connect","i18n":{"name":"pages.browser.name"},"component":"BrowserPage"}]},` +
 			`"tools":[` +
 			`{"name":"list_objects","policyAction":"list","parameters":{"type":"object","properties":{}}},` +
 			`{"name":"delete_object","policyAction":"delete","parameters":{"type":"object","properties":{}}},` +
-			`{"name":"get_object","policyAction":"list","parameters":{"type":"object","properties":{}}}]`))
+			`{"name":"get_object","policyAction":"list","parameters":{"type":"object","properties":{}}}]}}`))
 		So(err, ShouldBeNil)
 
 		m.apply(d)
@@ -313,6 +320,61 @@ func TestApplyDescriptor(t *testing.T) {
 	})
 }
 
+// TestDescribeWireShape: describe() answers icon, i18n and contributes keyed by
+// contribution point; the host merges it onto the manifest in the shape the
+// frontend has always read.
+func TestDescribeWireShape(t *testing.T) {
+	Convey("A describe() answer in the contributes shape", t, func() {
+		payload := `{"icon":"cloud","i18n":{"displayName":"d","description":"x"},"contributes":{` +
+			`"assetTypes":[{"type":"x","i18n":{"name":"n"},"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
+			`"tools":[{"name":"list","policyAction":"list","parameters":{"type":"object","properties":{}}}],` +
+			`"policy":{"type":"x","groups":[{"id":"ext:x:ro","i18n":{"name":"g","description":"gd"},"policy":{"allow_list":["list"]}}],"default":["ext:x:ro"]},` +
+			`"snippets":{"categories":[{"id":"xcat","assetType":"x","i18n":{"name":"c"}}],"seed":[{"key":"s","name":"s","category":"xcat","content":"ls"}]},` +
+			`"pages":{"entry":"frontend/index.js","pages":[{"id":"p","slot":"asset.connect","i18n":{"name":"pn"},"component":"P"}]},` +
+			`"databaseDrivers":[` + driverDescriptorJSON + `]}}`
+		d, err := ParseDescriptor([]byte(payload))
+		So(err, ShouldBeNil)
+		m := &Manifest{}
+		m.apply(d)
+
+		Convey("is read into the merged manifest", func() {
+			So(m.Icon, ShouldEqual, "cloud")
+			So(m.I18n.DisplayName, ShouldEqual, "d")
+			So(m.AssetTypes, ShouldHaveLength, 1)
+			So(m.Tools[0].Name, ShouldEqual, "list")
+			So(m.Policies.Type, ShouldEqual, "x")
+			So(m.Policies.Actions, ShouldResemble, []string{"list"})
+			So(m.Policies.Default, ShouldResemble, []string{"ext:x:ro"})
+			So(m.Snippets.Categories[0].ID, ShouldEqual, "xcat")
+			So(m.Snippets.Seed[0].Key, ShouldEqual, "s")
+			So(m.Frontend.Entry, ShouldEqual, "frontend/index.js")
+			So(m.Frontend.Pages[0].Component, ShouldEqual, "P")
+			So(string(m.DatabaseDrivers[0].ID), ShouldEqual, "mysql-ext")
+		})
+
+		Convey("and handed to the frontend in the merged shape it already reads", func() {
+			raw, err := json.Marshal(m)
+			So(err, ShouldBeNil)
+			var out map[string]any
+			So(json.Unmarshal(raw, &out), ShouldBeNil)
+			for _, key := range []string{"icon", "i18n", "assetTypes", "tools", "policies", "frontend", "snippets", "databaseDrivers"} {
+				So(out, ShouldContainKey, key)
+			}
+			So(out["policies"], ShouldContainKey, "actions")
+			So(out["frontend"], ShouldResemble, map[string]any{
+				"entry": "frontend/index.js", "styles": "",
+				"pages": []any{map[string]any{"id": "p", "slot": "asset.connect", "i18n": map[string]any{"name": "pn"}, "component": "P"}},
+			})
+		})
+	})
+
+	Convey("The flat pre-1.0 shape is refused rather than read as an empty describe", t, func() {
+		_, err := ParseDescriptor([]byte(`{` + baseDescriptor + `}`))
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "assetTypes")
+	})
+}
+
 // 权限组 ID 按声明者的策略面命名空间化（ext:<policies.type>:<name>），策略面名本身
 // 与资产类型同一套命名规则——组 ID 与 grant（ext:<policyType>:<action>:<resource>）都以它为段，
 // 一个不受约束的策略面名会让两者的命名空间失去意义。
@@ -321,10 +383,10 @@ func TestParseDescriptorPolicyNamespace(t *testing.T) {
 		return `{"id":"` + id + `","i18n":{"name":"n","description":"d"},"policy":{"allow_list":["read"]}}`
 	}
 	parse := func(policyType string, groups ...string) error {
-		body := `{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+		body := `"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
 			`"configSchema":{"type":"object","properties":{"e":{"type":"string"}}}}],` +
-			`"policies":{"type":"` + policyType + `","groups":[` + strings.Join(groups, ",") + `]}}`
-		_, err := ParseDescriptor([]byte(body))
+			`"policy":{"type":"` + policyType + `","groups":[` + strings.Join(groups, ",") + `]}`
+		_, err := ParseDescriptor(describeJSON(body))
 		return err
 	}
 
@@ -365,9 +427,9 @@ func TestParseDescriptorPolicyNamespace(t *testing.T) {
 func TestParseDescriptorConnection(t *testing.T) {
 	Convey("An asset type declares which host-owned connection settings it supports", t, func() {
 		withConnection := func(conn string) []byte {
-			return []byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+			return describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
 				`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"}}},` +
-				`"connection":` + conn + `}],"policies":{"type":"x"}}`)
+				`"connection":` + conn + `}],"policy":{"type":"x"}`)
 		}
 
 		Convey("a declared subset is kept", func() {
@@ -395,9 +457,9 @@ func TestParseDescriptorConnection(t *testing.T) {
 				`"connection":{"sshTunnel":true}`,
 				`"auth":{"groups":[{"bindings":[{"in":"header","name":"X-Key","value":"{{endpoint}}"}]}]}`,
 			} {
-				_, err := ParseDescriptor([]byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+				_, err := ParseDescriptor(describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
 					`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}},` +
-					binding + `}],"policies":{"type":"x"}}`))
+					binding + `}],"policy":{"type":"x"}`))
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, `format:"endpoint"`)
 			}
@@ -410,11 +472,11 @@ func TestParseDescriptorConnection(t *testing.T) {
 func TestParseDescriptorAuth(t *testing.T) {
 	Convey("An asset type declares auth bindings the host injects into requests to its endpoint", t, func() {
 		withAuth := func(auth string) []byte {
-			return []byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+			return describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
 				`"configSchema":{"type":"object","properties":{` +
 				`"endpoint":{"type":"string","format":"endpoint"},"authType":{"type":"string"},` +
 				`"username":{"type":"string"},"password":{"type":"string","format":"password"}}},` +
-				`"auth":` + auth + `}],"policies":{"type":"x"}}`)
+				`"auth":` + auth + `}],"policy":{"type":"x"}`)
 		}
 		refused := func(auth, want string) {
 			_, err := ParseDescriptor(withAuth(auth))
@@ -582,8 +644,8 @@ func TestParseDescriptorFileParams(t *testing.T) {
 
 func TestParseDescriptorEnumPresentation(t *testing.T) {
 	withProp := func(prop string) []byte {
-		return []byte(`{"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
-			`"configSchema":{"type":"object","properties":{"auth":` + prop + `}}}],"policies":{"type":"x"}}`)
+		return describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+			`"configSchema":{"type":"object","properties":{"auth":` + prop + `}}}],"policy":{"type":"x"}`)
 	}
 	Convey("enumLabels and default are checked against the enum they decorate", t, func() {
 		Convey("matching labels and a member default are accepted", func() {
@@ -628,29 +690,29 @@ const driverDescriptorJSON = `{"id":"mysql-ext","name":"MySQL Ext","icon":"x","o
 func TestParseDescriptorDatabaseDrivers(t *testing.T) {
 	Convey("A descriptor may provide SQL database drivers", t, func() {
 		Convey("a driver-only extension needs neither an asset type nor a policy type", func() {
-			d, err := ParseDescriptor([]byte(`{"icon":"mysql","databaseDrivers":[` + driverDescriptorJSON + `]}`))
+			d, err := ParseDescriptor([]byte(`{"icon":"mysql","contributes":{"databaseDrivers":[` + driverDescriptorJSON + `]}}`))
 			So(err, ShouldBeNil)
 			So(d.DatabaseDrivers, ShouldHaveLength, 1)
 			So(string(d.DatabaseDrivers[0].ID), ShouldEqual, "mysql-ext")
 		})
 
 		Convey("a policy type a driver-only extension does declare is held to the same rule", func() {
-			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],"policies":{"type":"a:b"}}`))
+			_, err := ParseDescriptor(describeJSON(`"databaseDrivers":[` + driverDescriptorJSON + `],"policy":{"type":"a:b"}`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "policies.type")
-			_, err = ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],"policies":{"type":"mydb"}}`))
+			_, err = ParseDescriptor(describeJSON(`"databaseDrivers":[` + driverDescriptorJSON + `],"policy":{"type":"mydb"}`))
 			So(err, ShouldBeNil)
 		})
 
 		Convey("an extension without drivers still needs an asset type", func() {
-			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[]}`))
+			_, err := ParseDescriptor(describeJSON(`"databaseDrivers":[]`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "assetTypes")
 		})
 
 		Convey("tools are unreachable without an asset type, drivers or not", func() {
-			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `],` +
-				`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{}}}]}`))
+			_, err := ParseDescriptor(describeJSON(`"databaseDrivers":[` + driverDescriptorJSON + `],` +
+				`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{}}}]`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "tools")
 		})
@@ -667,14 +729,14 @@ func TestParseDescriptorDatabaseDrivers(t *testing.T) {
 				`"form":[{"tab":"nowhere","fields":["host"]}]`,
 				`"driverFields":[{"key":"host","type":"text","tab":"connection"}]`,
 			} {
-				_, err := ParseDescriptor([]byte(`{"databaseDrivers":[{"id":"bad-one",` + bad + `}]}`))
+				_, err := ParseDescriptor(describeJSON(`"databaseDrivers":[{"id":"bad-one",` + bad + `}]`))
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, "bad-one")
 			}
 		})
 
 		Convey("duplicate driver ids in one descriptor are refused", func() {
-			_, err := ParseDescriptor([]byte(`{"databaseDrivers":[` + driverDescriptorJSON + `,` + driverDescriptorJSON + `]}`))
+			_, err := ParseDescriptor(describeJSON(`"databaseDrivers":[` + driverDescriptorJSON + `,` + driverDescriptorJSON + `]`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "mysql-ext")
 		})
@@ -695,19 +757,19 @@ func TestDescribeIntoDatabaseDrivers(t *testing.T) {
 	}
 	Convey("The manifest's driver ids and describe()'s must be the same set", t, func() {
 		Convey("matching sets load, and the driver icon is the extension's", func() {
-			m, err := load([]string{"mysql-ext"}, `{"icon":"ext-icon",`+drivers+`}`)
+			m, err := load([]string{"mysql-ext"}, `{"icon":"ext-icon","contributes":{`+drivers+`}}`)
 			So(err, ShouldBeNil)
 			So(m.DatabaseDrivers, ShouldHaveLength, 1)
 			So(m.DatabaseDrivers[0].Icon, ShouldEqual, "ext-icon")
 		})
 		Convey("a driver described but not declared", func() {
-			_, err := load(nil, `{`+drivers+`}`)
+			_, err := load(nil, string(describeJSON(drivers)))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "ext-a")
 			So(err.Error(), ShouldContainSubstring, "mysql-ext")
 		})
 		Convey("a driver declared but not described", func() {
-			_, err := load([]string{"mysql-ext", "ghost"}, `{`+drivers+`}`)
+			_, err := load([]string{"mysql-ext", "ghost"}, string(describeJSON(drivers)))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "ext-a")
 			So(err.Error(), ShouldContainSubstring, "ghost")
@@ -719,7 +781,7 @@ func TestDescribeIntoDatabaseDrivers(t *testing.T) {
 			`"form":[{"tab":"connection","fields":["host","port","username","password","kerberos"]}],` +
 			`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
 		loadWith := func(kerberos bool) error {
-			useDescribeCache(t, newFakeDescribeCache(stubWasm, `{"databaseDrivers":[`+krbDriver+`]}`))
+			useDescribeCache(t, newFakeDescribeCache(stubWasm, string(describeJSON(`"databaseDrivers":[`+krbDriver+`]`))))
 			m := &Manifest{Manifest: extmanifest.Manifest{
 				Name:        "ext-a",
 				HostABI:     extmanifest.HostABIVersion,

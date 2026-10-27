@@ -19,13 +19,13 @@ import (
 
 	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/pkg/dbdriver"
-	"github.com/opskat/opskat/pkg/extension/driverwire"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // A database driver an extension provides runs in the guest: the SDK assembles
 // its session there (pkg/extsdk/sdkdbdriver DatabaseDriver), and the host holds a
 // dbdriver.Session that forwards every operation across the boundary as JSON
-// (pkg/extension/driverwire). To shared code it is a session like any built-in
+// (pkg/extwire). To shared code it is a session like any built-in
 // driver's.
 //
 // A session runs on up to driverSessionInstances module instances of its own,
@@ -107,19 +107,19 @@ func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdr
 	if !slices.Contains(p.manifest.Contributes.DatabaseDrivers, id) {
 		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
 	}
-	input, err := json.Marshal(driverwire.Call{Op: driverwire.OpClassifyStatements, Args: driverwire.Args{
+	input, err := json.Marshal(extwire.DriverCall{Op: extwire.DriverOpClassifyStatements, Args: extwire.DriverArgs{
 		Driver: dbdriver.DriverID(id), Statement: sql,
 	}})
 	if err != nil {
-		return nil, fmt.Errorf("marshal database driver %s: %w", driverwire.OpClassifyStatements, err)
+		return nil, fmt.Errorf("marshal database driver %s: %w", extwire.DriverOpClassifyStatements, err)
 	}
-	raw, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), driverwire.Function, input, p.opts.toolTimeout)
+	raw, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), extwire.DriverFunction, input, p.opts.toolTimeout)
 	if err != nil {
 		return nil, err
 	}
-	var reply driverwire.Reply
+	var reply extwire.DriverReply
 	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, fmt.Errorf("parse database driver %s reply: %w", driverwire.OpClassifyStatements, err)
+		return nil, fmt.Errorf("parse database driver %s reply: %w", extwire.DriverOpClassifyStatements, err)
 	}
 	if reply.Error != nil {
 		return nil, fmt.Errorf("%w: %w", dbdriver.ErrCannotSplit, &driverError{message: reply.Error.Message, code: reply.Error.Code})
@@ -127,7 +127,7 @@ func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdr
 	var stmts []dbdriver.Statement
 	if len(reply.Result) > 0 {
 		if err := json.Unmarshal(reply.Result, &stmts); err != nil {
-			return nil, fmt.Errorf("parse database driver %s result: %w", driverwire.OpClassifyStatements, err)
+			return nil, fmt.Errorf("parse database driver %s result: %w", extwire.DriverOpClassifyStatements, err)
 		}
 	}
 	return stmts, nil
@@ -150,8 +150,8 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv}
 	d.refs.Store(1)
 
-	var opened driverwire.Opened
-	err = d.call(ctx, driverwire.Call{Op: driverwire.OpOpen, Args: driverwire.Args{
+	var opened extwire.DriverOpened
+	err = d.call(ctx, extwire.DriverCall{Op: extwire.DriverOpOpen, Args: extwire.DriverArgs{
 		Driver: dbdriver.DriverID(driver), Config: req.Config, Password: req.Password, DriverOptions: req.DriverOptions,
 		TLS: req.TLS, Kerberos: req.Kerberos != nil,
 	}}, &opened)
@@ -492,7 +492,7 @@ func (d *driverInstance) retire() error {
 	var err error
 	if d.usable() {
 		ctx, cancel := context.WithTimeout(context.Background(), d.plugin.opts.driverCloseTimeout)
-		err = d.call(ctx, driverwire.Call{Op: driverwire.OpClose, Session: d.session}, nil)
+		err = d.call(ctx, extwire.DriverCall{Op: extwire.DriverOpClose, Session: d.session}, nil)
 		cancel()
 	}
 	d.inv.close()
@@ -510,7 +510,7 @@ func (d *driverInstance) retire() error {
 // may be blocked reading one — and fails the call with ctx's error. A call that
 // fails in the guest itself (a panic, a trap, running out of memory) fails as an
 // extension database driver fault. Either way the instance is left unusable.
-func (d *driverInstance) call(ctx context.Context, call driverwire.Call, out any) error {
+func (d *driverInstance) call(ctx context.Context, call extwire.DriverCall, out any) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.broken != nil {
@@ -524,7 +524,7 @@ func (d *driverInstance) call(ctx context.Context, call driverwire.Call, out any
 	if err != nil {
 		return fmt.Errorf("marshal database driver %s: %w", call.Op, err)
 	}
-	req, err := callRequest(driverwire.Function, input)
+	req, err := callRequest(extwire.DriverFunction, input)
 	if err != nil {
 		return err
 	}
@@ -552,7 +552,7 @@ func (d *driverInstance) call(ctx context.Context, call driverwire.Call, out any
 			d.driver, d.plugin.manifest.Name, call.Op, err)
 	}
 
-	var reply driverwire.Reply
+	var reply extwire.DriverReply
 	if err := json.Unmarshal(raw, &reply); err != nil {
 		return fmt.Errorf("parse database driver %s reply: %w", call.Op, err)
 	}
@@ -582,7 +582,7 @@ func (e *driverError) Error() string { return e.message }
 // Is lets callers recognize a refusal with errors.Is(err, dbdriver.ErrUnsupported),
 // as they do for a built-in driver.
 func (e *driverError) Is(target error) bool {
-	return target == dbdriver.ErrUnsupported && e.code == driverwire.CodeUnsupported
+	return target == dbdriver.ErrUnsupported && e.code == extwire.DriverCodeUnsupported
 }
 
 // driverSession is the host's handle on a session: the instances it runs on and
@@ -793,21 +793,21 @@ func (s *driverSession) on(ctx context.Context, fn func(*driverInstance) error) 
 	return fn(inst)
 }
 
-func (s *driverSession) do(ctx context.Context, op string, args driverwire.Args, out any) error {
+func (s *driverSession) do(ctx context.Context, op string, args extwire.DriverArgs, out any) error {
 	return s.on(ctx, func(inst *driverInstance) error {
-		return inst.call(ctx, driverwire.Call{Op: op, Session: inst.session, Args: args}, out)
+		return inst.call(ctx, extwire.DriverCall{Op: op, Session: inst.session, Args: args}, out)
 	})
 }
 
 // forward runs op and returns its decoded result.
-func forward[T any](ctx context.Context, s *driverSession, op string, args driverwire.Args) (T, error) {
+func forward[T any](ctx context.Context, s *driverSession, op string, args extwire.DriverArgs) (T, error) {
 	var out T
 	err := s.do(ctx, op, args, &out)
 	return out, err
 }
 
 // forwardRequest runs op with req as its request.
-func forwardRequest[T any](ctx context.Context, s *driverSession, op string, args driverwire.Args, req any) (T, error) {
+func forwardRequest[T any](ctx context.Context, s *driverSession, op string, args extwire.DriverArgs, req any) (T, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		var zero T
@@ -818,45 +818,45 @@ func forwardRequest[T any](ctx context.Context, s *driverSession, op string, arg
 }
 
 func (s *driverSession) Execute(ctx context.Context, statement string) (*dbdriver.Result, error) {
-	return forward[*dbdriver.Result](ctx, s, driverwire.OpExecute, driverwire.Args{Statement: statement})
+	return forward[*dbdriver.Result](ctx, s, extwire.DriverOpExecute, extwire.DriverArgs{Statement: statement})
 }
 
 func (s *driverSession) ExecutePaged(ctx context.Context, statement string, page dbdriver.Page) (*dbdriver.Result, error) {
-	return forward[*dbdriver.Result](ctx, s, driverwire.OpExecutePaged, driverwire.Args{Statement: statement, Page: page})
+	return forward[*dbdriver.Result](ctx, s, extwire.DriverOpExecutePaged, extwire.DriverArgs{Statement: statement, Page: page})
 }
 
 func (s *driverSession) ListDatabases(ctx context.Context) ([]string, error) {
-	return forward[[]string](ctx, s, driverwire.OpListDatabases, driverwire.Args{})
+	return forward[[]string](ctx, s, extwire.DriverOpListDatabases, extwire.DriverArgs{})
 }
 
 func (s *driverSession) ListTables(ctx context.Context, database string) ([]string, error) {
-	return forward[[]string](ctx, s, driverwire.OpListTables, driverwire.Args{Database: database})
+	return forward[[]string](ctx, s, extwire.DriverOpListTables, extwire.DriverArgs{Database: database})
 }
 
 func (s *driverSession) TableMetadata(ctx context.Context, database, table string) (*dbdriver.TableMetadata, error) {
-	return forward[*dbdriver.TableMetadata](ctx, s, driverwire.OpTableMetadata, driverwire.Args{Database: database, Table: table})
+	return forward[*dbdriver.TableMetadata](ctx, s, extwire.DriverOpTableMetadata, extwire.DriverArgs{Database: database, Table: table})
 }
 
 func (s *driverSession) ListObjects(ctx context.Context, database string) (*dbdriver.DatabaseObjects, error) {
-	return forward[*dbdriver.DatabaseObjects](ctx, s, driverwire.OpListObjects, driverwire.Args{Database: database})
+	return forward[*dbdriver.DatabaseObjects](ctx, s, extwire.DriverOpListObjects, extwire.DriverArgs{Database: database})
 }
 
 func (s *driverSession) ObjectSource(ctx context.Context, database, objType, name, table string) (string, error) {
-	return forward[string](ctx, s, driverwire.OpObjectSource, driverwire.Args{
+	return forward[string](ctx, s, extwire.DriverOpObjectSource, extwire.DriverArgs{
 		Database: database, ObjectType: objType, Name: name, ObjectTable: table,
 	})
 }
 
 func (s *driverSession) OpenTable(ctx context.Context, database, table string, pageSize int) (*dbdriver.OpenedTable, error) {
-	return forward[*dbdriver.OpenedTable](ctx, s, driverwire.OpOpenTable, driverwire.Args{Database: database, Table: table, PageSize: pageSize})
+	return forward[*dbdriver.OpenedTable](ctx, s, extwire.DriverOpOpenTable, extwire.DriverArgs{Database: database, Table: table, PageSize: pageSize})
 }
 
 func (s *driverSession) TableRows(ctx context.Context, database, table string, query dbdriver.TableQuery, page dbdriver.Page) (*dbdriver.RowSet, error) {
-	return forward[*dbdriver.RowSet](ctx, s, driverwire.OpTableRows, driverwire.Args{Database: database, Table: table, Query: query, Page: page})
+	return forward[*dbdriver.RowSet](ctx, s, extwire.DriverOpTableRows, extwire.DriverArgs{Database: database, Table: table, Query: query, Page: page})
 }
 
 func (s *driverSession) CountTableRows(ctx context.Context, database, table string, filters []dbdriver.FilterItem) (int64, error) {
-	return forward[int64](ctx, s, driverwire.OpCountTableRows, driverwire.Args{Database: database, Table: table, Filters: filters})
+	return forward[int64](ctx, s, extwire.DriverOpCountTableRows, extwire.DriverArgs{Database: database, Table: table, Filters: filters})
 }
 
 // StreamTableRows opens the cursor in the guest and reads it over as many calls
@@ -868,8 +868,8 @@ func (s *driverSession) StreamTableRows(ctx context.Context, database, table str
 	if err != nil {
 		return nil, err
 	}
-	var opened driverwire.StreamOpened
-	err = inst.call(ctx, driverwire.Call{Op: driverwire.OpStreamTableRows, Session: inst.session, Args: driverwire.Args{
+	var opened extwire.DriverStreamOpened
+	err = inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpStreamTableRows, Session: inst.session, Args: extwire.DriverArgs{
 		Database: database, Table: table, Query: query,
 	}}, &opened)
 	if err != nil {
@@ -880,11 +880,11 @@ func (s *driverSession) StreamTableRows(ctx context.Context, database, table str
 }
 
 func (s *driverSession) TableDDL(ctx context.Context, database, table string) (string, error) {
-	return forward[string](ctx, s, driverwire.OpTableDDL, driverwire.Args{Database: database, Table: table})
+	return forward[string](ctx, s, extwire.DriverOpTableDDL, extwire.DriverArgs{Database: database, Table: table})
 }
 
 func (s *driverSession) StarterQuery(ctx context.Context, database, table string, limit int) (string, error) {
-	return forward[string](ctx, s, driverwire.OpStarterQuery, driverwire.Args{Database: database, Table: table, Limit: limit})
+	return forward[string](ctx, s, extwire.DriverOpStarterQuery, extwire.DriverArgs{Database: database, Table: table, Limit: limit})
 }
 
 // PrepareRowStatements prepares the writer in the guest, on one of the session's
@@ -893,8 +893,8 @@ func (s *driverSession) StarterQuery(ctx context.Context, database, table string
 func (s *driverSession) PrepareRowStatements(ctx context.Context, database, table string) (dbdriver.RowStatementWriter, error) {
 	var w *driverRowWriter
 	err := s.on(ctx, func(inst *driverInstance) error {
-		var prepared driverwire.WriterPrepared
-		err := inst.call(ctx, driverwire.Call{Op: driverwire.OpPrepareRowStatements, Session: inst.session, Args: driverwire.Args{
+		var prepared extwire.DriverWriterPrepared
+		err := inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpPrepareRowStatements, Session: inst.session, Args: extwire.DriverArgs{
 			Database: database, Table: table,
 		}}, &prepared)
 		if err != nil {
@@ -912,39 +912,39 @@ func (s *driverSession) PrepareRowStatements(ctx context.Context, database, tabl
 }
 
 func (s *driverSession) GridEditStatements(ctx context.Context, database, table string, req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
-	return forwardRequest[*dbdriver.GridEditStatements](ctx, s, driverwire.OpGridEditStatements, driverwire.Args{Database: database, Table: table}, req)
+	return forwardRequest[*dbdriver.GridEditStatements](ctx, s, extwire.DriverOpGridEditStatements, extwire.DriverArgs{Database: database, Table: table}, req)
 }
 
 func (s *driverSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
-	return forwardRequest[[]string](ctx, s, driverwire.OpCreateTableStatements, driverwire.Args{Database: database}, req)
+	return forwardRequest[[]string](ctx, s, extwire.DriverOpCreateTableStatements, extwire.DriverArgs{Database: database}, req)
 }
 
 func (s *driverSession) DropTableStatements(ctx context.Context, database, table string) ([]string, error) {
-	return forward[[]string](ctx, s, driverwire.OpDropTableStatements, driverwire.Args{Database: database, Table: table})
+	return forward[[]string](ctx, s, extwire.DriverOpDropTableStatements, extwire.DriverArgs{Database: database, Table: table})
 }
 
 func (s *driverSession) TruncateTableStatements(ctx context.Context, database, table string) ([]string, error) {
-	return forward[[]string](ctx, s, driverwire.OpTruncateTableStatements, driverwire.Args{Database: database, Table: table})
+	return forward[[]string](ctx, s, extwire.DriverOpTruncateTableStatements, extwire.DriverArgs{Database: database, Table: table})
 }
 
 func (s *driverSession) CreateDatabaseStatements(ctx context.Context, req dbdriver.CreateDatabaseRequest) ([]string, error) {
-	return forwardRequest[[]string](ctx, s, driverwire.OpCreateDatabaseStatements, driverwire.Args{}, req)
+	return forwardRequest[[]string](ctx, s, extwire.DriverOpCreateDatabaseStatements, extwire.DriverArgs{}, req)
 }
 
 func (s *driverSession) AlterTableModel(ctx context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
-	return forward[*dbdriver.AlterTableModel](ctx, s, driverwire.OpAlterTableModel, driverwire.Args{Database: database, Table: table})
+	return forward[*dbdriver.AlterTableModel](ctx, s, extwire.DriverOpAlterTableModel, extwire.DriverArgs{Database: database, Table: table})
 }
 
 func (s *driverSession) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
-	return forwardRequest[*dbdriver.AlterTableStatements](ctx, s, driverwire.OpAlterTableStatements, driverwire.Args{Database: database, Table: table}, req)
+	return forwardRequest[*dbdriver.AlterTableStatements](ctx, s, extwire.DriverOpAlterTableStatements, extwire.DriverArgs{Database: database, Table: table}, req)
 }
 
 func (s *driverSession) ImportStatements(ctx context.Context, database, table string, req dbdriver.ImportRequest) ([]string, error) {
-	return forwardRequest[[]string](ctx, s, driverwire.OpImportStatements, driverwire.Args{Database: database, Table: table}, req)
+	return forwardRequest[[]string](ctx, s, extwire.DriverOpImportStatements, extwire.DriverArgs{Database: database, Table: table}, req)
 }
 
 func (s *driverSession) ExecuteBatch(ctx context.Context, req dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
-	return forwardRequest[*dbdriver.BatchResult](ctx, s, driverwire.OpExecuteBatch, driverwire.Args{}, req)
+	return forwardRequest[*dbdriver.BatchResult](ctx, s, extwire.DriverOpExecuteBatch, extwire.DriverArgs{}, req)
 }
 
 // Close closes the session: its idle instances now, side by side — the session in
@@ -1003,8 +1003,8 @@ func (r *driverStream) Next() bool {
 		if r.done || r.err != nil {
 			return false
 		}
-		var page driverwire.StreamPage
-		r.err = r.inst.call(r.ctx, driverwire.Call{Op: driverwire.OpStreamNext, Args: driverwire.Args{
+		var page extwire.DriverStreamPage
+		r.err = r.inst.call(r.ctx, extwire.DriverCall{Op: extwire.DriverOpStreamNext, Args: extwire.DriverArgs{
 			Stream: r.id, Max: driverStreamRows,
 		}}, &page)
 		r.rows, r.done = page.Rows, page.Done
@@ -1034,7 +1034,7 @@ func (r *driverStream) Close() error {
 	if !r.inst.usable() {
 		return nil
 	}
-	return r.inst.call(r.ctx, driverwire.Call{Op: driverwire.OpStreamClose, Args: driverwire.Args{Stream: r.id}}, nil)
+	return r.inst.call(r.ctx, extwire.DriverCall{Op: extwire.DriverOpStreamClose, Args: extwire.DriverArgs{Stream: r.id}}, nil)
 }
 
 // driverRowWriter is a row statement writer prepared in the guest. Once it is
@@ -1060,7 +1060,7 @@ func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]st
 		return nil, fmt.Errorf("marshal row statements request: %w", err)
 	}
 	var out []string
-	err = w.inst.call(context.Background(), driverwire.Call{Op: driverwire.OpRowStatements, Args: driverwire.Args{
+	err = w.inst.call(context.Background(), extwire.DriverCall{Op: extwire.DriverOpRowStatements, Args: extwire.DriverArgs{
 		Writer: w.id, Request: raw,
 	}}, &out)
 	return out, err

@@ -211,6 +211,18 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
+// ReadManifest reads only the security contract of the extension in dir — its
+// manifest.json — for a caller that needs nothing describe() says (e.g. the
+// database driver ids an uninstall checks), so a functional face the host would
+// refuse does not stand in its way.
+func ReadManifest(dir string) (*Manifest, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json")) //nolint:gosec // extension directories are trusted
+	if err != nil {
+		return nil, err
+	}
+	return ParseManifest(data)
+}
+
 // LoadManifestInfo reads an extension directory without compiling or running its
 // WASM module: the manifest gives the security contract, the descriptor cache gives
 // the functional face. It is the entry point for callers that have no runtime at
@@ -218,17 +230,16 @@ func (m *Manager) Shutdown(ctx context.Context) {
 //
 // A cache miss leaves the functional face empty — that only happens for an
 // extension this machine has never loaded, since every load populates the cache.
+// A cached answer is judged exactly as loading the extension judges it: one the
+// load would refuse is an error here too.
 func LoadManifestInfo(dir string) (*ManifestInfo, error) {
-	manifestPath := filepath.Join(dir, "manifest.json")
-	data, err := os.ReadFile(manifestPath) //nolint:gosec // extension directories are trusted
+	manifest, err := ReadManifest(dir)
 	if err != nil {
 		return nil, err
 	}
-	manifest, err := ParseManifest(data)
-	if err != nil {
+	if err := applyCachedDescriptor(manifest, dir); err != nil {
 		return nil, err
 	}
-	applyCachedDescriptor(manifest, dir)
 	return newManifestInfo(manifest, dir), nil
 }
 
@@ -246,21 +257,22 @@ func newManifestInfo(manifest *Manifest, dir string) *ManifestInfo {
 }
 
 // applyCachedDescriptor merges the cached describe() answer for the extension in
-// dir, if the cache holds one for the wasm binary currently on disk.
-func applyCachedDescriptor(manifest *Manifest, dir string) {
+// dir, if the cache holds one for the wasm binary currently on disk, through the
+// same applyDescriptor a load uses; its refusal is returned.
+func applyCachedDescriptor(manifest *Manifest, dir string) error {
 	wasmBytes, err := os.ReadFile(filepath.Join(dir, manifest.Backend.Binary)) //nolint:gosec // path constructed from trusted extension directory
 	if err != nil {
 		logger.Default().Warn("read wasm binary for descriptor lookup",
 			zap.String("extension", manifest.Name), zap.Error(err))
-		return
+		return nil
 	}
 	desc := cachedDescriptor(manifest.Name, WasmHash(wasmBytes))
 	if desc == nil {
 		logger.Default().Warn("no cached descriptor for extension; load it once to populate the cache",
 			zap.String("extension", manifest.Name))
-		return
+		return nil
 	}
-	manifest.apply(desc)
+	return manifest.applyDescriptor(desc)
 }
 
 func (m *Manager) installLock(name string) *sync.Mutex {
@@ -295,31 +307,28 @@ func (p pendingDescriptor) store() {
 //
 // The guest is asked only when the cache has no answer for this exact wasm binary;
 // a hit skips the call entirely, which is what keeps listing extensions off the
-// WASM path. The answer is validated either way — a cached payload crosses the same
-// boundary as a fresh one. A fresh answer is returned for the caller to cache once
-// the extension is committed.
+// WASM path. The answer is judged by applyDescriptor either way — a cached payload
+// crosses the same boundary as a fresh one, and LoadManifestInfo judges it the
+// same way again. A fresh answer is returned for the caller to cache once the
+// extension is committed.
 func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *Plugin, wasmBytes []byte) (pendingDescriptor, error) {
 	hash := WasmHash(wasmBytes)
-	if desc := cachedDescriptor(manifest.Name, hash); desc != nil {
-		manifest.apply(desc)
-		if err := manifest.validateEndpointBindings(); err != nil {
+	var pending pendingDescriptor
+	desc := cachedDescriptor(manifest.Name, hash)
+	if desc == nil {
+		payload, err := plugin.Describe(ctx)
+		if err != nil {
+			return pendingDescriptor{}, fmt.Errorf("describe extension %q: %w", manifest.Name, err)
+		}
+		if desc, err = decodeDescriptor(payload); err != nil {
 			return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
 		}
-		return pendingDescriptor{}, nil
+		pending = pendingDescriptor{name: manifest.Name, hash: hash, payload: payload}
 	}
-	payload, err := plugin.Describe(ctx)
-	if err != nil {
-		return pendingDescriptor{}, fmt.Errorf("describe extension %q: %w", manifest.Name, err)
+	if err := manifest.applyDescriptor(desc); err != nil {
+		return pendingDescriptor{}, err
 	}
-	desc, err := ParseDescriptor(payload)
-	if err != nil {
-		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
-	}
-	manifest.apply(desc)
-	if err := manifest.validateEndpointBindings(); err != nil {
-		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
-	}
-	return pendingDescriptor{name: manifest.Name, hash: hash, payload: payload}, nil
+	return pending, nil
 }
 
 func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, error) {
@@ -438,8 +447,10 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 		// a disabled one has to fall back to what the cache remembers.
 		if ext := m.GetExtension(manifest.Name); ext != nil {
 			manifest = ext.Manifest
-		} else {
-			applyCachedDescriptor(manifest, extDir)
+		} else if err := applyCachedDescriptor(manifest, extDir); err != nil {
+			// The same verdict loading it would reach: not an extension this app runs.
+			m.logger.Warn("skip extension refused by its cached descriptor", zap.String("dir", entry.Name()), zap.Error(err))
+			continue
 		}
 		result = append(result, newManifestInfo(manifest, extDir))
 	}

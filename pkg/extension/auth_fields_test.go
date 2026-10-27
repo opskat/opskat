@@ -38,7 +38,9 @@ func TestAuthGroupJSONListsTheFieldsItsBindingsUse(t *testing.T) {
 
 // fields is derived by the host; a guest cannot declare it in describe().
 func TestAuthDeclarationCannotCarryFields(t *testing.T) {
-	var auth AuthDef
-	err := json.Unmarshal([]byte(`{"groups":[{"bindings":[{"in":"basic","value":"{{u}}:{{p}}"}],"fields":["u"]}]}`), &auth)
+	_, err := ParseDescriptor(describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"u":{"type":"string"},"p":{"type":"string"}}},` +
+		`"auth":{"groups":[{"bindings":[{"in":"basic","value":"{{u}}:{{p}}"}],"fields":["u"]}]}}],"policy":{"type":"x"}`))
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"fields"`)
 }

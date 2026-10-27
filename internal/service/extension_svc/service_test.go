@@ -134,16 +134,18 @@ func writeTestExtension(stub *describeCacheStub, dir, name string) {
 	writeSlimManifest(dir, name)
 	stub.put(name, map[string]any{
 		"i18n": map[string]any{"displayName": name, "description": name},
-		"assetTypes": []map[string]any{
-			{"type": name, "i18n": map[string]any{"name": name + ".name"},
-				"configSchema": testConfigSchema()},
-		},
-		"policies": map[string]any{"type": name},
-		"tools": []map[string]any{
-			{
-				"name": "test_tool", "policyAction": "read",
-				"i18n":       map[string]any{"description": "a tool"},
-				"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{
+				{"type": name, "i18n": map[string]any{"name": name + ".name"},
+					"configSchema": testConfigSchema()},
+			},
+			"policy": map[string]any{"type": name},
+			"tools": []map[string]any{
+				{
+					"name": "test_tool", "policyAction": "read",
+					"i18n":       map[string]any{"description": "a tool"},
+					"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+				},
 			},
 		},
 	})
@@ -156,16 +158,18 @@ func writeTestExtensionWithSnippets(stub *describeCacheStub, dir, name, assetTyp
 	writeSlimManifest(dir, name)
 	stub.put(name, map[string]any{
 		"i18n": map[string]any{"displayName": name, "description": name},
-		"assetTypes": []map[string]any{
-			{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
-		},
-		"policies": map[string]any{"type": name},
-		"snippets": map[string]any{
-			"categories": []map[string]any{
-				{"id": catID, "assetType": assetType, "i18n": map[string]any{"name": catID}},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{
+				{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
 			},
-			"seed": []map[string]any{
-				{"key": seedKey, "name": seedKey, "category": catID, "content": "echo " + seedKey},
+			"policy": map[string]any{"type": name},
+			"snippets": map[string]any{
+				"categories": []map[string]any{
+					{"id": catID, "assetType": assetType, "i18n": map[string]any{"name": catID}},
+				},
+				"seed": []map[string]any{
+					{"key": seedKey, "name": seedKey, "category": catID, "content": "echo " + seedKey},
+				},
 			},
 		},
 	})
@@ -383,10 +387,12 @@ func TestService(t *testing.T) {
 			// The new build claims an asset type another extension already owns.
 			stub.put("ext-hot", map[string]any{
 				"i18n": map[string]any{"displayName": "ext-hot", "description": "ext-hot"},
-				"assetTypes": []map[string]any{
-					{"type": "ext-other", "i18n": map[string]any{"name": "clash"}, "configSchema": testConfigSchema()},
+				"contributes": map[string]any{
+					"assetTypes": []map[string]any{
+						{"type": "ext-other", "i18n": map[string]any{"name": "clash"}, "configSchema": testConfigSchema()},
+					},
+					"policy": map[string]any{"type": "ext-hot"},
 				},
-				"policies": map[string]any{"type": "ext-hot"},
 			})
 			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldNotBeNil)
@@ -409,10 +415,12 @@ func TestService(t *testing.T) {
 
 			stub.put("ext-hot", map[string]any{
 				"i18n": map[string]any{"displayName": "ext-hot", "description": "ext-hot"},
-				"assetTypes": []map[string]any{
-					{"type": "ext-hot-v2", "i18n": map[string]any{"name": "v2"}, "configSchema": testConfigSchema()},
+				"contributes": map[string]any{
+					"assetTypes": []map[string]any{
+						{"type": "ext-hot-v2", "i18n": map[string]any{"name": "v2"}, "configSchema": testConfigSchema()},
+					},
+					"policy": map[string]any{"type": "ext-hot"},
 				},
-				"policies": map[string]any{"type": "ext-hot"},
 			})
 			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldBeNil)

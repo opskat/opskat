@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
-	"github.com/opskat/opskat/pkg/extension/driverwire"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 func TestLoadPlugin(t *testing.T) {
@@ -1109,7 +1109,7 @@ func TestDriverRowWriterIsReleasedInTheGuest(t *testing.T) {
 	inst, id := prepareAndDropWriter(t, s)
 	forgotten := func() bool {
 		raw, _ := json.Marshal(dbdriver.RowStatementsRequest{})
-		err := inst.call(ctx, driverwire.Call{Op: driverwire.OpRowStatements, Args: driverwire.Args{Writer: id, Request: raw}}, nil)
+		err := inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpRowStatements, Args: extwire.DriverArgs{Writer: id, Request: raw}}, nil)
 		return err != nil && strings.Contains(err.Error(), "no database driver row statement writer")
 	}
 	require.Eventually(t, func() bool {

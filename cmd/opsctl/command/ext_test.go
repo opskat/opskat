@@ -105,20 +105,22 @@ func writeExtManifest(t *testing.T, stub *describeCacheStub, dir, name, assetTyp
 
 	descriptor, err := json.Marshal(map[string]any{
 		"i18n": map[string]any{"displayName": name + " display", "description": name + " description"},
-		"assetTypes": []map[string]any{{
-			"type": assetType,
-			"i18n": map[string]any{"name": assetType},
-			"configSchema": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"endpoint": map[string]any{"type": "string"}},
-			},
-		}},
-		"tools": []map[string]any{{
-			"name":         "list_objects",
-			"policyAction": "list",
-			"parameters":   map[string]any{"type": "object", "properties": map[string]any{}},
-		}},
-		"policies": map[string]any{"type": name},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{{
+				"type": assetType,
+				"i18n": map[string]any{"name": assetType},
+				"configSchema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"endpoint": map[string]any{"type": "string"}},
+				},
+			}},
+			"tools": []map[string]any{{
+				"name":         "list_objects",
+				"policyAction": "list",
+				"parameters":   map[string]any{"type": "object", "properties": map[string]any{}},
+			}},
+			"policy": map[string]any{"type": name},
+		},
 	})
 	require.NoError(t, err)
 	stub.payloads[name] = string(descriptor)
@@ -342,9 +344,9 @@ func registerBulkExtension(t *testing.T) {
 	dir := withExtensionDir(t)
 	stub := installDescribeStub(t)
 	writeExtManifest(t, stub, dir, "acme", "acme-store")
-	var d map[string]any
+	var d map[string]map[string]any
 	require.NoError(t, json.Unmarshal([]byte(stub.payloads["acme"]), &d))
-	d["tools"] = []map[string]any{{
+	d["contributes"]["tools"] = []map[string]any{{
 		"name":         "bulk",
 		"policyAction": "write",
 		"fileParams":   []string{"body"},
@@ -776,7 +778,7 @@ func withDriverFields(t *testing.T) {
 	require.NoError(t, err)
 	var desc map[string]any
 	require.NoError(t, json.Unmarshal(payload, &desc))
-	drivers := desc["databaseDrivers"].([]any)
+	drivers := desc["contributes"].(map[string]any)["databaseDrivers"].([]any)
 	drivers[0].(map[string]any)["driverFields"] = []map[string]any{
 		{"key": "service_name", "type": "text", "tab": "connection", "required": true},
 		{"key": "wallet_secret", "type": "password", "tab": "connection"},

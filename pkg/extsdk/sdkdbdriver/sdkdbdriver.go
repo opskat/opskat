@@ -16,8 +16,8 @@ import (
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
-	"github.com/opskat/opskat/pkg/extension/driverwire"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // DriverOpen opens the database connection of one session and returns it with
@@ -100,7 +100,7 @@ var drivers []*driverEntry
 // driverHandleTable holds what the host refers to by id in this instance: open
 // sessions, open cursors (with the session they read from) and prepared row
 // statement writers, which outlive their session until the host releases them
-// (driverwire.Call.ReleaseWriters).
+// (extwire.DriverCall.ReleaseWriters).
 type driverHandleTable struct {
 	next     uint64
 	sessions map[uint64]dbdriver.Session
@@ -128,11 +128,11 @@ func (t *driverHandleTable) id() uint64 {
 
 var driverHandles = newDriverHandleTable()
 
-// serve serves one driverwire.Call. A failure of the operation is part of the
-// reply (driverwire.Error, coded when the host must recognize it); only a request
+// serve serves one extwire.DriverCall. A failure of the operation is part of the
+// reply (extwire.DriverError, coded when the host must recognize it); only a request
 // that cannot be read is an error of the call itself.
 func serve(input []byte) (json.RawMessage, error) {
-	var call driverwire.Call
+	var call extwire.DriverCall
 	if err := json.Unmarshal(input, &call); err != nil {
 		return nil, fmt.Errorf("parse database driver call: %w", err)
 	}
@@ -140,7 +140,7 @@ func serve(input []byte) (json.RawMessage, error) {
 		delete(driverHandles.writers, id)
 	}
 	result, opErr := runDriverOp(context.Background(), call)
-	var reply driverwire.Reply
+	var reply extwire.DriverReply
 	if result != nil {
 		raw, err := json.Marshal(result)
 		if err != nil {
@@ -151,31 +151,31 @@ func serve(input []byte) (json.RawMessage, error) {
 		}
 	}
 	if opErr != nil {
-		reply.Error = &driverwire.Error{Message: opErr.Error()}
+		reply.Error = &extwire.DriverError{Message: opErr.Error()}
 		if errors.Is(opErr, dbdriver.ErrUnsupported) {
-			reply.Error.Code = driverwire.CodeUnsupported
+			reply.Error.Code = extwire.DriverCodeUnsupported
 		}
 	}
 	return json.Marshal(reply)
 }
 
-func runDriverOp(ctx context.Context, call driverwire.Call) (any, error) {
+func runDriverOp(ctx context.Context, call extwire.DriverCall) (any, error) {
 	a := call.Args
 	switch call.Op {
-	case driverwire.OpOpen:
+	case extwire.DriverOpOpen:
 		return openDriverSession(ctx, a)
-	case driverwire.OpClassifyStatements:
+	case extwire.DriverOpClassifyStatements:
 		return classifyStatements(ctx, a)
-	case driverwire.OpStreamNext:
+	case extwire.DriverOpStreamNext:
 		return streamNext(a)
-	case driverwire.OpStreamClose:
+	case extwire.DriverOpStreamClose:
 		stream, ok := driverHandles.streams[a.Stream]
 		if !ok {
 			return nil, fmt.Errorf("no database driver cursor %d", a.Stream)
 		}
 		delete(driverHandles.streams, a.Stream)
 		return nil, stream.rows.Close()
-	case driverwire.OpRowStatements:
+	case extwire.DriverOpRowStatements:
 		writer, ok := driverHandles.writers[a.Writer]
 		if !ok {
 			return nil, fmt.Errorf("no database driver row statement writer %d", a.Writer)
@@ -192,82 +192,82 @@ func runDriverOp(ctx context.Context, call driverwire.Call) (any, error) {
 		return nil, fmt.Errorf("no database driver session %d", call.Session)
 	}
 	switch call.Op {
-	case driverwire.OpClose:
+	case extwire.DriverOpClose:
 		return nil, closeDriverSession(call.Session, s)
-	case driverwire.OpExecute:
+	case extwire.DriverOpExecute:
 		return s.Execute(ctx, a.Statement)
-	case driverwire.OpExecutePaged:
+	case extwire.DriverOpExecutePaged:
 		return s.ExecutePaged(ctx, a.Statement, a.Page)
-	case driverwire.OpListDatabases:
+	case extwire.DriverOpListDatabases:
 		return s.ListDatabases(ctx)
-	case driverwire.OpListTables:
+	case extwire.DriverOpListTables:
 		return s.ListTables(ctx, a.Database)
-	case driverwire.OpTableMetadata:
+	case extwire.DriverOpTableMetadata:
 		return s.TableMetadata(ctx, a.Database, a.Table)
-	case driverwire.OpListObjects:
+	case extwire.DriverOpListObjects:
 		return s.ListObjects(ctx, a.Database)
-	case driverwire.OpObjectSource:
+	case extwire.DriverOpObjectSource:
 		return s.ObjectSource(ctx, a.Database, a.ObjectType, a.Name, a.ObjectTable)
-	case driverwire.OpOpenTable:
+	case extwire.DriverOpOpenTable:
 		return s.OpenTable(ctx, a.Database, a.Table, a.PageSize)
-	case driverwire.OpTableRows:
+	case extwire.DriverOpTableRows:
 		return s.TableRows(ctx, a.Database, a.Table, a.Query, a.Page)
-	case driverwire.OpCountTableRows:
+	case extwire.DriverOpCountTableRows:
 		return s.CountTableRows(ctx, a.Database, a.Table, a.Filters)
-	case driverwire.OpStreamTableRows:
+	case extwire.DriverOpStreamTableRows:
 		rows, err := s.StreamTableRows(ctx, a.Database, a.Table, a.Query)
 		if err != nil {
 			return nil, err
 		}
 		id := driverHandles.id()
 		driverHandles.streams[id] = driverStream{session: call.Session, rows: rows}
-		return driverwire.StreamOpened{Stream: id, Columns: rows.Columns()}, nil
-	case driverwire.OpTableDDL:
+		return extwire.DriverStreamOpened{Stream: id, Columns: rows.Columns()}, nil
+	case extwire.DriverOpTableDDL:
 		return s.TableDDL(ctx, a.Database, a.Table)
-	case driverwire.OpStarterQuery:
+	case extwire.DriverOpStarterQuery:
 		return s.StarterQuery(ctx, a.Database, a.Table, a.Limit)
-	case driverwire.OpPrepareRowStatements:
+	case extwire.DriverOpPrepareRowStatements:
 		writer, err := s.PrepareRowStatements(ctx, a.Database, a.Table)
 		if err != nil {
 			return nil, err
 		}
 		id := driverHandles.id()
 		driverHandles.writers[id] = writer
-		return driverwire.WriterPrepared{Writer: id}, nil
-	case driverwire.OpDropTableStatements:
+		return extwire.DriverWriterPrepared{Writer: id}, nil
+	case extwire.DriverOpDropTableStatements:
 		return s.DropTableStatements(ctx, a.Database, a.Table)
-	case driverwire.OpTruncateTableStatements:
+	case extwire.DriverOpTruncateTableStatements:
 		return s.TruncateTableStatements(ctx, a.Database, a.Table)
-	case driverwire.OpAlterTableModel:
+	case extwire.DriverOpAlterTableModel:
 		return s.AlterTableModel(ctx, a.Database, a.Table)
 	}
 	return runDriverRequestOp(ctx, s, call.Op, a)
 }
 
 // runDriverRequestOp runs the operations whose input is a request type.
-func runDriverRequestOp(ctx context.Context, s dbdriver.Session, op string, a driverwire.Args) (any, error) {
+func runDriverRequestOp(ctx context.Context, s dbdriver.Session, op string, a extwire.DriverArgs) (any, error) {
 	switch op {
-	case driverwire.OpGridEditStatements:
+	case extwire.DriverOpGridEditStatements:
 		return withDriverRequest(a.Request, func(req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
 			return s.GridEditStatements(ctx, a.Database, a.Table, req)
 		})
-	case driverwire.OpCreateTableStatements:
+	case extwire.DriverOpCreateTableStatements:
 		return withDriverRequest(a.Request, func(req dbdriver.CreateTableRequest) ([]string, error) {
 			return s.CreateTableStatements(ctx, a.Database, req)
 		})
-	case driverwire.OpCreateDatabaseStatements:
+	case extwire.DriverOpCreateDatabaseStatements:
 		return withDriverRequest(a.Request, func(req dbdriver.CreateDatabaseRequest) ([]string, error) {
 			return s.CreateDatabaseStatements(ctx, req)
 		})
-	case driverwire.OpAlterTableStatements:
+	case extwire.DriverOpAlterTableStatements:
 		return withDriverRequest(a.Request, func(req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
 			return s.AlterTableStatements(ctx, a.Database, a.Table, req)
 		})
-	case driverwire.OpImportStatements:
+	case extwire.DriverOpImportStatements:
 		return withDriverRequest(a.Request, func(req dbdriver.ImportRequest) ([]string, error) {
 			return s.ImportStatements(ctx, a.Database, a.Table, req)
 		})
-	case driverwire.OpExecuteBatch:
+	case extwire.DriverOpExecuteBatch:
 		return withDriverRequest(a.Request, func(req dbdriver.BatchRequest) (*dbdriver.BatchResult, error) {
 			return s.ExecuteBatch(ctx, req)
 		})
@@ -303,7 +303,7 @@ func driverByID(id dbdriver.DriverID) (*driverEntry, error) {
 	return drivers[i], nil
 }
 
-func classifyStatements(ctx context.Context, a driverwire.Args) (any, error) {
+func classifyStatements(ctx context.Context, a extwire.DriverArgs) (any, error) {
 	drv, err := driverByID(a.Driver)
 	if err != nil {
 		return nil, err
@@ -314,7 +314,7 @@ func classifyStatements(ctx context.Context, a driverwire.Args) (any, error) {
 	return drv.classify(ctx, a.Statement)
 }
 
-func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
+func openDriverSession(ctx context.Context, a extwire.DriverArgs) (any, error) {
 	drv, err := driverByID(a.Driver)
 	if err != nil {
 		return nil, err
@@ -341,7 +341,7 @@ func openDriverSession(ctx context.Context, a driverwire.Args) (any, error) {
 	}
 	id := driverHandles.id()
 	driverHandles.sessions[id] = sqldb.NewSession(db, dialect)
-	return driverwire.Opened{Session: id}, nil
+	return extwire.DriverOpened{Session: id}, nil
 }
 
 // hostKerberosTicket is OpenRequest.Kerberos.Ticket in the guest: the host's
@@ -367,7 +367,7 @@ func closeDriverSession(id uint64, s dbdriver.Session) error {
 
 // streamNext reads up to a.Max rows; fewer means the cursor is done. A read error
 // is answered together with the rows read before it.
-func streamNext(a driverwire.Args) (any, error) {
+func streamNext(a extwire.DriverArgs) (any, error) {
 	stream, ok := driverHandles.streams[a.Stream]
 	if !ok {
 		return nil, fmt.Errorf("no database driver cursor %d", a.Stream)
@@ -375,7 +375,7 @@ func streamNext(a driverwire.Args) (any, error) {
 	if a.Max <= 0 {
 		return nil, fmt.Errorf("read cursor %d: max must be positive, got %d", a.Stream, a.Max)
 	}
-	page := driverwire.StreamPage{Rows: make([][]any, 0, a.Max)}
+	page := extwire.DriverStreamPage{Rows: make([][]any, 0, a.Max)}
 	for len(page.Rows) < a.Max && stream.rows.Next() {
 		page.Rows = append(page.Rows, stream.rows.Row())
 	}

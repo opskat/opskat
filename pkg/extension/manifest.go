@@ -1,8 +1,6 @@
 package extension
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 var (
@@ -58,12 +57,13 @@ type Manifest struct {
 	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
 }
 
+// The functional face is merged from describe() in the wire types the guest SDK
+// encodes it with (pkg/extwire). These names are the host's view of them; the
+// JSON the frontend reads is the wire shape.
+
 // SnippetsDef declares snippet categories and seed snippets contributed by this extension.
 // All fields are optional; an empty block is a no-op.
-type SnippetsDef struct {
-	Categories []SnippetCategoryDef `json:"categories"`
-	Seed       []SeedSnippetDef     `json:"seed"`
-}
+type SnippetsDef = extwire.Snippets
 
 // SnippetCategoryDef declares a new snippet category id that this extension owns.
 //
@@ -72,11 +72,7 @@ type SnippetsDef struct {
 //   - ID must NOT collide with any builtin category (see IsBuiltinSnippetCategoryID).
 //   - ID must be unique within this manifest.
 //   - AssetType must be non-empty and must match a type declared in assetTypes[].
-type SnippetCategoryDef struct {
-	ID        string   `json:"id"`
-	AssetType string   `json:"assetType"`
-	I18n      I18nName `json:"i18n"`
-}
+type SnippetCategoryDef = extwire.SnippetCategory
 
 // SeedSnippetDef is a read-only snippet shipped with the extension.
 //
@@ -84,18 +80,9 @@ type SnippetCategoryDef struct {
 //   - Key must match ^[a-z0-9][a-z0-9-]{0,63}$ and be unique within this manifest.
 //   - Name and Content must be non-empty after trimming.
 //   - Category must be either a builtin category id or a category declared in THIS manifest.
-type SeedSnippetDef struct {
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	Content     string `json:"content"`
-	Description string `json:"description"`
-}
+type SeedSnippetDef = extwire.SeedSnippet
 
-type ManifestI18n struct {
-	DisplayName string `json:"displayName"`
-	Description string `json:"description"`
-}
+type ManifestI18n = extwire.I18n
 
 type AssetTypeDef struct {
 	Type         string         `json:"type"`
@@ -111,30 +98,25 @@ type AssetTypeDef struct {
 	TestConnection bool `json:"testConnection,omitempty"`
 }
 
+// assetTypeDef is the host's view of a wire asset type: the same declaration,
+// with its auth read into AuthDef, which the host renders and injects.
+func assetTypeDef(at extwire.AssetType) AssetTypeDef {
+	return AssetTypeDef{
+		Type:           at.Type,
+		I18n:           at.I18n,
+		ConfigSchema:   at.ConfigSchema,
+		Connection:     at.Connection,
+		Auth:           authDef(at.Auth),
+		TestConnection: at.TestConnection,
+	}
+}
+
 // ConnectionDef is the subset of the host-owned connection settings an asset
 // type supports. The host renders a declared item in the asset form and detail
 // card and applies it when dialing the asset's endpoint; an undeclared item is
 // neither shown nor applied. The extension never reads these settings — the SSH
 // tunnel is the asset's own SSHTunnelID column, outside its config.
-type ConnectionDef struct {
-	SSHTunnel  bool `json:"sshTunnel,omitempty"`
-	ProxyChain bool `json:"proxyChain,omitempty"`
-	TLS        bool `json:"tls,omitempty"`
-}
-
-// UnmarshalJSON refuses an item the host does not own: silently dropping it would
-// load an extension whose author believes a setting is applied when it is not.
-func (c *ConnectionDef) UnmarshalJSON(data []byte) error {
-	type plain ConnectionDef
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var v plain
-	if err := dec.Decode(&v); err != nil {
-		return fmt.Errorf("connection (supported items: sshTunnel, proxyChain, tls): %w", err)
-	}
-	*c = ConnectionDef(v)
-	return nil
-}
+type ConnectionDef = extwire.Connection
 
 // bindsEndpoint reports whether the type declares anything the host applies only
 // on a connection to the asset's endpoint: credential injection or a connection
@@ -179,60 +161,25 @@ func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {
 	return nil
 }
 
-type I18nName struct {
-	Name string `json:"name"`
-}
+type I18nName = extwire.I18nName
 
-type I18nNameDesc struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
+type I18nNameDesc = extwire.I18nNameDesc
 
-type ToolDef struct {
-	Name       string         `json:"name"`
-	I18n       I18nDesc       `json:"i18n"`
-	Parameters map[string]any `json:"parameters"`
-	// PolicyAction is the fixed action this tool requests; the asset's permission
-	// groups are matched against it. It is declared at the tool's registration in
-	// the guest, which is also what makes the guest's policy answer unable to drift
-	// from its tool table.
-	PolicyAction string `json:"policyAction,omitempty"`
-	// PolicyActions is, instead of PolicyAction, the set of actions a tool that
-	// classifies each call from its arguments (the SDK's PolicyFunc) may answer
-	// check_policy with. A tool declares exactly one of the two.
-	PolicyActions []string `json:"policyActions,omitempty"`
-	// TimeoutMs is how long one call of this tool may run, in milliseconds; 0
-	// means the host default. It is the tool's to declare because only the tool
-	// knows whether it answers in a second or scans an index for minutes, and it
-	// holds for every caller alike — AI exec, opsctl and the extension's page.
-	TimeoutMs int64 `json:"timeoutMs,omitempty"`
-	// FileParams names the string parameters opsctl may fill from a file
-	// (`--<name>-file <path>`); every other entry point rejects that form.
-	FileParams []string `json:"fileParams,omitempty"`
-}
+// ToolDef is one tool. Its policy action is declared at the tool's registration
+// in the guest, which is what makes the guest's policy answer unable to drift
+// from its tool table; its timeout is the tool's to declare because only the
+// tool knows whether it answers in a second or scans an index for minutes.
+type ToolDef = extwire.Tool
 
 // MaxToolTimeout is the longest timeout a tool may declare. A tool call holds
 // one of the extension's few instance slots for as long as it runs; work that
 // needs longer is an action, which streams progress and can be canceled.
 const MaxToolTimeout = 10 * time.Minute
 
-// Timeout is the tool's declared call timeout, 0 when it leaves the host default.
-func (t ToolDef) Timeout() time.Duration {
-	return time.Duration(t.TimeoutMs) * time.Millisecond
-}
+type I18nDesc = extwire.I18nDesc
 
-// Actions is every policy action the tool can request.
-func (t ToolDef) Actions() []string {
-	if t.PolicyAction != "" {
-		return []string{t.PolicyAction}
-	}
-	return t.PolicyActions
-}
-
-type I18nDesc struct {
-	Description string `json:"description"`
-}
-
+// PoliciesDef is the policy face merged onto the manifest: the guest's
+// extwire.Policy plus Actions, derived from the tools.
 type PoliciesDef struct {
 	Type    string           `json:"type"`
 	Actions []string         `json:"actions"`
@@ -240,24 +187,11 @@ type PoliciesDef struct {
 	Default []string         `json:"default"`
 }
 
-type PolicyGroupDef struct {
-	ID     string         `json:"id"`
-	I18n   I18nNameDesc   `json:"i18n"`
-	Policy map[string]any `json:"policy"`
-}
+type PolicyGroupDef = extwire.PolicyGroup
 
-type FrontendDef struct {
-	Entry  string    `json:"entry"`
-	Styles string    `json:"styles"`
-	Pages  []PageDef `json:"pages"`
-}
+type FrontendDef = extwire.Pages
 
-type PageDef struct {
-	ID        string   `json:"id"`
-	Slot      string   `json:"slot,omitempty"`
-	I18n      I18nName `json:"i18n"`
-	Component string   `json:"component"`
-}
+type PageDef = extwire.Page
 
 // ParseManifest reads the security contract from manifest.json (see
 // extmanifest.Parse). The returned Manifest carries no functional face yet — that

@@ -35,6 +35,15 @@ func decodeDescribe(t *testing.T) map[string]any {
 	return out
 }
 
+// decodeContributes is describe()'s contributes object: one key per
+// contribution point.
+func decodeContributes(t *testing.T) map[string]any {
+	t.Helper()
+	contributes, ok := decodeDescribe(t)["contributes"].(map[string]any)
+	So(ok, ShouldBeTrue)
+	return contributes
+}
+
 func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 	Convey("describe reports what the registration calls declared", t, func() {
 		resetRegistries()
@@ -60,7 +69,8 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 			So(desc["icon"], ShouldEqual, "cloud")
 			i18n := desc["i18n"].(map[string]any)
 			So(i18n["displayName"], ShouldEqual, "manifest.displayName")
-			policies := desc["policies"].(map[string]any)
+			So(desc, ShouldNotContainKey, "policies")
+			policies := desc["contributes"].(map[string]any)["policy"].(map[string]any)
 			So(policies["type"], ShouldEqual, "demo")
 			So(policies["default"], ShouldResemble, []any{"ext:demo:readonly"})
 			groups := policies["groups"].([]any)
@@ -75,7 +85,7 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 
 		Convey("every registered tool is reported, with a schema reflected from its args", func() {
 			byName := map[string]map[string]any{}
-			for _, raw := range desc["tools"].([]any) {
+			for _, raw := range desc["contributes"].(map[string]any)["tools"].([]any) {
 				tool := raw.(map[string]any)
 				byName[tool["name"].(string)] = tool
 			}
@@ -110,7 +120,7 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 		})
 
 		Convey("asset type configSchema is reflected from the config struct", func() {
-			assetTypes := desc["assetTypes"].([]any)
+			assetTypes := desc["contributes"].(map[string]any)["assetTypes"].([]any)
 			So(len(assetTypes), ShouldEqual, 1)
 			at := assetTypes[0].(map[string]any)
 			So(at["type"], ShouldEqual, "demo")
@@ -135,7 +145,7 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 			// second list that could be left behind.
 			_ = decodeDescribe(t)
 			Tool("late", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
-			tools := decodeDescribe(t)["tools"].([]any)
+			tools := decodeContributes(t)["tools"].([]any)
 			names := make([]string, 0, len(tools))
 			for _, raw := range tools {
 				names = append(names, raw.(map[string]any)["name"].(string))
@@ -221,7 +231,7 @@ func TestDescribeReportsConnectionDeclaration(t *testing.T) {
 		AssetType[demoConfig]("direct")
 
 		byType := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["assetTypes"].([]any) {
+		for _, raw := range decodeContributes(t)["assetTypes"].([]any) {
 			at := raw.(map[string]any)
 			byType[at["type"].(string)] = at
 		}
@@ -244,7 +254,7 @@ func TestDescribeReportsAuthDeclaration(t *testing.T) {
 		AssetType[demoConfig]("plain")
 
 		byType := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["assetTypes"].([]any) {
+		for _, raw := range decodeContributes(t)["assetTypes"].([]any) {
 			at := raw.(map[string]any)
 			byType[at["type"].(string)] = at
 		}
@@ -303,7 +313,7 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 		})
 
 		Convey("describe declares the action set, not a fixed action", func() {
-			tool := decodeDescribe(t)["tools"].([]any)[0].(map[string]any)
+			tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
 			So(tool["policyActions"], ShouldResemble, []any{"index.read", "index.write"})
 			So(tool, ShouldNotContainKey, "policyAction")
 		})
@@ -314,7 +324,7 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 			raw, err := dispatch("check_policy", []byte(`{"tool":"list","args":{"bucket":"b1"}}`))
 			So(err, ShouldBeNil)
 			So(string(raw), ShouldEqual, `{"action":"list","resource":"b1"}`)
-			for _, rawTool := range decodeDescribe(t)["tools"].([]any) {
+			for _, rawTool := range decodeContributes(t)["tools"].([]any) {
 				tool := rawTool.(map[string]any)
 				if tool["name"] == "list" {
 					So(tool["policyAction"], ShouldEqual, "list")
@@ -386,7 +396,7 @@ func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
 		})
 
 		Convey("describe declares the action set", func() {
-			tool := decodeDescribe(t)["tools"].([]any)[0].(map[string]any)
+			tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
 			So(tool["policyActions"], ShouldResemble, []any{"index.read", "index.write"})
 		})
 
@@ -551,7 +561,7 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 		Tool("plain", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
 
 		byName := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["tools"].([]any) {
+		for _, raw := range decodeContributes(t)["tools"].([]any) {
 			tool := raw.(map[string]any)
 			byName[tool["name"].(string)] = tool
 		}
@@ -582,7 +592,7 @@ func TestDescribeReportsFileParams(t *testing.T) {
 		Tool("plain", noop).Policy("read")
 
 		byName := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["tools"].([]any) {
+		for _, raw := range decodeContributes(t)["tools"].([]any) {
 			tool := raw.(map[string]any)
 			byName[tool["name"].(string)] = tool
 		}

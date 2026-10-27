@@ -50,10 +50,12 @@ func writeVersionedExtension(t *testing.T, stub *describeCacheStub, parent, name
 	stub.put(name, map[string]any{
 		"icon": "database#336791",
 		"i18n": map[string]any{"displayName": "ext.name", "description": "ext.name"},
-		"assetTypes": []map[string]any{
-			{"type": name, "i18n": map[string]any{"name": name}, "configSchema": testConfigSchema()},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{
+				{"type": name, "i18n": map[string]any{"name": name}, "configSchema": testConfigSchema()},
+			},
+			"policy": map[string]any{"type": name},
 		},
-		"policies": map[string]any{"type": name},
 	})
 	return dir
 }
@@ -327,12 +329,14 @@ func TestNewInstallConfirm_DatabaseDriversAreGrantsAndUpgradeMarksNewOnes(t *tes
 	stub.put("ext-drv", map[string]any{
 		"icon": "database",
 		"i18n": map[string]any{"displayName": "ext.name", "description": "ext.name"},
-		"databaseDrivers": []map[string]any{{
-			"id": "oracle", "name": "Oracle", "icon": "database", "order": 50, "aliases": []string{},
-			"defaultPort": 1521, "form": []map[string]any{{"tab": "connection", "fields": []string{"host", "port", "username"}}},
-			"capabilities": []string{"schemas"}, "createDatabaseOptions": []any{},
-			"alterTableAttributes": []any{}, "driverFields": []any{},
-		}},
+		"contributes": map[string]any{
+			"databaseDrivers": []map[string]any{{
+				"id": "oracle", "name": "Oracle", "icon": "database", "order": 50, "aliases": []string{},
+				"defaultPort": 1521, "form": []map[string]any{{"tab": "connection", "fields": []string{"host", "port", "username"}}},
+				"capabilities": []string{"schemas"}, "createDatabaseOptions": []any{},
+				"alterTableAttributes": []any{}, "driverFields": []any{},
+			}},
+		},
 	})
 	_, err := svc.Install(langCtx, dir, nil)
 	require.NoError(t, err)

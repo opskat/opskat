@@ -117,11 +117,11 @@ func TestLoadExtensionRefusesAModuleThatIsNotAReactor(t *testing.T) {
 
 // sentinelDescriptor names a tool the fixture does not have, so a manifest that
 // ends up carrying it can only have come from the cache.
-const sentinelDescriptor = `{"i18n":{"displayName":"cached","description":"c"},` +
+const sentinelDescriptor = `{"i18n":{"displayName":"cached","description":"c"},"contributes":{` +
 	`"assetTypes":[{"type":"fixture","i18n":{"name":"n"},` +
 	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
-	`"policies":{"type":"fixture"},` +
-	`"tools":[{"name":"from_cache","policyAction":"read","parameters":{"type":"object","properties":{}}}]}`
+	`"policy":{"type":"fixture"},` +
+	`"tools":[{"name":"from_cache","policyAction":"read","parameters":{"type":"object","properties":{}}}]}}`
 
 func TestDescribeIsCachedByWasmHash(t *testing.T) {
 	Convey("Given an extension whose descriptor is already cached", t, func() {
@@ -188,4 +188,66 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 			So(info.Manifest.Tools[0].Name, ShouldEqual, "from_cache")
 		})
 	})
+}
+
+// TestCachedDescribeReachesTheFirstLoadVerdict is problem 8: a cached describe()
+// answer read without a runtime (opsctl, the extension list, a disabled
+// extension) must be refused exactly where loading the extension refuses it, not
+// merged onto the manifest as if it were valid.
+func TestCachedDescribeReachesTheFirstLoadVerdict(t *testing.T) {
+	const withEndpoint = `"configSchema":{"type":"object","properties":{` +
+		`"endpoint":{"type":"string","format":"endpoint"},"password":{"type":"string","format":"password"}}}`
+	const noEndpoint = `"configSchema":{"type":"object","properties":{` +
+		`"host":{"type":"string"},"password":{"type":"string","format":"password"}}}`
+	cached := func(schema string) string {
+		return cachedAssetTypePayload(`{"type":"fixture","i18n":{"name":"n"},` + schema + `,` +
+			`"auth":{"groups":[{"bindings":[{"in":"header","name":"X-Token","value":"{{password}}"}]}]}}`)
+	}
+	Convey("Given a cached describe() whose asset type declares auth", t, func() {
+		ctx := context.Background()
+		root, extDir := installFixture(t)
+
+		Convey("a manifest without permissions.network.assetEndpoint is refused on both paths", func() {
+			So(os.WriteFile(filepath.Join(extDir, "manifest.json"), []byte(`{"name":"fixture-ext","version":"1.0.0","hostABI":"1.0",`+
+				`"backend":{"runtime":"wasm","binary":"main.wasm"}}`), 0644), ShouldBeNil)
+			useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), cached(withEndpoint)))
+
+			_, loadErr := newFixtureManager(t, root).LoadExtension(ctx, extDir)
+			So(loadErr, ShouldNotBeNil)
+			So(loadErr.Error(), ShouldContainSubstring, "permissions.network.assetEndpoint")
+
+			_, infoErr := LoadManifestInfo(extDir)
+			So(infoErr, ShouldNotBeNil)
+			So(infoErr.Error(), ShouldEqual, loadErr.Error())
+
+			infos, err := newFixtureManager(t, root).ScanManifests()
+			So(err, ShouldBeNil)
+			So(infos, ShouldBeEmpty)
+		})
+
+		Convey("an asset type without a format:\"endpoint\" field is refused, not discarded as stale", func() {
+			useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), cached(noEndpoint)))
+
+			_, err := LoadManifestInfo(extDir)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "fixture-ext")
+			So(err.Error(), ShouldContainSubstring, `format:"endpoint"`)
+		})
+
+		Convey("a valid entry is still merged", func() {
+			useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), cached(withEndpoint)))
+
+			info, err := LoadManifestInfo(extDir)
+			So(err, ShouldBeNil)
+			So(info.Manifest.AssetTypes, ShouldHaveLength, 1)
+			So(info.Manifest.AssetTypes[0].Auth, ShouldNotBeNil)
+		})
+	})
+}
+
+// cachedAssetTypePayload is a describe() answer with one asset type and the
+// fixture's policy face.
+func cachedAssetTypePayload(assetType string) string {
+	return `{"i18n":{"displayName":"cached","description":"c"},"contributes":{` +
+		`"assetTypes":[` + assetType + `],"policy":{"type":"fixture"}}}`
 }

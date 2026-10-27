@@ -208,8 +208,8 @@ func writeStubExtension(t *testing.T, name string) (string, describeStub) {
 		name, extmanifest.HostABIVersion)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), stubWASM, 0o600))
-	desc := fmt.Sprintf(`{"i18n":{"displayName":%q},"assetTypes":[{"type":%q,"i18n":{"name":%q},`+
-		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],"policies":{"type":%q}}`,
+	desc := fmt.Sprintf(`{"i18n":{"displayName":%q},"contributes":{"assetTypes":[{"type":%q,"i18n":{"name":%q},`+
+		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],"policy":{"type":%q}}}`,
 		name, name, name, name)
 	return dir, describeStub{payload: map[string][]byte{name: []byte(desc)}}
 }

@@ -2,7 +2,6 @@
 package extension
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +12,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // AuthDef is the credential injection an asset type declares in describe(): the
@@ -60,26 +61,27 @@ type AuthBinding struct {
 	Value string `json:"value"`
 }
 
+// authDef reads a wire auth declaration (extwire.Auth, decoded strictly) into the
+// host's AuthDef; nil stays nil.
+func authDef(a *extwire.Auth) *AuthDef {
+	if a == nil {
+		return nil
+	}
+	out := &AuthDef{Selector: a.Selector, Groups: make([]AuthGroup, len(a.Groups))}
+	for i, g := range a.Groups {
+		out.Groups[i] = AuthGroup{When: g.When, Bindings: make([]AuthBinding, len(g.Bindings))}
+		for j, b := range g.Bindings {
+			out.Groups[i].Bindings[j] = AuthBinding(b)
+		}
+	}
+	return out
+}
+
 const (
 	authInHeader = "header"
 	authInQuery  = "query"
 	authInBasic  = "basic"
 )
-
-// UnmarshalJSON refuses a key the host does not read: a mistyped "name" left
-// unread would load an extension that injects nothing where its author expects
-// a credential.
-func (a *AuthDef) UnmarshalJSON(data []byte) error {
-	type plain AuthDef
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var v plain
-	if err := dec.Decode(&v); err != nil {
-		return fmt.Errorf("auth (keys: selector, groups[].when, groups[].bindings[].in/name/value): %w", err)
-	}
-	*a = AuthDef(v)
-	return nil
-}
 
 // headerNameRe is an RFC 7230 token: what net/http accepts as a header name.
 var headerNameRe = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")

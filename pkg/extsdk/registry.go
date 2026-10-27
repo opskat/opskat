@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // The registration API is the single place an extension declares what it can do.
@@ -422,16 +423,12 @@ func (r *AssetTypeReg[C]) Name(name string) *AssetTypeReg[C] {
 // detail card and applies it whenever the extension opens a connection to the
 // asset's endpoint. The extension never reads or handles them — they are not
 // part of the config struct. An item left out is neither shown nor applied.
-type Connection struct {
-	// SSHTunnel routes connections to the endpoint through an SSH asset the user
-	// picks on the asset.
-	SSHTunnel bool `json:"sshTunnel,omitempty"`
-	// ProxyChain routes connections through the asset's proxy chain.
-	ProxyChain bool `json:"proxyChain,omitempty"`
-	// TLS applies the asset's TLS settings (verification, server name, CA,
-	// client certificate) to connections.
-	TLS bool `json:"tls,omitempty"`
-}
+//
+// Fields: SSHTunnel routes connections to the endpoint through an SSH asset the
+// user picks on the asset; ProxyChain routes them through the asset's proxy
+// chain; TLS applies the asset's TLS settings (verification, server name, CA,
+// client certificate).
+type Connection = extwire.Connection
 
 // Connection declares the host-owned connection settings the asset type supports.
 func (r *AssetTypeReg[C]) Connection(c Connection) *AssetTypeReg[C] {
@@ -450,27 +447,17 @@ func (r *AssetTypeReg[C]) Connection(c Connection) *AssetTypeReg[C] {
 // always-active group. The host refuses the extension at load when a template
 // references a field the config does not declare, or the selector is a
 // format:"password" field.
-type Auth struct {
-	Selector string      `json:"selector,omitempty"`
-	Groups   []AuthGroup `json:"groups"`
-}
+type Auth = extwire.Auth
 
 // AuthGroup is the set of bindings injected when the selector field equals When.
-type AuthGroup struct {
-	When     string        `json:"when,omitempty"`
-	Bindings []AuthBinding `json:"bindings"`
-}
+type AuthGroup = extwire.AuthGroup
 
 // AuthBinding injects one value. In is "header" (Name = header name), "query"
 // (Name = parameter name) or "basic" (no Name; Value renders "user:password"
 // and is sent as Authorization: Basic). Value is a template: literal text with
 // {{field}} and {{base64(part, ...)}} placeholders, each part a config field or
 // a double-quoted literal — e.g. `ApiKey {{base64(apiKeyId, ":", apiKey)}}`.
-type AuthBinding struct {
-	In    string `json:"in"`
-	Name  string `json:"name,omitempty"`
-	Value string `json:"value"`
-}
+type AuthBinding = extwire.AuthBinding
 
 // Auth declares the credentials the host injects into requests to the asset's endpoint.
 func (r *AssetTypeReg[C]) Auth(a Auth) *AssetTypeReg[C] {

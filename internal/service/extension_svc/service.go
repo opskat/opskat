@@ -607,14 +607,14 @@ func (s *Service) unregister(ctx context.Context, name string) {
 // drivers. The driver ids come from the manifest on disk, so the check holds for
 // a disabled extension too; a name that is not installed has none to check.
 func (s *Service) checkDriverAssets(ctx context.Context, name string) error {
-	info, err := extension.LoadManifestInfo(s.manager.ExtDir(name))
+	manifest, err := extension.ReadManifest(s.manager.ExtDir(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("cannot uninstall %q: read its manifest to check the database assets using its drivers: %w; use force uninstall to remove it anyway", name, err)
 	}
-	for _, driver := range info.Manifest.Contributes.DatabaseDrivers {
+	for _, driver := range manifest.Contributes.DatabaseDrivers {
 		assets, err := s.assetRepo.List(ctx, asset_repo.ListOptions{DatabaseDriver: driver})
 		if err != nil {
 			return fmt.Errorf("cannot uninstall %q: list the database assets using its driver %q: %w", name, driver, err)

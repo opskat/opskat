@@ -1,7 +1,6 @@
 package extension
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -9,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // Descriptor is what the guest answers to describe(): everything an extension can
@@ -19,35 +19,82 @@ import (
 // audit *before* running the code — the capability grants — and the rest is read
 // back from the code that implements it.
 //
-// The wire shape mirrors pkg/extsdk/describe.go; the field names are the ones the
-// merged Manifest already exposes, so the frontend contract is unchanged.
+// The wire shape is pkg/extwire's — the one the guest SDK encodes — decoded here
+// contribution by contribution.
 type Descriptor struct {
-	Icon       string         `json:"icon"`
-	I18n       ManifestI18n   `json:"i18n"`
-	AssetTypes []AssetTypeDef `json:"assetTypes"`
-	Tools      []ToolDef      `json:"tools"`
-	Policies   PoliciesDef    `json:"policies"`
-	Frontend   FrontendDef    `json:"frontend"`
-	Snippets   SnippetsDef    `json:"snippets"`
+	Icon       string
+	I18n       ManifestI18n
+	AssetTypes []AssetTypeDef
+	Tools      []ToolDef
+	Policy     extwire.Policy
+	Frontend   FrontendDef
+	Snippets   SnippetsDef
 	// DatabaseDrivers are the SQL database drivers the extension provides, one
 	// descriptor per id the manifest lists in contributes.databaseDrivers.
-	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
+	DatabaseDrivers []dbdriver.Descriptor
 }
 
-// ParseDescriptor decodes and validates a describe() payload.
+// ParseDescriptor decodes and validates a describe() payload on its own, before
+// it is merged onto a manifest (see (*Manifest).applyDescriptor for the checks
+// against the manifest).
 //
 // The guest is on the far side of a WASM boundary, so its answer is checked here
 // even though the SDK builds it from typed registrations: a hand-rolled guest, or
 // a corrupted cache entry, must fail at load rather than halfway through a tool call.
 func ParseDescriptor(data []byte) (*Descriptor, error) {
-	var d Descriptor
-	if err := json.Unmarshal(data, &d); err != nil {
-		return nil, fmt.Errorf("parse describe() result: %w", err)
+	d, err := decodeDescriptor(data)
+	if err != nil {
+		return nil, err
 	}
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	return &d, nil
+	return d, nil
+}
+
+// decodeDescriptor reads a describe() payload without judging it. A payload that
+// does not decode is not an answer in this host's wire shape at all — the
+// describe cache treats that as stale — while one that decodes and breaks a rule
+// is refused (applyDescriptor).
+func decodeDescriptor(data []byte) (*Descriptor, error) {
+	w, err := extwire.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse describe() result: %w", err)
+	}
+	d := &Descriptor{Icon: w.Icon, I18n: w.I18n}
+	var assetTypes []extwire.AssetType
+	for key, dst := range map[string]any{
+		extwire.KeyAssetTypes:      &assetTypes,
+		extwire.KeyTools:           &d.Tools,
+		extwire.KeyPolicy:          &d.Policy,
+		extwire.KeyPages:           &d.Frontend,
+		extwire.KeySnippets:        &d.Snippets,
+		extwire.KeyDatabaseDrivers: &d.DatabaseDrivers,
+	} {
+		if err := w.Get(key, dst); err != nil {
+			return nil, fmt.Errorf("parse describe() result: %w", err)
+		}
+	}
+	for _, at := range assetTypes {
+		d.AssetTypes = append(d.AssetTypes, assetTypeDef(at))
+	}
+	return d, nil
+}
+
+// applyDescriptor is the one verdict on a describe() answer: valid on its own,
+// then merged onto the manifest and valid against it. A freshly described guest
+// and a cached answer (a load that hits the cache, opsctl, the extension list)
+// all go through it, so they cannot disagree. On error the manifest may hold a
+// partial merge and must be discarded.
+func (m *Manifest) applyDescriptor(d *Descriptor) error {
+	if err := d.validate(); err != nil {
+		return fmt.Errorf("extension %q: %w", m.Name, err)
+	}
+	m.apply(d)
+	if err := m.validateEndpointBindings(); err != nil {
+		return fmt.Errorf("extension %q: %w", m.Name, err)
+	}
+	return nil
 }
 
 func (d *Descriptor) validate() error {
@@ -80,7 +127,7 @@ func (d *Descriptor) validateAssetScope() error {
 		if len(d.Tools) > 0 {
 			return fmt.Errorf("describe(): tools require an asset type to be reached through; an extension that only provides database drivers declares none")
 		}
-		if d.Policies.Type == "" {
+		if d.Policy.Type == "" {
 			return nil
 		}
 		return d.validatePolicyType()
@@ -124,7 +171,7 @@ func (d *Descriptor) validateAssetScope() error {
 			}
 		}
 	}
-	if d.Policies.Type == "" {
+	if d.Policy.Type == "" {
 		return fmt.Errorf("describe(): policies.type is required — it names the policy face the extension's asset types are checked under")
 	}
 	return d.validatePolicyType()
@@ -135,8 +182,8 @@ func (d *Descriptor) validateAssetScope() error {
 // (ext:<type>:<action>:<resource>); a name that could itself contain ":" would let
 // one face's namespace spell another's.
 func (d *Descriptor) validatePolicyType() error {
-	if !nameRe.MatchString(d.Policies.Type) {
-		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policies.Type)
+	if !nameRe.MatchString(d.Policy.Type) {
+		return fmt.Errorf("describe(): policies.type must match %s (got %q)", nameRe.String(), d.Policy.Type)
 	}
 	return nil
 }
@@ -218,7 +265,7 @@ func (d *Descriptor) validateTools() error {
 			return fmt.Errorf("describe(): duplicate tool name %q", t.Name)
 		}
 		seen[t.Name] = true
-		if err := t.validateActions(); err != nil {
+		if err := validateToolActions(t); err != nil {
 			return err
 		}
 		if t.TimeoutMs < 0 || t.TimeoutMs > MaxToolTimeout.Milliseconds() {
@@ -295,9 +342,9 @@ func (d *Descriptor) validateTools() error {
 // before load, instead of surfacing as a collision against whatever else happens
 // to be installed.
 func (d *Descriptor) validatePolicyGroups() error {
-	prefix := "ext:" + d.Policies.Type + ":"
-	seen := make(map[string]struct{}, len(d.Policies.Groups))
-	for _, g := range d.Policies.Groups {
+	prefix := "ext:" + d.Policy.Type + ":"
+	seen := make(map[string]struct{}, len(d.Policy.Groups))
+	for _, g := range d.Policy.Groups {
 		if !strings.HasPrefix(g.ID, prefix) || len(g.ID) == len(prefix) {
 			return fmt.Errorf("describe(): policy group ID must be %s<name>, namespaced by policies.type (got %q)", prefix, g.ID)
 		}
@@ -379,7 +426,7 @@ func (d *Descriptor) validateSnippets() error {
 // that ends at the first ':' — a name that itself contains ':' (or whitespace,
 // which a rule is trimmed of) could not be told apart from an action plus a
 // resource, so it is refused here rather than silently never matching.
-func (t ToolDef) validateActions() error {
+func validateToolActions(t ToolDef) error {
 	if t.PolicyAction != "" && len(t.PolicyActions) > 0 {
 		return fmt.Errorf("describe(): tools[%q] declares both policyAction and policyActions — a tool's action is either fixed or classified per call", t.Name)
 	}
@@ -413,8 +460,12 @@ func (m *Manifest) apply(d *Descriptor) {
 	m.I18n = d.I18n
 	m.AssetTypes = d.AssetTypes
 	m.Tools = d.Tools
-	m.Policies = d.Policies
-	m.Policies.Actions = policyActions(d.Tools)
+	m.Policies = PoliciesDef{
+		Type:    d.Policy.Type,
+		Actions: policyActions(d.Tools),
+		Groups:  d.Policy.Groups,
+		Default: d.Policy.Default,
+	}
 	m.Frontend = d.Frontend
 	m.Snippets = d.Snippets
 	// A driver's icon is the extension's: it is the one icon the user sees on it.

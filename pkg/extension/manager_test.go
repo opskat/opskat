@@ -22,10 +22,10 @@ import (
 var stubWasm = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 
 // cannedDescriptor is the describe() answer the fake cache serves for stubWasm.
-const cannedDescriptor = `{"i18n":{"displayName":"d","description":"x"},` +
+const cannedDescriptor = `{"i18n":{"displayName":"d","description":"x"},"contributes":{` +
 	`"assetTypes":[{"type":"stub","i18n":{"name":"n"},` +
 	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
-	`"policies":{"type":"stub"}}`
+	`"policy":{"type":"stub"}}}`
 
 // fakeDescribeCache answers for every extension with the same canned descriptor,
 // keyed to the hash of whatever wasm bytes it was built with.
@@ -352,9 +352,9 @@ func TestManagerRefusesEndpointBindingsWithoutAnEndpoint(t *testing.T) {
 	const auth = `"auth":{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"Bearer {{token}}"}]}]}`
 	const connection = `"connection":{"sshTunnel":true}`
 	descriptor := func(schema, binding string) string {
-		return `{"i18n":{"displayName":"d","description":"x"},` +
+		return `{"i18n":{"displayName":"d","description":"x"},"contributes":{` +
 			`"assetTypes":[{"type":"stub","i18n":{"name":"n"},"configSchema":` + schema + `,` + binding + `}],` +
-			`"policies":{"type":"stub"}}`
+			`"policy":{"type":"stub"}}}`
 	}
 	load := func(t *testing.T, payload string, assetEndpoint bool) error {
 		t.Helper()
