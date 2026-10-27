@@ -528,3 +528,19 @@ func TestAlterIndexCarriesItsDefinition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `{"originalName":"ix","name":"ix2","type":"unique","columns":[{"name":"id","descending":true}],"options":{"method":"hash"},"comment":"lookup"}`, string(raw))
 }
+
+// 表结构语句可回滚是可选声明：没声明的描述序列化时不带这个键（按旧版本构建的扩展、前端内置驱动
+// 夹具看到的描述不变），声明了的带上它，前端据此知道保存是整批原子执行。
+func TestDescriptorTransactionalDDLIsOmittedUnlessDeclared(t *testing.T) {
+	raw, err := json.Marshal(Descriptor{ID: "extdb"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "transactionalDDL")
+
+	raw, err = json.Marshal(Descriptor{ID: "extdb", TransactionalDDL: true})
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"transactionalDDL":true`)
+
+	var decoded Descriptor
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	assert.True(t, decoded.TransactionalDDL)
+}

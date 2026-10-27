@@ -77,6 +77,7 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 		"name folding without create or alter table": {func(d *dbdriver.Descriptor) {
 			d.NameFolding = dbdriver.NameFoldUpper
 		}, "nameFolding"},
+		"transactional DDL without create or alter table": {func(d *dbdriver.Descriptor) { d.TransactionalDDL = true }, "transactionalDDL"},
 		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
 		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
 		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},

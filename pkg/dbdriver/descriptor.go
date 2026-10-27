@@ -66,6 +66,10 @@ type Descriptor struct {
 	// 名称唯一范围与额外选项，见 IndexEditing）；没声明时索引页只读，会话以 ErrUnsupported 拒绝
 	// 带索引改动的建表 / 改表请求。sqldb 的方言实现 TableIndexer 即开启（sqldb.IndexesTables）。
 	IndexEditing *IndexEditing `json:"indexEditing,omitempty"`
+	// TransactionalDDL 声明表结构语句（建表、改表、索引）可以在事务里执行、失败时整批回滚：表设计器
+	// 保存时把整批语句交给 Session.ExecuteBatch 原子执行（BatchRequest.Atomic），失败则表结构不变。没声明
+	// 时（如 MySQL、Oracle 的 DDL 会隐式提交）逐条执行、停在第一条失败，已执行的留下。
+	TransactionalDDL bool `json:"transactionalDDL,omitempty"`
 
 	// DriverFields 是驱动专属的配置字段：值存在资产配置的 driver_options 里，按这里的声明校验。
 	// 内置驱动不声明。

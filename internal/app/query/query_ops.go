@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/opskat/opskat/internal/ai/helper"
@@ -266,6 +267,55 @@ func (q *Query) ExecuteTableImport(assetID int64, database string, request query
 	}
 	log.Info("table import batch done", zap.Duration("elapsed", time.Since(start)),
 		zap.Int("processed", result.Processed), zap.Int("errors", result.Error), zap.Bool("rolledBack", result.RolledBack))
+	return result, nil
+}
+
+// schemaBatchTimeout 是表结构整批执行的时限：建索引、改列类型在大表上可能很久，整批在一次调用里
+// 执行完，不受资产的查询超时限制（同导入）。
+const schemaBatchTimeout = 30 * time.Minute
+
+// ExecuteSchemaStatements 由资产的驱动在会话的一条连接上执行表设计器保存的整批表结构语句（驱动
+// 生成、确认框里列出的那些）：驱动声明了表结构语句可回滚（Descriptor.TransactionalDDL）时整批原子执行，
+// 否则逐条执行、停在第一条失败；返回逐条的结果与是否回滚。只读连接由驱动在会话上拒绝写入，结果里
+// 是第一条语句失败。语句里可能有用户的数据（默认值、注释），不进日志。
+func (q *Query) ExecuteSchemaStatements(assetID int64, database string, statements []string) (*query_svc.SchemaBatchResult, error) {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.Int64("assetID", assetID), zap.String("database", database), zap.Int("statements", len(statements)))
+	log.Info("schema batch start")
+	start := time.Now()
+	panel, err := q.acquirePanelSession(assetID, database, func(*asset_entity.DatabaseConfig) time.Duration {
+		return schemaBatchTimeout
+	})
+	if err != nil {
+		log.Error("schema batch failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return nil, err
+	}
+	// 描述取自打开会话的那个驱动：声明与执行语句的会话必然属于同一个驱动。
+	var result *query_svc.SchemaBatchResult
+	err = panel.finish(func() error {
+		driver, err := dbregistry.Lookup(panel.driver)
+		if err != nil {
+			return err
+		}
+		result, err = query_svc.RunSchemaBatch(panel.ctx, panel.session, driver.Descriptor(), panel.database, statements)
+		return err
+	}())
+	if err != nil {
+		log.Error("schema batch failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return nil, err
+	}
+	failed := slices.IndexFunc(result.Statements, func(s query_svc.SchemaStatementResult) bool {
+		return s.Status == query_svc.SchemaStatementFailed
+	})
+	fields := []zap.Field{zap.Duration("elapsed", time.Since(start)), zap.String("driver", string(panel.driver)),
+		zap.Bool("atomic", result.Atomic), zap.Bool("rolledBack", result.RolledBack)}
+	if failed >= 0 {
+		// 数据库的错误可能引用数据（如唯一索引的重复值），只记失败的是第几条；批本身的错误（回滚失败）照记。
+		log.Warn("schema batch stopped at a failed statement", append(fields,
+			zap.Int("failedIndex", failed), zap.String("batchError", result.Error))...)
+		return result, nil
+	}
+	log.Info("schema batch done", fields...)
 	return result, nil
 }
 

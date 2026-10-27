@@ -1119,6 +1119,7 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 			{"autoIncrement", desc.AutoIncrement},
 			{"nameFolding", desc.NameFolding != ""},
 			{"indexEditing", desc.IndexEditing != nil},
+			{"transactionalDDL", desc.TransactionalDDL},
 		} {
 			if detail.declared {
 				report("%s is declared without capability %q or %q, the features that use it", detail.name, dbdriver.CapCreateTable, dbdriver.CapAlterTable)
