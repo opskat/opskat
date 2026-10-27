@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,18 +108,18 @@ func (d *indexerDialect) AlterableTable(context.Context, *sql.Conn, string, stri
 	return indexTable(), nil
 }
 
-// AlterTableSQL 照方言的写法：先改表名，再写索引（删在列之前），最后是删列与新增列。
+// AlterTableSQL 照方言的写法：先改表名，再删索引，然后删列与新增列，最后建索引。
 func (d *indexerDialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change TableChange) ([]string, error) {
 	d.changes = append(d.changes, change)
 	var statements []string
 	if change.Rename != "" {
 		statements = append(statements, "RENAME "+change.Target)
 	}
-	indexes, err := IndexStatements(d, change.TargetRef, change)
+	drops, err := IndexDropStatements(d, change.TargetRef, change)
 	if err != nil {
 		return nil, err
 	}
-	statements = append(statements, indexes...)
+	statements = append(statements, drops...)
 	for _, drop := range change.Drops {
 		statements = append(statements, "DROP COLUMN "+drop)
 	}
@@ -127,7 +128,11 @@ func (d *indexerDialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change Ta
 			statements = append(statements, "ADD "+column.Column.Name)
 		}
 	}
-	return statements, nil
+	creates, err := IndexCreateStatements(d, change.TargetRef, change)
+	if err != nil {
+		return nil, err
+	}
+	return append(statements, creates...), nil
 }
 
 // creatorDialect 是另能整条写建表语句的方言。
@@ -550,23 +555,47 @@ func TestAlterTableRefusesUndeclaredIndexFeatures(t *testing.T) {
 	assert.Contains(t, err.Error(), "ux_t_name")
 }
 
-// IndexStatements 按改动写语句：先删后建，方言的写法；删列之前调用它就不会留下引用已删列的索引。
-func TestIndexStatementsDropsBeforeCreates(t *testing.T) {
-	statements, err := IndexStatements(&indexerDialect{}, "<db>.<t>", TableChange{
+// 索引语句分两半：删除（请求删掉的与改动了的现有索引）写在列改动之前，新建（改动的与新增的）写在列改动之后。
+func TestIndexStatementsSplitIntoDropsAndCreates(t *testing.T) {
+	change := TableChange{
 		IndexDrops: []dbdriver.IndexDefinition{{Name: "gone", Type: dbdriver.IndexTypeNormal}},
 		Indexes: []IndexChange{
 			{Current: &dbdriver.IndexDefinition{Name: "old", Type: dbdriver.IndexTypeNormal},
 				Index: dbdriver.IndexDefinition{Name: "old", Type: dbdriver.IndexTypeUnique, Columns: []dbdriver.IndexColumn{{Name: "id"}}}},
 			{Index: dbdriver.IndexDefinition{Name: "new", Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: "id"}}}},
 		},
-	})
+	}
+	drops, err := IndexDropStatements(&indexerDialect{}, "<db>.<t>", change)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"DROP INDEX <gone> ON <db>.<t>", "DROP INDEX <old> ON <db>.<t>"}, drops)
+
+	creates, err := IndexCreateStatements(&indexerDialect{}, "<db>.<t>", change)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"DROP INDEX <gone> ON <db>.<t>",
-		"DROP INDEX <old> ON <db>.<t>",
 		"CREATE UNIQUE INDEX <old> ON <db>.<t> (<id>)",
 		"CREATE NORMAL INDEX <new> ON <db>.<t> (<id>)",
-	}, statements)
+	}, creates)
+}
+
+// 同一次保存里新增一列并在它上面建索引：建索引必须排在加列之后，否则数据库找不到这一列。
+func TestAlterTableCreatesAnIndexOnANewColumnAfterAddingIt(t *testing.T) {
+	ctx := context.Background()
+	session := newIndexSession(t, &indexerDialect{})
+	model, err := session.AlterTableModel(ctx, "db", "t")
+	require.NoError(t, err)
+
+	req := indexModelRequest(model)
+	req.Columns = append(req.Columns, dbdriver.AlterColumn{Name: "email", Type: "TEXT", Nullable: true})
+	req.Indexes = append(req.Indexes, dbdriver.AlterIndex{IndexDefinition: dbdriver.IndexDefinition{
+		Name: "ix_t_email", Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: "email"}},
+	}})
+	statements, err := session.AlterTableStatements(ctx, "db", "t", req)
+	require.NoError(t, err)
+	add := slices.Index(statements.Statements, "ADD email")
+	create := slices.IndexFunc(statements.Statements, func(s string) bool { return strings.Contains(s, "<ix_t_email>") })
+	require.GreaterOrEqual(t, add, 0, statements.Statements)
+	require.GreaterOrEqual(t, create, 0, statements.Statements)
+	assert.Less(t, add, create, "index on a new column must be created after the column is added: %v", statements.Statements)
 }
 
 // 请求改完之后仍有一个索引指向被删掉的列：矛盾，报错而不是写一条数据库会拒的语句。

@@ -643,8 +643,8 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   `UNIQUE` constraint owns with `Undroppable`) plus the index names other tables in the
   declared scope already use (`TakenIndexNames`). Set the descriptor field from
   `sqldb.IndexEditing(dialect)` so the two cannot drift. The shared session then hands
-  your dialect the changes as `TableChange.Indexes` / `IndexDrops` (`sqldb.IndexStatements`
-  writes them for you, before the dropped columns) and refuses on its own what the
+  your dialect the changes as `TableChange.Indexes` / `IndexDrops` (`sqldb.IndexDropStatements`
+  before your column changes and `sqldb.IndexCreateStatements` after them write them for you) and refuses on its own what the
   declaration does not allow: a read-only index can only be dropped, an undroppable one
   not at all, a primary-key change needs `AlterPrimaryKey`, an index on a dropped column
   goes with it. A create table's indexes and its table / column comments reach

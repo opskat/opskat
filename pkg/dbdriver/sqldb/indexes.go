@@ -72,11 +72,14 @@ type IndexChange struct {
 // IsNew 报告这是新增的索引。
 func (c IndexChange) IsNew() bool { return c.Current == nil }
 
-// IndexStatements 是改表里索引的那部分语句，按执行的次序：先把要删的删掉（请求删掉的、改动了的现有索引），
-// 再建（改动的与新增的）。先删完再建，改名的索引才不会与另一个还没删的索引重名；方言把它写在删列之前，
-// 引用被删列的索引就不会留到删列之后。
-func IndexStatements(dialect TableIndexer, tableRef string, change TableChange) ([]string, error) {
-	statements := make([]string, 0, len(change.IndexDrops)+2*len(change.Indexes))
+// 改表里索引的语句分两半，方言把 IndexDropStatements 写在列的改动之前、IndexCreateStatements 写在列的
+// 改动之后：引用被删列的索引先于删列删掉；建索引时新增的列已经加上、改名的列已经是新名字（索引的列名
+// 是改动之后的列名）。先删完再建，改名的索引也不会与另一个还没删的索引重名。tableRef 是改名之后的表引用
+// （TableChange.TargetRef），方言要先改表名再写这两半。
+
+// IndexDropStatements 是要删的索引的语句：请求删掉的，以及改动了的现有索引（随后重建）。
+func IndexDropStatements(dialect TableIndexer, tableRef string, change TableChange) ([]string, error) {
+	statements := make([]string, 0, len(change.IndexDrops)+len(change.Indexes))
 	for _, dropped := range change.IndexDrops {
 		statement, err := dialect.DropIndexSQL(tableRef, dropped.Name)
 		if err != nil {
@@ -94,6 +97,12 @@ func IndexStatements(dialect TableIndexer, tableRef string, change TableChange) 
 		}
 		statements = append(statements, statement)
 	}
+	return statements, nil
+}
+
+// IndexCreateStatements 是要建的索引的语句：改动了的（已由 IndexDropStatements 删掉）与新增的。
+func IndexCreateStatements(dialect TableIndexer, tableRef string, change TableChange) ([]string, error) {
+	statements := make([]string, 0, len(change.Indexes))
 	for _, changed := range change.Indexes {
 		statement, err := dialect.IndexSQL(tableRef, changed.Index)
 		if err != nil {
