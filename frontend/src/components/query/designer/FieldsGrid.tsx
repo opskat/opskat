@@ -118,6 +118,8 @@ interface EditableFieldsGridProps {
   showComment: boolean;
   issues: DraftIssue[];
   selectedKey: string | null;
+  /** 主键列(草稿列的 key);没给时按读出时的主键。 */
+  primaryKeys?: Set<string>;
   onSelect: (key: string) => void;
   onChange: (key: string, patch: DraftColumnPatch) => void;
 }
@@ -129,6 +131,7 @@ export function EditableFieldsGrid({
   showComment,
   issues,
   selectedKey,
+  primaryKeys,
   onSelect,
   onChange,
 }: EditableFieldsGridProps) {
@@ -146,6 +149,7 @@ export function EditableFieldsGrid({
           showComment={showComment}
           issues={issues.filter((issue) => issue.target.kind === "column" && issue.target.key === column.key)}
           selected={selectedKey === column.key}
+          primaryKey={primaryKeys ? primaryKeys.has(column.key) : column.primaryKey}
           onSelect={onSelect}
           onChange={onChange}
         />

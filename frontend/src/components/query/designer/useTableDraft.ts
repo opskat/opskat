@@ -15,9 +15,16 @@ import {
   type DraftColumnPatch,
   type TableDraft,
 } from "./draft";
+import {
+  addIndex as addDraftIndex,
+  indexCounts,
+  setTableName as setDraftTableName,
+  updateIndex as updateDraftIndex,
+  type DraftIndexPatch,
+} from "./indexDraft";
 
 /**
- * 设计器的草稿状态:从读出的表开始,记下表名、表注释、各列的改动与删除标记。读出的表换了(重新读取)
+ * 设计器的草稿状态:从读出的表开始,记下表名、表注释、各列与各索引的改动与删除标记。读出的表换了(重新读取)
  * 时草稿重新开始。派生出改动计数、是否有改动、校验结果与交给驱动的改表请求。
  * rebaseFrom 是保存停在中途时的草稿:开始时把它搬到读出的表上(已生效的不再标记,没执行的留下)。
  */
@@ -41,7 +48,7 @@ export function useTableDraft(
     setState((s) => ({ ...s, draft: fn(s.draft) }));
   }, []);
 
-  const setTableName = useCallback((name: string) => edit((d) => ({ ...d, name })), [edit]);
+  const setTableName = useCallback((name: string) => edit((d) => setDraftTableName(d, name)), [edit]);
   const setTableComment = useCallback((comment: string) => edit((d) => ({ ...d, comment })), [edit]);
   const updateColumn = useCallback(
     (key: string, patch: DraftColumnPatch) => edit((d) => updateDraftColumn(d, key, patch)),
@@ -63,7 +70,21 @@ export function useTableDraft(
     return key;
   }, [draft, descriptor, edit]);
 
+  /** 加一个索引,返回它的 key(同 addColumn)。 */
+  const addIndex = useCallback((): string => {
+    const key = addDraftIndex(draft, descriptor).key;
+    edit((d) => addDraftIndex(d, descriptor).draft);
+    return key;
+  }, [draft, descriptor, edit]);
+  const updateIndex = useCallback(
+    (key: string, patch: DraftIndexPatch) => edit((d) => updateDraftIndex(d, key, patch)),
+    [edit]
+  );
+  const deleteIndex = useCallback((key: string) => updateIndex(key, { deleted: true }), [updateIndex]);
+  const restoreIndex = useCallback((key: string) => updateIndex(key, { deleted: false }), [updateIndex]);
+
   const counts = useMemo(() => draftCounts(draft), [draft]);
+  const indexChanges = useMemo(() => indexCounts(draft), [draft]);
   const isDirty = useMemo(() => isDraftDirty(draft), [draft]);
   const issues = useMemo(() => validateDraft(draft, descriptor), [draft, descriptor]);
   const request = useMemo(() => buildAlterRequest(draft, descriptor), [draft, descriptor]);
@@ -71,6 +92,7 @@ export function useTableDraft(
   return {
     draft,
     counts,
+    indexCounts: indexChanges,
     isDirty,
     issues,
     request,
@@ -82,6 +104,10 @@ export function useTableDraft(
     restoreColumn,
     revertField,
     revertAll,
+    addIndex,
+    updateIndex,
+    deleteIndex,
+    restoreIndex,
   };
 }
 

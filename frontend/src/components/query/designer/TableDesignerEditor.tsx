@@ -6,15 +6,14 @@ import type { dbdriver } from "../../../../wailsjs/go/models";
 import { useQueryStore } from "@/stores/queryStore";
 import { eventMatchesBinding, formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { driverCanAlter, type DriverDescriptor } from "@/lib/dbDrivers";
-import { showsColumnComments, type TableStructure } from "./model";
+import { showsColumnComments, showsIndexComments, type TableStructure } from "./model";
+import { droppedColumns, tableCommentChanged, tableNameChanged, type DraftIssue, type TableDraft } from "./draft";
 import {
-  droppedColumns,
-  indexesDroppedWith,
-  tableCommentChanged,
-  tableNameChanged,
-  type DraftIssue,
-  type TableDraft,
-} from "./draft";
+  droppedIndexes as draftDroppedIndexes,
+  indexDefinition,
+  indexDeleted,
+  primaryKeyColumnKeys,
+} from "./indexDraft";
 import { useTableDraft } from "./useTableDraft";
 import { useAlterPreview } from "./useAlterPreview";
 import { issueMessage } from "./issueText";
@@ -24,6 +23,9 @@ import { EditableFieldsGrid } from "./FieldsGrid";
 import { ColumnProperties } from "./ColumnProperties";
 import { CapabilityBar, IssueList } from "./DesignerNotices";
 import { IndexList } from "./IndexList";
+import { EditableIndexList } from "./EditableIndexList";
+import { IndexEditor } from "./IndexEditor";
+import { UpdateDriverAction } from "./UpdateDriverAction";
 import { ForeignKeyList } from "./ForeignKeyList";
 import { SqlPreviewPane } from "./SqlPreviewPane";
 import { CloseGuardDialog } from "./CloseGuardDialog";
@@ -93,13 +95,17 @@ export function TableDesignerEditor({
   const { t } = useTranslation();
   const openSqlTab = useQueryStore((s) => s.openSqlTab);
   const draftState = useTableDraft(structure, descriptor, rebaseFrom);
-  const { draft, counts, isDirty, issues, request } = draftState;
+  const { draft, counts, indexCounts, isDirty, issues, request } = draftState;
   const errors = issues.filter((i) => i.severity === "error");
   const preview = useAlterPreview({ assetId, database, table, request, enabled: errors.length === 0 });
+  // 索引读自改表模型(驱动声明了索引编辑)时才能改;否则只读并说明。
+  const indexesEditable = structure.indexesEditable && !!descriptor?.indexEditing;
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedIndexKey, setSelectedIndexKey] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<PendingConfirm>(null);
   const selected = draft.columns.find((c) => c.key === selectedKey && !c.deleted);
+  const selectedIndex = indexesEditable ? draft.indexes.find((i) => i.key === selectedIndexKey) : undefined;
 
   // 问题列表、添加字段要聚焦的格子:由下面的 effect 聚焦。切子页时字段页的内容要晚一两帧才挂载
   // (Radix 的 Presence),找不到就在后面几帧再找。
@@ -125,6 +131,12 @@ export function TableDesignerEditor({
       focusCell("table:name");
       return;
     }
+    if (issue.target.kind === "index") {
+      onSubTabChange("indexes");
+      setSelectedIndexKey(issue.target.key);
+      focusCell(`${issue.target.key}:${issue.target.field}`);
+      return;
+    }
     onSubTabChange("fields");
     if (issue.target.kind === "column") {
       setSelectedKey(issue.target.key);
@@ -135,6 +147,12 @@ export function TableDesignerEditor({
   const addField = () => {
     const key = draftState.addColumn();
     setSelectedKey(key);
+    focusCell(`${key}:name`);
+  };
+
+  const addIndex = () => {
+    const key = draftState.addIndex();
+    setSelectedIndexKey(key);
     focusCell(`${key}:name`);
   };
 
@@ -149,6 +167,7 @@ export function TableDesignerEditor({
     if (confirm === "revertAll") {
       draftState.revertAll();
       setSelectedKey(null);
+      setSelectedIndexKey(null);
     } else if (confirm === "reload") {
       onReload();
     }
@@ -156,7 +175,12 @@ export function TableDesignerEditor({
   };
 
   const dropped = useMemo(() => droppedColumns(draft), [draft]);
-  const droppedIndexes = useMemo(() => indexesDroppedWith(draft, structure.indexes), [draft, structure.indexes]);
+  const droppedIndexes = useMemo(() => draftDroppedIndexes(draft), [draft]);
+  const primaryKeys = useMemo(
+    () => (indexesEditable ? primaryKeyColumnKeys(draft) : undefined),
+    [draft, indexesEditable]
+  );
+  const indexDefinitions = useMemo(() => draft.indexes.map((i) => indexDefinition(draft, i)), [draft]);
 
   const statements = preview.status === "ready" ? preview.statements : [];
   const canSave = errors.length === 0 && preview.status === "ready" && statements.length > 0;
@@ -191,6 +215,9 @@ export function TableDesignerEditor({
     counts.added +
     counts.modified +
     counts.deleted +
+    indexCounts.added +
+    indexCounts.modified +
+    indexCounts.deleted +
     (tableNameChanged(draft) ? 1 : 0) +
     (tableCommentChanged(draft) ? 1 : 0);
 
@@ -221,7 +248,13 @@ export function TableDesignerEditor({
       count: liveColumns,
       dirty: counts.added + counts.modified + counts.deleted > 0,
     },
-    { id: "indexes", label: t("query.designer.tab.indexes"), icon: ListTree, count: structure.indexes.length },
+    {
+      id: "indexes",
+      label: t("query.designer.tab.indexes"),
+      icon: ListTree,
+      count: draft.indexes.filter((i) => !indexDeleted(draft, i)).length,
+      dirty: indexCounts.added + indexCounts.modified + indexCounts.deleted > 0,
+    },
     {
       id: "foreignKeys",
       label: t("query.designer.tab.foreignKeys"),
@@ -245,6 +278,7 @@ export function TableDesignerEditor({
           onCommentChange={draftState.setTableComment}
           originalComment={structure.comment}
           counts={counts}
+          indexCounts={indexCounts}
           isDirty={isDirty}
           errorCount={errors.length}
           loading={false}
@@ -259,11 +293,19 @@ export function TableDesignerEditor({
       subTab={subTab}
       onSubTabChange={onSubTabChange}
       tabsRight={
-        subTab === "fields" && (
+        subTab === "fields" ? (
           <Button variant="ghost" size="xs" onClick={addField}>
             <Plus aria-hidden />
             {t("query.designer.addField")}
           </Button>
+        ) : (
+          subTab === "indexes" &&
+          indexesEditable && (
+            <Button variant="ghost" size="xs" onClick={addIndex}>
+              <Plus aria-hidden />
+              {t("query.designer.addIndex")}
+            </Button>
+          )
         )
       }
       footer={<IssueList issues={issues} onSelect={selectIssue} />}
@@ -277,6 +319,7 @@ export function TableDesignerEditor({
           showComment={showsColumnComments(descriptor, structure.columns)}
           issues={issues}
           selectedKey={selectedKey}
+          primaryKeys={primaryKeys}
           onSelect={setSelectedKey}
           onChange={draftState.updateColumn}
         />
@@ -289,13 +332,39 @@ export function TableDesignerEditor({
           />
         )}
       </TabsContent>
-      <TabsContent value="indexes" className="flex min-h-0 flex-col">
-        <IndexList
-          indexes={structure.indexes}
-          descriptor={descriptor}
-          // 驱动没声明索引编辑(改表模型不带索引):索引只能查看。
-          notEditableNotice={!structure.indexesEditable}
-        />
+      <TabsContent value="indexes" className="flex min-h-0 flex-row">
+        {indexesEditable ? (
+          <>
+            <EditableIndexList
+              draft={draft}
+              descriptor={descriptor}
+              showComment={showsIndexComments(descriptor, indexDefinitions)}
+              issues={issues}
+              selectedKey={selectedIndexKey}
+              onSelect={setSelectedIndexKey}
+              onDelete={draftState.deleteIndex}
+              onRestore={draftState.restoreIndex}
+            />
+            {selectedIndex && (
+              <IndexEditor
+                draft={draft}
+                index={selectedIndex}
+                descriptor={descriptor}
+                issues={issues.filter((i) => i.target.kind === "index" && i.target.key === selectedIndex.key)}
+                onChange={draftState.updateIndex}
+                onClose={() => setSelectedIndexKey(null)}
+              />
+            )}
+          </>
+        ) : (
+          <IndexList
+            indexes={structure.indexes}
+            descriptor={descriptor}
+            // 驱动没声明索引编辑(改表模型不带索引):索引只能查看,扩展驱动给出「去更新」。
+            notEditableNotice
+            updateDriverAction={<UpdateDriverAction descriptor={descriptor} />}
+          />
+        )}
       </TabsContent>
       <TabsContent value="foreignKeys" className="flex min-h-0 flex-col">
         <ForeignKeyList foreignKeys={structure.foreignKeys} />

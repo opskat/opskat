@@ -1,6 +1,19 @@
 import { dbdriver } from "../../../../wailsjs/go/models";
 import { driverCanAlter, type DriverDescriptor } from "@/lib/dbDrivers";
-import type { DesignerColumn, DesignerDefault, DesignerIndex, TableStructure } from "./model";
+import type { DesignerColumn, DesignerDefault, TableStructure } from "./model";
+import {
+  alterIndexes,
+  existingColumnKey,
+  existingIndex,
+  indexCounts,
+  rebaseIndexes,
+  removeColumnRefs,
+  syncAutoNames,
+  validateIndexes,
+  violatesFolding,
+  type DraftIndex,
+  type IndexField,
+} from "./indexDraft";
 
 /** 字段表里一列可编辑的属性。 */
 export type ColumnField = "name" | "type" | "nullable" | "default" | "comment";
@@ -30,14 +43,17 @@ export interface DraftColumn {
   autoIncrement: boolean;
 }
 
-/** 设计器的草稿:表名、表注释与各列(已有的按读出的次序在前,新增的在后)。 */
+/** 设计器的草稿:表名、表注释、各列与各索引(已有的按读出的次序在前,新增的在后)。 */
 export interface TableDraft {
   /** 读出时的表名与表注释。 */
   original: { name: string; comment: string };
   name: string;
   comment: string;
   columns: DraftColumn[];
-  /** 下一个新增列的编号,用来生成 key。 */
+  indexes: DraftIndex[];
+  /** 索引名唯一范围内其他表已有的索引名(重名校验用,见 TableStructure.takenIndexNames)。 */
+  takenIndexNames: string[];
+  /** 下一个新增列 / 索引的编号,用来生成 key。 */
   nextId: number;
 }
 
@@ -51,6 +67,8 @@ export function initDraft(structure: TableStructure): TableDraft {
     name: structure.name,
     comment: structure.comment,
     columns: structure.columns.map(existingColumn),
+    indexes: structure.indexes.map(existingIndex),
+    takenIndexNames: structure.takenIndexNames,
     nextId: 1,
   };
 }
@@ -76,14 +94,21 @@ export function addColumn(
   return { draft: { ...draft, columns: [...draft.columns, column], nextId: draft.nextId + 1 }, key };
 }
 
-/** 改一列;删除新增的列是直接移除,删除已有列只做标记。 */
+/**
+ * 改一列;删除新增的列是直接移除(索引里对它的引用一起拿掉),删除已有列只做标记(引用它的索引随列删除,
+ * 由草稿得出)。列名变了时新索引的自动名字跟着变。
+ */
 export function updateColumn(draft: TableDraft, key: string, patch: DraftColumnPatch): TableDraft {
   const target = draft.columns.find((c) => c.key === key);
   if (!target) return draft;
   if (patch.deleted && !target.original) {
-    return { ...draft, columns: draft.columns.filter((c) => c.key !== key) };
+    return syncAutoNames({
+      ...draft,
+      columns: draft.columns.filter((c) => c.key !== key),
+      indexes: removeColumnRefs(draft.indexes, key),
+    });
   }
-  return { ...draft, columns: draft.columns.map((c) => (c.key === key ? { ...c, ...patch } : c)) };
+  return syncAutoNames({ ...draft, columns: draft.columns.map((c) => (c.key === key ? { ...c, ...patch } : c)) });
 }
 
 /** 把一列的某个属性还原成读出时的值(只对已有列有意义)。 */
@@ -130,6 +155,7 @@ export interface DraftCounts {
   deleted: number;
 }
 
+/** 字段的改动计数(索引的见 indexCounts)。 */
 export function draftCounts(draft: TableDraft): DraftCounts {
   const counts: DraftCounts = { added: 0, modified: 0, deleted: 0 };
   for (const column of draft.columns) {
@@ -152,8 +178,7 @@ export function tableCommentChanged(draft: TableDraft): boolean {
 /** 草稿与读出的表相比有没有改动。 */
 export function isDraftDirty(draft: TableDraft): boolean {
   if (tableNameChanged(draft) || tableCommentChanged(draft)) return true;
-  const counts = draftCounts(draft);
-  return counts.added + counts.modified + counts.deleted > 0;
+  return [draftCounts(draft), indexCounts(draft)].some((c) => c.added + c.modified + c.deleted > 0);
 }
 
 /**
@@ -180,9 +205,9 @@ export function capabilityLimits(descriptor: DriverDescriptor | undefined): { ca
 }
 
 /**
- * 草稿交给驱动的改表请求:改完之后这张表的样子与要删除的已有列。只发驱动声明了的字段:默认值写法
- * 只在声明了 explicitDefaults 时发,自增只在声明了 autoIncrement 时对新列发;索引改动本轮不发(驱动保留
- * 没提到的索引,自己删掉随列删除的)。
+ * 草稿交给驱动的改表请求:改完之后这张表的样子与要删除的已有列、索引。只发驱动声明了的字段:默认值写法
+ * 只在声明了 explicitDefaults 时发,自增只在声明了 autoIncrement 时对新列发,索引只在声明了 indexEditing
+ * 时发(见 alterIndexes;没声明时驱动保留全部索引,随列删除的由数据库丢掉)。
  */
 export function buildAlterRequest(
   draft: TableDraft,
@@ -211,46 +236,58 @@ export function buildAlterRequest(
     comment: draft.comment,
     columns,
     drops: draft.columns.filter((c) => c.original && c.deleted).map((c) => c.original!.name),
+    ...(descriptor?.indexEditing ? alterIndexes(draft) : {}),
   });
 }
 
 function existingColumn(column: DesignerColumn): DraftColumn {
-  return { key: `e:${column.name}`, original: column, deleted: false, ...column };
+  return { key: existingColumnKey(column.name), original: column, deleted: false, ...column };
 }
 
 /**
  * 把草稿的目标状态搬到重新读出的表上(逐条执行停在中途后用):已生效的改动不再标记,没执行的留在草稿里。
  * 已有列按原名找,原名不在了再按目标名找(改名已执行);找不到的列(删除已执行)从草稿里去掉。新增的列
  * 在读出的表里有同名列时说明加列已执行,按读出的样子成为已有列。读出的表里草稿没有的列按读出的样子列入。
- * 次序同 initDraft:读出的列在前,还没加上的新列在后。
+ * 次序同 initDraft:读出的列在前,还没加上的新列在后。索引同样搬过去(见 rebaseIndexes),对列的引用换成
+ * 搬过之后的列。
  */
 export function rebaseDraft(draft: TableDraft, structure: TableStructure): TableDraft {
   const byName = new Map(structure.columns.map((c) => [c.name, c]));
   const claimed = new Map<string, DraftColumn>();
   const pending: DraftColumn[] = [];
+  // 草稿列的 key 到搬过之后的 key;删除已执行的列不在其中。
+  const columnKeys = new Map<string, string>();
   for (const column of draft.columns) {
     const target = column.name.trim();
     if (!column.original) {
       const added = byName.get(target);
-      if (added && !claimed.has(added.name)) claimed.set(added.name, existingColumn(added));
-      else pending.push(column);
+      if (added && !claimed.has(added.name)) {
+        claimed.set(added.name, existingColumn(added));
+        columnKeys.set(column.key, existingColumnKey(added.name));
+      } else {
+        pending.push(column);
+        columnKeys.set(column.key, column.key);
+      }
       continue;
     }
     const current = byName.get(column.original.name) ?? byName.get(target);
     if (!current || claimed.has(current.name)) continue;
     claimed.set(current.name, {
       ...column,
-      key: `e:${current.name}`,
+      key: existingColumnKey(current.name),
       original: current,
       primaryKey: current.primaryKey,
       autoIncrement: current.autoIncrement,
     });
+    columnKeys.set(column.key, existingColumnKey(current.name));
   }
-  return {
+  const rebased: TableDraft = {
     ...draft,
     original: { name: structure.name, comment: structure.comment },
     columns: [...structure.columns.map((c) => claimed.get(c.name) ?? existingColumn(c)), ...pending],
+    takenIndexNames: structure.takenIndexNames,
   };
+  return { ...rebased, ...rebaseIndexes(rebased, structure.indexes, columnKeys) };
 }
 
 /** 草稿里标记删除的已有列(原名)。 */
@@ -258,48 +295,45 @@ export function droppedColumns(draft: TableDraft): string[] {
   return draft.columns.filter((c) => c.original && c.deleted).map((c) => c.original!.name);
 }
 
-/** 引用了被删列的已有索引:由草稿得出,不依赖驱动给语句打标。表达式不是列名,不参与匹配。 */
-export function indexesDroppedWith(draft: TableDraft, indexes: DesignerIndex[]): string[] {
-  const dropped = droppedColumns(draft);
-  return indexes
-    .filter(
-      (index) =>
-        index.columns.some((c) => !c.expression && dropped.includes(c.name)) ||
-        index.include.some((name) => dropped.includes(name))
-    )
-    .map((index) => index.name);
-}
-
-/** 问题指向的位置:表名输入框、某列的某个格子,或整张表的列。 */
+/** 问题指向的位置:表名输入框、某列的某个格子、整张表的列,或某个索引的某一项。 */
 export type IssueTarget =
-  { kind: "tableName" } | { kind: "column"; key: string; field: "name" | "type" } | { kind: "columns" };
+  | { kind: "tableName" }
+  | { kind: "column"; key: string; field: "name" | "type" }
+  | { kind: "columns" }
+  | { kind: "index"; key: string; field: IndexField };
 
 export type IssueCode =
-  "tableNameEmpty" | "columnNameEmpty" | "columnNameDuplicate" | "columnTypeEmpty" | "noColumns" | "nameFolding";
+  | "tableNameEmpty"
+  | "columnNameEmpty"
+  | "columnNameDuplicate"
+  | "columnTypeEmpty"
+  | "noColumns"
+  | "nameFolding"
+  | "indexNameEmpty"
+  | "indexNameDuplicate"
+  | "indexNameTaken"
+  | "indexColumnsEmpty"
+  | "primaryKeyDuplicate"
+  | "indexOptionExclusive";
 
-/** 校验结果的一条:error 阻止保存,warning 只提醒。row 是表格里的序号(从 1 起)。 */
+/** 校验结果的一条:error 阻止保存,warning 只提醒。row 是字段表或索引表里的序号(从 1 起)。 */
 export interface DraftIssue {
   severity: "error" | "warning";
   code: IssueCode;
   target: IssueTarget;
   row?: number;
   name?: string;
-  /** 重名时与之重名的那一列的序号。 */
+  /** 重名时与之重名的那一列 / 那个索引的序号。 */
   duplicateOf?: number;
   /** 名称提醒时驱动声明的折叠规则。 */
   folding?: string;
-}
-
-/** 名字与驱动的折叠规则不符:折叠为大写时含小写字母,折叠为小写时含大写字母。 */
-function violatesFolding(name: string, folding: string): boolean {
-  if (folding === "upper") return name !== name.toUpperCase();
-  if (folding === "lower") return name !== name.toLowerCase();
-  return false;
+  /** 独占选项冲突时选项的显示名(驱动声明的,见 declaredLabel)。 */
+  option?: string;
 }
 
 /**
- * 校验草稿。错误:表名为空、列名为空或重名(不分大小写)、类型为空、没有任何列。提醒:新起或改过的名字
- * 与驱动声明的折叠规则不符(已有的名字保存前后一样,不提醒)。
+ * 校验草稿。错误:表名为空、列名为空或重名(不分大小写)、类型为空、没有任何列,以及索引的问题(见
+ * validateIndexes)。提醒:新起或改过的名字与驱动声明的折叠规则不符(已有的名字保存前后一样,不提醒)。
  */
 export function validateDraft(draft: TableDraft, descriptor: DriverDescriptor | undefined): DraftIssue[] {
   const issues: DraftIssue[] = [];
@@ -348,5 +382,6 @@ export function validateDraft(draft: TableDraft, descriptor: DriverDescriptor | 
     tableName && tableName !== draft.original.name && violatesFolding(tableName, folding)
       ? [{ severity: "warning", code: "nameFolding", target: { kind: "tableName" }, name: tableName, folding }]
       : [];
-  return [...issues, ...columnIssues, ...tableWarnings, ...warnings];
+  const indexIssues = validateIndexes(draft, descriptor);
+  return [...issues, ...columnIssues, ...indexIssues.errors, ...tableWarnings, ...warnings, ...indexIssues.warnings];
 }

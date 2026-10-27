@@ -78,6 +78,8 @@ interface EditableFieldRowProps {
   /** 指向这一列的问题。 */
   issues: DraftIssue[];
   selected: boolean;
+  /** 这一列在草稿里是不是主键(驱动声明了索引编辑时跟随草稿里的主键索引)。 */
+  primaryKey: boolean;
   onSelect: (key: string) => void;
   onChange: (key: string, patch: DraftColumnPatch) => void;
 }
@@ -91,6 +93,7 @@ export const EditableFieldRow = memo(function EditableFieldRow({
   showComment,
   issues,
   selected,
+  primaryKey,
   onSelect,
   onChange,
 }: EditableFieldRowProps) {
@@ -144,7 +147,7 @@ export const EditableFieldRow = memo(function EditableFieldRow({
         {row}
       </span>
       <span role="cell" className="flex justify-center">
-        <PrimaryKeyMark primaryKey={column.primaryKey} />
+        <PrimaryKeyMark primaryKey={primaryKey} />
       </span>
       <FieldCell {...cellProps("name")}>
         {deleted ? (

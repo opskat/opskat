@@ -2434,7 +2434,8 @@
         "warnings": "{{count}} 条提醒，不影响保存",
         "tableName": "表名",
         "column": "第 {{row}} 列 {{name}}",
-        "separator": "："
+        "separator": "：",
+        "index": "第 {{row}} 个索引 {{name}}"
       },
       "issue": {
         "tableNameEmpty": "表名不能为空",
@@ -2445,7 +2446,13 @@
         "nameFolding": {
           "upper": "含小写字母，数据库会按原样建名，之后访问要加引号写成 \"{{name}}\"",
           "lower": "含大写字母，数据库会按原样建名，之后访问要加引号写成 \"{{name}}\""
-        }
+        },
+        "indexNameEmpty": "索引名不能为空",
+        "indexNameDuplicate": "与第 {{row}} 个索引重名",
+        "indexNameTaken": "同一范围内另一张表已有这个索引名",
+        "indexColumnsEmpty": "索引至少要有一列",
+        "primaryKeyDuplicate": "一张表只能有一个主键",
+        "indexOptionExclusive": "一张表只能有一个索引打开「{{option}}」"
       },
       "revertAll": "撤销全部改动",
       "revertAllTitle": "撤销全部改动？",
@@ -2528,6 +2535,33 @@
         "title": "{{name}} 的设计还没保存",
         "desc": "{{count}} 处改动，关闭后不会保留。",
         "save": "保存…"
+      },
+      "addIndex": "新建索引",
+      "newIndex": "新建索引",
+      "editIndex": "编辑索引",
+      "indexModified": "已修改",
+      "closeIndexEditor": "关闭编辑区",
+      "indexName": "索引名",
+      "indexColumnsHint": "列（次序即最左前缀）",
+      "addIndexColumn": "添加列",
+      "removeIndexColumn": "移除这一列",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "prefixLength": "前缀长度",
+      "prefix": "前缀",
+      "filterColumns": "筛选列…",
+      "newColumn": "新",
+      "optional": "可选",
+      "indexRebuildNote": "修改已有索引会先删除再重建；大表重建期间可能锁表。",
+      "deleteIndex": "删除索引",
+      "restoreIndex": "恢复这个索引",
+      "unnamedIndex": "（未命名）",
+      "indexDroppedWith": "随列 {{columns}} 一起删除",
+      "indexWas": "原为 {{name}}（{{columns}}）",
+      "updateDriver": "去更新",
+      "indexLock": {
+        "undroppable": "数据库不允许删除这个索引（如约束自动建的索引），所以也不能修改",
+        "primaryKey": "当前驱动不支持修改已有主键"
       }
     },
     "objTables": "表",

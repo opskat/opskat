@@ -1,7 +1,9 @@
+import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
 import type { DriverDescriptor } from "@/lib/dbDrivers";
 import type { DesignerDefault } from "./model";
 import { fieldAttribute, type ColumnField, type DraftColumn } from "./draft";
+import type { IndexLock } from "./indexDraft";
 
 /** 按字面量显示为数字(不加引号)的值。 */
 export const NUMERIC_LITERAL = /^-?\d+(\.\d+)?$/;
@@ -47,6 +49,34 @@ export function lockReason(
     driver: descriptor?.name,
     attribute: t(`query.designer.attribute.${fieldAttribute(field)}`),
   });
+}
+
+/** 索引表的列宽:序号、名称、类型、列,驱动声明的各选项,注释(有时),操作(设计表时)。 */
+export function indexGridStyle(optionCount: number, showComment: boolean, actions: boolean): CSSProperties {
+  const template = ["36px", "minmax(170px,1fr)", "64px", "minmax(220px,1.8fr)"];
+  for (let i = 0; i < optionCount; i++) template.push("80px");
+  if (showComment) template.push("minmax(90px,0.8fr)");
+  if (actions) template.push("34px");
+  // 列数由驱动声明的选项决定,只能运行时算出。
+  return { gridTemplateColumns: template.join(" ") };
+}
+
+/** 索引选项的取值显示:开关打开为「是」,关闭为 —;枚举没给为「默认」。 */
+export function optionText(t: TFunction, type: string, value: unknown): string {
+  if (type === "switch") return value ? t("query.designer.yes") : "—";
+  return value === undefined || value === "" ? t("query.designer.optionDefault") : String(value);
+}
+
+/** 锁定的已有索引为什么不能改:只读索引是驱动给的原因,其余由锁定的种类得出。 */
+export function indexLockText(t: TFunction, lock: IndexLock, readOnlyReason: string): string {
+  switch (lock) {
+    case "readOnly":
+      return readOnlyReason;
+    case "undroppable":
+      return t("query.designer.indexLock.undroppable");
+    case "primaryKey":
+      return t("query.designer.indexLock.primaryKey");
+  }
 }
 
 /** 语句拼成一段脚本:每条以分号结尾,条与条之间空一行(复制与在 SQL 标签打开共用)。 */

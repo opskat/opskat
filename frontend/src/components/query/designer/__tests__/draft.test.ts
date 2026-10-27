@@ -9,7 +9,6 @@ import {
   changedFields,
   columnStatus,
   draftCounts,
-  indexesDroppedWith,
   initDraft,
   isDraftDirty,
   tableCommentChanged,
@@ -92,14 +91,16 @@ function keyOf(draft: TableDraft, name: string): string {
 }
 
 describe("buildAlterRequest", () => {
-  it("原样交回读出的表:每列带原名、写法与值都与模型一致,没有删除,不带索引与已有列的自增", () => {
+  it("原样交回读出的表:每列带原名、写法与值都与模型一致,没有删除,索引按读出的样子交回,不带已有列的自增", () => {
     const model = mysqlModel();
     const req = buildAlterRequest(initDraft(mysqlStructure()), MYSQL);
     expect(req.name).toBe("orders");
     expect(req.comment).toBe("销售订单");
     expect(req.drops).toEqual([]);
-    expect(JSON.parse(JSON.stringify(req))).not.toHaveProperty("indexes");
-    expect(JSON.parse(JSON.stringify(req))).not.toHaveProperty("indexDrops");
+    expect(JSON.parse(JSON.stringify(req)).indexes).toEqual(
+      model.indexes!.map((index) => ({ originalName: index.name, ...index }))
+    );
+    expect(req.indexDrops).toEqual([]);
     expect(req.columns).toEqual(
       model.columns.map((c) => ({
         originalName: c.name,
@@ -311,31 +312,6 @@ describe("validateDraft", () => {
     expect(validateDraft(draft, pgLike)).toMatchObject([
       { severity: "warning", code: "nameFolding", folding: "lower" },
     ]);
-  });
-});
-
-describe("indexesDroppedWith", () => {
-  it("列出引用被删列的已有索引(按草稿得出),表达式索引不按列名匹配", () => {
-    const structure = mysqlStructure();
-    let draft = initDraft(structure);
-    draft = updateColumn(draft, keyOf(draft, "note"), { deleted: true });
-    expect(indexesDroppedWith(draft, structure.indexes)).toEqual(["idx_note", "idx_status_note"]);
-    expect(indexesDroppedWith(initDraft(structure), structure.indexes)).toEqual([]);
-  });
-
-  it("只在 INCLUDE 里引用被删列的索引也随列删除", () => {
-    const structure = mysqlStructure();
-    const indexes = [
-      ...structure.indexes,
-      {
-        ...structure.indexes[0],
-        name: "idx_cover",
-        columns: [{ name: "id", expression: false, descending: false, prefixLength: 0 }],
-        include: ["note"],
-      },
-    ];
-    const draft = updateColumn(initDraft(structure), keyOf(initDraft(structure), "note"), { deleted: true });
-    expect(indexesDroppedWith(draft, indexes)).toContain("idx_cover");
   });
 });
 

@@ -130,6 +130,24 @@ export function mockDriverStatements(model: () => dbdriver.AlterTableModel) {
       if (!same) out.push(`${o ? "MODIFY" : "ADD"} ${JSON.stringify(c)}`);
     }
     for (const d of req.drops) out.push(`DROP ${d}`);
+    // 索引:交回的已有索引与现状(列按改名之后的名字)相同时没有语句,改了的一条,新建、删除各一条。
+    const renamed = new Map(req.columns.filter((c) => c.originalName).map((c) => [c.originalName, c.name]));
+    const shape = (i: dbdriver.IndexDefinition, rename: (name: string) => string) =>
+      JSON.stringify([
+        i.name,
+        i.type,
+        i.columns.map((c) => [c.expression ? c.name : rename(c.name), !!c.descending, c.prefixLength ?? 0]),
+        i.options ?? {},
+        i.comment ?? "",
+      ]);
+    for (const index of req.indexes ?? []) {
+      const o = current.indexes?.find((m) => m.name === index.originalName);
+      if (!o) out.push(`CREATE INDEX ${JSON.stringify(index)}`);
+      else if (shape(o, (name) => renamed.get(name) ?? name) !== shape(index, (name) => name)) {
+        out.push(`REBUILD INDEX ${JSON.stringify(index)}`);
+      }
+    }
+    for (const d of req.indexDrops ?? []) out.push(`DROP INDEX ${d}`);
     return dbdriver.AlterTableStatements.createFrom({
       statements: out,
       table: req.name !== current.name ? req.name : table,

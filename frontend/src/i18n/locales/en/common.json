@@ -2434,7 +2434,8 @@
         "warnings": "Heads-up, saving still works ({{count}})",
         "tableName": "Table name",
         "column": "Column {{row}} {{name}}",
-        "separator": ": "
+        "separator": ": ",
+        "index": "Index {{row}} {{name}}"
       },
       "issue": {
         "tableNameEmpty": "Table name is required",
@@ -2445,7 +2446,13 @@
         "nameFolding": {
           "upper": "Has lowercase letters: the database keeps the name as typed, so queries must quote it as \"{{name}}\"",
           "lower": "Has uppercase letters: the database keeps the name as typed, so queries must quote it as \"{{name}}\""
-        }
+        },
+        "indexNameEmpty": "Index name is required",
+        "indexNameDuplicate": "Same name as index {{row}}",
+        "indexNameTaken": "Another table in the same scope already has an index with this name",
+        "indexColumnsEmpty": "An index needs at least one column",
+        "primaryKeyDuplicate": "A table can have only one primary key",
+        "indexOptionExclusive": "Only one index per table can have {{option}} turned on"
       },
       "revertAll": "Discard all changes",
       "revertAllTitle": "Discard all changes?",
@@ -2528,6 +2535,33 @@
         "title": "Unsaved design for {{name}}",
         "desc": "Unsaved changes: {{count}}. Closing the tab discards them.",
         "save": "Save…"
+      },
+      "addIndex": "New index",
+      "newIndex": "New index",
+      "editIndex": "Edit index",
+      "indexModified": "Modified",
+      "closeIndexEditor": "Close editor",
+      "indexName": "Index name",
+      "indexColumnsHint": "Columns (order sets the leftmost prefix)",
+      "addIndexColumn": "Add column",
+      "removeIndexColumn": "Remove column",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "prefixLength": "Prefix length",
+      "prefix": "Prefix",
+      "filterColumns": "Filter columns…",
+      "newColumn": "New",
+      "optional": "Optional",
+      "indexRebuildNote": "Changing an existing index drops and rebuilds it. On a large table the rebuild may lock it for a while.",
+      "deleteIndex": "Drop index",
+      "restoreIndex": "Restore index",
+      "unnamedIndex": "(unnamed)",
+      "indexDroppedWith": "Dropped along with column {{columns}}",
+      "indexWas": "Was {{name}} ({{columns}})",
+      "updateDriver": "Update it",
+      "indexLock": {
+        "undroppable": "The database won't drop this index (for example one created for a constraint), so it can't be changed either",
+        "primaryKey": "This driver can't change an existing primary key"
       }
     },
     "objTables": "Tables",

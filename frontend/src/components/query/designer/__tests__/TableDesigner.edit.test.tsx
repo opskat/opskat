@@ -317,8 +317,9 @@ describe("设计表:SQL 预览", () => {
       }))
     );
     expect(req.drops).toEqual([]);
-    expect(req).not.toHaveProperty("indexes");
-    expect(req).not.toHaveProperty("indexDrops");
+    // 驱动声明了索引编辑:读出的索引原样交回(带原名),没有删除。
+    expect(req.indexes).toEqual(model.indexes!.map((index) => ({ originalName: index.name, ...index })));
+    expect(req.indexDrops).toEqual([]);
     openSqlTab();
     expect(await screen.findByText("query.designer.sql.noChanges")).toBeInTheDocument();
     expect(saveButton()).toBeDisabled();

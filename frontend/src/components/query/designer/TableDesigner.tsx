@@ -13,6 +13,7 @@ import { ReadOnlyToolbar } from "./DesignerToolbar";
 import { DesignerLoadError, DesignerSkeleton } from "./DesignerStates";
 import { FieldsGrid } from "./FieldsGrid";
 import { IndexList } from "./IndexList";
+import { UpdateDriverAction } from "./UpdateDriverAction";
 import { ForeignKeyList } from "./ForeignKeyList";
 import { DdlPane } from "./DdlPane";
 import { DesignerFrame, DesignerStatus, type DesignerSubTab, type SubTabDef } from "./DesignerFrame";
@@ -188,8 +189,9 @@ export const TableDesigner = memo(function TableDesigner({
           <IndexList
             indexes={structure.indexes}
             descriptor={descriptor}
-            // 能改表、但驱动没声明索引编辑(改表模型不带索引):索引只能查看。
+            // 能改表、但驱动没声明索引编辑(改表模型不带索引):索引只能查看,扩展驱动给出「去更新」。
             notEditableNotice={source === "alterModel" && !structure.indexesEditable}
+            updateDriverAction={<UpdateDriverAction descriptor={descriptor} />}
           />
         </TabsContent>
         <TabsContent value="foreignKeys" className="flex min-h-0 flex-col">

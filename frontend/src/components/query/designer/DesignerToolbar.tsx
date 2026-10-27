@@ -69,7 +69,9 @@ interface DesignToolbarProps {
   comment: string | null;
   onCommentChange: (comment: string) => void;
   originalComment: string;
+  /** 字段与索引各自的改动计数。 */
   counts: DraftCounts;
+  indexCounts: DraftCounts;
   isDirty: boolean;
   errorCount: number;
   loading: boolean;
@@ -93,6 +95,7 @@ export function DesignToolbar({
   onCommentChange,
   originalComment,
   counts,
+  indexCounts,
   isDirty,
   errorCount,
   loading,
@@ -105,7 +108,10 @@ export function DesignToolbar({
   const { t } = useTranslation();
   const nameChanged = tableName.trim() !== originalName;
   const commentChanged = comment !== null && comment.trim() !== originalComment.trim();
-  const hasColumnChanges = counts.added + counts.modified + counts.deleted > 0;
+  const groups = [
+    { label: t("query.designer.tab.fields"), counts },
+    { label: t("query.designer.tab.indexes"), counts: indexCounts },
+  ].filter((g) => g.counts.added + g.counts.modified + g.counts.deleted > 0);
   return (
     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
       <span className="shrink-0 text-[11px] text-muted-foreground">{t("query.designer.tableName")}</span>
@@ -141,18 +147,18 @@ export function DesignToolbar({
       )}
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <span data-testid="designer-changes" className="flex items-center gap-1 text-[11px] text-muted-foreground">
-          {!isDirty ? (
-            t("query.designer.changes.none")
-          ) : hasColumnChanges ? (
-            <>
-              {t("query.designer.tab.fields")}
-              {counts.added > 0 && <span className="text-success">+{counts.added}</span>}
-              {counts.modified > 0 && <span className="text-warning">~{counts.modified}</span>}
-              {counts.deleted > 0 && <span className="text-destructive">−{counts.deleted}</span>}
-            </>
-          ) : (
-            t("query.designer.changes.tableOnly")
-          )}
+          {!isDirty
+            ? t("query.designer.changes.none")
+            : groups.length > 0
+              ? groups.map((g, i) => (
+                  <span key={g.label} className={cn("flex items-center gap-1", i > 0 && "ml-1.5")}>
+                    {g.label}
+                    {g.counts.added > 0 && <span className="text-success">+{g.counts.added}</span>}
+                    {g.counts.modified > 0 && <span className="text-warning">~{g.counts.modified}</span>}
+                    {g.counts.deleted > 0 && <span className="text-destructive">−{g.counts.deleted}</span>}
+                  </span>
+                ))
+              : t("query.designer.changes.tableOnly")}
         </span>
         {errorCount > 0 && (
           <span
