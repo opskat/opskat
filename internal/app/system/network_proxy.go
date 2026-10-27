@@ -197,19 +197,17 @@ func (s *System) validateNetworkProxy(settings netproxy.Settings) error {
 // proxySchemePrefix 匹配代理地址开头的 "scheme://"（可省略，省略时进程按 http:// 解析）。
 var proxySchemePrefix = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
-// maskProxyPassword 把代理地址里的密码换成 ***。按 net/url 的规则切分：authority 截到第一个 "/"、"?" 或 "#"，
-// userinfo 截到 authority 里最后一个 "@"，用户名与密码以第一个 ":" 分隔——与进程实际解析出的密码一致。
+// maskProxyPassword 把代理地址里的密码换成 ***：scheme 之后到最后一个 "@" 为 userinfo，用户名与密码以第一个 ":" 分隔。
+// 进程（net/url）解析出的密码总在这一段内；不按 net/url 先在 "/"、"?"、"#" 处截断 authority，
+// 因为密码里未转义的这些字符会让进程解析不出密码，但那段文字仍是用户的密码，不能显示。
 func maskProxyPassword(value string) string {
 	start := len(proxySchemePrefix.FindString(value))
-	authority := value[start:]
-	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
-		authority = authority[:end]
-	}
-	at := strings.LastIndex(authority, "@")
+	rest := value[start:]
+	at := strings.LastIndex(rest, "@")
 	if at < 0 {
 		return value
 	}
-	colon := strings.Index(authority[:at], ":")
+	colon := strings.Index(rest[:at], ":")
 	if colon < 0 {
 		return value
 	}

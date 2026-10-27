@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -43,15 +43,16 @@ export function NetworkProxyTestDialog({
   const { t } = useTranslation();
   const [url, setUrl] = useState(() => localStorage.getItem(LAST_URL_KEY) ?? "");
   const [test, setTest] = useState<TestState>({ state: "idle" });
-  // 进行中的测试 id；关闭或被新一轮取代后清空，晚到的结果据此丢弃。
+  // 进行中的测试 id；结束、关闭或被新一轮取代后清空，晚到的结果据此丢弃。
   const activeId = useRef<string | null>(null);
 
-  useEffect(
-    () => () => {
-      activeId.current = null;
-    },
-    []
-  );
+  const cancelActive = useCallback(() => {
+    if (activeId.current) void CancelTest(activeId.current);
+    activeId.current = null;
+  }, []);
+
+  // 卸载（如设置页被关掉）同关闭对话框：取消进行中的测试。
+  useEffect(() => cancelActive, [cancelActive]);
 
   const trimmed = url.trim();
   const urlInvalid = trimmed !== "" && !isHttpUrl(trimmed);
@@ -63,19 +64,19 @@ export function NetworkProxyTestDialog({
     activeId.current = id;
     localStorage.setItem(LAST_URL_KEY, trimmed);
     setTest({ state: "testing" });
+    let next: TestState;
     try {
-      const result = await TestNetworkProxy(id, toNetworkProxyInput(form), trimmed);
-      if (activeId.current === id) setTest({ state: "done", result });
+      next = { state: "done", result: await TestNetworkProxy(id, toNetworkProxyInput(form), trimmed) };
     } catch (e: unknown) {
-      if (activeId.current === id) setTest({ state: "rejected", message: errMsg(e) });
+      next = { state: "rejected", message: errMsg(e) };
     }
+    if (activeId.current !== id) return;
+    activeId.current = null;
+    setTest(next);
   };
 
   const handleOpenChange = (next: boolean) => {
-    if (!next && activeId.current) {
-      void CancelTest(activeId.current);
-      activeId.current = null;
-    }
+    if (!next) cancelActive();
     onOpenChange(next);
   };
 

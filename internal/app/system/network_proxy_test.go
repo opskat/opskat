@@ -262,6 +262,30 @@ func TestNetworkProxyEnvVarsMaskPasswordContainingAt(t *testing.T) {
 	}
 }
 
+// 未转义的 "/"、"?"、"#" 会让 net/url 提前截断 authority，进程因此解析不出这段密码，
+// 但它仍是用户写进环境变量的密码，不能原样显示。
+func TestNetworkProxyEnvVarsMaskPasswordContainingURLDelimiters(t *testing.T) {
+	s := setupNetworkProxyTest(t, &bootstrap.AppConfig{})
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("HTTPS_PROXY", "http://bob:pa/ss@proxy.local:3128")
+	t.Setenv("HTTP_PROXY", "bob:p#s?s@proxy.local:3128")
+	v, err := s.GetNetworkProxySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"HTTPS_PROXY": "http://bob:***@proxy.local:3128", "HTTP_PROXY": "bob:***@proxy.local:3128"} //nolint:gosec // masked placeholder, not a credential
+	if len(v.EnvVars) != len(want) {
+		t.Fatalf("envVars = %v", v.EnvVars)
+	}
+	for _, e := range v.EnvVars {
+		if want[e.Name] != e.Value {
+			t.Fatalf("envVars[%s] = %q, want %q", e.Name, e.Value, want[e.Name])
+		}
+	}
+}
+
 func TestApplyNetworkProxyAtStartup(t *testing.T) {
 	s := setupNetworkProxyTest(t, &bootstrap.AppConfig{})
 	if err := s.SaveNetworkProxySettings(customInput()); err != nil {

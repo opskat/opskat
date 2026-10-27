@@ -170,6 +170,29 @@ describe("NetworkProxyTestDialog", () => {
     expect(screen.queryByText("network.proxy.test.success")).not.toBeInTheDocument();
   });
 
+  it("unmounting mid-test cancels it by id", async () => {
+    vi.mocked(TestNetworkProxy).mockReturnValue(new Promise<Result>(() => {}));
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = render(<NetworkProxyTestDialog open form={validForm} onOpenChange={onOpenChange} />);
+    await user.type(urlBox(), "https://example.com");
+    await user.click(runBtn());
+    unmount();
+    expect(CancelTest).toHaveBeenCalledWith(vi.mocked(TestNetworkProxy).mock.calls[0][0]);
+  });
+
+  it("closing or unmounting after the test finished does not call CancelTest", async () => {
+    vi.mocked(TestNetworkProxy).mockResolvedValue(result());
+    const user = userEvent.setup();
+    const { unmount } = render(<NetworkProxyTestDialog open form={validForm} onOpenChange={vi.fn()} />);
+    await user.type(urlBox(), "https://example.com");
+    await user.click(runBtn());
+    await screen.findByText("network.proxy.test.success");
+    await user.click(closeBtn());
+    unmount();
+    expect(CancelTest).not.toHaveBeenCalled();
+  });
+
   it("closing when idle does not call CancelTest", async () => {
     const { user, onOpenChange } = setup();
     await user.click(closeBtn());
