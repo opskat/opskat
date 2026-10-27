@@ -182,6 +182,15 @@ describe("设计表:字段编辑", () => {
     expect(fresh).toBeEnabled();
   });
 
+  it("自增只能在新表上设的驱动:已有表的新列不能勾自增,并说明原因", async () => {
+    await openWith(fakeAlterDriver({ autoIncrement: true, autoIncrementNewTablesOnly: true }));
+    addField();
+    fireEvent.click(within(lastRow()).getByRole("textbox", { name: "query.designer.column.name" }));
+    const props = screen.getByTestId("designer-column-props");
+    expect(within(props).getByRole("checkbox", { name: "query.designer.autoIncrement" })).toBeDisabled();
+    expect(within(props).getByText("query.designer.autoIncrementNewTablesOnly")).toBeInTheDocument();
+  });
+
   it("没声明自增的驱动:列属性里没有自增", async () => {
     await openWith(fakeAlterDriver({ alterTableAttributes: ["column_default"] }));
     addField();

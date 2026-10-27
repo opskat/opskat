@@ -2488,6 +2488,7 @@
       },
       "keys": "Keys",
       "autoIncrementExisting": "Auto-increment can't be changed on an existing column",
+      "autoIncrementNewTablesOnly": "This database only allows auto-increment when a table is created",
       "modifiedProps": "Changed (was)",
       "revert": "Revert",
       "sql": {

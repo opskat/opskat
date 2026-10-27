@@ -2488,6 +2488,7 @@
       },
       "keys": "键",
       "autoIncrementExisting": "已有列的自增不能修改",
+      "autoIncrementNewTablesOnly": "该数据库只能在建表时设置自增",
       "modifiedProps": "已修改（原值）",
       "revert": "还原",
       "sql": {

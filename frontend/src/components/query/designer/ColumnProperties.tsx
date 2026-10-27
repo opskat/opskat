@@ -51,17 +51,23 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert }: Col
               <label className="flex items-center gap-2">
                 <Checkbox
                   checked={column.autoIncrement}
-                  // 已有列的自增不能改,只显示现状。
-                  disabled={!!column.original}
+                  // 已有列的自增不能改,只显示现状;自增只能在新表上设的驱动,已有表的新列也不能勾。
+                  disabled={!!column.original || !!descriptor.autoIncrementNewTablesOnly}
                   onCheckedChange={(checked) => onChange(key, { autoIncrement: checked === true })}
                   aria-label={t("query.designer.autoIncrement")}
                 />
                 {t("query.designer.autoIncrement")}
               </label>
-              {column.original && (
+              {column.original ? (
                 <p className="text-[10px] leading-4 text-muted-foreground">
                   {t("query.designer.autoIncrementExisting")}
                 </p>
+              ) : (
+                descriptor.autoIncrementNewTablesOnly && (
+                  <p className="text-[10px] leading-4 text-muted-foreground">
+                    {t("query.designer.autoIncrementNewTablesOnly")}
+                  </p>
+                )
               )}
             </>
           )}
