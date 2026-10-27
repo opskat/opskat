@@ -319,4 +319,19 @@ describe("indexesDroppedWith", () => {
     expect(indexesDroppedWith(draft, structure.indexes)).toEqual(["idx_note", "idx_status_note"]);
     expect(indexesDroppedWith(initDraft(structure), structure.indexes)).toEqual([]);
   });
+
+  it("只在 INCLUDE 里引用被删列的索引也随列删除", () => {
+    const structure = mysqlStructure();
+    const indexes = [
+      ...structure.indexes,
+      {
+        ...structure.indexes[0],
+        name: "idx_cover",
+        columns: [{ name: "id", expression: false, descending: false, prefixLength: 0 }],
+        include: ["note"],
+      },
+    ];
+    const draft = updateColumn(initDraft(structure), keyOf(initDraft(structure), "note"), { deleted: true });
+    expect(indexesDroppedWith(draft, indexes)).toContain("idx_cover");
+  });
 });

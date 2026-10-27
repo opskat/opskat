@@ -614,3 +614,59 @@ func TestAlterTableRefusesAnIndexNamingADroppedColumn(t *testing.T) {
 	assert.Contains(t, err.Error(), "ix_t_at")
 	assert.Contains(t, err.Error(), `"at"`)
 }
+
+// includeDialect 的表另有一个只在 INCLUDE 里用到 note 的索引。
+type includeDialect struct{ indexerDialect }
+
+func (d *includeDialect) AlterableTable(context.Context, *sql.Conn, string, string) (*AlterableTable, error) {
+	table := indexTable()
+	table.Indexes = append(table.Indexes, dbdriver.IndexDefinition{
+		Name: "ix_t_name_cover", Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: "name"}},
+		Include: []string{"note"}, ReadOnlyReason: "INCLUDE columns",
+	})
+	return table, nil
+}
+
+// 只在 INCLUDE 里引用被删列的索引同样随列一起删（SQL Server 不先删它就删不掉这一列，PostgreSQL 会悄悄删掉它），
+// 删除警告才能列出它。
+func TestAlterTableDropsAnIndexIncludingADroppedColumn(t *testing.T) {
+	ctx := context.Background()
+	dialect := &includeDialect{}
+	session := newIndexSession(t, dialect)
+	model, err := session.AlterTableModel(ctx, "db", "t")
+	require.NoError(t, err)
+
+	req := modelRequest(model)
+	req.Columns = req.Columns[:3]
+	req.Drops = []string{"note"}
+	result, err := session.AlterTableStatements(ctx, "db", "t", req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"DROP INDEX <ix_t_note> ON <db>.<t>",
+		"DROP INDEX <ix_t_name_cover> ON <db>.<t>",
+		"DROP COLUMN note",
+	}, result.Statements)
+
+	// 请求原样留下这个索引、却删掉它 INCLUDE 的列：矛盾，报错。
+	kept := indexModelRequest(model)
+	kept.Columns = kept.Columns[:3]
+	kept.Indexes = slices.DeleteFunc(kept.Indexes, func(i dbdriver.AlterIndex) bool { return i.OriginalName == "ix_t_note" })
+	kept.Drops = []string{"note"}
+	_, err = session.AlterTableStatements(ctx, "db", "t", kept)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ix_t_name_cover")
+}
+
+// 改名的列在 INCLUDE 里同样跟着改名：原样交回不重建。
+func TestAlterTableRenamesIncludedColumnsWithoutRebuilding(t *testing.T) {
+	ctx := context.Background()
+	session := newIndexSession(t, &includeDialect{})
+	model, err := session.AlterTableModel(ctx, "db", "t")
+	require.NoError(t, err)
+
+	req := indexModelRequest(model)
+	req.Columns[3].Name = "remark" // note → remark
+	result, err := session.AlterTableStatements(ctx, "db", "t", req)
+	require.NoError(t, err)
+	assert.NotContains(t, strings.Join(result.Statements, "\n"), "ix_t_name_cover", "INCLUDE 列改名不重建索引")
+}

@@ -2,6 +2,7 @@ package sqldb
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -165,6 +166,16 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 			}
 			normalized.Columns[i] = column
 		}
+		if len(index.Include) > 0 {
+			normalized.Include = make([]string, len(index.Include))
+			for i, included := range index.Include {
+				name, ok := columns.resolve(strings.TrimSpace(included))
+				if !ok {
+					return dbdriver.IndexDefinition{}, fmt.Errorf("index %q includes column %q, which is not in table %s after the change", normalized.Name, included, table)
+				}
+				normalized.Include[i] = name
+			}
+		}
 		return normalized, nil
 	}
 	// renamedColumns 是现有索引在改动之后的列名：索引跟着列改名，不必重建。
@@ -178,6 +189,15 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 				}
 			}
 			out.Columns[i] = column
+		}
+		if len(index.Include) > 0 {
+			out.Include = make([]string, len(index.Include))
+			for i, included := range index.Include {
+				if renamed, ok := columns.renames[included]; ok {
+					included = renamed
+				}
+				out.Include[i] = included
+			}
 		}
 		return out
 	}
@@ -249,7 +269,7 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 		change.IndexDrops = append(change.IndexDrops, *current)
 	}
 
-	// 引用被删列的索引随列一起删：不删它就删不掉那一列。请求没有列出的在这里补上；不可删除的留给数据库
+	// 引用被删列（键列或 INCLUDE 列）的索引随列一起删：不删它就删不掉那一列。请求没有列出的在这里补上；不可删除的留给数据库
 	// 随列一起丢掉。请求要保留一个（改完之后仍然）引用被删列的索引是矛盾的，报错而不是写一条数据库会拒的语句。
 	for _, changed := range change.Indexes {
 		for _, column := range changed.Index.Columns {
@@ -264,7 +284,7 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 		if mentioned[index.Name] || drops[index.Name] || index.Undroppable {
 			continue
 		}
-		if slicesContainsColumn(index.Columns, columns.dropped) {
+		if slicesContainsColumn(index.Columns, columns.dropped) || slices.ContainsFunc(index.Include, func(name string) bool { return columns.dropped[name] }) {
 			drops[index.Name] = true
 			change.IndexDrops = append(change.IndexDrops, *index)
 		}

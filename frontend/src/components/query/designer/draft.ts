@@ -223,7 +223,11 @@ export function droppedColumns(draft: TableDraft): string[] {
 export function indexesDroppedWith(draft: TableDraft, indexes: DesignerIndex[]): string[] {
   const dropped = droppedColumns(draft);
   return indexes
-    .filter((index) => index.columns.some((c) => !c.expression && dropped.includes(c.name)))
+    .filter(
+      (index) =>
+        index.columns.some((c) => !c.expression && dropped.includes(c.name)) ||
+        index.include.some((name) => dropped.includes(name))
+    )
     .map((index) => index.name);
 }
 
