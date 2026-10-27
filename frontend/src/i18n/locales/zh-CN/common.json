@@ -1569,6 +1569,38 @@
       "brightWhite": "亮白"
     }
   },
+  "network": {
+    "title": "网络",
+    "proxy": {
+      "title": "网络代理",
+      "desc": "AI 对话、拉取模型列表、检查更新、扩展商店和云备份访问外网时使用的代理。资产连接不受影响，仍按各自的跳板机 / 代理设置连接。",
+      "mode": "代理模式",
+      "modeEnv": "使用环境变量",
+      "modeDirect": "不使用代理（直连）",
+      "modeCustom": "自定义",
+      "envDetected": "按 HTTPS_PROXY / HTTP_PROXY / NO_PROXY 环境变量连接，当前检测到：",
+      "envNone": "未检测到代理环境变量，当前为直连。从程序坞或开始菜单启动时读不到终端里设置的变量；使用 Clash 等代理软件请改选「自定义」。",
+      "type": "代理类型",
+      "host": "代理地址",
+      "port": "代理端口",
+      "hostHint": "Clash、Clash Verge、ClashX 等一般填 HTTP、127.0.0.1 和混合端口（默认 7890）。经代理时域名由代理解析，不依赖本机 DNS。",
+      "username": "代理用户名",
+      "password": "代理密码",
+      "optional": "可选",
+      "noProxy": "不走代理的地址",
+      "noProxyTip": "写法同 NO_PROXY：域名同时匹配其子域名，IP 和网段按地址匹配。",
+      "noProxyHint": "每行一个，如 example.com、192.168.0.0/16。",
+      "saved": "网络代理已保存",
+      "error": {
+        "hostRequired": "请填写代理地址",
+        "hostInvalid": "代理地址只能是主机名或 IP，不含协议、路径和空格",
+        "portRequired": "请填写代理端口",
+        "portInvalid": "端口需是整数",
+        "portRange": "端口需在 1-65535 之间",
+        "noProxyLine": "第 {{line}} 行无法识别，请填写域名、IP 或网段"
+      }
+    }
+  },
   "externalEdit": {
     "saving": "正在自动保存…",
     "panel": {
