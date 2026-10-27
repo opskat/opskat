@@ -1,13 +1,43 @@
 package system
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/netproxy"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestNetworkProxySaveLogsOneInfoWithoutCredentials(t *testing.T) {
+	s := setupNetworkProxyTest(t, &bootstrap.AppConfig{})
+	core, logs := observer.New(zap.DebugLevel)
+	old := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(old) })
+
+	in := customInput()
+	in.Username, in.Password = "proxy-user-x", "proxy-pass-y"
+	if err := s.SaveNetworkProxySettings(in); err != nil {
+		t.Fatal(err)
+	}
+	entries := logs.All()
+	if len(entries) != 1 || entries[0].Level != zap.InfoLevel {
+		t.Fatalf("want exactly one Info entry, got %v", entries)
+	}
+	fields := entries[0].ContextMap()
+	if fields["mode"] != "custom" || fields["scheme"] != "socks5" || fields["host"] != "127.0.0.1" || fields["port"] != int64(7890) || fields["auth"] != true {
+		t.Fatalf("fields = %v", fields)
+	}
+	dump := fmt.Sprint(entries[0].Message, fields)
+	if strings.Contains(dump, "proxy-user-x") || strings.Contains(dump, "proxy-pass-y") {
+		t.Fatalf("log leaks credentials: %s", dump)
+	}
+}
 
 // setupNetworkProxyTest 重置配置与进程级 netproxy 状态，并在结束时还原。
 func setupNetworkProxyTest(t *testing.T, cfg *bootstrap.AppConfig) *System {
