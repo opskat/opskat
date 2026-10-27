@@ -1591,6 +1591,32 @@
       "noProxyTip": "写法同 NO_PROXY：域名同时匹配其子域名，IP 和网段按地址匹配。",
       "noProxyHint": "每行一个，如 example.com、192.168.0.0/16。",
       "saved": "网络代理已保存",
+      "test": {
+        "open": "测试连接",
+        "title": "测试连接",
+        "desc": "按当前填写的代理设置（无需先保存）访问下面的地址。",
+        "url": "测试地址",
+        "urlPlaceholder": "如 https://api.openai.com",
+        "urlInvalid": "地址须以 http:// 或 https:// 开头",
+        "fixForm": "代理设置有误，请先修正后再测试",
+        "run": "测试",
+        "running": "测试中...",
+        "success": "连接成功",
+        "failed": "连接失败",
+        "via": "经由",
+        "direct": "直连",
+        "host": "目标主机",
+        "status": "HTTP 状态",
+        "elapsed": "耗时",
+        "reason": {
+          "proxy_unreachable": "连不上代理，请检查代理地址、端口和协议是否正确，代理软件是否已启动。",
+          "proxy_auth": "代理要求认证，或用户名、密码不正确。",
+          "dns": "目标域名解析失败。",
+          "tls": "TLS 握手失败。",
+          "timeout": "请求超时。",
+          "other": "请求失败。"
+        }
+      },
       "error": {
         "hostRequired": "请填写代理地址",
         "hostInvalid": "代理地址只能是主机名或 IP，不含协议、路径和空格",

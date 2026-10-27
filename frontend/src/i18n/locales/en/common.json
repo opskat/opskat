@@ -1591,6 +1591,32 @@
       "noProxyTip": "Same syntax as NO_PROXY: a domain also matches its subdomains; IPs and CIDR ranges match by address.",
       "noProxyHint": "One per line, e.g. example.com or 192.168.0.0/16.",
       "saved": "Network proxy saved",
+      "test": {
+        "open": "Test connection",
+        "title": "Test connection",
+        "desc": "Reaches the address below with the proxy settings as currently filled in, no need to save first.",
+        "url": "Test address",
+        "urlPlaceholder": "e.g. https://api.openai.com",
+        "urlInvalid": "The address must start with http:// or https://",
+        "fixForm": "The proxy settings have errors. Fix them before testing.",
+        "run": "Test",
+        "running": "Testing...",
+        "success": "Connected",
+        "failed": "Connection failed",
+        "via": "Via",
+        "direct": "Direct",
+        "host": "Target host",
+        "status": "HTTP status",
+        "elapsed": "Elapsed",
+        "reason": {
+          "proxy_unreachable": "Couldn’t reach the proxy. Check its host, port and protocol, and that the proxy app is running.",
+          "proxy_auth": "The proxy requires authentication, or the username or password is wrong.",
+          "dns": "Couldn’t resolve the target hostname.",
+          "tls": "The TLS handshake failed.",
+          "timeout": "The request timed out.",
+          "other": "The request failed."
+        }
+      },
       "error": {
         "hostRequired": "Enter the proxy host",
         "hostInvalid": "Use a hostname or IP only, without a scheme, path or spaces",

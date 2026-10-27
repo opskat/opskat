@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Info, Loader2, Save } from "lucide-react";
+import { Info, Loader2, PlugZap, Save } from "lucide-react";
 import { toast } from "sonner";
 import {
   Button,
@@ -26,6 +26,7 @@ import { SecretInput } from "@/components/SecretInput";
 import { notifySuccess } from "@/lib/notify";
 import { GetNetworkProxySettings, SaveNetworkProxySettings } from "../../../wailsjs/go/system/System";
 import type { system } from "../../../wailsjs/go/models";
+import { NetworkProxyTestDialog } from "./NetworkProxyTestDialog";
 import {
   networkProxyFormFromView,
   toNetworkProxyInput,
@@ -49,6 +50,7 @@ export function NetworkSection() {
   const [envVars, setEnvVars] = useState<system.NetworkProxyEnvVar[]>([]);
   const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
   const [saving, setSaving] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
 
   const apply = useCallback((view: system.NetworkProxyView) => {
     setForm(networkProxyFormFromView(view));
@@ -239,7 +241,12 @@ export function NetworkSection() {
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {t("action.save")}
           </Button>
+          <Button variant="outline" className="gap-1" onClick={() => setTestOpen(true)}>
+            <PlugZap className="h-4 w-4" />
+            {t("network.proxy.test.open")}
+          </Button>
         </div>
+        {testOpen && <NetworkProxyTestDialog open form={form} onOpenChange={setTestOpen} />}
       </CardContent>
     </Card>
   );

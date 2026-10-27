@@ -169,8 +169,11 @@ describe("NetworkSection", () => {
     expect(notifySuccess).not.toHaveBeenCalled();
   });
 
-  it("does not render a test-connection button yet", async () => {
-    await renderWith(view());
-    expect(screen.queryByRole("button", { name: /test/i })).not.toBeInTheDocument();
+  it("opens the test dialog from the card without saving", async () => {
+    const user = userEvent.setup();
+    await renderWith(view({ mode: "custom", host: "127.0.0.1", port: 7890 }));
+    await user.click(screen.getByRole("button", { name: /network.proxy.test.open/ }));
+    expect(await screen.findByLabelText("network.proxy.test.url")).toBeInTheDocument();
+    expect(SaveNetworkProxySettings).not.toHaveBeenCalled();
   });
 });
