@@ -41,8 +41,8 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AlterTableDialog } from "./AlterTableDialog";
-import { TableStructureDialog } from "./TableStructureDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
+import { useDesignerAccess } from "./designer/access";
 import {
   OBJECT_BROWSER_CAPABILITIES,
   driverHasCapability,
@@ -135,8 +135,16 @@ export function DriverUnavailableNotice({ driver }: { driver: string | undefined
 
 export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const { t } = useTranslation();
-  const { dbStates, loadDatabases, toggleDbExpand, toggleSchemaExpand, openTableTab, openSqlTab, refreshTables } =
-    useQueryStore();
+  const {
+    dbStates,
+    loadDatabases,
+    toggleDbExpand,
+    toggleSchemaExpand,
+    openTableTab,
+    openDesignerTab,
+    openSqlTab,
+    refreshTables,
+  } = useQueryStore();
   const treeRef = useRef<HTMLDivElement>(null);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
   const [showCreateTable, setShowCreateTable] = useState(false);
@@ -144,7 +152,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [showAlterTable, setShowAlterTable] = useState(false);
   const [alterDatabase, setAlterDatabase] = useState("");
   const [alterTableName, setAlterTableName] = useState("");
-  const [structureTarget, setStructureTarget] = useState<{ db: string; table: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -162,6 +169,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const driverUnavailable = driversState.status === "ready" && !driverDescriptor;
   const driverReady = !!driverDescriptor;
   const can = (capability: string) => driverHasCapability(driverDescriptor, capability);
+  // 能改表时「修改表」,不能改(驱动没声明或只读连接)时「查看结构」打开只读设计器。
+  const access = useDesignerAccess(driverDescriptor, tabMeta?.assetId);
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
 
   const dbState = dbStates[tabId];
@@ -452,11 +461,13 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             <Table2 className="h-3.5 w-3.5" />
             {isBatch ? t("query.openTables", { count: targets.length }) : t("query.openTable")}
           </ContextMenuItem>
-          <ContextMenuItem disabled={isBatch} onClick={() => setStructureTarget({ db, table: tbl })}>
-            <Columns3 className="h-3.5 w-3.5" />
-            {t("query.viewStructure")}
-          </ContextMenuItem>
-          {can("alter_table") && (
+          {!access.canAlter && (
+            <ContextMenuItem disabled={isBatch} onClick={() => openDesignerTab(tabId, db, tbl, "view")}>
+              <Columns3 className="h-3.5 w-3.5" />
+              {t("query.viewStructure")}
+            </ContextMenuItem>
+          )}
+          {access.canAlter && (
             <ContextMenuItem
               disabled={isBatch}
               onClick={() => {
@@ -807,16 +818,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           setAlterDatabase("");
           setAlterTableName("");
         }}
-      />
-
-      <TableStructureDialog
-        open={structureTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setStructureTarget(null);
-        }}
-        tabId={tabId}
-        database={structureTarget?.db ?? ""}
-        table={structureTarget?.table ?? ""}
       />
 
       <ConfirmDialog

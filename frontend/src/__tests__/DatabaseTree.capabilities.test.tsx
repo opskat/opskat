@@ -4,8 +4,9 @@ import { DatabaseTree } from "../components/query/DatabaseTree";
 import { DatabasePanel } from "../components/query/DatabasePanel";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
+import { useAssetStore } from "../stores/assetStore";
 import { ListDatabaseDrivers, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
-import { query_svc } from "../../wailsjs/go/models";
+import { asset_entity, query_svc } from "../../wailsjs/go/models";
 import { BUILTIN_DRIVERS, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
@@ -20,7 +21,15 @@ vi.mock("react-i18next", () => {
 });
 
 const ALL_OBJECT_GROUPS = ["query.objViews", "query.objProcedures", "query.objFunctions", "query.objTriggers"];
-const ALL_TABLE_MENU = ["query.openTable", "query.alterTable", "query.truncateTable", "query.dropTable"];
+const ALL_TABLE_MENU = [
+  "query.openTable",
+  "query.viewStructure",
+  "query.alterTable",
+  "query.truncateTable",
+  "query.dropTable",
+];
+// 能改表的驱动:「查看结构」换成「修改表」。
+const ALTER_TABLE_MENU = ALL_TABLE_MENU.filter((label) => label !== "query.viewStructure");
 
 function openTab(driver: string) {
   useTabStore.setState({
@@ -102,7 +111,13 @@ async function objectGroupsShown(): Promise<string[]> {
   return ALL_OBJECT_GROUPS.filter((label) => screen.queryByText(new RegExp(`^${label}`)) !== null);
 }
 
+/** 开启了只读连接的数据库资产。 */
+function readOnlyAsset(id: number): asset_entity.Asset {
+  return new asset_entity.Asset({ ID: id, Name: "db", Type: "database", Config: JSON.stringify({ read_only: true }) });
+}
+
 beforeEach(() => {
+  useAssetStore.setState({ assets: [] });
   vi.mocked(ListDatabaseObjects).mockReset();
   vi.mocked(ListDatabases).mockReset();
   vi.mocked(ListTables).mockReset();
@@ -133,7 +148,7 @@ describe("DatabaseTree 内置驱动的入口与改动前一致", () => {
       expect(hasToolbarCreateDatabase()).toBe(want.createDatabase);
       expect(hasSchemaGroup()).toBe(want.schemaGroup);
       expect(await objectGroupsShown()).toEqual(want.objects);
-      expect(tableMenuLabels()).toEqual(ALL_TABLE_MENU);
+      expect(tableMenuLabels()).toEqual(ALTER_TABLE_MENU);
       cleanup();
       await renderTree(driver, objectsOf(...want.backend));
       expect(databaseMenuHasAddTable()).toBe(true);
@@ -150,7 +165,7 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     expect(hasSchemaGroup()).toBe(false);
     expect(screen.getByText("public.users")).toBeInTheDocument();
     expect(await objectGroupsShown()).toEqual([]);
-    expect(tableMenuLabels()).toEqual(["query.openTable"]);
+    expect(tableMenuLabels()).toEqual(["query.openTable", "query.viewStructure"]);
     cleanup();
     await renderTree("fakedb");
     expect(databaseMenuHasAddTable()).toBe(false);
@@ -177,17 +192,49 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     expect(databaseMenuHasAddTable()).toBe(true);
   });
 
+  it("声明 alter_table:「查看结构」换成「修改表」", async () => {
+    provideDrivers([fakeDriverWith(["alter_table"])]);
+    await renderTree("fakedb");
+    expect(tableMenuLabels()).toEqual(["query.openTable", "query.alterTable"]);
+  });
+
   for (const [cap, label] of [
-    ["alter_table", "query.alterTable"],
     ["truncate_table", "query.truncateTable"],
     ["drop_table", "query.dropTable"],
   ]) {
     it(`声明 ${cap}:表的右键菜单只多出对应一项`, async () => {
       provideDrivers([fakeDriverWith([cap])]);
       await renderTree("fakedb");
-      expect(tableMenuLabels()).toEqual(["query.openTable", label]);
+      expect(tableMenuLabels()).toEqual(["query.openTable", "query.viewStructure", label]);
     });
   }
+
+  it("驱动不能改表时「查看结构」打开只读设计器标签", async () => {
+    provideDrivers([fakeDriverWith([])]);
+    await renderTree("fakedb");
+    fireEvent.contextMenu(screen.getByText("public.users"));
+    fireEvent.click(screen.getByText("query.viewStructure"));
+
+    const state = useQueryStore.getState().dbStates["query-1"];
+    expect(state.innerTabs).toEqual([
+      { id: "designer:appdb.public.users", type: "designer", mode: "view", database: "appdb", table: "public.users" },
+    ]);
+    expect(state.activeInnerTabId).toBe("designer:appdb.public.users");
+  });
+});
+
+describe("DatabaseTree 在资产开启只读连接时", () => {
+  it("能改表的驱动也只给「查看结构」,打开只读设计器", async () => {
+    provideDrivers([fakeDriverWith(["alter_table"])]);
+    useAssetStore.setState({ assets: [readOnlyAsset(1)] });
+    await renderTree("fakedb");
+    expect(tableMenuLabels()).toEqual(["query.openTable", "query.viewStructure"]);
+
+    fireEvent.click(screen.getByText("query.viewStructure"));
+    expect(useQueryStore.getState().dbStates["query-1"].innerTabs.map((t) => t.id)).toEqual([
+      "designer:appdb.public.users",
+    ]);
+  });
 
   it("对象浏览按四类对象各自的声明显示", async () => {
     provideDrivers([fakeDriverWith(["procedures", "triggers"])]);

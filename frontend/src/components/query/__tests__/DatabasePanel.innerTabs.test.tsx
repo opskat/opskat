@@ -14,6 +14,11 @@ vi.mock("@/components/query/DatabaseTree", () => ({
 }));
 vi.mock("@/components/query/TableDataTab", () => ({ TableDataTab: () => null }));
 vi.mock("@/components/query/SqlEditorTab", () => ({ SqlEditorTab: () => null }));
+vi.mock("@/components/query/designer/TableDesigner", () => ({
+  TableDesigner: (props: { innerTabId: string; database: string; table: string }) => (
+    <div data-testid="table-designer">{`${props.innerTabId}|${props.database}|${props.table}`}</div>
+  ),
+}));
 vi.mock("@/lib/notify", () => ({ notifyCopied: vi.fn(), notifySuccess: vi.fn() }));
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
@@ -25,7 +30,7 @@ const tabs: InnerTab[] = [
   { id: "table:app.orders", type: "table", database: "app", table: "orders" },
 ];
 
-function setup(active = "sql:1") {
+function setup(active = "sql:1", innerTabs: InnerTab[] = tabs) {
   provideDrivers(BUILTIN_DRIVERS);
   useTabStore.setState({
     tabs: [
@@ -49,7 +54,7 @@ function setup(active = "sql:1") {
         expandedDbs: [],
         expandedSchemas: {},
         loadingDbs: false,
-        innerTabs: tabs,
+        innerTabs,
         activeInnerTabId: active,
         error: null,
       },
@@ -203,6 +208,43 @@ describe("DatabasePanel inner tab bar", () => {
     expect(screen.queryByText("query.innerTab.reveal")).toBeNull();
     fireEvent.keyDown(document.body, { key: "Escape" });
     fireEvent.contextMenu(tabEl("app.orders"));
+    fireEvent.click(await screen.findByText("query.innerTab.reveal"));
+    expect(reveal).toHaveBeenCalledWith(TAB, "app", "orders");
+  });
+});
+
+describe("DatabasePanel 设计器标签", () => {
+  const designer: InnerTab = {
+    id: "designer:app.orders",
+    type: "designer",
+    mode: "view",
+    database: "app",
+    table: "orders",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+  });
+
+  it("只读查看的标签以「结构」为题,内容是这张表的设计器", () => {
+    setup(designer.id, [...tabs, designer]);
+    expect(tabEl("query.designer.tabTitle.view")).toBeInTheDocument();
+    expect(screen.getByTestId("table-designer")).toHaveTextContent("designer:app.orders|app|orders");
+  });
+
+  it("菜单:复制名称给出 db.table,并能在左侧树中定位", async () => {
+    setup(designer.id, [...tabs, designer]);
+    const reveal = vi.spyOn(useQueryStore.getState(), "revealTable");
+    fireEvent.contextMenu(tabEl("query.designer.tabTitle.view"));
+    fireEvent.click(await screen.findByText("query.innerTab.copyName"));
+    expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith("app.orders");
+    await act(async () => {});
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.contextMenu(tabEl("query.designer.tabTitle.view"));
     fireEvent.click(await screen.findByText("query.innerTab.reveal"));
     expect(reveal).toHaveBeenCalledWith(TAB, "app", "orders");
   });

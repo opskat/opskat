@@ -28,8 +28,17 @@ export interface QueryTab {
   redisMode?: "standalone" | "cluster" | "sentinel";
 }
 
+/**
+ * 表设计器标签。view:只读查看结构;design:设计已有的表;create:在 database 里新建表(还没有表名)。
+ * 每张已有的表只开一个(id 按库与表),草稿不持久化:恢复后重新读取表结构。
+ */
+export type DesignerInnerTab =
+  | { id: string; type: "designer"; mode: "view" | "design"; database: string; table: string }
+  | { id: string; type: "designer"; mode: "create"; database: string };
+
 export type InnerTab =
   | { id: string; type: "table"; database: string; table: string; pendingLoad?: boolean }
+  | DesignerInnerTab
   | {
       id: string;
       type: "sql";
@@ -167,6 +176,8 @@ interface QueryState {
   toggleSchemaExpand: (tabId: string, database: string, schema: string) => void;
   revealTable: (tabId: string, database: string, table: string) => void;
   openTableTab: (tabId: string, database: string, table: string) => void;
+  /** 打开某张表的设计器标签;这张表已有设计器标签时切过去(不改它的模式)。 */
+  openDesignerTab: (tabId: string, database: string, table: string, mode: "view" | "design") => void;
   openSqlTab: (tabId: string, database?: string, sql?: string) => void;
   closeInnerTab: (tabId: string, innerTabId: string) => void;
   closeOtherInnerTabs: (tabId: string, innerTabId: string) => void;
@@ -665,6 +676,25 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         [tabId]: {
           ...state,
           innerTabs: [...state.innerTabs, { id: innerId, type: "table", database, table }],
+          activeInnerTabId: innerId,
+        },
+      },
+    }));
+  },
+
+  openDesignerTab: (tabId, database, table, mode) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const innerId = `designer:${database}.${table}`;
+    const exists = state.innerTabs.some((t) => t.id === innerId);
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: {
+          ...state,
+          innerTabs: exists
+            ? state.innerTabs
+            : [...state.innerTabs, { id: innerId, type: "designer", mode, database, table }],
           activeInnerTabId: innerId,
         },
       },

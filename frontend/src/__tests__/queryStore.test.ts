@@ -888,6 +888,43 @@ describe("queryStore inner tab closing and SQL numbering", () => {
   });
 });
 
+describe("queryStore 设计器标签", () => {
+  const tabs = () => useQueryStore.getState().dbStates["query-41"].innerTabs;
+  const active = () => useQueryStore.getState().dbStates["query-41"].activeInnerTabId;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/SQLite");
+    useQueryStore.getState().openQueryTab(makeSQLiteAsset(41));
+  });
+
+  it("每张表只开一个:再次打开切到已有的那个", () => {
+    const s = useQueryStore.getState();
+    s.openDesignerTab("query-41", "main", "users", "view");
+    s.openTableTab("query-41", "main", "users");
+    s.openDesignerTab("query-41", "main", "users", "view");
+
+    const designers = tabs().filter((t) => t.type === "designer");
+    expect(designers).toEqual([
+      { id: "designer:main.users", type: "designer", mode: "view", database: "main", table: "users" },
+    ]);
+    expect(active()).toBe("designer:main.users");
+    // 与同一张表的数据标签互不影响。
+    expect(tabs().map((t) => t.id)).toEqual(["designer:main.users", "table:main.users"]);
+  });
+
+  it("不同的表各开一个", () => {
+    const s = useQueryStore.getState();
+    s.openDesignerTab("query-41", "main", "users", "view");
+    s.openDesignerTab("query-41", "main", "orders", "view");
+    expect(tabs().map((t) => t.id)).toEqual(["designer:main.users", "designer:main.orders"]);
+    expect(active()).toBe("designer:main.orders");
+  });
+});
+
 describe("queryStore SQL numbering across persist and restore", () => {
   const sqlTab = (n: number) => ({ id: `sql:${n}`, type: "sql", title: `SQL ${n}` });
   const tabsJson = JSON.stringify({
@@ -926,6 +963,24 @@ describe("queryStore SQL numbering across persist and restore", () => {
     expect(store.getState().dbStates["query-50"].innerTabs.map((t) => (t.type === "sql" ? t.title : ""))).toContain(
       "SQL 8"
     );
+  });
+
+  it("设计器标签随持久化恢复,恢复后不带任何草稿", async () => {
+    const designer = { id: "designer:main.users", type: "designer", mode: "view", database: "main", table: "users" };
+    const store = await restore({ ...base, innerTabs: [designer], activeInnerTabId: designer.id });
+    store.getState().openSqlTab("query-50");
+    await vi.waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("query_store_v1")!);
+      // 前面用例的旧模块实例可能还有防抖保存没落地,按内容等这一次的保存。
+      expect(saved.dbStates["query-50"].innerTabs.map((t: { id: string }) => t.id)).toEqual([
+        designer.id,
+        expect.stringMatching(/^sql:/),
+      ]);
+    });
+
+    const saved = JSON.parse(localStorage.getItem("query_store_v1")!);
+    const restored = await restore(saved.dbStates["query-50"]);
+    expect(restored.getState().dbStates["query-50"].innerTabs[0]).toEqual(designer);
   });
 
   it("keeps a closed number retired across a persist and restore round trip", async () => {

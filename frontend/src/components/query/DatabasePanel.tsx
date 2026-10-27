@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Table2, Code2, Database } from "lucide-react";
+import { X, Table2, Code2, Database, Columns3 } from "lucide-react";
 import { useQueryStore, type InnerTab } from "@/stores/queryStore";
 import {
   ConfirmDialog,
@@ -23,6 +23,7 @@ import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import { DatabaseTree, DriverUnavailableNotice } from "./DatabaseTree";
 import { TableDataTab } from "./TableDataTab";
 import { SqlEditorTab } from "./SqlEditorTab";
+import { TableDesigner } from "./designer/TableDesigner";
 
 interface DatabasePanelProps {
   tabId: string;
@@ -66,10 +67,20 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
   if (!dbState) return null;
 
   const { innerTabs, activeInnerTabId, closeRequest } = dbState;
-  const fullNameOf = (tab: InnerTab) => (tab.type === "table" ? `${tab.database}.${tab.table}` : tab.title);
+  // 复制名称给出的名字:表与设计器是 db.table,SQL 标签是标题。
+  const fullNameOf = (tab: InnerTab) => {
+    if (tab.type === "sql") return tab.title;
+    if (tab.type === "designer" && tab.mode === "create") return tab.database;
+    return `${tab.database}.${tab.table}`;
+  };
+  // 标签上显示的标题:设计器带上它是哪种设计器。
+  const titleOf = (tab: InnerTab) =>
+    tab.type === "designer" && tab.mode === "view"
+      ? t("query.designer.tabTitle.view", { name: fullNameOf(tab) })
+      : fullNameOf(tab);
   // 单个脏标签由该 TableDataTab 自己的三选项对话框处理,这里只接多个。
   const batchClose = closeRequest && closeRequest.dirtyIds.length > 1 ? closeRequest : null;
-  const batchNames = batchClose ? innerTabs.filter((tab) => batchClose.dirtyIds.includes(tab.id)).map(fullNameOf) : [];
+  const batchNames = batchClose ? innerTabs.filter((tab) => batchClose.dirtyIds.includes(tab.id)).map(titleOf) : [];
 
   return (
     <div className="flex h-full w-full" data-testid="database-query-panel">
@@ -97,6 +108,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
             {innerTabs.map((tab, index) => {
               const isActive = tab.id === activeInnerTabId;
               const fullName = fullNameOf(tab);
+              const title = titleOf(tab);
               return (
                 <ContextMenu key={tab.id}>
                   <Tooltip>
@@ -118,10 +130,12 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                         >
                           {tab.type === "table" ? (
                             <Table2 className="h-3 w-3 shrink-0" />
+                          ) : tab.type === "designer" ? (
+                            <Columns3 className="h-3 w-3 shrink-0" />
                           ) : (
                             <Code2 className="h-3 w-3 shrink-0" />
                           )}
-                          <span className="truncate max-w-[120px]">{fullName}</span>
+                          <span className="truncate max-w-[160px]">{title}</span>
                           <button
                             className="ml-1 rounded-sm p-0.5 hover:bg-muted transition-colors"
                             onClick={(e) => {
@@ -134,7 +148,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                         </div>
                       </TooltipTrigger>
                     </ContextMenuTrigger>
-                    <TooltipContent>{fullName}</TooltipContent>
+                    <TooltipContent>{title}</TooltipContent>
                   </Tooltip>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => closeInnerTab(tabId, tab.id)}>
@@ -164,7 +178,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                     >
                       {t("query.innerTab.copyName")}
                     </ContextMenuItem>
-                    {tab.type === "table" && (
+                    {(tab.type === "table" || (tab.type === "designer" && tab.mode !== "create")) && (
                       <ContextMenuItem onClick={() => revealTable(tabId, tab.database, tab.table)}>
                         {t("query.innerTab.reveal")}
                       </ContextMenuItem>
@@ -190,6 +204,10 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
               <div key={tab.id} className="absolute inset-0" style={{ display: isActive ? "block" : "none" }}>
                 {tab.type === "table" ? (
                   <TableDataTab tabId={tabId} innerTabId={tab.id} database={tab.database} table={tab.table} />
+                ) : tab.type === "designer" ? (
+                  tab.mode !== "create" && (
+                    <TableDesigner tabId={tabId} innerTabId={tab.id} database={tab.database} table={tab.table} />
+                  )
                 ) : (
                   <SqlEditorTab tabId={tabId} innerTabId={tab.id} />
                 )}

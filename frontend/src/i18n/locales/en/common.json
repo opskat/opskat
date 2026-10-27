@@ -2109,7 +2109,6 @@
     "nullValue": "NULL",
     "emptyStringTooltip": "(empty)",
     "negatedFilterLabel": "not",
-    "uniqueIndexLabel": "(UNIQUE)",
     "filterSelectAll": "Select all",
     "filterClearAll": "Clear",
     "filterSelectedOf": "{{selected}} / {{total}} selected",
@@ -2362,16 +2361,61 @@
     "ddlEmpty": "No DDL available",
     "refreshTables": "Refresh Tables",
     "viewStructure": "View Structure",
-    "tableStructure": "Structure: {{table}}",
-    "structLoading": "Loading structure...",
-    "structColumns": "Columns",
-    "structIndexes": "Indexes",
-    "structForeignKeys": "Foreign Keys",
-    "structName": "Name",
-    "structType": "Type",
-    "structNullable": "Nullable",
-    "structYes": "YES",
-    "structNo": "NO",
+    "designer": {
+      "tabTitle": {
+        "view": "Structure {{name}}"
+      },
+      "tab": {
+        "fields": "Columns",
+        "indexes": "Indexes",
+        "foreignKeys": "Foreign keys",
+        "ddl": "DDL"
+      },
+      "column": {
+        "primaryKey": "Primary key",
+        "name": "Name",
+        "type": "Type",
+        "nullable": "Nullable",
+        "default": "Default",
+        "comment": "Comment",
+        "indexColumns": "Columns (in order)",
+        "fkColumns": "Columns",
+        "references": "References"
+      },
+      "readOnly": {
+        "readOnlyConnection": "Read-only connection, so the structure can't be changed",
+        "driverCannotAlter": "This driver can't alter tables",
+        "generic": "Read-only"
+      },
+      "indexType": {
+        "primary": "Primary",
+        "unique": "Unique",
+        "normal": "Index",
+        "fulltext": "Full-text"
+      },
+      "indexOption": {
+        "method": "Method"
+      },
+      "typeGroup": {
+        "numeric": "Numeric",
+        "string": "String",
+        "datetime": "Date & time",
+        "binary": "Binary",
+        "json": "JSON"
+      },
+      "yes": "Yes",
+      "no": "No",
+      "autoIncrement": "Auto-increment",
+      "descending": "Descending",
+      "optionDefault": "Default",
+      "indexReadOnly": "The designer can't fully represent this index, so it can only be dropped",
+      "indexesNotEditable": "This driver version can't edit indexes in the designer",
+      "foreignKeysReadOnly": "Foreign keys are read-only in the designer",
+      "noForeignKeys": "This table has no foreign keys",
+      "reload": "Reload structure",
+      "loadFailed": "Couldn't read the table structure",
+      "closeTab": "Close tab"
+    },
     "objTables": "Tables",
     "objViews": "Views",
     "objProcedures": "Procedures",
