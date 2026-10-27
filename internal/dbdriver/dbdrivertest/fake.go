@@ -57,6 +57,9 @@ type Fake struct {
 	// StatementErrors 模拟数据库拒绝的语句：ExecuteBatch 执行到原样在其中的语句时，以对应的错误
 	// 记为失败。NewFake 已放进 ConformanceFailingStatement，一致性测试靠它检查整批的失败处理。
 	StatementErrors map[string]error
+	// TakenIndexNames 是改表读出的、索引名唯一范围内其他表已占用的索引名（驱动声明了索引编辑时才给出）：
+	// 一致性测试靠它检查重名校验的入参。
+	TakenIndexNames []string
 	// SessionPerAsset 为 true 时声明一条会话覆盖整个资产（像 SQLite）；默认一个库一条。
 	SessionPerAsset bool
 

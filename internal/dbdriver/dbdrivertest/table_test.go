@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -765,4 +766,95 @@ func TestTableConformanceReportsBrokenAlterTable(t *testing.T) {
 	problems := strings.Join(undeclaredObjectProblems(context.Background(), NewFake().Desc, session), "\n")
 	assert.Contains(t, problems, "AlterTableModel")
 	assert.Contains(t, problems, "AlterTableStatements")
+}
+
+// --- 索引编辑 ---
+
+// withIndexEditing 是另外声明了索引编辑的假驱动：主键、唯一、普通三个类型，主键可改，名称范围是表。
+func withIndexEditing() *Fake {
+	fake := withSchemaWrites()
+	fake.Desc.IndexEditing = &dbdriver.IndexEditing{
+		Types: []dbdriver.IndexTypeDecl{
+			{ID: dbdriver.IndexTypePrimary, Label: "indexType.primary"},
+			{ID: dbdriver.IndexTypeUnique, Label: "indexType.unique"},
+			{ID: dbdriver.IndexTypeNormal, Label: "indexType.normal"},
+		},
+		AlterPrimaryKey: true, NameScope: dbdriver.IndexScopeTable,
+	}
+	return fake
+}
+
+func TestFakeDriverWithIndexEditingPassesConformance(t *testing.T) {
+	fake := withIndexEditing()
+	Register(t, fake)
+	RunConformance(t, fake, FakeSessions(fake))
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+}
+
+// 假会话的索引跟着声明走：没声明时带索引的建表与改表请求被拒绝且什么也不记下，读出的模型不带索引；
+// 声明了时读出的索引可以原样交回（没有语句），加一个索引（或改动它）给出语句，只读的索引改不得、
+// 不可删除的删不得。
+func TestFakeSessionFollowsItsIndexEditing(t *testing.T) {
+	ctx := context.Background()
+	index := dbdriver.IndexDefinition{Name: "ix_users_name", Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: "name"}}}
+
+	undeclared := withSchemaWrites()
+	session := openFake(t, undeclared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	_, err := session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{
+		Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "int"}}, Indexes: []dbdriver.IndexDefinition{index},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = session.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{
+		Indexes: []dbdriver.AlterIndex{{IndexDefinition: index}},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = session.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{IndexDrops: []string{"ix_users_name"}})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Empty(t, session.TableCalls())
+	model, err := session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Empty(t, model.Indexes, "没声明索引编辑时模型不带索引")
+
+	declared := withIndexEditing()
+	declared.TakenIndexNames = []string{"ix_other_name"}
+	session = openFake(t, declared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	statements, err := session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{
+		Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "int"}}, Indexes: []dbdriver.IndexDefinition{index},
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, statements)
+
+	model, err = session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.IndexDefinition{{Name: "pk_users", Type: dbdriver.IndexTypePrimary, Columns: []dbdriver.IndexColumn{{Name: "id"}}}}, model.Indexes,
+		"与主键列相同的索引类型是 primary")
+	assert.Equal(t, []string{"ix_other_name"}, model.TakenIndexNames)
+
+	req := dbdriver.AlterTableRequest{Name: "users"}
+	for _, column := range model.Columns {
+		req.Columns = append(req.Columns, dbdriver.AlterColumn{
+			OriginalName: column.Name, Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+			DefaultValue: column.DefaultValue, Comment: column.Comment,
+		})
+	}
+	for _, each := range model.Indexes {
+		req.Indexes = append(req.Indexes, dbdriver.AlterIndex{OriginalName: each.Name, IndexDefinition: each})
+	}
+	result, err := session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err)
+	assert.Empty(t, result.Statements, "原样交回的索引不产生语句")
+
+	added := req
+	added.Indexes = append(slices.Clone(req.Indexes), dbdriver.AlterIndex{IndexDefinition: index})
+	result, err = session.AlterTableStatements(ctx, "app", "users", added)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Statements)
+
+	changed := req
+	changed.Indexes = slices.Clone(req.Indexes)
+	changed.Indexes[0].Type = dbdriver.IndexTypeUnique
+	changed.Indexes[0].Name = "ux_users_id"
+	result, err = session.AlterTableStatements(ctx, "app", "users", changed)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Statements, "改动的索引由驱动写成删除后重建")
 }

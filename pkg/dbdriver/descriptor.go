@@ -62,6 +62,10 @@ type Descriptor struct {
 	// NameFolding 是数据库把不加引号的名称折叠成的大小写：表设计器据此提醒与它不符的表名、列名、
 	// 索引名之后要加引号才能访问（只提醒，不阻止保存、不改写）。空表示不折叠，不提醒。
 	NameFolding NameFolding `json:"nameFolding,omitempty"`
+	// IndexEditing 声明表设计器里的索引编辑（可用类型、主键可改、降序、前缀长度、索引注释、
+	// 名称唯一范围与额外选项，见 IndexEditing）；没声明时索引页只读，会话以 ErrUnsupported 拒绝
+	// 带索引改动的建表 / 改表请求。sqldb 的方言实现 TableIndexer 即开启（sqldb.IndexesTables）。
+	IndexEditing *IndexEditing `json:"indexEditing,omitempty"`
 
 	// DriverFields 是驱动专属的配置字段：值存在资产配置的 driver_options 里，按这里的声明校验。
 	// 内置驱动不声明。
@@ -104,7 +108,8 @@ type DriverField struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Localized 返回专属字段的标签与说明、常用类型的分组名经 tr 翻译后的描述副本，不改 d。
+// Localized 返回专属字段的标签与说明、常用类型的分组名、索引类型与选项的显示名经 tr 翻译后的
+// 描述副本，不改 d。
 func (d Descriptor) Localized(tr func(key string) string) Descriptor {
 	if len(d.DriverFields) > 0 {
 		fields := make([]DriverField, len(d.DriverFields))
@@ -127,6 +132,24 @@ func (d Descriptor) Localized(tr func(key string) string) Descriptor {
 			types.Groups[i] = group
 		}
 		d.ColumnTypes = &types
+	}
+	if d.IndexEditing != nil && (len(d.IndexEditing.Types) > 0 || len(d.IndexEditing.Options) > 0) {
+		editing := *d.IndexEditing
+		if len(editing.Types) > 0 {
+			editing.Types = make([]IndexTypeDecl, len(d.IndexEditing.Types))
+			for i, declared := range d.IndexEditing.Types {
+				declared.Label = tr(declared.Label)
+				editing.Types[i] = declared
+			}
+		}
+		if len(editing.Options) > 0 {
+			editing.Options = make([]IndexOptionDecl, len(d.IndexEditing.Options))
+			for i, option := range d.IndexEditing.Options {
+				option.Label = tr(option.Label)
+				editing.Options[i] = option
+			}
+		}
+		d.IndexEditing = &editing
 	}
 	return d
 }
@@ -174,6 +197,11 @@ func (d Descriptor) Validate() error {
 	}
 	if d.NameFolding != "" && !slices.Contains(NameFoldings(), d.NameFolding) {
 		return fmt.Errorf("driver %q: unknown name folding %q", d.ID, d.NameFolding)
+	}
+	if d.IndexEditing != nil {
+		if err := d.IndexEditing.validate(); err != nil {
+			return fmt.Errorf("driver %q: %w", d.ID, err)
+		}
 	}
 	return nil
 }
@@ -384,6 +412,249 @@ func NameFoldings() []NameFolding {
 // ColumnFeatures 返回描述对建表 / 改表请求里列的两项声明。
 func (d Descriptor) ColumnFeatures() ColumnFeatures {
 	return ColumnFeatures{ExplicitDefaults: d.ExplicitDefaults, AutoIncrement: d.AutoIncrement}
+}
+
+// IndexType 是索引类型的标识：内置的见 IndexType 常量，扩展可以声明自己的 id（如 Oracle 的
+// 位图 bitmap）。
+type IndexType string
+
+const (
+	// IndexTypePrimary：主键。主键作为一项索引显示；已有的主键能否改由 IndexEditing.AlterPrimaryKey
+	// 声明，没声明时已有主键只读、类型「主键」不可选。
+	IndexTypePrimary IndexType = "primary"
+	// IndexTypeUnique：唯一索引。
+	IndexTypeUnique IndexType = "unique"
+	// IndexTypeNormal：普通索引。
+	IndexTypeNormal IndexType = "normal"
+	// IndexTypeFullText：全文索引。
+	IndexTypeFullText IndexType = "fulltext"
+)
+
+// IndexTypes 是全部内置的索引类型；索引类型不止这些，扩展可以声明自己的 id。
+func IndexTypes() []IndexType {
+	return []IndexType{IndexTypePrimary, IndexTypeUnique, IndexTypeNormal, IndexTypeFullText}
+}
+
+// IndexNameScope 是索引名的唯一范围，由驱动声明；重名校验与读范围内其他表的索引名都按它。
+type IndexNameScope string
+
+const (
+	// IndexScopeTable：索引名在一张表内唯一（MySQL、SQL Server）。
+	IndexScopeTable IndexNameScope = "table"
+	// IndexScopeSchema：索引名在一个 schema 内唯一（PostgreSQL）。
+	IndexScopeSchema IndexNameScope = "schema"
+	// IndexScopeDatabase：索引名在整个库内唯一（SQLite）。
+	IndexScopeDatabase IndexNameScope = "database"
+)
+
+// IndexNameScopes 是全部已知的索引名范围。
+func IndexNameScopes() []IndexNameScope {
+	return []IndexNameScope{IndexScopeTable, IndexScopeSchema, IndexScopeDatabase}
+}
+
+// IndexTypeDecl 声明一个可用的索引类型。
+type IndexTypeDecl struct {
+	// ID 是类型的标识，见 IndexType。
+	ID IndexType `json:"id"`
+	// Label 是类型的显示名：宿主多语言里的键，或（扩展驱动）扩展多语言（locales/）里的键，同
+	// DriverField.Label 经 Descriptor.Localized 解析，没有翻译的原样显示。
+	Label string `json:"label"`
+}
+
+// IndexOptionDecl 声明索引的一个额外选项（如 MySQL 的方法、SQL Server 的聚集）：索引编辑区按
+// 声明通用渲染——枚举给下拉、开关给开关，值经 IndexDefinition.Options 按键交给驱动。
+type IndexOptionDecl struct {
+	// Key 是选项的键，IndexDefinition.Options 按它取值。
+	Key string `json:"key"`
+	// Label 是选项的显示名，同 IndexTypeDecl.Label。
+	Label string `json:"label"`
+	// Type 是选项的取值类型：FieldTypeEnum（取值见 Enum）或 FieldTypeSwitch。
+	Type DriverFieldType `json:"type"`
+	// Enum 是枚举的取值，按编辑区下拉里的次序；只有 FieldTypeEnum 声明。
+	Enum []string `json:"enum,omitempty"`
+}
+
+// IndexEditing 是表设计器里的索引编辑声明，见 Descriptor.IndexEditing。
+type IndexEditing struct {
+	// Types 是可用的索引类型，按编辑区下拉里的次序；新建的表要带主键就在其中声明 primary。
+	Types []IndexTypeDecl `json:"types"`
+	// AlterPrimaryKey 声明已有的主键可以改（换列、删除）；没声明时对主键的任何改动以
+	// ErrUnsupported 拒绝。
+	AlterPrimaryKey bool `json:"alterPrimaryKey,omitempty"`
+	// Descending 声明索引的列可以降序（IndexColumn.Descending）。
+	Descending bool `json:"descending,omitempty"`
+	// PrefixLength 声明索引的列可以给前缀长度（IndexColumn.PrefixLength）。
+	PrefixLength bool `json:"prefixLength,omitempty"`
+	// Comments 声明索引可以写注释（IndexDefinition.Comment）。
+	Comments bool `json:"comments,omitempty"`
+	// NameScope 是索引名的唯一范围；改表读结构时给出范围内其他表已有的索引名
+	//（AlterTableModel.TakenIndexNames）供重名校验。
+	NameScope IndexNameScope `json:"nameScope"`
+	// Options 是驱动声明的额外选项，按编辑区里的次序；没有为空。
+	Options []IndexOptionDecl `json:"options,omitempty"`
+}
+
+// validate 检查索引编辑声明：至少声明一个类型；类型与选项有标识、有显示名，不重复；选项是枚举
+// （有取值）或开关；名称范围是已知的。
+func (i IndexEditing) validate() error {
+	if len(i.Types) == 0 {
+		return fmt.Errorf("index editing declares no type; leave it out instead")
+	}
+	if !slices.Contains(IndexNameScopes(), i.NameScope) {
+		return fmt.Errorf("index editing has the unknown name scope %q", i.NameScope)
+	}
+	seenTypes := map[IndexType]bool{}
+	for _, declared := range i.Types {
+		if strings.TrimSpace(string(declared.ID)) == "" {
+			return fmt.Errorf("an index type has an empty id")
+		}
+		if strings.TrimSpace(string(declared.ID)) != string(declared.ID) {
+			return fmt.Errorf("index type id %q has surrounding blanks", declared.ID)
+		}
+		if strings.TrimSpace(declared.Label) == "" {
+			return fmt.Errorf("index type %q has an empty label", declared.ID)
+		}
+		if seenTypes[declared.ID] {
+			return fmt.Errorf("index type %q is declared more than once", declared.ID)
+		}
+		seenTypes[declared.ID] = true
+	}
+	seenKeys := map[string]bool{}
+	for _, option := range i.Options {
+		if strings.TrimSpace(option.Key) == "" {
+			return fmt.Errorf("an index option has an empty key")
+		}
+		if strings.TrimSpace(option.Key) != option.Key {
+			return fmt.Errorf("index option key %q has surrounding blanks", option.Key)
+		}
+		if strings.TrimSpace(option.Label) == "" {
+			return fmt.Errorf("index option %q has an empty label", option.Key)
+		}
+		if seenKeys[option.Key] {
+			return fmt.Errorf("index option %q is declared more than once", option.Key)
+		}
+		seenKeys[option.Key] = true
+		switch option.Type {
+		case FieldTypeEnum:
+			if len(option.Enum) == 0 {
+				return fmt.Errorf("index option %q is an enum without values", option.Key)
+			}
+			seenValues := map[string]bool{}
+			for _, value := range option.Enum {
+				if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+					return fmt.Errorf("index option %q has the blank or padded enum value %q", option.Key, value)
+				}
+				if seenValues[value] {
+					return fmt.Errorf("index option %q lists the enum value %q more than once", option.Key, value)
+				}
+				seenValues[value] = true
+			}
+		case FieldTypeSwitch:
+			if len(option.Enum) > 0 {
+				return fmt.Errorf("index option %q is a switch but declares enum values", option.Key)
+			}
+		default:
+			return fmt.Errorf("index option %q has type %q; an index option is an enum or a switch", option.Key, option.Type)
+		}
+	}
+	return nil
+}
+
+// DeclaresType 报告 t 是声明的索引类型之一；没声明索引编辑的驱动只有不声明任何类型。
+func (i *IndexEditing) DeclaresType(t IndexType) bool {
+	if i == nil {
+		return false
+	}
+	return slices.ContainsFunc(i.Types, func(declared IndexTypeDecl) bool { return declared.ID == t })
+}
+
+// Check 检查要写出的索引定义（新建的索引、改动的索引改完的样子、建表请求里的索引）只用了声明了
+// 的能力：类型是声明的之一，降序、前缀长度、注释与选项只在声明了时给出，都以包着 ErrUnsupported
+// 的错误拒绝；INCLUDE 列与表达式列读得出、写不了，同样拒绝。选项值不符合声明的类型是普通错误。
+// e 为 nil（驱动没声明索引编辑）时任何索引都不支持。会话、宿主转给扩展之前都按它检查。错误点名索引。
+func (i *IndexEditing) Check(indexes ...IndexDefinition) error {
+	for _, index := range indexes {
+		if !i.DeclaresType(index.Type) {
+			return fmt.Errorf("%w: this driver does not declare the index type %q (index %q)", ErrUnsupported, index.Type, index.Name)
+		}
+		if len(index.Include) > 0 {
+			return fmt.Errorf("%w: INCLUDE columns cannot be written, only read (index %q)", ErrUnsupported, index.Name)
+		}
+		for _, column := range index.Columns {
+			if column.Expression {
+				return fmt.Errorf("%w: expression index columns cannot be written, only read (index %q)", ErrUnsupported, index.Name)
+			}
+			if column.Descending && !i.Descending {
+				return fmt.Errorf("%w: this driver does not declare descending index columns (index %q)", ErrUnsupported, index.Name)
+			}
+			if column.PrefixLength > 0 && !i.PrefixLength {
+				return fmt.Errorf("%w: this driver does not declare index column prefixes (index %q)", ErrUnsupported, index.Name)
+			}
+		}
+		if strings.TrimSpace(index.Comment) != "" && !i.Comments {
+			return fmt.Errorf("%w: this driver does not declare index comments (index %q)", ErrUnsupported, index.Name)
+		}
+		for key, value := range index.Options {
+			option, ok := i.indexOption(key)
+			if !ok {
+				return fmt.Errorf("%w: this driver does not declare the index option %q (index %q)", ErrUnsupported, key, index.Name)
+			}
+			if err := option.checkValue(key, value); err != nil {
+				return fmt.Errorf("index %q: %w", index.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (i *IndexEditing) indexOption(key string) (IndexOptionDecl, bool) {
+	for _, option := range i.Options {
+		if option.Key == key {
+			return option, true
+		}
+	}
+	return IndexOptionDecl{}, false
+}
+
+// checkValue 检查选项的取值是否符合声明的类型；错误点名键。
+func (o IndexOptionDecl) checkValue(key string, v any) error {
+	switch o.Type {
+	case FieldTypeEnum:
+		s, ok := v.(string)
+		if !ok || !slices.Contains(o.Enum, s) {
+			return fmt.Errorf("index option %q must be one of %v", key, o.Enum)
+		}
+	case FieldTypeSwitch:
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("index option %q must be a boolean", key)
+		}
+	}
+	return nil
+}
+
+// CheckAlterIndexes 检查改表请求里的索引只用声明了的能力（会话、宿主转给扩展之前都按它拒绝）：
+// 没声明索引编辑时任何索引改动都以包着 ErrUnsupported 的错误拒绝；声明了时新建的索引按 Check 检查、
+// 新建主键还要声明了主键可改。已有的索引与现状的比较（只读、改名、随删列、删除不可删的）要读了表
+// 才知道，由会话做。
+func (i *IndexEditing) CheckAlterIndexes(indexes []AlterIndex, drops []string) error {
+	if i == nil {
+		if len(indexes) > 0 || len(drops) > 0 {
+			return fmt.Errorf("%w: this driver does not declare index editing, but the request changes indexes", ErrUnsupported)
+		}
+		return nil
+	}
+	for _, index := range indexes {
+		if index.OriginalName != "" {
+			continue
+		}
+		if index.Type == IndexTypePrimary && !i.AlterPrimaryKey {
+			return fmt.Errorf("%w: this driver does not declare altering the primary key, but new index %q is one", ErrUnsupported, index.Name)
+		}
+		if err := i.Check(index.Definition()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DatabaseOption 是新建数据库的一个选项字段。

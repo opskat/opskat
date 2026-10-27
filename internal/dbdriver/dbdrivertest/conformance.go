@@ -39,8 +39,9 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（PrepareRowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
 //     必须给出语句），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。
-//     表设计器的列能力（ExplicitDefaults、AutoIncrement）同样按声明检查：建表时声明了的必须给出语句、
-//     没声明的以 ErrUnsupported 拒绝，改表时没声明的在读表之前拒绝（见 columnFeatureProblems）。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
+//     表设计器的列能力（ExplicitDefaults、AutoIncrement）与索引编辑（IndexEditing）同样按声明检查：建表时
+//     声明了的必须给出语句、没声明的以 ErrUnsupported 拒绝，改表时没声明的在读表之前拒绝（见
+//     columnFeatureProblems / indexFeatureProblems）。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
@@ -93,6 +94,7 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	problems = append(problems, undeclaredObjectProblems(ctx, desc, s)...)
 	problems = append(problems, schemaWriteProblems(ctx, desc, s)...)
 	problems = append(problems, columnFeatureProblems(ctx, desc, s)...)
+	problems = append(problems, indexFeatureProblems(ctx, desc, s)...)
 
 	res, err := s.Execute(ctx, ConformanceStatement)
 	problems = append(problems, resultProblems("Execute", res, err)...)
@@ -240,6 +242,57 @@ func columnFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdr
 			_, err := s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{Columns: undeclared.columns})
 			check(undeclared.name, undeclared.declaration, false, nil, err)
 		}
+	}
+	return problems
+}
+
+// conformanceIndex 是索引能力检查用的一个索引：类型取驱动声明的第一个非主键类型（没声明时普通），一列，
+// 名字一眼能与真表区分。
+func conformanceIndex(desc dbdriver.Descriptor) dbdriver.IndexDefinition {
+	indexType := dbdriver.IndexTypeNormal
+	if editing := desc.IndexEditing; editing != nil {
+		if i := slices.IndexFunc(editing.Types, func(declared dbdriver.IndexTypeDecl) bool {
+			return declared.ID != dbdriver.IndexTypePrimary
+		}); i >= 0 {
+			indexType = editing.Types[i].ID
+		}
+	}
+	return dbdriver.IndexDefinition{
+		Name: "conformance_ix", Type: indexType, Columns: []dbdriver.IndexColumn{{Name: "conformance_col"}},
+	}
+}
+
+// indexFeatureProblems 检查表设计器的索引编辑与声明一致（只生成、不执行，所以不需要数据）：声明了建表的
+// 驱动，带索引的建表请求在声明了索引编辑时必须给出语句、没声明时必须以 ErrUnsupported 拒绝；声明了改表的
+// 驱动，没声明索引编辑时任何索引改动与索引删除在读表之前就以 ErrUnsupported 拒绝（声明了的由
+// alterProblems 在有数据的会话上检查）。
+func indexFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	var problems []string
+	check := func(name string, statements []string, err error) {
+		switch {
+		case desc.IndexEditing == nil && !errors.Is(err, dbdriver.ErrUnsupported):
+			problems = append(problems, fmt.Sprintf("%s: the driver does not declare index editing, so it must be refused with ErrUnsupported, got: %v", name, err))
+		case desc.IndexEditing == nil:
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("%s: declared index editing but refused: %v", name, err))
+		case len(statements) == 0:
+			problems = append(problems, fmt.Sprintf("%s: returned no statements and no error", name))
+		}
+	}
+	if desc.Supports(dbdriver.CapCreateTable) {
+		statements, err := s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{
+			Name: "x", Columns: []dbdriver.NewColumn{{Name: "conformance_col", Type: "INT", Nullable: true}},
+			Indexes: []dbdriver.IndexDefinition{conformanceIndex(desc)},
+		})
+		check("CreateTableStatements with a declared index", statements, err)
+	}
+	if desc.Supports(dbdriver.CapAlterTable) && desc.IndexEditing == nil {
+		_, err := s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{
+			Indexes: []dbdriver.AlterIndex{{IndexDefinition: conformanceIndex(desc)}},
+		})
+		check("AlterTableStatements with an index", nil, err)
+		_, err = s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{IndexDrops: []string{"conformance_ix"}})
+		check("AlterTableStatements dropping an index", nil, err)
 	}
 	return problems
 }
@@ -736,9 +789,10 @@ func gridEditProblems(ctx context.Context, s dbdriver.Session, database, table s
 }
 
 // alterProblems 检查改表：读出的表名是列表名去掉 schema 的那部分，列都是表格里有的列，默认值写法与
-// 自增只在声明了时出现（声明了默认值写法时每一列都有已知的写法）；把读出的样子原样交回去，不能生成任何
-// 语句（序列化成 []，不是 null），表名不变；改已有列的自增必须以 ErrUnsupported 拒绝；声明了的列能力
-// 用在新增的列上必须给出语句。语句只生成，这里不执行。
+// 自增只在声明了时出现（声明了默认值写法时每一列都有已知的写法）；索引只在声明了索引编辑时出现、类型都在
+// 声明里；把读出的样子（列与索引）原样交回去，不能生成任何语句（序列化成 []，不是 null），表名不变；
+// 改已有列的自增、改动只读的索引、删除不可删除的索引必须以 ErrUnsupported 拒绝；声明了的列能力用在新增
+// 的列上必须给出语句。语句只生成，这里不执行。
 func alterProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session, database, table string, columns []string) []string {
 	var problems []string
 	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -777,6 +831,18 @@ func alterProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Ses
 			DefaultKind: column.DefaultKind, AutoIncrement: column.AutoIncrement,
 		})
 	}
+	if len(model.Indexes) > 0 && desc.IndexEditing == nil {
+		report("AlterTableModel: the driver does not declare index editing, yet the model has %d index(es)", len(model.Indexes))
+	}
+	if len(model.TakenIndexNames) > 0 && desc.IndexEditing == nil {
+		report("AlterTableModel: the driver does not declare index editing, yet the model names %d taken index name(s)", len(model.TakenIndexNames))
+	}
+	for _, index := range model.Indexes {
+		if desc.IndexEditing != nil && !desc.IndexEditing.DeclaresType(index.Type) {
+			report("AlterTableModel: index %q has type %q, which the driver does not declare in indexEditing", index.Name, index.Type)
+		}
+		req.Indexes = append(req.Indexes, dbdriver.AlterIndex{OriginalName: index.Name, IndexDefinition: index})
+	}
 	result, err := s.AlterTableStatements(ctx, database, table, req)
 	switch {
 	case err != nil:
@@ -812,6 +878,26 @@ func alterProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Ses
 			report("AlterTableStatements adding columns with the declared column features: %v", err)
 		case result == nil || len(result.Statements) == 0:
 			report("AlterTableStatements adding columns with the declared column features: generated no statements")
+		}
+	}
+
+	// 只读的索引只能删除、不可删除的连删除也不行：改它 / 删它都要以 ErrUnsupported 拒绝。
+	for i, index := range model.Indexes {
+		switch {
+		case index.ReadOnlyReason != "":
+			changed := req
+			changed.Indexes = slices.Clone(req.Indexes)
+			changed.Indexes[i].Comment = index.Comment + "conformance"
+			if _, err := s.AlterTableStatements(ctx, database, table, changed); !errors.Is(err, dbdriver.ErrUnsupported) {
+				report("AlterTableStatements: index %q is read-only (%s), so changing it must be refused with ErrUnsupported, got: %v", index.Name, index.ReadOnlyReason, err)
+			}
+		case index.Undroppable:
+			dropped := req
+			dropped.Indexes = slices.Delete(slices.Clone(req.Indexes), i, i+1)
+			dropped.IndexDrops = []string{index.Name}
+			if _, err := s.AlterTableStatements(ctx, database, table, dropped); !errors.Is(err, dbdriver.ErrUnsupported) {
+				report("AlterTableStatements: index %q cannot be dropped, so dropping it must be refused with ErrUnsupported, got: %v", index.Name, err)
+			}
 		}
 	}
 	return problems
@@ -1032,6 +1118,7 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 			{"explicitDefaults", desc.ExplicitDefaults},
 			{"autoIncrement", desc.AutoIncrement},
 			{"nameFolding", desc.NameFolding != ""},
+			{"indexEditing", desc.IndexEditing != nil},
 		} {
 			if detail.declared {
 				report("%s is declared without capability %q or %q, the features that use it", detail.name, dbdriver.CapCreateTable, dbdriver.CapAlterTable)

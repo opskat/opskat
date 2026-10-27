@@ -84,7 +84,10 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 		// is no more the extension's than the Kerberos credentials are.
 		req.Password = ""
 	}
-	s := &driverSession{plugin: p, driver: id, open: req, live: 1, columns: p.driverColumnFeatures(id)}
+	s := &driverSession{
+		plugin: p, driver: id, open: req, live: 1,
+		columns: p.driverColumnFeatures(id), indexes: p.driverIndexEditing(id),
+	}
 	s.reach = p.confineReach(id, &s.open)
 	s.tickets = p.ticketGate(id, &s.open)
 	inst, err := s.login(ctx)
@@ -93,6 +96,17 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 	}
 	s.release(inst)
 	return s, nil
+}
+
+// driverIndexEditing is what the descriptor of driver id declares for the indexes of
+// create and alter table requests; a driver that is not described declares nothing.
+func (p *Plugin) driverIndexEditing(id string) *dbdriver.IndexEditing {
+	for _, desc := range p.manifest.DatabaseDrivers {
+		if string(desc.ID) == id {
+			return desc.IndexEditing
+		}
+	}
+	return nil
 }
 
 // driverColumnFeatures is what the descriptor of driver id declares for the
@@ -618,6 +632,10 @@ type driverSession struct {
 	// sent: an extension built before a field existed ignores it (driverwire), so
 	// the change would be dropped without a word.
 	columns dbdriver.ColumnFeatures
+	// indexes is what the driver's descriptor declares for the indexes of create
+	// and alter table requests (nil: it declares no index editing). Same rule: a
+	// request that changes indexes is refused here and not sent.
+	indexes *dbdriver.IndexEditing
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -936,6 +954,9 @@ func (s *driverSession) CreateTableStatements(ctx context.Context, database stri
 	if err := s.checkColumns(req.Definitions()); err != nil {
 		return nil, err
 	}
+	if err := s.checkCreateIndexes(req.Indexes); err != nil {
+		return nil, err
+	}
 	return forwardRequest[[]string](ctx, s, driverwire.OpCreateTableStatements, driverwire.Args{Database: database}, req)
 }
 
@@ -943,6 +964,28 @@ func (s *driverSession) CreateTableStatements(ctx context.Context, database stri
 // feature the driver does not declare (see driverSession.columns).
 func (s *driverSession) checkColumns(columns []dbdriver.ColumnDefinition) error {
 	if err := s.columns.Check(columns...); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)
+	}
+	return nil
+}
+
+// checkCreateIndexes refuses, before anything is sent, a create table request whose
+// indexes use a feature the driver does not declare (see driverSession.indexes): an
+// extension built before a field existed would drop the index without a word.
+func (s *driverSession) checkCreateIndexes(indexes []dbdriver.IndexDefinition) error {
+	if err := s.indexes.Check(indexes...); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)
+	}
+	return nil
+}
+
+// checkAlterIndexes refuses, before anything is sent, an alter table request that
+// changes indexes the driver does not declare (see driverSession.indexes). The
+// change to an existing index and its comparison with the table as it is stay the
+// driver's own business: only an index the descriptor does not allow at all is cut
+// off here.
+func (s *driverSession) checkAlterIndexes(req dbdriver.AlterTableRequest) error {
+	if err := s.indexes.CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {
 		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)
 	}
 	return nil
@@ -966,6 +1009,9 @@ func (s *driverSession) AlterTableModel(ctx context.Context, database, table str
 
 func (s *driverSession) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
 	if err := s.checkColumns(req.Definitions()); err != nil {
+		return nil, err
+	}
+	if err := s.checkAlterIndexes(req); err != nil {
 		return nil, err
 	}
 	return forwardRequest[*dbdriver.AlterTableStatements](ctx, s, driverwire.OpAlterTableStatements, driverwire.Args{Database: database, Table: table}, req)

@@ -33,6 +33,12 @@ type AlterableTable struct {
 	Comment string
 	// Columns 按列在表里的次序。
 	Columns []AlterableColumn
+	// Indexes 是现有的索引（主键是类型为 primary 的一项），按方言给出的次序；开启了索引编辑的方言
+	// （TableIndexer）给出，设计器无法完整表示的带 ReadOnlyReason、不能删除的带 Undroppable。
+	Indexes []dbdriver.IndexDefinition
+	// TakenIndexNames 是索引名唯一范围（TableIndexer 的 IndexEditing.NameScope）内其他表已有的索引
+	// 名，供重名校验；范围为表时为空。
+	TakenIndexNames []string
 }
 
 // AlterableColumn 是改表对话框里的一列。开启了自增的方言（AutoIncrementer）在 AutoIncrement 里给出现状；
@@ -62,6 +68,10 @@ type TableChange struct {
 	Columns []ColumnChange
 	// Drops 是要删除的已有列，按请求的次序。
 	Drops []string
+	// Indexes 是要改动的与新增的索引，按请求的次序；每个改动的现有索引由方言写成删除后重建。
+	Indexes []IndexChange
+	// IndexDrops 是要删除的现有索引（含引用被删列而随列删除的），排在删列之前。
+	IndexDrops []dbdriver.IndexDefinition
 }
 
 // ColumnChange 是一列的改动。
@@ -82,7 +92,8 @@ type ColumnChange struct {
 func (c ColumnChange) IsNew() bool { return c.Current == nil }
 
 func (c TableChange) empty() bool {
-	return c.Rename == "" && c.Comment == nil && len(c.Columns) == 0 && len(c.Drops) == 0
+	return c.Rename == "" && c.Comment == nil && len(c.Columns) == 0 && len(c.Drops) == 0 &&
+		len(c.Indexes) == 0 && len(c.IndexDrops) == 0
 }
 
 func (s *Session) alterer() (Tables, TableAlterer, error) {
@@ -116,6 +127,10 @@ func (s *Session) AlterTableModel(ctx context.Context, database, table string) (
 		for _, column := range current.Columns {
 			model.Columns = append(model.Columns, column.ColumnDefinition)
 		}
+		if IndexesTables(alterer) {
+			model.Indexes = current.Indexes
+			model.TakenIndexNames = current.TakenIndexNames
+		}
 		return model, nil
 	})
 }
@@ -130,12 +145,15 @@ func (s *Session) AlterTableStatements(ctx context.Context, database, table stri
 	if err := columnFeatures(s.dialect).Check(req.Definitions()...); err != nil {
 		return nil, err
 	}
+	if err := IndexEditing(s.dialect).CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {
+		return nil, err
+	}
 	return onConn(ctx, s, func(conn *sql.Conn) (*dbdriver.AlterTableStatements, error) {
 		current, err := loadAlterableTable(ctx, conn, alterer, database, table)
 		if err != nil {
 			return nil, err
 		}
-		change, err := planTableChange(tables, alterer.AlterAttributes(), database, table, current, req)
+		change, err := planTableChange(tables, s.dialect, alterer.AlterAttributes(), database, table, current, req)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +188,7 @@ func loadAlterableTable(ctx context.Context, conn *sql.Conn, alterer TableAltere
 }
 
 // planTableChange 比较请求与表现在的定义，得出改动；要改方言不能改的属性、说到不在表里的列时失败。
-func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, database, table string, current *AlterableTable, req dbdriver.AlterTableRequest) (*TableChange, error) {
+func planTableChange(tables Tables, dialect Dialect, attributes []dbdriver.AlterAttribute, database, table string, current *AlterableTable, req dbdriver.AlterTableRequest) (*TableChange, error) {
 	mustAllow := func(attribute dbdriver.AlterAttribute, format string, args ...any) error {
 		if slices.Contains(attributes, attribute) {
 			return nil
@@ -265,6 +283,28 @@ func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, databa
 		}
 		dropped[name] = true
 		change.Drops = append(change.Drops, name)
+	}
+	// 要建 / 要改的索引的列名按改动之后的表解析，删掉的列也一并算出：引用被删列的索引随列一起删。
+	after := tableColumnsAfter{
+		renames: make(map[string]string, len(req.Columns)),
+		present: make(map[string]bool, len(current.Columns)),
+		dropped: make(map[string]bool, len(req.Drops)),
+	}
+	for _, column := range change.Columns {
+		after.present[column.Column.Name] = true
+		if column.Current != nil && column.Column.Name != column.Current.Name {
+			after.renames[column.Current.Name] = column.Column.Name
+		}
+	}
+	for i := range current.Columns {
+		after.present[current.Columns[i].Name] = true
+	}
+	for _, name := range change.Drops {
+		after.dropped[name] = true
+		delete(after.present, name)
+	}
+	if err := planIndexes(IndexEditing(dialect), current, change, req, after); err != nil {
+		return nil, err
 	}
 	return change, nil
 }

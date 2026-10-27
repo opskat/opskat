@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"strings"
@@ -218,9 +219,10 @@ type Session interface {
 	GridEditStatements(ctx context.Context, database, table string, req GridEditRequest) (*GridEditStatements, error)
 
 	// CreateTableStatements 生成建表语句（只生成、不执行）：表名、列名按方言加引号，列的类型文本
-	// 原样写入，默认值的写法见 NewColumn.DefaultValue 与 DefaultKind。req.Name 用 ListTables 给出的形式。
-	// 驱动没有声明 CapCreateTable、或列用到驱动没声明的列能力（ColumnFeatures.Check）时返回包着
-	// ErrUnsupported 的错误，且不执行任何语句。
+	// 原样写入，默认值的写法见 NewColumn.DefaultValue 与 DefaultKind，索引与注释（req.Indexes、
+	// req.Comment、列的 Comment）只交给声明了它们的驱动。req.Name 用 ListTables 给出的形式。驱动没有
+	// 声明 CapCreateTable、或列 / 索引用到驱动没声明的表设计器能力（ColumnFeatures.Check、
+	// IndexEditing.Check）时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	CreateTableStatements(ctx context.Context, database string, req CreateTableRequest) ([]string, error)
 
 	// DropTableStatements 生成删除一张表的语句（只生成、不执行）。驱动没有声明 CapDropTable 时返回
@@ -238,16 +240,19 @@ type Session interface {
 
 	// AlterTableModel 读出改表对话框打开时的这张表：不带 schema 的表名、表注释，以及各列的名称、
 	// 类型、可空、默认值与注释（声明了的驱动还有默认值写法与自增现状，见 ColumnDefinition），按列在表里
-	// 的次序（见 AlterTableModel）。表不存在时返回 error。驱动没有声明 CapAlterTable 时返回包着
-	// ErrUnsupported 的错误，且不执行任何语句。
+	// 的次序（见 AlterTableModel）；声明了索引编辑的驱动还给出现在的索引与范围内其他表已占用的索引名
+	//（AlterTableModel.Indexes、TakenIndexNames）。表不存在时返回 error。驱动没有声明 CapAlterTable 时
+	// 返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	AlterTableModel(ctx context.Context, database, table string) (*AlterTableModel, error)
 
 	// AlterTableStatements 生成把表改成 req 的语句（只生成、不执行），按执行的次序；没有任何改动时
 	// 语句为空列表。驱动在自己的会话上读这张表现在的定义，与 req 比较得出改动（比较的方式同
-	// AlterTableRequest 的说明），改列时保留对话框里不显示、用户也没有改的列定义。req 要改驱动没有
-	// 声明可改的属性（Descriptor.AlterTableAttributes），或说到的列不在表中（表已不存在）时返回
-	// error；要改已有列的自增时返回包着 ErrUnsupported 的错误。驱动没有声明 CapAlterTable、或列用到
-	// 驱动没声明的列能力（ColumnFeatures.Check）时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	// AlterTableRequest 的说明），改列时保留对话框里不显示、用户也没有改的列定义；改索引时只读的只能
+	// 删除、不可删除的删不得、主键的改动要声明了主键可改（见 IndexEditing），引用被删列的索引随列一起
+	// 删除（语句在删列之前）。req 要改驱动没有声明可改的属性（Descriptor.AlterTableAttributes），或说到
+	// 的列不在表中（表已不存在）时返回 error；要改已有列的自增时返回包着 ErrUnsupported 的错误。驱动没有
+	// 声明 CapAlterTable、或列 / 索引用到驱动没声明的表设计器能力（ColumnFeatures.Check、
+	// IndexEditing.CheckAlterIndexes）时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	AlterTableStatements(ctx context.Context, database, table string, req AlterTableRequest) (*AlterTableStatements, error)
 
 	// ImportStatements 生成导入要执行的语句（只生成、不执行），按执行的次序：各导入模式的写法（见
@@ -352,6 +357,9 @@ type NewColumn struct {
 	// DefaultValue 是用户填的默认值文本。DefaultKind 为空时空表示没有默认值，数字、TRUE / FALSE / NULL、
 	// CURRENT_TIMESTAMP / NOW() 原样写入，其余当作字符串加引号；DefaultKind 非空时按写法写（见 DefaultKind）。
 	DefaultValue string `json:"defaultValue"`
+	// Comment 是列注释，空表示没有。驱动写不了建表注释时以 ErrUnsupported 拒绝。新增字段，为空时
+	// 序列化省略，旧扩展收到的请求不变。
+	Comment string `json:"comment,omitempty"`
 	// DefaultKind 是默认值的写法；空表示没有按写法给出，DefaultValue 照上面的规则猜写法。只有声明了
 	// Descriptor.ExplicitDefaults 的驱动接受非空的写法。新增字段，为空时序列化省略，旧扩展收到的请求不变。
 	DefaultKind DefaultKind `json:"defaultKind,omitempty"`
@@ -361,16 +369,20 @@ type NewColumn struct {
 
 // Definition 是这一列的列定义。
 func (c NewColumn) Definition() ColumnDefinition {
-	return ColumnDefinition{
-		Name: c.Name, Type: c.Type, Nullable: c.Nullable, DefaultValue: c.DefaultValue,
-		DefaultKind: c.DefaultKind, AutoIncrement: c.AutoIncrement,
-	}
+	// 字段与 ColumnDefinition 一一对应（次序也一致），直接转换。
+	return ColumnDefinition(c)
 }
 
 // CreateTableRequest 是 Session.CreateTableStatements 要生成的建表语句。
 type CreateTableRequest struct {
 	Name    string      `json:"name"`
 	Columns []NewColumn `json:"columns"`
+	// Comment 是表注释，空表示没有；驱动写不了建表注释时以 ErrUnsupported 拒绝。新增字段，为空时
+	// 序列化省略，旧扩展收到的请求不变。
+	Comment string `json:"comment,omitempty"`
+	// Indexes 是这张表的索引（含主键：类型为 primary 的一项），按建表语句里的次序；驱动没声明
+	// 索引编辑（Descriptor.IndexEditing）时以 ErrUnsupported 拒绝。新增字段，为空时序列化省略。
+	Indexes []IndexDefinition `json:"indexes,omitempty"`
 }
 
 // Definitions 是各列的列定义，按请求里的次序。
@@ -480,6 +492,13 @@ type AlterTableModel struct {
 	Comment string `json:"comment"`
 	// Columns 按列在表里的次序。
 	Columns []ColumnDefinition `json:"columns"`
+	// Indexes 是这张表现在有的索引（主键是类型为 primary 的一项），按驱动给出的次序；设计器无法
+	// 完整表示的带 ReadOnlyReason（只能删除），连删除也不行的带 Undroppable。驱动声明了索引编辑
+	//（Descriptor.IndexEditing）才给出。新增字段，为空时序列化省略。
+	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	// TakenIndexNames 是索引名唯一范围内其他表已有的索引名，供重名校验（范围由 IndexEditing.NameScope
+	// 声明）；范围为表时为空。驱动声明了索引编辑才给出。新增字段，为空时序列化省略。
+	TakenIndexNames []string `json:"takenIndexNames,omitempty"`
 }
 
 // AlterTableRequest 是改表对话框提交的改动：改完之后这张表的样子。
@@ -487,6 +506,10 @@ type AlterTableModel struct {
 // 已有的列按 OriginalName 对到表里现在的那一列，与它比较：名称不同是改名，类型去掉首尾空白后
 // 不分大小写比较，默认值与注释去掉首尾空白后比较（给出了默认值写法时，写法不同即改动，同为「值」时
 // 比较原文）。自增与现在的不同时以 ErrUnsupported 拒绝：已有列的自增不能改。都相同的列不生成语句。
+//
+// 已有的索引同样按 OriginalName 对到表里现在的那个索引，与它比较的规则见 IndexDefinition.Equal；
+// 都相同的不生成语句，改动的由驱动写成删除后重建（或它支持的等价语句）。只读的索引只能删除，
+// 不可删除的连删除也不行，主键的任何改动要驱动声明了主键可改，都以 ErrUnsupported 拒绝。
 type AlterTableRequest struct {
 	// Name 是新表名，不带 schema（改名后表仍在原 schema）；为空或与现在的相同表示不改名。
 	Name string `json:"name"`
@@ -494,8 +517,14 @@ type AlterTableRequest struct {
 	Comment string `json:"comment"`
 	// Columns 是保留与新增的列，按对话框里的次序。
 	Columns []AlterColumn `json:"columns"`
-	// Drops 是要删除的已有列。
+	// Drops 是要删除的已有列；引用被删列的索引也随之删除（语句在删列之前），请求没有列出的话
+	// 由驱动补上。
 	Drops []string `json:"drops"`
+	// Indexes 是保留与新增的索引，按对话框里的次序；已有的按 OriginalName 对到表里现在的那一个。
+	// 新增字段，为空时序列化省略，旧扩展收到的请求不变。
+	Indexes []AlterIndex `json:"indexes,omitempty"`
+	// IndexDrops 是要删除的已有索引。新增字段，为空时序列化省略。
+	IndexDrops []string `json:"indexDrops,omitempty"`
 }
 
 // AlterColumn 是改表请求里的一列。
@@ -529,6 +558,76 @@ func (r AlterTableRequest) Definitions() []ColumnDefinition {
 	}
 	return definitions
 }
+
+// IndexColumn 是索引的一列，按它在索引里的次序。
+type IndexColumn struct {
+	// Name 是列名或表达式原文：Expression 为真时是表达式（原样写入，首尾空白除外），否则是列名。
+	Name string `json:"name"`
+	// Expression 报告 Name 是表达式而不是列名：这样的列读得出（设计器显示成虚线框）、写不了。
+	Expression bool `json:"expression,omitempty"`
+	// Descending 声明这一列降序；只有声明了 IndexEditing.Descending 的驱动接受。
+	Descending bool `json:"descending,omitempty"`
+	// PrefixLength 是这一列的前缀长度（字符数），0 表示没有；只有声明了 IndexEditing.PrefixLength
+	// 的驱动接受。
+	PrefixLength int `json:"prefixLength,omitempty"`
+}
+
+// IndexDefinition 是表设计器里一个索引的定义：改表读出的现状（见 AlterTableModel.Indexes）、建表
+// 请求里的索引（见 CreateTableRequest.Indexes）与改表请求里改完的样子（见 AlterIndex）都用它。
+type IndexDefinition struct {
+	Name string `json:"name"`
+	// Type 是索引的类型：声明了的类型之一，主键是 IndexTypePrimary。
+	Type IndexType `json:"type"`
+	// Columns 按索引里的次序。
+	Columns []IndexColumn `json:"columns"`
+	// Include 是 INCLUDE 列（覆盖索引的非键列），按次序；读得出、写不了——带它的索引是只读的。
+	Include []string `json:"include,omitempty"`
+	// Options 是驱动声明的额外选项（IndexEditing.Options）的值，按键取。
+	Options map[string]any `json:"options,omitempty"`
+	// Comment 是索引注释，空表示没有；只有声明了 IndexEditing.Comments 的驱动接受。
+	Comment string `json:"comment,omitempty"`
+	// ReadOnlyReason 非空表示设计器无法完整表示这个已有索引（如表达式、部分、带 INCLUDE 列）：只能
+	// 删除，任何改动以 ErrUnsupported 拒绝；原因是给用户看的说明。改表读出的索引才有。
+	ReadOnlyReason string `json:"readOnlyReason,omitempty"`
+	// Undroppable 为真表示这个已有索引不能删除（如 SQLite 为 UNIQUE 约束自动建的索引）：删除它的
+	// 请求以 ErrUnsupported 拒绝。改表读出的索引才有。
+	Undroppable bool `json:"undroppable,omitempty"`
+}
+
+// Equal 报告两个索引定义按改表请求的比较规则是否相同：类型、名字、列（名字、表达式、降序、前缀
+// 长度）、INCLUDE 列、选项与注释，文本去掉首尾空白；只读原因与不可删除标注是说明，不参与。会话
+// 与扩展 SDK 用它判断「原样交回」（交回不产生语句）。
+func (d IndexDefinition) Equal(other IndexDefinition) bool {
+	if d.Type != other.Type || strings.TrimSpace(d.Name) != strings.TrimSpace(other.Name) ||
+		strings.TrimSpace(d.Comment) != strings.TrimSpace(other.Comment) || len(d.Include) != len(other.Include) ||
+		len(d.Columns) != len(other.Columns) {
+		return false
+	}
+	for i, column := range d.Columns {
+		o := other.Columns[i]
+		if column.Expression != o.Expression || column.Descending != o.Descending ||
+			column.PrefixLength != o.PrefixLength || strings.TrimSpace(column.Name) != strings.TrimSpace(o.Name) {
+			return false
+		}
+	}
+	for i, included := range d.Include {
+		if strings.TrimSpace(included) != strings.TrimSpace(other.Include[i]) {
+			return false
+		}
+	}
+	return maps.EqualFunc(d.Options, other.Options, func(a, b any) bool { return a == b })
+}
+
+// AlterIndex 是改表请求里的一处索引：表里现在的那一个（OriginalName）与它改完之后的样子。
+type AlterIndex struct {
+	// OriginalName 是这个索引在表里现在的名字；为空表示新增的索引。
+	OriginalName string `json:"originalName"`
+	// IndexDefinition 是改完之后的样子（新增的索引就是它的定义），字段平铺序列化（同 AlterColumn）。
+	IndexDefinition
+}
+
+// Definition 是这一索引改表之后的样子。
+func (i AlterIndex) Definition() IndexDefinition { return i.IndexDefinition }
 
 // AlterTableStatements 是改表的语句。
 type AlterTableStatements struct {

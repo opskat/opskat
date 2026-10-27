@@ -163,6 +163,37 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, []string{"CREATE TABLE [app].[t] (\n  [id] INT NOT NULL,\n  [name] TEXT DEFAULT 'anon'\n)"}, statements)
 	})
 
+	// The fixture declares no index editing either: an extension built before it,
+	// which would ignore the request's index fields.
+	t.Run("a request changing indexes is refused, not sent", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		index := dbdriver.IndexDefinition{Name: "ix_users_name", Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: "name"}}}
+		_, err := s.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{
+			Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT"}}, Indexes: []dbdriver.IndexDefinition{index},
+		})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+		assert.Contains(t, err.Error(), "not sent to the extension")
+		assert.Contains(t, err.Error(), extensiontest.DBDriverFixtureDriver)
+		assert.Contains(t, err.Error(), "ix_users_name")
+
+		_, err = s.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{
+			Indexes: []dbdriver.AlterIndex{{IndexDefinition: index}},
+		})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+		assert.Contains(t, err.Error(), "not sent to the extension")
+
+		_, err = s.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{IndexDrops: []string{"ix_users_name"}})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+		assert.Contains(t, err.Error(), "not sent to the extension")
+
+		// A create table request with no index is still sent.
+		_, err = s.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT"}}})
+		require.NoError(t, err)
+	})
+
 	t.Run("an open that cannot log in fails with the driver's error", func(t *testing.T) {
 		d := newDriver()
 		d.server.Refuse = "access denied for user alice"
@@ -318,6 +349,24 @@ func TestOldStyleSchemaRequestsAreForwardedAsBefore(t *testing.T) {
 		`{"originalName":"id","name":"id","type":"INT","nullable":false,"defaultValue":"","comment":""},`+
 		`{"originalName":"","name":"age","type":"INT","nullable":true,"defaultValue":"0","comment":"years"}],`+
 		`"drops":["old"]}`, string(alter))
+
+	// The table designer's index fields are new too: a request carrying them puts
+	// them on the wire, and one without them is the same JSON as before (above).
+	withIndexes, err := json.Marshal(dbdriver.AlterTableRequest{Name: "people", Columns: []dbdriver.AlterColumn{}, Drops: []string{},
+		Indexes: []dbdriver.AlterIndex{{OriginalName: "ix", IndexDefinition: dbdriver.IndexDefinition{
+			Name: "ix2", Type: dbdriver.IndexTypeUnique, Columns: []dbdriver.IndexColumn{{Name: "id"}},
+		}}}, IndexDrops: []string{"old_ix"}})
+	require.NoError(t, err)
+	assert.Equal(t, `{"name":"people","comment":"","columns":[],"drops":[],"indexes":[`+
+		`{"originalName":"ix","name":"ix2","type":"unique","columns":[{"name":"id"}]}],`+
+		`"indexDrops":["old_ix"]}`, string(withIndexes))
+
+	createWithIndex, err := json.Marshal(dbdriver.CreateTableRequest{Name: "t", Comment: "people",
+		Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT", Comment: "the id"}},
+		Indexes: []dbdriver.IndexDefinition{{Name: "pk", Type: dbdriver.IndexTypePrimary, Columns: []dbdriver.IndexColumn{{Name: "id"}}}}})
+	require.NoError(t, err)
+	assert.Equal(t, `{"name":"t","columns":[{"name":"id","type":"INT","nullable":false,"defaultValue":"","comment":"the id"}],`+
+		`"comment":"people","indexes":[{"name":"pk","type":"primary","columns":[{"name":"id"}]}]}`, string(createWithIndex))
 }
 
 // openOptions asks the fixture's instance that runs the statement which driver

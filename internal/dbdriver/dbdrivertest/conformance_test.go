@@ -2,6 +2,7 @@ package dbdrivertest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -253,4 +254,65 @@ func TestConformanceChecksColumnCommentAndDefaultShape(t *testing.T) {
 	problems = strings.Join(columnShapeProblems([]byte(`{"comment":null,"default":1}`)), "\n")
 	assert.Contains(t, problems, "comment")
 	assert.Contains(t, problems, "default")
+}
+
+// 索引编辑的声明也要被一致性测试逐条核对：描述里没声明却在建表时放行索引、声明了却拒绝、
+// 改表时没声明索引编辑却不在读表之前拒绝，都要点出来。
+func TestConformanceReportsIndexEditingProblems(t *testing.T) {
+	for name, tt := range map[string]struct {
+		fake *Fake
+		want string
+	}{
+		"index editing without create or alter table": {func() *Fake {
+			fake := NewFake()
+			fake.Desc.IndexEditing = withIndexEditing().Desc.IndexEditing
+			return fake
+		}(), "indexEditing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			problems := descriptorProblems(tt.fake.Desc)
+			require.NotEmpty(t, problems)
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+
+	// 没声明索引编辑的假驱动：带索引的建表 / 改表请求被放行时要点出来。
+	lenient := func(fake *Fake) dbdriver.Session {
+		return lenientIndexSession{Session: openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})}
+	}
+	fake := withSchemaWrites()
+	problems := indexFeatureProblems(context.Background(), fake.Desc, lenient(fake))
+	require.NotEmpty(t, problems)
+	assert.Contains(t, strings.Join(problems, "\n"), "CreateTableStatements with a declared index")
+	assert.Contains(t, strings.Join(problems, "\n"), "AlterTableStatements with an index")
+
+	// 声明了索引编辑却拒绝时也要点出来。
+	fake = withIndexEditing()
+	problems = indexFeatureProblems(context.Background(), fake.Desc, refusingIndexSession{Session: openFake(t, fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})})
+	require.NotEmpty(t, problems)
+	assert.Contains(t, strings.Join(problems, "\n"), "declared index editing but refused")
+}
+
+// lenientIndexSession 放行任何带索引的请求，不管驱动声明了什么。
+type lenientIndexSession struct{ dbdriver.Session }
+
+func (s lenientIndexSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	req.Indexes = nil
+	return s.Session.CreateTableStatements(ctx, database, req)
+}
+
+func (s lenientIndexSession) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	req.Indexes, req.IndexDrops = nil, nil
+	return s.Session.AlterTableStatements(ctx, database, table, req)
+}
+
+// refusingIndexSession 拒绝任何带索引的请求，不管驱动声明了什么。
+type refusingIndexSession struct{ dbdriver.Session }
+
+func (s refusingIndexSession) CreateTableStatements(context.Context, string, dbdriver.CreateTableRequest) ([]string, error) {
+	return nil, fmt.Errorf("%w: no", dbdriver.ErrUnsupported)
+}
+
+func (s refusingIndexSession) AlterTableStatements(context.Context, string, string, dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	return nil, fmt.Errorf("%w: no", dbdriver.ErrUnsupported)
 }

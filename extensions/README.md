@@ -627,6 +627,36 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   a request using one the descriptor does not declare; an extension built before these
   fields existed keeps creating and altering tables as it did and simply does not get
   them. None of them needs a newer `hostABI`.
+- **Index editing is opt-in the same way.** Declare `IndexEditing` on the descriptor
+  (`*dbdriver.IndexEditing`: the index types you offer with their labels — built-in ids
+  `dbdriver.IndexTypePrimary` / `IndexTypeUnique` / `IndexTypeNormal` /
+  `IndexTypeFullText` or ids of your own, e.g. `bitmap`; whether the primary key may be
+  changed; descending columns, prefix lengths and index comments; where index names are
+  unique, `IndexScopeTable` / `IndexScopeSchema` / `IndexScopeDatabase`; and the extra
+  per-index options, each an enum with its values or a switch). The labels are plain
+  strings — a host i18n key for the built-in names, a key of your own `locales/` files
+  for anything else — and the host shows whatever it cannot translate as it is. Switch
+  it on in the dialect with `sqldb.TableIndexer`: `IndexEditing()` returns that same
+  declaration, `IndexSQL(tableRef, index)` / `DropIndexSQL(tableRef, name)` write one
+  index, and your `AlterableTable` lists the table's indexes (the primary key as
+  `IndexTypePrimary`, an index you cannot fully represent with `ReadOnlyReason`, one a
+  `UNIQUE` constraint owns with `Undroppable`) plus the index names other tables in the
+  declared scope already use (`TakenIndexNames`). Set the descriptor field from
+  `sqldb.IndexEditing(dialect)` so the two cannot drift. The shared session then hands
+  your dialect the changes as `TableChange.Indexes` / `IndexDrops` (`sqldb.IndexStatements`
+  writes them for you, before the dropped columns) and refuses on its own what the
+  declaration does not allow: a read-only index can only be dropped, an undroppable one
+  not at all, a primary-key change needs `AlterPrimaryKey`, an index on a dropped column
+  goes with it. A create table's indexes and its table / column comments reach
+  `CreateTableStatements`; write them either by implementing `sqldb.TableCreator` (a whole
+  `CREATE TABLE` of your own, needed when comments live inside the table definition) or by
+  implementing `sqldb.SchemaCommenter` (`TableCommentSQL` / `ColumnCommentSQL`, written
+  after the shared `CREATE TABLE` and its `IndexSQL`s). A dialect that writes neither is
+  refused a request carrying a comment rather than quietly dropping it. The host refuses,
+  before sending, a create / alter table request whose indexes the descriptor does not
+  declare (`driverSession.checkCreateIndexes` / `checkAlterIndexes`), so an extension
+  built before these fields existed again keeps working unchanged — and needs no newer
+  `hostABI`.
 - **Fields of the driver's own go in `DriverFields`.** Each one declares its key, type,
   tab, whether it is required and its default; the values are stored in the asset's
   `driver_options` and reach `open` as `req.DriverOptions`, password fields decrypted.

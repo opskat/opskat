@@ -350,14 +350,22 @@ func (s *FakeSession) writeStatement(capability dbdriver.Capability, call TableC
 }
 
 // CreateTableStatements 记下收到的请求（Op "create_table"）。请求用到驱动没声明的列能力（默认值写法、
-// 自增）时以 ErrUnsupported 拒绝，什么也不记。
+// 自增）或索引（索引编辑）时以 ErrUnsupported 拒绝，并带上驱动 id。什么也不记。
 func (s *FakeSession) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
 	if err := s.fake.Desc.ColumnFeatures().Check(req.Definitions()...); err != nil {
-		return nil, err
+		return nil, s.fake.refuse(err)
+	}
+	if err := s.fake.Desc.IndexEditing.Check(req.Indexes...); err != nil {
+		return nil, s.fake.refuse(err)
 	}
 	return s.writeStatement(dbdriver.CapCreateTable,
 		TableCall{Op: "create_table", Database: database, Table: req.Name, CreateTable: &req},
 		fmt.Sprintf("FAKE CREATE TABLE %s.%s", database, req.Name))
+}
+
+// refuse 给驱动的拒绝带上驱动 id：一致性测试据此认出拒绝确实来自这个驱动。
+func (f *Fake) refuse(err error) error {
+	return fmt.Errorf("%w (%s)", err, f.Desc.ID)
 }
 
 // DropTableStatements 记下收到的请求（Op "drop_table"）。
@@ -468,7 +476,8 @@ func (s *FakeSession) record(statement string) (isQuery bool, err error) {
 
 // AlterTableModel 记下收到的请求（Op "alter_model"），把假库的表元数据（Metadata 的列）当作这张表给出，
 // 表名原样、没有表注释；驱动声明了默认值写法时有默认值的列是「值」、没有的是「无」，声明了自增时自增
-// 现状取自 ColumnRules。驱动没有声明改表时以 ErrUnsupported 拒绝，什么也不记、不执行。
+// 现状取自 ColumnRules，声明了索引编辑时索引取自 Metadata 的索引（与主键相同的那一项类型是 primary）。
+// 驱动没有声明改表时以 ErrUnsupported 拒绝，什么也不记、不执行。
 func (s *FakeSession) AlterTableModel(_ context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
 	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
 		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
@@ -499,17 +508,46 @@ func (s *FakeSession) alterModel(table string) *dbdriver.AlterTableModel {
 		}
 		model.Columns = append(model.Columns, definition)
 	}
+	if s.fake.Desc.IndexEditing != nil {
+		model.Indexes = s.fake.indexDefinitions()
+		model.TakenIndexNames = slices.Clone(s.fake.TakenIndexNames)
+	}
 	return model
 }
 
-// AlterTableStatements 记下收到的请求（Op "alter_table"）：请求与 AlterTableModel 给出的样子相同时没有
-// 语句，否则给出一条一眼能与任何真实方言区分的语句；改了名时表名是新名字。驱动没有声明改表、请求用到
-// 驱动没声明的列能力或要改已有列的自增时以 ErrUnsupported 拒绝，什么也不记、不执行。
+// indexDefinitions 是假库的表元数据的索引写成表设计器的模型：与主键列相同的索引类型是 primary，其余按
+// 唯一与否分成 unique / normal。
+func (f *Fake) indexDefinitions() []dbdriver.IndexDefinition {
+	out := make([]dbdriver.IndexDefinition, 0, len(f.Metadata.Indexes))
+	for _, index := range f.Metadata.Indexes {
+		definition := dbdriver.IndexDefinition{Name: index.Name, Type: dbdriver.IndexTypeNormal, Include: index.Include}
+		columns := make([]dbdriver.IndexColumn, len(index.Columns))
+		for i, column := range index.Columns {
+			columns[i] = dbdriver.IndexColumn{Name: column}
+		}
+		definition.Columns = columns
+		switch {
+		case slices.Equal(index.Columns, f.PrimaryKeys):
+			definition.Type = dbdriver.IndexTypePrimary
+		case index.Unique:
+			definition.Type = dbdriver.IndexTypeUnique
+		}
+		out = append(out, definition)
+	}
+	return out
+}
+
+// AlterTableStatements 记下收到的请求（Op "alter_table"）：请求与 AlterTableModel 给出的样子（列与索引）
+// 相同时没有语句，否则给出一条一眼能与任何真实方言区分的语句；改了名时表名是新名字。驱动没有声明改表、
+// 请求用到驱动没声明的列或索引能力、要改已有列的自增时以 ErrUnsupported 拒绝，什么也不记、不执行。
 func (s *FakeSession) AlterTableStatements(_ context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
 	if !s.fake.Desc.Supports(dbdriver.CapAlterTable) {
 		return nil, fmt.Errorf("%w: %s does not declare %s", dbdriver.ErrUnsupported, s.fake.Desc.ID, dbdriver.CapAlterTable)
 	}
 	if err := s.fake.Desc.ColumnFeatures().Check(req.Definitions()...); err != nil {
+		return nil, err
+	}
+	if err := s.fake.Desc.IndexEditing.CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {
 		return nil, err
 	}
 	model := s.alterModel(table)
@@ -519,6 +557,11 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 			return nil, fmt.Errorf("%w: the auto-increment of existing column %q cannot be changed", dbdriver.ErrUnsupported, column.OriginalName)
 		}
 	}
+	if s.fake.Desc.IndexEditing != nil && !indexesUnchanged(model.Indexes, req) {
+		if err := s.fake.checkIndexChanges(model.Indexes, req); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.tableCall(TableCall{Op: "alter_table", Database: database, Table: table, AlterTable: &req}); err != nil {
 		return nil, err
 	}
@@ -526,7 +569,8 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 	if req.Name != "" && req.Name != table {
 		result.Table = req.Name
 	}
-	unchanged := result.Table == table && req.Comment == model.Comment && len(req.Drops) == 0 && len(req.Columns) == len(model.Columns)
+	unchanged := result.Table == table && req.Comment == model.Comment && len(req.Drops) == 0 && len(req.Columns) == len(model.Columns) &&
+		(s.fake.Desc.IndexEditing == nil || indexesUnchanged(model.Indexes, req))
 	for i := 0; unchanged && i < len(req.Columns); i++ {
 		unchanged = req.Columns[i].OriginalName == model.Columns[i].Name && req.Columns[i].Definition() == model.Columns[i]
 	}
@@ -534,4 +578,44 @@ func (s *FakeSession) AlterTableStatements(_ context.Context, database, table st
 		result.Statements = []string{fmt.Sprintf("FAKE ALTER TABLE %s.%s", database, table)}
 	}
 	return result, nil
+}
+
+// indexesUnchanged 报告请求把模型的索引原样交回：每个现有索引按原名交回且定义相同，没有删除。
+func indexesUnchanged(current []dbdriver.IndexDefinition, req dbdriver.AlterTableRequest) bool {
+	if len(req.IndexDrops) > 0 || len(req.Indexes) != len(current) {
+		return false
+	}
+	for _, index := range current {
+		i := slices.IndexFunc(req.Indexes, func(changed dbdriver.AlterIndex) bool { return changed.OriginalName == index.Name })
+		if i < 0 || !req.Indexes[i].Definition().Equal(index) {
+			return false
+		}
+	}
+	return true
+}
+
+// checkIndexChanges 拒绝假驱动不能改的索引改动：只读的只能删除，不可删除的删不得（同会话契约）。
+func (f *Fake) checkIndexChanges(current []dbdriver.IndexDefinition, req dbdriver.AlterTableRequest) error {
+	for _, changed := range req.Indexes {
+		if changed.OriginalName == "" {
+			continue
+		}
+		i := slices.IndexFunc(current, func(index dbdriver.IndexDefinition) bool { return index.Name == changed.OriginalName })
+		if i < 0 || changed.Definition().Equal(current[i]) {
+			continue
+		}
+		if current[i].ReadOnlyReason != "" {
+			return fmt.Errorf("%w: index %q cannot be changed (%s)", dbdriver.ErrUnsupported, current[i].Name, current[i].ReadOnlyReason)
+		}
+		if current[i].Undroppable {
+			return fmt.Errorf("%w: index %q cannot be dropped", dbdriver.ErrUnsupported, current[i].Name)
+		}
+	}
+	for _, name := range req.IndexDrops {
+		i := slices.IndexFunc(current, func(index dbdriver.IndexDefinition) bool { return index.Name == name })
+		if i >= 0 && current[i].Undroppable {
+			return fmt.Errorf("%w: index %q cannot be dropped", dbdriver.ErrUnsupported, name)
+		}
+	}
+	return nil
 }
