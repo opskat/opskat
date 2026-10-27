@@ -2363,13 +2363,15 @@
     "viewStructure": "查看结构",
     "designer": {
       "tabTitle": {
-        "view": "结构 {{name}}"
+        "view": "结构 {{name}}",
+        "design": "设计 {{name}}"
       },
       "tab": {
         "fields": "字段",
         "indexes": "索引",
         "foreignKeys": "外键",
-        "ddl": "建表语句"
+        "ddl": "建表语句",
+        "sql": "SQL 预览"
       },
       "column": {
         "primaryKey": "主键",
@@ -2380,7 +2382,8 @@
         "comment": "注释",
         "indexColumns": "列（按次序）",
         "fkColumns": "列",
-        "references": "引用"
+        "references": "引用",
+        "actions": "操作"
       },
       "readOnly": {
         "readOnlyConnection": "只读连接，不能修改表结构",
@@ -2415,7 +2418,86 @@
       "noForeignKeys": "这张表没有外键",
       "reload": "重新读取表结构",
       "loadFailed": "读取表结构失败",
-      "closeTab": "关闭标签"
+      "closeTab": "关闭标签",
+      "tableName": "表名",
+      "tableComment": "表注释",
+      "tableCommentPlaceholder": "表注释（可选）",
+      "changes": {
+        "none": "无改动",
+        "tableOnly": "表名或表注释已改"
+      },
+      "issues": {
+        "count": "{{count}} 个问题",
+        "errors": "{{count}} 个问题，解决后才能保存",
+        "warnings": "{{count}} 条提醒，不影响保存",
+        "tableName": "表名",
+        "column": "第 {{row}} 列 {{name}}",
+        "separator": "："
+      },
+      "issue": {
+        "tableNameEmpty": "表名不能为空",
+        "columnNameEmpty": "列名不能为空",
+        "columnNameDuplicate": "与第 {{row}} 列重名",
+        "columnTypeEmpty": "类型不能为空",
+        "noColumns": "表里至少要留一列",
+        "nameFolding": {
+          "upper": "含小写字母，数据库会按原样建名，之后访问要加引号写成 \"{{name}}\"",
+          "lower": "含大写字母，数据库会按原样建名，之后访问要加引号写成 \"{{name}}\""
+        }
+      },
+      "revertAll": "撤销全部改动",
+      "revertAllTitle": "撤销全部改动？",
+      "revertAllDesc": "草稿里的改动都会丢弃，回到打开时读出的表结构。",
+      "revertAllConfirm": "撤销",
+      "reloadTitle": "重新读取表结构？",
+      "reloadDesc": "未保存的改动会丢弃，界面回到刚打开时的样子。",
+      "reloadConfirm": "重新读取",
+      "addField": "添加字段",
+      "deleteColumn": "删除列",
+      "restoreColumn": "恢复这一列",
+      "originalValue": "原值：{{value}}",
+      "lockReason": "{{driver}} 不能修改已有列的{{attribute}}，可以删除后重新添加",
+      "lockReasonComment": "{{driver}} 不支持列注释",
+      "attribute": {
+        "column_type": "类型",
+        "column_nullable": "可空",
+        "column_default": "默认值",
+        "column_comment": "列注释",
+        "table_comment": "表注释"
+      },
+      "listSeparator": "、",
+      "capability": {
+        "limited": "{{driver}} 可以改表名、给列改名、新增与删除列，已有列还能改{{can}}；不能改{{cannot}}。",
+        "basicOnly": "{{driver}} 只能改表名、给列改名、新增与删除列；不能改{{cannot}}。"
+      },
+      "typeSuggestions": "常用类型",
+      "typeSuggestionsHint": "{{driver}} 常用类型 · 也可直接输入",
+      "columnProps": "列属性",
+      "unnamedColumn": "（未命名）",
+      "defaultValue": "默认值内容",
+      "defaultKind": {
+        "none": "无",
+        "value": "值",
+        "expression": "表达式"
+      },
+      "defaultHint": {
+        "explicit": "「值」按字面量写入（字符串会加引号）；函数或关键字选「表达式」，原样写入。",
+        "legacy": "数字、TRUE / FALSE / NULL、CURRENT_TIMESTAMP 原样写入，其余当作字符串加引号。"
+      },
+      "keys": "键",
+      "autoIncrementExisting": "已有列的自增不能修改",
+      "modifiedProps": "已修改（原值）",
+      "revert": "还原",
+      "sql": {
+        "count": "{{count}} 条语句 · 按次序执行",
+        "noChanges": "没有改动，不需要执行语句",
+        "generating": "正在生成语句…",
+        "blocked": "先解决底部列出的问题，才能生成语句",
+        "failed": "驱动生成语句失败",
+        "openInSqlTab": "在 SQL 标签打开",
+        "dropColumns": "将删除列（及其中数据）：",
+        "dropIndexes": "并删除索引："
+      }
     },
     "objTables": "表",
     "objViews": "视图",

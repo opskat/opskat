@@ -15,8 +15,8 @@ vi.mock("@/components/query/DatabaseTree", () => ({
 vi.mock("@/components/query/TableDataTab", () => ({ TableDataTab: () => null }));
 vi.mock("@/components/query/SqlEditorTab", () => ({ SqlEditorTab: () => null }));
 vi.mock("@/components/query/designer/TableDesigner", () => ({
-  TableDesigner: (props: { innerTabId: string; database: string; table: string }) => (
-    <div data-testid="table-designer">{`${props.innerTabId}|${props.database}|${props.table}`}</div>
+  TableDesigner: (props: { innerTabId: string; database: string; table: string; mode: string }) => (
+    <div data-testid="table-designer">{`${props.innerTabId}|${props.database}|${props.table}|${props.mode}`}</div>
   ),
 }));
 vi.mock("@/lib/notify", () => ({ notifyCopied: vi.fn(), notifySuccess: vi.fn() }));
@@ -233,7 +233,14 @@ describe("DatabasePanel 设计器标签", () => {
   it("只读查看的标签以「结构」为题,内容是这张表的设计器", () => {
     setup(designer.id, [...tabs, designer]);
     expect(tabEl("query.designer.tabTitle.view")).toBeInTheDocument();
-    expect(screen.getByTestId("table-designer")).toHaveTextContent("designer:app.orders|app|orders");
+    expect(screen.getByTestId("table-designer")).toHaveTextContent("designer:app.orders|app|orders|view");
+  });
+
+  it("设计表的标签以「设计」为题,设计器以设计模式打开", () => {
+    const design: InnerTab = { ...designer, mode: "design" };
+    setup(design.id, [...tabs, design]);
+    expect(tabEl("query.designer.tabTitle.design")).toBeInTheDocument();
+    expect(screen.getByTestId("table-designer")).toHaveTextContent("designer:app.orders|app|orders|design");
   });
 
   it("菜单:复制名称给出 db.table,并能在左侧树中定位", async () => {

@@ -90,7 +90,7 @@ async function renderDesigner() {
   await act(async () => {
     render(
       <TooltipProvider>
-        <TableDesigner tabId="query-1" innerTabId={INNER_ID} database="appdb" table="orders" />
+        <TableDesigner tabId="query-1" innerTabId={INNER_ID} database="appdb" table="orders" mode="view" />
       </TooltipProvider>
     );
   });

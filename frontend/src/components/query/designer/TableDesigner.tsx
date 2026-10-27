@@ -1,7 +1,7 @@
 import { memo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Code2, Columns3, Link2, ListTree } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@opskat/ui";
+import { TabsContent } from "@opskat/ui";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { driverHasCapability, findDatabaseDriver, refreshDatabaseDrivers, useDatabaseDrivers } from "@/lib/dbDrivers";
@@ -14,21 +14,32 @@ import { FieldsGrid } from "./FieldsGrid";
 import { IndexList } from "./IndexList";
 import { ForeignKeyList } from "./ForeignKeyList";
 import { DdlPane } from "./DdlPane";
+import { DesignerFrame, DesignerStatus, type DesignerSubTab, type SubTabDef } from "./DesignerFrame";
+import { TableDesignerEditor, type DesignerSave } from "./TableDesignerEditor";
 
 export interface TableDesignerProps {
   tabId: string;
   innerTabId: string;
   database: string;
   table: string;
+  /** view:只读查看;design:设计表(资产只读连接或驱动不能改表时仍只读)。 */
+  mode: "view" | "design";
+  /** 设计表的保存:草稿没有问题、驱动给出了语句时可点(任务 10 接上执行)。 */
+  onSave?: (save: DesignerSave) => void;
 }
 
-type SubTab = "fields" | "indexes" | "foreignKeys" | "ddl";
-
 /**
- * 表设计器内层标签(目前只有只读查看)。标签第一次到前台时读表结构,恢复的标签也是这样重新读取;
- * 能改表时读改表模型,否则读表元数据,两者映射成同一个 TableStructure。
+ * 表设计器内层标签。标签第一次到前台时读表结构,恢复的标签也是这样重新读取;能改表时读改表模型,
+ * 否则读表元数据,两者映射成同一个 TableStructure。设计表时由 TableDesignerEditor 编辑草稿。
  */
-export const TableDesigner = memo(function TableDesigner({ tabId, innerTabId, database, table }: TableDesignerProps) {
+export const TableDesigner = memo(function TableDesigner({
+  tabId,
+  innerTabId,
+  database,
+  table,
+  mode,
+  onSave,
+}: TableDesignerProps) {
   const { t } = useTranslation();
   const meta = useTabStore((s) => s.tabs.find((tab) => tab.id === tabId)?.meta as QueryTabMeta | undefined);
   const isOuterActive = useTabStore((s) => s.activeTabId === tabId);
@@ -40,6 +51,7 @@ export const TableDesigner = memo(function TableDesigner({ tabId, innerTabId, da
   const descriptor =
     driversState.status === "ready" ? findDatabaseDriver(driversState.drivers, meta?.driver ?? "") : undefined;
   const access = useDesignerAccess(descriptor, assetId);
+  const editable = mode === "design" && access.canAlter;
   const source = descriptor ? (access.canAlter ? "alterModel" : "metadata") : null;
   const { state: structureState, reload } = useTableStructure({
     assetId,
@@ -53,11 +65,28 @@ export const TableDesigner = memo(function TableDesigner({ tabId, innerTabId, da
     driversState.status === "error" ? { status: "error", error: driversState.error } : structureState;
   const retry = driversState.status === "error" ? refreshDatabaseDrivers : reload;
 
-  const [subTab, setSubTab] = useState<SubTab>("fields");
+  const [subTab, setSubTab] = useState<DesignerSubTab>("fields");
   const structure = state.status === "ready" ? state.value : null;
   const showDDL = driverHasCapability(descriptor, "view_ddl");
 
-  const tabs: { id: SubTab; label: string; icon: typeof Columns3; count?: number }[] = [
+  if (editable && structure) {
+    return (
+      <TableDesignerEditor
+        tabId={tabId}
+        assetId={assetId}
+        database={database}
+        table={table}
+        descriptor={descriptor}
+        structure={structure}
+        subTab={subTab}
+        onSubTabChange={setSubTab}
+        onReload={reload}
+        onSave={onSave}
+      />
+    );
+  }
+
+  const tabs: SubTabDef[] = [
     { id: "fields", label: t("query.designer.tab.fields"), icon: Columns3, count: structure?.columns.length },
     { id: "indexes", label: t("query.designer.tab.indexes"), icon: ListTree, count: structure?.indexes.length },
     {
@@ -66,7 +95,12 @@ export const TableDesigner = memo(function TableDesigner({ tabId, innerTabId, da
       icon: Link2,
       count: structure?.foreignKeys.length,
     },
-    ...(showDDL ? [{ id: "ddl" as const, label: t("query.designer.tab.ddl"), icon: Code2 }] : []),
+    // 设计表的最后一个子页是 SQL 预览,只读查看是建表语句(驱动声明查看 DDL 时)。
+    ...(editable
+      ? [{ id: "sql" as const, label: t("query.designer.tab.sql"), icon: Code2 }]
+      : showDDL
+        ? [{ id: "ddl" as const, label: t("query.designer.tab.ddl"), icon: Code2 }]
+        : []),
   ];
 
   let body: ReactNode;
@@ -101,48 +135,29 @@ export const TableDesigner = memo(function TableDesigner({ tabId, innerTabId, da
   }
 
   return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      <ReadOnlyToolbar
-        tableName={structure?.name ?? table}
-        comment={structure?.comment ?? ""}
-        readOnlyReason={access.readOnlyReason}
-        loading={state.status === "loading"}
-        onReload={retry}
-      />
-      <Tabs value={subTab} onValueChange={(value) => setSubTab(value as SubTab)} className="min-h-0 flex-1 gap-0">
-        {state.status !== "error" && (
-          <TabsList
-            variant="line"
-            className="h-9 w-full shrink-0 justify-start border-b border-border bg-muted/20 px-2"
-          >
-            {tabs.map(({ id, label, icon: Icon, count }) => (
-              <TabsTrigger
-                key={id}
-                value={id}
-                // 下划线贴着子页条底边,用主色标出当前子页。
-                className="h-full flex-none gap-1.5 rounded-none px-2.5 text-xs font-normal after:bg-primary group-data-[orientation=horizontal]/tabs:after:bottom-0"
-              >
-                <Icon className="h-3.5 w-3.5" aria-hidden />
-                {label}
-                {count !== undefined && (
-                  <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground tabular-nums">{count}</span>
-                )}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        )}
-        {body}
-      </Tabs>
-      <div
-        data-testid="designer-status"
-        className="flex h-6 shrink-0 items-center gap-1.5 border-t border-border bg-muted/30 px-3 text-[11px] text-muted-foreground"
-      >
-        {descriptor && <span>{descriptor.name}</span>}
-        {descriptor && <span aria-hidden>·</span>}
-        <span className="select-text">{`${database}.${table}`}</span>
-        <span aria-hidden>·</span>
-        <span>{t("query.designer.readOnly.generic")}</span>
-      </div>
-    </div>
+    <DesignerFrame
+      toolbar={
+        <ReadOnlyToolbar
+          tableName={structure?.name ?? table}
+          comment={structure?.comment ?? ""}
+          // 设计表还在读取时不标只读。
+          readOnlyReason={editable ? undefined : access.readOnlyReason}
+          loading={state.status === "loading"}
+          onReload={retry}
+        />
+      }
+      tabs={state.status === "error" ? null : tabs}
+      subTab={subTab}
+      onSubTabChange={setSubTab}
+      status={
+        <DesignerStatus
+          driver={descriptor?.name}
+          fullName={`${database}.${table}`}
+          note={editable ? undefined : t("query.designer.readOnly.generic")}
+        />
+      }
+    >
+      {body}
+    </DesignerFrame>
   );
 });

@@ -74,10 +74,12 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
     return `${tab.database}.${tab.table}`;
   };
   // 标签上显示的标题:设计器带上它是哪种设计器。
-  const titleOf = (tab: InnerTab) =>
-    tab.type === "designer" && tab.mode === "view"
-      ? t("query.designer.tabTitle.view", { name: fullNameOf(tab) })
-      : fullNameOf(tab);
+  const titleOf = (tab: InnerTab) => {
+    if (tab.type !== "designer") return fullNameOf(tab);
+    if (tab.mode === "view") return t("query.designer.tabTitle.view", { name: fullNameOf(tab) });
+    if (tab.mode === "design") return t("query.designer.tabTitle.design", { name: fullNameOf(tab) });
+    return fullNameOf(tab);
+  };
   // 单个脏标签由该 TableDataTab 自己的三选项对话框处理,这里只接多个。
   const batchClose = closeRequest && closeRequest.dirtyIds.length > 1 ? closeRequest : null;
   const batchNames = batchClose ? innerTabs.filter((tab) => batchClose.dirtyIds.includes(tab.id)).map(titleOf) : [];
@@ -206,7 +208,13 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                   <TableDataTab tabId={tabId} innerTabId={tab.id} database={tab.database} table={tab.table} />
                 ) : tab.type === "designer" ? (
                   tab.mode !== "create" && (
-                    <TableDesigner tabId={tabId} innerTabId={tab.id} database={tab.database} table={tab.table} />
+                    <TableDesigner
+                      tabId={tabId}
+                      innerTabId={tab.id}
+                      database={tab.database}
+                      table={tab.table}
+                      mode={tab.mode}
+                    />
                   )
                 ) : (
                   <SqlEditorTab tabId={tabId} innerTabId={tab.id} />

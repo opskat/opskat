@@ -1,14 +1,15 @@
 import { useTranslation } from "react-i18next";
-import { Lock, RefreshCw } from "lucide-react";
-import { Button, Tooltip, TooltipContent, TooltipTrigger, cn } from "@opskat/ui";
+import { AlertTriangle, CircleAlert, Lock, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { Button, Input, Tooltip, TooltipContent, TooltipTrigger, cn } from "@opskat/ui";
 import type { DesignerReadOnlyReason } from "./model";
+import type { DraftCounts } from "./draft";
 
 interface ReadOnlyToolbarProps {
   tableName: string;
   /** 表注释,读不出或没有时为空串。 */
   comment: string;
-  /** 只读的原因;null 表示没有具体原因(只说只读)。 */
-  readOnlyReason: DesignerReadOnlyReason | null;
+  /** 只读的原因;null 表示没有具体原因(只说只读);undefined 不标只读(设计表还在读取时)。 */
+  readOnlyReason: DesignerReadOnlyReason | null | undefined;
   loading: boolean;
   onReload: () => void;
 }
@@ -28,13 +29,15 @@ export function ReadOnlyToolbar({ tableName, comment, readOnlyReason, loading, o
         {tableName}
       </span>
       {comment && <span className="truncate text-xs text-muted-foreground select-text">{comment}</span>}
-      <span
-        data-testid="designer-readonly"
-        className="flex shrink-0 items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
-      >
-        <Lock className="h-3 w-3" aria-hidden />
-        {reasonText}
-      </span>
+      {readOnlyReason !== undefined && (
+        <span
+          data-testid="designer-readonly"
+          className="flex shrink-0 items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
+        >
+          <Lock className="h-3 w-3" aria-hidden />
+          {reasonText}
+        </span>
+      )}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -50,6 +53,146 @@ export function ReadOnlyToolbar({ tableName, comment, readOnlyReason, loading, o
         </TooltipTrigger>
         <TooltipContent>{t("query.designer.reload")}</TooltipContent>
       </Tooltip>
+    </div>
+  );
+}
+
+interface DesignToolbarProps {
+  tableName: string;
+  onTableNameChange: (name: string) => void;
+  /** 读出时的表名:改过时输入框标黄并悬停显示原值。 */
+  originalName: string;
+  /** 表名上的问题:error 标红,warning 给出提醒文案。 */
+  tableNameError: boolean;
+  tableNameWarning?: string;
+  /** 驱动不支持表注释时为 null:不显示表注释输入。 */
+  comment: string | null;
+  onCommentChange: (comment: string) => void;
+  originalComment: string;
+  counts: DraftCounts;
+  isDirty: boolean;
+  errorCount: number;
+  loading: boolean;
+  onRevertAll: () => void;
+  onReload: () => void;
+  /** 保存按钮能否点;onSave 缺省时按钮渲染但不可用。 */
+  canSave: boolean;
+  onSave?: () => void;
+}
+
+/** 设计表的工具栏:表名、表注释、改动计数、问题数、撤销全部改动、重新读取与保存。 */
+export function DesignToolbar({
+  tableName,
+  onTableNameChange,
+  originalName,
+  tableNameError,
+  tableNameWarning,
+  comment,
+  onCommentChange,
+  originalComment,
+  counts,
+  isDirty,
+  errorCount,
+  loading,
+  onRevertAll,
+  onReload,
+  canSave,
+  onSave,
+}: DesignToolbarProps) {
+  const { t } = useTranslation();
+  const nameChanged = tableName.trim() !== originalName;
+  const commentChanged = comment !== null && comment.trim() !== originalComment.trim();
+  const hasColumnChanges = counts.added + counts.modified + counts.deleted > 0;
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+      <span className="shrink-0 text-[11px] text-muted-foreground">{t("query.designer.tableName")}</span>
+      <div className="relative flex items-center">
+        <Input
+          data-cell="table:name"
+          aria-label={t("query.designer.tableName")}
+          aria-invalid={tableNameError || undefined}
+          title={nameChanged ? t("query.designer.originalValue", { value: originalName }) : tableNameWarning}
+          className={cn(
+            "h-7 w-44 font-mono text-xs",
+            nameChanged && "bg-warning/10",
+            tableNameWarning && "border-warning pr-6",
+            tableNameError && "border-destructive bg-destructive/10"
+          )}
+          value={tableName}
+          spellCheck={false}
+          onChange={(e) => onTableNameChange(e.target.value)}
+        />
+        {tableNameWarning && (
+          <AlertTriangle className="absolute right-2 h-3 w-3 text-warning" aria-label={tableNameWarning} />
+        )}
+      </div>
+      {comment !== null && (
+        <Input
+          aria-label={t("query.designer.tableComment")}
+          placeholder={t("query.designer.tableCommentPlaceholder")}
+          title={commentChanged ? t("query.designer.originalValue", { value: originalComment || "—" }) : undefined}
+          className={cn("h-7 w-64 text-xs", commentChanged && "bg-warning/10")}
+          value={comment}
+          onChange={(e) => onCommentChange(e.target.value)}
+        />
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <span data-testid="designer-changes" className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          {!isDirty ? (
+            t("query.designer.changes.none")
+          ) : hasColumnChanges ? (
+            <>
+              {t("query.designer.tab.fields")}
+              {counts.added > 0 && <span className="text-success">+{counts.added}</span>}
+              {counts.modified > 0 && <span className="text-warning">~{counts.modified}</span>}
+              {counts.deleted > 0 && <span className="text-destructive">−{counts.deleted}</span>}
+            </>
+          ) : (
+            t("query.designer.changes.tableOnly")
+          )}
+        </span>
+        {errorCount > 0 && (
+          <span
+            data-testid="designer-issue-count"
+            className="flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive"
+          >
+            <CircleAlert className="h-3 w-3" aria-hidden />
+            {t("query.designer.issues.count", { count: errorCount })}
+          </span>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t("query.designer.revertAll")}
+              disabled={!isDirty || loading}
+              onClick={onRevertAll}
+            >
+              <RotateCcw />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{t("query.designer.revertAll")}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t("query.designer.reload")}
+              disabled={loading}
+              onClick={onReload}
+            >
+              <RefreshCw className={cn(loading && "animate-spin")} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{t("query.designer.reload")}</TooltipContent>
+        </Tooltip>
+        <Button size="xs" className="h-7 px-2.5" disabled={!onSave || !canSave} onClick={onSave}>
+          <Save aria-hidden />
+          {t("action.save")}
+        </Button>
+      </div>
     </div>
   );
 }

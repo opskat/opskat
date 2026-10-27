@@ -2363,13 +2363,15 @@
     "viewStructure": "View Structure",
     "designer": {
       "tabTitle": {
-        "view": "Structure {{name}}"
+        "view": "Structure {{name}}",
+        "design": "Design {{name}}"
       },
       "tab": {
         "fields": "Columns",
         "indexes": "Indexes",
         "foreignKeys": "Foreign keys",
-        "ddl": "DDL"
+        "ddl": "DDL",
+        "sql": "SQL preview"
       },
       "column": {
         "primaryKey": "Primary key",
@@ -2380,7 +2382,8 @@
         "comment": "Comment",
         "indexColumns": "Columns (in order)",
         "fkColumns": "Columns",
-        "references": "References"
+        "references": "References",
+        "actions": "Actions"
       },
       "readOnly": {
         "readOnlyConnection": "Read-only connection, so the structure can't be changed",
@@ -2415,7 +2418,86 @@
       "noForeignKeys": "This table has no foreign keys",
       "reload": "Reload structure",
       "loadFailed": "Couldn't read the table structure",
-      "closeTab": "Close tab"
+      "closeTab": "Close tab",
+      "tableName": "Table",
+      "tableComment": "Table comment",
+      "tableCommentPlaceholder": "Table comment (optional)",
+      "changes": {
+        "none": "No changes",
+        "tableOnly": "Table name or comment changed"
+      },
+      "issues": {
+        "count": "Problems: {{count}}",
+        "errors": "Fix these before saving ({{count}})",
+        "warnings": "Heads-up, saving still works ({{count}})",
+        "tableName": "Table name",
+        "column": "Column {{row}} {{name}}",
+        "separator": ": "
+      },
+      "issue": {
+        "tableNameEmpty": "Table name is required",
+        "columnNameEmpty": "Column name is required",
+        "columnNameDuplicate": "Same name as column {{row}}",
+        "columnTypeEmpty": "Type is required",
+        "noColumns": "The table needs at least one column",
+        "nameFolding": {
+          "upper": "Has lowercase letters: the database keeps the name as typed, so queries must quote it as \"{{name}}\"",
+          "lower": "Has uppercase letters: the database keeps the name as typed, so queries must quote it as \"{{name}}\""
+        }
+      },
+      "revertAll": "Discard all changes",
+      "revertAllTitle": "Discard all changes?",
+      "revertAllDesc": "Everything in the draft is thrown away and the table goes back to how it was when opened.",
+      "revertAllConfirm": "Discard",
+      "reloadTitle": "Reload table structure?",
+      "reloadDesc": "Unsaved changes are discarded and the designer starts over from the database.",
+      "reloadConfirm": "Reload",
+      "addField": "Add column",
+      "deleteColumn": "Delete column",
+      "restoreColumn": "Restore column",
+      "originalValue": "Was: {{value}}",
+      "lockReason": "{{driver}} can't change the {{attribute}} of an existing column; drop it and add it again instead",
+      "lockReasonComment": "{{driver}} doesn't support column comments",
+      "attribute": {
+        "column_type": "type",
+        "column_nullable": "nullability",
+        "column_default": "default",
+        "column_comment": "column comment",
+        "table_comment": "table comment"
+      },
+      "listSeparator": ", ",
+      "capability": {
+        "limited": "{{driver}} can rename the table, rename columns, and add or drop columns. On existing columns it can also change: {{can}}. It can't change: {{cannot}}.",
+        "basicOnly": "{{driver}} can only rename the table, rename columns, and add or drop columns. It can't change: {{cannot}}."
+      },
+      "typeSuggestions": "Common types",
+      "typeSuggestionsHint": "Common {{driver}} types · or type your own",
+      "columnProps": "Column properties",
+      "unnamedColumn": "(unnamed)",
+      "defaultValue": "Default value",
+      "defaultKind": {
+        "none": "None",
+        "value": "Value",
+        "expression": "Expression"
+      },
+      "defaultHint": {
+        "explicit": "Value is written as a literal (strings get quoted). Pick Expression for functions or keywords; it is written as is.",
+        "legacy": "Numbers, TRUE / FALSE / NULL and CURRENT_TIMESTAMP are written as is; anything else is quoted as a string."
+      },
+      "keys": "Keys",
+      "autoIncrementExisting": "Auto-increment can't be changed on an existing column",
+      "modifiedProps": "Changed (was)",
+      "revert": "Revert",
+      "sql": {
+        "count": "Statements: {{count}} · run in order",
+        "noChanges": "No changes, nothing to run",
+        "generating": "Generating statements…",
+        "blocked": "Fix the problems listed below to generate statements",
+        "failed": "The driver couldn't generate statements",
+        "openInSqlTab": "Open in SQL tab",
+        "dropColumns": "Drops columns (and their data):",
+        "dropIndexes": "and indexes:"
+      }
     },
     "objTables": "Tables",
     "objViews": "Views",
