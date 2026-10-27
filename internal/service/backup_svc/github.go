@@ -12,6 +12,8 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 )
 
 const (
@@ -27,6 +29,9 @@ var (
 	githubBaseURL    = "https://github.com"
 	githubAPIBaseURL = "https://api.github.com"
 )
+
+// githubHTTPClient 走进程共用外网传输（遵循网络代理设置）；与此前的 http.DefaultClient 一样不设整体超时。
+var githubHTTPClient = &http.Client{Transport: netproxy.Transport()}
 
 // DeviceFlowInfo Device Flow 初始化返回
 type DeviceFlowInfo struct {
@@ -65,7 +70,7 @@ func StartDeviceFlow() (*DeviceFlowInfo, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub Device Flow 失败: %w", err)
 	}
@@ -145,7 +150,7 @@ func pollOnce(deviceCode string) (token string, slowDown bool, done bool, err er
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return "", false, false, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
@@ -210,7 +215,7 @@ func GetGitHubUser(token string) (*GitHubUser, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
@@ -272,7 +277,7 @@ func CreateOrUpdateGist(token, gistID string, content []byte) (*GistInfo, error)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
@@ -321,7 +326,7 @@ func GetGistContent(token, gistID string) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
@@ -362,7 +367,7 @@ func ListBackupGists(token string) ([]*GistInfo, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
