@@ -652,6 +652,27 @@ func TestAlterTableRefusesTwoIndexesWithAnExclusiveOption(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// 建表时同样至多一个索引打开独占开关，在交给方言（含整条写建表语句的方言）之前拒绝。
+func TestCreateTableRefusesTwoIndexesWithAnExclusiveOption(t *testing.T) {
+	declared := indexEditingDeclaration()
+	declared.Options[1].Exclusive = true
+	session := newIndexSession(t, &indexerDialect{declared: declared})
+	clustered := func(name, column string) dbdriver.IndexDefinition {
+		return dbdriver.IndexDefinition{Name: name, Type: dbdriver.IndexTypeNormal,
+			Columns: []dbdriver.IndexColumn{{Name: column}}, Options: map[string]any{"clustered": true}}
+	}
+	req := dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}},
+		Indexes: []dbdriver.IndexDefinition{clustered("ix_a", "a")}}
+	_, err := session.CreateTableStatements(context.Background(), "db", req)
+	require.NoError(t, err)
+
+	req.Indexes = append(req.Indexes, clustered("ix_b", "b"))
+	_, err = session.CreateTableStatements(context.Background(), "db", req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clustered")
+	assert.Contains(t, err.Error(), "ix_b")
+}
+
 // includeDialect 的表另有一个只在 INCLUDE 里用到 note 的索引。
 type includeDialect struct{ indexerDialect }
 

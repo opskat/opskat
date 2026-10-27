@@ -53,6 +53,11 @@ func (s *Session) CreateTableStatements(_ context.Context, database string, req 
 	if err := checkCreateIndexes(indexer, writesIndexes, req.Indexes); err != nil {
 		return nil, err
 	}
+	if writesIndexes {
+		if err := checkExclusiveOptions(indexer.IndexEditing(), req.Indexes, req.Name); err != nil {
+			return nil, err
+		}
+	}
 	commenter, writesComments := s.dialect.(SchemaCommenter)
 	creator, writesTheTable := s.dialect.(TableCreator)
 	if writesTheTable {

@@ -293,17 +293,16 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 	if primaryKeys > 1 {
 		return fmt.Errorf("table %s cannot have more than one primary key", table)
 	}
-	return checkExclusiveOptions(editing, current.Indexes, change, table)
+	return checkExclusiveOptions(editing, indexesAfter(current.Indexes, change), table)
 }
 
-// checkExclusiveOptions 拒绝改完之后一张表上有两个索引打开同一个独占开关（IndexOptionDecl.Exclusive）：
-// 算的是改完之后的全部索引——没删也没改的现有索引按现状，改动的与新增的按请求。
-func checkExclusiveOptions(editing *dbdriver.IndexEditing, current []dbdriver.IndexDefinition, change *TableChange, table string) error {
+// indexesAfter 是改完之后表上的全部索引：没删也没改的现有索引按现状，改动的与新增的按请求。
+func indexesAfter(current []dbdriver.IndexDefinition, change *TableChange) []dbdriver.IndexDefinition {
 	gone := make(map[string]bool, len(change.IndexDrops)+len(change.Indexes))
 	for _, dropped := range change.IndexDrops {
 		gone[dropped.Name] = true
 	}
-	var after []dbdriver.IndexDefinition
+	after := make([]dbdriver.IndexDefinition, 0, len(current)+len(change.Indexes))
 	for _, changed := range change.Indexes {
 		if changed.Current != nil {
 			gone[changed.Current.Name] = true
@@ -315,12 +314,18 @@ func checkExclusiveOptions(editing *dbdriver.IndexEditing, current []dbdriver.In
 			after = append(after, index)
 		}
 	}
+	return after
+}
+
+// checkExclusiveOptions 拒绝一张表上有两个索引打开同一个独占开关（IndexOptionDecl.Exclusive）；indexes 是
+// 这张表（改完之后 / 新建）的全部索引。
+func checkExclusiveOptions(editing *dbdriver.IndexEditing, indexes []dbdriver.IndexDefinition, table string) error {
 	for _, option := range editing.Options {
 		if !option.Exclusive {
 			continue
 		}
 		var on []string
-		for _, index := range after {
+		for _, index := range indexes {
 			if enabled, _ := index.Options[option.Key].(bool); enabled {
 				on = append(on, index.Name)
 			}

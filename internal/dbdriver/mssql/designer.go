@@ -577,8 +577,8 @@ func alterIndexes(ctx context.Context, conn *sql.Conn, change sqldb.TableChange)
 // --- 建表 ---
 
 // CreateTableSQL 写整条建表：CREATE TABLE（列定义，IDENTITY 与按写法的默认值见 sqldb.NewColumnSQL；主键写在表定义
-// 里），之后建其余索引（打开聚集的先建，其余按请求的次序）。一张表只能有一个聚集索引：请求里有两个打开聚集的
-// 索引时报错。没给聚集选项的主键在另有聚集索引时写成 NONCLUSTERED——否则 SQL Server 把它建成聚集，之后的聚集
+// 里），之后建其余索引（打开聚集的先建，其余按请求的次序）。一张表至多一个聚集索引由共用会话按声明的独占选项
+// 先行拒绝。没给聚集选项的主键在另有聚集索引时写成 NONCLUSTERED——否则 SQL Server 把它建成聚集，之后的聚集
 // 索引建不成。SQL Server 的注释在扩展属性里，建表时不写：带注释的请求以 ErrUnsupported 拒绝（同共用的写法）。
 // 没有用到索引与新写法的请求与共用的写法逐字一致。
 func (d dialect) CreateTableSQL(tables sqldb.Tables, database string, req dbdriver.CreateTableRequest) ([]string, error) {
@@ -591,15 +591,9 @@ func (d dialect) CreateTableSQL(tables sqldb.Tables, database string, req dbdriv
 		}
 	}
 	tableRef := tables.TableRef(database, req.Name)
-	var clusteredNames []string
-	for _, index := range req.Indexes {
-		if clusteredOn(index) {
-			clusteredNames = append(clusteredNames, index.Name)
-		}
-	}
-	if len(clusteredNames) > 1 {
-		return nil, fmt.Errorf("table %s can have only one clustered index, but %s are clustered", req.Name, strings.Join(clusteredNames, ", "))
-	}
+	anotherClustered := slices.ContainsFunc(req.Indexes, func(index dbdriver.IndexDefinition) bool {
+		return index.Type != dbdriver.IndexTypePrimary && clusteredOn(index)
+	})
 
 	columns := req.Definitions()
 	defs := make([]string, 0, len(columns)+1)
@@ -614,7 +608,7 @@ func (d dialect) CreateTableSQL(tables sqldb.Tables, database string, req dbdriv
 	for _, index := range req.Indexes {
 		if index.Type == dbdriver.IndexTypePrimary {
 			keyword := clusteredKeyword(index)
-			if keyword == "" && len(clusteredNames) > 0 {
+			if keyword == "" && anotherClustered {
 				keyword = " NONCLUSTERED"
 			}
 			clause, err := constraintClause(index, "PRIMARY KEY", keyword)
