@@ -189,7 +189,69 @@
       { "key": "charset", "default": "UTF8" },
       { "key": "collation", "default": "" }
     ],
-    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
+    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["smallint", "integer", "bigint", "numeric(10,2)", "real", "double precision"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["varchar(255)", "char(36)", "text", "uuid"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["date", "time", "timestamp", "timestamptz", "interval"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["bytea"]
+        },
+        {
+          "label": "query.designer.typeGroup.json",
+          "types": ["json", "jsonb"]
+        },
+        {
+          "label": "query.designer.typeGroup.other",
+          "types": ["boolean", "inet", "cidr", "macaddr", "text[]", "integer[]", "tsvector", "xml"]
+        }
+      ],
+      "newColumn": "varchar(255)",
+      "primaryKey": "bigint"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "nameFolding": "lower",
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "alterPrimaryKey": true,
+      "descending": true,
+      "comments": true,
+      "nameScope": "schema",
+      "options": [
+        {
+          "key": "method",
+          "label": "query.designer.indexOption.method",
+          "type": "enum",
+          "enum": ["btree", "hash", "gin", "gist", "brin", "spgist"]
+        }
+      ]
+    },
+    "transactionalDDL": true
   },
   {
     "id": "mssql",

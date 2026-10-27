@@ -11,21 +11,28 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-// pgColumn 是改表时读列定义的一行；nil 的 def 是 NULL（没有默认值）。
+// pgColumn 是改表时读列定义的一行；nil 的 def 是 NULL（没有默认值），identity 是 is_identity（空即 NO）。
 type pgColumn struct {
 	name, dataType, udtName, nullable string
 	def                               any
 	comment                           string
+	identity                          string
 }
 
 func expectAlterTable(mock sqlmock.Sqlmock, schema, table, tableComment string, columns ...pgColumn) {
-	rows := sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default", "column_comment"})
+	rows := sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default", "column_comment", "is_identity"})
 	for _, c := range columns {
-		rows.AddRow(c.name, c.dataType, c.udtName, c.nullable, c.def, c.comment)
+		identity := c.identity
+		if identity == "" {
+			identity = "NO"
+		}
+		rows.AddRow(c.name, c.dataType, c.udtName, c.nullable, c.def, c.comment, identity)
 	}
 	mock.ExpectQuery(alterColumnsSQL).WithArgs(schema, table).WillReturnRows(rows)
 	mock.ExpectQuery(alterTableCommentSQL).WithArgs(schema, table).
 		WillReturnRows(sqlmock.NewRows([]string{"table_comment"}).AddRow(tableComment))
+	expectIndexes(mock, schema, table)
+	expectTakenIndexNames(mock, schema, table)
 }
 
 // 任一 schema 的表都按它所在的 schema 读出全部列（改动前写死 public、又拿 schema.table 去匹配表名，
@@ -44,9 +51,11 @@ func TestAlterTableModelLoadsColumnsOfATableInAnySchema(t *testing.T) {
 		Name:    "events",
 		Comment: "event log",
 		Columns: []dbdriver.ColumnDefinition{
-			{Name: "id", Type: "integer", DefaultValue: "nextval('reporting.events_id_seq'::regclass)"},
-			{Name: "status", Type: "event_status", Nullable: true, DefaultValue: "'new'::event_status", Comment: "state"},
-			{Name: "payload", Type: "jsonb", Nullable: true},
+			{Name: "id", Type: "integer", DefaultValue: "nextval('reporting.events_id_seq'::regclass)",
+				DefaultKind: dbdriver.DefaultKindExpression, AutoIncrement: true},
+			{Name: "status", Type: "event_status", Nullable: true, DefaultValue: "new", Comment: "state",
+				DefaultKind: dbdriver.DefaultKindValue},
+			{Name: "payload", Type: "jsonb", Nullable: true, DefaultKind: dbdriver.DefaultKindNone},
 		},
 	}, model)
 	require.NoError(t, mock.ExpectationsWereMet())

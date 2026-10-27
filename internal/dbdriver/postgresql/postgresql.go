@@ -5,6 +5,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 var descriptor = dbdriver.Descriptor{
@@ -39,6 +40,14 @@ var descriptor = dbdriver.Descriptor{
 		{Key: dbdriver.OptionCollation},
 	},
 	AlterTableAttributes: alterAttributes,
+	ColumnTypes:          columnTypes,
+	ExplicitDefaults:     sqldb.ClassifiesDefaults(dialect{}),
+	AutoIncrement:        sqldb.AutoIncrements(dialect{}),
+	// 不加引号的名称按小写存：含大写的名字之后都要加引号才能访问。
+	NameFolding:  dbdriver.NameFoldLower,
+	IndexEditing: indexEditing,
+	// DDL 可以在事务里执行，失败整批回滚。
+	TransactionalDDL: true,
 }
 
 type driver struct {
