@@ -20,11 +20,20 @@ describe("injectExtensionAPI — @opskat/host-ui", () => {
     injectExtensionAPI(fakeApi);
 
     const hostUI = window.__OPSKAT_EXT__!.hostUI;
-    expect(hostUI.version).toMatch(/^\d+\.\d+$/);
+    expect(hostUI.version).toBe("1.0");
     expect(hostUI.CodeEditor).toBeDefined();
-    expect(hostUI.QueryResultTable).toBeDefined();
 
     render(<hostUI.JsonTreeView data={{ note: "hello" }} />);
     expect(screen.getByText("note:")).toBeInTheDocument();
+  });
+
+  it("renders a DataTable and no longer exposes the host's QueryResultTable", () => {
+    injectExtensionAPI(fakeApi);
+
+    const hostUI = window.__OPSKAT_EXT__!.hostUI;
+    expect("QueryResultTable" in hostUI).toBe(false);
+
+    render(<hostUI.DataTable columns={["key"]} rows={[{ key: "todo.md" }]} />);
+    expect(screen.getByText("todo.md")).toBeInTheDocument();
   });
 });
