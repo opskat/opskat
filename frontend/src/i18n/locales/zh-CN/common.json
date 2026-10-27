@@ -2397,7 +2397,8 @@
         "fulltext": "全文"
       },
       "indexOption": {
-        "method": "索引方法"
+        "method": "索引方法",
+        "clustered": "聚集索引"
       },
       "typeGroup": {
         "numeric": "数值",

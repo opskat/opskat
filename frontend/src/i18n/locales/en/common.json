@@ -2397,7 +2397,8 @@
         "fulltext": "Full-text"
       },
       "indexOption": {
-        "method": "Method"
+        "method": "Method",
+        "clustered": "Clustered"
       },
       "typeGroup": {
         "numeric": "Numeric",
