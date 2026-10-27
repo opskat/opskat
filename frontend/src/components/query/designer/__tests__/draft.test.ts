@@ -12,7 +12,10 @@ import {
   indexesDroppedWith,
   initDraft,
   isDraftDirty,
+  tableCommentChanged,
+  tableNameChanged,
   lockedFields,
+  rebaseDraft,
   revertField,
   updateColumn,
   validateDraft,
@@ -333,5 +336,107 @@ describe("indexesDroppedWith", () => {
     ];
     const draft = updateColumn(initDraft(structure), keyOf(initDraft(structure), "note"), { deleted: true });
     expect(indexesDroppedWith(draft, indexes)).toContain("idx_cover");
+  });
+});
+
+describe("rebaseDraft", () => {
+  /** 按名字改读出的表:模拟部分语句执行后重新读到的结构。 */
+  function reread(
+    structure: TableStructure,
+    edit: (columns: TableStructure["columns"]) => TableStructure["columns"],
+    table: Partial<Pick<TableStructure, "name" | "comment">> = {}
+  ): TableStructure {
+    return { ...structure, ...table, columns: edit(structure.columns.map((c) => ({ ...c }))) };
+  }
+
+  function edited() {
+    const structure = mysqlStructure();
+    let draft = initDraft(structure);
+    draft = { ...draft, name: "orders_v2", comment: "订单" };
+    draft = updateColumn(draft, keyOf(draft, "status"), { name: "state", type: "varchar(32)" });
+    draft = updateColumn(draft, keyOf(draft, "note"), { deleted: true });
+    const added = addColumn(draft, MYSQL);
+    draft = updateColumn(added.draft, added.key, { name: "paid_at", type: "datetime" });
+    return { structure, draft };
+  }
+
+  it("什么都没执行:草稿的改动原样留下", () => {
+    const { structure, draft } = edited();
+    const rebased = rebaseDraft(draft, structure);
+    expect(draftCounts(rebased)).toEqual(draftCounts(draft));
+    expect(rebased.name).toBe("orders_v2");
+    expect(tableNameChanged(rebased)).toBe(true);
+    expect(rebased.columns.map((c) => [c.original?.name ?? null, c.name, c.deleted])).toEqual([
+      ["id", "id", false],
+      ["status", "state", false],
+      ["created_at", "created_at", false],
+      ["note", "note", true],
+      [null, "paid_at", false],
+    ]);
+    expect(buildAlterRequest(rebased, MYSQL)).toEqual(buildAlterRequest(draft, MYSQL));
+  });
+
+  it("已生效的改动不再标记,没执行的留在草稿里", () => {
+    const { structure, draft } = edited();
+    // 改名与改列执行了,删列与加列没有执行。
+    const after = reread(
+      structure,
+      (columns) => columns.map((c) => (c.name === "status" ? { ...c, name: "state", type: "varchar(32)" } : c)),
+      { name: "orders_v2", comment: "订单" }
+    );
+    const rebased = rebaseDraft(draft, after);
+    expect(rebased.original).toEqual({ name: "orders_v2", comment: "订单" });
+    expect(tableNameChanged(rebased)).toBe(false);
+    expect(tableCommentChanged(rebased)).toBe(false);
+    expect(rebased.columns.map((c) => [c.original?.name ?? null, c.name, columnStatus(c)])).toEqual([
+      ["id", "id", "unchanged"],
+      ["state", "state", "unchanged"],
+      ["created_at", "created_at", "unchanged"],
+      ["note", "note", "deleted"],
+      [null, "paid_at", "new"],
+    ]);
+    expect(draftCounts(rebased)).toEqual({ added: 1, modified: 0, deleted: 1 });
+  });
+
+  it("执行了的删列与加列:删掉的列从草稿里去掉,加上的列成为已有列", () => {
+    const { structure, draft } = edited();
+    const after = reread(structure, (columns) => [
+      ...columns.filter((c) => c.name !== "note"),
+      { ...columns[0], name: "paid_at", type: "datetime", nullable: true, primaryKey: false, autoIncrement: false },
+    ]);
+    const rebased = rebaseDraft(draft, after);
+    expect(rebased.columns.map((c) => [c.original?.name ?? null, c.name, columnStatus(c)])).toEqual([
+      ["id", "id", "unchanged"],
+      ["status", "state", "modified"],
+      ["created_at", "created_at", "unchanged"],
+      ["paid_at", "paid_at", "unchanged"],
+    ]);
+    expect(isDraftDirty(rebased)).toBe(true);
+    expect(buildAlterRequest(rebased, MYSQL).drops).toEqual([]);
+  });
+
+  it("全部生效:与按新结构刚打开的草稿一样没有改动", () => {
+    const { structure, draft } = edited();
+    const after = reread(
+      structure,
+      (columns) => [
+        ...columns
+          .filter((c) => c.name !== "note")
+          .map((c) => (c.name === "status" ? { ...c, name: "state", type: "varchar(32)" } : c)),
+        { ...columns[3], name: "paid_at", type: "datetime", comment: "" },
+      ],
+      { name: "orders_v2", comment: "订单" }
+    );
+    const rebased = rebaseDraft(draft, after);
+    expect(isDraftDirty(rebased)).toBe(false);
+    expect(rebased.columns.map((c) => c.key)).toEqual(initDraft(after).columns.map((c) => c.key));
+  });
+
+  it("重新读出草稿里没有的列(别处加的)按读出的样子列入,不算改动", () => {
+    const structure = mysqlStructure();
+    const after = reread(structure, (columns) => [...columns, { ...columns[3], name: "extra" }]);
+    const rebased = rebaseDraft(initDraft(structure), after);
+    expect(rebased.columns.map((c) => c.name)).toEqual(["id", "status", "created_at", "note", "extra"]);
+    expect(isDraftDirty(rebased)).toBe(false);
   });
 });

@@ -75,9 +75,11 @@ interface DesignToolbarProps {
   loading: boolean;
   onRevertAll: () => void;
   onReload: () => void;
-  /** 保存按钮能否点;onSave 缺省时按钮渲染但不可用。 */
+  /** 保存按钮能否点。 */
   canSave: boolean;
-  onSave?: () => void;
+  onSave: () => void;
+  /** 保存快捷键的显示文本(快捷键设置里可改)。 */
+  saveShortcut: string;
 }
 
 /** 设计表的工具栏:表名、表注释、改动计数、问题数、撤销全部改动、重新读取与保存。 */
@@ -98,6 +100,7 @@ export function DesignToolbar({
   onReload,
   canSave,
   onSave,
+  saveShortcut,
 }: DesignToolbarProps) {
   const { t } = useTranslation();
   const nameChanged = tableName.trim() !== originalName;
@@ -188,9 +191,10 @@ export function DesignToolbar({
           </TooltipTrigger>
           <TooltipContent>{t("query.designer.reload")}</TooltipContent>
         </Tooltip>
-        <Button size="xs" className="h-7 px-2.5" disabled={!onSave || !canSave} onClick={onSave}>
+        <Button size="xs" className="h-7 px-2.5" disabled={!canSave} onClick={onSave}>
           <Save aria-hidden />
           {t("action.save")}
+          <kbd className="font-sans text-[10px] opacity-70">{saveShortcut}</kbd>
         </Button>
       </div>
     </div>

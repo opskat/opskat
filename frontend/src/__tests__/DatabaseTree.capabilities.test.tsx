@@ -209,6 +209,22 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     });
   }
 
+  it("能改表时「设计表」打开设计器标签(每张表一个,再点切到已有的)", async () => {
+    provideDrivers([fakeDriverWith(["alter_table"])]);
+    await renderTree("fakedb");
+    fireEvent.contextMenu(screen.getByText("public.users"));
+    fireEvent.click(screen.getByText("query.alterTable"));
+    fireEvent.contextMenu(screen.getByText("public.users"));
+    fireEvent.click(screen.getByText("query.alterTable"));
+
+    const state = useQueryStore.getState().dbStates["query-1"];
+    expect(state.innerTabs).toEqual([
+      { id: "designer:appdb.public.users", type: "designer", mode: "design", database: "appdb", table: "public.users" },
+    ]);
+    expect(state.activeInnerTabId).toBe("designer:appdb.public.users");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("驱动不能改表时「查看结构」打开只读设计器标签", async () => {
     provideDrivers([fakeDriverWith([])]);
     await renderTree("fakedb");

@@ -923,6 +923,47 @@ describe("queryStore 设计器标签", () => {
     expect(tabs().map((t) => t.id)).toEqual(["designer:main.users", "designer:main.orders"]);
     expect(active()).toBe("designer:main.orders");
   });
+
+  it("改名后设计器标签跟随新表名:id、表名、当前标签、脏标记与挂起的关闭请求都换成新的", () => {
+    const s = useQueryStore.getState();
+    s.openDesignerTab("query-41", "main", "users", "design");
+    s.openSqlTab("query-41");
+    s.setActiveInnerTab("query-41", "designer:main.users");
+    s.setInnerTabDirty("query-41", "designer:main.users", true);
+    s.requestCloseInnerTabs(
+      "query-41",
+      tabs().map((t) => t.id)
+    );
+
+    useQueryStore.getState().renameDesignerTab("query-41", "designer:main.users", "people");
+
+    const state = useQueryStore.getState().dbStates["query-41"];
+    expect(state.innerTabs[0]).toEqual({
+      id: "designer:main.people",
+      type: "designer",
+      mode: "design",
+      database: "main",
+      table: "people",
+    });
+    expect(state.innerTabs).toHaveLength(2);
+    expect(state.activeInnerTabId).toBe("designer:main.people");
+    expect(state.dirtyInnerTabIds).toEqual(["designer:main.people"]);
+    expect(state.closeRequest?.ids).toEqual(["designer:main.people", state.innerTabs[1].id]);
+    expect(state.closeRequest?.dirtyIds).toEqual(["designer:main.people"]);
+    // 再从树上打开新名字的设计器,切到的就是这个标签。
+    useQueryStore.getState().openDesignerTab("query-41", "main", "people", "design");
+    expect(tabs().filter((t) => t.type === "designer")).toHaveLength(1);
+  });
+
+  it("改名时新名字已有一个设计器标签:去掉那个旧的,不出现两个同 id 的标签", () => {
+    const s = useQueryStore.getState();
+    s.openDesignerTab("query-41", "main", "people", "view");
+    s.openDesignerTab("query-41", "main", "users", "design");
+    useQueryStore.getState().renameDesignerTab("query-41", "designer:main.users", "people");
+    expect(tabs()).toEqual([
+      { id: "designer:main.people", type: "designer", mode: "design", database: "main", table: "people" },
+    ]);
+  });
 });
 
 describe("queryStore SQL numbering across persist and restore", () => {

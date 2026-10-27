@@ -7,6 +7,7 @@ import {
   draftCounts,
   initDraft,
   isDraftDirty,
+  rebaseDraft,
   revertField as revertDraftField,
   updateColumn as updateDraftColumn,
   validateDraft,
@@ -18,9 +19,17 @@ import {
 /**
  * 设计器的草稿状态:从读出的表开始,记下表名、表注释、各列的改动与删除标记。读出的表换了(重新读取)
  * 时草稿重新开始。派生出改动计数、是否有改动、校验结果与交给驱动的改表请求。
+ * rebaseFrom 是保存停在中途时的草稿:开始时把它搬到读出的表上(已生效的不再标记,没执行的留下)。
  */
-export function useTableDraft(structure: TableStructure, descriptor: DriverDescriptor | undefined) {
-  const [state, setState] = useState(() => ({ structure, draft: initDraft(structure) }));
+export function useTableDraft(
+  structure: TableStructure,
+  descriptor: DriverDescriptor | undefined,
+  rebaseFrom?: TableDraft | null
+) {
+  const [state, setState] = useState(() => ({
+    structure,
+    draft: rebaseFrom ? rebaseDraft(rebaseFrom, structure) : initDraft(structure),
+  }));
   let draft = state.draft;
   if (state.structure !== structure) {
     // 渲染期对比上次的表:换了就丢弃草稿(替代 effect 里的同步 setState)。

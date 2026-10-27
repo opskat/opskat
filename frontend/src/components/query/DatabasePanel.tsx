@@ -66,7 +66,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
 
   if (!dbState) return null;
 
-  const { innerTabs, activeInnerTabId, closeRequest } = dbState;
+  const { innerTabs, activeInnerTabId, closeRequest, dirtyInnerTabIds } = dbState;
   // 复制名称给出的名字:表与设计器是 db.table,SQL 标签是标题。
   const fullNameOf = (tab: InnerTab) => {
     if (tab.type === "sql") return tab.title;
@@ -138,6 +138,13 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                             <Code2 className="h-3 w-3 shrink-0" />
                           )}
                           <span className="truncate max-w-[160px]">{title}</span>
+                          {dirtyInnerTabIds?.includes(tab.id) && (
+                            <span
+                              data-testid="inner-tab-dirty"
+                              className="size-1.5 shrink-0 rounded-full bg-warning"
+                              aria-hidden
+                            />
+                          )}
                           <button
                             className="ml-1 rounded-sm p-0.5 hover:bg-muted transition-colors"
                             onClick={(e) => {

@@ -243,6 +243,29 @@ describe("DatabasePanel 设计器标签", () => {
     expect(screen.getByTestId("table-designer")).toHaveTextContent("designer:app.orders|app|orders|design");
   });
 
+  it("有未保存改动的标签显示圆点", () => {
+    const design: InnerTab = { ...designer, mode: "design" };
+    setup(design.id, [...tabs, design]);
+    expect(within(tabEl("query.designer.tabTitle.design")).queryByTestId("inner-tab-dirty")).toBeNull();
+    act(() => useQueryStore.getState().setInnerTabDirty(TAB, design.id, true));
+    expect(within(tabEl("query.designer.tabTitle.design")).getByTestId("inner-tab-dirty")).toBeInTheDocument();
+    expect(within(tabEl("app.users")).queryByTestId("inner-tab-dirty")).toBeNull();
+  });
+
+  it("批量关闭多个有改动的标签时,批量确认里按标题列出设计器", () => {
+    const design: InnerTab = { ...designer, mode: "design" };
+    setup(design.id, [...tabs, design]);
+    act(() => {
+      useQueryStore.getState().setInnerTabDirty(TAB, design.id, true);
+      useQueryStore.getState().setInnerTabDirty(TAB, "table:app.users", true);
+      useQueryStore.getState().closeOtherInnerTabs(TAB, "sql:1");
+    });
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText("query.designer.tabTitle.design")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "query.unsavedEditsDiscardClose" }));
+    expect(innerIds()).toEqual(["sql:1"]);
+  });
+
   it("菜单:复制名称给出 db.table,并能在左侧树中定位", async () => {
     setup(designer.id, [...tabs, designer]);
     const reveal = vi.spyOn(useQueryStore.getState(), "revealTable");

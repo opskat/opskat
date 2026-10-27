@@ -40,7 +40,6 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
-import { AlterTableDialog } from "./AlterTableDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
 import { useDesignerAccess } from "./designer/access";
 import {
@@ -149,9 +148,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
   const [showCreateTable, setShowCreateTable] = useState(false);
   const [createTableDatabase, setCreateTableDatabase] = useState("");
-  const [showAlterTable, setShowAlterTable] = useState(false);
-  const [alterDatabase, setAlterDatabase] = useState("");
-  const [alterTableName, setAlterTableName] = useState("");
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -169,7 +165,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const driverUnavailable = driversState.status === "ready" && !driverDescriptor;
   const driverReady = !!driverDescriptor;
   const can = (capability: string) => driverHasCapability(driverDescriptor, capability);
-  // 能改表时「修改表」,不能改(驱动没声明或只读连接)时「查看结构」打开只读设计器。
+  // 能改表时「设计表」打开设计器,不能改(驱动没声明或只读连接)时「查看结构」打开只读设计器。
   const access = useDesignerAccess(driverDescriptor, tabMeta?.assetId);
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
 
@@ -468,14 +464,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             </ContextMenuItem>
           )}
           {access.canAlter && (
-            <ContextMenuItem
-              disabled={isBatch}
-              onClick={() => {
-                setAlterDatabase(db);
-                setAlterTableName(tbl);
-                setShowAlterTable(true);
-              }}
-            >
+            <ContextMenuItem disabled={isBatch} onClick={() => openDesignerTab(tabId, db, tbl, "design")}>
               <Wrench className="h-3.5 w-3.5" />
               {t("query.alterTable")}
             </ContextMenuItem>
@@ -790,33 +779,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           }
           setShowCreateTable(false);
           setCreateTableDatabase("");
-        }}
-      />
-
-      <AlterTableDialog
-        open={showAlterTable}
-        onOpenChange={(open) => {
-          setShowAlterTable(open);
-          if (!open) {
-            setAlterDatabase("");
-            setAlterTableName("");
-          }
-        }}
-        assetId={tabMeta?.assetId ?? 0}
-        database={alterDatabase || defaultDatabase}
-        table={alterTableName}
-        driver={driver}
-        onSuccess={(nextTableName) => {
-          const targetDb = alterDatabase || defaultDatabase;
-          if (targetDb) {
-            refreshTables(tabId, targetDb);
-          }
-          if (nextTableName && targetDb) {
-            openTableTab(tabId, targetDb, nextTableName);
-          }
-          setShowAlterTable(false);
-          setAlterDatabase("");
-          setAlterTableName("");
         }}
       />
 

@@ -50,7 +50,7 @@ export function initDraft(structure: TableStructure): TableDraft {
     original: { name: structure.name, comment: structure.comment },
     name: structure.name,
     comment: structure.comment,
-    columns: structure.columns.map((c) => ({ key: `e:${c.name}`, original: c, deleted: false, ...c })),
+    columns: structure.columns.map(existingColumn),
     nextId: 1,
   };
 }
@@ -212,6 +212,45 @@ export function buildAlterRequest(
     columns,
     drops: draft.columns.filter((c) => c.original && c.deleted).map((c) => c.original!.name),
   });
+}
+
+function existingColumn(column: DesignerColumn): DraftColumn {
+  return { key: `e:${column.name}`, original: column, deleted: false, ...column };
+}
+
+/**
+ * 把草稿的目标状态搬到重新读出的表上(逐条执行停在中途后用):已生效的改动不再标记,没执行的留在草稿里。
+ * 已有列按原名找,原名不在了再按目标名找(改名已执行);找不到的列(删除已执行)从草稿里去掉。新增的列
+ * 在读出的表里有同名列时说明加列已执行,按读出的样子成为已有列。读出的表里草稿没有的列按读出的样子列入。
+ * 次序同 initDraft:读出的列在前,还没加上的新列在后。
+ */
+export function rebaseDraft(draft: TableDraft, structure: TableStructure): TableDraft {
+  const byName = new Map(structure.columns.map((c) => [c.name, c]));
+  const claimed = new Map<string, DraftColumn>();
+  const pending: DraftColumn[] = [];
+  for (const column of draft.columns) {
+    const target = column.name.trim();
+    if (!column.original) {
+      const added = byName.get(target);
+      if (added && !claimed.has(added.name)) claimed.set(added.name, existingColumn(added));
+      else pending.push(column);
+      continue;
+    }
+    const current = byName.get(column.original.name) ?? byName.get(target);
+    if (!current || claimed.has(current.name)) continue;
+    claimed.set(current.name, {
+      ...column,
+      key: `e:${current.name}`,
+      original: current,
+      primaryKey: current.primaryKey,
+      autoIncrement: current.autoIncrement,
+    });
+  }
+  return {
+    ...draft,
+    original: { name: structure.name, comment: structure.comment },
+    columns: [...structure.columns.map((c) => claimed.get(c.name) ?? existingColumn(c)), ...pending],
+  };
 }
 
 /** 草稿里标记删除的已有列(原名)。 */

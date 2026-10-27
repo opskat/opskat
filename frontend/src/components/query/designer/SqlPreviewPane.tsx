@@ -1,9 +1,10 @@
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, CircleAlert, Copy, Loader2, SquareTerminal } from "lucide-react";
+import { CircleAlert, Copy, Loader2, SquareTerminal } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { notifyCopied } from "@/lib/notify";
 import type { AlterPreview } from "./useAlterPreview";
 import { statementsScript } from "./format";
+import { DropWarning, StatementList } from "./StatementList";
 
 interface SqlPreviewPaneProps {
   preview: AlterPreview;
@@ -52,21 +53,11 @@ export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpen
     body = <Placeholder text={t("query.designer.sql.noChanges")} />;
   } else {
     body = (
-      <ol data-testid="designer-statements" className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
-        {statements.map((statement, i) => (
-          <li key={i} className="flex gap-3 rounded-md border border-border bg-muted/20 px-3 py-2">
-            <span
-              data-testid="designer-statement-no"
-              className="w-4 shrink-0 pt-px text-right font-mono text-[11px] text-muted-foreground tabular-nums"
-            >
-              {i + 1}
-            </span>
-            <pre className="min-w-0 flex-1 font-mono text-xs break-all whitespace-pre-wrap select-text">
-              {statement}
-            </pre>
-          </li>
-        ))}
-      </ol>
+      <StatementList
+        listTestId="designer-statements"
+        items={statements.map((statement) => ({ statement }))}
+        className="min-h-0 flex-1 overflow-auto p-3"
+      />
     );
   }
 
@@ -85,34 +76,13 @@ export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpen
           </Button>
         </div>
       </div>
-      {droppedColumns.length > 0 && (
-        <div
-          data-testid="designer-drop-warning"
-          className="flex shrink-0 items-start gap-2 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive"
-        >
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-          <div className="space-y-0.5">
-            <NameList label={t("query.designer.sql.dropColumns")} names={droppedColumns} />
-            {droppedIndexes.length > 0 && (
-              <NameList label={t("query.designer.sql.dropIndexes")} names={droppedIndexes} />
-            )}
-          </div>
-        </div>
-      )}
+      <DropWarning
+        testId="designer-drop-warning"
+        droppedColumns={droppedColumns}
+        droppedIndexes={droppedIndexes}
+        className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5"
+      />
       {body}
-    </div>
-  );
-}
-
-function NameList({ label, names }: { label: string; names: string[] }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      <span>{label}</span>
-      {names.map((name) => (
-        <b key={name} className="font-mono font-semibold">
-          {name}
-        </b>
-      ))}
     </div>
   );
 }

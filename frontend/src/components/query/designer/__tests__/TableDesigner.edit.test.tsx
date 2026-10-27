@@ -1,198 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { TooltipProvider } from "@opskat/ui";
-import { TableDesigner } from "../TableDesigner";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useQueryStore } from "@/stores/queryStore";
-import { useTabStore } from "@/stores/tabStore";
-import { useAssetStore } from "@/stores/assetStore";
 import { notifyCopied } from "@/lib/notify";
-import { asset_entity, dbdriver, query_svc } from "../../../../../wailsjs/go/models";
+import { query_svc } from "../../../../../wailsjs/go/models";
 import { GetAlterTableModel, GetAlterTableStatements, GetTableMetadata } from "../../../../../wailsjs/go/query/Query";
 import { BUILTIN_DRIVERS, fakeAlterDriver, provideDrivers } from "@/__tests__/dbDriverFixtures";
+import {
+  addField,
+  lastRow,
+  lastRequest,
+  legacyModel,
+  openMysql,
+  openSqlTab,
+  openWith,
+  renderDesigner,
+  rowOf,
+  saveButton,
+  setup,
+} from "./designerKit";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
 }));
 vi.mock("@/lib/notify", () => ({ notifyCopied: vi.fn(), notifySuccess: vi.fn() }));
-
-const INNER_ID = "designer:appdb.orders";
-
-function setup(driver: string, opts: { readOnly?: boolean } = {}) {
-  useTabStore.setState({
-    tabs: [
-      {
-        id: "query-1",
-        type: "query",
-        label: "db",
-        meta: { type: "query", assetId: 1, assetName: "db", assetIcon: "", assetType: "database", driver },
-      },
-    ],
-    activeTabId: "query-1",
-  });
-  useAssetStore.setState({
-    assets: [
-      new asset_entity.Asset({
-        ID: 1,
-        Name: "db",
-        Type: "database",
-        Config: JSON.stringify({ driver, read_only: !!opts.readOnly }),
-      }),
-    ],
-  });
-  useQueryStore.setState({
-    dbStates: {
-      "query-1": {
-        databases: ["appdb"],
-        tables: { appdb: ["orders"] },
-        loadingTables: {},
-        expandedDbs: ["appdb"],
-        expandedSchemas: {},
-        loadingDbs: false,
-        innerTabs: [{ id: INNER_ID, type: "designer", mode: "design", database: "appdb", table: "orders" }],
-        activeInnerTabId: INNER_ID,
-        error: null,
-      },
-    },
-  });
-}
-
-/** MySQL 驱动读出的改表模型(带写法与自增现状)。 */
-function mysqlModel(): dbdriver.AlterTableModel {
-  return new dbdriver.AlterTableModel({
-    name: "orders",
-    comment: "销售订单",
-    columns: [
-      {
-        name: "id",
-        type: "bigint unsigned",
-        nullable: false,
-        defaultValue: "",
-        defaultKind: "none",
-        comment: "订单 ID",
-        autoIncrement: true,
-      },
-      {
-        name: "status",
-        type: "varchar(16)",
-        nullable: false,
-        defaultValue: "pending",
-        defaultKind: "value",
-        comment: "",
-      },
-      { name: "note", type: "varchar(255)", nullable: true, defaultValue: "", defaultKind: "null", comment: "备注" },
-    ],
-    indexes: [
-      { name: "PRIMARY", type: "primary", columns: [{ name: "id" }] },
-      { name: "idx_note", type: "normal", columns: [{ name: "note" }] },
-    ],
-  });
-}
-
-/** 没声明写法的驱动读出的改表模型:默认值是原文。 */
-function legacyModel(): dbdriver.AlterTableModel {
-  return new dbdriver.AlterTableModel({
-    name: "ORDERS",
-    comment: "",
-    columns: [
-      { name: "ID", type: "NUMBER(19)", nullable: false, defaultValue: "", comment: "" },
-      { name: "STATUS", type: "VARCHAR2(16)", nullable: true, defaultValue: "'pending'", comment: "" },
-    ],
-  });
-}
-
-const METADATA = new query_svc.TableMetadata({ columns: [], indexes: [], foreignKeys: [] });
-
-/**
- * 像驱动一样回答 GetAlterTableStatements:请求与读出的模型一致(每列原名、类型、可空、写法与值、注释
- * 都相同,没有删除,表名注释不变)时没有语句;否则每处改动一条,一眼能与真实方言区分。
- */
-function mockDriverStatements(model: dbdriver.AlterTableModel) {
-  vi.mocked(GetAlterTableStatements).mockImplementation(async (_a, _d, table, req) => {
-    const out: string[] = [];
-    if (req.name !== model.name) out.push(`RENAME ${req.name}`);
-    if (req.comment !== model.comment) out.push(`COMMENT ${req.comment}`);
-    for (const c of req.columns) {
-      const o = model.columns.find((m) => m.name === c.originalName);
-      const same =
-        o &&
-        o.name === c.name &&
-        o.type === c.type &&
-        o.nullable === c.nullable &&
-        o.defaultValue === c.defaultValue &&
-        o.defaultKind === c.defaultKind &&
-        o.comment === c.comment &&
-        !c.autoIncrement;
-      if (!same) out.push(`${o ? "MODIFY" : "ADD"} ${JSON.stringify(c)}`);
-    }
-    for (const d of req.drops) out.push(`DROP ${d}`);
-    return dbdriver.AlterTableStatements.createFrom({ statements: out, table });
-  });
-}
-
-async function renderDesigner(onSave?: (save: unknown) => void) {
-  await act(async () => {
-    render(
-      <TooltipProvider>
-        <TableDesigner
-          tabId="query-1"
-          innerTabId={INNER_ID}
-          database="appdb"
-          table="orders"
-          mode="design"
-          onSave={onSave}
-        />
-      </TooltipProvider>
-    );
-  });
-}
-
-async function openMysql(onSave?: (save: unknown) => void) {
-  provideDrivers(BUILTIN_DRIVERS);
-  setup("mysql");
-  const model = mysqlModel();
-  vi.mocked(GetAlterTableModel).mockResolvedValue(model);
-  vi.mocked(GetTableMetadata).mockResolvedValue(METADATA);
-  mockDriverStatements(model);
-  await renderDesigner(onSave);
-  await screen.findByDisplayValue("status");
-  return model;
-}
-
-async function openWith(descriptor: dbdriver.Descriptor, model = legacyModel(), onSave?: (save: unknown) => void) {
-  provideDrivers([descriptor]);
-  setup(descriptor.id);
-  vi.mocked(GetAlterTableModel).mockResolvedValue(model);
-  vi.mocked(GetTableMetadata).mockResolvedValue(METADATA);
-  mockDriverStatements(model);
-  await renderDesigner(onSave);
-  await screen.findByDisplayValue(model.columns[1].name);
-}
-
-function rowOf(name: string): HTMLElement {
-  return screen.getByDisplayValue(name).closest('[role="row"]') as HTMLElement;
-}
-
-function lastRow(): HTMLElement {
-  const rows = screen.getAllByRole("row");
-  return rows[rows.length - 1];
-}
-
-function addField() {
-  fireEvent.click(screen.getByRole("button", { name: "query.designer.addField" }));
-  return lastRow();
-}
-
-function openSqlTab() {
-  fireEvent.mouseDown(screen.getByRole("tab", { name: /query\.designer\.tab\.sql/ }));
-}
-
-/** 最近一次发给驱动的改表请求(按 JSON,即真正传给后端的样子)。 */
-function lastRequest() {
-  const calls = vi.mocked(GetAlterTableStatements).mock.calls;
-  return JSON.parse(JSON.stringify(calls[calls.length - 1][3]));
-}
-
-const saveButton = () => screen.getByRole("button", { name: /action\.save/ });
 
 beforeEach(() => {
   vi.mocked(GetTableMetadata).mockReset();
@@ -364,7 +194,7 @@ describe("设计表:字段编辑", () => {
   });
 
   it("名称折叠:新列名与规则不符时黄色提醒,不阻止保存", async () => {
-    await openWith(fakeAlterDriver({ alterTableAttributes: [], nameFolding: "upper" }), legacyModel(), vi.fn());
+    await openWith(fakeAlterDriver({ alterTableAttributes: [], nameFolding: "upper" }), legacyModel());
     const added = addField();
     fireEvent.change(within(added).getByRole("textbox", { name: "query.designer.column.type" }), {
       target: { value: "DATE" },
@@ -381,7 +211,7 @@ describe("设计表:字段编辑", () => {
   });
 
   it("校验:列名重名与为空标红并列在底部,点击问题跳到对应格子", async () => {
-    await openMysql(vi.fn());
+    await openMysql();
     const added = addField();
     const name = within(added).getByRole("textbox", { name: "query.designer.column.name" });
     fireEvent.change(name, { target: { value: "Status" } });
@@ -453,7 +283,7 @@ describe("设计表:字段编辑", () => {
         foreignKeys: [],
       })
     );
-    await renderDesigner(vi.fn());
+    await renderDesigner();
     expect(await screen.findByText("status")).toBeInTheDocument();
     expect(screen.getByTestId("designer-readonly")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
@@ -463,7 +293,7 @@ describe("设计表:字段编辑", () => {
 
 describe("设计表:SQL 预览", () => {
   it("原样交回读出的表:驱动不给语句,预览说没有改动,保存不可用", async () => {
-    const model = await openMysql(vi.fn());
+    const model = await openMysql();
     await waitFor(() => expect(GetAlterTableStatements).toHaveBeenCalled());
     const req = lastRequest();
     expect(req.columns).toEqual(
@@ -486,8 +316,7 @@ describe("设计表:SQL 预览", () => {
   });
 
   it("草稿变化后按声明重新生成:声明了写法与自增的驱动,新列带写法与自增,按次序编号显示", async () => {
-    const onSave = vi.fn();
-    await openMysql(onSave);
+    await openMysql();
     const added = addField();
     fireEvent.change(within(added).getByRole("textbox", { name: "query.designer.column.name" }), {
       target: { value: "seq" },
@@ -513,9 +342,8 @@ describe("设计表:SQL 预览", () => {
     ).toEqual(["1"]);
     await waitFor(() => expect(saveButton()).toBeEnabled());
     fireEvent.click(saveButton());
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ statements: [expect.stringContaining("ADD ")], table: "orders" })
-    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/ADD /)).toBeInTheDocument();
   });
 
   it("没声明写法与自增的驱动:请求里不带这两个字段", async () => {
@@ -533,8 +361,7 @@ describe("设计表:SQL 预览", () => {
   });
 
   it("驱动报错时显示错误,保存不可用", async () => {
-    const onSave = vi.fn();
-    await openMysql(onSave);
+    await openMysql();
     vi.mocked(GetAlterTableStatements).mockRejectedValue("unsupported: column type change");
     fireEvent.change(within(rowOf("status")).getByRole("textbox", { name: "query.designer.column.type" }), {
       target: { value: "json" },
@@ -545,7 +372,7 @@ describe("设计表:SQL 预览", () => {
   });
 
   it("有错误时不请求驱动,预览说明先解决问题", async () => {
-    await openMysql(vi.fn());
+    await openMysql();
     await waitFor(() => expect(GetAlterTableStatements).toHaveBeenCalled());
     vi.mocked(GetAlterTableStatements).mockClear();
     fireEvent.change(screen.getByRole("textbox", { name: "query.designer.tableName" }), { target: { value: "" } });
