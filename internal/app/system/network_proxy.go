@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/bootstrap"
@@ -193,8 +194,27 @@ func (s *System) validateNetworkProxy(settings netproxy.Settings) error {
 	return err
 }
 
-// proxyUserinfo 匹配代理地址里的 user:password@ 部分（协议前缀可省略）。
-var proxyUserinfo = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)?([^:@/]*):[^@/]*@`)
+// proxySchemePrefix 匹配代理地址开头的 "scheme://"（可省略，省略时进程按 http:// 解析）。
+var proxySchemePrefix = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// maskProxyPassword 把代理地址里的密码换成 ***。按 net/url 的规则切分：authority 截到第一个 "/"、"?" 或 "#"，
+// userinfo 截到 authority 里最后一个 "@"，用户名与密码以第一个 ":" 分隔——与进程实际解析出的密码一致。
+func maskProxyPassword(value string) string {
+	start := len(proxySchemePrefix.FindString(value))
+	authority := value[start:]
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return value
+	}
+	colon := strings.Index(authority[:at], ":")
+	if colon < 0 {
+		return value
+	}
+	return value[:start+colon+1] + "***" + value[start+at:]
+}
 
 // proxyEnvVars 返回 OpsKat 进程实际读到的 HTTPS_PROXY / HTTP_PROXY / NO_PROXY：
 // 与 net/http 一致，每个变量大写优先、其次小写，取第一个非空的；不含 ALL_PROXY。
@@ -207,7 +227,7 @@ func proxyEnvVars() []NetworkProxyEnvVar {
 				continue
 			}
 			if names[0] != "NO_PROXY" {
-				value = proxyUserinfo.ReplaceAllString(value, "${1}${2}:***@")
+				value = maskProxyPassword(value)
 			}
 			out = append(out, NetworkProxyEnvVar{Name: name, Value: value})
 			break

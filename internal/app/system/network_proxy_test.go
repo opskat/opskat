@@ -238,6 +238,30 @@ func TestNetworkProxyEnvVarsMaskPasswordAndMatchWhatProcessReads(t *testing.T) {
 	}
 }
 
+// 进程按 net/url 的规则解析代理地址：userinfo 截到 authority 里最后一个 "@"，密码可含未转义的 "@"。
+// 遮蔽必须按同一规则，否则密码的后半段会显示出来。
+func TestNetworkProxyEnvVarsMaskPasswordContainingAt(t *testing.T) {
+	s := setupNetworkProxyTest(t, &bootstrap.AppConfig{})
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("HTTPS_PROXY", "http://bob:p@ss@proxy.local:3128")
+	t.Setenv("HTTP_PROXY", "bob:p@ss@proxy.local:3128/")
+	v, err := s.GetNetworkProxySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"HTTPS_PROXY": "http://bob:***@proxy.local:3128", "HTTP_PROXY": "bob:***@proxy.local:3128/"} //nolint:gosec // masked placeholder, not a credential
+	if len(v.EnvVars) != len(want) {
+		t.Fatalf("envVars = %v", v.EnvVars)
+	}
+	for _, e := range v.EnvVars {
+		if want[e.Name] != e.Value {
+			t.Fatalf("envVars[%s] = %q, want %q", e.Name, e.Value, want[e.Name])
+		}
+	}
+}
+
 func TestApplyNetworkProxyAtStartup(t *testing.T) {
 	s := setupNetworkProxyTest(t, &bootstrap.AppConfig{})
 	if err := s.SaveNetworkProxySettings(customInput()); err != nil {
