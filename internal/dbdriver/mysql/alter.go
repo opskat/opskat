@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -14,7 +15,8 @@ import (
 // 改表：列照 SHOW FULL COLUMNS 读（同时拿到对话框不显示的 Collation 与 Extra），表注释查
 // information_schema.tables；改名用 RENAME TABLE，其余改动合成一条 ALTER TABLE，已有列用
 // CHANGE COLUMN（改了名）/ MODIFY COLUMN 整列重写，所以用户没动的自增、ON UPDATE、排序规则（字符集
-// 随它）与表达式默认值要从现在的定义里原样带上。表注释与列注释都能改。
+// 随它）与表达式默认值要从现在的定义里原样带上。表注释与列注释都能改。索引照 SHOW INDEX 读（见
+// readIndexes），索引的删与建作为子句写进同一条 ALTER TABLE：删在列的改动之前、建在之后（见 indexClauses）。
 var _ sqldb.TableAlterer = dialect{}
 
 var alterAttributes = []dbdriver.AlterAttribute{
@@ -33,11 +35,12 @@ func (dialect) AlterableTable(ctx context.Context, conn *sql.Conn, database, tab
 	for _, row := range records {
 		out.Columns = append(out.Columns, sqldb.AlterableColumn{
 			ColumnDefinition: dbdriver.ColumnDefinition{
-				Name:         sqldb.PickString(row, "Field"),
-				Type:         sqldb.PickString(row, "Type"),
-				Nullable:     strings.EqualFold(sqldb.PickString(row, "Null"), "YES"),
-				DefaultValue: sqldb.PickString(row, "Default"),
-				Comment:      sqldb.PickString(row, "Comment"),
+				Name:          sqldb.PickString(row, "Field"),
+				Type:          sqldb.PickString(row, "Type"),
+				Nullable:      strings.EqualFold(sqldb.PickString(row, "Null"), "YES"),
+				DefaultValue:  sqldb.PickString(row, "Default"),
+				Comment:       sqldb.PickString(row, "Comment"),
+				AutoIncrement: strings.Contains(strings.ToLower(sqldb.PickString(row, "Extra")), "auto_increment"),
 			},
 			Row: row,
 		})
@@ -47,17 +50,23 @@ func (dialect) AlterableTable(ctx context.Context, conn *sql.Conn, database, tab
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
+	if out.Indexes, err = readIndexes(ctx, conn, database, table); err != nil {
+		return nil, fmt.Errorf("indexes: %w", err)
+	}
 	return out, nil
 }
 
-func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableChange) ([]string, error) {
+func (d dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableChange) ([]string, error) {
 	literals := sqldb.DefinitionLiterals
 	var statements []string
 	if change.Rename != "" {
 		statements = append(statements, "RENAME TABLE "+change.TableRef+" TO "+change.TargetRef)
 	}
 
-	var clauses []string
+	clauses, err := sqldb.IndexDropStatements(indexClauses{d}, change.TargetRef, change)
+	if err != nil {
+		return nil, err
+	}
 	for _, column := range change.Columns {
 		if !column.IsNew() {
 			continue
@@ -92,6 +101,11 @@ func (dialect) AlterTableSQL(_ context.Context, _ *sql.Conn, change sqldb.TableC
 		}
 		clauses = append(clauses, "COMMENT = "+comment)
 	}
+	creates, err := sqldb.IndexCreateStatements(indexClauses{d}, change.TargetRef, change)
+	if err != nil {
+		return nil, err
+	}
+	clauses = append(clauses, creates...)
 	if len(clauses) > 0 {
 		statements = append(statements, "ALTER TABLE "+change.TargetRef+" "+strings.Join(clauses, ", "))
 	}
@@ -110,7 +124,8 @@ var (
 
 // columnDefinition 是 ADD / CHANGE / MODIFY COLUMN 后面的列定义：名称、类型、可空、默认值、注释（有
 // 注释或 forceComment 时写，清空注释要写 COMMENT ”）。改动已有的列时，从它现在的定义里带上用户没动
-// 的排序规则、表达式默认值、ON UPDATE 与自增。
+// 的排序规则、表达式默认值与 ON UPDATE。自增按 Column.AutoIncrement 写（已有的列是它的现状）。默认值按写法
+// 给出时见 explicitDefault，没给写法时照旧按文本猜。
 func columnDefinition(literals sqldb.Literals, column sqldb.ColumnChange, forceComment bool) (string, error) {
 	c := column.Column
 	columnType := strings.TrimSpace(c.Type)
@@ -129,8 +144,20 @@ func columnDefinition(literals sqldb.Literals, column sqldb.ColumnChange, forceC
 	if !c.Nullable {
 		definition += " NOT NULL"
 	}
-	if defaultValue := strings.TrimSpace(c.DefaultValue); defaultValue != "" {
-		untouched := !column.IsNew() && !column.DefaultChanged
+	untouched := !column.IsNew() && !column.DefaultChanged
+	if c.DefaultKind != "" {
+		var current *sqldb.AlterableColumn
+		if untouched {
+			current = column.Current
+		}
+		literal, ok, err := explicitDefault(c, current)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			definition += " DEFAULT " + literal
+		}
+	} else if defaultValue := strings.TrimSpace(c.DefaultValue); defaultValue != "" {
 		switch {
 		case untouched && generatedTimestampPattern.MatchString(defaultValue):
 			// 时间函数原样写，不加括号、不加引号（MySQL 5.7 的 Extra 里没有 DEFAULT_GENERATED）。
@@ -149,9 +176,17 @@ func columnDefinition(literals sqldb.Literals, column sqldb.ColumnChange, forceC
 		if match := onUpdatePattern.FindStringSubmatch(sqldb.PickString(column.Current.Row, "Extra")); match != nil {
 			definition += " ON UPDATE " + match[1]
 		}
-		if strings.Contains(extra, "auto_increment") {
-			definition += " AUTO_INCREMENT"
+	}
+	if c.AutoIncrement {
+		// 新增的列先确认类型能自增；已有的自增列照现状写回。
+		clause := "AUTO_INCREMENT"
+		if column.IsNew() {
+			var err error
+			if clause, err = (dialect{}).AutoIncrementSQL(c); err != nil {
+				return "", err
+			}
 		}
+		definition += " " + clause
 	}
 	if forceComment || strings.TrimSpace(c.Comment) != "" {
 		comment, err := literals.Literal(c.Comment, "")

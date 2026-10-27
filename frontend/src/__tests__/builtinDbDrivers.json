@@ -61,7 +61,68 @@
       { "key": "charset", "default": "utf8mb4" },
       { "key": "collation", "default": "utf8mb4_0900_ai_ci" }
     ],
-    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
+    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["TINYINT", "SMALLINT", "INT", "BIGINT", "DECIMAL(10,2)", "FLOAT", "DOUBLE", "BOOLEAN", "BIT(1)"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["CHAR(36)", "VARCHAR(255)", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["DATE", "TIME", "DATETIME", "TIMESTAMP", "YEAR"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["BINARY(16)", "VARBINARY(255)", "BLOB", "MEDIUMBLOB", "LONGBLOB"]
+        },
+        {
+          "label": "query.designer.typeGroup.json",
+          "types": ["JSON"]
+        }
+      ],
+      "newColumn": "VARCHAR(255)",
+      "primaryKey": "BIGINT"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "fulltext",
+          "label": "query.designer.indexType.fulltext"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "alterPrimaryKey": true,
+      "descending": true,
+      "prefixLength": true,
+      "comments": true,
+      "nameScope": "table",
+      "options": [
+        {
+          "key": "method",
+          "label": "query.designer.indexOption.method",
+          "type": "enum",
+          "enum": ["BTREE", "HASH"]
+        }
+      ]
+    }
   },
   {
     "id": "postgresql",
