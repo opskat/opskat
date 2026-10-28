@@ -107,7 +107,7 @@ func TestManagerInstallZipOverLimitKeepsInstalled(t *testing.T) {
 	useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
 	mgr := NewManager(dir, func(string) HostProvider {
 		return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
-	}, logger)
+	}, acceptingContributions(), logger)
 	t.Cleanup(func() { mgr.Close(ctx) })
 
 	src := t.TempDir()

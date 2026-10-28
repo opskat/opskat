@@ -10,7 +10,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/assetconn"
-	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -253,8 +252,8 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		}
 	}
 
-	// Cross-extension category id dedup. Intra-manifest duplicates are already
-	// rejected by manifest.validate().
+	// Cross-extension category id dedup. Intra-extension duplicates are already
+	// refused by the snippet contribution point when the version was staged.
 	if s.snippetHook != nil && len(manifest.Snippets.Categories) > 0 {
 		if conflict := s.findCrossExtensionCategoryConflict(manifest); conflict != "" {
 			staged.Abort(ctx)
@@ -509,7 +508,7 @@ func (s *Service) GetDetail(name, lang string) (*ExtensionInfo, error) {
 	}
 
 	dir := s.manager.ExtDir(name)
-	mi, err := extension.LoadManifestInfo(dir)
+	mi, err := extension.LoadManifestInfo(dir, s.manager.Contributions())
 	if err != nil {
 		return nil, fmt.Errorf("extension %q not found", name)
 	}
@@ -529,8 +528,9 @@ func (s *Service) Close(ctx context.Context) {
 // loadAndApplyState is the single source of truth: scan, register bridge, apply DB state.
 func (s *Service) loadAndApplyState(ctx context.Context) {
 	// Drop the previous generation from the app-wide registries before rebuilding:
-	// extreg keys on extension name, so a reload that re-registers the same asset type
-	// would otherwise be refused as a conflict with its own previous incarnation.
+	// contributions are attached by extension name, so a reload that re-attaches the
+	// same asset type would otherwise be refused as a conflict with its own previous
+	// incarnation.
 	if s.bridge != nil {
 		for _, name := range s.bridge.ListNames() {
 			s.unregister(ctx, name)
@@ -566,19 +566,21 @@ func (s *Service) loadAndApplyState(ctx context.Context) {
 
 }
 
-// register wires one loaded extension into the app-wide registries and, only if that
-// succeeds, records it in the bridge. The bridge is the "loaded and reachable" table;
-// there is no half-registered state for it to represent.
+// register attaches one loaded extension to its contribution points (the manager's
+// contribution registry) and, only if that succeeds, records it in the bridge. The
+// bridge is the "loaded and reachable" table; there is no half-registered state for
+// it to represent.
 func (s *Service) register(ext *extension.Extension) error {
-	if err := extreg.Register(ext); err != nil {
+	if err := s.manager.Contributions().Attach(ext.View()); err != nil {
 		return err
 	}
 	s.bridge.Register(ext)
 	return nil
 }
 
-// unregister takes name out of the app-wide registries. The database drivers it
-// provided leave the driver registry with their sessions closed (extreg.Unregister);
+// unregister revokes every contribution of name. The database drivers it provided
+// leave the driver registry with their sessions closed (the driver contribution
+// point's revoke);
 // the database assets using them then have their cached sessions dropped, so the
 // query panel shows the driver as unavailable now and opens a session of whatever
 // registers the driver next — a re-enabled or upgraded version — instead of reusing
@@ -588,7 +590,7 @@ func (s *Service) unregister(ctx context.Context, name string) {
 	if ext := s.bridge.Get(name); ext != nil {
 		drivers = ext.Manifest.Contributes.DatabaseDrivers
 	}
-	extreg.Unregister(name)
+	s.manager.Contributions().Revoke(name)
 	s.bridge.Unregister(name)
 	for _, driver := range drivers {
 		assets, err := s.assetRepo.List(ctx, asset_repo.ListOptions{DatabaseDriver: driver})

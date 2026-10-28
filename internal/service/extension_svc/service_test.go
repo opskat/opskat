@@ -59,7 +59,7 @@ func registeredAssetTypes(svc *Service) []string {
 // 留着会让下一个用例撞上"同名资产类型已注册"。
 func closeService(ctx context.Context, svc *Service) {
 	for _, name := range svc.Bridge().ListNames() {
-		extreg.Unregister(name)
+		svc.Manager().Contributions().Revoke(name)
 	}
 	svc.Close(ctx)
 }
@@ -241,7 +241,7 @@ func assertOldVersionIntact(svc *Service, stub *describeCacheStub, dir, name str
 func newTestManager(dir string) *extension.Manager {
 	return extension.NewManager(dir, func(extName string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{Logger: zap.NewNop()})
-	}, zap.NewNop())
+	}, extension.NewContributionRegistry(extreg.Points()...), zap.NewNop())
 }
 
 func TestService(t *testing.T) {
@@ -266,7 +266,7 @@ func TestService(t *testing.T) {
 		// 否则下一个叶子会撞上"同名资产类型已注册"。
 		Reset(func() {
 			for _, name := range svc.Bridge().ListNames() {
-				extreg.Unregister(name)
+				svc.Manager().Contributions().Revoke(name)
 			}
 		})
 

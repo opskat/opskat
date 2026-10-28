@@ -63,7 +63,7 @@ func loadDriverFixture(t *testing.T, spy *hostSpy, network map[string]any) *exte
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{
 			Logger: zap.NewNop(), KV: spy, FileDialogs: spy, AssetConfigs: spy,
 		})
-	}, zap.NewNop())
+	}, extensiontest.AcceptingContributions(), zap.NewNop())
 	t.Cleanup(func() { mgr.Close(context.Background()) })
 	m, err := mgr.LoadExtension(context.Background(), dir)
 	require.NoError(t, err)

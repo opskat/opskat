@@ -31,8 +31,10 @@ import (
 // devInstallFn 变量化：让 cmdExtDev 的判断可测，不必真起一个桌面端。
 var devInstallFn = requestExtDevInstall
 
-// extregRegisterFn 是"仅描述注册"的接缝，同上一套路。
-var extregRegisterFn = extreg.RegisterDescribeOnly
+// extensionContributions 是本进程的贡献点注册表：与桌面端（main.go）同一组贡献点
+// （extreg.Points）。启动时的仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，
+// 一个扩展在本进程里只有一次接入。
+var extensionContributions = extension.NewContributionRegistry(extreg.Points()...)
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
@@ -72,7 +74,7 @@ func newExtensionHost() *extension_svc.Service {
 		cfg := svc.HostConfig(extName)
 		cfg.FileDialogs = noFileDialog{}
 		return extension.NewDefaultHostProvider(cfg)
-	}, logger.Default())
+	}, extensionContributions, logger.Default())
 	svc = extension_svc.New(mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
@@ -92,7 +94,7 @@ func releaseExtensions(ctx context.Context) {
 		return
 	}
 	for _, name := range extensionHost.svc.Bridge().ListNames() {
-		extreg.Unregister(name)
+		extensionContributions.Revoke(name)
 	}
 	extensionHost.svc.Close(ctx)
 	extensionHost.svc = nil
@@ -278,7 +280,7 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		info, err := extension.LoadManifestInfo(filepath.Join(extDir, entry.Name()))
+		info, err := extension.LoadManifestInfo(filepath.Join(extDir, entry.Name()), extensionContributions)
 		if err != nil {
 			// A directory without a readable/valid manifest is not an extension; the
 			// desktop app skips it the same way.
@@ -322,15 +324,14 @@ func registerExtensionAssetTypes() {
 			continue
 		}
 		info := ext.info
-		// 描述缓存里的答案至少声明一个资产类型或一个数据库驱动；两者皆无才是缓存缺失。
-		if len(info.Manifest.AssetTypes) == 0 && len(info.Manifest.DatabaseDrivers) == 0 {
+		if !info.Described {
 			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
 				extensionDescribeFailures = append(extensionDescribeFailures, extensionDescribeFailure{name: ext.info.Name, err: err})
 				continue
 			}
 		}
-		if err := extregRegisterFn(info); err != nil {
+		if err := extensionContributions.Attach(info.View()); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
 	}
@@ -355,22 +356,23 @@ var describeExtensionFn = describeExtension
 // describeExtension 补缓存缺失的扩展：加载它的 WASM 取 describe() 的答案（Manager 在
 // 缓存缺失时顺手写入 extension_describe，供下一条命令用），随即释放。返回的清单带的是
 // 这次加载拿到的答案，而不是从缓存重读——缓存写入失败只让下一条命令再描述一次，
-// 不让这一条命令丢掉刚拿到的描述。它只取描述，不接入 extreg——真正执行由
+// 不让这一条命令丢掉刚拿到的描述。它只取描述，不接入贡献点——真正执行由
 // activateExtensionFn 在 exec 时完整激活。
 func describeExtension(ctx context.Context, dir string) (*extension.ManifestInfo, error) {
 	mgr := extension.NewManager(filepath.Dir(dir), func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, logger.Default())
+	}, extensionContributions, logger.Default())
 	defer mgr.Close(ctx)
 	described, err := mgr.LoadExtension(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-	info, err := extension.LoadManifestInfo(dir)
+	info, err := extension.LoadManifestInfo(dir, extensionContributions)
 	if err != nil {
 		return nil, err
 	}
 	info.Manifest = described
+	info.Described = true
 	return info, nil
 }
 

@@ -121,7 +121,7 @@ func (s *Service) installedManifest(name string) *extension.Manifest {
 	if ext := s.manager.GetExtension(name); ext != nil {
 		return ext.Manifest
 	}
-	mi, err := extension.LoadManifestInfo(s.manager.ExtDir(name))
+	mi, err := extension.LoadManifestInfo(s.manager.ExtDir(name), s.manager.Contributions())
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			// An unreadable installed copy is about to be replaced; the confirm

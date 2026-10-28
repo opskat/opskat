@@ -48,9 +48,9 @@ func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *extension.
 
 func registerManifest(t *testing.T, m *extension.Manifest, plugin pluginCaller) error {
 	t.Helper()
-	err := register(loaded{name: m.Name, manifest: m, plugin: plugin, translate: (&extension.Extension{}).Translate}, "help", "desc")
+	err := attachLoaded(loaded{name: m.Name, manifest: m, plugin: plugin, translate: (&extension.Extension{}).Translate}, "help", "desc")
 	if err == nil {
-		t.Cleanup(func() { Unregister(m.Name) })
+		t.Cleanup(func() { detach(m.Name) })
 	}
 	return err
 }
@@ -119,7 +119,7 @@ func TestDriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
 	_, err = dbregistry.Lookup("betadb")
 	require.NoError(t, err)
 
-	Unregister("acme-db")
+	detach("acme-db")
 	_, err = dbregistry.Lookup("acmedb")
 	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	_, ok = dbregistry.ByName("acme")
@@ -137,11 +137,11 @@ func TestExtensionDriverFieldsAreLocalizedThroughItsLocales(t *testing.T) {
 		Key: "sid", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection, Label: "field.sid", Description: "field.sid.help",
 	}}
 	m := driverOnlyManifest("acme-db", desc)
-	require.NoError(t, Register(&extension.Extension{Name: m.Name, Manifest: m, Locales: map[string]map[string]string{
+	require.NoError(t, attachExtension(&extension.Extension{Name: m.Name, Manifest: m, Locales: map[string]map[string]string{
 		"zh-cn": {"field.sid": "实例 SID", "field.sid.help": "数据库实例标识"},
 		"en":    {"field.sid": "Instance SID"},
 	}}))
-	t.Cleanup(func() { Unregister(m.Name) })
+	t.Cleanup(func() { detach(m.Name) })
 
 	d, err := dbregistry.Lookup("acmedb")
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 		var err error
 		require.NotPanics(t, func() { err = registerManifest(t, m, newFakeDriverPlugin()) })
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `"acme"`, "names the refused extension")
+		assert.Contains(t, err.Error(), "acme: databaseDrivers[acmedb]", "names the refused extension and its driver")
 		assert.Contains(t, err.Error(), `"fake"`, "names the clashing name")
 		assert.Contains(t, err.Error(), `built-in driver "fakedb"`, "names the owner")
 
@@ -188,7 +188,7 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 		var err error
 		require.NotPanics(t, func() { err = registerManifest(t, second, newFakeDriverPlugin()) })
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `"second"`)
+		assert.Contains(t, err.Error(), "second: databaseDrivers[seconddb]")
 		assert.Contains(t, err.Error(), `"shared"`)
 		assert.Contains(t, err.Error(), `extension "first"`)
 
@@ -276,7 +276,7 @@ func TestUnregisteringAnExtensionClosesItsDriverSessions(t *testing.T) {
 		<-inner[0].started
 	}
 
-	Unregister("acme-db")
+	detach("acme-db")
 
 	for range 2 {
 		select {
@@ -379,7 +379,7 @@ func TestExtensionDriverFormMustFitTheNetworkRules(t *testing.T) {
 		desc.Form = []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: fields}}
 		err := registerManifest(t, driverOnlyManifest("form-db", desc), newFakeDriverPlugin())
 		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), `"formdb"`, name)
+		assert.Contains(t, err.Error(), "databaseDrivers[formdb]", name)
 		_, err = dbregistry.Lookup("formdb")
 		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable, name)
 	}
@@ -494,7 +494,7 @@ func TestRemovedExtensionDriverCannotClassify(t *testing.T) {
 		t.Fatalf("the split ended before it reached the extension: %v", err)
 	}
 
-	Unregister("split-db")
+	detach("split-db")
 
 	select {
 	case err := <-inFlight:
@@ -512,8 +512,8 @@ func TestRemovedExtensionDriverCannotClassify(t *testing.T) {
 // A driver only described in this process (its extension not loaded) cannot split.
 func TestDescribeOnlyDriverCannotClassify(t *testing.T) {
 	m := driverOnlyManifest("describe-only-split", splittingDescriptor("describesplit"))
-	require.NoError(t, RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
+	t.Cleanup(func() { detach(m.Name) })
 	d, err := dbregistry.Lookup("describesplit")
 	require.NoError(t, err)
 

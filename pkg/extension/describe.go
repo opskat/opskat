@@ -52,8 +52,8 @@ func WasmHash(wasmBytes []byte) string {
 }
 
 // cachedDescriptor returns the stored descriptor for name when it was produced by
-// exactly this wasm binary, or nil. It is decoded, not judged: the caller runs it
-// through (*Manifest).applyDescriptor like a fresh answer.
+// exactly this wasm binary, or nil. It is decoded, not judged: the caller merges it
+// and runs the contribution points' Check on it like a fresh answer.
 func cachedDescriptor(name, wasmHash string) *Descriptor {
 	cache := currentDescribeCache()
 	if cache == nil {
@@ -68,7 +68,7 @@ func cachedDescriptor(name, wasmHash string) *Descriptor {
 	if len(payload) == 0 || storedHash != wasmHash {
 		return nil
 	}
-	desc, err := decodeDescriptor(payload)
+	desc, err := ParseDescriptor(payload)
 	if err != nil {
 		// A cache entry that no longer decodes (another wire shape) is stale, not
 		// fatal: describing the guest again produces the truth and overwrites it.

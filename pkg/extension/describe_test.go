@@ -3,12 +3,15 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // installFixture writes the fixture extension (slim manifest + real reactor
@@ -35,10 +38,15 @@ func installFixture(t *testing.T) (root, extDir string) {
 
 func newFixtureManager(t *testing.T, root string) *Manager {
 	t.Helper()
+	return newFixtureManagerWith(t, root, acceptingContributions())
+}
+
+func newFixtureManagerWith(t *testing.T, root string, contributions *ContributionRegistry) *Manager {
+	t.Helper()
 	logger := zap.NewNop()
 	mgr := NewManager(root, func(string) HostProvider {
 		return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
-	}, logger)
+	}, contributions, logger)
 	t.Cleanup(func() { mgr.Shutdown(context.Background()) })
 	return mgr
 }
@@ -181,7 +189,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 			cache := newFakeDescribeCache(fixtureWasm(t), sentinelDescriptor)
 			useDescribeCache(t, cache)
 
-			info, err := LoadManifestInfo(extDir)
+			info, err := LoadManifestInfo(extDir, acceptingContributions())
 			So(err, ShouldBeNil)
 			So(info.Manifest.I18n.DisplayName, ShouldEqual, "cached")
 			So(info.Manifest.AssetTypes, ShouldHaveLength, 1)
@@ -190,64 +198,78 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 	})
 }
 
+// refusingPoint refuses every extension contributing to its key, naming the item
+// the way a real point does.
+type refusingPoint string
+
+func (p refusingPoint) Key() string { return string(p) }
+func (p refusingPoint) Check(v ExtensionView) error {
+	if v.Contribution(string(p)) == nil {
+		return nil
+	}
+	return fmt.Errorf("%s[fixture]: refused by the test's point", string(p))
+}
+func (refusingPoint) Attach(ExtensionView) (func(), error) { return func() {}, nil }
+
 // TestCachedDescribeReachesTheFirstLoadVerdict is problem 8: a cached describe()
 // answer read without a runtime (opsctl, the extension list, a disabled
-// extension) must be refused exactly where loading the extension refuses it, not
-// merged onto the manifest as if it were valid.
+// extension) is judged by the same contribution points as loading the extension,
+// so it is refused exactly where the load refuses it, not merged as if it were valid.
 func TestCachedDescribeReachesTheFirstLoadVerdict(t *testing.T) {
-	const withEndpoint = `"configSchema":{"type":"object","properties":{` +
-		`"endpoint":{"type":"string","format":"endpoint"},"password":{"type":"string","format":"password"}}}`
-	const noEndpoint = `"configSchema":{"type":"object","properties":{` +
-		`"host":{"type":"string"},"password":{"type":"string","format":"password"}}}`
-	cached := func(schema string) string {
-		return cachedAssetTypePayload(`{"type":"fixture","i18n":{"name":"n"},` + schema + `,` +
-			`"auth":{"groups":[{"bindings":[{"in":"header","name":"X-Token","value":"{{password}}"}]}]}}`)
+	refusing := func() *ContributionRegistry {
+		return NewContributionRegistry(refusingPoint(extwire.KeyAssetTypes),
+			passPoint(extwire.KeyTools), passPoint(extwire.KeyPolicy), passPoint(extwire.KeySnippets),
+			passPoint(extwire.KeyPages), passPoint(extwire.KeyDatabaseDrivers))
 	}
-	Convey("Given a cached describe() whose asset type declares auth", t, func() {
-		ctx := context.Background()
+	verdicts := func(t *testing.T, reg *ContributionRegistry, payload string) (loadErr, infoErr error, listed int) {
 		root, extDir := installFixture(t)
+		useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), payload))
+		_, loadErr = newFixtureManagerWith(t, root, reg).LoadExtension(context.Background(), extDir)
+		_, infoErr = LoadManifestInfo(extDir, reg)
+		infos, err := newFixtureManagerWith(t, root, reg).ScanManifests()
+		So(err, ShouldBeNil)
+		return loadErr, infoErr, len(infos)
+	}
 
-		Convey("a manifest without permissions.network.assetEndpoint is refused on both paths", func() {
-			So(os.WriteFile(filepath.Join(extDir, "manifest.json"), []byte(`{"name":"fixture-ext","version":"1.0.0","hostABI":"1.0",`+
-				`"backend":{"runtime":"wasm","binary":"main.wasm"}}`), 0644), ShouldBeNil)
-			useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), cached(withEndpoint)))
+	Convey("A cached answer a contribution point refuses", t, func() {
+		loadErr, infoErr, listed := verdicts(t, refusing(), sentinelDescriptor)
 
-			_, loadErr := newFixtureManager(t, root).LoadExtension(ctx, extDir)
+		Convey("is refused on every path with the same error, naming extension, contribution and item", func() {
 			So(loadErr, ShouldNotBeNil)
-			So(loadErr.Error(), ShouldContainSubstring, "permissions.network.assetEndpoint")
-
-			_, infoErr := LoadManifestInfo(extDir)
+			So(loadErr.Error(), ShouldEqual, "fixture-ext: assetTypes[fixture]: refused by the test's point")
 			So(infoErr, ShouldNotBeNil)
 			So(infoErr.Error(), ShouldEqual, loadErr.Error())
-
-			infos, err := newFixtureManager(t, root).ScanManifests()
-			So(err, ShouldBeNil)
-			So(infos, ShouldBeEmpty)
-		})
-
-		Convey("an asset type without a format:\"endpoint\" field is refused, not discarded as stale", func() {
-			useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), cached(noEndpoint)))
-
-			_, err := LoadManifestInfo(extDir)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "fixture-ext")
-			So(err.Error(), ShouldContainSubstring, `format:"endpoint"`)
-		})
-
-		Convey("a valid entry is still merged", func() {
-			useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), cached(withEndpoint)))
-
-			info, err := LoadManifestInfo(extDir)
-			So(err, ShouldBeNil)
-			So(info.Manifest.AssetTypes, ShouldHaveLength, 1)
-			So(info.Manifest.AssetTypes[0].Auth, ShouldNotBeNil)
+			So(listed, ShouldEqual, 0)
 		})
 	})
-}
 
-// cachedAssetTypePayload is a describe() answer with one asset type and the
-// fixture's policy face.
-func cachedAssetTypePayload(assetType string) string {
-	return `{"i18n":{"displayName":"cached","description":"c"},"contributes":{` +
-		`"assetTypes":[` + assetType + `],"policy":{"type":"fixture"}}}`
+	Convey("A cached answer with a contributes key no point is registered for", t, func() {
+		payload := `{"i18n":{"displayName":"cached","description":"c"},"contributes":{"widgets":[{"id":"w"}]}}`
+		loadErr, infoErr, listed := verdicts(t, acceptingContributions(), payload)
+
+		Convey("is refused on every path with the same error, naming the key", func() {
+			So(loadErr, ShouldNotBeNil)
+			So(loadErr.Error(), ShouldContainSubstring, "fixture-ext: contributes.widgets")
+			So(infoErr, ShouldNotBeNil)
+			So(infoErr.Error(), ShouldEqual, loadErr.Error())
+			So(listed, ShouldEqual, 0)
+		})
+	})
+
+	Convey("An accepted cached answer is merged and marked described", t, func() {
+		_, extDir := installFixture(t)
+		useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), sentinelDescriptor))
+		info, err := LoadManifestInfo(extDir, acceptingContributions())
+		So(err, ShouldBeNil)
+		So(info.Described, ShouldBeTrue)
+		So(info.Manifest.Tools[0].Name, ShouldEqual, "from_cache")
+
+		Convey("while a cache miss is an undescribed extension, not a refusal", func() {
+			useDescribeCache(t, newFakeDescribeCache([]byte("another build"), sentinelDescriptor))
+			info, err := LoadManifestInfo(extDir, refusing())
+			So(err, ShouldBeNil)
+			So(info.Described, ShouldBeFalse)
+			So(info.Manifest.AssetTypes, ShouldBeEmpty)
+		})
+	})
 }

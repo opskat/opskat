@@ -419,7 +419,7 @@ func initExtensionSystem(
 		// is gone, the cache must be dropped instead of reused on the next open.
 		extension.RegisterHTTPCacheInvalidator(extName, provider)
 		return provider
-	}, logger.Default())
+	}, extpkg.NewContributionRegistry(extreg.Points()...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
 
 	extSvc = extension_svc.New(
 		mgr,

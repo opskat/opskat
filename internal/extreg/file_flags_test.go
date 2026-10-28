@@ -42,9 +42,9 @@ func registerBulkExtension(t *testing.T) *extension.Manifest {
 		FileParams:   []string{"a", "b"},
 	})
 	localized := m.Localized(func(k string) string { return k })
-	require.NoError(t, register(loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}},
+	require.NoError(t, attachLoaded(loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}},
 		helpDocument("", m.Name, localized), "acme skill"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	t.Cleanup(func() { detach(m.Name) })
 	return m
 }
 

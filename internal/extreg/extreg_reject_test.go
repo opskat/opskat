@@ -63,8 +63,8 @@ func TestExtensionClassificationFaultStillAsks(t *testing.T) {
 // host decode and the permission check the unified exec runs.
 func TestExtensionArgsRejectionFromARealGuest(t *testing.T) {
 	ext := extensiontest.LoadFixture(t)
-	require.NoError(t, Register(ext))
-	t.Cleanup(func() { Unregister(ext.Name) })
+	require.NoError(t, attachExtension(ext))
+	t.Cleanup(func() { detach(ext.Name) })
 	ctx := withGrantFixturePolicy(t, 1, "fixture", &asset_entity.CommandPolicy{})
 
 	shown := 0

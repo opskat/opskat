@@ -1,42 +1,17 @@
 package extension
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extwire"
 )
-
-var (
-	nameRe           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	policyIDRe       = regexp.MustCompile(`^ext:[a-z0-9][a-z0-9_-]{0,63}(:[a-z0-9][a-z0-9_-]{0,63})*$`)
-	snippetCatIDRe   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	snippetSeedKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
-)
-
-// builtinSnippetCategoryIDs is the immutable set of category ids owned by the app core.
-// Extensions may not re-declare these — they are reserved.
-// Kept unexported so callers can't mutate it; use IsBuiltinSnippetCategoryID to query.
-var builtinSnippetCategoryIDs = map[string]struct{}{
-	"shell":  {},
-	"sql":    {},
-	"redis":  {},
-	"mongo":  {},
-	"prompt": {},
-}
-
-// IsBuiltinSnippetCategoryID reports whether id is reserved by the app core.
-func IsBuiltinSnippetCategoryID(id string) bool {
-	_, ok := builtinSnippetCategoryIDs[id]
-	return ok
-}
 
 // Manifest is the host's complete view of one extension: the security contract it
 // reads from manifest.json plus the functional face the guest reports through
@@ -55,6 +30,10 @@ type Manifest struct {
 	Snippets   SnippetsDef    `json:"snippets"`
 	// DatabaseDrivers are the driver descriptors, one per contributes.databaseDrivers id.
 	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
+
+	// contributes is describe()'s raw answer the face above was merged from, for
+	// the contribution points to judge (ExtensionView).
+	contributes map[string]json.RawMessage
 }
 
 // The functional face is merged from describe() in the wire types the guest SDK
@@ -66,20 +45,10 @@ type Manifest struct {
 type SnippetsDef = extwire.Snippets
 
 // SnippetCategoryDef declares a new snippet category id that this extension owns.
-//
-// Validation rules:
-//   - ID must match ^[a-z][a-z0-9-]{0,31}$ (lowercase kebab, <=32 chars).
-//   - ID must NOT collide with any builtin category (see IsBuiltinSnippetCategoryID).
-//   - ID must be unique within this manifest.
-//   - AssetType must be non-empty and must match a type declared in assetTypes[].
+// Its rules are the snippet contribution point's (snippet_svc).
 type SnippetCategoryDef = extwire.SnippetCategory
 
 // SeedSnippetDef is a read-only snippet shipped with the extension.
-//
-// Validation rules:
-//   - Key must match ^[a-z0-9][a-z0-9-]{0,63}$ and be unique within this manifest.
-//   - Name and Content must be non-empty after trimming.
-//   - Category must be either a builtin category id or a category declared in THIS manifest.
 type SeedSnippetDef = extwire.SeedSnippet
 
 type ManifestI18n = extwire.I18n
@@ -118,38 +87,6 @@ func assetTypeDef(at extwire.AssetType) AssetTypeDef {
 // tunnel is the asset's own SSHTunnelID column, outside its config.
 type ConnectionDef = extwire.Connection
 
-// bindsEndpoint reports whether the type declares anything the host applies only
-// on a connection to the asset's endpoint: credential injection or a connection
-// setting.
-func (at AssetTypeDef) bindsEndpoint() bool {
-	c := at.Connection
-	return at.Auth != nil || (c != nil && (c.SSHTunnel || c.ProxyChain || c.TLS))
-}
-
-// validateEndpointBindings refuses an asset type whose auth or connection
-// declaration could never take effect: both apply only to a request to one of the
-// asset's endpoints, and an extension without network.assetEndpoint has none. It
-// runs once describe() is merged in, since the declaration comes from the guest
-// and the permission from manifest.json.
-//
-// It is also the one post-merge check of the guest's answer against the manifest,
-// so the database driver ids the manifest declares are compared with the ones
-// describe() provided here too (see checkDatabaseDrivers).
-func (m *Manifest) validateEndpointBindings() error {
-	if err := m.checkDatabaseDrivers(); err != nil {
-		return err
-	}
-	if m.Permissions.Network.AssetEndpoint {
-		return nil
-	}
-	for _, at := range m.AssetTypes {
-		if at.bindsEndpoint() {
-			return fmt.Errorf("asset type %q declares auth or connection, which apply only to the asset's endpoint, but the manifest does not declare permissions.network.assetEndpoint", at.Type)
-		}
-	}
-	return nil
-}
-
 // AssetTypeDef returns the declaration of assetType, nil when the extension does
 // not register it.
 func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {
@@ -170,11 +107,6 @@ type I18nNameDesc = extwire.I18nNameDesc
 // from its tool table; its timeout is the tool's to declare because only the
 // tool knows whether it answers in a second or scans an index for minutes.
 type ToolDef = extwire.Tool
-
-// MaxToolTimeout is the longest timeout a tool may declare. A tool call holds
-// one of the extension's few instance slots for as long as it runs; work that
-// needs longer is an action, which streams progress and can be canceled.
-const MaxToolTimeout = 10 * time.Minute
 
 type I18nDesc = extwire.I18nDesc
 

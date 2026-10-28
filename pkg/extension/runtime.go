@@ -46,8 +46,8 @@ const (
 	// cost is negligible.
 	defaultMaxInstanceCalls = 512
 	// defaultToolTimeout is the ceiling for tool / policy / config calls, which
-	// are request-response. A tool may declare its own in describe() (up to
-	// MaxToolTimeout). Actions are long-running by design and take their
+	// are request-response. A tool may declare its own in describe(), up to the
+	// ceiling its contribution point allows. Actions are long-running by design and take their
 	// deadline from the caller's context instead.
 	defaultToolTimeout = 30 * time.Second
 	// defaultMaxResultBytes caps a tool result handed back to the caller. A

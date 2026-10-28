@@ -15,7 +15,7 @@ import (
 // ConnTestRegistrar returns the extreg.ConnTestRegistrar a process that runs
 // extensions wires in once (extreg.SetConnTestRegistrar), before any extension
 // loads: internal/extreg cannot build this itself (import cycle — this package
-// already calls extreg.Register), so it asks for one through this seam, exactly
+// already imports extreg), so it asks for one through this seam, exactly
 // like HostConfig's providers are asked for theirs.
 func (s *Service) ConnTestRegistrar() extreg.ConnTestRegistrar {
 	return &connTestRegistrar{svc: s}

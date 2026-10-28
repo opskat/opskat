@@ -181,9 +181,8 @@ func registerFake(t *testing.T, plugin pluginCaller) *extension.Manifest {
 	t.Helper()
 	m := testManifest()
 	l := loaded{name: m.Name, manifest: m, plugin: plugin}
-	localized := m.Localized(func(k string) string { return k })
-	require.NoError(t, register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachLoaded(l, "# Acme\nProse about acme.", "acme skill"))
+	t.Cleanup(func() { detach(m.Name) })
 	return m
 }
 
@@ -211,7 +210,7 @@ func TestRegisterMakesTypeReachableThroughTheSharedRegistries(t *testing.T) {
 
 func TestUnregisterRemovesEveryRegistration(t *testing.T) {
 	registerFake(t, &fakePlugin{})
-	Unregister("acme")
+	detach("acme")
 
 	_, ok := assettype.Get("acme-store")
 	assert.False(t, ok)
@@ -232,7 +231,7 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 	other.Name = "acme-clone"
 	other.Policies.Type = "acme-clone"
 	other.Policies.Groups[0].ID = "ext:acme-clone:readonly"
-	err := register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}},
+	err := attachLoaded(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}},
 		"help", "desc")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "acme-store")
@@ -253,8 +252,8 @@ func TestConnTestRegistration(t *testing.T) {
 		m.AssetTypes[0].TestConnection = true
 		plugin := &fakePlugin{}
 		l := loaded{name: m.Name, manifest: m, plugin: plugin}
-		require.NoError(t, register(l, "help", "desc"))
-		t.Cleanup(func() { Unregister(m.Name) })
+		require.NoError(t, attachLoaded(l, "help", "desc"))
+		t.Cleanup(func() { detach(m.Name) })
 
 		fn, ok := conntest.Lookup("acme-store")
 		require.True(t, ok)
@@ -263,7 +262,7 @@ func TestConnTestRegistration(t *testing.T) {
 		assert.Equal(t, "acme-store", plugin.lastTestConnType)
 		assert.JSONEq(t, `{"endpoint":"http://x"}`, string(plugin.lastTestConnConfig.Config))
 
-		Unregister(m.Name)
+		detach(m.Name)
 		_, ok = conntest.Lookup("acme-store")
 		assert.False(t, ok, "unregister must drop the conntest tester too")
 	})
@@ -275,7 +274,7 @@ func TestConnTestRegistration(t *testing.T) {
 		m := testManifest()
 		m.AssetTypes[0].TestConnection = true
 		l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
-		err := register(l, "help", "desc")
+		err := attachLoaded(l, "help", "desc")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no registrar is wired")
 
@@ -655,10 +654,13 @@ func registerWithConnection(t *testing.T, conn *extension.ConnectionDef) {
 	t.Helper()
 	m := testManifest()
 	m.AssetTypes[0].Connection = conn
+	// Connection settings apply to the asset's endpoint: the type marks it and the
+	// manifest grants reaching it.
+	m.AssetTypes[0].ConfigSchema["properties"].(map[string]any)["endpoint"] = map[string]any{"type": "string", "format": "endpoint"}
+	m.Permissions.Network.AssetEndpoint = true
 	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
-	localized := m.Localized(func(k string) string { return k })
-	require.NoError(t, register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachLoaded(l, "# Acme\nProse about acme.", "acme skill"))
+	t.Cleanup(func() { detach(m.Name) })
 }
 
 func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {

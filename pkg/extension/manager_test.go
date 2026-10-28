@@ -100,7 +100,7 @@ func TestManager(t *testing.T) {
 		}
 
 		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
-		mgr := NewManager(dir, newHost, logger)
+		mgr := NewManager(dir, newHost, acceptingContributions(), logger)
 
 		Convey("Scan with no extensions", func() {
 			exts, err := mgr.Scan(ctx)
@@ -233,7 +233,7 @@ func TestManager(t *testing.T) {
 			So(os.MkdirAll(filepath.Join(extDir, "locales"), 0755), ShouldBeNil)
 			So(os.WriteFile(filepath.Join(extDir, "locales", "zh-CN.json"), []byte(`{"a":`), 0644), ShouldBeNil)
 
-			_, err := LoadManifestInfo(extDir)
+			_, err := LoadManifestInfo(extDir, acceptingContributions())
 			So(err, ShouldBeNil)
 			entries := logs.All()
 			So(len(entries), ShouldEqual, 1)
@@ -277,7 +277,7 @@ func TestManagerInstall(t *testing.T) {
 			return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
 		}
 		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
-		mgr := NewManager(dir, newHost, logger)
+		mgr := NewManager(dir, newHost, acceptingContributions(), logger)
 		Reset(func() { mgr.Close(ctx) })
 
 		src := t.TempDir()
@@ -322,7 +322,7 @@ func TestManagerInstall(t *testing.T) {
 			So(cur.Dir, ShouldEqual, filepath.Join(dir, "hot"))
 			So(old.Plugin.closed.Load(), ShouldBeTrue)
 			So(cur.Plugin.closed.Load(), ShouldBeFalse)
-			info, err := LoadManifestInfo(filepath.Join(dir, "hot"))
+			info, err := LoadManifestInfo(filepath.Join(dir, "hot"), acceptingContributions())
 			So(err, ShouldBeNil)
 			So(info.Manifest.Version, ShouldEqual, "2.0.0")
 			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
@@ -339,61 +339,6 @@ func TestManagerInstall(t *testing.T) {
 			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
 		})
 	})
-}
-
-// An asset type's auth and connection declarations only ever take effect on a
-// request to one of the asset's endpoints — which exist only for an extension
-// declaring network.assetEndpoint (the type-level half, a format:"endpoint"
-// field, is describe() validation: TestParseDescriptorConnection). Declared
-// without it they would load, be shown in the asset form, and never apply, so
-// the extension is refused at load instead.
-func TestManagerRefusesEndpointBindingsWithoutAnEndpoint(t *testing.T) {
-	const endpointSchema = `{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"token":{"type":"string","format":"password"}}}`
-	const auth = `"auth":{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"Bearer {{token}}"}]}]}`
-	const connection = `"connection":{"sshTunnel":true}`
-	descriptor := func(schema, binding string) string {
-		return `{"i18n":{"displayName":"d","description":"x"},"contributes":{` +
-			`"assetTypes":[{"type":"stub","i18n":{"name":"n"},"configSchema":` + schema + `,` + binding + `}],` +
-			`"policy":{"type":"stub"}}}`
-	}
-	load := func(t *testing.T, payload string, assetEndpoint bool) error {
-		t.Helper()
-		useDescribeCache(t, newFakeDescribeCache(stubWasm, payload))
-		dir := t.TempDir()
-		extDir := filepath.Join(dir, "bound")
-		writeMinimalExtension(t, extDir, "bound")
-		if assetEndpoint {
-			manifest := map[string]any{
-				"name": "bound", "version": "1.0.0", "hostABI": extmanifest.HostABIVersion,
-				"backend":     map[string]any{"runtime": "wasm", "binary": "main.wasm"},
-				"permissions": map[string]any{"network": map[string]any{"assetEndpoint": true}},
-			}
-			data, err := json.Marshal(manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		mgr := NewManager(dir, func(string) HostProvider { return NewDefaultHostProvider(DefaultHostConfig{}) }, zap.NewNop())
-		_, err := mgr.LoadExtension(context.Background(), extDir)
-		return err
-	}
-
-	for _, binding := range []string{auth, connection} {
-		t.Run("without network.assetEndpoint: "+binding[1:5], func(t *testing.T) {
-			err := load(t, descriptor(endpointSchema, binding), false)
-			if err == nil || !strings.Contains(err.Error(), "network.assetEndpoint") {
-				t.Fatalf("load error = %v, want a refusal naming network.assetEndpoint", err)
-			}
-		})
-		t.Run("with both: "+binding[1:5], func(t *testing.T) {
-			if err := load(t, descriptor(endpointSchema, binding), true); err != nil {
-				t.Fatalf("load: %v", err)
-			}
-		})
-	}
 }
 
 // The frontend names the language the way i18next does ("zh-CN") while locale

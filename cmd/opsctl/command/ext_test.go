@@ -186,7 +186,7 @@ func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 // leak an asset type into the next one (registration refuses duplicates).
 func forgetExtension(t *testing.T, name string) {
 	t.Helper()
-	t.Cleanup(func() { extreg.Unregister(name) })
+	t.Cleanup(func() { extensionContributions.Revoke(name) })
 }
 
 func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) {
@@ -217,6 +217,50 @@ func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) 
 	// …but nothing executes until exec activates the extension: this registration
 	// compiles no WASM.
 	assert.NotContains(t, permission.RegisteredExecTypes(), "acme-store")
+}
+
+// An extension contributing no asset type (here: only snippets) is a complete
+// cached answer, not a missing one: opsctl attaches it from the cache like any other,
+// without loading its WASM, and judges it by the same contribution points.
+func TestRegisterExtensionAssetTypesTakesACachedAnswerWithoutAssetTypes(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "snips", "unused")
+	stub.payloads["snips"] = `{"i18n":{"displayName":"s","description":"d"},"contributes":{` +
+		`"snippets":{"seed":[{"key":"ls","name":"ls","category":"shell","content":"ls -al"}]}}}`
+	forgetExtension(t, "snips")
+	var described []string
+	swapGlobal(t, func() func(context.Context, string) (*extension.ManifestInfo, error) { return describeExtensionFn },
+		func(f func(context.Context, string) (*extension.ManifestInfo, error)) { describeExtensionFn = f },
+		func(_ context.Context, dir string) (*extension.ManifestInfo, error) {
+			described = append(described, filepath.Base(dir))
+			return nil, errors.New("must not describe: the cache has the answer")
+		})
+
+	stderr := captureStderr(t, registerExtensionAssetTypes)
+
+	assert.Empty(t, described)
+	assert.Empty(t, stderr)
+	// Attached: a second attach of the same name is refused.
+	err := extensionContributions.Attach((&extension.ManifestInfo{Name: "snips", Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "snips"}}}).View())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already attached")
+}
+
+// A cached answer the contribution points refuse is reported, not attached — the
+// verdict loading the extension would reach.
+func TestScanInstalledExtensionsSkipsACachedAnswerThePointsRefuse(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "widgety", "widgety-store")
+	stub.payloads["widgety"] = `{"i18n":{"displayName":"w","description":"d"},"contributes":{"widgets":[]}}`
+	forgetExtension(t, "widgety")
+
+	results, err := scanInstalledExtensions()
+	require.NoError(t, err)
+	for _, r := range results {
+		assert.NotEqual(t, "widgety", r.Name, "an extension the app would refuse is not listed as installed")
+	}
 }
 
 func TestRegisterExtensionAssetTypesReportsAFailedDescribeInsteadOfRegisteringNothing(t *testing.T) {
@@ -409,7 +453,7 @@ func TestPrepareExtensionExecExpandsFileFlags(t *testing.T) {
 // row, then runs opsctl's boot registration.
 func bootWithoutDescribeCache(t *testing.T, env *localExtEnv) {
 	t.Helper()
-	extreg.Unregister(extensiontest.FixtureName)
+	extensionContributions.Revoke(extensiontest.FixtureName)
 	require.NoError(t, repoDescribeCache{}.DeleteDescriptor(extensiontest.FixtureName))
 	_, payload, err := repoDescribeCache{}.LoadDescriptor(extensiontest.FixtureName)
 	require.NoError(t, err)
@@ -592,7 +636,7 @@ func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionSta
 	dir := extensiontest.InstallDBDriverFixture(t, root)
 	mgr := extension.NewManager(root, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, zap.NewNop())
+	}, extensionContributions, zap.NewNop())
 	_, err := mgr.LoadExtension(ctx, dir)
 	require.NoError(t, err)
 	mgr.Close(ctx)
@@ -603,10 +647,10 @@ func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionSta
 		s.Enabled = enabled
 		require.NoError(t, extension_state_repo.ExtensionState().Update(ctx, s))
 	}
-	extreg.Unregister(extensiontest.FixtureName)
+	extensionContributions.Revoke(extensiontest.FixtureName)
 	t.Cleanup(func() {
 		releaseExtensions(ctx)
-		extreg.Unregister(extensiontest.DBDriverFixtureName)
+		extensionContributions.Revoke(extensiontest.DBDriverFixtureName)
 	})
 	registerExtensionAssetTypes()
 
@@ -642,7 +686,7 @@ func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionSta
 // knows its driver from the cached answer, so opsctl sees it with no WASM compiled.
 func TestRegisterExtensionAssetTypes_DriverOnlyExtensionRegistersItsDriverFromTheCache(t *testing.T) {
 	setupDriverExt(t)
-	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	extensionContributions.Revoke(extensiontest.DBDriverFixtureName)
 	var described []string
 	swapGlobal(t, func() func(context.Context, string) (*extension.ManifestInfo, error) { return describeExtensionFn },
 		func(f func(context.Context, string) (*extension.ManifestInfo, error)) { describeExtensionFn = f },
@@ -786,7 +830,7 @@ func withDriverFields(t *testing.T) {
 	patched, err := json.Marshal(desc)
 	require.NoError(t, err)
 	require.NoError(t, repoDescribeCache{}.StoreDescriptor(extensiontest.DBDriverFixtureName, hash, patched))
-	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	extensionContributions.Revoke(extensiontest.DBDriverFixtureName)
 	registerExtensionAssetTypes()
 	d, ok := dbregistry.ByName("fixturedb")
 	require.True(t, ok)

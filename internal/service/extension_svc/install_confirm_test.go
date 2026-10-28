@@ -17,7 +17,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/pkg/extension"
@@ -118,7 +117,7 @@ func newConfirmTestService(t *testing.T, extDir string) *Service {
 	require.NoError(t, svc.Init(context.Background()))
 	t.Cleanup(func() {
 		for _, name := range svc.Bridge().ListNames() {
-			extreg.Unregister(name)
+			svc.Manager().Contributions().Revoke(name)
 		}
 		svc.Close(context.Background())
 	})
@@ -280,7 +279,7 @@ func TestInstallConfirm_CancelLeavesNothing(t *testing.T) {
 	assert.Equal(t, []string{"ext-keep"}, extDirEntries(t, extDir))
 	assert.Same(t, old, svc.Manager().GetExtension("ext-keep"))
 	assert.Same(t, old, svc.Bridge().Get("ext-keep"))
-	mi, err := extension.LoadManifestInfo(filepath.Join(extDir, "ext-keep"))
+	mi, err := extension.LoadManifestInfo(filepath.Join(extDir, "ext-keep"), svc.Manager().Contributions())
 	require.NoError(t, err)
 	assert.Equal(t, "1.0.0", mi.Manifest.Version)
 }

@@ -8,17 +8,15 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-
-	"github.com/opskat/opskat/internal/extreg"
 )
 
 // Activate brings up one installed extension in full in this process: it loads the
-// extension from its directory and registers its executing face — policy check,
-// executor, command canonicalization, config validator, test connection — along with
-// the descriptive one (extreg.Register). It is how a process that does not run every
-// extension (opsctl) starts only the one a command needs, so it replaces a
-// describe-only registration of the same name (extreg.RegisterDescribeOnly): extreg
-// holds a single registration per extension.
+// extension from its directory and attaches it to its contribution points with its
+// running guest — policy check, executor, command canonicalization, config
+// validator, test connection — along with the descriptive face. It is how a process
+// that does not run every extension (opsctl) starts only the one a command needs, so
+// it replaces a describe-only attach of the same name (a cached view, attached
+// without a guest): the contribution registry holds one attach per extension.
 //
 // An extension the user disabled is refused before anything is loaded, and the error
 // names it. An extension this service already has active is left as it is.
@@ -49,7 +47,7 @@ func (s *Service) Activate(ctx context.Context, name string) error {
 		return fmt.Errorf("load extension %q: its directory holds extension %q", name, manifest.Name)
 	}
 
-	extreg.Unregister(name)
+	s.manager.Contributions().Revoke(name)
 	if err := s.register(s.manager.GetExtension(name)); err != nil {
 		s.unloadAfterFailedActivation(ctx, name)
 		log.Error("extension activation failed", zap.Error(err))

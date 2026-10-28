@@ -10,7 +10,6 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
-	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // An extension that provides database drivers and nothing else is a complete
@@ -19,8 +18,8 @@ import (
 func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
 	desc := driverDescriptor("describedb", "dsc")
 	m := driverOnlyManifest("describe-only-drivers", desc)
-	require.NoError(t, RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
+	t.Cleanup(func() { detach(m.Name) })
 
 	d, err := dbregistry.Lookup("describedb")
 	require.NoError(t, err)
@@ -39,7 +38,7 @@ func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.
 	assert.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 
 	// Unregister is what activation does before the full registration.
-	Unregister(m.Name)
+	detach(m.Name)
 	_, err = dbregistry.Lookup("describedb")
 	assert.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	_, ok = DriverOwnerOf("describedb")
@@ -48,15 +47,9 @@ func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.
 
 func TestRegisterDescribeOnly_DriverNameClashRegistersNothing(t *testing.T) {
 	m := driverOnlyManifest("describe-only-clash", driverDescriptor("describeclash"), driverDescriptor("mysql"))
-	err := RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m})
+	err := attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mysql")
 	_, lookupErr := dbregistry.Lookup("describeclash")
 	assert.ErrorIs(t, lookupErr, dbregistry.ErrDriverUnavailable, "all or nothing")
-}
-
-func TestRegisterDescribeOnly_NothingDescribedIsStillRejected(t *testing.T) {
-	m := &extension.Manifest{Manifest: extmanifest.Manifest{Name: "describe-only-empty", Version: "1.0.0"}}
-	err := RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m})
-	require.Error(t, err)
 }

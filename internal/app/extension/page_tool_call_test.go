@@ -35,7 +35,7 @@ func pageCallFixture(t *testing.T) (*Extension, *mock_asset_repo.MockAssetRepo) 
 	var svc *extension_svc.Service
 	mgr := extension.NewManager(root, func(name string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(svc.HostConfig(name))
-	}, zap.NewNop())
+	}, extensiontest.AcceptingContributions(), zap.NewNop())
 	t.Cleanup(func() { mgr.Close(context.Background()) })
 
 	assets := mock_asset_repo.NewMockAssetRepo(gomock.NewController(t))

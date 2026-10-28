@@ -17,7 +17,6 @@ import (
 
 	"github.com/opskat/opskat/internal/assetconn"
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -90,7 +89,7 @@ func newDriverFixture(t *testing.T) *driverFixture {
 		zap.NewNop(), func() { f.reloads++ }, nil)
 	t.Cleanup(func() {
 		for _, name := range f.svc.Bridge().ListNames() {
-			extreg.Unregister(name)
+			f.svc.Manager().Contributions().Revoke(name)
 		}
 		f.svc.Close(context.Background())
 	})

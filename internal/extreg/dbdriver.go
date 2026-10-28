@@ -17,7 +17,7 @@ import (
 // 经 Plugin.OpenDriverSession 活在扩展里。共享代码（connpool、查询面板、AI）照常按资产配置的
 // 驱动 id Lookup、Open，拿到的请求就是宿主替内置驱动构造的那一份。
 //
-// 扩展被停用、升级或卸载时（Unregister），驱动先移出注册表，再作废它打开过的每一条会话：
+// 扩展被停用、升级或卸载时（撤销它的驱动贡献，dbDriversPoint），驱动先移出注册表，再作废它打开过的每一条会话：
 // 执行中与排队的操作被取消，之后的操作——包括还缓存在查询面板、AI 里的那些会话上的——都报
 // 点名该驱动的 dbregistry.ErrDriverUnavailable，而不是扩展实例关闭后各种各样的报错。重新
 // 启用注册的是新的 extensionDriver，与作废的会话无关。
@@ -173,11 +173,11 @@ func registerDrivers(ext string, descs []dbdriver.Descriptor, plugin driverOpene
 	done := make([]*extensionDriver, 0, len(descs))
 	for _, desc := range descs {
 		if err := fitsNetworkRules(desc); err != nil {
-			return releaseDrivers(done), fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, err)
+			return releaseDrivers(done), fmt.Errorf("databaseDrivers[%s]: %w", desc.ID, err)
 		}
 		d := newExtensionDriver(ext, desc, plugin, translate)
 		if err := dbregistry.TryRegister(d); err != nil {
-			return releaseDrivers(done), fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, describeDriverClash(err))
+			return releaseDrivers(done), fmt.Errorf("databaseDrivers[%s]: %w", desc.ID, describeDriverClash(err))
 		}
 		driverOwner[desc.ID] = ext
 		done = append(done, d)

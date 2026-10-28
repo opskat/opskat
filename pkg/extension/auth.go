@@ -77,86 +77,23 @@ func authDef(a *extwire.Auth) *AuthDef {
 	return out
 }
 
+// The locations an auth binding injects into (AuthBinding.In).
 const (
-	authInHeader = "header"
-	authInQuery  = "query"
-	authInBasic  = "basic"
+	AuthInHeader = "header"
+	AuthInQuery  = "query"
+	AuthInBasic  = "basic"
 )
 
-// headerNameRe is an RFC 7230 token: what net/http accepts as a header name.
-var headerNameRe = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
-
-// validate checks the declaration against the fields the asset type's
-// configSchema declares — a template may reference nothing else — and the
-// subset of them that are secrets (format:"password"), which may be injected
-// but never select a group: the selector's value is compared and logged as
-// plain data.
-func (a *AuthDef) validate(fields, secrets map[string]bool) error {
-	if len(a.Groups) == 0 {
-		return fmt.Errorf("auth.groups must declare at least one group")
-	}
-	if a.Selector == "" {
-		if len(a.Groups) > 1 {
-			return fmt.Errorf("auth declares %d groups but no selector — name the config field that picks one", len(a.Groups))
-		}
-		if a.Groups[0].When != "" {
-			return fmt.Errorf("auth.groups[0].when %q needs a selector field to compare against", a.Groups[0].When)
-		}
-	} else if !fields[a.Selector] {
-		return fmt.Errorf("auth.selector %q is not a configSchema property", a.Selector)
-	} else if secrets[a.Selector] {
-		return fmt.Errorf("auth.selector %q is a password field; a secret cannot select an auth group", a.Selector)
-	}
-	seen := make(map[string]bool, len(a.Groups))
-	for i, g := range a.Groups {
-		if a.Selector != "" {
-			if g.When == "" {
-				return fmt.Errorf("auth.groups[%d].when is required: it is the %s value that selects the group", i, a.Selector)
-			}
-			if seen[g.When] {
-				return fmt.Errorf("auth.groups: duplicate when %q", g.When)
-			}
-			seen[g.When] = true
-		}
-		if len(g.Bindings) == 0 {
-			return fmt.Errorf("auth.groups[%d].bindings must declare at least one binding", i)
-		}
-		for j, b := range g.Bindings {
-			if err := b.validate(fields); err != nil {
-				return fmt.Errorf("auth.groups[%d].bindings[%d]: %w", i, j, err)
-			}
-		}
-	}
-	return nil
-}
-
-func (b AuthBinding) validate(fields map[string]bool) error {
-	switch b.In {
-	case authInHeader:
-		if !headerNameRe.MatchString(b.Name) {
-			return fmt.Errorf("header binding needs a valid header name (got %q)", b.Name)
-		}
-	case authInQuery:
-		if b.Name == "" {
-			return fmt.Errorf("query binding needs a parameter name")
-		}
-	case authInBasic:
-		if b.Name != "" {
-			return fmt.Errorf("basic binding takes no name (got %q): it always sets Authorization", b.Name)
-		}
-	default:
-		return fmt.Errorf("in must be header, query or basic (got %q)", b.In)
-	}
-	tmpl, err := parseAuthTemplate(b.Value)
+// AuthTemplateFields parses an auth binding's value template and returns the
+// config fields it references. It is the one reader of the template grammar: the
+// asset-type contribution point validates declarations with it before load, and
+// the injection below renders what it accepted.
+func AuthTemplateFields(value string) ([]string, error) {
+	tmpl, err := parseAuthTemplate(value)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, f := range tmpl.fields() {
-		if !fields[f] {
-			return fmt.Errorf("template references %q, which is not a configSchema property", f)
-		}
-	}
-	return nil
+	return tmpl.fields(), nil
 }
 
 // activeGroup returns the group selected by selectorValue (ignored without a
@@ -178,7 +115,7 @@ func (g *AuthGroup) fields() []string {
 	out := []string{}
 	seen := map[string]bool{}
 	for _, b := range g.Bindings {
-		tmpl, _ := parseAuthTemplate(b.Value) // validated at describe()
+		tmpl, _ := parseAuthTemplate(b.Value) // validated at load (AuthTemplateFields)
 		for _, f := range tmpl.fields() {
 			if !seen[f] {
 				seen[f] = true
@@ -194,7 +131,7 @@ func (g *AuthGroup) fields() []string {
 func (g *AuthGroup) render(values map[string]string) []renderedBinding {
 	out := make([]renderedBinding, 0, len(g.Bindings))
 	for _, b := range g.Bindings {
-		tmpl, _ := parseAuthTemplate(b.Value) // validated at describe()
+		tmpl, _ := parseAuthTemplate(b.Value) // validated at load (AuthTemplateFields)
 		out = append(out, renderedBinding{in: b.In, name: b.Name, value: tmpl.render(values)})
 	}
 	return out
@@ -229,7 +166,7 @@ func (a *requestAuth) redact(err error) error {
 			continue
 		}
 		forms := []string{b.value, url.QueryEscape(b.value), url.PathEscape(b.value)}
-		if b.in == authInBasic {
+		if b.in == AuthInBasic {
 			forms = append(forms, base64.StdEncoding.EncodeToString([]byte(b.value)))
 		}
 		for _, form := range forms {
@@ -284,11 +221,11 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	out := req.Clone(req.Context())
 	for _, b := range auth.bindings {
 		switch b.in {
-		case authInHeader:
+		case AuthInHeader:
 			out.Header.Set(b.name, b.value)
-		case authInBasic:
+		case AuthInBasic:
 			out.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(b.value)))
-		case authInQuery:
+		case AuthInQuery:
 			out.URL.RawQuery = setRawQueryParam(out.URL.RawQuery, b.name, b.value)
 		}
 	}

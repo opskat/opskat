@@ -190,7 +190,7 @@ func TestAssetAuthRefusesTrace(t *testing.T) {
 		endpoint := newAuthRecorder(t)
 		target, _ := url.Parse(endpoint.URL)
 		auth := &requestAuth{
-			bindings:   []renderedBinding{{in: authInHeader, name: "Authorization", value: "Bearer s3cret"}},
+			bindings:   []renderedBinding{{in: AuthInHeader, name: "Authorization", value: "Bearer s3cret"}},
 			isEndpoint: func(u *url.URL) bool { return u.Host == target.Host },
 		}
 		res, err := openHTTPResourceWithClient(IOOpenParams{Type: "http", Method: "TRACE", URL: endpoint.URL + "/ok"},
