@@ -12,8 +12,8 @@ import (
 // registration refuses it — and reads this instead.
 //
 // The zero value means the call was not scoped to an asset, which is a real case:
-// the frontend runs an action to test a configuration form before the asset it
-// describes exists.
+// a page calling a tool before it has an asset, or a configuration form tested
+// before the asset it describes exists.
 type Asset struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
@@ -21,10 +21,18 @@ type Asset struct {
 }
 
 // ToolContext is passed to tool handlers.
+//
+// Events and ShouldStop serve every tool, whoever calls it: events reach the
+// caller only when it is the extension's own page (AI exec and opsctl ignore
+// them), and ShouldStop turns true once the page cancels the call by its
+// invocation id. A long-running tool — typically a page-only one declaring
+// NoTimeout — polls it and returns; the call then ends as canceled whatever it
+// returns, and is cut off if it does not return within the host's grace period.
 type ToolContext struct {
-	Tool  string
-	Args  json.RawMessage
-	Asset Asset
+	Tool   string
+	Args   json.RawMessage
+	Asset  Asset
+	Events *EventWriter
 }
 
 // AssetConfig returns the configuration of the asset this call runs against,
@@ -38,19 +46,6 @@ func (ctx *ToolContext) AssetConfig() (json.RawMessage, error) {
 	return assetConfig(ctx.Asset, "tool "+ctx.Tool)
 }
 
-// ActionContext is passed to action handlers.
-type ActionContext struct {
-	Action string
-	Args   json.RawMessage
-	Asset  Asset
-	Events *EventWriter
-}
-
-// AssetConfig returns the configuration of the asset this action runs against.
-func (ctx *ActionContext) AssetConfig() (json.RawMessage, error) {
-	return assetConfig(ctx.Asset, "action "+ctx.Action)
-}
-
 func assetConfig(a Asset, what string) (json.RawMessage, error) {
 	if a.ID == 0 {
 		return nil, fmt.Errorf("%s is not scoped to an asset, so it has no config to read", what)
@@ -58,15 +53,12 @@ func assetConfig(a Asset, what string) (json.RawMessage, error) {
 	return hostAssetGetConfig(a.ID)
 }
 
-// ShouldStop returns true if the caller has requested cancellation.
-// Long-running actions should poll this periodically and exit cleanly
-// (e.g. send an "ended" event with reason="userStop").
-func (ctx *ActionContext) ShouldStop() bool {
-	return hostActionShouldStop()
+// ShouldStop reports whether the caller has canceled this call. A long-running
+// tool polls it and returns early, cleaning up first if it must (abort an
+// upload); host IO it is blocked in fails as soon as the call is canceled.
+func (ctx *ToolContext) ShouldStop() bool {
+	return hostToolShouldStop()
 }
-
-// ActionHandler handles an action invocation.
-type ActionHandler func(ctx *ActionContext) (any, error)
 
 // ConfigValidator validates asset configuration.
 type ConfigValidator func(config json.RawMessage) []ValidationError

@@ -5,7 +5,6 @@ import type { ExtAPI } from "../types";
 
 const fakeApi: ExtAPI = {
   callTool: async () => undefined,
-  executeAction: async () => undefined,
 };
 
 // @opskat/host-ui is what an extension page reaches for on window.__OPSKAT_EXT__:

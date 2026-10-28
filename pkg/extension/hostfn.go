@@ -67,9 +67,9 @@ func errUnavailableInDriverCall(what string) error {
 // driverCallOps are the host ops a driver call may make: logging, the TCP
 // streams (with their deadlines) that carry its connection to the database, and
 // the Kerberos tickets it logs in with. Everything else (KV, file dialogs, asset
-// config, action events) is refused.
+// config, tool events) is refused.
 var driverCallOps = map[string]bool{
-	"log": true, "io.open": true, "io.set_deadline": true, "action.should_stop": true, "dbdriver.kerberos_ticket": true,
+	"log": true, "io.open": true, "io.set_deadline": true, "tool.should_stop": true, "dbdriver.kerberos_ticket": true,
 }
 
 func init() {

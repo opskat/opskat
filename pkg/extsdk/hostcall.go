@@ -17,8 +17,8 @@ type hostCaller interface {
 	FileDialog(params []byte) (string, error)
 	KVGet(key string) ([]byte, error)
 	KVSet(key string, value []byte) error
-	ActionEvent(eventType string, data []byte)
-	ActionShouldStop() bool
+	ToolEvent(eventType string, data []byte)
+	ToolShouldStop() bool
 	KerberosTicket(spn string) ([]byte, error)
 }
 
@@ -40,6 +40,6 @@ func hostAssetGetConfig(assetID int64) (json.RawMessage, error) {
 func hostFileDialog(params []byte) (string, error)  { return currentHost.FileDialog(params) }
 func hostKVGet(key string) ([]byte, error)          { return currentHost.KVGet(key) }
 func hostKVSet(key string, value []byte) error      { return currentHost.KVSet(key, value) }
-func hostActionEvent(eventType string, data []byte) { currentHost.ActionEvent(eventType, data) }
-func hostActionShouldStop() bool                    { return currentHost.ActionShouldStop() }
+func hostToolEvent(eventType string, data []byte)   { currentHost.ToolEvent(eventType, data) }
+func hostToolShouldStop() bool                      { return currentHost.ToolShouldStop() }
 func hostKerberosTicket(spn string) ([]byte, error) { return currentHost.KerberosTicket(spn) }

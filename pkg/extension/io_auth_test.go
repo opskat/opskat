@@ -131,7 +131,7 @@ func TestAssetAuthInjection(t *testing.T) {
 				fixtureAsset.ID: mustJSON(t, map[string]any{"endpoint": endpoint.URL, "authType": "basic", "username": "elastic", "password": "garbled"}),
 			}}})
 			p := loadDescribedFixture(t, manifest, inner)
-			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "credentials of asset")
 			So(endpoint.requests(), ShouldBeEmpty)
@@ -139,14 +139,14 @@ func TestAssetAuthInjection(t *testing.T) {
 
 		Convey("the guest never observes the injected values", func() {
 			p := newAuthFixture(t, endpoint.URL, other.URL, "signed")
-			raw, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), fixtureAsset)
+			raw, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), Asset: fixtureAsset})
 			So(err, ShouldBeNil)
 			So(endpoint.requests(), ShouldResemble, []authSeen{{path: "/ok", token: signed}})
 			So(string(raw), ShouldNotContainSubstring, signed)
 
 			// A failed request's error travels back to the guest: it must name
 			// the URL the guest asked for, not the one carrying the credential.
-			_, err = p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/hangup"}), fixtureAsset)
+			_, err = p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/hangup"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(endpoint.requests()[1], ShouldResemble, authSeen{path: "/hangup", token: signed})
 			So(err.Error(), ShouldNotContainSubstring, "token=")
@@ -220,7 +220,7 @@ func TestAssetAuthRefusedRedirectDoesNotLeakTheInjectedQuery(t *testing.T) {
 		signed := base64.StdEncoding.EncodeToString([]byte("elastic:s3cret"))
 		p := newAuthFixture(t, srv.URL, other.URL, "signed")
 
-		_, err := p.CallTool(context.Background(), "http_get", mustJSON(t, map[string]any{"url": srv.URL + "/ok?q=1"}), fixtureAsset)
+		_, err := p.CallTool(context.Background(), ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": srv.URL + "/ok?q=1"}), Asset: fixtureAsset})
 
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")

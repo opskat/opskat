@@ -249,7 +249,7 @@ func TestAssetConnectionPath(t *testing.T) {
 			dialer := &fakeAssetDialer{openErr: errors.New("ssh tunnel asset 7 unreachable: connection refused")}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})
 
-			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": server.URL + "/"}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": server.URL + "/"}), Asset: fixtureAsset})
 
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "ssh tunnel asset 7 unreachable: connection refused")
@@ -260,11 +260,11 @@ func TestAssetConnectionPath(t *testing.T) {
 			hp, _ := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})
 			tp, _ := newDialFixture(t, dialer, map[string]any{"endpoint": broker.Addr().String()})
 
-			_, err := hp.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": server.URL + "/"}), fixtureAsset)
+			_, err := hp.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": server.URL + "/"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "administratively prohibited")
 
-			_, err = tp.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": broker.Addr().String()}), fixtureAsset)
+			_, err = tp.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": broker.Addr().String()}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "administratively prohibited")
 		})
@@ -297,7 +297,7 @@ func TestAssetConnectionPath(t *testing.T) {
 			dialer := &fakeAssetDialer{farSide: tlsServer.Listener.Addr().String(), tlsConfig: &tls.Config{}}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": httpsURL})
 
-			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": httpsURL + "/_cluster/health"}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": httpsURL + "/_cluster/health"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "certificate")
 		})
@@ -319,7 +319,7 @@ func TestAssetConnectionPath(t *testing.T) {
 			dialer := &fakeAssetDialer{farSide: ln.Addr().String(), tlsConfig: &tls.Config{ServerName: "127.0.0.1"}}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": brokerAddr})
 
-			_, err := p.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": brokerAddr}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": brokerAddr}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "certificate")
 		})

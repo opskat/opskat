@@ -14,9 +14,14 @@ import (
 const earlyCancelTTL = time.Minute
 
 // toolCalls tracks the page tool calls in flight by the invocation id the page
-// minted for each, so CancelExtensionTool can end one of them. A call is ended by
-// canceling its context: that reaches Plugin.CallTool, which interrupts the guest
-// and any host IO it is blocked in and gives its instance slot back.
+// minted for each. It is what CancelExtensionTool ends one of them through, and
+// what tells a tool event from a page's call — forwarded to the page — from one
+// of an AI exec or opsctl call, which nobody listens to.
+//
+// A call is canceled by its invocation id in the plugin (Plugin.CancelTool),
+// which lets the guest see ShouldStop before cutting it off. Between registering
+// here and reaching the runtime the plugin does not know the id yet; a cancel
+// landing in that window ends the call's context instead, so it never starts.
 //
 // Wails serves each IPC call on its own goroutine, so a cancel can arrive before
 // the call it names has begun. Such a cancel is remembered (canceled) and the
@@ -26,15 +31,22 @@ const earlyCancelTTL = time.Minute
 // The zero value is ready to use.
 type toolCalls struct {
 	mu       sync.Mutex
-	running  map[string]context.CancelFunc
+	running  map[string]pageCall
 	canceled map[string]time.Time
 }
 
-// begin registers the call named invocationID and returns the context it must
-// run under, plus the function that unregisters it once it returns. A second
-// call under an id that is still running is refused: cancel could not tell the
-// two apart. A call whose cancel already arrived is refused too.
-func (c *toolCalls) begin(ctx context.Context, invocationID string) (context.Context, func(), error) {
+// pageCall is one running page tool call.
+type pageCall struct {
+	extName string
+	cancel  func()
+}
+
+// begin registers the call of extName named invocationID and returns the context
+// it must run under, plus the function that unregisters it once it returns.
+// cancelTool is the plugin's Plugin.CancelTool. A second call under an id that
+// is still running is refused: cancel could not tell the two apart. A call whose
+// cancel already arrived is refused too.
+func (c *toolCalls) begin(ctx context.Context, extName, invocationID string, cancelTool func(invocationID string) bool) (context.Context, func(), error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, canceled := c.canceled[invocationID]; canceled {
@@ -45,15 +57,19 @@ func (c *toolCalls) begin(ctx context.Context, invocationID string) (context.Con
 		return nil, nil, fmt.Errorf("tool invocation %q is already running", invocationID)
 	}
 	if c.running == nil {
-		c.running = make(map[string]context.CancelFunc)
+		c.running = make(map[string]pageCall)
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	c.running[invocationID] = cancel
+	ctx, cancelCtx := context.WithCancel(ctx)
+	c.running[invocationID] = pageCall{extName: extName, cancel: func() {
+		if !cancelTool(invocationID) {
+			cancelCtx()
+		}
+	}}
 	end := func() {
 		c.mu.Lock()
 		delete(c.running, invocationID)
 		c.mu.Unlock()
-		cancel()
+		cancelCtx()
 	}
 	return ctx, end, nil
 }
@@ -63,7 +79,7 @@ func (c *toolCalls) begin(ctx context.Context, invocationID string) (context.Con
 // late, is refused.
 func (c *toolCalls) cancel(invocationID string) bool {
 	c.mu.Lock()
-	cancel, ok := c.running[invocationID]
+	call, ok := c.running[invocationID]
 	if !ok {
 		now := time.Now()
 		for id, at := range c.canceled {
@@ -78,7 +94,16 @@ func (c *toolCalls) cancel(invocationID string) bool {
 	}
 	c.mu.Unlock()
 	if ok {
-		cancel()
+		call.cancel()
 	}
 	return ok
+}
+
+// isPageCall reports whether invocationID is a page tool call of extName that is
+// still running — the only kind whose events have a listener.
+func (c *toolCalls) isPageCall(extName, invocationID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	call, ok := c.running[invocationID]
+	return ok && call.extName == extName
 }

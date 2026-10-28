@@ -51,7 +51,7 @@ func TestLoadPlugin(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(p.Manifest().Name, ShouldEqual, "test")
 
-			_, err = p.CallTool(ctx, "anything", json.RawMessage(`{}`), nil)
+			_, err = p.CallTool(ctx, ToolCall{Name: "anything", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "does not export opskat_call")
 
@@ -87,7 +87,7 @@ func callTool(t *testing.T, p *Plugin, tool string, args any) map[string]any {
 // every exec-driven call is.
 func callToolOn(t *testing.T, p *Plugin, asset *AssetRef, tool string, args any) map[string]any {
 	t.Helper()
-	raw, err := p.CallTool(context.Background(), tool, mustJSON(t, args), asset)
+	raw, err := p.CallTool(context.Background(), ToolCall{Name: tool, Args: mustJSON(t, args), Asset: asset})
 	if err != nil {
 		t.Fatalf("call tool %s: %v", tool, err)
 	}
@@ -120,7 +120,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a handler error surfaces as a Go error", func() {
-			_, err := p.CallTool(ctx, "fail", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "fail", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "deliberate failure")
 		})
@@ -131,7 +131,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a guest panic fails one call without killing the instance", func() {
-			_, err := p.CallTool(ctx, "panic", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "panic", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "boom")
 
@@ -140,7 +140,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("an unknown tool is reported by name", func() {
-			_, err := p.CallTool(ctx, "nope", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "nope", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "unknown tool: nope")
 		})
@@ -161,7 +161,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a call the host did not scope to an asset says so", func() {
-			_, err := p.CallTool(ctx, "asset_config", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "asset_config", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "not scoped to an asset")
 		})
@@ -224,7 +224,7 @@ func TestPluginCallsFixture(t *testing.T) {
 			So(errors.As(err, &rejected), ShouldBeFalse)
 
 			// execute_tool holds the same line without any policy check before it.
-			_, err = p.CallTool(ctx, "reject_host", json.RawMessage(`{"resource":"http://evil/x"}`), nil)
+			_, err = p.CallTool(ctx, ToolCall{Name: "reject_host", Args: json.RawMessage(`{"resource":"http://evil/x"}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "must not name a host")
 		})
@@ -280,8 +280,8 @@ func TestPluginConcurrentCallsAreIsolated(t *testing.T) {
 				wg.Add(1)
 				go func(i int) {
 					defer wg.Done()
-					raw, err := p.CallTool(context.Background(), "read_file", mustJSON(t,
-						map[string]any{"path": filepath.Join(extDir, fmt.Sprintf("f%d.txt", i))}), nil)
+					raw, err := p.CallTool(context.Background(), ToolCall{Name: "read_file", Args: mustJSON(t,
+						map[string]any{"path": filepath.Join(extDir, fmt.Sprintf("f%d.txt", i))})})
 					if err != nil {
 						errs[i] = err
 						return
@@ -315,8 +315,8 @@ func TestPluginCallsRunConcurrently(t *testing.T) {
 		done := make(chan error, n)
 		for i := 0; i < n; i++ {
 			go func(i int) {
-				_, err := p.CallTool(context.Background(), "kv_roundtrip", mustJSON(t,
-					map[string]any{"key": fmt.Sprintf("k%d", i), "value": "v"}), nil)
+				_, err := p.CallTool(context.Background(), ToolCall{Name: "kv_roundtrip", Args: mustJSON(t,
+					map[string]any{"key": fmt.Sprintf("k%d", i), "value": "v"})})
 				done <- err
 			}(i)
 		}
@@ -366,9 +366,9 @@ func TestPluginWriteErrorReachesGuest(t *testing.T) {
 		p := newFixturePlugin(t, newRecordedHost(), extDir)
 
 		Convey("the guest sees the error instead of a short write", func() {
-			_, err := p.CallTool(context.Background(), "write_file", mustJSON(t, map[string]any{
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "write_file", Args: mustJSON(t, map[string]any{
 				"path": filepath.Join(extDir, "broken.fail"), "content": "payload",
-			}), nil)
+			})})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "simulated write failure")
 		})
@@ -405,7 +405,7 @@ func TestPluginCapabilityEnforcement(t *testing.T) {
 		})
 
 		Convey("a read outside it is rejected before the host opens anything", func() {
-			_, err := p.CallTool(context.Background(), "read_file", mustJSON(t, map[string]any{"path": outside}), nil)
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "read_file", Args: mustJSON(t, map[string]any{"path": outside})})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "fs read denied")
 			So(host.resources, ShouldBeEmpty)
@@ -413,59 +413,57 @@ func TestPluginCapabilityEnforcement(t *testing.T) {
 	})
 }
 
-// TestPluginActionCancellation covers the cooperative stop path and, just as
-// importantly, that a canceled run leaves no residue for the next one.
-func TestPluginActionCancellation(t *testing.T) {
-	Convey("Given a long-running action streaming events", t, func() {
+// TestPluginToolCancellation covers the cooperative stop path of a page-only
+// tool canceled by invocation id and, just as importantly, that a canceled run
+// leaves no residue for the next one.
+func TestPluginToolCancellation(t *testing.T) {
+	Convey("Given a long-running page tool streaming events", t, func() {
 		host := newRecordedHost()
-		p := newFixturePlugin(t, host, t.TempDir())
+		p := newFixturePlugin(t, host, t.TempDir(), WithCancelGrace(time.Minute))
 
-		results := make(chan actionResult, 1)
+		results := make(chan error, 1)
 		go func() { results <- runStream(t, p, "upload-1", 100000, 1) }()
 
-		Convey("canceling it makes the guest return early", func() {
+		Convey("canceling it makes the guest see ShouldStop and the call end as canceled", func() {
 			waitForEvents(t, host, "upload-1", 1)
-			So(p.CancelAction("upload-1"), ShouldBeTrue)
+			So(p.CancelTool("upload-1"), ShouldBeTrue)
 
-			var got actionResult
+			// The grace period is a minute, so a return within the wait below is
+			// the guest stopping on its own, not the host cutting it off.
+			var err error
 			select {
-			case got = <-results:
+			case err = <-results:
 			case <-time.After(30 * time.Second):
-				t.Fatal("action did not stop after cancellation")
+				t.Fatal("tool did not stop after cancellation")
 			}
-			So(got.err, ShouldBeNil)
-			So(got.out["stopped"], ShouldEqual, true)
-			So(got.out["sent"], ShouldBeLessThan, float64(100000))
-			So(len(host.eventsFor("upload-1")), ShouldBeGreaterThan, 0)
+			So(errors.Is(err, context.Canceled), ShouldBeTrue)
+			So(lastEvent(host, "upload-1").Type, ShouldEqual, "stopped")
 
-			Convey("and the next action starts with a clean cancellation flag", func() {
-				raw, err := p.CallAction(context.Background(), "upload-2", "should_stop", json.RawMessage(`{}`), nil)
-				So(err, ShouldBeNil)
-				var out map[string]any
-				So(json.Unmarshal(raw, &out), ShouldBeNil)
+			Convey("and the next call starts with a clean cancellation flag", func() {
+				out := callTool(t, p, "should_stop", map[string]any{})
 				So(out["stopped"], ShouldEqual, false)
 			})
 
 			Convey("and canceling an invocation that is not running says so", func() {
-				So(p.CancelAction("upload-1"), ShouldBeFalse)
+				So(p.CancelTool("upload-1"), ShouldBeFalse)
 			})
 		})
 	})
 }
 
-// TestPluginCancelsOnlyTheNamedAction is the regression guard for the bug the
+// TestPluginCancelsOnlyTheNamedCall is the regression guard for the bug the
 // reactor instance pool introduced. While Plugin.mu serialized calls, "cancel
-// this extension" could only ever mean the single action in flight; once several
+// this extension" could only ever mean the single call in flight; once several
 // run at once the same request stopped every one of them — cancel one file in an
 // OSS multi-file upload and the whole queue died. The same root cause showed up
 // a second way in the event stream, so both are asserted here.
-func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
-	Convey("Given two actions of one extension running at the same time", t, func() {
+func TestPluginCancelsOnlyTheNamedCall(t *testing.T) {
+	Convey("Given two page tool calls of one extension running at the same time", t, func() {
 		host := newRecordedHost()
-		p := newFixturePlugin(t, host, t.TempDir())
+		p := newFixturePlugin(t, host, t.TempDir(), WithCancelGrace(time.Minute))
 
-		doomed := make(chan actionResult, 1)
-		survivor := make(chan actionResult, 1)
+		doomed := make(chan error, 1)
+		survivor := make(chan error, 1)
 		go func() { doomed <- runStream(t, p, "upload-doomed", 100000, 1) }()
 		go func() { survivor <- runStream(t, p, "upload-survivor", 100000, 1) }()
 
@@ -473,23 +471,22 @@ func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
 		waitForEvents(t, host, "upload-survivor", 1)
 
 		Convey("canceling one stops it and leaves the other running", func() {
-			So(p.CancelAction("upload-doomed"), ShouldBeTrue)
+			So(p.CancelTool("upload-doomed"), ShouldBeTrue)
 
-			var stopped actionResult
 			select {
-			case stopped = <-doomed:
+			case err := <-doomed:
+				So(errors.Is(err, context.Canceled), ShouldBeTrue)
 			case <-time.After(30 * time.Second):
-				t.Fatal("the canceled action never returned")
+				t.Fatal("the canceled call never returned")
 			}
-			So(stopped.err, ShouldBeNil)
-			So(stopped.out["stopped"], ShouldEqual, true)
+			So(lastEvent(host, "upload-doomed").Type, ShouldEqual, "stopped")
 
 			// The survivor is still making progress after the other one is gone.
 			before := len(host.eventsFor("upload-survivor"))
 			waitForEvents(t, host, "upload-survivor", before+3)
 			select {
-			case r := <-survivor:
-				t.Fatalf("the untouched action stopped too: %+v (err=%v)", r.out, r.err)
+			case err := <-survivor:
+				t.Fatalf("the untouched call stopped too (err=%v)", err)
 			default:
 			}
 
@@ -499,34 +496,72 @@ func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
 				waitForEvents(t, host, "upload-survivor", len(host.eventsFor("upload-survivor"))+3)
 				So(len(host.eventsFor("upload-doomed")), ShouldEqual, doomedCount)
 
-				So(p.CancelAction("upload-survivor"), ShouldBeTrue)
+				So(p.CancelTool("upload-survivor"), ShouldBeTrue)
 				select {
-				case r := <-survivor:
-					So(r.err, ShouldBeNil)
-					So(r.out["stopped"], ShouldEqual, true)
+				case err := <-survivor:
+					So(errors.Is(err, context.Canceled), ShouldBeTrue)
 				case <-time.After(30 * time.Second):
-					t.Fatal("the second action did not stop after cancellation")
+					t.Fatal("the second call did not stop after cancellation")
 				}
+				So(lastEvent(host, "upload-survivor").Type, ShouldEqual, "stopped")
 			})
 		})
 	})
 }
 
-type actionResult struct {
-	out map[string]any
-	err error
+// TestPluginCancelEndsANonCooperativeCall: a guest that never polls ShouldStop
+// and is not blocked in host IO is still ended by a cancel, once the grace
+// period it had to stop on its own has run out.
+func TestPluginCancelEndsANonCooperativeCall(t *testing.T) {
+	Convey("Given a page tool with no timeout that never polls ShouldStop", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithCancelGrace(100*time.Millisecond))
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := p.CallTool(context.Background(), ToolCall{InvocationID: "spin-1", Name: "spin_page",
+				Args: mustJSON(t, map[string]any{"ms": 60000}), Timeout: -1})
+			done <- err
+		}()
+
+		Convey("canceling it ends the call as canceled after the grace period", func() {
+			So(eventually(func() bool { return p.CancelTool("spin-1") }), ShouldBeTrue)
+			select {
+			case err := <-done:
+				So(errors.Is(err, context.Canceled), ShouldBeTrue)
+			case <-time.After(10 * time.Second):
+				t.Fatal("a canceled call that ignores ShouldStop was never ended")
+			}
+		})
+	})
 }
 
-// runStream drives the fixture's "stream" action under an explicit invocation id.
-func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) actionResult {
+// TestPluginRejectsADuplicateInvocationID: two runs under one id would make both
+// cancellation and event routing ambiguous.
+func TestPluginRejectsADuplicateInvocationID(t *testing.T) {
+	Convey("Given a call running under an invocation id", t, func() {
+		host := newRecordedHost()
+		p := newFixturePlugin(t, host, t.TempDir(), WithCancelGrace(time.Minute))
+		done := make(chan error, 1)
+		go func() { done <- runStream(t, p, "dup-1", 100000, 1) }()
+		waitForEvents(t, host, "dup-1", 1)
+
+		Convey("a second call under the same id is refused", func() {
+			err := runStream(t, p, "dup-1", 1, 0)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "already running")
+			So(p.CancelTool("dup-1"), ShouldBeTrue)
+			So(errors.Is(<-done, context.Canceled), ShouldBeTrue)
+		})
+	})
+}
+
+// runStream drives the fixture's page-only "stream" tool under an explicit
+// invocation id, with no timeout — as a page calls it.
+func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) error {
 	t.Helper()
-	raw, err := p.CallAction(context.Background(), invocationID, "stream",
-		mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}), nil)
-	var out map[string]any
-	if err == nil {
-		err = json.Unmarshal(raw, &out)
-	}
-	return actionResult{out: out, err: err}
+	_, err := p.CallTool(context.Background(), ToolCall{InvocationID: invocationID, Name: "stream",
+		Args: mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}), Timeout: -1})
+	return err
 }
 
 // waitForEvents blocks until one invocation has emitted at least n events.
@@ -544,29 +579,59 @@ func waitForEvents(t *testing.T, host *recordedHost, invocationID string, n int)
 	}
 }
 
-// TestToolTimeoutDoesNotBindActions is the reason tool and action calls stopped
-// sharing one hard-coded deadline: an action is expected to outlive it.
-func TestToolTimeoutDoesNotBindActions(t *testing.T) {
-	Convey("Given a plugin whose tool timeout is 150ms", t, func() {
+func lastEvent(host *recordedHost, invocationID string) recordedEvent {
+	events := host.eventsFor(invocationID)
+	if len(events) == 0 {
+		return recordedEvent{}
+	}
+	return events[len(events)-1]
+}
+
+// eventually polls cond for up to 10s.
+func eventually(cond func() bool) bool {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
+// TestToolCallTimeout pins what ToolCall.Timeout means: 0 is the plugin's
+// default, a positive value replaces it, and a negative one — a page-only tool
+// declaring NoTimeout — leaves only the caller's context to end the call.
+func TestToolCallTimeout(t *testing.T) {
+	Convey("Given a plugin whose default tool timeout is 150ms", t, func() {
 		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithToolTimeout(150*time.Millisecond))
+		spinFor := func(ms int) json.RawMessage { return mustJSON(t, map[string]any{"ms": ms}) }
 
-		Convey("a tool that runs longer is interrupted", func() {
-			_, err := p.CallTool(context.Background(), "spin", mustJSON(t, map[string]any{"ms": 3000}), nil)
-			So(err, ShouldNotBeNil)
+		Convey("a call with no timeout of its own gets the default", func() {
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "spin", Args: spinFor(3000)})
+			So(errors.Is(err, context.DeadlineExceeded), ShouldBeTrue)
 		})
 
-		Convey("the same work as an action is allowed to finish", func() {
-			raw, err := p.CallAction(context.Background(), "slow-1", "spin", mustJSON(t, map[string]any{"ms": 400}), nil)
+		Convey("a call's own timeout replaces the default, longer or shorter", func() {
+			raw, err := p.CallTool(context.Background(), ToolCall{Name: "spin", Args: spinFor(400), Timeout: 20 * time.Second})
 			So(err, ShouldBeNil)
-			var out map[string]any
-			So(json.Unmarshal(raw, &out), ShouldBeNil)
-			So(out["iterations"], ShouldBeGreaterThan, float64(0))
+			So(string(raw), ShouldContainSubstring, "iterations")
+
+			long := newFixturePlugin(t, newRecordedHost(), t.TempDir())
+			_, err = long.CallTool(context.Background(), ToolCall{Name: "spin", Args: spinFor(3000), Timeout: 150 * time.Millisecond})
+			So(errors.Is(err, context.DeadlineExceeded), ShouldBeTrue)
 		})
 
-		Convey("an action still obeys the deadline its caller set", func() {
+		Convey("a call with no timeout outlives the default", func() {
+			raw, err := p.CallTool(context.Background(), ToolCall{Name: "spin_page", Args: spinFor(400), Timeout: -1})
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldContainSubstring, "iterations")
+		})
+
+		Convey("a call with no timeout still obeys the deadline its caller set", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
-			_, err := p.CallAction(ctx, "slow-2", "spin", mustJSON(t, map[string]any{"ms": 3000}), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "spin_page", Args: spinFor(3000), Timeout: -1})
 			So(err, ShouldNotBeNil)
 		})
 	})
@@ -603,7 +668,7 @@ func benchmarkFixtureTool(b *testing.B, opts ...PluginOption) {
 	args := json.RawMessage(`{}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := p.CallTool(ctx, "seq", args, nil); err != nil {
+		if _, err := p.CallTool(ctx, ToolCall{Name: "seq", Args: args}); err != nil {
 			b.Fatal(err)
 		}
 	}

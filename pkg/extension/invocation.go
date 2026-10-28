@@ -3,24 +3,25 @@ package extension
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // invocation is the state that belongs to one WASM call and dies with it: the
-// IO handle table the guest may address, and the cancellation flag a long
-// running action polls.
+// IO handle table the guest may address, and the cancellation a tool call
+// polls through ShouldStop.
 //
 // The reactor instance pool runs several calls of one plugin concurrently, so a
 // plugin-wide handle table would let one call read another's file descriptor,
-// and a plugin-wide cancellation would stop every action at once.
+// and a plugin-wide cancellation would stop every call at once.
 type invocation struct {
 	// id names this run for the whole system: the caller cancels by it, and every
-	// action event the guest emits is stamped with it so a listener can tell two
+	// event the guest emits is stamped with it so a listener can tell two
 	// concurrent runs of the same extension apart.
 	id     string
 	io     *IOHandleManager
-	cancel *ActionCancellation // nil for calls that are not actions
+	cancel *toolCancellation // nil for calls that are not tool calls
 	// asset is the asset the host scoped this call to (nil when unscoped). It is
 	// the only asset whose config the guest may read: the id is the host's, never
 	// the guest's.
@@ -37,7 +38,7 @@ type invocation struct {
 	tickets *ticketGate
 }
 
-func newInvocation(id string, cancel *ActionCancellation) *invocation {
+func newInvocation(id string, cancel *toolCancellation) *invocation {
 	return &invocation{id: id, io: NewIOHandleManager(), cancel: cancel}
 }
 
@@ -52,19 +53,19 @@ func (inv *invocation) close() {
 	inv.io.CloseAll()
 }
 
-// stop cancels an action: it raises the flag the guest polls and fails whatever
-// host IO the guest is blocked in, since a guest waiting on a read that never
-// completes would never get to poll the flag — a stream still being opened
-// included (see IOHandleManager.RegisterSince). Handles opened afterwards still
-// work, so a guest that notices the stop can clean up (abort an upload) before
-// it returns.
-func (inv *invocation) stop() {
-	inv.cancel.Cancel()
+// stop cancels a tool call: it raises the flag the guest polls, starts the grace
+// period after which the call is cut off, and fails whatever host IO the guest
+// is blocked in, since a guest waiting on a read that never completes would
+// never get to poll the flag — a stream still being opened included (see
+// IOHandleManager.RegisterSince). Handles opened afterwards still work, so a
+// guest that notices the stop can clean up (abort an upload) before it returns.
+func (inv *invocation) stop(grace time.Duration) {
+	inv.cancel.cancel(grace)
 	inv.io.CloseAll()
 }
 
 func (inv *invocation) shouldStop() bool {
-	return inv.cancel != nil && inv.cancel.ShouldStop()
+	return inv.cancel != nil && inv.cancel.shouldStop()
 }
 
 type invocationKeyType struct{}

@@ -101,10 +101,10 @@ func (p *fakePlugin) ValidateConfig(_ context.Context, config json.RawMessage) (
 	return p.validationErrors, p.validateErr
 }
 
-func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error) {
-	p.lastTool = toolName
-	p.lastArgs = append(json.RawMessage(nil), args...)
-	p.lastAsset = asset
+func (p *fakePlugin) CallTool(_ context.Context, call extension.ToolCall) (json.RawMessage, error) {
+	p.lastTool = call.Name
+	p.lastArgs = append(json.RawMessage(nil), call.Args...)
+	p.lastAsset = call.Asset
 	if p.callErr != nil {
 		return nil, p.callErr
 	}

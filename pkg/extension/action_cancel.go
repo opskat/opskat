@@ -1,23 +1,55 @@
 package extension
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+	"time"
+)
 
-// ActionCancellation is a flag polled by long-running actions via
-// host_action_should_stop. Set by the host when the frontend requests cancel.
-type ActionCancellation struct {
-	stop atomic.Bool
+// defaultCancelGrace is how long a tool call canceled by invocation id has to
+// notice ShouldStop and return on its own before the host cuts it off.
+const defaultCancelGrace = 5 * time.Second
+
+// toolCancellation is how one tool call is canceled by its invocation id
+// (Plugin.CancelTool). Canceling raises the flag the guest polls through
+// ToolContext.ShouldStop at once, so a guest that notices can clean up (abort
+// an upload) and return; a guest that does not — it never polls — is ended by
+// hardStop, which cancels the call's context, once the grace period runs out.
+type toolCancellation struct {
+	stopped  atomic.Bool
+	hardStop func()
+
+	mu    sync.Mutex
+	timer *time.Timer // set by the first cancel
+	done  bool        // set by release: the call has returned
 }
 
-func NewActionCancellation() *ActionCancellation {
-	return &ActionCancellation{}
+func newToolCancellation(hardStop func()) *toolCancellation {
+	return &toolCancellation{hardStop: hardStop}
 }
 
-// Cancel marks the action as canceled. Idempotent.
-func (c *ActionCancellation) Cancel() {
-	c.stop.Store(true)
+// cancel raises the stop flag and starts the grace period. Only the first cancel
+// does anything; a call that has already returned is left alone.
+func (c *toolCancellation) cancel(grace time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.done || c.timer != nil {
+		return
+	}
+	c.stopped.Store(true)
+	c.timer = time.AfterFunc(grace, c.hardStop)
 }
 
-// ShouldStop returns true if Cancel has been called.
-func (c *ActionCancellation) ShouldStop() bool {
-	return c.stop.Load()
+// release marks the call returned, so a pending grace period never fires.
+func (c *toolCancellation) release() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.done = true
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+}
+
+func (c *toolCancellation) shouldStop() bool {
+	return c.stopped.Load()
 }

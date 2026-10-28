@@ -112,20 +112,20 @@ export interface ExtEvent {
 // works on an asset passes the `assetId` prop it was rendered with. Leaving it out
 // means "this call has no asset", which is what testing an unsaved configuration is.
 //
-// `options.signal` cancels a call in flight: the backend interrupts the tool —
-// host IO it is blocked in included — and the returned promise rejects with the
-// signal's reason (an AbortError unless the caller gave another).
+// `options.signal` cancels a call in flight: the tool's ShouldStop turns true,
+// host IO it is blocked in fails, a tool that does not stop on its own is cut
+// off, and the returned promise rejects with the signal's reason (an AbortError
+// unless the caller gave another).
+//
+// `options.onEvent` receives the events the tool emits while this call runs —
+// this call's only, never another call's of the same extension.
 export interface ExtCallOptions {
   signal?: AbortSignal;
+  onEvent?: (e: ExtEvent) => void;
 }
 
+// The page API: calling a tool is the one entry point, canceling is its signal.
+// A page may call any tool of its own extension, page-only or not.
 export interface ExtAPI {
   callTool(extName: string, tool: string, args: unknown, assetId?: number, options?: ExtCallOptions): Promise<unknown>;
-  executeAction(
-    extName: string,
-    action: string,
-    args: unknown,
-    onEvent?: (e: ExtEvent) => void,
-    assetId?: number
-  ): Promise<unknown>;
 }

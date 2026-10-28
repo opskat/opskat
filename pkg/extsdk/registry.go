@@ -147,7 +147,6 @@ var (
 	frontendSpec    FrontendSpec
 	snippetCats     []snippetCategoryEntry
 	snippetSeeds    []Seed
-	actions         = map[string]ActionHandler{}
 	configValidator ConfigValidator
 	databaseDrivers []dbdriver.Descriptor
 )
@@ -253,7 +252,8 @@ func (r *ToolReg[T]) PageOnly() *ToolReg[T] {
 }
 
 // NoTimeout lets a PageOnly tool run without a call timeout, for work that lasts
-// as long as the page keeps it going. A policy tool cannot declare it, and it
+// as long as the page keeps it going — until the page cancels it by invocation
+// id (ToolContext.ShouldStop) or stops waiting. A policy tool cannot declare it, and it
 // excludes Timeout.
 func (r *ToolReg[T]) NoTimeout() *ToolReg[T] {
 	if r.e.timeout != 0 {
@@ -396,7 +396,7 @@ func (e *toolEntry) checkArgs(args json.RawMessage) (*ArgsRejectedError, error) 
 
 // maxToolTimeout mirrors the host's ceiling (extreg's maxToolTimeout): a
 // tool call holds one of the extension's few instance slots while it runs, so
-// work that needs longer belongs in an action.
+// work that needs longer belongs in a PageOnly tool declaring NoTimeout.
 const maxToolTimeout = 10 * time.Minute
 
 // Timeout sets how long one call of this tool may run before the host stops it,
@@ -579,12 +579,6 @@ func (r *PolicyGroupReg) Default() *PolicyGroupReg {
 	return r
 }
 
-// RegisterAction registers an action handler. Actions are driven by the
-// extension's own UI, not by the model, so they carry no schema or policy action.
-func RegisterAction(name string, handler ActionHandler) {
-	actions[name] = handler
-}
-
 // RegisterConfigValidator registers the config validator.
 func RegisterConfigValidator(validator ConfigValidator) {
 	configValidator = validator
@@ -613,6 +607,5 @@ func resetRegistries() {
 	snippetSeeds = nil
 	databaseDrivers = nil
 	databaseDriverServe = nil
-	actions = map[string]ActionHandler{}
 	configValidator = nil
 }

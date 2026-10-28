@@ -15,8 +15,22 @@ import (
 
 // maxToolTimeout is the longest timeout a tool may declare. A tool call holds one
 // of the extension's few instance slots for as long as it runs; work that needs
-// longer is an action, which streams progress and can be canceled.
+// longer is a page-only tool declaring noTimeout, which streams progress and is
+// canceled by its page.
 const maxToolTimeout = 10 * time.Minute
+
+// ToolTimeout is the extension.ToolCall.Timeout a call of m's tool runs under,
+// for every caller alike: none (negative) for a page-only tool declaring
+// noTimeout, its declared timeout, or 0 — the runtime's default — when it
+// declares nothing. Callers resolve the tool name first (parseCommand,
+// ValidateToolArgs), so a name m does not declare is not a case here.
+func ToolTimeout(m *extension.Manifest, tool string) time.Duration {
+	def, _ := toolDef(m, tool)
+	if def.NoTimeout {
+		return -1
+	}
+	return def.Timeout()
+}
 
 // injectedAssetParam is the one parameter name a tool may not declare: the asset
 // a tool runs against is the `exec` target, put into the call envelope by the

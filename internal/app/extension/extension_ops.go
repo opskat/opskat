@@ -42,88 +42,6 @@ func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, erro
 	return ext.Manifest, nil
 }
 
-// CallExtensionAction calls an extension action and streams events via Wails Events.
-//
-// invocationID is the caller's correlation token for this one run: it comes back
-// on every "ext:action:event" this action emits, and CancelExtensionAction takes
-// it to stop this run and no other. The frontend mints it because the frontend is
-// the party that has to correlate — it needs the token before the call it is
-// about to make returns.
-func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID string, assetID int64) (string, error) {
-	plugin, err := e.actionPlugin(extName)
-	if err != nil {
-		return "", err
-	}
-	if invocationID == "" {
-		return "", fmt.Errorf("invocation id is required to run an action")
-	}
-	asset, err := e.assetRef(extName, assetID)
-	if err != nil {
-		return "", err
-	}
-
-	var args json.RawMessage
-	if argsJSON != "" {
-		args = json.RawMessage(argsJSON)
-	} else {
-		args = json.RawMessage("{}")
-	}
-
-	log := logger.Ctx(e.ctx).With(
-		zap.String("extension", extName),
-		zap.String("action", action),
-		zap.String("invocationID", invocationID),
-	)
-	log.Info("extension action started")
-
-	result, err := plugin.CallAction(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID, action, args, asset)
-	if err != nil {
-		log.Error("extension action failed", zap.Error(err))
-		return "", fmt.Errorf("call action %s/%s: %w", extName, action, err)
-	}
-	log.Info("extension action completed")
-	return string(result), nil
-}
-
-// CancelExtensionAction stops the one action run identified by invocationID. The
-// instance pool runs several actions of one extension at once, so cancellation is
-// per run, never per extension.
-func (e *Extension) CancelExtensionAction(extName, invocationID string) error {
-	plugin, err := e.actionPlugin(extName)
-	if err != nil {
-		return err
-	}
-	if invocationID == "" {
-		return fmt.Errorf("invocation id is required to cancel an action")
-	}
-	log := logger.Ctx(e.ctx).With(
-		zap.String("extension", extName),
-		zap.String("invocationID", invocationID),
-	)
-	if !plugin.CancelAction(invocationID) {
-		log.Warn("extension action cancel found nothing running")
-		return fmt.Errorf("extension %q has no running action %q", extName, invocationID)
-	}
-	log.Info("extension action cancel requested")
-	return nil
-}
-
-// actionPlugin resolves the loaded plugin behind an extension name, which is the
-// same three-step check every action entry point needs.
-func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
-	if e.service == nil {
-		return nil, fmt.Errorf("extension system not initialized")
-	}
-	ext := e.service.Manager().GetExtension(extName)
-	if ext == nil {
-		return nil, fmt.Errorf("extension %q not loaded", extName)
-	}
-	if ext.Plugin == nil {
-		return nil, fmt.Errorf("extension %q has no backend plugin", extName)
-	}
-	return ext.Plugin, nil
-}
-
 // CallExtensionTool calls an extension tool from the extension's own frontend
 // page, against the asset that page was opened on.
 //
@@ -136,11 +54,15 @@ func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 // policy check, approval, grant or audit — those belong to AI exec and opsctl. It
 // is still scoped to its asset (ctx.AssetConfig, endpoint gating, connection
 // settings and credential injection all follow the AssetRef) and its arguments are
-// held to the tool's declared schema, as Plugin.CallTool does not check them.
+// held to the tool's declared schema, as Plugin.CallTool does not check them. A
+// page may call any tool of its extension, page-only or not; it runs under the
+// tool's declared timeout, or none for a page-only tool declaring NoTimeout.
 //
-// invocationID is the frontend's per-call correlation token (the same convention
-// CallExtensionAction already uses): CancelExtensionTool takes it to stop this
-// call while it runs. A failure, the guest's included, is returned as-is.
+// invocationID is the frontend's per-call correlation token, minted there because
+// the page needs it before the call returns: every event the tool emits reaches
+// the page as "ext:tool:event" stamped with it, and CancelExtensionTool takes it
+// to stop this call while it runs. A failure, the guest's included, is returned
+// as-is.
 func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
@@ -170,13 +92,19 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		return "", fmt.Errorf("invocation id is required to call a tool")
 	}
 
-	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID)
+	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), extName, invocationID, ext.Plugin.CancelTool)
 	if err != nil {
 		return "", err
 	}
 	defer end()
 
-	result, err := ext.Plugin.CallTool(ctx, tool, args, asset)
+	result, err := ext.Plugin.CallTool(ctx, extension.ToolCall{
+		InvocationID: invocationID,
+		Name:         tool,
+		Args:         args,
+		Asset:        asset,
+		Timeout:      extreg.ToolTimeout(ext.Manifest, tool),
+	})
 	if err != nil {
 		return "", err
 	}
@@ -184,10 +112,11 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 }
 
 // CancelExtensionTool stops the page tool call running under invocationID: the
-// guest is interrupted, host IO it is blocked in fails, and the call returns an
-// error to the page. A call that has already returned is not an error to cancel
-// — the page cannot know whether its abort raced the result — and a cancel that
-// overtakes its call keeps that call from starting (see toolCalls).
+// guest's ShouldStop turns true, host IO it is blocked in fails, a guest that
+// does not return within the grace period is cut off (Plugin.CancelTool), and
+// the call ends as canceled. A call that has already returned is not an error
+// to cancel — the page cannot know whether its abort raced the result — and a
+// cancel that overtakes its call keeps that call from starting (see toolCalls).
 func (e *Extension) CancelExtensionTool(invocationID string) error {
 	if invocationID == "" {
 		return fmt.Errorf("invocation id is required to cancel a tool call")
@@ -202,8 +131,8 @@ func (e *Extension) CancelExtensionTool(invocationID string) error {
 }
 
 // assetRef names the asset a frontend-initiated call runs against. A 0 id is the
-// frontend saying it has none — the asset configuration form runs `test_connection`
-// on a configuration that has not been saved yet — and the guest is told so.
+// frontend saying it has none — a page calling a tool before it has an asset —
+// and the guest is told so.
 // Any other id must be an asset of a type extName registers: the page belongs to
 // that extension, and letting it name a builtin or another extension's asset would
 // scope the call — and its asset config — to something it has no claim on.

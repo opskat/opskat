@@ -3,35 +3,49 @@ package extension
 import (
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-func TestActionCancellation(t *testing.T) {
-	Convey("Given a new cancellation", t, func() {
-		c := NewActionCancellation()
+func TestToolCancellation(t *testing.T) {
+	Convey("Given a new tool cancellation", t, func() {
+		var hardStops atomic.Int32
+		c := newToolCancellation(func() { hardStops.Add(1) })
 		Convey("ShouldStop is initially false", func() {
-			So(c.ShouldStop(), ShouldBeFalse)
+			So(c.shouldStop(), ShouldBeFalse)
 		})
-		Convey("After Cancel, ShouldStop is true", func() {
-			c.Cancel()
-			So(c.ShouldStop(), ShouldBeTrue)
+		Convey("after cancel, ShouldStop is true at once and the hard stop waits out the grace", func() {
+			c.cancel(50 * time.Millisecond)
+			So(c.shouldStop(), ShouldBeTrue)
+			So(hardStops.Load(), ShouldEqual, 0)
+			So(eventually(func() bool { return hardStops.Load() == 1 }), ShouldBeTrue)
 		})
-		Convey("Cancel is idempotent", func() {
-			c.Cancel()
-			c.Cancel()
-			So(c.ShouldStop(), ShouldBeTrue)
+		Convey("cancel is idempotent: the grace starts once and the hard stop runs once", func() {
+			c.cancel(20 * time.Millisecond)
+			c.cancel(20 * time.Millisecond)
+			So(c.shouldStop(), ShouldBeTrue)
+			So(eventually(func() bool { return hardStops.Load() == 1 }), ShouldBeTrue)
+			time.Sleep(60 * time.Millisecond)
+			So(hardStops.Load(), ShouldEqual, 1)
+		})
+		Convey("a call that returned within the grace is not hard-stopped", func() {
+			c.cancel(30 * time.Millisecond)
+			c.release()
+			time.Sleep(80 * time.Millisecond)
+			So(hardStops.Load(), ShouldEqual, 0)
 		})
 	})
 }
 
 // TestInvocationCancellationIsScoped pins the property the instance pool
-// depends on: canceling one running action must not reach any other.
+// depends on: canceling one running tool call must not reach any other.
 func TestInvocationCancellationIsScoped(t *testing.T) {
 	Convey("Given two concurrent invocations of one plugin", t, func() {
-		a := newInvocation("inv-a", NewActionCancellation())
-		b := newInvocation("inv-b", NewActionCancellation())
+		a := newInvocation("inv-a", newToolCancellation(func() {}))
+		b := newInvocation("inv-b", newToolCancellation(func() {}))
 		defer a.close()
 		defer b.close()
 
@@ -41,14 +55,14 @@ func TestInvocationCancellationIsScoped(t *testing.T) {
 		})
 
 		Convey("canceling one leaves the other running", func() {
-			a.cancel.Cancel()
+			a.stop(time.Minute)
 			So(a.shouldStop(), ShouldBeTrue)
 			So(b.shouldStop(), ShouldBeFalse)
 		})
 	})
 
 	Convey("An invocation with no cancellation never reports stop", t, func() {
-		inv := newInvocation("inv-tool", nil)
+		inv := newInvocation("inv-policy", nil)
 		defer inv.close()
 		So(inv.shouldStop(), ShouldBeFalse)
 	})

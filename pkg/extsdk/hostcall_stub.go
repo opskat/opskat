@@ -35,11 +35,11 @@ func (n *nopHost) IOSetDeadline(handleID uint32, kind string, unixNanos int64) e
 func (n *nopHost) AssetGetConfig(assetID int64) (json.RawMessage, error) {
 	return nil, errNotConfigured
 }
-func (n *nopHost) FileDialog(params []byte) (string, error)  { return "", errNotConfigured }
-func (n *nopHost) KVGet(key string) ([]byte, error)          { return nil, errNotConfigured }
-func (n *nopHost) KVSet(key string, value []byte) error      { return errNotConfigured }
-func (n *nopHost) ActionEvent(eventType string, data []byte) {}
-func (n *nopHost) ActionShouldStop() bool                    { return false }
-func (n *nopHost) KerberosTicket(string) ([]byte, error)     { return nil, errNotConfigured }
+func (n *nopHost) FileDialog(params []byte) (string, error) { return "", errNotConfigured }
+func (n *nopHost) KVGet(key string) ([]byte, error)         { return nil, errNotConfigured }
+func (n *nopHost) KVSet(key string, value []byte) error     { return errNotConfigured }
+func (n *nopHost) ToolEvent(eventType string, data []byte)  {}
+func (n *nopHost) ToolShouldStop() bool                     { return false }
+func (n *nopHost) KerberosTicket(string) ([]byte, error)    { return nil, errNotConfigured }
 
 var errNotConfigured = fmt.Errorf("host not configured: use TestHost or run inside WASM")

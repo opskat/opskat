@@ -66,10 +66,10 @@ var hostOps = map[string]hostOpFunc{
 	"file_dialog":      opFileDialog,
 	"io.open":          opIOOpen,
 	"io.set_deadline":  opIOSetDeadline,
-	"action.event":     opActionEvent,
+	"tool.event":       opToolEvent,
 	// dbdriver.kerberos_ticket answers the raw AP-REQ bytes.
 	"dbdriver.kerberos_ticket": opKerberosTicket,
-	"action.should_stop": func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
+	"tool.should_stop": func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
 		if env.inv.shouldStop() {
 			return []byte{1}, nil
 		}
@@ -275,7 +275,9 @@ func opKerberosTicket(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	return env.inv.tickets.ticket(env.ctx, p.SPN)
 }
 
-func opActionEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+// opToolEvent hands one event to the host stamped with the call's invocation id.
+// Whether it reaches anyone is the host's call: only a page caller listens.
+func opToolEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	var p struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`

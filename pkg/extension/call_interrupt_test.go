@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -86,7 +87,7 @@ func stallingHTTP(t *testing.T, headersFirst bool) (*httptest.Server, <-chan str
 func callAsync(ctx context.Context, p *Plugin, tool string, args json.RawMessage) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.CallTool(ctx, tool, args, fixtureAsset)
+		_, err := p.CallTool(ctx, ToolCall{Name: tool, Args: args, Asset: fixtureAsset})
 		done <- err
 	}()
 	return done
@@ -189,25 +190,25 @@ func TestBlockedHostIOIsInterrupted(t *testing.T) {
 	})
 }
 
-// TestCancelActionInterruptsBlockedHostIO covers the action side: an action has
-// no host deadline, so the cancellation flag it polls is the only way to stop it
-// — and a guest blocked in a host read never gets to poll it.
-func TestCancelActionInterruptsBlockedHostIO(t *testing.T) {
-	Convey("Given an action blocked on a TCP read, on a plugin with one slot", t, func() {
+// TestCancelToolInterruptsBlockedHostIO covers a page tool with no timeout:
+// canceling it by invocation id is the only way to stop it short of the caller's
+// context — and a guest blocked in a host read never gets to poll ShouldStop.
+func TestCancelToolInterruptsBlockedHostIO(t *testing.T) {
+	Convey("Given a page tool with no timeout blocked on a TCP read, on a plugin with one slot", t, func() {
 		ln, arrived := stallingTCP(t)
 		p := newEndpointFixtureWith(t, map[string]any{"endpoint": ln.Addr().String()}, WithMaxInstances(1))
 
 		done := make(chan error, 1)
 		go func() {
-			_, err := p.CallAction(context.Background(), "blocked-1", "tcp_echo",
-				mustJSON(t, map[string]any{"addr": ln.Addr().String()}), fixtureAsset)
+			_, err := p.CallTool(context.Background(), ToolCall{InvocationID: "blocked-1", Name: "tcp_echo_page",
+				Args: mustJSON(t, map[string]any{"addr": ln.Addr().String()}), Asset: fixtureAsset, Timeout: -1})
 			done <- err
 		}()
 		waitArrival(t, arrived)
 
-		Convey("canceling it fails the blocked read, ends the action and frees its slot", func() {
-			So(p.CancelAction("blocked-1"), ShouldBeTrue)
-			So(waitCall(t, done), ShouldNotBeNil)
+		Convey("canceling it fails the blocked read, ends the call as canceled and frees its slot", func() {
+			So(p.CancelTool("blocked-1"), ShouldBeTrue)
+			So(errors.Is(waitCall(t, done), context.Canceled), ShouldBeTrue)
 			assertSlotFreed(t, p)
 		})
 	})
@@ -269,30 +270,6 @@ func TestHTTPHandleClosedDuringRoundTrip(t *testing.T) {
 	})
 }
 
-// TestToolDeclaredTimeout covers a tool's own timeout from describe(): it
-// replaces the host default for that tool's calls, in both directions, while
-// tools that declare none keep the default.
-func TestToolDeclaredTimeout(t *testing.T) {
-	Convey("Given the described fixture", t, func() {
-		Convey("a tool declaring a timeout shorter than the default is cut off at its own", func() {
-			p := newEndpointFixtureWith(t, map[string]any{"endpoint": "127.0.0.1:1"})
-			start := time.Now()
-			err := waitCall(t, callAsync(context.Background(), p, "spin_short", mustJSON(t, map[string]any{"ms": 20000})))
-			So(err, ShouldNotBeNil)
-			So(time.Since(start), ShouldBeLessThan, callBound)
-		})
-
-		Convey("a tool declaring a timeout longer than the default is allowed to finish", func() {
-			p := newEndpointFixtureWith(t, map[string]any{"endpoint": "127.0.0.1:1"}, WithToolTimeout(150*time.Millisecond))
-			So(waitCall(t, callAsync(context.Background(), p, "spin_long", mustJSON(t, map[string]any{"ms": 600}))), ShouldBeNil)
-
-			Convey("while a tool without a declaration still gets the default", func() {
-				So(waitCall(t, callAsync(context.Background(), p, "spin", mustJSON(t, map[string]any{"ms": 3000}))), ShouldNotBeNil)
-			})
-		})
-	})
-}
-
 // TestToolResultSizeLimit: a result over the host's limit fails the call with an
 // error that says so, rather than reaching the caller truncated.
 func TestToolResultSizeLimit(t *testing.T) {
@@ -305,7 +282,7 @@ func TestToolResultSizeLimit(t *testing.T) {
 		})
 
 		Convey("a result over the limit fails the call and names the limit", func() {
-			_, err := p.CallTool(context.Background(), "blob", mustJSON(t, map[string]any{"bytes": 8000}), nil)
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "blob", Args: mustJSON(t, map[string]any{"bytes": 8000})})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "blob")
 			So(err.Error(), ShouldContainSubstring, "4096")
@@ -329,12 +306,12 @@ func (h *slowRegisterHost) OpenIO(ctx context.Context, asset *AssetRef, params I
 	return res, err
 }
 
-// A cancel can land while the action is still opening its stream. That stream
+// A cancel can land while the call is still opening its stream. That stream
 // was asked for before the cancel, so it must not survive it: registered after
 // the cancel already closed everything, it would leave the guest blocked on a
 // read nothing will ever close.
-func TestCancelActionWhileItsStreamIsOpening(t *testing.T) {
-	Convey("Given an action whose TCP stream opens while it is canceled", t, func() {
+func TestCancelToolWhileItsStreamIsOpening(t *testing.T) {
+	Convey("Given a page tool whose TCP stream opens while it is canceled", t, func() {
 		ln, _ := stallingTCP(t)
 		manifest := fixtureManifest(t)
 		host := &slowRegisterHost{
@@ -348,20 +325,20 @@ func TestCancelActionWhileItsStreamIsOpening(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			_, err := p.CallAction(context.Background(), "opening-1", "tcp_echo",
-				mustJSON(t, map[string]any{"addr": ln.Addr().String()}), fixtureAsset)
+			_, err := p.CallTool(context.Background(), ToolCall{InvocationID: "opening-1", Name: "tcp_echo_page",
+				Args: mustJSON(t, map[string]any{"addr": ln.Addr().String()}), Asset: fixtureAsset, Timeout: -1})
 			done <- err
 		}()
 		select {
 		case <-host.opened:
 		case <-time.After(callBound):
-			t.Fatal("the action never opened its stream")
+			t.Fatal("the call never opened its stream")
 		}
 
-		Convey("the stream is closed on arrival, the action ends and frees its slot", func() {
-			So(p.CancelAction("opening-1"), ShouldBeTrue)
+		Convey("the stream is closed on arrival, the call ends as canceled and frees its slot", func() {
+			So(p.CancelTool("opening-1"), ShouldBeTrue)
 			close(host.release)
-			So(waitCall(t, done), ShouldNotBeNil)
+			So(errors.Is(waitCall(t, done), context.Canceled), ShouldBeTrue)
 			assertSlotFreed(t, p)
 		})
 	})

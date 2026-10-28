@@ -43,7 +43,7 @@ const helpLang = "en"
 // 收窄到这几个方法而不是直接吃 *Plugin，是为了让策略/执行/配置校验这几条闭包可以在
 // 没有 wazero 运行时的情况下被测试驱动——它们承载的是行为契约，不是 WASM 加载。
 type pluginCaller interface {
-	CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error)
+	CallTool(ctx context.Context, call extension.ToolCall) (json.RawMessage, error)
 	CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action string, resources []string, err error)
 	ValidateConfig(ctx context.Context, config json.RawMessage) ([]extension.ValidationError, error)
 	TestConnectionCaller
@@ -261,8 +261,12 @@ func execTool(l loaded) permission.ExecFunc {
 		// The exec target travels in the call envelope, not in the arguments: it is
 		// the asset the policy check above just ran against, so a tool cannot be
 		// pointed at a different one by what the model wrote on the command line.
-		result, err := l.plugin.CallTool(ctx, toolName, argsJSON,
-			&extension.AssetRef{ID: asset.ID, Name: asset.Name, Type: asset.Type})
+		result, err := l.plugin.CallTool(ctx, extension.ToolCall{
+			Name:    toolName,
+			Args:    argsJSON,
+			Asset:   &extension.AssetRef{ID: asset.ID, Name: asset.Name, Type: asset.Type},
+			Timeout: ToolTimeout(l.manifest, toolName),
+		})
 		if err != nil {
 			// 不记 raw error：它可能包装用户输入或远端输出。Error 级别本身即失败状态。
 			log.Error("extension tool execution failed")

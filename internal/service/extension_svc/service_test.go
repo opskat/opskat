@@ -224,7 +224,7 @@ func assertOldVersionIntact(svc *Service, stub *describeCacheStub, dir, name str
 	_, registered := assettype.Get(name)
 	So(registered, ShouldBeTrue)
 	// Still callable: a closed module answers every call with "plugin closed".
-	_, err := old.Plugin.CallTool(context.Background(), "test_tool", json.RawMessage(`{}`), nil)
+	_, err := old.Plugin.CallTool(context.Background(), extension.ToolCall{Name: "test_tool", Args: json.RawMessage(`{}`)})
 	So(err, ShouldNotBeNil)
 	So(err.Error(), ShouldNotContainSubstring, "plugin closed")
 	onDisk, err := os.ReadFile(filepath.Join(dir, name, "main.wasm")) //nolint:gosec // test TempDir
@@ -431,7 +431,7 @@ func TestService(t *testing.T) {
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-hot-v2"})
 			_, stillOld := assettype.Get("ext-hot")
 			So(stillOld, ShouldBeFalse)
-			_, err = old.Plugin.CallTool(ctx, "test_tool", json.RawMessage(`{}`), nil)
+			_, err = old.Plugin.CallTool(ctx, extension.ToolCall{Name: "test_tool", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "plugin closed")
 		})

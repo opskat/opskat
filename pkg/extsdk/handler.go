@@ -14,8 +14,6 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 		return dispatchDescribe()
 	case "execute_tool":
 		return dispatchTool(input)
-	case "execute_action":
-		return dispatchAction(input)
 	case "check_policy":
 		return dispatchPolicy(input)
 	case "validate_config":
@@ -171,32 +169,7 @@ func dispatchTool(input []byte) (json.RawMessage, error) {
 	if rejected != nil {
 		return nil, rejected
 	}
-	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args, Asset: req.Asset})
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
-}
-
-func dispatchAction(input []byte) (json.RawMessage, error) {
-	var req struct {
-		Action string          `json:"action"`
-		Args   json.RawMessage `json:"args"`
-		Asset  Asset           `json:"asset"`
-	}
-	if err := json.Unmarshal(input, &req); err != nil {
-		return nil, fmt.Errorf("parse action request: %w", err)
-	}
-	handler, ok := actions[req.Action]
-	if !ok {
-		return nil, fmt.Errorf("unknown action: %s", req.Action)
-	}
-	result, err := handler(&ActionContext{
-		Action: req.Action,
-		Args:   req.Args,
-		Asset:  req.Asset,
-		Events: newEventWriter(),
-	})
+	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args, Asset: req.Asset, Events: newEventWriter()})
 	if err != nil {
 		return nil, err
 	}
