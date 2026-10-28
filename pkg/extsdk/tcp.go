@@ -8,6 +8,10 @@ import (
 
 // DialContext opens a TCP connection via the host's IO bridge.
 // Its signature matches kafka-go Transport.Dial for drop-in use.
+// The host admits addr only within the call's asset scope: one of the asset's
+// endpoints (permissions.network.assetEndpoint), dialed along its connection
+// path and TLS settings, or any other address along that path
+// (permissions.network.assetRoute). A call with no asset dials nothing.
 // ctx is consulted only for pre-dial cancellation; per-call deadlines
 // should be set on the returned net.Conn via SetDeadline / SetReadDeadline.
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {

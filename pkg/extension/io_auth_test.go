@@ -64,12 +64,10 @@ func newAuthFixture(t *testing.T, endpoint, other, authType string) *Plugin {
 	manifest.Permissions.Network.AssetEndpoint = true
 	manifest.Permissions.Network.AllowPrivate = true
 	manifest.Permissions.Network.HTTP = []string{other + "/"}
-	inner := NewDefaultHostProvider(DefaultHostConfig{
-		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, map[string]any{
-			"endpoint": endpoint, "authType": authType, "username": "elastic", "password": "s3cret",
-		})},
-	})
-	return loadDescribedFixture(t, manifest, inner)
+	configs := assetConfigs{fixtureAsset.ID: mustJSON(t, map[string]any{
+		"endpoint": endpoint, "authType": authType, "username": "elastic", "password": "s3cret",
+	})}
+	return loadDescribedFixture(t, manifest, fixtureHost(manifest, configs, nil))
 }
 
 // undecryptable fails every credential read, as a stored secret that no longer
@@ -127,10 +125,10 @@ func TestAssetAuthInjection(t *testing.T) {
 		Convey("credentials that cannot be decrypted fail the request before it is sent", func() {
 			manifest := fixtureManifest(t)
 			manifest.Permissions.Network.AssetEndpoint = true
-			inner := NewDefaultHostProvider(DefaultHostConfig{AssetConfigs: undecryptable{assetConfigs{
+			configs := undecryptable{assetConfigs{
 				fixtureAsset.ID: mustJSON(t, map[string]any{"endpoint": endpoint.URL, "authType": "basic", "username": "elastic", "password": "garbled"}),
-			}}})
-			p := loadDescribedFixture(t, manifest, inner)
+			}}
+			p := loadDescribedFixture(t, manifest, fixtureHost(manifest, configs, nil))
 			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "credentials of asset")
@@ -190,7 +188,7 @@ func TestAssetAuthRefusesTrace(t *testing.T) {
 		endpoint := newAuthRecorder(t)
 		target, _ := url.Parse(endpoint.URL)
 		auth := &requestAuth{
-			bindings:   []renderedBinding{{in: AuthInHeader, name: "Authorization", value: "Bearer s3cret"}},
+			bindings:   []AuthValue{{In: AuthInHeader, Name: "Authorization", Value: "Bearer s3cret"}},
 			isEndpoint: func(u *url.URL) bool { return u.Host == target.Host },
 		}
 		res, err := openHTTPResourceWithClient(IOOpenParams{Type: "http", Method: "TRACE", URL: endpoint.URL + "/ok"},

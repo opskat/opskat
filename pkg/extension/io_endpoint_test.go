@@ -46,6 +46,97 @@ func (a assetConfigs) AssetCredentialValues(_ context.Context, assetID int64, fi
 
 var fixtureAsset = &AssetRef{ID: 1, Name: "fixture-1", Type: "fixture"}
 
+// fixtureConfigs is what the fixture's scope resolver reads an asset from: its
+// stored config, and its fields as credential injection sees them.
+type fixtureConfigs interface {
+	GetAssetConfig(assetID int64) (json.RawMessage, error)
+	AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error)
+}
+
+// providerConfigs reads both off a host provider's config getter: a fake that
+// keeps credentials in plaintext, like assetConfigs.
+type providerConfigs struct{ HostProvider }
+
+func (p providerConfigs) AssetCredentialValues(_ context.Context, assetID int64, fields []string) (map[string]string, error) {
+	raw, err := p.GetAssetConfig(assetID)
+	if err != nil {
+		return nil, err
+	}
+	return ConfigFieldValues(raw, fields)
+}
+
+// fixtureScopes stands in for the asset-type side (internal/extreg AssetScope,
+// fed by extension_svc's resolver): the scope of a call on a fixture asset is the
+// addresses its type's format:"endpoint" fields name in its config, conn as its
+// connection path (nil: direct), and its type's auth groups rendered from its
+// credentials — an ad-hoc call's all read from its AdHoc config.
+func fixtureScopes(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDialer) ScopeResolver {
+	return func(ctx context.Context, _ string, a AssetRef) (*Scope, error) {
+		def := manifest.AssetTypeDef(a.Type)
+		if def == nil {
+			return nil, fmt.Errorf("asset type %q is not the extension's", a.Type)
+		}
+		var raw json.RawMessage
+		var values CredentialValues
+		if a.AdHoc != nil {
+			raw = a.AdHoc.Config
+			values = func(_ context.Context, fields []string) (map[string]string, error) {
+				return ConfigFieldValues(a.AdHoc.Credentials, fields)
+			}
+		} else {
+			var err error
+			if raw, err = configs.GetAssetConfig(a.ID); err != nil {
+				return nil, err
+			}
+			values = func(ctx context.Context, fields []string) (map[string]string, error) {
+				return configs.AssetCredentialValues(ctx, a.ID, fields)
+			}
+		}
+		scope := &Scope{Asset: &a, Route: &Route{Dial: (&net.Dialer{}).DialContext, Direct: true}}
+		var cfg map[string]any
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+		for _, field := range EndpointFieldsFromSchema(def.ConfigSchema) {
+			if value, ok := cfg[field].(string); ok {
+				if ep, ok := ParseEndpoint(value); ok {
+					scope.Endpoints = append(scope.Endpoints, ep)
+				}
+			}
+		}
+		if conn != nil {
+			dial, tlsConfig, fingerprint, err := conn.connection(&a)
+			if err != nil {
+				return nil, err
+			}
+			if dial != nil {
+				scope.Route = &Route{Dial: dial}
+			}
+			scope.TLS, scope.Fingerprint = tlsConfig, fingerprint
+		}
+		if def.Auth != nil {
+			scope.Auth = def.Auth.Inject(values)
+		}
+		return scope, nil
+	}
+}
+
+// fixtureHost is a DefaultHostProvider over configs whose scopes fixtureScopes
+// resolves.
+func fixtureHost(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDialer) *DefaultHostProvider {
+	return NewDefaultHostProvider(DefaultHostConfig{AssetConfigs: configs, Scopes: fixtureScopes(manifest, configs, conn)})
+}
+
+// scopedHost gives an inner provider that resolves no scopes the fixture's.
+type scopedHost struct {
+	HostProvider
+	scopes ScopeResolver
+}
+
+func (h *scopedHost) resolveScope(ctx context.Context, a *AssetRef) (*Scope, error) {
+	return h.scopes(ctx, "fixture-ext", *a)
+}
+
 // newEndpointFixture loads the fixture extension over a real DefaultHostProvider
 // with capability enforcement.
 func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any) *Plugin {
@@ -60,10 +151,14 @@ func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any)
 
 // loadDescribedFixture loads the fixture extension over inner wrapped in
 // capability enforcement, and fills manifest's functional face from describe()
-// the way Manager.LoadExtension does — the endpoint gate and credential
-// injection read the asset type's declaration from there.
+// the way Manager.LoadExtension does — the fixture's scope resolver reads the
+// asset type's declaration from there. An inner provider that resolves no
+// scopes of its own gets fixtureScopes over its own config getter.
 func loadDescribedFixture(t *testing.T, manifest *Manifest, inner HostProvider, opts ...PluginOption) *Plugin {
 	t.Helper()
+	if d, ok := inner.(*DefaultHostProvider); !ok || d.cfg.Scopes == nil {
+		inner = &scopedHost{HostProvider: inner, scopes: fixtureScopes(manifest, providerConfigs{inner}, nil)}
+	}
 	p, err := LoadPlugin(context.Background(), manifest, fixtureWasm(t), NewCapabilityHost(inner, manifest, t.TempDir()), nil, opts...)
 	if err != nil {
 		t.Fatalf("load fixture plugin: %v", err)
@@ -212,9 +307,19 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 				So(err.Error(), ShouldContainSubstring, "not in permissions.network.http")
 			})
 
-			Convey("TCP stays ungated", func() {
-				out := callToolOn(t, tp, fixtureAsset, "tcp_echo", map[string]any{"addr": stranger.Addr().String()})
-				So(out["echo"], ShouldEqual, "ping")
+			Convey("TCP to the endpoint is refused naming the missing permission", func() {
+				_, err := tp.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": broker.Addr().String()}), Asset: fixtureAsset})
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "does not declare permissions.network.assetEndpoint")
+			})
+
+			Convey("TCP to any other address is refused too: TCP is no longer ungated", func() {
+				_, err := tp.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": stranger.Addr().String()}), Asset: fixtureAsset})
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")
+				_, err = tp.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": stranger.Addr().String()})})
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "not scoped to an asset")
 			})
 		})
 	})

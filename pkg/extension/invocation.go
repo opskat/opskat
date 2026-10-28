@@ -3,14 +3,13 @@ package extension
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
-
-	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // invocation is the state that belongs to one WASM call and dies with it: the
-// IO handle table the guest may address, and the cancellation a tool call
-// polls through ShouldStop.
+// IO handle table the guest may address, the cancellation a tool call polls
+// through ShouldStop, and the scope its host calls are admitted against.
 //
 // The reactor instance pool runs several calls of one plugin concurrently, so a
 // plugin-wide handle table would let one call read another's file descriptor,
@@ -26,26 +25,72 @@ type invocation struct {
 	// the only asset whose config the guest may read: the id is the host's, never
 	// the guest's.
 	asset *AssetRef
-	// reach is set for the calls of a database driver session: the reach path
-	// (tunnel, proxy chain, or direct) the host resolved for the session, gated by
-	// Plugin.confineReach — the asset's address, plus the addresses a database
-	// redirects to when the extension declares network.assetRoute — which
-	// every TCP stream the guest opens takes.
-	reach *dbdriver.Transport
-	// tickets is set for the calls of a database driver session too: the only way
-	// the guest gets the session's Kerberos tickets (Plugin.ticketGate). Outside a
-	// driver session it is nil and a ticket request is refused.
-	tickets *ticketGate
+
+	// scope is what the call may reach (see Scope): bound when the call starts
+	// (bindScope) or resolved on its first network or ticket host call
+	// (scopeOf), and kept for the rest of the call — a resolution error too.
+	scopeMu  sync.Mutex
+	scope    *Scope
+	scopeErr error
+	resolved bool
 }
 
 func newInvocation(id string, cancel *toolCancellation) *invocation {
 	return &invocation{id: id, io: NewIOHandleManager(), cancel: cancel}
 }
 
-// scopedTo records the asset the host scoped this call to.
+// scopedTo records the asset the host scoped this call to. Its scope is
+// resolved when the call first needs it.
 func (inv *invocation) scopedTo(asset *AssetRef) *invocation {
 	inv.asset = asset
 	return inv
+}
+
+// bindScope binds scope to the call from its start — a database driver
+// session's, complete with its Ops — so every host call, the first included, is
+// admitted against it.
+func (inv *invocation) bindScope(scope *Scope) *invocation {
+	inv.asset = scope.Asset
+	inv.scope = scope
+	inv.resolved = true
+	return inv
+}
+
+// boundScope is the scope a host call's kind is checked against: only a scope
+// bound when the call started restricts ops, so nothing is resolved here.
+func (inv *invocation) boundScope() *Scope {
+	inv.scopeMu.Lock()
+	defer inv.scopeMu.Unlock()
+	return inv.scope
+}
+
+// scopeOf returns the call's scope, resolving it with resolve the first time it
+// is needed. A call with no asset has an empty scope: nothing to reach but the
+// allowlist. A resolver's scope may not restrict ops (Scope.Ops).
+func (inv *invocation) scopeOf(resolve func(*AssetRef) (*Scope, error)) (*Scope, error) {
+	inv.scopeMu.Lock()
+	defer inv.scopeMu.Unlock()
+	if inv.resolved {
+		return inv.scope, inv.scopeErr
+	}
+	inv.resolved = true
+	if inv.asset == nil {
+		inv.scope = &Scope{}
+		return inv.scope, nil
+	}
+	scope, err := resolve(inv.asset)
+	switch {
+	case err != nil:
+		inv.scopeErr = err
+	case scope.Ops != nil:
+		inv.scopeErr = fmt.Errorf("scope of asset %s: a resolved scope may not restrict host calls", assetLabel(inv.asset))
+	default:
+		// The call is the host's to scope: whatever the resolver echoed, its
+		// asset is the one the call was scoped to (an ad-hoc config included).
+		scope.Asset = inv.asset
+		inv.scope = scope
+	}
+	return inv.scope, inv.scopeErr
 }
 
 // close releases everything the guest left open.
@@ -88,4 +133,13 @@ func invocationFrom(ctx context.Context) (*invocation, error) {
 		return nil, fmt.Errorf("host call outside of an extension invocation")
 	}
 	return inv, nil
+}
+
+// assetLabel names an asset in an error or log line: by its name when it has
+// one, else by its id.
+func assetLabel(a *AssetRef) string {
+	if a.Name != "" {
+		return fmt.Sprintf("%q", a.Name)
+	}
+	return fmt.Sprintf("#%d", a.ID)
 }

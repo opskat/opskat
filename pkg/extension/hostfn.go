@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tetratelabs/wazero/api"
@@ -60,46 +61,32 @@ func deadlineTime(unixNanos int64) time.Time {
 	return time.Unix(0, unixNanos)
 }
 
-func errUnavailableInDriverCall(what string) error {
-	return fmt.Errorf("%s is unavailable during driver calls: a database driver may only write logs, dial its database and ask for its Kerberos tickets", what)
-}
-
-// driverCallOps are the host ops a driver call may make: logging, the TCP
-// streams (with their deadlines) that carry its connection to the database, and
-// the Kerberos tickets it logs in with. Everything else (KV, file dialogs, asset
-// config, tool events) is refused.
-var driverCallOps = map[string]bool{
-	"log": true, "io.open": true, "io.set_deadline": true, "tool.should_stop": true, "dbdriver.kerberos_ticket": true,
-}
-
 func init() {
 	for op, fn := range hostOps {
-		hostOps[op] = gateDriverCall(op, fn)
+		hostOps[op] = gateScopeOps(op, fn)
 	}
 }
 
-// gateDriverCall makes fn refuse the calls of a database driver session (the
-// invocations that carry a reach path) unless a driver call may make it. For
-// io.open only a TCP stream is allowed, and it goes along the reach path alone
-// (see opIOOpen); an HTTP request or a file is refused.
-func gateDriverCall(op string, fn hostOpFunc) hostOpFunc {
+// gateScopeOps makes fn refuse a call whose scope does not list op (Scope.Ops),
+// before anything reaches the host. io.open is checked per stream type.
+func gateScopeOps(op string, fn hostOpFunc) hostOpFunc {
 	return func(env hostCallEnv, params json.RawMessage) ([]byte, error) {
-		if env.inv.reach == nil {
+		scope := env.inv.boundScope()
+		if scope == nil || scope.Ops == nil { // nil: a tool call, before or after its scope resolves
 			return fn(env, params)
 		}
-		if !driverCallOps[op] {
-			return nil, errUnavailableInDriverCall("host op " + op)
-		}
-		if op == "io.open" {
+		name := op
+		if op == OpIOOpen {
 			var p struct {
 				Type string `json:"type"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, err
 			}
-			if p.Type != "tcp" {
-				return nil, errUnavailableInDriverCall("io type " + p.Type)
-			}
+			name = IOOpenOp(p.Type)
+		}
+		if !scope.allows(name) {
+			return nil, fmt.Errorf("host call %q is not allowed in this call's scope, which allows only %s", name, strings.Join(scope.Ops, ", "))
 		}
 		return fn(env, params)
 	}

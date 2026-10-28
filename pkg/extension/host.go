@@ -3,6 +3,7 @@ package extension
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/url"
 )
@@ -15,10 +16,12 @@ import (
 type HostProvider interface {
 	// OpenIO opens a stream. asset is the asset whose endpoint a network stream
 	// targets — nil when the call has no asset, or when the target is not one of
-	// its endpoints (the capability layer decides which, see capHost.OpenIO) — and
-	// only then does the stream take the asset's connection path, cached client
-	// and credentials. The runtime registers the returned resource in the calling
-	// invocation's handle table and closes it when that call ends.
+	// its endpoints (the capability layer decides which against the call's
+	// Scope, see capHost.OpenIO) — and only then does the stream use the asset's
+	// cached client and carry its credentials. The way to dial (params.Dial,
+	// params.TLS) is the capability layer's to set. The runtime registers the
+	// returned resource in the calling invocation's handle table and closes it
+	// when that call ends.
 	OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error)
 	// GetAssetConfig returns the config of assetID, which is always the asset
 	// the runtime scoped the current invocation to — never a guest-supplied id.
@@ -51,17 +54,25 @@ type IOOpenParams struct {
 	// non-nil error stops the redirect and fails the request. Only the host sets
 	// it — it never crosses the WASM boundary.
 	RedirectGuard func(target *url.URL) error `json:"-"`
-	// Auth, when set, is the credential injection the asset's type declares,
-	// applied to every hop of an http handle that targets one of the asset's
-	// endpoints. Only the host sets it — it never crosses the WASM boundary.
+	// Auth, when set, is the scope's credential injection, applied to every hop
+	// of an http handle that targets one of the asset's endpoints. Only the host
+	// sets it — it never crosses the WASM boundary.
 	Auth *HTTPAuth `json:"-"`
+	// Dial is the connection path the stream takes (nil = a direct dial), TLS
+	// the settings a TCP stream or the asset's HTTP client applies (nil = none),
+	// and Fingerprint keys the asset's cached HTTP client by the settings both
+	// were built from. Only the host sets them — they never cross the WASM
+	// boundary.
+	Dial        DialContextFunc `json:"-"`
+	TLS         *tls.Config     `json:"-"`
+	Fingerprint string          `json:"-"`
 }
 
-// HTTPAuth pairs an asset type's auth declaration with the endpoint test that
+// HTTPAuth pairs a scope's credential injection with the endpoint test that
 // decides which request hops receive it.
 type HTTPAuth struct {
-	Def        *AuthDef
-	IsEndpoint func(target *url.URL) bool
+	Credentials RequestAuth
+	IsEndpoint  func(target *url.URL) bool
 }
 
 type DialogOptions struct {

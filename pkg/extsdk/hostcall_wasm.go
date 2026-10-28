@@ -202,7 +202,7 @@ func (w *wasmHostCaller) ToolEvent(eventType string, data []byte) {
 }
 
 func (w *wasmHostCaller) KerberosTicket(spn string) ([]byte, error) {
-	return call("dbdriver.kerberos_ticket", map[string]string{"spn": spn})
+	return call("auth.kerberos_ticket", map[string]string{"spn": spn})
 }
 
 func (w *wasmHostCaller) ToolShouldStop() bool {

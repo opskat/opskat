@@ -408,7 +408,7 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 
 		ticket, msg := askTicket(t, s, "fixturedb", "db.internal")
 		assert.Empty(t, ticket)
-		assert.Contains(t, msg, "does not log in with Kerberos")
+		assert.Contains(t, msg, "no Kerberos ticket source")
 	})
 
 	t.Run("a pinned SPN refuses any other, naming both, without asking the source", func(t *testing.T) {

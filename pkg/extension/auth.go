@@ -128,18 +128,45 @@ func (g *AuthGroup) fields() []string {
 
 // render fills the group's bindings from values, the plaintext of the fields
 // they reference.
-func (g *AuthGroup) render(values map[string]string) []renderedBinding {
-	out := make([]renderedBinding, 0, len(g.Bindings))
+func (g *AuthGroup) render(values map[string]string) []AuthValue {
+	out := make([]AuthValue, 0, len(g.Bindings))
 	for _, b := range g.Bindings {
 		tmpl, _ := parseAuthTemplate(b.Value) // validated at load (AuthTemplateFields)
-		out = append(out, renderedBinding{in: b.In, name: b.Name, value: tmpl.render(values)})
+		out = append(out, AuthValue{In: b.In, Name: b.Name, Value: tmpl.render(values)})
 	}
 	return out
 }
 
-// renderedBinding is a binding with its credential filled in.
-type renderedBinding struct {
-	in, name, value string
+// CredentialValues returns the named config fields of an asset as plaintext,
+// password fields decrypted: host-side only, for credential injection. A field
+// the config lacks is absent from the map.
+type CredentialValues func(ctx context.Context, fields []string) (map[string]string, error)
+
+// Inject is the RequestAuth of an asset whose type declares a: on each request it
+// reads the selector field, picks the active group (none: no credentials) and
+// renders that group's bindings from values. It is how the asset-type side
+// turns the declaration into a scope's Auth; any failure to read a field fails
+// the request rather than sending it without the credentials the user set.
+func (a *AuthDef) Inject(values CredentialValues) RequestAuth {
+	return func(ctx context.Context) ([]AuthValue, error) {
+		var selected string
+		if a.Selector != "" {
+			v, err := values(ctx, []string{a.Selector})
+			if err != nil {
+				return nil, err
+			}
+			selected = v[a.Selector]
+		}
+		group := a.activeGroup(selected)
+		if group == nil {
+			return nil, nil
+		}
+		v, err := values(ctx, group.fields())
+		if err != nil {
+			return nil, err
+		}
+		return group.render(v), nil
+	}
 }
 
 // requestAuth is the credential injection one HTTP request carries. It rides on
@@ -147,7 +174,7 @@ type renderedBinding struct {
 // applied by authTransport to each hop isEndpoint admits — the first request and
 // every redirect alike.
 type requestAuth struct {
-	bindings   []renderedBinding
+	bindings   []AuthValue
 	isEndpoint func(*url.URL) bool
 }
 
@@ -162,12 +189,12 @@ func (a *requestAuth) redact(err error) error {
 	msg := err.Error()
 	redacted := msg
 	for _, b := range a.bindings {
-		if b.value == "" {
+		if b.Value == "" {
 			continue
 		}
-		forms := []string{b.value, url.QueryEscape(b.value), url.PathEscape(b.value)}
-		if b.in == AuthInBasic {
-			forms = append(forms, base64.StdEncoding.EncodeToString([]byte(b.value)))
+		forms := []string{b.Value, url.QueryEscape(b.Value), url.PathEscape(b.Value)}
+		if b.In == AuthInBasic {
+			forms = append(forms, base64.StdEncoding.EncodeToString([]byte(b.Value)))
 		}
 		for _, form := range forms {
 			redacted = strings.ReplaceAll(redacted, form, "[REDACTED]")
@@ -220,13 +247,13 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	out := req.Clone(req.Context())
 	for _, b := range auth.bindings {
-		switch b.in {
+		switch b.In {
 		case AuthInHeader:
-			out.Header.Set(b.name, b.value)
+			out.Header.Set(b.Name, b.Value)
 		case AuthInBasic:
-			out.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(b.value)))
+			out.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(b.Value)))
 		case AuthInQuery:
-			out.URL.RawQuery = setRawQueryParam(out.URL.RawQuery, b.name, b.value)
+			out.URL.RawQuery = setRawQueryParam(out.URL.RawQuery, b.Name, b.Value)
 		}
 	}
 	return t.base.RoundTrip(out)

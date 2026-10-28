@@ -49,13 +49,14 @@ func newHostTestService(t *testing.T) (*Service, *mock_asset_repo.MockAssetRepo)
 	return svc, assets
 }
 
-// configGetterOf and dialerOf are the providers HostConfig hands extName's host.
+// configGetterOf is the config getter HostConfig hands extName's host; dialerOf
+// the connection-path resolver behind the scopes it resolves (ResolveScope).
 func configGetterOf(svc *Service, extName string) *assetConfigGetter {
 	return svc.HostConfig(extName).AssetConfigs.(*assetConfigGetter)
 }
 
 func dialerOf(svc *Service, extName string) *assetDialer {
-	return svc.HostConfig(extName).AssetDialer.(*assetDialer)
+	return &assetDialer{svc: svc, extName: extName}
 }
 
 func encryptedConfig(t *testing.T, password string) string {

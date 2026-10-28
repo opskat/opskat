@@ -80,82 +80,91 @@ func probe(t *testing.T, s dbdriver.Session, what string) string {
 }
 
 func TestDriverCallHostCapabilities(t *testing.T) {
-	for _, withEndpoint := range []bool{false, true} {
-		name := "without network.assetEndpoint"
-		var network map[string]any
-		if withEndpoint {
-			name = "with network.assetEndpoint"
-			network = map[string]any{"assetEndpoint": true}
+	t.Run("without network.assetEndpoint the driver cannot reach its own database", func(t *testing.T) {
+		ext := loadDriverFixture(t, &hostSpy{}, map[string]any{"assetRoute": true})
+		desc := ext.Manifest.DatabaseDrivers[0]
+		server := extension.NewFixtureDBServer(t)
+		d := &extensionDriver{
+			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
+			desc:         desc, plugin: ext.Plugin, server: server,
 		}
-		t.Run(name, func(t *testing.T) {
-			spy := &hostSpy{}
-			ext := loadDriverFixture(t, spy, network)
-			desc := ext.Manifest.DatabaseDrivers[0]
-			d := &extensionDriver{
-				NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
-				desc:         desc, plugin: ext.Plugin, server: extension.NewFixtureDBServer(t),
-			}
-			s := d.open(t)
-			defer func() { assert.NoError(t, s.Close()) }()
-
-			var httpHits atomic.Int32
-			web := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { httpHits.Add(1) }))
-			defer web.Close()
-
-			t.Run("KV, file dialogs, HTTP and other asset config are unavailable", func(t *testing.T) {
-				for what, target := range map[string]string{
-					"KV": "", "KVSET": "", "FILE_DIALOG": "", "ASSET_CONFIG": "", "HTTP": " " + web.URL,
-				} {
-					msg := probe(t, s, what+target)
-					assert.Contains(t, msg, "unavailable during driver calls", what)
-				}
-				assert.Zero(t, spy.kv.Load(), "the KV store is never reached")
-				assert.Zero(t, spy.dialogs.Load(), "no file dialog opens")
-				assert.Zero(t, spy.configs.Load(), "no asset config is read")
-				assert.Zero(t, httpHits.Load(), "no HTTP request leaves the host")
-			})
-
-			t.Run("logging is still allowed", func(t *testing.T) {
-				assert.Empty(t, probe(t, s, "LOG"))
-			})
-
-			t.Run("a dial to the asset's host:port goes through the reach path", func(t *testing.T) {
-				before := len(d.server.Dialed())
-				assert.Empty(t, probe(t, s, "DIAL db.internal:7357"))
-				dialed := d.server.Dialed()
-				require.Len(t, dialed, before+1)
-				assert.Equal(t, "db.internal:7357", dialed[before])
-			})
-
-			t.Run("a dial to any other address is refused, named and logged", func(t *testing.T) {
-				logs := observeLogs(t)
-				before := len(d.server.Dialed())
-				for _, addr := range []string{"other.internal:7357", "db.internal:7358"} {
-					msg := probe(t, s, "DIAL "+addr)
-					assert.Contains(t, msg, addr, "the refused address is named")
-					assert.Contains(t, msg, "does not declare following database redirects", "the refusal says why")
-				}
-				assert.Len(t, d.server.Dialed(), before, "the reach path never sees them")
-
-				refused := 0
-				for _, e := range logs.All() {
-					assert.NotContains(t, e.Message, "s3cret")
-					for _, f := range e.Context {
-						assert.NotContains(t, f.String, "s3cret")
-					}
-					if e.Level != zap.WarnLevel {
-						continue
-					}
-					for _, f := range e.Context {
-						if f.String == "other.internal:7357" || f.String == "db.internal:7358" {
-							refused++
-						}
-					}
-				}
-				assert.Equal(t, 2, refused, "each refusal is a Warn naming the address")
-			})
+		_, err := d.Open(context.Background(), dbdriver.OpenRequest{
+			Config: &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: desc.DefaultPort, Username: "alice", Database: "app"},
 		})
-	}
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "db.internal:7357")
+		assert.Contains(t, err.Error(), "does not declare permissions.network.assetEndpoint")
+		assert.Empty(t, server.Dialed(), "the reach path never sees the dial")
+	})
+
+	t.Run("with network.assetEndpoint", func(t *testing.T) {
+		spy := &hostSpy{}
+		ext := loadDriverFixture(t, spy, map[string]any{"assetEndpoint": true})
+		desc := ext.Manifest.DatabaseDrivers[0]
+		d := &extensionDriver{
+			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
+			desc:         desc, plugin: ext.Plugin, server: extension.NewFixtureDBServer(t),
+		}
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		var httpHits atomic.Int32
+		web := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { httpHits.Add(1) }))
+		defer web.Close()
+
+		t.Run("KV, file dialogs, HTTP and other asset config are unavailable", func(t *testing.T) {
+			for what, target := range map[string]string{
+				"KV": "", "KVSET": "", "FILE_DIALOG": "", "ASSET_CONFIG": "", "HTTP": " " + web.URL,
+			} {
+				msg := probe(t, s, what+target)
+				assert.Contains(t, msg, "is not allowed in this call's scope", what)
+			}
+			assert.Zero(t, spy.kv.Load(), "the KV store is never reached")
+			assert.Zero(t, spy.dialogs.Load(), "no file dialog opens")
+			assert.Zero(t, spy.configs.Load(), "no asset config is read")
+			assert.Zero(t, httpHits.Load(), "no HTTP request leaves the host")
+		})
+
+		t.Run("logging is still allowed", func(t *testing.T) {
+			assert.Empty(t, probe(t, s, "LOG"))
+		})
+
+		t.Run("a dial to the asset's host:port goes through the reach path", func(t *testing.T) {
+			before := len(d.server.Dialed())
+			assert.Empty(t, probe(t, s, "DIAL db.internal:7357"))
+			dialed := d.server.Dialed()
+			require.Len(t, dialed, before+1)
+			assert.Equal(t, "db.internal:7357", dialed[before])
+		})
+
+		t.Run("a dial to any other address is refused, named and logged", func(t *testing.T) {
+			logs := observeLogs(t)
+			before := len(d.server.Dialed())
+			for _, addr := range []string{"other.internal:7357", "db.internal:7358"} {
+				msg := probe(t, s, "DIAL "+addr)
+				assert.Contains(t, msg, addr, "the refused address is named")
+				assert.Contains(t, msg, "does not declare permissions.network.assetRoute", "the refusal says why")
+			}
+			assert.Len(t, d.server.Dialed(), before, "the reach path never sees them")
+
+			refused := 0
+			for _, e := range logs.All() {
+				assert.NotContains(t, e.Message, "s3cret")
+				for _, f := range e.Context {
+					assert.NotContains(t, f.String, "s3cret")
+				}
+				if e.Level != zap.WarnLevel {
+					continue
+				}
+				for _, f := range e.Context {
+					if f.String == "other.internal:7357" || f.String == "db.internal:7358" {
+						refused++
+					}
+				}
+			}
+			assert.Equal(t, 2, refused, "each refusal is a Warn naming the address")
+		})
+	})
 }
 
 // redirectRoute is a reach path with two ends to tell apart: the asset's own dial
@@ -196,7 +205,6 @@ func redirectLogs(t *testing.T, logs *observer.ObservedLogs) map[string]int {
 			continue
 		}
 		assert.Equal(t, "fixture-dbdriver", fields["extension"])
-		assert.Equal(t, extensiontest.DBDriverFixtureDriver, fields["driver"])
 		assert.EqualValues(t, 42, fields["assetID"])
 		seen[fields["addr"].(string)]++
 	}
@@ -204,7 +212,7 @@ func redirectLogs(t *testing.T, logs *observer.ObservedLogs) map[string]int {
 }
 
 func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
-	ext := loadDriverFixture(t, &hostSpy{}, map[string]any{"assetRoute": true})
+	ext := loadDriverFixture(t, &hostSpy{}, map[string]any{"assetEndpoint": true, "assetRoute": true})
 
 	t.Run("through a tunnel or proxy any address is dialed by address along the route, unresolved", func(t *testing.T) {
 		route := newRedirectRoute(t)

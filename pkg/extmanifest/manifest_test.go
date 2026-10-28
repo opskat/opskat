@@ -136,8 +136,6 @@ func TestParseValidatesFields(t *testing.T) {
 		{"credentials wrong type", string(manifest(`{"credentials":true}`, "")), "credentials"},
 		{"driver id", string(manifest("", `{"databaseDrivers":["Bad Id"]}`)), "Bad Id"},
 		{"driver twice", string(manifest("", `{"databaseDrivers":["a","a"]}`)), "twice"},
-		{"kerberos without drivers", string(manifest(`{"kerberos":true}`, "")), "permissions.kerberos"},
-		{"assetRoute without drivers", string(manifest(`{"network":{"assetRoute":true}}`, "")), "permissions.network.assetRoute"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,6 +144,17 @@ func TestParseValidatesFields(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+// network.assetRoute and kerberos are basic permissions any extension may
+// declare: they apply to whatever call carries a scope with a route or a ticket
+// source, a tool call included, not only to a database driver's.
+func TestParseAcceptsAssetRouteAndKerberosWithoutDrivers(t *testing.T) {
+	m, err := Parse(manifest(`{"kerberos":true,"network":{"assetRoute":true}}`, ""))
+	require.NoError(t, err)
+	assert.True(t, m.Permissions.Kerberos)
+	assert.True(t, m.Permissions.Network.AssetRoute)
+	assert.Empty(t, m.Contributes.DatabaseDrivers)
 }
 
 func TestParseAcceptsMinimalManifest(t *testing.T) {

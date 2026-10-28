@@ -7,7 +7,11 @@
     "binary": "main.wasm"
   },
   "permissions": {
-    "kerberos": true
+    "kerberos": true,
+    "network": {
+      "assetEndpoint": true,
+      "assetRoute": true
+    }
   },
   "contributes": {
     "databaseDrivers": ["fixturedb"]

@@ -2,6 +2,7 @@ package extreg
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extwire"
@@ -284,6 +286,64 @@ func extensionTypeSpec(extName string, m *extension.Manifest, at extension.Asset
 		DefaultPolicyGroups: m.Policies.Default,
 		Connection:          connectionSpec(at),
 	}
+}
+
+// AssetConnection 是宿主替扩展类型资产解析好的连接路径：拨号（nil 为直连）、TLS 设置与二者
+// 所据设置的指纹。
+type AssetConnection struct {
+	Dial        extension.DialContextFunc
+	TLS         *tls.Config
+	Fingerprint string
+}
+
+// AssetScope 是对 at 类型资产 a 的一次调用的作用域：资产类型这一侧据此告诉运行时这次调用能
+// 到达什么——config 里 format:"endpoint" 字段写的地址是端点，conn 是连接路径，at 声明的认证
+// 分组按 creds 渲染成认证注入。运行时只按作用域与权限放行，不再自己读 configSchema 与认证声明。
+// config 是资产存着的配置（端点字段不是口令，不必解密）。
+func AssetScope(a extension.AssetRef, at *extension.AssetTypeDef, config json.RawMessage, conn AssetConnection, creds extension.CredentialValues) (*extension.Scope, error) {
+	endpoints, err := assetEndpoints(at, config)
+	if err != nil {
+		return nil, fmt.Errorf("asset type %s: %w", at.Type, err)
+	}
+	route := &extension.Route{Dial: conn.Dial}
+	if route.Dial == nil {
+		route.Dial = (&netdial.Dialer{}).DialContext
+		route.Direct = true
+	}
+	scope := &extension.Scope{
+		Asset:       &a,
+		Endpoints:   endpoints,
+		Route:       route,
+		TLS:         conn.TLS,
+		Fingerprint: conn.Fingerprint,
+	}
+	if at.Auth != nil {
+		scope.Auth = at.Auth.Inject(creds)
+	}
+	return scope, nil
+}
+
+// assetEndpoints 读出 config 里端点字段写的地址；字段缺失、不是字符串或写不出端口的不算端点。
+func assetEndpoints(at *extension.AssetTypeDef, config json.RawMessage) ([]extension.Endpoint, error) {
+	fields := extension.EndpointFieldsFromSchema(at.ConfigSchema)
+	if len(fields) == 0 || len(config) == 0 {
+		return nil, nil
+	}
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	var endpoints []extension.Endpoint
+	for _, field := range fields {
+		var value string
+		if json.Unmarshal(cfg[field], &value) != nil {
+			continue
+		}
+		if ep, ok := extension.ParseEndpoint(value); ok {
+			endpoints = append(endpoints, ep)
+		}
+	}
+	return endpoints, nil
 }
 
 // connectionSpec 翻译该类型交给宿主接管的连接项。没声明 connection 的类型一项都没有，

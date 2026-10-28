@@ -13,25 +13,78 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
 // HostConfig returns the host capabilities of extName that need no user interface:
-// the config (and credentials) of the assets it owns, its KV store and the connection
-// path to those assets. Every process that runs extensions builds its providers from
+// the config of the assets it owns, its KV store and the scope of a call on one of
+// them (ResolveScope). Every process that runs extensions builds its providers from
 // this — the desktop app and opsctl alike — and adds only what it can offer beyond it:
-// the desktop its file dialog and action events, opsctl a file dialog that explains
+// the desktop its file dialog and tool events, opsctl a file dialog that explains
 // there is none.
 func (s *Service) HostConfig(extName string) extension.DefaultHostConfig {
 	return extension.DefaultHostConfig{
 		Logger:        s.logger,
 		AssetConfigs:  &assetConfigGetter{svc: s, extName: extName},
 		KV:            &kvStore{svc: s, extName: extName},
-		AssetDialer:   &assetDialer{svc: s, extName: extName},
+		Scopes:        s.ResolveScope,
 		ExtensionName: extName,
 	}
+}
+
+// ResolveScope resolves the scope of a call extName makes on asset a, as the
+// asset-type side owns it (extreg.AssetScope): the asset must be of a type
+// extName registers; its endpoints come from the type's endpoint fields, its
+// connection path from the tunnel / proxy chain / TLS the type declares, its
+// credential injection from the type's auth groups over the asset's decrypted
+// fields. An ad-hoc call (test connection) reads all of them from a.AdHoc. A
+// connection path that cannot be built is an error — never a direct or
+// unverified fallback.
+func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.AssetRef) (*extension.Scope, error) {
+	dialer := &assetDialer{svc: s, extName: extName}
+	if a.AdHoc != nil {
+		def, err := s.ownedType(extName, a.Type)
+		if err != nil {
+			return nil, err
+		}
+		dial, tlsConfig, err := dialer.DialContextForConfig(ctx, a.Type, a.AdHoc)
+		if err != nil {
+			return nil, fmt.Errorf("connection path of asset type %q: %w", a.Type, err)
+		}
+		creds := func(_ context.Context, fields []string) (map[string]string, error) {
+			return extension.ConfigFieldValues(a.AdHoc.Credentials, fields)
+		}
+		return extreg.AssetScope(a, def, a.AdHoc.Config, extreg.AssetConnection{Dial: dial, TLS: tlsConfig}, creds)
+	}
+	_, asset, def, err := s.OwnedTypedAsset(ctx, extName, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	dial, tlsConfig, fingerprint, err := dialer.DialContextFor(ctx, a.ID)
+	if err != nil {
+		return nil, fmt.Errorf("connection path of asset %d: %w", a.ID, err)
+	}
+	getter := &assetConfigGetter{svc: s, extName: extName}
+	creds := func(ctx context.Context, fields []string) (map[string]string, error) {
+		return getter.AssetCredentialValues(ctx, a.ID, fields)
+	}
+	return extreg.AssetScope(a, def, json.RawMessage(asset.Config), extreg.AssetConnection{Dial: dial, TLS: tlsConfig, Fingerprint: fingerprint}, creds)
+}
+
+// ownedType returns the declaration of assetType when extName registers it.
+func (s *Service) ownedType(extName, assetType string) (*extension.AssetTypeDef, error) {
+	owner := s.Bridge().Get(extName)
+	if owner == nil {
+		return nil, fmt.Errorf("extension %q not loaded", extName)
+	}
+	def := owner.Manifest.AssetTypeDef(assetType)
+	if def == nil {
+		return nil, fmt.Errorf("extension %q does not register asset type %q", extName, assetType)
+	}
+	return def, nil
 }
 
 // assetConfigGetter implements extension.AssetConfigGetter for one extension.
@@ -265,7 +318,8 @@ func credentialHandleFor(extName, assetType, field, encrypted string) string {
 	return "cred_" + hex.EncodeToString(h[:8])
 }
 
-// assetDialer implements extension.AssetDialer for one extension.
+// assetDialer resolves the connection path of the assets one extension owns: the
+// route and TLS settings of the scopes ResolveScope builds.
 type assetDialer struct {
 	svc     *Service
 	extName string
@@ -365,13 +419,9 @@ func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extens
 // and TLS building (resolveDialAndTLS), just fed from adhoc instead of a
 // database row, and never returns a fingerprint — the result is never cached.
 func (d *assetDialer) DialContextForConfig(ctx context.Context, assetType string, adhoc *extension.AdHocAssetConfig) (extension.DialContextFunc, *tls.Config, error) {
-	owner := d.svc.Bridge().Get(d.extName)
-	if owner == nil {
-		return nil, nil, fmt.Errorf("extension %q not loaded", d.extName)
-	}
-	def := owner.Manifest.AssetTypeDef(assetType)
-	if def == nil {
-		return nil, nil, fmt.Errorf("extension %q does not register asset type %q", d.extName, assetType)
+	def, err := d.svc.ownedType(d.extName, assetType)
+	if err != nil {
+		return nil, nil, err
 	}
 	conn := def.Connection
 	if conn == nil {

@@ -69,9 +69,9 @@ type Permissions struct {
 	FS FSPermission `json:"fs"`
 	// Credentials is "" (opaque handles only) or "read" (plaintext credentials).
 	Credentials string `json:"credentials"`
-	// Kerberos lets a database driver ask the host for Kerberos tickets fetched
-	// with the asset's Kerberos credentials. Only meaningful with
-	// contributes.databaseDrivers.
+	// Kerberos lets a call whose scope carries a ticket source ask the host for
+	// Kerberos tickets fetched with that asset's Kerberos credentials. Today only
+	// a database asset that logs in with Kerberos carries one.
 	Kerberos bool              `json:"kerberos"`
 	Network  NetworkPermission `json:"network"`
 }
@@ -98,10 +98,10 @@ type NetworkPermission struct {
 	// typed into that asset's format:"endpoint" config fields — private addresses
 	// included, since the user configured them — over HTTP and TCP.
 	AssetEndpoint bool `json:"assetEndpoint"`
-	// AssetRoute lets a database driver follow a redirect the database answers
-	// with (a cluster node, a read replica, a routed listener) by dialing that
-	// other address through the asset's own route. Only meaningful with
-	// contributes.databaseDrivers.
+	// AssetRoute lets a call scoped to an asset dial any other address along that
+	// asset's connection path — a database driver following a redirect (a cluster
+	// node, a read replica, a routed listener), a tool reaching a node behind the
+	// asset's tunnel. A direct path still refuses loopback and link-local targets.
 	AssetRoute bool `json:"assetRoute"`
 }
 
@@ -175,16 +175,10 @@ func (m *Manifest) validate() error {
 	return m.validateDatabaseDrivers()
 }
 
-// validateDatabaseDrivers checks the driver ids the manifest declares —
-// well-formed, unique — and the driver-only permissions that need them.
+// validateDatabaseDrivers checks the driver ids the manifest declares:
+// well-formed, unique.
 func (m *Manifest) validateDatabaseDrivers() error {
 	ids := m.Contributes.DatabaseDrivers
-	if m.Permissions.Network.AssetRoute && len(ids) == 0 {
-		return fmt.Errorf("permissions.network.assetRoute only applies to an extension that declares contributes.databaseDrivers")
-	}
-	if m.Permissions.Kerberos && len(ids) == 0 {
-		return fmt.Errorf("permissions.kerberos only applies to an extension that declares contributes.databaseDrivers")
-	}
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		if !nameRe.MatchString(id) {

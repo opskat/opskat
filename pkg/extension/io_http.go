@@ -127,7 +127,7 @@ func buildSingleUseEndpointClient(dial DialContextFunc, tlsConfig *tls.Config, a
 }
 
 // newEndpointTransport is the transport to an asset's endpoint. The host owns
-// that connection path (direct, SSH tunnel, proxy chain — see AssetDialer), so
+// that connection path (direct, SSH tunnel, proxy chain — see Scope.Route), so
 // the process's HTTP(S)_PROXY environment does not apply: through a tunnel the
 // transport would dial the proxy's address instead of the endpoint, and without
 // one it would hand the proxy the credentials injected for the endpoint.
