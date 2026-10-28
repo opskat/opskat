@@ -106,7 +106,7 @@ type ContentBlock struct {
 	// 保证实时嵌套显示与重载后的嵌套显示收到同一份原始值。
 	ChildBlocks []ContentBlock `json:"childBlocks,omitempty"`
 	// error 块字段：
-	//   ErrorKind   — "rate_limit" | "server" | "network" | "auth" | "interrupted" | "unknown"
+	//   ErrorKind   — "proxy" | "rate_limit" | "server" | "network" | "auth" | "interrupted" | "unknown"
 	//   ErrorDetail — 原始错误正文，UI 直接展示
 	ErrorKind   string `json:"errorKind,omitempty"`
 	ErrorDetail string `json:"errorDetail,omitempty"`

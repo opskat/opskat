@@ -15,6 +15,19 @@ describe("classifyError", () => {
     expect(classifyError("authentication failed").kind).toBe("auth");
   });
 
+  it("代理侧失败命中 proxy，且优先于 auth/network（代理认证失败不被说成 API Key 问题）", () => {
+    expect(
+      classifyError(
+        'Post "https://api.deepseek.com/anthropic/v1/messages": socks connect tcp 127.0.0.1:18081->api.deepseek.com:443: username/password authentication failed'
+      ).kind
+    ).toBe("proxy");
+    expect(classifyError('Post "https://huu.dqy.ink/v1/messages": Proxy Authentication Required').kind).toBe("proxy");
+    expect(
+      classifyError('Post "https://huu.dqy.ink/v1/messages": proxyconnect tcp: dial tcp 127.0.0.1:18080: i/o timeout')
+        .kind
+    ).toBe("proxy");
+  });
+
   it("命中 rate_limit（429/too many/rate limit）", () => {
     expect(classifyError("429 too many requests").kind).toBe("rate_limit");
     expect(classifyError("rate_limit_exceeded").kind).toBe("rate_limit");
@@ -53,7 +66,7 @@ describe("classifyError", () => {
   });
 
   it("message 字段在所有 kind 上非空", () => {
-    const kinds = ["rate_limit", "server", "network", "auth", "interrupted", "unknown"] as const;
+    const kinds = ["proxy", "rate_limit", "server", "network", "auth", "interrupted", "unknown"] as const;
     for (const k of kinds) {
       const { message } = classifyError("any", k);
       expect(message).toBeTruthy();

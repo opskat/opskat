@@ -1312,6 +1312,7 @@
       "now": "Retrying now..."
     },
     "error": {
+      "proxy": "Couldn't connect through the network proxy, check Settings → Network",
       "rate_limit": "Too many requests, please wait",
       "server": "Service temporarily unavailable",
       "network": "Unstable network connection",
