@@ -58,8 +58,9 @@ func TestContributesKeys(t *testing.T) {
 		})
 
 		Convey("the desktop app and opsctl know the same keys: every point of Points", func() {
-			keys := make([]string, 0)
-			for _, p := range Points() {
+			points := Points()
+			keys := make([]string, 0, len(points))
+			for _, p := range points {
 				keys = append(keys, p.Key())
 			}
 			So(keys, ShouldResemble, []string{"databaseDrivers", "assetTypes", "tools", "policy", "pages", "snippets"})

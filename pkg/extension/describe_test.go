@@ -221,18 +221,18 @@ func TestCachedDescribeReachesTheFirstLoadVerdict(t *testing.T) {
 			passPoint(extwire.KeyTools), passPoint(extwire.KeyPolicy), passPoint(extwire.KeySnippets),
 			passPoint(extwire.KeyPages), passPoint(extwire.KeyDatabaseDrivers))
 	}
-	verdicts := func(t *testing.T, reg *ContributionRegistry, payload string) (loadErr, infoErr error, listed int) {
+	verdicts := func(t *testing.T, reg *ContributionRegistry, payload string) (listed int, loadErr, infoErr error) {
 		root, extDir := installFixture(t)
 		useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), payload))
 		_, loadErr = newFixtureManagerWith(t, root, reg).LoadExtension(context.Background(), extDir)
 		_, infoErr = LoadManifestInfo(extDir, reg)
 		infos, err := newFixtureManagerWith(t, root, reg).ScanManifests()
 		So(err, ShouldBeNil)
-		return loadErr, infoErr, len(infos)
+		return len(infos), loadErr, infoErr
 	}
 
 	Convey("A cached answer a contribution point refuses", t, func() {
-		loadErr, infoErr, listed := verdicts(t, refusing(), sentinelDescriptor)
+		listed, loadErr, infoErr := verdicts(t, refusing(), sentinelDescriptor)
 
 		Convey("is refused on every path with the same error, naming extension, contribution and item", func() {
 			So(loadErr, ShouldNotBeNil)
@@ -245,7 +245,7 @@ func TestCachedDescribeReachesTheFirstLoadVerdict(t *testing.T) {
 
 	Convey("A cached answer with a contributes key no point is registered for", t, func() {
 		payload := `{"i18n":{"displayName":"cached","description":"c"},"contributes":{"widgets":[{"id":"w"}]}}`
-		loadErr, infoErr, listed := verdicts(t, acceptingContributions(), payload)
+		listed, loadErr, infoErr := verdicts(t, acceptingContributions(), payload)
 
 		Convey("is refused on every path with the same error, naming the key", func() {
 			So(loadErr, ShouldNotBeNil)
