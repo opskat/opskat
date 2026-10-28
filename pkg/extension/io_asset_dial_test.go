@@ -283,6 +283,26 @@ func TestAssetConnectionPath(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "ssh tunnel asset 7 unreachable: connection refused")
 		})
 
+		Convey("a path that cannot be built leaves an allowlisted request alone: it is dialed directly, as without an asset", func() {
+			direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("reached directly"))
+			}))
+			defer direct.Close()
+			dialer := &fakeAssetDialer{openErr: errors.New("TLS config: read CA file /gone/ca.pem: no such file")}
+			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})
+			m.Permissions.Network.HTTP = []string{direct.URL + "/"}
+			m.Permissions.Network.AllowPrivate = true // the allowlisted server is loopback
+
+			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": direct.URL + "/"})
+			So(out["body"], ShouldEqual, "reached directly")
+			assets, _ := dialer.dialed()
+			So(assets, ShouldBeEmpty) // the path was never built
+
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": server.URL + "/"}), Asset: fixtureAsset})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "/gone/ca.pem")
+		})
+
 		Convey("when the tunnel refuses the dial the host error reaches the caller, with no direct dial", func() {
 			dialer := &fakeAssetDialer{dialErr: errors.New("dial through tunnel: administratively prohibited")}
 			hp, _ := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})

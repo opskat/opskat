@@ -2,6 +2,7 @@ package extension_svc
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -60,9 +61,12 @@ func TestResolveScopeOfAnExtensionAsset(t *testing.T) {
 			scope, err := svc.ResolveScope(ctx, "authed", extension.AssetRef{ID: 6, Type: "authed-store"})
 			So(err, ShouldBeNil)
 			So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Scheme: "https", Host: "ES.internal", Port: "9200"}})
-			So(scope.Route, ShouldNotBeNil)
-			So(scope.Route.Direct, ShouldBeTrue)
-			So(scope.TLS, ShouldBeNil)
+			So(scope.Route, ShouldBeNil) // built only when a stream takes it
+			conn, err := scope.Connect(ctx)
+			So(err, ShouldBeNil)
+			So(conn.Route, ShouldNotBeNil)
+			So(conn.Route.Direct, ShouldBeTrue)
+			So(conn.TLS, ShouldBeNil)
 			So(scope.Ops, ShouldBeNil)
 			So(scope.Tickets, ShouldBeNil)
 			values, err := scope.Auth(ctx)
@@ -93,6 +97,31 @@ func TestResolveScopeOfAnExtensionAsset(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "does not register asset type")
 		})
+	})
+}
+
+// A connection path that cannot be built (a CA file that is gone) is the asset
+// endpoint's problem only: the scope still resolves, naming its endpoints, so a
+// request that is not to an endpoint is decided — and dialed — without it.
+func TestResolveScopeDefersABrokenConnectionPath(t *testing.T) {
+	Convey("Given an asset whose declared TLS names a missing CA file", t, func() {
+		svc, assets := newHostTestService(t)
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{TLS: true}))
+		config, err := json.Marshal(map[string]any{
+			"endpoint":                        "es.internal:9200",
+			extension.HostConnectionConfigKey: map[string]any{"tls": map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}},
+		})
+		So(err, ShouldBeNil)
+		assets.EXPECT().Find(gomock.Any(), int64(30)).
+			Return(&asset_entity.Asset{ID: 30, Type: "es-cluster", Config: string(config)}, nil).AnyTimes()
+
+		scope, err := svc.ResolveScope(context.Background(), "es", extension.AssetRef{ID: 30, Type: "es-cluster"})
+		So(err, ShouldBeNil)
+		So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Host: "es.internal", Port: "9200"}})
+		So(scope.Connect, ShouldNotBeNil)
+		_, err = scope.Connect(context.Background())
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "ca.pem")
 	})
 }
 

@@ -33,6 +33,8 @@ type invocation struct {
 	scope    *Scope
 	scopeErr error
 	resolved bool
+	// connectErr is the failure of the scope's Connect, kept for the call.
+	connectErr error
 }
 
 func newInvocation(id string, cancel *toolCancellation) *invocation {
@@ -91,6 +93,25 @@ func (inv *invocation) scopeOf(resolve func(*AssetRef) (*Scope, error)) (*Scope,
 		inv.scope = scope
 	}
 	return inv.scope, inv.scopeErr
+}
+
+// connectScope completes scope (the call's, from scopeOf) with its connection
+// path the first time a stream needs it (Scope.Connect); a failure is kept and
+// returned to every later stream that needs the path.
+func (inv *invocation) connectScope(ctx context.Context, scope *Scope) error {
+	inv.scopeMu.Lock()
+	defer inv.scopeMu.Unlock()
+	if inv.connectErr != nil || scope.Connect == nil {
+		return inv.connectErr
+	}
+	conn, err := scope.Connect(ctx)
+	if err != nil {
+		inv.connectErr = err
+		return err
+	}
+	scope.Route, scope.TLS, scope.Fingerprint = conn.Route, conn.TLS, conn.Fingerprint
+	scope.Connect = nil
+	return nil
 }
 
 // close releases everything the guest left open.

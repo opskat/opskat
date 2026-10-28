@@ -297,25 +297,31 @@ type AssetConnection struct {
 }
 
 // AssetScope 是对 at 类型资产 a 的一次调用的作用域：资产类型这一侧据此告诉运行时这次调用能
-// 到达什么——config 里 format:"endpoint" 字段写的地址是端点，conn 是连接路径，at 声明的认证
-// 分组按 creds 渲染成认证注入。运行时只按作用域与权限放行，不再自己读 configSchema 与认证声明。
-// config 是资产存着的配置（端点字段不是口令，不必解密）。
-func AssetScope(a extension.AssetRef, at *extension.AssetTypeDef, config json.RawMessage, conn AssetConnection, creds extension.CredentialValues) (*extension.Scope, error) {
+// 到达什么——config 里 format:"endpoint" 字段写的地址是端点，connect 构建连接路径，at 声明的
+// 认证分组按 creds 渲染成认证注入。运行时只按作用域与权限放行，不再自己读 configSchema 与认证
+// 声明。config 是资产存着的配置（端点字段不是口令，不必解密）。连接路径只在流真要走它（去端点、
+// 经 assetRoute）时才由运行时调 connect 构建（Scope.Connect）：白名单请求照旧直连，路径建不起来
+// （CA 文件没了、代理链解析失败）也不影响它。
+func AssetScope(a extension.AssetRef, at *extension.AssetTypeDef, config json.RawMessage, connect func(context.Context) (AssetConnection, error), creds extension.CredentialValues) (*extension.Scope, error) {
 	endpoints, err := assetEndpoints(at, config)
 	if err != nil {
 		return nil, fmt.Errorf("asset type %s: %w", at.Type, err)
 	}
-	route := &extension.Route{Dial: conn.Dial}
-	if route.Dial == nil {
-		route.Dial = (&netdial.Dialer{}).DialContext
-		route.Direct = true
-	}
 	scope := &extension.Scope{
-		Asset:       &a,
-		Endpoints:   endpoints,
-		Route:       route,
-		TLS:         conn.TLS,
-		Fingerprint: conn.Fingerprint,
+		Asset:     &a,
+		Endpoints: endpoints,
+		Connect: func(ctx context.Context) (extension.Connection, error) {
+			conn, err := connect(ctx)
+			if err != nil {
+				return extension.Connection{}, err
+			}
+			route := &extension.Route{Dial: conn.Dial}
+			if route.Dial == nil {
+				route.Dial = (&netdial.Dialer{}).DialContext
+				route.Direct = true
+			}
+			return extension.Connection{Route: route, TLS: conn.TLS, Fingerprint: conn.Fingerprint}, nil
+		},
 	}
 	if at.Auth != nil {
 		scope.Auth = at.Auth.Inject(creds)

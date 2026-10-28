@@ -43,6 +43,12 @@ type Scope struct {
 	// from: it changes whenever they change, and keys the asset's cached HTTP
 	// client (see DefaultHostProvider.httpClients).
 	Fingerprint string
+	// Connect, when set, builds Route, TLS and Fingerprint — which are then
+	// unset — the first time a stream of the call goes to one of Endpoints or
+	// along the route. A request decided otherwise (an allowlisted URL) never
+	// builds the path, so a path that cannot be built fails only the streams
+	// that would take it. Its result, error included, is kept for the call.
+	Connect func(ctx context.Context) (Connection, error)
 	// Auth renders the credentials injected into a request to one of
 	// Endpoints; nil = none.
 	Auth RequestAuth
@@ -111,6 +117,14 @@ func ParseEndpoint(value string) (Endpoint, bool) {
 		return Endpoint{}, false
 	}
 	return Endpoint{Host: host, Port: port}, true
+}
+
+// Connection is what Scope.Connect builds: the asset's route, its TLS settings
+// and their fingerprint.
+type Connection struct {
+	Route       *Route
+	TLS         *tls.Config
+	Fingerprint string
 }
 
 // Route is an asset's connection path. A Route must not be copied once used.

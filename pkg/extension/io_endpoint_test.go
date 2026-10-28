@@ -105,14 +105,20 @@ func fixtureScopes(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDi
 			}
 		}
 		if conn != nil {
-			dial, tlsConfig, fingerprint, err := conn.connection(&a)
-			if err != nil {
-				return nil, err
+			// Built only when a stream takes it, as the host builds it.
+			direct := scope.Route
+			scope.Route = nil
+			scope.Connect = func(context.Context) (Connection, error) {
+				dial, tlsConfig, fingerprint, err := conn.connection(&a)
+				if err != nil {
+					return Connection{}, err
+				}
+				route := direct
+				if dial != nil {
+					route = &Route{Dial: dial}
+				}
+				return Connection{Route: route, TLS: tlsConfig, Fingerprint: fingerprint}, nil
 			}
-			if dial != nil {
-				scope.Route = &Route{Dial: dial}
-			}
-			scope.TLS, scope.Fingerprint = tlsConfig, fingerprint
 		}
 		if def.Auth != nil {
 			scope.Auth = def.Auth.Inject(values)

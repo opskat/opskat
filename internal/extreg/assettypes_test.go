@@ -28,9 +28,11 @@ func TestAssetScope(t *testing.T) {
 	config := json.RawMessage(`{"url":"https://ES.internal:9200/base","broker":"10.0.0.5:9092","v6":"[fd00::1]:9300",
 		"empty":"","port":9200,"bare":"es.internal","other":"10.0.0.9:22"}`)
 	asset := extension.AssetRef{ID: 7, Name: "a", Type: "ep"}
+	// direct is an asset whose type declares no connection settings.
+	direct := func(context.Context) (AssetConnection, error) { return AssetConnection{}, nil }
 
 	t.Run("endpoints are the endpoint fields that name a host and a port", func(t *testing.T) {
-		scope, err := AssetScope(asset, at, config, AssetConnection{}, nil)
+		scope, err := AssetScope(asset, at, config, direct, nil)
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []extension.Endpoint{
 			{Scheme: "https", Host: "ES.internal", Port: "9200"},
@@ -44,28 +46,47 @@ func TestAssetScope(t *testing.T) {
 	})
 
 	t.Run("no dial is a direct route; a dial is the path, with its TLS and fingerprint", func(t *testing.T) {
-		scope, err := AssetScope(asset, at, config, AssetConnection{}, nil)
+		scope, err := AssetScope(asset, at, config, direct, nil)
 		require.NoError(t, err)
-		require.NotNil(t, scope.Route)
-		assert.True(t, scope.Route.Direct)
-		assert.NotNil(t, scope.Route.Dial)
+		conn, err := scope.Connect(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, conn.Route)
+		assert.True(t, conn.Route.Direct)
+		assert.NotNil(t, conn.Route.Dial)
 
 		var dialed string
 		tlsConfig := &tls.Config{ServerName: "es.internal"}
-		scope, err = AssetScope(asset, at, config, AssetConnection{
-			Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
-				dialed = addr
-				return nil, assert.AnError
-			},
-			TLS: tlsConfig, Fingerprint: "fp",
+		scope, err = AssetScope(asset, at, config, func(context.Context) (AssetConnection, error) {
+			return AssetConnection{
+				Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+					dialed = addr
+					return nil, assert.AnError
+				},
+				TLS: tlsConfig, Fingerprint: "fp",
+			}, nil
 		}, nil)
 		require.NoError(t, err)
-		assert.False(t, scope.Route.Direct)
-		_, err = scope.Route.Dial(context.Background(), "tcp", "es.internal:9200")
+		conn, err = scope.Connect(context.Background())
+		require.NoError(t, err)
+		assert.False(t, conn.Route.Direct)
+		_, err = conn.Route.Dial(context.Background(), "tcp", "es.internal:9200")
 		assert.ErrorIs(t, err, assert.AnError)
 		assert.Equal(t, "es.internal:9200", dialed)
-		assert.Same(t, tlsConfig, scope.TLS)
-		assert.Equal(t, "fp", scope.Fingerprint)
+		assert.Same(t, tlsConfig, conn.TLS)
+		assert.Equal(t, "fp", conn.Fingerprint)
+	})
+
+	t.Run("a path that cannot be built leaves the scope resolved, failing only its Connect", func(t *testing.T) {
+		called := false
+		scope, err := AssetScope(asset, at, config, func(context.Context) (AssetConnection, error) {
+			called = true
+			return AssetConnection{}, assert.AnError
+		}, nil)
+		require.NoError(t, err)
+		assert.False(t, called, "resolving the scope builds no connection path")
+		assert.Len(t, scope.Endpoints, 3)
+		_, err = scope.Connect(context.Background())
+		assert.ErrorIs(t, err, assert.AnError)
 	})
 
 	t.Run("declared auth renders the active group from the credentials", func(t *testing.T) {
@@ -74,7 +95,7 @@ func TestAssetScope(t *testing.T) {
 			{When: "bearer", Bindings: []extension.AuthBinding{{In: extension.AuthInHeader, Name: "Authorization", Value: "Bearer {{password}}"}}},
 		}}
 		creds := map[string]string{"kind": "bearer", "password": "s3cret"}
-		scope, err := AssetScope(asset, &authed, config, AssetConnection{}, func(_ context.Context, fields []string) (map[string]string, error) {
+		scope, err := AssetScope(asset, &authed, config, direct, func(_ context.Context, fields []string) (map[string]string, error) {
 			out := map[string]string{}
 			for _, f := range fields {
 				out[f] = creds[f]
@@ -93,7 +114,7 @@ func TestAssetScope(t *testing.T) {
 	})
 
 	t.Run("a config that is not an object is an error", func(t *testing.T) {
-		_, err := AssetScope(asset, at, json.RawMessage(`[1]`), AssetConnection{}, nil)
+		_, err := AssetScope(asset, at, json.RawMessage(`[1]`), direct, nil)
 		assert.Error(t, err)
 	})
 }

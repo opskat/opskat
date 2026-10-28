@@ -75,20 +75,60 @@ func (c *capHost) OpenIO(ctx context.Context, _ *AssetRef, params IOOpenParams) 
 		if err != nil {
 			return nil, err
 		}
-		endpoint, err := c.gateNetwork(ctx, inv, scope, &params)
+		way, err := c.gateNetwork(inv, scope, &params)
 		if err != nil {
 			c.logDenied(ctx, inv, scope, params, err)
 			return nil, err
 		}
-		var asset *AssetRef
-		if endpoint {
-			asset = scope.Asset
+		if way == wayDirect {
+			// Decided without the asset's connection path, which is never
+			// built for it: a path that cannot be built does not fail it.
+			return c.HostProvider.OpenIO(ctx, nil, params)
 		}
-		return c.HostProvider.OpenIO(ctx, asset, params)
+		if err := c.connect(ctx, inv, scope); err != nil {
+			return nil, err
+		}
+		if way == wayEndpoint {
+			c.dialEndpoint(scope, &params)
+			return c.HostProvider.OpenIO(ctx, scope.Asset, params)
+		}
+		if scope.Route == nil {
+			err := fmt.Errorf("%s denied: the asset %s has no connection path to dial along", params.Type, assetLabel(scope.Asset))
+			c.logDenied(ctx, inv, scope, params, err)
+			return nil, err
+		}
+		params.Dial = c.routeDial(inv, scope)
+		return c.HostProvider.OpenIO(ctx, nil, params)
 	default:
 		return c.HostProvider.OpenIO(ctx, nil, params)
 	}
 }
+
+// connect builds the scope's connection path the first time a stream takes it
+// (Scope.Connect). A failure fails that stream and every later one that would
+// take the path — never falling back to a direct or unverified connection.
+func (c *capHost) connect(ctx context.Context, inv *invocation, scope *Scope) error {
+	if err := inv.connectScope(ctx, scope); err != nil {
+		logger.Ctx(ctx).Error("extension asset connection path failed",
+			zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
+			zap.Int64("assetID", scope.Asset.ID), zap.String("assetType", scope.Asset.Type), zap.Error(err))
+		return fmt.Errorf("connection path of asset %s: %w", assetLabel(scope.Asset), err)
+	}
+	return nil
+}
+
+// streamWay is how gateNetwork admits a stream.
+type streamWay int
+
+const (
+	// wayDirect: an allowlisted URL, dialed directly.
+	wayDirect streamWay = iota
+	// wayEndpoint: one of the scope's endpoints, along the asset's route with
+	// its TLS settings and credentials.
+	wayEndpoint
+	// wayRoute: another address, along the asset's route by address.
+	wayRoute
+)
 
 // scopeOf returns the call's scope, resolving it through the inner provider the
 // first time the call needs it. A resolution failure fails this and every later
@@ -109,26 +149,26 @@ func (c *capHost) scopeOf(ctx context.Context, inv *invocation) (*Scope, error) 
 		logger.Ctx(ctx).Debug("extension call scope resolved",
 			zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
 			zap.Int64("assetID", asset.ID), zap.Int("endpoints", len(scope.Endpoints)),
-			zap.Bool("route", scope.Route != nil), zap.Bool("tls", scope.TLS != nil), zap.Bool("auth", scope.Auth != nil))
+			zap.Bool("route", scope.Route != nil || scope.Connect != nil), zap.Bool("auth", scope.Auth != nil))
 		return scope, nil
 	})
 }
 
-// gateNetwork decides how a stream may go, and sets it on params: to one of the
-// scope's endpoints (with network.assetEndpoint) along the asset's route, TLS and
-// credentials — endpoint reports this one; to an allowlisted URL directly; or,
-// with network.assetRoute, to any other address along the asset's route by
-// address. Anything else is refused, naming why.
-func (c *capHost) gateNetwork(ctx context.Context, inv *invocation, scope *Scope, params *IOOpenParams) (endpoint bool, err error) {
+// gateNetwork decides how a stream may go (streamWay) from the scope's endpoints
+// and the manifest's permissions alone — the asset's connection path is not
+// needed, and not built, to decide: to one of the scope's endpoints (with
+// network.assetEndpoint); to an allowlisted URL directly; or, with
+// network.assetRoute, to any other address along the asset's route. Anything else
+// is refused, naming why. It sets on params what the decision alone implies.
+func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParams) (streamWay, error) {
 	perms := c.manifest.Permissions.Network
 	eps := endpointSet(scope.Endpoints)
 	toEndpoint := perms.AssetEndpoint && scope.Asset != nil
-	alongRoute := perms.AssetRoute && scope.Route != nil
+	alongRoute := perms.AssetRoute && (scope.Route != nil || scope.Connect != nil)
 	switch params.Type {
 	case "http":
 		u, parseErr := url.Parse(params.URL)
 		if toEndpoint && parseErr == nil && eps.allowURL(u) {
-			c.dialEndpoint(scope, params)
 			// The asset's endpoints are the user's own addresses, private ones
 			// included; redirects are held to them.
 			params.AllowPrivate = true
@@ -141,51 +181,48 @@ func (c *capHost) gateNetwork(ctx context.Context, inv *invocation, scope *Scope
 				}
 				return fmt.Errorf("http redirect denied: %s://%s is not an endpoint of the asset %s", target.Scheme, target.Host, assetLabel(scope.Asset))
 			}
-			return true, nil
+			return wayEndpoint, nil
 		}
 		allowErr := c.manifest.CheckHTTPURL(params.URL, perms.AllowPrivate)
 		if allowErr == nil {
 			// Pass the allowPrivate permission to the dial-time guard.
 			params.AllowPrivate = perms.AllowPrivate
-			return false, nil
+			return wayDirect, nil
 		}
 		// An endpoint's own address is never "another address": it is reached
 		// as an endpoint or not at all.
 		if alongRoute && parseErr == nil && (u.Scheme == "http" || u.Scheme == "https") && !eps.allowAddr(urlHostPort(u)) {
-			params.Dial = c.routeDial(inv, scope)
 			// The route dial vets every connection itself (routeDial).
 			params.AllowPrivate = true
-			return false, nil
+			return wayRoute, nil
 		}
 		if toEndpoint {
-			return false, fmt.Errorf("http denied: target is not an endpoint of the asset %s, and %w", assetLabel(scope.Asset), allowErr)
+			return wayDirect, fmt.Errorf("http denied: target is not an endpoint of the asset %s, and %w", assetLabel(scope.Asset), allowErr)
 		}
-		return false, allowErr
+		return wayDirect, allowErr
 	case "tcp":
 		if scope.Asset == nil {
-			return false, fmt.Errorf("tcp denied: this call is not scoped to an asset, so it has no endpoint to connect to %q and no connection path to dial it along", params.Addr)
+			return wayDirect, fmt.Errorf("tcp denied: this call is not scoped to an asset, so it has no endpoint to connect to %q and no connection path to dial it along", params.Addr)
 		}
 		isEndpoint := eps.allowAddr(params.Addr)
 		if toEndpoint && isEndpoint {
-			c.dialEndpoint(scope, params)
-			return true, nil
+			return wayEndpoint, nil
 		}
 		if alongRoute && !isEndpoint {
-			params.Dial = c.routeDial(inv, scope)
-			return false, nil
+			return wayRoute, nil
 		}
 		if isEndpoint {
-			return false, fmt.Errorf("tcp denied: %q is an endpoint of the asset %s, but extension %q does not declare permissions.network.assetEndpoint",
+			return wayDirect, fmt.Errorf("tcp denied: %q is an endpoint of the asset %s, but extension %q does not declare permissions.network.assetEndpoint",
 				params.Addr, assetLabel(scope.Asset), c.manifest.Name)
 		}
 		if !perms.AssetRoute {
-			return false, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, and extension %q does not declare permissions.network.assetRoute",
+			return wayDirect, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, and extension %q does not declare permissions.network.assetRoute",
 				params.Addr, assetLabel(scope.Asset), c.manifest.Name)
 		}
-		return false, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, which has no connection path to dial it along",
+		return wayDirect, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, which has no connection path to dial it along",
 			params.Addr, assetLabel(scope.Asset))
 	}
-	return false, fmt.Errorf("unknown IO type: %q", params.Type)
+	return wayDirect, fmt.Errorf("unknown IO type: %q", params.Type)
 }
 
 // urlHostPort is the host:port a URL dials, its scheme's default port filled in.

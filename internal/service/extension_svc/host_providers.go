@@ -40,9 +40,11 @@ func (s *Service) HostConfig(extName string) extension.DefaultHostConfig {
 // extName registers; its endpoints come from the type's endpoint fields, its
 // connection path from the tunnel / proxy chain / TLS the type declares, its
 // credential injection from the type's auth groups over the asset's decrypted
-// fields. An ad-hoc call (test connection) reads all of them from a.AdHoc. A
-// connection path that cannot be built is an error — never a direct or
-// unverified fallback.
+// fields. An ad-hoc call (test connection) reads all of them from a.AdHoc. The
+// connection path is built only when a stream takes it (Scope.Connect, with that
+// stream's ctx — an SSH hop's MFA prompt is answered by the caller's responder);
+// one that cannot be built fails that stream — never a direct or unverified
+// fallback — and nothing else.
 func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.AssetRef) (*extension.Scope, error) {
 	dialer := &assetDialer{svc: s, extName: extName}
 	if a.AdHoc != nil {
@@ -50,28 +52,28 @@ func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.
 		if err != nil {
 			return nil, err
 		}
-		dial, tlsConfig, err := dialer.DialContextForConfig(ctx, a.Type, a.AdHoc)
-		if err != nil {
-			return nil, fmt.Errorf("connection path of asset type %q: %w", a.Type, err)
+		connect := func(ctx context.Context) (extreg.AssetConnection, error) {
+			dial, tlsConfig, err := dialer.DialContextForConfig(ctx, a.Type, a.AdHoc)
+			return extreg.AssetConnection{Dial: dial, TLS: tlsConfig}, err
 		}
 		creds := func(_ context.Context, fields []string) (map[string]string, error) {
 			return extension.ConfigFieldValues(a.AdHoc.Credentials, fields)
 		}
-		return extreg.AssetScope(a, def, a.AdHoc.Config, extreg.AssetConnection{Dial: dial, TLS: tlsConfig}, creds)
+		return extreg.AssetScope(a, def, a.AdHoc.Config, connect, creds)
 	}
 	_, asset, def, err := s.OwnedTypedAsset(ctx, extName, a.ID)
 	if err != nil {
 		return nil, err
 	}
-	dial, tlsConfig, fingerprint, err := dialer.DialContextFor(ctx, a.ID)
-	if err != nil {
-		return nil, fmt.Errorf("connection path of asset %d: %w", a.ID, err)
+	connect := func(ctx context.Context) (extreg.AssetConnection, error) {
+		dial, tlsConfig, fingerprint, err := dialer.DialContextFor(ctx, a.ID)
+		return extreg.AssetConnection{Dial: dial, TLS: tlsConfig, Fingerprint: fingerprint}, err
 	}
 	getter := &assetConfigGetter{svc: s, extName: extName}
 	creds := func(ctx context.Context, fields []string) (map[string]string, error) {
 		return getter.AssetCredentialValues(ctx, a.ID, fields)
 	}
-	return extreg.AssetScope(a, def, json.RawMessage(asset.Config), extreg.AssetConnection{Dial: dial, TLS: tlsConfig, Fingerprint: fingerprint}, creds)
+	return extreg.AssetScope(a, def, json.RawMessage(asset.Config), connect, creds)
 }
 
 // ownedType returns the declaration of assetType when extName registers it.
