@@ -80,8 +80,16 @@ func checkTool(t extwire.Tool, hasAssetType bool) error {
 	if err := checkToolActions(t); err != nil {
 		return err
 	}
-	if !hasAssetType {
+	if !t.PageOnly && !hasAssetType {
 		return fmt.Errorf("declares a policy action, checked on an asset of one of this extension's asset types, but the extension contributes no asset type")
+	}
+	if t.NoTimeout {
+		if !t.PageOnly {
+			return fmt.Errorf("noTimeout is only for a pageOnly tool — a tool reached through exec keeps a timeout")
+		}
+		if t.TimeoutMs != 0 {
+			return fmt.Errorf("declares both noTimeout and timeoutMs")
+		}
 	}
 	if t.TimeoutMs < 0 || t.TimeoutMs > maxToolTimeout.Milliseconds() {
 		return fmt.Errorf("timeoutMs must be between 0 (host default) and %d (%s), got %d", maxToolTimeout.Milliseconds(), maxToolTimeout, t.TimeoutMs)
@@ -121,15 +129,15 @@ func checkTool(t extwire.Tool, hasAssetType bool) error {
 			}
 		}
 	}
-	for _, name := range t.FileParams {
+	for _, name := range t.Large {
 		prop, _ := props[name].(map[string]any)
 		if typ, _ := prop["type"].(string); typ != "string" {
-			return fmt.Errorf("fileParams names %q, which is not a declared string parameter", name)
+			return fmt.Errorf("large names %q, which is not a declared string parameter", name)
 		}
 		// opsctl reads `--<name>-file` as the file form of name, so a parameter
 		// spelled that way could never be passed.
 		if _, clash := props[name+"-file"]; clash {
-			return fmt.Errorf("fileParams names %q, but %q is itself a parameter", name, name+"-file")
+			return fmt.Errorf("large names %q, but %q is itself a parameter", name, name+"-file")
 		}
 	}
 	if rawReq, exists := t.Parameters["required"]; exists {
@@ -147,20 +155,27 @@ func checkTool(t extwire.Tool, hasAssetType bool) error {
 	return nil
 }
 
-// checkToolActions checks what the tool declares it can request: a fixed action or
-// the set a per-call classification picks from, never both and never neither.
+// checkToolActions checks what the tool declares it is: a policy tool, which requests
+// a fixed action or the set a per-call classification picks from (never both), or a
+// page-only tool, which requests none. Exactly one of the two, never both, never neither.
 //
 // An action name is the segment of a rule <action>[:<resource-glob>] that ends at
 // the first ':' — a name that itself contains ':' (or whitespace, which a rule is
 // trimmed of) could not be told apart from an action plus a resource, so it is
 // refused here rather than silently never matching.
 func checkToolActions(t extwire.Tool) error {
+	if t.PageOnly {
+		if len(t.Actions()) > 0 {
+			return fmt.Errorf("declares both pageOnly and a policy action — a tool is either checked against the asset's permission groups or only for the extension's pages")
+		}
+		return nil
+	}
 	if t.PolicyAction != "" && len(t.PolicyActions) > 0 {
 		return fmt.Errorf("declares both policyAction and policyActions — a tool's action is either fixed or classified per call")
 	}
 	actions := t.Actions()
 	if len(actions) == 0 {
-		return fmt.Errorf("declares no policy action — every tool is checked against the asset's permission groups")
+		return fmt.Errorf("declares neither a policy action nor pageOnly — a tool is checked against the asset's permission groups or is only for the extension's pages")
 	}
 	seen := make(map[string]struct{}, len(actions))
 	for _, a := range actions {

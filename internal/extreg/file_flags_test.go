@@ -28,7 +28,7 @@ func registerBulkExtension(t *testing.T) *extension.Manifest {
 			},
 		},
 		PolicyAction: "object.write",
-		FileParams:   []string{"body"},
+		Large:        []string{"body"},
 	}, extension.ToolDef{
 		Name: "pair",
 		Parameters: map[string]any{
@@ -39,7 +39,7 @@ func registerBulkExtension(t *testing.T) *extension.Manifest {
 			},
 		},
 		PolicyAction: "object.write",
-		FileParams:   []string{"a", "b"},
+		Large:        []string{"a", "b"},
 	})
 	localized := m.Localized(func(k string) string { return k })
 	require.NoError(t, attachLoaded(loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}},
@@ -139,7 +139,7 @@ func TestParseCommandRejectsFileFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), `no parameter "body-file"`)
 }
 
-func TestExpandFileFlagsOnlyForFileParamsOfTheTool(t *testing.T) {
+func TestExpandFileFlagsOnlyForLargeOfTheTool(t *testing.T) {
 	registerBulkExtension(t)
 	// index is not file-readable: its -file form is not expanded (the desktop then
 	// rejects it as an unknown flag).

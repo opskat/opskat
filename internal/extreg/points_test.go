@@ -420,9 +420,9 @@ func TestToolRules(t *testing.T) {
 		})
 	})
 
-	Convey("A tool may mark string parameters as file-readable", t, func() {
-		tool := func(fileParams string) []byte {
-			return desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"},"n":{"type":"integer"}}},"fileParams":` + fileParams + `}]`)
+	Convey("A tool may mark string parameters as large", t, func() {
+		tool := func(large string) []byte {
+			return desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"},"n":{"type":"integer"}}},"large":` + large + `}]`)
 		}
 		Convey("a string parameter is accepted", func() {
 			So(check(t, tool(`["body"]`)), ShouldBeNil)
@@ -430,19 +430,67 @@ func TestToolRules(t *testing.T) {
 		Convey("a non-string parameter is refused at load", func() {
 			err := check(t, tool(`["n"]`))
 			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, `tools[t]: fileParams`)
+			So(err.Error(), ShouldContainSubstring, `tools[t]: large`)
 		})
 		Convey("an undeclared parameter is refused at load", func() {
 			err := check(t, tool(`["nope"]`))
 			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, `tools[t]: fileParams`)
+			So(err.Error(), ShouldContainSubstring, `tools[t]: large`)
 		})
 		// opsctl reads --body-file as body's file form, so a real body-file
 		// parameter could never be passed.
 		Convey("a parameter whose -file spelling is itself a parameter is refused at load", func() {
-			err := check(t, desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"},"body-file":{"type":"string"}}},"fileParams":["body"]}]`))
+			err := check(t, desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"},"body-file":{"type":"string"}}},"large":["body"]}]`))
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, `"body-file"`)
+		})
+	})
+}
+
+// 每个工具恰好二选一：策略动作，或只给页面用；都有或都无是点名该工具的错误。
+func TestToolIsPolicyOrPageOnly(t *testing.T) {
+	const params = `"parameters":{"type":"object","properties":{}}`
+	tools := func(entries ...string) []byte {
+		return describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
+			`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
+			`"tools":[` + strings.Join(entries, ",") + `],"policy":{"type":"x"}`)
+	}
+	refused := func(entry string, wants ...string) {
+		err := check(t, tools(entry))
+		So(err, ShouldNotBeNil)
+		for _, w := range wants {
+			So(err.Error(), ShouldContainSubstring, w)
+		}
+	}
+	Convey("A tool is exactly a policy tool or a page-only tool", t, func() {
+		Convey("a page-only tool needs no policy action", func() {
+			So(check(t, tools(`{"name":"ui","pageOnly":true,`+params+`}`)), ShouldBeNil)
+		})
+		Convey("a tool with neither is refused, naming it", func() {
+			refused(`{"name":"bare",`+params+`}`, "tools[bare]", "pageOnly")
+		})
+		Convey("a tool with both is refused, naming it", func() {
+			refused(`{"name":"both","pageOnly":true,"policyAction":"read",`+params+`}`, "tools[both]", "pageOnly")
+			refused(`{"name":"both","pageOnly":true,"policyActions":["read"],`+params+`}`, "tools[both]", "pageOnly")
+		})
+		Convey("only a page-only tool may declare no timeout", func() {
+			So(check(t, tools(`{"name":"ui","pageOnly":true,"noTimeout":true,`+params+`}`)), ShouldBeNil)
+			refused(`{"name":"p","policyAction":"read","noTimeout":true,`+params+`}`, "tools[p]", "noTimeout")
+			refused(`{"name":"ui","pageOnly":true,"noTimeout":true,"timeoutMs":1000,`+params+`}`, "tools[ui]", "noTimeout")
+		})
+		Convey("a page-only tool does not need an asset type or a policy type", func() {
+			So(check(t, describeJSON(`"tools":[{"name":"ui","pageOnly":true,`+params+`}]`)), ShouldBeNil)
+		})
+		Convey("the policy type is required once any tool declares a policy action", func() {
+			noType := func(entries ...string) error {
+				return check(t, describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},`+
+					`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],`+
+					`"tools":[`+strings.Join(entries, ",")+`]`))
+			}
+			So(noType(`{"name":"ui","pageOnly":true,`+params+`}`), ShouldBeNil)
+			err := noType(`{"name":"ui","pageOnly":true,`+params+`}`, `{"name":"p","policyAction":"read",`+params+`}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "policy.type")
 		})
 	})
 }

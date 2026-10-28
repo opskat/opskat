@@ -176,7 +176,7 @@ func helpDocument(skillMD, extName string, localized *extension.Manifest) string
 	if body := strings.TrimSpace(skillMD); body != "" {
 		parts = append(parts, body)
 	}
-	if ref := strings.TrimSpace(localized.ToolReference()); ref != "" {
+	if ref := strings.TrimSpace(toolReference(localized)); ref != "" {
 		parts = append(parts, ref)
 	}
 	if len(parts) == 0 {

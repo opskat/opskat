@@ -14,6 +14,10 @@ import (
 	"github.com/opskat/opskat/pkg/extension"
 )
 
+// pageOnlyRefusal is what exec answers for a tool declared pageOnly: such a tool has no
+// policy action to check, so the only entry to it is the extension's own pages.
+const pageOnlyRefusal = "该工具只供扩展页面使用"
+
 // parseCommand 把 `<tool> --flag=value`（或 `<tool> --flag value`，见下）解析成工具名
 // 与按 manifest 声明类型转换过的 JSON 参数。扩展名不在命令里：资产类型 → 扩展是一对一的
 // （注册时强制），命令面上再写一次扩展名只是让模型多一个能写错的位置。
@@ -36,6 +40,9 @@ func parseCommand(m *extension.Manifest, command string) (string, []byte, error)
 	if !ok {
 		return "", nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
 			m.Name, toolName, strings.Join(toolNames(m), ", "))
+	}
+	if def.PageOnly {
+		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, pageOnlyRefusal)
 	}
 	if len(c.Args) > 0 {
 		// 位置参数无处可去：manifest 的 parameters 只有具名属性。静默丢弃会让模型

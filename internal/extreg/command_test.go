@@ -244,6 +244,29 @@ func TestParseCommand(t *testing.T) {
 // including a string or array value that happens to be the literal "true", which
 // must not come out as a bare flag that the space-separated form then reads as
 // "take the next word".
+// A page-only tool is for the extension's pages: exec — the AI's and opsctl's —
+// refuses it before anything is approved or run, and says why. The page path
+// validates arguments by tool name and still reaches it.
+func TestParseCommandRefusesPageOnlyTools(t *testing.T) {
+	m := &extension.Manifest{
+		Manifest: extmanifest.Manifest{Name: "notebook"},
+		Tools: []extension.ToolDef{{
+			Name: "notes", PageOnly: true,
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}
+	_, _, err := parseCommand(m, `notes`)
+	if err == nil || !strings.Contains(err.Error(), "该工具只供扩展页面使用") {
+		t.Fatalf("exec on a page-only tool: err = %v, want the page-only refusal", err)
+	}
+	if _, err := canonicalCommand(m, `notes`); err == nil || !strings.Contains(err.Error(), "该工具只供扩展页面使用") {
+		t.Fatalf("canonicalize must refuse before approval: err = %v", err)
+	}
+	if _, err := ValidateToolArgs(m, "notes", []byte(`{}`)); err != nil {
+		t.Fatalf("a page call to a page-only tool must pass validation: %v", err)
+	}
+}
+
 func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
 	m := &extension.Manifest{
 		Manifest: extmanifest.Manifest{Name: "notes"},

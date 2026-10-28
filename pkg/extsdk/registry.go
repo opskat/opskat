@@ -85,8 +85,27 @@ type toolEntry struct {
 	reject func(args json.RawMessage) (*ArgsRejectedError, error)
 	// timeout is the tool's own call timeout; 0 leaves the host default.
 	timeout time.Duration
-	// fileParams are the string parameters opsctl may read from a file (FileParam).
-	fileParams []string
+	// large are the string parameters that carry large content, which opsctl may
+	// read from a file (Large).
+	large []string
+	// pageOnly and noTimeout are the page-only declaration (PageOnly, NoTimeout).
+	pageOnly  bool
+	noTimeout bool
+}
+
+// declaresPolicy reports whether a policy action was declared.
+func (e *toolEntry) declaresPolicy() bool { return e.action != "" || e.classify != nil }
+
+// check is the registration rule that every tool is exactly a policy tool or a
+// page-only tool; describe runs it once the whole declaration chain has run.
+func (e *toolEntry) check() error {
+	switch {
+	case !e.pageOnly && !e.declaresPolicy():
+		return fmt.Errorf("opskat: tool %q declares neither a policy action (Policy / PolicyFunc / PolicyResources) nor PageOnly", e.name)
+	case e.noTimeout && !e.pageOnly:
+		return fmt.Errorf("opskat: tool %q: only a PageOnly tool may declare NoTimeout", e.name)
+	}
+	return nil
 }
 
 type assetTypeEntry struct {
@@ -191,9 +210,9 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 	return &ToolReg[T]{e: entry}
 }
 
-// FileParam marks the string parameter name (its JSON field name) as file-readable:
-// `opsctl exec <asset> -- <tool> --<name>-file <path>` (or `-` for stdin) is
-// exactly `--<name> <file content>`, so a large payload — an NDJSON bulk body —
+// Large marks the string parameter name (its JSON field name) as carrying large
+// content: `opsctl exec <asset> -- <tool> --<name>-file <path>` (or `-` for stdin)
+// is exactly `--<name> <file content>`, so a large payload — an NDJSON bulk body —
 // need not be squeezed onto a command line. The marker changes nothing in the
 // handler, which still receives the content as the ordinary argument, and nothing
 // in policy, approval or audit, which see the content too. Only opsctl reads files:
@@ -202,22 +221,45 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 // It panics unless name is a declared string parameter whose `<name>-file`
 // spelling is not a parameter too, and on a repeat: like every other registration
 // error it fails the extension at load, not at first use.
-func (r *ToolReg[T]) FileParam(name string) *ToolReg[T] {
+func (r *ToolReg[T]) Large(name string) *ToolReg[T] {
 	props, _ := r.e.schema["properties"].(map[string]any)
 	prop, ok := props[name].(map[string]any)
 	if !ok {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): no such parameter", r.e.name, name))
+		panic(fmt.Sprintf("opskat: tool %q Large(%q): no such parameter", r.e.name, name))
 	}
 	if _, clash := props[name+"-file"]; clash {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): %q is itself a parameter, which opsctl would read as the file form", r.e.name, name, name+"-file"))
+		panic(fmt.Sprintf("opskat: tool %q Large(%q): %q is itself a parameter, which opsctl would read as the file form", r.e.name, name, name+"-file"))
 	}
 	if typ, _ := prop["type"].(string); typ != "string" {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): only a string parameter can be read from a file, not %v", r.e.name, name, prop["type"]))
+		panic(fmt.Sprintf("opskat: tool %q Large(%q): only a string parameter can be read from a file, not %v", r.e.name, name, prop["type"]))
 	}
-	if slices.Contains(r.e.fileParams, name) {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q) is already declared", r.e.name, name))
+	if slices.Contains(r.e.large, name) {
+		panic(fmt.Sprintf("opskat: tool %q Large(%q) is already declared", r.e.name, name))
 	}
-	r.e.fileParams = append(r.e.fileParams, name)
+	r.e.large = append(r.e.large, name)
+	return r
+}
+
+// PageOnly declares the tool is called only by the extension's pages: it has no
+// policy action, is left out of help and exec refuses it. Every tool declares
+// exactly one of this and a policy action (Policy, PolicyFunc, PolicyResources);
+// declaring both panics, and declaring neither fails describe, naming the tool.
+func (r *ToolReg[T]) PageOnly() *ToolReg[T] {
+	if r.e.declaresPolicy() {
+		panic(fmt.Sprintf("opskat: tool %q already declares a policy action; PageOnly is exclusive with it", r.e.name))
+	}
+	r.e.pageOnly = true
+	return r
+}
+
+// NoTimeout lets a PageOnly tool run without a call timeout, for work that lasts
+// as long as the page keeps it going. A policy tool cannot declare it, and it
+// excludes Timeout.
+func (r *ToolReg[T]) NoTimeout() *ToolReg[T] {
+	if r.e.timeout != 0 {
+		panic(fmt.Sprintf("opskat: tool %q declares both Timeout and NoTimeout", r.e.name))
+	}
+	r.e.noTimeout = true
 	return r
 }
 
@@ -225,6 +267,9 @@ func (r *ToolReg[T]) FileParam(name string) *ToolReg[T] {
 // against the user's permission groups before the tool runs; every tool needs
 // either this, PolicyFunc or PolicyResources.
 func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
+	if r.e.pageOnly {
+		panic(fmt.Sprintf("opskat: tool %q is PageOnly; Policy is exclusive with it", r.e.name))
+	}
 	if r.e.classify != nil {
 		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources; Policy is exclusive with both", r.e.name))
 	}
@@ -277,6 +322,9 @@ func (r *ToolReg[T]) PolicyResources(actions []string, fn func(args T) (action s
 func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource bool, fn func(args T) (string, []string)) {
 	if len(actions) == 0 {
 		panic(fmt.Sprintf("opskat: tool %q: %s needs the set of actions it can return", r.e.name, method))
+	}
+	if r.e.pageOnly {
+		panic(fmt.Sprintf("opskat: tool %q is PageOnly; %s is exclusive with it", r.e.name, method))
 	}
 	if r.e.action != "" || r.e.resource != nil || r.e.classify != nil {
 		panic(fmt.Sprintf("opskat: tool %q already declares its policy; %s replaces Policy/Resource and excludes the other classifier", r.e.name, method))
@@ -346,7 +394,7 @@ func (e *toolEntry) checkArgs(args json.RawMessage) (*ArgsRejectedError, error) 
 	return e.reject(args)
 }
 
-// maxToolTimeout mirrors the host's ceiling (pkg/extension MaxToolTimeout): a
+// maxToolTimeout mirrors the host's ceiling (extreg's maxToolTimeout): a
 // tool call holds one of the extension's few instance slots while it runs, so
 // work that needs longer belongs in an action.
 const maxToolTimeout = 10 * time.Minute
@@ -358,6 +406,9 @@ const maxToolTimeout = 10 * time.Minute
 func (r *ToolReg[T]) Timeout(d time.Duration) *ToolReg[T] {
 	if d < time.Millisecond || d > maxToolTimeout {
 		panic(fmt.Sprintf("opskat: tool %q: timeout %s is outside [1ms, %s]", r.e.name, d, maxToolTimeout))
+	}
+	if r.e.noTimeout {
+		panic(fmt.Sprintf("opskat: tool %q declares both Timeout and NoTimeout", r.e.name))
 	}
 	r.e.timeout = d
 	return r

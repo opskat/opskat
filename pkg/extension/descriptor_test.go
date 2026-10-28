@@ -247,11 +247,11 @@ func TestParseDescriptorPolicyActionSets(t *testing.T) {
 	})
 }
 
-func TestParseDescriptorFileParams(t *testing.T) {
+func TestParseDescriptorLarge(t *testing.T) {
 	Convey("A tool's file-readable string parameters are kept on the tool", t, func() {
-		d, err := ParseDescriptor(desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"}}},"fileParams":["body"]}]`))
+		d, err := ParseDescriptor(desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"body":{"type":"string"}}},"large":["body"]}]`))
 		So(err, ShouldBeNil)
-		So(d.Tools[0].FileParams, ShouldResemble, []string{"body"})
+		So(d.Tools[0].Large, ShouldResemble, []string{"body"})
 	})
 }
 

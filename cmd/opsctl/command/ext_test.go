@@ -379,10 +379,10 @@ func TestExtRoutesDevToTheDevSubcommand(t *testing.T) {
 	assert.Equal(t, dir, *sent)
 }
 
-// --- file-readable parameters -------------------------------------------------
+// --- large parameters -------------------------------------------------
 
 // registerBulkExtension makes opsctl learn, from the cached describe(), an
-// extension whose `bulk` tool has a file-readable `body` parameter.
+// extension whose `bulk` tool has a large `body` parameter.
 func registerBulkExtension(t *testing.T) {
 	t.Helper()
 	dir := withExtensionDir(t)
@@ -393,7 +393,7 @@ func registerBulkExtension(t *testing.T) {
 	d["contributes"]["tools"] = []map[string]any{{
 		"name":         "bulk",
 		"policyAction": "write",
-		"fileParams":   []string{"body"},
+		"large":        []string{"body"},
 		"parameters": map[string]any{"type": "object", "properties": map[string]any{
 			"body":  map[string]any{"type": "string"},
 			"index": map[string]any{"type": "string"},

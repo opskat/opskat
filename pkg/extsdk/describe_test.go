@@ -577,7 +577,7 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 	})
 }
 
-func TestDescribeReportsFileParams(t *testing.T) {
+func TestDescribeReportsLargeParams(t *testing.T) {
 	type bulkArgs struct {
 		Body     string `json:"body"`
 		Index    string `json:"index"`
@@ -585,10 +585,10 @@ func TestDescribeReportsFileParams(t *testing.T) {
 		IndexArg string `json:"index-file"`
 	}
 	noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
-	Convey("a string parameter marked file-readable is reported by describe", t, func() {
+	Convey("a string parameter marked large is reported by describe", t, func() {
 		resetRegistries()
 		AssetType[demoConfig]("demo")
-		Tool("bulk", noop).Policy("write").FileParam("body")
+		Tool("bulk", noop).Policy("write").Large("body")
 		Tool("plain", noop).Policy("read")
 
 		byName := map[string]map[string]any{}
@@ -596,16 +596,77 @@ func TestDescribeReportsFileParams(t *testing.T) {
 			tool := raw.(map[string]any)
 			byName[tool["name"].(string)] = tool
 		}
-		So(byName["bulk"]["fileParams"], ShouldResemble, []any{"body"})
-		So(byName["plain"], ShouldNotContainKey, "fileParams")
+		So(byName["bulk"]["large"], ShouldResemble, []any{"body"})
+		So(byName["plain"], ShouldNotContainKey, "large")
 
 		Convey("a non-string, unknown or repeated parameter fails at registration", func() {
 			reg := Tool("bad", noop).Policy("read")
-			So(func() { reg.FileParam("size") }, ShouldPanic)
-			So(func() { reg.FileParam("missing") }, ShouldPanic)
-			So(func() { reg.FileParam("body") }, ShouldNotPanic)
-			So(func() { reg.FileParam("body") }, ShouldPanic)
-			So(func() { reg.FileParam("index") }, ShouldPanic) // its -file spelling is the index-file parameter
+			So(func() { reg.Large("size") }, ShouldPanic)
+			So(func() { reg.Large("missing") }, ShouldPanic)
+			So(func() { reg.Large("body") }, ShouldNotPanic)
+			So(func() { reg.Large("body") }, ShouldPanic)
+			So(func() { reg.Large("index") }, ShouldPanic) // its -file spelling is the index-file parameter
+		})
+	})
+}
+
+func TestToolDeclaresPolicyOrPageOnly(t *testing.T) {
+	type args struct {
+		Q string `json:"q"`
+	}
+	noop := func(_ *ToolContext, _ args) (any, error) { return nil, nil }
+	describeErr := func() error {
+		_, err := dispatchDescribe()
+		return err
+	}
+	Convey("every tool is exactly a policy tool or a page-only tool", t, func() {
+		resetRegistries()
+		AssetType[demoConfig]("demo")
+
+		Convey("a page-only tool is reported with pageOnly and no policy action", func() {
+			Tool("ui", noop).PageOnly()
+			Tool("run", noop).Policy("read")
+			So(describeErr(), ShouldBeNil)
+			byName := map[string]map[string]any{}
+			for _, raw := range decodeContributes(t)["tools"].([]any) {
+				tool := raw.(map[string]any)
+				byName[tool["name"].(string)] = tool
+			}
+			So(byName["ui"]["pageOnly"], ShouldEqual, true)
+			So(byName["ui"], ShouldNotContainKey, "policyAction")
+			So(byName["run"], ShouldNotContainKey, "pageOnly")
+		})
+		Convey("a page-only tool may declare no timeout and reports it", func() {
+			Tool("ui", noop).PageOnly().NoTimeout()
+			So(describeErr(), ShouldBeNil)
+			tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
+			So(tool["noTimeout"], ShouldEqual, true)
+		})
+		Convey("a tool declaring neither fails describe, naming the tool", func() {
+			Tool("bare", noop)
+			err := describeErr()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"bare"`)
+		})
+		Convey("a tool declaring both fails at registration, in either order", func() {
+			So(func() { Tool("a", noop).Policy("read").PageOnly() }, ShouldPanic)
+			So(func() { Tool("b", noop).PageOnly().Policy("read") }, ShouldPanic)
+			So(func() {
+				Tool("c", noop).PageOnly().PolicyFunc([]string{"read"}, func(args) (string, string) { return "read", "" })
+			}, ShouldPanic)
+			So(func() {
+				Tool("d", noop).PolicyResources([]string{"read"}, func(args) (string, []string) { return "read", nil }).PageOnly()
+			}, ShouldPanic)
+		})
+		Convey("a policy tool cannot declare no timeout", func() {
+			Tool("p", noop).Policy("read").NoTimeout()
+			err := describeErr()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"p"`)
+		})
+		Convey("Timeout and NoTimeout exclude each other", func() {
+			So(func() { Tool("e", noop).PageOnly().Timeout(time.Second).NoTimeout() }, ShouldPanic)
+			So(func() { Tool("f", noop).PageOnly().NoTimeout().Timeout(time.Second) }, ShouldPanic)
 		})
 	})
 }

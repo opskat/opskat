@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // I18nName is an i18n key naming one item.
@@ -106,39 +105,6 @@ type AuthBinding struct {
 	In    string `json:"in"`
 	Name  string `json:"name,omitempty"`
 	Value string `json:"value"`
-}
-
-// Tool is one tool the extension contributes (KeyTools).
-type Tool struct {
-	Name       string         `json:"name"`
-	I18n       I18nDesc       `json:"i18n"`
-	Parameters map[string]any `json:"parameters"`
-	// PolicyAction is the fixed action this tool requests; the asset's
-	// permission groups are matched against it.
-	PolicyAction string `json:"policyAction,omitempty"`
-	// PolicyActions is, instead of PolicyAction, the set of actions a tool that
-	// classifies each call from its arguments may answer check_policy with. A
-	// tool declares exactly one of the two.
-	PolicyActions []string `json:"policyActions,omitempty"`
-	// TimeoutMs is how long one call of this tool may run, in milliseconds; 0
-	// means the host default. It holds for every caller alike.
-	TimeoutMs int64 `json:"timeoutMs,omitempty"`
-	// FileParams names the string parameters opsctl may fill from a file
-	// (`--<name>-file <path>`); every other entry point rejects that form.
-	FileParams []string `json:"fileParams,omitempty"`
-}
-
-// Timeout is the tool's declared call timeout, 0 when it leaves the host default.
-func (t Tool) Timeout() time.Duration {
-	return time.Duration(t.TimeoutMs) * time.Millisecond
-}
-
-// Actions is every policy action the tool can request.
-func (t Tool) Actions() []string {
-	if t.PolicyAction != "" {
-		return []string{t.PolicyAction}
-	}
-	return t.PolicyActions
 }
 
 // Policy is the extension's policy face (KeyPolicy): the type its asset types

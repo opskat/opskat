@@ -1,13 +1,15 @@
-package extension
+package extreg
 
 import (
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/opskat/opskat/pkg/extension"
 )
 
-// ToolReference renders the tools the guest reported through describe() as the
+// toolReference renders the tools the guest reported through describe() as the
 // command-syntax section of the extension's help document.
 //
 // Without it the model would have to guess flag names and types from the extension's
@@ -15,14 +17,22 @@ import (
 // never disagree — and since that declaration is reflected from the handler's own
 // argument type, neither can drift from the code that runs.
 //
+// Page-only tools are left out: exec refuses them, so telling the model they exist
+// would only invite calls that cannot succeed.
+//
 // Call it on a Localized manifest so the i18n keys in tools[].i18n.description are
 // resolved; on a raw manifest the keys are printed as-is, which is still honest but
 // unhelpful.
-func (m *Manifest) ToolReference() string {
-	if len(m.Tools) == 0 {
+func toolReference(m *extension.Manifest) string {
+	tools := make([]extension.ToolDef, 0, len(m.Tools))
+	for _, t := range m.Tools {
+		if !t.PageOnly {
+			tools = append(tools, t)
+		}
+	}
+	if len(tools) == 0 {
 		return ""
 	}
-	tools := append([]ToolDef(nil), m.Tools...)
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 
 	var b strings.Builder
@@ -53,11 +63,10 @@ func (m *Manifest) ToolReference() string {
 			b.WriteString(codeList(actions))
 			b.WriteString("\n")
 		}
-		params := renderToolParams(t)
 		b.WriteString("\n")
-		b.WriteString(params)
+		b.WriteString(renderToolParams(t))
 	}
-	b.WriteString(m.grantReference())
+	b.WriteString(grantReference(m))
 	return b.String()
 }
 
@@ -65,7 +74,7 @@ func (m *Manifest) ToolReference() string {
 // matches an extension call by its policy (action, resource), never by command text,
 // so a request_permission pattern shaped like a command could never match — the host
 // refuses it. Without the declared actions there is nothing to write a pattern with.
-func (m *Manifest) grantReference() string {
+func grantReference(m *extension.Manifest) string {
 	actions := m.Policies.Actions
 	if len(actions) == 0 {
 		return ""
@@ -90,7 +99,7 @@ func codeList(items []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-func renderToolParams(t ToolDef) string {
+func renderToolParams(t extension.ToolDef) string {
 	props, _ := t.Parameters["properties"].(map[string]any)
 	if len(props) == 0 {
 		return "Takes no parameters.\n"
@@ -126,17 +135,10 @@ func renderToolParams(t ToolDef) string {
 		if desc == "" {
 			desc, _ = prop["title"].(string)
 		}
-		fmt.Fprintf(&b, "| `--%s` | %s | %s | %s |\n", name, typ, req, escapeTableCell(desc))
-		if slices.Contains(t.FileParams, name) {
+		fmt.Fprintf(&b, "| `--%s` | %s | %s | %s |\n", name, typ, req, tableCell(desc))
+		if slices.Contains(t.Large, name) {
 			fmt.Fprintf(&b, "| `--%s-file` | string (path, or `-` for stdin) | no | opsctl only: reads `--%s` from a file; not accepted with `--%s` or through AI exec |\n", name, name, name)
 		}
 	}
 	return b.String()
-}
-
-// escapeTableCell keeps a description containing "|" or a newline from breaking the
-// markdown row it is rendered into.
-func escapeTableCell(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.ReplaceAll(s, "|", "\\|")
 }

@@ -57,14 +57,19 @@ func dispatchDescribe() (json.RawMessage, error) {
 	toolWire := make([]extwire.Tool, 0, len(toolOrder))
 	for _, name := range toolOrder {
 		t := tools[name]
+		if err := t.check(); err != nil {
+			return nil, err
+		}
 		toolWire = append(toolWire, extwire.Tool{
 			Name:          t.name,
 			I18n:          extwire.I18nDesc{Description: t.doc},
 			Parameters:    t.schema,
 			PolicyAction:  t.action,
 			PolicyActions: t.actions,
+			PageOnly:      t.pageOnly,
 			TimeoutMs:     t.timeout.Milliseconds(),
-			FileParams:    t.fileParams,
+			NoTimeout:     t.noTimeout,
+			Large:         t.large,
 		})
 	}
 
