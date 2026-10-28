@@ -15,37 +15,26 @@ var (
 	snippetSeedKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 )
 
-// builtinCategoryIDs is the immutable set of category ids owned by the app core.
-// Extensions may not re-declare these — they are reserved.
-var builtinCategoryIDs = map[string]struct{}{
-	"shell":  {},
-	"sql":    {},
-	"redis":  {},
-	"mongo":  {},
-	"prompt": {},
-}
-
-func isBuiltinCategoryID(id string) bool {
-	_, ok := builtinCategoryIDs[id]
-	return ok
-}
-
 // ContributionPoint is the snippet contribution point: the rules for the snippet
 // categories and seed snippets an extension contributes (describe()'s snippets).
 //
 // Attaching is a no-op: the category registry reads the categories of the loaded
 // extensions through its provider (RefreshFromExtensions), and seeds are synced and
 // removed by the extension's install and uninstall (extension_svc).
-func ContributionPoint() extension.ContributionPoint { return snippetsPoint{} }
+//
+// Which categories are builtin is decided by the host's CategoryRegistry alone.
+func ContributionPoint() extension.ContributionPoint {
+	return snippetsPoint{categories: NewCategoryRegistry()}
+}
 
-type snippetsPoint struct{}
+type snippetsPoint struct{ categories *CategoryRegistry }
 
 func (snippetsPoint) Key() string { return extwire.KeySnippets }
 
 // Check validates the snippets block; both of its halves are optional. A category
 // is shown for one of the extension's own asset types; a seed goes into a builtin
 // category or one the extension declares.
-func (snippetsPoint) Check(v extension.ExtensionView) error {
+func (p snippetsPoint) Check(v extension.ExtensionView) error {
 	raw := v.Contribution(extwire.KeySnippets)
 	if raw == nil {
 		return nil
@@ -75,7 +64,7 @@ func (snippetsPoint) Check(v extension.ExtensionView) error {
 		if !snippetCatIDRe.MatchString(c.ID) {
 			return fmt.Errorf("snippets.categories[%s]: id must match %s", c.ID, snippetCatIDRe.String())
 		}
-		if isBuiltinCategoryID(c.ID) {
+		if p.categories.IsBuiltin(c.ID) {
 			return fmt.Errorf("snippets.categories[%s]: id collides with a builtin category", c.ID)
 		}
 		if _, dup := catIDs[c.ID]; dup {
@@ -112,7 +101,7 @@ func (snippetsPoint) Check(v extension.ExtensionView) error {
 			return fmt.Errorf("snippets.seed[%s]: category is required", seed.Key)
 		}
 		_, isLocal := catIDs[seed.Category]
-		if !isBuiltinCategoryID(seed.Category) && !isLocal {
+		if !p.categories.IsBuiltin(seed.Category) && !isLocal {
 			return fmt.Errorf("snippets.seed[%s]: category %q is neither builtin nor declared by this extension", seed.Key, seed.Category)
 		}
 	}

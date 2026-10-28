@@ -68,6 +68,18 @@ func TestSnippetContributionPoint(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "builtin")
 		})
 
+		Convey("every category of the host registry is reserved and seedable", func() {
+			reg := NewCategoryRegistry()
+			for _, c := range reg.List() {
+				So(reg.IsBuiltin(c.ID), ShouldBeTrue)
+				err := checkSnippets(`{"categories":[{"id":"` + c.ID + `","assetType":"x","i18n":{"name":"n"}}]}`)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "snippets.categories["+c.ID+"]")
+				So(checkSnippets(`{"seed":[{"key":"s","name":"s","category":"`+c.ID+`","content":"x"}]}`), ShouldBeNil)
+			}
+			So(reg.IsBuiltin("kafka"), ShouldBeFalse)
+		})
+
 		Convey("a duplicate category id", func() {
 			err := checkSnippets(`{"categories":[` +
 				`{"id":"kafka","assetType":"x","i18n":{"name":"n"}},` +
