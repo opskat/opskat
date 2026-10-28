@@ -65,8 +65,9 @@ func TestPageSlotsMatchFrontend(t *testing.T) {
 	require.NoError(t, err)
 	m := regexp.MustCompile(`PAGE_SLOTS\s*=\s*\[([^\]]*)\]`).FindSubmatch(src)
 	require.NotNil(t, m, "PAGE_SLOTS array not found in slots.ts")
-	var ts []string
-	for _, q := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(m[1], -1) {
+	quoted := regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(m[1], -1)
+	ts := make([]string, 0, len(quoted))
+	for _, q := range quoted {
 		ts = append(ts, string(q[1]))
 	}
 	got := slices.Clone(PageSlots)
