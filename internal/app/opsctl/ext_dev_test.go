@@ -439,7 +439,7 @@ func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 
 	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
 
-	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\npermissions:\n  network.http: https://api.example.com/",
+	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\npermissions:\n  network.http: https://api.example.com/ (new)",
 		approver.prompts[0].Detail)
 }
 
@@ -527,4 +527,47 @@ func TestHandleExtDevInstallAssetRouteNewMark(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The approval lists every declared permission and driver id, one line each, and
+// marks exactly the high-risk ones — credentials: read, network.assetRoute and
+// kerberos — and what an overwrite adds, the same way the desktop dialog does.
+func TestHandleExtDevInstallListsEveryPermissionAndMarksHighRiskAndNew(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"full","version":"2.0.0","hostABI":"1.0",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "permissions": {"fs": {"read": ["/r"], "write": ["/w"]}, "credentials": "read", "kerberos": true,
+    "network": {"http": ["https://a.example.com/", "https://b.example.com/"], "allowPrivate": true, "assetEndpoint": true, "assetRoute": true}},
+  "contributes": {"databaseDrivers": ["d1"]}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{
+		installed: map[string]string{"full": "1.0.0"},
+		contracts: map[string]extmanifest.Manifest{"full": {Permissions: extmanifest.Permissions{
+			Network: extmanifest.NetworkPermission{HTTP: []string{"https://a.example.com/"}},
+		}}},
+	}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+
+	lines := map[string]string{}
+	for _, l := range strings.Split(approver.prompts[0].Detail, "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(l), ": "); ok {
+			lines[k] = v
+		}
+	}
+	for _, k := range []string{"fs.read", "fs.write", "network.http", "credentials", "network.allowPrivate",
+		"network.assetEndpoint", "network.assetRoute", "kerberos", "databaseDrivers"} {
+		require.Contains(t, lines, k)
+	}
+	for _, k := range []string{"credentials", "network.assetRoute", "kerberos"} {
+		require.Contains(t, lines[k], "[HIGH RISK]", k)
+	}
+	for _, k := range []string{"fs.read", "fs.write", "network.http", "network.allowPrivate", "network.assetEndpoint", "databaseDrivers"} {
+		require.NotContains(t, lines[k], "HIGH RISK", k)
+	}
+	require.Equal(t, "https://a.example.com/, https://b.example.com/ (new)", lines["network.http"])
+	require.Equal(t, "d1 (new)", lines["databaseDrivers"])
+	require.Equal(t, "/r (new)", lines["fs.read"])
 }

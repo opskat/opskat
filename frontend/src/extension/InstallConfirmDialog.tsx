@@ -30,6 +30,8 @@ const INSTALL_MODE_KEYS = {
 interface CapabilityGrant {
   kind: string;
   value: string;
+  /** Hands over secrets or widens the network path: credentials read, assetRoute, kerberos. */
+  highRisk: boolean;
 }
 
 /** The ext:install-confirm payload (internal/app/extension installConfirmRequest). */
@@ -63,6 +65,13 @@ const DATABASE_REDIRECTS_KIND = "network.databaseRedirects";
 
 /** extension_svc.CapDatabaseKerberos: the driver may fetch Kerberos tickets with the asset's Kerberos credentials. */
 const DATABASE_KERBEROS_KIND = "databaseKerberos";
+
+/** Why a high-risk grant matters, by kind; databaseDriver warns on its own, not through highRisk. */
+const HIGH_RISK_WARNING_KEYS: Record<string, string> = {
+  credentials: "extension.credentialsReadWarning",
+  [DATABASE_REDIRECTS_KIND]: "extension.assetRouteWarning",
+  [DATABASE_KERBEROS_KIND]: "extension.kerberosWarning",
+};
 
 const sameGrant = (a: CapabilityGrant, b: CapabilityGrant) => a.kind === b.kind && a.value === b.value;
 
@@ -105,8 +114,16 @@ export function ExtensionInstallConfirmDialog() {
     respond(ok);
   };
 
-  const credentialsRead = current?.capabilities.some((c) => c.kind === "credentials" && c.value === "read");
-  const providesDatabaseDrivers = current?.capabilities.some((c) => c.kind === DATABASE_DRIVER_KIND);
+  const warningKeys = current
+    ? [
+        ...Object.entries(HIGH_RISK_WARNING_KEYS)
+          .filter(([kind]) => current.capabilities.some((c) => c.kind === kind && c.highRisk))
+          .map(([, key]) => key),
+        ...(current.capabilities.some((c) => c.kind === DATABASE_DRIVER_KIND)
+          ? ["extension.databaseDriversWarning"]
+          : []),
+      ]
+    : [];
   const mode = !current?.from ? "install" : current.downgrade ? "downgrade" : "update";
   const confirmLabel = INSTALL_MODE_KEYS[mode].action;
 
@@ -131,21 +148,16 @@ export function ExtensionInstallConfirmDialog() {
                 </div>
               </div>
 
-              {[
-                credentialsRead && "extension.credentialsReadWarning",
-                providesDatabaseDrivers && "extension.databaseDriversWarning",
-              ]
-                .filter((key): key is string => !!key)
-                .map((key) => (
-                  <div
-                    key={key}
-                    role="alert"
-                    className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-warning"
-                  >
-                    <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-                    <span>{t(key)}</span>
-                  </div>
-                ))}
+              {warningKeys.map((key) => (
+                <div
+                  key={key}
+                  role="alert"
+                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-warning"
+                >
+                  <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{t(key)}</span>
+                </div>
+              ))}
 
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
                 <dt className="text-muted-foreground">{t("extension.version")}</dt>
@@ -187,11 +199,19 @@ export function ExtensionInstallConfirmDialog() {
                                 : cap.kind}
                         </span>
                         {cap.value && <span className="font-mono text-muted-foreground break-all">{cap.value}</span>}
-                        {current.added.some((a) => sameGrant(a, cap)) && (
-                          <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded bg-info/15 text-info">
-                            {t("extension.installConfirm.added")}
-                          </span>
-                        )}
+                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                          {cap.highRisk && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-warning/15 text-warning">
+                              <ShieldAlert className="h-3 w-3" aria-hidden />
+                              {t("extension.installConfirm.highRisk")}
+                            </span>
+                          )}
+                          {current.added.some((a) => sameGrant(a, cap)) && (
+                            <span className="px-1.5 py-0.5 rounded bg-info/15 text-info">
+                              {t("extension.installConfirm.added")}
+                            </span>
+                          )}
+                        </span>
                       </li>
                     ))}
                   </ul>

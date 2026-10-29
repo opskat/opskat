@@ -159,66 +159,79 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	} else {
 		b.WriteString("new install\n")
 	}
-	p := m.Permissions
+	grants := extension_svc.CapabilityGrants(m.Permissions, m.Contributes)
+	// A fresh install adds nothing "new"; only an overwrite marks what it adds.
+	var added []extension_svc.CapabilityGrant
+	if overwrites {
+		added = extension_svc.AddedGrants(grants, extension_svc.CapabilityGrants(installed.Permissions, installed.Contributes))
+	}
+	newMark := i18n.Pick(lang, "新增", "new")
+	riskMark := i18n.Pick(lang, "高风险", "HIGH RISK")
 	b.WriteString("permissions:")
 	lines := 0
-	capLine := func(label, value string) {
-		fmt.Fprintf(&b, "\n  %s: %s", label, value)
-		lines++
-	}
-	if len(p.FS.Read) > 0 {
-		capLine("fs.read", strings.Join(p.FS.Read, ", "))
-	}
-	if len(p.FS.Write) > 0 {
-		capLine("fs.write", strings.Join(p.FS.Write, ", "))
-	}
-	if len(p.Network.HTTP) > 0 {
-		capLine("network.http", strings.Join(p.Network.HTTP, ", "))
-	}
-	if p.Credentials != "" {
-		capLine("credentials", p.Credentials)
-	}
-	if p.Network.AllowPrivate {
-		capLine("network.allowPrivate", "true")
-	}
-	if p.Network.AssetEndpoint {
-		capLine("network.assetEndpoint", "true")
-	}
-	if p.Network.AssetRoute {
-		v := "true"
-		if overwrites && !installed.Permissions.Network.AssetRoute {
-			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
-		}
-		v += i18n.Pick(lang,
-			" —— 驱动可以连到数据库重定向到的其他地址，经资产的到达途径",
-			" — the driver may connect to other addresses the database redirects to, through the asset's route")
-		capLine("network.assetRoute", v)
-	}
-	if p.Kerberos {
-		v := "true"
-		if overwrites && !installed.Permissions.Kerberos {
-			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
-		}
-		v += i18n.Pick(lang,
-			" —— 驱动可以用资产里的 Kerberos 凭据为登录数据库取票",
-			" — the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
-		capLine("kerberos", v)
-	}
-	if drivers := m.Contributes.DatabaseDrivers; len(drivers) > 0 {
-		mark := i18n.Pick(lang, "新增", "new")
-		ids := make([]string, len(drivers))
-		for i, id := range drivers {
-			ids[i] = id
-			if overwrites && !slices.Contains(installed.Contributes.DatabaseDrivers, id) {
-				ids[i] += " (" + mark + ")"
+	// One line per kind, in the order CapabilityGrants lists them (the desktop
+	// dialog's order); a kind's values share the line.
+	for i := 0; i < len(grants); {
+		kind := grants[i].Kind
+		var values []string
+		highRisk := false
+		for ; i < len(grants) && grants[i].Kind == kind; i++ {
+			g := grants[i]
+			v := g.Value
+			if v == "" {
+				v = "true"
 			}
+			if slices.Contains(added, g) {
+				v += " (" + newMark + ")"
+			}
+			values = append(values, v)
+			highRisk = highRisk || g.HighRisk
 		}
-		capLine("databaseDrivers", strings.Join(ids, ", "))
+		line := strings.Join(values, ", ")
+		if highRisk {
+			line += " [" + riskMark + "]"
+		}
+		line += extDevGrantExplanation(kind, lang)
+		fmt.Fprintf(&b, "\n  %s: %s", extDevGrantLabel(kind), line)
+		lines++
 	}
 	if lines == 0 {
 		b.WriteString(" none")
 	}
 	return b.String()
+}
+
+// extDevGrantLabel 是授权类别在 manifest 里的写法，ext dev 文案按它列出。
+func extDevGrantLabel(kind string) string {
+	switch kind {
+	case extension_svc.CapTunnel:
+		return "network.allowPrivate"
+	case extension_svc.CapDatabaseRedirects:
+		return "network.assetRoute"
+	case extension_svc.CapDatabaseKerberos:
+		return "kerberos"
+	case extension_svc.CapDatabaseDriver:
+		return "databaseDrivers"
+	case extension_svc.CapHTTP:
+		return "network.http"
+	default:
+		return kind // fs.read / fs.write / credentials / network.assetEndpoint
+	}
+}
+
+// extDevGrantExplanation 说明那些光看键名不懂含义的高风险能力。
+func extDevGrantExplanation(kind, lang string) string {
+	switch kind {
+	case extension_svc.CapDatabaseRedirects:
+		return i18n.Pick(lang,
+			" —— 驱动可以连到数据库重定向到的其他地址，经资产的到达途径",
+			" — the driver may connect to other addresses the database redirects to, through the asset's route")
+	case extension_svc.CapDatabaseKerberos:
+		return i18n.Pick(lang,
+			" —— 驱动可以用资产里的 Kerberos 凭据为登录数据库取票",
+			" — the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
+	}
+	return ""
 }
 
 // extDevApprovalKey 是一次 ext dev 确认覆盖的范围。权限与驱动 id 也在键里：重建后

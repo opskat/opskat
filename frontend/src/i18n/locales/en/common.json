@@ -3012,6 +3012,8 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
+    "assetRouteWarning": "This extension can dial any address along an asset's connection path — database redirects, cluster nodes, hosts behind its tunnel — not just the address you typed. Keep it only if you trust its author.",
+    "kerberosWarning": "This extension can fetch Kerberos tickets with the Kerberos credentials stored in an asset. Keep it only if you trust its author.",
     "databaseDriversWarning": "This extension provides database drivers. For assets that use them, the connection password and TLS client private key are handed to the extension in plaintext. Keep it only if you trust its author.",
     "installConfirm": {
       "title": "Install extension?",
@@ -3028,6 +3030,7 @@
       "capabilities": "Requested capabilities",
       "noCapabilities": "No capabilities beyond its own directory",
       "added": "New",
+      "highRisk": "High risk",
       "databaseDriver": "Provides database driver",
       "databaseRedirects": "Follows database redirects via the asset's route",
       "databaseKerberos": "Fetches Kerberos tickets with the asset's Kerberos credentials to log in to the database",

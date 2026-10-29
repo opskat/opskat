@@ -42,10 +42,13 @@ const (
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
-// prefix / access level; it is empty for on/off grants.
+// prefix / access level; it is empty for on/off grants. HighRisk marks the
+// grants that hand over secrets or widen the network path past what the user
+// typed into the asset; the confirm dialog and the opsctl approval both warn on it.
 type CapabilityGrant struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
+	Kind     string `json:"kind"`
+	Value    string `json:"value"`
+	HighRisk bool   `json:"highRisk"`
 }
 
 // InstallConfirm is what the user is asked to approve before an install lands.
@@ -86,7 +89,7 @@ type InstallCandidate struct {
 // A caller without a local package — the store, from signed index data — builds
 // its confirm here too, so every install is described by one rule.
 func (s *Service) NewInstallConfirm(c InstallCandidate) InstallConfirm {
-	grants := capabilityGrants(c.Permissions, c.Contributes)
+	grants := CapabilityGrants(c.Permissions, c.Contributes)
 	out := InstallConfirm{
 		Name:         c.Name,
 		DisplayName:  c.DisplayName,
@@ -103,16 +106,23 @@ func (s *Service) NewInstallConfirm(c InstallCandidate) InstallConfirm {
 	}
 	out.From = installed.Version
 	out.Downgrade = appversion.Compare(c.Version, installed.Version) < 0
-	had := make(map[CapabilityGrant]struct{})
-	for _, g := range capabilityGrants(installed.Permissions, installed.Contributes) {
-		had[g] = struct{}{}
+	out.Added = AddedGrants(grants, CapabilityGrants(installed.Permissions, installed.Contributes))
+	return out
+}
+
+// AddedGrants returns the grants in now that had does not have.
+func AddedGrants(now, had []CapabilityGrant) []CapabilityGrant {
+	hadSet := make(map[CapabilityGrant]struct{}, len(had))
+	for _, g := range had {
+		hadSet[g] = struct{}{}
 	}
-	for _, g := range grants {
-		if _, ok := had[g]; !ok {
-			out.Added = append(out.Added, g)
+	added := []CapabilityGrant{}
+	for _, g := range now {
+		if _, ok := hadSet[g]; !ok {
+			added = append(added, g)
 		}
 	}
-	return out
+	return added
 }
 
 // installedManifest returns the manifest of the installed extension named name —
@@ -141,8 +151,9 @@ func (s *Service) installedVersion(name string) string {
 	return ""
 }
 
-// capabilityGrants flattens p and c into one entry per independently granted thing.
-func capabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []CapabilityGrant {
+// CapabilityGrants flattens p and c into one entry per independently granted
+// thing. credentials "read", assetRoute and kerberos are high risk.
+func CapabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []CapabilityGrant {
 	out := []CapabilityGrant{}
 	for _, path := range p.FS.Read {
 		out = append(out, CapabilityGrant{Kind: CapFSRead, Value: path})
@@ -154,7 +165,7 @@ func capabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []Ca
 		out = append(out, CapabilityGrant{Kind: CapHTTP, Value: u})
 	}
 	if p.Credentials != "" {
-		out = append(out, CapabilityGrant{Kind: CapCredentials, Value: p.Credentials})
+		out = append(out, CapabilityGrant{Kind: CapCredentials, Value: p.Credentials, HighRisk: p.Credentials == extmanifest.CredentialAccessRead})
 	}
 	if p.Network.AllowPrivate {
 		out = append(out, CapabilityGrant{Kind: CapTunnel})
@@ -163,10 +174,10 @@ func capabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []Ca
 		out = append(out, CapabilityGrant{Kind: CapAssetEndpoint})
 	}
 	if p.Network.AssetRoute {
-		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects})
+		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects, HighRisk: true})
 	}
 	if p.Kerberos {
-		out = append(out, CapabilityGrant{Kind: CapDatabaseKerberos})
+		out = append(out, CapabilityGrant{Kind: CapDatabaseKerberos, HighRisk: true})
 	}
 	// Only the ids are known here (manifest / signed store index); describe() has
 	// not run before an install is confirmed.

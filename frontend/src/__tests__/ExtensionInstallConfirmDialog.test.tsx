@@ -42,9 +42,9 @@ const upgrade = {
   size: 2048,
   capabilities: [
     { kind: "http", value: "https://api.acme.dev/" },
-    { kind: "credentials", value: "read" },
+    { kind: "credentials", value: "read", highRisk: true },
   ],
-  added: [{ kind: "credentials", value: "read" }],
+  added: [{ kind: "credentials", value: "read", highRisk: true }],
 };
 
 describe("ExtensionInstallConfirmDialog", () => {
@@ -176,6 +176,36 @@ describe("ExtensionInstallConfirmDialog", () => {
     const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-databaseKerberos");
     expect(row).toHaveTextContent("extension.installConfirm.databaseKerberos");
     expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
+  });
+
+  it("marks every high-risk grant with a chip and explains assetRoute and kerberos in an alert", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [
+        { kind: "http", value: "https://api.acme.dev/", highRisk: false },
+        { kind: "network.databaseRedirects", value: "", highRisk: true },
+        { kind: "databaseKerberos", value: "", highRisk: true },
+      ],
+      added: [{ kind: "databaseKerberos", value: "", highRisk: true }],
+    });
+
+    const dialog = screen.getByRole("dialog");
+    const alerts = within(dialog).getAllByRole("alert");
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent("extension.assetRouteWarning");
+    expect(alerts[1]).toHaveTextContent("extension.kerberosWarning");
+    for (const kind of ["network.databaseRedirects", "databaseKerberos"]) {
+      expect(
+        within(within(dialog).getByTestId(`ext-install-cap-${kind}`)).getByText("extension.installConfirm.highRisk")
+      ).toBeInTheDocument();
+    }
+    expect(
+      within(within(dialog).getByTestId("ext-install-cap-http")).queryByText("extension.installConfirm.highRisk")
+    ).toBeNull();
+    const kerberos = within(dialog).getByTestId("ext-install-cap-databaseKerberos");
+    expect(within(kerberos).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
   it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {

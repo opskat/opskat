@@ -186,7 +186,7 @@ func TestInstallConfirmBeforeCommit_Directory(t *testing.T) {
 	assert.Equal(t, dirContentSize(t, src), got.Size)
 	assert.ElementsMatch(t, []CapabilityGrant{
 		{Kind: CapHTTP, Value: "https://api.example.com/"},
-		{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead},
+		{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead, HighRisk: true},
 	}, got.Capabilities)
 	assert.Empty(t, got.Added, "a fresh install has nothing to compare against")
 
@@ -368,8 +368,8 @@ func TestNewInstallConfirm_FromStoreCandidate(t *testing.T) {
 	assert.Equal(t, InstallConfirm{
 		Name: "ext-store", DisplayName: "Store Ext", Icon: "cloud", From: "2.0.0", To: "2.1.0",
 		Source: InstallSourceStore, Size: 4096,
-		Capabilities: []CapabilityGrant{{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead}},
-		Added:        []CapabilityGrant{{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead}},
+		Capabilities: []CapabilityGrant{{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead, HighRisk: true}},
+		Added:        []CapabilityGrant{{Kind: CapCredentials, Value: extmanifest.CredentialAccessRead, HighRisk: true}},
 	}, c)
 }
 
@@ -385,8 +385,8 @@ func TestNewInstallConfirm_AssetRouteIsGrantAndUpgradeMarksIt(t *testing.T) {
 		Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetRoute: true}},
 		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"d"}},
 	})
-	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseRedirects})
-	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseRedirects})
+	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseRedirects, HighRisk: true})
+	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseRedirects, HighRisk: true})
 }
 
 func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
@@ -401,6 +401,32 @@ func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
 		Permissions: extmanifest.Permissions{Kerberos: true},
 		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"d"}},
 	})
-	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseKerberos})
-	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseKerberos})
+	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseKerberos, HighRisk: true})
+	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseKerberos, HighRisk: true})
+}
+
+// Every permission the manifest can declare is listed, and exactly the ones that
+// hand over secrets or widen the network path beyond what the user typed are high
+// risk — the desktop dialog and the opsctl approval both read this one list.
+func TestCapabilityGrants_ListsEveryPermissionAndFlagsHighRisk(t *testing.T) {
+	got := CapabilityGrants(extmanifest.Permissions{
+		FS:          extmanifest.FSPermission{Read: []string{"/r"}, Write: []string{"/w"}},
+		Credentials: extmanifest.CredentialAccessRead,
+		Kerberos:    true,
+		Network: extmanifest.NetworkPermission{
+			HTTP: []string{"https://a/"}, AllowPrivate: true, AssetEndpoint: true, AssetRoute: true,
+		},
+	}, extmanifest.Contributes{DatabaseDrivers: []string{"d1"}})
+
+	assert.ElementsMatch(t, []CapabilityGrant{
+		{Kind: CapFSRead, Value: "/r"},
+		{Kind: CapFSWrite, Value: "/w"},
+		{Kind: CapHTTP, Value: "https://a/"},
+		{Kind: CapCredentials, Value: "read", HighRisk: true},
+		{Kind: CapTunnel},
+		{Kind: CapAssetEndpoint},
+		{Kind: CapDatabaseRedirects, HighRisk: true},
+		{Kind: CapDatabaseKerberos, HighRisk: true},
+		{Kind: CapDatabaseDriver, Value: "d1"},
+	}, got)
 }
