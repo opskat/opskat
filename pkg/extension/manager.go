@@ -20,6 +20,7 @@ type Extension struct {
 	Dir              string
 	Manifest         *Manifest
 	Plugin           *Plugin
+	PackageSHA256    string                       // PackageSHA256 of the wasm and manifest.json bytes this Plugin was loaded from
 	SkillMD          string                       // Body of SKILL.md (frontmatter stripped)
 	SkillDescription string                       // description from SKILL.md frontmatter, if any
 	Locales          map[string]map[string]string // lang → key → translated text
@@ -160,6 +161,13 @@ func (m *Manager) GetExtension(name string) *Extension {
 	return m.extensions[name]
 }
 
+// PutForTest 把一个已构造的扩展放进管理器，只供测试构造“已加载”状态。
+func (m *Manager) PutForTest(ext *Extension) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.extensions[ext.Name] = ext
+}
+
 func (m *Manager) ListExtensions() []*Extension {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -260,7 +268,16 @@ func applyCachedDescriptor(manifest *Manifest, dir string) {
 			zap.String("extension", manifest.Name))
 		return
 	}
-	manifest.apply(desc)
+	applied := *manifest
+	applied.apply(desc)
+	if err := applied.validateDescribed(); err != nil {
+		// 缓存与当前 manifest 的能力对不上（例如声明了审核能力却没有 reviewer）时，
+		// 不用这份答案：列出一个半加载的扩展比报“需要加载一次”更难判断。
+		logger.Default().Warn("cached descriptor does not match the manifest; load the extension once to refresh it",
+			zap.String("extension", manifest.Name), zap.Error(err))
+		return
+	}
+	*manifest = applied
 }
 
 func (m *Manager) installLock(name string) *sync.Mutex {
@@ -302,7 +319,7 @@ func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *
 	hash := WasmHash(wasmBytes)
 	if desc := cachedDescriptor(manifest.Name, hash); desc != nil {
 		manifest.apply(desc)
-		if err := manifest.validateEndpointBindings(); err != nil {
+		if err := manifest.validateDescribed(); err != nil {
 			return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
 		}
 		return pendingDescriptor{}, nil
@@ -316,7 +333,7 @@ func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *
 		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
 	}
 	manifest.apply(desc)
-	if err := manifest.validateEndpointBindings(); err != nil {
+	if err := manifest.validateDescribed(); err != nil {
 		return pendingDescriptor{}, fmt.Errorf("extension %q: %w", manifest.Name, err)
 	}
 	return pendingDescriptor{name: manifest.Name, hash: hash, payload: payload}, nil
@@ -389,6 +406,7 @@ func (m *Manager) loadExtension(ctx context.Context, srcDir, extDir string) (*Ex
 		Dir:              extDir,
 		Manifest:         manifest,
 		Plugin:           plugin,
+		PackageSHA256:    packageDigest(wasmBytes, data),
 		SkillMD:          skillMD,
 		SkillDescription: skillDescription,
 		Locales:          locales,

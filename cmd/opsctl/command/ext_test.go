@@ -179,6 +179,20 @@ func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 
 // --- local registration ------------------------------------------------------
 
+// 只注册资产类型的命令（list、get、help……）不建扩展宿主：建宿主要在扩展目录下建 WASM 编译缓存、
+// 接全局的测试连接注册。命令审核用的宿主等真正要审核时才建。
+func TestRegisterExtensionAssetTypesDoesNotStartTheExtensionHost(t *testing.T) {
+	dir := withExtensionDir(t)
+	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
+	forgetExtension(t, "acme")
+
+	registerExtensionAssetTypes()
+	t.Cleanup(func() { releaseExtensions(context.Background()) })
+
+	_, err := os.Stat(filepath.Join(dir, ".cache"))
+	assert.True(t, os.IsNotExist(err), "registering asset types must not create the extension host")
+}
+
 // forgetExtension undoes what registerExtensionAssetTypes wrote, so a test does not
 // leak an asset type into the next one (registration refuses duplicates).
 func forgetExtension(t *testing.T, name string) {

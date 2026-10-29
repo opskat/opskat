@@ -29,6 +29,10 @@ type HostProvider interface {
 	Log(level, msg string)
 	KVGet(key string) ([]byte, error)
 	KVSet(key string, value []byte) error
+	// SettingsGet 返回该扩展的非密钥设置。密钥不在其中。
+	SettingsGet() (map[string]string, error)
+	// SettingSecrets 返回指定密钥字段的明文，只给请求头替换用。
+	SettingSecrets(fields []string) (map[string]string, error)
 	// ActionEvent forwards one event from a running action. invocationID names
 	// the run it came from — without it a listener watching an extension with
 	// two actions in flight cannot tell whose progress it is reading.

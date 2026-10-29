@@ -100,8 +100,8 @@ var (
 	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
 
-// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。只提供数据库驱动
-// 的扩展没有策略面（空串），无可占用。调用方持有 mu。
+// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。纯审核扩展和
+// 只提供数据库驱动的扩展都没有策略面（policyType 为空），无可占用。调用方持有 mu。
 func claimPolicyType(extName, policyType string) error {
 	if policyType == "" {
 		return nil

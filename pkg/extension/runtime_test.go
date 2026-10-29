@@ -510,6 +510,33 @@ func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
 	})
 }
 
+func TestFixtureReviewCommands(t *testing.T) {
+	Convey("review_commands 走实例池并整批校验", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir())
+		payload, err := p.Describe(context.Background())
+		So(err, ShouldBeNil)
+		desc, err := ParseDescriptor(payload)
+		So(err, ShouldBeNil)
+		p.Manifest().apply(desc)
+		items := []ReviewItem{
+			{AssetType: "fixture", Command: "ls", Syntax: "shell"},
+			{AssetType: "fixture", Command: "rm -rf /tmp/x", Syntax: "shell"},
+		}
+		out, err := p.ReviewCommands(context.Background(), items, time.Second)
+		So(err, ShouldBeNil)
+		So(out[0].Outcome, ShouldEqual, ReviewOutcomePass)
+		So(out[1].Outcome, ShouldEqual, ReviewOutcomeReject)
+		So(out[1].Failed, ShouldResemble, []string{"destructive"})
+
+		Convey("guest panic 恢复后整批按无效结果失败", func() {
+			_, err := p.ReviewCommands(context.Background(), []ReviewItem{{Command: "panic"}}, time.Second)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, ReasonInvalidResult)
+			So(err.Error(), ShouldContainSubstring, "panic")
+		})
+	})
+}
+
 type actionResult struct {
 	out map[string]any
 	err error

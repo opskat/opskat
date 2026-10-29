@@ -22,6 +22,8 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 		return dispatchConfigValidator(input)
 	case "test_connection":
 		return dispatchTestConnection(input)
+	case "review_commands":
+		return dispatchReview(input)
 	case driverwire.Function:
 		return dispatchDatabaseDriver(input)
 	default:

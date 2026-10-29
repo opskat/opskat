@@ -21,6 +21,13 @@ const (
 	InstallSourceDir   InstallSource = "dir"
 )
 
+// 持久化的安装来源，由安装入口决定。与安装确认里的 file/dir 不同：两者都是本地安装。
+const (
+	InstallOriginStore = "store"
+	InstallOriginLocal = "local"
+	InstallOriginDev   = "dev"
+)
+
 // Capability grant kinds, one per independently granted thing in
 // extension.Capabilities.
 const (
@@ -37,6 +44,8 @@ const (
 	// CapDatabaseKerberos: the driver may ask the host for Kerberos tickets
 	// fetched with the asset's Kerberos credentials.
 	CapDatabaseKerberos = "databaseKerberos"
+	// CapCommandReview 表示扩展可以自动放行命令。安装确认单独列出它。
+	CapCommandReview = "commandReview"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -158,6 +167,9 @@ func capabilityGrants(c extension.Capabilities) []CapabilityGrant {
 	}
 	if c.Network.AssetEndpoint {
 		out = append(out, CapabilityGrant{Kind: CapAssetEndpoint})
+	}
+	if c.CommandReview {
+		out = append(out, CapabilityGrant{Kind: CapCommandReview})
 	}
 	if c.Network.DatabaseRedirects {
 		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects})

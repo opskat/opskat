@@ -19,8 +19,8 @@ import (
 )
 
 // HostConfig returns the host capabilities of extName that need no user interface:
-// the config (and credentials) of the assets it owns, its KV store and the connection
-// path to those assets. Every process that runs extensions builds its providers from
+// the config (and credentials) of the assets it owns, its KV store, its own settings
+// and the connection path to those assets. Every process that runs extensions builds its providers from
 // this — the desktop app and opsctl alike — and adds only what it can offer beyond it:
 // the desktop its file dialog and action events, opsctl a file dialog that explains
 // there is none.
@@ -29,6 +29,7 @@ func (s *Service) HostConfig(extName string) extension.DefaultHostConfig {
 		Logger:        s.logger,
 		AssetConfigs:  &assetConfigGetter{svc: s, extName: extName},
 		KV:            &kvStore{svc: s, extName: extName},
+		Settings:      &settingsStore{svc: s, extName: extName},
 		AssetDialer:   &assetDialer{svc: s, extName: extName},
 		ExtensionName: extName,
 	}
@@ -134,21 +135,48 @@ func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID i
 }
 
 // kvStore implements extension.KVStore, scoped to one extension.
+// 扩展设置由宿主存在同一个命名空间里，扩展不能读写它：读到的是密钥密文，
+// 改了服务地址就能让宿主把解密后的密钥发到扩展自己指定的主机。
 type kvStore struct {
 	svc     *Service
 	extName string
 }
 
 func (s *kvStore) Get(key string) ([]byte, error) {
+	if key == settingsKVKey {
+		return nil, fmt.Errorf("extension KV: key %q is reserved for the host", key)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return s.svc.GetHostKV(ctx, s.extName, key)
 }
 
 func (s *kvStore) Set(key string, value []byte) error {
+	if key == settingsKVKey {
+		return fmt.Errorf("extension KV: key %q is reserved for the host", key)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return s.svc.SetHostKV(ctx, s.extName, key, value)
+}
+
+// settingsStore implements extension.SettingsStore, scoped to one extension.
+// 密钥字段在保存时已加密；Get 不返回它们，Secrets 解密后只给请求头替换。
+type settingsStore struct {
+	svc     *Service
+	extName string
+}
+
+func (s *settingsStore) Get() (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.svc.PublicSettings(ctx, s.extName)
+}
+
+func (s *settingsStore) Secrets(fields []string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.svc.SettingSecrets(ctx, s.extName, fields, credential_svc.Default().Decrypt)
 }
 
 // FormConfig returns the config of an asset extName owns for the host's

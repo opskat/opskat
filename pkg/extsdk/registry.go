@@ -580,4 +580,18 @@ func resetRegistries() {
 	databaseDriverServe = nil
 	actions = map[string]ActionHandler{}
 	configValidator = nil
+	commandReviewer = nil
+	settingsSchema = nil
+}
+
+// settingsSchema 是 SettingsSchema 注册的扩展级设置。
+var settingsSchema map[string]any
+
+// SettingsSchema 声明扩展级设置，schema 从 S 反射。字段标签与资产配置相同，
+// format:"password" 由宿主加密，format:"endpoint" 的值是该扩展可访问的地址。
+func SettingsSchema[S any]() {
+	if settingsSchema != nil {
+		panic("opskat: settings schema is already registered")
+	}
+	settingsSchema = reflectSchema(reflect.TypeFor[S](), "extension settings", schemaModeConfig)
 }

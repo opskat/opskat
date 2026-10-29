@@ -57,6 +57,7 @@ func WithKerberosTickets(source func(spn string) ([]byte, error)) TestOption {
 type TestHost struct {
 	assetConfigs  map[int64]json.RawMessage
 	kv            map[string][]byte
+	settings      map[string]string
 	httpHandler   http.HandlerFunc
 	mockTCP       func(addr string) (net.Conn, error)
 	mockTCPMu     sync.Mutex
@@ -192,6 +193,23 @@ func (h *TestHost) AssetGetConfig(assetID int64) (json.RawMessage, error) {
 
 func (h *TestHost) FileDialog(params []byte) (string, error) {
 	return "", fmt.Errorf("file dialog not available in test")
+}
+
+// SetSettings 预置 settings_get 返回的非密钥字段。
+func (h *TestHost) SetSettings(values map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.settings = values
+}
+
+func (h *TestHost) SettingsGet() (map[string]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]string, len(h.settings))
+	for k, v := range h.settings {
+		out[k] = v
+	}
+	return out, nil
 }
 
 func (h *TestHost) KVGet(key string) ([]byte, error) {

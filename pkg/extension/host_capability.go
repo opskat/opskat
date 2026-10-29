@@ -51,6 +51,10 @@ func (c *capHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenPara
 			c.logDenied(ctx, asset, params.Type, err)
 			return nil, err
 		}
+		if err := c.substituteSettings(&params); err != nil {
+			c.logDenied(ctx, asset, params.Type, err)
+			return nil, err
+		}
 		if !endpoint {
 			asset = nil
 		}
@@ -101,6 +105,14 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool
 		}
 	}
 	if err := c.manifest.CheckHTTPURL(params.URL, c.manifest.Capabilities.Tunnel); err != nil {
+		eps, readErr := c.settingsEndpoints()
+		if readErr != nil {
+			return false, readErr
+		}
+		if u, parseErr := url.Parse(params.URL); parseErr == nil && eps.allowURL(u) {
+			params.AllowPrivate = c.manifest.Capabilities.Tunnel
+			return false, nil
+		}
 		if endpointScoped {
 			return false, fmt.Errorf("http denied: target is not an endpoint of the asset %q, and %w", asset.Name, err)
 		}
@@ -109,6 +121,26 @@ func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool
 	// Pass tunnel capability to dial-time guard.
 	params.AllowPrivate = c.manifest.Capabilities.Tunnel
 	return false, nil
+}
+
+// settingsEndpoints 是设置里 format:"endpoint" 字段的值，按资产端点同一套规则解析：
+// 与静态 allowlist 并列放行，也是带着密钥的请求唯一能去的地方；私网仍要 manifest 声明 tunnel。
+func (c *capHost) settingsEndpoints() (endpointSet, error) {
+	fields := EndpointFieldsFromSchema(c.manifest.SettingsSchema)
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	plain, err := c.SettingsGet()
+	if err != nil {
+		return nil, fmt.Errorf("read settings endpoints: %w", err)
+	}
+	var eps endpointSet
+	for _, name := range fields {
+		if ep, ok := parseEndpoint(plain[name]); ok {
+			eps = append(eps, ep)
+		}
+	}
+	return eps, nil
 }
 
 // gateTCP admits a connection only to one of the asset's endpoints.
@@ -122,6 +154,50 @@ func (c *capHost) gateTCP(asset *AssetRef, addr string) error {
 	}
 	if !eps.allowAddr(addr) {
 		return fmt.Errorf("tcp denied: %q is not an endpoint of the asset %q", addr, asset.Name)
+	}
+	return nil
+}
+
+// substituteSettings 把请求头里的 {{setting.<field>}} 换成该扩展的密钥。
+// 只允许发往 settingsSchema 里 format:"endpoint" 字段声明的地址。
+func (c *capHost) substituteSettings(params *IOOpenParams) error {
+	if c.manifest.SettingsSchema == nil || len(params.Headers) == 0 {
+		return nil
+	}
+	needs := false
+	for _, v := range params.Headers {
+		if strings.Contains(v, "{{setting.") {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return nil
+	}
+	secrets, err := c.SettingSecrets(PasswordFieldsFromSchema(c.manifest.SettingsSchema))
+	if err != nil {
+		return err
+	}
+	endpoints, err := c.settingsEndpoints()
+	if err != nil {
+		return err
+	}
+	replaced, err := substituteSettingHeaders(params.URL, params.Headers, secrets, endpoints)
+	if err != nil {
+		return err
+	}
+	params.Headers = replaced
+	// net/http 重定向到别的主机时只去掉 Authorization、Cookie 这类头，X-API-Key 之类的自定义头
+	// 会原样带过去，所以带着密钥的请求只能在声明地址之内重定向。
+	prev := params.RedirectGuard
+	params.RedirectGuard = func(target *url.URL) error {
+		if !endpoints.allowURL(target) {
+			return fmt.Errorf("http redirect denied: a request carrying a settings secret may only be redirected to a declared endpoint, not %s://%s", target.Scheme, target.Host)
+		}
+		if prev != nil {
+			return prev(target)
+		}
+		return nil
 	}
 	return nil
 }

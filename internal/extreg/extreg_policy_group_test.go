@@ -100,3 +100,31 @@ func TestRegisterRefusesABuiltinPolicyType(t *testing.T) {
 		assert.Contains(t, err.Error(), "built-in")
 	}
 }
+
+func reviewerOnlyManifest(t *testing.T, name string) *extension.Manifest {
+	t.Cleanup(func() { Unregister(name) })
+	return &extension.Manifest{
+		Name: name, Version: "1.0.0",
+		Capabilities: extension.Capabilities{CommandReview: true},
+		Reviewer: &extension.ReviewerDef{
+			Questions: []extension.ReviewQuestion{{ID: "a", I18n: extension.I18nNames{Name: map[string]string{"en": "A"}}}},
+			MaxItems:  4, MaxCommandLen: 100,
+		},
+	}
+}
+
+// 纯审核扩展没有策略面：注册时不占用空的策略类型，两个审核扩展可以同时装着。
+func TestReviewerOnlyExtensionsRegisterWithoutAPolicyType(t *testing.T) {
+	for _, name := range []string{"rev-a", "rev-b"} {
+		m := reviewerOnlyManifest(t, name)
+		require.NoError(t, register(loaded{name: name, manifest: m, plugin: &fakePlugin{}}, "help", "desc"))
+	}
+	_, claimed := policyTypeOwner[""]
+	assert.False(t, claimed)
+}
+
+// opsctl 按缓存注册时，纯审核扩展没有资产类型可注册，不是"这台机器没加载过它"。
+func TestDescribeOnlyAcceptsAReviewerOnlyExtension(t *testing.T) {
+	m := reviewerOnlyManifest(t, "rev-c")
+	require.NoError(t, RegisterDescribeOnly(&extension.ManifestInfo{Name: "rev-c", Manifest: m}))
+}

@@ -61,6 +61,12 @@ type KVStore interface {
 	Set(key string, value []byte) error
 }
 
+// SettingsStore 返回扩展设置。Get 不含密钥；Secrets 只给出指定密钥字段的明文。
+type SettingsStore interface {
+	Get() (map[string]string, error)
+	Secrets(fields []string) (map[string]string, error)
+}
+
 type ActionEventHandler interface {
 	OnActionEvent(invocationID, eventType string, data json.RawMessage) error
 }
@@ -70,6 +76,7 @@ type DefaultHostConfig struct {
 	AssetConfigs AssetConfigGetter
 	FileDialogs  FileDialogOpener
 	KV           KVStore
+	Settings     SettingsStore
 	ActionEvents ActionEventHandler
 	AssetDialer  AssetDialer // connection path of the invocation's asset (nil = always direct)
 	// ExtensionName scopes this provider's cached HTTP clients (httpClientCache)
@@ -328,6 +335,20 @@ func (h *DefaultHostProvider) KVSet(key string, value []byte) error {
 		return fmt.Errorf("KV store not configured")
 	}
 	return h.cfg.KV.Set(key, value)
+}
+
+func (h *DefaultHostProvider) SettingsGet() (map[string]string, error) {
+	if h.cfg.Settings == nil {
+		return map[string]string{}, nil
+	}
+	return h.cfg.Settings.Get()
+}
+
+func (h *DefaultHostProvider) SettingSecrets(fields []string) (map[string]string, error) {
+	if h.cfg.Settings == nil {
+		return map[string]string{}, nil
+	}
+	return h.cfg.Settings.Secrets(fields)
 }
 
 func (h *DefaultHostProvider) ActionEvent(invocationID, eventType string, data json.RawMessage) error {

@@ -121,7 +121,8 @@ const sentinelDescriptor = `{"i18n":{"displayName":"cached","description":"c"},`
 	`"assetTypes":[{"type":"fixture","i18n":{"name":"n"},` +
 	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
 	`"policies":{"type":"fixture"},` +
-	`"tools":[{"name":"from_cache","policyAction":"read","parameters":{"type":"object","properties":{}}}]}`
+	`"tools":[{"name":"from_cache","policyAction":"read","parameters":{"type":"object","properties":{}}}],` +
+	`"reviewer":{"questions":[{"id":"destructive","i18n":{"name":{"en":"Destroys data"}}}],"maxItems":8,"maxCommandLen":4000}}`
 
 func TestDescribeIsCachedByWasmHash(t *testing.T) {
 	Convey("Given an extension whose descriptor is already cached", t, func() {

@@ -50,9 +50,20 @@ import (
 //
 // 2.5 adds capabilities.databaseKerberos (the driver may ask the host for Kerberos
 // tickets fetched with the asset's Kerberos credentials) and the statement
-// split/classify declaration. An extension using either declares 2.5 and an older
-// app refuses to install it.
-const HostABIVersion = "2.5"
+// split/classify declaration. An extension using either declares 2.5 and an
+// older app refuses to install it.
+//
+// 2.6 adds command review: capabilities.commandReview, the guest entry
+// review_commands and the describe() reviewer section, plus extension settings
+// (describe() settingsSchema, settings_get, {{setting.<field>}} header
+// placeholders). An older host cannot read them, so a reviewer declares 2.6 and an
+// older app refuses to install it instead of installing a reviewer it would
+// silently ignore.
+const HostABIVersion = "2.6"
+
+// reviewCommandsMinHostABI is the first host ABI that understands the
+// command-review guest entry review_commands and the describe() reviewer section.
+const reviewCommandsMinHostABI = "2.6"
 
 // databaseDriversMinHostABI is the first host ABI that understands
 // capabilities.databaseDrivers.
@@ -67,11 +78,11 @@ const DatabaseExtrasMinHostABI = "2.4"
 const DatabaseKerberosMinHostABI = "2.5"
 
 // SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
-// 2.4 stay listed so extensions built before host-ui, multi-resource
-// classification, database drivers or the 2.4/2.5 driver capabilities keep loading
-// unchanged; only a hostABI newer than everything here (e.g. an extension
-// declaring 2.6 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5"}
+// 2.5 stay listed so extensions built before host-ui, multi-resource
+// classification, database drivers, the 2.4/2.5 driver capabilities or command
+// review keep loading unchanged; only a hostABI newer than everything here (e.g.
+// an extension declaring 2.7 or 3.0) is refused.
+var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -128,6 +139,12 @@ type Manifest struct {
 	Snippets   SnippetsDef    `json:"snippets"`
 	// DatabaseDrivers are the driver descriptors, one per capabilities.databaseDrivers id.
 	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
+	// Reviewer is the command-review face from describe(). It is set only when the
+	// guest reports one; together with Capabilities.CommandReview it makes the
+	// extension a reviewer (see validateReviewer).
+	Reviewer *ReviewerDef `json:"reviewer,omitempty"`
+	// SettingsSchema 是扩展级设置，来自 describe()。
+	SettingsSchema map[string]any `json:"settingsSchema,omitempty"`
 }
 
 // manifestFile is what manifest.json is allowed to say.
@@ -192,8 +209,13 @@ type Capabilities struct {
 	// Tunnel lets an allowlisted (non-endpoint) HTTP target resolve to a private
 	// address. Routing through an asset's SSH tunnel is an asset type's
 	// connection.sshTunnel declaration, not this capability.
-	Tunnel  bool              `json:"tunnel"`
-	Network NetworkCapability `json:"network"`
+	Tunnel bool `json:"tunnel"`
+	// CommandReview lets the extension register a command reviewer. A "pass" from
+	// that reviewer can auto-allow a command under assisted approval and Autopilot,
+	// so the grant is shown on its own in the install confirm. It takes effect only
+	// together with a reviewer section from describe() (see validateReviewer).
+	CommandReview bool              `json:"commandReview"`
+	Network       NetworkCapability `json:"network"`
 	// DatabaseDrivers lists the SQL database driver ids the extension provides.
 	// describe() must answer with exactly this set of drivers; requires hostABI 2.3.
 	DatabaseDrivers []string `json:"databaseDrivers"`
@@ -298,10 +320,17 @@ func (at AssetTypeDef) bindsEndpoint() bool {
 // asset's endpoints, and an extension without network.assetEndpoint has none. It
 // runs once describe() is merged in, since the declaration comes from the guest
 // and the capability from manifest.json.
-//
-// It is also the one post-merge check of the guest's answer against the manifest,
-// so the database driver ids the manifest declares are compared with the ones
-// describe() provided here too (see checkDatabaseDrivers).
+// validateDescribed checks the face describe() just merged against the security
+// contract: endpoint bindings need network.assetEndpoint, a reviewer needs
+// both the capability and the reviewer section, and the database driver ids the
+// manifest declares are compared with the ones describe() provided (see
+// checkDatabaseDrivers).
+func (m *Manifest) validateDescribed() error {
+	if err := m.validateEndpointBindings(); err != nil {
+		return err
+	}
+	return m.validateReviewer()
+}
 func (m *Manifest) validateEndpointBindings() error {
 	if err := m.checkDatabaseDrivers(); err != nil {
 		return err
@@ -446,6 +475,10 @@ func (m *Manifest) Localized(tr func(key string) string) *Manifest {
 			at.ConfigSchema = localizeConfigSchema(at.ConfigSchema, tr)
 			out.AssetTypes[i] = at
 		}
+	}
+
+	if m.SettingsSchema != nil {
+		out.SettingsSchema = localizeConfigSchema(m.SettingsSchema, tr)
 	}
 
 	if len(m.Tools) > 0 {

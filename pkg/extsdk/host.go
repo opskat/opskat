@@ -33,6 +33,12 @@ func KVSet(key string, value []byte) error {
 	return hostKVSet(key, value)
 }
 
+// Settings 返回该扩展的设置。非密钥字段是值；已设置的密钥字段是它的占位 {{setting.<field>}}，
+// 原样写进请求头即可，宿主发出请求前替换成密钥；没设置的密钥字段不在其中。
+func Settings() (map[string]string, error) {
+	return hostSettingsGet()
+}
+
 // KerberosTicket asks the host for the Kerberos ticket (the AP-REQ bytes, to be
 // written into the login handshake as they are) for service principal spn —
 // dbdriver.KerberosSPN(service, host) of the names the database sent. It only

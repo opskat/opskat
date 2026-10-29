@@ -29,6 +29,10 @@ type Descriptor struct {
 	Policies   PoliciesDef    `json:"policies"`
 	Frontend   FrontendDef    `json:"frontend"`
 	Snippets   SnippetsDef    `json:"snippets"`
+	// Reviewer is present only when the guest registered a command reviewer.
+	Reviewer *ReviewerDef `json:"reviewer,omitempty"`
+	// SettingsSchema 是扩展级设置的 JSON Schema。空表示该扩展没有设置。
+	SettingsSchema map[string]any `json:"settingsSchema,omitempty"`
 	// DatabaseDrivers are the SQL database drivers the extension provides, one
 	// descriptor per id the manifest lists in capabilities.databaseDrivers.
 	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
@@ -63,7 +67,10 @@ func (d *Descriptor) validate() error {
 	if err := d.validatePolicyGroups(); err != nil {
 		return err
 	}
-	return d.validateSnippets()
+	if err := d.validateSnippets(); err != nil {
+		return err
+	}
+	return d.validateReviewer()
 }
 
 // validateAssetScope enforces "an extension belongs to an asset type".
@@ -72,13 +79,15 @@ func (d *Descriptor) validate() error {
 // do, and the entry to that path is an *asset*. A missing declaration is therefore not "an optional field left out"
 // but "this extension has no reachable entry point", and must be said at load time.
 //
-// An extension that provides database drivers is the exception: its entry point is
-// the database asset the user already has, so it may declare no asset types and no
-// policy type — but then it has no tools either, since a tool could not be reached.
+// The exceptions are a reviewer-only extension and an extension that only
+// provides database drivers: the reviewer's entry point is review_commands,
+// which the host calls itself, and the driver's is the database asset the user
+// already has — so both may declare no asset types and no policy type, and
+// having no asset of their own they can declare no tools either.
 func (d *Descriptor) validateAssetScope() error {
-	if len(d.AssetTypes) == 0 && len(d.DatabaseDrivers) > 0 {
+	if len(d.AssetTypes) == 0 && (d.Reviewer != nil || len(d.DatabaseDrivers) > 0) {
 		if len(d.Tools) > 0 {
-			return fmt.Errorf("describe(): tools require an asset type to be reached through; an extension that only provides database drivers declares none")
+			return fmt.Errorf("describe(): tools need assetTypes — extension tools are reached through exec on an asset, and a reviewer-only or driver-only extension has none")
 		}
 		if d.Policies.Type == "" {
 			return nil
@@ -432,6 +441,8 @@ func (m *Manifest) apply(d *Descriptor) {
 	m.Policies.Actions = policyActions(d.Tools)
 	m.Frontend = d.Frontend
 	m.Snippets = d.Snippets
+	m.Reviewer = d.Reviewer
+	m.SettingsSchema = d.SettingsSchema
 	// A driver's icon is the extension's: it is the one icon the user sees on it.
 	m.DatabaseDrivers = make([]dbdriver.Descriptor, len(d.DatabaseDrivers))
 	for i, drv := range d.DatabaseDrivers {

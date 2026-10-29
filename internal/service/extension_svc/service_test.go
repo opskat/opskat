@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -342,6 +343,63 @@ func TestService(t *testing.T) {
 			So(svc.Manager().GetExtension("ext-upgrade"), ShouldNotBeNil)
 		})
 
+		// 来源决定扩展能否当命令审核器（正式版只认商店安装），所以要按安装入口落库，
+		// 不能从安装包路径推断：商店安装同样是先下载到本地再装。
+		Convey("Install records where the package came from", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-origin")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+
+			var recorded []string
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-origin").Return(nil, fmt.Errorf("not found")).AnyTimes()
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, state *extension_state_entity.ExtensionState) error {
+					recorded = append(recorded, state.Source)
+					return nil
+				}).AnyTimes()
+
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-origin"), nil)
+			So(err, ShouldBeNil)
+			_, err = svc.InstallStorePackage(ctx, filepath.Join(sourceDir, "ext-origin"), nil)
+			So(err, ShouldBeNil)
+			_, err = svc.InstallDev(ctx, filepath.Join(sourceDir, "ext-origin"))
+			So(err, ShouldBeNil)
+			So(recorded, ShouldResemble, []string{InstallOriginLocal, InstallOriginStore, InstallOriginDev})
+		})
+
+		// 安装记录写不进去时安装要整个失败：旧版本留在原处照常运行，而不是新版本已经换上、
+		// 却报安装失败、又没有来源记录（审核器因此永远不合格）。
+		Convey("Install that cannot record its provenance leaves the previous version in place", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-prov")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-prov").Return(nil, fmt.Errorf("not found")).Times(1)
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-prov"), nil)
+			So(err, ShouldBeNil)
+
+			manifestPath := filepath.Join(sourceDir, "ext-prov", "manifest.json")
+			data, err := os.ReadFile(manifestPath) //nolint:gosec // test temp dir
+			So(err, ShouldBeNil)
+			So(os.WriteFile(manifestPath, []byte(strings.Replace(string(data), `"1.0.0"`, `"2.0.0"`, 1)), 0o600), ShouldBeNil) //nolint:gosec // test temp dir
+
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-prov").Return(
+				&extension_state_entity.ExtensionState{Name: "ext-prov", Enabled: true, Source: InstallOriginLocal}, nil).AnyTimes()
+			stateRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(fmt.Errorf("database is locked")).AnyTimes()
+			reloadCalled = 0
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-prov"), nil)
+			So(err, ShouldNotBeNil)
+			So(svc.Manager().GetExtension("ext-prov").Manifest.Version, ShouldEqual, "1.0.0")
+			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-prov"})
+			installed, err := os.ReadFile(filepath.Join(dir, "ext-prov", "manifest.json")) //nolint:gosec // test temp dir
+			So(err, ShouldBeNil)
+			So(string(installed), ShouldContainSubstring, `"1.0.0"`)
+			So(reloadCalled, ShouldEqual, 0)
+		})
+
 		// `opsctl ext dev` reinstalls on every rebuild, so a broken build is routine.
 		// It must not take the running version down with it: the old module stays
 		// loaded, registered and callable, its files and cached descriptor intact.
@@ -387,6 +445,8 @@ func TestService(t *testing.T) {
 				},
 				"policies": map[string]any{"type": "ext-hot"},
 			})
+			// 这次安装写下的记录要撤掉（这里的仓库假装之前没有记录）。
+			stateRepo.EXPECT().Delete(gomock.Any(), "ext-hot").Return(nil).Times(1)
 			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
 			So(err, ShouldNotBeNil)
 

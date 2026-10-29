@@ -147,6 +147,11 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 			"警告：credentials: read —— 该扩展能以明文读取其资产里保存的全部密码\n",
 			"WARNING: credentials: read — this extension can read every password stored in its assets in plaintext\n"))
 	}
+	if m.Capabilities.CommandReview {
+		b.WriteString(i18n.Pick(lang,
+			"警告：commandReview —— 此扩展可以自动放行命令\n",
+			"WARNING: commandReview — this extension can auto-allow commands\n"))
+	}
 	if len(m.Capabilities.DatabaseDrivers) > 0 {
 		b.WriteString(i18n.Pick(lang,
 			"警告：databaseDrivers —— 使用这些驱动的数据库资产，其口令与 TLS 客户端私钥会以明文交给该扩展\n",
@@ -182,6 +187,9 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	}
 	if c.Network.AssetEndpoint {
 		capLine("network.assetEndpoint", "true")
+	}
+	if c.CommandReview {
+		capLine("commandReview", "true")
 	}
 	if c.Network.DatabaseRedirects {
 		v := "true"

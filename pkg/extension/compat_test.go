@@ -25,6 +25,7 @@ func TestCheckCompatible(t *testing.T) {
 		reason        IncompatibleReason // zero = compatible
 	}{
 		{"supported abi, no min", "2.2", "", release, ""},
+		{"command review abi", "2.6", "", release, ""},
 		{"min equals app", "2.2", "1.5.0", release, ""},
 		{"min below app", "2.0", "1.4.9", release, ""},
 		{"unsupported abi", "9.0", "", release, ReasonHostABI},

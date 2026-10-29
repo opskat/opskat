@@ -24,6 +24,8 @@ export interface ExtManifest {
 export interface ExtCapabilities {
   /** "read" hands the extension the plaintext of its assets' password fields. */
   credentials: string;
+  /** The extension is a command reviewer: a command it passes runs without asking under Assisted / Autopilot. */
+  commandReview?: boolean;
 }
 
 export interface ExtAssetType {

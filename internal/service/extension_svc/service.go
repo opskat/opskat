@@ -47,6 +47,8 @@ type Service struct {
 	logger      *zap.Logger
 
 	onReload func()
+	// reviewerLoader 非空时，ActiveCommandReviewer 会在审核器尚未加载时用它加载（见 LoadReviewersOnDemand）。
+	reviewerLoader func(ctx context.Context, dir string) error
 
 	mu       sync.Mutex
 	initDone atomic.Bool
@@ -174,26 +176,42 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 //     the service lock is released while the user decides. Any error from it —
 //     ErrInstallCanceled, a timeout, a canceled ctx — discards the staged files.
 //  3. Cross-extension snippet category id conflict check against the staged manifest.
-//  4. Swap the registrations: unregister the old version, register the new one; on
-//     refusal put the old registration back.
-//  5. staged.Commit moves the new version into place and closes the old module.
-//  6. snippet hook: RefreshCategories → SyncExtensionSeeds; persist enabled state.
+//  4. Record the install (source, package digest of the staged files, enabled).
+//  5. Swap the registrations: unregister the old version, register the new one; on
+//     refusal put the old registration and install record back.
+//  6. staged.Commit moves the new version into place and closes the old module.
+//  7. snippet hook: RefreshCategories → SyncExtensionSeeds.
 //
 // A nil confirm installs without asking: the caller already has the user's
 // consent (`opsctl ext dev` asks in its own approval dialog).
 func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, confirm, InstallOriginLocal)
+}
+
+// InstallStorePackage 与 Install 相同，但把来源记为 store。只给商店安装用：
+// 商店包也是先下载到本地再装，来源没法从路径看出来。
+func (s *Service) InstallStorePackage(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, confirm, InstallOriginStore)
+}
+
+// InstallDev 与 Install 相同，但把来源记为 dev。只给 opsctl ext dev 用。
+func (s *Service) InstallDev(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, nil, InstallOriginDev)
+}
+
+func (s *Service) install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc, origin string) (*extension.Manifest, error) {
 	staged, ask, err := s.stage(ctx, sourcePath)
 	if err != nil {
 		return nil, err
 	}
 	if confirm == nil {
-		return s.commit(ctx, staged, nil)
+		return s.commit(ctx, staged, nil, origin)
 	}
 	if err := confirm(ctx, ask); err != nil {
 		staged.Abort(ctx)
 		return nil, err
 	}
-	return s.commit(ctx, staged, &ask)
+	return s.commit(ctx, staged, &ask, origin)
 }
 
 // stage runs step 1 of Install and describes the staged version for the confirm.
@@ -233,9 +251,9 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	return staged, ask, nil
 }
 
-// commit runs steps 3–6 of Install. approved is what the user confirmed, nil when
+// commit runs steps 3–7 of Install. approved is what the user confirmed, nil when
 // nobody was asked.
-func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved *InstallConfirm) (*extension.Manifest, error) {
+func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved *InstallConfirm, origin string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	manifest := staged.Manifest()
@@ -261,6 +279,15 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		}
 	}
 
+	// The install record (source, package digest) is written before anything is
+	// swapped: once the new version is in place a failed write could not be undone,
+	// leaving it running without a record — never eligible as a reviewer.
+	prevState, err := s.recordProvenance(ctx, manifest.Name, origin, staged.Extension().PackageSHA256, true)
+	if err != nil {
+		staged.Abort(ctx)
+		return nil, fmt.Errorf("install extension: %w", err)
+	}
+
 	// Registration is keyed by name and refuses a name it already holds, so the
 	// running version's entry has to go before the new one can be registered.
 	previous := s.bridge.Get(manifest.Name)
@@ -270,11 +297,13 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	if err := s.register(staged.Extension()); err != nil {
 		staged.Abort(ctx)
 		s.restoreRegistration(previous)
+		s.restoreState(ctx, manifest.Name, prevState)
 		return nil, err
 	}
 	if err := staged.Commit(ctx); err != nil {
 		s.unregister(ctx, manifest.Name)
 		s.restoreRegistration(previous)
+		s.restoreState(ctx, manifest.Name, prevState)
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
 
@@ -290,9 +319,22 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		}
 	}
 
-	s.ensureState(ctx, manifest.Name, true)
 	s.notifyReload()
 	return manifest, nil
+}
+
+// restoreState puts back the install record a failed install overwrote. prev is nil
+// when there was no record before.
+func (s *Service) restoreState(ctx context.Context, name string, prev *extension_state_entity.ExtensionState) {
+	var err error
+	if prev == nil {
+		err = s.stateRepo.Delete(ctx, name)
+	} else {
+		err = s.stateRepo.Update(ctx, prev)
+	}
+	if err != nil {
+		s.logger.Error("restore extension state after failed install", zap.String("name", name), zap.Error(err))
+	}
 }
 
 // restoreRegistration puts back the registration a failed install took down. prev is

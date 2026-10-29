@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { FileCode2, Copy, TriangleAlert, Download, PanelRight } from "lucide-react";
 import {
@@ -564,9 +564,10 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     () => collectGridEdits({ rows, newRowCount: newRows.length, columns, primaryKeys, columnRules, edits }),
     [rows, newRows.length, columns, primaryKeys, columnRules, edits]
   );
-  // 生成要等后端:等回来时修改若已变了,这次的结果就不再对应表格里的修改。
+  // 生成要等后端:等回来时修改若已变了,这次的结果就不再对应表格里的修改。随渲染提交同步更新,
+  // 修改一显示出来就提交也能对上。
   const latestPendingEdits = useRef(pendingEdits);
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestPendingEdits.current = pendingEdits;
   }, [pendingEdits]);
   const hasPendingStatements = pendingEdits.intent.inserts.length + pendingEdits.intent.updates.length > 0;
