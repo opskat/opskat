@@ -2908,6 +2908,8 @@
     "count": "{{count}} issue(s)"
   },
   "extension": {
+    "incompatible": "Incompatible",
+    "loadFailed": "Load failed",
     "title": "Extensions",
     "mirror": {
       "title": "Extension Downloads",

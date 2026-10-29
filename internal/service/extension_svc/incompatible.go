@@ -2,6 +2,7 @@ package extension_svc
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/policy"
@@ -40,3 +41,37 @@ type localizedError struct {
 
 func (e *localizedError) Error() string { return e.msg }
 func (e *localizedError) Unwrap() error { return e.err }
+
+// Kinds of LoadError.
+const (
+	// LoadErrorIncompatible: the extension targets a hostABI this OpsKat does not
+	// support.
+	LoadErrorIncompatible = "incompatible"
+	// LoadErrorInvalid: the manifest or the extension's describe() answer was
+	// refused, or the extension failed to load.
+	LoadErrorInvalid = "invalid"
+)
+
+// LoadError is why an installed extension is not loaded, as the frontend shows it.
+type LoadError struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+// NewLoadError classifies err, what refused an installed extension, and renders it
+// in ctx's language. A hostABI mismatch reads as a statement about the extension's
+// build (it may be older than this OpsKat as well as newer); any other refusal
+// carries the parse / validation error as is.
+func NewLoadError(ctx context.Context, err error) *LoadError {
+	var inc *extmanifest.IncompatibleError
+	if !errors.As(err, &inc) {
+		return &LoadError{Kind: LoadErrorInvalid, Message: err.Error()}
+	}
+	if inc.Reason != extmanifest.ReasonHostABI {
+		return &LoadError{Kind: LoadErrorIncompatible, Message: IncompatibleMessage(ctx, inc)}
+	}
+	return &LoadError{Kind: LoadErrorIncompatible, Message: policy.PolicyFmt(ctx,
+		"This extension declares hostABI %s, but this OpsKat supports only %s, so it isn't loaded. Install a version of the extension built for this OpsKat.",
+		"此扩展声明 hostABI %s，当前 OpsKat 仅支持 %s，未加载。请安装适配当前 OpsKat 的扩展版本。",
+		inc.HostABI, strings.Join(inc.SupportedHostABIs, policy.PolicyMsg(ctx, ", ", "、")))}
+}

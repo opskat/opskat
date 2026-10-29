@@ -134,30 +134,37 @@ func NewManager(dir string, newHost func(extName string) HostProvider, contribut
 	}
 }
 
-// Scan discovers and loads extensions from the extensions directory.
-func (m *Manager) Scan(ctx context.Context) ([]*Manifest, error) {
+// Scan discovers and loads extensions from the extensions directory. An extension
+// directory that fails to load is not loaded and not dropped silently: it is
+// returned as a LoadFailure.
+func (m *Manager) Scan(ctx context.Context) ([]*Manifest, []LoadFailure, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read extensions dir: %w", err)
+		return nil, nil, fmt.Errorf("read extensions dir: %w", err)
 	}
 
 	var manifests []*Manifest
+	var failures []LoadFailure
 	for _, entry := range entries {
 		if !isExtensionDir(entry) {
 			continue
 		}
 		extDir := filepath.Join(m.dir, entry.Name())
+		if !hasManifest(extDir) {
+			continue
+		}
 		manifest, err := m.LoadExtension(ctx, extDir)
 		if err != nil {
-			m.logger.Warn("skip extension", zap.String("dir", entry.Name()), zap.Error(err))
+			m.logger.Warn("extension not loaded", zap.String("dir", entry.Name()), zap.Error(err))
+			failures = append(failures, NewLoadFailure(extDir, err))
 			continue
 		}
 		manifests = append(manifests, manifest)
 	}
-	return manifests, nil
+	return manifests, failures, nil
 }
 
 // Contributions is the contribution registry the manager judges extensions with.
@@ -443,30 +450,82 @@ type ManifestInfo struct {
 	Described bool
 }
 
-// ScanManifests reads every extension directory without loading WASM plugins.
+// LoadFailure is an installed extension the host refused to load: its directory
+// holds a manifest.json, but the manifest or the cached describe() answer was not
+// accepted (or, from Scan, loading it failed). Name and Version are read leniently
+// from the manifest so the failure can be shown against the extension; Name falls
+// back to the directory name when the manifest gives none. Err keeps the cause —
+// an *extmanifest.IncompatibleError for a hostABI this app does not support.
+type LoadFailure struct {
+	Dir     string
+	Name    string
+	Version string
+	Err     error
+}
+
+// NewLoadFailure describes why the extension in dir was refused. The name and
+// version come from whatever manifest.json holds, parseable or not.
+func NewLoadFailure(dir string, err error) LoadFailure {
+	f := LoadFailure{Dir: dir, Name: filepath.Base(dir), Err: err}
+	data, readErr := os.ReadFile(filepath.Join(dir, "manifest.json")) //nolint:gosec // extension directories are trusted
+	if readErr != nil {
+		return f
+	}
+	var head struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &head) != nil {
+		return f
+	}
+	if head.Name != "" {
+		f.Name = head.Name
+	}
+	f.Version = head.Version
+	return f
+}
+
+// hasManifest reports whether dir holds a manifest.json: a directory without one is
+// not an extension, so it is neither loaded nor a load failure.
+func hasManifest(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "manifest.json"))
+	return err == nil || !os.IsNotExist(err)
+}
+
+// ScanManifests reads every extension directory without loading WASM plugins and
+// returns the ones the host accepts; ScanInstalled also reports the ones it refuses.
 func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
+	infos, _, err := m.ScanInstalled()
+	return infos, err
+}
+
+// ScanInstalled reads every extension directory without loading WASM plugins. An
+// extension whose manifest is refused, or whose cached describe() answer a
+// contribution point refuses, comes back as a LoadFailure with the same verdict
+// loading it would reach; it is not among the infos.
+func (m *Manager) ScanInstalled() ([]*ManifestInfo, []LoadFailure, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read extensions dir: %w", err)
+		return nil, nil, fmt.Errorf("read extensions dir: %w", err)
 	}
 
 	var result []*ManifestInfo
+	var failures []LoadFailure
 	for _, entry := range entries {
 		if !isExtensionDir(entry) {
 			continue
 		}
 		extDir := filepath.Join(m.dir, entry.Name())
-		manifestPath := filepath.Join(extDir, "manifest.json")
-		data, err := os.ReadFile(manifestPath) //nolint:gosec // path constructed from ReadDir within extensions directory
-		if err != nil {
+		if !hasManifest(extDir) {
 			continue
 		}
-		manifest, err := ParseManifest(data)
+		manifest, err := ReadManifest(extDir)
 		if err != nil {
-			m.logger.Warn("skip extension manifest", zap.String("dir", entry.Name()), zap.Error(err))
+			m.logger.Warn("extension manifest refused", zap.String("dir", entry.Name()), zap.Error(err))
+			failures = append(failures, NewLoadFailure(extDir, err))
 			continue
 		}
 		// A loaded extension already holds the answer the guest gave this run; only
@@ -480,12 +539,13 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 		info, err := cachedManifestInfo(manifest, extDir, m.contribs)
 		if err != nil {
 			// The same verdict loading it would reach: not an extension this app runs.
-			m.logger.Warn("skip extension refused by its cached descriptor", zap.String("dir", entry.Name()), zap.Error(err))
+			m.logger.Warn("extension refused by its cached descriptor", zap.String("dir", entry.Name()), zap.Error(err))
+			failures = append(failures, NewLoadFailure(extDir, err))
 			continue
 		}
 		result = append(result, info)
 	}
-	return result, nil
+	return result, failures, nil
 }
 
 // stagingPrefix names the directories Stage builds new versions in. They live inside

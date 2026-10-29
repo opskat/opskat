@@ -2908,6 +2908,8 @@
     "count": "{{count}} 个问题"
   },
   "extension": {
+    "incompatible": "不兼容",
+    "loadFailed": "加载失败",
     "title": "扩展",
     "mirror": {
       "title": "扩展下载",

@@ -269,32 +269,66 @@ type scannedExtension struct {
 // sorted by name. It is the single scan behind both `ext list` and the startup
 // registration below, so the two cannot disagree about what is installed.
 func scanExtensionDirs() ([]scannedExtension, error) {
+	scanned, _, err := scanExtensionDirsWithFailures()
+	return scanned, err
+}
+
+// scanExtensionDirsWithFailures is scanExtensionDirs plus the extensions the host
+// refuses (a manifest or cached describe() it does not accept): listed with the
+// refusal, in the order of the directories, not among the scanned ones. A directory
+// without a manifest.json is not an extension and is in neither.
+func scanExtensionDirsWithFailures() ([]scannedExtension, []extension.LoadFailure, error) {
 	extDir := extensionsDirFn()
 	entries, err := os.ReadDir(extDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read extensions directory: %w", err)
+		return nil, nil, fmt.Errorf("read extensions directory: %w", err)
 	}
 
 	disabled := disabledExtensionNames()
 
 	results := make([]scannedExtension, 0, len(entries))
+	var failures []extension.LoadFailure
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		info, err := extension.LoadManifestInfo(filepath.Join(extDir, entry.Name()), extensionContributions)
+		dir := filepath.Join(extDir, entry.Name())
+		info, err := extension.LoadManifestInfo(dir, extensionContributions)
 		if err != nil {
-			// A directory without a readable/valid manifest is not an extension; the
-			// desktop app skips it the same way.
+			if _, statErr := os.Stat(filepath.Join(dir, "manifest.json")); statErr == nil {
+				failures = append(failures, extension.NewLoadFailure(dir, err))
+			}
 			continue
 		}
 		results = append(results, scannedExtension{info: info, enabled: !disabled[info.Name]})
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].info.Name < results[j].info.Name })
-	return results, nil
+	return results, failures, nil
+}
+
+// refusedExtensionError is the error for an asset whose owning extension is
+// installed but refused by the host: it names the extension and why, so exec stops
+// before loading anything. The owner comes from the asset row, which is there even
+// when the extension's describe() is not. nil when the asset is not an extension's
+// or its extension is accepted.
+func refusedExtensionError(ctx context.Context, asset *asset_entity.Asset) error {
+	if asset.ExtensionName == "" {
+		return nil
+	}
+	_, failures, err := scanExtensionDirsWithFailures()
+	if err != nil {
+		return err
+	}
+	for _, f := range failures {
+		if f.Name == asset.ExtensionName {
+			return fmt.Errorf("asset %q is provided by extension %q, which is not loaded: %s",
+				asset.Name, f.Name, extension_svc.NewLoadError(ctx, f.Err).Message)
+		}
+	}
+	return nil
 }
 
 // registerExtensionAssetTypes wires every enabled extension's non-executing face into

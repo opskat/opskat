@@ -318,6 +318,48 @@ func TestUnsupportedExecTypeError_UnchangedWhenNoExtensionFailed(t *testing.T) {
 	assert.NotContains(t, err.Error(), "failed to describe")
 }
 
+// An asset of an installed extension the host refuses (a retired hostABI, or a
+// manifest in another shape) fails `exec` naming the extension and the reason; the
+// asset row alone says who owns it, and the extension is never loaded.
+func TestCmdExec_AssetOfARefusedExtensionNamesTheExtensionAndWhy(t *testing.T) {
+	cases := []struct {
+		name, manifest string
+		wants          []string
+	}{
+		{"retired hostABI",
+			`{"name":"` + extensiontest.FixtureName + `","version":"1.0.0","hostABI":"2.3","backend":{"runtime":"wasm","binary":"main.wasm"}}`,
+			[]string{"hostABI 2.3", "supports only"}},
+		{"old shape",
+			`{"name":"` + extensiontest.FixtureName + `","version":"1.0.0","hostABI":"` + extmanifest.HostABIVersion + `","capabilities":["x"],"backend":{"runtime":"wasm","binary":"main.wasm"}}`,
+			[]string{"capabilities"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupLocalExtExec(t)
+			require.NoError(t, os.WriteFile(filepath.Join(env.extDir, "manifest.json"), []byte(tc.manifest), 0o600))
+			extensionContributions.Revoke(extensiontest.FixtureName)
+			registerExtensionAssetTypes()
+			owned := &asset_entity.Asset{
+				Name: "fx-refused", Type: "fixture", ExtensionName: extensiontest.FixtureName,
+				Status: asset_entity.StatusActive, Createtime: 1, Config: `{"endpoint":"http://127.0.0.1:1"}`,
+			}
+			require.NoError(t, asset_repo.Asset().Create(context.Background(), owned))
+
+			code, stdout, stderr := env.exec(t, "fx-refused", "--", "echo", "--msg", "hi")
+
+			assert.Equal(t, 1, code)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, `"`+extensiontest.FixtureName+`"`)
+			for _, want := range tc.wants {
+				assert.Contains(t, stderr, want)
+			}
+			extensionHost.mu.Lock()
+			defer extensionHost.mu.Unlock()
+			assert.Nil(t, extensionHost.svc, "a refused extension must not be loaded")
+		})
+	}
+}
+
 // --- ext dev -----------------------------------------------------------------
 
 // stubDevInstall replaces the socket round trip so the tests observe what opsctl

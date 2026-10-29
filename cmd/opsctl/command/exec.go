@@ -68,6 +68,10 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// parseExecArgs（多词 argv 的引号策略——扩展的 flag DSL 没有远端 shell，元字符必须
 	// 逐词保真；ssh 等类型的多词语义不变）和下面的激活判断，避免同一个"是不是扩展资产"
 	// 的问题被问两次、答案还可能不一致。
+	if err := refusedExtensionError(ctx, asset); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	extName, isExtensionAsset, err := extensionOwnerOf(asset.Type)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

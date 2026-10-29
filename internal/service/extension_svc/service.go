@@ -28,13 +28,26 @@ var currentApp = appversion.Current
 
 // ExtensionInfo is the frontend-facing extension descriptor.
 type ExtensionInfo struct {
-	Name        string           `json:"name"`
-	Version     string           `json:"version"`
-	Icon        string           `json:"icon"`
-	DisplayName string           `json:"displayName"`
-	Description string           `json:"description"`
-	Enabled     bool             `json:"enabled"`
-	Manifest    *extreg.Manifest `json:"manifest"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Icon        string `json:"icon"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	// Manifest is nil when LoadError is set: a refused extension contributes nothing.
+	Manifest *extreg.Manifest `json:"manifest"`
+	// LoadError is why the extension is not loaded; nil for one the host accepts.
+	LoadError *LoadError `json:"loadError,omitempty"`
+}
+
+// newFailedExtensionInfo lists an installed extension the host refuses: no
+// manifest, never enabled, and the reason in lang.
+func newFailedExtensionInfo(f extension.LoadFailure, lang string) ExtensionInfo {
+	ctx := aictx.WithPolicyLang(context.Background(), lang)
+	return ExtensionInfo{
+		Name: f.Name, Version: f.Version, DisplayName: f.Name,
+		LoadError: NewLoadError(ctx, f.Err),
+	}
 }
 
 // NewExtensionInfo describes the extension whose manifest is m to the frontend,
@@ -65,7 +78,12 @@ type Service struct {
 
 	onReload func()
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// loadFailures are the extensions the last scan could not load, by directory:
+	// the ones whose describe() the guest could not answer are invisible to a scan
+	// that reads only manifests and the cache. Guarded by mu.
+	loadFailures map[string]extension.LoadFailure
+	// initDone is set once Init has completed.
 	initDone atomic.Bool
 }
 
@@ -167,9 +185,16 @@ func (s *Service) Enable(ctx context.Context, name string) error {
 	if s.snippetHook != nil {
 		s.snippetHook.RefreshCategories()
 	}
+	s.clearLoadFailure(name)
 	s.ensureState(ctx, name, true)
 	s.notifyReload()
 	return nil
+}
+
+// clearLoadFailure forgets the scan's verdict on name once an operation has
+// replaced what it judged (enable, install) or removed it (uninstall). Callers hold s.mu.
+func (s *Service) clearLoadFailure(name string) {
+	delete(s.loadFailures, s.manager.ExtDir(name))
 }
 
 // Disable unloads a running extension without removing files.
@@ -329,6 +354,7 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		}
 	}
 
+	s.clearLoadFailure(manifest.Name)
 	s.ensureState(ctx, manifest.Name, true)
 	s.notifyReload()
 	return manifest, nil
@@ -476,6 +502,7 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 		return fmt.Errorf("uninstall extension: %w", err)
 	}
 	s.discardHostHTTPCache(name)
+	s.clearLoadFailure(name)
 
 	// Refresh categories AFTER the extension is unloaded from the manager, so the
 	// snippet category registry rebuilds without the uninstalled extension's entries.
@@ -510,7 +537,7 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 		loaded[ext.Name] = ext
 	}
 
-	allManifests, err := s.manager.ScanManifests()
+	allManifests, refused, err := s.manager.ScanInstalled()
 	if err != nil {
 		s.logger.Warn("scan manifests failed", zap.Error(err))
 		result := make([]ExtensionInfo, 0, len(loaded))
@@ -528,6 +555,10 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 	result := make([]ExtensionInfo, 0, len(allManifests))
 	for _, mi := range allManifests {
 		ext, isLoaded := loaded[mi.Name]
+		if failure, failed := s.loadFailures[mi.Dir]; failed && !isLoaded {
+			result = append(result, newFailedExtensionInfo(failure, lang))
+			continue
+		}
 		tr := func(key string) string { return mi.Translate(lang, key) }
 		if isLoaded {
 			tr = func(key string) string { return ext.Translate(lang, key) }
@@ -538,6 +569,9 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 			continue
 		}
 		result = append(result, *info)
+	}
+	for _, f := range refused {
+		result = append(result, newFailedExtensionInfo(f, lang))
 	}
 	return result
 }
@@ -574,8 +608,13 @@ func (s *Service) loadAndApplyState(ctx context.Context) {
 		}
 	}
 
-	if _, err := s.manager.Scan(ctx); err != nil {
+	_, failures, err := s.manager.Scan(ctx)
+	if err != nil {
 		s.logger.Error("scan extensions failed", zap.Error(err))
+	}
+	s.loadFailures = make(map[string]extension.LoadFailure, len(failures))
+	for _, f := range failures {
+		s.loadFailures[f.Dir] = f
 	}
 
 	s.bridge = extension.NewBridge()

@@ -69,6 +69,8 @@ interface ExtInfo {
   displayName: string;
   description: string;
   enabled: boolean;
+  /** Set when the host refused the extension: it is listed but neither loaded nor toggleable. */
+  loadError?: { kind: string; message: string };
   manifest?: {
     permissions?: ExtPermissions;
     tools?: { name: string; i18n?: { description?: string } }[];
@@ -278,16 +280,29 @@ export function ExtensionSection() {
                             <div>
                               <div className="flex items-center gap-2">
                                 <p className="font-medium text-sm">{ext.displayName || ext.name}</p>
-                                {!ext.enabled && (
-                                  <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                                    {t("extension.disabled")}
+                                {ext.loadError ? (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">
+                                    {t(
+                                      ext.loadError.kind === "incompatible"
+                                        ? "extension.incompatible"
+                                        : "extension.loadFailed"
+                                    )}
                                   </span>
+                                ) : (
+                                  !ext.enabled && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                      {t("extension.disabled")}
+                                    </span>
+                                  )
                                 )}
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 {ext.description && <span>{ext.description} · </span>}
                                 {t("extension.version")} {ext.version}
                               </p>
+                              {ext.loadError && (
+                                <p className="text-xs text-destructive mt-0.5">{ext.loadError.message}</p>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -298,11 +313,13 @@ export function ExtensionSection() {
                                 onUpdate={() => void updateFromStore(update)}
                               />
                             )}
-                            <Switch
-                              checked={ext.enabled}
-                              onCheckedChange={() => handleToggle(ext)}
-                              data-testid={`extension-toggle-${ext.name}`}
-                            />
+                            {!ext.loadError && (
+                              <Switch
+                                checked={ext.enabled}
+                                onCheckedChange={() => handleToggle(ext)}
+                                data-testid={`extension-toggle-${ext.name}`}
+                              />
+                            )}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
@@ -310,10 +327,12 @@ export function ExtensionSection() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => openDetail(ext.name)}>
-                                  <Info className="h-4 w-4 mr-2" />
-                                  {t("extension.detail")}
-                                </DropdownMenuItem>
+                                {!ext.loadError && (
+                                  <DropdownMenuItem onClick={() => openDetail(ext.name)}>
+                                    <Info className="h-4 w-4 mr-2" />
+                                    {t("extension.detail")}
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem onClick={() => setUninstallTarget(ext)} className="text-destructive">
                                   <Trash2 className="h-4 w-4 mr-2" />
                                   {t("extension.uninstall")}

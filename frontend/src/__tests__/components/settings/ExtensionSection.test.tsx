@@ -43,3 +43,41 @@ describe("ExtensionSection detail", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
+
+describe("ExtensionSection refused extensions", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(cleanup);
+
+  const refused = (name: string, kind: string, message: string) => ({
+    name,
+    version: "1.4.0",
+    icon: "",
+    displayName: name,
+    description: "",
+    enabled: false,
+    loadError: { kind, message },
+  });
+
+  it("shows an incompatible extension with its reason and no enable switch", async () => {
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([
+      refused("legacy", "incompatible", "declares hostABI 2.3, supports only 1.0"),
+    ] as never);
+    render(<ExtensionSection />);
+
+    expect(await screen.findByText("legacy")).toBeInTheDocument();
+    expect(screen.getByText("extension.incompatible")).toBeInTheDocument();
+    expect(screen.getByText("declares hostABI 2.3, supports only 1.0")).toBeInTheDocument();
+    expect(screen.queryByTestId("extension-toggle-legacy")).not.toBeInTheDocument();
+  });
+
+  it("shows a load failure with the parse error", async () => {
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([
+      refused("old", "invalid", 'unknown field "capabilities"'),
+    ] as never);
+    render(<ExtensionSection />);
+
+    expect(await screen.findByText("extension.loadFailed")).toBeInTheDocument();
+    expect(screen.getByText('unknown field "capabilities"')).toBeInTheDocument();
+    expect(screen.queryByTestId("extension-toggle-old")).not.toBeInTheDocument();
+  });
+});
