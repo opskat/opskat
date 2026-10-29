@@ -74,8 +74,8 @@ func newConfirmBinder(appCtx context.Context) (*Extension, *eventRecorder) {
 var sampleConfirm = extension_svc.InstallConfirm{
 	Name: "acme", DisplayName: "Acme", Icon: "cloud", From: "1.0.0", To: "2.0.0",
 	Source: extension_svc.InstallSourceFile, Size: 1234,
-	Capabilities: []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read"}},
-	Added:        []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read"}},
+	Capabilities: []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read", HighRisk: true}},
+	Added:        []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read", HighRisk: true}},
 }
 
 // startConfirm runs confirmInstall in the background and returns the event it
@@ -115,8 +115,8 @@ func TestConfirmInstall_EventCarriesTheConfirm(t *testing.T) {
 	assert.Equal(t, false, ev["downgrade"])
 	assert.Equal(t, "file", ev["source"])
 	assert.EqualValues(t, 1234, ev["size"])
-	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read"}}, ev["capabilities"])
-	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read"}}, ev["added"])
+	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read", "highRisk": true}}, ev["capabilities"])
+	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read", "highRisk": true}}, ev["added"])
 
 	require.NoError(t, e.RespondExtensionInstallConfirm(id, true))
 	assert.NoError(t, result(t, done))
