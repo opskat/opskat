@@ -9,10 +9,12 @@ import {
   FilePen,
   FileText,
   Globe,
+  KeyRound,
   Loader2,
   Network,
   Puzzle,
   RefreshCw,
+  Route,
   Router,
   Search,
   SearchX,
@@ -42,14 +44,24 @@ interface PermissionTag {
   warning?: boolean;
 }
 
-/** One tag per kind of grant the version asks for (the kinds the install confirm lists). */
+/**
+ * One tag per kind of permission the version asks for (the kinds the install confirm
+ * lists); the ones the confirm marks high risk — credentials "read", assetRoute and
+ * kerberos (extension_svc.CapabilityGrants) — are warnings.
+ */
 function permissionTags(p: extmanifest.Permissions): PermissionTag[] {
   const tags: PermissionTag[] = [];
   if (p.network.assetEndpoint) {
     tags.push({ key: "assetEndpoint", label: "extension.capability.assetEndpoint", icon: Network });
   }
+  if (p.network.assetRoute) {
+    tags.push({ key: "assetRoute", label: "extension.capability.assetRoute", icon: Route, warning: true });
+  }
   if (p.credentials === "read") {
     tags.push({ key: "credentials", label: "extension.capability.credentials", icon: ShieldAlert, warning: true });
+  }
+  if (p.kerberos) {
+    tags.push({ key: "kerberos", label: "extension.capability.kerberos", icon: KeyRound, warning: true });
   }
   if (p.fs.read?.length) {
     tags.push({ key: "fsRead", label: "extension.capability.fsRead", icon: FileText, detail: p.fs.read.join("\n") });

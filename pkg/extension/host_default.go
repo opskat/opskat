@@ -38,8 +38,8 @@ type KVStore interface {
 	Set(key string, value []byte) error
 }
 
-type ActionEventHandler interface {
-	OnActionEvent(invocationID, eventType string, data json.RawMessage) error
+type ToolEventHandler interface {
+	OnToolEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type DefaultHostConfig struct {
@@ -47,7 +47,7 @@ type DefaultHostConfig struct {
 	AssetConfigs AssetConfigGetter
 	FileDialogs  FileDialogOpener
 	KV           KVStore
-	ActionEvents ActionEventHandler
+	ToolEvents   ToolEventHandler
 	// Scopes resolves the scope of a call on an asset (endpoints, connection
 	// path, credential injection) the first time the call needs it; nil gives
 	// every asset an empty scope, which reaches nothing beyond the allowlist.
@@ -264,11 +264,11 @@ func (h *DefaultHostProvider) KVSet(key string, value []byte) error {
 	return h.cfg.KV.Set(key, value)
 }
 
-func (h *DefaultHostProvider) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
-	if h.cfg.ActionEvents == nil {
+func (h *DefaultHostProvider) ToolEvent(invocationID, eventType string, data json.RawMessage) error {
+	if h.cfg.ToolEvents == nil {
 		return nil
 	}
-	return h.cfg.ActionEvents.OnActionEvent(invocationID, eventType, data)
+	return h.cfg.ToolEvents.OnToolEvent(invocationID, eventType, data)
 }
 
 // httpClientCache caches one *http.Client per asset, keyed by the asset id and

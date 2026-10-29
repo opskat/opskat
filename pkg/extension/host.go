@@ -11,7 +11,7 @@ import (
 // HostProvider defines the capabilities that the host provides to extensions.
 //
 // Every method is stateless with respect to a single call: the runtime owns the
-// per-invocation IO handle table and the action cancellation flag, so a provider
+// per-invocation IO handle table and the tool cancellation flag, so a provider
 // never has to reason about which concurrent call it is serving.
 type HostProvider interface {
 	// OpenIO opens a stream. asset is the asset whose endpoint a network stream
@@ -32,10 +32,10 @@ type HostProvider interface {
 	Log(level, msg string)
 	KVGet(key string) ([]byte, error)
 	KVSet(key string, value []byte) error
-	// ActionEvent forwards one event from a running action. invocationID names
-	// the run it came from — without it a listener watching an extension with
-	// two actions in flight cannot tell whose progress it is reading.
-	ActionEvent(invocationID, eventType string, data json.RawMessage) error
+	// ToolEvent forwards one event from a running tool call. invocationID names
+	// the call it came from — without it a listener watching an extension with
+	// two calls in flight cannot tell whose progress it is reading.
+	ToolEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type IOOpenParams struct {

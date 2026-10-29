@@ -63,7 +63,7 @@ func activateExtension(ctx context.Context, extName string) error {
 
 // newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：
 // 资产配置与凭据、KV、资产连接路径）建扩展运行时；桌面窗口才有的两项里，文件对话框
-// 换成 noFileDialog，action 事件不接（exec 只调工具，不跑 action）。
+// 换成 noFileDialog，工具事件不接（只有页面调用的事件有人听）。
 //
 // 日志走 logger.Default()：opsctl 不初始化日志，它是 no-op，扩展的日志与 guest 的
 // 标准输出 / 标准错误（pkg/extension guestLogWriter 也写它）因此永远不进 opsctl 的

@@ -44,7 +44,7 @@ func pageCallFixtureWithEvents(t *testing.T) (*Extension, *mock_asset_repo.MockA
 	var svc *extension_svc.Service
 	mgr := extension.NewManager(root, func(name string) extension.HostProvider {
 		cfg := svc.HostConfig(name)
-		cfg.ActionEvents = e.NewActionEventHandler(name)
+		cfg.ToolEvents = e.NewToolEventHandler(name)
 		return extension.NewDefaultHostProvider(cfg)
 	}, extensiontest.AcceptingContributions(), zap.NewNop())
 	t.Cleanup(func() { mgr.Close(context.Background()) })

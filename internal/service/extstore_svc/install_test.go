@@ -130,22 +130,8 @@ type fakeInstaller struct {
 func (f *fakeInstaller) NewInstallConfirm(c extension_svc.InstallCandidate) extension_svc.InstallConfirm {
 	return extension_svc.InstallConfirm{
 		Name: c.Name, DisplayName: c.DisplayName, Icon: c.Icon, From: f.installed[c.Name], To: c.Version,
-		Source: c.Source, Size: c.Size, Capabilities: grants(c.Permissions, c.Contributes), Added: []extension_svc.CapabilityGrant{},
+		Source: c.Source, Size: c.Size, Capabilities: extension_svc.CapabilityGrants(c.Permissions, c.Contributes), Added: []extension_svc.CapabilityGrant{},
 	}
-}
-
-func grants(p extmanifest.Permissions, c extmanifest.Contributes) []extension_svc.CapabilityGrant {
-	out := []extension_svc.CapabilityGrant{}
-	if p.Credentials != "" {
-		out = append(out, extension_svc.CapabilityGrant{Kind: extension_svc.CapCredentials, Value: p.Credentials})
-	}
-	if p.Network.AssetEndpoint {
-		out = append(out, extension_svc.CapabilityGrant{Kind: extension_svc.CapAssetEndpoint})
-	}
-	for _, id := range c.DatabaseDrivers {
-		out = append(out, extension_svc.CapabilityGrant{Kind: extension_svc.CapDatabaseDriver, Value: id})
-	}
-	return out
 }
 
 func (f *fakeInstaller) Install(ctx context.Context, path string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error) {
@@ -166,7 +152,7 @@ func (f *fakeInstaller) Install(ctx context.Context, path string, confirm extens
 
 	staged := extension_svc.InstallConfirm{
 		Name: m.Name, To: m.Version, From: f.installed[m.Name], Source: extension_svc.InstallSourceFile,
-		Capabilities: grants(storeCaps, storeDrivers),
+		Capabilities: extension_svc.CapabilityGrants(storeCaps, storeDrivers),
 	}
 	if f.staged != nil {
 		staged = f.staged(staged)
@@ -294,7 +280,7 @@ func TestInstallFromStoreConfirmsFromIndexBeforeDownloading(t *testing.T) {
 	assert.Equal(t, "1.0.0", asked.From)
 	assert.Equal(t, "1.1.0", asked.To)
 	assert.Equal(t, int64(len(f.reg.blob)), asked.Size)
-	assert.Equal(t, grants(storeCaps, storeDrivers), asked.Capabilities, "the index's permissions and driver ids are what the user approves")
+	assert.Equal(t, extension_svc.CapabilityGrants(storeCaps, storeDrivers), asked.Capabilities, "the index's permissions and driver ids are what the user approves")
 
 	assert.Equal(t, f.reg.blob, f.installer.installed2, "the pulled package is what gets installed")
 	assert.Contains(t, f.reg.calls(), "/v2/opskat/extensions/demo/manifests/1.1.0",

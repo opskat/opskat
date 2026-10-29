@@ -1,9 +1,13 @@
 // Package extwire is the JSON an extension and its host exchange: the describe()
 // answer (this file and contributes.go) and the database driver calls
-// (driver.go). The guest SDK (pkg/extsdk) encodes it and the host
-// (pkg/extension) decodes it with these same types, so there is no second copy
-// to keep in step. It is pure data — it depends on nothing but pkg/dbdriver —
-// so it compiles into the guest.
+// (driver.go). The guest SDK (pkg/extsdk) encodes it, and the host's
+// contribution points (internal/extreg) and driver sessions
+// (internal/extreg/extdriver) decode it with these same types. The one other
+// reader is the runtime (pkg/extension), which may not depend on the wire
+// format and so decodes only describe()'s envelope with its own
+// extension.Descriptor — strictly, so a field the SDK starts sending there fails
+// every SDK-built fixture's load instead of drifting unnoticed. It is pure data —
+// it depends on nothing but pkg/dbdriver — so it compiles into the guest.
 package extwire
 
 import (
@@ -68,18 +72,5 @@ func (d *Describe) Put(key string, v any) error {
 		d.Contributes = make(map[string]json.RawMessage)
 	}
 	d.Contributes[key] = raw
-	return nil
-}
-
-// Get decodes the contribution under key into v, leaving v untouched when the
-// extension contributes nothing there. The error names the key.
-func (d *Describe) Get(key string, v any) error {
-	raw, ok := d.Contributes[key]
-	if !ok {
-		return nil
-	}
-	if err := json.Unmarshal(raw, v); err != nil {
-		return fmt.Errorf("contributes.%s: %w", key, err)
-	}
 	return nil
 }

@@ -15,7 +15,7 @@ import (
 // An extension that provides database drivers and nothing else is a complete
 // describe-only registration: its drivers are known (descriptor, fields) in this
 // process, and the registration can be replaced by the full one on activation.
-func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
+func TestAttachDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
 	desc := driverDescriptor("describedb", "dsc")
 	m := driverOnlyManifest("describe-only-drivers", desc)
 	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)}))
@@ -45,7 +45,7 @@ func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.
 	assert.False(t, ok)
 }
 
-func TestRegisterDescribeOnly_DriverNameClashRegistersNothing(t *testing.T) {
+func TestAttachDescribeOnly_DriverNameClashRegistersNothing(t *testing.T) {
 	m := driverOnlyManifest("describe-only-clash", driverDescriptor("describeclash"), driverDescriptor("mysql"))
 	err := attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)})
 	require.Error(t, err)

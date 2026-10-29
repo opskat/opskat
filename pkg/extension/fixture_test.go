@@ -173,7 +173,7 @@ func (h *recordedHost) KVSet(key string, value []byte) error {
 	return nil
 }
 
-func (h *recordedHost) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
+func (h *recordedHost) ToolEvent(invocationID, eventType string, data json.RawMessage) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, recordedEvent{Invocation: invocationID, Type: eventType, Data: data})

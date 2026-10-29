@@ -2986,7 +2986,9 @@
       "fsRead": "Reads local files",
       "fsWrite": "Writes local files",
       "http": "Internet access",
-      "allowPrivate": "Private network"
+      "allowPrivate": "Private network",
+      "assetRoute": "Asset connection path",
+      "kerberos": "Kerberos tickets"
     },
     "installed": "Installed Extensions",
     "noExtensions": "No extensions installed",
@@ -3027,8 +3029,8 @@
       "sourceFile": "Local file",
       "sourceDir": "Local directory",
       "size": "Size",
-      "capabilities": "Requested capabilities",
-      "noCapabilities": "No capabilities beyond its own directory",
+      "capabilities": "Requested permissions",
+      "noCapabilities": "No permissions requested",
       "added": "New",
       "highRisk": "High risk",
       "databaseDriver": "Provides database driver",

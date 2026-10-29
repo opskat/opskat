@@ -174,7 +174,7 @@ func (h *extensionHandler) SafeView(a *asset_entity.Asset) map[string]any {
 }
 
 // ResolvePassword 扩展资产的密文字段由 WASM 宿主接口按 permissions.credentials 逐个
-// 发放（见 internal/app/extension/host.go），不存在"这个资产的密码"这样一个单值。
+// 发放（见 internal/service/extension_svc/host_providers.go），不存在"这个资产的密码"这样一个单值。
 func (h *extensionHandler) ResolvePassword(_ context.Context, _ *asset_entity.Asset) (string, error) {
 	return "", fmt.Errorf("asset type %q is provided by extension %q; credentials are resolved through the extension host API",
 		h.spec.Type, h.spec.ExtensionName)

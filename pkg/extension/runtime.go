@@ -202,7 +202,7 @@ func (p *Plugin) Describe(ctx context.Context) (json.RawMessage, error) {
 // is not something the caller's arguments get to choose: for a tool it is the
 // `exec` target the host resolved and checked the policy against, and a second
 // asset id hidden in the arguments would reach an asset the user never granted.
-// Tools therefore may not declare one (descriptor.go refuses it), and the guest
+// Tools therefore may not declare one (internal/extreg refuses it), and the guest
 // reads it off its ToolContext.
 type AssetRef struct {
 	ID   int64  `json:"id"`
@@ -455,7 +455,7 @@ func (p *Plugin) Manifest() *Manifest {
 // maxDuration of 0 means "no host-imposed deadline".
 func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input []byte, maxDuration time.Duration) (json.RawMessage, error) {
 	if p.closed.Load() {
-		return nil, fmt.Errorf("plugin closed")
+		return nil, ErrPluginClosed
 	}
 
 	req, err := callRequest(fnName, input)
@@ -492,7 +492,10 @@ func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input
 	inv.close()
 	p.release(callCtx, inst, callErr != nil)
 
-	if callErr != nil {
+	switch {
+	case callErr != nil && p.closed.Load():
+		return nil, fmt.Errorf("call %s: %w: %w", fnName, ErrPluginClosed, callErr)
+	case callErr != nil:
 		return nil, fmt.Errorf("call %s: %w", fnName, callErr)
 	}
 	return out, nil

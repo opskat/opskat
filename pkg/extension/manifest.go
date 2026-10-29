@@ -143,9 +143,16 @@ func matchPathPrefix(path, root string) bool {
 
 // CheckHTTPURL returns nil if the given URL is permitted by the extension's
 // permissions.network.http. Enforces:
-//  1. The URL prefix must match an allowlist entry.
+//  1. An allowlist entry must name the URL's scheme, host and port (the scheme's
+//     default filled in, the host compared case-insensitively), and the URL's
+//     path and query must start with the entry's — so "https://api.example.com"
+//     admits neither https://api.example.com.evil.net/ nor
+//     https://api.example.com@evil.net/.
 //  2. Private/loopback/link-local destinations are rejected unless allowPrivate is true.
 //  3. The scheme must be http or https.
+//
+// A refusal names the URL's origin only: its path and query may carry what the
+// guest put there, and the refusal is logged.
 //
 // allowPrivate should be true ONLY when the extension declared
 // permissions.network.allowPrivate.
@@ -164,19 +171,8 @@ func (m *Manifest) CheckHTTPURL(urlStr string, allowPrivate bool) error {
 		return fmt.Errorf("http denied: missing host")
 	}
 
-	// Enforce allowlist prefix match.
-	matched := false
-	for _, allowed := range m.Permissions.Network.HTTP {
-		if allowed == "" {
-			continue
-		}
-		if strings.HasPrefix(urlStr, allowed) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		return fmt.Errorf("http denied: %q not in permissions.network.http", urlStr)
+	if !slices.ContainsFunc(m.Permissions.Network.HTTP, func(allowed string) bool { return httpPrefixAdmits(allowed, u) }) {
+		return fmt.Errorf("http denied: %s://%s is not in permissions.network.http", u.Scheme, u.Host)
 	}
 
 	// Reject private-network destinations unless the extension may reach them.
@@ -185,6 +181,39 @@ func (m *Manifest) CheckHTTPURL(urlStr string, allowPrivate bool) error {
 			u.Hostname(), allowPrivate, m.Permissions.Network.AllowPrivate)
 	}
 	return nil
+}
+
+// httpPrefixAdmits reports whether allowlist entry allowed admits u: the same
+// scheme, host and port, and a path-and-query that starts with the entry's.
+func httpPrefixAdmits(allowed string, u *url.URL) bool {
+	p, err := url.Parse(allowed)
+	if err != nil || !strings.EqualFold(p.Scheme, u.Scheme) || p.Hostname() == "" {
+		return false
+	}
+	if canonicalHost(p.Hostname()) != canonicalHost(u.Hostname()) || urlPort(p) != urlPort(u) {
+		return false
+	}
+	return strings.HasPrefix(pathAndQuery(u), pathAndQuery(p))
+}
+
+// urlPort is the port u dials, its scheme's default filled in.
+func urlPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	return defaultPort(strings.ToLower(u.Scheme))
+}
+
+// pathAndQuery is u's escaped path ("/" when empty) and its query.
+func pathAndQuery(u *url.URL) string {
+	out := u.EscapedPath()
+	if out == "" {
+		out = "/"
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		out += "?" + u.RawQuery
+	}
+	return out
 }
 
 // isPrivateHost returns true if the host is a literal private IP (RFC1918,

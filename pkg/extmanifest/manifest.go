@@ -65,8 +65,9 @@ type Contributes struct {
 }
 
 // Permissions declares which host resources an extension may use. The zero value
-// is deny-all except an implicit read-only ${EXT_DIR}/** for the extension's own
-// directory; the host enforces each grant at its host call.
+// is deny-all — the extension's own directory included, which it reads through
+// fs.read like any other path ("${EXT_DIR}/**"); the host enforces each grant
+// at its host call.
 type Permissions struct {
 	FS FSPermission `json:"fs"`
 	// Credentials is "" (opaque handles only) or "read" (plaintext credentials).
@@ -89,8 +90,9 @@ type FSPermission struct {
 
 // NetworkPermission grants network reach.
 type NetworkPermission struct {
-	// HTTP lists the URL prefixes an extension may open over HTTP; the request URL
-	// must start with one of them.
+	// HTTP lists the URL prefixes an extension may open over HTTP. A request URL
+	// is admitted by one naming its scheme, host and port, whose path (and query)
+	// starts the request's (extension.Manifest.CheckHTTPURL).
 	HTTP []string `json:"http"`
 	// AllowPrivate lets an HTTP target admitted by HTTP resolve to a private
 	// address (RFC1918, loopback, link-local). Routing through an asset's SSH

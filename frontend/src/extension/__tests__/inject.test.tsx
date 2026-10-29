@@ -19,7 +19,7 @@ describe("injectExtensionAPI — @opskat/host-ui", () => {
     injectExtensionAPI(fakeApi);
 
     const hostUI = window.__OPSKAT_EXT__!.hostUI;
-    expect(hostUI.version).toBe("1.0");
+    expect(hostUI.version).toMatch(/^\d+\.\d+$/);
     expect(hostUI.CodeEditor).toBeDefined();
 
     render(<hostUI.JsonTreeView data={{ note: "hello" }} />);

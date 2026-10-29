@@ -34,7 +34,7 @@ const (
 	CapAssetEndpoint = "network.assetEndpoint"
 	// CapAssetRoute: a call scoped to an asset may dial any address along that
 	// asset's connection path, not just the address the user typed.
-	CapAssetRoute = "network.assetRoute" // #nosec G101 -- a permission name, not a credential
+	CapAssetRoute = "network.assetRoute" //nolint:gosec // G101: a permission name, not a credential
 	// CapKerberos: a call whose scope carries a ticket source may ask the host for
 	// Kerberos tickets fetched with that asset's Kerberos credentials.
 	CapKerberos       = "kerberos"

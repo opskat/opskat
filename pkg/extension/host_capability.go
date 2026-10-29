@@ -227,11 +227,7 @@ func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParam
 
 // urlHostPort is the host:port a URL dials, its scheme's default port filled in.
 func urlHostPort(u *url.URL) string {
-	port := u.Port()
-	if port == "" {
-		port = defaultPort(strings.ToLower(u.Scheme))
-	}
-	return net.JoinHostPort(u.Hostname(), port)
+	return net.JoinHostPort(u.Hostname(), urlPort(u))
 }
 
 // dialEndpoint sets the way to one of the scope's endpoints: the asset's route

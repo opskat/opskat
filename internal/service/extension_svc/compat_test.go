@@ -14,6 +14,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/pkg/appversion"
+	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/pkg/extmanifest"
 )
@@ -143,4 +144,51 @@ func TestListInstalledShowsExtensionsTheHostRefuses(t *testing.T) {
 		en[info.Name] = info
 	}
 	assert.Contains(t, en["ext-legacy"].LoadError.Message, "supports only 1.0")
+}
+
+// An extension the host refuses is listed with an Uninstall action, and that
+// action works without force: a refused extension registered no asset type and
+// no driver, so there is nothing for the orphan checks to protect.
+func TestUninstallRemovesAnExtensionTheHostRefuses(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "ext-legacy")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "manifest.json"),
+		[]byte(`{"name":"ext-legacy","version":"1.4.0","hostABI":"2.3","capabilities":{"databaseDrivers":["legacydb"]},"backend":{"runtime":"wasm","binary":"main.wasm"}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "main.wasm"), minimalWASM, 0o600))
+
+	ctrl := gomock.NewController(t)
+	stateRepo := mock_extension_state_repo.NewMockExtensionStateRepo(ctrl)
+	stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+	stateRepo.EXPECT().Delete(gomock.Any(), "ext-legacy").Return(nil)
+	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
+	svc := New(newTestManager(dir), stateRepo, nil, assets, zap.NewNop(), nil, nil)
+	t.Cleanup(func() { closeService(context.Background(), svc) })
+	require.NoError(t, svc.Init(context.Background()))
+
+	require.NoError(t, svc.Uninstall(context.Background(), "ext-legacy", false, false))
+	assert.NoDirExists(t, sub)
+	assert.Empty(t, svc.ListInstalled("en"), "the refused entry is gone with it")
+}
+
+// An uninstall that cannot count the assets of the extension's types is refused
+// with why, not let through as if none used them.
+func TestUninstallIsRefusedWhenItsAssetsCannotBeCounted(t *testing.T) {
+	stub := installDescribeStub(t)
+	dir := t.TempDir()
+	writeTestExtension(stub, dir, "ext-a")
+
+	ctrl := gomock.NewController(t)
+	stateRepo := mock_extension_state_repo.NewMockExtensionStateRepo(ctrl)
+	stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
+	assets.EXPECT().CountByTypes(gomock.Any(), []string{"ext-a"}).Return(int64(0), errors.New("database is locked"))
+	svc := New(newTestManager(dir), stateRepo, nil, assets, zap.NewNop(), nil, nil)
+	t.Cleanup(func() { closeService(context.Background(), svc) })
+	require.NoError(t, svc.Init(context.Background()))
+
+	err := svc.Uninstall(context.Background(), "ext-a", false, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database is locked")
+	assert.FileExists(t, filepath.Join(dir, "ext-a", "manifest.json"), "nothing is removed")
 }

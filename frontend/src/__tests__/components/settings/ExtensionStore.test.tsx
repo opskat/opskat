@@ -155,6 +155,26 @@ describe("ExtensionStore", () => {
     expect(status).toHaveTextContent("extension.store.verified");
   });
 
+  it("a card warns about every high-risk permission the install confirm marks", async () => {
+    serve(
+      verified([
+        card("oracle", {
+          permissions: perms({
+            kerberos: true,
+            network: { http: [], allowPrivate: false, assetEndpoint: true, assetRoute: true },
+          }),
+        }),
+      ])
+    );
+    renderStore();
+    await screen.findByTestId("ext-store-card-oracle");
+
+    const oracle = within(cardEl("oracle"));
+    expect(oracle.getByText("extension.capability.assetRoute").closest("[data-warning]")).toHaveClass("text-warning");
+    expect(oracle.getByText("extension.capability.kerberos").closest("[data-warning]")).toHaveClass("text-warning");
+    expect(oracle.getByText("extension.capability.assetEndpoint").closest("[data-warning]")).toBeNull();
+  });
+
   it("each card shows name, version, description, permissions, size and its status button", async () => {
     serve(verified(sample));
     renderStore();

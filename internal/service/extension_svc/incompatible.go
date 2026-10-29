@@ -45,7 +45,7 @@ func (e *localizedError) Unwrap() error { return e.err }
 // Kinds of LoadError.
 const (
 	// LoadErrorIncompatible: the extension targets a hostABI this OpsKat does not
-	// support.
+	// support, or needs a newer OpsKat (minAppVersion).
 	LoadErrorIncompatible = "incompatible"
 	// LoadErrorInvalid: the manifest or the extension's describe() answer was
 	// refused, or the extension failed to load.
@@ -60,7 +60,8 @@ type LoadError struct {
 
 // NewLoadError classifies err, what refused an installed extension, and renders it
 // in ctx's language. A hostABI mismatch reads as a statement about the extension's
-// build (it may be older than this OpsKat as well as newer); any other refusal
+// build (it may be older than this OpsKat as well as newer), a minAppVersion one
+// names the OpsKat release to update to; any other refusal
 // carries the parse / validation error as is.
 func NewLoadError(ctx context.Context, err error) *LoadError {
 	var inc *extmanifest.IncompatibleError
@@ -68,7 +69,10 @@ func NewLoadError(ctx context.Context, err error) *LoadError {
 		return &LoadError{Kind: LoadErrorInvalid, Message: err.Error()}
 	}
 	if inc.Reason != extmanifest.ReasonHostABI {
-		return &LoadError{Kind: LoadErrorIncompatible, Message: IncompatibleMessage(ctx, inc)}
+		return &LoadError{Kind: LoadErrorIncompatible, Message: policy.PolicyFmt(ctx,
+			"This extension requires OpsKat %s or newer, but this is %s, so it isn't loaded. Update OpsKat to use it.",
+			"此扩展要求 OpsKat %s 或更高版本，当前为 %s，未加载。请更新 OpsKat 后再使用。",
+			inc.MinAppVersion, inc.AppVersion)}
 	}
 	return &LoadError{Kind: LoadErrorIncompatible, Message: policy.PolicyFmt(ctx,
 		"This extension declares hostABI %s, but this OpsKat supports only %s, so it isn't loaded. Install a version of the extension built for this OpsKat.",

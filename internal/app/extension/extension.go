@@ -66,16 +66,16 @@ func (e *Extension) NewHostProvider(extName string) interface{} {
 	return nil
 }
 
-// FileDialogOpener / ActionEventHandler（工具事件）暴露给 main.go：它们是只有桌面窗口才能提供的
+// FileDialogOpener / ToolEventHandler（工具事件）暴露给 main.go：它们是只有桌面窗口才能提供的
 // 宿主能力，main.go 把它们补进 extension_svc.Service.HostConfig 给出的其余能力（资产配置、
 // KV、连接路径——与 opsctl 共用）再交给 extension.NewDefaultHostProvider。
 
 // NewFileDialogOpener 返回 fileDialogOpener 实例。
 func (e *Extension) NewFileDialogOpener() *fileDialogOpener { return &fileDialogOpener{ctx: e.ctx} }
 
-// NewActionEventHandler 为指定扩展返回工具事件转发器：只把页面调用的事件以
+// NewToolEventHandler 为指定扩展返回工具事件转发器：只把页面调用的事件以
 // ext:tool:event 发给前端，AI exec / opsctl 调用的事件丢弃。
-func (e *Extension) NewActionEventHandler(extName string) *toolEventHandler {
+func (e *Extension) NewToolEventHandler(extName string) *toolEventHandler {
 	return &toolEventHandler{ext: e, extName: extName}
 }
 

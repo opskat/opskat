@@ -142,7 +142,7 @@ func (m *IOHandleManager) Epoch() uint64 {
 }
 
 // RegisterSince registers a resource whose open began at epoch. If CloseAll ran
-// in between — the call was interrupted or its action canceled while the stream
+// in between — the call was interrupted or canceled while the stream
 // was being opened — the resource is closed instead: CloseAll could not reach
 // it, and handed to the guest it would outlive the interruption (a read on it
 // blocking with nothing left to close it).

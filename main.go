@@ -409,10 +409,10 @@ func initExtensionSystem(
 	var extSvc *extension_svc.Service
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
 		// 资产配置 / KV / 连接路径来自 extension_svc（与 opsctl 共用），文件对话框与
-		// action 事件只有桌面窗口能给。
+		// 工具事件只有桌面窗口能给。
 		cfg := extSvc.HostConfig(extName)
 		cfg.FileDialogs = extB.NewFileDialogOpener()
-		cfg.ActionEvents = extB.NewActionEventHandler(extName)
+		cfg.ToolEvents = extB.NewToolEventHandler(extName)
 		provider := extpkg.NewDefaultHostProvider(cfg)
 		// The asset's cached HTTP client (kept for keep-alive reuse across calls)
 		// is built from its connection settings; once those change or the asset

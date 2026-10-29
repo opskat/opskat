@@ -285,7 +285,7 @@ func opToolEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
-	return nil, env.host.ActionEvent(env.inv.id, p.Type, p.Data)
+	return nil, env.host.ToolEvent(env.inv.id, p.Type, p.Data)
 }
 
 // readHandle reads up to size bytes, keeping io.EOF distinguishable while never

@@ -8,7 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// What one side Puts the other Gets back, keyed by contribution point.
+// What one side Puts the other decodes back, keyed by contribution point; a key
+// nothing was put under is absent.
 func TestDescribeContributionsRoundTrip(t *testing.T) {
 	sent := Describe{Icon: "cloud", I18n: I18n{DisplayName: "d", Description: "x"}}
 	tools := []Tool{{Name: "list", PolicyAction: "list", Parameters: map[string]any{"type": "object"}}}
@@ -22,30 +23,18 @@ func TestDescribeContributionsRoundTrip(t *testing.T) {
 	assert.Equal(t, "cloud", got.Icon)
 	assert.Equal(t, "d", got.I18n.DisplayName)
 	var gotTools []Tool
-	require.NoError(t, got.Get(KeyTools, &gotTools))
+	require.NoError(t, json.Unmarshal(got.Contributes[KeyTools], &gotTools))
 	assert.Equal(t, tools, gotTools)
 	var policy Policy
-	require.NoError(t, got.Get(KeyPolicy, &policy))
+	require.NoError(t, json.Unmarshal(got.Contributes[KeyPolicy], &policy))
 	assert.Equal(t, Policy{Type: "x", Default: []string{"ext:x:ro"}}, policy)
-
-	pages := Pages{Entry: "keep"}
-	require.NoError(t, got.Get(KeyPages, &pages))
-	assert.Equal(t, Pages{Entry: "keep"}, pages, "an absent key leaves the destination untouched")
+	assert.NotContains(t, got.Contributes, KeyPages)
 }
 
 func TestParseRefusesAnotherShape(t *testing.T) {
 	_, err := Parse([]byte(`{"assetTypes":[],"policies":{"type":"x"}}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"assetTypes"`)
-}
-
-func TestGetNamesTheContributionThatDoesNotDecode(t *testing.T) {
-	d, err := Parse([]byte(`{"contributes":{"tools":{"name":"not a list"}}}`))
-	require.NoError(t, err)
-	var tools []Tool
-	err = d.Get(KeyTools, &tools)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "contributes.tools")
 }
 
 // Auth and connection are applied by the host; a key it does not read must not

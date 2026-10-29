@@ -659,3 +659,28 @@ func benchmarkFixtureTool(b *testing.B, opts ...PluginOption) {
 		}
 	}
 }
+
+// TestPluginCallsAfterCloseFailWithErrPluginClosed: every kind of call on a
+// closed plugin — pooled (Invoke, CallTool) or leased — is told apart from the
+// guest's own failures by ErrPluginClosed.
+func TestPluginCallsAfterCloseFailWithErrPluginClosed(t *testing.T) {
+	ctx := context.Background()
+	manifest := fixtureManifest(t)
+	p, err := LoadPlugin(ctx, manifest, fixtureWasm(t), NewCapabilityHost(newRecordedHost(), manifest, t.TempDir()), nil)
+	if err != nil {
+		t.Fatalf("load fixture plugin: %v", err)
+	}
+	if err := p.Close(ctx); err != nil {
+		t.Fatalf("close plugin: %v", err)
+	}
+
+	if _, err := p.Invoke(ctx, "describe", []byte(`{}`)); !errors.Is(err, ErrPluginClosed) {
+		t.Errorf("Invoke after Close: got %v, want ErrPluginClosed", err)
+	}
+	if _, err := p.CallTool(ctx, ToolCall{Name: "seq", Args: json.RawMessage(`{}`)}); !errors.Is(err, ErrPluginClosed) {
+		t.Errorf("CallTool after Close: got %v, want ErrPluginClosed", err)
+	}
+	if _, err := p.Lease(ctx, &Scope{}); !errors.Is(err, ErrPluginClosed) {
+		t.Errorf("Lease after Close: got %v, want ErrPluginClosed", err)
+	}
+}

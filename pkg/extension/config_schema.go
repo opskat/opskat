@@ -7,10 +7,11 @@ import (
 )
 
 // ConfigFieldValues reads the named fields of an asset config as strings — the
-// values credential injection renders into requests (AuthDef bindings). A field
-// absent or null is omitted, not ""; a number or bool renders as its JSON text. It
-// does not decrypt: a stored config's password fields come back as ciphertext, and
-// the caller that holds the key decrypts them (AssetConfigGetter.AssetCredentialValues).
+// values credential injection renders into requests (the auth bindings an asset
+// type declares, internal/extreg.AuthDef). A field absent or null is omitted, not
+// ""; a number or bool renders as its JSON text. It does not decrypt: a stored
+// config's password fields come back as ciphertext, and the caller that holds the
+// key decrypts them (internal/service/extension_svc's AssetCredentialValues).
 // A config that does not parse is an error: injecting nothing would send the request
 // without the credentials the user configured.
 func ConfigFieldValues(config json.RawMessage, fields []string) (map[string]string, error) {

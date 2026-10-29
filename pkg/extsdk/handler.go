@@ -180,14 +180,13 @@ func dispatchTool(input []byte) (json.RawMessage, error) {
 // requests is part of declaring the tool, so there is no per-tool switch here to
 // fall out of step with the handler table.
 //
-// The reply has two shapes. {"action","resource"} is the 2.0/2.1 wire: one literal
-// resource, what Policy/Resource and PolicyFunc answer. {"action","resources"} is
-// the 2.2 wire PolicyResources answers — a list (never null) whose '*' / '?' are
-// wildcards. Which shape a tool answers is fixed by how it registered, so a
-// single-resource extension's reply is byte-for-byte what it always was.
+// The reply has two shapes. {"action","resource"} is one literal resource, what
+// Policy/Resource and PolicyFunc answer. {"action","resources"} is what
+// PolicyResources answers — a list (never null) whose '*' / '?' are wildcards.
+// Which shape a tool answers is fixed by how it registered.
 //
-// A tool declaring RejectArgs may answer a third shape first, {"reject":"<reason>"}
-// (2.2 too): no classification, the tool refusing the arguments themselves.
+// A tool declaring RejectArgs may answer a third shape first, {"reject":"<reason>"}:
+// no classification, the tool refusing the arguments themselves.
 func dispatchPolicy(input []byte) (json.RawMessage, error) {
 	entry, req, err := parseToolCall(input)
 	if err != nil {

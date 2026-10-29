@@ -35,15 +35,20 @@ func (e *Extension) RefreshStore(lang string) (extstore_svc.State, error) {
 }
 
 // InstalledVersions returns the installed extensions (enabled or disabled),
-// name → version, for the store to compare against. Empty until the extension
-// system has started. A package-level function, like InstalledExtensionVersion,
-// so it is not exposed as a binding.
+// name → version, for the store to compare against. A copy the host refuses is
+// not among them: the store offers what this host can run, and installing over
+// such a copy is a fresh install (InstallConfirm.From is empty). Empty until the
+// extension system has started. A package-level function, like
+// InstalledExtensionVersion, so it is not exposed as a binding.
 func InstalledVersions(e *Extension) map[string]string {
 	out := map[string]string{}
 	if e.service == nil {
 		return out
 	}
 	for _, info := range e.service.ListInstalled(e.lang.Lang()) {
+		if info.LoadError != nil {
+			continue
+		}
 		out[info.Name] = info.Version
 	}
 	return out

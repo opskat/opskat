@@ -79,6 +79,32 @@ func TestPermissionChecks(t *testing.T) {
 			So(m.CheckHTTPURL("https://evil.example.com/", false), ShouldNotBeNil)
 		})
 
+		Convey("HTTP URL — a prefix admits its own host and port only, however the URL is spelled", func() {
+			m := &Manifest{
+				Manifest: extmanifest.Manifest{
+					Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{HTTP: []string{"https://api.example.com", "https://svc.example.com:8443/v1/"}}},
+				},
+			}
+			So(m.CheckHTTPURL("https://api.example.com/v1/foo", false), ShouldBeNil)
+			So(m.CheckHTTPURL("https://api.example.com.evil.net/", false), ShouldNotBeNil)
+			So(m.CheckHTTPURL("https://api.example.com@evil.net/", false), ShouldNotBeNil)
+			So(m.CheckHTTPURL("https://api.example.com:4430/", false), ShouldNotBeNil)
+			So(m.CheckHTTPURL("http://api.example.com/", false), ShouldNotBeNil)
+			So(m.CheckHTTPURL("https://svc.example.com:8443/v1/items", false), ShouldBeNil)
+			So(m.CheckHTTPURL("https://svc.example.com:84430/v1/items", false), ShouldNotBeNil)
+			So(m.CheckHTTPURL("https://svc.example.com:8443/v2/items", false), ShouldNotBeNil)
+			So(m.CheckHTTPURL("https://API.example.com/v1/foo", false), ShouldBeNil)
+			So(m.CheckHTTPURL("https://api.example.com:443/v1/foo", false), ShouldBeNil)
+		})
+
+		Convey("HTTP URL — a refusal names the target's origin, never its path or query", func() {
+			m := &Manifest{}
+			err := m.CheckHTTPURL("https://api.example.com/v1/foo?token=s3cret", false)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "https://api.example.com")
+			So(err.Error(), ShouldNotContainSubstring, "s3cret")
+		})
+
 		Convey("HTTP URL — reject RFC1918 without allowPrivate", func() {
 			m := &Manifest{
 				Manifest: extmanifest.Manifest{

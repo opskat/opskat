@@ -512,7 +512,7 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
             {pages.map((page) => (
               <div key={page.id} className="flex justify-between text-xs p-2 rounded bg-muted/50">
                 <span>{page.i18n?.name || page.id}</span>
-                <span className="text-muted-foreground font-mono">{page.slot || "-"}</span>
+                <span className="text-muted-foreground font-mono">{page.slot}</span>
               </div>
             ))}
           </div>

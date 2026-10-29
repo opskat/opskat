@@ -3,8 +3,9 @@
 // ExtManifest is the backend's merged view of one extension, delivered by
 // ListInstalledExtensions — the security contract read from manifest.json plus the
 // functional face the WASM module reported through describe(). The frontend never
-// parses manifest.json itself: pkg/extension is the only reader of that file, and
-// the shape below is what internal/service/extension_svc serialises.
+// parses manifest.json itself: pkg/extmanifest.Parse is the only reader of that
+// file, and the shape below is internal/extreg.Manifest, the typed view
+// internal/service/extension_svc serialises.
 
 export interface ExtManifest {
   name: string;
@@ -42,7 +43,7 @@ export interface ExtAssetType {
  * The credential injection an asset type declares in describe(), as far as a form
  * needs it: `selector` is the config field (a dropdown) that picks the auth method,
  * and each group lists the config fields its method uses — derived by the backend
- * from the group's bindings (pkg/extension AuthGroup.MarshalJSON).
+ * from the group's bindings (internal/extreg AuthGroup.MarshalJSON).
  */
 export interface ExtAuth {
   selector?: string;
@@ -66,7 +67,8 @@ export interface ExtToolDef {
   parameters: Record<string, unknown>;
   /**
    * The fixed policy action this tool requests; declared at the tool's registration in
-   * the guest. Absent for a tool that classifies each call from its arguments.
+   * the guest. Absent for a tool that classifies each call from its arguments, and for
+   * a page-only tool, which requests none.
    */
   policyAction?: string;
 }
@@ -91,7 +93,8 @@ export interface ExtFrontend {
 
 export interface ExtPage {
   id: string;
-  slot?: string;
+  /** Always set: the host refuses a page without a slot (internal/extreg pagesPoint). */
+  slot: string;
   i18n: { name: string };
   component: string;
 }

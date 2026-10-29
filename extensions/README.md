@@ -77,7 +77,11 @@ Each one is enforced at the host call it guards:
 - `fs.read` / `fs.write` are absolute path prefixes (`${EXT_DIR}` resolves to the
   installed extension's directory and may only start an entry); an optional trailing
   `/**` is the same prefix. An empty, relative or `..` entry fails manifest parsing.
-- `network.http` is a list of URL prefixes; a request must start with one of them.
+- `network.http` is a list of URL prefixes. A request is admitted by one that names
+  its scheme, host and port (the scheme's default port filled in, the host
+  case-insensitive) and whose path starts the request's path, so
+  `https://api.example.com` admits `https://api.example.com/v1/x` but not
+  `https://api.example.com.evil.net/`.
   Each must be an `http://` or `https://` URL with a host, or manifest parsing fails.
   Private and loopback destinations are refused unless `network.allowPrivate` is also
   set.

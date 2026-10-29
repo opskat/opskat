@@ -51,13 +51,13 @@ func toWailsFilters(filters []string) []wailsRuntime.FileFilter {
 	return result
 }
 
-// toolEventHandler implements extension.ActionEventHandler for one extension.
+// toolEventHandler implements extension.ToolEventHandler for one extension.
 type toolEventHandler struct {
 	ext     *Extension
 	extName string
 }
 
-// OnActionEvent forwards one tool event to the page that made the call, as
+// OnToolEvent forwards one tool event to the page that made the call, as
 // "ext:tool:event". Only a page call has a listener: an event from an AI exec or
 // opsctl call of the same tool is dropped here, so the tool never has to know
 // who called it.
@@ -65,7 +65,7 @@ type toolEventHandler struct {
 // invocationId rides along because one handler serves every concurrent call of
 // this extension: without it a listener sees the extension's events merged into
 // one stream and attributes another upload's progress to its own.
-func (h *toolEventHandler) OnActionEvent(invocationID, eventType string, data json.RawMessage) error {
+func (h *toolEventHandler) OnToolEvent(invocationID, eventType string, data json.RawMessage) error {
 	if !h.ext.toolCalls.isPageCall(h.extName, invocationID) {
 		return nil
 	}

@@ -1,5 +1,5 @@
-// Command fixture-dbdriver is the WASM extension pkg/extension's database driver
-// tests run against: one SQL database driver, "fixturedb", whose session the SDK
+// Command fixture-dbdriver is the WASM extension the database driver tests
+// (internal/extreg/extdriver and its callers) run against: one SQL database driver, "fixturedb", whose session the SDK
 // assembles from pkg/dbdriver/sqldb. Its database is memdb (memdb.go), an
 // in-memory database/sql driver that serves a fixed catalog but logs in to — and
 // announces every statement to — whatever the host's reach path leads to, so a
@@ -31,9 +31,9 @@ func main() {}
 // It declares the certificate field group, so the host hands it the asset's TLS
 // material (SHOW OPEN TLS answers what it got), and the Kerberos field group,
 // so a Kerberos asset's session logs in with a host ticket (SHOW OPEN AUTH and
-// SHOW KERBEROS TICKET probe it); its manifest declares the host ABI and the
-// capability both need. It splits and classifies statements itself (split.go),
-// which needs that host ABI too.
+// SHOW KERBEROS TICKET probe it); its manifest grants permissions.kerberos for
+// the ticket and network.assetEndpoint / assetRoute for the reach path. It splits
+// and classifies statements itself (split.go).
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",

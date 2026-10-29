@@ -24,6 +24,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
@@ -211,7 +212,7 @@ var driverScopeOps = []string{
 // (Transport.DialAddr). A transport without a by-address dial dials directly and
 // gets the direct route's check whatever Direct says.
 func (d *Drivers) driverScope(driver string, req *dbdriver.OpenRequest) *extension.Scope {
-	scope := &extension.Scope{Asset: &extension.AssetRef{ID: req.AssetID}, Ops: driverScopeOps}
+	scope := &extension.Scope{Asset: &extension.AssetRef{ID: req.AssetID, Type: asset_entity.AssetTypeDatabase}, Ops: driverScopeOps}
 	if cfg := req.Config; cfg != nil {
 		scope.Endpoints = []extension.Endpoint{{Host: cfg.Host, Port: strconv.Itoa(cfg.Port)}}
 	}
@@ -325,7 +326,8 @@ func (d *driverInstance) drop() {
 		return
 	}
 	if err := d.inst.Close(context.Background()); err != nil {
-		logger.Default().Warn("close database driver instance", zap.Error(err))
+		logger.Default().Warn("close database driver instance",
+			zap.String("extension", d.drivers.name()), zap.String("driver", d.driver), zap.String("invocation", d.inst.ID()), zap.Error(err))
 	}
 }
 

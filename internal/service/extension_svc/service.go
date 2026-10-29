@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -477,7 +479,10 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 		}
 		if len(assetTypes) > 0 {
 			count, err := s.assetRepo.CountByTypes(ctx, assetTypes)
-			if err == nil && count > 0 {
+			if err != nil {
+				return fmt.Errorf("cannot uninstall %q: count the assets of its asset types %v: %w", name, assetTypes, err)
+			}
+			if count > 0 {
 				return fmt.Errorf("cannot uninstall %q: %d asset(s) still reference its asset types %v; delete them first or use force uninstall", name, count, assetTypes)
 			}
 		}
@@ -545,6 +550,7 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 			info, err := NewExtensionInfo(ext.Manifest, func(key string) string { return ext.Translate(lang, key) }, true)
 			if err != nil {
 				s.logger.Error("describe installed extension for the list", zap.String("name", ext.Name), zap.Error(err))
+				result = append(result, newFailedExtensionInfo(extension.NewLoadFailure(ext.Dir, err), lang))
 				continue
 			}
 			result = append(result, *info)
@@ -565,7 +571,10 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 		}
 		info, err := NewExtensionInfo(mi.Manifest, tr, isLoaded)
 		if err != nil {
+			// Listed with why rather than dropped: a row the user cannot see is one
+			// they cannot uninstall either.
 			s.logger.Error("describe installed extension for the list", zap.String("name", mi.Name), zap.Error(err))
+			result = append(result, newFailedExtensionInfo(extension.NewLoadFailure(mi.Dir, err), lang))
 			continue
 		}
 		result = append(result, *info)
@@ -683,14 +692,22 @@ func (s *Service) unregister(ctx context.Context, name string) {
 
 // checkDriverAssets refuses to uninstall name while database assets use one of its
 // drivers. The driver ids come from the manifest on disk, so the check holds for
-// a disabled extension too; a name that is not installed has none to check.
+// a disabled extension too; a name that is not installed has none to check, and
+// neither has one whose manifest this host refuses — it never loaded, so it
+// registered no driver.
 func (s *Service) checkDriverAssets(ctx context.Context, name string) error {
-	manifest, err := extension.ReadManifest(s.manager.ExtDir(name))
+	data, err := os.ReadFile(filepath.Join(s.manager.ExtDir(name), "manifest.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("cannot uninstall %q: read its manifest to check the database assets using its drivers: %w; use force uninstall to remove it anyway", name, err)
+	}
+	manifest, err := extension.ParseManifest(data)
+	if err != nil {
+		s.logger.Info("uninstalling an extension this host refuses; it registered no database driver",
+			zap.String("extension", name), zap.Error(err))
+		return nil
 	}
 	for _, driver := range manifest.Contributes.DatabaseDrivers {
 		assets, err := s.assetRepo.List(ctx, asset_repo.ListOptions{DatabaseDriver: driver})
