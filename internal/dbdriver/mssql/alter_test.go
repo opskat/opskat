@@ -11,20 +11,29 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-// mssqlColumn 是改表时读列定义的一行；nil 的 maxLen / precision / scale / timePrecision / def 是 NULL。
+// mssqlColumn 是改表时读列定义的一行；nil 的 maxLen / precision / scale / timePrecision / def 是 NULL，identity 是
+// IDENTITY 列。
 type mssqlColumn struct {
 	name, dataType                  string
 	maxLen                          any
 	precision, scale, timePrecision any
 	nullable                        string
 	def                             any
+	identity                        bool
 }
 
+// expectAlterColumns 是改表读表的两条查询：列定义与（这里没有的）索引。
 func expectAlterColumns(mock sqlmock.Sqlmock, schema, table string, columns ...mssqlColumn) {
+	expectColumnRows(mock, schema, table, columns...)
+	expectIndexes(mock, schema, table)
+}
+
+// expectColumnRows 是改表读列定义的查询。
+func expectColumnRows(mock sqlmock.Sqlmock, schema, table string, columns ...mssqlColumn) {
 	rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "CHARACTER_MAXIMUM_LENGTH",
-		"NUMERIC_PRECISION", "NUMERIC_SCALE", "DATETIME_PRECISION", "IS_NULLABLE", "COLUMN_DEFAULT"})
+		"NUMERIC_PRECISION", "NUMERIC_SCALE", "DATETIME_PRECISION", "IS_NULLABLE", "COLUMN_DEFAULT", "IS_IDENTITY"})
 	for _, c := range columns {
-		rows.AddRow(c.name, c.dataType, c.maxLen, c.precision, c.scale, c.timePrecision, c.nullable, c.def)
+		rows.AddRow(c.name, c.dataType, c.maxLen, c.precision, c.scale, c.timePrecision, c.nullable, c.def, int64(boolInt(c.identity)))
 	}
 	mock.ExpectQuery(alterColumnsSQL).WithArgs(schema, table).WillReturnRows(rows)
 }
@@ -45,9 +54,9 @@ func TestAlterTableModelForSQLServer(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableModel{
 		Name: "users",
 		Columns: []dbdriver.ColumnDefinition{
-			{Name: "id", Type: "int"},
-			{Name: "name", Type: "nvarchar(50)", Nullable: true, DefaultValue: "(N'anon')"},
-			{Name: "bio", Type: "varchar(max)", Nullable: true},
+			{Name: "id", Type: "int", DefaultKind: dbdriver.DefaultKindNone},
+			{Name: "name", Type: "nvarchar(50)", Nullable: true, DefaultValue: "anon", DefaultKind: dbdriver.DefaultKindValue},
+			{Name: "bio", Type: "varchar(max)", Nullable: true, DefaultKind: dbdriver.DefaultKindNone},
 		},
 	}, model)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -74,9 +83,9 @@ func TestAlterTableStatementsForSQLServer(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
 			"EXEC sp_rename 'users', 'users_v2'",
+			"ALTER TABLE [users_v2] DROP COLUMN [name]",
 			"ALTER TABLE [users_v2] ADD [email] VARCHAR(255) NOT NULL",
 			"ALTER TABLE [users_v2] ALTER COLUMN [id] BIGINT NOT NULL",
-			"ALTER TABLE [users_v2] DROP COLUMN [name]",
 		},
 		Table: "users_v2",
 	}, result)
@@ -138,9 +147,9 @@ func TestAlterTableRenamesSQLServerColumnsThenAltersThemByTheNewName(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
+			"EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN'",
 			"ALTER TABLE [users] ADD [nick] NVARCHAR(20) DEFAULT '匿名'",
 			"ALTER TABLE [users] ADD [tag] VARBINARY(4) DEFAULT 'ab'",
-			"EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN'",
 			"ALTER TABLE [users] ALTER COLUMN [display_name] NVARCHAR(200) NOT NULL",
 		},
 		Table: "users",

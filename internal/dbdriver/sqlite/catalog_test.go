@@ -90,7 +90,7 @@ func TestTableMetadata(t *testing.T) {
 
 	assert.Contains(t, meta.Indexes, dbdriver.IndexMeta{Name: "idx_orders_code", Columns: []string{"code"}, Unique: true})
 
-	assert.Equal(t, []dbdriver.ForeignKeyMeta{{Column: "user_id", ReferencedTable: "users", ReferencedColumn: "id"}}, meta.ForeignKeys)
+	assert.Equal(t, []dbdriver.ForeignKeyMeta{{Column: "user_id", ReferencedTable: "users", ReferencedColumn: "id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION"}}, meta.ForeignKeys)
 }
 
 // SQLite 没有列注释（恒为空串）；默认值 NULL（没有默认值）与空串默认值可区分。

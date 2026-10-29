@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Table2, Code2, Database } from "lucide-react";
+import { X, Table2, Code2, Database, Columns3, SquarePen } from "lucide-react";
 import { useQueryStore, type InnerTab } from "@/stores/queryStore";
 import {
+  Button,
   ConfirmDialog,
   ContextMenu,
   ContextMenuContent,
@@ -19,10 +20,14 @@ import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
-import { findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
+import { driverHasCapability, findDatabaseDriver, useDatabaseDrivers } from "@/lib/dbDrivers";
 import { DatabaseTree, DriverUnavailableNotice } from "./DatabaseTree";
 import { TableDataTab } from "./TableDataTab";
 import { SqlEditorTab } from "./SqlEditorTab";
+import { TableDesigner } from "./designer/TableDesigner";
+import { TableCreator } from "./designer/TableCreator";
+import { useCanCreateTable, useDesignerAccess } from "./designer/access";
+import { defaultCreateTarget, targetLabel } from "./designer/createTarget";
 
 interface DatabasePanelProps {
   tabId: string;
@@ -51,9 +56,18 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
     requestCloseInnerTabs(tabId, ids, { closeOuter: true });
   }, [cancelPendingClose, outerCloseRequested, requestCloseInnerTabs, tabId]);
 
-  const driver = useTabStore((s) => (s.tabs.find((tab) => tab.id === tabId)?.meta as QueryTabMeta | undefined)?.driver);
+  const meta = useTabStore((s) => s.tabs.find((tab) => tab.id === tabId)?.meta as QueryTabMeta | undefined);
+  const driver = meta?.driver;
   const driversState = useDatabaseDrivers();
-  const driverUnavailable = driversState.status === "ready" && !findDatabaseDriver(driversState.drivers, driver ?? "");
+  const descriptor =
+    driversState.status === "ready" ? findDatabaseDriver(driversState.drivers, driver ?? "") : undefined;
+  const driverUnavailable = driversState.status === "ready" && !descriptor;
+  const canCreateTable = useCanCreateTable(descriptor, meta?.assetId);
+  // 设计表的标签在不能改表(只读连接、驱动不能改表)时打开的是只读设计器,标题随之是「结构」;驱动描述
+  // 还没读到时按标签记下的模式。
+  const designerAccess = useDesignerAccess(descriptor, meta?.assetId);
+  const openSqlTab = useQueryStore((s) => s.openSqlTab);
+  const openCreateTableTab = useQueryStore((s) => s.openCreateTableTab);
 
   const sidebarRef = useRef<HTMLDivElement>(null);
   const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
@@ -65,11 +79,32 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
 
   if (!dbState) return null;
 
-  const { innerTabs, activeInnerTabId, closeRequest } = dbState;
-  const fullNameOf = (tab: InnerTab) => (tab.type === "table" ? `${tab.database}.${tab.table}` : tab.title);
+  const { innerTabs, activeInnerTabId, closeRequest, dirtyInnerTabIds } = dbState;
+  // 复制名称给出的名字:表与设计器是 db.table,新建表是目标库(db 或 db.schema),SQL 标签是标题。
+  const fullNameOf = (tab: InnerTab) => {
+    if (tab.type === "sql") return tab.title;
+    if (tab.type === "designer" && tab.mode === "create") return targetLabel(tab);
+    return `${tab.database}.${tab.table}`;
+  };
+  // 标签上显示的标题:设计器带上它是哪种设计器。
+  const titleOf = (tab: InnerTab) => {
+    if (tab.type !== "designer") return fullNameOf(tab);
+    if (tab.mode === "create") return t("query.designer.tabTitle.create", { name: fullNameOf(tab) });
+    if (tab.mode === "view" || (descriptor && !designerAccess.canAlter)) {
+      return t("query.designer.tabTitle.view", { name: fullNameOf(tab) });
+    }
+    return t("query.designer.tabTitle.design", { name: fullNameOf(tab) });
+  };
+  // 空白区的「新建表」没有具体位置:建在第一个展开的库,没有时是资产的默认库。
+  const emptyCreateTarget = defaultCreateTarget({
+    databases: dbState.databases,
+    expandedDbs: dbState.expandedDbs,
+    defaultDatabase: meta?.defaultDatabase ?? "",
+    schemas: driverHasCapability(descriptor, "schemas"),
+  });
   // 单个脏标签由该 TableDataTab 自己的三选项对话框处理,这里只接多个。
   const batchClose = closeRequest && closeRequest.dirtyIds.length > 1 ? closeRequest : null;
-  const batchNames = batchClose ? innerTabs.filter((tab) => batchClose.dirtyIds.includes(tab.id)).map(fullNameOf) : [];
+  const batchNames = batchClose ? innerTabs.filter((tab) => batchClose.dirtyIds.includes(tab.id)).map(titleOf) : [];
 
   return (
     <div className="flex h-full w-full" data-testid="database-query-panel">
@@ -97,6 +132,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
             {innerTabs.map((tab, index) => {
               const isActive = tab.id === activeInnerTabId;
               const fullName = fullNameOf(tab);
+              const title = titleOf(tab);
               return (
                 <ContextMenu key={tab.id}>
                   <Tooltip>
@@ -118,10 +154,19 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                         >
                           {tab.type === "table" ? (
                             <Table2 className="h-3 w-3 shrink-0" />
+                          ) : tab.type === "designer" ? (
+                            <Columns3 className="h-3 w-3 shrink-0" />
                           ) : (
                             <Code2 className="h-3 w-3 shrink-0" />
                           )}
-                          <span className="truncate max-w-[120px]">{fullName}</span>
+                          <span className="truncate max-w-[160px]">{title}</span>
+                          {dirtyInnerTabIds?.includes(tab.id) && (
+                            <span
+                              data-testid="inner-tab-dirty"
+                              className="size-1.5 shrink-0 rounded-full bg-warning"
+                              aria-hidden
+                            />
+                          )}
                           <button
                             className="ml-1 rounded-sm p-0.5 hover:bg-muted transition-colors"
                             onClick={(e) => {
@@ -134,7 +179,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                         </div>
                       </TooltipTrigger>
                     </ContextMenuTrigger>
-                    <TooltipContent>{fullName}</TooltipContent>
+                    <TooltipContent>{title}</TooltipContent>
                   </Tooltip>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => closeInnerTab(tabId, tab.id)}>
@@ -164,7 +209,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                     >
                       {t("query.innerTab.copyName")}
                     </ContextMenuItem>
-                    {tab.type === "table" && (
+                    {(tab.type === "table" || (tab.type === "designer" && tab.mode !== "create")) && (
                       <ContextMenuItem onClick={() => revealTable(tabId, tab.database, tab.table)}>
                         {t("query.innerTab.reveal")}
                       </ContextMenuItem>
@@ -179,9 +224,33 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
         {/* Tab content — render all, hide inactive to preserve state */}
         <div className="flex-1 min-h-0 relative">
           {!driverUnavailable && innerTabs.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
               <Database className="h-10 w-10 opacity-30" />
-              <p className="text-xs">{t("query.openTable")}</p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  data-testid="empty-new-sql"
+                  onClick={() => openSqlTab(tabId)}
+                >
+                  <SquarePen className="h-3.5 w-3.5" />
+                  {t("query.newSql")}
+                </Button>
+                {canCreateTable && emptyCreateTarget && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    data-testid="empty-new-table"
+                    title={t("query.newTableIn", { name: targetLabel(emptyCreateTarget) })}
+                    onClick={() => openCreateTableTab(tabId, emptyCreateTarget.database, emptyCreateTarget.schema)}
+                  >
+                    <Table2 className="h-3.5 w-3.5" />
+                    {t("query.newTable")}
+                  </Button>
+                )}
+              </div>
             </div>
           )}
           {(driverUnavailable ? [] : innerTabs).map((tab) => {
@@ -190,6 +259,18 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
               <div key={tab.id} className="absolute inset-0" style={{ display: isActive ? "block" : "none" }}>
                 {tab.type === "table" ? (
                   <TableDataTab tabId={tabId} innerTabId={tab.id} database={tab.database} table={tab.table} />
+                ) : tab.type === "designer" ? (
+                  tab.mode === "create" ? (
+                    <TableCreator tabId={tabId} innerTabId={tab.id} database={tab.database} schema={tab.schema} />
+                  ) : (
+                    <TableDesigner
+                      tabId={tabId}
+                      innerTabId={tab.id}
+                      database={tab.database}
+                      table={tab.table}
+                      mode={tab.mode}
+                    />
+                  )
                 ) : (
                   <SqlEditorTab tabId={tabId} innerTabId={tab.id} />
                 )}

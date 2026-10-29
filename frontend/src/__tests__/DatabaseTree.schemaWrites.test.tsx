@@ -83,7 +83,8 @@ describe("DatabaseTree — create database options", () => {
   async function openDialog(driver: string) {
     setup(driver);
     await renderTree();
-    fireEvent.click(screen.getByLabelText("query.createDatabase"));
+    fireEvent.pointerDown(screen.getByTestId("database-new-menu"), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByTestId("database-new-menu-database"));
     fireEvent.change(screen.getByPlaceholderText("query.databaseNamePlaceholder"), { target: { value: "reports" } });
   }
 

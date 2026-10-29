@@ -66,24 +66,8 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 		"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 " +
 		"ORDER BY kcu.ORDINAL_POSITION").
 		WillReturnRows(names("COLUMN_NAME", "id"))
-	mock.ExpectQuery("SELECT i.name, i.is_unique, c.name " +
-		"FROM sys.indexes i " +
-		"JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id " +
-		"JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id " +
-		"JOIN sys.objects o ON o.object_id = i.object_id " +
-		"JOIN sys.schemas s ON s.schema_id = o.schema_id " +
-		"WHERE s.name = @p1 AND o.name = @p2 AND i.name IS NOT NULL " +
-		"ORDER BY i.name, ic.key_ordinal").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "is_unique", "name"}).AddRow("PK_orders", true, "id"))
-	mock.ExpectQuery("SELECT fk.name, pc.name, rt.name, rc.name " +
-		"FROM sys.foreign_keys fk " +
-		"JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id " +
-		"JOIN sys.tables pt ON pt.object_id = fk.parent_object_id " +
-		"JOIN sys.schemas s ON s.schema_id = pt.schema_id " +
-		"JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id " +
-		"JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id " +
-		"JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id " +
-		"WHERE s.name = @p1 AND pt.name = @p2 ORDER BY fk.name").
+	expectIndexes(mock, "sales", "orders", primaryKeyRow("PK_orders", "id", 1))
+	mock.ExpectQuery(foreignKeysSQL).
 		WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c", "d"}).AddRow("FK_user", "user_id", "users", "id"))
 
 	meta, err := session.TableMetadata(context.Background(), "appdb", "sales.orders")
@@ -94,6 +78,30 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	}, meta.Columns)
 	assert.Equal(t, []dbdriver.IndexMeta{{Name: "PK_orders", Columns: []string{"id"}, Unique: true}}, meta.Indexes)
 	assert.Equal(t, []dbdriver.ForeignKeyMeta{{Name: "FK_user", Column: "user_id", ReferencedTable: "users", ReferencedColumn: "id"}}, meta.ForeignKeys)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 覆盖索引（INCLUDE）的非键列不是键列：sys.index_columns 里 INCLUDE 列的 key_ordinal 是 0，按 key_ordinal 排序时
+// 排在键列前面。CREATE INDEX idx_cover ON orders (code, user_id) INCLUDE (email) 读出来键列只有 code、user_id
+// （按键的次序），email 在 Include 里。
+func TestTableMetadataSeparatesIncludeColumns(t *testing.T) {
+	session, mock := newMock(t)
+	mock.ExpectQuery(columnsSQL).WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT"}).
+		AddRow("code", "nvarchar", "YES", nil))
+	mock.ExpectQuery(primaryKeysSQL).WillReturnRows(names("COLUMN_NAME"))
+	// 键列与 INCLUDE 列按 is_included_column 分开，不看行的位置：INCLUDE 列排在最前也一样。
+	expectIndexes(mock, "dbo", "orders",
+		indexRow{name: "idx_cover", column: "email", included: true},
+		keyRow("idx_cover", "code", 1),
+		keyRow("idx_cover", "user_id", 2))
+	mock.ExpectQuery(foreignKeysSQL).
+		WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c", "d"}))
+
+	meta, err := session.TableMetadata(context.Background(), "appdb", "dbo.orders")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.IndexMeta{
+		{Name: "idx_cover", Columns: []string{"code", "user_id"}, Include: []string{"email"}},
+	}, meta.Indexes)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

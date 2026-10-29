@@ -445,6 +445,79 @@ func TestPanelSharesOneSessionAcrossDatabasesWhenTheDriverSaysSo(t *testing.T) {
 	assert.Equal(t, []string{"SELECT * FROM t", "SELECT * FROM t"}, sessions[0].Statements())
 }
 
+// 设计器保存的整批语句经资产的驱动会话执行：驱动声明了表结构语句可回滚时整批原子执行，失败即整批
+// 回滚；没声明时逐条执行、停在第一条失败。结果（JSON，键名与前端一致）逐条给出执行 / 失败 / 未执行。
+func TestExecuteSchemaStatementsRunsTheBatchOnTheDriverSession(t *testing.T) {
+	statements := []string{"ALTER TABLE users ADD age INT", dbdrivertest.ConformanceFailingStatement, "CREATE INDEX ix_age ON users (age)"}
+	for _, tc := range []struct {
+		name          string
+		transactional bool
+		wantJSON      string
+	}{
+		{"transactional DDL", true, `{"atomic":true,"rolledBack":true,"statements":[
+			{"statement":"ALTER TABLE users ADD age INT","status":"executed"},
+			{"statement":"NOT A STATEMENT","status":"failed","error":"fakedb: syntax error"},
+			{"statement":"CREATE INDEX ix_age ON users (age)","status":"notExecuted"}]}`},
+		{"one by one", false, `{"atomic":false,"rolledBack":false,"statements":[
+			{"statement":"ALTER TABLE users ADD age INT","status":"executed"},
+			{"statement":"NOT A STATEMENT","status":"failed","error":"fakedb: syntax error"},
+			{"statement":"CREATE INDEX ix_age ON users (age)","status":"notExecuted"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := dbdrivertest.NewFake()
+			fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapAlterTable)
+			fake.Desc.TransactionalDDL = tc.transactional
+			dbdrivertest.Register(t, fake)
+			q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
+
+			result, err := q.ExecuteSchemaStatements(1, "reporting", statements)
+			require.NoError(t, err)
+			raw, err := json.Marshal(result)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.wantJSON, string(raw))
+
+			sessions := fake.Sessions()
+			require.Len(t, sessions, 1)
+			assert.Equal(t, []dbdrivertest.TableCall{{Op: "batch", Database: "reporting", Batch: &dbdriver.BatchRequest{
+				Statements: statements, Atomic: tc.transactional, Database: "reporting",
+			}}}, sessions[0].TableCalls())
+			assert.Equal(t, statements[:2], sessions[0].Statements())
+		})
+	}
+}
+
+// 只读连接照旧拒绝写入：拒绝由驱动在会话上落实，经这个绑定如实报告在第一条语句上，什么也没写。
+func TestExecuteSchemaStatementsOnAReadOnlyConnectionIsRefusedByTheDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapAlterTable)
+	fake.Desc.TransactionalDDL = true
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app", ReadOnly: true})
+
+	result, err := q.ExecuteSchemaStatements(1, "", []string{"ALTER TABLE users ADD age INT", "CREATE INDEX ix_age ON users (age)"})
+	require.NoError(t, err)
+	assert.Equal(t, &query_svc.SchemaBatchResult{
+		Atomic: true, RolledBack: true,
+		Statements: []query_svc.SchemaStatementResult{
+			{Statement: "ALTER TABLE users ADD age INT", Status: query_svc.SchemaStatementFailed, Error: dbdrivertest.ErrFakeReadOnly.Error()},
+			{Statement: "CREATE INDEX ix_age ON users (age)", Status: query_svc.SchemaStatementNotExecuted},
+		},
+	}, result)
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.True(t, sessions[0].Request.Config.ReadOnly)
+	assert.Empty(t, sessions[0].Statements())
+}
+
+// 资产的驱动不可用（扩展停用或卸载）：报「驱动不可用」并点名驱动，不执行。
+func TestExecuteSchemaStatementsRejectsUnregisteredDriver(t *testing.T) {
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "oracle", Host: "127.0.0.1", Port: 1521, Username: "u"})
+
+	_, err := q.ExecuteSchemaStatements(1, "", []string{"ALTER TABLE users ADD age INT"})
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+	assert.Contains(t, err.Error(), "oracle")
+}
+
 func TestFinishPanelDBOperation(t *testing.T) {
 	t.Run("returns cleanup error when operation succeeds", func(t *testing.T) {
 		cleanupErr := errors.New("remove lock failed")

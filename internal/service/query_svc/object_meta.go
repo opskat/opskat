@@ -22,6 +22,9 @@ type IndexMeta struct {
 	Name    string   `json:"name"`
 	Columns []string `json:"columns"`
 	Unique  bool     `json:"unique"`
+	// Include lists the index's INCLUDE columns (non-key covering columns), in order;
+	// empty for a driver that cannot tell them apart.
+	Include []string `json:"include,omitempty"`
 }
 
 // ForeignKeyMeta describes one foreign-key column mapping.
@@ -30,6 +33,11 @@ type ForeignKeyMeta struct {
 	Column           string `json:"column"`
 	ReferencedTable  string `json:"referencedTable"`
 	ReferencedColumn string `json:"referencedColumn"`
+	// OnUpdate / OnDelete are the actions taken when the referenced row changes /
+	// is deleted, as the driver read them; empty when there is none or the driver
+	// cannot read them.
+	OnUpdate string `json:"onUpdate,omitempty"`
+	OnDelete string `json:"onDelete,omitempty"`
 }
 
 // TableMetadata is the full object-browser detail for a single table.

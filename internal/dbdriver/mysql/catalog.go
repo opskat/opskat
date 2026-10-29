@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -56,6 +57,18 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, ta
 	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
+// 表达式（函数）索引（MySQL 8.0.13 起）的键在 STATISTICS 里 COLUMN_NAME 为 NULL、表达式在 EXPRESSION 列。
+// EXPRESSION 列在 5.7 上不存在，所以只在读到 NULL 列名时（只有 8.0.13 起会有）再查一次表达式。
+const expressionIndexPartsSQL = "SELECT INDEX_NAME, SEQ_IN_INDEX, EXPRESSION FROM information_schema.STATISTICS " +
+	"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME IS NULL ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+
+// indexPart 是 STATISTICS 的一行：索引的一个键。
+type indexPart struct {
+	name   string
+	unique bool
+	column sql.NullString
+}
+
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, table string) ([]dbdriver.IndexMeta, error) {
 	rows, err := conn.QueryContext(ctx,
 		"SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME FROM information_schema.STATISTICS "+
@@ -65,27 +78,75 @@ func (dialect) indexes(ctx context.Context, conn *sql.Conn, table string) ([]dbd
 	}
 	defer func() { _ = rows.Close() }()
 
-	var indexes sqldb.IndexBuilder
+	var parts []indexPart
+	hasExpressions := false
 	for rows.Next() {
-		var name, col string
+		var part indexPart
 		var nonUnique int
-		if err := rows.Scan(&name, &nonUnique, &col); err != nil {
+		if err := rows.Scan(&part.name, &nonUnique, &part.column); err != nil {
 			return nil, err
 		}
-		indexes.Add(name, nonUnique == 0, col)
+		part.unique = nonUnique == 0
+		hasExpressions = hasExpressions || !part.column.Valid
+		parts = append(parts, part)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	var expressions map[string]map[int]string
+	if hasExpressions {
+		if expressions, err = expressionIndexParts(ctx, conn, table); err != nil {
+			return nil, err
+		}
+	}
+
+	var indexes sqldb.IndexBuilder
+	seq := map[string]int{}
+	for _, part := range parts {
+		seq[part.name]++
+		column := part.column.String
+		if !part.column.Valid {
+			expression, ok := expressions[part.name][seq[part.name]]
+			if !ok {
+				return nil, fmt.Errorf("index %q: key part %d has neither a column nor an expression", part.name, seq[part.name])
+			}
+			column = expression
+		}
+		indexes.Add(part.name, part.unique, column)
+	}
 	return indexes.Indexes(), nil
 }
 
+// expressionIndexParts 读表达式键：索引名 → 键在索引里的序号（从 1 起）→ 表达式原文。
+func expressionIndexParts(ctx context.Context, conn *sql.Conn, table string) (map[string]map[int]string, error) {
+	records, err := sqldb.QueryRecords(ctx, conn, expressionIndexPartsSQL, table)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[int]string{}
+	for _, record := range records {
+		name := sqldb.PickString(record, "INDEX_NAME")
+		seq, err := strconv.Atoi(sqldb.PickString(record, "SEQ_IN_INDEX"))
+		if err != nil {
+			return nil, fmt.Errorf("index %q: key part number: %w", name, err)
+		}
+		if out[name] == nil {
+			out[name] = map[int]string{}
+		}
+		out[name][seq] = sqldb.PickString(record, "EXPRESSION")
+	}
+	return out, nil
+}
+
+// foreignKeysSQL 读外键的列映射，并带上 ON UPDATE / ON DELETE 的动作（最后两列，见 sqldb.QueryForeignKeys）。
+const foreignKeysSQL = "SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE " +
+	"FROM information_schema.KEY_COLUMN_USAGE k " +
+	"LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME " +
+	"WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL " +
+	"ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
+
 func (dialect) foreignKeys(ctx context.Context, conn *sql.Conn, table string) ([]dbdriver.ForeignKeyMeta, error) {
-	return sqldb.QueryForeignKeys(ctx, conn,
-		"SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME "+
-			"FROM information_schema.KEY_COLUMN_USAGE "+
-			"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL "+
-			"ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION", table)
+	return sqldb.QueryForeignKeys(ctx, conn, foreignKeysSQL, table)
 }
 
 func (dialect) ListObjects(ctx context.Context, conn *sql.Conn, _ string) (*dbdriver.DatabaseObjects, error) {

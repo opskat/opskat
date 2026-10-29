@@ -5,6 +5,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 var descriptor = dbdriver.Descriptor{
@@ -36,6 +37,12 @@ var descriptor = dbdriver.Descriptor{
 		{Key: dbdriver.OptionCollation, Default: "utf8mb4_0900_ai_ci"},
 	},
 	AlterTableAttributes: alterAttributes,
+	ColumnTypes:          columnTypes,
+	ExplicitDefaults:     sqldb.ClassifiesDefaults(dialect{}),
+	AutoIncrement:        sqldb.AutoIncrements(dialect{}),
+	// 建表时写得出表注释与列注释（CreateTableSQL）。
+	CreateTableComments: true,
+	IndexEditing:        indexEditing,
 }
 
 type driver struct {
