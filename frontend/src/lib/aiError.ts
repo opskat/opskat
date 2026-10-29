@@ -1,7 +1,7 @@
 import i18n from "../i18n";
 
 // ErrorKind: AI 对话错误分类。
-// proxy       — 连网络代理失败（连不上、认证被拒、代理返回 407），文案指向「设置 → 网络」
+// proxy       — 连网络代理失败（连不上、认证被拒、代理返回错误），文案指向「设置 → 网络」
 // rate_limit  — 429 / 限流
 // server      — 5xx / 服务暂不可用
 // network     — 连接抖动、超时、TLS 握手失败、EOF
@@ -21,11 +21,14 @@ const I18N_KEY_BY_KIND: Record<ErrorKind, string> = {
 };
 
 // 匹配优先级遵循 README 的从高到低顺序：
-// proxy 最先（Go 的代理错误带 proxyconnect / socks connect 前缀，认证失败的原文含 authentication，会被 auth 误捞），
+// proxy 最先（Go 的代理错误带 proxyconnect / socks connect 前缀，认证失败的原文含 authentication，会被 auth 误捞；
+// HTTP 代理拒绝 CONNECT 时 net/http 只报代理给的原因短语，如 `Post "url": Bad Gateway`，会被 server 误捞——
+// 服务端自己的响应不会是这个形状：SDK 报成 `POST "url": 502 ...`，传输层错误按 Go 惯例小写或全大写如 EOF），
 // auth 优先于 rate_limit/server（避免 401 被 5xx 关键字误捞），
 // rate_limit/network 优先于 server（429/timeout 在响应里有时也带 5xx 串）。
 const PATTERNS: Array<{ kind: ErrorKind; re: RegExp }> = [
   { kind: "proxy", re: /proxyconnect|socks connect|proxy authentication required/i },
+  { kind: "proxy", re: /^[A-Z][a-z]+ "[^"]*": [A-Z][a-z][^:"]*$/ },
   { kind: "auth", re: /\b(401|403)\b|api[\s._-]?key|invalid_api|authentication|unauthorized/i },
   { kind: "rate_limit", re: /\b429\b|too many|rate[\s._-]?limit/i },
   { kind: "network", re: /timeout|EOF|connection reset|broken pipe|i\/o timeout|tls handshake/i },

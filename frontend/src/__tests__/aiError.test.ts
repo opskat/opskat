@@ -28,6 +28,20 @@ describe("classifyError", () => {
     ).toBe("proxy");
   });
 
+  it("HTTP 代理拒绝 CONNECT（net/http 只报原因短语）命中 proxy，不被说成服务不可用", () => {
+    expect(classifyError('Post "https://api.example.com/v1/messages": Bad Gateway').kind).toBe("proxy");
+    expect(classifyError('Post "https://api.example.com/v1/messages": Service Unavailable').kind).toBe("proxy");
+    expect(classifyError('Post "https://api.example.com/v1/messages": Forbidden').kind).toBe("proxy");
+  });
+
+  it("服务端自己的 5xx 与传输层 EOF 不被当成代理失败", () => {
+    expect(classifyError('POST "https://api.example.com/v1/messages": 502 Bad Gateway {"error":"x"}').kind).toBe(
+      "server"
+    );
+    expect(classifyError('Post "https://api.example.com/v1/messages": EOF').kind).toBe("network");
+    expect(classifyError('Post "https://api.example.com/v1/messages": context deadline exceeded').kind).toBe("unknown");
+  });
+
   it("命中 rate_limit（429/too many/rate limit）", () => {
     expect(classifyError("429 too many requests").kind).toBe("rate_limit");
     expect(classifyError("rate_limit_exceeded").kind).toBe("rate_limit");
