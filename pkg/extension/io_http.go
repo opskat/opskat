@@ -82,10 +82,9 @@ type httpHandle struct {
 	headers map[string]string
 	ctx     context.Context
 	cancel  context.CancelFunc
-	bodyBuf *bytes.Buffer // buffered request body (for POST/PUT/PATCH)
+	bodyBuf *bytes.Buffer // request body the extension wrote; sent as-is whatever the method
 	resp    *http.Response
 	phase   httpPhase
-	hasBody bool         // true for POST/PUT/PATCH
 	auth    *requestAuth // credentials injected into endpoint hops; nil = none
 	// redirectGuard vets where this request may be redirected; nil = anywhere.
 	// Like auth it rides on the request, not the client: a cached client is
@@ -198,7 +197,6 @@ func newHandleFromClient(params IOOpenParams, client *http.Client, auth *request
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
 
 	return &httpHandle{
 		client:  client,
@@ -209,7 +207,6 @@ func newHandleFromClient(params IOOpenParams, client *http.Client, auth *request
 		cancel:  cancel,
 		bodyBuf: &bytes.Buffer{},
 		phase:   httpPhaseWriting,
-		hasBody: hasBody,
 		auth:    auth,
 
 		redirectGuard: params.RedirectGuard,
@@ -239,7 +236,7 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 
 	// Build request body.
 	var body *bytes.Reader
-	if h.hasBody {
+	if h.bodyBuf.Len() > 0 {
 		body = bytes.NewReader(h.bodyBuf.Bytes())
 	}
 
