@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/internal/pkg/netdial"
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 	"github.com/opskat/opskat/internal/service/update_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extstore"
@@ -32,12 +32,8 @@ const (
 )
 
 var httpClient = &http.Client{
-	Timeout: 30 * time.Second,
-	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         netdial.Default().DialContext,
-		TLSHandshakeTimeout: 15 * time.Second,
-	},
+	Timeout:   30 * time.Second,
+	Transport: netproxy.Transport(),
 }
 
 // ErrorKind classifies why a refresh failed; each kind has its own store state.

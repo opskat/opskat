@@ -1312,6 +1312,7 @@
       "now": "Retrying now..."
     },
     "error": {
+      "proxy": "Couldn't connect through the network proxy, check Settings → Network",
       "rate_limit": "Too many requests, please wait",
       "server": "Service temporarily unavailable",
       "network": "Unstable network connection",
@@ -1567,6 +1568,64 @@
       "brightMagenta": "Bright Magenta",
       "brightCyan": "Bright Cyan",
       "brightWhite": "Bright White"
+    }
+  },
+  "network": {
+    "title": "Network",
+    "proxy": {
+      "title": "Network proxy",
+      "desc": "The proxy used when AI chat, model listing, update checks, the extension store and cloud backup reach the internet. Asset connections are not affected; they keep using their own jump hosts and proxy settings.",
+      "mode": "Proxy mode",
+      "modeEnv": "Use environment variables",
+      "modeDirect": "No proxy (direct)",
+      "modeCustom": "Custom",
+      "envDetected": "Connections follow the HTTPS_PROXY / HTTP_PROXY / NO_PROXY environment variables. Detected now:",
+      "envNone": "No proxy environment variables found, so connections are direct. An app launched from the Dock or Start menu can't see variables set in a terminal; if you use Clash or a similar tool, choose Custom instead.",
+      "type": "Proxy type",
+      "host": "Proxy host",
+      "port": "Proxy port",
+      "hostHint": "Clash, Clash Verge, ClashX and similar usually take HTTP, 127.0.0.1 and the mixed port (7890 by default). Through the proxy, hostnames are resolved by the proxy, not by local DNS.",
+      "username": "Proxy username",
+      "password": "Proxy password",
+      "optional": "Optional",
+      "noProxy": "Bypass addresses",
+      "noProxyTip": "Same syntax as NO_PROXY: a domain also matches its subdomains; IPs and CIDR ranges match by address.",
+      "noProxyHint": "One per line, e.g. example.com or 192.168.0.0/16.",
+      "saved": "Network proxy saved",
+      "test": {
+        "open": "Test connection",
+        "title": "Test connection",
+        "desc": "Reaches the address below with the proxy settings as currently filled in, no need to save first.",
+        "url": "Test address",
+        "urlPlaceholder": "e.g. https://api.openai.com",
+        "urlInvalid": "The address must start with http:// or https://",
+        "fixForm": "The proxy settings have errors. Fix them before testing.",
+        "run": "Test",
+        "running": "Testing...",
+        "success": "Connected",
+        "failed": "Connection failed",
+        "via": "Via",
+        "direct": "Direct",
+        "host": "Target host",
+        "status": "HTTP status",
+        "elapsed": "Elapsed",
+        "reason": {
+          "proxy_unreachable": "Couldn’t reach the proxy. Check its host, port and protocol, and that the proxy app is running.",
+          "proxy_auth": "The proxy requires authentication, or the username or password is wrong.",
+          "dns": "Couldn’t resolve the target hostname.",
+          "tls": "The TLS handshake failed.",
+          "timeout": "The request timed out.",
+          "other": "The request failed."
+        }
+      },
+      "error": {
+        "hostRequired": "Enter the proxy host",
+        "hostInvalid": "Use a hostname or IP only, without a scheme, path or spaces",
+        "portRequired": "Enter the proxy port",
+        "portInvalid": "The port must be a whole number",
+        "portRange": "The port must be between 1 and 65535",
+        "noProxyLine": "Line {{line}} isn't a domain, IP or CIDR range"
+      }
     }
   },
   "externalEdit": {

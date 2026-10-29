@@ -20,6 +20,7 @@ import (
 
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 )
 
 // ProviderOptions 构造 cago provider 需要的传输层参数。
@@ -47,18 +48,21 @@ func BuildProvider(opts ProviderOptions) (cagoProvider.Provider, error) {
 	switch p.Type {
 	case "anthropic":
 		return cagoAnthropics.NewProvider(cagoAnthropics.Config{
-			BaseURL: p.APIBase,
-			APIKey:  opts.APIKey,
-			Headers: headers,
+			BaseURL:    p.APIBase,
+			APIKey:     opts.APIKey,
+			Headers:    headers,
+			HTTPClient: &http.Client{Transport: netproxy.Transport()},
 		}), nil
 	case "openai", "":
 		cfg := openai.DefaultConfig(opts.APIKey)
 		if p.APIBase != "" {
 			cfg.BaseURL = p.APIBase
 		}
+		rt := netproxy.Transport()
 		if len(headers) > 0 {
-			cfg.HTTPClient = &http.Client{Transport: &headerInjectingTransport{headers: headers}}
+			rt = &headerInjectingTransport{base: rt, headers: headers}
 		}
+		cfg.HTTPClient = &http.Client{Transport: rt}
 		return cagoOpenAI.NewProvider(cfg), nil
 	default:
 		return nil, fmt.Errorf("不支持的 provider 类型: %s", p.Type)

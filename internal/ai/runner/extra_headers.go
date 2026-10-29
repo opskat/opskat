@@ -37,8 +37,10 @@ func oneOffSessionID() string {
 }
 
 // headerInjectingTransport 给每个出站请求补上自定义头。
+// base 承载实际的网络传输，生产路径传 netproxy.Transport()，让请求随「设置 → 网络」切换。
 // 只在请求副本上写，不改调用方持有的 *http.Request（RoundTripper 的契约）。
 type headerInjectingTransport struct {
+	base    http.RoundTripper
 	headers map[string]string
 }
 
@@ -47,5 +49,5 @@ func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 	for name, value := range t.headers {
 		clone.Header.Set(name, value)
 	}
-	return http.DefaultTransport.RoundTrip(clone)
+	return t.base.RoundTrip(clone)
 }
