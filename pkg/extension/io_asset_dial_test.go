@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/pkg/extwire"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -172,7 +173,7 @@ func TestAssetConnectionPath(t *testing.T) {
 
 		Convey("the fixture declares the SSH tunnel on its asset type", func() {
 			_, m := newDialFixture(t, &fakeAssetDialer{farSide: server.Listener.Addr().String()}, map[string]any{"endpoint": esURL})
-			So(m.AssetTypeDef("fixture").Connection, ShouldResemble, &ConnectionDef{SSHTunnel: true})
+			So(faceOf(t, m).assetType("fixture").Connection, ShouldResemble, &extwire.Connection{SSHTunnel: true})
 		})
 
 		Convey("an HTTP request to the endpoint is dialed through the asset's connection path", func() {

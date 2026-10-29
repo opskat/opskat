@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extension/extensiontest"
 	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
@@ -29,11 +32,25 @@ var passwordSchema = map[string]any{
 func registeredExt(name, assetType, credentials string) *extension.Extension {
 	return &extension.Extension{
 		Name: name,
-		Manifest: &extension.Manifest{
-			Manifest:   extmanifest.Manifest{Name: name, Permissions: extmanifest.Permissions{Credentials: credentials}},
-			AssetTypes: []extension.AssetTypeDef{{Type: assetType, ConfigSchema: passwordSchema}},
-		},
+		Manifest: withAssetTypes(extmanifest.Manifest{Name: name, Permissions: extmanifest.Permissions{Credentials: credentials}},
+			extwire.AssetType{Type: assetType, ConfigSchema: passwordSchema}),
 	}
+}
+
+// withAssetTypes is the runtime manifest of an extension under contract whose
+// describe() contributes types — what loading it produces.
+func withAssetTypes(contract extmanifest.Manifest, types ...extwire.AssetType) *extension.Manifest {
+	return extensiontest.Described(contract, extensiontest.Describe{Contributes: map[string]any{extwire.KeyAssetTypes: types}})
+}
+
+// viewOf is m's typed view, as the service reads it.
+func viewOf(t testing.TB, m *extension.Manifest) *extreg.Manifest {
+	t.Helper()
+	view, err := extreg.ManifestOf(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view
 }
 
 // newHostTestService is a service whose asset repo is mocked and whose bridge has

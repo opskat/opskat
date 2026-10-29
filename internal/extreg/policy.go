@@ -18,7 +18,7 @@ var policyIDRe = regexp.MustCompile(`^ext:[a-z0-9][a-z0-9_-]{0,63}(:[a-z0-9][a-z
 
 // policyPoint 是策略面的贡献点：策略面类型、权限组与默认组的规则；接入的是策略面归属、
 // 扩展权限组表、本扩展资产类型的永久规则落点与默认策略。策略动作集合不在这里声明，由工具
-// 的声明推导（Manifest.Policies.Actions）。
+// 的声明推导（PoliciesDef.Actions）。
 type policyPoint struct{}
 
 func (policyPoint) Key() string { return extwire.KeyPolicy }
@@ -68,13 +68,17 @@ func (policyPoint) Check(v extension.ExtensionView) error {
 // 扩展资产的默认策略只引用组 ID，组不登记 `policy show` 就解析不出它们的规则。没有策略面的
 // 扩展（没有工具）什么也不接。
 func (policyPoint) Attach(v extension.ExtensionView) (func(), error) {
-	name, m := v.Name(), v.Manifest()
+	name := v.Name()
+	m, err := ManifestOf(v.Manifest())
+	if err != nil {
+		return nil, err
+	}
 	policyType := m.Policies.Type
 	if policyType == "" {
 		return func() {}, nil
 	}
 	mu.Lock()
-	err := claimPolicyType(name, policyType)
+	err = claimPolicyType(name, policyType)
 	mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -120,7 +124,7 @@ func claimPolicyType(extName, policyType string) error {
 
 // registerPolicyGroups 把扩展声明的权限组登记进内置权限组表。失败时已登记的由调用方按
 // 扩展名撤掉。
-func registerPolicyGroups(extName string, m *extension.Manifest) error {
+func registerPolicyGroups(extName string, m *Manifest) error {
 	for _, pg := range m.Policies.Groups {
 		policyJSON, err := json.Marshal(pg.Policy)
 		if err != nil {

@@ -24,7 +24,7 @@ const maxToolTimeout = 10 * time.Minute
 // noTimeout, its declared timeout, or 0 — the runtime's default — when it
 // declares nothing. Callers resolve the tool name first (parseCommand,
 // ValidateToolArgs), so a name m does not declare is not a case here.
-func ToolTimeout(m *extension.Manifest, tool string) time.Duration {
+func ToolTimeout(m *Manifest, tool string) time.Duration {
 	def, _ := toolDef(m, tool)
 	if def.NoTimeout {
 		return -1
@@ -216,7 +216,10 @@ func checkToolActions(t extwire.Tool) error {
 // RegisterExecutor）：清单进 prompt，让模型知道这个类型存在、help 能问；正文只在模型真的
 // 调了 help 之后才下发。
 func (p toolsPoint) Attach(v extension.ExtensionView) (func(), error) {
-	l := p.guest.loaded(v)
+	l, err := p.guest.loaded(v)
+	if err != nil {
+		return nil, err
+	}
 	localized := l.manifest.Localized(func(key string) string { return v.Translate(helpLang, key) })
 	help := helpDocument(v.SkillMD(), l.name, localized)
 	description := skillDescription(v)

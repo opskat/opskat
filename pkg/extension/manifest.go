@@ -6,233 +6,67 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 
-	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extmanifest"
-	"github.com/opskat/opskat/pkg/extwire"
 )
 
-// Manifest is the host's complete view of one extension: the security contract it
-// reads from manifest.json plus the functional face the guest reports through
-// describe(). Only the first half is written by hand — see extmanifest.Manifest.
+// Manifest is the host's complete view of one extension as the runtime holds it:
+// the security contract it reads from manifest.json, the presentation describe()
+// answers, and describe()'s contributions, raw. Only the contract is written by
+// hand — see extmanifest.Manifest.
+//
+// The runtime does not read the contributions: each is the business of the
+// contribution point that owns its key (ContributionPoint), and the typed view of
+// them — asset types, tools, policy, pages, snippets, drivers — is that host
+// side's (internal/extreg).
 type Manifest struct {
 	// -- security contract, from manifest.json --
 	extmanifest.Manifest
 
-	// -- functional face, from describe() (see descriptor.go) --
-	Icon       string         `json:"icon"`
-	I18n       ManifestI18n   `json:"i18n"`
-	AssetTypes []AssetTypeDef `json:"assetTypes"`
-	Tools      []ToolDef      `json:"tools"`
-	Policies   PoliciesDef    `json:"policies"`
-	Frontend   FrontendDef    `json:"frontend"`
-	Snippets   SnippetsDef    `json:"snippets"`
-	// DatabaseDrivers are the driver descriptors, one per contributes.databaseDrivers id.
-	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
+	// -- presentation, from describe() (see descriptor.go) --
+	Icon string       `json:"icon"`
+	I18n ManifestI18n `json:"i18n"`
 
-	// contributes is describe()'s raw answer the face above was merged from, for
-	// the contribution points to judge (ExtensionView).
+	// contributes is describe()'s contributions, one raw entry per contribution
+	// point key, for the points to judge (ExtensionView.Contribution).
 	contributes map[string]json.RawMessage
 }
 
-// The functional face is merged from describe() in the wire types the guest SDK
-// encodes it with (pkg/extwire). These names are the host's view of them; the
-// JSON the frontend reads is the wire shape.
-
-// SnippetsDef declares snippet categories and seed snippets contributed by this extension.
-// All fields are optional; an empty block is a no-op.
-type SnippetsDef = extwire.Snippets
-
-// SnippetCategoryDef declares a new snippet category id that this extension owns.
-// Its rules are the snippet contribution point's (snippet_svc).
-type SnippetCategoryDef = extwire.SnippetCategory
-
-// SeedSnippetDef is a read-only snippet shipped with the extension.
-type SeedSnippetDef = extwire.SeedSnippet
-
-type ManifestI18n = extwire.I18n
-
-type AssetTypeDef struct {
-	Type         string         `json:"type"`
-	I18n         I18nName       `json:"i18n"`
-	ConfigSchema map[string]any `json:"configSchema"`
-	Connection   *ConnectionDef `json:"connection,omitempty"`
-	Auth         *AuthDef       `json:"auth,omitempty"`
-	// TestConnection reports whether the type registered a test-connection
-	// handler (opskat.AssetTypeReg.TestConnection in the guest SDK). The
-	// asset form shows its "Test connection" button only when this is true;
-	// the host dispatches the call itself (Plugin.TestConnection), never
-	// through policy — testing a connection is not an operation on the asset.
-	TestConnection bool `json:"testConnection,omitempty"`
+// ManifestI18n is the extension's display name and description, as i18n keys
+// resolved against its locales/ directory.
+type ManifestI18n struct {
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
 }
 
-// assetTypeDef is the host's view of a wire asset type: the same declaration,
-// with its auth read into AuthDef, which the host renders and injects.
-func assetTypeDef(at extwire.AssetType) AssetTypeDef {
-	return AssetTypeDef{
-		Type:           at.Type,
-		I18n:           at.I18n,
-		ConfigSchema:   at.ConfigSchema,
-		Connection:     at.Connection,
-		Auth:           authDef(at.Auth),
-		TestConnection: at.TestConnection,
+// Contribution is describe()'s raw entry under the contribution point key, nil
+// when the extension contributes nothing there.
+func (m *Manifest) Contribution(key string) json.RawMessage {
+	return m.contributes[key]
+}
+
+// ContributionKeys is the contribution point keys describe() answered, sorted.
+func (m *Manifest) ContributionKeys() []string {
+	keys := make([]string, 0, len(m.contributes))
+	for k := range m.contributes {
+		keys = append(keys, k)
 	}
+	slices.Sort(keys)
+	return keys
 }
-
-// ConnectionDef is the subset of the host-owned connection settings an asset
-// type supports. The host renders a declared item in the asset form and detail
-// card and applies it when dialing the asset's endpoint; an undeclared item is
-// neither shown nor applied. The extension never reads these settings — the SSH
-// tunnel is the asset's own SSHTunnelID column, outside its config.
-type ConnectionDef = extwire.Connection
-
-// AssetTypeDef returns the declaration of assetType, nil when the extension does
-// not register it.
-func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {
-	for i := range m.AssetTypes {
-		if m.AssetTypes[i].Type == assetType {
-			return &m.AssetTypes[i]
-		}
-	}
-	return nil
-}
-
-type I18nName = extwire.I18nName
-
-type I18nNameDesc = extwire.I18nNameDesc
-
-// ToolDef is one tool. Its policy action is declared at the tool's registration
-// in the guest, which is what makes the guest's policy answer unable to drift
-// from its tool table; its timeout is the tool's to declare because only the
-// tool knows whether it answers in a second or scans an index for minutes.
-type ToolDef = extwire.Tool
-
-type I18nDesc = extwire.I18nDesc
-
-// PoliciesDef is the policy face merged onto the manifest: the guest's
-// extwire.Policy plus Actions, derived from the tools.
-type PoliciesDef struct {
-	Type    string           `json:"type"`
-	Actions []string         `json:"actions"`
-	Groups  []PolicyGroupDef `json:"groups"`
-	Default []string         `json:"default"`
-}
-
-type PolicyGroupDef = extwire.PolicyGroup
-
-type FrontendDef = extwire.Pages
-
-type PageDef = extwire.Page
 
 // ParseManifest reads the security contract from manifest.json (see
-// extmanifest.Parse). The returned Manifest carries no functional face yet — that
-// arrives with (*Manifest).apply once describe() has been read, either from the
-// guest or from the cache.
+// extmanifest.Parse). The returned Manifest carries nothing from describe() yet —
+// that arrives with (*Manifest).apply once describe() has been read, either from
+// the guest or from the cache.
 func ParseManifest(data []byte) (*Manifest, error) {
 	c, err := extmanifest.Parse(data)
 	if err != nil {
 		return nil, err
 	}
 	return &Manifest{Manifest: *c}, nil
-}
-
-// Localized returns a shallow copy of the manifest with all i18n string fields
-// resolved using the provided translate function.
-func (m *Manifest) Localized(tr func(key string) string) *Manifest {
-	out := *m
-	out.I18n = ManifestI18n{
-		DisplayName: tr(m.I18n.DisplayName),
-		Description: tr(m.I18n.Description),
-	}
-
-	if len(m.AssetTypes) > 0 {
-		out.AssetTypes = make([]AssetTypeDef, len(m.AssetTypes))
-		for i, at := range m.AssetTypes {
-			at.I18n = I18nName{Name: tr(at.I18n.Name)}
-			at.ConfigSchema = localizeConfigSchema(at.ConfigSchema, tr)
-			out.AssetTypes[i] = at
-		}
-	}
-
-	if len(m.Tools) > 0 {
-		out.Tools = make([]ToolDef, len(m.Tools))
-		for i, t := range m.Tools {
-			t.I18n = I18nDesc{Description: tr(t.I18n.Description)}
-			out.Tools[i] = t
-		}
-	}
-
-	if len(m.Policies.Groups) > 0 {
-		out.Policies.Groups = make([]PolicyGroupDef, len(m.Policies.Groups))
-		for i, pg := range m.Policies.Groups {
-			pg.I18n = I18nNameDesc{
-				Name:        tr(pg.I18n.Name),
-				Description: tr(pg.I18n.Description),
-			}
-			out.Policies.Groups[i] = pg
-		}
-	}
-
-	if len(m.Frontend.Pages) > 0 {
-		out.Frontend.Pages = make([]PageDef, len(m.Frontend.Pages))
-		for i, p := range m.Frontend.Pages {
-			p.I18n = I18nName{Name: tr(p.I18n.Name)}
-			out.Frontend.Pages[i] = p
-		}
-	}
-
-	if len(m.Snippets.Categories) > 0 {
-		out.Snippets.Categories = make([]SnippetCategoryDef, len(m.Snippets.Categories))
-		for i, c := range m.Snippets.Categories {
-			c.I18n = I18nName{Name: tr(c.I18n.Name)}
-			out.Snippets.Categories[i] = c
-		}
-	}
-
-	return &out
-}
-
-// localizeConfigSchema translates title, placeholder, description and enumLabels fields in a JSON Schema.
-func localizeConfigSchema(schema map[string]any, tr func(string) string) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	out := make(map[string]any, len(schema))
-	for k, v := range schema {
-		out[k] = v
-	}
-	// Translate top-level title/placeholder/description
-	for _, field := range []string{"title", "placeholder", "description"} {
-		if s, ok := out[field].(string); ok && s != "" {
-			out[field] = tr(s)
-		}
-	}
-	// Enum option labels are i18n keys, like title.
-	if labels, ok := out["enumLabels"].([]any); ok {
-		translated := make([]any, len(labels))
-		for i, l := range labels {
-			if key, ok := l.(string); ok {
-				translated[i] = tr(key)
-			} else {
-				translated[i] = l
-			}
-		}
-		out["enumLabels"] = translated
-	}
-	// Recurse into properties
-	if props, ok := out["properties"].(map[string]any); ok {
-		newProps := make(map[string]any, len(props))
-		for name, propVal := range props {
-			if propMap, ok := propVal.(map[string]any); ok {
-				newProps[name] = localizeConfigSchema(propMap, tr)
-			} else {
-				newProps[name] = propVal
-			}
-		}
-		out["properties"] = newProps
-	}
-	return out
 }
 
 // -- Capability enforcement --------------------------------------------------

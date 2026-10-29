@@ -77,12 +77,16 @@ func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.
 }
 
 // ownedType returns the declaration of assetType when extName registers it.
-func (s *Service) ownedType(extName, assetType string) (*extension.AssetTypeDef, error) {
+func (s *Service) ownedType(extName, assetType string) (*extreg.AssetTypeDef, error) {
 	owner := s.Bridge().Get(extName)
 	if owner == nil {
 		return nil, fmt.Errorf("extension %q not loaded", extName)
 	}
-	def := owner.Manifest.AssetTypeDef(assetType)
+	view, err := extreg.ManifestOf(owner.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	def := view.AssetType(assetType)
 	if def == nil {
 		return nil, fmt.Errorf("extension %q does not register asset type %q", extName, assetType)
 	}
@@ -105,7 +109,7 @@ type assetConfigGetter struct {
 func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	caller, asset, _, err := g.svc.OwnedTypedAsset(ctx, g.extName, assetID)
+	caller, asset, def, err := g.svc.OwnedTypedAsset(ctx, g.extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +131,7 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 	if err != nil {
 		return nil, fmt.Errorf("strip asset %d host connection config: %w", assetID, err)
 	}
-	return decryptConfigPasswordFields(stripped, asset.Type, caller)
+	return decryptConfigPasswordFields(stripped, def, caller)
 }
 
 // AssetCredentialValues serves host-side credential injection (the asset type's
@@ -172,7 +176,7 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 // asset's stored type rather than by whoever asked. A database asset of a driver
 // extName provides is not one of them: its config, password and reach path go to
 // the driver only in the open call of a session.
-func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
+func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extreg.AssetTypeDef, error) {
 	caller := s.Bridge().Get(extName)
 	if caller == nil {
 		return nil, nil, nil, fmt.Errorf("extension %q not loaded", extName)
@@ -181,7 +185,11 @@ func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID i
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
 	}
-	def := caller.Manifest.AssetTypeDef(asset.Type)
+	view, err := extreg.ManifestOf(caller.Manifest)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	def := view.AssetType(asset.Type)
 	if def == nil {
 		return nil, nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
 	}
@@ -215,7 +223,7 @@ func (s *kvStore) Set(key string, value []byte) error {
 // back) as a value. The form instead shows a withheld field as already set and
 // keeps its stored ciphertext on save.
 func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64) (string, error) {
-	owner, asset, _, err := s.OwnedTypedAsset(ctx, extName, assetID)
+	owner, asset, def, err := s.OwnedTypedAsset(ctx, extName, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -224,23 +232,23 @@ func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64)
 	}
 	raw := json.RawMessage(asset.Config)
 	if owner.Manifest.CheckCredentialRead() != nil {
-		withheld, err := withholdPasswordFields(raw, asset.Type, owner)
+		withheld, err := withholdPasswordFields(raw, def)
 		if err != nil {
 			return "", err
 		}
 		return string(withheld), nil
 	}
-	decrypted, err := decryptConfigPasswordFields(raw, asset.Type, owner)
+	decrypted, err := decryptConfigPasswordFields(raw, def, owner)
 	if err != nil {
 		return "", err
 	}
 	return string(decrypted), nil
 }
 
-// withholdPasswordFields drops the fields assetType's configSchema marks
+// withholdPasswordFields drops the fields def's configSchema marks
 // format:"password" from raw.
-func withholdPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
-	def := ext.Manifest.AssetTypeDef(assetType)
+func withholdPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef) (json.RawMessage, error) {
+	assetType := def.Type
 	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil
@@ -255,15 +263,12 @@ func withholdPasswordFields(raw json.RawMessage, assetType string, ext *extensio
 	return json.Marshal(cfg)
 }
 
-// decryptConfigPasswordFields decrypts the fields assetType's configSchema marks
+// decryptConfigPasswordFields decrypts the fields def's configSchema marks
 // format:"password". Whether the plaintext or an opaque handle comes back is
 // decided by ext — the extension the config is being handed to, which
-// OwnedTypedAsset has already confirmed registers assetType.
-func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
-	def := ext.Manifest.AssetTypeDef(assetType)
-	if def == nil || len(def.ConfigSchema) == 0 {
-		return raw, nil
-	}
+// OwnedTypedAsset has already confirmed registers def's type.
+func decryptConfigPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef, ext *extension.Extension) (json.RawMessage, error) {
+	assetType := def.Type
 	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil

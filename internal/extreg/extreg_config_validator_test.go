@@ -50,7 +50,7 @@ func TestUnregisterRemovesTheConfigValidator(t *testing.T) {
 // 校验（assettype.PrepareCreate）照常生效，guest 规则要到桌面端保存时才跑。
 func TestDescribeOnlyRegistersNoGuestValidator(t *testing.T) {
 	m := testManifest()
-	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)}))
 	t.Cleanup(func() { detach(m.Name) })
 	assert.NoError(t, asset_entity.ValidateRegisteredConfig(context.Background(),
 		&asset_entity.Asset{Name: "a", Type: "acme-store", Config: `{}`}))

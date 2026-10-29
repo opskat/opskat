@@ -25,7 +25,7 @@ func TestPluginTestConnection(t *testing.T) {
 
 		Convey("describe() reports the declaration", func() {
 			p := newTestConnectionFixture(t, nil)
-			So(p.manifest.AssetTypeDef("fixture").TestConnection, ShouldBeTrue)
+			So(faceOf(t, p.manifest).assetType("fixture").TestConnection, ShouldBeTrue)
 		})
 
 		Convey("a reachable endpoint succeeds", func() {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/assetconn"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -27,13 +28,29 @@ var currentApp = appversion.Current
 
 // ExtensionInfo is the frontend-facing extension descriptor.
 type ExtensionInfo struct {
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Icon        string              `json:"icon"`
-	DisplayName string              `json:"displayName"`
-	Description string              `json:"description"`
-	Enabled     bool                `json:"enabled"`
-	Manifest    *extension.Manifest `json:"manifest"`
+	Name        string           `json:"name"`
+	Version     string           `json:"version"`
+	Icon        string           `json:"icon"`
+	DisplayName string           `json:"displayName"`
+	Description string           `json:"description"`
+	Enabled     bool             `json:"enabled"`
+	Manifest    *extreg.Manifest `json:"manifest"`
+}
+
+// NewExtensionInfo describes the extension whose manifest is m to the frontend,
+// its i18n keys resolved by tr: the merged manifest the frontend reads is m's
+// typed view (extreg.Manifest), localized.
+func NewExtensionInfo(m *extension.Manifest, tr func(key string) string, enabled bool) (*ExtensionInfo, error) {
+	view, err := extreg.ManifestOf(m)
+	if err != nil {
+		return nil, err
+	}
+	lm := view.Localized(tr)
+	return &ExtensionInfo{
+		Name: lm.Name, Version: lm.Version, Icon: lm.Icon,
+		DisplayName: lm.I18n.DisplayName, Description: lm.I18n.Description,
+		Enabled: enabled, Manifest: lm,
+	}, nil
 }
 
 // Service manages the extension lifecycle: init, reload, enable/disable, install/uninstall.
@@ -119,8 +136,19 @@ func (s *Service) Enable(ctx context.Context, name string) error {
 	// Cross-extension snippet category conflict check — mirrors Install. If the
 	// extension being enabled was installed while another declarer was also disabled,
 	// we only catch the collision now. Roll back the load if we detect one.
-	if s.snippetHook != nil && loadedManifest != nil && len(loadedManifest.Snippets.Categories) > 0 {
-		if conflict := s.findCrossExtensionCategoryConflict(loadedManifest); conflict != "" {
+	if s.snippetHook != nil {
+		view, err := extreg.ManifestOf(loadedManifest)
+		conflict := ""
+		if err == nil {
+			conflict, err = s.findCrossExtensionCategoryConflict(view)
+		}
+		if err != nil {
+			if uErr := s.manager.Unload(ctx, name); uErr != nil {
+				s.logger.Warn("unload after enable-conflict check failed", zap.String("name", name), zap.Error(uErr))
+			}
+			return fmt.Errorf("cannot enable %q: %w", name, err)
+		}
+		if conflict != "" {
 			if uErr := s.manager.Unload(ctx, name); uErr != nil {
 				s.logger.Warn("unload after enable-conflict failed", zap.String("name", name), zap.Error(uErr))
 			}
@@ -254,8 +282,18 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 
 	// Cross-extension category id dedup. Intra-extension duplicates are already
 	// refused by the snippet contribution point when the version was staged.
-	if s.snippetHook != nil && len(manifest.Snippets.Categories) > 0 {
-		if conflict := s.findCrossExtensionCategoryConflict(manifest); conflict != "" {
+	view, err := extreg.ManifestOf(manifest)
+	if err != nil {
+		staged.Abort(ctx)
+		return nil, fmt.Errorf("install extension: %w", err)
+	}
+	if s.snippetHook != nil {
+		conflict, err := s.findCrossExtensionCategoryConflict(view)
+		if err != nil {
+			staged.Abort(ctx)
+			return nil, fmt.Errorf("install extension: %w", err)
+		}
+		if conflict != "" {
 			staged.Abort(ctx)
 			return nil, fmt.Errorf("cannot install %q: snippet category %q is already registered by another extension",
 				manifest.Name, conflict)
@@ -284,7 +322,7 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	// registry consistent for immediate queries from the frontend).
 	if s.snippetHook != nil {
 		s.snippetHook.RefreshCategories()
-		seeds := manifestSeedsToSvc(manifest)
+		seeds := manifestSeedsToSvc(view)
 		if err := s.snippetHook.SyncExtensionSeeds(ctx, manifest.Name, seeds); err != nil {
 			s.logger.Warn("sync extension seeds failed",
 				zap.String("name", manifest.Name), zap.Error(err))
@@ -310,7 +348,8 @@ func (s *Service) restoreRegistration(prev *extension.Extension) {
 
 // findCrossExtensionCategoryConflict scans every installed extension — loaded AND
 // disabled-but-on-disk — and returns the first category id from the new manifest that
-// clashes with an existing extension's declaration. Empty string = no conflict.
+// clashes with an existing extension's declaration. Empty string = no conflict; the
+// error is an installed extension whose contributions do not decode.
 //
 // Why scan disk too: a disabled extension keeps its manifest in the extensions dir but
 // is not in manager.ListExtensions(); if we only checked loaded ones, installing a new
@@ -319,37 +358,41 @@ func (s *Service) restoreRegistration(prev *extension.Extension) {
 //
 // We filter out the new extension itself so a reinstall/upgrade of the same extension
 // does not self-conflict.
-func (s *Service) findCrossExtensionCategoryConflict(newManifest *extension.Manifest) string {
-	if len(newManifest.Snippets.Categories) == 0 {
-		return ""
+func (s *Service) findCrossExtensionCategoryConflict(newView *extreg.Manifest) (string, error) {
+	if len(newView.Snippets.Categories) == 0 {
+		return "", nil
 	}
-	newCats := make(map[string]struct{}, len(newManifest.Snippets.Categories))
-	for _, c := range newManifest.Snippets.Categories {
+	newCats := make(map[string]struct{}, len(newView.Snippets.Categories))
+	for _, c := range newView.Snippets.Categories {
 		newCats[c.ID] = struct{}{}
 	}
 	// Deduplicate by extension name — an extension might be both loaded and on disk.
 	seen := make(map[string]struct{})
-	check := func(name string, mf *extension.Manifest) string {
-		if mf == nil || name == newManifest.Name {
-			return ""
+	check := func(name string, mf *extension.Manifest) (string, error) {
+		if mf == nil || name == newView.Name {
+			return "", nil
 		}
 		if _, dup := seen[name]; dup {
-			return ""
+			return "", nil
 		}
 		seen[name] = struct{}{}
-		for _, c := range mf.Snippets.Categories {
+		view, err := extreg.ManifestOf(mf)
+		if err != nil {
+			return "", err
+		}
+		for _, c := range view.Snippets.Categories {
 			if _, hit := newCats[c.ID]; hit {
-				return c.ID
+				return c.ID, nil
 			}
 		}
-		return ""
+		return "", nil
 	}
 	for _, ext := range s.manager.ListExtensions() {
 		if ext == nil {
 			continue
 		}
-		if conflict := check(ext.Name, ext.Manifest); conflict != "" {
-			return conflict
+		if conflict, err := check(ext.Name, ext.Manifest); conflict != "" || err != nil {
+			return conflict, err
 		}
 	}
 	// Also scan disabled extensions on disk. ScanManifests errors are non-fatal here —
@@ -360,20 +403,19 @@ func (s *Service) findCrossExtensionCategoryConflict(newManifest *extension.Mani
 			if info == nil {
 				continue
 			}
-			if conflict := check(info.Name, info.Manifest); conflict != "" {
-				return conflict
+			if conflict, err := check(info.Name, info.Manifest); conflict != "" || err != nil {
+				return conflict, err
 			}
 		}
 	} else {
 		s.logger.Warn("scan manifests for conflict check failed", zap.Error(err))
 	}
-	return ""
+	return "", nil
 }
 
-// manifestSeedsToSvc copies manifest.Snippets.Seed into snippet_svc.SeedDef to avoid
-// snippet_svc importing pkg/extension.
-func manifestSeedsToSvc(m *extension.Manifest) []snippet_svc.SeedDef {
-	if m == nil || len(m.Snippets.Seed) == 0 {
+// manifestSeedsToSvc copies the extension's seed snippets into snippet_svc.SeedDef.
+func manifestSeedsToSvc(m *extreg.Manifest) []snippet_svc.SeedDef {
+	if len(m.Snippets.Seed) == 0 {
 		return nil
 	}
 	out := make([]snippet_svc.SeedDef, 0, len(m.Snippets.Seed))
@@ -397,12 +439,17 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 
 	// Orphan check: refuse if active assets reference this extension's asset types.
 	if !force && s.assetRepo != nil {
-		ext := s.manager.GetExtension(name)
-		if ext != nil && len(ext.Manifest.AssetTypes) > 0 {
-			assetTypes := make([]string, 0, len(ext.Manifest.AssetTypes))
-			for _, at := range ext.Manifest.AssetTypes {
+		var assetTypes []string
+		if ext := s.manager.GetExtension(name); ext != nil {
+			view, err := extreg.ManifestOf(ext.Manifest)
+			if err != nil {
+				return fmt.Errorf("cannot uninstall %q: %w; use force uninstall to remove it anyway", name, err)
+			}
+			for _, at := range view.AssetTypes {
 				assetTypes = append(assetTypes, at.Type)
 			}
+		}
+		if len(assetTypes) > 0 {
 			count, err := s.assetRepo.CountByTypes(ctx, assetTypes)
 			if err == nil && count > 0 {
 				return fmt.Errorf("cannot uninstall %q: %d asset(s) still reference its asset types %v; delete them first or use force uninstall", name, count, assetTypes)
@@ -468,12 +515,12 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 		s.logger.Warn("scan manifests failed", zap.Error(err))
 		result := make([]ExtensionInfo, 0, len(loaded))
 		for _, ext := range loaded {
-			lm := ext.Manifest.Localized(func(key string) string { return ext.Translate(lang, key) })
-			result = append(result, ExtensionInfo{
-				Name: ext.Name, Version: lm.Version, Icon: lm.Icon,
-				DisplayName: lm.I18n.DisplayName, Description: lm.I18n.Description,
-				Enabled: true, Manifest: lm,
-			})
+			info, err := NewExtensionInfo(ext.Manifest, func(key string) string { return ext.Translate(lang, key) }, true)
+			if err != nil {
+				s.logger.Error("describe installed extension for the list", zap.String("name", ext.Name), zap.Error(err))
+				continue
+			}
+			result = append(result, *info)
 		}
 		return result
 	}
@@ -485,12 +532,12 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 		if isLoaded {
 			tr = func(key string) string { return ext.Translate(lang, key) }
 		}
-		lm := mi.Manifest.Localized(tr)
-		result = append(result, ExtensionInfo{
-			Name: mi.Name, Version: lm.Version, Icon: lm.Icon,
-			DisplayName: lm.I18n.DisplayName, Description: lm.I18n.Description,
-			Enabled: isLoaded, Manifest: lm,
-		})
+		info, err := NewExtensionInfo(mi.Manifest, tr, isLoaded)
+		if err != nil {
+			s.logger.Error("describe installed extension for the list", zap.String("name", mi.Name), zap.Error(err))
+			continue
+		}
+		result = append(result, *info)
 	}
 	return result
 }
@@ -499,12 +546,7 @@ func (s *Service) ListInstalled(lang string) []ExtensionInfo {
 func (s *Service) GetDetail(name, lang string) (*ExtensionInfo, error) {
 	ext := s.manager.GetExtension(name)
 	if ext != nil {
-		lm := ext.Manifest.Localized(func(key string) string { return ext.Translate(lang, key) })
-		return &ExtensionInfo{
-			Name: ext.Name, Version: lm.Version, Icon: lm.Icon,
-			DisplayName: lm.I18n.DisplayName, Description: lm.I18n.Description,
-			Enabled: true, Manifest: lm,
-		}, nil
+		return NewExtensionInfo(ext.Manifest, func(key string) string { return ext.Translate(lang, key) }, true)
 	}
 
 	dir := s.manager.ExtDir(name)
@@ -512,12 +554,7 @@ func (s *Service) GetDetail(name, lang string) (*ExtensionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extension %q not found", name)
 	}
-	lm := mi.Manifest.Localized(func(key string) string { return mi.Translate(lang, key) })
-	return &ExtensionInfo{
-		Name: lm.Name, Version: lm.Version, Icon: lm.Icon,
-		DisplayName: lm.I18n.DisplayName, Description: lm.I18n.Description,
-		Enabled: false, Manifest: lm,
-	}, nil
+	return NewExtensionInfo(mi.Manifest, func(key string) string { return mi.Translate(lang, key) }, false)
 }
 
 // Close shuts down all extensions and releases the compilation cache.

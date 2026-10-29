@@ -72,8 +72,8 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		Convey("describe() supplies the tools, with the schemas reflected in the guest", func() {
-			byName := map[string]ToolDef{}
-			for _, tool := range manifest.Tools {
+			byName := map[string]extwire.Tool{}
+			for _, tool := range faceOf(t, manifest).Tools {
 				byName[tool.Name] = tool
 			}
 			So(byName, ShouldContainKey, "echo")
@@ -87,13 +87,14 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 		})
 
 		Convey("and the asset type, policy face and groups the host registers on", func() {
-			So(manifest.AssetTypes, ShouldHaveLength, 1)
-			So(manifest.AssetTypes[0].Type, ShouldEqual, "fixture")
-			So(ConfigSchemaProperties(manifest.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
-			So(manifest.Policies.Type, ShouldEqual, "fixture")
-			So(manifest.Policies.Actions, ShouldResemble, []string{"read", "write"})
-			So(manifest.Policies.Default, ShouldResemble, []string{"ext:fixture:read"})
-			So(manifest.Policies.Groups, ShouldHaveLength, 1)
+			f := faceOf(t, manifest)
+			So(f.AssetTypes, ShouldHaveLength, 1)
+			So(f.AssetTypes[0].Type, ShouldEqual, "fixture")
+			So(ConfigSchemaProperties(f.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
+			So(f.Policy.Type, ShouldEqual, "fixture")
+			So(f.actions(), ShouldResemble, []string{"read", "write"})
+			So(f.Policy.Default, ShouldResemble, []string{"ext:fixture:read"})
+			So(f.Policy.Groups, ShouldHaveLength, 1)
 		})
 
 		Convey("and the tools it declared are callable", func() {
@@ -143,8 +144,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 
 			manifest, err := mgr.LoadExtension(ctx, extDir)
 			So(err, ShouldBeNil)
-			So(manifest.Tools, ShouldHaveLength, 1)
-			So(manifest.Tools[0].Name, ShouldEqual, "from_cache")
+			So(faceOf(t, manifest).toolNames(), ShouldResemble, []string{"from_cache"})
 			So(cache.loads, ShouldEqual, 1)
 			So(cache.stored, ShouldBeEmpty) // nothing to write back: the answer was already there
 		})
@@ -157,10 +157,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 
 			manifest, err := mgr.LoadExtension(ctx, extDir)
 			So(err, ShouldBeNil)
-			names := make([]string, 0, len(manifest.Tools))
-			for _, tool := range manifest.Tools {
-				names = append(names, tool.Name)
-			}
+			names := faceOf(t, manifest).toolNames()
 			So(names, ShouldContain, "echo")
 			So(names, ShouldNotContain, "from_cache")
 			So(cache.stored["fixture-ext"], ShouldEqual, WasmHash(fixtureWasm(t)))
@@ -175,7 +172,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 
 			staged, err := mgr.Stage(ctx, extDir)
 			So(err, ShouldBeNil)
-			So(staged.Manifest().Tools, ShouldNotBeEmpty)
+			So(faceOf(t, staged.Manifest()).Tools, ShouldNotBeEmpty)
 			staged.Abort(ctx)
 			So(cache.stored, ShouldBeEmpty)
 
@@ -192,8 +189,8 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 			info, err := LoadManifestInfo(extDir, acceptingContributions())
 			So(err, ShouldBeNil)
 			So(info.Manifest.I18n.DisplayName, ShouldEqual, "cached")
-			So(info.Manifest.AssetTypes, ShouldHaveLength, 1)
-			So(info.Manifest.Tools[0].Name, ShouldEqual, "from_cache")
+			So(faceOf(t, info.Manifest).AssetTypes, ShouldHaveLength, 1)
+			So(faceOf(t, info.Manifest).toolNames(), ShouldResemble, []string{"from_cache"})
 		})
 	})
 }
@@ -262,14 +259,14 @@ func TestCachedDescribeReachesTheFirstLoadVerdict(t *testing.T) {
 		info, err := LoadManifestInfo(extDir, acceptingContributions())
 		So(err, ShouldBeNil)
 		So(info.Described, ShouldBeTrue)
-		So(info.Manifest.Tools[0].Name, ShouldEqual, "from_cache")
+		So(faceOf(t, info.Manifest).toolNames(), ShouldResemble, []string{"from_cache"})
 
 		Convey("while a cache miss is an undescribed extension, not a refusal", func() {
 			useDescribeCache(t, newFakeDescribeCache([]byte("another build"), sentinelDescriptor))
 			info, err := LoadManifestInfo(extDir, refusing())
 			So(err, ShouldBeNil)
 			So(info.Described, ShouldBeFalse)
-			So(info.Manifest.AssetTypes, ShouldBeEmpty)
+			So(info.Manifest.ContributionKeys(), ShouldBeEmpty)
 		})
 	})
 }

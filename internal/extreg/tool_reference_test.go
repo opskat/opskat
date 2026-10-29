@@ -8,15 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
-func grantReferenceManifest() *extension.Manifest {
-	return &extension.Manifest{
-		Tools: []extension.ToolDef{
+func grantReferenceManifest() *Manifest {
+	return &Manifest{
+		Manifest: &extension.Manifest{},
+		Tools: []extwire.Tool{
 			{Name: "note_put", PolicyAction: "write"},
 			{Name: "note_get", PolicyActions: []string{"read", "list"}},
 		},
-		Policies: extension.PoliciesDef{Type: "notebook", Actions: []string{"read", "list", "write"}},
+		Policies: PoliciesDef{Type: "notebook", Actions: []string{"read", "list", "write"}},
 	}
 }
 
@@ -43,7 +45,7 @@ func TestToolReferenceTellsTheModelTheGrantFormat(t *testing.T) {
 }
 
 func TestToolReferenceOmitsGrantFormatWithoutPolicyActions(t *testing.T) {
-	m := &extension.Manifest{Tools: []extension.ToolDef{{Name: "ping", PolicyAction: "read"}}}
+	m := &Manifest{Manifest: &extension.Manifest{}, Tools: []extwire.Tool{{Name: "ping", PolicyAction: "read"}}}
 
 	assert.NotContains(t, toolReference(m), "request_permission")
 }
@@ -51,15 +53,16 @@ func TestToolReferenceOmitsGrantFormatWithoutPolicyActions(t *testing.T) {
 // The `-file` form is only understood by opsctl: the parameter table must say so, or
 // a model would try it through exec and get an unknown-flag error.
 func TestToolReferenceMarksLargeParams(t *testing.T) {
-	m := &extension.Manifest{
-		Tools: []extension.ToolDef{{
+	m := &Manifest{
+		Manifest: &extension.Manifest{},
+		Tools: []extwire.Tool{{
 			Name: "bulk", PolicyAction: "write", Large: []string{"body"},
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{
 				"body":  map[string]any{"type": "string"},
 				"index": map[string]any{"type": "string"},
 			}},
 		}},
-		Policies: extension.PoliciesDef{Type: "x", Actions: []string{"write"}},
+		Policies: PoliciesDef{Type: "x", Actions: []string{"write"}},
 	}
 	ref := toolReference(m)
 	assert.Contains(t, ref, "`--body-file`")
@@ -70,17 +73,18 @@ func TestToolReferenceMarksLargeParams(t *testing.T) {
 // A page-only tool cannot be called through exec, so the model must not be told
 // it exists.
 func TestToolReferenceLeavesOutPageOnlyTools(t *testing.T) {
-	m := &extension.Manifest{
-		Tools: []extension.ToolDef{
+	m := &Manifest{
+		Manifest: &extension.Manifest{},
+		Tools: []extwire.Tool{
 			{Name: "ping", PolicyAction: "read"},
 			{Name: "ui_notes", PageOnly: true},
 		},
-		Policies: extension.PoliciesDef{Type: "x", Actions: []string{"read"}},
+		Policies: PoliciesDef{Type: "x", Actions: []string{"read"}},
 	}
 	ref := toolReference(m)
 	assert.Contains(t, ref, "### ping")
 	assert.NotContains(t, ref, "ui_notes")
 
-	onlyPages := &extension.Manifest{Tools: []extension.ToolDef{{Name: "ui_notes", PageOnly: true}}}
+	onlyPages := &Manifest{Manifest: &extension.Manifest{}, Tools: []extwire.Tool{{Name: "ui_notes", PageOnly: true}}}
 	assert.Empty(t, toolReference(onlyPages))
 }

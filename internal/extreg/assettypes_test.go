@@ -16,7 +16,7 @@ import (
 // AssetScope 是资产类型这一侧给运行时的作用域：端点只来自 format:"endpoint" 字段里写得出端口
 // 的字符串值，连接路径与认证注入按类型的声明。
 func TestAssetScope(t *testing.T) {
-	at := &extension.AssetTypeDef{Type: "ep", ConfigSchema: map[string]any{"type": "object", "properties": map[string]any{
+	at := &AssetTypeDef{Type: "ep", ConfigSchema: map[string]any{"type": "object", "properties": map[string]any{
 		"url":    map[string]any{"type": "string", "format": "endpoint"},
 		"broker": map[string]any{"type": "string", "format": "endpoint"},
 		"v6":     map[string]any{"type": "string", "format": "endpoint"},
@@ -91,8 +91,8 @@ func TestAssetScope(t *testing.T) {
 
 	t.Run("declared auth renders the active group from the credentials", func(t *testing.T) {
 		authed := *at
-		authed.Auth = &extension.AuthDef{Selector: "kind", Groups: []extension.AuthGroup{
-			{When: "bearer", Bindings: []extension.AuthBinding{{In: extension.AuthInHeader, Name: "Authorization", Value: "Bearer {{password}}"}}},
+		authed.Auth = &AuthDef{Selector: "kind", Groups: []AuthGroup{
+			{When: "bearer", Bindings: []AuthBinding{{In: extension.AuthInHeader, Name: "Authorization", Value: "Bearer {{password}}"}}},
 		}}
 		creds := map[string]string{"kind": "bearer", "password": "s3cret"}
 		scope, err := AssetScope(asset, &authed, config, direct, func(_ context.Context, fields []string) (map[string]string, error) {

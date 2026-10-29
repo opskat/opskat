@@ -45,7 +45,11 @@ func registeredAssetTypes(svc *Service) []string {
 		if ext == nil {
 			continue
 		}
-		for _, at := range ext.Manifest.AssetTypes {
+		view, err := extreg.ManifestOf(ext.Manifest)
+		if err != nil {
+			panic(err) // a loaded extension's contributions were judged with the same wire types
+		}
+		for _, at := range view.AssetTypes {
 			if _, ok := assettype.Get(at.Type); ok {
 				out = append(out, at.Type)
 			}

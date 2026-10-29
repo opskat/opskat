@@ -13,14 +13,15 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 )
 
 // bearerAuth injects the asset's password field as a bearer token.
-var bearerAuth = &extension.AuthDef{Groups: []extension.AuthGroup{{
-	Bindings: []extension.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}},
+var bearerAuth = &extwire.Auth{Groups: []extwire.AuthGroup{{
+	Bindings: []extwire.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}},
 }}}
 
 // authedExt is extension "authed": its type authed-store names its endpoint in
@@ -28,17 +29,15 @@ var bearerAuth = &extension.AuthDef{Groups: []extension.AuthGroup{{
 func authedExt() *extension.Extension {
 	return &extension.Extension{
 		Name: "authed",
-		Manifest: &extension.Manifest{
-			Manifest: extmanifest.Manifest{Name: "authed"},
-			AssetTypes: []extension.AssetTypeDef{{Type: "authed-store", Auth: bearerAuth, ConfigSchema: map[string]any{
+		Manifest: withAssetTypes(extmanifest.Manifest{Name: "authed"},
+			extwire.AssetType{Type: "authed-store", Auth: bearerAuth, ConfigSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"host":     map[string]any{"type": "string"},
 					"url":      map[string]any{"type": "string", "format": "endpoint"},
 					"password": map[string]any{"type": "string", "format": "password"},
 				},
-			}}},
-		},
+			}}),
 	}
 }
 
@@ -106,7 +105,7 @@ func TestResolveScopeOfAnExtensionAsset(t *testing.T) {
 func TestResolveScopeDefersABrokenConnectionPath(t *testing.T) {
 	Convey("Given an asset whose declared TLS names a missing CA file", t, func() {
 		svc, assets := newHostTestService(t)
-		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{TLS: true}))
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{TLS: true}))
 		config, err := json.Marshal(map[string]any{
 			"endpoint":                        "es.internal:9200",
 			extension.HostConnectionConfigKey: map[string]any{"tls": map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}},
@@ -191,10 +190,8 @@ func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 func TestTestConnectionKeepsCredentialsForInjectionWithoutCredentialsRead(t *testing.T) {
 	Convey("given an extension without credentials:read", t, func() {
 		svc, assets := newHostTestService(t)
-		manifest := &extension.Manifest{
-			Manifest:   extmanifest.Manifest{Name: "other"},
-			AssetTypes: []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}},
-		}
+		manifest := viewOf(t, withAssetTypes(extmanifest.Manifest{Name: "other"},
+			extwire.AssetType{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}))
 
 		Convey("a password typed into the new-asset form is kept for injection, withheld from the guest", func() {
 			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)

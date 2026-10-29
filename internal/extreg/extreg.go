@@ -67,7 +67,7 @@ type TestConnectionCaller interface {
 // on the manager the contribution registry (Points) is handed to, so the
 // capability is injected once the service exists instead of passed to Points.
 type ConnTestRegistrar interface {
-	Build(extName string, manifest *extension.Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc
+	Build(extName string, manifest *Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc
 }
 
 var connTestRegistrar ConnTestRegistrar
@@ -108,41 +108,35 @@ func pluginOf(v extension.ExtensionView) pluginCaller {
 	return nil
 }
 
-// loaded 是一个扩展在本包内的最小画像。plugin 为 nil 表示没有运行中的插件（仅描述接入）。
+// loaded 是一个扩展在本包内的最小画像：manifest 是它贡献的结构化视图。plugin 为 nil 表示
+// 没有运行中的插件（仅描述接入）。
 type loaded struct {
 	name     string
-	manifest *extension.Manifest
+	manifest *Manifest
 	plugin   pluginCaller
 	// translate 解析扩展多语言里的键（数据库驱动专属字段的标签与说明）。
 	translate translateFunc
 }
 
-func (g guestFunc) loaded(v extension.ExtensionView) loaded {
-	return loaded{name: v.Name(), manifest: v.Manifest(), plugin: g(v), translate: v.Translate}
+// loaded 解出 v 的结构化视图（ManifestOf）；贡献点的 Check 已按同样的线格式判过它。
+func (g guestFunc) loaded(v extension.ExtensionView) (loaded, error) {
+	m, err := ManifestOf(v.Manifest())
+	if err != nil {
+		return loaded{}, err
+	}
+	return loaded{name: v.Name(), manifest: m, plugin: g(v), translate: v.Translate}, nil
 }
 
 var (
 	mu sync.Mutex
 	// manifests 是已接入工具的扩展的清单，供 ExpandFileFlags 查工具声明。
-	manifests = make(map[string]*extension.Manifest) // extension name → its manifest
+	manifests = make(map[string]*Manifest) // extension name → its typed view
 	// policyTypeOwner 记录每个策略面（describe 的 policy.type）归哪个扩展。策略面是
 	// 权限组 ID（ext:<policyType>:<name>）的命名空间段、组上扩展永久规则的落点键，也是
 	// CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，一方的组与规则就会被
 	// 当成另一方的来判。
 	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
-
-// decodeContribution 把扩展在 key 下的原始贡献解进 dst；扩展没有贡献这个键时 dst 不变。
-func decodeContribution(v extension.ExtensionView, key string, dst any) error {
-	raw := v.Contribution(key)
-	if raw == nil {
-		return nil
-	}
-	if err := json.Unmarshal(raw, dst); err != nil {
-		return fmt.Errorf("%s: %w", key, err)
-	}
-	return nil
-}
 
 // undo 是一串按登记顺序记下的撤销动作，逆序执行。
 type undo []func()
@@ -171,7 +165,7 @@ func skillDescription(v extension.ExtensionView) string {
 // 这两半各自补对方的洞：SKILL.md 是散文，说得清"这个扩展是干什么的"，但单靠它
 // flag 名与类型只能靠猜；参数表是权威的（同一份声明被 parseCommand 强制
 // 执行），但读不出语义。缺 SKILL.md 也照常给出参数表——没有散文不等于没有语法。
-func helpDocument(skillMD, extName string, localized *extension.Manifest) string {
+func helpDocument(skillMD, extName string, localized *Manifest) string {
 	var parts []string
 	if body := strings.TrimSpace(skillMD); body != "" {
 		parts = append(parts, body)
@@ -195,7 +189,7 @@ func helpDocument(skillMD, extName string, localized *extension.Manifest) string
 // （assettype 的 AutomationContract）只在填错之后才以 "unknown config field" 的形式露面。
 // 两份都从契约的同一来源渲染——configSchema 与 assettype.ConnectionFieldDocs——所以不会
 // 列出一个实际不接受的字段。
-func configReference(localized *extension.Manifest) string {
+func configReference(localized *Manifest) string {
 	var b strings.Builder
 	for _, at := range localized.AssetTypes {
 		props, _ := at.ConfigSchema["properties"].(map[string]any)
@@ -288,7 +282,7 @@ func execTool(l loaded) permission.ExecFunc {
 // 判定逐个资源进行：任一资源命中 deny 即拒；allow 规则没覆盖到的资源再逐个查 grant，
 // 每个资源都被某条规则或某个 grant 覆盖才放行（不同资源可由不同规则 / grant 覆盖）。
 //
-// guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（ToolDef.Actions，
+// guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（extwire.Tool.Actions，
 // 不是整个扩展的 policies.actions 并集）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
 // 这次调用本身。
@@ -349,7 +343,7 @@ var errClassifyFailed = errors.New("extension policy classification failed")
 
 // classifyCommand parses a command and runs the guest's check_policy classification,
 // validating the action against the actions the called tool declares
-// (ToolDef.Actions) — not the extension-wide union, so one tool cannot answer with
+// (extwire.Tool.Actions) — not the extension-wide union, so one tool cannot answer with
 // an action only another tool may request.
 // It is the single place policyCheck and classifyForApproval both call, so "undeclared
 // action never classifies" can't drift between the check path and the approval/grant

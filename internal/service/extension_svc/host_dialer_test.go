@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -28,13 +29,10 @@ var endpointSchema = map[string]any{
 	"properties": map[string]any{"endpoint": map[string]any{"type": "string", "format": "endpoint"}},
 }
 
-func connectionExt(name, assetType string, conn *extension.ConnectionDef) *extension.Extension {
+func connectionExt(name, assetType string, conn *extwire.Connection) *extension.Extension {
 	return &extension.Extension{
-		Name: name,
-		Manifest: &extension.Manifest{
-			Manifest:   extmanifest.Manifest{Name: name},
-			AssetTypes: []extension.AssetTypeDef{{Type: assetType, ConfigSchema: endpointSchema, Connection: conn}},
-		},
+		Name:     name,
+		Manifest: withAssetTypes(extmanifest.Manifest{Name: name}, extwire.AssetType{Type: assetType, ConfigSchema: endpointSchema, Connection: conn}),
 	}
 }
 
@@ -72,7 +70,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
 		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
-		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{SSHTunnel: true}))
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{SSHTunnel: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
 		ctx := context.Background()
 
@@ -144,8 +142,8 @@ func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
 		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
-		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{ProxyChain: true}))
-		svc.Bridge().Register(connectionExt("plain", "plain-store", &extension.ConnectionDef{SSHTunnel: true}))
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{ProxyChain: true}))
+		svc.Bridge().Register(connectionExt("plain", "plain-store", &extwire.Connection{SSHTunnel: true}))
 		ctx := context.Background()
 
 		chainConfig := func(proxyHost string, proxyPort int) string {
@@ -186,7 +184,7 @@ func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
 		// The shared resolver lets a non-empty chain win over the tunnel column; a
 		// type declaring both would silently skip the SSH hop the user picked.
 		Convey("an asset setting both an SSH tunnel and a proxy chain is refused, not dialed without the tunnel", func() {
-			svc.Bridge().Register(connectionExt("both", "both-store", &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true}))
+			svc.Bridge().Register(connectionExt("both", "both-store", &extwire.Connection{SSHTunnel: true, ProxyChain: true}))
 			assets.EXPECT().Find(gomock.Any(), int64(12)).
 				Return(&asset_entity.Asset{ID: 12, Name: "both-store", Type: "both-store", Config: chainConfig("127.0.0.1", 1080), SSHTunnelID: 7}, nil)
 
@@ -221,7 +219,7 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
 		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
-		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{TLS: true}))
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{TLS: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
 		ctx := context.Background()
 

@@ -106,8 +106,8 @@ func TestExtensionsWithoutAnAssetType(t *testing.T) {
 		w, err := extwire.Parse(describeJSON(`"snippets":{"seed":[{"key":"ls","name":"ls","category":"shell","content":"ls -al"}]}`))
 		So(err, ShouldBeNil)
 		v := &testView{
-			l:   loaded{name: "snips", manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "snips"}}, plugin: &fakePlugin{}},
-			raw: w.Contributes,
+			l:  loaded{name: "snips", plugin: &fakePlugin{}},
+			rt: extension.Described(extmanifest.Manifest{Name: "snips"}, &extension.Descriptor{Contributes: w.Contributes}),
 		}
 		So(testContributions.Attach(v), ShouldBeNil)
 		testContributions.Revoke("snips")

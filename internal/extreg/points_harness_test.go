@@ -2,7 +2,6 @@ package extreg
 
 import (
 	"encoding/json"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,31 +21,22 @@ var testContributions = extension.NewContributionRegistry(newPoints(func(v exten
 	return pluginOf(v)
 })...)
 
-// testView is an extension as its contribution points see it, built from a manifest
-// a test writes by hand (the merged face, what Attach reads) and, for Check, the raw
-// describe() entries.
+// testView is an extension as its contribution points see it: the runtime's
+// manifest — contract and raw describe() entries — and, standing in for its
+// running guest, the fake plugin l carries.
 type testView struct {
 	l                  loaded
-	raw                map[string]json.RawMessage
+	rt                 *extension.Manifest
 	skillMD, skillDesc string
 }
 
-func (v *testView) Name() string                  { return v.l.name }
-func (v *testView) Manifest() *extension.Manifest { return v.l.manifest }
-func (v *testView) Plugin() *extension.Plugin     { return nil }
-func (v *testView) SkillMD() string               { return v.skillMD }
-func (v *testView) SkillDescription() string      { return v.skillDesc }
-
-func (v *testView) Keys() []string {
-	keys := make([]string, 0, len(v.raw))
-	for k := range v.raw {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
-func (v *testView) Contribution(key string) json.RawMessage { return v.raw[key] }
+func (v *testView) Name() string                            { return v.l.name }
+func (v *testView) Manifest() *extension.Manifest           { return v.rt }
+func (v *testView) Plugin() *extension.Plugin               { return nil }
+func (v *testView) SkillMD() string                         { return v.skillMD }
+func (v *testView) SkillDescription() string                { return v.skillDesc }
+func (v *testView) Keys() []string                          { return v.rt.ContributionKeys() }
+func (v *testView) Contribution(key string) json.RawMessage { return v.rt.Contribution(key) }
 
 func (v *testView) Translate(lang, key string) string {
 	if v.l.translate == nil {
@@ -56,10 +46,11 @@ func (v *testView) Translate(lang, key string) string {
 }
 
 // attachLoaded attaches the extension l describes, running l.plugin (nil: a
-// describe-only attach). The hand-written manifest's face is what describe() would
-// have answered, so the contribution points judge it before attaching.
+// describe-only attach). The hand-written typed view is encoded back into the
+// describe() answer it stands for, which the contribution points judge and
+// decode like a real one.
 func attachLoaded(l loaded, skillMD, description string) error {
-	return testContributions.Attach(&testView{l: l, raw: wireContributions(l.manifest), skillMD: skillMD, skillDesc: description})
+	return testContributions.Attach(&testView{l: l, rt: runtimeManifest(l.manifest), skillMD: skillMD, skillDesc: description})
 }
 
 // attachExtension attaches an extension the way extension_svc does. A real loaded
@@ -69,18 +60,30 @@ func attachExtension(ext *extension.Extension) error {
 	if ext.Plugin != nil {
 		return testContributions.Attach(ext.View())
 	}
-	return attachLoaded(loaded{name: ext.Name, manifest: ext.Manifest, translate: ext.Translate}, ext.SkillMD, ext.SkillDescription)
+	return testContributions.Attach(&testView{l: loaded{name: ext.Name, translate: ext.Translate}, rt: ext.Manifest,
+		skillMD: ext.SkillMD, skillDesc: ext.SkillDescription})
 }
 
 // attachDescribeOnly attaches an extension read from the describe cache, the way
 // opsctl does at startup.
 func attachDescribeOnly(info *extension.ManifestInfo) error {
-	return attachLoaded(loaded{name: info.Name, manifest: info.Manifest, translate: info.Translate}, info.SkillMD, info.SkillDescription)
+	return testContributions.Attach(&testView{l: loaded{name: info.Name, translate: info.Translate}, rt: info.Manifest,
+		skillMD: info.SkillMD, skillDesc: info.SkillDescription})
 }
 
-// wireContributions is the describe() answer a hand-written merged manifest stands
-// for: the entries its face was merged from.
-func wireContributions(m *extension.Manifest) map[string]json.RawMessage {
+// runtimeManifest is the runtime's manifest a hand-written typed view stands for:
+// its contract and presentation, and the describe() entries it was decoded from.
+func runtimeManifest(m *Manifest) *extension.Manifest {
+	rt := m.Manifest
+	if rt == nil {
+		rt = &extension.Manifest{}
+	}
+	return extension.Described(rt.Manifest, &extension.Descriptor{Icon: rt.Icon, I18n: rt.I18n, Contributes: wireContributions(m)})
+}
+
+// wireContributions is the describe() answer a hand-written typed view stands
+// for: the entries its face was decoded from.
+func wireContributions(m *Manifest) map[string]json.RawMessage {
 	raw := map[string]json.RawMessage{}
 	put := func(key string, v any) {
 		b, err := json.Marshal(v)
@@ -93,7 +96,7 @@ func wireContributions(m *extension.Manifest) map[string]json.RawMessage {
 		types := make([]extwire.AssetType, len(m.AssetTypes))
 		for i, at := range m.AssetTypes {
 			types[i] = extwire.AssetType{Type: at.Type, I18n: at.I18n, ConfigSchema: at.ConfigSchema,
-				Connection: at.Connection, TestConnection: at.TestConnection}
+				Connection: at.Connection, Auth: wireAuth(at.Auth), TestConnection: at.TestConnection}
 		}
 		put(extwire.KeyAssetTypes, types)
 	}
@@ -103,10 +106,30 @@ func wireContributions(m *extension.Manifest) map[string]json.RawMessage {
 	if m.Policies.Type != "" || len(m.Policies.Groups) > 0 {
 		put(extwire.KeyPolicy, extwire.Policy{Type: m.Policies.Type, Groups: m.Policies.Groups, Default: m.Policies.Default})
 	}
+	if m.Frontend.Entry != "" || len(m.Frontend.Pages) > 0 {
+		put(extwire.KeyPages, m.Frontend)
+	}
+	if len(m.Snippets.Categories) > 0 || len(m.Snippets.Seed) > 0 {
+		put(extwire.KeySnippets, m.Snippets)
+	}
 	if len(m.DatabaseDrivers) > 0 {
 		put(extwire.KeyDatabaseDrivers, m.DatabaseDrivers)
 	}
 	return raw
+}
+
+func wireAuth(a *AuthDef) *extwire.Auth {
+	if a == nil {
+		return nil
+	}
+	out := &extwire.Auth{Selector: a.Selector, Groups: make([]extwire.AuthGroup, len(a.Groups))}
+	for i, g := range a.Groups {
+		out.Groups[i] = extwire.AuthGroup{When: g.When, Bindings: make([]extwire.AuthBinding, len(g.Bindings))}
+		for j, b := range g.Bindings {
+			out.Groups[i].Bindings[j] = extwire.AuthBinding(b)
+		}
+	}
+	return out
 }
 
 // detach revokes everything the extension named name attached.
@@ -123,7 +146,7 @@ func checkDescribe(t *testing.T, mf extmanifest.Manifest, payload []byte) error 
 		mf.Name = "ext"
 	}
 	return testContributions.Check(&testView{
-		l:   loaded{name: mf.Name, manifest: &extension.Manifest{Manifest: mf}},
-		raw: w.Contributes,
+		l:  loaded{name: mf.Name},
+		rt: extension.Described(mf, &extension.Descriptor{Contributes: w.Contributes}),
 	})
 }

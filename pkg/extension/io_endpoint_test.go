@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extwire"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -65,26 +67,32 @@ func (p providerConfigs) AssetCredentialValues(_ context.Context, assetID int64,
 	return ConfigFieldValues(raw, fields)
 }
 
+// credentialValues reads the named fields of an asset's credentials.
+type credentialValues func(ctx context.Context, fields []string) (map[string]string, error)
+
 // fixtureScopes stands in for the asset-type side (internal/extreg AssetScope,
 // fed by extension_svc's resolver): the scope of a call on a fixture asset is the
 // addresses its type's format:"endpoint" fields name in its config, conn as its
 // connection path (nil: direct), and its type's auth groups rendered from its
-// credentials — an ad-hoc call's all read from its AdHoc config.
+// credentials (fixtureAuth) — an ad-hoc call's all read from its AdHoc config.
 func fixtureScopes(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDialer) ScopeResolver {
 	return func(ctx context.Context, _ string, a AssetRef) (*Scope, error) {
-		def := manifest.AssetTypeDef(a.Type)
+		f, err := decodeFace(manifest)
+		if err != nil {
+			return nil, err
+		}
+		def := f.assetType(a.Type)
 		if def == nil {
 			return nil, fmt.Errorf("asset type %q is not the extension's", a.Type)
 		}
 		var raw json.RawMessage
-		var values CredentialValues
+		var values credentialValues
 		if a.AdHoc != nil {
 			raw = a.AdHoc.Config
 			values = func(_ context.Context, fields []string) (map[string]string, error) {
 				return ConfigFieldValues(a.AdHoc.Credentials, fields)
 			}
 		} else {
-			var err error
 			if raw, err = configs.GetAssetConfig(a.ID); err != nil {
 				return nil, err
 			}
@@ -121,10 +129,50 @@ func fixtureScopes(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDi
 			}
 		}
 		if def.Auth != nil {
-			scope.Auth = def.Auth.Inject(values)
+			if scope.Auth, err = fixtureAuth(def.Auth, values); err != nil {
+				return nil, err
+			}
 		}
 		return scope, nil
 	}
+}
+
+// fixtureAuth renders the auth groups the fixture declares — basic, bearer and
+// signed, selected by authType — into what the endpoint receives. Rendering a
+// declaration's templates is the asset-type side's (extreg's AuthDef.Inject, tested
+// there with these same groups); the runtime only injects what a scope's Auth
+// answers, so this renders the fixture's three groups by hand, refusing a
+// declaration that has drifted from them.
+func fixtureAuth(declared *extwire.Auth, values credentialValues) (RequestAuth, error) {
+	render := map[string]func(v map[string]string) AuthValue{
+		"basic": func(v map[string]string) AuthValue {
+			return AuthValue{In: AuthInBasic, Value: v["username"] + ":" + v["password"]}
+		},
+		"bearer": func(v map[string]string) AuthValue {
+			return AuthValue{In: AuthInHeader, Name: "Authorization", Value: "Bearer " + v["password"]}
+		},
+		"signed": func(v map[string]string) AuthValue {
+			return AuthValue{In: AuthInQuery, Name: "token", Value: base64.StdEncoding.EncodeToString([]byte(v["username"] + ":" + v["password"]))}
+		},
+	}
+	if declared.Selector != "authType" || len(declared.Groups) != len(render) {
+		return nil, fmt.Errorf("the fixture's auth declaration changed: %+v", declared)
+	}
+	for _, g := range declared.Groups {
+		if render[g.When] == nil {
+			return nil, fmt.Errorf("the fixture's auth declaration changed: group %q", g.When)
+		}
+	}
+	return func(ctx context.Context) ([]AuthValue, error) {
+		v, err := values(ctx, []string{"authType", "username", "password"})
+		if err != nil {
+			return nil, err
+		}
+		if r := render[v["authType"]]; r != nil {
+			return []AuthValue{r(v)}, nil
+		}
+		return nil, nil
+	}, nil
 }
 
 // fixtureHost is a DefaultHostProvider over configs whose scopes fixtureScopes
@@ -156,9 +204,9 @@ func newEndpointFixture(t *testing.T, assetEndpoint bool, config map[string]any)
 }
 
 // loadDescribedFixture loads the fixture extension over inner wrapped in
-// capability enforcement, and fills manifest's functional face from describe()
-// the way Manager.LoadExtension does — the fixture's scope resolver reads the
-// asset type's declaration from there. An inner provider that resolves no
+// capability enforcement, and merges describe() onto manifest the way
+// Manager.LoadExtension does — the fixture's scope resolver reads the asset
+// type's declaration from there. An inner provider that resolves no
 // scopes of its own gets fixtureScopes over its own config getter.
 func loadDescribedFixture(t *testing.T, manifest *Manifest, inner HostProvider, opts ...PluginOption) *Plugin {
 	t.Helper()

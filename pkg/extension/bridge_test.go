@@ -15,9 +15,7 @@ func TestBridge(t *testing.T) {
 		ext := &Extension{
 			Name: "oss",
 			Manifest: &Manifest{
-				Manifest:   extmanifest.Manifest{Name: "oss", Version: "1.0.0"},
-				AssetTypes: []AssetTypeDef{{Type: "oss", I18n: I18nName{Name: "assetType.oss.name"}}},
-				Policies:   PoliciesDef{Type: "ext:oss"},
+				Manifest: extmanifest.Manifest{Name: "oss", Version: "1.0.0"},
 			},
 		}
 		bridge.Register(ext)
@@ -31,15 +29,10 @@ func TestBridge(t *testing.T) {
 			So(bridge.ListNames(), ShouldResemble, []string{"oss"})
 		})
 
-		Convey("GetExtensionByAssetType resolves the owning extension", func() {
-			So(bridge.GetExtensionByAssetType("oss"), ShouldEqual, ext)
-			So(bridge.GetExtensionByAssetType("ssh"), ShouldBeNil)
-		})
-
 		Convey("Unregister drops the extension", func() {
 			bridge.Unregister("oss")
 			So(bridge.ListNames(), ShouldBeEmpty)
-			So(bridge.GetExtensionByAssetType("oss"), ShouldBeNil)
+			So(bridge.Get("oss"), ShouldBeNil)
 		})
 	})
 }

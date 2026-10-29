@@ -127,10 +127,12 @@ func extensionOwnerOf(assetType string) (string, bool, error) {
 		return "", false, err
 	}
 	for _, ext := range scanned {
-		for _, at := range ext.info.Manifest.AssetTypes {
-			if at.Type == assetType {
-				return ext.info.Name, true, nil
-			}
+		view, err := extreg.ManifestOf(ext.info.Manifest)
+		if err != nil {
+			return "", false, err
+		}
+		if view.AssetType(assetType) != nil {
+			return ext.info.Name, true, nil
 		}
 	}
 	return "", false, nil
@@ -234,7 +236,10 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 	}
 	results := make([]installedExtension, 0, len(scanned))
 	for _, ext := range scanned {
-		m := ext.info.Manifest
+		m, err := extreg.ManifestOf(ext.info.Manifest)
+		if err != nil {
+			return nil, err
+		}
 		item := installedExtension{
 			Name:        m.Name,
 			Version:     m.Version,

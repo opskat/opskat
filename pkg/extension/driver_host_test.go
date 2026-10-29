@@ -82,7 +82,7 @@ func probe(t *testing.T, s dbdriver.Session, what string) string {
 func TestDriverCallHostCapabilities(t *testing.T) {
 	t.Run("without network.assetEndpoint the driver cannot reach its own database", func(t *testing.T) {
 		ext := loadDriverFixture(t, &hostSpy{}, map[string]any{"assetRoute": true})
-		desc := ext.Manifest.DatabaseDrivers[0]
+		desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 		server := extension.NewFixtureDBServer(t)
 		d := &extensionDriver{
 			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
@@ -100,7 +100,7 @@ func TestDriverCallHostCapabilities(t *testing.T) {
 	t.Run("with network.assetEndpoint", func(t *testing.T) {
 		spy := &hostSpy{}
 		ext := loadDriverFixture(t, spy, map[string]any{"assetEndpoint": true})
-		desc := ext.Manifest.DatabaseDrivers[0]
+		desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 		d := &extensionDriver{
 			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
 			desc:         desc, plugin: ext.Plugin, server: extension.NewFixtureDBServer(t),
@@ -181,7 +181,7 @@ func newRedirectRoute(t *testing.T) redirectRoute {
 // transport, as the host does for asset 42.
 func openRedirectSession(t *testing.T, ext *extension.Extension, host string, transport dbdriver.Transport) dbdriver.Session {
 	t.Helper()
-	desc := ext.Manifest.DatabaseDrivers[0]
+	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 	s, err := ext.Plugin.OpenDriverSession(context.Background(), string(desc.ID), dbdriver.OpenRequest{
 		Config:    &dbdriver.Config{Driver: desc.ID, Host: host, Port: desc.DefaultPort, Username: "alice", Database: "app"},
 		Password:  "s3cret",
@@ -325,7 +325,7 @@ func (d classifyingDriver) ClassifyStatements(ctx context.Context, sql string) (
 
 func TestDriverClassifiesStatementsWithoutASession(t *testing.T) {
 	ext := loadDriverFixture(t, &hostSpy{}, nil)
-	desc := ext.Manifest.DatabaseDrivers[0]
+	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 	require.True(t, desc.Supports(dbdriver.CapClassifyStatements), "the fixture declares splitting")
 	drv := classifyingDriver{desc: desc, plugin: ext.Plugin}
 	ctx := context.Background()

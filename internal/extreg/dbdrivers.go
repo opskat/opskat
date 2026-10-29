@@ -61,7 +61,10 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 // 背后是它；仅描述接入的驱动描述与专属字段可用，打开会话与切分语句报驱动不可用
 // （notLoadedOpener）。撤销时驱动先移出注册表，再在 mu 之外作废它打开过的会话。
 func (p dbDriversPoint) Attach(v extension.ExtensionView) (func(), error) {
-	l := p.guest.loaded(v)
+	l, err := p.guest.loaded(v)
+	if err != nil {
+		return nil, err
+	}
 	var opener driverOpener = notLoadedOpener{ext: l.name}
 	if l.plugin != nil {
 		opener = l.plugin

@@ -7,13 +7,14 @@ import (
 
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 func TestParseCommand(t *testing.T) {
 	// 扩展名不再出现在命令里：资产类型 → 扩展是一对一的，工具名就是第一个词。
-	m := &extension.Manifest{
-		Manifest: extmanifest.Manifest{Name: "oss"},
-		Tools: []extension.ToolDef{{
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "oss"}},
+		Tools: []extwire.Tool{{
 			Name: "list_objects", Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -248,9 +249,9 @@ func TestParseCommand(t *testing.T) {
 // refuses it before anything is approved or run, and says why. The page path
 // validates arguments by tool name and still reaches it.
 func TestParseCommandRefusesPageOnlyTools(t *testing.T) {
-	m := &extension.Manifest{
-		Manifest: extmanifest.Manifest{Name: "notebook"},
-		Tools: []extension.ToolDef{{
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "notebook"}},
+		Tools: []extwire.Tool{{
 			Name: "notes", PageOnly: true,
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 		}},
@@ -268,9 +269,9 @@ func TestParseCommandRefusesPageOnlyTools(t *testing.T) {
 }
 
 func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
-	m := &extension.Manifest{
-		Manifest: extmanifest.Manifest{Name: "notes"},
-		Tools: []extension.ToolDef{{
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "notes"}},
+		Tools: []extwire.Tool{{
 			Name: "put", Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

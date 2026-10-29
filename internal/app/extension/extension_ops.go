@@ -30,8 +30,9 @@ func (e *Extension) ListInstalledExtensions(lang string) []extension_svc.Extensi
 	return e.service.ListInstalled(lang)
 }
 
-// GetExtensionManifest returns a single extension's manifest.
-func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, error) {
+// GetExtensionManifest returns a single extension's merged manifest: the typed
+// view of its contributions (extreg.Manifest), as the extension list carries it.
+func (e *Extension) GetExtensionManifest(name string) (*extreg.Manifest, error) {
 	if e.service == nil {
 		return nil, fmt.Errorf("extension system not initialized")
 	}
@@ -39,7 +40,7 @@ func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, erro
 	if ext == nil {
 		return nil, fmt.Errorf("extension %q not found", name)
 	}
-	return ext.Manifest, nil
+	return extreg.ManifestOf(ext.Manifest)
 }
 
 // CallExtensionTool calls an extension tool from the extension's own frontend
@@ -75,11 +76,15 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		return "", fmt.Errorf("extension %q has no backend plugin", extName)
 	}
 
+	view, err := extreg.ManifestOf(ext.Manifest)
+	if err != nil {
+		return "", err
+	}
 	args := []byte(argsJSON)
 	if argsJSON == "" {
 		args = []byte("{}")
 	}
-	args, err := extreg.ValidateToolArgs(ext.Manifest, tool, args)
+	args, err = extreg.ValidateToolArgs(view, tool, args)
 	if err != nil {
 		return "", err
 	}
@@ -103,7 +108,7 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		Name:         tool,
 		Args:         args,
 		Asset:        asset,
-		Timeout:      extreg.ToolTimeout(ext.Manifest, tool),
+		Timeout:      extreg.ToolTimeout(view, tool),
 	})
 	if err != nil {
 		return "", err
@@ -174,7 +179,11 @@ func (e *Extension) ValidateExtensionConfig(extName, assetType, configJSON strin
 	if ext == nil {
 		return nil, fmt.Errorf("extension %q not loaded", extName)
 	}
-	if ext.Manifest.AssetTypeDef(assetType) == nil {
+	view, err := extreg.ManifestOf(ext.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	if view.AssetType(assetType) == nil {
 		return nil, fmt.Errorf("asset type %q does not belong to extension %q", assetType, extName)
 	}
 	if ext.Plugin == nil {
@@ -236,21 +245,11 @@ func (e *Extension) installExtensionFromPath(sourcePath string) (*extension_svc.
 		return nil, err
 	}
 
-	ext := e.service.Manager().GetExtension(manifest.Name)
-	lm := manifest
-	if ext != nil {
-		lm = manifest.Localized(func(key string) string { return ext.Translate(e.lang.Lang(), key) })
+	tr := func(key string) string { return key }
+	if ext := e.service.Manager().GetExtension(manifest.Name); ext != nil {
+		tr = func(key string) string { return ext.Translate(e.lang.Lang(), key) }
 	}
-
-	return &extension_svc.ExtensionInfo{
-		Name:        lm.Name,
-		Version:     lm.Version,
-		Icon:        lm.Icon,
-		DisplayName: lm.I18n.DisplayName,
-		Description: lm.I18n.Description,
-		Enabled:     true,
-		Manifest:    lm,
-	}, nil
+	return extension_svc.NewExtensionInfo(manifest, tr, true)
 }
 
 // UninstallExtension removes an extension and optionally cleans up its data.
@@ -332,7 +331,8 @@ func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
 	}
 	info, err := e.service.GetDetail(name, e.lang.Lang())
 	if err != nil {
-		// GetDetail's only failure is "not installed".
+		// GetDetail fails when nothing of that name is installed, or its describe()
+		// answer is refused: either way there is no installed version to show.
 		return "", false
 	}
 	return info.Version, true
@@ -348,8 +348,9 @@ func InstalledExtensionManifest(e *Extension, name string) extmanifest.Manifest 
 	}
 	info, err := e.service.GetDetail(name, e.lang.Lang())
 	if err != nil {
-		// GetDetail's only failure is "not installed".
+		// GetDetail fails when nothing of that name is installed, or its describe()
+		// answer is refused: either way there is no installed contract to compare.
 		return extmanifest.Manifest{}
 	}
-	return info.Manifest.Manifest
+	return info.Manifest.Manifest.Manifest
 }

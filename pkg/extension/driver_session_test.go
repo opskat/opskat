@@ -55,8 +55,8 @@ func (d *extensionDriver) open(t *testing.T) dbdriver.Session {
 
 func TestExtensionDatabaseDriverSessions(t *testing.T) {
 	ext := extensiontest.LoadDBDriverFixture(t)
-	require.Len(t, ext.Manifest.DatabaseDrivers, 1)
-	desc := ext.Manifest.DatabaseDrivers[0]
+	require.Len(t, extensiontest.DatabaseDrivers(t, ext.Manifest), 1)
+	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 	require.Equal(t, dbdriver.DriverID(extensiontest.DBDriverFixtureDriver), desc.ID)
 	newDriver := func() *extensionDriver {
 		return &extensionDriver{
@@ -365,7 +365,7 @@ func ticketLogs(t *testing.T, logs *observer.ObservedLogs, secrets ...string) ma
 // a later call.
 func TestExtensionDriverKerberosTickets(t *testing.T) {
 	ext := extensiontest.LoadDBDriverFixture(t)
-	desc := ext.Manifest.DatabaseDrivers[0]
+	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 	require.True(t, desc.UsesField(dbdriver.FieldKerberos), "the fixture declares the Kerberos field group")
 	ctx := context.Background()
 	open := func(t *testing.T, server *extension.FixtureDBServer, krb *dbdriver.Kerberos) (dbdriver.Session, error) {

@@ -1,4 +1,4 @@
-package extension
+package extreg
 
 import (
 	"encoding/json"
@@ -38,8 +38,8 @@ func TestAuthGroupJSONListsTheFieldsItsBindingsUse(t *testing.T) {
 
 // fields is derived by the host; a guest cannot declare it in describe().
 func TestAuthDeclarationCannotCarryFields(t *testing.T) {
-	_, err := ParseDescriptor(describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},` +
-		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"u":{"type":"string"},"p":{"type":"string"}}},` +
+	_, err := ManifestOf(describedWith(t, `"assetTypes":[{"type":"x","i18n":{"name":"n"},`+
+		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"u":{"type":"string"},"p":{"type":"string"}}},`+
 		`"auth":{"groups":[{"bindings":[{"in":"basic","value":"{{u}}:{{p}}"}],"fields":["u"]}]}}],"policy":{"type":"x"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"fields"`)

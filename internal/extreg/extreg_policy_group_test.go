@@ -14,7 +14,7 @@ import (
 // 扩展权限组与策略面归属：一个策略面（policies.type）只属于一个扩展，一个权限组 ID
 // 也只属于一个扩展。后来者撞上任何一个都整体拒绝，而不是静默覆盖先来者。
 
-func otherManifest(t *testing.T, name, policyType, assetType, groupID string) *extension.Manifest {
+func otherManifest(t *testing.T, name, policyType, assetType, groupID string) *Manifest {
 	t.Cleanup(func() { detach(name) })
 	m := testManifest()
 	m.Name = name
@@ -71,7 +71,7 @@ func TestDescribeOnlyRefusesAPolicyTypeOwnedByAnotherExtension(t *testing.T) {
 	registerFake(t, &fakePlugin{})
 
 	other := otherManifest(t, "beta", "acme", "beta-store", "ext:acme:wide-open")
-	err := attachDescribeOnly(&extension.ManifestInfo{Name: "beta", Manifest: other})
+	err := attachDescribeOnly(&extension.ManifestInfo{Name: "beta", Manifest: runtimeManifest(other)})
 	require.Error(t, err)
 	assert.Nil(t, policy_group_entity.FindExtensionGroup("ext:acme:wide-open"))
 	assertAcmeGroupIntact(t)
@@ -96,7 +96,7 @@ func TestRegisterRefusesABuiltinPolicyType(t *testing.T) {
 		assert.Contains(t, err.Error(), "built-in")
 		assert.Nil(t, policy_group_entity.FindExtensionGroup("ext:"+builtin+":readonly"))
 
-		err = attachDescribeOnly(&extension.ManifestInfo{Name: "beta", Manifest: other})
+		err = attachDescribeOnly(&extension.ManifestInfo{Name: "beta", Manifest: runtimeManifest(other)})
 		require.Error(t, err, builtin)
 		assert.Contains(t, err.Error(), "built-in")
 	}

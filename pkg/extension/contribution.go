@@ -3,7 +3,6 @@ package extension
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -34,12 +33,12 @@ type ContributionPoint interface {
 
 // ExtensionView is the read-only view of one extension a contribution point
 // judges and attaches: its security contract and every contribution, as raw
-// describe() entries and merged onto the manifest.
+// describe() entries. The typed view of the contributions is the host's
+// (internal/extreg), decoded from these entries.
 type ExtensionView interface {
 	Name() string
-	// Manifest is manifest.json's security contract with describe()'s functional
-	// face merged onto it. A point's Check reads the contributions through
-	// Contribution, not the merged face.
+	// Manifest is manifest.json's security contract with describe()'s
+	// presentation and raw contributions merged onto it.
 	Manifest() *Manifest
 	// Keys is the contributes keys describe() answered, sorted.
 	Keys() []string
@@ -74,17 +73,10 @@ func (v *extensionView) Name() string        { return v.manifest.Name }
 func (v *extensionView) Manifest() *Manifest { return v.manifest }
 func (v *extensionView) Plugin() *Plugin     { return v.plugin }
 
-func (v *extensionView) Keys() []string {
-	keys := make([]string, 0, len(v.manifest.contributes))
-	for k := range v.manifest.contributes {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
+func (v *extensionView) Keys() []string { return v.manifest.ContributionKeys() }
 
 func (v *extensionView) Contribution(key string) json.RawMessage {
-	return v.manifest.contributes[key]
+	return v.manifest.Contribution(key)
 }
 
 func (v *extensionView) Translate(lang, key string) string {

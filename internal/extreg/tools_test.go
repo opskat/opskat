@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // ToolTimeout is the timeout every caller of a tool — AI exec, opsctl, the
@@ -14,7 +15,7 @@ import (
 // page-only tool declaring noTimeout, its declared timeout otherwise, the
 // runtime's default (0) when it declares nothing.
 func TestToolTimeout(t *testing.T) {
-	m := &extension.Manifest{Tools: []extension.ToolDef{
+	m := &Manifest{Manifest: &extension.Manifest{}, Tools: []extwire.Tool{
 		{Name: "stream", PageOnly: true, NoTimeout: true},
 		{Name: "spin_short", PolicyAction: "read", TimeoutMs: 300},
 		{Name: "echo", PolicyAction: "read"},

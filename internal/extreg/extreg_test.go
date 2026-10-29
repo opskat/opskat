@@ -26,6 +26,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // fakeConnTestRegistrar stands in for internal/app/extension's real
@@ -35,7 +36,7 @@ import (
 // extension's timeout tests) need — main.go, not this package, owns the merge.
 type fakeConnTestRegistrar struct{}
 
-func (fakeConnTestRegistrar) Build(_ string, _ *extension.Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc {
+func (fakeConnTestRegistrar) Build(_ string, _ *Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc {
 	return func(ctx context.Context, configJSON, _ string) error {
 		return plugin.TestConnection(ctx, assetType, &extension.AdHocAssetConfig{Config: json.RawMessage(configJSON)})
 	}
@@ -122,13 +123,15 @@ func (p *fakePlugin) CheckPolicy(_ context.Context, _ string, _ json.RawMessage)
 	return p.action, []string{p.resource}, p.policyErr
 }
 
-func testManifest() *extension.Manifest {
-	return &extension.Manifest{
-		Manifest: extmanifest.Manifest{Name: "acme", Version: "1.0.0"},
-		I18n:     extension.ManifestI18n{Description: "Acme object store"},
-		AssetTypes: []extension.AssetTypeDef{{
+func testManifest() *Manifest {
+	return &Manifest{
+		Manifest: &extension.Manifest{
+			Manifest: extmanifest.Manifest{Name: "acme", Version: "1.0.0"},
+			I18n:     extension.ManifestI18n{Description: "Acme object store"},
+		},
+		AssetTypes: []AssetTypeDef{{
 			Type: "acme-store",
-			I18n: extension.I18nName{Name: "Acme"},
+			I18n: extwire.I18nName{Name: "Acme"},
 			ConfigSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -138,9 +141,9 @@ func testManifest() *extension.Manifest {
 				"required": []any{"endpoint"},
 			},
 		}},
-		Tools: []extension.ToolDef{{
+		Tools: []extwire.Tool{{
 			Name: "list_objects",
-			I18n: extension.I18nDesc{Description: "List objects in a bucket"},
+			I18n: extwire.I18nDesc{Description: "List objects in a bucket"},
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -153,7 +156,7 @@ func testManifest() *extension.Manifest {
 			PolicyActions: []string{"object.list", "object.write", "object.delete"},
 		}, {
 			Name: "delete_bucket",
-			I18n: extension.I18nDesc{Description: "Delete a bucket"},
+			I18n: extwire.I18nDesc{Description: "Delete a bucket"},
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"bucket": map[string]any{"type": "string"}},
@@ -161,12 +164,12 @@ func testManifest() *extension.Manifest {
 			},
 			PolicyAction: "object.delete",
 		}},
-		Policies: extension.PoliciesDef{
+		Policies: PoliciesDef{
 			Type:    "acme",
 			Actions: []string{"object.list", "object.write", "object.delete"},
-			Groups: []extension.PolicyGroupDef{{
+			Groups: []extwire.PolicyGroup{{
 				ID:   "ext:acme:readonly",
-				I18n: extension.I18nNameDesc{Name: "read only", Description: "list and read"},
+				I18n: extwire.I18nNameDesc{Name: "read only", Description: "list and read"},
 				Policy: map[string]any{
 					"allow_list": []any{"object.list"},
 					"deny_list":  []any{"object.delete"},
@@ -177,7 +180,7 @@ func testManifest() *extension.Manifest {
 	}
 }
 
-func registerFake(t *testing.T, plugin pluginCaller) *extension.Manifest {
+func registerFake(t *testing.T, plugin pluginCaller) *Manifest {
 	t.Helper()
 	m := testManifest()
 	l := loaded{name: m.Name, manifest: m, plugin: plugin}
@@ -650,7 +653,7 @@ func TestExtensionGrantRequestRefusesCommandShapedPatterns(t *testing.T) {
 
 // --- connection fields ---------------------------------------------------------
 
-func registerWithConnection(t *testing.T, conn *extension.ConnectionDef) {
+func registerWithConnection(t *testing.T, conn *extwire.Connection) {
 	t.Helper()
 	m := testManifest()
 	m.AssetTypes[0].Connection = conn
@@ -664,7 +667,7 @@ func registerWithConnection(t *testing.T, conn *extension.ConnectionDef) {
 }
 
 func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {
-	registerWithConnection(t, &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true, TLS: true})
+	registerWithConnection(t, &extwire.Connection{SSHTunnel: true, ProxyChain: true, TLS: true})
 
 	prepared, err := assettype.PrepareCreate("acme-store", map[string]any{
 		"endpoint": "https://acme.test", "ssh_asset_id": float64(3), "tls": true, "tls_ca_pem": "CA-PEM",
@@ -681,7 +684,7 @@ func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {
 }
 
 func TestHelpListsTheConfigFieldsAnAssetAccepts(t *testing.T) {
-	registerWithConnection(t, &extension.ConnectionDef{SSHTunnel: true, TLS: true})
+	registerWithConnection(t, &extwire.Connection{SSHTunnel: true, TLS: true})
 
 	help, ok := permission.HelpFor("acme-store")
 	require.True(t, ok)

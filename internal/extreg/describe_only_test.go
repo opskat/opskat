@@ -18,7 +18,7 @@ import (
 func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
 	desc := driverDescriptor("describedb", "dsc")
 	m := driverOnlyManifest("describe-only-drivers", desc)
-	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)}))
 	t.Cleanup(func() { detach(m.Name) })
 
 	d, err := dbregistry.Lookup("describedb")
@@ -47,7 +47,7 @@ func TestRegisterDescribeOnly_DriverOnlyExtensionRegistersItsDrivers(t *testing.
 
 func TestRegisterDescribeOnly_DriverNameClashRegistersNothing(t *testing.T) {
 	m := driverOnlyManifest("describe-only-clash", driverDescriptor("describeclash"), driverDescriptor("mysql"))
-	err := attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m})
+	err := attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mysql")
 	_, lookupErr := dbregistry.Lookup("describeclash")

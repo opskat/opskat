@@ -10,15 +10,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // registerBulkExtension registers acme with one extra tool whose `body` parameter
 // is file-readable.
-func registerBulkExtension(t *testing.T) *extension.Manifest {
+func registerBulkExtension(t *testing.T) *Manifest {
 	t.Helper()
 	m := testManifest()
-	m.Tools = append(m.Tools, extension.ToolDef{
+	m.Tools = append(m.Tools, extwire.Tool{
 		Name: "bulk",
 		Parameters: map[string]any{
 			"type": "object",
@@ -29,7 +29,7 @@ func registerBulkExtension(t *testing.T) *extension.Manifest {
 		},
 		PolicyAction: "object.write",
 		Large:        []string{"body"},
-	}, extension.ToolDef{
+	}, extwire.Tool{
 		Name: "pair",
 		Parameters: map[string]any{
 			"type": "object",
@@ -57,7 +57,7 @@ func writeTemp(t *testing.T, content []byte) string {
 
 // argsOf parses the command the way the desktop does, so "equivalent to inline" is
 // judged on what the tool would receive.
-func argsOf(t *testing.T, m *extension.Manifest, command string) map[string]any {
+func argsOf(t *testing.T, m *Manifest, command string) map[string]any {
 	t.Helper()
 	_, raw, err := parseCommand(m, command)
 	require.NoError(t, err)

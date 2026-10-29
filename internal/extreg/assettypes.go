@@ -192,7 +192,7 @@ func checkAuthBinding(b extwire.AuthBinding, fields map[string]bool) error {
 	default:
 		return fmt.Errorf("in must be header, query or basic (got %q)", b.In)
 	}
-	refs, err := extension.AuthTemplateFields(b.Value)
+	refs, err := authTemplateFields(b.Value)
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,10 @@ func checkAuthBinding(b extwire.AuthBinding, fields map[string]bool) error {
 // 写入口，声明了测试连接处理器的类型登记测试连接。仅描述接入（opsctl 启动时，没有 WASM）
 // 只有 configSchema 的字段契约。
 func (p assetTypesPoint) Attach(v extension.ExtensionView) (func(), error) {
-	l := p.guest.loaded(v)
+	l, err := p.guest.loaded(v)
+	if err != nil {
+		return nil, err
+	}
 	var done undo
 	for _, at := range l.manifest.AssetTypes {
 		revoke, err := attachAssetType(l, at)
@@ -221,7 +224,7 @@ func (p assetTypesPoint) Attach(v extension.ExtensionView) (func(), error) {
 	return done.run, nil
 }
 
-func attachAssetType(l loaded, at extension.AssetTypeDef) (func(), error) {
+func attachAssetType(l loaded, at AssetTypeDef) (func(), error) {
 	// 测试连接要跑 WASM，只有加载扩展的进程（桌面端、激活扩展的 opsctl）接了 registrar；先查，免得登记到一半再回滚。
 	if l.plugin != nil && at.TestConnection && connTestRegistrar == nil {
 		return nil, fmt.Errorf("declares a test-connection handler but no registrar is wired")
@@ -275,7 +278,7 @@ func validateConfig(l loaded) asset_entity.ConfigValidator {
 
 // extensionTypeSpec 把 describe() 报上来的一个资产类型翻译成 assettype 的注册声明。
 // 完整接入与仅描述接入共用它，否则 configSchema → 资产类型的契约会有两份，其中一份迟早落后。
-func extensionTypeSpec(extName string, m *extension.Manifest, at extension.AssetTypeDef) assettype.ExtensionTypeSpec {
+func extensionTypeSpec(extName string, m *Manifest, at AssetTypeDef) assettype.ExtensionTypeSpec {
 	return assettype.ExtensionTypeSpec{
 		Type:                at.Type,
 		ExtensionName:       extName,
@@ -302,7 +305,7 @@ type AssetConnection struct {
 // 声明。config 是资产存着的配置（端点字段不是口令，不必解密）。连接路径只在流真要走它（去端点、
 // 经 assetRoute）时才由运行时调 connect 构建（Scope.Connect）：白名单请求照旧直连，路径建不起来
 // （CA 文件没了、代理链解析失败）也不影响它。
-func AssetScope(a extension.AssetRef, at *extension.AssetTypeDef, config json.RawMessage, connect func(context.Context) (AssetConnection, error), creds extension.CredentialValues) (*extension.Scope, error) {
+func AssetScope(a extension.AssetRef, at *AssetTypeDef, config json.RawMessage, connect func(context.Context) (AssetConnection, error), creds CredentialValues) (*extension.Scope, error) {
 	endpoints, err := assetEndpoints(at, config)
 	if err != nil {
 		return nil, fmt.Errorf("asset type %s: %w", at.Type, err)
@@ -330,7 +333,7 @@ func AssetScope(a extension.AssetRef, at *extension.AssetTypeDef, config json.Ra
 }
 
 // assetEndpoints 读出 config 里端点字段写的地址；字段缺失、不是字符串或写不出端口的不算端点。
-func assetEndpoints(at *extension.AssetTypeDef, config json.RawMessage) ([]extension.Endpoint, error) {
+func assetEndpoints(at *AssetTypeDef, config json.RawMessage) ([]extension.Endpoint, error) {
 	fields := extension.EndpointFieldsFromSchema(at.ConfigSchema)
 	if len(fields) == 0 || len(config) == 0 {
 		return nil, nil
@@ -354,7 +357,7 @@ func assetEndpoints(at *extension.AssetTypeDef, config json.RawMessage) ([]exten
 
 // connectionSpec 翻译该类型交给宿主接管的连接项。没声明 connection 的类型一项都没有，
 // 自动化写入面也就不接受任何宿主连接字段。
-func connectionSpec(at extension.AssetTypeDef) assettype.ExtensionConnectionSpec {
+func connectionSpec(at AssetTypeDef) assettype.ExtensionConnectionSpec {
 	if at.Connection == nil {
 		return assettype.ExtensionConnectionSpec{}
 	}

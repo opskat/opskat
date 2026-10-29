@@ -38,15 +38,15 @@ func driverDescriptor(id string, aliases ...string) dbdriver.Descriptor {
 
 // driverOnlyManifest is the merged manifest of an extension that provides drivers
 // and nothing else: no asset type, no policy type.
-func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *extension.Manifest {
-	m := &extension.Manifest{Manifest: extmanifest.Manifest{Name: name, Version: "1.0.0"}, DatabaseDrivers: drivers}
+func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *Manifest {
+	m := &Manifest{Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: name, Version: "1.0.0"}}, DatabaseDrivers: drivers}
 	for _, d := range drivers {
 		m.Contributes.DatabaseDrivers = append(m.Contributes.DatabaseDrivers, string(d.ID))
 	}
 	return m
 }
 
-func registerManifest(t *testing.T, m *extension.Manifest, plugin pluginCaller) error {
+func registerManifest(t *testing.T, m *Manifest, plugin pluginCaller) error {
 	t.Helper()
 	err := attachLoaded(loaded{name: m.Name, manifest: m, plugin: plugin, translate: (&extension.Extension{}).Translate}, "help", "desc")
 	if err == nil {
@@ -137,7 +137,7 @@ func TestExtensionDriverFieldsAreLocalizedThroughItsLocales(t *testing.T) {
 		Key: "sid", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection, Label: "field.sid", Description: "field.sid.help",
 	}}
 	m := driverOnlyManifest("acme-db", desc)
-	require.NoError(t, attachExtension(&extension.Extension{Name: m.Name, Manifest: m, Locales: map[string]map[string]string{
+	require.NoError(t, attachExtension(&extension.Extension{Name: m.Name, Manifest: runtimeManifest(m), Locales: map[string]map[string]string{
 		"zh-cn": {"field.sid": "实例 SID", "field.sid.help": "数据库实例标识"},
 		"en":    {"field.sid": "Instance SID"},
 	}}))
@@ -512,7 +512,7 @@ func TestRemovedExtensionDriverCannotClassify(t *testing.T) {
 // A driver only described in this process (its extension not loaded) cannot split.
 func TestDescribeOnlyDriverCannotClassify(t *testing.T) {
 	m := driverOnlyManifest("describe-only-split", splittingDescriptor("describesplit"))
-	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)}))
 	t.Cleanup(func() { detach(m.Name) })
 	d, err := dbregistry.Lookup("describesplit")
 	require.NoError(t, err)

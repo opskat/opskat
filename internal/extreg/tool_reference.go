@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // toolReference renders the tools the guest reported through describe() as the
@@ -23,8 +23,8 @@ import (
 // Call it on a Localized manifest so the i18n keys in tools[].i18n.description are
 // resolved; on a raw manifest the keys are printed as-is, which is still honest but
 // unhelpful.
-func toolReference(m *extension.Manifest) string {
-	tools := make([]extension.ToolDef, 0, len(m.Tools))
+func toolReference(m *Manifest) string {
+	tools := make([]extwire.Tool, 0, len(m.Tools))
 	for _, t := range m.Tools {
 		if !t.PageOnly {
 			tools = append(tools, t)
@@ -74,7 +74,7 @@ func toolReference(m *extension.Manifest) string {
 // matches an extension call by its policy (action, resource), never by command text,
 // so a request_permission pattern shaped like a command could never match — the host
 // refuses it. Without the declared actions there is nothing to write a pattern with.
-func grantReference(m *extension.Manifest) string {
+func grantReference(m *Manifest) string {
 	actions := m.Policies.Actions
 	if len(actions) == 0 {
 		return ""
@@ -99,7 +99,7 @@ func codeList(items []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-func renderToolParams(t extension.ToolDef) string {
+func renderToolParams(t extwire.Tool) string {
 	props, _ := t.Parameters["properties"].(map[string]any)
 	if len(props) == 0 {
 		return "Takes no parameters.\n"

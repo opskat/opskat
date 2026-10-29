@@ -117,9 +117,10 @@ func TestManager(t *testing.T) {
 			So(exts[0].Name, ShouldEqual, "test-ext")
 
 			Convey("and its functional face is merged in from describe()", func() {
-				So(exts[0].AssetTypes, ShouldHaveLength, 1)
-				So(exts[0].AssetTypes[0].Type, ShouldEqual, "stub")
-				So(exts[0].Policies.Type, ShouldEqual, "stub")
+				f := faceOf(t, exts[0])
+				So(f.AssetTypes, ShouldHaveLength, 1)
+				So(f.AssetTypes[0].Type, ShouldEqual, "stub")
+				So(f.Policy.Type, ShouldEqual, "stub")
 			})
 		})
 
