@@ -61,10 +61,14 @@ export const TableCreator = memo(function TableCreator({
     driversState.status === "ready" ? findDatabaseDriver(driversState.drivers, meta?.driver ?? "") : undefined;
   const canCreate = useCanCreateTable(descriptor, assetId);
   const schemasDeclared = driverHasCapability(descriptor, "schemas");
-  const structure = useMemo(() => createStructure(descriptor), [descriptor]);
+  // 驱动描述重新取过(扩展加载完、换语言)后是新对象:「读出的表」只随索引能不能改而变,声明没变时草稿不重来。
+  const indexesEditable = !!descriptor?.indexEditing;
+  const structure = useMemo(() => createStructure(indexesEditable), [indexesEditable]);
   const preset = useMemo(() => presetDraft(descriptor), [descriptor]);
   const qualify = useCallback((name: string) => qualifiedTableName(schema, name), [schema]);
   const [subTab, setSubTab] = useState<DesignerSubTab>("fields");
+  // 执行完到标签转过去(或确定留下)之间还在刷新树:这段时间同样算保存中,不能再建一次。
+  const [settling, setSettling] = useState(false);
 
   /**
    * 建出的表在刷新后的树上叫什么:选了 schema(或驱动没有 schema)时就是请求里的表名;用默认 schema 建的,
@@ -106,7 +110,10 @@ export const TableCreator = memo(function TableCreator({
   const flow = useSaveFlow<DesignerSavePlan>({
     assetId,
     database,
-    onExecuted: (plan, outcome) => void afterSave(plan, outcome),
+    onExecuted: (plan, outcome) => {
+      setSettling(true);
+      void afterSave(plan, outcome).finally(() => setSettling(false));
+    },
   });
   const startSave = (save: DesignerSave, close?: CloseAfterSave) =>
     flow.open({
@@ -196,13 +203,15 @@ export const TableCreator = memo(function TableCreator({
         onSubTabChange={setSubTab}
         onReload={() => undefined}
         rebaseFrom={null}
-        saving={flow.state.phase !== "idle"}
+        saving={settling || flow.state.phase !== "idle"}
         onSave={startSave}
         create={create}
       />
       <SaveDialog
         state={flow.state}
         transactional={!!descriptor?.transactionalDDL}
+        // 表建出来时结果视图随标签交给设计标签(由它重新读取);留在这里的是没建出来的,草稿没动。
+        partialNote={t("query.designer.create.partialKept")}
         onConfirm={() => void flow.confirm()}
         onClose={flow.close}
       />

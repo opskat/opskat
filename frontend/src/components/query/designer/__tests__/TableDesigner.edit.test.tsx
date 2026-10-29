@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useQueryStore } from "@/stores/queryStore";
+import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { query_svc } from "../../../../../wailsjs/go/models";
 import { GetAlterTableModel, GetAlterTableStatements, GetTableMetadata } from "../../../../../wailsjs/go/query/Query";
@@ -422,5 +423,24 @@ describe("设计表:SQL 预览", () => {
     const sqlTab = state.innerTabs.find((t) => t.type === "sql");
     expect(sqlTab).toMatchObject({ type: "sql", sql: "DROP note;", selectedDb: "appdb" });
     expect(state.activeInnerTabId).toBe(sqlTab!.id);
+  });
+
+  it("复制失败(剪贴板拒绝):给出错误提示,不报复制成功", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("clipboard denied")) },
+    });
+    const toastError = vi.spyOn(toast, "error");
+    await openMysql();
+    fireEvent.click(within(rowOf("note")).getByRole("button", { name: "query.designer.deleteColumn" }));
+    openSqlTab();
+    await screen.findByText("DROP note");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "action.copy" }));
+    });
+    expect(toastError).toHaveBeenCalledWith("Error: clipboard denied");
+    expect(notifyCopied).not.toHaveBeenCalled();
+    toastError.mockRestore();
   });
 });

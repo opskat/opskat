@@ -53,10 +53,10 @@ func TestAlterTableStatementsRunOnARealSQLiteDatabase(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
 			`ALTER TABLE "main"."users" RENAME TO "users_v2"`,
+			`ALTER TABLE "main"."users_v2" DROP COLUMN "gone"`,
+			`ALTER TABLE "main"."users_v2" RENAME COLUMN "name" TO "full_name"`,
 			`ALTER TABLE "main"."users_v2" ADD COLUMN "age" INTEGER DEFAULT 18`,
 			`ALTER TABLE "main"."users_v2" ADD COLUMN "tag" BLOB DEFAULT 'ab'`,
-			`ALTER TABLE "main"."users_v2" RENAME COLUMN "name" TO "full_name"`,
-			`ALTER TABLE "main"."users_v2" DROP COLUMN "gone"`,
 		},
 		Table: "users_v2",
 	}, result)

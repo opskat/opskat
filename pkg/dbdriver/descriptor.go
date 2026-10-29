@@ -452,11 +452,6 @@ const (
 	IndexTypeFullText IndexType = "fulltext"
 )
 
-// IndexTypes 是全部内置的索引类型；索引类型不止这些，扩展可以声明自己的 id。
-func IndexTypes() []IndexType {
-	return []IndexType{IndexTypePrimary, IndexTypeUnique, IndexTypeNormal, IndexTypeFullText}
-}
-
 // IndexNameScope 是索引名的唯一范围，由驱动声明；重名校验与读范围内其他表的索引名都按它。
 type IndexNameScope string
 

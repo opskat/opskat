@@ -19,6 +19,8 @@ interface SaveDialogProps {
   state: SaveFlowState<SavePlan>;
   /** 驱动声明了表结构语句可回滚:整批在一个事务里执行。 */
   transactional: boolean;
+  /** 停在中途的结果视图下方的说明:草稿之后怎样了(设计表重新读取了表结构,新建表的草稿留在原处)。 */
+  partialNote: string;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -27,7 +29,7 @@ interface SaveDialogProps {
  * 保存的确认与结果:确认时列出全部语句(删除列或索引时红色警告、确认按钮为危险样式),执行中不能操作;
  * 之后按结局显示整批回滚、逐条结果或没能执行的错误。
  */
-export function SaveDialog({ state, transactional, onConfirm, onClose }: SaveDialogProps) {
+export function SaveDialog({ state, transactional, partialNote, onConfirm, onClose }: SaveDialogProps) {
   const { t } = useTranslation();
   if (state.phase === "idle") return null;
   const { plan } = state;
@@ -98,7 +100,7 @@ export function SaveDialog({ state, transactional, onConfirm, onClose }: SaveDia
           <>
             {/* 有失败又没有回滚、批本身还报了错:回滚失败,表结构可能停在中途。 */}
             {state.result.error && <ErrorBox error={state.result.error} />}
-            <p className="text-xs text-muted-foreground">{t("query.designer.save.partialReloaded")}</p>
+            <p className="text-xs text-muted-foreground">{partialNote}</p>
           </>
         )}
         <AlertDialogFooter>

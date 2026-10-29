@@ -665,6 +665,7 @@ type AlterIndex struct {
 	// OriginalName 是这个索引在表里现在的名字；为空表示新增的索引。
 	OriginalName string `json:"originalName"`
 	// IndexDefinition 是改完之后的样子（新增的索引就是它的定义），字段平铺序列化（同 AlterColumn）。
+	// 列与 INCLUDE 列写改动之后的列名：改了名的列写新名字，原样交回的已有索引也是。
 	IndexDefinition
 }
 

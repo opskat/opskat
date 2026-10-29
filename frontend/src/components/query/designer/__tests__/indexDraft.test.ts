@@ -174,6 +174,11 @@ describe("索引草稿:初始与改动标记", () => {
       expression: true,
     });
   });
+
+  it("读出的索引引用了列表里没有的列(如隐藏列):显示读出时的列名", () => {
+    const draft = initDraft(structure([{ name: "ix_hidden", type: "normal", columns: [{ name: "SYS_NC00005$" }] }]));
+    expect(indexDefinition(draft, idx(draft, "ix_hidden")).columns.map((c) => c.name)).toEqual(["SYS_NC00005$"]);
+  });
 });
 
 describe("随列删除", () => {
@@ -535,6 +540,27 @@ describe("rebaseDraft 与索引", () => {
       name: "idx_status",
       type: "unique",
     });
+  });
+
+  it("删列已执行、随列删除的索引也没了:不会回来变成没有列的新索引", () => {
+    const base = structure();
+    let draft = initDraft(base);
+    // 一个没改、一个改过的索引都随 status 删除。
+    draft = updateIndex(draft, idx(draft, "idx_status").key, { type: "unique" });
+    draft = updateColumn(draft, colKey(draft, "note"), { deleted: true });
+    draft = updateColumn(draft, colKey(draft, "status"), { deleted: true });
+    draft = withNewIndex(draft, MYSQL, ["region"]).draft;
+    const after = reread(base, {
+      columns: base.columns.filter((c) => c.name !== "note" && c.name !== "status"),
+      indexes: base.indexes.filter((i) => i.name === "PRIMARY" || i.name === "idx_expr"),
+    });
+    const rebased = rebaseDraft(draft, after);
+    expect(rebased.indexes.map((i) => [i.original?.name ?? null, i.name, indexStatus(rebased, i)])).toEqual([
+      ["PRIMARY", "PRIMARY", "unchanged"],
+      ["idx_expr", "idx_expr", "unchanged"],
+      [null, "idx_orders_region", "new"],
+    ]);
+    expect(validateDraft(rebased, MYSQL)).toEqual([]);
   });
 
   it("列改名已执行:索引里对这一列的引用跟着换到新的列", () => {

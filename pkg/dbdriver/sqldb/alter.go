@@ -293,18 +293,23 @@ func planTableChange(tables Tables, dialect Dialect, attributes []dbdriver.Alter
 		present: make(map[string]bool, len(current.Columns)),
 		dropped: make(map[string]bool, len(req.Drops)),
 	}
-	for _, column := range change.Columns {
-		after.present[column.Column.Name] = true
-		if column.Current != nil && column.Column.Name != column.Current.Name {
-			after.renames[column.Current.Name] = column.Column.Name
-		}
-	}
+	// 先去掉删除与改名之前的名字、再加上改名之后与新增的名字：两列互换名字、或改成被删列的名字时，改动之后的
+	// 名字才不会被旧名字顶掉。
 	for i := range current.Columns {
 		after.present[current.Columns[i].Name] = true
 	}
 	for _, name := range change.Drops {
 		after.dropped[name] = true
 		delete(after.present, name)
+	}
+	for _, column := range change.Columns {
+		if column.Current != nil && column.Column.Name != column.Current.Name {
+			after.renames[column.Current.Name] = column.Column.Name
+			delete(after.present, column.Current.Name)
+		}
+	}
+	for _, column := range change.Columns {
+		after.present[column.Column.Name] = true
 	}
 	if err := planIndexes(IndexEditing(dialect), current, change, req, after); err != nil {
 		return nil, err

@@ -81,9 +81,9 @@ func TestAlterTableStatementsForPostgreSQL(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
 			`ALTER TABLE "users" RENAME TO "users_v2"`,
+			`ALTER TABLE "users_v2" RENAME COLUMN "name" TO "full_name"`,
 			`ALTER TABLE "users_v2" ADD COLUMN "age" integer`,
 			`ALTER TABLE "users_v2" ADD COLUMN "tag" bytea DEFAULT '\x41'`,
-			`ALTER TABLE "users_v2" RENAME COLUMN "name" TO "full_name"`,
 			`ALTER TABLE "users_v2" ALTER COLUMN "full_name" TYPE varchar(120)`,
 			`ALTER TABLE "users_v2" ALTER COLUMN "full_name" SET NOT NULL`,
 			`ALTER TABLE "users_v2" ALTER COLUMN "full_name" SET DEFAULT 'anonymous'`,

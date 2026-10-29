@@ -111,10 +111,12 @@ export function updateColumn(draft: TableDraft, key: string, patch: DraftColumnP
   return syncAutoNames({ ...draft, columns: draft.columns.map((c) => (c.key === key ? { ...c, ...patch } : c)) });
 }
 
-/** 把一列的某个属性还原成读出时的值(只对已有列有意义)。 */
-export function revertField(column: DraftColumn, field: ColumnField): DraftColumn {
-  if (!column.original) return column;
-  return { ...column, [field]: column.original[field] };
+/** 把一列的某个属性还原成读出时的值(只对已有列有意义);还原列名时新索引的自动名字跟着回去。 */
+export function revertField(draft: TableDraft, key: string, field: ColumnField): TableDraft {
+  return syncAutoNames({
+    ...draft,
+    columns: draft.columns.map((c) => (c.key === key && c.original ? { ...c, [field]: c.original[field] } : c)),
+  });
 }
 
 export function defaultText(value: DesignerDefault): string {
@@ -266,15 +268,40 @@ function existingColumn(column: DesignerColumn): DraftColumn {
   return { key: existingColumnKey(column.name), original: column, deleted: false, ...column };
 }
 
+/** 读出的两列是不是一样(名字之外的各项)。 */
+function sameColumn(a: DesignerColumn, b: DesignerColumn): boolean {
+  return (
+    a.type === b.type &&
+    a.nullable === b.nullable &&
+    sameDefault(a.default, b.default) &&
+    a.comment === b.comment &&
+    a.autoIncrement === b.autoIncrement
+  );
+}
+
 /**
  * 把草稿的目标状态搬到重新读出的表上(逐条执行停在中途后用):已生效的改动不再标记,没执行的留在草稿里。
  * 已有列按原名找,原名不在了再按目标名找(改名已执行);找不到的列(删除已执行)从草稿里去掉。新增的列
  * 在读出的表里有同名列时说明加列已执行,按读出的样子成为已有列。读出的表里草稿没有的列按读出的样子列入。
  * 次序同 initDraft:读出的列在前,还没加上的新列在后。索引同样搬过去(见 rebaseIndexes),对列的引用换成
  * 搬过之后的列。
+ * 已有列删除或改名后新列用了它的原名时,读出的同名列可能是两者之一:它与读出时不同、却是新列的样子(类型
+ * 不分大小写、可空),就是让名与加列都已执行,归新列;否则归原来的列。两者一模一样时分不出,按没执行算。
  */
 export function rebaseDraft(draft: TableDraft, structure: TableStructure): TableDraft {
   const byName = new Map(structure.columns.map((c) => [c.name, c]));
+  const newByName = new Map(draft.columns.filter((c) => !c.original).map((c) => [c.name.trim(), c]));
+  const takenByNew = (original: DesignerColumn): boolean => {
+    const current = byName.get(original.name);
+    const added = newByName.get(original.name);
+    return (
+      !!current &&
+      !!added &&
+      !sameColumn(current, original) &&
+      current.type.trim().toLowerCase() === added.type.trim().toLowerCase() &&
+      current.nullable === added.nullable
+    );
+  };
   const claimed = new Map<string, DraftColumn>();
   const pending: DraftColumn[] = [];
   // 草稿列的 key 到搬过之后的 key;删除已执行的列不在其中。
@@ -292,7 +319,11 @@ export function rebaseDraft(draft: TableDraft, structure: TableStructure): Table
       }
       continue;
     }
-    const current = byName.get(column.original.name) ?? byName.get(target);
+    const current = takenByNew(column.original)
+      ? target !== column.original.name
+        ? byName.get(target)
+        : undefined
+      : (byName.get(column.original.name) ?? byName.get(target));
     if (!current || claimed.has(current.name)) continue;
     claimed.set(current.name, {
       ...column,
@@ -309,7 +340,8 @@ export function rebaseDraft(draft: TableDraft, structure: TableStructure): Table
     columns: [...structure.columns.map((c) => claimed.get(c.name) ?? existingColumn(c)), ...pending],
     takenIndexNames: structure.takenIndexNames,
   };
-  return { ...rebased, ...rebaseIndexes(rebased, structure.indexes, columnKeys) };
+  // 随列删除按搬之前的草稿判断:删除已执行的列在搬过之后的草稿里已经没有了。
+  return { ...rebased, ...rebaseIndexes(draft, structure.indexes, columnKeys) };
 }
 
 /** 草稿里标记删除的已有列(原名)。 */

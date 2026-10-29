@@ -426,24 +426,32 @@ func TestAlterTableDropsIndexesOfADroppedColumnFirst(t *testing.T) {
 	assert.Contains(t, result.Statements, "DROP INDEX <pk_t> ON <db>.<t>")
 }
 
-// 索引的列按改动之后的表解析：改名的列按新名字写，交回的是现在的名字也不算改动；不在表里的列报错。
+// 索引的列是改动之后的列名：改名的列写新名字，索引跟着列不算改动；仍写旧名字、或不在表里的列报错。
 func TestAlterTableResolvesIndexColumns(t *testing.T) {
 	ctx := context.Background()
 	session := newIndexSession(t, &indexerDialect{})
 	model, err := session.AlterTableModel(ctx, "db", "t")
 	require.NoError(t, err)
 
-	// at 改名为 created_at，请求里的索引仍写现在的名字：索引不必重建（列改了名，索引跟着列）。
+	// at 改名为 created_at，请求里的索引写新名字：索引不必重建（列改了名，索引跟着列）。
 	req := indexModelRequest(model)
 	req.Columns[2].Name = "created_at"
+	req.Indexes[2].Columns = []dbdriver.IndexColumn{{Name: "created_at", Descending: true}}
 	result, err := session.AlterTableStatements(ctx, "db", "t", req)
 	require.NoError(t, err)
 	assert.Empty(t, result.Statements, "列改名后索引跟着列，不必重建")
 
+	// 改了名的列仍写旧名字：改动之后的表里没有它。
+	req = indexModelRequest(model)
+	req.Columns[2].Name = "created_at"
+	_, err = session.AlterTableStatements(ctx, "db", "t", req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"at"`)
+
 	// 同时给它加一列：重建的语句写新名字。
 	req = indexModelRequest(model)
 	req.Columns[2].Name = "created_at"
-	req.Indexes[2].Columns = append(req.Indexes[2].Columns, dbdriver.IndexColumn{Name: "id"})
+	req.Indexes[2].Columns = []dbdriver.IndexColumn{{Name: "created_at", Descending: true}, {Name: "id"}}
 	result, err = session.AlterTableStatements(ctx, "db", "t", req)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
@@ -723,8 +731,49 @@ func TestAlterTableRenamesIncludedColumnsWithoutRebuilding(t *testing.T) {
 	require.NoError(t, err)
 
 	req := indexModelRequest(model)
-	req.Columns[3].Name = "remark" // note → remark
+	req.Columns[3].Name = "remark" // note → remark，索引里写改名之后的名字
+	req.Indexes[3].Columns = []dbdriver.IndexColumn{{Name: "remark"}}
+	req.Indexes[5].Include = []string{"remark"}
 	result, err := session.AlterTableStatements(ctx, "db", "t", req)
 	require.NoError(t, err)
-	assert.NotContains(t, strings.Join(result.Statements, "\n"), "ix_t_name_cover", "INCLUDE 列改名不重建索引")
+	assert.Empty(t, result.Statements, "INCLUDE 列改名不重建索引")
+}
+
+// 请求里索引的列写改动之后的名字（设计器就这样交）：两列互换名字时，索引仍跟着原来的那一列，不重建也不错指到
+// 另一列。
+func TestAlterTableIndexesFollowSwappedColumnNames(t *testing.T) {
+	ctx := context.Background()
+	session := newIndexSession(t, &indexerDialect{})
+	model, err := session.AlterTableModel(ctx, "db", "t")
+	require.NoError(t, err)
+
+	req := indexModelRequest(model)
+	req.Columns[1].Name = "at"                                                        // name → at
+	req.Columns[2].Name = "name"                                                      // at → name
+	req.Indexes[1].Columns = []dbdriver.IndexColumn{{Name: "at"}}                     // ux_t_name 在原来的 name 上
+	req.Indexes[2].Columns = []dbdriver.IndexColumn{{Name: "name", Descending: true}} // ix_t_at 在原来的 at 上
+	result, err := session.AlterTableStatements(ctx, "db", "t", req)
+	require.NoError(t, err)
+	assert.Empty(t, result.Statements, "索引跟着列改名，不必重建")
+}
+
+// 删掉一列、把另一列改成它的名字：留下的索引按改动之后的名字指向改名的那一列，不是被删的列。
+func TestAlterTableIndexOnAColumnRenamedToADroppedName(t *testing.T) {
+	ctx := context.Background()
+	session := newIndexSession(t, &indexerDialect{})
+	model, err := session.AlterTableModel(ctx, "db", "t")
+	require.NoError(t, err)
+
+	req := indexModelRequest(model)
+	req.Columns = req.Columns[:3]
+	req.Columns[2].Name = "note" // at → note
+	req.Drops = []string{"note"}
+	req.Indexes = req.Indexes[:3]
+	req.Indexes[2].Columns = []dbdriver.IndexColumn{{Name: "note", Descending: true}} // ix_t_at 在原来的 at 上
+	result, err := session.AlterTableStatements(ctx, "db", "t", req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"DROP INDEX <ix_t_note> ON <db>.<t>",
+		"DROP COLUMN note",
+	}, result.Statements)
 }

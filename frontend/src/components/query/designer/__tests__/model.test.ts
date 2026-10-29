@@ -105,6 +105,31 @@ describe("structureFromMetadata", () => {
       { name: "fk_b", columns: ["b"], referencedTable: "u", referencedColumns: ["id"], onUpdate: "", onDelete: "" },
     ]);
   });
+
+  it("读不出名字的外键(SQLite):同一引用表的两条单列外键分开,真正的复合外键仍合成一条", () => {
+    const fk = (column: string, referencedTable: string, referencedColumn: string) => ({
+      name: "",
+      column,
+      referencedTable,
+      referencedColumn,
+    });
+    const s = structureFromMetadata(
+      "orders",
+      metadata({
+        foreignKeys: [
+          fk("created_by", "users", "id"),
+          fk("updated_by", "users", "id"),
+          fk("a", "t", "x"),
+          fk("b", "t", "y"),
+        ],
+      })
+    );
+    expect(s.foreignKeys.map((f) => [f.columns, f.referencedTable, f.referencedColumns])).toEqual([
+      [["created_by"], "users", ["id"]],
+      [["updated_by"], "users", ["id"]],
+      [["a", "b"], "t", ["x", "y"]],
+    ]);
+  });
 });
 
 describe("structureFromAlterModel", () => {

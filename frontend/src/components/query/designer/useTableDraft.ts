@@ -61,8 +61,7 @@ export function useTableDraft(
   const deleteColumn = useCallback((key: string) => updateColumn(key, { deleted: true }), [updateColumn]);
   const restoreColumn = useCallback((key: string) => updateColumn(key, { deleted: false }), [updateColumn]);
   const revertField = useCallback(
-    (key: string, field: ColumnField) =>
-      edit((d) => ({ ...d, columns: d.columns.map((c) => (c.key === key ? revertDraftField(c, field) : c)) })),
+    (key: string, field: ColumnField) => edit((d) => revertDraftField(d, key, field)),
     [edit]
   );
   const revertAll = useCallback(() => setState((s) => ({ ...s, draft: start(s.structure) })), [start]);

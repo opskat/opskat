@@ -341,6 +341,13 @@ test("create a table with an index, then truncate and drop it, in a SQLite datab
     "made",
     { timeout: 30_000 },
   );
+  // 只有设计标签才有外键子页、才显示改动计数(新建表显示的是字段与索引的概要)。
+  await expect(
+    page.getByRole("tab", { name: /^(Foreign keys|外键)/ }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("designer-changes")).toHaveText(
+    text("No changes", "无改动"),
+  );
   await page.getByRole("tab", { name: /^(Indexes|索引)/ }).click();
   await expect(page.getByTestId("designer-index-list")).toContainText(
     "idx_made_code",

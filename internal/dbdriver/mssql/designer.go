@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -556,16 +557,26 @@ func alterIndexes(ctx context.Context, conn *sql.Conn, change sqldb.TableChange)
 	}
 	var clusteredBuilds, builds []string
 	for _, changed := range change.Indexes {
+		index := changed.Index
 		uniqueConstraint := false
 		if !changed.IsNew() {
 			drops = append(drops, dropIndexSQL(target, changed.Current.Name, constraints[changed.Current.Name] != ""))
-			uniqueConstraint = constraints[changed.Current.Name] == constraintUnique && changed.Index.Type == dbdriver.IndexTypeUnique
+			uniqueConstraint = constraints[changed.Current.Name] == constraintUnique && index.Type == dbdriver.IndexTypeUnique
+			// 读出的索引都带聚集选项，重建时没带表示关掉了（设计器不发送关掉的开关）：主键要写明 NONCLUSTERED，
+			// 否则 SQL Server 在堆表上把它建成聚集。
+			if _, given := index.Options[clusteredOption]; !given && index.Type == dbdriver.IndexTypePrimary {
+				index.Options = maps.Clone(index.Options)
+				if index.Options == nil {
+					index.Options = map[string]any{}
+				}
+				index.Options[clusteredOption] = false
+			}
 		}
-		statement, err := createIndexSQL(target, changed.Index, uniqueConstraint)
+		statement, err := createIndexSQL(target, index, uniqueConstraint)
 		if err != nil {
 			return nil, nil, err
 		}
-		if clusteredOn(changed.Index) {
+		if clusteredOn(index) {
 			clusteredBuilds = append(clusteredBuilds, statement)
 		} else {
 			builds = append(builds, statement)

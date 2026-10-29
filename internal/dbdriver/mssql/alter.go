@@ -86,7 +86,7 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 	name := func(text string) (string, error) { return sqldb.DefinitionLiterals.Literal(text, "") }
 	target := change.TargetRef
 
-	var statements, renames, modifications []string
+	var statements, additions, renames, modifications []string
 	if change.Rename != "" {
 		from, err := name(change.Table)
 		if err != nil {
@@ -111,7 +111,7 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 			if err != nil {
 				return nil, err
 			}
-			statements = append(statements, "ALTER TABLE "+target+" ADD "+definition)
+			additions = append(additions, "ALTER TABLE "+target+" ADD "+definition)
 			continue
 		}
 		if column.Renamed {
@@ -134,10 +134,12 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 			modifications = append(modifications, "ALTER TABLE "+target+" ALTER COLUMN "+quoteIdent(c.Name)+" "+strings.TrimSpace(c.Type)+nullable)
 		}
 	}
-	statements = append(statements, renames...)
-	statements = append(statements, modifications...)
+	// 先删列、再改名、然后加列：被删列的名字可以给改名的列或新列用，改名让出的旧名字可以给新列用。
 	for _, drop := range change.Drops {
 		statements = append(statements, "ALTER TABLE "+target+" DROP COLUMN "+quoteIdent(drop))
 	}
+	statements = append(statements, renames...)
+	statements = append(statements, additions...)
+	statements = append(statements, modifications...)
 	return append(statements, indexCreates...), nil
 }

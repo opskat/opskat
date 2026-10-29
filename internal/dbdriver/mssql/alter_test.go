@@ -83,9 +83,9 @@ func TestAlterTableStatementsForSQLServer(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
 			"EXEC sp_rename 'users', 'users_v2'",
+			"ALTER TABLE [users_v2] DROP COLUMN [name]",
 			"ALTER TABLE [users_v2] ADD [email] VARCHAR(255) NOT NULL",
 			"ALTER TABLE [users_v2] ALTER COLUMN [id] BIGINT NOT NULL",
-			"ALTER TABLE [users_v2] DROP COLUMN [name]",
 		},
 		Table: "users_v2",
 	}, result)
@@ -147,9 +147,9 @@ func TestAlterTableRenamesSQLServerColumnsThenAltersThemByTheNewName(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
+			"EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN'",
 			"ALTER TABLE [users] ADD [nick] NVARCHAR(20) DEFAULT '匿名'",
 			"ALTER TABLE [users] ADD [tag] VARBINARY(4) DEFAULT 'ab'",
-			"EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN'",
 			"ALTER TABLE [users] ALTER COLUMN [display_name] NVARCHAR(200) NOT NULL",
 		},
 		Table: "users",

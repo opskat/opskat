@@ -84,7 +84,7 @@ interface TableDesignerEditorProps {
   onReload: () => void;
   /** 保存停在中途后重新读取时的草稿:搬到读出的表上作为起点。 */
   rebaseFrom: TableDraft | null;
-  /** 保存的确认或结果正在显示:快捷键与关闭拦截让路。 */
+  /** 保存的确认或结果正在显示,或执行完的收尾还没结束:不能再保存,快捷键与关闭拦截让路。 */
   saving: boolean;
   /** 保存:打开确认。close 是关闭拦截里点「保存…」时挂着的关闭,保存全部成功后照此关闭。 */
   onSave: (save: DesignerSave, close?: CloseAfterSave) => void;
@@ -224,7 +224,7 @@ export function TableDesignerEditor({
   const indexDefinitions = useMemo(() => draft.indexes.map((i) => indexDefinition(draft, i)), [draft]);
 
   const statements = preview.status === "ready" ? preview.statements : [];
-  const canSave = errors.length === 0 && preview.status === "ready" && statements.length > 0;
+  const canSave = !saving && errors.length === 0 && preview.status === "ready" && statements.length > 0;
   const save = (close?: CloseAfterSave) => {
     if (!canSave || preview.status !== "ready") return;
     onSave(
@@ -267,7 +267,7 @@ export function TableDesignerEditor({
   // 保存快捷键(快捷键设置里可改):只在本标签在前台、能保存、没有对话框时响应,其余时候不拦下按键。
   const saveBinding = useShortcutStore((s) => s.shortcuts["designer.save"]);
   const onShortcut = useEffectEvent((e: KeyboardEvent) => {
-    if (!active || !canSave || saving || guarding || confirm !== null) return;
+    if (!active || !canSave || guarding || confirm !== null) return;
     const { shortcuts, isRecording } = useShortcutStore.getState();
     if (isRecording || !eventMatchesBinding(e, shortcuts["designer.save"])) return;
     e.preventDefault();
@@ -337,7 +337,6 @@ export function TableDesignerEditor({
           }
           isDirty={isDirty}
           errorCount={errors.length}
-          loading={false}
           onRevertAll={creating ? undefined : () => confirmOrRun("revertAll")}
           onReload={creating ? undefined : () => confirmOrRun("reload")}
           canSave={canSave}

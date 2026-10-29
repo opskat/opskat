@@ -223,6 +223,8 @@ func TestAlterTableIndexesOnARealSQLiteDatabase(t *testing.T) {
 		case "idx_users_email":
 			index.Type = dbdriver.IndexTypeNormal
 			index.Columns = []dbdriver.IndexColumn{{Name: "email", Descending: true}}
+		case "idx_users_name":
+			index.Columns = []dbdriver.IndexColumn{column("full_name")} // 写改名之后的列名（设计器就这样交）
 		}
 		indexes = append(indexes, index)
 	}
@@ -237,9 +239,9 @@ func TestAlterTableIndexesOnARealSQLiteDatabase(t *testing.T) {
 		`DROP INDEX "main"."idx_users_score"`,
 		`DROP INDEX "main"."idx_users_created"`,
 		`DROP INDEX "main"."idx_users_email"`,
-		`ALTER TABLE "main"."users" ADD COLUMN "status" TEXT DEFAULT 'new'`,
-		`ALTER TABLE "main"."users" RENAME COLUMN "name" TO "full_name"`,
 		`ALTER TABLE "main"."users" DROP COLUMN "created_at"`,
+		`ALTER TABLE "main"."users" RENAME COLUMN "name" TO "full_name"`,
+		`ALTER TABLE "main"."users" ADD COLUMN "status" TEXT DEFAULT 'new'`,
 		`CREATE INDEX "main"."idx_users_email" ON "users" ("email" DESC)`,
 		`CREATE INDEX "main"."idx_users_status" ON "users" ("status")`,
 	}, result.Statements)
@@ -448,4 +450,44 @@ func TestAnIndexWhoseStatementCannotBeReadIsReadOnly(t *testing.T) {
 	require.Len(t, m.Indexes, 1)
 	assert.Equal(t, []dbdriver.IndexColumn{{Name: "a"}, {Name: "c"}}, m.Indexes[0].Columns)
 	assert.Equal(t, readOnlyUnreadable, m.Indexes[0].ReadOnlyReason)
+}
+
+// 删掉一列再加回同名的新列、把另一列改成被删列的名字、改名之后加回旧名字的新列：都在真实的库上执行成功，
+// 读回的列就是请求改完的样子。
+func TestAlterTableReusesTheNamesOfDroppedAndRenamedColumns(t *testing.T) {
+	for name, edit := range map[string]func(req *dbdriver.AlterTableRequest) []string{
+		"drop and add back": func(req *dbdriver.AlterTableRequest) []string {
+			req.Columns = append(req.Columns[:1], req.Columns[2:]...)
+			req.Drops = []string{"name"}
+			req.Columns = append(req.Columns, dbdriver.AlterColumn{Name: "name", Type: "INTEGER", Nullable: true})
+			return []string{"id", "email", "note", "name"}
+		},
+		"rename into a dropped name": func(req *dbdriver.AlterTableRequest) []string {
+			req.Columns = append(req.Columns[:1], req.Columns[2:]...)
+			req.Drops = []string{"name"}
+			req.Columns[1].Name = "name" // email → name
+			return []string{"id", "name", "note"}
+		},
+		"rename then add the old name": func(req *dbdriver.AlterTableRequest) []string {
+			req.Columns[1].Name = "full_name" // name → full_name
+			req.Columns = append(req.Columns, dbdriver.AlterColumn{Name: "name", Type: "TEXT", Nullable: true})
+			return []string{"id", "full_name", "email", "note", "name"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := newDatabase(t, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, note TEXT)`)
+			req := keepAll(model(t, session, "users"))
+			want := edit(&req)
+			result, err := session.AlterTableStatements(context.Background(), "main", "users", req)
+			require.NoError(t, err)
+			runAtomic(t, session, "users", result.Statements)
+
+			after := model(t, session, "users")
+			names := make([]string, len(after.Columns))
+			for i, c := range after.Columns {
+				names[i] = c.Name
+			}
+			assert.Equal(t, want, names)
+		})
+	}
 }

@@ -286,6 +286,20 @@ func TestAlterTableChangesThePrimaryKey(t *testing.T) {
 	}, statements)
 }
 
+// 重建的主键没带聚集选项（设计器把关掉的开关当作「默认」不发送）：写明 NONCLUSTERED，而不是让 SQL Server 在
+// 堆表上把它建成聚集、整表重写。
+func TestAlterTableRebuildsAPrimaryKeyWithoutTheClusteredOptionAsNonclustered(t *testing.T) {
+	req := usersRequest(t)
+	req.Indexes[0].Columns = []dbdriver.IndexColumn{{Name: "tenant_id"}, {Name: "id"}}
+	req.Indexes[0].Options = nil
+	statements, err := alterUsers(t, req, usersConstraints)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"ALTER TABLE [dbo].[users] DROP CONSTRAINT [PK_users]",
+		"ALTER TABLE [dbo].[users] ADD CONSTRAINT [PK_users] PRIMARY KEY NONCLUSTERED ([tenant_id], [id])",
+	}, statements)
+}
+
 // 支撑 UNIQUE 约束的索引随约束删；重建时仍写成唯一约束，不悄悄变成唯一索引。
 func TestAlterTableDropsAndRebuildsAUniqueConstraint(t *testing.T) {
 	req := usersRequest(t)
@@ -332,17 +346,25 @@ func TestAlterTableCreatesIndexesAfterTheColumnChanges(t *testing.T) {
 	req := usersRequest(t)
 	req.Name = "members"
 	req.Columns[1].Name = "org_id"
+	// 索引里写改名之后的列名（设计器就这样交）。
+	for _, index := range req.Indexes {
+		for j := range index.Columns {
+			if index.Columns[j].Name == "tenant_id" {
+				index.Columns[j].Name = "org_id"
+			}
+		}
+	}
 	req.Columns = append(req.Columns, dbdriver.AlterColumn{Name: "code", Type: "nvarchar(20)", Nullable: true,
 		DefaultKind: dbdriver.DefaultKindValue, DefaultValue: "无"})
 	req.Indexes = append(req.Indexes, dbdriver.AlterIndex{IndexDefinition: dbdriver.IndexDefinition{
-		Name: "IX_code", Type: dbdriver.IndexTypeUnique, Columns: []dbdriver.IndexColumn{{Name: "code"}, {Name: "tenant_id"}},
+		Name: "IX_code", Type: dbdriver.IndexTypeUnique, Columns: []dbdriver.IndexColumn{{Name: "code"}, {Name: "org_id"}},
 	}})
 	statements, err := alterUsers(t, req, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"EXEC sp_rename 'dbo.users', 'members'",
-		"ALTER TABLE [dbo].[members] ADD [code] nvarchar(20) DEFAULT N'无'",
 		"EXEC sp_rename 'dbo.members.tenant_id', 'org_id', 'COLUMN'",
+		"ALTER TABLE [dbo].[members] ADD [code] nvarchar(20) DEFAULT N'无'",
 		"CREATE UNIQUE INDEX [IX_code] ON [dbo].[members] ([code], [org_id])",
 	}, statements)
 }

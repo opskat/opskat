@@ -2578,6 +2578,7 @@
         "label": "New table · {{name}}",
         "confirmTitle": "Create {{name}}",
         "done": "Created table {{name}}",
+        "partialKept": "The table wasn't created. Your design is still here as you left it.",
         "unavailable": "New tables can't be created here: the driver doesn't support it, or the connection is read-only."
       }
     },

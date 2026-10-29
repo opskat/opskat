@@ -20,6 +20,7 @@ import {
   validateDraft,
   type TableDraft,
 } from "../draft";
+import { addIndex, updateIndex } from "../indexDraft";
 
 const MYSQL = BUILTIN_DRIVERS.find((d) => d.id === "mysql")!;
 /** 没声明任何列细项的驱动(旧扩展的样子):只能改表名、列名、增删列。 */
@@ -195,14 +196,25 @@ describe("改动标记与计数", () => {
     expect(isDraftDirty({ ...initDraft(structure), comment: "x" })).toBe(true);
   });
 
+  it("还原列名:跟随它的新索引的自动名字一起回去", () => {
+    let draft = initDraft(mysqlStructure());
+    const added = addIndex(draft, MYSQL);
+    const key = keyOf(added.draft, "note");
+    draft = updateIndex(added.draft, added.key, {
+      columns: [{ ref: key, expression: false, descending: false, prefixLength: 0 }],
+    });
+    draft = updateColumn(draft, key, { name: "remark" });
+    expect(draft.indexes.find((i) => i.key === added.key)!.name).toBe("idx_orders_remark");
+    draft = revertField(draft, key, "name");
+    expect(draft.columns.find((c) => c.key === key)!.name).toBe("note");
+    expect(draft.indexes.find((i) => i.key === added.key)!.name).toBe("idx_orders_note");
+  });
+
   it("逐项还原回原值", () => {
     let draft = initDraft(mysqlStructure());
     const key = keyOf(draft, "status");
     draft = updateColumn(draft, key, { type: "text", default: { kind: "expression", text: "uuid()" } });
-    const reverted = revertField(
-      draft.columns.find((c) => c.key === key)!,
-      "default"
-    );
+    const reverted = revertField(draft, key, "default").columns.find((c) => c.key === key)!;
     expect(changedFields(reverted)).toEqual(["type"]);
     expect(reverted.default).toEqual({ kind: "value", text: "pending" });
   });
@@ -439,6 +451,58 @@ describe("rebaseDraft", () => {
     const rebased = rebaseDraft(draft, after);
     expect(isDraftDirty(rebased)).toBe(false);
     expect(rebased.columns.map((c) => c.key)).toEqual(initDraft(after).columns.map((c) => c.key));
+  });
+
+  it("删掉一列又加同名新列,两条都执行了:读出的同名列是新列,不再标删除也不再待加", () => {
+    const structure = mysqlStructure();
+    let draft = initDraft(structure);
+    draft = updateColumn(draft, keyOf(draft, "note"), { deleted: true });
+    const added = addColumn(draft, MYSQL);
+    draft = updateColumn(added.draft, added.key, { name: "note", type: "text" });
+    const after = reread(structure, (columns) => [
+      ...columns.filter((c) => c.name !== "note"),
+      { ...columns[3], type: "text", default: { kind: "none" }, comment: "" },
+    ]);
+    const rebased = rebaseDraft(draft, after);
+    expect(rebased.columns.map((c) => [c.original?.name ?? null, c.name, columnStatus(c)])).toEqual([
+      ["id", "id", "unchanged"],
+      ["status", "status", "unchanged"],
+      ["created_at", "created_at", "unchanged"],
+      ["note", "note", "unchanged"],
+    ]);
+    expect(buildAlterRequest(rebased, MYSQL).drops).toEqual([]);
+  });
+
+  it("删掉一列又加同名新列,都没执行:删除与新列照旧留在草稿里", () => {
+    const structure = mysqlStructure();
+    let draft = initDraft(structure);
+    draft = updateColumn(draft, keyOf(draft, "note"), { deleted: true });
+    const added = addColumn(draft, MYSQL);
+    draft = updateColumn(added.draft, added.key, { name: "note", type: "text" });
+    const rebased = rebaseDraft(draft, structure);
+    expect(draftCounts(rebased)).toEqual({ added: 1, modified: 0, deleted: 1 });
+    expect(buildAlterRequest(rebased, MYSQL).drops).toEqual(["note"]);
+  });
+
+  it("列改名让出原名、新列接过原名,两条都执行了:改名的列找到新名字,新列成为已有列", () => {
+    const structure = mysqlStructure();
+    let draft = initDraft(structure);
+    draft = updateColumn(draft, keyOf(draft, "note"), { name: "remark" });
+    const added = addColumn(draft, MYSQL);
+    draft = updateColumn(added.draft, added.key, { name: "note", type: "int" });
+    const after = reread(structure, (columns) => [
+      ...columns.map((c) => (c.name === "note" ? { ...c, name: "remark" } : c)),
+      { ...columns[3], type: "int", nullable: true, default: { kind: "none" }, comment: "" },
+    ]);
+    const rebased = rebaseDraft(draft, after);
+    expect(rebased.columns.map((c) => [c.original?.name ?? null, c.name, columnStatus(c)])).toEqual([
+      ["id", "id", "unchanged"],
+      ["status", "status", "unchanged"],
+      ["created_at", "created_at", "unchanged"],
+      ["remark", "remark", "unchanged"],
+      ["note", "note", "unchanged"],
+    ]);
+    expect(isDraftDirty(rebased)).toBe(false);
   });
 
   it("重新读出草稿里没有的列(别处加的)按读出的样子列入,不算改动", () => {

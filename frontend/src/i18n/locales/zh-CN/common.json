@@ -2578,6 +2578,7 @@
         "label": "新建表 · {{name}}",
         "confirmTitle": "确认创建 {{name}}",
         "done": "已创建表 {{name}}",
+        "partialKept": "表没有建出来，设计原样留在这里。",
         "unavailable": "这里不能新建表：驱动不支持建表，或连接为只读。"
       }
     },

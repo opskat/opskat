@@ -145,12 +145,13 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 		}
 	}
 
-	statements = append(statements, additions...)
-	statements = append(statements, renames...)
-	statements = append(statements, modifications...)
+	// 先删列、再改名、然后加列：被删列的名字可以给改名的列或新列用，改名让出的旧名字可以给新列用。
 	for _, drop := range change.Drops {
 		statements = append(statements, "ALTER TABLE "+target+" DROP COLUMN "+quoteIdent(drop))
 	}
+	statements = append(statements, renames...)
+	statements = append(statements, additions...)
+	statements = append(statements, modifications...)
 	statements = append(statements, indexCreates...)
 	if change.Comment != nil {
 		statement, err := d.TableCommentSQL(target, *change.Comment)

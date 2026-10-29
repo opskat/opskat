@@ -6,8 +6,8 @@ import { createIndexes, syncAutoNames, type DraftIndex } from "./indexDraft";
 
 // 新建表:设计器从一张空表开始,预置一列 id 与它上面的主键;保存时把草稿写成建表请求交给驱动。
 
-/** 新建表的「读出的表」:什么都没有,索引能不能改看驱动有没有声明索引编辑。 */
-export function createStructure(descriptor: DriverDescriptor | undefined): TableStructure {
+/** 新建表的「读出的表」:什么都没有,索引能不能改看驱动有没有声明索引编辑(indexesEditable)。 */
+export function createStructure(indexesEditable: boolean): TableStructure {
   return {
     name: "",
     comment: "",
@@ -15,7 +15,7 @@ export function createStructure(descriptor: DriverDescriptor | undefined): Table
     indexes: [],
     foreignKeys: [],
     takenIndexNames: [],
-    indexesEditable: !!descriptor?.indexEditing,
+    indexesEditable,
   };
 }
 

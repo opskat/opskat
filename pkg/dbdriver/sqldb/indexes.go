@@ -115,26 +115,32 @@ func IndexCreateStatements(dialect TableIndexer, tableRef string, change TableCh
 }
 
 // tableColumnsAfter 是改动之后的表的列：现在的名字到改名之后的名字（只有改了名的），改动之后的全部列名，
-// 以及删掉的列。
+// 以及删掉的列（现在的名字）。
 type tableColumnsAfter struct {
 	renames map[string]string
 	present map[string]bool
 	dropped map[string]bool
 }
 
-// resolve 是索引里一列在改动之后的表里的名字：现在的名字换成改名之后的名字；这一列不在改动之后的表里时
-// ok 为假。
+// resolve 是请求里索引的一列在改动之后的表里的名字：请求写的就是改动之后的名字（见 dbdriver.AlterIndex），
+// 只去掉首尾空白；不在改动之后的表里时 ok 为假。不再按现在的名字换算：两列互换名字、或一列改成被删列的名字
+// 时，同一个名字两种读法都成立，按现在的名字读就指到了另一列。
 func (c tableColumnsAfter) resolve(name string) (string, bool) {
 	name = strings.TrimSpace(name)
-	if renamed, ok := c.renames[name]; ok {
-		name = renamed
-	}
 	return name, c.present[name]
+}
+
+// missing 是索引里的一列不在改动之后的表里时的说明。
+func (c tableColumnsAfter) missing(name string) string {
+	if c.dropped[strings.TrimSpace(name)] {
+		return "which the request drops"
+	}
+	return "which is not in the table after the change"
 }
 
 // planIndexes 比较请求里的索引与表现在的索引，得出要删与要建的索引（见 dbdriver.AlterTableRequest）：
 // 原样交回的不产生语句；改动的是删除后重建（方言可以写成等价语句）；只读的只能删除、不可删除的删不得；
-// 主键的任何改动要声明了主键可改；索引的列按改动之后的表解析（改名的列换成新名字，不在表里的列报错）；
+// 主键的任何改动要声明了主键可改；索引的列是改动之后的列名（不在改动之后的表里的列报错），与跟着列改名的现有索引比较；
 // 引用被删列的索引随列一起删（请求没有列出的话补上），请求却要保留它时失败。
 //
 // editing 非 nil：没有声明索引编辑的方言的请求在读表之前已被拒绝。change 已经填好改名与删除的列。
@@ -160,7 +166,7 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 			if !column.Expression {
 				name, ok := columns.resolve(column.Name)
 				if !ok {
-					return dbdriver.IndexDefinition{}, fmt.Errorf("index %q names column %q, which is not in table %s after the change", normalized.Name, column.Name, table)
+					return dbdriver.IndexDefinition{}, fmt.Errorf("index %q of table %s names column %q, %s", normalized.Name, table, column.Name, columns.missing(column.Name))
 				}
 				column.Name = name
 			}
@@ -171,7 +177,7 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 			for i, included := range index.Include {
 				name, ok := columns.resolve(strings.TrimSpace(included))
 				if !ok {
-					return dbdriver.IndexDefinition{}, fmt.Errorf("index %q includes column %q, which is not in table %s after the change", normalized.Name, included, table)
+					return dbdriver.IndexDefinition{}, fmt.Errorf("index %q of table %s includes column %q, %s", normalized.Name, table, included, columns.missing(included))
 				}
 				normalized.Include[i] = name
 			}
@@ -270,15 +276,7 @@ func planIndexes(editing *dbdriver.IndexEditing, current *AlterableTable, change
 	}
 
 	// 引用被删列（键列或 INCLUDE 列）的索引随列一起删：不删它就删不掉那一列。请求没有列出的在这里补上；不可删除的留给数据库
-	// 随列一起丢掉。请求要保留一个（改完之后仍然）引用被删列的索引是矛盾的，报错而不是写一条数据库会拒的语句。
-	for _, changed := range change.Indexes {
-		for _, column := range changed.Index.Columns {
-			if !column.Expression && columns.dropped[column.Name] {
-				return fmt.Errorf("index %q of table %s still names column %q, which the request drops",
-					changed.Index.Name, table, column.Name)
-			}
-		}
-	}
+	// 随列一起丢掉。请求要保留一个（改完之后仍然）引用被删列的索引是矛盾的，上面解析列名时已经报错。
 	for i := range current.Indexes {
 		index := &current.Indexes[i]
 		if mentioned[index.Name] || drops[index.Name] || index.Undroppable {

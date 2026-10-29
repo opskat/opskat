@@ -79,7 +79,6 @@ interface DesignToolbarProps {
   summary?: string;
   isDirty: boolean;
   errorCount: number;
-  loading: boolean;
   /** 撤销全部改动与重新读取;新建表没有可重新读取的表,不显示这两个按钮。 */
   onRevertAll?: () => void;
   onReload?: () => void;
@@ -108,7 +107,6 @@ export function DesignToolbar({
   summary,
   isDirty,
   errorCount,
-  loading,
   onRevertAll,
   onReload,
   canSave,
@@ -190,7 +188,7 @@ export function DesignToolbar({
                 variant="ghost"
                 size="icon-xs"
                 aria-label={t("query.designer.revertAll")}
-                disabled={!isDirty || loading}
+                disabled={!isDirty}
                 onClick={onRevertAll}
               >
                 <RotateCcw />
@@ -202,14 +200,8 @@ export function DesignToolbar({
         {onReload && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t("query.designer.reload")}
-                disabled={loading}
-                onClick={onReload}
-              >
-                <RefreshCw className={cn(loading && "animate-spin")} />
+              <Button variant="ghost" size="icon-xs" aria-label={t("query.designer.reload")} onClick={onReload}>
+                <RefreshCw />
               </Button>
             </TooltipTrigger>
             <TooltipContent>{t("query.designer.reload")}</TooltipContent>

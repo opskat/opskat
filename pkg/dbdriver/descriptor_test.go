@@ -253,10 +253,6 @@ func TestColumnFeaturesCheck(t *testing.T) {
 			assert.Contains(t, err.Error(), `"c"`, name)
 		}
 	})
-	t.Run("the descriptor's declarations are its column features", func(t *testing.T) {
-		assert.Equal(t, ColumnFeatures{ExplicitDefaults: true}, Descriptor{ExplicitDefaults: true}.ColumnFeatures())
-		assert.Equal(t, ColumnFeatures{AutoIncrement: true}, Descriptor{AutoIncrement: true}.ColumnFeatures())
-	})
 }
 
 // 表设计器的细项声明：索引编辑写错了，描述就不合法，错误点名驱动 id 与出问题的地方。

@@ -41,9 +41,11 @@ export type DraftIndexPatch = Partial<
 /** 索引上可改的一项;选项按键,如 option:method。 */
 export type IndexField = "name" | "type" | "columns" | "comment" | `option:${string}`;
 
+const EXISTING_COLUMN_PREFIX = "e:";
+
 /** 已有列在草稿里的 key(initDraft 与 rebaseDraft 都按读出的列名给出)。 */
 export function existingColumnKey(name: string): string {
-  return `e:${name}`;
+  return EXISTING_COLUMN_PREFIX + name;
 }
 
 /** 读出的索引放进草稿。 */
@@ -67,14 +69,20 @@ export function existingIndex(index: DesignerIndex): DraftIndex {
   };
 }
 
-function columnByKey(draft: TableDraft, key: string) {
-  return draft.columns.find((c) => c.key === key);
+/**
+ * 列引用现在的名字:草稿里这一列现在的名字。读出的索引可能引用列表里没有的列(驱动不列出的隐藏列,如
+ * Oracle 函数索引的 SYS_NC 列),这时是读出时的名字;新列的引用总在草稿里(移除新列时一并拿掉)。
+ */
+function columnName(draft: TableDraft, key: string): string {
+  const column = draft.columns.find((c) => c.key === key);
+  if (column) return column.name.trim();
+  if (key.startsWith(EXISTING_COLUMN_PREFIX)) return key.slice(EXISTING_COLUMN_PREFIX.length);
+  throw new Error(`index references a column missing from the draft: ${key}`);
 }
 
 /** 索引里一列显示的名字:列引用是草稿里这一列现在的名字,表达式是原文。 */
 export function indexColumnName(draft: TableDraft, column: DraftIndexColumn): string {
-  if (column.expression) return column.ref;
-  return columnByKey(draft, column.ref)?.name.trim() ?? column.ref;
+  return column.expression ? column.ref : columnName(draft, column.ref);
 }
 
 /** 新索引的名字:idx_表_列(列按次序以 _ 连接,表达式不参与)。 */
@@ -320,7 +328,7 @@ export function indexDefinition(draft: TableDraft, index: DraftIndex): DesignerI
       descending: c.descending,
       prefixLength: c.prefixLength,
     })),
-    include: index.include.map((k) => columnByKey(draft, k)?.name.trim() ?? k),
+    include: index.include.map((k) => columnName(draft, k)),
     options: index.options,
     comment: index.comment,
     readOnlyReason: index.original?.readOnlyReason ?? "",
@@ -372,11 +380,6 @@ function requestIndex(originalName: string, definition: Parameters<typeof defini
   return { originalName, ...definitionJson(definition) };
 }
 
-/** 草稿列现在的名字;列引用找不到时(不会发生)原样。 */
-function currentName(draft: TableDraft, key: string, fallback: string): string {
-  return columnByKey(draft, key)?.name.trim() ?? fallback;
-}
-
 /**
  * 交给驱动的索引改动(见 dbdriver.AlterTableRequest):
  * - indexes:保留的已有索引(带原名)与新索引。没改的已有索引按读出的样子交回、列换成改名之后的名字,
@@ -399,9 +402,9 @@ export function alterIndexes(draft: TableDraft): { indexes: RequestIndex[]; inde
         requestIndex(o.name, {
           ...o,
           columns: o.columns.map((c) =>
-            requestColumn(c.expression ? c.name : currentName(draft, existingColumnKey(c.name), c.name), c)
+            requestColumn(c.expression ? c.name : columnName(draft, existingColumnKey(c.name)), c)
           ),
-          include: o.include.map((name) => currentName(draft, existingColumnKey(name), name)),
+          include: o.include.map((name) => columnName(draft, existingColumnKey(name))),
         })
       );
       continue;
@@ -411,7 +414,7 @@ export function alterIndexes(draft: TableDraft): { indexes: RequestIndex[]; inde
         name: index.name.trim(),
         type: index.type,
         columns: index.columns.map((c) => requestColumn(indexColumnName(draft, c), c)),
-        include: index.include.map((k) => currentName(draft, k, k)),
+        include: index.include.map((k) => columnName(draft, k)),
         options: normalizedOptions(index.options),
         comment: index.comment.trim(),
       })
@@ -440,8 +443,8 @@ export function createIndexes(draft: TableDraft): Omit<dbdriver.IndexDefinition,
 }
 
 /**
- * 重新读出表之后的草稿索引(见 rebaseDraft):columnKeys 是草稿列的 key 到重新读出之后的 key(删除已执行的
- * 列不在其中)。已有索引按原名找,找不到再按目标名找(改名或重建已执行);都找不到时,删除的(删除已执行)
+ * 重新读出表之后的草稿索引(见 rebaseDraft):draft 是搬之前的草稿(随列删除按它判断),columnKeys 是草稿列的
+ * key 到重新读出之后的 key(删除已执行的列不在其中)。已有索引按原名找,找不到再按目标名找(改名或重建已执行);都找不到时,删除的(删除已执行)
  * 去掉,改过的(删除已执行、重建没执行)按改完的样子成为新索引。新索引在读出的表里有同名索引时说明已建,
  * 按读出的样子成为已有索引。读出的表里草稿没有的索引按读出的样子列入。次序同 initDraft。
  */

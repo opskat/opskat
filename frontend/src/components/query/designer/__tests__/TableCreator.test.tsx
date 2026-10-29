@@ -13,6 +13,7 @@ import {
   GetCreateTableStatements,
   GetTableMetadata,
   ListDatabaseObjects,
+  ListDatabaseDrivers,
   ListTables,
 } from "../../../../../wailsjs/go/query/Query";
 import { BUILTIN_DRIVERS, fakeAlterDriver, provideDrivers } from "@/__tests__/dbDriverFixtures";
@@ -347,6 +348,61 @@ describe("新建表的设计器", () => {
     // 主键索引没建出来,留在草稿里作为新索引。
     fireEvent.mouseDown(screen.getByRole("tab", { name: /query\.designer\.tab\.indexes/ }));
     expect(await screen.findByText("idx_users_id")).toBeInTheDocument();
+  });
+
+  it("驱动描述重新取过(扩展加载完、换语言)而声明没变:草稿与未保存标记都留着", async () => {
+    await openCreate("mysql");
+    const id = createTab()!.id;
+    fireEvent.change(tableNameInput(), { target: { value: "users" } });
+    await waitFor(() => expect(db().dirtyInnerTabIds).toContain(id));
+
+    const calls = vi.mocked(ListDatabaseDrivers).mock.calls.length;
+    await act(async () => provideDrivers(BUILTIN_DRIVERS.map((d) => dbdriver.Descriptor.createFrom(d))));
+    await waitFor(() => expect(vi.mocked(ListDatabaseDrivers).mock.calls.length).toBeGreaterThan(calls));
+    await act(async () => {});
+
+    expect(tableNameInput()).toHaveValue("users");
+    expect(db().dirtyInnerTabIds).toContain(id);
+  });
+
+  it("执行成功后刷新树期间(标签还没转过去):「创建」不可用,不会再建一次", async () => {
+    await openCreate("mysql");
+    fireEvent.change(tableNameInput(), { target: { value: "users" } });
+    succeedAll();
+    let listed: (tables: string[]) => void = () => undefined;
+    vi.mocked(ListTables).mockImplementation(() => new Promise((resolve) => (listed = resolve)));
+    await confirmCreate();
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(createTab()).toBeDefined();
+    expect(createButton()).toBeDisabled();
+
+    await act(async () => listed(["orders", "users"]));
+    await waitFor(() => expect(db().innerTabs.map((t) => t.id)).toEqual(["designer:appdb.users"]));
+    expect(ExecuteSchemaStatements).toHaveBeenCalledTimes(1);
+  });
+
+  it("逐条执行时建表语句本身失败:标签与草稿不动,结果视图不说「已重新读取」", async () => {
+    await openCreate("mysql");
+    fireEvent.change(tableNameInput(), { target: { value: "users" } });
+    vi.mocked(ExecuteSchemaStatements).mockResolvedValue(
+      query_svc.SchemaBatchResult.createFrom({
+        atomic: false,
+        rolledBack: false,
+        statements: [{ statement: "CREATE TABLE appdb.users", status: "failed", error: "boom" }],
+      })
+    );
+    vi.mocked(ListTables).mockResolvedValue(["orders"]);
+    await confirmCreate();
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("query.designer.save.partialTitle")).toBeInTheDocument();
+    await waitFor(() => expect(ListTables).toHaveBeenCalled());
+    expect(within(dialog).queryByText("query.designer.save.partialReloaded")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("query.designer.create.partialKept")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "query.designer.save.back" }));
+    expect(createTab()).toBeDefined();
+    expect(tableNameInput()).toHaveValue("users");
   });
 
   it("有改动才算未保存;关闭时拦下来问,放弃并关闭关掉", async () => {

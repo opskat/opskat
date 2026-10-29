@@ -122,6 +122,7 @@ export const TableDesigner = memo(function TableDesigner({
     <SaveDialog
       state={flow.state}
       transactional={!!descriptor?.transactionalDDL}
+      partialNote={t("query.designer.save.partialReloaded")}
       onConfirm={() => void flow.confirm()}
       onClose={flow.close}
     />

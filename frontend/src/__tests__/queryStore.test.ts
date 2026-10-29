@@ -916,6 +916,25 @@ describe("queryStore 设计器标签", () => {
     expect(tabs().map((t) => t.id)).toEqual(["designer:main.users", "table:main.users"]);
   });
 
+  it("已开着只读查看的标签,再从「设计表」打开:换成设计标签(只读关掉或驱动更新之后)", () => {
+    const s = useQueryStore.getState();
+    s.openDesignerTab("query-41", "main", "users", "view");
+    s.openSqlTab("query-41");
+    s.openDesignerTab("query-41", "main", "users", "design");
+    expect(tabs()[0]).toEqual({
+      id: "designer:main.users",
+      type: "designer",
+      mode: "design",
+      database: "main",
+      table: "users",
+    });
+    expect(tabs()).toHaveLength(2);
+    expect(active()).toBe("designer:main.users");
+    // 反过来「查看结构」不把设计标签降成只读(能不能改由设计器自己按现状决定)。
+    useQueryStore.getState().openDesignerTab("query-41", "main", "users", "view");
+    expect(tabs()[0]).toMatchObject({ mode: "design" });
+  });
+
   it("不同的表各开一个", () => {
     const s = useQueryStore.getState();
     s.openDesignerTab("query-41", "main", "users", "view");

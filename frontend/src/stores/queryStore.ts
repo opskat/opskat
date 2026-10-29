@@ -731,18 +731,17 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const state = get().dbStates[tabId];
     if (!state) return;
     const innerId = designerTabId(database, table);
-    const exists = state.innerTabs.some((t) => t.id === innerId);
+    const existing = state.innerTabs.find((t) => t.id === innerId);
+    const tab: InnerTab = { id: innerId, type: "designer", mode, database, table };
+    let innerTabs: InnerTab[];
+    if (!existing) innerTabs = [...state.innerTabs, tab];
+    // 查看与设计同用一个标签:开着只读查看时(之后关了只读连接或更新了驱动)从「设计表」打开就换成设计;
+    // 反过来不降级,能不能改由设计器按现状决定。
+    else if (mode === "design" && existing.type === "designer" && existing.mode === "view") {
+      innerTabs = state.innerTabs.map((t) => (t.id === innerId ? tab : t));
+    } else innerTabs = state.innerTabs;
     set((s) => ({
-      dbStates: {
-        ...s.dbStates,
-        [tabId]: {
-          ...state,
-          innerTabs: exists
-            ? state.innerTabs
-            : [...state.innerTabs, { id: innerId, type: "designer", mode, database, table }],
-          activeInnerTabId: innerId,
-        },
-      },
+      dbStates: { ...s.dbStates, [tabId]: { ...state, innerTabs, activeInnerTabId: innerId } },
     }));
   },
 

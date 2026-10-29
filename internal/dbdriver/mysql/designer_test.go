@@ -207,6 +207,19 @@ func TestAlterTableChangesAnIndexForMySQL(t *testing.T) {
 	}, statements)
 }
 
+// 全文索引没有方法：读出的 BTREE 索引改成全文、方法还留着时报错，不写 MySQL 会拒的 USING。
+func TestAlterTableRefusesAMethodOnAFullTextIndexForMySQL(t *testing.T) {
+	_, err := alterUsers(t, dbdriver.AlterTableRequest{
+		Columns: keptColumns(),
+		Indexes: []dbdriver.AlterIndex{primaryKept(), {OriginalName: "idx_name", IndexDefinition: dbdriver.IndexDefinition{
+			Name: "idx_name", Type: dbdriver.IndexTypeFullText, Columns: []dbdriver.IndexColumn{{Name: "name"}}, Options: method("BTREE"),
+		}}},
+	}, primaryRow, btree("idx_name", 1, 1, "name"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "idx_name")
+	assert.Contains(t, err.Error(), "BTREE")
+}
+
 // 改主键：DROP PRIMARY KEY 与 ADD PRIMARY KEY 写在同一条语句里——自增列必须始终在键上，分开执行时
 // 单独的 DROP PRIMARY KEY 会被 MySQL 拒绝（1075）。
 func TestAlterTableChangesThePrimaryKeyForMySQL(t *testing.T) {

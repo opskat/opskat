@@ -140,9 +140,14 @@ function indexesFromMetadata(metadata: query_svc.TableMetadata): DesignerIndex[]
 function groupForeignKeys(rows: query_svc.ForeignKeyMeta[]): DesignerForeignKey[] {
   const out: DesignerForeignKey[] = [];
   for (const row of rows) {
-    // 同一条外键的各列映射相邻;名字为空的(驱动读不出名字)按引用表区分。
+    // 同一条外键的各列映射相邻;名字为空的(驱动读不出名字,如 SQLite)按引用表区分,且复合外键不会重复本表列
+    // 或引用列,重复了就是下一条。相邻两条指向同一张表、列都不同的单列外键与一条复合外键仍分不出。
     const last = out[out.length - 1];
-    if (last && last.name === row.name && last.referencedTable === row.referencedTable) {
+    const repeats =
+      row.name === "" &&
+      !!last &&
+      (last.columns.includes(row.column) || last.referencedColumns.includes(row.referencedColumn));
+    if (last && !repeats && last.name === row.name && last.referencedTable === row.referencedTable) {
       last.columns.push(row.column);
       last.referencedColumns.push(row.referencedColumn);
       continue;
@@ -242,7 +247,6 @@ export function showsIndexComments(descriptor: DriverDescriptor | undefined, ind
 /** 宿主自带文案的索引类型(dbdriver.IndexType 的内置取值);扩展自己的类型由驱动声明名称。 */
 const BUILTIN_INDEX_TYPES = ["primary", "unique", "normal", "fulltext"];
 
-/** 索引类型的显示名:驱动声明的名称,其次宿主对内置类型的文案,都没有时原样。 */
 /**
  * 驱动声明里的显示名(类型分组、索引类型、索引选项):内置驱动给的是宿主 i18n 键,在这里翻译;扩展驱动的
  * 已由宿主按扩展自己的 locales 翻译成文本,不是键,原样显示。
@@ -251,6 +255,7 @@ export function declaredLabel(t: TFunction, label: string): string {
   return t(label, { defaultValue: label });
 }
 
+/** 索引类型的显示名:驱动声明的名称,其次宿主对内置类型的文案,都没有时原样。 */
 export function indexTypeLabel(descriptor: DriverDescriptor | undefined, type: string, t: TFunction): string {
   const declared = descriptor?.indexEditing?.types.find((d) => d.id === type);
   if (declared) return declaredLabel(t, declared.label);

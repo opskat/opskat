@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { CircleAlert, Copy, Loader2, SquareTerminal } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@opskat/ui";
 import { notifyCopied } from "@/lib/notify";
 import type { AlterPreview } from "./useAlterPreview";
@@ -22,10 +23,11 @@ export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpen
   const { t } = useTranslation();
   const statements = preview.status === "ready" ? preview.statements : [];
   const script = statementsScript(statements);
-  const copy = async () => {
-    await navigator.clipboard.writeText(script);
-    notifyCopied(t("query.copied"));
-  };
+  const copy = () =>
+    navigator.clipboard.writeText(script).then(
+      () => notifyCopied(t("query.copied")),
+      (err: unknown) => toast.error(String(err))
+    );
 
   let body;
   if (preview.status === "blocked") {

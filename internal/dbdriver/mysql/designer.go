@@ -257,6 +257,10 @@ func indexDefinition(index dbdriver.IndexDefinition) (string, error) {
 	}
 	definition += " (" + strings.Join(parts, ", ") + ")"
 	if method, ok := index.Options[indexMethodOption].(string); ok {
+		// 全文索引不能写 USING：读出的 BTREE 索引改成全文时方法还留着，报错让用户清掉，而不是悄悄丢掉。
+		if index.Type == dbdriver.IndexTypeFullText {
+			return "", fmt.Errorf("%w: FULLTEXT index %q cannot have a method (USING %s)", dbdriver.ErrUnsupported, index.Name, method)
+		}
 		definition += " USING " + method
 	}
 	if comment := strings.TrimSpace(index.Comment); comment != "" {

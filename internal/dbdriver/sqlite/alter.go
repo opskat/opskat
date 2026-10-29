@@ -85,6 +85,11 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 		return nil, err
 	}
 	statements = append(statements, indexDrops...)
+	// 先删列、再改名、最后加列：被删列的名字可以给改名的列或新列用，改名让出的旧名字可以给新列用。
+	for _, drop := range change.Drops {
+		statements = append(statements, "ALTER TABLE "+target+" DROP COLUMN "+quoteIdent(drop))
+	}
+	var additions []string
 	for _, column := range change.Columns {
 		if column.IsNew() {
 			if err := checkAddColumnDefault(ctx, conn, change.TableRef, column.Column); err != nil {
@@ -94,16 +99,14 @@ func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb
 			if err != nil {
 				return nil, err
 			}
-			statements = append(statements, "ALTER TABLE "+target+" ADD COLUMN "+definition)
+			additions = append(additions, "ALTER TABLE "+target+" ADD COLUMN "+definition)
 			continue
 		}
 		// 能走到这里的已有列只有改名（其余属性未声明，Session 已拒绝）。
 		renames = append(renames, "ALTER TABLE "+target+" RENAME COLUMN "+quoteIdent(column.Current.Name)+" TO "+quoteIdent(column.Column.Name))
 	}
 	statements = append(statements, renames...)
-	for _, drop := range change.Drops {
-		statements = append(statements, "ALTER TABLE "+target+" DROP COLUMN "+quoteIdent(drop))
-	}
+	statements = append(statements, additions...)
 	indexCreates, err := sqldb.IndexCreateStatements(d, target, change)
 	if err != nil {
 		return nil, err
