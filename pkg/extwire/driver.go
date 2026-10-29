@@ -2,7 +2,7 @@ package extwire
 
 // The database driver calls: the JSON a host and an extension exchange to run a
 // database driver the extension provides. The host side is
-// pkg/extension.(*Plugin).OpenDriverSession (and ClassifyStatements, which
+// internal/extreg/extdriver.(*Drivers).OpenDriverSession (and ClassifyStatements, which
 // needs no session), the guest side the SDK's DatabaseDriver (pkg/extsdk).
 // Every call is the guest function DriverFunction with a DriverCall as input,
 // answered by a DriverReply.

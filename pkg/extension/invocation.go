@@ -48,9 +48,9 @@ func (inv *invocation) scopedTo(asset *AssetRef) *invocation {
 	return inv
 }
 
-// bindScope binds scope to the call from its start — a database driver
-// session's, complete with its Ops — so every host call, the first included, is
-// admitted against it.
+// bindScope binds scope to the call from its start — a leased instance's
+// (Plugin.Lease), complete with its Ops — so every host call, the first
+// included, is admitted against it.
 func (inv *invocation) bindScope(scope *Scope) *invocation {
 	inv.asset = scope.Asset
 	inv.scope = scope

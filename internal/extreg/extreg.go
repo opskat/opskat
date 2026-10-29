@@ -29,6 +29,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	aipolicy "github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/extreg/extdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
@@ -103,9 +104,15 @@ type guestFunc func(v extension.ExtensionView) pluginCaller
 
 func pluginOf(v extension.ExtensionView) pluginCaller {
 	if p := v.Plugin(); p != nil {
-		return p
+		return runningPlugin{Plugin: p, Drivers: extdriver.New(p)}
 	}
 	return nil
+}
+
+// runningPlugin 是运行中的插件，连同它提供的数据库驱动（extdriver）。
+type runningPlugin struct {
+	*extension.Plugin
+	*extdriver.Drivers
 }
 
 // loaded 是一个扩展在本包内的最小画像：manifest 是它贡献的结构化视图。plugin 为 nil 表示

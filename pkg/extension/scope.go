@@ -25,10 +25,10 @@ import (
 //   - auth.kerberos_ticket answers from Tickets with permissions.kerberos;
 //   - with Ops set, no other host call runs at all.
 //
-// A call either has its scope bound when it starts (a database driver session:
-// complete, Ops included, never failing) or resolves it through the host's
-// ScopeResolver on its first network or ticket host call, and keeps it for the
-// rest of the call.
+// A call either has its scope bound when it starts (an instance leased with
+// Plugin.Lease, such as a database driver session's: complete, Ops included,
+// never failing) or resolves it through the host's ScopeResolver on its first
+// network or ticket host call, and keeps it for the rest of the call.
 type Scope struct {
 	// Asset is the asset the call runs against; nil when it has none.
 	Asset *AssetRef
@@ -80,6 +80,12 @@ const (
 // IOOpenOp is how Scope.Ops names io.open of one stream type ("file", "http",
 // "tcp"): a scope admits only the stream types it lists.
 func IOOpenOp(streamType string) string { return OpIOOpen + ":" + streamType }
+
+// HasEndpoint reports whether a host:port dial targets one of the scope's
+// Endpoints (host compared case-insensitively, an IP literal however spelled).
+func (s *Scope) HasEndpoint(addr string) bool {
+	return endpointSet(s.Endpoints).allowAddr(addr)
+}
 
 // allows reports whether the scope admits host call op (for io.open, op is
 // already narrowed by IOOpenOp).

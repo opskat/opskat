@@ -1,4 +1,4 @@
-package extension_test
+package extdriver_test
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/opskat/opskat/internal/extreg/extdriver"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
@@ -83,10 +84,10 @@ func TestDriverCallHostCapabilities(t *testing.T) {
 	t.Run("without network.assetEndpoint the driver cannot reach its own database", func(t *testing.T) {
 		ext := loadDriverFixture(t, &hostSpy{}, map[string]any{"assetRoute": true})
 		desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
-		server := extension.NewFixtureDBServer(t)
+		server := extdriver.NewFixtureDBServer(t)
 		d := &extensionDriver{
 			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
-			desc:         desc, plugin: ext.Plugin, server: server,
+			desc:         desc, plugin: extdriver.New(ext.Plugin), server: server,
 		}
 		_, err := d.Open(context.Background(), dbdriver.OpenRequest{
 			Config: &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: desc.DefaultPort, Username: "alice", Database: "app"},
@@ -103,7 +104,7 @@ func TestDriverCallHostCapabilities(t *testing.T) {
 		desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 		d := &extensionDriver{
 			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
-			desc:         desc, plugin: ext.Plugin, server: extension.NewFixtureDBServer(t),
+			desc:         desc, plugin: extdriver.New(ext.Plugin), server: extdriver.NewFixtureDBServer(t),
 		}
 		s := d.open(t)
 		defer func() { assert.NoError(t, s.Close()) }()
@@ -170,11 +171,11 @@ func TestDriverCallHostCapabilities(t *testing.T) {
 // redirectRoute is a reach path with two ends to tell apart: the asset's own dial
 // (Transport.Dial) and the by-address dial (Transport.DialAddr).
 type redirectRoute struct {
-	asset, byAddr *extension.FixtureDBServer
+	asset, byAddr *extdriver.FixtureDBServer
 }
 
 func newRedirectRoute(t *testing.T) redirectRoute {
-	return redirectRoute{asset: extension.NewFixtureDBServer(t), byAddr: extension.NewFixtureDBServer(t)}
+	return redirectRoute{asset: extdriver.NewFixtureDBServer(t), byAddr: extdriver.NewFixtureDBServer(t)}
 }
 
 // openRedirectSession opens a session of the fixture driver on host along
@@ -182,7 +183,7 @@ func newRedirectRoute(t *testing.T) redirectRoute {
 func openRedirectSession(t *testing.T, ext *extension.Extension, host string, transport dbdriver.Transport) dbdriver.Session {
 	t.Helper()
 	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
-	s, err := ext.Plugin.OpenDriverSession(context.Background(), string(desc.ID), dbdriver.OpenRequest{
+	s, err := extdriver.New(ext.Plugin).OpenDriverSession(context.Background(), string(desc.ID), dbdriver.OpenRequest{
 		Config:    &dbdriver.Config{Driver: desc.ID, Host: host, Port: desc.DefaultPort, Username: "alice", Database: "app"},
 		Password:  "s3cret",
 		Transport: transport,
@@ -314,7 +315,7 @@ func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
 type classifyingDriver struct {
 	dbdriver.Driver // only Descriptor and ClassifyStatements are called
 	desc            dbdriver.Descriptor
-	plugin          *extension.Plugin
+	plugin          *extdriver.Drivers
 }
 
 func (d classifyingDriver) Descriptor() dbdriver.Descriptor { return d.desc }
@@ -327,7 +328,7 @@ func TestDriverClassifiesStatementsWithoutASession(t *testing.T) {
 	ext := loadDriverFixture(t, &hostSpy{}, nil)
 	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 	require.True(t, desc.Supports(dbdriver.CapClassifyStatements), "the fixture declares splitting")
-	drv := classifyingDriver{desc: desc, plugin: ext.Plugin}
+	drv := classifyingDriver{desc: desc, plugin: extdriver.New(ext.Plugin)}
 	ctx := context.Background()
 
 	t.Run("the driver's statements come back with positions, text, type and danger", func(t *testing.T) {
@@ -363,7 +364,7 @@ func TestDriverClassifiesStatementsWithoutASession(t *testing.T) {
 	})
 
 	t.Run("a driver the extension does not provide is refused", func(t *testing.T) {
-		_, err := ext.Plugin.ClassifyStatements(ctx, "otherdb", "SELECT 1")
+		_, err := extdriver.New(ext.Plugin).ClassifyStatements(ctx, "otherdb", "SELECT 1")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `"otherdb"`)
 	})

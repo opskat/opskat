@@ -14,7 +14,7 @@ import (
 )
 
 // 扩展提供的数据库驱动：注册进驱动注册表（internal/dbdriver）的是 extensionDriver，它的会话
-// 经 Plugin.OpenDriverSession 活在扩展里。共享代码（connpool、查询面板、AI）照常按资产配置的
+// 经 extdriver（Drivers.OpenDriverSession）活在扩展里。共享代码（connpool、查询面板、AI）照常按资产配置的
 // 驱动 id Lookup、Open，拿到的请求就是宿主替内置驱动构造的那一份。
 //
 // 扩展被停用、升级或卸载时（撤销它的驱动贡献，dbDriversPoint），驱动先移出注册表，再作废它打开过的每一条会话：
@@ -22,7 +22,7 @@ import (
 // 点名该驱动的 dbregistry.ErrDriverUnavailable，而不是扩展实例关闭后各种各样的报错。重新
 // 启用注册的是新的 extensionDriver，与作废的会话无关。
 
-// driverOpener 是扩展驱动用到的插件能力（*extension.Plugin 满足它）：打开会话，以及不经会话
+// driverOpener 是扩展驱动用到的插件能力（*extdriver.Drivers 满足它）：打开会话，以及不经会话
 // 的语句切分分类。
 type driverOpener interface {
 	OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)

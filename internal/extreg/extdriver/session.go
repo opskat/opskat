@@ -1,4 +1,11 @@
-package extension
+// Package extdriver runs the database drivers extensions provide: a driver's
+// session lives in the guest (pkg/extsdk/sdkdbdriver DatabaseDriver assembles it
+// there), and the host holds a dbdriver.Session that forwards every operation
+// across the boundary as JSON (pkg/extwire). To shared code it is a session like
+// any built-in driver's. The extension runtime (pkg/extension) knows nothing of
+// databases: a session runs on instances it leases (Plugin.Lease), each bound to
+// the scope this package builds from the open request.
+package extdriver
 
 import (
 	"bytes"
@@ -19,24 +26,20 @@ import (
 
 	"github.com/opskat/opskat/internal/pkg/netdial"
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extwire"
 )
 
-// A database driver an extension provides runs in the guest: the SDK assembles
-// its session there (pkg/extsdk/sdkdbdriver DatabaseDriver), and the host holds a
-// dbdriver.Session that forwards every operation across the boundary as JSON
-// (pkg/extwire). To shared code it is a session like any built-in
-// driver's.
-//
 // A session runs on up to driverSessionInstances module instances of its own,
-// outside the plugin's call pool. Each instance logs in once — its own session in
-// the guest, its own database connection — and keeps that session, its
-// connection and its cursors in its memory between calls; its invocation, with
-// the IO handle table that holds the connection, lasts as long as the instance
-// instead of one call. A WASM instance runs one call at a time, so an operation
-// holds an instance for as long as it runs: operations beyond the instances run
-// on a new one, logged in on demand, or — once the session has all of them —
-// wait for one in arrival order. A cursor holds its instance from open to close.
+// leased outside the plugin's call pool. Each instance logs in once — its own
+// session in the guest, its own database connection — and keeps that session,
+// its connection and its cursors in its memory between calls; its invocation,
+// with the IO handle table that holds the connection, lasts as long as the
+// instance instead of one call. A WASM instance runs one call at a time, so an
+// operation holds an instance for as long as it runs: operations beyond the
+// instances run on a new one, logged in on demand, or — once the session has all
+// of them — wait for one in arrival order. A cursor holds its instance from open
+// to close.
 //
 // The host, not the guest, ends a call that is canceled or past its deadline: a
 // guest blocked in a host read never gets to run its own timers. Closing the
@@ -50,12 +53,43 @@ const (
 	driverSessionInstances = 3
 	// driverStreamRows is how many rows one cursor read brings over.
 	driverStreamRows = 256
+	// defaultIdleTimeout is how long an instance of a session may stay idle
+	// before it is closed, unless it is the session's last one.
+	defaultIdleTimeout = time.Minute
+	// defaultCloseTimeout bounds closing an instance's session in the guest: a
+	// driver's close may talk to a database that no longer answers.
+	defaultCloseTimeout = 10 * time.Second
 )
 
 // errDriverSessionClosed is what an operation on a closed session fails with.
 var errDriverSessionClosed = errors.New("database driver session is closed")
 
-// OpenDriverSession opens a session of database driver id, which this extension
+// Drivers are the database drivers a loaded extension provides: the ones its
+// manifest declares in contributes.databaseDrivers.
+type Drivers struct {
+	plugin *extension.Plugin
+	// idleTimeout is defaultIdleTimeout; tests shorten it.
+	idleTimeout time.Duration
+	// closeTimeout is defaultCloseTimeout; tests shorten it.
+	closeTimeout time.Duration
+}
+
+// New returns the database drivers plugin provides.
+func New(plugin *extension.Plugin) *Drivers {
+	return &Drivers{plugin: plugin, idleTimeout: defaultIdleTimeout, closeTimeout: defaultCloseTimeout}
+}
+
+func (d *Drivers) name() string { return d.plugin.Manifest().Name }
+
+// provides checks the extension declares driver id.
+func (d *Drivers) provides(id string) error {
+	if !slices.Contains(d.plugin.Manifest().Contributes.DatabaseDrivers, id) {
+		return fmt.Errorf("extension %q does not provide database driver %q", d.name(), id)
+	}
+	return nil
+}
+
+// OpenDriverSession opens a session of database driver id, which the extension
 // must declare in contributes.databaseDrivers. req is handed to the driver — its
 // config, the decrypted password, the driver options and the TLS material — each
 // time an instance of the session logs in; its reach path and Kerberos ticket
@@ -65,12 +99,9 @@ var errDriverSessionClosed = errors.New("database driver session is closed")
 //
 // The session's calls are bounded only by ctx — the asset's query timeout and
 // the caller's cancellation — not by the plugin's tool timeout.
-func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
-	if p.closed.Load() {
-		return nil, fmt.Errorf("plugin closed")
-	}
-	if !slices.Contains(p.manifest.Contributes.DatabaseDrivers, id) {
-		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
+func (d *Drivers) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	if err := d.provides(id); err != nil {
+		return nil, err
 	}
 	if req.Config != nil {
 		// The SSH asset is the host's: a tunnel it has already resolved into
@@ -85,8 +116,8 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 		// is no more the extension's than the Kerberos credentials are.
 		req.Password = ""
 	}
-	s := &driverSession{plugin: p, driver: id, open: req, live: 1}
-	s.scope = p.driverScope(id, &s.open)
+	s := &driverSession{drivers: d, driver: id, open: req, live: 1}
+	s.scope = d.driverScope(id, &s.open)
 	inst, err := s.login(ctx)
 	if err != nil {
 		return nil, err
@@ -96,16 +127,16 @@ func (p *Plugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.
 }
 
 // ClassifyStatements splits and classifies sql with database driver id
-// (dbdriver.StatementClassifier), which this extension must declare in
+// (dbdriver.StatementClassifier), which the extension must declare in
 // contributes.databaseDrivers. No session is involved: the driver does not touch
 // the database to answer, so the call runs on a pooled instance like
-// CheckPolicy, with no asset, no reach path and the plugin's tool timeout. The
-// statements are the driver's as it answered them; dbdriver.ClassifyStatements
-// checks them. A failure the driver answers — text it cannot split — wraps
-// dbdriver.ErrCannotSplit with the driver's own reason.
-func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
-	if !slices.Contains(p.manifest.Contributes.DatabaseDrivers, id) {
-		return nil, fmt.Errorf("extension %q does not provide database driver %q", p.manifest.Name, id)
+// CheckPolicy, with no asset, no reach path and the plugin's tool timeout
+// (Plugin.Invoke). The statements are the driver's as it answered them;
+// dbdriver.ClassifyStatements checks them. A failure the driver answers — text
+// it cannot split — wraps dbdriver.ErrCannotSplit with the driver's own reason.
+func (d *Drivers) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	if err := d.provides(id); err != nil {
+		return nil, err
 	}
 	input, err := json.Marshal(extwire.DriverCall{Op: extwire.DriverOpClassifyStatements, Args: extwire.DriverArgs{
 		Driver: dbdriver.DriverID(id), Statement: sql,
@@ -113,7 +144,7 @@ func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdr
 	if err != nil {
 		return nil, fmt.Errorf("marshal database driver %s: %w", extwire.DriverOpClassifyStatements, err)
 	}
-	raw, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), extwire.DriverFunction, input, p.opts.toolTimeout)
+	raw, err := d.plugin.Invoke(ctx, extwire.DriverFunction, input)
 	if err != nil {
 		return nil, err
 	}
@@ -133,36 +164,33 @@ func (p *Plugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdr
 	return stmts, nil
 }
 
-// openDriverInstance creates an instance and logs it in: the driver opens its
-// session in the guest and connects, every host call of the instance admitted
-// against the session's scope (driverScope).
-func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbdriver.OpenRequest, scope *Scope) (*driverInstance, error) {
-	if p.closed.Load() {
-		return nil, fmt.Errorf("plugin closed")
-	}
-	inst, err := p.newInstance(ctx)
+// openInstance leases an instance and logs it in: the driver opens its session
+// in the guest and connects, every host call of the instance admitted against
+// the session's scope (driverScope).
+func (s *driverSession) openInstance(ctx context.Context) (*driverInstance, error) {
+	inst, err := s.drivers.plugin.Lease(ctx, s.scope)
 	if err != nil {
 		return nil, err
 	}
-	inv := newInvocation(p.nextInvocationID(), nil).bindScope(scope)
-	d := &driverInstance{plugin: p, driver: driver, inst: inst, inv: inv}
+	d := &driverInstance{drivers: s.drivers, driver: s.driver, inst: inst}
 	d.refs.Store(1)
 
+	req := &s.open
 	var opened extwire.DriverOpened
 	err = d.call(ctx, extwire.DriverCall{Op: extwire.DriverOpOpen, Args: extwire.DriverArgs{
-		Driver: dbdriver.DriverID(driver), Config: req.Config, Password: req.Password, DriverOptions: req.DriverOptions,
+		Driver: dbdriver.DriverID(s.driver), Config: req.Config, Password: req.Password, DriverOptions: req.DriverOptions,
 		TLS: req.TLS, Kerberos: req.Kerberos != nil,
 	}}, &opened)
 	if err != nil {
-		d.inv.close()
+		d.inst.Interrupt()
 		d.drop()
 		logger.Ctx(ctx).Warn("extension database driver instance login failed",
-			zap.String("extension", p.manifest.Name), zap.String("driver", driver), zap.String("invocation", inv.id), zap.Error(err))
+			zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.String("invocation", inst.ID()), zap.Error(err))
 		return nil, err
 	}
 	d.session = opened.Session
 	logger.Ctx(ctx).Info("extension database driver instance logged in",
-		zap.String("extension", p.manifest.Name), zap.String("driver", driver), zap.String("invocation", inv.id))
+		zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.String("invocation", inst.ID()))
 	return d, nil
 }
 
@@ -170,7 +198,9 @@ func (p *Plugin) openDriverInstance(ctx context.Context, driver string, req *dbd
 // streams (with their deadlines) that carry its connection to the database, the
 // stop check, and the Kerberos tickets it logs in with. Everything else (KV,
 // file dialogs, asset config, tool events, HTTP, files) is refused.
-var driverScopeOps = []string{OpLog, IOOpenOp("tcp"), OpIOSetDeadline, OpToolShouldStop, OpKerberosTicket}
+var driverScopeOps = []string{
+	extension.OpLog, extension.IOOpenOp("tcp"), extension.OpIOSetDeadline, extension.OpToolShouldStop, extension.OpKerberosTicket,
+}
 
 // driverScope is the scope every instance of a session runs in, built from the
 // open request the database side assembled: the asset's host:port as its one
@@ -180,41 +210,35 @@ var driverScopeOps = []string{OpLog, IOOpenOp("tcp"), OpIOSetDeadline, OpToolSho
 // database answered with, reachable with network.assetRoute — goes by address
 // (Transport.DialAddr). A transport without a by-address dial dials directly and
 // gets the direct route's check whatever Direct says.
-func (p *Plugin) driverScope(driver string, req *dbdriver.OpenRequest) *Scope {
-	asset := &AssetRef{ID: req.AssetID}
-	var endpoints endpointSet
+func (d *Drivers) driverScope(driver string, req *dbdriver.OpenRequest) *extension.Scope {
+	scope := &extension.Scope{Asset: &extension.AssetRef{ID: req.AssetID}, Ops: driverScopeOps}
 	if cfg := req.Config; cfg != nil {
-		endpoints = endpointSet{{Host: cfg.Host, Port: strconv.Itoa(cfg.Port)}}
+		scope.Endpoints = []extension.Endpoint{{Host: cfg.Host, Port: strconv.Itoa(cfg.Port)}}
 	}
 	dial, dialAddr := orDirectDial(req.Transport.Dial), orDirectDial(req.Transport.DialAddr)
-	scope := &Scope{
-		Asset:     asset,
-		Endpoints: endpoints,
-		Route: &Route{
-			Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				if endpoints.allowAddr(addr) {
-					return dial(ctx, network, addr)
-				}
-				return dialAddr(ctx, network, addr)
-			},
-			Direct: req.Transport.Direct || req.Transport.DialAddr == nil,
+	scope.Route = &extension.Route{
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if scope.HasEndpoint(addr) {
+				return dial(ctx, network, addr)
+			}
+			return dialAddr(ctx, network, addr)
 		},
-		Ops: driverScopeOps,
+		Direct: req.Transport.Direct || req.Transport.DialAddr == nil,
 	}
 	if req.Kerberos != nil {
 		scope.Tickets = &driverTickets{
-			extension: p.manifest.Name, driver: driver, assetID: req.AssetID,
+			extension: d.name(), driver: driver, assetID: req.AssetID,
 			source: req.Kerberos, issued: map[string]bool{},
 		}
 	}
 	return scope
 }
 
-func orDirectDial(dial dbdriver.DialFunc) DialContextFunc {
+func orDirectDial(dial dbdriver.DialFunc) extension.DialContextFunc {
 	if dial == nil {
 		return (&netdial.Dialer{}).DialContext
 	}
-	return DialContextFunc(dial)
+	return extension.DialContextFunc(dial)
 }
 
 // driverTickets is a session's Kerberos ticket source: the one the caller of
@@ -256,18 +280,17 @@ func (g *driverTickets) Ticket(ctx context.Context, spn string) ([]byte, error) 
 	return ticket, nil
 }
 
-// driverInstance is one module instance of a session, logged in to the database.
+// driverInstance is one leased instance of a session, logged in to the database.
 // Calls into it are serialized: an instance runs one call at a time.
 //
 // It is reference counted because a prepared row statement writer outlives its
 // session (dbdriver.Session.PrepareRowStatements) and generates in the guest: the
-// module is closed once the session has let go of the instance and every writer
+// instance is closed once the session has let go of it and every writer
 // prepared on it has been collected.
 type driverInstance struct {
-	plugin *Plugin
-	driver string
-	inst   *instance
-	inv    *invocation
+	drivers *Drivers
+	driver  string
+	inst    *extension.Instance
 	// session is the instance's session in the guest.
 	session uint64
 
@@ -294,14 +317,14 @@ type driverInstance struct {
 
 func (d *driverInstance) hold() { d.refs.Add(1) }
 
-// drop lets go of one hold; the last closes the module. No call can be running
+// drop lets go of one hold; the last closes the instance. No call can be running
 // then: calls are made by the session, which holds the instance until it retires
 // it, and by writers, which hold it while they are reachable.
 func (d *driverInstance) drop() {
 	if d.refs.Add(-1) > 0 {
 		return
 	}
-	if err := d.inst.mod.Close(context.Background()); err != nil {
+	if err := d.inst.Close(context.Background()); err != nil {
 		logger.Default().Warn("close database driver instance", zap.Error(err))
 	}
 }
@@ -337,26 +360,26 @@ func (d *driverInstance) discard(reason error) {
 		d.broken = reason
 	}
 	d.mu.Unlock()
-	d.inv.close()
+	d.inst.Interrupt()
 }
 
 // retire closes the instance's session in the guest — when the instance is
 // still usable — and its connections, and lets go of the instance; a writer
-// prepared on it keeps the module until the writer is collected. Closing in the
-// guest is bounded by the plugin's driver close timeout: a driver's close may
-// wait on a database that no longer answers, and retiring runs when an extension
-// is disabled or removed and when an idle instance is reaped.
+// prepared on it keeps the instance until the writer is collected. Closing in
+// the guest is bounded by the driver close timeout: a driver's close may wait on
+// a database that no longer answers, and retiring runs when an extension is
+// disabled or removed and when an idle instance is reaped.
 func (d *driverInstance) retire() error {
 	var err error
 	if d.usable() {
-		ctx, cancel := context.WithTimeout(context.Background(), d.plugin.opts.driverCloseTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), d.drivers.closeTimeout)
 		err = d.call(ctx, extwire.DriverCall{Op: extwire.DriverOpClose, Session: d.session}, nil)
 		cancel()
 	}
-	d.inv.close()
+	d.inst.Interrupt()
 	d.drop()
 	logger.Default().Info("extension database driver instance closed",
-		zap.String("extension", d.plugin.manifest.Name), zap.String("driver", d.driver), zap.String("invocation", d.inv.id))
+		zap.String("extension", d.drivers.name()), zap.String("driver", d.driver), zap.String("invocation", d.inst.ID()))
 	return err
 }
 
@@ -382,32 +405,26 @@ func (d *driverInstance) call(ctx context.Context, call extwire.DriverCall, out 
 	if err != nil {
 		return fmt.Errorf("marshal database driver %s: %w", call.Op, err)
 	}
-	req, err := callRequest(extwire.DriverFunction, input)
-	if err != nil {
-		return err
-	}
-	stopInterrupt := context.AfterFunc(ctx, d.inv.close)
-	raw, err := d.inst.invoke(withInvocation(ctx, d.inv), req)
-	interrupted := !stopInterrupt()
+	raw, err := d.inst.Invoke(ctx, extwire.DriverFunction, input)
 	switch {
-	case interrupted || (err != nil && ctx.Err() != nil):
+	case err != nil && ctx.Err() != nil:
 		d.broken = ctx.Err()
-		d.inv.close()
+		d.inst.Interrupt()
 		logger.Ctx(ctx).Warn("extension database driver call interrupted, instance discarded",
-			zap.String("extension", d.plugin.manifest.Name), zap.String("driver", d.driver),
+			zap.String("extension", d.drivers.name()), zap.String("driver", d.driver),
 			zap.String("op", call.Op), zap.Error(ctx.Err()))
 		return fmt.Errorf("database driver %s: %w", call.Op, ctx.Err())
-	case err != nil && d.plugin.closed.Load():
+	case errors.Is(err, extension.ErrPluginClosed):
 		d.broken = err
-		return fmt.Errorf("database driver %s: plugin closed: %w", call.Op, err)
+		return fmt.Errorf("database driver %s: %w", call.Op, err)
 	case err != nil:
 		d.broken = err
-		d.inv.close()
+		d.inst.Interrupt()
 		logger.Ctx(ctx).Error("extension database driver fault",
-			zap.String("extension", d.plugin.manifest.Name), zap.String("driver", d.driver),
+			zap.String("extension", d.drivers.name()), zap.String("driver", d.driver),
 			zap.String("op", call.Op), zap.Error(err))
 		return fmt.Errorf("extension database driver fault: driver %q of extension %q failed in %s: %w",
-			d.driver, d.plugin.manifest.Name, call.Op, err)
+			d.driver, d.drivers.name(), call.Op, err)
 	}
 
 	var reply extwire.DriverReply
@@ -446,17 +463,17 @@ func (e *driverError) Is(target error) bool {
 // driverSession is the host's handle on a session: the instances it runs on and
 // the operations waiting for one.
 type driverSession struct {
-	plugin *Plugin
-	driver string
+	drivers *Drivers
+	driver  string
 	// open is what every instance of the session logs in with — config,
 	// decrypted password, reach path — kept for the session's life because
 	// instances are logged in on demand: when operations overlap, and after an
 	// instance is discarded.
 	open dbdriver.OpenRequest
-	// scope is what every instance of the session may reach (Plugin.driverScope),
+	// scope is what every instance of the session may reach (driverScope),
 	// shared by every instance, so each redirect address and each SPN is logged
 	// once per session.
-	scope *Scope
+	scope *extension.Scope
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -549,7 +566,7 @@ func (s *driverSession) forgo(g driverGrant) {
 
 // login logs in an instance the session has already counted in live.
 func (s *driverSession) login(ctx context.Context) (*driverInstance, error) {
-	inst, err := s.plugin.openDriverInstance(ctx, s.driver, &s.open, s.scope)
+	inst, err := s.openInstance(ctx)
 	if err != nil {
 		s.mu.Lock()
 		s.live--
@@ -564,7 +581,7 @@ func (s *driverSession) login(ctx context.Context) (*driverInstance, error) {
 // to the idle instances. One left unusable, or released after the session
 // closed, is closed instead, which makes room for a waiting operation to log in
 // one of its own. An instance beyond the session's last one is closed once it
-// has stayed idle for the plugin's driver idle timeout.
+// has stayed idle for the driver idle timeout (Drivers).
 func (s *driverSession) release(inst *driverInstance) {
 	// Asked before taking s.mu: a writer's call may hold the instance a while.
 	usable := inst.usable()
@@ -585,7 +602,7 @@ func (s *driverSession) release(inst *driverInstance) {
 	inst.idleGen++
 	if s.live > 1 {
 		gen := inst.idleGen
-		inst.idleTimer = time.AfterFunc(s.plugin.opts.driverIdleTimeout, func() { s.reap(inst, gen) })
+		inst.idleTimer = time.AfterFunc(s.drivers.idleTimeout, func() { s.reap(inst, gen) })
 	}
 	s.mu.Unlock()
 }
@@ -635,7 +652,7 @@ func (s *driverSession) reap(inst *driverInstance, gen uint64) {
 func (s *driverSession) retire(inst *driverInstance) {
 	if err := inst.retire(); err != nil {
 		logger.Default().Warn("close extension database driver instance",
-			zap.String("extension", s.plugin.manifest.Name), zap.String("driver", s.driver), zap.Error(err))
+			zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.Error(err))
 	}
 }
 

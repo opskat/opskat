@@ -1,4 +1,4 @@
-package extension_test
+package extdriver_test
 
 import (
 	"context"
@@ -17,19 +17,19 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	"github.com/opskat/opskat/internal/extreg/extdriver"
 	"github.com/opskat/opskat/pkg/dbdriver"
-	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
 // extensionDriver is a dbdriver.Driver whose sessions live in the fixture
 // extension: what the host registry will hold for an extension's driver. Its
-// reach path leads to server (see extension.FixtureDBServer).
+// reach path leads to server (see extdriver.FixtureDBServer).
 type extensionDriver struct {
 	dbdriver.NetworkRules
 	desc   dbdriver.Descriptor
-	plugin *extension.Plugin
-	server *extension.FixtureDBServer
+	plugin *extdriver.Drivers
+	server *extdriver.FixtureDBServer
 }
 
 func (d *extensionDriver) Descriptor() dbdriver.Descriptor { return d.desc }
@@ -61,7 +61,7 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 	newDriver := func() *extensionDriver {
 		return &extensionDriver{
 			NetworkRules: dbdriver.NetworkRules{DefaultPort: desc.DefaultPort},
-			desc:         desc, plugin: ext.Plugin, server: extension.NewFixtureDBServer(t),
+			desc:         desc, plugin: extdriver.New(ext.Plugin), server: extdriver.NewFixtureDBServer(t),
 		}
 	}
 	ctx := context.Background()
@@ -246,7 +246,7 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 	})
 
 	t.Run("a driver the extension does not provide is refused", func(t *testing.T) {
-		_, err := ext.Plugin.OpenDriverSession(ctx, "otherdb", dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "otherdb"}})
+		_, err := extdriver.New(ext.Plugin).OpenDriverSession(ctx, "otherdb", dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "otherdb"}})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "otherdb")
 	})
@@ -368,9 +368,9 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
 	require.True(t, desc.UsesField(dbdriver.FieldKerberos), "the fixture declares the Kerberos field group")
 	ctx := context.Background()
-	open := func(t *testing.T, server *extension.FixtureDBServer, krb *dbdriver.Kerberos) (dbdriver.Session, error) {
+	open := func(t *testing.T, server *extdriver.FixtureDBServer, krb *dbdriver.Kerberos) (dbdriver.Session, error) {
 		t.Helper()
-		s, err := ext.Plugin.OpenDriverSession(ctx, string(desc.ID), dbdriver.OpenRequest{
+		s, err := extdriver.New(ext.Plugin).OpenDriverSession(ctx, string(desc.ID), dbdriver.OpenRequest{
 			Config:    &dbdriver.Config{Driver: desc.ID, Host: "db.internal", Port: desc.DefaultPort, Username: "alice", Database: "app"},
 			Password:  "s3cret",
 			Transport: dbdriver.Transport{Dial: server.Dial},
@@ -384,7 +384,7 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 	}
 
 	t.Run("the driver logs in with the ticket for the SPN its server named, learning only that the asset uses Kerberos", func(t *testing.T) {
-		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		server, tickets := extdriver.NewFixtureDBServer(t), &fakeTickets{}
 		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
 		require.NoError(t, err)
 
@@ -399,7 +399,7 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 	})
 
 	t.Run("an asset without Kerberos hands the driver no Kerberos, and its ticket calls are refused saying why", func(t *testing.T) {
-		server := extension.NewFixtureDBServer(t)
+		server := extdriver.NewFixtureDBServer(t)
 		s, err := open(t, server, nil)
 		require.NoError(t, err)
 		kerberos, password := openAuth(t, s)
@@ -412,7 +412,7 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 	})
 
 	t.Run("a pinned SPN refuses any other, naming both, without asking the source", func(t *testing.T) {
-		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		server, tickets := extdriver.NewFixtureDBServer(t), &fakeTickets{}
 		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", SPN: "fixturedb/db.internal", Ticket: tickets.ticket})
 		require.NoError(t, err)
 
@@ -428,7 +428,7 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 	})
 
 	t.Run("names that would spell another principal or realm are refused", func(t *testing.T) {
-		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		server, tickets := extdriver.NewFixtureDBServer(t), &fakeTickets{}
 		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
 		require.NoError(t, err)
 		for _, bad := range [][2]string{{"fixturedb", "db.internal@EVIL.REALM"}, {"fixturedb/x", "db.internal"}} {
@@ -441,7 +441,7 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 
 	t.Run("each session logs its first ticket for each SPN once, with no secret in any log", func(t *testing.T) {
 		logs := observeLogs(t)
-		server, tickets := extension.NewFixtureDBServer(t), &fakeTickets{}
+		server, tickets := extdriver.NewFixtureDBServer(t), &fakeTickets{}
 		s, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
 		require.NoError(t, err)
 
@@ -462,14 +462,14 @@ func TestExtensionDriverKerberosTickets(t *testing.T) {
 		secrets := []string{"s3cret", "ticket:", hex.EncodeToString([]byte("ticket:"))}
 		assert.Equal(t, map[string]int{"fixturedb/db.internal": 1, "other/node2.internal": 1}, ticketLogs(t, logs, secrets...))
 
-		_, err = open(t, extension.NewFixtureDBServer(t), &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
+		_, err = open(t, extdriver.NewFixtureDBServer(t), &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
 		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"fixturedb/db.internal": 2, "other/node2.internal": 1}, ticketLogs(t, logs, secrets...),
 			"another session logs its own first ticket")
 	})
 
 	t.Run("a source that cannot issue fails the login with its reason, never falling back to the password", func(t *testing.T) {
-		server := extension.NewFixtureDBServer(t)
+		server := extdriver.NewFixtureDBServer(t)
 		tickets := &fakeTickets{fail: errors.New("KDC refused: KDC_ERR_PREAUTH_FAILED (wrong password or keytab)")}
 		_, err := open(t, server, &dbdriver.Kerberos{Principal: "alice@EXAMPLE.COM", Ticket: tickets.ticket})
 		require.Error(t, err)
