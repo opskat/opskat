@@ -53,22 +53,24 @@ func TestHTTPHandle(t *testing.T) {
 
 		Convey("a body the extension wrote is sent whatever the method", func() {
 			for _, method := range []string{"GET", "DELETE"} {
-				var gotMethod, gotBody string
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					body, _ := io.ReadAll(r.Body)
-					gotMethod, gotBody = r.Method, string(body)
-				}))
+				Convey(method, func() {
+					var gotMethod, gotBody string
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, _ := io.ReadAll(r.Body)
+						gotMethod, gotBody = r.Method, string(body)
+					}))
+					defer srv.Close()
 
-				h, err := newHTTPHandle(IOOpenParams{Method: method, URL: srv.URL + "/idx/_count", AllowPrivate: true})
-				So(err, ShouldBeNil)
-				_, err = h.Write([]byte(`{"query":{"match_all":{}}}`))
-				So(err, ShouldBeNil)
-				_, err = h.Flush()
-				So(err, ShouldBeNil)
-				So(gotMethod, ShouldEqual, method)
-				So(gotBody, ShouldEqual, `{"query":{"match_all":{}}}`)
-				So(h.Close(), ShouldBeNil)
-				srv.Close()
+					h, err := newHTTPHandle(IOOpenParams{Method: method, URL: srv.URL + "/idx/_count", AllowPrivate: true})
+					So(err, ShouldBeNil)
+					_, err = h.Write([]byte(`{"query":{"match_all":{}}}`))
+					So(err, ShouldBeNil)
+					_, err = h.Flush()
+					So(err, ShouldBeNil)
+					So(gotMethod, ShouldEqual, method)
+					So(gotBody, ShouldEqual, `{"query":{"match_all":{}}}`)
+					So(h.Close(), ShouldBeNil)
+				})
 			}
 		})
 
