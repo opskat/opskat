@@ -1,9 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 
-// classifyError 内部读取 i18n.t 取友好标题；测试只关心 kind 分类，t 直接回显 key 即可。
-vi.mock("../i18n", () => ({
-  default: { t: (key: string) => key },
-}));
+// classifyError 内部读取 i18n.t 取友好标题；t 按 key 查真实的 en 文案（缺失返回 undefined），
+// 让「每个 kind 都有文案」能在 kind 与语言包脱节时失败（zh-CN 与 en 的 key 对齐由 i18n.test 保证）。
+vi.mock("../i18n", async () => {
+  const en = (await import("../i18n/locales/en/common.json")).default as Record<string, unknown>;
+  return {
+    default: {
+      t: (key: string) =>
+        key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown> | undefined)?.[part], en),
+    },
+  };
+});
 
 import { classifyError } from "../lib/aiError";
 
@@ -32,6 +39,14 @@ describe("classifyError", () => {
     expect(classifyError('Post "https://api.example.com/v1/messages": Bad Gateway').kind).toBe("proxy");
     expect(classifyError('Post "https://api.example.com/v1/messages": Service Unavailable').kind).toBe("proxy");
     expect(classifyError('Post "https://api.example.com/v1/messages": Forbidden').kind).toBe("proxy");
+  });
+
+  it("HTTP 代理拒绝 CONNECT 时原因短语缺失或全大写同样命中 proxy", () => {
+    // 状态行 `HTTP/1.1 403`（无空格）→ net/http 报 unknown status code；`HTTP/1.1 403 `（空短语）→ 错误正文为空；
+    // `HTTP/1.1 502 BAD GATEWAY` → 原样报全大写短语（不能被 server 的 bad gateway 捞走）
+    expect(classifyError('Post "https://api.example.com/v1/messages": unknown status code').kind).toBe("proxy");
+    expect(classifyError('Post "https://api.example.com/v1/messages": ').kind).toBe("proxy");
+    expect(classifyError('Post "https://api.example.com/v1/messages": BAD GATEWAY').kind).toBe("proxy");
   });
 
   it("服务端自己的 5xx 与传输层 EOF 不被当成代理失败", () => {
