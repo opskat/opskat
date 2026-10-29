@@ -239,7 +239,7 @@ func TestInstallConfirm_UpgradeAddedAndDowngrade(t *testing.T) {
 	assert.ElementsMatch(t, []CapabilityGrant{
 		{Kind: CapHTTP, Value: "https://b.example.com/"},
 		{Kind: CapFSRead, Value: "/tmp/x"},
-		{Kind: CapTunnel},
+		{Kind: CapAllowPrivate},
 		{Kind: CapAssetEndpoint},
 	}, up.Added)
 
@@ -385,8 +385,8 @@ func TestNewInstallConfirm_AssetRouteIsGrantAndUpgradeMarksIt(t *testing.T) {
 		Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetRoute: true}},
 		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"d"}},
 	})
-	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseRedirects, HighRisk: true})
-	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseRedirects, HighRisk: true})
+	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapAssetRoute, HighRisk: true})
+	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapAssetRoute, HighRisk: true})
 }
 
 func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
@@ -401,8 +401,8 @@ func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
 		Permissions: extmanifest.Permissions{Kerberos: true},
 		Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"d"}},
 	})
-	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapDatabaseKerberos, HighRisk: true})
-	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapDatabaseKerberos, HighRisk: true})
+	assert.Contains(t, c.Capabilities, CapabilityGrant{Kind: CapKerberos, HighRisk: true})
+	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapKerberos, HighRisk: true})
 }
 
 // Every permission the manifest can declare is listed, and exactly the ones that
@@ -418,15 +418,17 @@ func TestCapabilityGrants_ListsEveryPermissionAndFlagsHighRisk(t *testing.T) {
 		},
 	}, extmanifest.Contributes{DatabaseDrivers: []string{"d1"}})
 
+	// The kind is the dialog's wire format and is spelled the way manifest.json
+	// spells the permission, so what the user approves names what the author wrote.
 	assert.ElementsMatch(t, []CapabilityGrant{
-		{Kind: CapFSRead, Value: "/r"},
-		{Kind: CapFSWrite, Value: "/w"},
-		{Kind: CapHTTP, Value: "https://a/"},
-		{Kind: CapCredentials, Value: "read", HighRisk: true},
-		{Kind: CapTunnel},
-		{Kind: CapAssetEndpoint},
-		{Kind: CapDatabaseRedirects, HighRisk: true},
-		{Kind: CapDatabaseKerberos, HighRisk: true},
-		{Kind: CapDatabaseDriver, Value: "d1"},
+		{Kind: "fs.read", Value: "/r"},
+		{Kind: "fs.write", Value: "/w"},
+		{Kind: "network.http", Value: "https://a/"},
+		{Kind: "credentials", Value: "read", HighRisk: true},
+		{Kind: "network.allowPrivate"},
+		{Kind: "network.assetEndpoint"},
+		{Kind: "network.assetRoute", HighRisk: true},
+		{Kind: "kerberos", HighRisk: true},
+		{Kind: "databaseDriver", Value: "d1"},
 	}, got)
 }

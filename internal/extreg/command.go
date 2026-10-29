@@ -39,7 +39,7 @@ func parseCommand(m *Manifest, command string) (string, []byte, error) {
 	def, ok := toolDef(m, toolName)
 	if !ok {
 		return "", nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
-			m.Name, toolName, strings.Join(toolNames(m), ", "))
+			m.Name, toolName, strings.Join(toolNames(m, false), ", "))
 	}
 	if def.PageOnly {
 		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, pageOnlyRefusal)
@@ -167,9 +167,15 @@ func toolDef(m *Manifest, name string) (extwire.Tool, bool) {
 	return extwire.Tool{}, false
 }
 
-func toolNames(m *Manifest) []string {
+// toolNames lists the tools a caller may name: every tool for a page, only the
+// ones that declare a policy action for exec (page-only tools stay out of it, as
+// they stay out of help).
+func toolNames(m *Manifest, includePageOnly bool) []string {
 	names := make([]string, 0, len(m.Tools))
 	for _, t := range m.Tools {
+		if t.PageOnly && !includePageOnly {
+			continue
+		}
 		names = append(names, t.Name)
 	}
 	sort.Strings(names)
@@ -185,7 +191,7 @@ func ValidateToolArgs(m *Manifest, tool string, raw []byte) ([]byte, error) {
 	def, ok := toolDef(m, tool)
 	if !ok {
 		return nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
-			m.Name, tool, strings.Join(toolNames(m), ", "))
+			m.Name, tool, strings.Join(toolNames(m, true), ", "))
 	}
 	return validateToolArgs(m.Name, def, raw)
 }

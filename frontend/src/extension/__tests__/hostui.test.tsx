@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { CodeEditor, DataTable, JsonTreeView } from "../hostui";
+import { CodeEditor, DataTable, JsonTreeView, type HostDataTableProps } from "../hostui";
 
 // The real Monaco is not loadable in jsdom: stand in for @monaco-editor/react and
 // hand out a fake editor + monaco so the wrapper's onMount contract is observable.
@@ -83,6 +83,14 @@ describe("hostUI.DataTable", () => {
     fireEvent.click(screen.getByTitle("query.columnActions:name"));
     fireEvent.click(screen.getByText("query.sortAsc"));
     expect(onSortChange).toHaveBeenCalledWith("name", "asc");
+  });
+
+  it("ignores props outside its contract, so the host's internal table props are not reachable", () => {
+    // Extension pages are plain JS: nothing stops them passing the query panel's own props.
+    const internal = { error: "internal-only error" } as unknown as Partial<HostDataTableProps>;
+    render(<DataTable columns={["name"]} rows={rows} {...internal} />);
+    expect(screen.queryByText("internal-only error")).toBeNull();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
   });
 });
 

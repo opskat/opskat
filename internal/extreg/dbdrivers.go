@@ -18,8 +18,9 @@ type dbDriversPoint struct{ guest guestFunc }
 func (dbDriversPoint) Key() string { return extwire.KeyDatabaseDrivers }
 
 // Check validates every driver descriptor on its own (dbdriver validation: known
-// fields, capabilities and tabs, driver fields clear of the built-in ones), that no
-// id appears twice, and that describe()'s driver ids are exactly the ones the
+// fields, capabilities and tabs, driver fields clear of the built-in ones) and
+// against the extension driver's network rules (fitsNetworkRules), that no id
+// appears twice, and that describe()'s driver ids are exactly the ones the
 // manifest declared: the manifest is what the user audited before running the code,
 // the descriptor is what the code implements, and they may not disagree. It runs
 // for an extension that describes no driver too — the manifest may still declare
@@ -37,6 +38,9 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 			return fmt.Errorf("databaseDrivers: %w", err)
 		}
 		id := string(drv.ID)
+		if err := fitsNetworkRules(drv); err != nil {
+			return fmt.Errorf("databaseDrivers[%s]: %w", id, err)
+		}
 		if _, dup := described[id]; dup {
 			return fmt.Errorf("databaseDrivers[%s]: duplicate driver %q", id, id)
 		}

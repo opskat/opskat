@@ -266,6 +266,13 @@ func TestParseCommandRefusesPageOnlyTools(t *testing.T) {
 	if _, err := ValidateToolArgs(m, "notes", []byte(`{}`)); err != nil {
 		t.Fatalf("a page call to a page-only tool must pass validation: %v", err)
 	}
+	// Like help, the tools exec offers when a name is wrong are the ones exec can run.
+	m.Tools = append(m.Tools, extwire.Tool{Name: "list", PolicyAction: "read",
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{}}})
+	_, _, err = parseCommand(m, `nope`)
+	if err == nil || !strings.Contains(err.Error(), "available: list") || strings.Contains(err.Error(), "notes") {
+		t.Fatalf("exec on an unknown tool must offer only the tools exec can run: err = %v", err)
+	}
 }
 
 func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {

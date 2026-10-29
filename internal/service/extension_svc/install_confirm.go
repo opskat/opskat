@@ -24,21 +24,21 @@ const (
 
 // Grant kinds, one per independently granted thing in extmanifest.Permissions
 // and extmanifest.Contributes. The kind strings are the confirm dialog's wire
-// format.
+// format and spell each permission the way manifest.json does.
 const (
-	CapFSRead         = "fs.read"
-	CapFSWrite        = "fs.write"
-	CapHTTP           = "http"
-	CapCredentials    = "credentials"
-	CapTunnel         = "tunnel" // permissions.network.allowPrivate
-	CapAssetEndpoint  = "network.assetEndpoint"
+	CapFSRead        = "fs.read"
+	CapFSWrite       = "fs.write"
+	CapHTTP          = "network.http"
+	CapCredentials   = "credentials"
+	CapAllowPrivate  = "network.allowPrivate"
+	CapAssetEndpoint = "network.assetEndpoint"
+	// CapAssetRoute: a call scoped to an asset may dial any address along that
+	// asset's connection path, not just the address the user typed.
+	CapAssetRoute = "network.assetRoute" // #nosec G101 -- a permission name, not a credential
+	// CapKerberos: a call whose scope carries a ticket source may ask the host for
+	// Kerberos tickets fetched with that asset's Kerberos credentials.
+	CapKerberos       = "kerberos"
 	CapDatabaseDriver = "databaseDriver"
-	// CapDatabaseRedirects: the driver may dial the other addresses a database
-	// redirects to, through the asset's route (permissions.network.assetRoute).
-	CapDatabaseRedirects = "network.databaseRedirects"
-	// CapDatabaseKerberos: the driver may ask the host for Kerberos tickets fetched with
-	// the asset's Kerberos credentials (permissions.kerberos).
-	CapDatabaseKerberos = "databaseKerberos"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -168,16 +168,16 @@ func CapabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []Ca
 		out = append(out, CapabilityGrant{Kind: CapCredentials, Value: p.Credentials, HighRisk: p.Credentials == extmanifest.CredentialAccessRead})
 	}
 	if p.Network.AllowPrivate {
-		out = append(out, CapabilityGrant{Kind: CapTunnel})
+		out = append(out, CapabilityGrant{Kind: CapAllowPrivate})
 	}
 	if p.Network.AssetEndpoint {
 		out = append(out, CapabilityGrant{Kind: CapAssetEndpoint})
 	}
 	if p.Network.AssetRoute {
-		out = append(out, CapabilityGrant{Kind: CapDatabaseRedirects, HighRisk: true})
+		out = append(out, CapabilityGrant{Kind: CapAssetRoute, HighRisk: true})
 	}
 	if p.Kerberos {
-		out = append(out, CapabilityGrant{Kind: CapDatabaseKerberos, HighRisk: true})
+		out = append(out, CapabilityGrant{Kind: CapKerberos, HighRisk: true})
 	}
 	// Only the ids are known here (manifest / signed store index); describe() has
 	// not run before an install is confirmed.

@@ -227,7 +227,7 @@ func configReference(localized *Manifest) string {
 			}
 			fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", name, typ, req, tableCell(notes))
 		}
-		for _, doc := range assettype.ConnectionFieldDocs(connectionSpec(at)) {
+		for _, doc := range assettype.ConnectionFieldDocs(connectionSpec(at.Connection)) {
 			fmt.Fprintf(&b, "| `%s` | %s | no | %s |\n", doc.Name, doc.Type, tableCell(doc.Notes))
 		}
 	}

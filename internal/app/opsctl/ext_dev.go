@@ -201,35 +201,26 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	return b.String()
 }
 
-// extDevGrantLabel 是授权类别在 manifest 里的写法，ext dev 文案按它列出。
+// extDevGrantLabel 是授权类别在 manifest 里的写法，ext dev 文案按它列出。授权类别本身就按
+// manifest 的写法命名，只有驱动 id 一项一个授权、键名是复数。
 func extDevGrantLabel(kind string) string {
-	switch kind {
-	case extension_svc.CapTunnel:
-		return "network.allowPrivate"
-	case extension_svc.CapDatabaseRedirects:
-		return "network.assetRoute"
-	case extension_svc.CapDatabaseKerberos:
-		return "kerberos"
-	case extension_svc.CapDatabaseDriver:
+	if kind == extension_svc.CapDatabaseDriver {
 		return "databaseDrivers"
-	case extension_svc.CapHTTP:
-		return "network.http"
-	default:
-		return kind // fs.read / fs.write / credentials / network.assetEndpoint
 	}
+	return kind
 }
 
-// extDevGrantExplanation 说明那些光看键名不懂含义的高风险能力。
+// extDevGrantExplanation 说明那些光看键名不懂含义的高风险权限。
 func extDevGrantExplanation(kind, lang string) string {
 	switch kind {
-	case extension_svc.CapDatabaseRedirects:
+	case extension_svc.CapAssetRoute:
 		return i18n.Pick(lang,
-			" —— 驱动可以连到数据库重定向到的其他地址，经资产的到达途径",
-			" — the driver may connect to other addresses the database redirects to, through the asset's route")
-	case extension_svc.CapDatabaseKerberos:
+			" —— 带资产的调用可以经该资产的连接路径连到任意地址，不只是资产里填写的地址",
+			" — a call on an asset may dial any address along that asset's connection path, not just the address typed into the asset")
+	case extension_svc.CapKerberos:
 		return i18n.Pick(lang,
-			" —— 驱动可以用资产里的 Kerberos 凭据为登录数据库取票",
-			" — the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
+			" —— 可以用资产里保存的 Kerberos 凭据申请票据",
+			" — may fetch Kerberos tickets with the Kerberos credentials stored in the asset")
 	}
 	return ""
 }

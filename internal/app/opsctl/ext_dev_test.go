@@ -484,7 +484,7 @@ func TestHandleExtDevInstallKerberosNewMark(t *testing.T) {
 			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "kerberos: true")
-			require.Contains(t, detail, "the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
+			require.Contains(t, detail, "may fetch Kerberos tickets with the Kerberos credentials stored in the asset")
 			if tc.marked {
 				require.Contains(t, detail, "kerberos: true (new)")
 			} else {
@@ -519,7 +519,7 @@ func TestHandleExtDevInstallAssetRouteNewMark(t *testing.T) {
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "network.assetRoute: true")
 			// 与桌面端确认一样说明这项能力的含义，而不只列出键。
-			require.Contains(t, detail, "the driver may connect to other addresses the database redirects to, through the asset's route")
+			require.Contains(t, detail, "a call on an asset may dial any address along that asset's connection path, not just the address typed into the asset")
 			if tc.marked {
 				require.Contains(t, detail, "network.assetRoute: true (new)")
 			} else {

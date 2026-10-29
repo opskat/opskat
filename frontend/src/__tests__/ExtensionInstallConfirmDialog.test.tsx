@@ -41,7 +41,7 @@ const upgrade = {
   source: "file",
   size: 2048,
   capabilities: [
-    { kind: "http", value: "https://api.acme.dev/" },
+    { kind: "network.http", value: "https://api.acme.dev/" },
     { kind: "credentials", value: "read", highRisk: true },
   ],
   added: [{ kind: "credentials", value: "read", highRisk: true }],
@@ -65,7 +65,7 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(within(dialog).getByText("2.0 KB")).toBeInTheDocument();
     expect(within(dialog).getByRole("alert")).toHaveTextContent("extension.credentialsReadWarning");
 
-    const http = within(dialog).getByTestId("ext-install-cap-http");
+    const http = within(dialog).getByTestId("ext-install-cap-network.http");
     expect(http).toHaveTextContent("https://api.acme.dev/");
     expect(within(http).queryByText("extension.installConfirm.added")).toBeNull();
     const creds = within(dialog).getByTestId("ext-install-cap-credentials");
@@ -150,31 +150,31 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(screen.getByRole("dialog").querySelector("[data-slot=dialog-title]")?.textContent).toBe(title);
   });
 
-  it("lists the database-redirect capability with a label and marks it new on upgrade", () => {
+  it("lists the assetRoute permission with a label and marks it new on upgrade", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);
     fire(handlers, "ext:install-confirm", {
       ...upgrade,
-      capabilities: [{ kind: "network.databaseRedirects", value: "" }],
-      added: [{ kind: "network.databaseRedirects", value: "" }],
+      capabilities: [{ kind: "network.assetRoute", value: "" }],
+      added: [{ kind: "network.assetRoute", value: "" }],
     });
 
-    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-network.databaseRedirects");
-    expect(row).toHaveTextContent("extension.installConfirm.databaseRedirects");
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-network.assetRoute");
+    expect(row).toHaveTextContent("extension.installConfirm.assetRoute");
     expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
-  it("lists the database-kerberos capability with a label and marks it new on upgrade", () => {
+  it("lists the kerberos permission with a label and marks it new on upgrade", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);
     fire(handlers, "ext:install-confirm", {
       ...upgrade,
-      capabilities: [{ kind: "databaseKerberos", value: "" }],
-      added: [{ kind: "databaseKerberos", value: "" }],
+      capabilities: [{ kind: "kerberos", value: "" }],
+      added: [{ kind: "kerberos", value: "" }],
     });
 
-    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-databaseKerberos");
-    expect(row).toHaveTextContent("extension.installConfirm.databaseKerberos");
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-kerberos");
+    expect(row).toHaveTextContent("extension.installConfirm.kerberos");
     expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
@@ -184,11 +184,11 @@ describe("ExtensionInstallConfirmDialog", () => {
     fire(handlers, "ext:install-confirm", {
       ...upgrade,
       capabilities: [
-        { kind: "http", value: "https://api.acme.dev/", highRisk: false },
-        { kind: "network.databaseRedirects", value: "", highRisk: true },
-        { kind: "databaseKerberos", value: "", highRisk: true },
+        { kind: "network.http", value: "https://api.acme.dev/", highRisk: false },
+        { kind: "network.assetRoute", value: "", highRisk: true },
+        { kind: "kerberos", value: "", highRisk: true },
       ],
-      added: [{ kind: "databaseKerberos", value: "", highRisk: true }],
+      added: [{ kind: "kerberos", value: "", highRisk: true }],
     });
 
     const dialog = screen.getByRole("dialog");
@@ -196,15 +196,17 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(alerts).toHaveLength(2);
     expect(alerts[0]).toHaveTextContent("extension.assetRouteWarning");
     expect(alerts[1]).toHaveTextContent("extension.kerberosWarning");
-    for (const kind of ["network.databaseRedirects", "databaseKerberos"]) {
+    for (const kind of ["network.assetRoute", "kerberos"]) {
       expect(
         within(within(dialog).getByTestId(`ext-install-cap-${kind}`)).getByText("extension.installConfirm.highRisk")
       ).toBeInTheDocument();
     }
     expect(
-      within(within(dialog).getByTestId("ext-install-cap-http")).queryByText("extension.installConfirm.highRisk")
+      within(within(dialog).getByTestId("ext-install-cap-network.http")).queryByText(
+        "extension.installConfirm.highRisk"
+      )
     ).toBeNull();
-    const kerberos = within(dialog).getByTestId("ext-install-cap-databaseKerberos");
+    const kerberos = within(dialog).getByTestId("ext-install-cap-kerberos");
     expect(within(kerberos).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 

@@ -22,10 +22,35 @@ export interface HostDataTableProps {
   onSelectedRowsChange?: (rowIdxs: number[]) => void;
 }
 
-export function DataTable({ onCopyAs, ...props }: HostDataTableProps) {
+// Only the contract's props reach the internal table: a page is plain JS, and a
+// spread would hand it every prop the query panel's table has.
+export function DataTable({
+  columns,
+  rows,
+  loading,
+  showRowNumber,
+  rowNumberOffset,
+  rowDensity,
+  sortColumn,
+  sortDir,
+  onSortChange,
+  onCopyAs,
+  onSelectedCellChange,
+  onSelectedRowsChange,
+}: HostDataTableProps) {
   return (
     <QueryResultTable
-      {...props}
+      columns={columns}
+      rows={rows}
+      loading={loading}
+      showRowNumber={showRowNumber}
+      rowNumberOffset={rowNumberOffset}
+      rowDensity={rowDensity}
+      sortColumn={sortColumn}
+      sortDir={sortDir}
+      onSortChange={onSortChange}
+      onSelectedCellChange={onSelectedCellChange}
+      onSelectedRowsChange={onSelectedRowsChange}
       copyAsSql={false}
       onCopyAs={
         onCopyAs

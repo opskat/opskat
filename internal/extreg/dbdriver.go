@@ -172,9 +172,6 @@ func (d *extensionDriver) remove() {
 func registerDrivers(ext string, descs []dbdriver.Descriptor, plugin driverOpener, translate translateFunc) ([]*extensionDriver, error) {
 	done := make([]*extensionDriver, 0, len(descs))
 	for _, desc := range descs {
-		if err := fitsNetworkRules(desc); err != nil {
-			return releaseDrivers(done), fmt.Errorf("databaseDrivers[%s]: %w", desc.ID, err)
-		}
 		d := newExtensionDriver(ext, desc, plugin, translate)
 		if err := dbregistry.TryRegister(d); err != nil {
 			return releaseDrivers(done), fmt.Errorf("databaseDrivers[%s]: %w", desc.ID, describeDriverClash(err))

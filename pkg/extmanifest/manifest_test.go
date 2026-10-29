@@ -136,6 +136,17 @@ func TestParseValidatesFields(t *testing.T) {
 		{"credentials wrong type", string(manifest(`{"credentials":true}`, "")), "credentials"},
 		{"driver id", string(manifest("", `{"databaseDrivers":["Bad Id"]}`)), "Bad Id"},
 		{"driver twice", string(manifest("", `{"databaseDrivers":["a","a"]}`)), "twice"},
+		// A path or URL prefix the host could never match is a mistake in the
+		// contract, refused before the user is asked to approve it.
+		{"fs read empty", string(manifest(`{"fs":{"read":[""]}}`, "")), "permissions.fs.read"},
+		{"fs read relative", string(manifest(`{"fs":{"read":["data/**"]}}`, "")), `permissions.fs.read entry "data/**"`},
+		{"fs write traversal", string(manifest(`{"fs":{"write":["/tmp/../etc"]}}`, "")), `permissions.fs.write entry "/tmp/../etc"`},
+		{"fs write bare glob", string(manifest(`{"fs":{"write":["/**"]}}`, "")), `permissions.fs.write entry "/**"`},
+		{"fs ext dir inside", string(manifest(`{"fs":{"read":["/x/${EXT_DIR}"]}}`, "")), "permissions.fs.read"},
+		{"http empty", string(manifest(`{"network":{"http":[""]}}`, "")), "permissions.network.http"},
+		{"http no scheme", string(manifest(`{"network":{"http":["example.com/"]}}`, "")), `permissions.network.http entry "example.com/"`},
+		{"http ftp", string(manifest(`{"network":{"http":["ftp://example.com/"]}}`, "")), `permissions.network.http entry "ftp://example.com/"`},
+		{"http no host", string(manifest(`{"network":{"http":["https:///x"]}}`, "")), "permissions.network.http"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -172,6 +172,18 @@ func TestAssetTypeRules(t *testing.T) {
 				So(checkDescribe(t, withAssetEndpoint(), payload), ShouldBeNil)
 			}
 		})
+
+		// A connection item the type opts into stores the host's own field in the
+		// asset config; a configSchema property of that name would collide with it.
+		// The check refuses it, so a cached read concludes what a load does.
+		Convey("a configSchema property named like a host connection field the type opts into is refused", func() {
+			err := checkDescribe(t, withAssetEndpoint(), describeJSON(`"assetTypes":[{"type":"x","i18n":{"name":"n"},`+
+				`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"ssh_asset_id":{"type":"string"}}},`+
+				`"connection":{"sshTunnel":true}}],"policy":{"type":"x"}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldStartWith, "ext: assetTypes[x]: ")
+			So(err.Error(), ShouldContainSubstring, `"ssh_asset_id"`)
+		})
 	})
 }
 
@@ -567,7 +579,7 @@ func TestPolicyRules(t *testing.T) {
 }
 
 const driverDescriptorJSON = `{"id":"mysql-ext","name":"MySQL Ext","icon":"x","order":50,"aliases":[],"defaultPort":3306,` +
-	`"form":[{"tab":"connection","fields":["host","port"]}],"capabilities":["schemas"],` +
+	`"form":[{"tab":"connection","fields":["host","port","username"]}],"capabilities":["schemas"],` +
 	`"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}`
 
 func TestDatabaseDriverRules(t *testing.T) {
@@ -598,6 +610,23 @@ func TestDatabaseDriverRules(t *testing.T) {
 
 		Convey("an extension may mix asset types and drivers", func() {
 			So(checkDescribe(t, declaring("mysql-ext"), desc(drivers)), ShouldBeNil)
+		})
+
+		// An extension driver reaches a database over the network: a form without
+		// host / port / username, or with a database-file field, is refused by the
+		// check — a cached read concludes what a load does.
+		Convey("a driver form that does not fit the network rules is refused, naming the driver and the field", func() {
+			for field, form := range map[string]string{
+				`"username"`:      `["host","port"]`,
+				`"sqlite_source"`: `["host","port","username","sqlite_source"]`,
+			} {
+				err := checkDescribe(t, declaring("net-ext"), describeJSON(`"databaseDrivers":[{"id":"net-ext","name":"N","icon":"x",`+
+					`"order":50,"aliases":[],"defaultPort":1,"form":[{"tab":"connection","fields":`+form+`}],`+
+					`"capabilities":[],"createDatabaseOptions":[],"alterTableAttributes":[],"driverFields":[]}]`))
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldStartWith, "ext-a: databaseDrivers[net-ext]: ")
+				So(err.Error(), ShouldContainSubstring, field)
+			}
 		})
 	})
 

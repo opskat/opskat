@@ -382,7 +382,7 @@ func TestInstallFromStoreRefusesAPackageOtherThanConfirmed(t *testing.T) {
 			return c
 		},
 		"other grants": func(c extension_svc.InstallConfirm) extension_svc.InstallConfirm {
-			c.Capabilities = append(c.Capabilities, extension_svc.CapabilityGrant{Kind: extension_svc.CapTunnel})
+			c.Capabilities = append(c.Capabilities, extension_svc.CapabilityGrant{Kind: extension_svc.CapAllowPrivate})
 			return c
 		},
 	}

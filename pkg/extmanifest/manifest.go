@@ -9,8 +9,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // HostABIVersion is the host ABI contract this app speaks. An extension declares
@@ -172,7 +174,52 @@ func (m *Manifest) validate() error {
 	if c := m.Permissions.Credentials; c != CredentialAccessNone && c != CredentialAccessRead {
 		return fmt.Errorf("permissions.credentials must be \"\" or \"read\" (got %q)", c)
 	}
+	if err := validateFSPatterns("read", m.Permissions.FS.Read); err != nil {
+		return err
+	}
+	if err := validateFSPatterns("write", m.Permissions.FS.Write); err != nil {
+		return err
+	}
+	if err := validateHTTPPrefixes(m.Permissions.Network.HTTP); err != nil {
+		return err
+	}
 	return m.validateDatabaseDrivers()
+}
+
+// winAbsRe is an absolute Windows path: a drive letter and a separator.
+var winAbsRe = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
+
+// validateFSPatterns refuses an fs pattern the host could never match: it must
+// be ${EXT_DIR} or an absolute path (optionally followed by /**), never empty,
+// a bare glob, or one that climbs out with "..".
+func validateFSPatterns(kind string, patterns []string) error {
+	for _, p := range patterns {
+		rest, inExtDir := strings.CutPrefix(p, "${EXT_DIR}")
+		root := strings.TrimSuffix(strings.TrimSuffix(rest, "/**"), "**")
+		switch {
+		case strings.Contains(rest, "${EXT_DIR}"):
+			return fmt.Errorf("permissions.fs.%s entry %q: ${EXT_DIR} may only start a pattern", kind, p)
+		case !inExtDir && root == "":
+			return fmt.Errorf("permissions.fs.%s entry %q: must be ${EXT_DIR} or an absolute path", kind, p)
+		case !inExtDir && !strings.HasPrefix(root, "/") && !winAbsRe.MatchString(root):
+			return fmt.Errorf("permissions.fs.%s entry %q: must be ${EXT_DIR} or an absolute path", kind, p)
+		case slices.Contains(strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }), ".."):
+			return fmt.Errorf("permissions.fs.%s entry %q: must not contain \"..\"", kind, p)
+		}
+	}
+	return nil
+}
+
+// validateHTTPPrefixes refuses an http prefix no request URL could start with
+// under the host's rules: each must be an http(s) URL with a host.
+func validateHTTPPrefixes(prefixes []string) error {
+	for _, p := range prefixes {
+		u, err := url.Parse(p)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("permissions.network.http entry %q: must be an http:// or https:// URL prefix with a host", p)
+		}
+	}
+	return nil
 }
 
 // validateDatabaseDrivers checks the driver ids the manifest declares:

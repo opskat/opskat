@@ -66,6 +66,9 @@ func checkAssetType(at extwire.AssetType, assetEndpoint bool) error {
 	if err := checkEnumPresentation(at.ConfigSchema); err != nil {
 		return fmt.Errorf("configSchema.%w", err)
 	}
+	if err := assettype.CheckExtensionConfigFields(props, connectionSpec(at.Connection)); err != nil {
+		return err
+	}
 	binds := bindsEndpoint(at)
 	if binds && len(extension.EndpointFieldsFromSchema(at.ConfigSchema)) == 0 {
 		return fmt.Errorf(`declares auth or connection, which apply only to the asset's endpoint, but its configSchema marks no field format:"endpoint"`)
@@ -287,7 +290,7 @@ func extensionTypeSpec(extName string, m *Manifest, at AssetTypeDef) assettype.E
 		SecretFields:        extension.PasswordFieldsFromSchema(at.ConfigSchema),
 		PolicyKind:          m.Policies.Type,
 		DefaultPolicyGroups: m.Policies.Default,
-		Connection:          connectionSpec(at),
+		Connection:          connectionSpec(at.Connection),
 	}
 }
 
@@ -355,16 +358,16 @@ func assetEndpoints(at *AssetTypeDef, config json.RawMessage) ([]extension.Endpo
 	return endpoints, nil
 }
 
-// connectionSpec 翻译该类型交给宿主接管的连接项。没声明 connection 的类型一项都没有，
+// connectionSpec 翻译资产类型交给宿主接管的连接项。没声明 connection 的类型一项都没有，
 // 自动化写入面也就不接受任何宿主连接字段。
-func connectionSpec(at AssetTypeDef) assettype.ExtensionConnectionSpec {
-	if at.Connection == nil {
+func connectionSpec(c *extwire.Connection) assettype.ExtensionConnectionSpec {
+	if c == nil {
 		return assettype.ExtensionConnectionSpec{}
 	}
 	return assettype.ExtensionConnectionSpec{
 		ConfigKey:  extension.HostConnectionConfigKey,
-		SSHTunnel:  at.Connection.SSHTunnel,
-		ProxyChain: at.Connection.ProxyChain,
-		TLS:        at.Connection.TLS,
+		SSHTunnel:  c.SSHTunnel,
+		ProxyChain: c.ProxyChain,
+		TLS:        c.TLS,
 	}
 }
