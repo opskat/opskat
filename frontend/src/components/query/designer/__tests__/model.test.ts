@@ -3,6 +3,7 @@ import { dbdriver, query_svc } from "../../../../../wailsjs/go/models";
 import type { TFunction } from "i18next";
 import {
   declaredLabel,
+  canCreateTable,
   designerAccess,
   indexTypeLabel,
   structureFromAlterModel,
@@ -256,5 +257,14 @@ describe("declaredLabel / indexTypeLabel", () => {
       indexEditing: { types: [{ id: "unique", label: "query.designer.indexType.unique" }], nameScope: "table" },
     });
     expect(indexTypeLabel(descriptor, "unique", t)).toBe("Unique");
+  });
+});
+
+describe("canCreateTable", () => {
+  it("驱动声明了建表、且连接不是只读时才能新建表", () => {
+    expect(canCreateTable(fakeDriverWith(["create_table"]), false)).toBe(true);
+    expect(canCreateTable(fakeDriverWith(["create_table"]), true)).toBe(false);
+    expect(canCreateTable(fakeDriverWith(["alter_table"]), false)).toBe(false);
+    expect(canCreateTable(undefined, false)).toBe(false);
   });
 });

@@ -2353,7 +2353,6 @@
     "mongoshCollection": "Collection",
     "applyFilter": "Apply",
     "addRow": "Add Row",
-    "addTable": "Add Table",
     "alterTable": "Design Table",
     "viewDDL": "View DDL",
     "ddlDialogTitle": "Table DDL",
@@ -2365,7 +2364,8 @@
     "designer": {
       "tabTitle": {
         "view": "Structure {{name}}",
-        "design": "Design {{name}}"
+        "design": "Design {{name}}",
+        "create": "New table · {{name}}"
       },
       "tab": {
         "fields": "Columns",
@@ -2534,7 +2534,10 @@
       "guard": {
         "title": "Unsaved design for {{name}}",
         "desc": "Unsaved changes: {{count}}. Closing the tab discards them.",
-        "save": "Save…"
+        "save": "Save…",
+        "createTitle": "The new table in {{name}} hasn't been created",
+        "createDesc": "Its design will be lost if you close this tab.",
+        "create": "Create…"
       },
       "addIndex": "New index",
       "newIndex": "New index",
@@ -2562,6 +2565,18 @@
       "indexLock": {
         "undroppable": "The database won't drop this index (for example one created for a constraint), so it can't be changed either",
         "primaryKey": "This driver can't change an existing primary key"
+      },
+      "create": {
+        "target": "Create in",
+        "database": "Target database",
+        "schema": "Target schema",
+        "defaultSchema": "default schema",
+        "submit": "Create",
+        "summary": "Columns: {{columns}} · Indexes: {{indexes}}",
+        "label": "New table · {{name}}",
+        "confirmTitle": "Create {{name}}",
+        "done": "Created table {{name}}",
+        "unavailable": "New tables can't be created here: the driver doesn't support it, or the connection is read-only."
       }
     },
     "objTables": "Tables",
@@ -2873,26 +2888,7 @@
     "unsavedEditsDiscardClose": "Discard and close",
     "unsavedTabsTitle": "{{count}} tabs have unsaved changes",
     "unsavedTabsDesc": "Closing will discard the changes in these tabs:",
-    "createTableDialogTitle": "Add Table",
-    "createTableDialogDesc": "Create a new table in database {{database}}",
-    "tableNameLabel": "Table Name",
-    "tableNamePlaceholder": "Enter table name",
-    "columnsLabel": "Columns",
-    "columnNameLabel": "Column Name",
-    "columnNamePlaceholder": "e.g. name",
-    "columnTypeLabel": "Column Type",
-    "columnTypePlaceholder": "e.g. VARCHAR(255)",
-    "columnNullableLabel": "Nullable",
-    "defaultValueLabel": "Default Value",
-    "defaultValuePlaceholder": "Leave empty to skip",
-    "addColumn": "Add Column",
-    "removeColumn": "Remove Column",
     "createTableSubmit": "Create Table",
-    "createTableNameRequired": "Table name is required",
-    "createTableAtLeastOneColumn": "At least one column is required",
-    "createTableColumnNameRequired": "Column name is required",
-    "createTableColumnTypeRequired": "Column type is required",
-    "createTableSuccess": "Table {{table}} created",
     "alterTableDialogTitle": "Alter Table",
     "alterTableDialogDesc": "Current table: {{table}}",
     "designTablePreviewChanges": "Preview SQL",
@@ -3065,7 +3061,14 @@
     "openTables": "Open {{count}} tables",
     "truncateTables": "Truncate {{count}} tables...",
     "dropTables": "Drop {{count}} tables...",
-    "batchTableActionNote": "Each table runs its own statement; one failure does not stop the rest."
+    "batchTableActionNote": "Each table runs its own statement; one failure does not stop the rest.",
+    "newTable": "New table",
+    "newTableIn": "New table in {{name}}",
+    "newMenu": {
+      "label": "New",
+      "in": "in {{name}}",
+      "database": "New database…"
+    }
   },
   "systemStatus": {
     "title": "Status",

@@ -29,12 +29,13 @@ export interface QueryTab {
 }
 
 /**
- * 表设计器标签。view:只读查看结构;design:设计已有的表;create:在 database 里新建表(还没有表名)。
- * 每张已有的表只开一个(id 按库与表),草稿不持久化:恢复后重新读取表结构。
+ * 表设计器标签。view:只读查看结构;design:设计已有的表;create:在 database(有 schema 的驱动还有 schema,
+ * 空表示驱动的默认 schema)里新建表(还没有表名)。每张已有的表只开一个(id 按库与表),草稿不持久化:
+ * 恢复后重新读取表结构,新建表回到预置的样子。
  */
 export type DesignerInnerTab =
   | { id: string; type: "designer"; mode: "view" | "design"; database: string; table: string }
-  | { id: string; type: "designer"; mode: "create"; database: string };
+  | { id: string; type: "designer"; mode: "create"; database: string; schema?: string };
 
 export type InnerTab =
   | { id: string; type: "table"; database: string; table: string; pendingLoad?: boolean }
@@ -183,6 +184,17 @@ interface QueryState {
    * 新名字已有设计器标签时去掉那个旧的。
    */
   renameDesignerTab: (tabId: string, innerTabId: string, table: string) => void;
+  /**
+   * 打开在 database(与 schema)里新建表的设计器标签。同一目标已有还没动过的新建表标签时切过去,否则另开一个。
+   */
+  openCreateTableTab: (tabId: string, database: string, schema?: string) => void;
+  /** 新建表的目标库(与 schema)改了。 */
+  retargetCreateTab: (tabId: string, innerTabId: string, database: string, schema?: string) => void;
+  /**
+   * 新建表成功:标签换成这张表的设计标签(id、当前标签、脏标记与挂起的关闭请求里的 id 一并换掉)。这张表
+   * 已有设计器标签时去掉那个旧的。
+   */
+  completeCreateTab: (tabId: string, innerTabId: string, table: string) => void;
   openSqlTab: (tabId: string, database?: string, sql?: string) => void;
   closeInnerTab: (tabId: string, innerTabId: string) => void;
   closeOtherInnerTabs: (tabId: string, innerTabId: string) => void;
@@ -229,6 +241,29 @@ interface QueryState {
 
 function makeTabId(assetId: number) {
   return `query-${assetId}`;
+}
+
+/** 新建表标签 id 的序号(与时间一起保证不与恢复出来的标签重复)。 */
+let createTabSeq = 0;
+
+/**
+ * 把一个内层标签换成 next(id 可以不同):当前标签、脏标记与挂起的关闭请求里的 id 一并换掉;已有与 next 同 id
+ * 的其他标签时去掉它。
+ */
+function replaceInnerTab(state: DatabaseTabState, innerTabId: string, next: InnerTab): DatabaseTabState {
+  const swap = (id: string) => (id === innerTabId ? next.id : id);
+  const others = (id: string) => id === innerTabId || id !== next.id;
+  return {
+    ...state,
+    innerTabs: state.innerTabs.filter((t) => others(t.id)).map((t) => (t.id === innerTabId ? next : t)),
+    activeInnerTabId: state.activeInnerTabId && swap(state.activeInnerTabId),
+    dirtyInnerTabIds: state.dirtyInnerTabIds?.filter(others).map(swap),
+    closeRequest: state.closeRequest && {
+      ...state.closeRequest,
+      ids: state.closeRequest.ids.filter(others).map(swap),
+      dirtyIds: state.closeRequest.dirtyIds.filter(others).map(swap),
+    },
+  };
 }
 
 /** 已有表的设计器标签 id:每张表一个。 */
@@ -715,28 +750,60 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const state = get().dbStates[tabId];
     const tab = state?.innerTabs.find((t) => t.id === innerTabId);
     if (!state || tab?.type !== "designer" || tab.mode === "create") return;
-    const nextId = designerTabId(tab.database, table);
-    const swap = (id: string) => (id === innerTabId ? nextId : id);
-    const innerTabs = state.innerTabs
-      .filter((t) => t.id !== nextId)
-      .map((t) => (t.id === innerTabId ? { ...tab, id: nextId, table } : t));
-    const closeRequest = state.closeRequest && {
-      ...state.closeRequest,
-      ids: state.closeRequest.ids.filter((id) => id !== nextId).map(swap),
-      dirtyIds: state.closeRequest.dirtyIds.filter((id) => id !== nextId).map(swap),
+    const next = { ...tab, id: designerTabId(tab.database, table), table };
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: replaceInnerTab(state, innerTabId, next) } }));
+  },
+
+  openCreateTableTab: (tabId, database, schema) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const untouched = state.innerTabs.find(
+      (t) =>
+        t.type === "designer" &&
+        t.mode === "create" &&
+        t.database === database &&
+        (t.schema ?? "") === (schema ?? "") &&
+        !state.dirtyInnerTabIds?.includes(t.id)
+    );
+    const tab: InnerTab = untouched ?? {
+      id: `create:${Date.now().toString(36)}.${++createTabSeq}`,
+      type: "designer",
+      mode: "create",
+      database,
+      ...(schema ? { schema } : {}),
     };
     set((s) => ({
       dbStates: {
         ...s.dbStates,
         [tabId]: {
           ...state,
-          innerTabs,
-          activeInnerTabId: state.activeInnerTabId && swap(state.activeInnerTabId),
-          dirtyInnerTabIds: state.dirtyInnerTabIds?.filter((id) => id !== nextId).map(swap),
-          closeRequest,
+          innerTabs: untouched ? state.innerTabs : [...state.innerTabs, tab],
+          activeInnerTabId: tab.id,
         },
       },
     }));
+  },
+
+  retargetCreateTab: (tabId, innerTabId, database, schema) => {
+    const state = get().dbStates[tabId];
+    const tab = state?.innerTabs.find((t) => t.id === innerTabId);
+    if (!state || tab?.type !== "designer" || tab.mode !== "create") return;
+    const next: InnerTab = { id: tab.id, type: "designer", mode: "create", database, ...(schema ? { schema } : {}) };
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: replaceInnerTab(state, innerTabId, next) } }));
+  },
+
+  completeCreateTab: (tabId, innerTabId, table) => {
+    const state = get().dbStates[tabId];
+    const tab = state?.innerTabs.find((t) => t.id === innerTabId);
+    if (!state || tab?.type !== "designer" || tab.mode !== "create") return;
+    const next: InnerTab = {
+      id: designerTabId(tab.database, table),
+      type: "designer",
+      mode: "design",
+      database: tab.database,
+      table,
+    };
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: replaceInnerTab(state, innerTabId, next) } }));
   },
 
   openSqlTab: (tabId, database?, sql?) => {

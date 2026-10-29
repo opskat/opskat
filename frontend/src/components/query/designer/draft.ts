@@ -117,7 +117,7 @@ export function revertField(column: DraftColumn, field: ColumnField): DraftColum
   return { ...column, [field]: column.original[field] };
 }
 
-function defaultText(value: DesignerDefault): string {
+export function defaultText(value: DesignerDefault): string {
   return value.kind === "none" || value.kind === "null" ? "" : value.text;
 }
 
@@ -190,6 +190,19 @@ export function lockedFields(descriptor: DriverDescriptor | undefined, column: D
   return (Object.keys(FIELD_ATTRIBUTE) as (keyof typeof FIELD_ATTRIBUTE)[]).filter(
     (field) => !driverCanAlter(descriptor, FIELD_ATTRIBUTE[field])
   );
+}
+
+/**
+ * 一列的自增能不能勾:驱动声明了自增,且是新列;驱动声明自增只能在新表上设时,已有表的新列也不行,
+ * 新建表(creating)的列可以。已有列的自增不能改,只显示现状。
+ */
+export function autoIncrementEditable(
+  descriptor: DriverDescriptor | undefined,
+  column: DraftColumn,
+  creating: boolean
+): boolean {
+  if (!descriptor?.autoIncrement || column.original) return false;
+  return creating || !descriptor.autoIncrementNewTablesOnly;
 }
 
 /** 锁定的属性对应的驱动可改属性,用来生成锁定原因。 */

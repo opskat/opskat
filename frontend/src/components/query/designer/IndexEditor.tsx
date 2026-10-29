@@ -47,6 +47,8 @@ interface IndexEditorProps {
   issues: DraftIssue[];
   onChange: (key: string, patch: DraftIndexPatch) => void;
   onClose: () => void;
+  /** 新建表:「主键」类型总可选(没有要改的已有主键)。 */
+  creating?: boolean;
 }
 
 /**
@@ -54,7 +56,15 @@ interface IndexEditorProps {
  * 驱动声明时每列可设降序与前缀长度)、驱动声明的选项(枚举给下拉、开关给开关)、注释(驱动声明时)。
  * 锁定的已有索引只显示原因与定义。
  */
-export function IndexEditor({ draft, index, descriptor, issues, onChange, onClose }: IndexEditorProps) {
+export function IndexEditor({
+  draft,
+  index,
+  descriptor,
+  issues,
+  onChange,
+  onClose,
+  creating = false,
+}: IndexEditorProps) {
   const { t } = useTranslation();
   const key = index.key;
   const editing = descriptor?.indexEditing;
@@ -142,7 +152,7 @@ export function IndexEditor({ draft, index, descriptor, issues, onChange, onClos
                 className={cn("h-7 w-auto [&>button]:px-2 [&>button]:text-xs", typeError && "ring-1 ring-destructive")}
                 value={index.type}
                 onChange={(type) => onChange(key, { type })}
-                options={indexTypeChoices(descriptor).map((choice) => ({
+                options={indexTypeChoices(descriptor, creating).map((choice) => ({
                   value: choice.id,
                   label: declaredLabel(t, choice.label),
                   disabled: choice.disabled,

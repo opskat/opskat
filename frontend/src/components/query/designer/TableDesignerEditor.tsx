@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Code2, Columns3, Link2, ListTree, Plus } from "lucide-react";
 import { Button, ConfirmDialog, TabsContent } from "@opskat/ui";
@@ -15,7 +15,8 @@ import {
   primaryKeyColumnKeys,
 } from "./indexDraft";
 import { useTableDraft } from "./useTableDraft";
-import { useAlterPreview } from "./useAlterPreview";
+import { useAlterPreview, useCreatePreview } from "./useAlterPreview";
+import { buildCreateRequest } from "./createDraft";
 import { issueMessage } from "./issueText";
 import { DesignToolbar } from "./DesignerToolbar";
 import { DesignerFrame, DesignerStatus, type DesignerSubTab, type SubTabDef } from "./DesignerFrame";
@@ -37,12 +38,27 @@ import type { CloseAfterSave } from "./handoff";
  */
 export interface DesignerSave {
   statements: string[];
-  request: dbdriver.AlterTableRequest;
-  /** 改表后的表名(列表给出的形式);改了名时与打开时不同。 */
+  /** 设计表是改表请求,新建表是建表请求。 */
+  request: dbdriver.AlterTableRequest | dbdriver.CreateTableRequest;
+  /** 改表后的表名(列表给出的形式);改了名时与打开时不同。新建表时是要建的表名(有 schema 时带上)。 */
   table: string;
   draft: TableDraft;
   droppedColumns: string[];
   droppedIndexes: string[];
+}
+
+/** 新建表(见 TableCreator)时编辑器与设计表不同的地方。 */
+export interface CreateMode {
+  /** 工具栏表名前的目标库(与 schema)选择。 */
+  target: ReactNode;
+  /** 要建的表名(有 schema 时带上 schema)。 */
+  qualify: (name: string) => string;
+  /** 状态栏上这张新表的叫法(新建表 · 目标)。 */
+  label: string;
+  /** 目标库(与 schema)的显示名,关闭拦截里用。 */
+  targetName: string;
+  /** 新建表的起点(见 presetDraft)。 */
+  preset: TableDraft;
 }
 
 interface TableDesignerEditorProps {
@@ -65,6 +81,8 @@ interface TableDesignerEditorProps {
   saving: boolean;
   /** 保存:打开确认。close 是关闭拦截里点「保存…」时挂着的关闭,保存全部成功后照此关闭。 */
   onSave: (save: DesignerSave, close?: CloseAfterSave) => void;
+  /** 新建表;设计表时不给。 */
+  create?: CreateMode;
 }
 
 type PendingConfirm = "revertAll" | "reload" | null;
@@ -73,8 +91,8 @@ type PendingConfirm = "revertAll" | "reload" | null;
 const FOCUS_RETRY_FRAMES = 10;
 
 /**
- * 设计表:字段直接编辑、改动标记与还原、按驱动声明锁定、校验与提醒;SQL 预览随草稿重新生成,
- * 驱动报错或草稿有问题时保存不可用。
+ * 设计表与新建表:字段直接编辑、改动标记与还原、按驱动声明锁定、校验与提醒;SQL 预览随草稿重新生成(新建表
+ * 是建表语句),驱动报错或草稿有问题时保存不可用。新建表时没有外键子页、撤销与重新读取,保存是「创建」。
  */
 export function TableDesignerEditor({
   tabId,
@@ -91,13 +109,29 @@ export function TableDesignerEditor({
   rebaseFrom,
   saving,
   onSave,
+  create,
 }: TableDesignerEditorProps) {
   const { t } = useTranslation();
   const openSqlTab = useQueryStore((s) => s.openSqlTab);
-  const draftState = useTableDraft(structure, descriptor, rebaseFrom);
-  const { draft, counts, indexCounts, isDirty, issues, request } = draftState;
+  const creating = !!create;
+  const draftState = useTableDraft(structure, descriptor, rebaseFrom, create?.preset);
+  const { draft, counts, indexCounts, isDirty, issues } = draftState;
   const errors = issues.filter((i) => i.severity === "error");
-  const preview = useAlterPreview({ assetId, database, table, request, enabled: errors.length === 0 });
+  const qualify = create?.qualify;
+  const createRequest = useMemo(
+    () => (qualify ? buildCreateRequest(draft, descriptor, qualify(draft.name)) : null),
+    [descriptor, draft, qualify]
+  );
+  const request = createRequest ?? draftState.request;
+  const alterPreview = useAlterPreview({
+    assetId,
+    database,
+    table,
+    request: draftState.request,
+    enabled: !creating && errors.length === 0,
+  });
+  const createPreview = useCreatePreview({ assetId, database, request: createRequest, enabled: errors.length === 0 });
+  const preview = creating ? createPreview : alterPreview;
   // 索引读自改表模型(驱动声明了索引编辑)时才能改;否则只读并说明。
   const indexesEditable = structure.indexesEditable && !!descriptor?.indexEditing;
 
@@ -211,6 +245,8 @@ export function TableDesignerEditor({
   const forceCloseInnerTabs = useQueryStore((s) => s.forceCloseInnerTabs);
   const cancelCloseRequest = useQueryStore((s) => s.cancelCloseRequest);
   const guarding = !saving && closeRequest?.dirtyIds.length === 1 && closeRequest.dirtyIds[0] === innerTabId;
+  const liveColumns = draft.columns.filter((c) => !c.deleted).length;
+  const liveIndexes = draft.indexes.filter((i) => !indexDeleted(draft, i)).length;
   const changeCount =
     counts.added +
     counts.modified +
@@ -238,7 +274,6 @@ export function TableDesignerEditor({
   const tableNameIssue = (severity: DraftIssue["severity"]) =>
     issues.find((i) => i.target.kind === "tableName" && i.severity === severity);
   const tableNameWarning = tableNameIssue("warning");
-  const liveColumns = draft.columns.filter((c) => !c.deleted).length;
 
   const tabs: SubTabDef[] = [
     {
@@ -252,15 +287,20 @@ export function TableDesignerEditor({
       id: "indexes",
       label: t("query.designer.tab.indexes"),
       icon: ListTree,
-      count: draft.indexes.filter((i) => !indexDeleted(draft, i)).length,
+      count: liveIndexes,
       dirty: indexCounts.added + indexCounts.modified + indexCounts.deleted > 0,
     },
-    {
-      id: "foreignKeys",
-      label: t("query.designer.tab.foreignKeys"),
-      icon: Link2,
-      count: structure.foreignKeys.length,
-    },
+    // 新建表没有外键可看。
+    ...(creating
+      ? []
+      : [
+          {
+            id: "foreignKeys" as const,
+            label: t("query.designer.tab.foreignKeys"),
+            icon: Link2,
+            count: structure.foreignKeys.length,
+          },
+        ]),
     { id: "sql", label: t("query.designer.tab.sql"), icon: Code2 },
   ];
 
@@ -269,23 +309,28 @@ export function TableDesignerEditor({
       rootRef={rootRef}
       toolbar={
         <DesignToolbar
+          target={create?.target}
           tableName={draft.name}
           onTableNameChange={draftState.setTableName}
-          originalName={structure.name}
+          originalName={creating ? null : structure.name}
           tableNameError={!!tableNameIssue("error")}
           tableNameWarning={tableNameWarning ? issueMessage(t, tableNameWarning) : undefined}
           comment={driverCanAlter(descriptor, "table_comment") ? draft.comment : null}
           onCommentChange={draftState.setTableComment}
-          originalComment={structure.comment}
+          originalComment={creating ? null : structure.comment}
           counts={counts}
           indexCounts={indexCounts}
+          summary={
+            creating ? t("query.designer.create.summary", { columns: liveColumns, indexes: liveIndexes }) : undefined
+          }
           isDirty={isDirty}
           errorCount={errors.length}
           loading={false}
-          onRevertAll={() => confirmOrRun("revertAll")}
-          onReload={() => confirmOrRun("reload")}
+          onRevertAll={creating ? undefined : () => confirmOrRun("revertAll")}
+          onReload={creating ? undefined : () => confirmOrRun("reload")}
           canSave={canSave}
           onSave={() => save()}
+          saveLabel={creating ? t("query.designer.create.submit") : undefined}
           saveShortcut={formatBinding(saveBinding)}
         />
       }
@@ -309,10 +354,11 @@ export function TableDesignerEditor({
         )
       }
       footer={<IssueList issues={issues} onSelect={selectIssue} />}
-      status={<DesignerStatus driver={descriptor?.name} fullName={`${database}.${table}`} />}
+      status={<DesignerStatus driver={descriptor?.name} fullName={create ? create.label : `${database}.${table}`} />}
     >
       <TabsContent value="fields" className="flex min-h-0 flex-col">
-        <CapabilityBar descriptor={descriptor} />
+        {/* 能力说明讲的是已有列能改什么,新建表的列不受限制。 */}
+        {!creating && <CapabilityBar descriptor={descriptor} />}
         <EditableFieldsGrid
           columns={draft.columns}
           descriptor={descriptor}
@@ -329,6 +375,7 @@ export function TableDesignerEditor({
             descriptor={descriptor}
             onChange={draftState.updateColumn}
             onRevert={draftState.revertField}
+            creating={creating}
           />
         )}
       </TabsContent>
@@ -353,6 +400,7 @@ export function TableDesignerEditor({
                 issues={issues.filter((i) => i.target.kind === "index" && i.target.key === selectedIndex.key)}
                 onChange={draftState.updateIndex}
                 onClose={() => setSelectedIndexKey(null)}
+                creating={creating}
               />
             )}
           </>
@@ -366,9 +414,11 @@ export function TableDesignerEditor({
           />
         )}
       </TabsContent>
-      <TabsContent value="foreignKeys" className="flex min-h-0 flex-col">
-        <ForeignKeyList foreignKeys={structure.foreignKeys} />
-      </TabsContent>
+      {!creating && (
+        <TabsContent value="foreignKeys" className="flex min-h-0 flex-col">
+          <ForeignKeyList foreignKeys={structure.foreignKeys} />
+        </TabsContent>
+      )}
       <TabsContent value="sql" className="flex min-h-0 flex-col">
         <SqlPreviewPane
           preview={preview}
@@ -388,7 +438,8 @@ export function TableDesignerEditor({
       />
       <CloseGuardDialog
         open={guarding}
-        name={`${database}.${table}`}
+        name={create ? create.targetName : `${database}.${table}`}
+        creating={creating}
         changes={changeCount}
         canSave={canSave}
         onStay={() => cancelCloseRequest(tabId)}

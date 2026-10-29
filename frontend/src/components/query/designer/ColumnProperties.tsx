@@ -4,7 +4,14 @@ import { Checkbox, Input, cn } from "@opskat/ui";
 import { Segmented } from "@/components/asset/fields";
 import type { DriverDescriptor } from "@/lib/dbDrivers";
 import type { DesignerDefault } from "./model";
-import { changedFields, lockedFields, type ColumnField, type DraftColumn, type DraftColumnPatch } from "./draft";
+import {
+  autoIncrementEditable,
+  changedFields,
+  lockedFields,
+  type ColumnField,
+  type DraftColumn,
+  type DraftColumnPatch,
+} from "./draft";
 import { fieldText, lockReason } from "./format";
 
 type ExplicitKind = "none" | "null" | "value" | "expression";
@@ -14,10 +21,12 @@ interface ColumnPropertiesProps {
   descriptor: DriverDescriptor | undefined;
   onChange: (key: string, patch: DraftColumnPatch) => void;
   onRevert: (key: string, field: ColumnField) => void;
+  /** 新建表:自增只能在新表上设的驱动,列也可以勾自增。 */
+  creating?: boolean;
 }
 
 /** 选中一列时表格下方的列属性:默认值(按驱动声明的写法或旧的单一文本)、自增、已修改的属性与原值。 */
-export function ColumnProperties({ column, descriptor, onChange, onRevert }: ColumnPropertiesProps) {
+export function ColumnProperties({ column, descriptor, onChange, onRevert, creating = false }: ColumnPropertiesProps) {
   const { t } = useTranslation();
   const key = column.key;
   const changed = changedFields(column);
@@ -52,7 +61,7 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert }: Col
                 <Checkbox
                   checked={column.autoIncrement}
                   // 已有列的自增不能改,只显示现状;自增只能在新表上设的驱动,已有表的新列也不能勾。
-                  disabled={!!column.original || !!descriptor.autoIncrementNewTablesOnly}
+                  disabled={!autoIncrementEditable(descriptor, column, creating)}
                   onCheckedChange={(checked) => onChange(key, { autoIncrement: checked === true })}
                   aria-label={t("query.designer.autoIncrement")}
                 />
@@ -63,7 +72,8 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert }: Col
                   {t("query.designer.autoIncrementExisting")}
                 </p>
               ) : (
-                descriptor.autoIncrementNewTablesOnly && (
+                descriptor.autoIncrementNewTablesOnly &&
+                !creating && (
                   <p className="text-[10px] leading-4 text-muted-foreground">
                     {t("query.designer.autoIncrementNewTablesOnly")}
                   </p>

@@ -20,17 +20,32 @@ interface CloseGuardDialogProps {
   onStay: () => void;
   onDiscard: () => void;
   onSave: () => void;
+  /** 新建表:name 是目标库,文案说的是还没创建的表。 */
+  creating?: boolean;
 }
 
 /** 关闭有未保存改动的设计器标签时的拦截:取消 / 放弃并关闭 / 保存…(同表数据标签的关闭拦截)。 */
-export function CloseGuardDialog({ open, name, changes, canSave, onStay, onDiscard, onSave }: CloseGuardDialogProps) {
+export function CloseGuardDialog({
+  open,
+  name,
+  changes,
+  canSave,
+  onStay,
+  onDiscard,
+  onSave,
+  creating = false,
+}: CloseGuardDialogProps) {
   const { t } = useTranslation();
   return (
     <AlertDialog open={open} onOpenChange={(next) => !next && onStay()}>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("query.designer.guard.title", { name })}</AlertDialogTitle>
-          <AlertDialogDescription>{t("query.designer.guard.desc", { count: changes })}</AlertDialogDescription>
+          <AlertDialogTitle>
+            {creating ? t("query.designer.guard.createTitle", { name }) : t("query.designer.guard.title", { name })}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {creating ? t("query.designer.guard.createDesc") : t("query.designer.guard.desc", { count: changes })}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onStay}>
@@ -45,7 +60,7 @@ export function CloseGuardDialog({ open, name, changes, canSave, onStay, onDisca
             {t("query.unsavedEditsDiscardClose")}
           </Button>
           <Button size="sm" className="h-7 text-xs" disabled={!canSave} onClick={onSave}>
-            {t("query.designer.guard.save")}
+            {creating ? t("query.designer.guard.create") : t("query.designer.guard.save")}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

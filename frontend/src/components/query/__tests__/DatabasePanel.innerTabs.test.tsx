@@ -5,6 +5,8 @@ import { TooltipProvider } from "@opskat/ui";
 import { DatabasePanel } from "@/components/query/DatabasePanel";
 import { useQueryStore, type InnerTab } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
+import { useAssetStore } from "@/stores/assetStore";
+import { asset_entity } from "../../../../wailsjs/go/models";
 import { notifyCopied } from "@/lib/notify";
 import { BUILTIN_DRIVERS, provideDrivers } from "@/__tests__/dbDriverFixtures";
 
@@ -19,6 +21,11 @@ vi.mock("@/components/query/designer/TableDesigner", () => ({
     <div data-testid="table-designer">{`${props.innerTabId}|${props.database}|${props.table}|${props.mode}`}</div>
   ),
 }));
+vi.mock("@/components/query/designer/TableCreator", () => ({
+  TableCreator: (props: { innerTabId: string; database: string; schema?: string }) => (
+    <div data-testid="table-creator">{`${props.innerTabId}|${props.database}|${props.schema ?? ""}`}</div>
+  ),
+}));
 vi.mock("@/lib/notify", () => ({ notifyCopied: vi.fn(), notifySuccess: vi.fn() }));
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
@@ -30,15 +37,38 @@ const tabs: InnerTab[] = [
   { id: "table:app.orders", type: "table", database: "app", table: "orders" },
 ];
 
-function setup(active = "sql:1", innerTabs: InnerTab[] = tabs) {
+function setup(
+  active: string | null = "sql:1",
+  innerTabs: InnerTab[] = tabs,
+  opts: { driver?: string; readOnly?: boolean; expandedDbs?: string[]; defaultDatabase?: string } = {}
+) {
   provideDrivers(BUILTIN_DRIVERS);
+  const driver = opts.driver ?? "mysql";
+  useAssetStore.setState({
+    assets: [
+      new asset_entity.Asset({
+        ID: 1,
+        Name: "db",
+        Type: "database",
+        Config: JSON.stringify({ driver, read_only: !!opts.readOnly }),
+      }),
+    ],
+  });
   useTabStore.setState({
     tabs: [
       {
         id: TAB,
         type: "query",
         label: "db",
-        meta: { type: "query", assetId: 1, assetName: "db", assetIcon: "", assetType: "database", driver: "mysql" },
+        meta: {
+          type: "query",
+          assetId: 1,
+          assetName: "db",
+          assetIcon: "",
+          assetType: "database",
+          driver,
+          defaultDatabase: opts.defaultDatabase,
+        },
       },
     ],
     activeTabId: TAB,
@@ -48,10 +78,10 @@ function setup(active = "sql:1", innerTabs: InnerTab[] = tabs) {
   useQueryStore.setState({
     dbStates: {
       [TAB]: {
-        databases: [],
+        databases: ["app", "logs"],
         tables: {},
         loadingTables: {},
-        expandedDbs: [],
+        expandedDbs: opts.expandedDbs ?? [],
         expandedSchemas: {},
         loadingDbs: false,
         innerTabs,
@@ -277,5 +307,52 @@ describe("DatabasePanel 设计器标签", () => {
     fireEvent.contextMenu(tabEl("query.designer.tabTitle.view"));
     fireEvent.click(await screen.findByText("query.innerTab.reveal"));
     expect(reveal).toHaveBeenCalledWith(TAB, "app", "orders");
+  });
+});
+
+describe("DatabasePanel 新建表", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("新建表标签以「新建表 · 库」为题,内容是新建表的设计器;复制名称给出库,没有「在树中定位」", async () => {
+    const create: InnerTab = { id: "create:x", type: "designer", mode: "create", database: "app", schema: "sales" };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    setup(create.id, [...tabs, create]);
+    expect(tabEl("query.designer.tabTitle.create")).toBeInTheDocument();
+    expect(screen.getByTestId("table-creator")).toHaveTextContent("create:x|app|sales");
+    fireEvent.contextMenu(tabEl("query.designer.tabTitle.create"));
+    expect(screen.queryByText("query.innerTab.reveal")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByText("query.innerTab.copyName"));
+    expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith("app.sales");
+  });
+
+  it("没有内层标签时空白区给「新建查询 / 新建表」:新建表建在第一个展开的库", async () => {
+    setup(null, [], { expandedDbs: ["logs"], defaultDatabase: "app" });
+    await screen.findByTestId("empty-new-table");
+    fireEvent.click(screen.getByTestId("empty-new-table"));
+    const state = useQueryStore.getState().dbStates[TAB];
+    expect(state.innerTabs).toEqual([
+      { id: expect.stringMatching(/^create:/), type: "designer", mode: "create", database: "logs" },
+    ]);
+    expect(state.activeInnerTabId).toBe(state.innerTabs[0].id);
+  });
+
+  it("没有展开的库时新建表建在资产的默认库;「新建查询」打开 SQL 标签", async () => {
+    setup(null, [], { defaultDatabase: "app" });
+    fireEvent.click(await screen.findByTestId("empty-new-table"));
+    expect(useQueryStore.getState().dbStates[TAB].innerTabs[0]).toMatchObject({ mode: "create", database: "app" });
+    act(() => useQueryStore.getState().forceCloseInnerTabs(TAB, innerIds()));
+    fireEvent.click(await screen.findByTestId("empty-new-sql"));
+    expect(useQueryStore.getState().dbStates[TAB].innerTabs[0]).toMatchObject({ type: "sql" });
+  });
+
+  it("只读连接或驱动没声明建表:空白区只有「新建查询」", async () => {
+    setup(null, [], { readOnly: true, defaultDatabase: "app" });
+    await screen.findByTestId("empty-new-sql");
+    expect(screen.queryByTestId("empty-new-table")).not.toBeInTheDocument();
   });
 });

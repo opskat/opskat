@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useAssetStore } from "@/stores/assetStore";
 import { parseDatabaseConfig } from "@/components/asset/DatabaseConfigSection.config";
 import type { DriverDescriptor } from "@/lib/dbDrivers";
-import { designerAccess, type DesignerAccess } from "./model";
+import { canCreateTable, designerAccess, type DesignerAccess } from "./model";
 
 /** 数据库资产是否开启了只读连接(资产配置的 read_only)。 */
 export function useAssetReadOnly(assetId: number | undefined): boolean {
@@ -17,4 +17,10 @@ export function useDesignerAccess(
 ): DesignerAccess {
   const assetReadOnly = useAssetReadOnly(assetId);
   return useMemo(() => designerAccess(descriptor, assetReadOnly), [descriptor, assetReadOnly]);
+}
+
+/** 这个资产上能不能新建表(入口按它显示)。 */
+export function useCanCreateTable(descriptor: DriverDescriptor | undefined, assetId: number | undefined): boolean {
+  const assetReadOnly = useAssetReadOnly(assetId);
+  return canCreateTable(descriptor, assetReadOnly);
 }

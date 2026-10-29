@@ -2353,7 +2353,6 @@
     "mongoshCollection": "集合",
     "applyFilter": "应用",
     "addRow": "添加数据",
-    "addTable": "添加表",
     "alterTable": "设计表",
     "viewDDL": "查看 DDL",
     "ddlDialogTitle": "表结构 DDL",
@@ -2365,7 +2364,8 @@
     "designer": {
       "tabTitle": {
         "view": "结构 {{name}}",
-        "design": "设计 {{name}}"
+        "design": "设计 {{name}}",
+        "create": "新建表 · {{name}}"
       },
       "tab": {
         "fields": "字段",
@@ -2534,7 +2534,10 @@
       "guard": {
         "title": "{{name}} 的设计还没保存",
         "desc": "{{count}} 处改动，关闭后不会保留。",
-        "save": "保存…"
+        "save": "保存…",
+        "createTitle": "{{name}} 里的新表还没创建",
+        "createDesc": "关闭后这张表的设计不会保留。",
+        "create": "创建…"
       },
       "addIndex": "新建索引",
       "newIndex": "新建索引",
@@ -2562,6 +2565,18 @@
       "indexLock": {
         "undroppable": "数据库不允许删除这个索引（如约束自动建的索引），所以也不能修改",
         "primaryKey": "当前驱动不支持修改已有主键"
+      },
+      "create": {
+        "target": "新表建在",
+        "database": "目标库",
+        "schema": "目标 schema",
+        "defaultSchema": "默认 schema",
+        "submit": "创建",
+        "summary": "{{columns}} 个字段 · {{indexes}} 个索引",
+        "label": "新建表 · {{name}}",
+        "confirmTitle": "确认创建 {{name}}",
+        "done": "已创建表 {{name}}",
+        "unavailable": "这里不能新建表：驱动不支持建表，或连接为只读。"
       }
     },
     "objTables": "表",
@@ -2873,26 +2888,7 @@
     "unsavedEditsDiscardClose": "放弃并关闭",
     "unsavedTabsTitle": "{{count}} 个标签有未提交的修改",
     "unsavedTabsDesc": "关闭后，以下标签中的修改都会丢失：",
-    "createTableDialogTitle": "添加表",
-    "createTableDialogDesc": "在数据库 {{database}} 中创建新表",
-    "tableNameLabel": "表名",
-    "tableNamePlaceholder": "请输入表名",
-    "columnsLabel": "字段",
-    "columnNameLabel": "字段名",
-    "columnNamePlaceholder": "例如：name",
-    "columnTypeLabel": "字段类型",
-    "columnTypePlaceholder": "例如：VARCHAR(255)",
-    "columnNullableLabel": "允许为空",
-    "defaultValueLabel": "默认值",
-    "defaultValuePlaceholder": "留空表示不设置",
-    "addColumn": "添加字段",
-    "removeColumn": "删除字段",
     "createTableSubmit": "创建表",
-    "createTableNameRequired": "请输入表名",
-    "createTableAtLeastOneColumn": "至少需要一个字段",
-    "createTableColumnNameRequired": "字段名不能为空",
-    "createTableColumnTypeRequired": "字段类型不能为空",
-    "createTableSuccess": "表 {{table}} 创建成功",
     "alterTableDialogTitle": "修改表",
     "alterTableDialogDesc": "当前表：{{table}}",
     "designTablePreviewChanges": "预览 SQL",
@@ -3065,7 +3061,14 @@
     "openTables": "打开 {{count}} 张表",
     "truncateTables": "清空 {{count}} 张表...",
     "dropTables": "删除 {{count}} 张表...",
-    "batchTableActionNote": "每张表单独执行一条语句；某一张失败不会中断其余表。"
+    "batchTableActionNote": "每张表单独执行一条语句；某一张失败不会中断其余表。",
+    "newTable": "新建表",
+    "newTableIn": "在 {{name}} 新建表",
+    "newMenu": {
+      "label": "新建",
+      "in": "在 {{name}}",
+      "database": "新建数据库…"
+    }
   },
   "systemStatus": {
     "title": "系统状态",

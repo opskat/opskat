@@ -966,6 +966,62 @@ describe("queryStore 设计器标签", () => {
   });
 });
 
+describe("queryStore 新建表标签", () => {
+  const state = () => useQueryStore.getState().dbStates["query-42"];
+  const creates = () => state().innerTabs.filter((t) => t.type === "designer" && t.mode === "create");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provideDrivers(BUILTIN_DRIVERS);
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/SQLite");
+    useQueryStore.getState().openQueryTab(makeSQLiteAsset(42));
+  });
+
+  it("在目标库(与 schema)打开一个新建表标签并切过去", () => {
+    useQueryStore.getState().openCreateTableTab("query-42", "appdb", "sales");
+    expect(creates()).toEqual([
+      { id: expect.stringMatching(/^create:/), type: "designer", mode: "create", database: "appdb", schema: "sales" },
+    ]);
+    expect(state().activeInnerTabId).toBe(creates()[0].id);
+  });
+
+  it("同一目标还没动过的新建表标签直接切过去;动过的、或目标不同的另开一个", () => {
+    const s = useQueryStore.getState();
+    s.openCreateTableTab("query-42", "appdb");
+    const first = creates()[0].id;
+    s.openSqlTab("query-42");
+    s.openCreateTableTab("query-42", "appdb");
+    expect(creates()).toHaveLength(1);
+    expect(state().activeInnerTabId).toBe(first);
+
+    s.openCreateTableTab("query-42", "other");
+    expect(creates()).toHaveLength(2);
+
+    s.setInnerTabDirty("query-42", first, true);
+    useQueryStore.getState().openCreateTableTab("query-42", "appdb");
+    expect(creates()).toHaveLength(3);
+    expect(new Set(creates().map((t) => t.id)).size).toBe(3);
+  });
+
+  it("建好后标签换成这张表的设计标签:id、当前标签与脏标记跟着换,原有的同表设计标签去掉", () => {
+    const s = useQueryStore.getState();
+    s.openDesignerTab("query-42", "appdb", "users", "view");
+    s.openCreateTableTab("query-42", "appdb");
+    const id = creates()[0].id;
+    s.setInnerTabDirty("query-42", id, true);
+
+    useQueryStore.getState().completeCreateTab("query-42", id, "users");
+
+    expect(state().innerTabs).toEqual([
+      { id: "designer:appdb.users", type: "designer", mode: "design", database: "appdb", table: "users" },
+    ]);
+    expect(state().activeInnerTabId).toBe("designer:appdb.users");
+    expect(state().dirtyInnerTabIds).toEqual(["designer:appdb.users"]);
+  });
+});
+
 describe("queryStore SQL numbering across persist and restore", () => {
   const sqlTab = (n: number) => ({ id: `sql:${n}`, type: "sql", title: `SQL ${n}` });
   const tabsJson = JSON.stringify({

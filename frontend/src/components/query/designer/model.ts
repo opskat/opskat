@@ -83,6 +83,11 @@ export function designerAccess(descriptor: DriverDescriptor | undefined, assetRe
   return { canAlter: true, readOnlyReason: null };
 }
 
+/** 这个资产上能不能新建表:驱动声明了建表,且资产没有开启只读连接。 */
+export function canCreateTable(descriptor: DriverDescriptor | undefined, assetReadOnly: boolean): boolean {
+  return !assetReadOnly && driverHasCapability(descriptor, "create_table");
+}
+
 function indexColumn(c: dbdriver.IndexColumn): DesignerIndexColumn {
   return {
     name: c.name,

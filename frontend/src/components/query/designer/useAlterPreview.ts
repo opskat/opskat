@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GetAlterTableStatements } from "../../../../wailsjs/go/query/Query";
+import { GetAlterTableStatements, GetCreateTableStatements } from "../../../../wailsjs/go/query/Query";
 import type { dbdriver } from "../../../../wailsjs/go/models";
 
 /** 草稿停止变化多久之后再请驱动生成语句。 */
@@ -30,20 +30,21 @@ export interface AlterPreviewRequest {
 }
 
 /**
- * 按草稿请驱动生成改表语句:草稿停下 PREVIEW_DEBOUNCE_MS 后请求,结果带着发起时的请求,
- * 只有与当前草稿一致的结果才算数(最新的请求胜出)。
+ * 按草稿请驱动生成语句:草稿停下 PREVIEW_DEBOUNCE_MS 后调用 run,结果带着发起时的 key(请求的全部参数),
+ * 只有与当前草稿一致的结果才算数(最新的请求胜出)。key 为 null 表示不请求(草稿有阻止保存的问题)。
  */
-export function useAlterPreview({ assetId, database, table, request, enabled }: AlterPreviewRequest): AlterPreview {
-  const key = enabled ? JSON.stringify([assetId, database, table, request]) : null;
+function useStatementPreview(
+  key: string | null,
+  run: () => Promise<{ statements: string[]; table: string }>
+): AlterPreview {
   const [result, setResult] = useState<PreviewResult | null>(null);
 
   useEffect(() => {
     if (key === null) return;
     let alive = true;
     const timer = setTimeout(() => {
-      GetAlterTableStatements(assetId, database, table, request).then(
-        (r) =>
-          alive && setResult({ key, preview: { status: "ready", statements: r.statements ?? [], table: r.table } }),
+      run().then(
+        (r) => alive && setResult({ key, preview: { status: "ready", statements: r.statements, table: r.table } }),
         (err: unknown) => alive && setResult({ key, preview: { status: "error", error: String(err) } })
       );
     }, PREVIEW_DEBOUNCE_MS);
@@ -57,4 +58,35 @@ export function useAlterPreview({ assetId, database, table, request, enabled }: 
 
   if (key === null) return { status: "blocked" };
   return result?.key === key ? result.preview : { status: "loading" };
+}
+
+/** 按草稿请驱动生成改表语句(见 useStatementPreview)。 */
+export function useAlterPreview({ assetId, database, table, request, enabled }: AlterPreviewRequest): AlterPreview {
+  const key = enabled ? JSON.stringify([assetId, database, table, request]) : null;
+  return useStatementPreview(key, () =>
+    GetAlterTableStatements(assetId, database, table, request).then((r) => ({
+      statements: r.statements ?? [],
+      table: r.table,
+    }))
+  );
+}
+
+export interface CreatePreviewRequest {
+  assetId: number;
+  database: string;
+  /** 不是新建表时为 null:不请求驱动。 */
+  request: dbdriver.CreateTableRequest | null;
+  /** 草稿有阻止保存的问题时为 false:不请求驱动。 */
+  enabled: boolean;
+}
+
+/** 按草稿请驱动生成建表语句(见 useStatementPreview);建出的表名就是请求里的表名。 */
+export function useCreatePreview({ assetId, database, request, enabled }: CreatePreviewRequest): AlterPreview {
+  const key = enabled && request ? JSON.stringify([assetId, database, request]) : null;
+  return useStatementPreview(key, () =>
+    GetCreateTableStatements(assetId, database, request!).then((statements) => ({
+      statements: statements ?? [],
+      table: request!.name,
+    }))
+  );
 }

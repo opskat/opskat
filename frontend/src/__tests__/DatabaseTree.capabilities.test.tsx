@@ -92,7 +92,12 @@ async function renderTree(driver: string, objects = objectsOf(...EVERY_GROUP)) {
   await screen.findByText(/^query\.objTables/);
 }
 
-const hasToolbarCreateDatabase = () => screen.queryByLabelText("query.createDatabase") !== null;
+/** 侧栏工具栏的新建下拉里有没有「新建数据库…」(打开下拉,之后要重新渲染再看别的菜单)。 */
+async function hasToolbarCreateDatabase(): Promise<boolean> {
+  fireEvent.pointerDown(screen.getByTestId("database-new-menu"), { button: 0, ctrlKey: false });
+  await screen.findByTestId("database-new-menu-sql");
+  return screen.queryByTestId("database-new-menu-database") !== null;
+}
 const hasSchemaGroup = () => screen.queryByText("public") !== null;
 
 function tableMenuLabels(): string[] {
@@ -102,7 +107,7 @@ function tableMenuLabels(): string[] {
 
 function databaseMenuHasAddTable(): boolean {
   fireEvent.contextMenu(screen.getByText("appdb"));
-  return screen.queryByText("query.addTable") !== null;
+  return screen.queryByText("query.newTable") !== null;
 }
 
 async function objectGroupsShown(): Promise<string[]> {
@@ -145,13 +150,15 @@ describe("DatabaseTree 内置驱动的入口与改动前一致", () => {
       provideDrivers(BUILTIN_DRIVERS);
       await renderTree(driver, objectsOf(...want.backend));
 
-      expect(hasToolbarCreateDatabase()).toBe(want.createDatabase);
       expect(hasSchemaGroup()).toBe(want.schemaGroup);
       expect(await objectGroupsShown()).toEqual(want.objects);
       expect(tableMenuLabels()).toEqual(ALTER_TABLE_MENU);
       cleanup();
       await renderTree(driver, objectsOf(...want.backend));
       expect(databaseMenuHasAddTable()).toBe(true);
+      cleanup();
+      await renderTree(driver, objectsOf(...want.backend));
+      expect(await hasToolbarCreateDatabase()).toBe(want.createDatabase);
     });
   }
 });
@@ -161,7 +168,6 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     provideDrivers([fakeDriverWith([])]);
     await renderTree("fakedb");
 
-    expect(hasToolbarCreateDatabase()).toBe(false);
     expect(hasSchemaGroup()).toBe(false);
     expect(screen.getByText("public.users")).toBeInTheDocument();
     expect(await objectGroupsShown()).toEqual([]);
@@ -169,6 +175,9 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     cleanup();
     await renderTree("fakedb");
     expect(databaseMenuHasAddTable()).toBe(false);
+    cleanup();
+    await renderTree("fakedb");
+    expect(await hasToolbarCreateDatabase()).toBe(false);
   });
 
   it("声明 schemas:表按 schema 分组", async () => {
@@ -183,7 +192,7 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
   it("声明 create_database:出现「新建数据库」", async () => {
     provideDrivers([fakeDriverWith(["create_database"])]);
     await renderTree("fakedb");
-    expect(hasToolbarCreateDatabase()).toBe(true);
+    expect(await hasToolbarCreateDatabase()).toBe(true);
   });
 
   it("声明 create_table:数据库右键菜单出现「新建表」", async () => {
@@ -290,7 +299,8 @@ describe("DatabaseTree 在资产的驱动没有注册时", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(ListDatabases).not.toHaveBeenCalled();
     expect(ListTables).not.toHaveBeenCalled();
-    expect(hasToolbarCreateDatabase()).toBe(false);
+    // 驱动不可用时工具栏的新建下拉整个不出现。
+    expect(screen.queryByTestId("database-new-menu")).not.toBeInTheDocument();
   });
 
   it("描述还在加载时不闪出「驱动不可用」", async () => {
@@ -304,12 +314,12 @@ describe("DatabaseTree 在资产的驱动没有注册时", () => {
     resolve(BUILTIN_DRIVERS);
     await screen.findByText(/^query\.objTables/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await waitFor(() => expect(hasToolbarCreateDatabase()).toBe(true));
+    expect(await hasToolbarCreateDatabase()).toBe(true);
   });
 });
 
 describe("DatabasePanel 在资产的驱动没有注册时", () => {
-  it("右侧区域显示指明驱动名的「驱动不可用」,而不是「打开表」的占位", async () => {
+  it("右侧区域显示指明驱动名的「驱动不可用」,而不是空白区的新建按钮", async () => {
     provideDrivers(BUILTIN_DRIVERS);
     openTab("ghostdb");
     render(<DatabasePanel tabId="query-1" />);
@@ -318,10 +328,10 @@ describe("DatabasePanel 在资产的驱动没有注册时", () => {
     // 侧栏与右侧各一份。
     await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
     for (const notice of notices) expect(notice).toHaveTextContent("ghostdb");
-    expect(screen.queryByText("query.openTable")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("empty-new-sql")).not.toBeInTheDocument();
   });
 
-  it("描述加载期间不显示「驱动不可用」,已注册时仍是「打开表」的占位", async () => {
+  it("描述加载期间不显示「驱动不可用」,已注册时仍是空白区的新建按钮", async () => {
     let resolve!: (v: typeof BUILTIN_DRIVERS) => void;
     provideDrivers([]);
     vi.mocked(ListDatabaseDrivers).mockReturnValue(new Promise((r) => (resolve = r)));
@@ -330,7 +340,7 @@ describe("DatabasePanel 在资产的驱动没有注册时", () => {
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     resolve(BUILTIN_DRIVERS);
-    expect(await screen.findByText("query.openTable")).toBeInTheDocument();
+    expect(await screen.findByTestId("empty-new-sql")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

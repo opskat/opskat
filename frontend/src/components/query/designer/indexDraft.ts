@@ -286,15 +286,19 @@ export function indexDroppable(descriptor: DriverDescriptor | undefined, index: 
   return lock === null || lock === "readOnly";
 }
 
-/** 编辑区的类型选择:声明的类型按次序;「主键」只在驱动声明主键可改时可选。 */
+/**
+ * 编辑区的类型选择:声明的类型按次序;「主键」只在驱动声明主键可改时可选。新建表(creating)没有要改的已有
+ * 主键,声明了主键类型就可选。
+ */
 export function indexTypeChoices(
-  descriptor: DriverDescriptor | undefined
+  descriptor: DriverDescriptor | undefined,
+  creating = false
 ): { id: string; label: string; disabled: boolean }[] {
   const editing = descriptor?.indexEditing;
   return (editing?.types ?? []).map((t) => ({
     id: t.id,
     label: t.label,
-    disabled: t.id === "primary" && !editing?.alterPrimaryKey,
+    disabled: t.id === "primary" && !creating && !editing?.alterPrimaryKey,
   }));
 }
 
@@ -345,16 +349,14 @@ function requestColumn(name: string, column: Omit<DraftIndexColumn, "ref">): dbd
 /** 请求里一个索引的 JSON 样子(AlterTableRequest.createFrom 再转成 dbdriver.AlterIndex)。 */
 export type RequestIndex = Omit<dbdriver.AlterIndex, "convertValues">;
 
-/** 请求里的一个索引;细项只在有值时带上(没声明的能力不会出现在 JSON 里)。 */
-function requestIndex(
-  originalName: string,
+/** 一个索引定义的 JSON 样子;细项只在有值时带上(没声明的能力不会出现在 JSON 里)。 */
+function definitionJson(
   definition: Pick<DesignerIndex, "name" | "type" | "comment" | "options"> & {
     columns: dbdriver.IndexColumn[];
     include: string[];
   }
-): RequestIndex {
-  const out: RequestIndex = {
-    originalName,
+): Omit<dbdriver.IndexDefinition, "convertValues"> {
+  const out: Omit<dbdriver.IndexDefinition, "convertValues"> = {
     name: definition.name,
     type: definition.type,
     columns: definition.columns,
@@ -363,6 +365,11 @@ function requestIndex(
   if (Object.keys(definition.options).length > 0) out.options = definition.options;
   if (definition.comment !== "") out.comment = definition.comment;
   return out;
+}
+
+/** 改表请求里的一个索引:原名在前,其后是定义。 */
+function requestIndex(originalName: string, definition: Parameters<typeof definitionJson>[0]): RequestIndex {
+  return { originalName, ...definitionJson(definition) };
 }
 
 /** 草稿列现在的名字;列引用找不到时(不会发生)原样。 */
@@ -411,6 +418,25 @@ export function alterIndexes(draft: TableDraft): { indexes: RequestIndex[]; inde
     );
   }
   return { indexes, indexDrops };
+}
+
+/**
+ * 建表请求里的索引(见 dbdriver.CreateTableRequest.indexes):草稿里没删的索引按次序,列按草稿里现在的名字,
+ * 选项按「默认」归一;细项只在有值时带上。新建表的索引都是新的。
+ */
+export function createIndexes(draft: TableDraft): Omit<dbdriver.IndexDefinition, "convertValues">[] {
+  return draft.indexes
+    .filter((index) => !indexDeleted(draft, index))
+    .map((index) =>
+      definitionJson({
+        name: index.name.trim(),
+        type: index.type,
+        columns: index.columns.map((c) => requestColumn(indexColumnName(draft, c), c)),
+        include: [],
+        options: normalizedOptions(index.options),
+        comment: index.comment.trim(),
+      })
+    );
 }
 
 /**
