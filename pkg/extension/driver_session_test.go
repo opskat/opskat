@@ -163,6 +163,25 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, []string{"CREATE TABLE [app].[t] (\n  [id] INT NOT NULL,\n  [name] TEXT DEFAULT 'anon'\n)"}, statements)
 	})
 
+	// Comments in a create table request are new fields too: an extension built
+	// before them (the fixture declares no createTableComments) would create the
+	// table without them and say nothing, so the host refuses them first.
+	t.Run("a create table request with comments the driver does not declare is refused, not sent", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		for name, req := range map[string]dbdriver.CreateTableRequest{
+			"table comment":  {Name: "t", Comment: "people", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT"}}},
+			"column comment": {Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "INT", Comment: "the id"}}},
+		} {
+			_, err := s.CreateTableStatements(ctx, "app", req)
+			require.ErrorIs(t, err, dbdriver.ErrUnsupported, name)
+			assert.Contains(t, err.Error(), "not sent to the extension", name)
+			assert.Contains(t, err.Error(), extensiontest.DBDriverFixtureDriver, name)
+		}
+	})
+
 	// The fixture declares no index editing either: an extension built before it,
 	// which would ignore the request's index fields.
 	t.Run("a request changing indexes is refused, not sent", func(t *testing.T) {

@@ -26,7 +26,7 @@ import { TableDataTab } from "./TableDataTab";
 import { SqlEditorTab } from "./SqlEditorTab";
 import { TableDesigner } from "./designer/TableDesigner";
 import { TableCreator } from "./designer/TableCreator";
-import { useCanCreateTable } from "./designer/access";
+import { useCanCreateTable, useDesignerAccess } from "./designer/access";
 import { defaultCreateTarget, targetLabel } from "./designer/createTarget";
 
 interface DatabasePanelProps {
@@ -63,6 +63,9 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
     driversState.status === "ready" ? findDatabaseDriver(driversState.drivers, driver ?? "") : undefined;
   const driverUnavailable = driversState.status === "ready" && !descriptor;
   const canCreateTable = useCanCreateTable(descriptor, meta?.assetId);
+  // 设计表的标签在不能改表(只读连接、驱动不能改表)时打开的是只读设计器,标题随之是「结构」;驱动描述
+  // 还没读到时按标签记下的模式。
+  const designerAccess = useDesignerAccess(descriptor, meta?.assetId);
   const openSqlTab = useQueryStore((s) => s.openSqlTab);
   const openCreateTableTab = useQueryStore((s) => s.openCreateTableTab);
 
@@ -86,9 +89,11 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
   // 标签上显示的标题:设计器带上它是哪种设计器。
   const titleOf = (tab: InnerTab) => {
     if (tab.type !== "designer") return fullNameOf(tab);
-    if (tab.mode === "view") return t("query.designer.tabTitle.view", { name: fullNameOf(tab) });
-    if (tab.mode === "design") return t("query.designer.tabTitle.design", { name: fullNameOf(tab) });
-    return t("query.designer.tabTitle.create", { name: fullNameOf(tab) });
+    if (tab.mode === "create") return t("query.designer.tabTitle.create", { name: fullNameOf(tab) });
+    if (tab.mode === "view" || (descriptor && !designerAccess.canAlter)) {
+      return t("query.designer.tabTitle.view", { name: fullNameOf(tab) });
+    }
+    return t("query.designer.tabTitle.design", { name: fullNameOf(tab) });
   };
   // 空白区的「新建表」没有具体位置:建在第一个展开的库,没有时是资产的默认库。
   const emptyCreateTarget = defaultCreateTarget({

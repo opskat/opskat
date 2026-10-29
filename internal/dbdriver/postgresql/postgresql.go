@@ -43,6 +43,8 @@ var descriptor = dbdriver.Descriptor{
 	ColumnTypes:          columnTypes,
 	ExplicitDefaults:     sqldb.ClassifiesDefaults(dialect{}),
 	AutoIncrement:        sqldb.AutoIncrements(dialect{}),
+	// 建表时写得出表注释与列注释（CreateTableSQL）。
+	CreateTableComments: true,
 	// 不加引号的名称按小写存：含大写的名字之后都要加引号才能访问。
 	NameFolding:  dbdriver.NameFoldLower,
 	IndexEditing: indexEditing,

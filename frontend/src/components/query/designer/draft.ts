@@ -182,14 +182,23 @@ export function isDraftDirty(draft: TableDraft): boolean {
 }
 
 /**
- * 已有列上锁定的属性:驱动没声明可改的。新增的列不受这些限制,只有驱动根本不能写列注释时注释也锁定
- * (否则注释会被驱动丢掉)。
+ * 已有列上锁定的属性:驱动没声明可改的。新增的列不受这些限制,只有驱动写不了它的注释时注释也锁定(否则
+ * 注释会被驱动丢掉):新建表(creating)看驱动是否声明了建表注释,已有表的新列看能否改列注释。
  */
-export function lockedFields(descriptor: DriverDescriptor | undefined, column: DraftColumn): ColumnField[] {
-  if (!column.original) return driverCanAlter(descriptor, "column_comment") ? [] : ["comment"];
+export function lockedFields(
+  descriptor: DriverDescriptor | undefined,
+  column: DraftColumn,
+  creating = false
+): ColumnField[] {
+  if (!column.original) return writesNewColumnComments(descriptor, creating) ? [] : ["comment"];
   return (Object.keys(FIELD_ATTRIBUTE) as (keyof typeof FIELD_ATTRIBUTE)[]).filter(
     (field) => !driverCanAlter(descriptor, FIELD_ATTRIBUTE[field])
   );
+}
+
+/** 新列的注释写不写得出:新建表要驱动声明建表注释,已有表的新列要驱动能改列注释。 */
+export function writesNewColumnComments(descriptor: DriverDescriptor | undefined, creating: boolean): boolean {
+  return creating ? !!descriptor?.createTableComments : driverCanAlter(descriptor, "column_comment");
 }
 
 /**
@@ -311,7 +320,7 @@ export function droppedColumns(draft: TableDraft): string[] {
 /** 问题指向的位置:表名输入框、某列的某个格子、整张表的列,或某个索引的某一项。 */
 export type IssueTarget =
   | { kind: "tableName" }
-  | { kind: "column"; key: string; field: "name" | "type" }
+  | { kind: "column"; key: string; field: "name" | "type" | "default" }
   | { kind: "columns" }
   | { kind: "index"; key: string; field: IndexField };
 
@@ -322,6 +331,7 @@ export type IssueCode =
   | "columnTypeEmpty"
   | "noColumns"
   | "nameFolding"
+  | "emptyStringIsNull"
   | "indexNameEmpty"
   | "indexNameDuplicate"
   | "indexNameTaken"
@@ -346,7 +356,8 @@ export interface DraftIssue {
 
 /**
  * 校验草稿。错误:表名为空、列名为空或重名(不分大小写)、类型为空、没有任何列,以及索引的问题(见
- * validateIndexes)。提醒:新起或改过的名字与驱动声明的折叠规则不符(已有的名字保存前后一样,不提醒)。
+ * validateIndexes)。提醒:新起或改过的名字与驱动声明的折叠规则不符(已有的名字保存前后一样,不提醒);驱动声明
+ * 空字符串即 NULL 时,新设或改过的默认值是空串的「值」。
  */
 export function validateDraft(draft: TableDraft, descriptor: DriverDescriptor | undefined): DraftIssue[] {
   const issues: DraftIssue[] = [];
@@ -364,7 +375,7 @@ export function validateDraft(draft: TableDraft, descriptor: DriverDescriptor | 
     if (column.deleted) return;
     const row = i + 1;
     const name = column.name.trim();
-    const at = (field: "name" | "type"): IssueTarget => ({ kind: "column", key: column.key, field });
+    const at = (field: "name" | "type" | "default"): IssueTarget => ({ kind: "column", key: column.key, field });
     if (!name) {
       columnIssues.push({ severity: "error", code: "columnNameEmpty", target: at("name"), row, name });
     } else {
@@ -388,6 +399,10 @@ export function validateDraft(draft: TableDraft, descriptor: DriverDescriptor | 
     }
     if (!column.type.trim()) {
       columnIssues.push({ severity: "error", code: "columnTypeEmpty", target: at("type"), row, name });
+    }
+    const defaultSet = !column.original || changedFields(column).includes("default");
+    if (descriptor?.emptyStringIsNull && defaultSet && column.default.kind === "value" && column.default.text === "") {
+      warnings.push({ severity: "warning", code: "emptyStringIsNull", target: at("default"), row, name });
     }
   });
 

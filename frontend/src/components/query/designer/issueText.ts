@@ -19,6 +19,8 @@ export function issueMessage(t: TFunction, issue: DraftIssue): string {
       return issue.folding === "upper"
         ? t("query.designer.issue.nameFolding.upper", { name: issue.name })
         : t("query.designer.issue.nameFolding.lower", { name: issue.name });
+    case "emptyStringIsNull":
+      return t("query.designer.issue.emptyStringIsNull");
     case "indexNameEmpty":
       return t("query.designer.issue.indexNameEmpty");
     case "indexNameDuplicate":

@@ -90,6 +90,7 @@
     },
     "explicitDefaults": true,
     "autoIncrement": true,
+    "createTableComments": true,
     "indexEditing": {
       "types": [
         {
@@ -222,6 +223,7 @@
     },
     "explicitDefaults": true,
     "autoIncrement": true,
+    "createTableComments": true,
     "nameFolding": "lower",
     "indexEditing": {
       "types": [

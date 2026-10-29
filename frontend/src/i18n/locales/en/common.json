@@ -2447,6 +2447,7 @@
           "upper": "Has lowercase letters: the database keeps the name as typed, so queries must quote it as \"{{name}}\"",
           "lower": "Has uppercase letters: the database keeps the name as typed, so queries must quote it as \"{{name}}\""
         },
+        "emptyStringIsNull": "This database stores an empty string as NULL, so the default is effectively NULL",
         "indexNameEmpty": "Index name is required",
         "indexNameDuplicate": "Same name as index {{row}}",
         "indexNameTaken": "Another table in the same scope already has an index with this name",
@@ -2506,7 +2507,8 @@
         "failed": "The driver couldn't generate statements",
         "openInSqlTab": "Open in SQL tab",
         "dropColumns": "Drops columns (and their data):",
-        "dropIndexes": "and indexes:"
+        "dropIndexes": "and indexes:",
+        "dropIndexesOnly": "Drops indexes:"
       },
       "save": {
         "confirmTitle": "Apply changes to {{name}}?",

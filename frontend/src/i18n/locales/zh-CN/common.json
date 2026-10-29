@@ -2447,6 +2447,7 @@
           "upper": "含小写字母，数据库会按原样建名，之后访问要加引号写成 \"{{name}}\"",
           "lower": "含大写字母，数据库会按原样建名，之后访问要加引号写成 \"{{name}}\""
         },
+        "emptyStringIsNull": "这个数据库把空字符串存成 NULL，默认值实际是 NULL",
         "indexNameEmpty": "索引名不能为空",
         "indexNameDuplicate": "与第 {{row}} 个索引重名",
         "indexNameTaken": "同一范围内另一张表已有这个索引名",
@@ -2506,7 +2507,8 @@
         "failed": "驱动生成语句失败",
         "openInSqlTab": "在 SQL 标签打开",
         "dropColumns": "将删除列（及其中数据）：",
-        "dropIndexes": "并删除索引："
+        "dropIndexes": "并删除索引：",
+        "dropIndexesOnly": "将删除索引："
       },
       "save": {
         "confirmTitle": "确认修改 {{name}}",

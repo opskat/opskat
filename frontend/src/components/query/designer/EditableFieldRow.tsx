@@ -82,6 +82,8 @@ interface EditableFieldRowProps {
   primaryKey: boolean;
   onSelect: (key: string) => void;
   onChange: (key: string, patch: DraftColumnPatch) => void;
+  /** 新建表(见 lockedFields)。 */
+  creating: boolean;
 }
 
 /** 字段表里可编辑的一行:左侧色条标出新增 / 修改 / 删除,删除的已有列划掉并可恢复。 */
@@ -96,20 +98,21 @@ export const EditableFieldRow = memo(function EditableFieldRow({
   primaryKey,
   onSelect,
   onChange,
+  creating,
 }: EditableFieldRowProps) {
   const { t } = useTranslation();
   const status = columnStatus(column);
   const deleted = status === "deleted";
   const changed = changedFields(column);
-  const locked = lockedFields(descriptor, column);
+  const locked = lockedFields(descriptor, column, creating);
   const key = column.key;
   const cellId = (field: "name" | "type") => `${key}:${field}`;
 
-  const issueOf = (field: "name" | "type", severity: DraftIssue["severity"]) =>
+  const issueOf = (field: "name" | "type" | "default", severity: DraftIssue["severity"]) =>
     issues.find((i) => i.target.kind === "column" && i.target.field === field && i.severity === severity);
   const cellProps = (field: ColumnField) => {
     const isChanged = !deleted && changed.includes(field);
-    const warning = field === "name" || field === "type" ? issueOf(field, "warning") : undefined;
+    const warning = field === "name" || field === "type" || field === "default" ? issueOf(field, "warning") : undefined;
     return {
       changed: isChanged,
       original: isChanged && column.original ? fieldText(t, column.original, field) : undefined,

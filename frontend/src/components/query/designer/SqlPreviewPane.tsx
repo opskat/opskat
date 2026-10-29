@@ -15,7 +15,7 @@ interface SqlPreviewPaneProps {
 }
 
 /**
- * SQL 预览子页:驱动按当前草稿生成的语句,按执行次序编号;删除了已有列时顶部红色警告;
+ * SQL 预览子页:驱动按当前草稿生成的语句,按执行次序编号;删除了已有列或索引时顶部红色警告;
  * 可复制全部语句或放进新的 SQL 标签。
  */
 export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpenInSqlTab }: SqlPreviewPaneProps) {

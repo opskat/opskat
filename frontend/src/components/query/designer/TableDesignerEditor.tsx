@@ -7,7 +7,14 @@ import { useQueryStore } from "@/stores/queryStore";
 import { eventMatchesBinding, formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { driverCanAlter, type DriverDescriptor } from "@/lib/dbDrivers";
 import { showsColumnComments, showsIndexComments, type TableStructure } from "./model";
-import { droppedColumns, tableCommentChanged, tableNameChanged, type DraftIssue, type TableDraft } from "./draft";
+import {
+  droppedColumns,
+  tableCommentChanged,
+  tableNameChanged,
+  writesNewColumnComments,
+  type DraftIssue,
+  type TableDraft,
+} from "./draft";
 import {
   droppedIndexes as draftDroppedIndexes,
   indexDefinition,
@@ -34,7 +41,7 @@ import type { CloseAfterSave } from "./handoff";
 
 /**
  * 保存时交给调用方的内容:驱动按当前草稿生成的语句(就是要执行的),请求本身,改表后的表名,草稿(停在
- * 中途时搬到重新读出的表上),与草稿里删除的已有列和随之删除的索引(确认框的警告)。
+ * 中途时搬到重新读出的表上),与草稿里删除的已有列和索引(含随列删除的,确认框的警告)。
  */
 export interface DesignerSave {
   statements: string[];
@@ -315,7 +322,12 @@ export function TableDesignerEditor({
           originalName={creating ? null : structure.name}
           tableNameError={!!tableNameIssue("error")}
           tableNameWarning={tableNameWarning ? issueMessage(t, tableNameWarning) : undefined}
-          comment={driverCanAlter(descriptor, "table_comment") ? draft.comment : null}
+          // 新建表的注释要驱动声明了建表注释,设计表要能改表注释。
+          comment={
+            (creating ? descriptor?.createTableComments : driverCanAlter(descriptor, "table_comment"))
+              ? draft.comment
+              : null
+          }
           onCommentChange={draftState.setTableComment}
           originalComment={creating ? null : structure.comment}
           counts={counts}
@@ -362,12 +374,15 @@ export function TableDesignerEditor({
         <EditableFieldsGrid
           columns={draft.columns}
           descriptor={descriptor}
-          showComment={showsColumnComments(descriptor, structure.columns)}
+          showComment={
+            creating ? writesNewColumnComments(descriptor, true) : showsColumnComments(descriptor, structure.columns)
+          }
           issues={issues}
           selectedKey={selectedKey}
           primaryKeys={primaryKeys}
           onSelect={setSelectedKey}
           onChange={draftState.updateColumn}
+          creating={creating}
         />
         {selected && (
           <ColumnProperties

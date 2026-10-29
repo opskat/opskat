@@ -122,6 +122,8 @@ interface EditableFieldsGridProps {
   primaryKeys?: Set<string>;
   onSelect: (key: string) => void;
   onChange: (key: string, patch: DraftColumnPatch) => void;
+  /** 新建表(新列的注释按驱动是否声明了建表注释锁定)。 */
+  creating?: boolean;
 }
 
 /** 字段子页(设计表):同一张紧凑表格,格子直接编辑,带改动标记、锁定与问题标记,末尾是删除 / 恢复。 */
@@ -134,6 +136,7 @@ export function EditableFieldsGrid({
   primaryKeys,
   onSelect,
   onChange,
+  creating = false,
 }: EditableFieldsGridProps) {
   const style = gridStyle(showComment, true);
   return (
@@ -152,6 +155,7 @@ export function EditableFieldsGrid({
           primaryKey={primaryKeys ? primaryKeys.has(column.key) : column.primaryKey}
           onSelect={onSelect}
           onChange={onChange}
+          creating={creating}
         />
       ))}
     </div>

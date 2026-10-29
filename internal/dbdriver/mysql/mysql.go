@@ -40,7 +40,9 @@ var descriptor = dbdriver.Descriptor{
 	ColumnTypes:          columnTypes,
 	ExplicitDefaults:     sqldb.ClassifiesDefaults(dialect{}),
 	AutoIncrement:        sqldb.AutoIncrements(dialect{}),
-	IndexEditing:         indexEditing,
+	// 建表时写得出表注释与列注释（CreateTableSQL）。
+	CreateTableComments: true,
+	IndexEditing:        indexEditing,
 }
 
 type driver struct {

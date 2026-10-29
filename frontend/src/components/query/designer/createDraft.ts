@@ -1,5 +1,5 @@
 import { dbdriver } from "../../../../wailsjs/go/models";
-import { driverCanAlter, type DriverDescriptor } from "@/lib/dbDrivers";
+import type { DriverDescriptor } from "@/lib/dbDrivers";
 import type { TableStructure } from "./model";
 import { defaultText, type DraftColumn, type TableDraft } from "./draft";
 import { createIndexes, syncAutoNames, type DraftIndex } from "./indexDraft";
@@ -83,7 +83,7 @@ export function qualifiedTableName(schema: string, name: string): string {
 
 /**
  * 草稿交给驱动的建表请求,name 是要建的表名(有 schema 时带上,见 qualifiedTableName)。只发驱动声明了的字段:
- * 注释只在驱动能写(可改属性里有 table_comment / column_comment)且非空时发,默认值写法只在声明了
+ * 注释只在驱动声明了建表注释(createTableComments)且非空时发,默认值写法只在声明了
  * explicitDefaults 时发,自增只在声明了 autoIncrement 时发,索引(含主键)只在声明了 indexEditing 时发。
  */
 export function buildCreateRequest(
@@ -91,8 +91,7 @@ export function buildCreateRequest(
   descriptor: DriverDescriptor | undefined,
   name: string
 ): dbdriver.CreateTableRequest {
-  const tableComments = driverCanAlter(descriptor, "table_comment");
-  const columnComments = driverCanAlter(descriptor, "column_comment");
+  const comments = !!descriptor?.createTableComments;
   const columns = draft.columns
     .filter((c) => !c.deleted)
     .map((c) => {
@@ -102,7 +101,7 @@ export function buildCreateRequest(
         nullable: c.nullable,
         defaultValue: defaultText(c.default),
       };
-      if (columnComments && c.comment.trim() !== "") column.comment = c.comment.trim();
+      if (comments && c.comment.trim() !== "") column.comment = c.comment.trim();
       // text 是没给写法的原文:不带写法,按旧规则由驱动猜。
       if (descriptor?.explicitDefaults && c.default.kind !== "text") column.defaultKind = c.default.kind;
       if (descriptor?.autoIncrement && c.autoIncrement) column.autoIncrement = true;
@@ -112,7 +111,7 @@ export function buildCreateRequest(
   return dbdriver.CreateTableRequest.createFrom({
     name,
     columns,
-    ...(tableComments && comment !== "" ? { comment } : {}),
+    ...(comments && comment !== "" ? { comment } : {}),
     ...(descriptor?.indexEditing ? { indexes: createIndexes(draft) } : {}),
   });
 }

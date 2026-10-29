@@ -350,9 +350,9 @@ func (s *FakeSession) writeStatement(capability dbdriver.Capability, call TableC
 }
 
 // CreateTableStatements 记下收到的请求（Op "create_table"）。请求用到驱动没声明的列能力（默认值写法、
-// 自增）或索引（索引编辑）时以 ErrUnsupported 拒绝，并带上驱动 id。什么也不记。
+// 自增、建表注释）或索引（索引编辑）时以 ErrUnsupported 拒绝，并带上驱动 id。什么也不记。
 func (s *FakeSession) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
-	if err := s.fake.Desc.ColumnFeatures().Check(req.Definitions()...); err != nil {
+	if err := s.fake.Desc.ColumnFeatures().CheckCreate(req); err != nil {
 		return nil, s.fake.refuse(err)
 	}
 	if err := s.fake.Desc.IndexEditing.Check(req.Indexes...); err != nil {

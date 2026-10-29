@@ -305,6 +305,39 @@ describe("validateDraft", () => {
     expect(validateDraft(draft, LEGACY)).toEqual([]);
   });
 
+  it("驱动声明空字符串即 NULL(如 Oracle):新设或改过的默认值是空的「值」时提醒(只提醒),其余写法不提醒", () => {
+    const oracleLike = fakeAlterDriver({
+      alterTableAttributes: ["column_default"],
+      explicitDefaults: true,
+      emptyStringIsNull: true,
+    });
+    let draft = initDraft(mysqlStructure());
+    const a = addColumn(draft, oracleLike);
+    draft = updateColumn(a.draft, a.key, { name: "note2", type: "VARCHAR2(10)", default: { kind: "value", text: "" } });
+    draft = updateColumn(draft, keyOf(draft, "status"), { default: { kind: "value", text: "" } });
+    expect(validateDraft(draft, oracleLike)).toEqual([
+      {
+        severity: "warning",
+        code: "emptyStringIsNull",
+        target: { kind: "column", key: keyOf(draft, "status"), field: "default" },
+        row: 2,
+        name: "status",
+      },
+      {
+        severity: "warning",
+        code: "emptyStringIsNull",
+        target: { kind: "column", key: a.key, field: "default" },
+        row: 5,
+        name: "note2",
+      },
+    ]);
+    // 写的是值、不是空串,或驱动没声明时不提醒。
+    expect(
+      validateDraft(updateColumn(draft, a.key, { default: { kind: "value", text: "x" } }), oracleLike)
+    ).toHaveLength(1);
+    expect(validateDraft(draft, { ...oracleLike, emptyStringIsNull: false } as typeof oracleLike)).toEqual([]);
+  });
+
   it("折叠为小写时提醒含大写字母的名字", () => {
     const pgLike = fakeAlterDriver({ alterTableAttributes: [], nameFolding: "lower" });
     let draft = initDraft(mysqlStructure());

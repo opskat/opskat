@@ -30,7 +30,7 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert, creat
   const { t } = useTranslation();
   const key = column.key;
   const changed = changedFields(column);
-  const defaultLocked = lockedFields(descriptor, column).includes("default");
+  const defaultLocked = lockedFields(descriptor, column, creating).includes("default");
   return (
     <div data-testid="designer-column-props" className="shrink-0 border-t border-border bg-muted/15">
       <div className="flex h-7 items-center gap-2 border-b border-border/60 px-3 text-[11px]">
@@ -48,7 +48,11 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert, creat
               {lockReason(t, descriptor, column, "default")}
             </div>
           ) : descriptor?.explicitDefaults ? (
-            <ExplicitDefaultEditor value={column.default} onChange={(d) => onChange(key, { default: d })} />
+            <ExplicitDefaultEditor
+              value={column.default}
+              onChange={(d) => onChange(key, { default: d })}
+              cellId={`${key}:default`}
+            />
           ) : (
             <LegacyDefaultEditor value={column.default} onChange={(d) => onChange(key, { default: d })} />
           )}
@@ -115,9 +119,12 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert, creat
 function ExplicitDefaultEditor({
   value,
   onChange,
+  cellId,
 }: {
   value: DesignerDefault;
   onChange: (value: DesignerDefault) => void;
+  /** 问题列表点到这一列的默认值时聚焦的格子。 */
+  cellId: string;
 }) {
   const { t } = useTranslation();
   // 驱动给了写法的列不会是 text;万一是,按「值」编辑原文。
@@ -140,6 +147,7 @@ function ExplicitDefaultEditor({
         ]}
       />
       <Input
+        data-cell={cellId}
         aria-label={t("query.designer.defaultValue")}
         className={cn("h-7 font-mono text-xs")}
         value={text}

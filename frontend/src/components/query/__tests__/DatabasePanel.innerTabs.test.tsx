@@ -273,6 +273,13 @@ describe("DatabasePanel 设计器标签", () => {
     expect(screen.getByTestId("table-designer")).toHaveTextContent("designer:app.orders|app|orders|design");
   });
 
+  it("设计表的标签在资产是只读连接时(如恢复的标签、之后开启了只读连接)以「结构」为题", async () => {
+    const design: InnerTab = { ...designer, mode: "design" };
+    setup(design.id, [...tabs, design], { readOnly: true });
+    expect(await screen.findByText("query.designer.tabTitle.view")).toBeInTheDocument();
+    expect(screen.queryByText("query.designer.tabTitle.design")).not.toBeInTheDocument();
+  });
+
   it("有未保存改动的标签显示圆点", () => {
     const design: InnerTab = { ...designer, mode: "design" };
     setup(design.id, [...tabs, design]);

@@ -77,7 +77,12 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 		"name folding without create or alter table": {func(d *dbdriver.Descriptor) {
 			d.NameFolding = dbdriver.NameFoldUpper
 		}, "nameFolding"},
-		"transactional DDL without create or alter table": {func(d *dbdriver.Descriptor) { d.TransactionalDDL = true }, "transactionalDDL"},
+		"transactional DDL without create or alter table":    {func(d *dbdriver.Descriptor) { d.TransactionalDDL = true }, "transactionalDDL"},
+		"empty string is null without create or alter table": {func(d *dbdriver.Descriptor) { d.EmptyStringIsNull = true }, "emptyStringIsNull"},
+		"create table comments without create table": {func(d *dbdriver.Descriptor) {
+			d.Capabilities = append(d.Capabilities, dbdriver.CapAlterTable)
+			d.CreateTableComments = true
+		}, "createTableComments"},
 		"nil capabilities":     {func(d *dbdriver.Descriptor) { d.Capabilities = nil }, "capabilities"},
 		"unknown capability":   {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, "teleport") }, "teleport"},
 		"duplicate capability": {func(d *dbdriver.Descriptor) { d.Capabilities = append(d.Capabilities, dbdriver.CapViews) }, "views"},
@@ -188,6 +193,7 @@ func withColumnFeatures() *Fake {
 	fake := withSchemaWrites()
 	fake.Desc.ExplicitDefaults = true
 	fake.Desc.AutoIncrement = true
+	fake.Desc.CreateTableComments = true
 	fake.Desc.ColumnTypes = &dbdriver.ColumnTypes{
 		Groups:    []dbdriver.ColumnTypeGroup{{Label: "numeric", Types: []string{"int", "bigint"}}},
 		NewColumn: "text", PrimaryKey: "bigint",
@@ -231,7 +237,7 @@ func (lenientColumnsSession) AlterTableStatements(_ context.Context, _, table st
 type refusingColumnsSession struct{ dbdriver.Session }
 
 func (s refusingColumnsSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
-	if err := (dbdriver.ColumnFeatures{}).Check(req.Definitions()...); err != nil {
+	if err := (dbdriver.ColumnFeatures{}).CheckCreate(req); err != nil {
 		return nil, err
 	}
 	return s.Session.CreateTableStatements(ctx, database, req)
@@ -245,11 +251,13 @@ func TestConformanceChecksColumnFeaturesAgainstTheDeclaration(t *testing.T) {
 	assert.Contains(t, problems, "CreateTableStatements with an auto-increment column")
 	assert.Contains(t, problems, "AlterTableStatements with default kinds")
 	assert.Contains(t, problems, "AlterTableStatements with an auto-increment column")
+	assert.Contains(t, problems, "CreateTableStatements with comments")
 
 	declared := withColumnFeatures()
 	problems = strings.Join(sessionProblems(declared.Desc, refusingColumnsSession{openFake(t, declared, &dbdriver.Config{Driver: "fakedb", Host: "h"})}), "\n")
 	assert.Contains(t, problems, "CreateTableStatements with default kinds: declared explicitDefaults but refused")
 	assert.Contains(t, problems, "CreateTableStatements with an auto-increment column: declared autoIncrement but refused")
+	assert.Contains(t, problems, "CreateTableStatements with comments: declared createTableComments but refused")
 }
 
 // 列元数据必须带 comment（字符串）与 default（字符串或 null）两个键；缺了或类型不对要点出来。

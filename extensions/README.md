@@ -623,8 +623,13 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   the dialect — `sqldb.DefaultClassifier` (judge an existing column's default) and
   `sqldb.AutoIncrementer` (the clause after the type) — and set the descriptor fields
   from `sqldb.ClassifiesDefaults(dialect)` / `sqldb.AutoIncrements(dialect)`, so the
-  declaration cannot drift from the implementation. The host refuses, before sending,
-  a request using one the descriptor does not declare; an extension built before these
+  declaration cannot drift from the implementation. `CreateTableComments` says a create
+  table writes the table and column comments (the dialect's `sqldb.SchemaCommenter`, or
+  a `sqldb.TableCreator` that writes them); without it the designer offers no comment
+  inputs for a new table. `EmptyStringIsNull` (from
+  `sqldb.StoresEmptyStringAsNull(dialect)`, the same `sqldb.EmptyStringNull` the filters
+  use) only makes the designer warn that an empty-string default is NULL. The host
+  refuses, before sending, a request using a feature the descriptor does not declare; an extension built before these
   fields existed keeps creating and altering tables as it did and simply does not get
   them. None of them needs a newer `hostABI`.
 - **Index editing is opt-in the same way.** Declare `IndexEditing` on the descriptor

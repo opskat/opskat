@@ -951,7 +951,7 @@ func (s *driverSession) GridEditStatements(ctx context.Context, database, table 
 }
 
 func (s *driverSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
-	if err := s.checkColumns(req.Definitions()); err != nil {
+	if err := s.checkCreateColumns(req); err != nil {
 		return nil, err
 	}
 	if err := s.checkCreateIndexes(req.Indexes); err != nil {
@@ -960,18 +960,20 @@ func (s *driverSession) CreateTableStatements(ctx context.Context, database stri
 	return forwardRequest[[]string](ctx, s, driverwire.OpCreateTableStatements, driverwire.Args{Database: database}, req)
 }
 
-// checkColumns refuses, before anything is sent, a request whose columns use a
-// feature the driver does not declare (see driverSession.columns).
-func (s *driverSession) checkColumns(columns []dbdriver.ColumnDefinition) error {
-	if err := s.columns.Check(columns...); err != nil {
+// checkCreateColumns refuses, before anything is sent, a create table request
+// whose columns or comments use a feature the driver does not declare (see
+// driverSession.columns, dbdriver.ColumnFeatures.CheckCreate).
+func (s *driverSession) checkCreateColumns(req dbdriver.CreateTableRequest) error {
+	if err := s.columns.CheckCreate(req); err != nil {
 		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)
 	}
 	return nil
 }
 
-// checkAlterColumns is checkColumns for an alter table request, which also
-// refuses a new auto-increment column when the driver sets auto-increment only on
-// new tables (dbdriver.ColumnFeatures.CheckAlter).
+// checkAlterColumns refuses, before anything is sent, an alter table request
+// whose columns use a feature the driver does not declare, including a new
+// auto-increment column when the driver sets auto-increment only on new tables
+// (dbdriver.ColumnFeatures.CheckAlter).
 func (s *driverSession) checkAlterColumns(req dbdriver.AlterTableRequest) error {
 	if err := s.columns.CheckAlter(req); err != nil {
 		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.plugin.manifest.Name, err)

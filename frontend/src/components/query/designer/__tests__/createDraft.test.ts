@@ -105,6 +105,18 @@ describe("buildCreateRequest", () => {
     });
   });
 
+  it("改表能写注释、但没声明建表注释的驱动(如已发布的 Oracle 扩展):注释不发送", () => {
+    const oracleLike = fakeAlterDriver({
+      capabilities: ["create_table", "alter_table"],
+      alterTableAttributes: ["table_comment", "column_comment"],
+    });
+    let draft = setTableName(presetDraft(oracleLike), "users");
+    draft = updateColumn({ ...draft, comment: "x" }, draft.columns[0].key, { comment: "y", type: "NUMBER" });
+    const request = json(buildCreateRequest(draft, oracleLike, "users"));
+    expect(request.comment).toBeUndefined();
+    expect(request.columns).toEqual([{ name: "id", type: "NUMBER", nullable: false, defaultValue: "" }]);
+  });
+
   it("PostgreSQL:表名带上 schema", () => {
     const draft = presetPlusColumnAndIndex(PG);
     const request = json(buildCreateRequest(draft, PG, qualifiedTableName("public", draft.name)));

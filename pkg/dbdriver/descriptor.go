@@ -64,6 +64,13 @@ type Descriptor struct {
 	// 拒绝。只与 AutoIncrement 一起声明；sqldb 的方言实现 NewTableAutoIncrementer 即声明
 	// （sqldb.AutoIncrementsNewTablesOnly）。
 	AutoIncrementNewTablesOnly bool `json:"autoIncrementNewTablesOnly,omitempty"`
+	// CreateTableComments 声明建表时写得出表注释与列注释（CreateTableRequest.Comment、NewColumn.Comment）。
+	// 没声明时设计器新建表不提供注释输入，会话与宿主转给扩展之前都以 ErrUnsupported 拒绝带注释的建表请求
+	//（按旧版本构建的扩展不认识这两个字段，会建出没有注释的表而不报错）。
+	CreateTableComments bool `json:"createTableComments,omitempty"`
+	// EmptyStringIsNull 声明数据库把空字符串存成 NULL（如 Oracle）：表设计器在默认值写法为「值」且是空串时
+	// 提醒（只提醒，不阻止保存）。只是给用户的提示，不影响生成的语句；与 ExplicitDefaults 一起声明才有意义。
+	EmptyStringIsNull bool `json:"emptyStringIsNull,omitempty"`
 	// NameFolding 是数据库把不加引号的名称折叠成的大小写：表设计器据此提醒与它不符的表名、列名、
 	// 索引名之后要加引号才能访问（只提醒，不阻止保存、不改写）。空表示不折叠，不提醒。
 	NameFolding NameFolding `json:"nameFolding,omitempty"`
@@ -425,6 +432,7 @@ func NameFoldings() []NameFolding {
 func (d Descriptor) ColumnFeatures() ColumnFeatures {
 	return ColumnFeatures{
 		ExplicitDefaults: d.ExplicitDefaults, AutoIncrement: d.AutoIncrement, NewTablesOnly: d.AutoIncrementNewTablesOnly,
+		CreateComments: d.CreateTableComments,
 	}
 }
 

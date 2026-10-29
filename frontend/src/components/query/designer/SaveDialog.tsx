@@ -33,7 +33,7 @@ export function SaveDialog({ state, transactional, onConfirm, onClose }: SaveDia
   const { plan } = state;
   const asking = state.phase === "confirm" || state.phase === "running";
   const running = state.phase === "running";
-  const destructive = plan.droppedColumns.length > 0;
+  const destructive = plan.droppedColumns.length > 0 || plan.droppedIndexes.length > 0;
 
   let title = plan.title;
   let description: string;

@@ -421,6 +421,27 @@ type ColumnFeatures struct {
 	AutoIncrement    bool
 	// NewTablesOnly 是 Descriptor.AutoIncrementNewTablesOnly：改表时新增的列不能自增。
 	NewTablesOnly bool
+	// CreateComments 是 Descriptor.CreateTableComments：建表请求可以带表注释与列注释。
+	CreateComments bool
+}
+
+// CheckCreate 检查建表请求：列同 Check，另外没声明 CreateComments 时表注释与列注释以 ErrUnsupported 拒绝。
+func (f ColumnFeatures) CheckCreate(req CreateTableRequest) error {
+	if err := f.Check(req.Definitions()...); err != nil {
+		return err
+	}
+	if f.CreateComments {
+		return nil
+	}
+	if strings.TrimSpace(req.Comment) != "" {
+		return fmt.Errorf("%w: this driver does not declare comments when creating a table, but the request has a table comment", ErrUnsupported)
+	}
+	for _, column := range req.Columns {
+		if strings.TrimSpace(column.Comment) != "" {
+			return fmt.Errorf("%w: this driver does not declare comments when creating a table, but column %q has one", ErrUnsupported, column.Name)
+		}
+	}
+	return nil
 }
 
 // CheckAlter 检查改表请求里的列：同 Check，另外声明了自增只能在新表上设时，新增的列不能自增（已有列的

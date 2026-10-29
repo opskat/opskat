@@ -172,6 +172,25 @@ describe("设计表:索引编辑", () => {
     expect(within(indexList()).queryByText("idx_orders")).not.toBeInTheDocument();
   });
 
+  it("只删除已有索引(不删列):SQL 预览顶部红色警告列出它,保存确认同样警告、确认按钮为危险样式", async () => {
+    await openMysql();
+    openIndexes();
+    fireEvent.click(within(indexRow("idx_note")).getByRole("button", { name: "query.designer.deleteIndex" }));
+    openSqlTab();
+    const warning = await screen.findByTestId("designer-drop-warning");
+    expect(within(warning).getByText("idx_note")).toBeInTheDocument();
+    expect(within(warning).getByText("query.designer.sql.dropIndexesOnly")).toBeInTheDocument();
+
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+    fireEvent.click(saveButton());
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(within(dialog).getByTestId("save-drop-warning")).getByText("idx_note")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "query.designer.save.run" })).toHaveAttribute(
+      "data-variant",
+      "destructive"
+    );
+  });
+
   it("删除列:引用它的索引标记删除并注明随列删除,恢复列一起恢复;删除警告列出它", async () => {
     await openMysql();
     fireEvent.click(within(rowOf("note")).getByRole("button", { name: "query.designer.deleteColumn" }));

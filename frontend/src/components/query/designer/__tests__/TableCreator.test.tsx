@@ -213,6 +213,30 @@ describe("新建表的设计器", () => {
     });
   });
 
+  it("改表能写注释、但没声明建表注释的驱动(如已发布的 Oracle 扩展):没有注释输入,请求不带注释", async () => {
+    provideDrivers([
+      fakeAlterDriver({
+        capabilities: ["create_table", "alter_table"],
+        alterTableAttributes: ["table_comment", "column_comment"],
+        columnTypes: undefined,
+        id: "fakedb",
+      }),
+    ]);
+    await openCreate("fakedb");
+    expect(screen.queryByRole("textbox", { name: "query.designer.tableComment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "query.designer.column.comment" })).not.toBeInTheDocument();
+  });
+
+  it("声明了建表注释的驱动:有表注释与列注释输入,注释随请求发送", async () => {
+    await openCreate("mysql");
+    fireEvent.change(tableNameInput(), { target: { value: "users" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "query.designer.tableComment" }), {
+      target: { value: "用户" },
+    });
+    expect(screen.getByRole("columnheader", { name: "query.designer.column.comment" })).toBeInTheDocument();
+    await waitFor(() => expect(lastCreateRequest().request.comment).toBe("用户"));
+  });
+
   it("换目标库:标签与请求跟着换", async () => {
     await openCreate("mysql");
     fireEvent.change(tableNameInput(), { target: { value: "users" } });

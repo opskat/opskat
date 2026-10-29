@@ -69,7 +69,7 @@ export function StatementList({ items, className, listTestId, itemTestId }: Stat
   );
 }
 
-/** 将删除的已有列(及其中数据)与索引的红色警告(由草稿得出);没有删除列时不显示。 */
+/** 将删除的已有列(及其中数据)与索引的红色警告(由草稿得出);列与索引都没有删除时不显示。 */
 export function DropWarning({
   droppedColumns,
   droppedIndexes,
@@ -82,13 +82,21 @@ export function DropWarning({
   testId: string;
 }) {
   const { t } = useTranslation();
-  if (droppedColumns.length === 0) return null;
+  if (droppedColumns.length === 0 && droppedIndexes.length === 0) return null;
   return (
     <div data-testid={testId} className={cn("flex items-start gap-2 text-[11px] text-destructive", className)}>
       <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
       <div className="space-y-0.5">
-        <NameList label={t("query.designer.sql.dropColumns")} names={droppedColumns} />
-        {droppedIndexes.length > 0 && <NameList label={t("query.designer.sql.dropIndexes")} names={droppedIndexes} />}
+        {droppedColumns.length > 0 && <NameList label={t("query.designer.sql.dropColumns")} names={droppedColumns} />}
+        {droppedIndexes.length > 0 && (
+          <NameList
+            // 删了列时索引接在列后面说「并删除索引」,只删索引时单独说。
+            label={t(
+              droppedColumns.length > 0 ? "query.designer.sql.dropIndexes" : "query.designer.sql.dropIndexesOnly"
+            )}
+            names={droppedIndexes}
+          />
+        )}
       </div>
     </div>
   );

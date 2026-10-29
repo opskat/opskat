@@ -204,8 +204,8 @@ func asAlterColumns(columns ...dbdriver.NewColumn) []dbdriver.AlterColumn {
 	return out
 }
 
-// columnFeatureProblems 检查表设计器的两项列能力与声明一致（只生成、不执行，所以不需要数据）：声明了
-// 建表的驱动，四种默认值写法与自增列在声明了时必须给出语句、没声明时必须以 ErrUnsupported 拒绝；声明了
+// columnFeatureProblems 检查表设计器的列能力与声明一致（只生成、不执行，所以不需要数据）：声明了
+// 建表的驱动，四种默认值写法、自增列与建表注释在声明了时必须给出语句、没声明时必须以 ErrUnsupported 拒绝；声明了
 // 改表的驱动，没声明的列能力在读表之前就以 ErrUnsupported 拒绝（声明了的由 alterProblems 在有数据的
 // 会话上检查）。
 func columnFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
@@ -226,6 +226,9 @@ func columnFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdr
 		check("CreateTableStatements with default kinds", "explicitDefaults", desc.ExplicitDefaults, statements, err)
 		statements, err = s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{Name: "x", Columns: []dbdriver.NewColumn{autoIncrementColumn(desc)}})
 		check("CreateTableStatements with an auto-increment column", "autoIncrement", desc.AutoIncrement, statements, err)
+		statements, err = s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{Name: "x", Comment: "conformance",
+			Columns: []dbdriver.NewColumn{{Name: "conformance_c", Type: "INT", Nullable: true, Comment: "conformance"}}})
+		check("CreateTableStatements with comments", "createTableComments", desc.CreateTableComments, statements, err)
 	}
 	if desc.Supports(dbdriver.CapAlterTable) {
 		for _, undeclared := range []struct {
@@ -1134,6 +1137,9 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	if len(desc.AlterTableAttributes) > 0 && !desc.Supports(dbdriver.CapAlterTable) {
 		report("alterTableAttributes are declared without capability %q, the only feature that uses them", dbdriver.CapAlterTable)
 	}
+	if desc.CreateTableComments && !desc.Supports(dbdriver.CapCreateTable) {
+		report("createTableComments is declared without capability %q, the only feature that uses it", dbdriver.CapCreateTable)
+	}
 	if !desc.Supports(dbdriver.CapCreateTable) && !desc.Supports(dbdriver.CapAlterTable) {
 		for _, detail := range []struct {
 			name     string
@@ -1143,6 +1149,7 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 			{"explicitDefaults", desc.ExplicitDefaults},
 			{"autoIncrement", desc.AutoIncrement},
 			{"nameFolding", desc.NameFolding != ""},
+			{"emptyStringIsNull", desc.EmptyStringIsNull},
 			{"indexEditing", desc.IndexEditing != nil},
 			{"transactionalDDL", desc.TransactionalDDL},
 		} {
