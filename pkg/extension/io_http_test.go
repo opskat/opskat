@@ -73,9 +73,10 @@ func TestHTTPHandle(t *testing.T) {
 		})
 
 		Convey("POST with nothing written sends no body and Content-Length 0", func() {
-			var gotLen int64 = -1
+			gotLen, gotBody := "unset", "unset"
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotLen = r.ContentLength
+				body, _ := io.ReadAll(r.Body)
+				gotLen, gotBody = r.Header.Get("Content-Length"), string(body)
 				_, _ = w.Write([]byte("ok"))
 			}))
 			defer srv.Close()
@@ -84,7 +85,8 @@ func TestHTTPHandle(t *testing.T) {
 			So(err, ShouldBeNil)
 			_, err = h.Flush()
 			So(err, ShouldBeNil)
-			So(gotLen, ShouldEqual, 0)
+			So(gotLen, ShouldEqual, "0")
+			So(gotBody, ShouldEqual, "")
 			So(h.Close(), ShouldBeNil)
 		})
 

@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -92,10 +93,11 @@ type httpHandle struct {
 	redirectGuard func(*url.URL) error
 }
 
-// newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
-// or immediate flushing (GET/HEAD/DELETE/OPTIONS) to a target that is not an
-// asset's endpoint. Its client is single-use: no later call reads its pool, so
-// it keeps no connection alive past the call. For an asset's endpoint, see
+// newHTTPHandle creates an HTTP handle to a target that is not an asset's
+// endpoint. Whatever the method, the extension may write a request body before
+// Flush; it is sent as written, and a request with nothing written has none.
+// Its client is single-use: no later call reads its pool, so it keeps no
+// connection alive past the call. For an asset's endpoint, see
 // buildCachedHTTPClient / buildSingleUseEndpointClient.
 func newHTTPHandle(params IOOpenParams) (*httpHandle, error) {
 	transport := newHTTPTransport(nil, nil, params.AllowPrivate)
@@ -234,8 +236,9 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	}
 	h.phase = httpPhaseFlushed
 
-	// Build request body.
-	var body *bytes.Reader
+	// The body is what the extension wrote, whatever the method; nothing
+	// written means no body.
+	var body io.Reader
 	if h.bodyBuf.Len() > 0 {
 		body = bytes.NewReader(h.bodyBuf.Bytes())
 	}
@@ -247,13 +250,7 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	if h.redirectGuard != nil {
 		reqCtx = withRedirectGuard(reqCtx, h.redirectGuard)
 	}
-	var req *http.Request
-	var err error
-	if body != nil {
-		req, err = http.NewRequestWithContext(reqCtx, h.method, h.url, body)
-	} else {
-		req, err = http.NewRequestWithContext(reqCtx, h.method, h.url, nil)
-	}
+	req, err := http.NewRequestWithContext(reqCtx, h.method, h.url, body)
 	if err != nil {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("create HTTP request: %w", err)
