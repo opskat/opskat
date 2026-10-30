@@ -369,3 +369,57 @@ func TestDriverClassifiesStatementsWithoutASession(t *testing.T) {
 		assert.Contains(t, err.Error(), `"otherdb"`)
 	})
 }
+
+// A classification runs no session and touches no database: of the host calls
+// a driver session may make, it may only log. The fixture's classifier probes
+// the host when the text asks it to (SHOW HOST / SHOW KERBEROS TICKET) and
+// fails with the host's refusal.
+func TestDriverClassificationHostCalls(t *testing.T) {
+	spy := &hostSpy{}
+	ext := loadDriverFixture(t, spy, nil)
+	desc := extensiontest.DatabaseDrivers(t, ext.Manifest)[0]
+	drv := classifyingDriver{desc: desc, plugin: extdriver.New(ext.Plugin)}
+	ctx := context.Background()
+
+	var httpHits atomic.Int32
+	web := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { httpHits.Add(1) }))
+	defer web.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+	var dials atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			_ = c.Close()
+		}
+	}()
+
+	t.Run("every host call but logging is refused", func(t *testing.T) {
+		for _, sql := range []string{
+			"SHOW HOST KV", "SHOW HOST KVSET", "SHOW HOST FILE_DIALOG", "SHOW HOST ASSET_CONFIG",
+			"SHOW HOST HTTP " + web.URL, "SHOW HOST DIAL " + ln.Addr().String(),
+			"SHOW KERBEROS TICKET MSSQLSvc db.internal",
+		} {
+			_, err := dbdriver.ClassifyStatements(ctx, drv, sql)
+			require.ErrorIs(t, err, dbdriver.ErrCannotSplit, sql)
+			assert.Contains(t, err.Error(), "is not allowed in this call's scope, which allows only log", sql)
+		}
+		assert.Zero(t, spy.kv.Load(), "the KV store is never reached")
+		assert.Zero(t, spy.dialogs.Load(), "no file dialog opens")
+		assert.Zero(t, spy.configs.Load(), "no asset config is read")
+		assert.Zero(t, httpHits.Load(), "no HTTP request leaves the host")
+		assert.Zero(t, dials.Load(), "no TCP connection is made")
+	})
+
+	t.Run("logging is allowed", func(t *testing.T) {
+		got, err := dbdriver.ClassifyStatements(ctx, drv, "SHOW HOST LOG")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "SHOW", got[0].Type)
+	})
+}

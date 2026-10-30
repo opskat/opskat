@@ -163,8 +163,25 @@ func TestDriverSessionClosesItsInstancesSideBySide(t *testing.T) {
 }
 
 // spinColumn is the fixture's sentinel (fixture-dbdriver main.go): generating an
-// UPDATE that sets it never returns.
+// UPDATE that sets it, or classifying it as the whole text, never returns.
 const spinColumn = "__fixturedb_spin__"
+
+// A classification that never comes back is cut off at the classification
+// timeout, and the next one is answered.
+func TestClassificationTimeout(t *testing.T) {
+	p := newDBDriverPlugin(t)
+	p.classifyTimeout = 100 * time.Millisecond
+
+	stuck := driverOp(func() error {
+		_, err := p.ClassifyStatements(context.Background(), "fixturedb", spinColumn)
+		return err
+	})
+	require.ErrorIs(t, waitOp(t, stuck, p.classifyTimeout+driverInterruptBound), context.DeadlineExceeded)
+
+	got, err := p.ClassifyStatements(context.Background(), "fixturedb", "SELECT 1")
+	require.NoError(t, err)
+	assert.Len(t, got, 1)
+}
 
 // A driver stuck generating row statements — a writer's call has no ctx of its
 // own — must not hold up removing the driver: closing the drivers ends the call

@@ -60,6 +60,9 @@ const (
 	// defaultCloseTimeout bounds closing an instance's session in the guest: a
 	// driver's close may talk to a database that no longer answers.
 	defaultCloseTimeout = 10 * time.Second
+	// defaultClassifyTimeout bounds a classification (ClassifyStatements), as the
+	// plugin's default tool timeout bounds its other request-response calls.
+	defaultClassifyTimeout = 30 * time.Second
 )
 
 // errDriverSessionClosed is what an operation on a closed session fails with.
@@ -77,6 +80,8 @@ type Drivers struct {
 	idleTimeout time.Duration
 	// closeTimeout is defaultCloseTimeout; tests shorten it.
 	closeTimeout time.Duration
+	// classifyTimeout is defaultClassifyTimeout; tests shorten it.
+	classifyTimeout time.Duration
 
 	// life ends, with errDriversClosed, when the drivers are closed. It bounds the
 	// calls of the row statement writers prepared on any of their sessions: a
@@ -89,7 +94,9 @@ type Drivers struct {
 // New returns the database drivers plugin provides.
 func New(plugin *extension.Plugin) *Drivers {
 	life, end := context.WithCancelCause(context.Background())
-	return &Drivers{plugin: plugin, idleTimeout: defaultIdleTimeout, closeTimeout: defaultCloseTimeout, life: life, end: end}
+	return &Drivers{plugin: plugin, idleTimeout: defaultIdleTimeout, closeTimeout: defaultCloseTimeout,
+		classifyTimeout: defaultClassifyTimeout, life: life, end: end,
+	}
 }
 
 // CloseDrivers ends the drivers' life, as their removal does (the extension
@@ -150,9 +157,10 @@ func (d *Drivers) OpenDriverSession(ctx context.Context, id string, req dbdriver
 // ClassifyStatements splits and classifies sql with database driver id
 // (dbdriver.StatementClassifier), which the extension must declare in
 // contributes.databaseDrivers. No session is involved: the driver does not touch
-// the database to answer, so the call runs on a pooled instance like
-// CheckPolicy, with no asset, no reach path and the plugin's tool timeout
-// (Plugin.Invoke). The statements are the driver's as it answered them;
+// the database to answer, so the call runs on an instance of its own, leased
+// for it and closed after it, in classifyScope — no asset, no reach path, and
+// of the host calls a session may make only logging — bounded by the
+// classification timeout. The statements are the driver's as it answered them;
 // dbdriver.ClassifyStatements checks them. A failure the driver answers — text
 // it cannot split — wraps dbdriver.ErrCannotSplit with the driver's own reason.
 func (d *Drivers) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
@@ -165,7 +173,19 @@ func (d *Drivers) ClassifyStatements(ctx context.Context, id, sql string) ([]dbd
 	if err != nil {
 		return nil, fmt.Errorf("marshal database driver %s: %w", extwire.DriverOpClassifyStatements, err)
 	}
-	raw, err := d.plugin.Invoke(ctx, extwire.DriverFunction, input)
+	ctx, cancel := context.WithTimeout(ctx, d.classifyTimeout)
+	defer cancel()
+	inst, err := d.plugin.Lease(ctx, classifyScope)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := inst.Close(context.Background()); err != nil {
+			logger.Ctx(ctx).Warn("close database driver classification instance",
+				zap.String("extension", d.name()), zap.String("driver", id), zap.String("invocation", inst.ID()), zap.Error(err))
+		}
+	}()
+	raw, err := inst.Invoke(ctx, extwire.DriverFunction, input)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +242,11 @@ func (s *driverSession) openInstance(ctx context.Context) (*driverInstance, erro
 var driverScopeOps = []string{
 	extension.OpLog, extension.IOOpenOp("tcp"), extension.OpIOSetDeadline, extension.OpToolShouldStop, extension.OpKerberosTicket,
 }
+
+// classifyScope is the scope a classification runs in (ClassifyStatements): no
+// asset, and of the host calls a driver session may make only logging — the
+// driver splits text, it reaches no database and logs in to nothing.
+var classifyScope = &extension.Scope{Ops: []string{extension.OpLog}}
 
 // driverScope is the scope every instance of a session runs in, built from the
 // open request the database side assembled: the asset's host:port as its one
