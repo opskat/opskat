@@ -235,7 +235,9 @@ type ToolCall struct {
 	// calls of the same extension in flight can stop one and route the events of
 	// each. It must be unique among this plugin's running calls. Left empty, the
 	// runtime names the call itself: a caller that never cancels by id (AI exec,
-	// opsctl) has nothing to correlate.
+	// opsctl) has nothing to correlate. The ids the runtime names calls by share
+	// this space; a caller passing ids it does not mint itself must keep them out
+	// of that shape (IsRuntimeInvocationID).
 	InvocationID string
 	Name         string
 	Args         json.RawMessage
@@ -381,9 +383,10 @@ func (p *Plugin) TestConnection(ctx context.Context, assetType string, adhoc *Ad
 }
 
 // nextInvocationID names a call that has no caller-supplied id. The plugin name
-// keeps it readable in a log line next to a page's invocation id.
+// keeps it readable in a log line next to a page's invocation id; its shape is
+// reserved to the runtime (IsRuntimeInvocationID).
 func (p *Plugin) nextInvocationID() string {
-	return fmt.Sprintf("%s#%d", p.manifest.Name, p.callSeq.Add(1))
+	return runtimeInvocationID(p.manifest.Name, p.callSeq.Add(1))
 }
 
 // CheckPolicy calls check_policy on the extension.

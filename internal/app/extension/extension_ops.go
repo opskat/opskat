@@ -61,8 +61,9 @@ func (e *Extension) GetExtensionManifest(name string) (*extreg.Manifest, error) 
 // invocationID is the frontend's per-call correlation token, minted there because
 // the page needs it before the call returns: every event the tool emits reaches
 // the page as "ext:tool:event" stamped with it, and CancelExtensionTool takes it
-// to stop this call while it runs. A failure, the guest's included, is returned
-// as-is.
+// to stop this call while it runs. It may not be empty nor shaped like the ids
+// the runtime names its own calls by (see checkPageInvocationID). A failure, the
+// guest's included, is returned as-is.
 func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
@@ -92,10 +93,6 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
-	if invocationID == "" {
-		return "", fmt.Errorf("invocation id is required to call a tool")
-	}
-
 	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), extName, invocationID, ext.Plugin.CancelTool)
 	if err != nil {
 		return "", err
@@ -121,12 +118,15 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 // the call ends as canceled. A call that has already returned is not an error
 // to cancel — the page cannot know whether its abort raced the result — and a
 // cancel that overtakes its call keeps that call from starting (see toolCalls).
+// Only the page's own calls can be named: an id a page could not have called
+// under is refused (checkPageInvocationID).
 func (e *Extension) CancelExtensionTool(invocationID string) error {
-	if invocationID == "" {
-		return fmt.Errorf("invocation id is required to cancel a tool call")
+	canceled, err := e.toolCalls.cancel(invocationID)
+	if err != nil {
+		return err
 	}
 	log := logger.Ctx(e.ctx).With(zap.String("invocationID", invocationID))
-	if !e.toolCalls.cancel(invocationID) {
+	if !canceled {
 		log.Debug("extension tool cancel found nothing running; held against a late start")
 		return nil
 	}

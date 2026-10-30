@@ -2,9 +2,16 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+
+	"github.com/opskat/opskat/pkg/extension"
 )
 
 // notRunningInPlugin is a Plugin.CancelTool that finds nothing running: the
@@ -106,4 +113,78 @@ func TestPageToolCallCanceledBeforeItStarts(t *testing.T) {
 			end()
 		})
 	})
+}
+
+// The runtime names the calls whose caller supplies no id — AI exec, opsctl —
+// "<extension>#<n>". A page picks its own invocation ids, so one shaped like
+// that could name a call the runtime started for someone else: canceling by it
+// from the page must never reach that call, while the page's own ids still
+// cancel the page's own calls.
+func TestPageCannotCancelARuntimeNamedCall(t *testing.T) {
+	e, assets, rec := pageCallFixtureWithEvents(t)
+	assets.EXPECT().Find(gomock.Any(), int64(1)).Return(fixtureAsset(t, "http://127.0.0.1:9"), nil).AnyTimes()
+	plugin := e.service.Manager().GetExtension("fixture-ext").Plugin
+
+	aiCtx, stopAI := context.WithCancel(context.Background())
+	defer stopAI()
+	aiDone := make(chan error, 1)
+	go func() {
+		_, err := plugin.CallTool(aiCtx, extension.ToolCall{Name: "stream", Args: json.RawMessage(`{"count":100000000,"delay_ms":1}`)})
+		aiDone <- err
+	}()
+
+	// A page call registered under a runtime-shaped id and canceled before it
+	// reaches the plugin: the window in which the page's id is all that stands
+	// between its cancel and Plugin.CancelTool. Every id the runtime may have
+	// handed the AI call is tried, over and over until the call has surely
+	// started.
+	pageCancelsRuntimeIDs := func() {
+		for n := 1; n <= 64; n++ {
+			id := fmt.Sprintf("fixture-ext#%d", n)
+			_, end, err := e.toolCalls.begin(context.Background(), "fixture-ext", id, plugin.CancelTool)
+			_ = e.CancelExtensionTool(id)
+			if err == nil {
+				end()
+			}
+		}
+	}
+	require.Never(t, func() bool {
+		pageCancelsRuntimeIDs()
+		select {
+		case err := <-aiDone:
+			t.Logf("runtime-named call ended: %v", err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 20*time.Millisecond, "a page cancel reached a call the runtime named")
+
+	t.Run("a page call may not take a runtime-shaped id", func(t *testing.T) {
+		_, err := e.CallExtensionTool("fixture-ext", "stream", `{"count":1,"delay_ms":0}`, "fixture-ext#9999", 1)
+		require.Error(t, err)
+		require.Error(t, e.CancelExtensionTool("fixture-ext#9999"))
+	})
+
+	t.Run("a page's own id still cancels its own call", func(t *testing.T) {
+		done := make(chan error, 1)
+		go func() {
+			_, err := e.CallExtensionTool("fixture-ext", "stream", `{"count":100000000,"delay_ms":1}`, "inv-own", 1)
+			done <- err
+		}()
+		require.Eventually(t, func() bool { return len(rec.forInvocation("inv-own")) > 0 }, 10*time.Second, 5*time.Millisecond)
+		require.NoError(t, e.CancelExtensionTool("inv-own"))
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(10 * time.Second):
+			t.Fatal("canceled page call never returned")
+		}
+	})
+
+	stopAI()
+	select {
+	case <-aiDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runtime-named call never returned")
+	}
 }

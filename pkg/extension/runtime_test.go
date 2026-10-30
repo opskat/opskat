@@ -541,6 +541,34 @@ func TestPluginRejectsADuplicateInvocationID(t *testing.T) {
 	})
 }
 
+// TestRuntimeNamedInvocationIDsAreRecognized: a caller that takes ids it does not
+// mint (an extension page) keeps them apart from the runtime's by
+// IsRuntimeInvocationID, so the ids the runtime really names its calls by must
+// be recognized — and an id of the frontend's kind must not be.
+func TestRuntimeNamedInvocationIDsAreRecognized(t *testing.T) {
+	Convey("Given a tool call whose caller supplies no invocation id", t, func() {
+		host := newRecordedHost()
+		p := newFixturePlugin(t, host, t.TempDir())
+		_, err := p.CallTool(context.Background(), ToolCall{Name: "stream",
+			Args: mustJSON(t, map[string]any{"count": 1, "delay_ms": 0}), Timeout: -1})
+		So(err, ShouldBeNil)
+
+		Convey("the id the runtime named it by has the runtime's reserved shape", func() {
+			host.mu.Lock()
+			events := append([]recordedEvent(nil), host.events...)
+			host.mu.Unlock()
+			So(events, ShouldHaveLength, 1)
+			So(IsRuntimeInvocationID(events[0].Invocation), ShouldBeTrue)
+		})
+
+		Convey("ids of other shapes are not the runtime's", func() {
+			for _, id := range []string{"", "inv-1", "#1", "ext#", "ext#1a", "0b5d7c1e-9a4f-4f7e-8c33-2f1d6a1b9e10"} {
+				So(IsRuntimeInvocationID(id), ShouldBeFalse)
+			}
+		})
+	})
+}
+
 // runStream drives the fixture's page-only "stream" tool under an explicit
 // invocation id, with no timeout — as a page calls it.
 func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) error {

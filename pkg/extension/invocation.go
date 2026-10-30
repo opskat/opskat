@@ -3,6 +3,8 @@ package extension
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,6 +37,33 @@ type invocation struct {
 	resolved bool
 	// connectErr is the failure of the scope's Connect, kept for the call.
 	connectErr error
+}
+
+// runtimeInvocationID is the id the runtime names a call by when its caller
+// supplies none (an AI exec or opsctl tool call, policy and config calls):
+// "<extension>#<n>". IsRuntimeInvocationID recognizes the shape.
+func runtimeInvocationID(extName string, n uint64) string {
+	return extName + "#" + strconv.FormatUint(n, 10)
+}
+
+// IsRuntimeInvocationID reports whether id has the shape of the ids the runtime
+// names its own calls by — "<name>#<digits>", whatever the name. Those ids and
+// the ones a caller supplies (ToolCall.InvocationID) share one space, since
+// CancelTool and every event of a call go by the id alone; a caller that takes
+// its ids from somewhere it does not control, such as an extension page, has to
+// refuse ids of this shape, or one of them could name — and cancel, or collide
+// with — a call the runtime started for someone else.
+func IsRuntimeInvocationID(id string) bool {
+	i := strings.LastIndexByte(id, '#')
+	if i <= 0 || i == len(id)-1 {
+		return false
+	}
+	for _, r := range id[i+1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func newInvocation(id string, cancel *toolCancellation) *invocation {

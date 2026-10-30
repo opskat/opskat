@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/opskat/opskat/pkg/extension"
 )
 
 // earlyCancelTTL bounds how long a cancel that found no running call is held for
@@ -23,6 +25,11 @@ const earlyCancelTTL = time.Minute
 // here and reaching the runtime the plugin does not know the id yet; a cancel
 // landing in that window ends the call's context instead, so it never starts.
 //
+// The ids are the page's, so they are checked as they enter (checkPageInvocationID):
+// the runtime names the calls it makes for AI exec and opsctl in the same id
+// space, and a page id shaped like one of those could cancel that call or take
+// its id.
+//
 // Wails serves each IPC call on its own goroutine, so a cancel can arrive before
 // the call it names has begun. Such a cancel is remembered (canceled) and the
 // call is refused when it does begin: the page has already been told it was
@@ -35,6 +42,21 @@ type toolCalls struct {
 	canceled map[string]time.Time
 }
 
+// checkPageInvocationID refuses an id a page may not run or cancel a call under:
+// an empty one, and one shaped like the ids the runtime names its own calls by
+// (extension.IsRuntimeInvocationID) — those belong to calls the page did not
+// make, and keeping page ids out of that shape is what keeps a page cancel to
+// the page's own calls.
+func checkPageInvocationID(invocationID string) error {
+	if invocationID == "" {
+		return fmt.Errorf("invocation id is required")
+	}
+	if extension.IsRuntimeInvocationID(invocationID) {
+		return fmt.Errorf("invocation id %q has the shape the extension runtime reserves for its own calls", invocationID)
+	}
+	return nil
+}
+
 // pageCall is one running page tool call.
 type pageCall struct {
 	extName string
@@ -45,8 +67,12 @@ type pageCall struct {
 // it must run under, plus the function that unregisters it once it returns.
 // cancelTool is the plugin's Plugin.CancelTool. A second call under an id that
 // is still running is refused: cancel could not tell the two apart. A call whose
-// cancel already arrived is refused too.
+// cancel already arrived is refused too, and so is an id checkPageInvocationID
+// refuses.
 func (c *toolCalls) begin(ctx context.Context, extName, invocationID string, cancelTool func(invocationID string) bool) (context.Context, func(), error) {
+	if err := checkPageInvocationID(invocationID); err != nil {
+		return nil, nil, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, canceled := c.canceled[invocationID]; canceled {
@@ -76,8 +102,12 @@ func (c *toolCalls) begin(ctx context.Context, extName, invocationID string, can
 
 // cancel ends the call named invocationID and reports whether one was running.
 // When none was, the id is held for earlyCancelTTL so the call, should it begin
-// late, is refused.
-func (c *toolCalls) cancel(invocationID string) bool {
+// late, is refused. An id checkPageInvocationID refuses names no page call and
+// is refused here as well.
+func (c *toolCalls) cancel(invocationID string) (bool, error) {
+	if err := checkPageInvocationID(invocationID); err != nil {
+		return false, err
+	}
 	c.mu.Lock()
 	call, ok := c.running[invocationID]
 	if !ok {
@@ -96,7 +126,7 @@ func (c *toolCalls) cancel(invocationID string) bool {
 	if ok {
 		call.cancel()
 	}
-	return ok
+	return ok, nil
 }
 
 // isPageCall reports whether invocationID is a page tool call of extName that is
