@@ -33,6 +33,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -104,15 +105,43 @@ type guestFunc func(v extension.ExtensionView) pluginCaller
 
 func pluginOf(v extension.ExtensionView) pluginCaller {
 	if p := v.Plugin(); p != nil {
-		return runningPlugin{Plugin: p, Drivers: extdriver.New(p)}
+		return runningPlugin{Plugin: p, drivers: &lazyDrivers{plugin: p}}
 	}
 	return nil
 }
 
+// driversOf 建插件提供的数据库驱动（extdriver）；测试经它观察驱动生命周期的创建与结束。
+var driversOf = func(p *extension.Plugin) driverOpener { return extdriver.New(p) }
+
 // runningPlugin 是运行中的插件，连同它提供的数据库驱动（extdriver）。
+//
+// 驱动的生命周期只在有人用到驱动时才建（lazyDrivers）：每个贡献点各取一份运行中的插件，
+// 只有数据库驱动贡献点用驱动，也只有它在撤销（含接入失败的回滚）时结束这份生命周期；
+// 资产类型与工具贡献点若也各建一份，就没有人会去结束它们。
 type runningPlugin struct {
 	*extension.Plugin
-	*extdriver.Drivers
+	drivers *lazyDrivers
+}
+
+func (p runningPlugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	return p.drivers.get().OpenDriverSession(ctx, id, req)
+}
+
+func (p runningPlugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	return p.drivers.get().ClassifyStatements(ctx, id, sql)
+}
+
+func (p runningPlugin) CloseDrivers() { p.drivers.get().CloseDrivers() }
+
+type lazyDrivers struct {
+	plugin *extension.Plugin
+	once   sync.Once
+	d      driverOpener
+}
+
+func (l *lazyDrivers) get() driverOpener {
+	l.once.Do(func() { l.d = driversOf(l.plugin) })
+	return l.d
 }
 
 // loaded 是一个扩展在本包内的最小画像：manifest 是它贡献的结构化视图。plugin 为 nil 表示

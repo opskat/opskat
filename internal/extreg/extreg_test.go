@@ -693,3 +693,47 @@ func TestHelpListsTheConfigFieldsAnAssetAccepts(t *testing.T) {
 	}
 	assert.NotContains(t, help, "`proxy_chain`", "a connection item the type did not declare is not offered")
 }
+
+// countingDrivers records the lifetimes of the database drivers an attach creates.
+type countingDrivers struct {
+	fakePlugin
+	closed int
+}
+
+func (d *countingDrivers) CloseDrivers() { d.closed++ }
+
+// viewOfRunningPlugin is an extension whose guest is running, so the contribution
+// points build the real runningPlugin (and its drivers) instead of a fake.
+type viewOfRunningPlugin struct{ *testView }
+
+func (viewOfRunningPlugin) Plugin() *extension.Plugin { return &extension.Plugin{} }
+
+// An attach refused by a later contribution point leaves no driver lifetime of its
+// own behind: every database drivers' lifetime it created is ended, once.
+func TestFailedAttachEndsTheDriversItCreated(t *testing.T) {
+	var created []*countingDrivers
+	orig := driversOf
+	driversOf = func(*extension.Plugin) driverOpener {
+		d := &countingDrivers{}
+		created = append(created, d)
+		return d
+	}
+	t.Cleanup(func() { driversOf = orig })
+
+	registerFake(t, &fakePlugin{}) // owns the "acme" policy face
+	m := testManifest()
+	m.Name, m.Policies.Type = "clash", "acme"
+	m.AssetTypes[0].Type = "clash-store"
+	m.Policies.Groups[0].ID, m.Policies.Default = "ext:acme:other", []string{"ext:acme:other"}
+	m.DatabaseDrivers = []dbdriver.Descriptor{driverDescriptor("clashdb")}
+	m.Contributes.DatabaseDrivers = []string{"clashdb"}
+
+	view := viewOfRunningPlugin{&testView{l: loaded{name: m.Name, manifest: m}, rt: runtimeManifest(m)}}
+	err := testContributions.Attach(view)
+	require.ErrorContains(t, err, `already owned by extension "acme"`)
+
+	require.NotEmpty(t, created, "the attach built its drivers")
+	for i, d := range created {
+		assert.Equal(t, 1, d.closed, "drivers #%d created by the failed attach are ended exactly once", i)
+	}
+}
