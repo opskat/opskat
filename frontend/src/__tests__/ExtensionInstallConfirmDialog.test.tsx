@@ -232,4 +232,54 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(rows[1]).toHaveTextContent("dm");
     expect(within(rows[1]).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
+
+  it.each([
+    ["network.assetRoute", "network.assetRoute", "", "extension.installConfirm.assetRoute"],
+    ["kerberos", "kerberos", "", "extension.installConfirm.kerberos"],
+    ["databaseDriver", "databaseDrivers", "oracle", "extension.installConfirm.databaseDriver"],
+  ])(
+    "labels %s by its manifest name and keeps the explanation as separate wrapping text",
+    (kind, label, value, note) => {
+      const handlers = captureHandlers();
+      render(<ExtensionInstallConfirmDialog />);
+      fire(handlers, "ext:install-confirm", {
+        ...upgrade,
+        capabilities: [{ kind, value, highRisk: kind !== "databaseDriver" }],
+        added: [{ kind, value }],
+      });
+
+      const row = within(screen.getByRole("dialog")).getByTestId(`ext-install-cap-${kind}`);
+      expect(within(row).getByTestId("ext-install-cap-label")).toHaveTextContent(new RegExp(`^${label}$`));
+      const explanation = within(row).getByTestId("ext-install-cap-explanation");
+      expect(explanation).toHaveTextContent(note);
+      expect(explanation).not.toHaveClass("truncate");
+      if (value) expect(within(row).getByText(value)).toBeInTheDocument();
+    }
+  );
+
+  it("keeps the tags beside a shrinkable text block so long text wraps instead of pushing them out", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "kerberos", value: "", highRisk: true }],
+      added: [{ kind: "kerberos", value: "", highRisk: true }],
+    });
+
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-kerberos");
+    const text = within(row).getByTestId("ext-install-cap-label").parentElement!;
+    expect(text).toHaveClass("min-w-0", "flex-1");
+    const tags = within(row).getByText("extension.installConfirm.highRisk").closest("span.shrink-0")!;
+    expect(tags.parentElement).toBe(row);
+    expect(tags).toContainElement(within(row).getByText("extension.installConfirm.added"));
+  });
+
+  it("labels other kinds by their manifest name without an explanation", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", upgrade);
+    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-network.http");
+    expect(within(row).getByTestId("ext-install-cap-label")).toHaveTextContent("network.http");
+    expect(within(row).queryByTestId("ext-install-cap-explanation")).toBeNull();
+  });
 });

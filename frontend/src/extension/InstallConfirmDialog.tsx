@@ -73,8 +73,11 @@ const HIGH_RISK_WARNING_KEYS: Record<string, string> = {
   [KERBEROS_KIND]: "extension.kerberosWarning",
 };
 
-/** Kinds shown by a sentence; every other kind is shown as manifest.json spells the permission. */
-const GRANT_LABEL_KEYS: Record<string, string> = {
+/** The manifest.json name a grant is labelled with (opsctl ext dev uses the same): the kind, except databaseDriver is declared as databaseDrivers. */
+const grantLabel = (kind: string) => (kind === DATABASE_DRIVER_KIND ? "databaseDrivers" : kind);
+
+/** Kinds that carry an explanation sentence under their manifest name. */
+const GRANT_EXPLANATION_KEYS: Record<string, string> = {
   [DATABASE_DRIVER_KIND]: "extension.installConfirm.databaseDriver",
   [ASSET_ROUTE_KIND]: "extension.installConfirm.assetRoute",
   [KERBEROS_KIND]: "extension.installConfirm.kerberos",
@@ -194,13 +197,22 @@ export function ExtensionInstallConfirmDialog() {
                       <li
                         key={`${cap.kind}:${cap.value}`}
                         data-testid={`ext-install-cap-${cap.kind}`}
-                        className="flex items-center gap-2 text-xs p-2 rounded bg-muted/50"
+                        className="flex items-start gap-2 text-xs p-2 rounded bg-muted/50"
                       >
-                        <span className="font-mono font-medium shrink-0">
-                          {cap.kind in GRANT_LABEL_KEYS ? t(GRANT_LABEL_KEYS[cap.kind]) : cap.kind}
-                        </span>
-                        {cap.value && <span className="font-mono text-muted-foreground break-all">{cap.value}</span>}
-                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                        <div className="min-w-0 flex-1 break-words">
+                          <span data-testid="ext-install-cap-label" className="font-mono font-medium">
+                            {grantLabel(cap.kind)}
+                          </span>
+                          {cap.value && (
+                            <span className="ml-2 font-mono text-muted-foreground break-all">{cap.value}</span>
+                          )}
+                          {cap.kind in GRANT_EXPLANATION_KEYS && (
+                            <p data-testid="ext-install-cap-explanation" className="mt-0.5 text-muted-foreground">
+                              {t(GRANT_EXPLANATION_KEYS[cap.kind])}
+                            </p>
+                          )}
+                        </div>
+                        <span className="flex shrink-0 items-center gap-1.5">
                           {cap.highRisk && (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-warning/15 text-warning">
                               <ShieldAlert className="h-3 w-3" aria-hidden />
