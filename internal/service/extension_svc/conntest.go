@@ -77,7 +77,7 @@ func (s *Service) buildAdHocTestConfig(ctx context.Context, extName string, mani
 	}
 
 	credentials := guestConfig
-	if passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema); len(passwordFields) > 0 {
+	if passwordFields := extreg.PasswordFieldsFromSchema(def.ConfigSchema); len(passwordFields) > 0 {
 		guestConfig, credentials, err = s.mergeAndGateTestPasswords(ctx, extName, assetType, assetID, manifest, passwordFields, guestConfig)
 		if err != nil {
 			return nil, err

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 
 	"github.com/opskat/opskat/pkg/extwire"
@@ -64,7 +65,7 @@ func (p providerConfigs) AssetCredentialValues(_ context.Context, assetID int64,
 	if err != nil {
 		return nil, err
 	}
-	return ConfigFieldValues(raw, fields)
+	return fixtureConfigFieldValues(raw, fields)
 }
 
 // credentialValues reads the named fields of an asset's credentials.
@@ -90,7 +91,7 @@ func fixtureScopes(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDi
 		if a.AdHoc != nil {
 			raw = a.AdHoc.Config
 			values = func(_ context.Context, fields []string) (map[string]string, error) {
-				return ConfigFieldValues(a.AdHoc.Credentials, fields)
+				return fixtureConfigFieldValues(a.AdHoc.Credentials, fields)
 			}
 		} else {
 			if raw, err = configs.GetAssetConfig(a.ID); err != nil {
@@ -105,7 +106,7 @@ func fixtureScopes(manifest *Manifest, configs fixtureConfigs, conn *fakeAssetDi
 		if err := json.Unmarshal(raw, &cfg); err != nil {
 			return nil, err
 		}
-		for _, field := range EndpointFieldsFromSchema(def.ConfigSchema) {
+		for _, field := range schemaFieldsWithFormat(def.ConfigSchema, "endpoint") {
 			if value, ok := cfg[field].(string); ok {
 				if ep, ok := ParseEndpoint(value); ok {
 					scope.Endpoints = append(scope.Endpoints, ep)
@@ -377,4 +378,50 @@ func TestAssetEndpointNetworkGate(t *testing.T) {
 			})
 		})
 	})
+}
+
+// fixtureConfigFieldValues reads the named config fields as strings, the way the
+// asset-type side (internal/extreg) renders credential values.
+func fixtureConfigFieldValues(config json.RawMessage, fields []string) (map[string]string, error) {
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return nil, err
+	}
+	values := make(map[string]string, len(fields))
+	for _, field := range fields {
+		raw, ok := cfg[field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			s = string(raw)
+		}
+		values[field] = s
+	}
+	return values, nil
+}
+
+// schemaPropertyNames lists a configSchema's declared properties, sorted.
+func schemaPropertyNames(schema map[string]any) []string {
+	props, _ := schema["properties"].(map[string]any)
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// schemaFieldsWithFormat lists the properties of a configSchema declaring format, sorted.
+func schemaFieldsWithFormat(schema map[string]any, format string) []string {
+	props, _ := schema["properties"].(map[string]any)
+	var fields []string
+	for name, v := range props {
+		if prop, ok := v.(map[string]any); ok && prop["format"] == format {
+			fields = append(fields, name)
+		}
+	}
+	sort.Strings(fields)
+	return fields
 }

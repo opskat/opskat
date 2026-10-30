@@ -244,7 +244,7 @@ func TestFixtureTypedConfigCredential(t *testing.T) {
 			So(err, ShouldBeNil)
 			types := faceOf(t, Described(extmanifest.Manifest{}, desc)).AssetTypes
 			So(types, ShouldHaveLength, 1)
-			So(PasswordFieldsFromSchema(types[0].ConfigSchema), ShouldResemble, []string{"password"})
+			So(schemaFieldsWithFormat(types[0].ConfigSchema, "password"), ShouldResemble, []string{"password"})
 		})
 	})
 }

@@ -309,16 +309,3 @@ func TestCapHostResolvesTheScopeOnDemand(t *testing.T) {
 		})
 	})
 }
-
-func TestEndpointFieldsFromSchema(t *testing.T) {
-	Convey("EndpointFieldsFromSchema lists format:endpoint properties, sorted", t, func() {
-		schema := map[string]any{"properties": map[string]any{
-			"z":    map[string]any{"format": "endpoint"},
-			"a":    map[string]any{"format": "endpoint"},
-			"pass": map[string]any{"format": "password"},
-			"name": map[string]any{"type": "string"},
-		}}
-		So(EndpointFieldsFromSchema(schema), ShouldResemble, []string{"a", "z"})
-		So(EndpointFieldsFromSchema(nil), ShouldBeEmpty)
-	})
-}

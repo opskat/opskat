@@ -90,7 +90,7 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 			f := faceOf(t, manifest)
 			So(f.AssetTypes, ShouldHaveLength, 1)
 			So(f.AssetTypes[0].Type, ShouldEqual, "fixture")
-			So(ConfigSchemaProperties(f.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
+			So(schemaPropertyNames(f.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
 			So(f.Policy.Type, ShouldEqual, "fixture")
 			So(f.actions(), ShouldResemble, []string{"read", "write"})
 			So(f.Policy.Default, ShouldResemble, []string{"ext:fixture:read"})

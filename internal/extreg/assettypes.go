@@ -59,7 +59,7 @@ func (assetTypesPoint) Check(v extension.ExtensionView) error {
 }
 
 func checkAssetType(at extwire.AssetType, assetEndpoint bool) error {
-	props := extension.ConfigSchemaProperties(at.ConfigSchema)
+	props := ConfigSchemaProperties(at.ConfigSchema)
 	if len(props) == 0 {
 		return fmt.Errorf("configSchema must declare properties")
 	}
@@ -70,7 +70,7 @@ func checkAssetType(at extwire.AssetType, assetEndpoint bool) error {
 		return err
 	}
 	binds := bindsEndpoint(at)
-	if binds && len(extension.EndpointFieldsFromSchema(at.ConfigSchema)) == 0 {
+	if binds && len(EndpointFieldsFromSchema(at.ConfigSchema)) == 0 {
 		return fmt.Errorf(`declares auth or connection, which apply only to the asset's endpoint, but its configSchema marks no field format:"endpoint"`)
 	}
 	if at.Auth != nil {
@@ -79,7 +79,7 @@ func checkAssetType(at extwire.AssetType, assetEndpoint bool) error {
 			declared[p] = true
 		}
 		secrets := make(map[string]bool)
-		for _, p := range extension.PasswordFieldsFromSchema(at.ConfigSchema) {
+		for _, p := range PasswordFieldsFromSchema(at.ConfigSchema) {
 			secrets[p] = true
 		}
 		if err := checkAuth(at.Auth, declared, secrets); err != nil {
@@ -106,7 +106,7 @@ func bindsEndpoint(at extwire.AssetType) bool {
 // default, so a mismatch would mislabel or preselect a value the guest rejects.
 func checkEnumPresentation(schema map[string]any) error {
 	props, _ := schema["properties"].(map[string]any)
-	for _, name := range extension.ConfigSchemaProperties(schema) {
+	for _, name := range ConfigSchemaProperties(schema) {
 		prop, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -285,9 +285,9 @@ func extensionTypeSpec(extName string, m *Manifest, at AssetTypeDef) assettype.E
 	return assettype.ExtensionTypeSpec{
 		Type:                at.Type,
 		ExtensionName:       extName,
-		ConfigFields:        extension.ConfigSchemaProperties(at.ConfigSchema),
-		RequiredFields:      extension.ConfigSchemaRequired(at.ConfigSchema),
-		SecretFields:        extension.PasswordFieldsFromSchema(at.ConfigSchema),
+		ConfigFields:        ConfigSchemaProperties(at.ConfigSchema),
+		RequiredFields:      ConfigSchemaRequired(at.ConfigSchema),
+		SecretFields:        PasswordFieldsFromSchema(at.ConfigSchema),
 		PolicyKind:          m.Policies.Type,
 		DefaultPolicyGroups: m.Policies.Default,
 		Connection:          connectionSpec(at.Connection),
@@ -337,7 +337,7 @@ func AssetScope(a extension.AssetRef, at *AssetTypeDef, config json.RawMessage, 
 
 // assetEndpoints 读出 config 里端点字段写的地址；字段缺失、不是字符串或写不出端口的不算端点。
 func assetEndpoints(at *AssetTypeDef, config json.RawMessage) ([]extension.Endpoint, error) {
-	fields := extension.EndpointFieldsFromSchema(at.ConfigSchema)
+	fields := EndpointFieldsFromSchema(at.ConfigSchema)
 	if len(fields) == 0 || len(config) == 0 {
 		return nil, nil
 	}

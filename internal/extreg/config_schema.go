@@ -1,4 +1,4 @@
-package extension
+package extreg
 
 import (
 	"encoding/json"

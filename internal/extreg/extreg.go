@@ -209,9 +209,9 @@ func configReference(localized *Manifest) string {
 		}
 		fmt.Fprintf(&b, "\n### %s\n\n", at.Type)
 		b.WriteString("| field | type | required | notes |\n| --- | --- | --- | --- |\n")
-		required := extension.ConfigSchemaRequired(at.ConfigSchema)
-		secret := extension.PasswordFieldsFromSchema(at.ConfigSchema)
-		for _, name := range extension.ConfigSchemaProperties(at.ConfigSchema) {
+		required := ConfigSchemaRequired(at.ConfigSchema)
+		secret := PasswordFieldsFromSchema(at.ConfigSchema)
+		for _, name := range ConfigSchemaProperties(at.ConfigSchema) {
 			prop, _ := props[name].(map[string]any)
 			typ, _ := prop["type"].(string)
 			req := "no"

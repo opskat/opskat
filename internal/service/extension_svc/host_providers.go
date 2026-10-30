@@ -57,7 +57,7 @@ func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.
 			return extreg.AssetConnection{Dial: dial, TLS: tlsConfig}, err
 		}
 		creds := func(_ context.Context, fields []string) (map[string]string, error) {
-			return extension.ConfigFieldValues(a.AdHoc.Credentials, fields)
+			return extreg.ConfigFieldValues(a.AdHoc.Credentials, fields)
 		}
 		return extreg.AssetScope(a, def, a.AdHoc.Config, connect, creds)
 	}
@@ -148,11 +148,11 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 	if asset.Config == "" {
 		return map[string]string{}, nil
 	}
-	values, err := extension.ConfigFieldValues(json.RawMessage(asset.Config), fields)
+	values, err := extreg.ConfigFieldValues(json.RawMessage(asset.Config), fields)
 	if err != nil {
 		return nil, fmt.Errorf("%s config: %w", asset.Type, err)
 	}
-	for _, field := range extension.PasswordFieldsFromSchema(def.ConfigSchema) {
+	for _, field := range extreg.PasswordFieldsFromSchema(def.ConfigSchema) {
 		if value := values[field]; value != "" {
 			if values[field], err = decryptPasswordField(asset.Type, field, value); err != nil {
 				return nil, err
@@ -249,7 +249,7 @@ func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64)
 // format:"password" from raw.
 func withholdPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef) (json.RawMessage, error) {
 	assetType := def.Type
-	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
+	passwordFields := extreg.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil
 	}
@@ -269,7 +269,7 @@ func withholdPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef) (json
 // OwnedTypedAsset has already confirmed registers def's type.
 func decryptConfigPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef, ext *extension.Extension) (json.RawMessage, error) {
 	assetType := def.Type
-	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
+	passwordFields := extreg.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil
 	}
