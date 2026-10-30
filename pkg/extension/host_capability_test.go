@@ -236,6 +236,7 @@ func TestCapHostRouteDialDirectRefusesThisMachine(t *testing.T) {
 	Convey("Given a direct route to a public asset", t, func() {
 		var dialed []string
 		ch := NewCapabilityHost(&recordingHost{}, &Manifest{Manifest: extmanifest.Manifest{Name: "route"}}, "/tmp/ext").(*capHost)
+		ch.localIPs = func() ([]net.IP, error) { return nil, nil }
 		scope := &Scope{
 			Asset:     &AssetRef{ID: 9},
 			Endpoints: []Endpoint{{Host: "203.0.113.10", Port: "5432"}},
@@ -251,7 +252,7 @@ func TestCapHostRouteDialDirectRefusesThisMachine(t *testing.T) {
 				_, err := dial(context.Background(), "tcp", addr)
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, addr)
-				So(err.Error(), ShouldContainSubstring, "loopback or link-local")
+				So(err.Error(), ShouldContainSubstring, `"route"`)
 			}
 			So(dialed, ShouldBeEmpty)
 		})
@@ -266,6 +267,91 @@ func TestCapHostRouteDialDirectRefusesThisMachine(t *testing.T) {
 			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
 			_, _ = dial(context.Background(), "tcp", "127.0.0.1:7401")
 			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
+		})
+	})
+}
+
+// The user's machine is more than its loopback: a direct route refuses any
+// address of this machine's own network interfaces too, while a tunnel or proxy
+// route reaches the same address on its far side.
+func TestCapHostRouteDialDirectRefusesThisMachinesInterfaces(t *testing.T) {
+	Convey("Given a direct route to a public asset, on a machine whose interfaces carry 192.168.7.5 and 2001:db8::5", t, func() {
+		var dialed []string
+		ch := NewCapabilityHost(&recordingHost{}, &Manifest{Manifest: extmanifest.Manifest{Name: "route"}}, "/tmp/ext").(*capHost)
+		ch.localIPs = func() ([]net.IP, error) {
+			return []net.IP{net.ParseIP("192.168.7.5"), net.ParseIP("2001:db8::5")}, nil
+		}
+		scope := &Scope{
+			Asset:     &AssetRef{ID: 9, Name: "pg-prod"},
+			Endpoints: []Endpoint{{Host: "203.0.113.10", Port: "5432"}},
+			Route: &Route{Direct: true, Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+				dialed = append(dialed, addr)
+				return nil, errors.New("not really dialing")
+			}},
+		}
+		dial := ch.routeDial(newInvocation("t", nil).bindScope(scope), scope)
+
+		Convey("an address of this machine's interfaces is refused naming the extension, the asset and the target, undialed", func() {
+			for _, addr := range []string{"192.168.7.5:22", "[2001:db8::5]:22"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+				So(err.Error(), ShouldContainSubstring, `"pg-prod"`)
+				So(err.Error(), ShouldContainSubstring, addr)
+			}
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("another private address is still dialed", func() {
+			_, err := dial(context.Background(), "tcp", "192.168.7.6:22")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"192.168.7.6:22"})
+		})
+
+		Convey("the interface lookup failing refuses the dial instead of skipping the check", func() {
+			ch.localIPs = func() ([]net.IP, error) { return nil, errors.New("no interfaces for you") }
+			_, err := dial(context.Background(), "tcp", "192.168.7.6:22")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "no interfaces for you")
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("on an asset at one of this machine's interface addresses", func() {
+			scope.Endpoints = []Endpoint{{Host: "192.168.7.5", Port: "5432"}}
+
+			Convey("the asset's own address is dialed on any port", func() {
+				_, err := dial(context.Background(), "tcp", "192.168.7.5:7401")
+				So(err.Error(), ShouldContainSubstring, "not really dialing")
+				So(dialed, ShouldResemble, []string{"192.168.7.5:7401"})
+			})
+
+			Convey("loopback and the machine's other interface addresses are still refused, undialed", func() {
+				for _, addr := range []string{"127.0.0.1:7401", "[::1]:7401", "[2001:db8::5]:7401"} {
+					_, err := dial(context.Background(), "tcp", addr)
+					So(err, ShouldNotBeNil)
+					So(err.Error(), ShouldContainSubstring, `"route"`)
+					So(err.Error(), ShouldContainSubstring, `"pg-prod"`)
+					So(err.Error(), ShouldContainSubstring, addr)
+				}
+				So(dialed, ShouldBeEmpty)
+			})
+		})
+
+		Convey("on a loopback asset, loopback targets are allowed but the machine's interface addresses are not", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			_, err := dial(context.Background(), "tcp", "127.0.0.1:7401")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
+			_, err = dial(context.Background(), "tcp", "192.168.7.5:7401")
+			So(err.Error(), ShouldContainSubstring, `"route"`)
+			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
+		})
+
+		Convey("through a tunnel the same address is dialed on the far side", func() {
+			scope.Route.Direct = false
+			_, err := dial(context.Background(), "tcp", "192.168.7.5:22")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"192.168.7.5:22"})
 		})
 	})
 }

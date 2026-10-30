@@ -31,11 +31,14 @@ type capHost struct {
 	HostProvider
 	manifest *Manifest
 	extDir   string
+	// localIPs lists the addresses of this machine's network interfaces, which
+	// a direct route refuses like loopback (routeDial).
+	localIPs func() ([]net.IP, error)
 }
 
 // NewCapabilityHost wraps inner with permission enforcement.
 func NewCapabilityHost(inner HostProvider, manifest *Manifest, extDir string) HostProvider {
-	return &capHost{HostProvider: inner, manifest: manifest, extDir: extDir}
+	return &capHost{HostProvider: inner, manifest: manifest, extDir: extDir, localIPs: interfaceIPs}
 }
 
 // scopeSource is an inner provider that resolves the scope of a call on an
@@ -244,10 +247,12 @@ func (c *capHost) dialEndpoint(scope *Scope, params *IOOpenParams) {
 // asset's route, by address: through an SSH tunnel to that address itself, its
 // name resolved at the far end of a tunnel, proxy or proxy chain. On a direct
 // route the name resolves here, and an address on this machine (loopback,
-// unspecified) or on its link (link-local) is refused — an asset the user
-// reaches directly cannot point the extension at the user's own machine — unless
-// the asset itself is such an address. What is dialed is the address checked,
-// not the name resolved again. The route's first dial of each address is logged.
+// unspecified, any address of its network interfaces) or on its link
+// (link-local) is refused — an asset the user reaches directly cannot point the
+// extension at the user's own machine — unless it is the asset's own address
+// (directTargets). What is dialed is the address checked, not the name resolved
+// again.
+// The route's first dial of each address is logged.
 func (c *capHost) routeDial(inv *invocation, scope *Scope) DialContextFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		targets := []string{addr}
@@ -274,9 +279,12 @@ func (c *capHost) routeDial(inv *invocation, scope *Scope) DialContextFunc {
 	}
 }
 
-// directTargets are the addresses to dial for addr on a direct route: addr
-// itself when it and the asset are both on this machine or its link, else the
-// resolved ip:port addresses — none of them on this machine or its link.
+// directTargets are the addresses to dial for addr on a direct route: the
+// resolved ip:port addresses when none is on this machine or its link, else addr
+// itself when each such address is the asset's own — a loopback, link-local or
+// unspecified one when an endpoint of the asset is such an address, an interface
+// address of this machine when an endpoint of the asset resolves to that very
+// address. Any other such address refuses addr.
 func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Scope, network, addr string) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -286,18 +294,30 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	if slices.ContainsFunc(ips, onThisMachineOrLink) {
-		local, err := c.assetIsLocal(ctx, network, scope)
+	local, err := c.localIPs()
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: list this machine's interface addresses: %w", addr, err)
+	}
+	onInterface := func(ip net.IP) bool { return slices.ContainsFunc(local, ip.Equal) }
+	if slices.ContainsFunc(ips, func(ip net.IP) bool { return onThisMachineOrLink(ip) || onInterface(ip) }) {
+		assetIPs, err := assetIPs(ctx, network, scope)
 		if err != nil {
 			return nil, fmt.Errorf("dial %s: %w", addr, err)
 		}
-		if local {
-			return []string{addr}, nil
+		assetOnLoopOrLink := slices.ContainsFunc(assetIPs, onThisMachineOrLink)
+		refused := func(ip net.IP) bool {
+			if onThisMachineOrLink(ip) {
+				return !assetOnLoopOrLink
+			}
+			return onInterface(ip) && !slices.ContainsFunc(assetIPs, ip.Equal)
 		}
-		err = fmt.Errorf("dial denied: %q is a loopback or link-local address, which a direct connection path may only reach when the asset %s itself is on this machine",
-			addr, assetLabel(scope.Asset))
-		c.logDenied(ctx, inv, scope, IOOpenParams{Type: network, Addr: addr}, err)
-		return nil, err
+		if slices.ContainsFunc(ips, refused) {
+			err = fmt.Errorf("dial denied: extension %q may not reach %q along the direct connection path of the asset %s: it is an address of this machine or its link (loopback, link-local, unspecified or one of this machine's network interfaces) other than the asset's own",
+				c.manifest.Name, addr, assetLabel(scope.Asset))
+			c.logDenied(ctx, inv, scope, IOOpenParams{Type: network, Addr: addr}, err)
+			return nil, err
+		}
+		return []string{addr}, nil
 	}
 	targets := make([]string, len(ips))
 	for i, ip := range ips {
@@ -306,19 +326,17 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 	return targets, nil
 }
 
-// assetIsLocal reports whether one of the asset's endpoints is on this machine
-// or its link.
-func (c *capHost) assetIsLocal(ctx context.Context, network string, scope *Scope) (bool, error) {
+// assetIPs are the addresses the asset's endpoints resolve to here.
+func assetIPs(ctx context.Context, network string, scope *Scope) ([]net.IP, error) {
+	var all []net.IP
 	for _, ep := range scope.Endpoints {
 		ips, err := resolveHere(ctx, network, ep.Host)
 		if err != nil {
-			return false, fmt.Errorf("resolve the asset's host %s: %w", ep.Host, err)
+			return nil, fmt.Errorf("resolve the asset's host %s: %w", ep.Host, err)
 		}
-		if slices.ContainsFunc(ips, onThisMachineOrLink) {
-			return true, nil
-		}
+		all = append(all, ips...)
 	}
-	return false, nil
+	return all, nil
 }
 
 // resolveHere resolves host on this machine, the way a direct dial would.
@@ -333,6 +351,24 @@ func resolveHere(ctx context.Context, network, host string) ([]net.IP, error) {
 // unspecified one, which a dial reaches as this machine.
 func onThisMachineOrLink(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+}
+
+// interfaceIPs lists the addresses of this machine's network interfaces.
+func interfaceIPs() ([]net.IP, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, a := range addrs {
+		switch a := a.(type) {
+		case *net.IPNet:
+			ips = append(ips, a.IP)
+		case *net.IPAddr:
+			ips = append(ips, a.IP)
+		}
+	}
+	return ips, nil
 }
 
 // kerberosTicket answers auth.kerberos_ticket: only a call whose scope carries a

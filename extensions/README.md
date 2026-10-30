@@ -98,7 +98,13 @@ Each one is enforced at the host call it guards:
   configured with: a database driver following a redirect to a cluster node or a
   replica, a tool reaching a node behind the asset's tunnel. Through a tunnel, proxy
   or chain the name resolves at the far end; on a direct path it resolves on the
-  user's machine and a loopback or link-local target is refused.
+  user's machine and a target on that machine or its link — loopback, link-local,
+  unspecified, or any address of the machine's own network interfaces — is refused,
+  naming the extension, the asset and the target. Only the asset's own address is
+  exempt: an asset on a loopback or link-local address may reach such addresses, and
+  an asset whose endpoint resolves to one of the machine's interface addresses may
+  reach that address itself, on any port — not loopback, not the machine's other
+  addresses.
 - `kerberos` lets a call whose scope carries a ticket source ask the host for a
   Kerberos ticket (`opskat.KerberosTicket`); today only a database asset that logs in
   with Kerberos has one.
@@ -643,8 +649,12 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   answers with) is dialed along the asset's route — direct, SSH tunnel, proxy or proxy
   chain — to that address itself: through a tunnel, proxy or chain the name resolves at
   the far end, directly it resolves on the user's machine, and then a loopback
-  (`127.0.0.0/8`, `::1`, `localhost`), unspecified (`0.0.0.0`, `::`) or link-local
-  target is refused unless the asset's own address is one. The first dial of each such
+  (`127.0.0.0/8`, `::1`, `localhost`), unspecified (`0.0.0.0`, `::`), link-local or
+  own-interface (any address of the user's machine's network interfaces) target is
+  refused, except the asset's own: a loopback / link-local asset may reach loopback /
+  link-local targets, and an asset at one of the machine's interface addresses may
+  reach that address itself on any port, nothing else on the machine. The first dial
+  of each such
   address in a session is logged (extension, driver, asset, address); one the route
   cannot reach fails with the route's error naming the address.
 - **Certificate TLS is the driver's own.** Declare `dbdriver.FieldTLSCert` on the
