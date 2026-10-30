@@ -98,6 +98,26 @@ func viewDriverOptions(d dbdriver.Descriptor, opts map[string]any) (values map[s
 	return values, secretsSet
 }
 
+// approvalDriverOptions 是审批 / 审计视图里的 driver_options：按 config 里 driver 的声明，
+// 非口令类给出取值，口令类只列出已设置（driver_options_secrets_set）。更新没带 driver 时
+// AutomationUpdateContext 已补上资产现有的驱动；驱动查不到则没有谁能说出哪些是口令，不给。
+func approvalDriverOptions(config map[string]any) map[string]any {
+	opts, err := driverOptionsArg(config)
+	if err != nil || len(opts) == 0 {
+		return nil
+	}
+	drv, err := requestedDriver(config)
+	if err != nil {
+		return nil
+	}
+	values, secretsSet := viewDriverOptions(drv.Descriptor(), opts)
+	out := map[string]any{argDriverOptions: values}
+	if len(secretsSet) > 0 {
+		out["driver_options_secrets_set"] = secretsSet
+	}
+	return out
+}
+
 // DriverOptionsHaveSecret 报告 config 的 driver_options 里是否带了口令类的明文。驱动取自 config 的
 // driver，局部更新没带时取 stored（已存资产）的驱动；驱动不可用时没有谁能说出哪些是口令，返回
 // false（这样的请求在落库时本来就会被拒）。

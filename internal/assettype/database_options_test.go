@@ -78,14 +78,37 @@ func TestDriverOptionsCreate(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("approval view carries no driver option values", func(t *testing.T) {
+	t.Run("approval view shows plain options and only marks passwords as set", func(t *testing.T) {
 		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
-			"driver": "fakedb", "host": "fake.internal", "driver_options": map[string]any{"region": "eu", "token": "s3cret"},
+			"driver": "fakedb", "host": "fake.internal", "driver_options": map[string]any{"region": "eu", "retries": 5, "token": "s3cret"},
 		})
 		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"region": "eu", "retries": 5}, prepared.Approval["driver_options"])
+		assert.Equal(t, []string{"token"}, prepared.Approval["driver_options_secrets_set"])
 		data, err := json.Marshal(prepared.Approval)
 		require.NoError(t, err)
 		assert.NotContains(t, string(data), "s3cret")
+	})
+
+	t.Run("approval view has no option keys when none are supplied", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+			"driver": "fakedb", "host": "fake.internal", "driver_options": map[string]any{"region": "eu"},
+		})
+		require.NoError(t, err)
+		assert.NotContains(t, prepared.Approval, "driver_options_secrets_set")
+	})
+
+	t.Run("an update without driver reads it from the stored asset", func(t *testing.T) {
+		stored, err := createWithOptions(t, map[string]any{"region": "eu"})
+		require.NoError(t, err)
+		args, err := (&databaseHandler{}).AutomationUpdateContext(stored, map[string]any{
+			"driver_options": map[string]any{"retries": 7, "token": "s3cret"},
+		})
+		require.NoError(t, err)
+		prepared, err := PrepareUpdate(asset_entity.AssetTypeDatabase, args)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"retries": 7}, prepared.Approval["driver_options"])
+		assert.Equal(t, []string{"token"}, prepared.Approval["driver_options_secrets_set"])
 	})
 }
 
