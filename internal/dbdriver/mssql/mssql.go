@@ -5,6 +5,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
 var descriptor = dbdriver.Descriptor{
@@ -37,6 +38,12 @@ var descriptor = dbdriver.Descriptor{
 	// SQL Server 没有 CHARACTER SET，只有排序规则；默认空（用服务器默认）。
 	CreateDatabaseOptions: []dbdriver.DatabaseOption{{Key: dbdriver.OptionCollation}},
 	AlterTableAttributes:  alterAttributes,
+	ColumnTypes:           columnTypes,
+	ExplicitDefaults:      sqldb.ClassifiesDefaults(dialect{}),
+	AutoIncrement:         sqldb.AutoIncrements(dialect{}),
+	IndexEditing:          sqldb.IndexEditing(dialect{}),
+	// DDL 可以在事务里执行，失败整批回滚。
+	TransactionalDDL: true,
 }
 
 type driver struct {

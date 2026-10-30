@@ -1,0 +1,94 @@
+import { useTranslation } from "react-i18next";
+import { CircleAlert, Copy, Loader2, SquareTerminal } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@opskat/ui";
+import { notifyCopied } from "@/lib/notify";
+import type { AlterPreview } from "./useAlterPreview";
+import { statementsScript } from "./format";
+import { DropWarning, StatementList } from "./StatementList";
+
+interface SqlPreviewPaneProps {
+  preview: AlterPreview;
+  /** 草稿里删除的已有列与随之删除的已有索引(由草稿得出)。 */
+  droppedColumns: string[];
+  droppedIndexes: string[];
+  onOpenInSqlTab: (script: string) => void;
+}
+
+/**
+ * SQL 预览子页:驱动按当前草稿生成的语句,按执行次序编号;删除了已有列或索引时顶部红色警告;
+ * 可复制全部语句或放进新的 SQL 标签。
+ */
+export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpenInSqlTab }: SqlPreviewPaneProps) {
+  const { t } = useTranslation();
+  const statements = preview.status === "ready" ? preview.statements : [];
+  const script = statementsScript(statements);
+  const copy = () =>
+    navigator.clipboard.writeText(script).then(
+      () => notifyCopied(t("query.copied")),
+      (err: unknown) => toast.error(String(err))
+    );
+
+  let body;
+  if (preview.status === "blocked") {
+    body = <Placeholder text={t("query.designer.sql.blocked")} />;
+  } else if (preview.status === "loading") {
+    body = (
+      <div className="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+        {t("query.designer.sql.generating")}
+      </div>
+    );
+  } else if (preview.status === "error") {
+    body = (
+      <div role="alert" className="m-3 space-y-1.5 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+          <CircleAlert className="h-3.5 w-3.5" aria-hidden />
+          {t("query.designer.sql.failed")}
+        </div>
+        <code className="block font-mono text-[11px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+          {preview.error}
+        </code>
+      </div>
+    );
+  } else if (statements.length === 0) {
+    body = <Placeholder text={t("query.designer.sql.noChanges")} />;
+  } else {
+    body = (
+      <StatementList
+        listTestId="designer-statements"
+        items={statements.map((statement) => ({ statement }))}
+        className="min-h-0 flex-1 overflow-auto p-3"
+      />
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-[11px] text-muted-foreground">
+        {statements.length > 0 && <span>{t("query.designer.sql.count", { count: statements.length })}</span>}
+        <div className="ml-auto flex items-center gap-1">
+          <Button variant="ghost" size="xs" disabled={statements.length === 0} onClick={copy}>
+            <Copy aria-hidden />
+            {t("action.copy")}
+          </Button>
+          <Button variant="ghost" size="xs" disabled={statements.length === 0} onClick={() => onOpenInSqlTab(script)}>
+            <SquareTerminal aria-hidden />
+            {t("query.designer.sql.openInSqlTab")}
+          </Button>
+        </div>
+      </div>
+      <DropWarning
+        testId="designer-drop-warning"
+        droppedColumns={droppedColumns}
+        droppedIndexes={droppedIndexes}
+        className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5"
+      />
+      {body}
+    </div>
+  );
+}
+
+function Placeholder({ text }: { text: string }) {
+  return <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">{text}</div>;
+}

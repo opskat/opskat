@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opskat/opskat/internal/pkg/netdial"
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 )
 
 // 错误类别，调用方用 errors.Is 区分。
@@ -43,13 +43,7 @@ func (e *DigestError) Is(target error) bool { return target == ErrDigest }
 const manifestAccept = "application/vnd.oci.image.manifest.v1+json, " +
 	"application/vnd.docker.distribution.manifest.v2+json"
 
-var httpClient = &http.Client{
-	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         netdial.Default().DialContext,
-		TLSHandshakeTimeout: 15 * time.Second,
-	},
-}
+var httpClient = &http.Client{Transport: netproxy.Transport()}
 
 type manifest struct {
 	Layers []struct {

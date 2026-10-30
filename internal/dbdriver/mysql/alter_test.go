@@ -32,6 +32,7 @@ func expectAlterTable(mock sqlmock.Sqlmock, database, table, tableComment string
 	mock.ExpectQuery("SHOW FULL COLUMNS FROM " + quoteTableRef(database, table)).WillReturnRows(rows)
 	mock.ExpectQuery(alterTableCommentSQL).WithArgs(database, table).
 		WillReturnRows(sqlmock.NewRows([]string{"table_comment"}).AddRow(tableComment))
+	expectIndexes(mock, database, table)
 }
 
 func expectSQLMode(mock sqlmock.Sqlmock, mode string) {
@@ -53,8 +54,8 @@ func TestAlterTableModelForMySQL(t *testing.T) {
 		Name:    "users",
 		Comment: "user table",
 		Columns: []dbdriver.ColumnDefinition{
-			{Name: "id", Type: "bigint unsigned", Nullable: false, Comment: "pk"},
-			{Name: "name", Type: "varchar(100)", Nullable: true, DefaultValue: "anon"},
+			{Name: "id", Type: "bigint unsigned", Nullable: false, Comment: "pk", DefaultKind: dbdriver.DefaultKindNone, AutoIncrement: true},
+			{Name: "name", Type: "varchar(100)", Nullable: true, DefaultValue: "anon", DefaultKind: dbdriver.DefaultKindValue},
 		},
 	}, model)
 	require.NoError(t, mock.ExpectationsWereMet())

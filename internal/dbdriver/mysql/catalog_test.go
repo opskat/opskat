@@ -59,10 +59,7 @@ func TestTableMetadata(t *testing.T) {
 		"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX").WithArgs("orders").WillReturnRows(
 		sqlmock.NewRows([]string{"INDEX_NAME", "NON_UNIQUE", "COLUMN_NAME"}).
 			AddRow("PRIMARY", 0, "id").AddRow("idx_code", 1, "code").AddRow("idx_code", 1, "id"))
-	mock.ExpectQuery("SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME " +
-		"FROM information_schema.KEY_COLUMN_USAGE " +
-		"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL " +
-		"ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION").WithArgs("orders").WillReturnRows(
+	mock.ExpectQuery(foreignKeysSQL).WithArgs("orders").WillReturnRows(
 		sqlmock.NewRows([]string{"c", "col", "rt", "rc"}).AddRow("fk_user", "user_id", "users", "id"))
 
 	meta, err := session.TableMetadata(context.Background(), "app", "orders")
@@ -118,6 +115,64 @@ func TestObjectSourceReadsTheCreateStatement(t *testing.T) {
 	// 不认识的对象类型：拒绝，不执行任何语句（mock 没有再预期任何查询）。
 	_, err = session.ObjectSource(ctx, "app", "sequence", "s", "")
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 表达式（函数）索引的键在 information_schema.STATISTICS 里 COLUMN_NAME 为 NULL、表达式在 EXPRESSION 列
+// （MySQL 8.0.13 起）：读结构不因它整体失败，表达式按次序作为这一列显示。
+func TestTableMetadataReadsExpressionIndexes(t *testing.T) {
+	session, mock := newMock(t)
+
+	mock.ExpectQuery("SHOW FULL COLUMNS FROM `app`.`users`").WillReturnRows(
+		sqlmock.NewRows([]string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}).
+			AddRow("id", "int", nil, "NO", "PRI", nil, "", "select", "").
+			AddRow("email", "varchar(100)", "utf8mb4_bin", "YES", "", nil, "", "select", ""))
+	mock.ExpectQuery("SHOW KEYS FROM `app`.`users` WHERE Key_name = 'PRIMARY'").WillReturnRows(
+		sqlmock.NewRows([]string{"Table", "Key_name", "Column_name"}).AddRow("users", "PRIMARY", "id"))
+	mock.ExpectQuery("SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME FROM information_schema.STATISTICS " +
+		"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX").WithArgs("users").WillReturnRows(
+		sqlmock.NewRows([]string{"INDEX_NAME", "NON_UNIQUE", "COLUMN_NAME"}).
+			AddRow("PRIMARY", 0, "id").
+			AddRow("idx_lower_email", 1, nil).AddRow("idx_lower_email", 1, "id"))
+	mock.ExpectQuery("SELECT INDEX_NAME, SEQ_IN_INDEX, EXPRESSION FROM information_schema.STATISTICS " +
+		"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME IS NULL ORDER BY INDEX_NAME, SEQ_IN_INDEX").WithArgs("users").WillReturnRows(
+		sqlmock.NewRows([]string{"INDEX_NAME", "SEQ_IN_INDEX", "EXPRESSION"}).AddRow("idx_lower_email", 1, "lower(`email`)"))
+	mock.ExpectQuery(foreignKeysSQL).WithArgs("users").WillReturnRows(
+		sqlmock.NewRows([]string{"c", "col", "rt", "rc", "u", "d"}))
+
+	meta, err := session.TableMetadata(context.Background(), "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.IndexMeta{
+		{Name: "PRIMARY", Columns: []string{"id"}, Unique: true},
+		{Name: "idx_lower_email", Columns: []string{"lower(`email`)", "id"}},
+	}, meta.Indexes)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 外键带上 ON UPDATE / ON DELETE 的动作（information_schema.REFERENTIAL_CONSTRAINTS 的 UPDATE_RULE / DELETE_RULE）。
+func TestTableMetadataReadsForeignKeyActions(t *testing.T) {
+	session, mock := newMock(t)
+
+	mock.ExpectQuery("SHOW FULL COLUMNS FROM `app`.`orders`").WillReturnRows(
+		sqlmock.NewRows([]string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}).
+			AddRow("user_id", "int", nil, "NO", "MUL", nil, "", "select", ""))
+	mock.ExpectQuery("SHOW KEYS FROM `app`.`orders` WHERE Key_name = 'PRIMARY'").WillReturnRows(
+		sqlmock.NewRows([]string{"Table", "Key_name", "Column_name"}))
+	mock.ExpectQuery("SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME FROM information_schema.STATISTICS " +
+		"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX").WithArgs("orders").WillReturnRows(
+		sqlmock.NewRows([]string{"INDEX_NAME", "NON_UNIQUE", "COLUMN_NAME"}).AddRow("fk_user", 1, "user_id"))
+	mock.ExpectQuery("SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE " +
+		"FROM information_schema.KEY_COLUMN_USAGE k " +
+		"LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME " +
+		"WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL " +
+		"ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION").WithArgs("orders").WillReturnRows(
+		sqlmock.NewRows([]string{"c", "col", "rt", "rc", "u", "d"}).AddRow("fk_user", "user_id", "users", "id", "CASCADE", "SET NULL"))
+
+	meta, err := session.TableMetadata(context.Background(), "app", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.ForeignKeyMeta{{
+		Name: "fk_user", Column: "user_id", ReferencedTable: "users", ReferencedColumn: "id", OnUpdate: "CASCADE", OnDelete: "SET NULL",
+	}}, meta.ForeignKeys)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

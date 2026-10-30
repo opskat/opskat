@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -611,11 +612,106 @@ func TestFakeSessionAltersTablesWithoutExecuting(t *testing.T) {
 	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
 }
 
+// 假会话的列能力跟着声明走：没声明时带写法、要自增的请求被拒绝且什么也没记下；声明了，读出的列带
+// 写法（有默认值是值，没有是无）与自增现状（ColumnRules），已有列的自增不能改，新列可以自增。
+func TestFakeSessionFollowsItsColumnFeatures(t *testing.T) {
+	ctx := context.Background()
+	kind := dbdriver.NewColumn{Name: "at", Type: "text", DefaultKind: dbdriver.DefaultKindExpression, DefaultValue: "now()"}
+	auto := dbdriver.NewColumn{Name: "id", Type: "int", AutoIncrement: true}
+
+	undeclared := withSchemaWrites()
+	session := openFake(t, undeclared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	for _, column := range []dbdriver.NewColumn{kind, auto} {
+		_, err := session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{column}})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported, column.Name)
+		_, err = session.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{Columns: []dbdriver.AlterColumn{{
+			Name: column.Name, Type: column.Type, DefaultKind: column.DefaultKind, DefaultValue: column.DefaultValue, AutoIncrement: column.AutoIncrement,
+		}}})
+		require.ErrorIs(t, err, dbdriver.ErrUnsupported, column.Name)
+	}
+	assert.Empty(t, session.TableCalls())
+	model, err := session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	for _, column := range model.Columns {
+		assert.Empty(t, column.DefaultKind)
+		assert.False(t, column.AutoIncrement)
+	}
+
+	declared := withColumnFeatures()
+	session = openFake(t, declared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	_, err = session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{Name: "t", Columns: []dbdriver.NewColumn{kind, auto}})
+	require.NoError(t, err)
+	model, err = session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.ColumnDefinition{
+		{Name: "id", Type: "int", Comment: "primary key", DefaultKind: dbdriver.DefaultKindNone, AutoIncrement: true},
+		{Name: "name", Type: "text", Nullable: true, DefaultKind: dbdriver.DefaultKindValue, DefaultValue: "anon"},
+	}, model.Columns)
+
+	req := dbdriver.AlterTableRequest{Name: "users"}
+	for _, column := range model.Columns {
+		req.Columns = append(req.Columns, dbdriver.AlterColumn{
+			OriginalName: column.Name, Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+			DefaultValue: column.DefaultValue, Comment: column.Comment, DefaultKind: column.DefaultKind, AutoIncrement: column.AutoIncrement,
+		})
+	}
+	result, err := session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err)
+	assert.Empty(t, result.Statements)
+	req.Columns = append(req.Columns, dbdriver.AlterColumn{Name: "seq", Type: "int", AutoIncrement: true})
+	result, err = session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Statements)
+	req.Columns[0].AutoIncrement = false
+	_, err = session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err, "不带自增表示照旧")
+	req.Columns[1].AutoIncrement = true
+	_, err = session.AlterTableStatements(ctx, "app", "users", req)
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported, "已有列不能开启自增")
+}
+
+// 列能力的改表一致性检查也得能失败。
+func TestTableConformanceReportsBrokenColumnFeatures(t *testing.T) {
+	for name, tt := range map[string]struct {
+		fake   *Fake
+		broken brokenAlter
+		want   string
+	}{
+		"undeclared default kinds in the model": {withSchemaWrites(), brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns[1].DefaultKind = dbdriver.DefaultKindValue
+			return m
+		}}, "does not declare explicitDefaults"},
+		"undeclared auto-increment in the model": {withSchemaWrites(), brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns[0].AutoIncrement = true
+			return m
+		}}, "does not declare autoIncrement"},
+		"declared default kinds missing from the model": {withColumnFeatures(), brokenAlter{model: func(m *dbdriver.AlterTableModel) *dbdriver.AlterTableModel {
+			m.Columns[0].DefaultKind = ""
+			return m
+		}}, "default kind"},
+		"an existing column made auto-increment": {withColumnFeatures(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+			return r
+		}, lenientAutoIncrement: true}, "cannot become auto-increment"},
+		"a new auto-increment column accepted although declared for new tables only": {withNewTablesOnly(), brokenAlter{stmts: func(r *dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements {
+			return r
+		}, lenientAutoIncrement: true}, "only on new tables"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tt.broken.Session = openFake(t, tt.fake, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+			problems := tableProblems(tt.fake.Desc, tt.broken, "app", "users")
+			require.NotEmpty(t, problems)
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+}
+
 // brokenAlter 在假会话的改表之上按需改坏一处。
 type brokenAlter struct {
 	dbdriver.Session
 	model func(*dbdriver.AlterTableModel) *dbdriver.AlterTableModel
 	stmts func(*dbdriver.AlterTableStatements) *dbdriver.AlterTableStatements
+	// lenientAutoIncrement 让改已有列自增的请求照样给出语句，而不是被拒绝。
+	lenientAutoIncrement bool
 }
 
 func (b brokenAlter) AlterTableModel(ctx context.Context, database, table string) (*dbdriver.AlterTableModel, error) {
@@ -628,6 +724,9 @@ func (b brokenAlter) AlterTableModel(ctx context.Context, database, table string
 
 func (b brokenAlter) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
 	result, err := b.Session.AlterTableStatements(ctx, database, table, req)
+	if b.lenientAutoIncrement && errors.Is(err, dbdriver.ErrUnsupported) && strings.Contains(err.Error(), "auto-increment") {
+		return &dbdriver.AlterTableStatements{Statements: []string{"ALTER TABLE users"}, Table: table}, nil
+	}
 	if b.stmts != nil && err == nil {
 		return b.stmts(result), nil
 	}
@@ -673,4 +772,95 @@ func TestTableConformanceReportsBrokenAlterTable(t *testing.T) {
 	problems := strings.Join(undeclaredObjectProblems(context.Background(), NewFake().Desc, session), "\n")
 	assert.Contains(t, problems, "AlterTableModel")
 	assert.Contains(t, problems, "AlterTableStatements")
+}
+
+// --- 索引编辑 ---
+
+// withIndexEditing 是另外声明了索引编辑的假驱动：主键、唯一、普通三个类型，主键可改，名称范围是表。
+func withIndexEditing() *Fake {
+	fake := withSchemaWrites()
+	fake.Desc.IndexEditing = &dbdriver.IndexEditing{
+		Types: []dbdriver.IndexTypeDecl{
+			{ID: dbdriver.IndexTypePrimary, Label: "indexType.primary"},
+			{ID: dbdriver.IndexTypeUnique, Label: "indexType.unique"},
+			{ID: dbdriver.IndexTypeNormal, Label: "indexType.normal"},
+		},
+		AlterPrimaryKey: true, NameScope: dbdriver.IndexScopeTable,
+	}
+	return fake
+}
+
+func TestFakeDriverWithIndexEditingPassesConformance(t *testing.T) {
+	fake := withIndexEditing()
+	Register(t, fake)
+	RunConformance(t, fake, FakeSessions(fake))
+	RunTableConformance(t, fake, FakeSessions(fake), "app", "users")
+}
+
+// 假会话的索引跟着声明走：没声明时带索引的建表与改表请求被拒绝且什么也不记下，读出的模型不带索引；
+// 声明了时读出的索引可以原样交回（没有语句），加一个索引（或改动它）给出语句，只读的索引改不得、
+// 不可删除的删不得。
+func TestFakeSessionFollowsItsIndexEditing(t *testing.T) {
+	ctx := context.Background()
+	index := dbdriver.IndexDefinition{Name: "ix_users_name", Type: dbdriver.IndexTypeNormal, Columns: []dbdriver.IndexColumn{{Name: "name"}}}
+
+	undeclared := withSchemaWrites()
+	session := openFake(t, undeclared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	_, err := session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{
+		Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "int"}}, Indexes: []dbdriver.IndexDefinition{index},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = session.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{
+		Indexes: []dbdriver.AlterIndex{{IndexDefinition: index}},
+	})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	_, err = session.AlterTableStatements(ctx, "app", "users", dbdriver.AlterTableRequest{IndexDrops: []string{"ix_users_name"}})
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	assert.Empty(t, session.TableCalls())
+	model, err := session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Empty(t, model.Indexes, "没声明索引编辑时模型不带索引")
+
+	declared := withIndexEditing()
+	declared.TakenIndexNames = []string{"ix_other_name"}
+	session = openFake(t, declared, &dbdriver.Config{Driver: "fakedb", Host: "h"})
+	statements, err := session.CreateTableStatements(ctx, "app", dbdriver.CreateTableRequest{
+		Name: "t", Columns: []dbdriver.NewColumn{{Name: "id", Type: "int"}}, Indexes: []dbdriver.IndexDefinition{index},
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, statements)
+
+	model, err = session.AlterTableModel(ctx, "app", "users")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.IndexDefinition{{Name: "pk_users", Type: dbdriver.IndexTypePrimary, Columns: []dbdriver.IndexColumn{{Name: "id"}}}}, model.Indexes,
+		"与主键列相同的索引类型是 primary")
+	assert.Equal(t, []string{"ix_other_name"}, model.TakenIndexNames)
+
+	req := dbdriver.AlterTableRequest{Name: "users"}
+	for _, column := range model.Columns {
+		req.Columns = append(req.Columns, dbdriver.AlterColumn{
+			OriginalName: column.Name, Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+			DefaultValue: column.DefaultValue, Comment: column.Comment,
+		})
+	}
+	for _, each := range model.Indexes {
+		req.Indexes = append(req.Indexes, dbdriver.AlterIndex{OriginalName: each.Name, IndexDefinition: each})
+	}
+	result, err := session.AlterTableStatements(ctx, "app", "users", req)
+	require.NoError(t, err)
+	assert.Empty(t, result.Statements, "原样交回的索引不产生语句")
+
+	added := req
+	added.Indexes = append(slices.Clone(req.Indexes), dbdriver.AlterIndex{IndexDefinition: index})
+	result, err = session.AlterTableStatements(ctx, "app", "users", added)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Statements)
+
+	changed := req
+	changed.Indexes = slices.Clone(req.Indexes)
+	changed.Indexes[0].Type = dbdriver.IndexTypeUnique
+	changed.Indexes[0].Name = "ux_users_id"
+	result, err = session.AlterTableStatements(ctx, "app", "users", changed)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Statements, "改动的索引由驱动写成删除后重建")
 }

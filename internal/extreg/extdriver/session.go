@@ -144,7 +144,14 @@ func (d *Drivers) OpenDriverSession(ctx context.Context, id string, req dbdriver
 		// is no more the extension's than the Kerberos credentials are.
 		req.Password = ""
 	}
-	s := &driverSession{drivers: d, driver: id, open: req, live: 1}
+	desc, err := d.descriptor(id)
+	if err != nil {
+		return nil, err
+	}
+	s := &driverSession{
+		drivers: d, driver: id, open: req, live: 1,
+		columns: desc.ColumnFeatures(), indexes: desc.IndexEditing,
+	}
 	s.scope = d.driverScope(id, &s.open)
 	inst, err := s.login(ctx)
 	if err != nil {
@@ -152,6 +159,27 @@ func (d *Drivers) OpenDriverSession(ctx context.Context, id string, req dbdriver
 	}
 	s.release(inst)
 	return s, nil
+}
+
+// descriptor is the descriptor of driver id as the extension's describe()
+// answered it (contributes.databaseDrivers, which loading checked): what it
+// declares for the columns and indexes of create and alter table requests. A
+// driver that is not described declares nothing.
+func (d *Drivers) descriptor(id string) (dbdriver.Descriptor, error) {
+	raw := d.plugin.Manifest().Contribution(extwire.KeyDatabaseDrivers)
+	if raw == nil {
+		return dbdriver.Descriptor{}, nil
+	}
+	var descs []dbdriver.Descriptor
+	if err := json.Unmarshal(raw, &descs); err != nil {
+		return dbdriver.Descriptor{}, fmt.Errorf("extension %q: decode %s: %w", d.name(), extwire.KeyDatabaseDrivers, err)
+	}
+	for _, desc := range descs {
+		if string(desc.ID) == id {
+			return desc, nil
+		}
+	}
+	return dbdriver.Descriptor{}, nil
 }
 
 // ClassifyStatements splits and classifies sql with database driver id
@@ -521,6 +549,15 @@ type driverSession struct {
 	// shared by every instance, so each redirect address and each SPN is logged
 	// once per session.
 	scope *extension.Scope
+	// columns is what the driver's descriptor declares for the columns of create
+	// and alter table requests. A request that uses more is refused here and not
+	// sent: an extension built before a field existed ignores it (extwire), so
+	// the change would be dropped without a word.
+	columns dbdriver.ColumnFeatures
+	// indexes is what the driver's descriptor declares for the indexes of create
+	// and alter table requests (nil: it declares no index editing). Same rule: a
+	// request that changes indexes is refused here and not sent.
+	indexes *dbdriver.IndexEditing
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -836,7 +873,56 @@ func (s *driverSession) GridEditStatements(ctx context.Context, database, table 
 }
 
 func (s *driverSession) CreateTableStatements(ctx context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
+	if err := s.checkCreateColumns(req); err != nil {
+		return nil, err
+	}
+	if err := s.checkCreateIndexes(req.Indexes); err != nil {
+		return nil, err
+	}
 	return forwardRequest[[]string](ctx, s, extwire.DriverOpCreateTableStatements, extwire.DriverArgs{Database: database}, req)
+}
+
+// checkCreateColumns refuses, before anything is sent, a create table request
+// whose columns or comments use a feature the driver does not declare (see
+// driverSession.columns, dbdriver.ColumnFeatures.CheckCreate).
+func (s *driverSession) checkCreateColumns(req dbdriver.CreateTableRequest) error {
+	if err := s.columns.CheckCreate(req); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.drivers.name(), err)
+	}
+	return nil
+}
+
+// checkAlterColumns refuses, before anything is sent, an alter table request
+// whose columns use a feature the driver does not declare, including a new
+// auto-increment column when the driver sets auto-increment only on new tables
+// (dbdriver.ColumnFeatures.CheckAlter).
+func (s *driverSession) checkAlterColumns(req dbdriver.AlterTableRequest) error {
+	if err := s.columns.CheckAlter(req); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.drivers.name(), err)
+	}
+	return nil
+}
+
+// checkCreateIndexes refuses, before anything is sent, a create table request whose
+// indexes use a feature the driver does not declare (see driverSession.indexes): an
+// extension built before a field existed would drop the index without a word.
+func (s *driverSession) checkCreateIndexes(indexes []dbdriver.IndexDefinition) error {
+	if err := s.indexes.Check(indexes...); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.drivers.name(), err)
+	}
+	return nil
+}
+
+// checkAlterIndexes refuses, before anything is sent, an alter table request that
+// changes indexes the driver does not declare (see driverSession.indexes). The
+// change to an existing index and its comparison with the table as it is stay the
+// driver's own business: only an index the descriptor does not allow at all is cut
+// off here.
+func (s *driverSession) checkAlterIndexes(req dbdriver.AlterTableRequest) error {
+	if err := s.indexes.CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {
+		return fmt.Errorf("database driver %q of extension %q: %w (not sent to the extension)", s.driver, s.drivers.name(), err)
+	}
+	return nil
 }
 
 func (s *driverSession) DropTableStatements(ctx context.Context, database, table string) ([]string, error) {
@@ -856,6 +942,12 @@ func (s *driverSession) AlterTableModel(ctx context.Context, database, table str
 }
 
 func (s *driverSession) AlterTableStatements(ctx context.Context, database, table string, req dbdriver.AlterTableRequest) (*dbdriver.AlterTableStatements, error) {
+	if err := s.checkAlterColumns(req); err != nil {
+		return nil, err
+	}
+	if err := s.checkAlterIndexes(req); err != nil {
+		return nil, err
+	}
 	return forwardRequest[*dbdriver.AlterTableStatements](ctx, s, extwire.DriverOpAlterTableStatements, extwire.DriverArgs{Database: database, Table: table}, req)
 }
 

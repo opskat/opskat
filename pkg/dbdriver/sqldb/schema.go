@@ -35,36 +35,128 @@ type DatabaseCreator interface {
 // 的值（RowWriter.Literals）。
 var DefinitionLiterals = Literals{}
 
-// CreateTableStatements 生成建表语句：表引用与列名按方言加引号，类型文本原样写入。不碰数据库。
+// CreateTableStatements 生成建表语句：表引用与列名按方言加引号，类型文本原样写入，默认值与自增见
+// NewColumnSQL。索引与注释（请求的表注释、列的 Comment）只交给开启了它们的方言：方言能整条写建表语句
+// （TableCreator）时一并交给它，否则用共用的 CREATE TABLE，随后按请求的次序建索引（TableIndexer），再写
+// 注释（SchemaCommenter，表注释在前、列注释后）——两者都写不了时，请求带它们就以 ErrUnsupported 拒绝，
+// 而不是悄悄丢掉。请求用到方言没开启的索引或列能力时同样以 ErrUnsupported 拒绝。不碰数据库。
 func (s *Session) CreateTableStatements(_ context.Context, database string, req dbdriver.CreateTableRequest) ([]string, error) {
 	tables, err := s.tables()
 	if err != nil {
 		return nil, err
 	}
-	defs := make([]string, 0, len(req.Columns))
-	for _, column := range req.Columns {
-		def, err := ColumnDefinitionSQL(DefinitionLiterals, tables.QuoteIdent, dbdriver.ColumnDefinition{
-			Name: column.Name, Type: column.Type, Nullable: column.Nullable, DefaultValue: column.DefaultValue,
-		})
+	columns := req.Definitions()
+	if err := columnFeatures(s.dialect).Check(columns...); err != nil {
+		return nil, err
+	}
+	indexer, writesIndexes := s.dialect.(TableIndexer)
+	if err := checkCreateIndexes(indexer, writesIndexes, req.Indexes); err != nil {
+		return nil, err
+	}
+	if writesIndexes {
+		if err := checkExclusiveOptions(indexer.IndexEditing(), req.Indexes, req.Name); err != nil {
+			return nil, err
+		}
+	}
+	commenter, writesComments := s.dialect.(SchemaCommenter)
+	creator, writesTheTable := s.dialect.(TableCreator)
+	if writesTheTable {
+		return creator.CreateTableSQL(tables, database, req)
+	}
+	if err := checkSchemaComments(req, writesComments); err != nil {
+		return nil, err
+	}
+
+	defs := make([]string, 0, len(columns))
+	for _, column := range columns {
+		def, err := NewColumnSQL(s.dialect, DefinitionLiterals, tables.QuoteIdent, column)
 		if err != nil {
 			return nil, err
 		}
 		defs = append(defs, def)
 	}
-	return []string{fmt.Sprintf("CREATE TABLE %s (\n  %s\n)", tables.TableRef(database, req.Name), strings.Join(defs, ",\n  "))}, nil
+	tableRef := tables.TableRef(database, req.Name)
+	statements := []string{fmt.Sprintf("CREATE TABLE %s (\n  %s\n)", tableRef, strings.Join(defs, ",\n  "))}
+	if writesIndexes {
+		for _, index := range req.Indexes {
+			statement, err := indexer.IndexSQL(tableRef, index)
+			if err != nil {
+				return nil, err
+			}
+			statements = append(statements, statement)
+		}
+	}
+	if writesComments {
+		if comment := strings.TrimSpace(req.Comment); comment != "" {
+			statement, err := commenter.TableCommentSQL(tableRef, comment)
+			if err != nil {
+				return nil, err
+			}
+			statements = append(statements, statement)
+		}
+		for _, column := range columns {
+			if strings.TrimSpace(column.Comment) == "" {
+				continue
+			}
+			statement, err := commenter.ColumnCommentSQL(tableRef, column)
+			if err != nil {
+				return nil, err
+			}
+			statements = append(statements, statement)
+		}
+	}
+	return statements, nil
+}
+
+// checkCreateIndexes 检查建表请求里的索引按方言的声明只用了声明了的能力（类型、降序、前缀、注释、选项）。
+// 没开启索引编辑的方言没有声明，任何索引都被拒绝。
+func checkCreateIndexes(indexer TableIndexer, writesIndexes bool, indexes []dbdriver.IndexDefinition) error {
+	if !writesIndexes {
+		return (*dbdriver.IndexEditing)(nil).Check(indexes...)
+	}
+	return indexer.IndexEditing().Check(indexes...)
+}
+
+// checkSchemaComments 拒绝共用的建表写法写不出来的注释：它们只能由方言自己写（SchemaCommenter 或
+// TableCreator），共用的 CREATE TABLE 没有它们的位置。
+func checkSchemaComments(req dbdriver.CreateTableRequest, writesComments bool) error {
+	if writesComments {
+		return nil
+	}
+	if strings.TrimSpace(req.Comment) != "" {
+		return fmt.Errorf("%w: this driver does not write a table comment when creating a table", dbdriver.ErrUnsupported)
+	}
+	for _, column := range req.Columns {
+		if strings.TrimSpace(column.Comment) != "" {
+			return fmt.Errorf("%w: this driver does not write column comments when creating a table (column %q)", dbdriver.ErrUnsupported, column.Name)
+		}
+	}
+	return nil
 }
 
 // ColumnDefinitionSQL 是建表与新增列时的列定义：名称加引号、类型文本原样（首尾空白除外）、有默认值时
-// DEFAULT（写法见 Literals.Default）、不可空时 NOT NULL。DEFAULT 在 NOT NULL 之前：Oracle 只接受这个
-// 次序（反过来报 ORA-00907），其余方言两种次序都接受。注释不在其中：各方言写法不同。
+// DEFAULT（写法见 DefaultSQL）、不可空时 NOT NULL。DEFAULT 在 NOT NULL 之前：Oracle 只接受这个
+// 次序（反过来报 ORA-00907），其余方言两种次序都接受。注释不在其中：各方言写法不同。自增的写法在方言
+// 里：要自增的列用 NewColumnSQL，这里以 ErrUnsupported 拒绝，而不是悄悄丢掉自增。
 func ColumnDefinitionSQL(literals Literals, quote func(string) string, column dbdriver.ColumnDefinition) (string, error) {
-	columnType := strings.TrimSpace(column.Type)
-	def := quote(strings.TrimSpace(column.Name)) + " " + columnType
-	if strings.TrimSpace(column.DefaultValue) != "" {
-		literal, err := literals.Default(column.DefaultValue, columnType)
-		if err != nil {
-			return "", err
-		}
+	if column.AutoIncrement {
+		return "", autoIncrementUnsupported(column)
+	}
+	return columnDefinitionSQL(literals, quote, column, "")
+}
+
+// columnDefinitionSQL 写列定义；autoIncrement 是方言的自增子句，写在类型之后，空表示不自增。
+func columnDefinitionSQL(literals Literals, quote func(string) string, column dbdriver.ColumnDefinition, autoIncrement string) (string, error) {
+	column.Type = strings.TrimSpace(column.Type)
+	def := quote(strings.TrimSpace(column.Name)) + " " + column.Type
+	if autoIncrement != "" {
+		def += " " + autoIncrement
+	}
+	literal, ok, err := DefaultSQL(literals, column)
+	if err != nil {
+		return "", err
+	}
+	if ok {
 		def += " DEFAULT " + literal
 	}
 	if !column.Nullable {

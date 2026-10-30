@@ -164,6 +164,12 @@ func main() {
 		log.Fatalf("初始化日志失败: %v", err)
 	}
 
+	// 应用已保存的网络代理设置（放在日志初始化之后，使其信息日志进入文件）。
+	// 密码解密失败时仍按其余设置应用（不带密码），不退回直连。
+	if err := system.ApplyNetworkProxy(bootstrap.GetConfig()); err != nil {
+		logger.Default().Error("apply network proxy settings", zap.Error(err))
+	}
+
 	// appCtx 在所有 binder 之间共享：cancel 后 wait loop 退出
 	appCtx, cancelApp := context.WithCancel(ctx)
 
