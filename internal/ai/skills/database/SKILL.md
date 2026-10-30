@@ -32,7 +32,7 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 
 | field | type | required | notes |
 |---|---|---|---|
-| `driver` | string | yes | `"mysql"`, `"postgresql"`, `"mssql"`, or `"sqlite"` |
+| `driver` | string | yes | Built-in: `"mysql"`, `"postgresql"`, `"mssql"`, `"sqlite"`. Installed extensions can contribute more drivers (e.g. `"oracle"`), accepted the same way. Omit `driver` on create and the error lists every driver registered right now, built-in and extension; extension ids are also in the extension's manifest (`contributes.databaseDrivers`) |
 | `host` | string | non-SQLite | Hostname or IP |
 | `port` | number | no | Defaults by driver: 3306 / 5432 / 1433 |
 | `username` | string | non-SQLite | Database account name; may be left empty under Kerberos (`auth_method: "kerberos"`) |
