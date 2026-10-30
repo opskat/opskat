@@ -13,36 +13,25 @@ import (
 
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/pkg/appversion"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
-	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
-// recordingDevInstaller stands in for extension_svc.Install. It reads the
-// manifest out of the directory it is handed, so a test sees exactly what would
-// have been installed — not what the source directory says by the time the
-// assertion runs.
+// recordingDevInstaller stands in for extension_svc.Install: it reads the
+// manifest out of the directory it is handed, describes it the way the service
+// does — From and Added are what the test says the service reports — asks
+// confirm, and installs only once confirm approves. A test therefore sees
+// exactly what would have been installed, not what the source directory says by
+// the time the assertion runs.
 type recordingDevInstaller struct {
-	installs  []string // directories handed to InstallExtensionDir
-	installed map[string]string
-	contracts map[string]extmanifest.Manifest // manifest.json contract of the installed version
-	manifest  *extension.Manifest             // manifest read from the last installed directory
-	err       error
+	installs  []string                                   // directories committed after confirm approved them
+	installed map[string]string                          // installed version the service reports, by name
+	added     map[string][]extension_svc.CapabilityGrant // Added the service reports, by name
+	manifest  *extension.Manifest                        // manifest read from the last installed directory
+	err       error                                      // the commit's failure, after approval
 }
 
-func (i *recordingDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
-	v, ok := i.installed[name]
-	return v, ok
-}
-
-func (i *recordingDevInstaller) InstalledExtensionManifest(_ context.Context, name string) extmanifest.Manifest {
-	return i.contracts[name]
-}
-
-func (i *recordingDevInstaller) InstallExtensionDir(_ context.Context, sourceDir string) (string, string, error) {
-	i.installs = append(i.installs, sourceDir)
-	if i.err != nil {
-		return "", "", i.err
-	}
+func (i *recordingDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
 	data, err := os.ReadFile(filepath.Join(sourceDir, "manifest.json")) //nolint:gosec // test-owned temp dir
 	if err != nil {
 		return "", "", err
@@ -50,6 +39,18 @@ func (i *recordingDevInstaller) InstallExtensionDir(_ context.Context, sourceDir
 	m, err := extension.ParseManifest(data)
 	if err != nil {
 		return "", "", err
+	}
+	c := extension_svc.InstallConfirm{
+		Name: m.Name, To: m.Version, From: i.installed[m.Name], Source: extension_svc.InstallSourceDir,
+		Capabilities: extension_svc.CapabilityGrants(m.Permissions, m.Contributes),
+		Added:        append([]extension_svc.CapabilityGrant{}, i.added[m.Name]...),
+	}
+	if err := confirm(ctx, c); err != nil {
+		return "", "", err
+	}
+	i.installs = append(i.installs, sourceDir)
+	if i.err != nil {
+		return "", "", i.err
 	}
 	i.manifest = m
 	return m.Name, m.Version, nil
@@ -419,7 +420,7 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	installer := &recordingDevInstaller{
 		installed: map[string]string{"vmysql": "1.0.0"},
-		contracts: map[string]extmanifest.Manifest{"vmysql": {Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"vmysql"}}}},
+		added:     map[string][]extension_svc.CapabilityGrant{"vmysql": {{Kind: extension_svc.CapDatabaseDriver, Value: "vmaria"}}},
 	}
 	o := newDevOpsctl(installer, approver)
 
@@ -434,7 +435,7 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"},
-		contracts: map[string]extmanifest.Manifest{"oss": {Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"gone"}}}}}
+		added: map[string][]extension_svc.CapabilityGrant{"oss": {{Kind: extension_svc.CapHTTP, Value: "https://api.example.com/"}}}}
 	o := newDevOpsctl(installer, approver)
 
 	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
@@ -464,23 +465,21 @@ func writeKerberosExtension(t *testing.T) string {
 }
 
 func TestHandleExtDevInstallKerberosNewMark(t *testing.T) {
-	drivers := extmanifest.Contributes{DatabaseDrivers: []string{"vkrb"}}
-	declared := extmanifest.Manifest{Permissions: extmanifest.Permissions{Kerberos: true}, Contributes: drivers}
-	undeclared := extmanifest.Manifest{Contributes: drivers}
+	installed := map[string]string{"vkrb": "1.0.0"}
 	cases := []struct {
 		name      string
 		installed map[string]string
-		contracts map[string]extmanifest.Manifest
+		added     map[string][]extension_svc.CapabilityGrant
 		marked    bool
 	}{
-		{"added by overwrite", map[string]string{"vkrb": "1.0.0"}, map[string]extmanifest.Manifest{"vkrb": undeclared}, true},
-		{"already declared", map[string]string{"vkrb": "1.0.0"}, map[string]extmanifest.Manifest{"vkrb": declared}, false},
+		{"added by overwrite", installed, map[string][]extension_svc.CapabilityGrant{"vkrb": {{Kind: extension_svc.CapKerberos, HighRisk: true}}}, true},
+		{"already declared", installed, nil, false},
 		{"fresh install", nil, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
-			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, contracts: tc.contracts}, approver)
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, added: tc.added}, approver)
 			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "kerberos: true")
@@ -495,26 +494,21 @@ func TestHandleExtDevInstallKerberosNewMark(t *testing.T) {
 }
 
 func TestHandleExtDevInstallAssetRouteNewMark(t *testing.T) {
-	drivers := extmanifest.Contributes{DatabaseDrivers: []string{"vredir"}}
-	declared := extmanifest.Manifest{
-		Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetRoute: true}},
-		Contributes: drivers,
-	}
-	undeclared := extmanifest.Manifest{Contributes: drivers}
+	installed := map[string]string{"vredir": "1.0.0"}
 	cases := []struct {
 		name      string
 		installed map[string]string
-		contracts map[string]extmanifest.Manifest
+		added     map[string][]extension_svc.CapabilityGrant
 		marked    bool
 	}{
-		{"added by overwrite", map[string]string{"vredir": "1.0.0"}, map[string]extmanifest.Manifest{"vredir": undeclared}, true},
-		{"already declared", map[string]string{"vredir": "1.0.0"}, map[string]extmanifest.Manifest{"vredir": declared}, false},
+		{"added by overwrite", installed, map[string][]extension_svc.CapabilityGrant{"vredir": {{Kind: extension_svc.CapAssetRoute, HighRisk: true}}}, true},
+		{"already declared", installed, nil, false},
 		{"fresh install", nil, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
-			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, contracts: tc.contracts}, approver)
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, added: tc.added}, approver)
 			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "network.assetRoute: true")
@@ -543,9 +537,18 @@ func TestHandleExtDevInstallListsEveryPermissionAndMarksHighRiskAndNew(t *testin
 	approver := &recordingApprover{approve: true}
 	installer := &recordingDevInstaller{
 		installed: map[string]string{"full": "1.0.0"},
-		contracts: map[string]extmanifest.Manifest{"full": {Permissions: extmanifest.Permissions{
-			Network: extmanifest.NetworkPermission{HTTP: []string{"https://a.example.com/"}},
-		}}},
+		// What the service reports over an installed version that declared only https://a.example.com/.
+		added: map[string][]extension_svc.CapabilityGrant{"full": {
+			{Kind: extension_svc.CapFSRead, Value: "/r"},
+			{Kind: extension_svc.CapFSWrite, Value: "/w"},
+			{Kind: extension_svc.CapHTTP, Value: "https://b.example.com/"},
+			{Kind: extension_svc.CapCredentials, Value: "read", HighRisk: true},
+			{Kind: extension_svc.CapAllowPrivate},
+			{Kind: extension_svc.CapAssetEndpoint},
+			{Kind: extension_svc.CapAssetRoute, HighRisk: true},
+			{Kind: extension_svc.CapKerberos, HighRisk: true},
+			{Kind: extension_svc.CapDatabaseDriver, Value: "d1"},
+		}},
 	}
 	o := newDevOpsctl(installer, approver)
 
@@ -570,4 +573,42 @@ func TestHandleExtDevInstallListsEveryPermissionAndMarksHighRiskAndNew(t *testin
 	require.Equal(t, "https://a.example.com/, https://b.example.com/ (new)", lines["network.http"])
 	require.Equal(t, "d1 (new)", lines["databaseDrivers"])
 	require.Equal(t, "/r (new)", lines["fs.read"])
+}
+
+// The dialog describes the install the service is about to commit: the
+// installed version and what counts as new come from the service's
+// InstallConfirm, not from a second reading of the installed extension. Exactly
+// the grants in its Added carry the new mark.
+func TestHandleExtDevInstallMarksExactlyTheConfirmsAdded(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	installer := &recordingDevInstaller{
+		installed: map[string]string{"oss": "1.1.0"},
+		added: map[string][]extension_svc.CapabilityGrant{"oss": {
+			{Kind: extension_svc.CapCredentials, Value: "read", HighRisk: true},
+		}},
+	}
+	o := newDevOpsctl(installer, approver)
+
+	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "read")}).Approved)
+
+	detail := approver.prompts[0].Detail
+	require.Contains(t, detail, "overwrites installed: oss 1.1.0")
+	require.Contains(t, detail, "\n  credentials: read (new) [HIGH RISK]")
+	require.Contains(t, detail, "\n  network.http: https://api.example.com/\n")
+	require.Equal(t, 1, strings.Count(detail, "(new)"))
+}
+
+// The approval is asked inside the install, before the commit. A commit the
+// service refuses after approval — the installed version changed meanwhile — is
+// reported as the refusal, not turned into a success.
+func TestHandleExtDevInstallReportsCommitRefusedAfterApproval(t *testing.T) {
+	approver := &recordingApprover{approve: true}
+	refused := errors.New(`cannot install "oss": the installed version changed from "1.0.0" to "3.0.0" while awaiting confirmation`)
+	o := newDevOpsctl(&recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, err: refused}, approver)
+
+	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
+
+	require.False(t, resp.Approved)
+	require.Len(t, approver.prompts, 1)
+	require.Equal(t, refused.Error(), resp.Reason)
 }

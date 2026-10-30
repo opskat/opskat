@@ -1,6 +1,7 @@
 package opsctl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -32,10 +33,11 @@ var currentApp = appversion.Current
 // 未打包的扩展目录装进当前进程。
 //
 // 这条通道让扩展开发不需要第二套宿主：安装走的就是 ExtDevInstaller 背后那一个
-// extension_svc.Install——扩展页"从目录安装"用的同一条暂存 → 校验 → 提交路径，装完的
-// 扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。唯一的差别是确认：按钮安装
-// 在提交前弹应用内的安装确认框，ext dev 不再弹它，因为下面已经在 opsctl 审批弹窗里问过
-// 用户（InstallExtensionDir 不传确认函数）。重装即热重载——Install 会先 Unload 再加载
+// extension_svc.Install——扩展页"从目录安装"用的同一条暂存 → 确认 → 提交路径，装完的
+// 扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。确认也是同一份：Install
+// 描述的 InstallConfirm（已装版本、权限、新增项）交给这里的确认函数，只是展示在 opsctl
+// 审批弹窗里而不是应用内的安装确认框；提交时 Install 同样复查已装版本仍是确认时的
+// From，弹窗开着时有别的安装落地就拒绝。重装即热重载——Install 会先 Unload 再加载
 // 并通知前端刷新。
 //
 // 它装进来并启用的是未经审阅的 WASM，manifest 要什么能力就有什么能力，还能覆盖同名的
@@ -95,40 +97,43 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
 	}
 
-	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
-	installedVersion, overwrites := o.extDevInstaller.InstalledExtensionVersion(ctx, manifest.Name)
-	var installed extmanifest.Manifest
-	if overwrites {
-		installed = o.extDevInstaller.InstalledExtensionManifest(ctx, manifest.Name)
-	}
 	log = log.With(
 		zap.String("extension", manifest.Name),
 		zap.String("version", manifest.Version),
-		zap.Bool("overwrites", overwrites),
-		zap.String("installedVersion", installedVersion),
 		zap.String("credentials", manifest.Permissions.Credentials),
 		zap.Bool("allowPrivate", manifest.Permissions.Network.AllowPrivate),
 		zap.Bool("assetEndpoint", manifest.Permissions.Network.AssetEndpoint),
 	)
 
-	key := extDevApprovalKey{dir: sourceDir, name: manifest.Name, grants: grantsFingerprint(manifest.Manifest)}
-	if o.extDevApprovals.has(key) {
-		log.Info("extension dev install approved", zap.String("decision", "remembered"))
-	} else {
+	// The approval is Install's confirm: it sees the InstallConfirm the service
+	// built for the staged snapshot, and Install commits only what it approved.
+	var denied *approval.ApprovalResponse
+	confirm := func(_ context.Context, c extension_svc.InstallConfirm) error {
+		log := log.With(zap.Bool("overwrites", c.From != ""), zap.String("installedVersion", c.From))
+		key := extDevApprovalKey{dir: sourceDir, name: c.Name, grants: grantsFingerprint(c.Capabilities)}
+		if o.extDevApprovals.has(key) {
+			log.Info("extension dev install approved", zap.String("decision", "remembered"))
+			return nil
+		}
 		resp := o.extDevApprove(approval.ApprovalRequest{
 			Type:    extDevApprovalType,
 			Command: sourceDir,
-			Detail:  extDevApprovalDetail(manifest, installedVersion, installed, overwrites, o.lang.Lang()),
+			Detail:  extDevApprovalDetail(c, o.lang.Lang()),
 		})
 		if !resp.Approved {
 			log.Info("extension dev install denied", zap.String("reason", resp.Reason))
-			return approval.ApprovalResponse{Approved: false, Reason: "extension dev install " + resp.Reason}
+			denied = &resp
+			return extension_svc.ErrInstallCanceled
 		}
 		o.extDevApprovals.remember(key)
 		log.Info("extension dev install approved", zap.String("decision", "user"))
+		return nil
 	}
 
-	name, version, err := o.extDevInstaller.InstallExtensionDir(ctx, staged)
+	name, version, err := o.extDevInstaller.InstallExtensionDir(i18n.Ctx(o.ctx, o.lang.Lang()), staged, confirm)
+	if denied != nil {
+		return approval.ApprovalResponse{Approved: false, Reason: "extension dev install " + denied.Reason}
+	}
 	if err != nil {
 		log.Error("extension dev install failed", zap.Error(err))
 		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
@@ -140,31 +145,30 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 
 // extDevApprovalDetail 是弹窗里除来源目录之外的全部内容：用户据此判断要不要放行。
 // credentials: read 会把扩展资产里保存的每个密码以明文交给它，所以放在第一行醒目提示，
-// 而不是混在权限列表里。
-func extDevApprovalDetail(m *extension.Manifest, installedVersion string, installed extmanifest.Manifest, overwrites bool, lang string) string {
+// 而不是混在权限列表里。全部内容取自 extension_svc 描述这次安装的 c：From 非空即覆盖
+// 已装版本，c.Added（全新安装时为空）里的项标为新增。
+func extDevApprovalDetail(c extension_svc.InstallConfirm, lang string) string {
 	var b strings.Builder
-	if m.Permissions.Credentials == extmanifest.CredentialAccessRead {
+	grants := c.Capabilities
+	if slices.ContainsFunc(grants, func(g extension_svc.CapabilityGrant) bool {
+		return g.Kind == extension_svc.CapCredentials && g.Value == extmanifest.CredentialAccessRead
+	}) {
 		b.WriteString(i18n.Pick(lang,
 			"警告：credentials: read —— 该扩展能以明文读取其资产里保存的全部密码\n",
 			"WARNING: credentials: read — this extension can read every password stored in its assets in plaintext\n"))
 	}
-	if len(m.Contributes.DatabaseDrivers) > 0 {
+	if slices.ContainsFunc(grants, func(g extension_svc.CapabilityGrant) bool { return g.Kind == extension_svc.CapDatabaseDriver }) {
 		b.WriteString(i18n.Pick(lang,
 			"警告：databaseDrivers —— 使用这些驱动的数据库资产，其口令与 TLS 客户端私钥会以明文交给该扩展\n",
 			"WARNING: databaseDrivers — database assets using these drivers hand their passwords and TLS client private keys to this extension in plaintext\n"))
 	}
-	fmt.Fprintf(&b, "extension: %s %s\n", m.Name, m.Version)
-	if overwrites {
-		fmt.Fprintf(&b, "overwrites installed: %s %s\n", m.Name, installedVersion)
+	fmt.Fprintf(&b, "extension: %s %s\n", c.Name, c.To)
+	if c.From != "" {
+		fmt.Fprintf(&b, "overwrites installed: %s %s\n", c.Name, c.From)
 	} else {
 		b.WriteString("new install\n")
 	}
-	grants := extension_svc.CapabilityGrants(m.Permissions, m.Contributes)
-	// A fresh install adds nothing "new"; only an overwrite marks what it adds.
-	var added []extension_svc.CapabilityGrant
-	if overwrites {
-		added = extension_svc.AddedGrants(grants, extension_svc.CapabilityGrants(installed.Permissions, installed.Contributes))
-	}
+	added := c.Added
 	newMark := i18n.Pick(lang, "新增", "new")
 	riskMark := i18n.Pick(lang, "高风险", "HIGH RISK")
 	b.WriteString("permissions:")
@@ -233,8 +237,8 @@ type extDevApprovalKey struct {
 	grants string
 }
 
-func grantsFingerprint(m extmanifest.Manifest) string {
-	return fmt.Sprintf("%+v %+v", m.Permissions, m.Contributes)
+func grantsFingerprint(grants []extension_svc.CapabilityGrant) string {
+	return fmt.Sprintf("%+v", grants)
 }
 
 // extDevApprovalMemory 只活在内存里：桌面进程退出即失效，下一次运行重新询问。

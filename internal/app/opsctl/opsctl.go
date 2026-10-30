@@ -10,7 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -30,17 +30,13 @@ type WindowActivator interface {
 //
 // 位置而非语义：安装要落 enabled 状态、经 extreg
 // 注册资产类型/策略/技能、刷新前端，这些注册表只存在于桌面进程。因此这里跑的就是
-// 扩展页"从目录安装"按钮跑的那一个 extension_svc.Install（只是不弹安装确认框——
-// ext dev 自己的审批弹窗已经问过），dev 与 prod 的加载路径由构造相同，而不是靠两套
-// 宿主维持一致。
+// 扩展页"从目录安装"按钮跑的那一个 extension_svc.Install，dev 与 prod 的加载路径由
+// 构造相同，而不是靠两套宿主维持一致。
 type ExtDevInstaller interface {
-	// InstalledExtensionVersion 报告同名扩展是否已安装（启用或停用）及其版本，
-	// 供确认弹窗说明这次安装会不会覆盖它。
-	InstalledExtensionVersion(ctx context.Context, name string) (version string, installed bool)
-	// InstalledExtensionManifest 返回已安装的同名扩展的 manifest（权限与驱动 id），
-	// 供确认弹窗把本次新增的驱动与权限标出来；未安装时返回零值。
-	InstalledExtensionManifest(ctx context.Context, name string) extmanifest.Manifest
-	InstallExtensionDir(ctx context.Context, sourceDir string) (name, version string, err error)
+	// InstallExtensionDir 暂存 sourceDir，把 extension_svc 描述的这次安装
+	// （InstallConfirm：已装版本 From、权限、新增项 Added）交给 confirm——ext dev 的
+	// 审批弹窗——确认后再提交；提交时与桌面安装一样复查已装版本仍是 From，变了就拒绝。
+	InstallExtensionDir(ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (name, version string, err error)
 }
 
 // Opsctl binder。

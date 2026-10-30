@@ -152,8 +152,50 @@ func newStoreWorld(t *testing.T, name, indexSHA string) *storeWorld {
 // installLocal puts the 1.0.0 stub in place, as if installed earlier.
 func (w *storeWorld) installLocal(t *testing.T) {
 	t.Helper()
-	_, _, err := InstallExtensionDir(w.e, context.Background(), w.src)
+	_, _, err := InstallExtensionDir(w.e, context.Background(), w.src, approveInstall)
 	require.NoError(t, err)
+}
+
+// approveInstall answers an install confirm with yes.
+func approveInstall(context.Context, extension_svc.InstallConfirm) error { return nil }
+
+// writeStubVersion writes the stub extension name at version into a fresh
+// directory; the describe cache newStoreWorld installs answers for it.
+func writeStubVersion(t *testing.T, name, version string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	manifest := fmt.Sprintf(`{"name":%q,"version":%q,"hostABI":%q,"backend":{"runtime":"wasm","binary":"main.wasm"}}`,
+		name, version, extmanifest.HostABIVersion)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), stubWASM, 0o600))
+	return dir
+}
+
+// `opsctl ext dev` commits through the same re-checked path as the install
+// dialog. The user approved replacing From with To; if another install lands
+// between that approval and the commit, the dev install is refused and the
+// version that landed in between stays in place.
+func TestInstallExtensionDir_RefusesWhenInstalledVersionChangedAfterConfirm(t *testing.T) {
+	w := newStoreWorld(t, "ext-dev-race", "")
+	w.installLocal(t)
+
+	var asked extension_svc.InstallConfirm
+	_, _, err := InstallExtensionDir(w.e, context.Background(), writeStubVersion(t, "ext-dev-race", "2.0.0"),
+		func(ctx context.Context, c extension_svc.InstallConfirm) error {
+			asked = c
+			_, _, err := InstallExtensionDir(w.e, ctx, writeStubVersion(t, "ext-dev-race", "3.0.0"), approveInstall)
+			require.NoError(t, err)
+			return nil
+		})
+
+	require.ErrorContains(t, err, "installed version changed")
+	assert.Equal(t, "1.0.0", asked.From, "the confirm describes the version installed when it was asked")
+	assert.Equal(t, "2.0.0", asked.To)
+	assert.Equal(t, "3.0.0", w.svc.Manager().GetExtension("ext-dev-race").Manifest.Version)
+	data, err := os.ReadFile(filepath.Join(w.extDir, "ext-dev-race", "manifest.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"version":"3.0.0"`, "the refused install must not overwrite what landed in between")
 }
 
 // install runs the binding and answers the confirm with answer, returning the

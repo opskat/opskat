@@ -228,14 +228,16 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 //  2. confirm (when given) shows the user what the staged version is and asks;
 //     the service lock is released while the user decides. Any error from it —
 //     ErrInstallCanceled, a timeout, a canceled ctx — discards the staged files.
-//  3. Cross-extension snippet category id conflict check against the staged manifest.
+//  3. When confirmed, the installed version must still be the confirm's From;
+//     cross-extension snippet category id conflict check against the staged manifest.
 //  4. Swap the registrations: unregister the old version, register the new one; on
 //     refusal put the old registration back.
 //  5. staged.Commit moves the new version into place and closes the old module.
 //  6. snippet hook: RefreshCategories → SyncExtensionSeeds; persist enabled state.
 //
-// A nil confirm installs without asking: the caller already has the user's
-// consent (`opsctl ext dev` asks in its own approval dialog).
+// Every user-facing install passes a confirm — the app-wide install dialog, the
+// store, and `opsctl ext dev`'s approval dialog. A nil confirm installs without
+// asking and without the From re-check.
 func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
 	staged, ask, err := s.stage(ctx, sourcePath)
 	if err != nil {

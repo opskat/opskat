@@ -11,7 +11,6 @@ import (
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
-	"github.com/opskat/opskat/pkg/extmanifest"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -303,54 +302,21 @@ func (e *Extension) ReloadExtensions() error {
 // InstallExtensionDir installs an unpacked extension directory and returns what
 // landed. It backs `opsctl ext dev`, which is why it is a package-level function
 // rather than a method: every exported method on this binder becomes a Wails
-// binding, and "install whatever directory I name, no dialog" is not something
-// the frontend should be able to ask for.
+// binding, and "install whatever directory I name, with a confirm I supply" is
+// not something the frontend should be able to ask for.
 //
 // The path itself is deliberately the same one the "install from directory"
 // button takes — one install implementation, so a dev build cannot load through
-// a laxer route than a shipped one. Only the install confirm is skipped: `opsctl
-// ext dev` has already asked the user in its own approval dialog.
-func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string) (string, string, error) {
+// a laxer route than a shipped one. Only where the confirm is shown differs:
+// confirm is `opsctl ext dev`'s approval dialog instead of the app-wide install
+// confirm, and the commit re-checks the installed version it approved.
+func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
 	if e.service == nil {
 		return "", "", fmt.Errorf("extension system not initialized")
 	}
-	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, nil)
+	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, confirm)
 	if err != nil {
 		return "", "", err
 	}
 	return manifest.Name, manifest.Version, nil
-}
-
-// InstalledExtensionVersion reports whether an extension named name is installed
-// (enabled or disabled on disk) and its version. `opsctl ext dev` shows it in the
-// confirmation dialog so the user sees an overwrite before approving it; it is a
-// package-level function for the same reason InstallExtensionDir is.
-func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
-	if e.service == nil {
-		return "", false
-	}
-	info, err := e.service.GetDetail(name, e.lang.Lang())
-	if err != nil {
-		// GetDetail fails when nothing of that name is installed, or its describe()
-		// answer is refused: either way there is no installed version to show.
-		return "", false
-	}
-	return info.Version, true
-}
-
-// InstalledExtensionManifest returns the manifest.json contract (permissions and
-// driver ids) of the installed extension named name, the zero value when it is
-// not installed. `opsctl ext dev` compares it with the incoming manifest to mark
-// what an overwrite newly adds.
-func InstalledExtensionManifest(e *Extension, name string) extmanifest.Manifest {
-	if e.service == nil {
-		return extmanifest.Manifest{}
-	}
-	info, err := e.service.GetDetail(name, e.lang.Lang())
-	if err != nil {
-		// GetDetail fails when nothing of that name is installed, or its describe()
-		// answer is refused: either way there is no installed contract to compare.
-		return extmanifest.Manifest{}
-	}
-	return info.Manifest.Manifest.Manifest
 }

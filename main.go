@@ -52,7 +52,6 @@ import (
 	"github.com/opskat/opskat/internal/service/vnc_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 	extpkg "github.com/opskat/opskat/pkg/extension"
-	"github.com/opskat/opskat/pkg/extmanifest"
 	skillplugin "github.com/opskat/opskat/plugin"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -464,16 +463,8 @@ func initExtensionSystem(
 // "从目录安装"那一条 extension_svc.Install。
 type desktopExtDevInstaller struct{ ext *extension.Extension }
 
-func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
-	return extension.InstalledExtensionVersion(i.ext, name)
-}
-
-func (i desktopExtDevInstaller) InstalledExtensionManifest(_ context.Context, name string) extmanifest.Manifest {
-	return extension.InstalledExtensionManifest(i.ext, name)
-}
-
-func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
-	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
+func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
+	return extension.InstallExtensionDir(i.ext, ctx, sourceDir, confirm)
 }
 
 // desktopExtStore 把 `opsctl ext search / install / update` 交给扩展商店：列表来自
