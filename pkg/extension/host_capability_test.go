@@ -281,6 +281,14 @@ func TestCapHostRouteDialDirectRefusesThisMachine(t *testing.T) {
 			}
 		})
 
+		// A link-local address names a host only together with its zone (the
+		// interface it is on): dialed without it, the connect fails.
+		Convey("on a link-local asset, a zoned link-local target is dialed with its zone", func() {
+			scope.Endpoints = []Endpoint{{Host: "fe80::1%lo0", Port: "5432"}}
+			_, _ = dial(context.Background(), "tcp", "[fe80::2%lo0]:7401")
+			So(dialed, ShouldResemble, []string{"[fe80::2%lo0]:7401"})
+		})
+
 		// The exemption is the asset's own address: a loopback / link-local asset
 		// reaches loopback / link-local targets, and the unspecified address only
 		// when it is the asset's own.

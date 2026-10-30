@@ -37,4 +37,27 @@ describe("loadExtension stylesheet", () => {
     expect(links("/extensions/es/b.css")).toHaveLength(1);
     expect(links("/extensions/other/o.css")).toHaveLength(1);
   });
+
+  it("removes the stylesheet of a load whose module fails to import", async () => {
+    vi.doMock("/extensions/broken/main.js", () => {
+      throw new Error("syntax error in main.js");
+    });
+    await expect(loadExtension("broken", manifest("style.css"))).rejects.toThrow();
+    expect(links("/extensions/broken/style.css")).toHaveLength(0);
+  });
+
+  it("does not cache a load the cache was cleared under, so the next load brings its stylesheet back", async () => {
+    let finishImport = () => {};
+    const imported = new Promise<void>((resolve) => (finishImport = resolve));
+    vi.doMock("/extensions/slow/main.js", async () => {
+      await imported;
+      return {};
+    });
+    const first = loadExtension("slow", manifest("style.css"));
+    clearExtensionCache();
+    finishImport();
+    await first;
+    await loadExtension("slow", manifest("style.css"));
+    expect(links("/extensions/slow/style.css")).toHaveLength(1);
+  });
 });

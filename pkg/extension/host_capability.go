@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -294,6 +295,12 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
+	// The zone of a link-local literal (the interface it is on) is no part of the
+	// address checked, but the dial needs it: without it the connect fails.
+	var zone string
+	if literal, err := netip.ParseAddr(host); err == nil {
+		zone = literal.Zone()
+	}
 	local, err := c.localIPs()
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: list this machine's interface addresses: %w", addr, err)
@@ -320,7 +327,7 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 	}
 	targets := make([]string, len(ips))
 	for i, ip := range ips {
-		targets[i] = net.JoinHostPort(ip.String(), port)
+		targets[i] = net.JoinHostPort((&net.IPAddr{IP: ip, Zone: zone}).String(), port)
 	}
 	return targets, nil
 }
@@ -338,10 +345,11 @@ func assetIPs(ctx context.Context, network string, scope *Scope) ([]net.IP, erro
 	return all, nil
 }
 
-// resolveHere resolves host on this machine, the way a direct dial would.
+// resolveHere resolves host on this machine, the way a direct dial would. A
+// literal is its own address, its zone (if any) dropped.
 func resolveHere(ctx context.Context, network, host string) ([]net.IP, error) {
-	if ip := net.ParseIP(host); ip != nil {
-		return []net.IP{ip}, nil
+	if literal, err := netip.ParseAddr(host); err == nil {
+		return []net.IP{literal.WithZone("").AsSlice()}, nil
 	}
 	return (&netdial.Dialer{}).Resolve(ctx, network, host)
 }

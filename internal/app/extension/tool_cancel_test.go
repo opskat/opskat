@@ -161,8 +161,8 @@ func TestPageCannotCancelARuntimeNamedCall(t *testing.T) {
 
 	t.Run("a page call may not take a runtime-shaped id", func(t *testing.T) {
 		_, err := e.CallExtensionTool("fixture-ext", "stream", `{"count":1,"delay_ms":0}`, "fixture-ext#9999", 1)
-		require.Error(t, err)
-		require.Error(t, e.CancelExtensionTool("fixture-ext#9999"))
+		require.ErrorContains(t, err, "reserves for its own calls")
+		require.ErrorContains(t, e.CancelExtensionTool("fixture-ext#9999"), "reserves for its own calls")
 	})
 
 	t.Run("a page's own id still cancels its own call", func(t *testing.T) {

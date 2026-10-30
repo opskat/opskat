@@ -110,6 +110,30 @@ func TestDriverOptionsCreate(t *testing.T) {
 		assert.Equal(t, map[string]any{"retries": 7}, prepared.Approval["driver_options"])
 		assert.Equal(t, []string{"token"}, prepared.Approval["driver_options_secrets_set"])
 	})
+
+	// An empty password option on an update keeps the stored one: the approver
+	// must not be told it is being set.
+	t.Run("an empty password option is not shown as set", func(t *testing.T) {
+		stored, err := createWithOptions(t, map[string]any{"region": "eu", "token": "s3cret"})
+		require.NoError(t, err)
+		args, err := (&databaseHandler{}).AutomationUpdateContext(stored, map[string]any{
+			"driver_options": map[string]any{"retries": 7, "token": ""},
+		})
+		require.NoError(t, err)
+		prepared, err := PrepareUpdate(asset_entity.AssetTypeDatabase, args)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"retries": 7}, prepared.Approval["driver_options"])
+		assert.NotContains(t, prepared.Approval, "driver_options_secrets_set")
+	})
+
+	// With no driver nobody can tell which options are passwords, so the approval
+	// cannot show them; it must not go ahead without them.
+	t.Run("options whose driver is unknown are refused, not left out of the approval", func(t *testing.T) {
+		_, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{
+			"driver_options": map[string]any{"retries": 7},
+		})
+		require.Error(t, err)
+	})
 }
 
 func TestDriverOptionsRejectedForDriversWithoutFields(t *testing.T) {
