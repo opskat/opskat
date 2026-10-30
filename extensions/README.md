@@ -732,9 +732,10 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   inputs for a new table. `EmptyStringIsNull` (from
   `sqldb.StoresEmptyStringAsNull(dialect)`, the same `sqldb.EmptyStringNull` the filters
   use) only makes the designer warn that an empty-string default is NULL. The host
-  refuses, before sending, a request using a feature the descriptor does not declare; an extension built before these
-  fields existed keeps creating and altering tables as it did and simply does not get
-  them. None of them needs a newer `hostABI`.
+  refuses, before sending, a request using a feature the descriptor does not declare
+  (`driverSession.checkCreateColumns` / `checkAlterColumns`, `ErrUnsupported`). Under
+  `hostABI` 1.0 these fields are all optional: a driver that declares none of them keeps
+  creating and altering tables, and simply does not get them.
 - **Index editing is opt-in the same way.** Declare `IndexEditing` on the descriptor
   (`*dbdriver.IndexEditing`: the index types you offer with their labels — built-in ids
   `dbdriver.IndexTypePrimary` / `IndexTypeUnique` / `IndexTypeNormal` /
@@ -762,9 +763,9 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   after the shared `CREATE TABLE` and its `IndexSQL`s). A dialect that writes neither is
   refused a request carrying a comment rather than quietly dropping it. The host refuses,
   before sending, a create / alter table request whose indexes the descriptor does not
-  declare (`driverSession.checkCreateIndexes` / `checkAlterIndexes`), so an extension
-  built before these fields existed again keeps working unchanged — and needs no newer
-  `hostABI`.
+  declare (`driverSession.checkCreateIndexes` / `checkAlterIndexes`, `ErrUnsupported`);
+  `IndexEditing` is optional under `hostABI` 1.0, and a driver without it keeps its
+  create and alter table.
 - **Fields of the driver's own go in `DriverFields`.** Each one declares its key, type,
   tab, whether it is required and its default; the values are stored in the asset's
   `driver_options` and reach `open` as `req.DriverOptions`, password fields decrypted.
