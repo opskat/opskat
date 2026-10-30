@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
@@ -156,7 +157,23 @@ func (dialect) Literals(context.Context, *sql.Conn) (sqldb.Literals, error) {
 }
 
 func (dialect) UpdateRowSQL(tableRef, set, where string) string {
+	if strings.Contains(set, "["+spinColumn+"]") {
+		spin()
+	}
 	return "UPDATE " + tableRef + " SET " + set + " WHERE " + where + ";"
+}
+
+// spinColumn is a test-only sentinel: generating an UPDATE that sets it never
+// returns — a driver stuck in RowStatements, which only the host can end.
+const spinColumn = "__fixturedb_spin__"
+
+// spun keeps spin's loop from being an empty one.
+var spun uint64
+
+func spin() {
+	for {
+		spun++
+	}
 }
 
 func (dialect) TruncateTableSQL(tableRef string) string { return "TRUNCATE TABLE " + tableRef }

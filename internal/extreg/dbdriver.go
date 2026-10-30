@@ -22,11 +22,13 @@ import (
 // 点名该驱动的 dbregistry.ErrDriverUnavailable，而不是扩展实例关闭后各种各样的报错。重新
 // 启用注册的是新的 extensionDriver，与作废的会话无关。
 
-// driverOpener 是扩展驱动用到的插件能力（*extdriver.Drivers 满足它）：打开会话，以及不经会话
-// 的语句切分分类。
+// driverOpener 是扩展驱动用到的插件能力（*extdriver.Drivers 满足它）：打开会话、不经会话
+// 的语句切分分类，以及驱动撤销时的 CloseDrivers——结束扩展里仍在执行的行语句生成（它没有自己的
+// ctx，且活得比会话久），之后关闭会话才不必等它。
 type driverOpener interface {
 	OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
 	ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error)
+	CloseDrivers()
 }
 
 // driverOwner 记录每个已注册的扩展驱动 id 归哪个扩展，撞名时据此点名占用者。调用方持有 mu。

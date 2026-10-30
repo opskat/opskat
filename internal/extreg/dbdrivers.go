@@ -63,7 +63,8 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 
 // Attach 把扩展的驱动注册进驱动注册表，全有或全无（registerDrivers）。有运行中的插件时驱动
 // 背后是它；仅描述接入的驱动描述与专属字段可用，打开会话与切分语句报驱动不可用
-// （notLoadedOpener）。撤销时驱动先移出注册表，再在 mu 之外作废它打开过的会话。
+// （notLoadedOpener）。撤销时驱动先移出注册表，再关闭插件的驱动（CloseDrivers：结束扩展里
+// 仍在执行的行语句生成，否则关闭会话要一直等它），最后在 mu 之外作废它打开过的会话。
 func (p dbDriversPoint) Attach(v extension.ExtensionView) (func(), error) {
 	l, err := p.guest.loaded(v)
 	if err != nil {
@@ -85,6 +86,7 @@ func (p dbDriversPoint) Attach(v extension.ExtensionView) (func(), error) {
 		mu.Lock()
 		released := releaseDrivers(extDrivers)
 		mu.Unlock()
+		opener.CloseDrivers()
 		removeDrivers(released)
 	}, nil
 }
@@ -100,6 +102,9 @@ func (o notLoadedOpener) OpenDriverSession(_ context.Context, id string, _ dbdri
 func (o notLoadedOpener) ClassifyStatements(_ context.Context, id, _ string) ([]dbdriver.Statement, error) {
 	return nil, o.unavailable(id)
 }
+
+// CloseDrivers：没有加载的扩展里没有在执行的调用。
+func (notLoadedOpener) CloseDrivers() {}
 
 func (o notLoadedOpener) unavailable(id string) error {
 	return fmt.Errorf("%w: %q (its extension %q is not loaded in this process)", dbregistry.ErrDriverUnavailable, id, o.ext)

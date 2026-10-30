@@ -65,6 +65,10 @@ const (
 // errDriverSessionClosed is what an operation on a closed session fails with.
 var errDriverSessionClosed = errors.New("database driver session is closed")
 
+// errDriversClosed is what a row statement writer's call fails with once its
+// drivers are closed (Drivers.CloseDrivers).
+var errDriversClosed = errors.New("extension database drivers are closed")
+
 // Drivers are the database drivers a loaded extension provides: the ones its
 // manifest declares in contributes.databaseDrivers.
 type Drivers struct {
@@ -73,12 +77,28 @@ type Drivers struct {
 	idleTimeout time.Duration
 	// closeTimeout is defaultCloseTimeout; tests shorten it.
 	closeTimeout time.Duration
+
+	// life ends, with errDriversClosed, when the drivers are closed. It bounds the
+	// calls of the row statement writers prepared on any of their sessions: a
+	// writer's call has no ctx of its own (dbdriver.RowStatementWriter) and
+	// outlives its session.
+	life context.Context
+	end  context.CancelCauseFunc
 }
 
 // New returns the database drivers plugin provides.
 func New(plugin *extension.Plugin) *Drivers {
-	return &Drivers{plugin: plugin, idleTimeout: defaultIdleTimeout, closeTimeout: defaultCloseTimeout}
+	life, end := context.WithCancelCause(context.Background())
+	return &Drivers{plugin: plugin, idleTimeout: defaultIdleTimeout, closeTimeout: defaultCloseTimeout, life: life, end: end}
 }
+
+// CloseDrivers ends the drivers' life, as their removal does (the extension
+// disabled, upgraded or removed): a row statement writer's call in progress
+// fails with errDriversClosed — the instance it runs on is discarded, so closing
+// the session that instance belongs to need not wait for the guest — and so does
+// every later one. Sessions are closed by their holders, as before. Closing twice
+// is a no-op.
+func (d *Drivers) CloseDrivers() { d.end(errDriversClosed) }
 
 func (d *Drivers) name() string { return d.plugin.Manifest().Name }
 
@@ -390,7 +410,7 @@ func (d *driverInstance) retire() error {
 // result: a batch that failed part way answers both.
 //
 // ctx ending while the call runs closes the instance's connections — the guest
-// may be blocked reading one — and fails the call with ctx's error. A call that
+// may be blocked reading one — and fails the call with ctx's cause. A call that
 // fails in the guest itself (a panic, a trap, running out of memory) fails as an
 // extension database driver fault. Either way the instance is left unusable.
 func (d *driverInstance) call(ctx context.Context, call extwire.DriverCall, out any) error {
@@ -399,8 +419,8 @@ func (d *driverInstance) call(ctx context.Context, call extwire.DriverCall, out 
 	if d.broken != nil {
 		return fmt.Errorf("database driver instance is unusable after an earlier failure: %w", d.broken)
 	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("database driver %s: %w", call.Op, err)
+	if ctx.Err() != nil {
+		return fmt.Errorf("database driver %s: %w", call.Op, context.Cause(ctx))
 	}
 	call.ReleaseWriters = d.takeReleased()
 	input, err := json.Marshal(call)
@@ -410,12 +430,12 @@ func (d *driverInstance) call(ctx context.Context, call extwire.DriverCall, out 
 	raw, err := d.inst.Invoke(ctx, extwire.DriverFunction, input)
 	switch {
 	case err != nil && ctx.Err() != nil:
-		d.broken = ctx.Err()
+		d.broken = context.Cause(ctx)
 		d.inst.Interrupt()
 		logger.Ctx(ctx).Warn("extension database driver call interrupted, instance discarded",
 			zap.String("extension", d.drivers.name()), zap.String("driver", d.driver),
-			zap.String("op", call.Op), zap.Error(ctx.Err()))
-		return fmt.Errorf("database driver %s: %w", call.Op, ctx.Err())
+			zap.String("op", call.Op), zap.Error(d.broken))
+		return fmt.Errorf("database driver %s: %w", call.Op, d.broken)
 	case errors.Is(err, extension.ErrPluginClosed):
 		d.broken = err
 		return fmt.Errorf("database driver %s: %w", call.Op, err)
@@ -935,7 +955,7 @@ func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]st
 		return nil, fmt.Errorf("marshal row statements request: %w", err)
 	}
 	var out []string
-	err = w.inst.call(context.Background(), extwire.DriverCall{Op: extwire.DriverOpRowStatements, Args: extwire.DriverArgs{
+	err = w.inst.call(w.inst.drivers.life, extwire.DriverCall{Op: extwire.DriverOpRowStatements, Args: extwire.DriverArgs{
 		Writer: w.id, Request: raw,
 	}}, &out)
 	return out, err

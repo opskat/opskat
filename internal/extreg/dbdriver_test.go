@@ -428,6 +428,67 @@ func TestRemovingADriverClosesItsSessionsSideBySide(t *testing.T) {
 	<-removed
 }
 
+// CloseDrivers: the fake's drivers prepare no row statement writers, so there is
+// nothing to end.
+func (p *fakePlugin) CloseDrivers() {}
+
+// stuckWriterPlugin stands in for an extension with a row statement writer's call
+// still running in it: its sessions' Close waits for that call, which only closing
+// the drivers ends.
+type stuckWriterPlugin struct {
+	*fakePlugin
+	driversClosed chan struct{}
+	once          sync.Once
+}
+
+func (p *stuckWriterPlugin) CloseDrivers() { p.once.Do(func() { close(p.driversClosed) }) }
+
+type stuckWriterSession struct {
+	*dbdrivertest.FakeSession
+	driversClosed <-chan struct{}
+}
+
+func (s *stuckWriterSession) Close() error {
+	<-s.driversClosed
+	return s.FakeSession.Close()
+}
+
+// Revoking an extension's drivers closes them before closing their sessions: a
+// row statement writer's call stuck in the extension ends, instead of holding the
+// session's close — and disabling, upgrading or removing the extension — forever.
+func TestRevokingDriversEndsAStuckRowStatementsCall(t *testing.T) {
+	p := &stuckWriterPlugin{fakePlugin: &fakePlugin{}, driversClosed: make(chan struct{})}
+	t.Cleanup(p.CloseDrivers) // a failed run must not leave the revoke blocked
+	var sessions []*stuckWriterSession
+	p.openDriver = func(ctx context.Context, _ string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+		inner, err := dbdrivertest.NewFake().Open(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		s := &stuckWriterSession{FakeSession: inner.(*dbdrivertest.FakeSession), driversClosed: p.driversClosed}
+		sessions = append(sessions, s)
+		return s, nil
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("acme-db", driverDescriptor("acmedb")), p))
+	d, err := dbregistry.Lookup("acmedb")
+	require.NoError(t, err)
+	_, err = d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "acmedb", Host: "h", Port: 1, Username: "u"}})
+	require.NoError(t, err)
+
+	revoked := make(chan struct{})
+	go func() {
+		detach("acme-db")
+		close(revoked)
+	}()
+	select {
+	case <-revoked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revoking the drivers waited for a row statement writer's call stuck in the extension")
+	}
+	require.Len(t, sessions, 1)
+	assert.True(t, sessions[0].Closed(), "the session is closed once the drivers are")
+}
+
 // splittingDescriptor is a driver that declares statement splitting.
 func splittingDescriptor(id string) dbdriver.Descriptor {
 	desc := driverDescriptor(id)

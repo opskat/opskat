@@ -161,3 +161,53 @@ func TestDriverSessionClosesItsInstancesSideBySide(t *testing.T) {
 	second.Release()
 	require.NoError(t, waitOp(t, closed, callBound))
 }
+
+// spinColumn is the fixture's sentinel (fixture-dbdriver main.go): generating an
+// UPDATE that sets it never returns.
+const spinColumn = "__fixturedb_spin__"
+
+// A driver stuck generating row statements — a writer's call has no ctx of its
+// own — must not hold up removing the driver: closing the drivers ends the call
+// with an error, and the session closes within its bound afterwards.
+func TestClosingTheDriversEndsAStuckRowStatements(t *testing.T) {
+	p := newDBDriverPlugin(t)
+	p.closeTimeout = 100 * time.Millisecond
+	srv := NewFixtureDBServer(t)
+	s := openFixtureSession(t, p, srv)
+	w, err := s.PrepareRowStatements(context.Background(), "app", "users")
+	require.NoError(t, err)
+
+	stuck := driverOp(func() error {
+		_, err := w.RowStatements(dbdriver.RowStatementsRequest{
+			Kind: dbdriver.RowUpdate, Columns: []string{spinColumn}, Rows: []map[string]any{{spinColumn: "x"}}, PrimaryKeys: []string{"id"},
+		})
+		return err
+	})
+	require.Never(t, func() bool { return len(stuck) > 0 }, 200*time.Millisecond, 10*time.Millisecond,
+		"the fixture's sentinel keeps RowStatements running")
+
+	removed := driverOp(func() error {
+		p.CloseDrivers()
+		return s.Close()
+	})
+	require.ErrorIs(t, waitOp(t, stuck, driverInterruptBound), errDriversClosed)
+	require.NoError(t, waitOp(t, removed, p.closeTimeout+driverInterruptBound))
+
+	_, err = w.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": 4}}})
+	require.ErrorIs(t, err, errDriversClosed, "a writer of closed drivers generates nothing")
+}
+
+// A writer outlives its session: closing the session — the query panel letting
+// go of it, the connection pool evicting it — leaves a table edit's writer working.
+func TestRowWriterOutlivesItsSession(t *testing.T) {
+	p := newDBDriverPlugin(t)
+	srv := NewFixtureDBServer(t)
+	s := openFixtureSession(t, p, srv)
+	w, err := s.PrepareRowStatements(context.Background(), "app", "users")
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	stmts, err := w.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": 4, "name": "dave"}}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO [app].[users] ([id], [name]) VALUES ('4', 'dave');"}, stmts)
+}
