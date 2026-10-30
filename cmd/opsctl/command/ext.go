@@ -278,31 +278,13 @@ func scanExtensionDirs() ([]scannedExtension, error) {
 // refusal, in the order of the directories, not among the scanned ones. A directory
 // without a manifest.json is not an extension and is in neither.
 func scanExtensionDirsWithFailures() ([]scannedExtension, []extension.LoadFailure, error) {
-	extDir := extensionsDirFn()
-	entries, err := os.ReadDir(extDir)
+	infos, failures, err := extension.ScanInstalledDir(extensionsDirFn(), extensionContributions, zap.NewNop())
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, nil
-		}
-		return nil, nil, fmt.Errorf("read extensions directory: %w", err)
+		return nil, nil, err
 	}
-
 	disabled := disabledExtensionNames()
-
-	results := make([]scannedExtension, 0, len(entries))
-	var failures []extension.LoadFailure
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		dir := filepath.Join(extDir, entry.Name())
-		info, err := extension.LoadManifestInfo(dir, extensionContributions)
-		if err != nil {
-			if _, statErr := os.Stat(filepath.Join(dir, "manifest.json")); statErr == nil {
-				failures = append(failures, extension.NewLoadFailure(dir, err))
-			}
-			continue
-		}
+	results := make([]scannedExtension, 0, len(infos))
+	for _, info := range infos {
 		results = append(results, scannedExtension{info: info, enabled: !disabled[info.Name]})
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].info.Name < results[j].info.Name })

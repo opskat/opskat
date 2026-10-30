@@ -504,7 +504,31 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 // contribution point refuses, comes back as a LoadFailure with the same verdict
 // loading it would reach; it is not among the infos.
 func (m *Manager) ScanInstalled() ([]*ManifestInfo, []LoadFailure, error) {
-	entries, err := os.ReadDir(m.dir)
+	return scanInstalled(m.dir, m.contribs, m.logger, func(manifest *Manifest, extDir string) *ManifestInfo {
+		// A loaded extension already holds the answer the guest gave this run; only
+		// a disabled one has to fall back to what the cache remembers.
+		ext := m.GetExtension(manifest.Name)
+		if ext == nil {
+			return nil
+		}
+		info := newManifestInfo(ext.Manifest, extDir)
+		info.Described = true
+		return info
+	})
+}
+
+// ScanInstalledDir is ScanInstalled for a process that holds no Manager (opsctl): the
+// same scan and the same verdicts over dir, with nothing loaded, so every extension
+// is judged from its cached describe() answer.
+func ScanInstalledDir(dir string, contributions *ContributionRegistry, logger *zap.Logger) ([]*ManifestInfo, []LoadFailure, error) {
+	return scanInstalled(dir, contributions, logger, func(*Manifest, string) *ManifestInfo { return nil })
+}
+
+// scanInstalled is the one directory scan behind ScanInstalled and ScanInstalledDir.
+// loaded returns the view of an extension that is running right now, or nil to judge
+// it from the cache.
+func scanInstalled(dir string, contributions *ContributionRegistry, logger *zap.Logger, loaded func(manifest *Manifest, extDir string) *ManifestInfo) ([]*ManifestInfo, []LoadFailure, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, nil
@@ -518,28 +542,24 @@ func (m *Manager) ScanInstalled() ([]*ManifestInfo, []LoadFailure, error) {
 		if !isExtensionDir(entry) {
 			continue
 		}
-		extDir := filepath.Join(m.dir, entry.Name())
+		extDir := filepath.Join(dir, entry.Name())
 		if !hasManifest(extDir) {
 			continue
 		}
 		manifest, err := ReadManifest(extDir)
 		if err != nil {
-			m.logger.Warn("extension manifest refused", zap.String("dir", entry.Name()), zap.Error(err))
+			logger.Warn("extension manifest refused", zap.String("dir", entry.Name()), zap.Error(err))
 			failures = append(failures, NewLoadFailure(extDir, err))
 			continue
 		}
-		// A loaded extension already holds the answer the guest gave this run; only
-		// a disabled one has to fall back to what the cache remembers.
-		if ext := m.GetExtension(manifest.Name); ext != nil {
-			info := newManifestInfo(ext.Manifest, extDir)
-			info.Described = true
+		if info := loaded(manifest, extDir); info != nil {
 			result = append(result, info)
 			continue
 		}
-		info, err := cachedManifestInfo(manifest, extDir, m.contribs)
+		info, err := cachedManifestInfo(manifest, extDir, contributions)
 		if err != nil {
 			// The same verdict loading it would reach: not an extension this app runs.
-			m.logger.Warn("extension refused by its cached descriptor", zap.String("dir", entry.Name()), zap.Error(err))
+			logger.Warn("extension refused by its cached descriptor", zap.String("dir", entry.Name()), zap.Error(err))
 			failures = append(failures, NewLoadFailure(extDir, err))
 			continue
 		}

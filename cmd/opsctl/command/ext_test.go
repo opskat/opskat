@@ -164,6 +164,38 @@ func TestScanInstalledExtensionsUsesTheRealManifestParser(t *testing.T) {
 	assert.True(t, got[0].Enabled)
 }
 
+// The scan lists the accepted extensions by name and, apart from them, the ones the
+// host refuses with their reason (a retired hostABI, an unparsable manifest), in
+// directory order; a directory without a manifest.json is in neither.
+func TestScanExtensionDirsWithFailuresListsAcceptedAndRefused(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "zeta", "zeta-store")
+	writeExtManifest(t, stub, dir, "acme", "acme-store")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "legacy"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "legacy", "manifest.json"),
+		[]byte(`{"name":"legacy-abi","version":"1.2.0","hostABI":"2.2","backend":{"runtime":"wasm","binary":"main.wasm"}}`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "broken"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken", "manifest.json"), []byte(`{not json`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "no-manifest"), 0o755))
+
+	scanned, failures, err := scanExtensionDirsWithFailures()
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(scanned))
+	for _, s := range scanned {
+		names = append(names, s.info.Name)
+	}
+	assert.Equal(t, []string{"acme", "zeta"}, names)
+
+	require.Len(t, failures, 2)
+	assert.Equal(t, "broken", failures[0].Name)
+	require.Error(t, failures[0].Err)
+	assert.Equal(t, "legacy-abi", failures[1].Name)
+	assert.Equal(t, "1.2.0", failures[1].Version)
+	assert.Contains(t, failures[1].Err.Error(), "hostABI 2.2")
+}
+
 func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 	dir := withExtensionDir(t, &extension_state_entity.ExtensionState{Name: "acme", Enabled: false})
 	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
