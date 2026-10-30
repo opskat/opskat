@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/require"
@@ -107,4 +108,21 @@ func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
 		o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "deny"})
 		require.Equal(t, "deny", (<-ch).Decision)
 	})
+}
+
+// An answer given from inside the grant dialog's own event must reach the waiting request.
+func TestHandleGrantApprovalAnswerDuringEmitIsDelivered(t *testing.T) {
+	withGrantExtFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	o := &Opsctl{ctx: ctx, appCtx: context.Background(), lang: extTestLang{}}
+	o.emit = func(name string, payload map[string]any) {
+		if name == "opsctl:grant-approval" {
+			o.RespondOpsctlApproval(payload["session_id"].(string), permission.ApprovalResponse{Decision: "allow"})
+		}
+	}
+
+	resp := o.handleGrantApproval(grantRequest("read"))
+
+	require.True(t, resp.Approved, "reason: %s", resp.Reason)
 }
