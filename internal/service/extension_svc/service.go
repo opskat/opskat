@@ -225,32 +225,28 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 //
 //  1. Compatibility check on the source's manifest; manager.Stage copies + loads +
 //     describes the new version in a staging dir.
-//  2. confirm (when given) shows the user what the staged version is and asks;
-//     the service lock is released while the user decides. Any error from it —
+//  2. confirm shows the user what the staged version is and asks; the service
+//     lock is released while the user decides. Any error from it —
 //     ErrInstallCanceled, a timeout, a canceled ctx — discards the staged files.
-//  3. When confirmed, the installed version must still be the confirm's From;
-//     cross-extension snippet category id conflict check against the staged manifest.
+//  3. The installed version must still be the confirm's From; cross-extension
+//     snippet category id conflict check against the staged manifest.
 //  4. Swap the registrations: unregister the old version, register the new one; on
 //     refusal put the old registration back.
 //  5. staged.Commit moves the new version into place and closes the old module.
 //  6. snippet hook: RefreshCategories → SyncExtensionSeeds; persist enabled state.
 //
-// Every user-facing install passes a confirm — the app-wide install dialog, the
-// store, and `opsctl ext dev`'s approval dialog. A nil confirm installs without
-// asking and without the From re-check.
+// Every install is confirmed — by the app-wide install dialog, the store, or
+// `opsctl ext dev`'s approval dialog; there is no unconfirmed install.
 func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
 	staged, ask, err := s.stage(ctx, sourcePath)
 	if err != nil {
 		return nil, err
 	}
-	if confirm == nil {
-		return s.commit(ctx, staged, nil)
-	}
 	if err := confirm(ctx, ask); err != nil {
 		staged.Abort(ctx)
 		return nil, err
 	}
-	return s.commit(ctx, staged, &ask)
+	return s.commit(ctx, staged, ask)
 }
 
 // stage runs step 1 of Install and describes the staged version for the confirm.
@@ -291,9 +287,8 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	return staged, ask, nil
 }
 
-// commit runs steps 3–6 of Install. approved is what the user confirmed, nil when
-// nobody was asked.
-func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved *InstallConfirm) (*extension.Manifest, error) {
+// commit runs steps 3–6 of Install. approved is what the user confirmed.
+func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved InstallConfirm) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	manifest := staged.Manifest()
@@ -301,12 +296,10 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	// The user approved replacing From with To. Another install or an uninstall
 	// may have landed while the dialog was open; that approval then describes a
 	// different change, so it is not applied.
-	if approved != nil {
-		if now := s.installedVersion(manifest.Name); now != approved.From {
-			staged.Abort(ctx)
-			return nil, fmt.Errorf("cannot install %q: the installed version changed from %q to %q while awaiting confirmation",
-				manifest.Name, approved.From, now)
-		}
+	if now := s.installedVersion(manifest.Name); now != approved.From {
+		staged.Abort(ctx)
+		return nil, fmt.Errorf("cannot install %q: the installed version changed from %q to %q while awaiting confirmation",
+			manifest.Name, approved.From, now)
 	}
 
 	// Cross-extension category id dedup. Intra-extension duplicates are already

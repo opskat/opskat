@@ -107,9 +107,11 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 
 	// The approval is Install's confirm: it sees the InstallConfirm the service
 	// built for the staged snapshot, and Install commits only what it approved.
+	// Install calls it synchronously, so the overwrite it describes is on log for
+	// the outcome lines below too.
 	var denied *approval.ApprovalResponse
 	confirm := func(_ context.Context, c extension_svc.InstallConfirm) error {
-		log := log.With(zap.Bool("overwrites", c.From != ""), zap.String("installedVersion", c.From))
+		log = log.With(zap.Bool("overwrites", c.From != ""), zap.String("installedVersion", c.From))
 		key := extDevApprovalKey{dir: sourceDir, name: c.Name, grants: grantsFingerprint(c.Capabilities)}
 		if o.extDevApprovals.has(key) {
 			log.Info("extension dev install approved", zap.String("decision", "remembered"))

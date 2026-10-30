@@ -9,7 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/pkg/appversion"
@@ -611,4 +614,32 @@ func TestHandleExtDevInstallReportsCommitRefusedAfterApproval(t *testing.T) {
 	require.False(t, resp.Approved)
 	require.Len(t, approver.prompts, 1)
 	require.Equal(t, refused.Error(), resp.Reason)
+}
+
+// The install's outcome is logged with what it overwrote: the "completed" and
+// "failed" lines carry the installed version the confirm described, so a log
+// read after the fact tells an upgrade from a fresh install.
+func TestHandleExtDevInstallOutcomeLogsCarryTheOverwrite(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	oldLogger := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(oldLogger) })
+
+	for _, tc := range []struct {
+		message string
+		err     error
+	}{
+		{"extension dev install completed", nil},
+		{"extension dev install failed", errors.New("commit refused")},
+	} {
+		installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, err: tc.err}
+		o := newDevOpsctl(installer, &recordingApprover{approve: true})
+		o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
+
+		entries := logs.FilterMessage(tc.message).All()
+		require.Len(t, entries, 1, tc.message)
+		fields := entries[0].ContextMap()
+		require.Equal(t, true, fields["overwrites"], tc.message)
+		require.Equal(t, "1.0.0", fields["installedVersion"], tc.message)
+	}
 }

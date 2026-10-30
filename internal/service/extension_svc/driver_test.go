@@ -189,7 +189,7 @@ func TestUpgradingADriverExtensionClosesTheOldVersionsSessions(t *testing.T) {
 
 	old := f.open(t)
 	newVersion := extensiontest.InstallDBDriverFixture(t, t.TempDir())
-	_, err := f.svc.Install(context.Background(), newVersion, nil)
+	_, err := f.svc.Install(context.Background(), newVersion, approveInstall)
 	require.NoError(t, err)
 
 	_, err = old.ListDatabases(context.Background())

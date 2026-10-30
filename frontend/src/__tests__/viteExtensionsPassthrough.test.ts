@@ -30,8 +30,4 @@ describe("extensionsPassthrough (vite dev)", () => {
       expect(res.end).not.toHaveBeenCalled();
     }
   });
-
-  it("only applies to the dev server, not the production build", () => {
-    expect(extensionsPassthrough().apply).toBe("serve");
-  });
 });

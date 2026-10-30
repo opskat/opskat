@@ -141,6 +141,9 @@ func extDirEntries(t *testing.T, extDir string) []string {
 
 var langCtx = aictx.WithPolicyLang(context.Background(), "zh-CN")
 
+// approveInstall answers an install confirm with yes.
+func approveInstall(context.Context, InstallConfirm) error { return nil }
+
 // A local directory install shows the confirm after staging — the package's
 // display name, icon and permissions are known — and lands nothing until the
 // user accepts. The service lock is not held while the user decides.
@@ -218,7 +221,7 @@ func TestInstallConfirm_UpgradeAddedAndDowngrade(t *testing.T) {
 	extDir := t.TempDir()
 	svc := newConfirmTestService(t, extDir)
 	oldCaps := map[string]any{"network": map[string]any{"http": []string{"https://a.example.com/"}}}
-	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-up", "1.0.0", oldCaps), nil)
+	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-up", "1.0.0", oldCaps), approveInstall)
 	require.NoError(t, err)
 
 	newCaps := map[string]any{
@@ -268,7 +271,7 @@ func TestInstallConfirm_CancelLeavesNothing(t *testing.T) {
 	assert.Nil(t, svc.Manager().GetExtension("ext-new"))
 	assert.Nil(t, svc.Bridge().Get("ext-new"))
 
-	_, err = svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-keep", "1.0.0", nil), nil)
+	_, err = svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-keep", "1.0.0", nil), approveInstall)
 	require.NoError(t, err)
 	old := svc.Manager().GetExtension("ext-keep")
 
@@ -291,12 +294,12 @@ func TestInstallConfirm_InstalledChangedWhileWaiting(t *testing.T) {
 	stub := installDescribeStub(t)
 	extDir := t.TempDir()
 	svc := newConfirmTestService(t, extDir)
-	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-race", "1.0.0", nil), nil)
+	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-race", "1.0.0", nil), approveInstall)
 	require.NoError(t, err)
 
 	_, err = svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-race", "2.0.0", nil),
 		func(context.Context, InstallConfirm) error {
-			_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-race", "3.0.0", nil), nil)
+			_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-race", "3.0.0", nil), approveInstall)
 			require.NoError(t, err)
 			return nil
 		})
@@ -337,7 +340,7 @@ func TestNewInstallConfirm_DatabaseDriversAreGrantsAndUpgradeMarksNewOnes(t *tes
 			}},
 		},
 	})
-	_, err := svc.Install(langCtx, dir, nil)
+	_, err := svc.Install(langCtx, dir, approveInstall)
 	require.NoError(t, err)
 
 	c := svc.NewInstallConfirm(InstallCandidate{
@@ -357,7 +360,7 @@ func TestNewInstallConfirm_FromStoreCandidate(t *testing.T) {
 	stub := installDescribeStub(t)
 	extDir := t.TempDir()
 	svc := newConfirmTestService(t, extDir)
-	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-store", "2.0.0", nil), nil)
+	_, err := svc.Install(langCtx, writeVersionedExtension(t, stub, t.TempDir(), "ext-store", "2.0.0", nil), approveInstall)
 	require.NoError(t, err)
 
 	c := svc.NewInstallConfirm(InstallCandidate{
@@ -377,7 +380,7 @@ func TestNewInstallConfirm_AssetRouteIsGrantAndUpgradeMarksIt(t *testing.T) {
 	stub := installDescribeStub(t)
 	svc := newConfirmTestService(t, t.TempDir())
 	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-redir", "1.0.0", map[string]any{})
-	_, err := svc.Install(langCtx, dir, nil)
+	_, err := svc.Install(langCtx, dir, approveInstall)
 	require.NoError(t, err)
 
 	c := svc.NewInstallConfirm(InstallCandidate{
@@ -393,7 +396,7 @@ func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
 	stub := installDescribeStub(t)
 	svc := newConfirmTestService(t, t.TempDir())
 	dir := writeVersionedExtension(t, stub, t.TempDir(), "ext-krb", "1.0.0", map[string]any{})
-	_, err := svc.Install(langCtx, dir, nil)
+	_, err := svc.Install(langCtx, dir, approveInstall)
 	require.NoError(t, err)
 
 	c := svc.NewInstallConfirm(InstallCandidate{
