@@ -295,7 +295,14 @@ func TestDriverDialFollowsDatabaseRedirects(t *testing.T) {
 		for _, addr := range []string{"127.0.0.1:7401", "localhost:7402"} {
 			assert.Empty(t, probe(t, s, "DIAL "+addr), addr)
 		}
-		assert.Equal(t, []string{"127.0.0.1:7401", "localhost:7402"}, route.byAddr.Dialed())
+		dialed := route.byAddr.Dialed()
+		require.Len(t, dialed, 2)
+		assert.Equal(t, "127.0.0.1:7401", dialed[0])
+		host, port, err := net.SplitHostPort(dialed[1])
+		require.NoError(t, err)
+		assert.Equal(t, "7402", port)
+		assert.True(t, net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback(),
+			"a name is dialed as the loopback address it was checked as, not resolved again: %s", dialed[1])
 	})
 
 	t.Run("an address the route cannot reach fails, naming the address and the cause", func(t *testing.T) {

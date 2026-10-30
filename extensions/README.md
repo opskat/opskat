@@ -696,7 +696,9 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
   other panics at init. `classify(ctx, sql)` returns each statement of the text as a
   `dbdriver.Statement`: byte offsets `Start` / `End` into the input, `Text`, an
   uppercase `Type`, and `Dangerous` with a `Reason` from `dbdriver.DangerReasons()`. It
-  must not touch the database: the host calls it outside any session. The AI / opsctl
+  must not touch the database: the host calls it outside any session, on an instance of
+  its own where logging is the only host call allowed (any other one fails), and cuts
+  it off after 30 seconds. The AI / opsctl
   permission check and the query panel then go by these statements instead of the
   host's own SQL parsing. Use the host's type names (`SELECT`, `UPDATE`, `DROP TABLE`,
   ...) only for the same kind of statement and a name of your own (`MERGE`, a PL/SQL

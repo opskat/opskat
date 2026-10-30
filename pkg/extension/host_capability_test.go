@@ -268,6 +268,43 @@ func TestCapHostRouteDialDirectRefusesThisMachine(t *testing.T) {
 			_, _ = dial(context.Background(), "tcp", "127.0.0.1:7401")
 			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
 		})
+
+		Convey("on a loopback asset, a name is dialed by the address it was checked as, not resolved again", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			_, _ = dial(context.Background(), "tcp", "localhost:7401")
+			So(dialed, ShouldNotBeEmpty)
+			for _, target := range dialed {
+				host, _, err := net.SplitHostPort(target)
+				So(err, ShouldBeNil)
+				So(net.ParseIP(host), ShouldNotBeNil)
+				So(net.ParseIP(host).IsLoopback(), ShouldBeTrue)
+			}
+		})
+
+		// The exemption is the asset's own address: a loopback / link-local asset
+		// reaches loopback / link-local targets, and the unspecified address only
+		// when it is the asset's own.
+		Convey("on a loopback asset, the unspecified address is still refused, undialed", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			for _, addr := range []string{"0.0.0.0:7401", "[::]:7401"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+			}
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("on an asset at the unspecified address, loopback and link-local are refused and only its own address is dialed", func() {
+			scope.Endpoints = []Endpoint{{Host: "0.0.0.0", Port: "5432"}}
+			for _, addr := range []string{"127.0.0.1:7401", "169.254.1.1:7401", "[::]:7401"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+			}
+			So(dialed, ShouldBeEmpty)
+			_, _ = dial(context.Background(), "tcp", "0.0.0.0:7401")
+			So(dialed, ShouldResemble, []string{"0.0.0.0:7401"})
+		})
 	})
 }
 

@@ -280,11 +280,11 @@ func (c *capHost) routeDial(inv *invocation, scope *Scope) DialContextFunc {
 }
 
 // directTargets are the addresses to dial for addr on a direct route: the
-// resolved ip:port addresses when none is on this machine or its link, else addr
-// itself when each such address is the asset's own — a loopback, link-local or
-// unspecified one when an endpoint of the asset is such an address, an interface
-// address of this machine when an endpoint of the asset resolves to that very
-// address. Any other such address refuses addr.
+// ip:port addresses addr resolves to, unless one of them is on this machine or
+// its link and is not the asset's own — a loopback or link-local address is the
+// asset's own when an endpoint of the asset is one, the unspecified address or
+// an interface address of this machine when an endpoint of the asset resolves
+// to that very address. Such an address refuses addr.
 func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Scope, network, addr string) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -304,12 +304,12 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 		if err != nil {
 			return nil, fmt.Errorf("dial %s: %w", addr, err)
 		}
-		assetOnLoopOrLink := slices.ContainsFunc(assetIPs, onThisMachineOrLink)
+		assetOnLoopOrLink := slices.ContainsFunc(assetIPs, loopbackOrLinkLocal)
 		refused := func(ip net.IP) bool {
-			if onThisMachineOrLink(ip) {
+			if loopbackOrLinkLocal(ip) {
 				return !assetOnLoopOrLink
 			}
-			return onInterface(ip) && !slices.ContainsFunc(assetIPs, ip.Equal)
+			return (ip.IsUnspecified() || onInterface(ip)) && !slices.ContainsFunc(assetIPs, ip.Equal)
 		}
 		if slices.ContainsFunc(ips, refused) {
 			err = fmt.Errorf("dial denied: extension %q may not reach %q along the direct connection path of the asset %s: it is an address of this machine or its link (loopback, link-local, unspecified or one of this machine's network interfaces) other than the asset's own",
@@ -317,7 +317,6 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 			c.logDenied(ctx, inv, scope, IOOpenParams{Type: network, Addr: addr}, err)
 			return nil, err
 		}
-		return []string{addr}, nil
 	}
 	targets := make([]string, len(ips))
 	for i, ip := range ips {
@@ -350,7 +349,13 @@ func resolveHere(ctx context.Context, network, host string) ([]net.IP, error) {
 // onThisMachineOrLink reports a loopback or link-local address, or the
 // unspecified one, which a dial reaches as this machine.
 func onThisMachineOrLink(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+	return loopbackOrLinkLocal(ip) || ip.IsUnspecified()
+}
+
+// loopbackOrLinkLocal reports the addresses a loopback or link-local asset may
+// reach on a direct route besides its own (directTargets).
+func loopbackOrLinkLocal(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast()
 }
 
 // interfaceIPs lists the addresses of this machine's network interfaces.
