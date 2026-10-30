@@ -63,8 +63,8 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 
 // Attach 把扩展的驱动注册进驱动注册表，全有或全无（registerDrivers）。有运行中的插件时驱动
 // 背后是它；仅描述接入的驱动描述与专属字段可用，打开会话与切分语句报驱动不可用
-// （notLoadedOpener）。撤销时驱动先移出注册表，再关闭插件的驱动（CloseDrivers：结束扩展里
-// 仍在执行的行语句生成，否则关闭会话要一直等它），最后在 mu 之外作废它打开过的会话。
+// （notLoadedOpener）。撤销时驱动先移出注册表，再在 mu 之外作废（removeDrivers：结束驱动、
+// 关闭插件的驱动、关闭它们打开过的会话）。
 func (p dbDriversPoint) Attach(v extension.ExtensionView) (func(), error) {
 	l, err := p.guest.loaded(v)
 	if err != nil {
@@ -79,15 +79,14 @@ func (p dbDriversPoint) Attach(v extension.ExtensionView) (func(), error) {
 	mu.Unlock()
 	if err != nil {
 		// 注册与撞名之间已可能有会话打开：在 mu 之外作废。
-		removeDrivers(extDrivers)
+		removeDrivers(extDrivers, opener)
 		return nil, err
 	}
 	return func() {
 		mu.Lock()
 		released := releaseDrivers(extDrivers)
 		mu.Unlock()
-		opener.CloseDrivers()
-		removeDrivers(released)
+		removeDrivers(released, opener)
 	}, nil
 }
 

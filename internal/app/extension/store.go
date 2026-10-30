@@ -39,7 +39,7 @@ func (e *Extension) RefreshStore(lang string) (extstore_svc.State, error) {
 // not among them: the store offers what this host can run, and installing over
 // such a copy is a fresh install (InstallConfirm.From is empty). Empty until the
 // extension system has started. A package-level function, like
-// InstalledExtensionVersion, so it is not exposed as a binding.
+// InstallExtensionDir, so it is not exposed as a binding.
 func InstalledVersions(e *Extension) map[string]string {
 	out := map[string]string{}
 	if e.service == nil {

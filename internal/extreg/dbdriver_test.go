@@ -2,6 +2,7 @@ package extreg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -487,6 +488,80 @@ func TestRevokingDriversEndsAStuckRowStatementsCall(t *testing.T) {
 	}
 	require.Len(t, sessions, 1)
 	assert.True(t, sessions[0].Closed(), "the session is closed once the drivers are")
+}
+
+// endingWriterPlugin's CloseDrivers ends the one row statement writer call stuck
+// in the extension, the way closing real drivers does, and returns once the
+// caller has its answer: the removal has gone no further by then.
+type endingWriterPlugin struct {
+	*fakePlugin
+	driversClosed chan struct{}
+	answered      chan struct{}
+	once          sync.Once
+}
+
+func (p *endingWriterPlugin) CloseDrivers() {
+	p.once.Do(func() {
+		close(p.driversClosed)
+		select {
+		case <-p.answered:
+		case <-time.After(5 * time.Second):
+		}
+	})
+}
+
+type endingWriterSession struct {
+	*dbdrivertest.FakeSession
+	driversClosed <-chan struct{}
+}
+
+func (s *endingWriterSession) PrepareRowStatements(context.Context, string, string) (dbdriver.RowStatementWriter, error) {
+	return endingWriter{driversClosed: s.driversClosed}, nil
+}
+
+type endingWriter struct{ driversClosed <-chan struct{} }
+
+func (w endingWriter) RowStatements(dbdriver.RowStatementsRequest) ([]string, error) {
+	<-w.driversClosed
+	return nil, errors.New("extension database drivers are closed")
+}
+
+// The call a revoke ends answers like every other operation on a removed driver:
+// the driver is unavailable, naming it and its extension — not whatever the
+// extension's closing drivers said.
+func TestRevokingDriversAnswersTheEndedRowStatementsCallUnavailable(t *testing.T) {
+	p := &endingWriterPlugin{fakePlugin: &fakePlugin{}, driversClosed: make(chan struct{}), answered: make(chan struct{})}
+	p.openDriver = func(ctx context.Context, _ string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+		inner, err := dbdrivertest.NewFake().Open(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return &endingWriterSession{FakeSession: inner.(*dbdrivertest.FakeSession), driversClosed: p.driversClosed}, nil
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("acme-db", driverDescriptor("acmedb")), p))
+	d, err := dbregistry.Lookup("acmedb")
+	require.NoError(t, err)
+	s, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "acmedb", Host: "h", Port: 1, Username: "u"}})
+	require.NoError(t, err)
+	w, err := s.PrepareRowStatements(context.Background(), "app", "users")
+	require.NoError(t, err)
+
+	stuck := make(chan error, 1)
+	go func() {
+		_, err := w.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": 1}}})
+		stuck <- err
+		close(p.answered)
+	}()
+	detach("acme-db")
+
+	select {
+	case err := <-stuck:
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+		assert.ErrorContains(t, err, `"acmedb"`)
+		assert.ErrorContains(t, err, `"acme-db"`)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the row statement writer's call was not ended by the revoke")
+	}
 }
 
 // splittingDescriptor is a driver that declares statement splitting.
