@@ -115,9 +115,10 @@ func (*databaseHandler) AutomationContract() AutomationContract {
 		// tls_* 是证书字段组：键在契约里固定，按驱动是否声明 FieldTLSCert 在 database.go 里判定。
 		// auth_method / krb_* 是 Kerberos 字段组，同样按驱动是否声明 FieldKerberos 判定。
 		withFields(withFields([]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions}, tlsConfigArgs()...), kerberosConfigArgs()...),
-		// driver_options 是复合值，approvalView 会整体省略它；审批与审计里的呈现由
-		// approvalDriverOptions 按驱动声明给出（口令类只列出已设置）。
-		withFields(withFields([]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path"}, tlsApprovalArgs()...), kerberosApprovalArgs()...),
+		// driver_options 留在审批字段里（不算 write-only：其中口令类明文由 DriverOptionsHaveSecret
+		// 按驱动声明单独判断），但它是复合值，approvalView 会整体省略；审批与审计里的呈现
+		// 由 approvalDriverOptions 给出（口令类只列出已设置）。
+		withFields(withFields([]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions}, tlsApprovalArgs()...), kerberosApprovalArgs()...),
 		normalizeDatabaseAutomation,
 		databaseCredentialPlan,
 		bindDatabaseCredential,
