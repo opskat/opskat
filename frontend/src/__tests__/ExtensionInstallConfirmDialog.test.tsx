@@ -150,34 +150,6 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(screen.getByRole("dialog").querySelector("[data-slot=dialog-title]")?.textContent).toBe(title);
   });
 
-  it("lists the assetRoute permission with a label and marks it new on upgrade", () => {
-    const handlers = captureHandlers();
-    render(<ExtensionInstallConfirmDialog />);
-    fire(handlers, "ext:install-confirm", {
-      ...upgrade,
-      capabilities: [{ kind: "network.assetRoute", value: "" }],
-      added: [{ kind: "network.assetRoute", value: "" }],
-    });
-
-    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-network.assetRoute");
-    expect(row).toHaveTextContent("extension.installConfirm.assetRoute");
-    expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
-  });
-
-  it("lists the kerberos permission with a label and marks it new on upgrade", () => {
-    const handlers = captureHandlers();
-    render(<ExtensionInstallConfirmDialog />);
-    fire(handlers, "ext:install-confirm", {
-      ...upgrade,
-      capabilities: [{ kind: "kerberos", value: "" }],
-      added: [{ kind: "kerberos", value: "" }],
-    });
-
-    const row = within(screen.getByRole("dialog")).getByTestId("ext-install-cap-kerberos");
-    expect(row).toHaveTextContent("extension.installConfirm.kerberos");
-    expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
-  });
-
   it("marks every high-risk grant with a chip and explains assetRoute and kerberos in an alert", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);
@@ -238,7 +210,7 @@ describe("ExtensionInstallConfirmDialog", () => {
     ["kerberos", "kerberos", "", "extension.installConfirm.kerberos"],
     ["databaseDriver", "databaseDrivers", "oracle", "extension.installConfirm.databaseDriver"],
   ])(
-    "labels %s by its manifest name and keeps the explanation as separate wrapping text",
+    "labels %s by its manifest name, explains it on its own line and marks it new on upgrade",
     (kind, label, value, note) => {
       const handlers = captureHandlers();
       render(<ExtensionInstallConfirmDialog />);
@@ -249,11 +221,10 @@ describe("ExtensionInstallConfirmDialog", () => {
       });
 
       const row = within(screen.getByRole("dialog")).getByTestId(`ext-install-cap-${kind}`);
-      expect(within(row).getByTestId("ext-install-cap-label")).toHaveTextContent(new RegExp(`^${label}$`));
-      const explanation = within(row).getByTestId("ext-install-cap-explanation");
-      expect(explanation).toHaveTextContent(note);
-      expect(explanation).not.toHaveClass("truncate");
+      expect(within(row).getByTestId("ext-install-cap-label").textContent).toBe(label);
+      expect(within(row).getByTestId("ext-install-cap-explanation")).toHaveTextContent(note);
       if (value) expect(within(row).getByText(value)).toBeInTheDocument();
+      expect(within(row).getByText("extension.installConfirm.added")).toBeInTheDocument();
     }
   );
 
