@@ -39,8 +39,8 @@ const wireDescribeJSON = `{"icon":"cloud","i18n":{"displayName":"d","description
 // (the extension list, the page loader), byte for byte what the host handed it
 // while the runtime still carried the typed face.
 const mergedManifestJSON = `{"name":"wire","version":"1.2.3","minAppVersion":"","hostABI":"1.0","backend":{"runtime":"wasm","binary":"main.wasm"},` +
-	`"permissions":{"fs":{"read":null,"write":null},"credentials":"","kerberos":false,"network":{"http":null,"allowPrivate":false,"assetEndpoint":true,"assetRoute":false}},` +
-	`"contributes":{"databaseDrivers":["mysql-ext"]},"icon":"cloud","i18n":{"displayName":"d","description":"x"},` +
+	`"permissions":{"fs":{"read":null,"write":null},"credentials":"","kerberos":false,"network":{"http":null,"allowPrivate":false,"assetEndpoint":true,"assetRoute":false,"settingsEndpoint":false}},` +
+	`"contributes":{"commandReviewer":false,"databaseDrivers":["mysql-ext"]},"icon":"cloud","i18n":{"displayName":"d","description":"x"},` +
 	`"assetTypes":[{"type":"x","i18n":{"name":"n"},"configSchema":{"properties":{"authType":{"type":"string"},"endpoint":{"format":"endpoint","type":"string"},"password":{"format":"password","type":"string"}},"type":"object"},` +
 	`"connection":{"sshTunnel":true,"tls":true},"auth":{"selector":"authType","groups":[{"when":"token","bindings":[{"in":"header","name":"Authorization","value":"Bearer {{password}}"}],"fields":["password"]}]},"testConnection":true}],` +
 	`"tools":[{"name":"list","i18n":{"description":"td"},"parameters":{"properties":{"body":{"type":"string"}},"type":"object"},"policyAction":"list","timeoutMs":3000,"large":["body"]},` +
