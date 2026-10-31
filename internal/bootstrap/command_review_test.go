@@ -29,14 +29,16 @@ func TestCommandReviewTimeoutDefaultsWhenUnset(t *testing.T) {
 	assert.Equal(t, 8*time.Second, CommandReviewTimeout())
 }
 
-// 还没有审核器来源：审核按"没有审核器"失败。辅助审批照常问人，Autopilot 拒绝，
+// 审核器注册表里一个候选都没有：审核按"没有审核器"失败。辅助审批照常问人，Autopilot 拒绝，
 // 默认模式和以前一样，绝不因审核器缺失而放行。
 func TestNoReviewerFailsClosedPerPermissionMode(t *testing.T) {
-	origService := command_review_svc.Default()
+	origService, origConfig := command_review_svc.Default(), appConfig
 	t.Cleanup(func() {
 		command_review_svc.Register(origService)
 		permission.SetReviewer(nil)
+		appConfig = origConfig
 	})
+	appConfig = &AppConfig{CommandReviewExtension: "jev-command-review"} // 选了，但它不是候选
 	registerCommandReview()
 
 	ctrl := gomock.NewController(t)

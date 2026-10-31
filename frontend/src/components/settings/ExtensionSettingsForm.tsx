@@ -5,10 +5,16 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@opskat/ui";
 import i18n from "@/i18n";
 import { notifySuccess } from "@/lib/notify";
+import type { ReviewInfo } from "@/lib/commandReview";
+import { ReviewNotice } from "@/components/approval/ReviewNotice";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { visibleFields, type ExtensionConfigSchema } from "@/extension/configSchema";
 import type { ExtAuth } from "@/extension/types";
-import { GetExtensionSettings, SaveExtensionSettings } from "../../../wailsjs/go/extension/Extension";
+import {
+  GetExtensionSettings,
+  SaveExtensionSettings,
+  TestCommandReviewer,
+} from "../../../wailsjs/go/extension/Extension";
 
 /** 宿主读回的设置表单：声明（已按扩展语言翻译）、非密钥的已存值、各密钥是否已设置。 */
 interface SettingsFormData {
@@ -24,13 +30,17 @@ interface SettingsFormData {
  * 保存返回的逐字段错误显示在对应字段下，落不到字段上的另行提示，都不保存。
  * 密钥字段不回显：已设置的呈现为"已设置，留空则不修改"，留空保存即保留原值。
  * 扩展没有声明设置时什么也不渲染。
+ *
+ * reviewer：扩展提供命令审核器（manifest 的 contributes.commandReviewer）。多一个"保存并测试"：
+ * 保存成功后用刚保存的设置让它审一条无害的命令，显示审核结果。
  */
-export function ExtensionSettingsForm({ extName }: { extName: string }) {
+export function ExtensionSettingsForm({ extName, reviewer = false }: { extName: string; reviewer?: boolean }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<SettingsFormData | null>(null);
   const [value, setValue] = useState<Record<string, unknown>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [testResult, setTestResult] = useState<ReviewInfo | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -51,23 +61,32 @@ export function ExtensionSettingsForm({ extName }: { extName: string }) {
 
   if (!form) return null;
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const errors = (await SaveExtensionSettings(extName, JSON.stringify(value))) ?? [];
-      if (errors.length > 0) {
-        const shown = new Set(visibleFields(form.configSchema, form.auth, value).map(([key]) => key));
-        const placed: Record<string, string> = {};
-        for (const e of errors) {
-          if (shown.has(e.field)) placed[e.field] = t(`extension.settings.error.${e.code}`);
-        }
-        setFieldErrors(placed);
-        toast.error(t("extension.settings.invalid"));
-        return;
+  /** 保存设置；保存成功返回 true。 */
+  const save = async (): Promise<boolean> => {
+    const errors = (await SaveExtensionSettings(extName, JSON.stringify(value))) ?? [];
+    if (errors.length > 0) {
+      const shown = new Set(visibleFields(form.configSchema, form.auth, value).map(([key]) => key));
+      const placed: Record<string, string> = {};
+      for (const e of errors) {
+        if (shown.has(e.field)) placed[e.field] = t(`extension.settings.error.${e.code}`);
       }
-      setFieldErrors({});
-      notifySuccess(t("extension.settings.saved"));
-      await load();
+      setFieldErrors(placed);
+      toast.error(t("extension.settings.invalid"));
+      return false;
+    }
+    setFieldErrors({});
+    notifySuccess(t("extension.settings.saved"));
+    await load();
+    return true;
+  };
+
+  const run = async (test: boolean) => {
+    setSaving(true);
+    setTestResult(null);
+    try {
+      if ((await save()) && test) {
+        setTestResult((await TestCommandReviewer(extName)) as ReviewInfo);
+      }
     } catch (e) {
       toast.error(String((e as Error)?.message ?? e));
     } finally {
@@ -94,8 +113,24 @@ export function ExtensionSettingsForm({ extName }: { extName: string }) {
           fieldErrors={fieldErrors}
         />
       </div>
-      <div className="flex justify-end">
-        <Button size="sm" onClick={handleSave} disabled={saving} data-testid="extension-settings-save">
+      {testResult && (
+        <div data-testid="extension-settings-test-result">
+          <ReviewNotice review={testResult} />
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        {reviewer && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => run(true)}
+            disabled={saving}
+            data-testid="extension-settings-save-and-test"
+          >
+            {t("extension.settings.saveAndTest")}
+          </Button>
+        )}
+        <Button size="sm" onClick={() => run(false)} disabled={saving} data-testid="extension-settings-save">
           {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {t("action.save")}
         </Button>

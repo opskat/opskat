@@ -74,6 +74,8 @@ interface ExtInfo {
   loadError?: { kind: string; message: string };
   manifest?: {
     permissions?: ExtPermissions;
+    /** What the user approved at install: commandReviewer marks the extension providing the command reviewer. */
+    contributes?: { commandReviewer?: boolean };
     tools?: { name: string; i18n?: { description?: string } }[];
     policies?: {
       groups?: {
@@ -458,7 +460,7 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
         {ext.description && <p className="text-muted-foreground">{ext.description}</p>}
       </div>
 
-      <ExtensionSettingsForm extName={ext.name} />
+      <ExtensionSettingsForm extName={ext.name} reviewer={ext.manifest?.contributes?.commandReviewer === true} />
 
       <Separator />
 

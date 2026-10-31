@@ -175,6 +175,23 @@ describe("ExtensionStore", () => {
     expect(oracle.getByText("extension.capability.assetEndpoint").closest("[data-warning]")).toBeNull();
   });
 
+  it("a card lists the settings endpoint permission", async () => {
+    serve(
+      verified([
+        card("jev", {
+          permissions: perms({
+            network: { http: [], allowPrivate: false, assetEndpoint: false, assetRoute: false, settingsEndpoint: true },
+          }),
+        }),
+      ])
+    );
+    renderStore();
+    await screen.findByTestId("ext-store-card-jev");
+
+    const jev = within(cardEl("jev"));
+    expect(jev.getByText("extension.capability.settingsEndpoint").closest("[data-warning]")).toBeNull();
+  });
+
   it("each card shows name, version, description, permissions, size and its status button", async () => {
     serve(verified(sample));
     renderStore();

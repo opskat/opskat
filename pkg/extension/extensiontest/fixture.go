@@ -3,7 +3,8 @@
 // only way to observe describe(), check_policy, execute_tool and a database
 // driver's session as the app sees them. testdata/fixture-ext exercises the host
 // capabilities; testdata/fixture-dbdriver provides a database driver;
-// testdata/fixture-settings declares extension settings. It is for tests only.
+// testdata/fixture-settings declares extension settings; testdata/fixture-reviewer
+// contributes a command reviewer. It is for tests only.
 package extensiontest
 
 import (
@@ -38,6 +39,18 @@ const DBDriverFixtureDriver = "fixturedb"
 // and settings (what ctx.Settings reads). See testdata/fixture-settings.
 const SettingsFixtureName = "fixture-settings"
 
+// ReviewerFixtureName is the command reviewer fixture's name: an extension
+// contributing a command reviewer (opskat.CommandReviewer, tool
+// opskat.ReviewToolName; questions destructive, disruptive, remote_code) and
+// settings (endpoint format:"endpoint", apiKey format:"password" injected as a
+// bearer token) under permissions.network.settingsEndpoint. With no endpoint
+// saved it judges by keyword — "fixture-error" errors "unavailable",
+// "fixture-slow" runs past the timeout, "rm -rf" rejects destructive (0.9),
+// "curl" with "| sh" rejects remote_code (0.8), anything else passes; with one
+// saved it POSTs {assetType, command} to <endpoint>/review and answers the JSON
+// reply. See testdata/fixture-reviewer.
+const ReviewerFixtureName = "fixture-reviewer"
+
 // fixtureSrc is a fixture extension's source directory, found from this file so
 // a test in any package can build it.
 func fixtureSrc(t testing.TB, name string) string {
@@ -70,6 +83,13 @@ func InstallDBDriverFixture(t testing.TB, root string) string {
 func InstallSettingsFixture(t testing.TB, root string) string {
 	t.Helper()
 	return install(t, root, SettingsFixtureName)
+}
+
+// InstallReviewerFixture is InstallFixture for the command reviewer fixture
+// (<root>/fixture-reviewer).
+func InstallReviewerFixture(t testing.TB, root string) string {
+	t.Helper()
+	return install(t, root, ReviewerFixtureName)
 }
 
 func install(t testing.TB, root, name string) string {

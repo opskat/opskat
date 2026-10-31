@@ -667,5 +667,6 @@ func resetRegistries() {
 	databaseDrivers = nil
 	databaseDriverServe = nil
 	settings = nil
+	commandReviewer = nil
 	configValidator = nil
 }

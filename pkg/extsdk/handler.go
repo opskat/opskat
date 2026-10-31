@@ -123,6 +123,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 		{extwire.KeyPages, frontendSpec.Entry != "", pages},
 		{extwire.KeyDatabaseDrivers, len(databaseDrivers) > 0, databaseDrivers},
 		{extwire.KeySettings, settings != nil, settings},
+		{extwire.KeyCommandReviewer, commandReviewer != nil, commandReviewer},
 	}
 	for _, c := range contributions {
 		if !c.present {

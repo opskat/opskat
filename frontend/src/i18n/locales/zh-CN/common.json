@@ -3225,7 +3225,8 @@
       "http": "访问网络",
       "allowPrivate": "访问内网",
       "assetRoute": "经资产连接路径访问",
-      "kerberos": "申请 Kerberos 票据"
+      "kerberos": "申请 Kerberos 票据",
+      "settingsEndpoint": "访问设置里的地址"
     },
     "installed": "已安装扩展",
     "noExtensions": "未安装扩展",
@@ -3260,7 +3261,8 @@
         "type": "值的类型不对",
         "enum": "请从选项中选择",
         "unknown": "不是此扩展的设置项"
-      }
+      },
+      "saveAndTest": "保存并测试"
     },
     "assetRouteWarning": "此扩展可以沿资产的连接路径连到你没有填写的地址，例如数据库重定向的目标、集群节点、隧道后面的主机。请确认你信任它的作者后再使用。",
     "kerberosWarning": "此扩展可以用资产里保存的 Kerberos 凭据去申请票据，请确认你信任它的作者后再使用。",
@@ -3672,33 +3674,33 @@
       "fail": "模型审核失败（{{detail}}）"
     },
     "reason": {
-      "not_configured": "命令审核扩展还没配置好",
-      "invalid_api_key": "命令审核的 API key 无效",
+      "not_configured": "命令审核器还没配置好",
+      "invalid_api_key": "命令审核器的 API key 无效",
       "timeout": "超时",
       "too_long": "命令过长",
       "unparseable": "命令无法解析",
       "undecodable": "命令把要执行的内容藏在解码后面",
       "unavailable": "服务不可用",
-      "invalid_result": "审核扩展返回了无效结果",
-      "reviewer_unavailable": "要用的命令审核扩展不可用",
-      "no_reviewer": "没有可用的命令审核扩展"
+      "invalid_result": "命令审核器返回了无效结果",
+      "reviewer_unavailable": "要用的命令审核器不可用",
+      "no_reviewer": "没有可用的命令审核器"
     },
     "settings": {
       "title": "命令审核",
-      "desc": "权限模式为辅助审批或 Autopilot 的资产，规则判断不了、原本要问人的命令会先交给审核扩展判断，只拦明确危险的操作。送审前会展开解码执行的脚本，并替换密码等敏感信息。",
+      "desc": "权限模式为辅助审批或 Autopilot 的资产，规则判断不了、原本要问人的命令会先交给扩展提供的命令审核器判断，只拦明确危险的操作。送审前会展开解码执行的脚本，并替换密码等敏感信息。",
       "timeout": "审核超时（毫秒）",
-      "timeoutHint": "每次调用审核扩展的超时；超时会自动重试一次",
+      "timeoutHint": "每次调用命令审核器的超时；超时会自动重试一次",
       "timeoutRange": "超时需在 {{min}}~{{max}} 毫秒之间",
-      "reviewer": "审核扩展",
+      "reviewer": "命令审核器",
       "unsigned": "未经签名",
       "reviewerUnusable": "{{name}} 现在不能使用：{{reason}}",
-      "reviewerSaved": "审核服务已切换",
+      "reviewerSaved": "已切换命令审核器",
       "save": "保存",
       "saved": "命令审核设置已保存",
       "lastFail": "最近一次审核失败：{{reason}}（{{time}}）",
       "notice": "这是省事功能，不是安全防线：命令里故意写的误导文字可能影响判断，真正的底线仍然是禁止规则。",
-      "noReviewer": "还没有可用的审核扩展。到 设置 › 扩展 安装并启用一个（例如「Jev 命令审核」）。在那之前，辅助审批会把这些命令全部转人工，Autopilot 会全部拒绝。",
-      "selectReviewer": "启用了多个审核扩展，请选用其中一个。"
+      "noReviewer": "还没有可用的命令审核器。到 设置 › 扩展 安装并启用一个提供审核器的扩展（例如「Jev 命令审核」）。在那之前，辅助审批会把这些命令全部转人工，Autopilot 会全部拒绝。",
+      "selectReviewer": "启用的扩展里有多个提供命令审核器，请选用其中一个。"
     },
     "mode": {
       "title": "权限模式",
@@ -3728,17 +3730,17 @@
       "confirmAutopilot": "规则判断不了的命令会先交给审核模型，审核通过就自动执行；判断为明确危险或审核失败时直接拒绝，不会等你确认。适合无人值守的场景。命令会（替换掉敏感信息后）发给设置里的审核服务。",
       "confirm": "开启",
       "saved": "权限模式已保存",
-      "noReviewer": "当前没有可用的审核扩展：辅助审批与 Autopilot 会转到默认。"
+      "noReviewer": "当前没有可用的命令审核器：辅助审批会把这些命令转人工，Autopilot 会直接拒绝。"
     },
     "configError": {
-      "not_configured": "命令审核扩展还没配置好（比如没填 API key），要审核的命令都会审核失败。",
-      "invalid_api_key": "命令审核扩展的 API key 无效，要审核的命令都会审核失败。",
+      "not_configured": "命令审核器还没配置好（比如扩展设置里没填 API key），要审核的命令都会审核失败。",
+      "invalid_api_key": "命令审核器的 API key 无效，要审核的命令都会审核失败。",
       "openSettings": "打开设置",
-      "no_reviewer": "有资产开启了辅助审批或 Autopilot，但没有可用的命令审核扩展，要审核的命令都会审核失败。",
-      "reviewer_unavailable": "要用的命令审核扩展现在不可用（可能被停用，或安装包被改动过），要审核的命令都会审核失败。"
+      "no_reviewer": "有资产开启了辅助审批或 Autopilot，但没有可用的命令审核器，要审核的命令都会审核失败。",
+      "reviewer_unavailable": "要用的命令审核器现在不可用（它的扩展可能被停用，或安装包被改动过），要审核的命令都会审核失败。"
     },
     "scores": "评分",
     "retried": "自动重试过：共请求 {{attempts}} 次",
-    "reviewedBy": "由审核扩展 {{name}} {{version}} 判断"
+    "reviewedBy": "由 {{name}} {{version}} 的命令审核器判断"
   }
 }

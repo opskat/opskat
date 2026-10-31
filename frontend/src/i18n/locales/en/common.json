@@ -3225,7 +3225,8 @@
       "http": "Internet access",
       "allowPrivate": "Private network",
       "assetRoute": "Asset connection path",
-      "kerberos": "Kerberos tickets"
+      "kerberos": "Kerberos tickets",
+      "settingsEndpoint": "Settings addresses"
     },
     "installed": "Installed Extensions",
     "noExtensions": "No extensions installed",
@@ -3260,7 +3261,8 @@
         "type": "Wrong type of value",
         "enum": "Pick one of the listed options",
         "unknown": "Not a setting of this extension"
-      }
+      },
+      "saveAndTest": "Save and test"
     },
     "assetRouteWarning": "This extension can dial any address along an asset's connection path — database redirects, cluster nodes, hosts behind its tunnel — not just the address you typed. Keep it only if you trust its author.",
     "kerberosWarning": "This extension can fetch Kerberos tickets with the Kerberos credentials stored in an asset. Keep it only if you trust its author.",
@@ -3672,33 +3674,33 @@
       "fail": "Model review failed ({{detail}})"
     },
     "reason": {
-      "not_configured": "the command review extension is not configured",
-      "invalid_api_key": "the command review API key is invalid",
+      "not_configured": "the command reviewer is not configured",
+      "invalid_api_key": "the command reviewer's API key is invalid",
       "timeout": "timed out",
       "too_long": "command too long",
       "unparseable": "the command cannot be parsed",
       "undecodable": "the command hides the code it runs behind decoding",
       "unavailable": "service unavailable",
-      "invalid_result": "the review extension returned an invalid result",
-      "reviewer_unavailable": "the command review extension in use is unavailable",
-      "no_reviewer": "no command review extension is available"
+      "invalid_result": "the command reviewer returned an invalid result",
+      "reviewer_unavailable": "the command reviewer in use is unavailable",
+      "no_reviewer": "no command reviewer is available"
     },
     "settings": {
       "title": "Command review",
-      "desc": "For assets using Assisted approval or Autopilot, a command the rules cannot decide is first judged by the review extension, which stops only clearly dangerous operations. Before review, decoded scripts are expanded and passwords and other secrets are masked.",
+      "desc": "For assets using Assisted approval or Autopilot, a command the rules cannot decide is first judged by the command reviewer an extension provides, which stops only clearly dangerous operations. Before review, decoded scripts are expanded and passwords and other secrets are masked.",
       "timeout": "Review timeout (ms)",
-      "timeoutHint": "Timeout for each call to the review extension; a timed-out call is retried once",
+      "timeoutHint": "Timeout for each call to the command reviewer; a timed-out call is retried once",
       "timeoutRange": "Timeout must be between {{min}} and {{max}} ms",
-      "reviewer": "Review extension",
+      "reviewer": "Command reviewer",
       "unsigned": "unsigned",
       "reviewerUnusable": "{{name}} can't be used right now: {{reason}}",
-      "reviewerSaved": "Review service switched",
+      "reviewerSaved": "Command reviewer switched",
       "save": "Save",
       "saved": "Command review settings saved",
       "lastFail": "Last review failure: {{reason}} ({{time}})",
       "notice": "This saves effort; it is not a security boundary. Misleading text written into a command can sway the model. Deny rules remain the real safeguard.",
-      "noReviewer": "No review extension is available. Install and enable one under Settings › Extensions (for example \"Jev Command Review\"). Until then, Assisted approval asks you about every such command and Autopilot refuses them.",
-      "selectReviewer": "Several review extensions are enabled; select one."
+      "noReviewer": "No command reviewer is available. Install and enable an extension that provides one under Settings › Extensions (for example \"Jev Command Review\"). Until then, Assisted approval asks you about every such command and Autopilot refuses them.",
+      "selectReviewer": "Several enabled extensions provide a command reviewer; select one."
     },
     "mode": {
       "title": "Permission mode",
@@ -3728,17 +3730,17 @@
       "confirmAutopilot": "Commands that no rule decides will first be reviewed by the review model. They run when the review passes and are rejected without waiting for you when judged clearly dangerous or when the review fails. Meant for unattended use. Commands (with sensitive values replaced) are sent to the review service in Settings.",
       "confirm": "Turn on",
       "saved": "Permission mode saved",
-      "noReviewer": "No review extension is available: Assisted approval and Autopilot fall back to the default behavior."
+      "noReviewer": "No command reviewer is available: Assisted approval asks you about these commands and Autopilot refuses them."
     },
     "configError": {
-      "not_configured": "The command review extension is not configured yet (for example, no API key), so every review fails.",
-      "invalid_api_key": "The command review extension's API key is invalid, so every review fails.",
+      "not_configured": "The command reviewer is not configured yet (for example, no API key in its extension's settings), so every review fails.",
+      "invalid_api_key": "The command reviewer's API key is invalid, so every review fails.",
       "openSettings": "Open settings",
-      "no_reviewer": "Some assets use Assisted approval or Autopilot, but no command review extension is available, so every review fails.",
-      "reviewer_unavailable": "The command review extension in use is unavailable (it may be disabled, or its package was changed), so every review fails."
+      "no_reviewer": "Some assets use Assisted approval or Autopilot, but no command reviewer is available, so every review fails.",
+      "reviewer_unavailable": "The command reviewer in use is unavailable (its extension may be disabled, or its package was changed), so every review fails."
     },
     "scores": "Scores",
     "retried": "Retried automatically: {{attempts}} requests in total",
-    "reviewedBy": "Judged by review extension {{name}} {{version}}"
+    "reviewedBy": "Judged by the command reviewer of {{name}} {{version}}"
   }
 }

@@ -33,8 +33,8 @@ installs.
 
 **`manifest.json` carries the security contract and nothing else** — `name`,
 `version`, `minAppVersion`, `hostABI`, `backend`, `permissions`, and
-`contributes.databaseDrivers`. That is what a user must be able to audit *before* the
-code runs, so it can never come from the code. Everything else — tools, asset types,
+`contributes` (`databaseDrivers`, `commandReviewer`). That is what a user must be able
+to audit *before* the code runs, so it can never come from the code. Everything else — tools, asset types,
 policies, snippets, pages, display strings — is answered by `describe()`.
 
 ```json
@@ -49,9 +49,9 @@ policies, snippets, pages, display strings — is answered by `describe()`.
 
 `hostABI` is `1.0`, and only `1.0` (`extmanifest.SupportedHostABIs`): an extension
 declaring any other value is refused at load, with the version it declared and the
-ones this app supports. The manifest is parsed strictly — an unknown field, or a
-`contributes` key other than `databaseDrivers`, is a parse error naming the extension
-and the field. An extension built for the earlier manifest shape (capabilities, tools
+ones this app supports. The manifest is parsed strictly — an unknown field, a
+`contributes` key other than `databaseDrivers` and `commandReviewer`, or a value of the
+wrong type, is a parse error naming the extension and the field. An extension built for the earlier manifest shape (capabilities, tools
 and asset types written into the manifest) therefore shows up in Settings as failed to
 load, with that parse error; nothing of it is registered.
 
@@ -67,7 +67,8 @@ asset config and logging are available without a grant. Declare only what you us
     "http":          ["https://api.example.com/"],
     "allowPrivate":  false,
     "assetEndpoint": true,
-    "assetRoute":    false
+    "assetRoute":    false,
+    "settingsEndpoint": false
   }
 }
 ```
@@ -105,13 +106,24 @@ Each one is enforced at the host call it guards:
   an asset whose endpoint resolves to one of the machine's interface addresses may
   reach that address itself, on any port — not loopback, not the machine's other
   addresses.
+- `network.settingsEndpoint` lets a call **without** an asset reach the addresses in
+  the extension's own settings fields tagged `format:"endpoint"`, over HTTP, private
+  addresses included, with the settings' `auth` injected (see
+  [Extension settings](#extension-settings)). The extension must declare settings
+  with such a field: the permission without one, or an endpoint field or settings
+  `auth` without the permission, fails the load.
 - `kerberos` lets a call whose scope carries a ticket source ask the host for a
   Kerberos ticket (`opskat.KerberosTicket`); today only a database asset that logs in
   with Kerberos has one.
 
-The install confirm and `opsctl ext dev` list every permission and every declared
-driver id; `credentials: "read"`, `network.assetRoute` and `kerberos` are marked high
-risk, and an upgrade marks the entries it adds as new.
+`contributes.commandReviewer: true` says the extension provides the command reviewer
+(see [Command reviewer](#command-reviewer)); `describe()` must provide one exactly
+when it is set.
+
+The install confirm and `opsctl ext dev` list every permission, every declared driver
+id and the command reviewer; `credentials: "read"`, `network.assetRoute`, `kerberos`
+and `commandReviewer` are marked high risk, and an upgrade marks the entries it adds as
+new.
 
 ### The call scope decides what is reachable
 
@@ -123,14 +135,18 @@ against that scope and the manifest's `permissions`; it never reads an asset typ
 declaration itself. In order:
 
 1. a `network.http` URL is dialed directly;
-2. one of the scope's endpoints is reachable with `network.assetEndpoint`, along the
-   asset's connection path, with its TLS settings and injected credentials;
+2. one of the scope's endpoints is reachable with `network.assetEndpoint` (in a call
+   without an asset, `network.settingsEndpoint`), along the asset's connection path,
+   with its TLS settings and injected credentials;
 3. any other address is reachable only with `network.assetRoute` and a scope that has a
    connection path;
 4. anything else is refused, and the refusal is logged naming the extension, the asset
    and the target.
 
-A call with no asset has an empty scope, so only `network.http` applies. Without
+A call with no asset — a host-only tool, a page's call made without one — runs in the
+extension's **settings scope**: its endpoints are the settings' `format:"endpoint"`
+addresses (HTTP only; TCP needs an asset), its credential injection the settings'
+`auth`, and without settings it is empty, so only `network.http` applies. Without
 `network.assetEndpoint` an asset's endpoint is not reachable at all, TCP included.
 `auth.kerberos_ticket` answers only when the scope has a ticket source **and** the
 manifest declares `kerberos`.
@@ -139,7 +155,7 @@ manifest declares `kerberos`.
 write that answer: the SDK derives it from the registration calls, so the host's view
 of the extension and the code that runs cannot disagree. `describe()` answers `icon`,
 `i18n` and `contributes`; each `contributes` key — `assetTypes`, `tools`, `policy`,
-`snippets`, `pages`, `databaseDrivers` — is checked by the subsystem that owns that
+`snippets`, `pages`, `databaseDrivers`, `settings`, `commandReviewer` — is checked by the subsystem that owns that
 kind of contribution when the extension loads, and an error names the extension, the
 contribution and the entry. A key no contribution point is registered for, or a
 contribution that fails to attach, keeps the whole extension from loading.
@@ -209,9 +225,9 @@ type putArgs struct {
   given it). Declare a secret as an `opskat.Credential` field, which is always
   `format:"password"` (see [Reading secret fields](#reading-secret-fields)).
 
-### Policy tool or page-only tool
+### Policy, page-only or host-only tool
 
-A tool is exactly one of two things, and declares which:
+A tool is exactly one of three things, and declares which:
 
 - a **policy tool** declares the action it requests (`.Policy`, `.PolicyFunc` or
   `.PolicyResources`, see [The policy face](#the-policy-face)). AI `exec` and opsctl can
@@ -219,8 +235,13 @@ A tool is exactly one of two things, and declares which:
   call it too.
 - a **page-only tool** declares `.PageOnly()`. It has no policy action, is left out of
   `help`, and `exec` refuses it. Only the extension's own pages call it.
+- a **host-only tool** declares `.HostOnly()`. It has no policy action, is left out of
+  `help`, and `exec` and pages refuse it (`该工具只供宿主调用`). Only the host subsystem
+  whose contribution names it calls it — today the [command reviewer](#command-reviewer)
+  — as a call without an asset, under the caller's timeout when that is shorter than
+  the tool's own. It needs no asset type and keeps a policy tool's timeout rules.
 
-Declaring both is a registration panic; declaring neither fails `describe()`, naming the
+Declaring two is a registration panic; declaring none fails `describe()`, naming the
 tool. A policy tool needs the extension to register an asset type (above).
 
 Every tool, whoever calls it, can emit events and can be cancelled:
@@ -581,6 +602,93 @@ read-only snippet into a category. Which categories are built in (`shell`, `sql`
 …) is decided by the host's snippet category registry alone: declaring a category with a
 built-in id fails the load, naming it, while a seed may go into any built-in category or
 one the extension declares. An extension may provide snippets alone, with no asset type.
+
+## Extension settings
+
+An extension may declare **one settings form of its own** — a service address, an API
+key, a model name — that the user fills in under Settings › Extensions › the
+extension's details. It is declared exactly like an asset type's config, from a Go
+struct with the same tags, and its credentials are injected the same way:
+
+```go
+type settings struct {
+    BaseURL string `json:"baseURL" title:"settings.baseURL" format:"endpoint"`
+    APIKey  string `json:"apiKey" title:"settings.apiKey" format:"password"`
+    Model   string `json:"model,omitempty" title:"settings.model"`
+}
+
+opskat.Settings[settings]().Auth(opskat.Auth{Groups: []opskat.AuthGroup{{
+    Bindings: []opskat.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{apiKey}}"}},
+}}})
+```
+
+The host stores the values apart from the extension's KV store, `format:"password"`
+fields encrypted; a secret left blank on save keeps the stored one, and the form only
+ever shows whether it is set. The extension never receives a secret's plaintext:
+
+- **reading** — `ctx.Settings()` (the host call `config.get`) answers the settings as a
+  call without an asset sees them: `Values` holds every non-secret field, `Secrets`
+  whether each secret is set. A call scoped to an asset is refused — its config is
+  `ctx.AssetConfig()`;
+- **reaching the service** — with `permissions.network.settingsEndpoint`, a call
+  without an asset may reach the addresses in the `format:"endpoint"` fields over HTTP,
+  and the host renders `auth` from the decrypted settings into those requests only (a
+  redirect off them fails before it is followed; any other address gets nothing
+  injected and follows `network.http`).
+
+The load fails, naming the rule, when the schema breaks an asset-config rule, when an
+endpoint field or `auth` is declared without `network.settingsEndpoint`, or when the
+permission is declared with no endpoint field. In tests, `opskat.NewTestHost(opskat.WithSettings(values, secrets))`
+sets what `ctx.Settings()` reads.
+
+## Command reviewer
+
+Under assisted approval and Autopilot, a command the rules would ask the user about
+is first judged by the **command reviewer** an extension provides; a pass lets it run
+unasked, so the user approves a reviewer at install. The host does everything that is
+not the judgement — which commands are reviewed, masking secrets, expanding
+decode-then-execute scripts, the length limit, caching (per extension version and
+settings), concurrency, the timeout and its one retry — and asks the reviewer about
+**one command per call**:
+
+```go
+var questions = []opskat.ReviewQuestion{
+    {ID: "destructive", Names: map[string]string{"en": "may destroy data", "zh-CN": "可能破坏数据"}},
+}
+
+opskat.CommandReviewer(questions, 4000, func(ctx *opskat.ToolContext, item opskat.ReviewItem) opskat.ReviewResult {
+    // item.AssetType, item.Command (secrets replaced), item.Syntax ("shell" / "redis" / "text")
+    return opskat.ReviewResult{Outcome: opskat.ReviewReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 0.9}}
+})
+```
+
+and in `manifest.json`:
+
+```json
+"contributes": { "commandReviewer": true }
+```
+
+`CommandReviewer` registers the host-only tool `review_command` (parameters exactly the
+required strings `assetType`, `command`, `syntax`) and the `commandReviewer`
+contribution naming it, its questions and the longest command it takes (a longer one
+fails the review without a call). A question id starts with a lowercase letter and
+holds lowercase letters, digits and underscores, at most 64; ids are unique, there is
+at least one question, and each has a name in at least one language. The answer is
+`ReviewPass`; `ReviewReject` with the failed question ids and optional 0–1 scores; or
+`ReviewError` with a reason id (`not_configured`, `invalid_api_key`, `unavailable`, …)
+when it could not judge. Anything else — an undeclared question id, a reject without
+one, a score out of range — and a failed or timed-out call fail the review; an `error`
+is never cached. A failed review never lets a command run: assisted approval asks the
+user, Autopilot refuses it.
+
+The review function runs as a call without an asset: it reads its settings with
+`ctx.Settings()` and reaches the service in them under
+`permissions.network.settingsEndpoint` (above). Do not retry inside it — the host's
+timeout cuts the call and retries once. The manifest flag and `describe()` must agree,
+and the tool must exist, be host-only and take exactly those parameters, or the load
+fails naming the rule. Enabled reviewers are the candidates; with several, the user
+picks one under Settings › AI › Command review, and the extension's settings form
+gains "Save and test", which reviews a harmless command with the saved settings.
 
 ## Providing a database driver
 

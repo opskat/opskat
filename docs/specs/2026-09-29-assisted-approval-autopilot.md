@@ -48,7 +48,7 @@
 | System One API 客户端（可换 Base URL；429 / 529 退避重试） | `internal/pkg/typesafe/` |
 | 审核服务：替换敏感信息（`redact.go`）、解码后执行（`decode_exec.go`）、题目、判断、缓存、测试模型 | `internal/service/command_review_svc/` |
 | 审核缓存表 | `internal/model/entity/command_review_entity/`、`internal/repository/command_review_repo/` |
-| 迁移：`command_reviews` 表、`assets` / `groups.permission_mode`、`audit_logs.review` | `migrations/202609290001_command_review.go` |
+| 迁移：`command_reviews` 表、`assets` / `groups.permission_mode`、`audit_logs.review` | `migrations/202610310001_command_review_cache.go`、`202610310002_permission_mode.go`、`202610310003_audit_review.go`（按归属方拆开，原 `202609290001` 已删除） |
 | 权限模式取值与校验 | `internal/model/entity/policy/permission_mode.go`；资产和分组的 `Validate` 调用它 |
 | 接入权限检查 | `internal/ai/permission/review.go` 的 `applyReviews`，由 `CheckPermissions`（`permission.go`）在规则判断之后调用；各资产类型的命令写法在 `type_registry.go` 注册时声明 |
 | 决策来源、审核结果类型 | `internal/ai/aictx/decision.go`（`assisted_allow` / `autopilot_allow` / `autopilot_deny`）、`internal/ai/aictx/review.go` |

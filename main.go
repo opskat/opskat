@@ -42,6 +42,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
 	"github.com/opskat/opskat/internal/service/extstore_svc"
@@ -425,7 +426,7 @@ func initExtensionSystem(
 		// is gone, the cache must be dropped instead of reused on the next open.
 		extension.RegisterHTTPCacheInvalidator(extName, provider)
 		return provider
-	}, extpkg.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint())...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
+	}, extpkg.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint(), reviewerreg.Default().Point())...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
 
 	extSvc = extension_svc.New(
 		mgr,
@@ -442,6 +443,8 @@ func initExtensionSystem(
 	// opsctl 在激活扩展时）。必须在任何扩展加载之前接好——extreg 加载期一遇到声明了
 	// 处理器的类型就要拿它建 tester。
 	extreg.SetConnTestRegistrar(extSvc.ConnTestRegistrar())
+	// 审核缓存按审核器扩展的设置哈希区分：同样在任何扩展加载之前接好。
+	reviewerreg.Default().SetSettingsHasher(extSvc.SettingsHash)
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)

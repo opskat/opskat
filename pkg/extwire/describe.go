@@ -1,7 +1,8 @@
 // Package extwire is the JSON an extension and its host exchange: the describe()
-// answer (this file and contributes.go) and the database driver calls
-// (driver.go). The guest SDK (pkg/extsdk) encodes it, and the host's
-// contribution points (internal/extreg) and driver sessions
+// answer (this file and contributes.go), the database driver calls (driver.go)
+// and the command reviewer's declaration and calls (review.go). The guest SDK
+// (pkg/extsdk) encodes it, and the host's contribution points (internal/extreg,
+// and the subsystems owning a point) and driver sessions
 // (internal/extreg/extdriver) decode it with these same types. The one other
 // reader is the runtime (pkg/extension), which may not depend on the wire
 // format and so decodes only describe()'s envelope with its own
@@ -21,7 +22,7 @@ import (
 //
 // Contributes stays raw here because each contribution point decodes its own
 // entry: the typed shapes are AssetType, Tool, Policy, Snippets, Pages,
-// dbdriver.Descriptor and Settings, under the Key* constants.
+// dbdriver.Descriptor, Settings and CommandReviewer, under the Key* constants.
 type Describe struct {
 	Icon        string                     `json:"icon,omitempty"`
 	I18n        I18n                       `json:"i18n"`
@@ -44,6 +45,8 @@ const (
 	KeyDatabaseDrivers = "databaseDrivers"
 	// KeySettings holds Settings.
 	KeySettings = "settings"
+	// KeyCommandReviewer holds CommandReviewer.
+	KeyCommandReviewer = "commandReviewer"
 )
 
 // I18n is the extension's display name and description, as i18n keys resolved

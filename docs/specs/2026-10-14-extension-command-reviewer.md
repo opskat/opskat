@@ -1,8 +1,8 @@
 # 扩展能力：命令审核器扩展点（第 1 步）
 
-> Status: Implemented（第 1 步）
+> Status: Superseded —— 已由 [命令审核器与扩展设置迁到 hostABI 1.0](./2026-10-31-command-reviewer-abi-v1.md) 取代（贡献点 `commandReviewer`、宿主专用工具、扩展设置贡献点）；本文仅作历史记录，不再反映现状。
 > Owner: OpsKat 维护者
-> Last updated: 2026-10-14
+> Last updated: 2026-10-31
 
 **Objective:** 让"命令模型审核"可以由扩展提供、按需安装。本文是第 1 步：补齐宿主与扩展 SDK 的能力（审核器扩展点、opsctl 内运行审核器、扩展级设置与密钥、按设置放行网络、安装来源记录），并把 [辅助审批与 Autopilot](./2026-09-29-assisted-approval-autopilot.md) 里与具体审核服务无关的部分留在宿主。第 2 步再把现有的 TypeSafe/Jev 审核迁成官方扩展 `extensions/jev-command-review`，另立文档。
 

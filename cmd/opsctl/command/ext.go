@@ -21,6 +21,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
@@ -33,9 +34,11 @@ import (
 var devInstallFn = requestExtDevInstall
 
 // extensionContributions 是本进程的贡献点注册表：与桌面端（main.go）同一组贡献点
-// （extreg.Points，加上扩展管理拥有的设置贡献点）。启动时的仅描述接入、读缓存的扫描、
-// 激活扩展的完整接入都经它，一个扩展在本进程里只有一次接入。
-var extensionContributions = extension.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint())...)
+// （extreg.Points，加上扩展管理拥有的设置贡献点与命令审核拥有的审核器贡献点）。启动时的
+// 仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，一个扩展在本进程里只有一次接入。
+// 仅描述接入的审核器扩展也是候选（设置页与选用规则看得到它），但没有运行中的插件，
+// 审核时按审核器不可用失败。
+var extensionContributions = extension.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint(), reviewerreg.Default().Point())...)
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
@@ -84,6 +87,8 @@ func newExtensionHost() *extension_svc.Service {
 		logger.Default(), nil, nil)
 	// 完整注册遇到声明了测试连接的类型就要 registrar，激活前接好。
 	extreg.SetConnTestRegistrar(svc.ConnTestRegistrar())
+	// 激活的审核器扩展审核时要读它的设置哈希（审核缓存键）。
+	reviewerreg.Default().SetSettingsHasher(svc.SettingsHash)
 	return svc
 }
 

@@ -256,10 +256,18 @@ function loadDotEnv() {
 // no asset type, only the SQL driver "fixturedb" (an in-memory catalog that logs in
 // to whatever its asset's host:port is), so a database asset, the query panel and the
 // driver's disable / enable lifecycle can be driven against an extension driver.
+//
+// `fixture-reviewer` is pkg/extension's command reviewer test extension (the only
+// candidate, so it is the reviewer in use): with its settings' endpoint empty it
+// judges by keyword — "rm -rf" fails destructive, "curl … | sh" fails remote_code,
+// "fixture-error" errors, "fixture-slow" times out, anything else passes — and with
+// an endpoint saved it POSTs {assetType, command} to <endpoint>/review, so assisted
+// approval, Autopilot, its settings form and "save and test" can be driven for real.
 const HARNESS_EXTENSIONS = [
   { name: "notebook", dir: "extensions/notebook" },
   { name: "fixture-ext", dir: "pkg/extension/testdata/fixture-ext" },
   { name: "fixture-dbdriver", dir: "pkg/extension/testdata/fixture-dbdriver" },
+  { name: "fixture-reviewer", dir: "pkg/extension/testdata/fixture-reviewer" },
 ];
 
 // Builds each extension's wasm guest and lays the result out in the run's data dir,

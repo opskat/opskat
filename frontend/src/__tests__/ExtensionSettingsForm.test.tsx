@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { ExtensionSettingsForm } from "../components/settings/ExtensionSettingsForm";
-import { GetExtensionSettings, SaveExtensionSettings } from "../../wailsjs/go/extension/Extension";
+import { GetExtensionSettings, SaveExtensionSettings, TestCommandReviewer } from "../../wailsjs/go/extension/Extension";
 
 const toastError = vi.hoisted(() => vi.fn());
 const notifySuccess = vi.hoisted(() => vi.fn());
@@ -92,5 +92,48 @@ describe("ExtensionSettingsForm", () => {
     });
     expect(toastError).toHaveBeenCalledWith("disk full");
     expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  describe("an extension contributing the command reviewer", () => {
+    beforeEach(() => {
+      vi.mocked(TestCommandReviewer).mockReset();
+    });
+
+    it("saves, then tests its reviewer with the saved settings and shows the result", async () => {
+      vi.mocked(TestCommandReviewer).mockResolvedValue({
+        mode: "",
+        outcome: "fail",
+        reason: "invalid_api_key",
+      } as never);
+      await act(async () => {
+        render(<ExtensionSettingsForm extName="jev" reviewer />);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("extension-settings-save-and-test"));
+      });
+      expect(SaveExtensionSettings).toHaveBeenCalled();
+      expect(TestCommandReviewer).toHaveBeenCalledWith("jev");
+      expect(vi.mocked(SaveExtensionSettings).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(TestCommandReviewer).mock.invocationCallOrder[0]
+      );
+      expect(screen.getByTestId("extension-settings-test-result")).toHaveTextContent("commandReview.summary.fail");
+    });
+
+    it("does not test when the settings do not save", async () => {
+      vi.mocked(SaveExtensionSettings).mockResolvedValue([{ field: "baseURL", code: "required" }] as never);
+      await act(async () => {
+        render(<ExtensionSettingsForm extName="jev" reviewer />);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("extension-settings-save-and-test"));
+      });
+      expect(TestCommandReviewer).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("extension-settings-test-result")).toBeNull();
+    });
+
+    it("another extension has no test button", async () => {
+      await renderForm();
+      expect(screen.queryByTestId("extension-settings-save-and-test")).toBeNull();
+    });
   });
 });

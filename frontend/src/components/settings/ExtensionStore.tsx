@@ -57,6 +57,9 @@ function permissionTags(p: extmanifest.Permissions): PermissionTag[] {
   if (p.network.assetRoute) {
     tags.push({ key: "assetRoute", label: "extension.capability.assetRoute", icon: Route, warning: true });
   }
+  if (p.network.settingsEndpoint) {
+    tags.push({ key: "settingsEndpoint", label: "extension.capability.settingsEndpoint", icon: Network });
+  }
   if (p.credentials === "read") {
     tags.push({ key: "credentials", label: "extension.capability.credentials", icon: ShieldAlert, warning: true });
   }
