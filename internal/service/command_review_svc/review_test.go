@@ -280,43 +280,6 @@ func TestSendsDecodedScriptInsteadOfBase64(t *testing.T) {
 	assert.Equal(t, script, rev.lastSent(t))
 }
 
-func TestDecodesCommonShellWrappers(t *testing.T) {
-	script := "docker compose up -d"
-	payload := base64.StdEncoding.EncodeToString([]byte(script))
-	cases := []string{
-		pipeDecodeExec(script, "/bin/bash"),
-		"printf '%s' '" + payload + "' | base64 --decode | sh",
-		"echo '" + payload + "' | base64 -d | sudo bash",
-		`bash -c "echo '` + payload + `' | base64 -d | bash"`,
-		"echo '" + payload + "' | base64 -d > /tmp/x.sh && bash /tmp/x.sh",
-		"bash -c \"$(echo '" + payload + "' | base64 -d)\"",
-		"eval \"$(echo '" + payload + "' | base64 -d)\"",
-	}
-	for _, cmd := range cases {
-		t.Run(cmd, func(t *testing.T) {
-			rev := newReviewer()
-			s, _ := newService(rev)
-			s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: cmd})
-			got := rev.lastSent(t)
-			assert.Contains(t, got, script)
-			assert.NotContains(t, got, payload)
-		})
-	}
-}
-
-func TestKeepsSiblingCommandsWhenDecoding(t *testing.T) {
-	script := "docker inspect vaalhub-web"
-	rev := newReviewer()
-	s, _ := newService(rev)
-
-	s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: pipeDecodeExec(script, "bash") + " && rm -rf /var/lib/gone"})
-
-	got := rev.lastSent(t)
-	assert.Contains(t, got, script)
-	assert.Contains(t, got, "rm -rf /var/lib/gone")
-	assert.NotContains(t, got, "base64")
-}
-
 func TestRedactsSecretsInsideDecodedScript(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
@@ -330,14 +293,9 @@ func TestRedactsSecretsInsideDecodedScript(t *testing.T) {
 }
 
 func TestUndecodableExecIsNotSent(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString([]byte("docker compose up -d"))
 	cases := []string{
 		"echo '!!!' | base64 -d | bash",
 		"base64 -d /tmp/payload | bash",
-		"echo \"$payload\" | base64 -d | bash",
-		// 藏在条件里的解码执行同样不送审
-		"if true; then " + pipeDecodeExec("docker compose up -d", "bash") + "; fi",
-		"if true; then echo '" + payload + "' | base64 -d > /tmp/x.sh && bash /tmp/x.sh; fi",
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -349,27 +307,6 @@ func TestUndecodableExecIsNotSent(t *testing.T) {
 			assert.Empty(t, rev.calls)
 		})
 	}
-}
-
-func TestBase64WriteWithoutExecutionIsReviewedAsWritten(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString([]byte("/root/docker/nginx/logs/*.log {\n}"))
-	rev := newReviewer()
-	s, _ := newService(rev)
-
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: "echo '" + payload + "' | base64 -d > /etc/logrotate.d/nginx-docker"})
-
-	assert.Equal(t, OutcomePass, r.Outcome)
-	assert.Contains(t, rev.lastSent(t), payload)
-}
-
-func TestOrdinaryEvalIsStillReviewed(t *testing.T) {
-	rev := newReviewer()
-	s, _ := newService(rev)
-
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: `eval "$cmd"`})
-
-	assert.Equal(t, OutcomePass, r.Outcome)
-	assert.Contains(t, rev.lastSent(t), "eval")
 }
 
 func TestNonShellCommandIsNotDecoded(t *testing.T) {

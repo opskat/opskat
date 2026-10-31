@@ -1,4 +1,4 @@
-package command_review_svc
+package cmdredact
 
 import (
 	"errors"
@@ -15,12 +15,12 @@ import (
 type Syntax string
 
 const (
-	// SyntaxText 是 SQL、路径、扩展类型的命令等：只按值本身的格式和紧挨着的键名找。
-	SyntaxText Syntax = ""
-	// SyntaxShell 是 shell 命令（SSH、串口、k8s），以及按 shell 词法切词的 etcd / mongo / kafka 命令。
-	SyntaxShell Syntax = "shell"
-	// SyntaxRedis 是 Redis 命令。
-	SyntaxRedis Syntax = "redis"
+	// Text 是 SQL、路径、扩展类型的命令等：只按值本身的格式和紧挨着的键名找。
+	Text Syntax = ""
+	// Shell 是 shell 命令（SSH、串口、k8s），以及按 shell 词法切词的 etcd / mongo / kafka 命令。
+	Shell Syntax = "shell"
+	// Redis 是 Redis 命令。
+	Redis Syntax = "redis"
 )
 
 // ErrUnparseable 表示命令解析不了，分不清哪些是值、哪些是命令结构，所以不能发送。
@@ -35,9 +35,9 @@ const mask = "***"
 // 也不能把要执行的代码藏起来。shell 命令解析不了时返回 ErrUnparseable。
 func RedactSensitive(syn Syntax, command string) (string, error) {
 	switch syn {
-	case SyntaxShell:
+	case Shell:
 		return redactShell(command)
-	case SyntaxRedis:
+	case Redis:
 		return redactRedis(command), nil
 	default:
 		return redactText(command), nil

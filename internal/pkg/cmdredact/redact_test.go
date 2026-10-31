@@ -1,4 +1,4 @@
-package command_review_svc
+package cmdredact
 
 import (
 	"testing"
@@ -25,7 +25,7 @@ func runRedactCases(t *testing.T, syntax Syntax, cases []redactCase) {
 }
 
 func TestRedactShellReplacesSensitiveValues(t *testing.T) {
-	runRedactCases(t, SyntaxShell, []redactCase{
+	runRedactCases(t, Shell, []redactCase{
 		{"mysql attached -p", "mysql -uroot -pS3cret! -e 'show databases'", "mysql -uroot -p*** -e 'show databases'"},
 		{"mysql quoted -p", "mysql -u root -p'pass word' shop", "mysql -u root -p*** shop"},
 		{"mysqldump attached -p", "mysqldump -h db -u app -pabc123 shop > /tmp/x.sql", "mysqldump -h db -u app -p*** shop > /tmp/x.sql"},
@@ -81,7 +81,7 @@ func TestRedactShellKeepsCommandsVisible(t *testing.T) {
 		"some-tool --no-password rm -rf /",
 		"docker login --password-stdin -u bob registry.example.com",
 	} {
-		got, err := RedactSensitive(SyntaxShell, in)
+		got, err := RedactSensitive(Shell, in)
 		require.NoError(t, err, in)
 		assert.Equal(t, in, got, in)
 	}
@@ -111,7 +111,7 @@ func TestRedactShellLeavesOrdinaryCommandsAlone(t *testing.T) {
 		"ssh web 'KEY_DIR=/ rm -rf $KEY_DIR/*'",
 		"curl -d '{\"password_file\": \"/run/secrets/db\"}' http://x",
 	} {
-		got, err := RedactSensitive(SyntaxShell, in)
+		got, err := RedactSensitive(Shell, in)
 		require.NoError(t, err, in)
 		assert.Equal(t, in, got, in)
 	}
@@ -119,12 +119,12 @@ func TestRedactShellLeavesOrdinaryCommandsAlone(t *testing.T) {
 
 // 解析不了就不发：宁可审核失败，也不把没替换的命令发出去。
 func TestRedactShellRejectsUnparseableCommands(t *testing.T) {
-	_, err := RedactSensitive(SyntaxShell, "echo 'unterminated")
+	_, err := RedactSensitive(Shell, "echo 'unterminated")
 	assert.ErrorIs(t, err, ErrUnparseable)
 }
 
 func TestRedactRedisReplacesSensitiveValues(t *testing.T) {
-	runRedactCases(t, SyntaxRedis, []redactCase{
+	runRedactCases(t, Redis, []redactCase{
 		{"auth", "AUTH s3cr3t", "AUTH ***"},
 		{"auth with user", "auth default s3cr3t", "auth default ***"},
 		{"hello auth", "HELLO 3 AUTH default s3cr3t SETNAME app", "HELLO 3 AUTH default *** SETNAME app"},
@@ -137,14 +137,14 @@ func TestRedactRedisReplacesSensitiveValues(t *testing.T) {
 		{"token in a value", "SET gh ghp_abcdefghijklmnopqrstuvwxyz0123456789", "SET gh ***"},
 	})
 	for _, in := range []string{"GET session:123", "FLUSHALL", "SET k v", "DEL user:1 user:2", "CONFIG SET maxmemory 1gb", "EVAL \"return redis.call('flushall')\" 0"} {
-		got, err := RedactSensitive(SyntaxRedis, in)
+		got, err := RedactSensitive(Redis, in)
 		require.NoError(t, err, in)
 		assert.Equal(t, in, got, in)
 	}
 }
 
 func TestRedactTextReplacesSensitiveValues(t *testing.T) {
-	runRedactCases(t, SyntaxText, []redactCase{
+	runRedactCases(t, Text, []redactCase{
 		{"identified by", "CREATE USER 'repl'@'%' IDENTIFIED BY 'Repl#2026'", "CREATE USER 'repl'@'%' IDENTIFIED BY '***'"},
 		{"identified with by", "ALTER USER u IDENTIFIED WITH mysql_native_password BY 'pw'", "ALTER USER u IDENTIFIED WITH mysql_native_password BY '***'"},
 		{"postgres with password", "ALTER USER app WITH PASSWORD 'pg-secret'", "ALTER USER app WITH PASSWORD '***'"},
@@ -160,7 +160,7 @@ func TestRedactTextReplacesSensitiveValues(t *testing.T) {
 		"DROP DATABASE fnky",
 		"/etc/nginx/nginx.conf",
 	} {
-		got, err := RedactSensitive(SyntaxText, in)
+		got, err := RedactSensitive(Text, in)
 		require.NoError(t, err, in)
 		assert.Equal(t, in, got, in)
 	}
@@ -182,7 +182,7 @@ func TestRedactKnownSecretFormats(t *testing.T) {
 		"npm token":         {"npm_", "aB3dEfG7iJkLmN9pQrStUvWxYz0123456789"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := RedactSensitive(SyntaxShell, "deploy --config prod "+parts[0]+parts[1]+" --force")
+			got, err := RedactSensitive(Shell, "deploy --config prod "+parts[0]+parts[1]+" --force")
 			require.NoError(t, err)
 			assert.Equal(t, "deploy --config prod *** --force", got)
 		})

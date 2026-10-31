@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/pkg/cmdredact"
 )
 
 // DefaultTimeout 是每次调用审核扩展的默认超时。
@@ -280,7 +281,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 			results[i] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version}
 			continue
 		}
-		command, err := RedactSensitive(in.Syntax, reviewed)
+		command, err := cmdredact.RedactSensitive(in.Syntax, reviewed)
 		if err != nil {
 			logger.Ctx(ctx).Warn("redact command for review", zap.String("assetType", in.AssetType), zap.Error(err))
 			results[i] = Result{Outcome: OutcomeFail, Reason: ReasonUnparseable, Extension: name, Version: version}

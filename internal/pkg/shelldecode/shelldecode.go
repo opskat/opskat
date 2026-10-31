@@ -1,4 +1,6 @@
-package command_review_svc
+// Package shelldecode 把 shell 命令里「base64 解码后交给 shell 执行」的写法展开成解码出来的脚本，
+// 让审核看到真正会执行的内容。纯算法，只依赖 shell 解析器。
+package shelldecode
 
 import (
 	"bytes"
@@ -12,30 +14,17 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// ErrUndecodable 表示命令会执行解码后的内容，但这部分解不开，不能发给模型。
+// ErrUndecodable 表示命令会执行解码后的内容，但这部分解不开，不能当作已经看清。
 var ErrUndecodable = errors.New("decoded execution cannot be read")
+
+// ErrUnparseable 表示命令解析不了，分不清哪些是解码执行、哪些是命令结构。
+var ErrUnparseable = errors.New("command cannot be parsed")
 
 const maxRevealDepth = 3
 
-// commandForReview 返回真正交给替换敏感信息和模型的命令。shell 里「解码后交给 shell 执行」
-// 的写法换成解码出来的脚本；没有这种写法时原样返回。解不开时返回 ErrUndecodable，
-// 命令解析不了时返回 ErrUnparseable。
-func commandForReview(in Input) (string, error) {
-	if in.Syntax != SyntaxShell {
-		return in.Command, nil
-	}
-	return revealDecodedExec(in.Command)
-}
-
-// cacheKeyCommand 让解码展开过的命令不命中展开前的缓存。没展开时键和原来一样。
-func cacheKeyCommand(original, reviewed string) string {
-	if reviewed == original {
-		return original
-	}
-	return original + "\x00" + reviewed
-}
-
-func revealDecodedExec(command string) (string, error) {
+// Reveal 把 shell 里「解码后交给 shell 执行」的写法换成解码出来的脚本，其余部分原样保留；
+// 没有这种写法时原样返回。解不开时返回 ErrUndecodable，命令解析不了时返回 ErrUnparseable。
+func Reveal(command string) (string, error) {
 	return revealDepth(command, 0)
 }
 
@@ -863,4 +852,28 @@ func joinNonEmpty(parts ...string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// literalValue 返回词去掉引号后的值；词里有变量、命令替换等展开时 ok 为 false。
+func literalValue(w *syntax.Word) (string, bool) {
+	var b strings.Builder
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			for _, q := range p.Parts {
+				lit, ok := q.(*syntax.Lit)
+				if !ok {
+					return "", false
+				}
+				b.WriteString(lit.Value)
+			}
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
 }
