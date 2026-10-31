@@ -56,7 +56,7 @@ func TestCallHostTool(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "deadline exceeded")
 		elapsed := time.Since(start)
-		assert.GreaterOrEqual(t, elapsed, 2*time.Second, "an hour is not honoured: the tool's 3s limit applies")
+		assert.GreaterOrEqual(t, elapsed, 2*time.Second, "an hour is not honored: the tool's 3s limit applies")
 		assert.Less(t, elapsed, 10*time.Second)
 	})
 
