@@ -392,6 +392,24 @@ func TestNewInstallConfirm_AssetRouteIsGrantAndUpgradeMarksIt(t *testing.T) {
 	assert.Contains(t, c.Added, CapabilityGrant{Kind: CapAssetRoute, HighRisk: true})
 }
 
+func TestNewInstallConfirm_SettingsEndpointAndCommandReviewerGrants(t *testing.T) {
+	got := CapabilityGrants(
+		extmanifest.Permissions{Network: extmanifest.NetworkPermission{SettingsEndpoint: true}},
+		extmanifest.Contributes{CommandReviewer: true})
+	// commandReviewer lets commands run without a human confirm under assisted
+	// approval and Autopilot, so it is high risk; settingsEndpoint is not.
+	assert.ElementsMatch(t, []CapabilityGrant{
+		{Kind: "network.settingsEndpoint"},
+		{Kind: "commandReviewer", HighRisk: true},
+	}, got)
+	assert.Empty(t, CapabilityGrants(extmanifest.Permissions{}, extmanifest.Contributes{}))
+
+	// An upgrade of an extension that had neither marks both as added.
+	had := CapabilityGrants(extmanifest.Permissions{}, extmanifest.Contributes{})
+	assert.ElementsMatch(t, got, AddedGrants(got, had))
+	assert.Empty(t, AddedGrants(got, got))
+}
+
 func TestNewInstallConfirm_KerberosIsGrantAndUpgradeMarksIt(t *testing.T) {
 	stub := installDescribeStub(t)
 	svc := newConfirmTestService(t, t.TempDir())

@@ -3253,6 +3253,7 @@
     "credentialsReadWarning": "此扩展可以明文读取其资产中保存的全部密码（credentials: read），请确认你信任它的作者后再使用。",
     "assetRouteWarning": "此扩展可以沿资产的连接路径连到你没有填写的地址，例如数据库重定向的目标、集群节点、隧道后面的主机。请确认你信任它的作者后再使用。",
     "kerberosWarning": "此扩展可以用资产里保存的 Kerberos 凭据去申请票据，请确认你信任它的作者后再使用。",
+    "commandReviewerWarning": "此扩展充当命令审核器：在辅助审批和 Autopilot 下，它的审核结论可以让命令不经人工确认直接执行。请确认你信任它的作者后再使用。",
     "databaseDriversWarning": "此扩展提供数据库驱动：使用这些驱动的数据库资产，其连接口令与 TLS 客户端私钥会以明文交给扩展，请确认你信任它的作者后再使用。",
     "installConfirm": {
       "title": "安装扩展？",
@@ -3273,6 +3274,8 @@
       "databaseDriver": "提供数据库驱动",
       "assetRoute": "可经资产的连接路径连到任意地址",
       "kerberos": "可用资产里的 Kerberos 凭据申请票据",
+      "settingsEndpoint": "可访问你在它的设置里填写的地址",
+      "commandReviewer": "负责审核命令，辅助审批和 Autopilot 下可让命令不经人工确认就执行",
       "downgrade": "降级",
       "install": "安装",
       "update": "更新",

@@ -182,6 +182,33 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(within(kerberos).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
+  it("warns that commandReviewer can let commands run without a human confirmation, and does not for settingsEndpoint", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [
+        { kind: "network.settingsEndpoint", value: "", highRisk: false },
+        { kind: "commandReviewer", value: "", highRisk: true },
+      ],
+      added: [{ kind: "commandReviewer", value: "", highRisk: true }],
+    });
+    const dialog = screen.getByRole("dialog");
+    const alerts = within(dialog).getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("extension.commandReviewerWarning");
+    expect(
+      within(within(dialog).getByTestId("ext-install-cap-commandReviewer")).getByText(
+        "extension.installConfirm.highRisk"
+      )
+    ).toBeInTheDocument();
+    expect(
+      within(within(dialog).getByTestId("ext-install-cap-network.settingsEndpoint")).queryByText(
+        "extension.installConfirm.highRisk"
+      )
+    ).toBeNull();
+  });
+
   it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);
@@ -209,6 +236,8 @@ describe("ExtensionInstallConfirmDialog", () => {
     ["network.assetRoute", "network.assetRoute", "", "extension.installConfirm.assetRoute"],
     ["kerberos", "kerberos", "", "extension.installConfirm.kerberos"],
     ["databaseDriver", "databaseDrivers", "oracle", "extension.installConfirm.databaseDriver"],
+    ["network.settingsEndpoint", "network.settingsEndpoint", "", "extension.installConfirm.settingsEndpoint"],
+    ["commandReviewer", "commandReviewer", "", "extension.installConfirm.commandReviewer"],
   ])(
     "labels %s by its manifest name, explains it on its own line and marks it new on upgrade",
     (kind, label, value, note) => {
@@ -216,7 +245,7 @@ describe("ExtensionInstallConfirmDialog", () => {
       render(<ExtensionInstallConfirmDialog />);
       fire(handlers, "ext:install-confirm", {
         ...upgrade,
-        capabilities: [{ kind, value, highRisk: kind !== "databaseDriver" }],
+        capabilities: [{ kind, value, highRisk: !["databaseDriver", "network.settingsEndpoint"].includes(kind) }],
         added: [{ kind, value }],
       });
 

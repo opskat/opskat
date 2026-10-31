@@ -168,6 +168,34 @@ func TestParseAcceptsAssetRouteAndKerberosWithoutDrivers(t *testing.T) {
 	assert.Empty(t, m.Contributes.DatabaseDrivers)
 }
 
+// network.settingsEndpoint and contributes.commandReviewer are booleans under
+// the same strict parsing as every other field: a value of another type fails
+// the parse and names the field.
+func TestParseSettingsEndpointAndCommandReviewer(t *testing.T) {
+	m, err := Parse(manifest(`{"network":{"settingsEndpoint":true}}`, `{"commandReviewer":true}`))
+	require.NoError(t, err)
+	assert.True(t, m.Permissions.Network.SettingsEndpoint)
+	assert.True(t, m.Contributes.CommandReviewer)
+
+	m, err = Parse(manifest("", ""))
+	require.NoError(t, err)
+	assert.False(t, m.Permissions.Network.SettingsEndpoint)
+	assert.False(t, m.Contributes.CommandReviewer)
+
+	for name, tc := range map[string]struct{ perms, contrib, want string }{
+		"settingsEndpoint string": {`{"network":{"settingsEndpoint":"yes"}}`, "", "settingsEndpoint"},
+		"settingsEndpoint number": {`{"network":{"settingsEndpoint":1}}`, "", "settingsEndpoint"},
+		"commandReviewer string":  {"", `{"commandReviewer":"yes"}`, "commandReviewer"},
+		"commandReviewer object":  {"", `{"commandReviewer":{}}`, "commandReviewer"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse(manifest(tc.perms, tc.contrib))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 func TestParseAcceptsMinimalManifest(t *testing.T) {
 	m, err := Parse(manifest("", ""))
 	require.NoError(t, err)
