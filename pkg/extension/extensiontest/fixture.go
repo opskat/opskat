@@ -102,7 +102,7 @@ func load(t testing.TB, install func(testing.TB, string) string) *extension.Exte
 
 	mgr := extension.NewManager(root, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, zap.NewNop())
+	}, AcceptingContributions(), zap.NewNop())
 	t.Cleanup(func() { mgr.Close(context.Background()) })
 	m, err := mgr.LoadExtension(context.Background(), dir)
 	if err != nil {

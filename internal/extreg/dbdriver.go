@@ -14,19 +14,21 @@ import (
 )
 
 // 扩展提供的数据库驱动：注册进驱动注册表（internal/dbdriver）的是 extensionDriver，它的会话
-// 经 Plugin.OpenDriverSession 活在扩展里。共享代码（connpool、查询面板、AI）照常按资产配置的
+// 经 extdriver（Drivers.OpenDriverSession）活在扩展里。共享代码（connpool、查询面板、AI）照常按资产配置的
 // 驱动 id Lookup、Open，拿到的请求就是宿主替内置驱动构造的那一份。
 //
-// 扩展被停用、升级或卸载时（Unregister），驱动先移出注册表，再作废它打开过的每一条会话：
+// 扩展被停用、升级或卸载时（撤销它的驱动贡献，dbDriversPoint），驱动先移出注册表，再作废它打开过的每一条会话：
 // 执行中与排队的操作被取消，之后的操作——包括还缓存在查询面板、AI 里的那些会话上的——都报
 // 点名该驱动的 dbregistry.ErrDriverUnavailable，而不是扩展实例关闭后各种各样的报错。重新
 // 启用注册的是新的 extensionDriver，与作废的会话无关。
 
-// driverOpener 是扩展驱动用到的插件能力（*extension.Plugin 满足它）：打开会话，以及不经会话
-// 的语句切分分类。
+// driverOpener 是扩展驱动用到的插件能力（*extdriver.Drivers 满足它）：打开会话、不经会话
+// 的语句切分分类，以及驱动移除时的 CloseDrivers——结束扩展里仍在执行的行语句生成（它没有自己的
+// ctx，且活得比会话久），之后关闭会话才不必等它（removeDrivers）。
 type driverOpener interface {
 	OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
 	ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error)
+	CloseDrivers()
 }
 
 // driverOwner 记录每个已注册的扩展驱动 id 归哪个扩展，撞名时据此点名占用者。调用方持有 mu。
@@ -172,12 +174,9 @@ func (d *extensionDriver) remove() {
 func registerDrivers(ext string, descs []dbdriver.Descriptor, plugin driverOpener, translate translateFunc) ([]*extensionDriver, error) {
 	done := make([]*extensionDriver, 0, len(descs))
 	for _, desc := range descs {
-		if err := fitsNetworkRules(desc); err != nil {
-			return releaseDrivers(done), fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, err)
-		}
 		d := newExtensionDriver(ext, desc, plugin, translate)
 		if err := dbregistry.TryRegister(d); err != nil {
-			return releaseDrivers(done), fmt.Errorf("extension %q: database driver %q: %w", ext, desc.ID, describeDriverClash(err))
+			return releaseDrivers(done), fmt.Errorf("databaseDrivers[%s]: %w", desc.ID, describeDriverClash(err))
 		}
 		driverOwner[desc.ID] = ext
 		done = append(done, d)
@@ -225,9 +224,15 @@ func releaseDrivers(drivers []*extensionDriver) []*extensionDriver {
 	return drivers
 }
 
-// removeDrivers 并行作废已移出注册表的驱动的会话。关闭会话要等扩展里执行中的调用停下，所以
-// 不在 mu 里做。
-func removeDrivers(drivers []*extensionDriver) {
+// removeDrivers 并行作废已移出注册表的驱动（remove）。在那之前先关闭 plugin 的驱动
+// （CloseDrivers：结束扩展里仍在执行、没有自己 ctx 的行语句生成，否则关闭会话要一直等它），
+// 而再之前先结束驱动的生命周期：被 CloseDrivers 结束的调用与其他操作一样报 unavailable()。
+// 关闭会话要等扩展里执行中的调用停下，所以不在 mu 里做。
+func removeDrivers(drivers []*extensionDriver, plugin driverOpener) {
+	for _, d := range drivers {
+		d.end(d.unavailable())
+	}
+	plugin.CloseDrivers()
 	var wg sync.WaitGroup
 	for _, d := range drivers {
 		wg.Go(d.remove)

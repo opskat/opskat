@@ -3,36 +3,60 @@ package extension
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/pkg/netdial"
 )
 
-// capHost decorates a HostProvider with per-call capability enforcement.
+// capHost decorates a HostProvider with per-call permission enforcement: every
+// stream and every Kerberos ticket is admitted against the manifest's
+// permissions and the call's Scope, which the subsystem owning the call's asset
+// resolved (see Scope). It never reads an asset type's declaration itself.
 //
-// Only OpenIO needs a decision — everything else is already scoped to the
-// extension by construction (KV is namespaced per extension; asset config is
-// only ever the invocation's own asset, and the provider refuses one whose type
-// the extension does not register and applies its credentials capability). Embedding the inner provider
-// keeps this file a single middleware instead of a pass-through for every
-// method the interface happens to have.
+// Everything else is already scoped to the extension by construction: KV is
+// namespaced per extension, and asset config is only ever the invocation's own
+// asset, which the provider refuses unless the extension registers its type and
+// serves per its credentials permission. Embedding the inner provider keeps this
+// file a single middleware instead of a pass-through for every method the
+// interface happens to have.
 type capHost struct {
 	HostProvider
 	manifest *Manifest
 	extDir   string
+	// localIPs lists the addresses of this machine's network interfaces, which
+	// a direct route refuses like loopback (routeDial).
+	localIPs func() ([]net.IP, error)
 }
 
-// NewCapabilityHost wraps inner with capability enforcement.
+// NewCapabilityHost wraps inner with permission enforcement.
 func NewCapabilityHost(inner HostProvider, manifest *Manifest, extDir string) HostProvider {
-	return &capHost{HostProvider: inner, manifest: manifest, extDir: extDir}
+	return &capHost{HostProvider: inner, manifest: manifest, extDir: extDir, localIPs: interfaceIPs}
 }
 
-func (c *capHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error) {
+// scopeSource is an inner provider that resolves the scope of a call on an
+// asset (DefaultHostProvider, through its ScopeResolver). An inner provider
+// without one gives every asset an empty scope.
+type scopeSource interface {
+	resolveScope(ctx context.Context, asset *AssetRef) (*Scope, error)
+}
+
+// OpenIO admits a stream. A network stream is admitted against the scope of the
+// call ctx belongs to — resolved now if this is the call's first network or
+// ticket host call — and reaches the inner provider with the asset only when it
+// targets one of the asset's endpoints: the asset's cached client and its
+// credentials are how the host talks to that endpoint, and nothing else the same
+// call reaches (an allowlisted public API, an address along the asset route) may
+// ride them.
+func (c *capHost) OpenIO(ctx context.Context, _ *AssetRef, params IOOpenParams) (*IOResource, error) {
 	switch params.Type {
 	case "file":
 		switch params.Mode {
@@ -45,224 +69,364 @@ func (c *capHost) OpenIO(ctx context.Context, asset *AssetRef, params IOOpenPara
 				return nil, err
 			}
 		}
-	case "http":
-		endpoint, err := c.gateHTTP(asset, &params)
+		return c.HostProvider.OpenIO(ctx, nil, params)
+	case "http", "tcp":
+		inv, err := invocationFrom(ctx)
 		if err != nil {
-			c.logDenied(ctx, asset, params.Type, err)
 			return nil, err
 		}
-		if !endpoint {
-			asset = nil
-		}
-	case "tcp":
-		// Without network.assetEndpoint TCP stays ungated: it is reserved for
-		// first-party extensions (e.g. Kafka) that predate the capability. Do not
-		// treat that path as safe for third-party extensions.
-		if !c.manifest.Capabilities.Network.AssetEndpoint {
-			asset = nil
-			break
-		}
-		if err := c.gateTCP(asset, params.Addr); err != nil {
-			c.logDenied(ctx, asset, params.Type, err)
+		scope, err := c.scopeOf(ctx, inv)
+		if err != nil {
 			return nil, err
 		}
+		way, err := c.gateNetwork(inv, scope, &params)
+		if err != nil {
+			c.logDenied(ctx, inv, scope, params, err)
+			return nil, err
+		}
+		if way == wayDirect {
+			// Decided without the asset's connection path, which is never
+			// built for it: a path that cannot be built does not fail it.
+			return c.HostProvider.OpenIO(ctx, nil, params)
+		}
+		if err := c.connect(ctx, inv, scope); err != nil {
+			return nil, err
+		}
+		if way == wayEndpoint {
+			c.dialEndpoint(scope, &params)
+			return c.HostProvider.OpenIO(ctx, scope.Asset, params)
+		}
+		if scope.Route == nil {
+			err := fmt.Errorf("%s denied: the asset %s has no connection path to dial along", params.Type, assetLabel(scope.Asset))
+			c.logDenied(ctx, inv, scope, params, err)
+			return nil, err
+		}
+		params.Dial = c.routeDial(inv, scope)
+		return c.HostProvider.OpenIO(ctx, nil, params)
+	default:
+		return c.HostProvider.OpenIO(ctx, nil, params)
 	}
-	// A network stream reaches the inner provider with the asset only when it
-	// targets one of the asset's endpoints: the asset's connection path (tunnel,
-	// proxy chain, TLS), its cached keep-alive client and its credentials are how
-	// the host talks to that endpoint, and nothing else the same call reaches
-	// (an allowlisted public API, an ungated TCP address) may ride them.
-	return c.HostProvider.OpenIO(ctx, asset, params)
 }
 
-// gateHTTP admits a request that targets one of the asset's endpoints — private
-// addresses included, and redirects held to the same endpoints — or else one the
-// static allowlist admits, with private reach only through a declared tunnel.
-// endpoint reports which of the two admitted it.
-func (c *capHost) gateHTTP(asset *AssetRef, params *IOOpenParams) (endpoint bool, err error) {
-	endpointScoped := c.manifest.Capabilities.Network.AssetEndpoint && asset != nil
-	if endpointScoped {
-		eps, err := c.assetEndpoints(asset)
-		if err != nil {
-			return false, err
+// connect builds the scope's connection path the first time a stream takes it
+// (Scope.Connect). A failure fails that stream and every later one that would
+// take the path — never falling back to a direct or unverified connection.
+func (c *capHost) connect(ctx context.Context, inv *invocation, scope *Scope) error {
+	if err := inv.connectScope(ctx, scope); err != nil {
+		logger.Ctx(ctx).Error("extension asset connection path failed",
+			zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
+			zap.Int64("assetID", scope.Asset.ID), zap.String("assetType", scope.Asset.Type), zap.Error(err))
+		return fmt.Errorf("connection path of asset %s: %w", assetLabel(scope.Asset), err)
+	}
+	return nil
+}
+
+// streamWay is how gateNetwork admits a stream.
+type streamWay int
+
+const (
+	// wayDirect: an allowlisted URL, dialed directly.
+	wayDirect streamWay = iota
+	// wayEndpoint: one of the scope's endpoints, along the asset's route with
+	// its TLS settings and credentials.
+	wayEndpoint
+	// wayRoute: another address, along the asset's route by address.
+	wayRoute
+)
+
+// scopeOf returns the call's scope, resolving it through the inner provider the
+// first time the call needs it. A resolution failure fails this and every later
+// network or ticket host call of the call, never anything else.
+func (c *capHost) scopeOf(ctx context.Context, inv *invocation) (*Scope, error) {
+	return inv.scopeOf(func(asset *AssetRef) (*Scope, error) {
+		src, ok := c.HostProvider.(scopeSource)
+		if !ok {
+			return &Scope{Asset: asset}, nil
 		}
-		if u, err := url.Parse(params.URL); err == nil && eps.allowURL(u) {
+		scope, err := src.resolveScope(ctx, asset)
+		if err != nil {
+			logger.Ctx(ctx).Error("extension call scope resolution failed",
+				zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
+				zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))
+			return nil, fmt.Errorf("scope of asset %s: %w", assetLabel(asset), err)
+		}
+		logger.Ctx(ctx).Debug("extension call scope resolved",
+			zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
+			zap.Int64("assetID", asset.ID), zap.Int("endpoints", len(scope.Endpoints)),
+			zap.Bool("route", scope.Route != nil || scope.Connect != nil), zap.Bool("auth", scope.Auth != nil))
+		return scope, nil
+	})
+}
+
+// gateNetwork decides how a stream may go (streamWay) from the scope's endpoints
+// and the manifest's permissions alone — the asset's connection path is not
+// needed, and not built, to decide: to one of the scope's endpoints (with
+// network.assetEndpoint); to an allowlisted URL directly; or, with
+// network.assetRoute, to any other address along the asset's route. Anything else
+// is refused, naming why. It sets on params what the decision alone implies.
+func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParams) (streamWay, error) {
+	perms := c.manifest.Permissions.Network
+	eps := endpointSet(scope.Endpoints)
+	toEndpoint := perms.AssetEndpoint && scope.Asset != nil
+	alongRoute := perms.AssetRoute && (scope.Route != nil || scope.Connect != nil)
+	switch params.Type {
+	case "http":
+		u, parseErr := url.Parse(params.URL)
+		if toEndpoint && parseErr == nil && eps.allowURL(u) {
+			// The asset's endpoints are the user's own addresses, private ones
+			// included; redirects are held to them.
 			params.AllowPrivate = true
-			if def := c.manifest.AssetTypeDef(asset.Type); def != nil && def.Auth != nil {
-				params.Auth = &HTTPAuth{Def: def.Auth, IsEndpoint: eps.allowURL}
+			if scope.Auth != nil {
+				params.Auth = &HTTPAuth{Credentials: scope.Auth, IsEndpoint: eps.allowURL}
 			}
 			params.RedirectGuard = func(target *url.URL) error {
 				if eps.allowURL(target) {
 					return nil
 				}
-				return fmt.Errorf("http redirect denied: %s://%s is not an endpoint of the asset %q", target.Scheme, target.Host, asset.Name)
+				return fmt.Errorf("http redirect denied: %s://%s is not an endpoint of the asset %s", target.Scheme, target.Host, assetLabel(scope.Asset))
 			}
-			return true, nil
+			return wayEndpoint, nil
 		}
-	}
-	if err := c.manifest.CheckHTTPURL(params.URL, c.manifest.Capabilities.Tunnel); err != nil {
-		if endpointScoped {
-			return false, fmt.Errorf("http denied: target is not an endpoint of the asset %q, and %w", asset.Name, err)
+		allowErr := c.manifest.CheckHTTPURL(params.URL, perms.AllowPrivate)
+		if allowErr == nil {
+			// Pass the allowPrivate permission to the dial-time guard.
+			params.AllowPrivate = perms.AllowPrivate
+			return wayDirect, nil
 		}
-		return false, err
-	}
-	// Pass tunnel capability to dial-time guard.
-	params.AllowPrivate = c.manifest.Capabilities.Tunnel
-	return false, nil
-}
-
-// gateTCP admits a connection only to one of the asset's endpoints.
-func (c *capHost) gateTCP(asset *AssetRef, addr string) error {
-	if asset == nil {
-		return fmt.Errorf("tcp denied: this call is not scoped to an asset, so it has no endpoint to connect to")
-	}
-	eps, err := c.assetEndpoints(asset)
-	if err != nil {
-		return err
-	}
-	if !eps.allowAddr(addr) {
-		return fmt.Errorf("tcp denied: %q is not an endpoint of the asset %q", addr, asset.Name)
-	}
-	return nil
-}
-
-func (c *capHost) logDenied(ctx context.Context, asset *AssetRef, ioType string, err error) {
-	fields := []zap.Field{zap.String("extension", c.manifest.Name), zap.String("type", ioType), zap.Error(err)}
-	if asset != nil {
-		fields = append(fields, zap.Int64("assetID", asset.ID))
-	}
-	logger.Ctx(ctx).Warn("extension network target denied", fields...)
-}
-
-// readAssetConfig returns asset's guest-visible config: an ad-hoc call's own
-// submitted config (see AdHocAssetConfig — there is no database row to read,
-// or it must not be trusted over the caller's unsaved edits), or else the
-// inner provider's own reader, scoped to assets of this extension.
-func (c *capHost) readAssetConfig(asset *AssetRef) (json.RawMessage, error) {
-	if asset.AdHoc != nil {
-		return asset.AdHoc.Config, nil
-	}
-	return c.GetAssetConfig(asset.ID)
-}
-
-// assetEndpoints reads the endpoints the asset's config names. The config comes
-// from the inner provider — the host's own reader, already scoped to assets of
-// this extension — so the addresses are the ones the user typed, never the
-// guest's.
-func (c *capHost) assetEndpoints(asset *AssetRef) (endpointSet, error) {
-	def := c.manifest.AssetTypeDef(asset.Type)
-	if def == nil {
-		return nil, nil
-	}
-	fields := EndpointFieldsFromSchema(def.ConfigSchema)
-	if len(fields) == 0 {
-		return nil, nil
-	}
-	raw, err := c.readAssetConfig(asset)
-	if err != nil {
-		return nil, fmt.Errorf("read endpoints of asset %q: %w", asset.Name, err)
-	}
-	var cfg map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config of asset %q: %w", asset.Name, err)
-	}
-	var eps endpointSet
-	for _, field := range fields {
-		var value string
-		if json.Unmarshal(cfg[field], &value) != nil {
-			continue // absent or not a string: names no endpoint
+		// An endpoint's own address is never "another address": it is reached
+		// as an endpoint or not at all.
+		if alongRoute && parseErr == nil && (u.Scheme == "http" || u.Scheme == "https") && !eps.allowAddr(urlHostPort(u)) {
+			// The route dial vets every connection itself (routeDial).
+			params.AllowPrivate = true
+			return wayRoute, nil
 		}
-		if ep, ok := parseEndpoint(value); ok {
-			eps = append(eps, ep)
+		if toEndpoint {
+			return wayDirect, fmt.Errorf("http denied: target is not an endpoint of the asset %s, and %w", assetLabel(scope.Asset), allowErr)
 		}
-	}
-	return eps, nil
-}
-
-// assetEndpoint is one address an endpoint field names. scheme is empty for a
-// bare host:port, which admits both http and https.
-type assetEndpoint struct {
-	scheme, host, port string
-}
-
-type endpointSet []assetEndpoint
-
-// parseEndpoint reads a URL ("https://es.internal:9200/base") or a host:port
-// ("10.0.0.5:9092"). A value naming no port it can infer names no endpoint.
-func parseEndpoint(value string) (assetEndpoint, bool) {
-	value = strings.TrimSpace(value)
-	if strings.Contains(value, "://") {
-		u, err := url.Parse(value)
-		if err != nil || u.Hostname() == "" {
-			return assetEndpoint{}, false
+		return wayDirect, allowErr
+	case "tcp":
+		if scope.Asset == nil {
+			return wayDirect, fmt.Errorf("tcp denied: this call is not scoped to an asset, so it has no endpoint to connect to %q and no connection path to dial it along", params.Addr)
 		}
-		scheme := strings.ToLower(u.Scheme)
-		port := u.Port()
-		if port == "" {
-			port = defaultPort(scheme)
+		isEndpoint := eps.allowAddr(params.Addr)
+		if toEndpoint && isEndpoint {
+			return wayEndpoint, nil
 		}
-		if port == "" {
-			return assetEndpoint{}, false
+		if alongRoute && !isEndpoint {
+			return wayRoute, nil
 		}
-		return assetEndpoint{scheme: scheme, host: canonicalHost(u.Hostname()), port: port}, true
-	}
-	host, port, err := net.SplitHostPort(value)
-	if err != nil || host == "" || port == "" {
-		return assetEndpoint{}, false
-	}
-	return assetEndpoint{host: canonicalHost(host), port: port}, true
-}
-
-func defaultPort(scheme string) string {
-	switch scheme {
-	case "http":
-		return "80"
-	case "https":
-		return "443"
-	}
-	return ""
-}
-
-// canonicalHost folds case and spells an IP literal one way, so "ES.internal"
-// and "es.internal", or "fd00:0::1" and "fd00::1", name the same host.
-func canonicalHost(host string) string {
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.String()
-	}
-	return strings.ToLower(host)
-}
-
-// allowURL reports whether u targets one of the endpoints: same scheme (any of
-// http/https for a bare host:port), host and port.
-func (s endpointSet) allowURL(u *url.URL) bool {
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return false
-	}
-	port := u.Port()
-	if port == "" {
-		port = defaultPort(scheme)
-	}
-	host := canonicalHost(u.Hostname())
-	for _, ep := range s {
-		if (ep.scheme == "" || ep.scheme == scheme) && ep.host == host && ep.port == port {
-			return true
+		if isEndpoint {
+			return wayDirect, fmt.Errorf("tcp denied: %q is an endpoint of the asset %s, but extension %q does not declare permissions.network.assetEndpoint",
+				params.Addr, assetLabel(scope.Asset), c.manifest.Name)
 		}
+		if !perms.AssetRoute {
+			return wayDirect, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, and extension %q does not declare permissions.network.assetRoute",
+				params.Addr, assetLabel(scope.Asset), c.manifest.Name)
+		}
+		return wayDirect, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, which has no connection path to dial it along",
+			params.Addr, assetLabel(scope.Asset))
 	}
-	return false
+	return wayDirect, fmt.Errorf("unknown IO type: %q", params.Type)
 }
 
-// allowAddr reports whether a host:port dial targets one of the endpoints.
-func (s endpointSet) allowAddr(addr string) bool {
+// urlHostPort is the host:port a URL dials, its scheme's default port filled in.
+func urlHostPort(u *url.URL) string {
+	return net.JoinHostPort(u.Hostname(), urlPort(u))
+}
+
+// dialEndpoint sets the way to one of the scope's endpoints: the asset's route
+// and TLS settings, keyed by their fingerprint.
+func (c *capHost) dialEndpoint(scope *Scope, params *IOOpenParams) {
+	if scope.Route != nil {
+		params.Dial = scope.Route.Dial
+	}
+	params.TLS = scope.TLS
+	params.Fingerprint = scope.Fingerprint
+}
+
+// routeDial dials an address other than the asset's endpoints along the
+// asset's route, by address: through an SSH tunnel to that address itself, its
+// name resolved at the far end of a tunnel, proxy or proxy chain. On a direct
+// route the name resolves here, and an address on this machine (loopback,
+// unspecified, any address of its network interfaces) or on its link
+// (link-local) is refused — an asset the user reaches directly cannot point the
+// extension at the user's own machine — unless it is the asset's own address
+// (directTargets). What is dialed is the address checked, not the name resolved
+// again.
+// The route's first dial of each address is logged.
+func (c *capHost) routeDial(inv *invocation, scope *Scope) DialContextFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		targets := []string{addr}
+		if scope.Route.Direct {
+			var err error
+			if targets, err = c.directTargets(ctx, inv, scope, network, addr); err != nil {
+				return nil, err
+			}
+		}
+		if scope.Route.firstDial(addr) {
+			logger.Ctx(ctx).Info("extension dials along the asset's connection path",
+				zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
+				zap.Int64("assetID", scope.Asset.ID), zap.String("addr", addr))
+		}
+		var errs []error
+		for _, target := range targets {
+			conn, err := scope.Route.Dial(ctx, network, target)
+			if err == nil {
+				return conn, nil
+			}
+			errs = append(errs, err)
+		}
+		return nil, fmt.Errorf("dial %s: %w", addr, errors.Join(errs...))
+	}
+}
+
+// directTargets are the addresses to dial for addr on a direct route: the
+// ip:port addresses addr resolves to, unless one of them is on this machine or
+// its link and is not the asset's own — a loopback or link-local address is the
+// asset's own when an endpoint of the asset is one, the unspecified address or
+// an interface address of this machine when an endpoint of the asset resolves
+// to that very address. Such an address refuses addr.
+func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Scope, network, addr string) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	host = canonicalHost(host)
-	for _, ep := range s {
-		if ep.host == host && ep.port == port {
-			return true
+	ips, err := resolveHere(ctx, network, host)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+	// The zone of a link-local literal (the interface it is on) is no part of the
+	// address checked, but the dial needs it: without it the connect fails.
+	var zone string
+	if literal, err := netip.ParseAddr(host); err == nil {
+		zone = literal.Zone()
+	}
+	local, err := c.localIPs()
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: list this machine's interface addresses: %w", addr, err)
+	}
+	onInterface := func(ip net.IP) bool { return slices.ContainsFunc(local, ip.Equal) }
+	if slices.ContainsFunc(ips, func(ip net.IP) bool { return onThisMachineOrLink(ip) || onInterface(ip) }) {
+		assetIPs, err := assetIPs(ctx, network, scope)
+		if err != nil {
+			return nil, fmt.Errorf("dial %s: %w", addr, err)
+		}
+		assetOnLoopOrLink := slices.ContainsFunc(assetIPs, loopbackOrLinkLocal)
+		refused := func(ip net.IP) bool {
+			if loopbackOrLinkLocal(ip) {
+				return !assetOnLoopOrLink
+			}
+			return (ip.IsUnspecified() || onInterface(ip)) && !slices.ContainsFunc(assetIPs, ip.Equal)
+		}
+		if slices.ContainsFunc(ips, refused) {
+			err = fmt.Errorf("dial denied: extension %q may not reach %q along the direct connection path of the asset %s: it is an address of this machine or its link (loopback, link-local, unspecified or one of this machine's network interfaces) other than the asset's own",
+				c.manifest.Name, addr, assetLabel(scope.Asset))
+			c.logDenied(ctx, inv, scope, IOOpenParams{Type: network, Addr: addr}, err)
+			return nil, err
 		}
 	}
-	return false
+	targets := make([]string, len(ips))
+	for i, ip := range ips {
+		targets[i] = net.JoinHostPort((&net.IPAddr{IP: ip, Zone: zone}).String(), port)
+	}
+	return targets, nil
+}
+
+// assetIPs are the addresses the asset's endpoints resolve to here.
+func assetIPs(ctx context.Context, network string, scope *Scope) ([]net.IP, error) {
+	var all []net.IP
+	for _, ep := range scope.Endpoints {
+		ips, err := resolveHere(ctx, network, ep.Host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve the asset's host %s: %w", ep.Host, err)
+		}
+		all = append(all, ips...)
+	}
+	return all, nil
+}
+
+// resolveHere resolves host on this machine, the way a direct dial would. A
+// literal is its own address, its zone (if any) dropped.
+func resolveHere(ctx context.Context, network, host string) ([]net.IP, error) {
+	if literal, err := netip.ParseAddr(host); err == nil {
+		return []net.IP{literal.WithZone("").AsSlice()}, nil
+	}
+	return (&netdial.Dialer{}).Resolve(ctx, network, host)
+}
+
+// onThisMachineOrLink reports a loopback or link-local address, or the
+// unspecified one, which a dial reaches as this machine.
+func onThisMachineOrLink(ip net.IP) bool {
+	return loopbackOrLinkLocal(ip) || ip.IsUnspecified()
+}
+
+// loopbackOrLinkLocal reports the addresses a loopback or link-local asset may
+// reach on a direct route besides its own (directTargets).
+func loopbackOrLinkLocal(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast()
+}
+
+// interfaceIPs lists the addresses of this machine's network interfaces.
+func interfaceIPs() ([]net.IP, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, a := range addrs {
+		switch a := a.(type) {
+		case *net.IPNet:
+			ips = append(ips, a.IP)
+		case *net.IPAddr:
+			ips = append(ips, a.IP)
+		}
+	}
+	return ips, nil
+}
+
+// kerberosTicket answers auth.kerberos_ticket: only a call whose scope carries a
+// ticket source, of an extension declaring permissions.kerberos, gets a ticket —
+// and only from that source, whose principal rules apply.
+func (c *capHost) kerberosTicket(ctx context.Context, inv *invocation, spn string) ([]byte, error) {
+	scope, err := c.scopeOf(ctx, inv)
+	if err != nil {
+		return nil, err
+	}
+	var refused error
+	switch {
+	case scope.Asset == nil:
+		refused = errors.New("kerberos ticket refused: this call is not scoped to an asset, so it has no Kerberos ticket source")
+	case scope.Tickets == nil:
+		refused = fmt.Errorf("kerberos ticket refused: the asset %s has no Kerberos ticket source — only a database asset that logs in with Kerberos has one", assetLabel(scope.Asset))
+	case !c.manifest.Permissions.Kerberos:
+		refused = fmt.Errorf("kerberos ticket refused: extension %q does not declare permissions.kerberos", c.manifest.Name)
+	}
+	if refused != nil {
+		fields := []zap.Field{zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id), zap.String("spn", spn), zap.Error(refused)}
+		if scope.Asset != nil {
+			fields = append(fields, zap.Int64("assetID", scope.Asset.ID))
+		}
+		logger.Ctx(ctx).Warn("extension kerberos ticket refused", fields...)
+		return nil, refused
+	}
+	return scope.Tickets.Ticket(ctx, spn)
+}
+
+// logDenied records a refused network target, naming the extension, the asset
+// and the target — never the full URL, whose query may carry what the guest
+// put there.
+func (c *capHost) logDenied(ctx context.Context, inv *invocation, scope *Scope, params IOOpenParams, err error) {
+	target := params.Addr
+	if params.Type == "http" {
+		target = params.URL
+		if u, perr := url.Parse(params.URL); perr == nil {
+			target = strings.ToLower(u.Scheme) + "://" + u.Host
+		}
+	}
+	fields := []zap.Field{zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
+		zap.String("type", params.Type), zap.String("target", target), zap.Error(err)}
+	if scope.Asset != nil {
+		fields = append(fields, zap.Int64("assetID", scope.Asset.ID), zap.String("assetType", scope.Asset.Type))
+	}
+	logger.Ctx(ctx).Warn("extension network target denied", fields...)
 }

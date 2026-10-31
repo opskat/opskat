@@ -3,12 +3,15 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // installFixture writes the fixture extension (slim manifest + real reactor
@@ -35,10 +38,15 @@ func installFixture(t *testing.T) (root, extDir string) {
 
 func newFixtureManager(t *testing.T, root string) *Manager {
 	t.Helper()
+	return newFixtureManagerWith(t, root, acceptingContributions())
+}
+
+func newFixtureManagerWith(t *testing.T, root string, contributions *ContributionRegistry) *Manager {
+	t.Helper()
 	logger := zap.NewNop()
 	mgr := NewManager(root, func(string) HostProvider {
 		return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
-	}, logger)
+	}, contributions, logger)
 	t.Cleanup(func() { mgr.Shutdown(context.Background()) })
 	return mgr
 }
@@ -47,7 +55,7 @@ func newFixtureManager(t *testing.T, root string) *Manager {
 // this design: the fixture's manifest.json declares no tools, no asset types and no
 // policy face at all, and the extension still loads, registers and answers calls.
 func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
-	Convey("Given an extension whose manifest carries only capabilities", t, func() {
+	Convey("Given an extension whose manifest carries only permissions", t, func() {
 		ctx := context.Background()
 		root, extDir := installFixture(t)
 		mgr := newFixtureManager(t, root)
@@ -64,8 +72,8 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		Convey("describe() supplies the tools, with the schemas reflected in the guest", func() {
-			byName := map[string]ToolDef{}
-			for _, tool := range manifest.Tools {
+			byName := map[string]extwire.Tool{}
+			for _, tool := range faceOf(t, manifest).Tools {
 				byName[tool.Name] = tool
 			}
 			So(byName, ShouldContainKey, "echo")
@@ -79,19 +87,20 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 		})
 
 		Convey("and the asset type, policy face and groups the host registers on", func() {
-			So(manifest.AssetTypes, ShouldHaveLength, 1)
-			So(manifest.AssetTypes[0].Type, ShouldEqual, "fixture")
-			So(ConfigSchemaProperties(manifest.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
-			So(manifest.Policies.Type, ShouldEqual, "fixture")
-			So(manifest.Policies.Actions, ShouldResemble, []string{"read", "write"})
-			So(manifest.Policies.Default, ShouldResemble, []string{"ext:fixture:read"})
-			So(manifest.Policies.Groups, ShouldHaveLength, 1)
+			f := faceOf(t, manifest)
+			So(f.AssetTypes, ShouldHaveLength, 1)
+			So(f.AssetTypes[0].Type, ShouldEqual, "fixture")
+			So(schemaPropertyNames(f.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"authType", "endpoint", "password", "username"})
+			So(f.Policy.Type, ShouldEqual, "fixture")
+			So(f.actions(), ShouldResemble, []string{"read", "write"})
+			So(f.Policy.Default, ShouldResemble, []string{"ext:fixture:read"})
+			So(f.Policy.Groups, ShouldHaveLength, 1)
 		})
 
 		Convey("and the tools it declared are callable", func() {
 			ext := mgr.GetExtension("fixture-ext")
 			So(ext, ShouldNotBeNil)
-			out, err := ext.Plugin.CallTool(ctx, "echo", json.RawMessage(`{"msg":"hi"}`), nil)
+			out, err := ext.Plugin.CallTool(ctx, ToolCall{Name: "echo", Args: json.RawMessage(`{"msg":"hi"}`)})
 			So(err, ShouldBeNil)
 			So(string(out), ShouldContainSubstring, `"msg":"hi"`)
 		})
@@ -99,7 +108,7 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 }
 
 // TestLoadExtensionRefusesAModuleThatIsNotAReactor covers the other half of the
-// ABI gate: the manifest may claim hostABI 2.0, but a module that cannot answer
+// ABI gate: the manifest may claim hostABI 1.0, but a module that cannot answer
 // describe() is refused while loading rather than on the first tool call.
 func TestLoadExtensionRefusesAModuleThatIsNotAReactor(t *testing.T) {
 	Convey("An extension whose module is not a reactor fails to load", t, func() {
@@ -117,11 +126,11 @@ func TestLoadExtensionRefusesAModuleThatIsNotAReactor(t *testing.T) {
 
 // sentinelDescriptor names a tool the fixture does not have, so a manifest that
 // ends up carrying it can only have come from the cache.
-const sentinelDescriptor = `{"i18n":{"displayName":"cached","description":"c"},` +
+const sentinelDescriptor = `{"i18n":{"displayName":"cached","description":"c"},"contributes":{` +
 	`"assetTypes":[{"type":"fixture","i18n":{"name":"n"},` +
 	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
-	`"policies":{"type":"fixture"},` +
-	`"tools":[{"name":"from_cache","policyAction":"read","parameters":{"type":"object","properties":{}}}]}`
+	`"policy":{"type":"fixture"},` +
+	`"tools":[{"name":"from_cache","policyAction":"read","parameters":{"type":"object","properties":{}}}]}}`
 
 func TestDescribeIsCachedByWasmHash(t *testing.T) {
 	Convey("Given an extension whose descriptor is already cached", t, func() {
@@ -135,8 +144,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 
 			manifest, err := mgr.LoadExtension(ctx, extDir)
 			So(err, ShouldBeNil)
-			So(manifest.Tools, ShouldHaveLength, 1)
-			So(manifest.Tools[0].Name, ShouldEqual, "from_cache")
+			So(faceOf(t, manifest).toolNames(), ShouldResemble, []string{"from_cache"})
 			So(cache.loads, ShouldEqual, 1)
 			So(cache.stored, ShouldBeEmpty) // nothing to write back: the answer was already there
 		})
@@ -149,10 +157,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 
 			manifest, err := mgr.LoadExtension(ctx, extDir)
 			So(err, ShouldBeNil)
-			names := make([]string, 0, len(manifest.Tools))
-			for _, tool := range manifest.Tools {
-				names = append(names, tool.Name)
-			}
+			names := faceOf(t, manifest).toolNames()
 			So(names, ShouldContain, "echo")
 			So(names, ShouldNotContain, "from_cache")
 			So(cache.stored["fixture-ext"], ShouldEqual, WasmHash(fixtureWasm(t)))
@@ -167,7 +172,7 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 
 			staged, err := mgr.Stage(ctx, extDir)
 			So(err, ShouldBeNil)
-			So(staged.Manifest().Tools, ShouldNotBeEmpty)
+			So(faceOf(t, staged.Manifest()).Tools, ShouldNotBeEmpty)
 			staged.Abort(ctx)
 			So(cache.stored, ShouldBeEmpty)
 
@@ -181,11 +186,87 @@ func TestDescribeIsCachedByWasmHash(t *testing.T) {
 			cache := newFakeDescribeCache(fixtureWasm(t), sentinelDescriptor)
 			useDescribeCache(t, cache)
 
-			info, err := LoadManifestInfo(extDir)
+			info, err := LoadManifestInfo(extDir, acceptingContributions())
 			So(err, ShouldBeNil)
 			So(info.Manifest.I18n.DisplayName, ShouldEqual, "cached")
-			So(info.Manifest.AssetTypes, ShouldHaveLength, 1)
-			So(info.Manifest.Tools[0].Name, ShouldEqual, "from_cache")
+			So(faceOf(t, info.Manifest).AssetTypes, ShouldHaveLength, 1)
+			So(faceOf(t, info.Manifest).toolNames(), ShouldResemble, []string{"from_cache"})
+		})
+	})
+}
+
+// refusingPoint refuses every extension contributing to its key, naming the item
+// the way a real point does.
+type refusingPoint string
+
+func (p refusingPoint) Key() string { return string(p) }
+func (p refusingPoint) Check(v ExtensionView) error {
+	if v.Contribution(string(p)) == nil {
+		return nil
+	}
+	return fmt.Errorf("%s[fixture]: refused by the test's point", string(p))
+}
+func (refusingPoint) Attach(ExtensionView) (func(), error) { return func() {}, nil }
+
+// TestCachedDescribeReachesTheFirstLoadVerdict is problem 8: a cached describe()
+// answer read without a runtime (opsctl, the extension list, a disabled
+// extension) is judged by the same contribution points as loading the extension,
+// so it is refused exactly where the load refuses it, not merged as if it were valid.
+func TestCachedDescribeReachesTheFirstLoadVerdict(t *testing.T) {
+	refusing := func() *ContributionRegistry {
+		return NewContributionRegistry(refusingPoint(extwire.KeyAssetTypes),
+			passPoint(extwire.KeyTools), passPoint(extwire.KeyPolicy), passPoint(extwire.KeySnippets),
+			passPoint(extwire.KeyPages), passPoint(extwire.KeyDatabaseDrivers))
+	}
+	verdicts := func(t *testing.T, reg *ContributionRegistry, payload string) (listed int, loadErr, infoErr error) {
+		root, extDir := installFixture(t)
+		useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), payload))
+		_, loadErr = newFixtureManagerWith(t, root, reg).LoadExtension(context.Background(), extDir)
+		_, infoErr = LoadManifestInfo(extDir, reg)
+		infos, err := newFixtureManagerWith(t, root, reg).ScanManifests()
+		So(err, ShouldBeNil)
+		return len(infos), loadErr, infoErr
+	}
+
+	Convey("A cached answer a contribution point refuses", t, func() {
+		listed, loadErr, infoErr := verdicts(t, refusing(), sentinelDescriptor)
+
+		Convey("is refused on every path with the same error, naming extension, contribution and item", func() {
+			So(loadErr, ShouldNotBeNil)
+			So(loadErr.Error(), ShouldEqual, "fixture-ext: assetTypes[fixture]: refused by the test's point")
+			So(infoErr, ShouldNotBeNil)
+			So(infoErr.Error(), ShouldEqual, loadErr.Error())
+			So(listed, ShouldEqual, 0)
+		})
+	})
+
+	Convey("A cached answer with a contributes key no point is registered for", t, func() {
+		payload := `{"i18n":{"displayName":"cached","description":"c"},"contributes":{"widgets":[{"id":"w"}]}}`
+		listed, loadErr, infoErr := verdicts(t, acceptingContributions(), payload)
+
+		Convey("is refused on every path with the same error, naming the key", func() {
+			So(loadErr, ShouldNotBeNil)
+			So(loadErr.Error(), ShouldContainSubstring, "fixture-ext: contributes.widgets")
+			So(infoErr, ShouldNotBeNil)
+			So(infoErr.Error(), ShouldEqual, loadErr.Error())
+			So(listed, ShouldEqual, 0)
+		})
+	})
+
+	Convey("An accepted cached answer is merged and marked described", t, func() {
+		_, extDir := installFixture(t)
+		useDescribeCache(t, newFakeDescribeCache(fixtureWasm(t), sentinelDescriptor))
+		info, err := LoadManifestInfo(extDir, acceptingContributions())
+		So(err, ShouldBeNil)
+		So(info.Described, ShouldBeTrue)
+		So(faceOf(t, info.Manifest).toolNames(), ShouldResemble, []string{"from_cache"})
+
+		Convey("while a cache miss is an undescribed extension, not a refusal", func() {
+			useDescribeCache(t, newFakeDescribeCache([]byte("another build"), sentinelDescriptor))
+			info, err := LoadManifestInfo(extDir, refusing())
+			So(err, ShouldBeNil)
+			So(info.Described, ShouldBeFalse)
+			So(info.Manifest.ContributionKeys(), ShouldBeEmpty)
 		})
 	})
 }

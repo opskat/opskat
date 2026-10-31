@@ -24,6 +24,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -34,7 +35,7 @@ func packageZip(t *testing.T, name, version string) []byte {
 	zw := zip.NewWriter(&buf)
 	w, err := zw.Create("manifest.json")
 	require.NoError(t, err)
-	_, err = fmt.Fprintf(w, `{"name":%q,"version":%q,"hostABI":"2.2"}`, name, version)
+	_, err = fmt.Fprintf(w, `{"name":%q,"version":%q,"hostABI":"1.0"}`, name, version)
 	require.NoError(t, err)
 	require.NoError(t, zw.Close())
 	return buf.Bytes()
@@ -129,19 +130,8 @@ type fakeInstaller struct {
 func (f *fakeInstaller) NewInstallConfirm(c extension_svc.InstallCandidate) extension_svc.InstallConfirm {
 	return extension_svc.InstallConfirm{
 		Name: c.Name, DisplayName: c.DisplayName, Icon: c.Icon, From: f.installed[c.Name], To: c.Version,
-		Source: c.Source, Size: c.Size, Capabilities: grants(c.Capabilities), Added: []extension_svc.CapabilityGrant{},
+		Source: c.Source, Size: c.Size, Capabilities: extension_svc.CapabilityGrants(c.Permissions, c.Contributes), Added: []extension_svc.CapabilityGrant{},
 	}
-}
-
-func grants(c extension.Capabilities) []extension_svc.CapabilityGrant {
-	out := []extension_svc.CapabilityGrant{}
-	if c.Credentials != "" {
-		out = append(out, extension_svc.CapabilityGrant{Kind: extension_svc.CapCredentials, Value: c.Credentials})
-	}
-	if c.Network.AssetEndpoint {
-		out = append(out, extension_svc.CapabilityGrant{Kind: extension_svc.CapAssetEndpoint})
-	}
-	return out
 }
 
 func (f *fakeInstaller) Install(ctx context.Context, path string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error) {
@@ -162,7 +152,7 @@ func (f *fakeInstaller) Install(ctx context.Context, path string, confirm extens
 
 	staged := extension_svc.InstallConfirm{
 		Name: m.Name, To: m.Version, From: f.installed[m.Name], Source: extension_svc.InstallSourceFile,
-		Capabilities: grants(storeCaps),
+		Capabilities: extension_svc.CapabilityGrants(storeCaps, storeDrivers),
 	}
 	if f.staged != nil {
 		staged = f.staged(staged)
@@ -174,7 +164,10 @@ func (f *fakeInstaller) Install(ctx context.Context, path string, confirm extens
 	return &m, nil
 }
 
-var storeCaps = extension.Capabilities{Credentials: "read", Network: extension.NetworkCapability{AssetEndpoint: true}}
+var (
+	storeCaps    = extmanifest.Permissions{Credentials: "read", Network: extmanifest.NetworkPermission{AssetEndpoint: true}}
+	storeDrivers = extmanifest.Contributes{DatabaseDrivers: []string{"demodb"}}
+)
 
 // storeFixture is a verified store whose index offers "demo" 1.1.0 (installed:
 // 1.0.0 when installedVersion is set), packaged by pkg and pulled from reg.
@@ -196,7 +189,7 @@ func newStoreFixture(t *testing.T, o fixtureOpts) *storeFixture {
 	t.Helper()
 	pkg := packageZip(t, "demo", "1.1.0")
 	reg := newRegistry(t, pkg)
-	sha, size, hostABI := hexSum(pkg), int64(len(pkg)), "2.2"
+	sha, size, hostABI := hexSum(pkg), int64(len(pkg)), "1.0"
 	if o.sha != "" {
 		sha = o.sha
 	}
@@ -216,11 +209,12 @@ func newStoreFixture(t *testing.T, o fixtureOpts) *storeFixture {
 			},
 			"versions": []any{
 				map[string]any{"version": "1.0.0", "hostABI": hostABI, "size": size,
-					"capabilities": map[string]any{},
-					"source":       map[string]any{"ref": "ghcr.io/opskat/extensions/demo:1.0.0", "sha256": sha}},
+					"permissions": map[string]any{},
+					"source":      map[string]any{"ref": "ghcr.io/opskat/extensions/demo:1.0.0", "sha256": sha}},
 				map[string]any{"version": "1.1.0", "hostABI": hostABI, "size": size,
-					"capabilities": map[string]any{"credentials": "read", "network": map[string]any{"assetEndpoint": true}},
-					"source":       map[string]any{"ref": "ghcr.io/opskat/extensions/demo:1.1.0", "sha256": sha}},
+					"permissions": map[string]any{"credentials": "read", "network": map[string]any{"assetEndpoint": true}},
+					"contributes": map[string]any{"databaseDrivers": []string{"demodb"}},
+					"source":      map[string]any{"ref": "ghcr.io/opskat/extensions/demo:1.1.0", "sha256": sha}},
 			},
 		})
 	key, priv := newKey(t)
@@ -286,7 +280,7 @@ func TestInstallFromStoreConfirmsFromIndexBeforeDownloading(t *testing.T) {
 	assert.Equal(t, "1.0.0", asked.From)
 	assert.Equal(t, "1.1.0", asked.To)
 	assert.Equal(t, int64(len(f.reg.blob)), asked.Size)
-	assert.Equal(t, grants(storeCaps), asked.Capabilities)
+	assert.Equal(t, extension_svc.CapabilityGrants(storeCaps, storeDrivers), asked.Capabilities, "the index's permissions and driver ids are what the user approves")
 
 	assert.Equal(t, f.reg.blob, f.installer.installed2, "the pulled package is what gets installed")
 	assert.Contains(t, f.reg.calls(), "/v2/opskat/extensions/demo/manifests/1.1.0",
@@ -373,8 +367,8 @@ func TestInstallFromStoreRefusesAPackageOtherThanConfirmed(t *testing.T) {
 			c.From = "1.0.5"
 			return c
 		},
-		"other capabilities": func(c extension_svc.InstallConfirm) extension_svc.InstallConfirm {
-			c.Capabilities = append(c.Capabilities, extension_svc.CapabilityGrant{Kind: extension_svc.CapTunnel})
+		"other grants": func(c extension_svc.InstallConfirm) extension_svc.InstallConfirm {
+			c.Capabilities = append(c.Capabilities, extension_svc.CapabilityGrant{Kind: extension_svc.CapAllowPrivate})
 			return c
 		},
 	}
@@ -398,7 +392,7 @@ func TestInstallFromStoreRefusesAPackageOtherThanConfirmed(t *testing.T) {
 func TestInstallFromStoreStagingFailures(t *testing.T) {
 	t.Run("incompatible package", func(t *testing.T) {
 		f := newStoreFixture(t, fixtureOpts{})
-		f.installer.failWith = fmt.Errorf("localized: %w", &extension.IncompatibleError{Reason: extension.ReasonHostABI, HostABI: "9.0"})
+		f.installer.failWith = fmt.Errorf("localized: %w", &extmanifest.IncompatibleError{Reason: extmanifest.ReasonHostABI, HostABI: "9.0"})
 		_, _, _, err := f.run(context.Background(), accept)
 		out := InstallOutcome("demo", "", err)
 		require.NotNil(t, out.Error)
@@ -471,7 +465,7 @@ func TestInstallFromStoreIncompatibleReasonIsLocalized(t *testing.T) {
 	f := newStoreFixture(t, fixtureOpts{hostABI: "9.0"})
 	ctx := aictx.WithPolicyLang(context.Background(), "zh-cn")
 	_, _, err := f.svc.InstallFromStore(ctx, "demo", InstallOptions{Installer: f.installer, Confirm: accept, OnProgress: func(Progress) {}})
-	var inc *extension.IncompatibleError
+	var inc *extmanifest.IncompatibleError
 	require.ErrorAs(t, err, &inc)
 	assert.Equal(t, extension_svc.IncompatibleMessage(ctx, inc), InstallOutcome("demo", "", err).Error.Message)
 }

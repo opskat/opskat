@@ -3,6 +3,7 @@ package opsctl
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/approval"
@@ -72,11 +73,12 @@ func storeEntry(l extstore_svc.Listing, lang string) approval.ExtStoreEntry {
 	return e
 }
 
-// unavailableReason 说明这一版 OpsKat 缺什么；补救总是更新 OpsKat。
+// unavailableReason 说明为什么装不了：hostABI 不符时点名扩展声明的与本 OpsKat 支持的版本。
 func unavailableReason(u *extstore_svc.Unavailable, lang string) string {
 	switch u.Reason {
 	case extstore_svc.ReasonHostABI:
-		return fmt.Sprintf(i18n.Pick(lang, "需要 hostABI %s，请更新 OpsKat", "needs hostABI %s; update OpsKat"), u.HostABI)
+		return fmt.Sprintf(i18n.Pick(lang, "声明 hostABI %s，当前 OpsKat 仅支持 %s", "declares hostABI %s; this OpsKat supports only %s"),
+			u.HostABI, strings.Join(u.SupportedHostABIs, ", "))
 	case extstore_svc.ReasonMinAppVersion:
 		return fmt.Sprintf(i18n.Pick(lang, "需要 OpsKat %s 或更高版本", "needs OpsKat %s or newer"), u.MinAppVersion)
 	default:

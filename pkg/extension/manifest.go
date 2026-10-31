@@ -1,638 +1,87 @@
 package extension
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
-	"time"
 
-	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
-// HostABIVersion is the current host ABI contract version.
-// Extensions must declare a compatible hostABI in their manifest.
-// Bump the minor version when adding new host functions (backward compatible);
-// bump the major version when removing or changing existing host function signatures.
+// Manifest is the host's complete view of one extension as the runtime holds it:
+// the security contract it reads from manifest.json, the presentation describe()
+// answers, and describe()'s contributions, raw. Only the contract is written by
+// hand — see extmanifest.Manifest.
 //
-// 2.0 is the reactor contract: the module is a WASI reactor exporting
-// opskat_call / malloc / free, it imports exactly host_call + host_io, and it
-// answers describe().
-//
-// 2.1 additionally exposes @opskat/host-ui to extension pages (a code editor,
-// JSON tree view, and result table injected on window.__OPSKAT_EXT__.hostUI) —
-// a frontend-only addition that changes nothing about the WASM host_call/host_io
-// contract. A 2.0 extension keeps loading and working exactly as before; it just
-// doesn't get hostUI.
-//
-// 2.2 lets check_policy answer {"action","resources":[...]} (the SDK's
-// PolicyResources): a call classified on several resources at once, whose '*' /
-// '?' are wildcards. The {"action","resource"} reply keeps its exact meaning. An
-// older host would read the list reply as a call with no resource at all, so an
-// extension that uses it declares 2.2 and an older app refuses to load it. 2.2
-// also lets check_policy answer {"reject":"<reason>"} (the SDK's RejectArgs): the
-// tool refusing the call's arguments, which the host denies without asking.
-//
-// 2.3 lets an extension provide SQL database drivers (capabilities.databaseDrivers
-// plus the driver descriptors in describe()). An older host would not know to read
-// them and would load the extension as one with nothing to offer, so an extension
-// declaring drivers declares 2.3 and an older app refuses to install it.
-//
-// 2.4 adds two driver-extension capabilities an older host would silently ignore:
-// network.databaseRedirects (the driver may follow a database's redirect to another
-// address, dialed through the asset's route) and the certificate field group (the
-// driver is handed the asset's TLS material when it opens a session). An extension
-// using either declares 2.4 and an older app refuses to install it.
-//
-// 2.5 adds capabilities.databaseKerberos (the driver may ask the host for Kerberos
-// tickets fetched with the asset's Kerberos credentials) and the statement
-// split/classify declaration. An extension using either declares 2.5 and an older
-// app refuses to install it.
-const HostABIVersion = "2.5"
-
-// databaseDriversMinHostABI is the first host ABI that understands
-// capabilities.databaseDrivers.
-const databaseDriversMinHostABI = "2.3"
-
-// DatabaseExtrasMinHostABI is the first host ABI that understands the 2.4 driver
-// capabilities: network.databaseRedirects and the certificate field group.
-const DatabaseExtrasMinHostABI = "2.4"
-
-// DatabaseKerberosMinHostABI is the first host ABI that understands
-// capabilities.databaseKerberos.
-const DatabaseKerberosMinHostABI = "2.5"
-
-// SupportedHostABIs lists all host ABI versions the runtime accepts. 2.0 through
-// 2.4 stay listed so extensions built before host-ui, multi-resource
-// classification, database drivers or the 2.4/2.5 driver capabilities keep loading
-// unchanged; only a hostABI newer than everything here (e.g. an extension
-// declaring 2.6 or 3.0) is refused.
-var SupportedHostABIs = []string{"2.0", "2.1", "2.2", "2.3", "2.4", "2.5"}
-
-var (
-	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
-	nameRe           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	policyIDRe       = regexp.MustCompile(`^ext:[a-z0-9][a-z0-9_-]{0,63}(:[a-z0-9][a-z0-9_-]{0,63})*$`)
-	credentialRe     = regexp.MustCompile(`^(|read)$`) // "" or "read"
-	snippetCatIDRe   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	snippetSeedKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
-)
-
-// builtinSnippetCategoryIDs is the immutable set of category ids owned by the app core.
-// Extensions may not re-declare these — they are reserved.
-// Kept unexported so callers can't mutate it; use IsBuiltinSnippetCategoryID to query.
-var builtinSnippetCategoryIDs = map[string]struct{}{
-	"shell":  {},
-	"sql":    {},
-	"redis":  {},
-	"mongo":  {},
-	"prompt": {},
-}
-
-// IsBuiltinSnippetCategoryID reports whether id is reserved by the app core.
-func IsBuiltinSnippetCategoryID(id string) bool {
-	_, ok := builtinSnippetCategoryIDs[id]
-	return ok
-}
-
-// CredentialAccessNone means the extension receives only opaque credential handles (default).
-// CredentialAccessRead means the extension may request plaintext credentials (discouraged).
-const (
-	CredentialAccessNone = ""
-	CredentialAccessRead = "read"
-)
-
-// Manifest is the host's complete view of one extension: the security contract it
-// reads from manifest.json plus the functional face the guest reports through
-// describe(). Only the first half is written by hand — see manifestFile.
+// The runtime does not read the contributions: each is the business of the
+// contribution point that owns its key (ContributionPoint), and the typed view of
+// them — asset types, tools, policy, pages, snippets, drivers — is that host
+// side's (internal/extreg).
 type Manifest struct {
 	// -- security contract, from manifest.json --
-	Name          string          `json:"name"`
-	Version       string          `json:"version"`
-	MinAppVersion string          `json:"minAppVersion"`
-	HostABI       string          `json:"hostABI"`
-	Backend       ManifestBackend `json:"backend"`
-	Capabilities  Capabilities    `json:"capabilities"`
+	extmanifest.Manifest
 
-	// -- functional face, from describe() (see descriptor.go) --
-	Icon       string         `json:"icon"`
-	I18n       ManifestI18n   `json:"i18n"`
-	AssetTypes []AssetTypeDef `json:"assetTypes"`
-	Tools      []ToolDef      `json:"tools"`
-	Policies   PoliciesDef    `json:"policies"`
-	Frontend   FrontendDef    `json:"frontend"`
-	Snippets   SnippetsDef    `json:"snippets"`
-	// DatabaseDrivers are the driver descriptors, one per capabilities.databaseDrivers id.
-	DatabaseDrivers []dbdriver.Descriptor `json:"databaseDrivers"`
+	// -- presentation, from describe() (see descriptor.go) --
+	Icon string       `json:"icon"`
+	I18n ManifestI18n `json:"i18n"`
+
+	// contributes is describe()'s contributions, one raw entry per contribution
+	// point key, for the points to judge (ExtensionView.Contribution).
+	contributes map[string]json.RawMessage
 }
 
-// manifestFile is what manifest.json is allowed to say.
-//
-// It is deliberately the whole security contract and nothing else: the capability
-// grants are what a user must be able to audit *before* the extension's code runs,
-// so they can never come from the code itself. Everything a running extension can
-// tell the host about itself — its tools, asset types, policy groups, pages,
-// snippets, display strings — is read back from describe() instead of being
-// declared a second time here.
-type manifestFile struct {
-	Name          string          `json:"name"`
-	Version       string          `json:"version"`
-	MinAppVersion string          `json:"minAppVersion"`
-	HostABI       string          `json:"hostABI"`
-	Backend       ManifestBackend `json:"backend"`
-	Capabilities  Capabilities    `json:"capabilities"`
-}
-
-// SnippetsDef declares snippet categories and seed snippets contributed by this extension.
-// All fields are optional; an empty block is a no-op.
-type SnippetsDef struct {
-	Categories []SnippetCategoryDef `json:"categories"`
-	Seed       []SeedSnippetDef     `json:"seed"`
-}
-
-// SnippetCategoryDef declares a new snippet category id that this extension owns.
-//
-// Validation rules:
-//   - ID must match ^[a-z][a-z0-9-]{0,31}$ (lowercase kebab, <=32 chars).
-//   - ID must NOT collide with any builtin category (see IsBuiltinSnippetCategoryID).
-//   - ID must be unique within this manifest.
-//   - AssetType must be non-empty and must match a type declared in assetTypes[].
-type SnippetCategoryDef struct {
-	ID        string   `json:"id"`
-	AssetType string   `json:"assetType"`
-	I18n      I18nName `json:"i18n"`
-}
-
-// SeedSnippetDef is a read-only snippet shipped with the extension.
-//
-// Validation rules:
-//   - Key must match ^[a-z0-9][a-z0-9-]{0,63}$ and be unique within this manifest.
-//   - Name and Content must be non-empty after trimming.
-//   - Category must be either a builtin category id or a category declared in THIS manifest.
-type SeedSnippetDef struct {
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	Content     string `json:"content"`
-	Description string `json:"description"`
-}
-
-// Capabilities declares what host resources an extension is permitted to access.
-// Default (zero value) is deny-all except an implicit read-only ${EXT_DIR}/** for the
-// extension's own directory. Extensions must declare every capability they need;
-// the host enforces these at each host_* call site.
-type Capabilities struct {
-	FS          FSCapability   `json:"fs"`
-	HTTP        HTTPCapability `json:"http"`
-	Credentials string         `json:"credentials"` // "" (none) | "read"
-	// Tunnel lets an allowlisted (non-endpoint) HTTP target resolve to a private
-	// address. Routing through an asset's SSH tunnel is an asset type's
-	// connection.sshTunnel declaration, not this capability.
-	Tunnel  bool              `json:"tunnel"`
-	Network NetworkCapability `json:"network"`
-	// DatabaseDrivers lists the SQL database driver ids the extension provides.
-	// describe() must answer with exactly this set of drivers; requires hostABI 2.3.
-	DatabaseDrivers []string `json:"databaseDrivers"`
-	// DatabaseKerberos lets a database driver ask the host for Kerberos tickets
-	// fetched with the asset's Kerberos credentials. Only meaningful with
-	// databaseDrivers; requires hostABI 2.5.
-	DatabaseKerberos bool `json:"databaseKerberos"`
-}
-
-// NetworkCapability grants network reach that is decided per call rather than by
-// a static list.
-//
-// AssetEndpoint lets a call scoped to an asset reach the addresses the user typed
-// into that asset's format:"endpoint" config fields — private-network addresses
-// included, since the user configured them — over HTTP and TCP. Undeclared, HTTP
-// reach is exactly the static http allowlist and TCP stays ungated.
-//
-// DatabaseRedirects lets a database driver follow a redirect the database answers
-// with (a cluster node, a read replica, a routed listener) by dialing that other
-// address through the asset's own route. Only meaningful with databaseDrivers;
-// requires hostABI 2.4.
-type NetworkCapability struct {
-	AssetEndpoint     bool `json:"assetEndpoint"`
-	DatabaseRedirects bool `json:"databaseRedirects"`
-}
-
-// FSCapability lists filesystem path patterns an extension may access.
-// Patterns support one ${EXT_DIR} placeholder (resolved at load time to the extension's directory)
-// and a trailing /** for recursive match. All other entries are treated as absolute path prefixes.
-type FSCapability struct {
-	Read  []string `json:"read"`
-	Write []string `json:"write"`
-}
-
-// HTTPCapability lists URL prefix patterns an extension may open via host_io_open(type=http).
-// Entries are URL prefixes; the request URL must start with at least one allowlist entry.
-// Private-network destinations (RFC1918, loopback, link-local) are always rejected
-// unless the target also matches an allowlist entry AND Tunnel=true.
-type HTTPCapability struct {
-	Allowlist []string `json:"allowlist"`
-}
-
+// ManifestI18n is the extension's display name and description, as i18n keys
+// resolved against its locales/ directory.
 type ManifestI18n struct {
 	DisplayName string `json:"displayName"`
 	Description string `json:"description"`
 }
 
-type ManifestBackend struct {
-	Runtime string `json:"runtime"`
-	Binary  string `json:"binary"`
+// Contribution is describe()'s raw entry under the contribution point key, nil
+// when the extension contributes nothing there.
+func (m *Manifest) Contribution(key string) json.RawMessage {
+	return m.contributes[key]
 }
 
-type AssetTypeDef struct {
-	Type         string         `json:"type"`
-	I18n         I18nName       `json:"i18n"`
-	ConfigSchema map[string]any `json:"configSchema"`
-	Connection   *ConnectionDef `json:"connection,omitempty"`
-	Auth         *AuthDef       `json:"auth,omitempty"`
-	// TestConnection reports whether the type registered a test-connection
-	// handler (opskat.AssetTypeReg.TestConnection in the guest SDK). The
-	// asset form shows its "Test connection" button only when this is true;
-	// the host dispatches the call itself (Plugin.TestConnection), never
-	// through policy — testing a connection is not an operation on the asset.
-	TestConnection bool `json:"testConnection,omitempty"`
-}
-
-// ConnectionDef is the subset of the host-owned connection settings an asset
-// type supports. The host renders a declared item in the asset form and detail
-// card and applies it when dialing the asset's endpoint; an undeclared item is
-// neither shown nor applied. The extension never reads these settings — the SSH
-// tunnel is the asset's own SSHTunnelID column, outside its config.
-type ConnectionDef struct {
-	SSHTunnel  bool `json:"sshTunnel,omitempty"`
-	ProxyChain bool `json:"proxyChain,omitempty"`
-	TLS        bool `json:"tls,omitempty"`
-}
-
-// UnmarshalJSON refuses an item the host does not own: silently dropping it would
-// load an extension whose author believes a setting is applied when it is not.
-func (c *ConnectionDef) UnmarshalJSON(data []byte) error {
-	type plain ConnectionDef
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var v plain
-	if err := dec.Decode(&v); err != nil {
-		return fmt.Errorf("connection (supported items: sshTunnel, proxyChain, tls): %w", err)
+// ContributionKeys is the contribution point keys describe() answered, sorted.
+func (m *Manifest) ContributionKeys() []string {
+	keys := make([]string, 0, len(m.contributes))
+	for k := range m.contributes {
+		keys = append(keys, k)
 	}
-	*c = ConnectionDef(v)
-	return nil
+	slices.Sort(keys)
+	return keys
 }
 
-// bindsEndpoint reports whether the type declares anything the host applies only
-// on a connection to the asset's endpoint: credential injection or a connection
-// setting.
-func (at AssetTypeDef) bindsEndpoint() bool {
-	c := at.Connection
-	return at.Auth != nil || (c != nil && (c.SSHTunnel || c.ProxyChain || c.TLS))
-}
-
-// validateEndpointBindings refuses an asset type whose auth or connection
-// declaration could never take effect: both apply only to a request to one of the
-// asset's endpoints, and an extension without network.assetEndpoint has none. It
-// runs once describe() is merged in, since the declaration comes from the guest
-// and the capability from manifest.json.
-//
-// It is also the one post-merge check of the guest's answer against the manifest,
-// so the database driver ids the manifest declares are compared with the ones
-// describe() provided here too (see checkDatabaseDrivers).
-func (m *Manifest) validateEndpointBindings() error {
-	if err := m.checkDatabaseDrivers(); err != nil {
-		return err
-	}
-	if m.Capabilities.Network.AssetEndpoint {
-		return nil
-	}
-	for _, at := range m.AssetTypes {
-		if at.bindsEndpoint() {
-			return fmt.Errorf("asset type %q declares auth or connection, which apply only to the asset's endpoint, but the manifest does not declare capabilities.network.assetEndpoint", at.Type)
-		}
-	}
-	return nil
-}
-
-// AssetTypeDef returns the declaration of assetType, nil when the extension does
-// not register it.
-func (m *Manifest) AssetTypeDef(assetType string) *AssetTypeDef {
-	for i := range m.AssetTypes {
-		if m.AssetTypes[i].Type == assetType {
-			return &m.AssetTypes[i]
-		}
-	}
-	return nil
-}
-
-type I18nName struct {
-	Name string `json:"name"`
-}
-
-type I18nNameDesc struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-type ToolDef struct {
-	Name       string         `json:"name"`
-	I18n       I18nDesc       `json:"i18n"`
-	Parameters map[string]any `json:"parameters"`
-	// PolicyAction is the fixed action this tool requests; the asset's permission
-	// groups are matched against it. It is declared at the tool's registration in
-	// the guest, which is also what makes the guest's policy answer unable to drift
-	// from its tool table.
-	PolicyAction string `json:"policyAction,omitempty"`
-	// PolicyActions is, instead of PolicyAction, the set of actions a tool that
-	// classifies each call from its arguments (the SDK's PolicyFunc) may answer
-	// check_policy with. A tool declares exactly one of the two.
-	PolicyActions []string `json:"policyActions,omitempty"`
-	// TimeoutMs is how long one call of this tool may run, in milliseconds; 0
-	// means the host default. It is the tool's to declare because only the tool
-	// knows whether it answers in a second or scans an index for minutes, and it
-	// holds for every caller alike — AI exec, opsctl and the extension's page.
-	TimeoutMs int64 `json:"timeoutMs,omitempty"`
-	// FileParams names the string parameters opsctl may fill from a file
-	// (`--<name>-file <path>`); every other entry point rejects that form.
-	FileParams []string `json:"fileParams,omitempty"`
-}
-
-// MaxToolTimeout is the longest timeout a tool may declare. A tool call holds
-// one of the extension's few instance slots for as long as it runs; work that
-// needs longer is an action, which streams progress and can be canceled.
-const MaxToolTimeout = 10 * time.Minute
-
-// Timeout is the tool's declared call timeout, 0 when it leaves the host default.
-func (t ToolDef) Timeout() time.Duration {
-	return time.Duration(t.TimeoutMs) * time.Millisecond
-}
-
-// Actions is every policy action the tool can request.
-func (t ToolDef) Actions() []string {
-	if t.PolicyAction != "" {
-		return []string{t.PolicyAction}
-	}
-	return t.PolicyActions
-}
-
-type I18nDesc struct {
-	Description string `json:"description"`
-}
-
-type PoliciesDef struct {
-	Type    string           `json:"type"`
-	Actions []string         `json:"actions"`
-	Groups  []PolicyGroupDef `json:"groups"`
-	Default []string         `json:"default"`
-}
-
-type PolicyGroupDef struct {
-	ID     string         `json:"id"`
-	I18n   I18nNameDesc   `json:"i18n"`
-	Policy map[string]any `json:"policy"`
-}
-
-type FrontendDef struct {
-	Entry  string    `json:"entry"`
-	Styles string    `json:"styles"`
-	Pages  []PageDef `json:"pages"`
-}
-
-type PageDef struct {
-	ID        string   `json:"id"`
-	Slot      string   `json:"slot,omitempty"`
-	I18n      I18nName `json:"i18n"`
-	Component string   `json:"component"`
-}
-
-// ParseManifest reads the security contract from manifest.json. The returned
-// Manifest carries no functional face yet — that arrives with (*Manifest).apply
-// once describe() has been read, either from the guest or from the cache.
+// ParseManifest reads the security contract from manifest.json (see
+// extmanifest.Parse). The returned Manifest carries nothing from describe() yet —
+// that arrives with (*Manifest).apply once describe() has been read, either from
+// the guest or from the cache.
 func ParseManifest(data []byte) (*Manifest, error) {
-	var f manifestFile
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
-	}
-	m := &Manifest{
-		Name:          f.Name,
-		Version:       f.Version,
-		MinAppVersion: f.MinAppVersion,
-		HostABI:       f.HostABI,
-		Backend:       f.Backend,
-		Capabilities:  f.Capabilities,
-	}
-	if err := m.validate(); err != nil {
+	c, err := extmanifest.Parse(data)
+	if err != nil {
 		return nil, err
 	}
-	return m, nil
-}
-
-// Localized returns a shallow copy of the manifest with all i18n string fields
-// resolved using the provided translate function.
-func (m *Manifest) Localized(tr func(key string) string) *Manifest {
-	out := *m
-	out.I18n = ManifestI18n{
-		DisplayName: tr(m.I18n.DisplayName),
-		Description: tr(m.I18n.Description),
-	}
-
-	if len(m.AssetTypes) > 0 {
-		out.AssetTypes = make([]AssetTypeDef, len(m.AssetTypes))
-		for i, at := range m.AssetTypes {
-			at.I18n = I18nName{Name: tr(at.I18n.Name)}
-			at.ConfigSchema = localizeConfigSchema(at.ConfigSchema, tr)
-			out.AssetTypes[i] = at
-		}
-	}
-
-	if len(m.Tools) > 0 {
-		out.Tools = make([]ToolDef, len(m.Tools))
-		for i, t := range m.Tools {
-			t.I18n = I18nDesc{Description: tr(t.I18n.Description)}
-			out.Tools[i] = t
-		}
-	}
-
-	if len(m.Policies.Groups) > 0 {
-		out.Policies.Groups = make([]PolicyGroupDef, len(m.Policies.Groups))
-		for i, pg := range m.Policies.Groups {
-			pg.I18n = I18nNameDesc{
-				Name:        tr(pg.I18n.Name),
-				Description: tr(pg.I18n.Description),
-			}
-			out.Policies.Groups[i] = pg
-		}
-	}
-
-	if len(m.Frontend.Pages) > 0 {
-		out.Frontend.Pages = make([]PageDef, len(m.Frontend.Pages))
-		for i, p := range m.Frontend.Pages {
-			p.I18n = I18nName{Name: tr(p.I18n.Name)}
-			out.Frontend.Pages[i] = p
-		}
-	}
-
-	if len(m.Snippets.Categories) > 0 {
-		out.Snippets.Categories = make([]SnippetCategoryDef, len(m.Snippets.Categories))
-		for i, c := range m.Snippets.Categories {
-			c.I18n = I18nName{Name: tr(c.I18n.Name)}
-			out.Snippets.Categories[i] = c
-		}
-	}
-
-	return &out
-}
-
-// localizeConfigSchema translates title, placeholder, description and enumLabels fields in a JSON Schema.
-func localizeConfigSchema(schema map[string]any, tr func(string) string) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	out := make(map[string]any, len(schema))
-	for k, v := range schema {
-		out[k] = v
-	}
-	// Translate top-level title/placeholder/description
-	for _, field := range []string{"title", "placeholder", "description"} {
-		if s, ok := out[field].(string); ok && s != "" {
-			out[field] = tr(s)
-		}
-	}
-	// Enum option labels are i18n keys, like title.
-	if labels, ok := out["enumLabels"].([]any); ok {
-		translated := make([]any, len(labels))
-		for i, l := range labels {
-			if key, ok := l.(string); ok {
-				translated[i] = tr(key)
-			} else {
-				translated[i] = l
-			}
-		}
-		out["enumLabels"] = translated
-	}
-	// Recurse into properties
-	if props, ok := out["properties"].(map[string]any); ok {
-		newProps := make(map[string]any, len(props))
-		for name, propVal := range props {
-			if propMap, ok := propVal.(map[string]any); ok {
-				newProps[name] = localizeConfigSchema(propMap, tr)
-			} else {
-				newProps[name] = propVal
-			}
-		}
-		out["properties"] = newProps
-	}
-	return out
-}
-
-func (m *Manifest) validate() error {
-	if m.Name == "" {
-		return fmt.Errorf("manifest: name is required")
-	}
-	if !nameRe.MatchString(m.Name) {
-		return fmt.Errorf("manifest: name must match %s (got %q)", nameRe.String(), m.Name)
-	}
-	if m.Version == "" {
-		return fmt.Errorf("manifest: version is required")
-	}
-	if !semverRe.MatchString(m.Version) {
-		return fmt.Errorf("manifest: version must be semver (got %q)", m.Version)
-	}
-	if m.MinAppVersion != "" && !semverRe.MatchString(m.MinAppVersion) {
-		return fmt.Errorf("manifest: minAppVersion must be semver (got %q)", m.MinAppVersion)
-	}
-	if m.HostABI == "" {
-		return fmt.Errorf("manifest: hostABI is required (expected one of %v)", SupportedHostABIs)
-	}
-	if !isSupportedHostABI(m.HostABI) {
-		return fmt.Errorf("manifest: hostABI %q not supported by this runtime (supported: %v)", m.HostABI, SupportedHostABIs)
-	}
-	if !credentialRe.MatchString(m.Capabilities.Credentials) {
-		return fmt.Errorf("manifest: capabilities.credentials must be \"\" or \"read\" (got %q)", m.Capabilities.Credentials)
-	}
-	if m.Backend.Binary == "" {
-		return fmt.Errorf("manifest: backend.binary is required — it names the WASM module the host loads")
-	}
-	return m.validateDatabaseDrivers()
-}
-
-// validateDatabaseDrivers checks the driver ids the manifest declares: well-formed,
-// unique, and only on a host ABI that reads them.
-func (m *Manifest) validateDatabaseDrivers() error {
-	ids := m.Capabilities.DatabaseDrivers
-	if m.Capabilities.Network.DatabaseRedirects {
-		if len(ids) == 0 {
-			return fmt.Errorf("manifest: capabilities.network.databaseRedirects only applies to an extension that declares capabilities.databaseDrivers")
-		}
-		if !hostABIAtLeast(m.HostABI, DatabaseExtrasMinHostABI) {
-			return fmt.Errorf("manifest: capabilities.network.databaseRedirects requires hostABI %s or newer (got %s)", DatabaseExtrasMinHostABI, m.HostABI)
-		}
-	}
-	if m.Capabilities.DatabaseKerberos {
-		if len(ids) == 0 {
-			return fmt.Errorf("manifest: capabilities.databaseKerberos only applies to an extension that declares capabilities.databaseDrivers")
-		}
-		if !hostABIAtLeast(m.HostABI, DatabaseKerberosMinHostABI) {
-			return fmt.Errorf("manifest: capabilities.databaseKerberos requires hostABI %s or newer (got %s)", DatabaseKerberosMinHostABI, m.HostABI)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	if !hostABIAtLeast(m.HostABI, databaseDriversMinHostABI) {
-		return fmt.Errorf("manifest: capabilities.databaseDrivers requires hostABI %s or newer (got %s)", databaseDriversMinHostABI, m.HostABI)
-	}
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		if !nameRe.MatchString(id) {
-			return fmt.Errorf("manifest: capabilities.databaseDrivers id %q must match %s", id, nameRe.String())
-		}
-		if _, dup := seen[id]; dup {
-			return fmt.Errorf("manifest: capabilities.databaseDrivers lists %q twice", id)
-		}
-		seen[id] = struct{}{}
-	}
-	return nil
-}
-
-// hostABIAtLeast compares "major.minor" host ABI versions. Both are known-good
-// here (the caller has already checked abi against SupportedHostABIs).
-func hostABIAtLeast(abi, floor string) bool {
-	var aMaj, aMin, fMaj, fMin int
-	if _, err := fmt.Sscanf(abi, "%d.%d", &aMaj, &aMin); err != nil {
-		return false
-	}
-	if _, err := fmt.Sscanf(floor, "%d.%d", &fMaj, &fMin); err != nil {
-		return false
-	}
-	return aMaj > fMaj || (aMaj == fMaj && aMin >= fMin)
-}
-
-func isSupportedHostABI(abi string) bool {
-	for _, s := range SupportedHostABIs {
-		if s == abi {
-			return true
-		}
-	}
-	return false
+	return &Manifest{Manifest: *c}, nil
 }
 
 // -- Capability enforcement --------------------------------------------------
 
 // CheckFSRead returns nil if reading the given absolute path is permitted
-// by the extension's fs.read capabilities. extDir is the extension's own
+// by the extension's permissions.fs.read. extDir is the extension's own
 // directory (used to resolve ${EXT_DIR} placeholders).
 func (m *Manifest) CheckFSRead(path, extDir string) error {
-	return checkFSPath(path, extDir, m.Capabilities.FS.Read, "read")
+	return checkFSPath(path, extDir, m.Permissions.FS.Read, "read")
 }
 
 // CheckFSWrite returns nil if writing to the given absolute path is permitted
-// by the extension's fs.write capabilities.
+// by the extension's permissions.fs.write.
 func (m *Manifest) CheckFSWrite(path, extDir string) error {
-	return checkFSPath(path, extDir, m.Capabilities.FS.Write, "write")
+	return checkFSPath(path, extDir, m.Permissions.FS.Write, "write")
 }
 
 func checkFSPath(path, extDir string, patterns []string, kind string) error {
@@ -656,7 +105,7 @@ func checkFSPath(path, extDir string, patterns []string, kind string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("fs %s denied: %q not in capabilities.fs.%s", kind, abs, kind)
+	return fmt.Errorf("fs %s denied: %q not in permissions.fs.%s", kind, abs, kind)
 }
 
 // resolvePattern substitutes ${EXT_DIR} and cleans the pattern.
@@ -693,14 +142,21 @@ func matchPathPrefix(path, root string) bool {
 }
 
 // CheckHTTPURL returns nil if the given URL is permitted by the extension's
-// http capabilities. Enforces:
-//  1. The URL prefix must match an allowlist entry.
-//  2. Private/loopback/link-local destinations are rejected unless tunnelAllowed is true.
+// permissions.network.http. Enforces:
+//  1. An allowlist entry must name the URL's scheme, host and port (the scheme's
+//     default filled in, the host compared case-insensitively), and the URL's
+//     path and query must start with the entry's — so "https://api.example.com"
+//     admits neither https://api.example.com.evil.net/ nor
+//     https://api.example.com@evil.net/.
+//  2. Private/loopback/link-local destinations are rejected unless allowPrivate is true.
 //  3. The scheme must be http or https.
 //
-// tunnelAllowed should be true ONLY when the host has an active SSH tunnel
-// configured AND the extension declared capabilities.tunnel=true.
-func (m *Manifest) CheckHTTPURL(urlStr string, tunnelAllowed bool) error {
+// A refusal names the URL's origin only: its path and query may carry what the
+// guest put there, and the refusal is logged.
+//
+// allowPrivate should be true ONLY when the extension declared
+// permissions.network.allowPrivate.
+func (m *Manifest) CheckHTTPURL(urlStr string, allowPrivate bool) error {
 	if urlStr == "" {
 		return fmt.Errorf("http denied: empty url")
 	}
@@ -715,27 +171,49 @@ func (m *Manifest) CheckHTTPURL(urlStr string, tunnelAllowed bool) error {
 		return fmt.Errorf("http denied: missing host")
 	}
 
-	// Enforce allowlist prefix match.
-	matched := false
-	for _, allowed := range m.Capabilities.HTTP.Allowlist {
-		if allowed == "" {
-			continue
-		}
-		if strings.HasPrefix(urlStr, allowed) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		return fmt.Errorf("http denied: %q not in capabilities.http.allowlist", urlStr)
+	if !slices.ContainsFunc(m.Permissions.Network.HTTP, func(allowed string) bool { return httpPrefixAdmits(allowed, u) }) {
+		return fmt.Errorf("http denied: %s://%s is not in permissions.network.http", u.Scheme, u.Host)
 	}
 
-	// Reject private-network destinations unless tunnel routing is allowed.
-	if !tunnelAllowed && isPrivateHost(u.Hostname()) {
-		return fmt.Errorf("http denied: %q resolves to private/loopback/link-local address (tunnel=%v, capabilities.tunnel=%v)",
-			u.Hostname(), tunnelAllowed, m.Capabilities.Tunnel)
+	// Reject private-network destinations unless the extension may reach them.
+	if !allowPrivate && isPrivateHost(u.Hostname()) {
+		return fmt.Errorf("http denied: %q resolves to private/loopback/link-local address (allowPrivate=%v, permissions.network.allowPrivate=%v)",
+			u.Hostname(), allowPrivate, m.Permissions.Network.AllowPrivate)
 	}
 	return nil
+}
+
+// httpPrefixAdmits reports whether allowlist entry allowed admits u: the same
+// scheme, host and port, and a path-and-query that starts with the entry's.
+func httpPrefixAdmits(allowed string, u *url.URL) bool {
+	p, err := url.Parse(allowed)
+	if err != nil || !strings.EqualFold(p.Scheme, u.Scheme) || p.Hostname() == "" {
+		return false
+	}
+	if canonicalHost(p.Hostname()) != canonicalHost(u.Hostname()) || urlPort(p) != urlPort(u) {
+		return false
+	}
+	return strings.HasPrefix(pathAndQuery(u), pathAndQuery(p))
+}
+
+// urlPort is the port u dials, its scheme's default filled in.
+func urlPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	return defaultPort(strings.ToLower(u.Scheme))
+}
+
+// pathAndQuery is u's escaped path ("/" when empty) and its query.
+func pathAndQuery(u *url.URL) string {
+	out := u.EscapedPath()
+	if out == "" {
+		out = "/"
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		out += "?" + u.RawQuery
+	}
+	return out
 }
 
 // isPrivateHost returns true if the host is a literal private IP (RFC1918,
@@ -784,16 +262,8 @@ func isPrivateIP(ip net.IP) bool {
 // CheckCredentialRead returns nil if the extension is allowed to request
 // plaintext credential values. Default is deny.
 func (m *Manifest) CheckCredentialRead() error {
-	if m.Capabilities.Credentials != CredentialAccessRead {
-		return fmt.Errorf("credentials denied: extension must declare capabilities.credentials=\"read\" to access plaintext passwords")
-	}
-	return nil
-}
-
-// CheckTunnel returns nil if the extension is allowed to use SSH tunnel routing.
-func (m *Manifest) CheckTunnel() error {
-	if !m.Capabilities.Tunnel {
-		return fmt.Errorf("tunnel denied: extension must declare capabilities.tunnel=true")
+	if m.Permissions.Credentials != extmanifest.CredentialAccessRead {
+		return fmt.Errorf("credentials denied: extension must declare permissions.credentials=\"read\" to access plaintext passwords")
 	}
 	return nil
 }

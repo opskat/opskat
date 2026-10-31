@@ -29,8 +29,9 @@ func (e *Extension) ListInstalledExtensions(lang string) []extension_svc.Extensi
 	return e.service.ListInstalled(lang)
 }
 
-// GetExtensionManifest returns a single extension's manifest.
-func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, error) {
+// GetExtensionManifest returns a single extension's merged manifest: the typed
+// view of its contributions (extreg.Manifest), as the extension list carries it.
+func (e *Extension) GetExtensionManifest(name string) (*extreg.Manifest, error) {
 	if e.service == nil {
 		return nil, fmt.Errorf("extension system not initialized")
 	}
@@ -38,89 +39,7 @@ func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, erro
 	if ext == nil {
 		return nil, fmt.Errorf("extension %q not found", name)
 	}
-	return ext.Manifest, nil
-}
-
-// CallExtensionAction calls an extension action and streams events via Wails Events.
-//
-// invocationID is the caller's correlation token for this one run: it comes back
-// on every "ext:action:event" this action emits, and CancelExtensionAction takes
-// it to stop this run and no other. The frontend mints it because the frontend is
-// the party that has to correlate — it needs the token before the call it is
-// about to make returns.
-func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID string, assetID int64) (string, error) {
-	plugin, err := e.actionPlugin(extName)
-	if err != nil {
-		return "", err
-	}
-	if invocationID == "" {
-		return "", fmt.Errorf("invocation id is required to run an action")
-	}
-	asset, err := e.assetRef(extName, assetID)
-	if err != nil {
-		return "", err
-	}
-
-	var args json.RawMessage
-	if argsJSON != "" {
-		args = json.RawMessage(argsJSON)
-	} else {
-		args = json.RawMessage("{}")
-	}
-
-	log := logger.Ctx(e.ctx).With(
-		zap.String("extension", extName),
-		zap.String("action", action),
-		zap.String("invocationID", invocationID),
-	)
-	log.Info("extension action started")
-
-	result, err := plugin.CallAction(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID, action, args, asset)
-	if err != nil {
-		log.Error("extension action failed", zap.Error(err))
-		return "", fmt.Errorf("call action %s/%s: %w", extName, action, err)
-	}
-	log.Info("extension action completed")
-	return string(result), nil
-}
-
-// CancelExtensionAction stops the one action run identified by invocationID. The
-// instance pool runs several actions of one extension at once, so cancellation is
-// per run, never per extension.
-func (e *Extension) CancelExtensionAction(extName, invocationID string) error {
-	plugin, err := e.actionPlugin(extName)
-	if err != nil {
-		return err
-	}
-	if invocationID == "" {
-		return fmt.Errorf("invocation id is required to cancel an action")
-	}
-	log := logger.Ctx(e.ctx).With(
-		zap.String("extension", extName),
-		zap.String("invocationID", invocationID),
-	)
-	if !plugin.CancelAction(invocationID) {
-		log.Warn("extension action cancel found nothing running")
-		return fmt.Errorf("extension %q has no running action %q", extName, invocationID)
-	}
-	log.Info("extension action cancel requested")
-	return nil
-}
-
-// actionPlugin resolves the loaded plugin behind an extension name, which is the
-// same three-step check every action entry point needs.
-func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
-	if e.service == nil {
-		return nil, fmt.Errorf("extension system not initialized")
-	}
-	ext := e.service.Manager().GetExtension(extName)
-	if ext == nil {
-		return nil, fmt.Errorf("extension %q not loaded", extName)
-	}
-	if ext.Plugin == nil {
-		return nil, fmt.Errorf("extension %q has no backend plugin", extName)
-	}
-	return ext.Plugin, nil
+	return extreg.ManifestOf(ext.Manifest)
 }
 
 // CallExtensionTool calls an extension tool from the extension's own frontend
@@ -135,11 +54,16 @@ func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 // policy check, approval, grant or audit — those belong to AI exec and opsctl. It
 // is still scoped to its asset (ctx.AssetConfig, endpoint gating, connection
 // settings and credential injection all follow the AssetRef) and its arguments are
-// held to the tool's declared schema, as Plugin.CallTool does not check them.
+// held to the tool's declared schema, as Plugin.CallTool does not check them. A
+// page may call any tool of its extension, page-only or not; it runs under the
+// tool's declared timeout, or none for a page-only tool declaring NoTimeout.
 //
-// invocationID is the frontend's per-call correlation token (the same convention
-// CallExtensionAction already uses): CancelExtensionTool takes it to stop this
-// call while it runs. A failure, the guest's included, is returned as-is.
+// invocationID is the frontend's per-call correlation token, minted there because
+// the page needs it before the call returns: every event the tool emits reaches
+// the page as "ext:tool:event" stamped with it, and CancelExtensionTool takes it
+// to stop this call while it runs. It may not be empty nor shaped like the ids
+// the runtime names its own calls by (see checkPageInvocationID). A failure, the
+// guest's included, is returned as-is.
 func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
@@ -152,11 +76,15 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 		return "", fmt.Errorf("extension %q has no backend plugin", extName)
 	}
 
+	view, err := extreg.ManifestOf(ext.Manifest)
+	if err != nil {
+		return "", err
+	}
 	args := []byte(argsJSON)
 	if argsJSON == "" {
 		args = []byte("{}")
 	}
-	args, err := extreg.ValidateToolArgs(ext.Manifest, tool, args)
+	args, err = extreg.ValidateToolArgs(view, tool, args)
 	if err != nil {
 		return "", err
 	}
@@ -165,17 +93,19 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
-	if invocationID == "" {
-		return "", fmt.Errorf("invocation id is required to call a tool")
-	}
-
-	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID)
+	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), extName, invocationID, ext.Plugin.CancelTool)
 	if err != nil {
 		return "", err
 	}
 	defer end()
 
-	result, err := ext.Plugin.CallTool(ctx, tool, args, asset)
+	result, err := ext.Plugin.CallTool(ctx, extension.ToolCall{
+		InvocationID: invocationID,
+		Name:         tool,
+		Args:         args,
+		Asset:        asset,
+		Timeout:      extreg.ToolTimeout(view, tool),
+	})
 	if err != nil {
 		return "", err
 	}
@@ -183,16 +113,20 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 }
 
 // CancelExtensionTool stops the page tool call running under invocationID: the
-// guest is interrupted, host IO it is blocked in fails, and the call returns an
-// error to the page. A call that has already returned is not an error to cancel
-// — the page cannot know whether its abort raced the result — and a cancel that
-// overtakes its call keeps that call from starting (see toolCalls).
+// guest's ShouldStop turns true, host IO it is blocked in fails, a guest that
+// does not return within the grace period is cut off (Plugin.CancelTool), and
+// the call ends as canceled. A call that has already returned is not an error
+// to cancel — the page cannot know whether its abort raced the result — and a
+// cancel that overtakes its call keeps that call from starting (see toolCalls).
+// Only the page's own calls can be named: an id a page could not have called
+// under is refused (checkPageInvocationID).
 func (e *Extension) CancelExtensionTool(invocationID string) error {
-	if invocationID == "" {
-		return fmt.Errorf("invocation id is required to cancel a tool call")
+	canceled, err := e.toolCalls.cancel(invocationID)
+	if err != nil {
+		return err
 	}
 	log := logger.Ctx(e.ctx).With(zap.String("invocationID", invocationID))
-	if !e.toolCalls.cancel(invocationID) {
+	if !canceled {
 		log.Debug("extension tool cancel found nothing running; held against a late start")
 		return nil
 	}
@@ -201,8 +135,8 @@ func (e *Extension) CancelExtensionTool(invocationID string) error {
 }
 
 // assetRef names the asset a frontend-initiated call runs against. A 0 id is the
-// frontend saying it has none — the asset configuration form runs `test_connection`
-// on a configuration that has not been saved yet — and the guest is told so.
+// frontend saying it has none — a page calling a tool before it has an asset —
+// and the guest is told so.
 // Any other id must be an asset of a type extName registers: the page belongs to
 // that extension, and letting it name a builtin or another extension's asset would
 // scope the call — and its asset config — to something it has no claim on.
@@ -244,7 +178,11 @@ func (e *Extension) ValidateExtensionConfig(extName, assetType, configJSON strin
 	if ext == nil {
 		return nil, fmt.Errorf("extension %q not loaded", extName)
 	}
-	if ext.Manifest.AssetTypeDef(assetType) == nil {
+	view, err := extreg.ManifestOf(ext.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	if view.AssetType(assetType) == nil {
 		return nil, fmt.Errorf("asset type %q does not belong to extension %q", assetType, extName)
 	}
 	if ext.Plugin == nil {
@@ -306,21 +244,11 @@ func (e *Extension) installExtensionFromPath(sourcePath string) (*extension_svc.
 		return nil, err
 	}
 
-	ext := e.service.Manager().GetExtension(manifest.Name)
-	lm := manifest
-	if ext != nil {
-		lm = manifest.Localized(func(key string) string { return ext.Translate(e.lang.Lang(), key) })
+	tr := func(key string) string { return key }
+	if ext := e.service.Manager().GetExtension(manifest.Name); ext != nil {
+		tr = func(key string) string { return ext.Translate(e.lang.Lang(), key) }
 	}
-
-	return &extension_svc.ExtensionInfo{
-		Name:        lm.Name,
-		Version:     lm.Version,
-		Icon:        lm.Icon,
-		DisplayName: lm.I18n.DisplayName,
-		Description: lm.I18n.Description,
-		Enabled:     true,
-		Manifest:    lm,
-	}, nil
+	return extension_svc.NewExtensionInfo(manifest, tr, true)
 }
 
 // UninstallExtension removes an extension and optionally cleans up its data.
@@ -374,52 +302,21 @@ func (e *Extension) ReloadExtensions() error {
 // InstallExtensionDir installs an unpacked extension directory and returns what
 // landed. It backs `opsctl ext dev`, which is why it is a package-level function
 // rather than a method: every exported method on this binder becomes a Wails
-// binding, and "install whatever directory I name, no dialog" is not something
-// the frontend should be able to ask for.
+// binding, and "install whatever directory I name, with a confirm I supply" is
+// not something the frontend should be able to ask for.
 //
 // The path itself is deliberately the same one the "install from directory"
 // button takes — one install implementation, so a dev build cannot load through
-// a laxer route than a shipped one. Only the install confirm is skipped: `opsctl
-// ext dev` has already asked the user in its own approval dialog.
-func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string) (string, string, error) {
+// a laxer route than a shipped one. Only where the confirm is shown differs:
+// confirm is `opsctl ext dev`'s approval dialog instead of the app-wide install
+// confirm, and the commit re-checks the installed version it approved.
+func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
 	if e.service == nil {
 		return "", "", fmt.Errorf("extension system not initialized")
 	}
-	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, nil)
+	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, confirm)
 	if err != nil {
 		return "", "", err
 	}
 	return manifest.Name, manifest.Version, nil
-}
-
-// InstalledExtensionVersion reports whether an extension named name is installed
-// (enabled or disabled on disk) and its version. `opsctl ext dev` shows it in the
-// confirmation dialog so the user sees an overwrite before approving it; it is a
-// package-level function for the same reason InstallExtensionDir is.
-func InstalledExtensionVersion(e *Extension, name string) (string, bool) {
-	if e.service == nil {
-		return "", false
-	}
-	info, err := e.service.GetDetail(name, e.lang.Lang())
-	if err != nil {
-		// GetDetail's only failure is "not installed".
-		return "", false
-	}
-	return info.Version, true
-}
-
-// InstalledExtensionCapabilities returns the capabilities the installed
-// extension named name declares, the zero value when it is not installed.
-// `opsctl ext dev` compares them with the incoming manifest to mark what an
-// overwrite newly adds.
-func InstalledExtensionCapabilities(e *Extension, name string) extension.Capabilities {
-	if e.service == nil {
-		return extension.Capabilities{}
-	}
-	info, err := e.service.GetDetail(name, e.lang.Lang())
-	if err != nil {
-		// GetDetail's only failure is "not installed".
-		return extension.Capabilities{}
-	}
-	return info.Manifest.Capabilities
 }

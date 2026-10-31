@@ -19,7 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/pkg/netproxy"
 	"github.com/opskat/opskat/internal/service/update_svc"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -69,10 +69,10 @@ func (e *RefreshError) Unwrap() error { return e.Err }
 type UnavailableReason string
 
 const (
-	// ReasonHostABI: the newest version needs a host ABI this app lacks.
-	ReasonHostABI UnavailableReason = UnavailableReason(extension.ReasonHostABI)
+	// ReasonHostABI: the newest version declares a host ABI this app does not run.
+	ReasonHostABI UnavailableReason = UnavailableReason(extmanifest.ReasonHostABI)
 	// ReasonMinAppVersion: the newest version needs a newer OpsKat release.
-	ReasonMinAppVersion UnavailableReason = UnavailableReason(extension.ReasonMinAppVersion)
+	ReasonMinAppVersion UnavailableReason = UnavailableReason(extmanifest.ReasonMinAppVersion)
 	// ReasonSource: the newest version lives in a source type this build
 	// cannot fetch.
 	ReasonSource UnavailableReason = "source"

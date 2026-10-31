@@ -1,17 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// One backend action call resolves when the test releases it, so two runs of the
-// same extension can be in flight at the same time — which is the situation the
-// invocation id exists for.
+// A backend tool call can be held open until the test releases it, so two calls
+// of the same extension are in flight at the same time — the situation the
+// invocation id exists for. Calls nobody holds resolve at once with "{}".
 const pendingCalls = new Map<string, (result: string) => void>();
+let holdCalls = false;
 
 vi.mock("../../wailsjs/go/extension/Extension", () => ({
-  CallExtensionAction: vi.fn(
-    (_ext: string, _action: string, _args: string, invocationId: string, _assetId: number) =>
-      new Promise<string>((resolve) => pendingCalls.set(invocationId, resolve))
+  CallExtensionTool: vi.fn((_ext: string, _tool: string, _args: string, invocationId: string, _assetId: number) =>
+    holdCalls ? new Promise<string>((resolve) => pendingCalls.set(invocationId, resolve)) : Promise.resolve("{}")
   ),
-  CallExtensionTool: vi.fn(async () => "{}"),
-  CancelExtensionAction: vi.fn(async () => undefined),
   CancelExtensionTool: vi.fn(async () => undefined),
 }));
 
@@ -28,93 +26,87 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   EventsOff: vi.fn((name: string) => listeners.delete(name)),
 }));
 
-import {
-  CallExtensionAction,
-  CallExtensionTool,
-  CancelExtensionAction,
-  CancelExtensionTool,
-} from "../../wailsjs/go/extension/Extension";
+import { CallExtensionTool, CancelExtensionTool } from "../../wailsjs/go/extension/Extension";
 import { createExtensionAPI } from "../extension/api";
 
 function emit(payload: { extension: string; invocationId: string; eventType: string; data: unknown }) {
-  for (const cb of listeners.get("ext:action:event") ?? []) cb(payload);
+  for (const cb of listeners.get("ext:tool:event") ?? []) cb(payload);
 }
 
-describe("extension action API", () => {
+function invocationIdOf(callIndex: number): string {
+  return vi.mocked(CallExtensionTool).mock.calls[callIndex][3];
+}
+
+describe("extension page API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pendingCalls.clear();
     listeners.clear();
+    holdCalls = false;
   });
 
-  it("routes events to the run that produced them, not to every run of the extension", async () => {
+  it("routes a tool call's events to that call's onEvent, not to every call of the extension", async () => {
+    holdCalls = true;
     const api = createExtensionAPI();
     const first: unknown[] = [];
     const second: unknown[] = [];
 
-    const a = api.startAction("oss", "upload", { file: "a" }, (e) => first.push(e.data));
-    const b = api.startAction("oss", "upload", { file: "b" }, (e) => second.push(e.data));
-    expect(a.invocationId).not.toEqual(b.invocationId);
+    const a = api.callTool("oss", "upload", { file: "a" }, 12, { onEvent: (e) => first.push(e.data) });
+    const b = api.callTool("oss", "upload", { file: "b" }, 12, { onEvent: (e) => second.push(e.data) });
+    const [idA, idB] = [invocationIdOf(0), invocationIdOf(1)];
+    expect(idA).not.toEqual(idB);
 
-    emit({ extension: "oss", invocationId: a.invocationId, eventType: "progress", data: { pct: 10 } });
-    emit({ extension: "oss", invocationId: b.invocationId, eventType: "progress", data: { pct: 90 } });
+    emit({ extension: "oss", invocationId: idA, eventType: "progress", data: { pct: 10 } });
+    emit({ extension: "oss", invocationId: idB, eventType: "progress", data: { pct: 90 } });
     // Another extension's stream must not reach either.
-    emit({ extension: "kafka", invocationId: a.invocationId, eventType: "progress", data: { pct: 50 } });
+    emit({ extension: "kafka", invocationId: idA, eventType: "progress", data: { pct: 50 } });
 
     expect(first).toEqual([{ pct: 10 }]);
     expect(second).toEqual([{ pct: 90 }]);
 
-    pendingCalls.get(a.invocationId)?.("{}");
-    pendingCalls.get(b.invocationId)?.("{}");
-    await Promise.all([a.result, b.result]);
+    pendingCalls.get(idA)?.("{}");
+    pendingCalls.get(idB)?.("{}");
+    await Promise.all([a, b]);
   });
 
-  it("keeps delivering events to a run after another run of the same extension finishes", async () => {
+  it("keeps delivering events to a call after another call finishes, and stops once its own does", async () => {
+    holdCalls = true;
     const api = createExtensionAPI();
     const survivor: unknown[] = [];
 
-    const doomed = api.startAction("oss", "upload", {}, () => undefined);
-    const alive = api.startAction("oss", "upload", {}, (e) => survivor.push(e.data));
+    const doomed = api.callTool("oss", "upload", {}, 12, { onEvent: () => undefined });
+    const alive = api.callTool("oss", "upload", {}, 12, { onEvent: (e) => survivor.push(e.data) });
+    const [idDoomed, idAlive] = [invocationIdOf(0), invocationIdOf(1)];
 
-    pendingCalls.get(doomed.invocationId)?.("{}");
-    await doomed.result;
+    pendingCalls.get(idDoomed)?.("{}");
+    await doomed;
 
-    emit({ extension: "oss", invocationId: alive.invocationId, eventType: "progress", data: { pct: 42 } });
+    emit({ extension: "oss", invocationId: idAlive, eventType: "progress", data: { pct: 42 } });
     expect(survivor).toEqual([{ pct: 42 }]);
 
-    pendingCalls.get(alive.invocationId)?.("{}");
-    await alive.result;
+    pendingCalls.get(idAlive)?.("{}");
+    await alive;
+    emit({ extension: "oss", invocationId: idAlive, eventType: "progress", data: { pct: 99 } });
+    expect(survivor).toEqual([{ pct: 42 }]);
+    expect(listeners.get("ext:tool:event")?.size ?? 0).toBe(0);
   });
 
-  it("cancels only the run it was asked to cancel", async () => {
+  it("cancels only the call whose signal was aborted", async () => {
+    holdCalls = true;
     const api = createExtensionAPI();
-    const a = api.startAction("oss", "upload", {}, () => undefined);
-    const b = api.startAction("oss", "upload", {}, () => undefined);
+    const controller = new AbortController();
+    const a = api.callTool("oss", "upload", {}, 12, { signal: controller.signal, onEvent: () => undefined });
+    const b = api.callTool("oss", "upload", {}, 12, { onEvent: () => undefined });
+    const [idA, idB] = [invocationIdOf(0), invocationIdOf(1)];
 
-    await a.cancel();
+    controller.abort();
+    await expect(a).rejects.toMatchObject({ name: "AbortError" });
 
-    expect(CancelExtensionAction).toHaveBeenCalledTimes(1);
-    expect(CancelExtensionAction).toHaveBeenCalledWith("oss", a.invocationId);
+    expect(CancelExtensionTool).toHaveBeenCalledTimes(1);
+    expect(CancelExtensionTool).toHaveBeenCalledWith(idA);
 
-    pendingCalls.get(a.invocationId)?.("{}");
-    pendingCalls.get(b.invocationId)?.("{}");
-    await Promise.all([a.result, b.result]);
-  });
-
-  it("passes the invocation id the caller will cancel with to the backend", async () => {
-    const api = createExtensionAPI();
-    const run = api.startAction("oss", "upload", { file: "x" });
-
-    expect(CallExtensionAction).toHaveBeenCalledWith(
-      "oss",
-      "upload",
-      JSON.stringify({ file: "x" }),
-      run.invocationId,
-      0
-    );
-
-    pendingCalls.get(run.invocationId)?.('{"ok":true}');
-    await expect(run.result).resolves.toEqual({ ok: true });
+    pendingCalls.get(idB)?.('{"ok":true}');
+    await expect(b).resolves.toEqual({ ok: true });
   });
 
   // A page opened on an asset names it; the guest reads it off the call envelope
@@ -127,27 +119,20 @@ describe("extension action API", () => {
 
     await api.callTool("notebook", "note_list", {});
     expect(CallExtensionTool).toHaveBeenLastCalledWith("notebook", "note_list", "{}", expect.any(String), 0);
-
-    const run = api.startAction("notebook", "sync", {}, undefined, 12);
-    expect(CallExtensionAction).toHaveBeenCalledWith("notebook", "sync", "{}", run.invocationId, 12);
-    pendingCalls.get(run.invocationId)?.("{}");
-    await run.result;
   });
 
-  // The invocation id is what CancelExtensionTool names: it must be a real,
-  // call-unique token, not an empty string or a constant reused across calls
-  // (either of which would let one call's abort stop another, or be refused by
-  // the backend outright). The "always allow" grant session is not derived from
-  // it — the backend keys that on the asset.
+  // The invocation id is what CancelExtensionTool names and what every event of
+  // the call carries: it must be a real, call-unique token, not an empty string
+  // or a constant reused across calls (either of which would let one call's abort
+  // stop another, or be refused by the backend outright).
   it("mints a distinct invocation id for each callTool call", async () => {
     const api = createExtensionAPI();
 
     await api.callTool("notebook", "note_put", { key: "a" }, 12);
     await api.callTool("notebook", "note_put", { key: "b" }, 12);
 
-    const [firstCall, secondCall] = (CallExtensionTool as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    const firstInvocationId = firstCall[3];
-    const secondInvocationId = secondCall[3];
+    const firstInvocationId = invocationIdOf(0);
+    const secondInvocationId = invocationIdOf(1);
     expect(firstInvocationId).toEqual(expect.any(String));
     expect(firstInvocationId).not.toBe("");
     expect(firstInvocationId).not.toEqual(secondInvocationId);
@@ -170,8 +155,7 @@ describe("extension action API", () => {
     controller.abort();
 
     await expect(call).rejects.toMatchObject({ name: "AbortError" });
-    const invocationId = vi.mocked(CallExtensionTool).mock.calls[0][3];
-    expect(CancelExtensionTool).toHaveBeenCalledWith(invocationId);
+    expect(CancelExtensionTool).toHaveBeenCalledWith(invocationIdOf(0));
   });
 
   it("does not start a call whose signal is already aborted", async () => {

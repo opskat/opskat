@@ -31,6 +31,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // --- fixtures ----------------------------------------------------------------
@@ -94,7 +95,7 @@ func writeExtManifest(t *testing.T, stub *describeCacheStub, dir, name, assetTyp
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
-		"hostABI": extension.HostABIVersion,
+		"hostABI": extmanifest.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 	}
 	data, err := json.Marshal(manifest)
@@ -104,20 +105,22 @@ func writeExtManifest(t *testing.T, stub *describeCacheStub, dir, name, assetTyp
 
 	descriptor, err := json.Marshal(map[string]any{
 		"i18n": map[string]any{"displayName": name + " display", "description": name + " description"},
-		"assetTypes": []map[string]any{{
-			"type": assetType,
-			"i18n": map[string]any{"name": assetType},
-			"configSchema": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"endpoint": map[string]any{"type": "string"}},
-			},
-		}},
-		"tools": []map[string]any{{
-			"name":         "list_objects",
-			"policyAction": "list",
-			"parameters":   map[string]any{"type": "object", "properties": map[string]any{}},
-		}},
-		"policies": map[string]any{"type": name},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{{
+				"type": assetType,
+				"i18n": map[string]any{"name": assetType},
+				"configSchema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"endpoint": map[string]any{"type": "string"}},
+				},
+			}},
+			"tools": []map[string]any{{
+				"name":         "list_objects",
+				"policyAction": "list",
+				"parameters":   map[string]any{"type": "object", "properties": map[string]any{}},
+			}},
+			"policy": map[string]any{"type": name},
+		},
 	})
 	require.NoError(t, err)
 	stub.payloads[name] = string(descriptor)
@@ -161,6 +164,38 @@ func TestScanInstalledExtensionsUsesTheRealManifestParser(t *testing.T) {
 	assert.True(t, got[0].Enabled)
 }
 
+// The scan lists the accepted extensions by name and, apart from them, the ones the
+// host refuses with their reason (a retired hostABI, an unparsable manifest), in
+// directory order; a directory without a manifest.json is in neither.
+func TestScanExtensionDirsWithFailuresListsAcceptedAndRefused(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "zeta", "zeta-store")
+	writeExtManifest(t, stub, dir, "acme", "acme-store")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "legacy"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "legacy", "manifest.json"),
+		[]byte(`{"name":"legacy-abi","version":"1.2.0","hostABI":"2.2","backend":{"runtime":"wasm","binary":"main.wasm"}}`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "broken"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken", "manifest.json"), []byte(`{not json`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "no-manifest"), 0o755))
+
+	scanned, failures, err := scanExtensionDirsWithFailures()
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(scanned))
+	for _, s := range scanned {
+		names = append(names, s.info.Name)
+	}
+	assert.Equal(t, []string{"acme", "zeta"}, names)
+
+	require.Len(t, failures, 2)
+	assert.Equal(t, "broken", failures[0].Name)
+	require.Error(t, failures[0].Err)
+	assert.Equal(t, "legacy-abi", failures[1].Name)
+	assert.Equal(t, "1.2.0", failures[1].Version)
+	assert.Contains(t, failures[1].Err.Error(), "hostABI 2.2")
+}
+
 func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 	dir := withExtensionDir(t, &extension_state_entity.ExtensionState{Name: "acme", Enabled: false})
 	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
@@ -183,7 +218,7 @@ func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 // leak an asset type into the next one (registration refuses duplicates).
 func forgetExtension(t *testing.T, name string) {
 	t.Helper()
-	t.Cleanup(func() { extreg.Unregister(name) })
+	t.Cleanup(func() { extensionContributions.Revoke(name) })
 }
 
 func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) {
@@ -214,6 +249,50 @@ func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) 
 	// …but nothing executes until exec activates the extension: this registration
 	// compiles no WASM.
 	assert.NotContains(t, permission.RegisteredExecTypes(), "acme-store")
+}
+
+// An extension contributing no asset type (here: only snippets) is a complete
+// cached answer, not a missing one: opsctl attaches it from the cache like any other,
+// without loading its WASM, and judges it by the same contribution points.
+func TestRegisterExtensionAssetTypesTakesACachedAnswerWithoutAssetTypes(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "snips", "unused")
+	stub.payloads["snips"] = `{"i18n":{"displayName":"s","description":"d"},"contributes":{` +
+		`"snippets":{"seed":[{"key":"ls","name":"ls","category":"shell","content":"ls -al"}]}}}`
+	forgetExtension(t, "snips")
+	var described []string
+	swapGlobal(t, func() func(context.Context, string) (*extension.ManifestInfo, error) { return describeExtensionFn },
+		func(f func(context.Context, string) (*extension.ManifestInfo, error)) { describeExtensionFn = f },
+		func(_ context.Context, dir string) (*extension.ManifestInfo, error) {
+			described = append(described, filepath.Base(dir))
+			return nil, errors.New("must not describe: the cache has the answer")
+		})
+
+	stderr := captureStderr(t, registerExtensionAssetTypes)
+
+	assert.Empty(t, described)
+	assert.Empty(t, stderr)
+	// Attached: a second attach of the same name is refused.
+	err := extensionContributions.Attach((&extension.ManifestInfo{Name: "snips", Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "snips"}}}).View())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already attached")
+}
+
+// A cached answer the contribution points refuse is reported, not attached — the
+// verdict loading the extension would reach.
+func TestScanInstalledExtensionsSkipsACachedAnswerThePointsRefuse(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "widgety", "widgety-store")
+	stub.payloads["widgety"] = `{"i18n":{"displayName":"w","description":"d"},"contributes":{"widgets":[]}}`
+	forgetExtension(t, "widgety")
+
+	results, err := scanInstalledExtensions()
+	require.NoError(t, err)
+	for _, r := range results {
+		assert.NotEqual(t, "widgety", r.Name, "an extension the app would refuse is not listed as installed")
+	}
 }
 
 func TestRegisterExtensionAssetTypesReportsAFailedDescribeInsteadOfRegisteringNothing(t *testing.T) {
@@ -269,6 +348,48 @@ func TestUnsupportedExecTypeError_UnchangedWhenNoExtensionFailed(t *testing.T) {
 	err := unsupportedExecTypeError(&asset_entity.Asset{Name: "a", Type: "rdp"})
 
 	assert.NotContains(t, err.Error(), "failed to describe")
+}
+
+// An asset of an installed extension the host refuses (a retired hostABI, or a
+// manifest in another shape) fails `exec` naming the extension and the reason; the
+// asset row alone says who owns it, and the extension is never loaded.
+func TestCmdExec_AssetOfARefusedExtensionNamesTheExtensionAndWhy(t *testing.T) {
+	cases := []struct {
+		name, manifest string
+		wants          []string
+	}{
+		{"retired hostABI",
+			`{"name":"` + extensiontest.FixtureName + `","version":"1.0.0","hostABI":"2.3","backend":{"runtime":"wasm","binary":"main.wasm"}}`,
+			[]string{"hostABI 2.3", "supports only"}},
+		{"old shape",
+			`{"name":"` + extensiontest.FixtureName + `","version":"1.0.0","hostABI":"` + extmanifest.HostABIVersion + `","capabilities":["x"],"backend":{"runtime":"wasm","binary":"main.wasm"}}`,
+			[]string{"capabilities"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupLocalExtExec(t)
+			require.NoError(t, os.WriteFile(filepath.Join(env.extDir, "manifest.json"), []byte(tc.manifest), 0o600))
+			extensionContributions.Revoke(extensiontest.FixtureName)
+			registerExtensionAssetTypes()
+			owned := &asset_entity.Asset{
+				Name: "fx-refused", Type: "fixture", ExtensionName: extensiontest.FixtureName,
+				Status: asset_entity.StatusActive, Createtime: 1, Config: `{"endpoint":"http://127.0.0.1:1"}`,
+			}
+			require.NoError(t, asset_repo.Asset().Create(context.Background(), owned))
+
+			code, stdout, stderr := env.exec(t, "fx-refused", "--", "echo", "--msg", "hi")
+
+			assert.Equal(t, 1, code)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, `"`+extensiontest.FixtureName+`"`)
+			for _, want := range tc.wants {
+				assert.Contains(t, stderr, want)
+			}
+			extensionHost.mu.Lock()
+			defer extensionHost.mu.Unlock()
+			assert.Nil(t, extensionHost.svc, "a refused extension must not be loaded")
+		})
+	}
 }
 
 // --- ext dev -----------------------------------------------------------------
@@ -332,21 +453,21 @@ func TestExtRoutesDevToTheDevSubcommand(t *testing.T) {
 	assert.Equal(t, dir, *sent)
 }
 
-// --- file-readable parameters -------------------------------------------------
+// --- large parameters -------------------------------------------------
 
 // registerBulkExtension makes opsctl learn, from the cached describe(), an
-// extension whose `bulk` tool has a file-readable `body` parameter.
+// extension whose `bulk` tool has a large `body` parameter.
 func registerBulkExtension(t *testing.T) {
 	t.Helper()
 	dir := withExtensionDir(t)
 	stub := installDescribeStub(t)
 	writeExtManifest(t, stub, dir, "acme", "acme-store")
-	var d map[string]any
+	var d map[string]map[string]any
 	require.NoError(t, json.Unmarshal([]byte(stub.payloads["acme"]), &d))
-	d["tools"] = []map[string]any{{
+	d["contributes"]["tools"] = []map[string]any{{
 		"name":         "bulk",
 		"policyAction": "write",
-		"fileParams":   []string{"body"},
+		"large":        []string{"body"},
 		"parameters": map[string]any{"type": "object", "properties": map[string]any{
 			"body":  map[string]any{"type": "string"},
 			"index": map[string]any{"type": "string"},
@@ -406,7 +527,7 @@ func TestPrepareExtensionExecExpandsFileFlags(t *testing.T) {
 // row, then runs opsctl's boot registration.
 func bootWithoutDescribeCache(t *testing.T, env *localExtEnv) {
 	t.Helper()
-	extreg.Unregister(extensiontest.FixtureName)
+	extensionContributions.Revoke(extensiontest.FixtureName)
 	require.NoError(t, repoDescribeCache{}.DeleteDescriptor(extensiontest.FixtureName))
 	_, payload, err := repoDescribeCache{}.LoadDescriptor(extensiontest.FixtureName)
 	require.NoError(t, err)
@@ -589,7 +710,7 @@ func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionSta
 	dir := extensiontest.InstallDBDriverFixture(t, root)
 	mgr := extension.NewManager(root, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, zap.NewNop())
+	}, extensionContributions, zap.NewNop())
 	_, err := mgr.LoadExtension(ctx, dir)
 	require.NoError(t, err)
 	mgr.Close(ctx)
@@ -600,10 +721,10 @@ func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionSta
 		s.Enabled = enabled
 		require.NoError(t, extension_state_repo.ExtensionState().Update(ctx, s))
 	}
-	extreg.Unregister(extensiontest.FixtureName)
+	extensionContributions.Revoke(extensiontest.FixtureName)
 	t.Cleanup(func() {
 		releaseExtensions(ctx)
-		extreg.Unregister(extensiontest.DBDriverFixtureName)
+		extensionContributions.Revoke(extensiontest.DBDriverFixtureName)
 	})
 	registerExtensionAssetTypes()
 
@@ -639,7 +760,7 @@ func setupDriverExt(t *testing.T, states ...*extension_state_entity.ExtensionSta
 // knows its driver from the cached answer, so opsctl sees it with no WASM compiled.
 func TestRegisterExtensionAssetTypes_DriverOnlyExtensionRegistersItsDriverFromTheCache(t *testing.T) {
 	setupDriverExt(t)
-	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	extensionContributions.Revoke(extensiontest.DBDriverFixtureName)
 	var described []string
 	swapGlobal(t, func() func(context.Context, string) (*extension.ManifestInfo, error) { return describeExtensionFn },
 		func(f func(context.Context, string) (*extension.ManifestInfo, error)) { describeExtensionFn = f },
@@ -775,7 +896,7 @@ func withDriverFields(t *testing.T) {
 	require.NoError(t, err)
 	var desc map[string]any
 	require.NoError(t, json.Unmarshal(payload, &desc))
-	drivers := desc["databaseDrivers"].([]any)
+	drivers := desc["contributes"].(map[string]any)["databaseDrivers"].([]any)
 	drivers[0].(map[string]any)["driverFields"] = []map[string]any{
 		{"key": "service_name", "type": "text", "tab": "connection", "required": true},
 		{"key": "wallet_secret", "type": "password", "tab": "connection"},
@@ -783,7 +904,7 @@ func withDriverFields(t *testing.T) {
 	patched, err := json.Marshal(desc)
 	require.NoError(t, err)
 	require.NoError(t, repoDescribeCache{}.StoreDescriptor(extensiontest.DBDriverFixtureName, hash, patched))
-	extreg.Unregister(extensiontest.DBDriverFixtureName)
+	extensionContributions.Revoke(extensiontest.DBDriverFixtureName)
 	registerExtensionAssetTypes()
 	d, ok := dbregistry.ByName("fixturedb")
 	require.True(t, ok)

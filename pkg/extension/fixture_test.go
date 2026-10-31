@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -172,7 +173,7 @@ func (h *recordedHost) KVSet(key string, value []byte) error {
 	return nil
 }
 
-func (h *recordedHost) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
+func (h *recordedHost) ToolEvent(invocationID, eventType string, data json.RawMessage) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, recordedEvent{Invocation: invocationID, Type: eventType, Data: data})
@@ -241,8 +242,9 @@ func TestFixtureTypedConfigCredential(t *testing.T) {
 			So(err, ShouldBeNil)
 			desc, err := ParseDescriptor(payload)
 			So(err, ShouldBeNil)
-			So(desc.AssetTypes, ShouldHaveLength, 1)
-			So(PasswordFieldsFromSchema(desc.AssetTypes[0].ConfigSchema), ShouldResemble, []string{"password"})
+			types := faceOf(t, Described(extmanifest.Manifest{}, desc)).AssetTypes
+			So(types, ShouldHaveLength, 1)
+			So(schemaFieldsWithFormat(types[0].ConfigSchema, "password"), ShouldResemble, []string{"password"})
 		})
 	})
 }

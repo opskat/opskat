@@ -1905,7 +1905,7 @@
   "opsctlApproval": {
     "title": "CLI 操作审批",
     "description": "opsctl 正在请求批准以下操作：",
-    "extDevInstallDescription": "opsctl ext dev 请求从以下目录安装并启用一个未打包的扩展，它将获得清单里声明的全部能力：",
+    "extDevInstallDescription": "opsctl ext dev 请求从以下目录安装并启用一个未打包的扩展，它将获得清单里声明的全部权限：",
     "allow": "允许",
     "deny": "拒绝",
     "typeExec": "执行命令",
@@ -3145,6 +3145,8 @@
     "count": "{{count}} 个问题"
   },
   "extension": {
+    "incompatible": "不兼容",
+    "loadFailed": "加载失败",
     "title": "扩展",
     "mirror": {
       "title": "扩展下载",
@@ -3173,7 +3175,7 @@
       "unavailable": "无法安装",
       "installedVersion": "已装 {{version}}",
       "reason": {
-        "hostABI": "需要更新 OpsKat（需 hostABI {{hostABI}}）",
+        "hostABI": "该版本声明 hostABI {{hostABI}}，当前 OpsKat 仅支持 {{supported}}",
         "minAppVersion": "需要 OpsKat {{version}} 及以上版本",
         "source": "需要更新 OpsKat 才能下载此扩展包"
       },
@@ -3221,7 +3223,9 @@
       "fsRead": "读取本地文件",
       "fsWrite": "写入本地文件",
       "http": "访问网络",
-      "tunnel": "访问内网"
+      "allowPrivate": "访问内网",
+      "assetRoute": "经资产连接路径访问",
+      "kerberos": "申请 Kerberos 票据"
     },
     "installed": "已安装扩展",
     "noExtensions": "未安装扩展",
@@ -3247,25 +3251,28 @@
     "disableSuccess": "扩展已禁用",
     "detail": "详情",
     "credentialsReadWarning": "此扩展可以明文读取其资产中保存的全部密码（credentials: read），请确认你信任它的作者后再使用。",
+    "assetRouteWarning": "此扩展可以沿资产的连接路径连到你没有填写的地址，例如数据库重定向的目标、集群节点、隧道后面的主机。请确认你信任它的作者后再使用。",
+    "kerberosWarning": "此扩展可以用资产里保存的 Kerberos 凭据去申请票据，请确认你信任它的作者后再使用。",
     "databaseDriversWarning": "此扩展提供数据库驱动：使用这些驱动的数据库资产，其连接口令与 TLS 客户端私钥会以明文交给扩展，请确认你信任它的作者后再使用。",
     "installConfirm": {
       "title": "安装扩展？",
       "titleUpdate": "更新扩展？",
       "titleDowngrade": "降级扩展？",
-      "description": "安装前请确认扩展的来历与它申请的能力。",
-      "descriptionUpdate": "更新前请确认新版本申请的能力有哪些变化。",
-      "descriptionDowngrade": "将用旧版本覆盖当前版本，继续前请确认它申请的能力。",
+      "description": "安装前请确认扩展的来历与它申请的权限。",
+      "descriptionUpdate": "更新前请确认新版本申请的权限有哪些变化。",
+      "descriptionDowngrade": "将用旧版本覆盖当前版本，继续前请确认它申请的权限。",
       "source": "来源",
       "sourceStore": "官方商店，签名已验证",
       "sourceFile": "本地文件",
       "sourceDir": "本地目录",
       "size": "大小",
-      "capabilities": "申请的能力",
-      "noCapabilities": "除自身目录外不申请任何能力",
+      "capabilities": "申请的权限",
+      "noCapabilities": "不申请任何权限",
       "added": "新增",
+      "highRisk": "高风险",
       "databaseDriver": "提供数据库驱动",
-      "databaseRedirects": "可连到数据库重定向的地址（经资产途径）",
-      "databaseKerberos": "可用资产里的 Kerberos 凭据为登录数据库取票",
+      "assetRoute": "可经资产的连接路径连到任意地址",
+      "kerberos": "可用资产里的 Kerberos 凭据申请票据",
       "downgrade": "降级",
       "install": "安装",
       "update": "更新",

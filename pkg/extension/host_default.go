@@ -21,35 +21,12 @@ import (
 // DialContextFunc opens a network connection, like net.Dialer.DialContext.
 type DialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// AssetDialer resolves the host-owned connection path (SSH tunnel, proxy chain,
-// TLS) to an asset's endpoint. An implementation is scoped to one extension and
-// refuses an asset whose type that extension does not register.
-type AssetDialer interface {
-	// DialContextFor returns the dial function, TLS config, and a fingerprint of
-	// assetID's connection settings. dial is nil when the asset connects
-	// directly (no tunnel/proxy chain); tlsConfig is nil when the asset's type
-	// does not declare/enable TLS. fingerprint changes whenever the resolved
-	// tunnel, proxy chain or TLS settings change — it lets a cached HTTP client
-	// (see DefaultHostProvider.httpClients) detect that it was built for a
-	// since-changed configuration and must be rebuilt rather than reused. An
-	// error means the path cannot be built; it must be returned, never
-	// downgraded to a direct or unverified connection.
-	DialContextFor(ctx context.Context, assetID int64) (dial DialContextFunc, tlsConfig *tls.Config, fingerprint string, err error)
-}
-
 // AssetConfigGetter reads the config of the assets an extension owns.
 type AssetConfigGetter interface {
 	// GetAssetConfig returns the config the guest sees through
 	// ctx.AssetConfig(): password fields as plaintext or opaque handles, per the
 	// extension's credentials capability.
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
-	// AssetCredentialValues returns the named config fields of assetID as
-	// strings, format:"password" fields decrypted whatever the extension's
-	// credentials capability — it feeds host-side credential injection
-	// (AuthDef) only, and its result must never reach the guest. A field the
-	// config lacks is absent from the map; a password field that does not
-	// decrypt is an error.
-	AssetCredentialValues(ctx context.Context, assetID int64, fields []string) (map[string]string, error)
 }
 
 type FileDialogOpener interface {
@@ -61,8 +38,8 @@ type KVStore interface {
 	Set(key string, value []byte) error
 }
 
-type ActionEventHandler interface {
-	OnActionEvent(invocationID, eventType string, data json.RawMessage) error
+type ToolEventHandler interface {
+	OnToolEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type DefaultHostConfig struct {
@@ -70,8 +47,11 @@ type DefaultHostConfig struct {
 	AssetConfigs AssetConfigGetter
 	FileDialogs  FileDialogOpener
 	KV           KVStore
-	ActionEvents ActionEventHandler
-	AssetDialer  AssetDialer // connection path of the invocation's asset (nil = always direct)
+	ToolEvents   ToolEventHandler
+	// Scopes resolves the scope of a call on an asset (endpoints, connection
+	// path, credential injection) the first time the call needs it; nil gives
+	// every asset an empty scope, which reaches nothing beyond the allowlist.
+	Scopes ScopeResolver
 	// ExtensionName scopes this provider's cached HTTP clients (httpClientCache)
 	// in the process-wide registry (registerHTTPClientCache / DiscardHostHTTPCache)
 	// so the extension lifecycle (internal/service/extension_svc) can release them
@@ -101,13 +81,16 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 		return OpenFileResource(params.Path, params.Mode)
 	case "http":
 		if asset == nil {
+			if params.Dial != nil {
+				// Along an asset's connection path to an address that is not one
+				// of its endpoints (network.assetRoute): single-use, no credentials,
+				// no TLS settings of the asset's — the route dial itself vets
+				// each connection, redirect hops included.
+				return openHTTPResourceWithClient(params, buildSingleUseEndpointClient(params.Dial, nil, true), nil)
+			}
 			// Not an asset endpoint: a direct, single-use client — no connection
 			// path to apply and no asset to key a cache on.
 			return OpenHTTPResource(params)
-		}
-		dial, tlsConfig, fingerprint, err := h.assetDial(ctx, asset)
-		if err != nil {
-			return nil, err
 		}
 		// Credentials are resolved per request and ride on it, never on the
 		// cached client: the client outlives this call and serves the asset's
@@ -121,11 +104,11 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 			// way — nothing to key a cache entry on that would ever hit — so it
 			// gets a single-use client, like the unscoped path above, but still
 			// carries whatever credentials resolveAuth rendered.
-			client := buildSingleUseEndpointClient(dial, tlsConfig, params.AllowPrivate)
+			client := buildSingleUseEndpointClient(params.Dial, params.TLS, params.AllowPrivate)
 			return openHTTPResourceWithClient(params, client, auth)
 		}
-		client, built := h.httpClients.getOrCreate(asset.ID, fingerprint, func() *http.Client {
-			return buildCachedHTTPClient(dial, tlsConfig, params.AllowPrivate)
+		client, built := h.httpClients.getOrCreate(asset.ID, params.Fingerprint, func() *http.Client {
+			return buildCachedHTTPClient(params.Dial, params.TLS, params.AllowPrivate)
 		})
 		if built {
 			logger.Ctx(ctx).Info("extension HTTP client cache miss, built new client",
@@ -133,93 +116,44 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 		}
 		return openHTTPResourceWithClient(params, client, auth)
 	case "tcp":
-		dial, tlsConfig, _, err := h.assetDial(ctx, asset)
-		if err != nil {
-			return nil, err
-		}
-		return openTCP(ctx, dial, tlsConfig, params, asset)
+		return openTCP(ctx, params.Dial, params.TLS, params, asset)
 	default:
 		return nil, fmt.Errorf("unknown IO type: %q", params.Type)
 	}
 }
 
-// resolveAuth renders the asset's active auth group into the credentials to
-// inject; nil when the request carries no auth declaration or no group is
-// selected. Any failure to read or decrypt a referenced field fails the open —
-// sending the request without the credentials the user configured would be a
-// silent downgrade.
+// resolveAuth renders the request's credential injection (the scope's Auth);
+// nil when the request carries none or the asset selects no credentials. Any
+// failure to read or decrypt a referenced field fails the open — sending the
+// request without the credentials the user configured would be a silent
+// downgrade.
 func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, auth *HTTPAuth) (*requestAuth, error) {
 	if auth == nil {
 		return nil, nil
 	}
-	fail := func(err error) (*requestAuth, error) {
+	values, err := auth.Credentials(ctx)
+	if err != nil {
 		logger.Ctx(ctx).Error("extension credential injection failed",
 			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.Error(err))
-		return nil, fmt.Errorf("credentials of asset %q: %w", asset.Name, err)
+		return nil, fmt.Errorf("credentials of asset %s: %w", assetLabel(asset), err)
 	}
-	var selected string
-	if auth.Def.Selector != "" {
-		values, err := h.credentialValues(ctx, asset, []string{auth.Def.Selector})
-		if err != nil {
-			return fail(err)
-		}
-		selected = values[auth.Def.Selector]
-	}
-	group := auth.Def.activeGroup(selected)
-	if group == nil {
-		logger.Ctx(ctx).Debug("extension asset selects no auth group",
-			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.String("selector", selected))
+	if values == nil {
+		logger.Ctx(ctx).Debug("extension asset selects no credentials",
+			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID))
 		return nil, nil
 	}
-	values, err := h.credentialValues(ctx, asset, group.fields())
-	if err != nil {
-		return fail(err)
-	}
 	logger.Ctx(ctx).Debug("extension credentials injected for endpoint request",
-		zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID),
-		zap.String("group", group.When), zap.Int("bindings", len(group.Bindings)))
-	return &requestAuth{bindings: group.render(values), isEndpoint: auth.IsEndpoint}, nil
+		zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.Int("bindings", len(values)))
+	return &requestAuth{bindings: values, isEndpoint: auth.IsEndpoint}, nil
 }
 
-// credentialValues resolves the named config fields of asset as strings: from
-// the database for a saved asset, or out of an ad-hoc call's host-only
-// Credentials (already plaintext — see AdHocAssetConfig) for a test-connection
-// call, which has no database row to decrypt from in the first place.
-func (h *DefaultHostProvider) credentialValues(ctx context.Context, asset *AssetRef, fields []string) (map[string]string, error) {
-	if asset.AdHoc != nil {
-		return ConfigFieldValues(asset.AdHoc.Credentials, fields)
+// resolveScope resolves the scope of a call on asset through the host's
+// ScopeResolver (scopeSource). Without one every asset gets an empty scope.
+func (h *DefaultHostProvider) resolveScope(ctx context.Context, asset *AssetRef) (*Scope, error) {
+	if h.cfg.Scopes == nil {
+		return &Scope{Asset: asset}, nil
 	}
-	return h.cfg.AssetConfigs.AssetCredentialValues(ctx, asset.ID, fields)
-}
-
-// assetDial resolves the connection path and TLS settings of the invocation's
-// asset; a nil dial means a direct dial, a nil tlsConfig means no TLS. A path
-// that cannot be built fails the open — falling back to a direct or unverified
-// connection would silently bypass what the user configured.
-func (h *DefaultHostProvider) assetDial(ctx context.Context, asset *AssetRef) (DialContextFunc, *tls.Config, string, error) {
-	if asset == nil || h.cfg.AssetDialer == nil {
-		return nil, nil, "", nil
-	}
-	if asset.AdHoc != nil {
-		dialer, ok := h.cfg.AssetDialer.(AdHocAssetDialer)
-		if !ok {
-			return nil, nil, "", fmt.Errorf("connection path of asset type %q: host does not support testing an ad-hoc connection", asset.Type)
-		}
-		dial, tlsConfig, err := dialer.DialContextForConfig(ctx, asset.Type, asset.AdHoc)
-		if err != nil {
-			logger.Ctx(ctx).Error("extension ad-hoc connection path failed",
-				zap.String("assetType", asset.Type), zap.Error(err))
-			return nil, nil, "", fmt.Errorf("connection path of asset type %q: %w", asset.Type, err)
-		}
-		return dial, tlsConfig, "", nil
-	}
-	dial, tlsConfig, fingerprint, err := h.cfg.AssetDialer.DialContextFor(ctx, asset.ID)
-	if err != nil {
-		logger.Ctx(ctx).Error("extension asset connection path failed",
-			zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))
-		return nil, nil, "", fmt.Errorf("connection path of asset %q: %w", asset.Name, err)
-	}
-	return dial, tlsConfig, fingerprint, nil
+	return h.cfg.Scopes(ctx, h.cfg.ExtensionName, *asset)
 }
 
 // InvalidateAssetHTTPClient drops assetID's cached HTTP client, closing its
@@ -330,11 +264,11 @@ func (h *DefaultHostProvider) KVSet(key string, value []byte) error {
 	return h.cfg.KV.Set(key, value)
 }
 
-func (h *DefaultHostProvider) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
-	if h.cfg.ActionEvents == nil {
+func (h *DefaultHostProvider) ToolEvent(invocationID, eventType string, data json.RawMessage) error {
+	if h.cfg.ToolEvents == nil {
 		return nil
 	}
-	return h.cfg.ActionEvents.OnActionEvent(invocationID, eventType, data)
+	return h.cfg.ToolEvents.OnToolEvent(invocationID, eventType, data)
 }
 
 // httpClientCache caches one *http.Client per asset, keyed by the asset id and
@@ -427,7 +361,7 @@ func closeIdleHTTPClient(client *http.Client) {
 // can release cached keep-alive connections on disable/uninstall, and so a
 // reinstall's new DefaultHostProvider can release the version it replaces —
 // without pkg/extension depending on that layer (DefaultHostProvider's
-// dependencies are all injected the other way around, e.g. AssetDialer).
+// dependencies are all injected the other way around, e.g. Scopes).
 // Same-name registration always supersedes: the loader never keeps two live
 // providers under one name, so the superseded one will never be called again,
 // matching the invariant internal/assetconn documents for its own registry.

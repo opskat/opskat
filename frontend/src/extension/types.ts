@@ -3,8 +3,9 @@
 // ExtManifest is the backend's merged view of one extension, delivered by
 // ListInstalledExtensions — the security contract read from manifest.json plus the
 // functional face the WASM module reported through describe(). The frontend never
-// parses manifest.json itself: pkg/extension is the only reader of that file, and
-// the shape below is what internal/service/extension_svc serialises.
+// parses manifest.json itself: pkg/extmanifest.Parse is the only reader of that
+// file, and the shape below is internal/extreg.Manifest, the typed view
+// internal/service/extension_svc serialises.
 
 export interface ExtManifest {
   name: string;
@@ -13,15 +14,15 @@ export interface ExtManifest {
   minAppVersion?: string;
   i18n: { displayName: string; description: string };
   backend?: { runtime: string; binary: string };
-  capabilities?: ExtCapabilities;
+  permissions?: ExtPermissions;
   assetTypes?: ExtAssetType[];
   tools?: ExtToolDef[];
   policies?: ExtPolicies;
   frontend?: ExtFrontend;
 }
 
-/** The capability grants from manifest.json (the subset the frontend reads). */
-export interface ExtCapabilities {
+/** The permission grants from manifest.json (the subset the frontend reads). */
+export interface ExtPermissions {
   /** "read" hands the extension the plaintext of its assets' password fields. */
   credentials: string;
 }
@@ -42,7 +43,7 @@ export interface ExtAssetType {
  * The credential injection an asset type declares in describe(), as far as a form
  * needs it: `selector` is the config field (a dropdown) that picks the auth method,
  * and each group lists the config fields its method uses — derived by the backend
- * from the group's bindings (pkg/extension AuthGroup.MarshalJSON).
+ * from the group's bindings (internal/extreg AuthGroup.MarshalJSON).
  */
 export interface ExtAuth {
   selector?: string;
@@ -66,7 +67,8 @@ export interface ExtToolDef {
   parameters: Record<string, unknown>;
   /**
    * The fixed policy action this tool requests; declared at the tool's registration in
-   * the guest. Absent for a tool that classifies each call from its arguments.
+   * the guest. Absent for a tool that classifies each call from its arguments, and for
+   * a page-only tool, which requests none.
    */
   policyAction?: string;
 }
@@ -91,7 +93,8 @@ export interface ExtFrontend {
 
 export interface ExtPage {
   id: string;
-  slot?: string;
+  /** Always set: the host refuses a page without a slot (internal/extreg pagesPoint). */
+  slot: string;
   i18n: { name: string };
   component: string;
 }
@@ -112,20 +115,20 @@ export interface ExtEvent {
 // works on an asset passes the `assetId` prop it was rendered with. Leaving it out
 // means "this call has no asset", which is what testing an unsaved configuration is.
 //
-// `options.signal` cancels a call in flight: the backend interrupts the tool —
-// host IO it is blocked in included — and the returned promise rejects with the
-// signal's reason (an AbortError unless the caller gave another).
+// `options.signal` cancels a call in flight: the tool's ShouldStop turns true,
+// host IO it is blocked in fails, a tool that does not stop on its own is cut
+// off, and the returned promise rejects with the signal's reason (an AbortError
+// unless the caller gave another).
+//
+// `options.onEvent` receives the events the tool emits while this call runs —
+// this call's only, never another call's of the same extension.
 export interface ExtCallOptions {
   signal?: AbortSignal;
+  onEvent?: (e: ExtEvent) => void;
 }
 
+// The page API: calling a tool is the one entry point, canceling is its signal.
+// A page may call any tool of its own extension, page-only or not.
 export interface ExtAPI {
   callTool(extName: string, tool: string, args: unknown, assetId?: number, options?: ExtCallOptions): Promise<unknown>;
-  executeAction(
-    extName: string,
-    action: string,
-    args: unknown,
-    onEvent?: (e: ExtEvent) => void,
-    assetId?: number
-  ): Promise<unknown>;
 }

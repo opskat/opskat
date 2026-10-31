@@ -1905,7 +1905,7 @@
   "opsctlApproval": {
     "title": "CLI Operation Approval",
     "description": "opsctl is requesting approval for the following operation:",
-    "extDevInstallDescription": "opsctl ext dev wants to install and enable an unpacked extension from this directory. It will get every capability its manifest declares:",
+    "extDevInstallDescription": "opsctl ext dev wants to install and enable an unpacked extension from this directory. It will be granted every permission its manifest declares:",
     "allow": "Allow",
     "deny": "Deny",
     "typeExec": "Execute Command",
@@ -3145,6 +3145,8 @@
     "count": "{{count}} issue(s)"
   },
   "extension": {
+    "incompatible": "Incompatible",
+    "loadFailed": "Load failed",
     "title": "Extensions",
     "mirror": {
       "title": "Extension Downloads",
@@ -3173,7 +3175,7 @@
       "unavailable": "Can't install",
       "installedVersion": "{{version}} installed",
       "reason": {
-        "hostABI": "Needs a newer OpsKat (hostABI {{hostABI}})",
+        "hostABI": "Built for hostABI {{hostABI}}; this OpsKat supports {{supported}}",
         "minAppVersion": "Needs OpsKat {{version}} or later",
         "source": "Needs a newer OpsKat to download this package"
       },
@@ -3221,7 +3223,9 @@
       "fsRead": "Reads local files",
       "fsWrite": "Writes local files",
       "http": "Internet access",
-      "tunnel": "Private network"
+      "allowPrivate": "Private network",
+      "assetRoute": "Asset connection path",
+      "kerberos": "Kerberos tickets"
     },
     "installed": "Installed Extensions",
     "noExtensions": "No extensions installed",
@@ -3247,6 +3251,8 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
+    "assetRouteWarning": "This extension can dial any address along an asset's connection path — database redirects, cluster nodes, hosts behind its tunnel — not just the address you typed. Keep it only if you trust its author.",
+    "kerberosWarning": "This extension can fetch Kerberos tickets with the Kerberos credentials stored in an asset. Keep it only if you trust its author.",
     "databaseDriversWarning": "This extension provides database drivers. For assets that use them, the connection password and TLS client private key are handed to the extension in plaintext. Keep it only if you trust its author.",
     "installConfirm": {
       "title": "Install extension?",
@@ -3260,12 +3266,13 @@
       "sourceFile": "Local file",
       "sourceDir": "Local directory",
       "size": "Size",
-      "capabilities": "Requested capabilities",
-      "noCapabilities": "No capabilities beyond its own directory",
+      "capabilities": "Requested permissions",
+      "noCapabilities": "No permissions requested",
       "added": "New",
+      "highRisk": "High risk",
       "databaseDriver": "Provides database driver",
-      "databaseRedirects": "Follows database redirects via the asset's route",
-      "databaseKerberos": "Fetches Kerberos tickets with the asset's Kerberos credentials to log in to the database",
+      "assetRoute": "Dials any address along the asset's connection path",
+      "kerberos": "Fetches Kerberos tickets with the asset's Kerberos credentials",
       "downgrade": "Downgrade",
       "install": "Install",
       "update": "Update",

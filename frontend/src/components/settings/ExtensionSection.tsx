@@ -60,7 +60,7 @@ import { ExtensionStore, InstallFailed, InstallProgress, type CardInstall, type 
 import { useStoreInstalls } from "./useStoreInstalls";
 import { syncExtensionUpdates, useExtensionUpdates } from "./extensionUpdates";
 import { Segmented } from "@/components/asset/fields";
-import type { ExtCapabilities } from "@/extension/types";
+import type { ExtPermissions } from "@/extension/types";
 
 interface ExtInfo {
   name: string;
@@ -69,8 +69,10 @@ interface ExtInfo {
   displayName: string;
   description: string;
   enabled: boolean;
+  /** Set when the host refused the extension: it is listed but neither loaded nor toggleable. */
+  loadError?: { kind: string; message: string };
   manifest?: {
-    capabilities?: ExtCapabilities;
+    permissions?: ExtPermissions;
     tools?: { name: string; i18n?: { description?: string } }[];
     policies?: {
       groups?: {
@@ -278,16 +280,29 @@ export function ExtensionSection() {
                             <div>
                               <div className="flex items-center gap-2">
                                 <p className="font-medium text-sm">{ext.displayName || ext.name}</p>
-                                {!ext.enabled && (
-                                  <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                                    {t("extension.disabled")}
+                                {ext.loadError ? (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">
+                                    {t(
+                                      ext.loadError.kind === "incompatible"
+                                        ? "extension.incompatible"
+                                        : "extension.loadFailed"
+                                    )}
                                   </span>
+                                ) : (
+                                  !ext.enabled && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                      {t("extension.disabled")}
+                                    </span>
+                                  )
                                 )}
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 {ext.description && <span>{ext.description} · </span>}
                                 {t("extension.version")} {ext.version}
                               </p>
+                              {ext.loadError && (
+                                <p className="text-xs text-destructive mt-0.5">{ext.loadError.message}</p>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -298,11 +313,13 @@ export function ExtensionSection() {
                                 onUpdate={() => void updateFromStore(update)}
                               />
                             )}
-                            <Switch
-                              checked={ext.enabled}
-                              onCheckedChange={() => handleToggle(ext)}
-                              data-testid={`extension-toggle-${ext.name}`}
-                            />
+                            {!ext.loadError && (
+                              <Switch
+                                checked={ext.enabled}
+                                onCheckedChange={() => handleToggle(ext)}
+                                data-testid={`extension-toggle-${ext.name}`}
+                              />
+                            )}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
@@ -310,10 +327,12 @@ export function ExtensionSection() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => openDetail(ext.name)}>
-                                  <Info className="h-4 w-4 mr-2" />
-                                  {t("extension.detail")}
-                                </DropdownMenuItem>
+                                {!ext.loadError && (
+                                  <DropdownMenuItem onClick={() => openDetail(ext.name)}>
+                                    <Info className="h-4 w-4 mr-2" />
+                                    {t("extension.detail")}
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem onClick={() => setUninstallTarget(ext)} className="text-destructive">
                                   <Trash2 className="h-4 w-4 mr-2" />
                                   {t("extension.uninstall")}
@@ -416,7 +435,7 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
   const policyGroups: { id: string; i18n?: { name?: string }; policy?: Record<string, string[]> }[] =
     manifest?.policies?.groups || [];
   const pages: { id: string; i18n?: { name?: string }; slot?: string }[] = manifest?.frontend?.pages || [];
-  const credentialsRead = ext.manifest?.capabilities?.credentials === "read";
+  const credentialsRead = ext.manifest?.permissions?.credentials === "read";
 
   return (
     <div className="space-y-4">
@@ -493,7 +512,7 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
             {pages.map((page) => (
               <div key={page.id} className="flex justify-between text-xs p-2 rounded bg-muted/50">
                 <span>{page.i18n?.name || page.id}</span>
-                <span className="text-muted-foreground font-mono">{page.slot || "-"}</span>
+                <span className="text-muted-foreground font-mono">{page.slot}</span>
               </div>
             ))}
           </div>

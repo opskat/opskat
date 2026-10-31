@@ -1,5 +1,5 @@
-// Command fixture-dbdriver is the WASM extension pkg/extension's database driver
-// tests run against: one SQL database driver, "fixturedb", whose session the SDK
+// Command fixture-dbdriver is the WASM extension the database driver tests
+// (internal/extreg/extdriver and its callers) run against: one SQL database driver, "fixturedb", whose session the SDK
 // assembles from pkg/dbdriver/sqldb. Its database is memdb (memdb.go), an
 // in-memory database/sql driver that serves a fixed catalog but logs in to — and
 // announces every statement to — whatever the host's reach path leads to, so a
@@ -13,9 +13,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
@@ -31,9 +33,10 @@ func main() {}
 // It declares the certificate field group, so the host hands it the asset's TLS
 // material (SHOW OPEN TLS answers what it got), and the Kerberos field group,
 // so a Kerberos asset's session logs in with a host ticket (SHOW OPEN AUTH and
-// SHOW KERBEROS TICKET probe it); its manifest declares the host ABI and the
-// capability both need. It splits and classifies statements itself (split.go),
-// which needs that host ABI too.
+// SHOW KERBEROS TICKET probe it); its manifest grants permissions.kerberos for
+// the ticket and network.assetEndpoint / assetRoute for the reach path. It splits
+// and classifies statements itself (split.go), probing the host first when asked
+// to (classifyProbing).
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",
@@ -55,7 +58,36 @@ var descriptor = dbdriver.Descriptor{
 
 func init() {
 	opskat.Extension(opskat.Meta{Icon: "database", DisplayName: "Fixture DB", Description: "Test fixture database driver"})
-	sdkdbdriver.DatabaseDriver(descriptor, open, sdkdbdriver.WithStatementClassifier(classify))
+	sdkdbdriver.DatabaseDriver(descriptor, open, sdkdbdriver.WithStatementClassifier(classifyProbing))
+}
+
+// classifyProbing is a test-only sentinel around classify: text that is a host
+// probe ("SHOW HOST <what> [target]", "SHOW KERBEROS TICKET <service> <host>")
+// makes that host call first, as a session's probe does, and a host call the
+// host refuses fails the classification with the host's error — what a
+// classification may and may not ask of the host. Text that is spinColumn never
+// returns, as a stuck classifier would. Any other text, and a probe the host
+// allows, is classified as usual.
+func classifyProbing(ctx context.Context, sql string) ([]dbdriver.Statement, error) {
+	if sql == spinColumn {
+		spin()
+	}
+	var rows driver.Rows
+	if m := showHost.FindStringSubmatch(sql); m != nil {
+		rows = hostProbe(m[1], m[2])
+	} else if m := showTicket.FindStringSubmatch(sql); m != nil {
+		rows = ticketProbe(m[1], m[2])
+	}
+	if rows != nil {
+		row := make([]driver.Value, len(rows.Columns()))
+		if err := rows.Next(row); err != nil {
+			return nil, err
+		}
+		if msg := row[len(row)-1].(string); msg != "" {
+			return nil, fmt.Errorf("host refused the probe: %s", msg)
+		}
+	}
+	return classify(ctx, sql)
 }
 
 // open logs in through the reach path the host handed over and confirms the
@@ -156,7 +188,23 @@ func (dialect) Literals(context.Context, *sql.Conn) (sqldb.Literals, error) {
 }
 
 func (dialect) UpdateRowSQL(tableRef, set, where string) string {
+	if strings.Contains(set, "["+spinColumn+"]") {
+		spin()
+	}
 	return "UPDATE " + tableRef + " SET " + set + " WHERE " + where + ";"
+}
+
+// spinColumn is a test-only sentinel: generating an UPDATE that sets it never
+// returns — a driver stuck in RowStatements, which only the host can end.
+const spinColumn = "__fixturedb_spin__"
+
+// spun keeps spin's loop from being an empty one.
+var spun uint64
+
+func spin() {
+	for {
+		spun++
+	}
 }
 
 func (dialect) TruncateTableSQL(tableRef string) string { return "TRUNCATE TABLE " + tableRef }

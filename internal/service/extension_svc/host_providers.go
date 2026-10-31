@@ -13,25 +13,84 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
 // HostConfig returns the host capabilities of extName that need no user interface:
-// the config (and credentials) of the assets it owns, its KV store and the connection
-// path to those assets. Every process that runs extensions builds its providers from
+// the config of the assets it owns, its KV store and the scope of a call on one of
+// them (ResolveScope). Every process that runs extensions builds its providers from
 // this — the desktop app and opsctl alike — and adds only what it can offer beyond it:
-// the desktop its file dialog and action events, opsctl a file dialog that explains
+// the desktop its file dialog and tool events, opsctl a file dialog that explains
 // there is none.
 func (s *Service) HostConfig(extName string) extension.DefaultHostConfig {
 	return extension.DefaultHostConfig{
 		Logger:        s.logger,
 		AssetConfigs:  &assetConfigGetter{svc: s, extName: extName},
 		KV:            &kvStore{svc: s, extName: extName},
-		AssetDialer:   &assetDialer{svc: s, extName: extName},
+		Scopes:        s.ResolveScope,
 		ExtensionName: extName,
 	}
+}
+
+// ResolveScope resolves the scope of a call extName makes on asset a, as the
+// asset-type side owns it (extreg.AssetScope): the asset must be of a type
+// extName registers; its endpoints come from the type's endpoint fields, its
+// connection path from the tunnel / proxy chain / TLS the type declares, its
+// credential injection from the type's auth groups over the asset's decrypted
+// fields. An ad-hoc call (test connection) reads all of them from a.AdHoc. The
+// connection path is built only when a stream takes it (Scope.Connect, with that
+// stream's ctx — an SSH hop's MFA prompt is answered by the caller's responder);
+// one that cannot be built fails that stream — never a direct or unverified
+// fallback — and nothing else.
+func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.AssetRef) (*extension.Scope, error) {
+	dialer := &assetDialer{svc: s, extName: extName}
+	if a.AdHoc != nil {
+		def, err := s.ownedType(extName, a.Type)
+		if err != nil {
+			return nil, err
+		}
+		connect := func(ctx context.Context) (extreg.AssetConnection, error) {
+			dial, tlsConfig, err := dialer.DialContextForConfig(ctx, a.Type, a.AdHoc)
+			return extreg.AssetConnection{Dial: dial, TLS: tlsConfig}, err
+		}
+		creds := func(_ context.Context, fields []string) (map[string]string, error) {
+			return extreg.ConfigFieldValues(a.AdHoc.Credentials, fields)
+		}
+		return extreg.AssetScope(a, def, a.AdHoc.Config, connect, creds)
+	}
+	_, asset, def, err := s.OwnedTypedAsset(ctx, extName, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	connect := func(ctx context.Context) (extreg.AssetConnection, error) {
+		dial, tlsConfig, fingerprint, err := dialer.DialContextFor(ctx, a.ID)
+		return extreg.AssetConnection{Dial: dial, TLS: tlsConfig, Fingerprint: fingerprint}, err
+	}
+	getter := &assetConfigGetter{svc: s, extName: extName}
+	creds := func(ctx context.Context, fields []string) (map[string]string, error) {
+		return getter.AssetCredentialValues(ctx, a.ID, fields)
+	}
+	return extreg.AssetScope(a, def, json.RawMessage(asset.Config), connect, creds)
+}
+
+// ownedType returns the declaration of assetType when extName registers it.
+func (s *Service) ownedType(extName, assetType string) (*extreg.AssetTypeDef, error) {
+	owner := s.Bridge().Get(extName)
+	if owner == nil {
+		return nil, fmt.Errorf("extension %q not loaded", extName)
+	}
+	view, err := extreg.ManifestOf(owner.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	def := view.AssetType(assetType)
+	if def == nil {
+		return nil, fmt.Errorf("extension %q does not register asset type %q", extName, assetType)
+	}
+	return def, nil
 }
 
 // assetConfigGetter implements extension.AssetConfigGetter for one extension.
@@ -50,7 +109,7 @@ type assetConfigGetter struct {
 func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	caller, asset, _, err := g.svc.OwnedTypedAsset(ctx, g.extName, assetID)
+	caller, asset, def, err := g.svc.OwnedTypedAsset(ctx, g.extName, assetID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +131,7 @@ func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, erro
 	if err != nil {
 		return nil, fmt.Errorf("strip asset %d host connection config: %w", assetID, err)
 	}
-	return decryptConfigPasswordFields(stripped, asset.Type, caller)
+	return decryptConfigPasswordFields(stripped, def, caller)
 }
 
 // AssetCredentialValues serves host-side credential injection (the asset type's
@@ -89,11 +148,11 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 	if asset.Config == "" {
 		return map[string]string{}, nil
 	}
-	values, err := extension.ConfigFieldValues(json.RawMessage(asset.Config), fields)
+	values, err := extreg.ConfigFieldValues(json.RawMessage(asset.Config), fields)
 	if err != nil {
 		return nil, fmt.Errorf("%s config: %w", asset.Type, err)
 	}
-	for _, field := range extension.PasswordFieldsFromSchema(def.ConfigSchema) {
+	for _, field := range extreg.PasswordFieldsFromSchema(def.ConfigSchema) {
 		if value := values[field]; value != "" {
 			if values[field], err = decryptPasswordField(asset.Type, field, value); err != nil {
 				return nil, err
@@ -117,7 +176,7 @@ func (g *assetConfigGetter) AssetCredentialValues(ctx context.Context, assetID i
 // asset's stored type rather than by whoever asked. A database asset of a driver
 // extName provides is not one of them: its config, password and reach path go to
 // the driver only in the open call of a session.
-func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extension.AssetTypeDef, error) {
+func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID int64) (*extension.Extension, *HostAssetConfig, *extreg.AssetTypeDef, error) {
 	caller := s.Bridge().Get(extName)
 	if caller == nil {
 		return nil, nil, nil, fmt.Errorf("extension %q not loaded", extName)
@@ -126,7 +185,11 @@ func (s *Service) OwnedTypedAsset(ctx context.Context, extName string, assetID i
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("asset %d not found: %w", assetID, err)
 	}
-	def := caller.Manifest.AssetTypeDef(asset.Type)
+	view, err := extreg.ManifestOf(caller.Manifest)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	def := view.AssetType(asset.Type)
 	if def == nil {
 		return nil, nil, nil, fmt.Errorf("asset %d (type %q) does not belong to extension %q", assetID, asset.Type, extName)
 	}
@@ -160,7 +223,7 @@ func (s *kvStore) Set(key string, value []byte) error {
 // back) as a value. The form instead shows a withheld field as already set and
 // keeps its stored ciphertext on save.
 func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64) (string, error) {
-	owner, asset, _, err := s.OwnedTypedAsset(ctx, extName, assetID)
+	owner, asset, def, err := s.OwnedTypedAsset(ctx, extName, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -169,24 +232,24 @@ func (s *Service) FormConfig(ctx context.Context, extName string, assetID int64)
 	}
 	raw := json.RawMessage(asset.Config)
 	if owner.Manifest.CheckCredentialRead() != nil {
-		withheld, err := withholdPasswordFields(raw, asset.Type, owner)
+		withheld, err := withholdPasswordFields(raw, def)
 		if err != nil {
 			return "", err
 		}
 		return string(withheld), nil
 	}
-	decrypted, err := decryptConfigPasswordFields(raw, asset.Type, owner)
+	decrypted, err := decryptConfigPasswordFields(raw, def, owner)
 	if err != nil {
 		return "", err
 	}
 	return string(decrypted), nil
 }
 
-// withholdPasswordFields drops the fields assetType's configSchema marks
+// withholdPasswordFields drops the fields def's configSchema marks
 // format:"password" from raw.
-func withholdPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
-	def := ext.Manifest.AssetTypeDef(assetType)
-	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
+func withholdPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef) (json.RawMessage, error) {
+	assetType := def.Type
+	passwordFields := extreg.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil
 	}
@@ -200,16 +263,13 @@ func withholdPasswordFields(raw json.RawMessage, assetType string, ext *extensio
 	return json.Marshal(cfg)
 }
 
-// decryptConfigPasswordFields decrypts the fields assetType's configSchema marks
+// decryptConfigPasswordFields decrypts the fields def's configSchema marks
 // format:"password". Whether the plaintext or an opaque handle comes back is
 // decided by ext — the extension the config is being handed to, which
-// OwnedTypedAsset has already confirmed registers assetType.
-func decryptConfigPasswordFields(raw json.RawMessage, assetType string, ext *extension.Extension) (json.RawMessage, error) {
-	def := ext.Manifest.AssetTypeDef(assetType)
-	if def == nil || len(def.ConfigSchema) == 0 {
-		return raw, nil
-	}
-	passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema)
+// OwnedTypedAsset has already confirmed registers def's type.
+func decryptConfigPasswordFields(raw json.RawMessage, def *extreg.AssetTypeDef, ext *extension.Extension) (json.RawMessage, error) {
+	assetType := def.Type
+	passwordFields := extreg.PasswordFieldsFromSchema(def.ConfigSchema)
 	if len(passwordFields) == 0 {
 		return raw, nil
 	}
@@ -265,7 +325,8 @@ func credentialHandleFor(extName, assetType, field, encrypted string) string {
 	return "cred_" + hex.EncodeToString(h[:8])
 }
 
-// assetDialer implements extension.AssetDialer for one extension.
+// assetDialer resolves the connection path of the assets one extension owns: the
+// route and TLS settings of the scopes ResolveScope builds.
 type assetDialer struct {
 	svc     *Service
 	extName string
@@ -365,13 +426,9 @@ func (d *assetDialer) DialContextFor(ctx context.Context, assetID int64) (extens
 // and TLS building (resolveDialAndTLS), just fed from adhoc instead of a
 // database row, and never returns a fingerprint — the result is never cached.
 func (d *assetDialer) DialContextForConfig(ctx context.Context, assetType string, adhoc *extension.AdHocAssetConfig) (extension.DialContextFunc, *tls.Config, error) {
-	owner := d.svc.Bridge().Get(d.extName)
-	if owner == nil {
-		return nil, nil, fmt.Errorf("extension %q not loaded", d.extName)
-	}
-	def := owner.Manifest.AssetTypeDef(assetType)
-	if def == nil {
-		return nil, nil, fmt.Errorf("extension %q does not register asset type %q", d.extName, assetType)
+	def, err := d.svc.ownedType(d.extName, assetType)
+	if err != nil {
+		return nil, nil, err
 	}
 	conn := def.Connection
 	if conn == nil {

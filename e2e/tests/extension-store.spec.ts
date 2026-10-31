@@ -54,7 +54,7 @@ test("a store install confirms from the index first, cancels without downloading
   await expect(dialog.getByText("商店示例")).toBeVisible();
   await expect(dialog.getByTestId("ext-install-version")).toHaveText("1.0.0");
   await expect(dialog).toContainText("官方商店，签名已验证");
-  await expect(dialog.getByTestId("ext-install-cap-http")).toContainText("https://example.com/");
+  await expect(dialog.getByTestId("ext-install-cap-network.http")).toContainText("https://example.com/");
   await dialog.getByTestId("ext-install-cancel").click();
   await expect(dialog).toBeHidden();
   await expect(card.getByRole("button", { name: "安装" })).toBeEnabled();

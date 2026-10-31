@@ -2,9 +2,14 @@ package extension
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/url"
 	"testing"
+
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -24,27 +29,31 @@ func (r *recordingHost) OpenIO(_ context.Context, _ *AssetRef, params IOOpenPara
 	return &IOResource{}, nil
 }
 
-// TestCapHostTCPPassthrough pins that an extension which does not declare
-// network.assetEndpoint keeps today's ungated TCP (first-party Kafka builds on
-// it); declaring the capability puts TCP under the endpoint gate below.
-func TestCapHostTCPPassthrough(t *testing.T) {
+// scopedCtx is the context of a host call made inside a call bound to scope.
+func scopedCtx(scope *Scope) context.Context {
+	return withInvocation(context.Background(), newInvocation("cap-test", nil).bindScope(scope))
+}
+
+// A TCP stream used to be ungated for an extension that did not declare
+// network.assetEndpoint. It now needs an endpoint of the call's scope or an
+// asset route, like every other network target.
+func TestCapHostRefusesTCPOutsideTheScope(t *testing.T) {
 	Convey("Given a capHost wrapping a manifest with no capabilities", t, func() {
 		inner := &recordingHost{}
-		manifest := &Manifest{Name: "no-caps", Version: "1.0.0"}
+		manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "no-caps", Version: "1.0.0"}}
 		ch := NewCapabilityHost(inner, manifest, "/tmp/ext")
 
-		Convey("OpenIO(type=tcp) is not blocked and is delegated to the inner host", func() {
-			res, err := ch.OpenIO(context.Background(), nil, IOOpenParams{Type: "tcp", Addr: "example.com:9092"})
-			So(err, ShouldBeNil)
-			So(res, ShouldNotBeNil)
-			So(inner.opened, ShouldEqual, 1)
-			So(inner.lastParams.Type, ShouldEqual, "tcp")
-			So(inner.lastParams.Addr, ShouldEqual, "example.com:9092")
+		Convey("OpenIO(type=tcp) from a call with no asset is refused and never reaches the inner host", func() {
+			_, err := ch.OpenIO(scopedCtx(&Scope{}), nil, IOOpenParams{Type: "tcp", Addr: "example.com:9092"})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not scoped to an asset")
+			So(inner.opened, ShouldEqual, 0)
 		})
 
 		Convey("OpenIO(type=http) is still gated by the allowlist", func() {
-			_, err := ch.OpenIO(context.Background(), nil, IOOpenParams{Type: "http", URL: "https://example.com/foo"})
+			_, err := ch.OpenIO(scopedCtx(&Scope{}), nil, IOOpenParams{Type: "http", URL: "https://example.com/foo"})
 			So(err, ShouldNotBeNil) // allowlist is empty, so reject
+			So(inner.opened, ShouldEqual, 0)
 		})
 	})
 }
@@ -52,55 +61,43 @@ func TestCapHostTCPPassthrough(t *testing.T) {
 // Compile-time assertion that recordingHost satisfies HostProvider.
 var _ HostProvider = (*recordingHost)(nil)
 
-// configHost is an inner provider that serves one asset config and records what
-// capHost finally hands to OpenIO.
-type configHost struct {
-	recordingHost
-	config json.RawMessage
+// endpointScope is the scope of a call on asset 7 whose type names these
+// endpoints, reached directly.
+func endpointScope(values ...string) *Scope {
+	scope := &Scope{
+		Asset: &AssetRef{ID: 7, Name: "a", Type: "ep"},
+		Route: &Route{Dial: (&net.Dialer{}).DialContext, Direct: true},
+	}
+	for _, v := range values {
+		if ep, ok := ParseEndpoint(v); ok {
+			scope.Endpoints = append(scope.Endpoints, ep)
+		}
+	}
+	return scope
 }
 
-func (h *configHost) GetAssetConfig(int64) (json.RawMessage, error) { return h.config, nil }
-
-func endpointManifest(schemaProps map[string]any) *Manifest {
-	return &Manifest{
-		Name: "ep", Version: "1.0.0",
-		Capabilities: Capabilities{Network: NetworkCapability{AssetEndpoint: true}},
-		AssetTypes: []AssetTypeDef{{
-			Type:         "ep",
-			ConfigSchema: map[string]any{"type": "object", "properties": schemaProps},
-		}},
-	}
+func endpointManifest() *Manifest {
+	return &Manifest{Manifest: extmanifest.Manifest{
+		Name:        "ep",
+		Version:     "1.0.0",
+		Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetEndpoint: true}},
+	}}
 }
 
 func TestCapHostAssetEndpointGate(t *testing.T) {
-	Convey("Given an extension declaring network.assetEndpoint", t, func() {
-		ctx := context.Background()
-		asset := &AssetRef{ID: 7, Name: "a", Type: "ep"}
-		inner := &configHost{config: json.RawMessage(`{
-			"url": "https://ES.internal:9200/base",
-			"plain": "https://api.example.com",
-			"broker": "10.0.0.5:9092",
-			"v6": "[fd00::1]:9300",
-			"empty": "",
-			"port": 9200,
-			"other": "10.0.0.9:22"
-		}`)}
-		manifest := endpointManifest(map[string]any{
-			"url":    map[string]any{"type": "string", "format": "endpoint"},
-			"plain":  map[string]any{"type": "string", "format": "endpoint"},
-			"broker": map[string]any{"type": "string", "format": "endpoint"},
-			"v6":     map[string]any{"type": "string", "format": "endpoint"},
-			"empty":  map[string]any{"type": "string", "format": "endpoint"},
-			"port":   map[string]any{"type": "number", "format": "endpoint"},
-			"other":  map[string]any{"type": "string"},
-		})
+	Convey("Given an extension declaring network.assetEndpoint and a call scoped to an asset", t, func() {
+		inner := &recordingHost{}
+		manifest := endpointManifest()
 		ch := NewCapabilityHost(inner, manifest, "/tmp/ext")
+		scope := endpointScope("https://ES.internal:9200/base", "https://api.example.com", "10.0.0.5:9092", "[fd00::1]:9300", "")
+		scope.TLS = &tls.Config{ServerName: "es.internal"}
+		scope.Fingerprint = "fp"
 		open := func(p IOOpenParams) error {
-			_, err := ch.OpenIO(ctx, asset, p)
+			_, err := ch.OpenIO(scopedCtx(scope), scope.Asset, p)
 			return err
 		}
 
-		Convey("HTTP to an endpoint matches on scheme, case-insensitive host and port", func() {
+		Convey("HTTP to an endpoint matches on scheme, case-insensitive host and port, and takes the asset's path", func() {
 			for _, u := range []string{
 				"https://es.internal:9200/_search",
 				"https://es.internal:9200",
@@ -112,6 +109,9 @@ func TestCapHostAssetEndpointGate(t *testing.T) {
 				So(open(IOOpenParams{Type: "http", URL: u}), ShouldBeNil)
 				So(inner.lastParams.AllowPrivate, ShouldBeTrue)
 				So(inner.lastParams.RedirectGuard, ShouldNotBeNil)
+				So(inner.lastParams.Dial, ShouldNotBeNil)
+				So(inner.lastParams.TLS, ShouldEqual, scope.TLS)
+				So(inner.lastParams.Fingerprint, ShouldEqual, "fp")
 			}
 		})
 
@@ -121,7 +121,7 @@ func TestCapHostAssetEndpointGate(t *testing.T) {
 				"https://es.internal:9201/", // port differs
 				"https://es.internal/",      // default port differs
 				"http://api.example.com/",   // scheme differs
-				"https://10.0.0.9:22/",      // a non-endpoint field's value
+				"https://10.0.0.9:22/",
 				"https://evil.example.com/",
 			} {
 				err := open(IOOpenParams{Type: "http", URL: u})
@@ -140,6 +140,15 @@ func TestCapHostAssetEndpointGate(t *testing.T) {
 			So(guard(bad).Error(), ShouldContainSubstring, "not an endpoint of the asset")
 		})
 
+		Convey("the scope's credential injection rides only on endpoint requests", func() {
+			scope.Auth = func(context.Context) ([]AuthValue, error) { return nil, nil }
+			So(open(IOOpenParams{Type: "http", URL: "https://es.internal:9200/"}), ShouldBeNil)
+			So(inner.lastParams.Auth, ShouldNotBeNil)
+			manifest.Permissions.Network.HTTP = []string{"https://public.example.com/"}
+			So(open(IOOpenParams{Type: "http", URL: "https://public.example.com/x"}), ShouldBeNil)
+			So(inner.lastParams.Auth, ShouldBeNil)
+		})
+
 		Convey("a guest cannot pre-set allowPrivate for a non-endpoint target", func() {
 			err := open(IOOpenParams{Type: "http", URL: "http://10.0.0.9:22/", AllowPrivate: true})
 			So(err, ShouldNotBeNil)
@@ -147,6 +156,7 @@ func TestCapHostAssetEndpointGate(t *testing.T) {
 
 		Convey("TCP to an endpoint's host and port is allowed, anything else rejected", func() {
 			So(open(IOOpenParams{Type: "tcp", Addr: "10.0.0.5:9092"}), ShouldBeNil)
+			So(inner.lastParams.TLS, ShouldEqual, scope.TLS)
 			So(open(IOOpenParams{Type: "tcp", Addr: "es.internal:9200"}), ShouldBeNil)
 			So(open(IOOpenParams{Type: "tcp", Addr: "api.example.com:443"}), ShouldBeNil)
 			So(open(IOOpenParams{Type: "tcp", Addr: "[fd00::1]:9300"}), ShouldBeNil)
@@ -158,31 +168,275 @@ func TestCapHostAssetEndpointGate(t *testing.T) {
 		})
 
 		Convey("a call not scoped to an asset has no endpoints", func() {
-			_, err := ch.OpenIO(ctx, nil, IOOpenParams{Type: "tcp", Addr: "10.0.0.5:9092"})
+			_, err := ch.OpenIO(scopedCtx(&Scope{}), nil, IOOpenParams{Type: "tcp", Addr: "10.0.0.5:9092"})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "not scoped to an asset")
-			_, err = ch.OpenIO(ctx, nil, IOOpenParams{Type: "http", URL: "https://es.internal:9200/"})
+			_, err = ch.OpenIO(scopedCtx(&Scope{}), nil, IOOpenParams{Type: "http", URL: "https://es.internal:9200/"})
 			So(err, ShouldNotBeNil)
 		})
 
-		Convey("the static allowlist still admits its URLs, without private reach", func() {
-			manifest.Capabilities.HTTP.Allowlist = []string{"https://public.example.com/"}
+		Convey("the static allowlist still admits its URLs, directly and without private reach", func() {
+			manifest.Permissions.Network.HTTP = []string{"https://public.example.com/"}
 			So(open(IOOpenParams{Type: "http", URL: "https://public.example.com/x", AllowPrivate: true}), ShouldBeNil)
 			So(inner.lastParams.AllowPrivate, ShouldBeFalse)
 			So(inner.lastParams.RedirectGuard, ShouldBeNil)
+			So(inner.lastParams.Dial, ShouldBeNil)
+			So(inner.lastParams.TLS, ShouldBeNil)
 		})
 	})
 }
 
-func TestEndpointFieldsFromSchema(t *testing.T) {
-	Convey("EndpointFieldsFromSchema lists format:endpoint properties, sorted", t, func() {
-		schema := map[string]any{"properties": map[string]any{
-			"z":    map[string]any{"format": "endpoint"},
-			"a":    map[string]any{"format": "endpoint"},
-			"pass": map[string]any{"format": "password"},
-			"name": map[string]any{"type": "string"},
+// network.assetRoute opens every other address of a call that has a connection
+// path — along that path, never with the asset's TLS settings or credentials —
+// and still nothing for a call without one.
+func TestCapHostAssetRouteGate(t *testing.T) {
+	Convey("Given an extension declaring network.assetRoute", t, func() {
+		inner := &recordingHost{}
+		manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "route", Version: "1.0.0",
+			Permissions: extmanifest.Permissions{Network: extmanifest.NetworkPermission{AssetRoute: true}}}}
+		ch := NewCapabilityHost(inner, manifest, "/tmp/ext")
+		scope := endpointScope("es.internal:9200")
+		scope.TLS = &tls.Config{}
+		scope.Auth = func(context.Context) ([]AuthValue, error) { return nil, nil }
+
+		Convey("TCP and HTTP to another address go along the route, without the asset's TLS or credentials", func() {
+			_, err := ch.OpenIO(scopedCtx(scope), scope.Asset, IOOpenParams{Type: "tcp", Addr: "node2.internal:9300"})
+			So(err, ShouldBeNil)
+			So(inner.lastParams.Dial, ShouldNotBeNil)
+			So(inner.lastParams.TLS, ShouldBeNil)
+			_, err = ch.OpenIO(scopedCtx(scope), scope.Asset, IOOpenParams{Type: "http", URL: "https://node2.internal:9200/"})
+			So(err, ShouldBeNil)
+			So(inner.lastParams.Dial, ShouldNotBeNil)
+			So(inner.lastParams.Auth, ShouldBeNil)
+			So(inner.lastParams.TLS, ShouldBeNil)
+		})
+
+		Convey("the asset's own endpoint still needs network.assetEndpoint", func() {
+			_, err := ch.OpenIO(scopedCtx(scope), scope.Asset, IOOpenParams{Type: "tcp", Addr: "es.internal:9200"})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "permissions.network.assetEndpoint")
+			_, err = ch.OpenIO(scopedCtx(scope), scope.Asset, IOOpenParams{Type: "http", URL: "http://es.internal:9200/"})
+			So(err, ShouldNotBeNil)
+			So(inner.opened, ShouldEqual, 0)
+		})
+
+		Convey("a call without a connection path dials nothing along one", func() {
+			_, err := ch.OpenIO(scopedCtx(&Scope{Asset: &AssetRef{ID: 9}}), nil, IOOpenParams{Type: "tcp", Addr: "node2.internal:9300"})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "no connection path")
+			So(inner.opened, ShouldEqual, 0)
+		})
+	})
+}
+
+// A direct route reaches this machine and its link only when the asset itself
+// is there: an asset the user reaches directly cannot point the extension at
+// the user's own machine.
+func TestCapHostRouteDialDirectRefusesThisMachine(t *testing.T) {
+	Convey("Given a direct route to a public asset", t, func() {
+		var dialed []string
+		ch := NewCapabilityHost(&recordingHost{}, &Manifest{Manifest: extmanifest.Manifest{Name: "route"}}, "/tmp/ext").(*capHost)
+		ch.localIPs = func() ([]net.IP, error) { return nil, nil }
+		scope := &Scope{
+			Asset:     &AssetRef{ID: 9},
+			Endpoints: []Endpoint{{Host: "203.0.113.10", Port: "5432"}},
+			Route: &Route{Direct: true, Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+				dialed = append(dialed, addr)
+				return nil, errors.New("not really dialing")
+			}},
+		}
+		dial := ch.routeDial(newInvocation("t", nil).bindScope(scope), scope)
+
+		Convey("loopback and link-local targets are refused by name, undialed", func() {
+			for _, addr := range []string{"127.0.0.1:1", "[::1]:1", "169.254.1.1:1", "0.0.0.0:1"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, addr)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+			}
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("a public target is dialed by its address", func() {
+			_, err := dial(context.Background(), "tcp", "203.0.113.20:5432")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"203.0.113.20:5432"})
+		})
+
+		Convey("on a loopback asset, loopback targets are allowed", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			_, _ = dial(context.Background(), "tcp", "127.0.0.1:7401")
+			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
+		})
+
+		Convey("on a loopback asset, a name is dialed by the address it was checked as, not resolved again", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			_, _ = dial(context.Background(), "tcp", "localhost:7401")
+			So(dialed, ShouldNotBeEmpty)
+			for _, target := range dialed {
+				host, _, err := net.SplitHostPort(target)
+				So(err, ShouldBeNil)
+				So(net.ParseIP(host), ShouldNotBeNil)
+				So(net.ParseIP(host).IsLoopback(), ShouldBeTrue)
+			}
+		})
+
+		// A link-local address names a host only together with its zone (the
+		// interface it is on): dialed without it, the connect fails.
+		Convey("on a link-local asset, a zoned link-local target is dialed with its zone", func() {
+			scope.Endpoints = []Endpoint{{Host: "fe80::1%lo0", Port: "5432"}}
+			_, _ = dial(context.Background(), "tcp", "[fe80::2%lo0]:7401")
+			So(dialed, ShouldResemble, []string{"[fe80::2%lo0]:7401"})
+		})
+
+		// The exemption is the asset's own address: a loopback / link-local asset
+		// reaches loopback / link-local targets, and the unspecified address only
+		// when it is the asset's own.
+		Convey("on a loopback asset, the unspecified address is still refused, undialed", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			for _, addr := range []string{"0.0.0.0:7401", "[::]:7401"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+			}
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("on an asset at the unspecified address, loopback and link-local are refused and only its own address is dialed", func() {
+			scope.Endpoints = []Endpoint{{Host: "0.0.0.0", Port: "5432"}}
+			for _, addr := range []string{"127.0.0.1:7401", "169.254.1.1:7401", "[::]:7401"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+			}
+			So(dialed, ShouldBeEmpty)
+			_, _ = dial(context.Background(), "tcp", "0.0.0.0:7401")
+			So(dialed, ShouldResemble, []string{"0.0.0.0:7401"})
+		})
+	})
+}
+
+// The user's machine is more than its loopback: a direct route refuses any
+// address of this machine's own network interfaces too, while a tunnel or proxy
+// route reaches the same address on its far side.
+func TestCapHostRouteDialDirectRefusesThisMachinesInterfaces(t *testing.T) {
+	Convey("Given a direct route to a public asset, on a machine whose interfaces carry 192.168.7.5 and 2001:db8::5", t, func() {
+		var dialed []string
+		ch := NewCapabilityHost(&recordingHost{}, &Manifest{Manifest: extmanifest.Manifest{Name: "route"}}, "/tmp/ext").(*capHost)
+		ch.localIPs = func() ([]net.IP, error) {
+			return []net.IP{net.ParseIP("192.168.7.5"), net.ParseIP("2001:db8::5")}, nil
+		}
+		scope := &Scope{
+			Asset:     &AssetRef{ID: 9, Name: "pg-prod"},
+			Endpoints: []Endpoint{{Host: "203.0.113.10", Port: "5432"}},
+			Route: &Route{Direct: true, Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+				dialed = append(dialed, addr)
+				return nil, errors.New("not really dialing")
+			}},
+		}
+		dial := ch.routeDial(newInvocation("t", nil).bindScope(scope), scope)
+
+		Convey("an address of this machine's interfaces is refused naming the extension, the asset and the target, undialed", func() {
+			for _, addr := range []string{"192.168.7.5:22", "[2001:db8::5]:22"} {
+				_, err := dial(context.Background(), "tcp", addr)
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, `"route"`)
+				So(err.Error(), ShouldContainSubstring, `"pg-prod"`)
+				So(err.Error(), ShouldContainSubstring, addr)
+			}
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("another private address is still dialed", func() {
+			_, err := dial(context.Background(), "tcp", "192.168.7.6:22")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"192.168.7.6:22"})
+		})
+
+		Convey("the interface lookup failing refuses the dial instead of skipping the check", func() {
+			ch.localIPs = func() ([]net.IP, error) { return nil, errors.New("no interfaces for you") }
+			_, err := dial(context.Background(), "tcp", "192.168.7.6:22")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "no interfaces for you")
+			So(dialed, ShouldBeEmpty)
+		})
+
+		Convey("on an asset at one of this machine's interface addresses", func() {
+			scope.Endpoints = []Endpoint{{Host: "192.168.7.5", Port: "5432"}}
+
+			Convey("the asset's own address is dialed on any port", func() {
+				_, err := dial(context.Background(), "tcp", "192.168.7.5:7401")
+				So(err.Error(), ShouldContainSubstring, "not really dialing")
+				So(dialed, ShouldResemble, []string{"192.168.7.5:7401"})
+			})
+
+			Convey("loopback and the machine's other interface addresses are still refused, undialed", func() {
+				for _, addr := range []string{"127.0.0.1:7401", "[::1]:7401", "[2001:db8::5]:7401"} {
+					_, err := dial(context.Background(), "tcp", addr)
+					So(err, ShouldNotBeNil)
+					So(err.Error(), ShouldContainSubstring, `"route"`)
+					So(err.Error(), ShouldContainSubstring, `"pg-prod"`)
+					So(err.Error(), ShouldContainSubstring, addr)
+				}
+				So(dialed, ShouldBeEmpty)
+			})
+		})
+
+		Convey("on a loopback asset, loopback targets are allowed but the machine's interface addresses are not", func() {
+			scope.Endpoints = []Endpoint{{Host: "127.0.0.1", Port: "5432"}}
+			_, err := dial(context.Background(), "tcp", "127.0.0.1:7401")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
+			_, err = dial(context.Background(), "tcp", "192.168.7.5:7401")
+			So(err.Error(), ShouldContainSubstring, `"route"`)
+			So(dialed, ShouldResemble, []string{"127.0.0.1:7401"})
+		})
+
+		Convey("through a tunnel the same address is dialed on the far side", func() {
+			scope.Route.Direct = false
+			_, err := dial(context.Background(), "tcp", "192.168.7.5:22")
+			So(err.Error(), ShouldContainSubstring, "not really dialing")
+			So(dialed, ShouldResemble, []string{"192.168.7.5:22"})
+		})
+	})
+}
+
+// A call's scope is resolved once, on its first network or ticket host call —
+// a failure fails only those, never the call's other host calls.
+func TestCapHostResolvesTheScopeOnDemand(t *testing.T) {
+	Convey("Given a call on an asset whose scope cannot be resolved", t, func() {
+		host := newRecordedHost()
+		host.configs[7] = json.RawMessage(`{"own":true}`)
+		resolves := 0
+		inner := &scopedHost{HostProvider: host, scopes: func(context.Context, string, AssetRef) (*Scope, error) {
+			resolves++
+			return nil, errors.New("ssh tunnel asset 3 unreachable")
 		}}
-		So(EndpointFieldsFromSchema(schema), ShouldResemble, []string{"a", "z"})
-		So(EndpointFieldsFromSchema(nil), ShouldBeEmpty)
+		ch := NewCapabilityHost(inner, endpointManifest(), "/tmp/ext")
+		inv := newInvocation("t", nil).scopedTo(&AssetRef{ID: 7, Name: "a", Type: "ep"})
+		call := func(req string) ([]byte, error) {
+			return hostCall(withInvocation(context.Background(), inv), ch, []byte(req))
+		}
+
+		Convey("log, KV and asset config still work, and resolve nothing", func() {
+			_, err := call(`{"op":"log","params":{"level":"info","msg":"hi"}}`)
+			So(err, ShouldBeNil)
+			_, err = call(`{"op":"kv.get","params":{"key":"k"}}`)
+			So(err, ShouldBeNil)
+			out, err := call(`{"op":"asset.get_config","params":{}}`)
+			So(err, ShouldBeNil)
+			So(string(out), ShouldEqual, `{"own":true}`)
+			So(resolves, ShouldEqual, 0)
+		})
+
+		Convey("network and ticket calls fail with the reason, resolved only once", func() {
+			_, err := call(`{"op":"io.open","params":{"type":"tcp","addr":"10.0.0.5:9092"}}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ssh tunnel asset 3 unreachable")
+			_, err = call(`{"op":"auth.kerberos_ticket","params":{"spn":"a/b"}}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ssh tunnel asset 3 unreachable")
+			So(resolves, ShouldEqual, 1)
+		})
 	})
 }

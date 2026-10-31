@@ -59,17 +59,16 @@ type hostOpFunc func(env hostCallEnv, params json.RawMessage) ([]byte, error)
 // hostOps is the control-plane dispatch table. A payload of nil means "no
 // result"; the reply is then just the OK tag.
 var hostOps = map[string]hostOpFunc{
-	"log":              opLog,
-	"kv.get":           opKVGet,
-	"kv.set":           opKVSet,
-	"asset.get_config": opAssetGetConfig,
-	"file_dialog":      opFileDialog,
-	"io.open":          opIOOpen,
-	"io.set_deadline":  opIOSetDeadline,
-	"action.event":     opActionEvent,
-	// dbdriver.kerberos_ticket answers the raw AP-REQ bytes.
-	"dbdriver.kerberos_ticket": opKerberosTicket,
-	"action.should_stop": func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
+	OpLog:            opLog,
+	OpKVGet:          opKVGet,
+	OpKVSet:          opKVSet,
+	OpAssetGetConfig: opAssetGetConfig,
+	OpFileDialog:     opFileDialog,
+	OpIOOpen:         opIOOpen,
+	OpIOSetDeadline:  opIOSetDeadline,
+	OpToolEvent:      opToolEvent,
+	OpKerberosTicket: opKerberosTicket,
+	OpToolShouldStop: func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
 		if env.inv.shouldStop() {
 			return []byte{1}, nil
 		}
@@ -227,15 +226,9 @@ func opIOOpen(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	epoch := env.inv.io.Epoch()
-	var res *IOResource
-	var err error
-	if p.Type == "tcp" && env.inv.reach != nil {
-		// A database driver reaches its database along the session's reach path,
-		// not along an asset endpoint of the extension's own.
-		res, err = openTCP(env.ctx, DialContextFunc(env.inv.reach.Dial), nil, p, nil)
-	} else {
-		res, err = env.host.OpenIO(env.ctx, env.inv.asset, p)
-	}
+	// The capability layer (capHost) admits the stream against the call's scope,
+	// which it reads off the invocation env.ctx carries.
+	res, err := env.host.OpenIO(env.ctx, env.inv.asset, p)
 	if err != nil {
 		return nil, err
 	}
@@ -258,10 +251,16 @@ func opIOSetDeadline(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	return nil, env.inv.io.SetDeadline(p.Handle, p.Kind, deadlineTime(p.UnixNanos))
 }
 
-// opKerberosTicket hands a database driver the ticket it logs in with: the
-// Kerberos AP-REQ for the service principal it names (service/host, as the
-// database's login handshake gave them), from its session's ticket gate. It
-// names no asset: the session's is the only one whose tickets it may get.
+// ticketGate is the capability layer (capHost) as auth.kerberos_ticket reaches
+// it: the call's scope and the manifest's kerberos permission both decide.
+type ticketGate interface {
+	kerberosTicket(ctx context.Context, inv *invocation, spn string) ([]byte, error)
+}
+
+// opKerberosTicket hands the guest a Kerberos ticket — the AP-REQ for the
+// service principal it names (service/host, as a login handshake gave them) —
+// from its call's scope. It names no asset: the scope's is the only one whose
+// tickets it may get.
 func opKerberosTicket(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	var p struct {
 		SPN string `json:"spn"`
@@ -269,13 +268,16 @@ func opKerberosTicket(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
-	if env.inv.tickets == nil {
-		return nil, errTicketOutsideDriverSession
+	gate, ok := env.host.(ticketGate)
+	if !ok {
+		return nil, fmt.Errorf("kerberos ticket refused: this host enforces no permissions, so it issues no tickets")
 	}
-	return env.inv.tickets.ticket(env.ctx, p.SPN)
+	return gate.kerberosTicket(env.ctx, env.inv, p.SPN)
 }
 
-func opActionEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+// opToolEvent hands one event to the host stamped with the call's invocation id.
+// Whether it reaches anyone is the host's call: only a page caller listens.
+func opToolEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	var p struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
@@ -283,7 +285,7 @@ func opActionEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
-	return nil, env.host.ActionEvent(env.inv.id, p.Type, p.Data)
+	return nil, env.host.ToolEvent(env.inv.id, p.Type, p.Data)
 }
 
 // readHandle reads up to size bytes, keeping io.EOF distinguishable while never

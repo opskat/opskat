@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -12,10 +13,6 @@ import (
 	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // callBound is how long a timed-out or canceled call may take to come back. It
@@ -86,7 +83,7 @@ func stallingHTTP(t *testing.T, headersFirst bool) (*httptest.Server, <-chan str
 func callAsync(ctx context.Context, p *Plugin, tool string, args json.RawMessage) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.CallTool(ctx, tool, args, fixtureAsset)
+		_, err := p.CallTool(ctx, ToolCall{Name: tool, Args: args, Asset: fixtureAsset})
 		done <- err
 	}()
 	return done
@@ -189,25 +186,25 @@ func TestBlockedHostIOIsInterrupted(t *testing.T) {
 	})
 }
 
-// TestCancelActionInterruptsBlockedHostIO covers the action side: an action has
-// no host deadline, so the cancellation flag it polls is the only way to stop it
-// — and a guest blocked in a host read never gets to poll it.
-func TestCancelActionInterruptsBlockedHostIO(t *testing.T) {
-	Convey("Given an action blocked on a TCP read, on a plugin with one slot", t, func() {
+// TestCancelToolInterruptsBlockedHostIO covers a page tool with no timeout:
+// canceling it by invocation id is the only way to stop it short of the caller's
+// context — and a guest blocked in a host read never gets to poll ShouldStop.
+func TestCancelToolInterruptsBlockedHostIO(t *testing.T) {
+	Convey("Given a page tool with no timeout blocked on a TCP read, on a plugin with one slot", t, func() {
 		ln, arrived := stallingTCP(t)
 		p := newEndpointFixtureWith(t, map[string]any{"endpoint": ln.Addr().String()}, WithMaxInstances(1))
 
 		done := make(chan error, 1)
 		go func() {
-			_, err := p.CallAction(context.Background(), "blocked-1", "tcp_echo",
-				mustJSON(t, map[string]any{"addr": ln.Addr().String()}), fixtureAsset)
+			_, err := p.CallTool(context.Background(), ToolCall{InvocationID: "blocked-1", Name: "tcp_echo_page",
+				Args: mustJSON(t, map[string]any{"addr": ln.Addr().String()}), Asset: fixtureAsset, Timeout: -1})
 			done <- err
 		}()
 		waitArrival(t, arrived)
 
-		Convey("canceling it fails the blocked read, ends the action and frees its slot", func() {
-			So(p.CancelAction("blocked-1"), ShouldBeTrue)
-			So(waitCall(t, done), ShouldNotBeNil)
+		Convey("canceling it fails the blocked read, ends the call as canceled and frees its slot", func() {
+			So(p.CancelTool("blocked-1"), ShouldBeTrue)
+			So(errors.Is(waitCall(t, done), context.Canceled), ShouldBeTrue)
 			assertSlotFreed(t, p)
 		})
 	})
@@ -269,30 +266,6 @@ func TestHTTPHandleClosedDuringRoundTrip(t *testing.T) {
 	})
 }
 
-// TestToolDeclaredTimeout covers a tool's own timeout from describe(): it
-// replaces the host default for that tool's calls, in both directions, while
-// tools that declare none keep the default.
-func TestToolDeclaredTimeout(t *testing.T) {
-	Convey("Given the described fixture", t, func() {
-		Convey("a tool declaring a timeout shorter than the default is cut off at its own", func() {
-			p := newEndpointFixtureWith(t, map[string]any{"endpoint": "127.0.0.1:1"})
-			start := time.Now()
-			err := waitCall(t, callAsync(context.Background(), p, "spin_short", mustJSON(t, map[string]any{"ms": 20000})))
-			So(err, ShouldNotBeNil)
-			So(time.Since(start), ShouldBeLessThan, callBound)
-		})
-
-		Convey("a tool declaring a timeout longer than the default is allowed to finish", func() {
-			p := newEndpointFixtureWith(t, map[string]any{"endpoint": "127.0.0.1:1"}, WithToolTimeout(150*time.Millisecond))
-			So(waitCall(t, callAsync(context.Background(), p, "spin_long", mustJSON(t, map[string]any{"ms": 600}))), ShouldBeNil)
-
-			Convey("while a tool without a declaration still gets the default", func() {
-				So(waitCall(t, callAsync(context.Background(), p, "spin", mustJSON(t, map[string]any{"ms": 3000}))), ShouldNotBeNil)
-			})
-		})
-	})
-}
-
 // TestToolResultSizeLimit: a result over the host's limit fails the call with an
 // error that says so, rather than reaching the caller truncated.
 func TestToolResultSizeLimit(t *testing.T) {
@@ -305,7 +278,7 @@ func TestToolResultSizeLimit(t *testing.T) {
 		})
 
 		Convey("a result over the limit fails the call and names the limit", func() {
-			_, err := p.CallTool(context.Background(), "blob", mustJSON(t, map[string]any{"bytes": 8000}), nil)
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "blob", Args: mustJSON(t, map[string]any{"bytes": 8000})})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "blob")
 			So(err.Error(), ShouldContainSubstring, "4096")
@@ -329,12 +302,12 @@ func (h *slowRegisterHost) OpenIO(ctx context.Context, asset *AssetRef, params I
 	return res, err
 }
 
-// A cancel can land while the action is still opening its stream. That stream
+// A cancel can land while the call is still opening its stream. That stream
 // was asked for before the cancel, so it must not survive it: registered after
 // the cancel already closed everything, it would leave the guest blocked on a
 // read nothing will ever close.
-func TestCancelActionWhileItsStreamIsOpening(t *testing.T) {
-	Convey("Given an action whose TCP stream opens while it is canceled", t, func() {
+func TestCancelToolWhileItsStreamIsOpening(t *testing.T) {
+	Convey("Given a page tool whose TCP stream opens while it is canceled", t, func() {
 		ln, _ := stallingTCP(t)
 		manifest := fixtureManifest(t)
 		host := &slowRegisterHost{
@@ -348,171 +321,21 @@ func TestCancelActionWhileItsStreamIsOpening(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			_, err := p.CallAction(context.Background(), "opening-1", "tcp_echo",
-				mustJSON(t, map[string]any{"addr": ln.Addr().String()}), fixtureAsset)
+			_, err := p.CallTool(context.Background(), ToolCall{InvocationID: "opening-1", Name: "tcp_echo_page",
+				Args: mustJSON(t, map[string]any{"addr": ln.Addr().String()}), Asset: fixtureAsset, Timeout: -1})
 			done <- err
 		}()
 		select {
 		case <-host.opened:
 		case <-time.After(callBound):
-			t.Fatal("the action never opened its stream")
+			t.Fatal("the call never opened its stream")
 		}
 
-		Convey("the stream is closed on arrival, the action ends and frees its slot", func() {
-			So(p.CancelAction("opening-1"), ShouldBeTrue)
+		Convey("the stream is closed on arrival, the call ends as canceled and frees its slot", func() {
+			So(p.CancelTool("opening-1"), ShouldBeTrue)
 			close(host.release)
-			So(waitCall(t, done), ShouldNotBeNil)
+			So(errors.Is(waitCall(t, done), context.Canceled), ShouldBeTrue)
 			assertSlotFreed(t, p)
 		})
 	})
-}
-
-// driverInterruptBound is how long a canceled or timed-out database driver call
-// may take to fail. The spec says "about a second"; the margin absorbs a loaded
-// machine.
-const driverInterruptBound = 3 * time.Second
-
-// A database driver call blocked in a host read — the database not answering — is
-// ended by the host closing that instance's connection: the extension's own timers
-// do not fire while it is blocked.
-func TestDriverCallCancelAndTimeout(t *testing.T) {
-	t.Run("a canceled call fails promptly and only its instance is discarded", func(t *testing.T) {
-		p := newDBDriverPlugin(t)
-		srv := NewFixtureDBServer(t)
-		srv.Hold = "QUERY SHOW DATABASES"
-		s := openFixtureSession(t, p, srv)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		canceled := driverOp(listDatabases(ctx, s))
-		hc := srv.WaitHeld(t)
-		other := driverOp(listDatabases(context.Background(), s))
-		ho := srv.WaitHeld(t)
-		require.NotEqual(t, hc.Conn, ho.Conn)
-
-		cancel()
-		err := waitOp(t, canceled, driverInterruptBound)
-		require.ErrorIs(t, err, context.Canceled)
-		assertPending(t, other, "the other instance's operation")
-
-		_, err = s.Execute(context.Background(), "SELECT 1")
-		require.NoError(t, err, "the session stays usable")
-		assert.Len(t, srv.Logins(), 3, "the canceled instance is gone: the next operation logs in again")
-
-		ho.Release()
-		require.NoError(t, waitOp(t, other, callBound), "the other instance's operation is not affected")
-	})
-
-	t.Run("a waiting operation goes on when a running one is canceled", func(t *testing.T) {
-		p := newDBDriverPlugin(t)
-		srv := NewFixtureDBServer(t)
-		srv.Hold = "QUERY SHOW DATABASES"
-		s := openFixtureSession(t, p, srv)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		canceled := driverOp(listDatabases(ctx, s))
-		srv.WaitHeld(t)
-		ops, held := holdAll(t, s, srv, 2)
-		waiting := driverOp(execute(context.Background(), s, "SELECT 1"))
-		waitQueued(t, s, 1)
-
-		cancel()
-		require.ErrorIs(t, waitOp(t, canceled, driverInterruptBound), context.Canceled)
-		require.NoError(t, waitOp(t, waiting, callBound), "the waiting operation logs in an instance in place of the discarded one")
-		assert.Len(t, srv.Logins(), 4)
-		for i, h := range held {
-			assertPending(t, ops[i], "an operation on another instance")
-			h.Release()
-			require.NoError(t, waitOp(t, ops[i], callBound))
-		}
-	})
-
-	t.Run("a call past its deadline fails as a timeout", func(t *testing.T) {
-		p := newDBDriverPlugin(t)
-		srv := NewFixtureDBServer(t)
-		srv.Hold = "QUERY SHOW DATABASES"
-		s := openFixtureSession(t, p, srv)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-		defer cancel()
-		err := waitOp(t, driverOp(listDatabases(ctx, s)), 300*time.Millisecond+driverInterruptBound)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-
-		_, err = s.Execute(context.Background(), "SELECT 1")
-		require.NoError(t, err)
-		assert.Len(t, srv.Logins(), 2, "the timed-out instance is discarded; the next operation logs in again")
-	})
-
-	t.Run("the tool timeout does not bound a driver call", func(t *testing.T) {
-		const toolTimeout = 100 * time.Millisecond
-		p := newDBDriverPlugin(t, WithToolTimeout(toolTimeout))
-		srv := NewFixtureDBServer(t)
-		srv.Hold = "QUERY SHOW DATABASES"
-		s := openFixtureSession(t, p, srv)
-
-		start := time.Now()
-		op := driverOp(listDatabases(context.Background(), s))
-		h := srv.WaitHeld(t)
-		release := time.AfterFunc(4*toolTimeout, h.Release)
-		defer release.Stop()
-		require.NoError(t, waitOp(t, op, callBound))
-		assert.GreaterOrEqual(t, time.Since(start), 4*toolTimeout)
-	})
-}
-
-// Closing a session closes its sessions in the guest, and a guest's close may talk
-// to the database (a logoff). A database that never answers must not hold the
-// close forever: closing runs when an extension is disabled, upgraded or removed,
-// and when an idle instance is reaped.
-func TestDriverSessionCloseIsBounded(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	p.opts.driverCloseTimeout = 100 * time.Millisecond
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "LOGOFF"
-	s, err := p.OpenDriverSession(context.Background(), "fixturedb", dbdriver.OpenRequest{
-		Config:        &dbdriver.Config{Driver: "fixturedb", Host: "db.internal", Port: 7357, Username: "alice", Database: "app"},
-		Password:      "s3cret",
-		DriverOptions: map[string]any{"logoff": true},
-		Transport:     dbdriver.Transport{Dial: srv.Dial},
-	})
-	require.NoError(t, err)
-
-	closed := driverOp(s.Close)
-	srv.WaitHeld(t)
-	require.ErrorIs(t, waitOp(t, closed, p.opts.driverCloseTimeout+driverInterruptBound), context.DeadlineExceeded,
-		"the close fails as a timeout instead of waiting for the database")
-}
-
-// A session's idle instances close side by side: each close is bounded, but one
-// after another a database that never answers would hold the close for that bound
-// once per instance.
-func TestDriverSessionClosesItsInstancesSideBySide(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	p.opts.driverCloseTimeout = time.Minute
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "LOGOFF"
-	ctx := context.Background()
-	s, err := p.OpenDriverSession(ctx, "fixturedb", dbdriver.OpenRequest{
-		Config:        &dbdriver.Config{Driver: "fixturedb", Host: "db.internal", Port: 7357, Username: "alice", Database: "app"},
-		Password:      "s3cret",
-		DriverOptions: map[string]any{"logoff": true},
-		Transport:     dbdriver.Transport{Dial: srv.Dial},
-	})
-	require.NoError(t, err)
-	// A cursor holds the first instance, so the query logs in a second; both are
-	// then idle.
-	rows, err := s.StreamTableRows(ctx, "app", "users", dbdriver.TableQuery{})
-	require.NoError(t, err)
-	_, err = s.Execute(ctx, "SELECT 1")
-	require.NoError(t, err)
-	require.NoError(t, rows.Close())
-	require.Len(t, srv.Logins(), 2)
-
-	closed := driverOp(s.Close)
-	first := srv.WaitHeld(t)
-	second := srv.WaitHeld(t) // fails the test if it waits for the first close
-	first.Release()
-	second.Release()
-	require.NoError(t, waitOp(t, closed, callBound))
 }

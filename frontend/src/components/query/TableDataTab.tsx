@@ -185,7 +185,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [submitting, setSubmitting] = useState(false);
   // `preview` = read-only view (opened by the "Preview SQL" button).
   // `confirm` = confirmation before submit (opened by the "Submit" button).
-  const [sqlDialog, setSqlDialog] = useState<{ mode: "preview" | "confirm"; plan: GridEditPlan } | null>(null);
+  // plan 是驱动为 source 这份修改生成的语句;then 是提交全部成功后要继续的操作(拦截框里选「提交修改…」时
+  // 被拦下的那个),预览取消或提交失败时随对话框一起丢掉。
+  const [sqlDialog, setSqlDialog] = useState<{
+    mode: "preview" | "confirm";
+    source: PendingGridEdits;
+    plan: GridEditPlan;
+    then?: () => void;
+  } | null>(null);
   // 状态栏的语句摘要:驱动为哪一份修改生成的第一条语句(修改变了就不再显示旧的)。
   const [sqlSummary, setSqlSummary] = useState<{ source: PendingGridEdits; statement: string } | null>(null);
   const [showDDLDialog, setShowDDLDialog] = useState(false);
@@ -223,8 +230,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [focusCellRequest, setFocusCellRequest] = useState<FocusCellRequest | null>(null);
   // 有未提交修改时被拦下的操作:对话框打开期间挂在这里,按用户选择丢弃或执行。
   const [guardedAction, setGuardedAction] = useState<GuardedAction | null>(null);
-  // 选「提交修改…」后,被拦下的操作等提交成功才执行;预览取消或提交失败时清掉。
-  const continueAfterSubmit = useRef<(() => void) | null>(null);
   const requestSeq = useRef(0);
   const latestDataRequest = useRef(0);
   const latestCountRequest = useRef(0);
@@ -564,11 +569,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     () => collectGridEdits({ rows, newRowCount: newRows.length, columns, primaryKeys, columnRules, edits }),
     [rows, newRows.length, columns, primaryKeys, columnRules, edits]
   );
-  // 生成要等后端:等回来时修改若已变了,这次的结果就不再对应表格里的修改。
-  const latestPendingEdits = useRef(pendingEdits);
-  useEffect(() => {
-    latestPendingEdits.current = pendingEdits;
-  }, [pendingEdits]);
   const hasPendingStatements = pendingEdits.intent.inserts.length + pendingEdits.intent.updates.length > 0;
 
   const generateGridEdits = useCallback(
@@ -600,6 +600,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     };
   }, [assetId, canGridEdit, generateGridEdits, hasPendingStatements, pendingEdits]);
   const pendingSqlSummary = sqlSummary?.source === pendingEdits ? sqlSummary.statement : "";
+  // 生成要等后端:等回来时修改若已变了,这次的结果就不再对应表格里的修改,对话框不显示。
+  const activeSqlDialog = sqlDialog?.source === pendingEdits ? sqlDialog : null;
 
   const showInsertValidationError = useCallback(
     (fields: string[]) => {
@@ -608,32 +610,33 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     [t]
   );
 
-  // 让驱动为当前修改生成语句并打开预览 / 确认;返回是否打开了。生成失败时显示错误,不打开预览。
+  // 让驱动为当前修改生成语句并打开预览 / 确认;then 是确认提交全部成功后要继续的操作。生成失败时显示错误,
+  // 不打开预览。
   const openSqlDialog = useCallback(
-    async (mode: "preview" | "confirm"): Promise<boolean> => {
+    async (mode: "preview" | "confirm", then?: () => void) => {
       const source = pendingEdits;
       if (source.missingFields.length > 0) {
         showInsertValidationError(source.missingFields);
-        return false;
+        return;
       }
-      if (!hasPendingStatements) return false;
+      if (!hasPendingStatements) return;
       let generated: dbdriver.GridEditStatements;
       try {
         generated = await generateGridEdits(source.intent);
       } catch (e) {
         toast.error(String(e));
-        return false;
+        return;
       }
-      if (latestPendingEdits.current !== source) return false;
       setSqlDialog({
         mode,
+        source,
+        then,
         plan: {
           statements: [...generated.inserts, ...generated.updates],
           rowIdxs: [...source.insertRowIdxs, ...source.updateRowIdxs],
           rowsLength: rows.length,
         },
       });
-      return true;
     },
     [generateGridEdits, hasPendingStatements, pendingEdits, rows.length, showInsertValidationError]
   );
@@ -901,18 +904,17 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     pendingGuard.run();
   }, [handleDiscard, handleGuardStay, pendingGuard]);
 
-  const handleGuardSubmit = useCallback(async () => {
+  const handleGuardSubmit = useCallback(() => {
     if (!pendingGuard) return;
     handleGuardStay();
-    if (await openSqlDialog("confirm")) continueAfterSubmit.current = pendingGuard.run;
+    void openSqlDialog("confirm", pendingGuard.run);
   }, [handleGuardStay, openSqlDialog, pendingGuard]);
 
   const handleConfirmSubmit = useCallback(async () => {
-    if (!sqlDialog) return;
-    const next = continueAfterSubmit.current;
-    continueAfterSubmit.current = null;
-    if ((await handleSubmit(sqlDialog.plan)) && next) next();
-  }, [handleSubmit, sqlDialog]);
+    if (!activeSqlDialog) return;
+    const { plan, then } = activeSqlDialog;
+    if ((await handleSubmit(plan)) && then) then();
+  }, [activeSqlDialog, handleSubmit]);
 
   const handleDeleteRows = useCallback(
     async (rowIdxs: number[]) => {
@@ -1400,14 +1402,13 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
       {/* SQL preview / submit confirmation */}
       <SqlPreviewDialog
-        open={sqlDialog !== null}
+        open={activeSqlDialog !== null}
         onOpenChange={(open) => {
           if (open || submitting) return;
           setSqlDialog(null);
-          continueAfterSubmit.current = null;
         }}
-        statements={sqlDialog?.plan.statements ?? []}
-        onConfirm={sqlDialog?.mode === "confirm" ? handleConfirmSubmit : undefined}
+        statements={activeSqlDialog?.plan.statements ?? []}
+        onConfirm={activeSqlDialog?.mode === "confirm" ? handleConfirmSubmit : undefined}
         submitting={submitting}
       />
 

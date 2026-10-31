@@ -414,17 +414,17 @@ func initExtensionSystem(
 	var extSvc *extension_svc.Service
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
 		// 资产配置 / KV / 连接路径来自 extension_svc（与 opsctl 共用），文件对话框与
-		// action 事件只有桌面窗口能给。
+		// 工具事件只有桌面窗口能给。
 		cfg := extSvc.HostConfig(extName)
 		cfg.FileDialogs = extB.NewFileDialogOpener()
-		cfg.ActionEvents = extB.NewActionEventHandler(extName)
+		cfg.ToolEvents = extB.NewToolEventHandler(extName)
 		provider := extpkg.NewDefaultHostProvider(cfg)
 		// The asset's cached HTTP client (kept for keep-alive reuse across calls)
 		// is built from its connection settings; once those change or the asset
 		// is gone, the cache must be dropped instead of reused on the next open.
 		extension.RegisterHTTPCacheInvalidator(extName, provider)
 		return provider
-	}, logger.Default())
+	}, extpkg.NewContributionRegistry(extreg.Points()...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
 
 	extSvc = extension_svc.New(
 		mgr,
@@ -469,16 +469,8 @@ func initExtensionSystem(
 // "从目录安装"那一条 extension_svc.Install。
 type desktopExtDevInstaller struct{ ext *extension.Extension }
 
-func (i desktopExtDevInstaller) InstalledExtensionVersion(_ context.Context, name string) (string, bool) {
-	return extension.InstalledExtensionVersion(i.ext, name)
-}
-
-func (i desktopExtDevInstaller) InstalledExtensionCapabilities(_ context.Context, name string) extpkg.Capabilities {
-	return extension.InstalledExtensionCapabilities(i.ext, name)
-}
-
-func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
-	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
+func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
+	return extension.InstallExtensionDir(i.ext, ctx, sourceDir, confirm)
 }
 
 // desktopExtStore 把 `opsctl ext search / install / update` 交给扩展商店：列表来自

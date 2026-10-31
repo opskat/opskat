@@ -8,6 +8,9 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extension/extensiontest"
+	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -21,10 +24,9 @@ func (l fixedLang) Lang() string { return string(l) }
 func registeredExt(name, assetType string) *extension.Extension {
 	return &extension.Extension{
 		Name: name,
-		Manifest: &extension.Manifest{
-			Name:       name,
-			AssetTypes: []extension.AssetTypeDef{{Type: assetType}},
-		},
+		Manifest: extensiontest.Described(extmanifest.Manifest{Name: name}, extensiontest.Describe{
+			Contributes: map[string]any{extwire.KeyAssetTypes: []extwire.AssetType{{Type: assetType}}},
+		}),
 	}
 }
 
@@ -56,10 +58,10 @@ func TestFrontendCallsScopeAssetToExtension(t *testing.T) {
 
 		Convey("assetRef refuses a database asset of a driver the extension provides", func() {
 			svc := e.service
-			svc.Bridge().Register(&extension.Extension{Name: "mydb", Manifest: &extension.Manifest{
-				Name: "mydb", AssetTypes: []extension.AssetTypeDef{{Type: "mydb-console"}},
-				Capabilities: extension.Capabilities{DatabaseDrivers: []string{"mydb"}},
-			}})
+			svc.Bridge().Register(&extension.Extension{Name: "mydb", Manifest: extensiontest.Described(
+				extmanifest.Manifest{Name: "mydb", Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"mydb"}}},
+				extensiontest.Describe{Contributes: map[string]any{extwire.KeyAssetTypes: []extwire.AssetType{{Type: "mydb-console"}}}},
+			)})
 			assets.EXPECT().Find(gomock.Any(), int64(3)).Return(&asset_entity.Asset{
 				ID: 3, Name: "orders", Type: asset_entity.AssetTypeDatabase, Config: `{"driver":"mydb","host":"h","port":1}`,
 			}, nil)

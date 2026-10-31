@@ -72,7 +72,7 @@ func packResponse(tag byte, payload []byte) uint64 {
 }
 
 // copyGuestBytes copies host-written memory into a Go-owned slice and releases
-// the host's buffer, so a long-running action that makes thousands of host calls
+// the host's buffer, so a long-running tool that makes thousands of host calls
 // does not accumulate them for the lifetime of the instance.
 func copyGuestBytes(ptr, size uint32) []byte {
 	if size == 0 {

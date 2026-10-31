@@ -12,8 +12,7 @@
 // gated). A tool error, note_delete's included, reaches runTool as a rejected promise.
 //
 // It also renders the note list a second time through window.__OPSKAT_EXT__.hostUI
-// (task 11's @opskat/host-ui — this is why manifest.json declares hostABI 2.1
-// instead of 2.0): note_list already returns key/size/updatedAt per note, which is
+// (@opskat/host-ui, versioned together with hostABI 1.0): note_list already returns key/size/updatedAt per note, which is
 // exactly a result-table shape, so this is the "result table for the note list"
 // case the spec calls out rather than a contrived one.
 
@@ -117,7 +116,7 @@ export function NotebookPage({ assetId }) {
     h(
       "div",
       { "data-testid": "notebook-table", style: { height: 180 } },
-      h(hostUI.QueryResultTable, {
+      h(hostUI.DataTable, {
         columns: ["key", "size", "updatedAt"],
         rows: notes,
       })

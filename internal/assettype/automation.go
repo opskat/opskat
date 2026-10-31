@@ -2,6 +2,7 @@ package assettype
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -20,7 +21,12 @@ type AutomationContract struct {
 	// that happens to hold a map value (composite/attacker-supplied) is still dropped by
 	// approvalView's default scalar-only rule — this allowlist is opt-in per field, not a
 	// blanket exception for "looks flat".
-	FlatMapFields  []string
+	FlatMapFields []string
+	// ApprovalExtra adds approval entries computed from the prepared config that the
+	// scalar-only approvalView cannot carry (e.g. a driver's declared options). It must
+	// return only values safe to show, and fail when it cannot tell what is safe — the
+	// request must not reach approval with part of it unshown. nil means the type has none.
+	ApprovalExtra  func(map[string]any) (map[string]any, error)
 	Normalize      func(map[string]any) error
 	CredentialPlan func(map[string]any) (CredentialPlan, error)
 	BindCredential func(map[string]any, CredentialBinding) (map[string]any, error)
@@ -93,6 +99,11 @@ func newAutomationContract(configFields, approvalFields []string, normalize func
 	}
 }
 
+func (c AutomationContract) withApprovalExtra(extra func(map[string]any) (map[string]any, error)) AutomationContract {
+	c.ApprovalExtra = extra
+	return c
+}
+
 func PrepareCreate(assetType string, args map[string]any) (PreparedCreate, error) {
 	prepared, contract, err := prepareAutomation(assetType, args)
 	if err != nil {
@@ -147,6 +158,13 @@ func validateAutomation(prepared PreparedCreate) error {
 
 func finalizeAutomation(prepared PreparedCreate, contract AutomationContract) (PreparedCreate, error) {
 	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields, contract.FlatMapFields)
+	if contract.ApprovalExtra != nil {
+		extra, err := contract.ApprovalExtra(prepared.Config)
+		if err != nil {
+			return PreparedCreate{}, err
+		}
+		maps.Copy(prepared.Approval, extra)
+	}
 	// A proxy chain is a list of objects, which approvalView drops wholesale (a nested
 	// value could hide a secret). The approver still has to see the path, so it goes in
 	// as one summary line per hop.

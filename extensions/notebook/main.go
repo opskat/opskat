@@ -112,11 +112,11 @@ func init() {
 		}).
 		Doc("tools.note_delete.description")
 
-	// The reference extension's own page: it exercises the seam task 8 adds
-	// (frontend/page.js calls note_list/note_put/note_delete through
-	// window.__OPSKAT_EXT__.api.callTool, which now clears the same policy /
-	// approval / grant / audit gate opsctl's delegated exec does) rather than
-	// dialing the plugin directly. Slot "asset.connect" is what makes
+	// The reference extension's own page: frontend/page.js calls
+	// note_list/note_put/note_delete through window.__OPSKAT_EXT__.api.callTool,
+	// which the host runs directly against the page's asset — a page call is the
+	// user's own action, so no policy, approval, grant or audit applies (AI exec and
+	// opsctl on the same asset stay gated). Slot "asset.connect" is what makes
 	// double-clicking a notebook asset open it.
 	opskat.Frontend(opskat.FrontendSpec{
 		Entry: "page.js",

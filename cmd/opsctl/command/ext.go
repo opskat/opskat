@@ -31,8 +31,10 @@ import (
 // devInstallFn 变量化：让 cmdExtDev 的判断可测，不必真起一个桌面端。
 var devInstallFn = requestExtDevInstall
 
-// extregRegisterFn 是"仅描述注册"的接缝，同上一套路。
-var extregRegisterFn = extreg.RegisterDescribeOnly
+// extensionContributions 是本进程的贡献点注册表：与桌面端（main.go）同一组贡献点
+// （extreg.Points）。启动时的仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，
+// 一个扩展在本进程里只有一次接入。
+var extensionContributions = extension.NewContributionRegistry(extreg.Points()...)
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
@@ -61,7 +63,7 @@ func activateExtension(ctx context.Context, extName string) error {
 
 // newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：
 // 资产配置与凭据、KV、资产连接路径）建扩展运行时；桌面窗口才有的两项里，文件对话框
-// 换成 noFileDialog，action 事件不接（exec 只调工具，不跑 action）。
+// 换成 noFileDialog，工具事件不接（只有页面调用的事件有人听）。
 //
 // 日志走 logger.Default()：opsctl 不初始化日志，它是 no-op，扩展的日志与 guest 的
 // 标准输出 / 标准错误（pkg/extension guestLogWriter 也写它）因此永远不进 opsctl 的
@@ -72,7 +74,7 @@ func newExtensionHost() *extension_svc.Service {
 		cfg := svc.HostConfig(extName)
 		cfg.FileDialogs = noFileDialog{}
 		return extension.NewDefaultHostProvider(cfg)
-	}, logger.Default())
+	}, extensionContributions, logger.Default())
 	svc = extension_svc.New(mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
@@ -92,7 +94,7 @@ func releaseExtensions(ctx context.Context) {
 		return
 	}
 	for _, name := range extensionHost.svc.Bridge().ListNames() {
-		extreg.Unregister(name)
+		extensionContributions.Revoke(name)
 	}
 	extensionHost.svc.Close(ctx)
 	extensionHost.svc = nil
@@ -125,10 +127,12 @@ func extensionOwnerOf(assetType string) (string, bool, error) {
 		return "", false, err
 	}
 	for _, ext := range scanned {
-		for _, at := range ext.info.Manifest.AssetTypes {
-			if at.Type == assetType {
-				return ext.info.Name, true, nil
-			}
+		view, err := extreg.ManifestOf(ext.info.Manifest)
+		if err != nil {
+			return "", false, err
+		}
+		if view.AssetType(assetType) != nil {
+			return ext.info.Name, true, nil
 		}
 	}
 	return "", false, nil
@@ -159,7 +163,7 @@ func driverExtensionOf(asset *asset_entity.Asset) (extName string, driverID dbdr
 		return "", id, false, err
 	}
 	for _, ext := range scanned {
-		if slices.Contains(ext.info.Manifest.Capabilities.DatabaseDrivers, string(id)) {
+		if slices.Contains(ext.info.Manifest.Contributes.DatabaseDrivers, string(id)) {
 			return ext.info.Name, id, true, nil
 		}
 	}
@@ -232,7 +236,10 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 	}
 	results := make([]installedExtension, 0, len(scanned))
 	for _, ext := range scanned {
-		m := ext.info.Manifest
+		m, err := extreg.ManifestOf(ext.info.Manifest)
+		if err != nil {
+			return nil, err
+		}
 		item := installedExtension{
 			Name:        m.Name,
 			Version:     m.Version,
@@ -262,32 +269,48 @@ type scannedExtension struct {
 // sorted by name. It is the single scan behind both `ext list` and the startup
 // registration below, so the two cannot disagree about what is installed.
 func scanExtensionDirs() ([]scannedExtension, error) {
-	extDir := extensionsDirFn()
-	entries, err := os.ReadDir(extDir)
+	scanned, _, err := scanExtensionDirsWithFailures()
+	return scanned, err
+}
+
+// scanExtensionDirsWithFailures is scanExtensionDirs plus the extensions the host
+// refuses (a manifest or cached describe() it does not accept): listed with the
+// refusal, in the order of the directories, not among the scanned ones. A directory
+// without a manifest.json is not an extension and is in neither.
+func scanExtensionDirsWithFailures() ([]scannedExtension, []extension.LoadFailure, error) {
+	infos, failures, err := extension.ScanInstalledDir(extensionsDirFn(), extensionContributions, zap.NewNop())
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read extensions directory: %w", err)
+		return nil, nil, err
 	}
-
 	disabled := disabledExtensionNames()
-
-	results := make([]scannedExtension, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		info, err := extension.LoadManifestInfo(filepath.Join(extDir, entry.Name()))
-		if err != nil {
-			// A directory without a readable/valid manifest is not an extension; the
-			// desktop app skips it the same way.
-			continue
-		}
+	results := make([]scannedExtension, 0, len(infos))
+	for _, info := range infos {
 		results = append(results, scannedExtension{info: info, enabled: !disabled[info.Name]})
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].info.Name < results[j].info.Name })
-	return results, nil
+	return results, failures, nil
+}
+
+// refusedExtensionError is the error for an asset whose owning extension is
+// installed but refused by the host: it names the extension and why, so exec stops
+// before loading anything. The owner comes from the asset row, which is there even
+// when the extension's describe() is not. nil when the asset is not an extension's
+// or its extension is accepted.
+func refusedExtensionError(ctx context.Context, asset *asset_entity.Asset) error {
+	if asset.ExtensionName == "" {
+		return nil
+	}
+	_, failures, err := scanExtensionDirsWithFailures()
+	if err != nil {
+		return err
+	}
+	for _, f := range failures {
+		if f.Name == asset.ExtensionName {
+			return fmt.Errorf("asset %q is provided by extension %q, which is not loaded: %s",
+				asset.Name, f.Name, extension_svc.NewLoadError(ctx, f.Err).Message)
+		}
+	}
+	return nil
 }
 
 // registerExtensionAssetTypes wires every enabled extension's non-executing face into
@@ -322,15 +345,14 @@ func registerExtensionAssetTypes() {
 			continue
 		}
 		info := ext.info
-		// 描述缓存里的答案至少声明一个资产类型或一个数据库驱动；两者皆无才是缓存缺失。
-		if len(info.Manifest.AssetTypes) == 0 && len(info.Manifest.DatabaseDrivers) == 0 {
+		if !info.Described {
 			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
 				extensionDescribeFailures = append(extensionDescribeFailures, extensionDescribeFailure{name: ext.info.Name, err: err})
 				continue
 			}
 		}
-		if err := extregRegisterFn(info); err != nil {
+		if err := extensionContributions.Attach(info.View()); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
 	}
@@ -355,22 +377,23 @@ var describeExtensionFn = describeExtension
 // describeExtension 补缓存缺失的扩展：加载它的 WASM 取 describe() 的答案（Manager 在
 // 缓存缺失时顺手写入 extension_describe，供下一条命令用），随即释放。返回的清单带的是
 // 这次加载拿到的答案，而不是从缓存重读——缓存写入失败只让下一条命令再描述一次，
-// 不让这一条命令丢掉刚拿到的描述。它只取描述，不接入 extreg——真正执行由
+// 不让这一条命令丢掉刚拿到的描述。它只取描述，不接入贡献点——真正执行由
 // activateExtensionFn 在 exec 时完整激活。
 func describeExtension(ctx context.Context, dir string) (*extension.ManifestInfo, error) {
 	mgr := extension.NewManager(filepath.Dir(dir), func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, logger.Default())
+	}, extensionContributions, logger.Default())
 	defer mgr.Close(ctx)
 	described, err := mgr.LoadExtension(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-	info, err := extension.LoadManifestInfo(dir)
+	info, err := extension.LoadManifestInfo(dir, extensionContributions)
 	if err != nil {
 		return nil, err
 	}
 	info.Manifest = described
+	info.Described = true
 	return info, nil
 }
 

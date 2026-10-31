@@ -1,6 +1,7 @@
 package opsctl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -31,10 +33,11 @@ var currentApp = appversion.Current
 // 未打包的扩展目录装进当前进程。
 //
 // 这条通道让扩展开发不需要第二套宿主：安装走的就是 ExtDevInstaller 背后那一个
-// extension_svc.Install——扩展页"从目录安装"用的同一条暂存 → 校验 → 提交路径，装完的
-// 扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。唯一的差别是确认：按钮安装
-// 在提交前弹应用内的安装确认框，ext dev 不再弹它，因为下面已经在 opsctl 审批弹窗里问过
-// 用户（InstallExtensionDir 不传确认函数）。重装即热重载——Install 会先 Unload 再加载
+// extension_svc.Install——扩展页"从目录安装"用的同一条暂存 → 确认 → 提交路径，装完的
+// 扩展由同一个 WASM 运行时、同一套能力面、同一份注册表承载。确认也是同一份：Install
+// 描述的 InstallConfirm（已装版本、权限、新增项）交给这里的确认函数，只是展示在 opsctl
+// 审批弹窗里而不是应用内的安装确认框；提交时 Install 同样复查已装版本仍是确认时的
+// From，弹窗开着时有别的安装落地就拒绝。重装即热重载——Install 会先 Unload 再加载
 // 并通知前端刷新。
 //
 // 它装进来并启用的是未经审阅的 WASM，manifest 要什么能力就有什么能力，还能覆盖同名的
@@ -80,9 +83,9 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: fmt.Sprintf("read manifest: %v", err)}
 	}
 	// 同一条兼容规则：不兼容的构建在弹窗之前就拒绝，并说明需要更新 OpsKat。
-	if err := extension.CheckManifestJSON(data, currentApp()); err != nil {
+	if err := extmanifest.CheckManifestJSON(data, currentApp()); err != nil {
 		log.Warn("extension dev install refused", zap.Error(err))
-		var inc *extension.IncompatibleError
+		var inc *extmanifest.IncompatibleError
 		if errors.As(err, &inc) {
 			return approval.ApprovalResponse{Approved: false, Reason: extension_svc.IncompatibleMessage(i18n.Ctx(o.ctx, o.lang.Lang()), inc)}
 		}
@@ -94,40 +97,45 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
 	}
 
-	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
-	installedVersion, overwrites := o.extDevInstaller.InstalledExtensionVersion(ctx, manifest.Name)
-	var installed extension.Capabilities
-	if overwrites {
-		installed = o.extDevInstaller.InstalledExtensionCapabilities(ctx, manifest.Name)
-	}
 	log = log.With(
 		zap.String("extension", manifest.Name),
 		zap.String("version", manifest.Version),
-		zap.Bool("overwrites", overwrites),
-		zap.String("installedVersion", installedVersion),
-		zap.String("credentials", manifest.Capabilities.Credentials),
-		zap.Bool("tunnel", manifest.Capabilities.Tunnel),
-		zap.Bool("assetEndpoint", manifest.Capabilities.Network.AssetEndpoint),
+		zap.String("credentials", manifest.Permissions.Credentials),
+		zap.Bool("allowPrivate", manifest.Permissions.Network.AllowPrivate),
+		zap.Bool("assetEndpoint", manifest.Permissions.Network.AssetEndpoint),
 	)
 
-	key := extDevApprovalKey{dir: sourceDir, name: manifest.Name, capabilities: capabilitiesFingerprint(manifest.Capabilities)}
-	if o.extDevApprovals.has(key) {
-		log.Info("extension dev install approved", zap.String("decision", "remembered"))
-	} else {
+	// The approval is Install's confirm: it sees the InstallConfirm the service
+	// built for the staged snapshot, and Install commits only what it approved.
+	// Install calls it synchronously, so the overwrite it describes is on log for
+	// the outcome lines below too.
+	var denied *approval.ApprovalResponse
+	confirm := func(_ context.Context, c extension_svc.InstallConfirm) error {
+		log = log.With(zap.Bool("overwrites", c.From != ""), zap.String("installedVersion", c.From))
+		key := extDevApprovalKey{dir: sourceDir, name: c.Name, grants: grantsFingerprint(c.Capabilities)}
+		if o.extDevApprovals.has(key) {
+			log.Info("extension dev install approved", zap.String("decision", "remembered"))
+			return nil
+		}
 		resp := o.extDevApprove(approval.ApprovalRequest{
 			Type:    extDevApprovalType,
 			Command: sourceDir,
-			Detail:  extDevApprovalDetail(manifest, installedVersion, installed, overwrites, o.lang.Lang()),
+			Detail:  extDevApprovalDetail(c, o.lang.Lang()),
 		})
 		if !resp.Approved {
 			log.Info("extension dev install denied", zap.String("reason", resp.Reason))
-			return approval.ApprovalResponse{Approved: false, Reason: "extension dev install " + resp.Reason}
+			denied = &resp
+			return extension_svc.ErrInstallCanceled
 		}
 		o.extDevApprovals.remember(key)
 		log.Info("extension dev install approved", zap.String("decision", "user"))
+		return nil
 	}
 
-	name, version, err := o.extDevInstaller.InstallExtensionDir(ctx, staged)
+	name, version, err := o.extDevInstaller.InstallExtensionDir(i18n.Ctx(o.ctx, o.lang.Lang()), staged, confirm)
+	if denied != nil {
+		return approval.ApprovalResponse{Approved: false, Reason: "extension dev install " + denied.Reason}
+	}
 	if err != nil {
 		log.Error("extension dev install failed", zap.Error(err))
 		return approval.ApprovalResponse{Approved: false, Reason: err.Error()}
@@ -139,80 +147,59 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 
 // extDevApprovalDetail 是弹窗里除来源目录之外的全部内容：用户据此判断要不要放行。
 // credentials: read 会把扩展资产里保存的每个密码以明文交给它，所以放在第一行醒目提示，
-// 而不是混在能力列表里。
-func extDevApprovalDetail(m *extension.Manifest, installedVersion string, installed extension.Capabilities, overwrites bool, lang string) string {
+// 而不是混在权限列表里。全部内容取自 extension_svc 描述这次安装的 c：From 非空即覆盖
+// 已装版本，c.Added（全新安装时为空）里的项标为新增。
+func extDevApprovalDetail(c extension_svc.InstallConfirm, lang string) string {
 	var b strings.Builder
-	if m.Capabilities.Credentials == extension.CredentialAccessRead {
+	grants := c.Capabilities
+	if slices.ContainsFunc(grants, func(g extension_svc.CapabilityGrant) bool {
+		return g.Kind == extension_svc.CapCredentials && g.Value == extmanifest.CredentialAccessRead
+	}) {
 		b.WriteString(i18n.Pick(lang,
 			"警告：credentials: read —— 该扩展能以明文读取其资产里保存的全部密码\n",
 			"WARNING: credentials: read — this extension can read every password stored in its assets in plaintext\n"))
 	}
-	if len(m.Capabilities.DatabaseDrivers) > 0 {
+	if slices.ContainsFunc(grants, func(g extension_svc.CapabilityGrant) bool { return g.Kind == extension_svc.CapDatabaseDriver }) {
 		b.WriteString(i18n.Pick(lang,
 			"警告：databaseDrivers —— 使用这些驱动的数据库资产，其口令与 TLS 客户端私钥会以明文交给该扩展\n",
 			"WARNING: databaseDrivers — database assets using these drivers hand their passwords and TLS client private keys to this extension in plaintext\n"))
 	}
-	fmt.Fprintf(&b, "extension: %s %s\n", m.Name, m.Version)
-	if overwrites {
-		fmt.Fprintf(&b, "overwrites installed: %s %s\n", m.Name, installedVersion)
+	fmt.Fprintf(&b, "extension: %s %s\n", c.Name, c.To)
+	if c.From != "" {
+		fmt.Fprintf(&b, "overwrites installed: %s %s\n", c.Name, c.From)
 	} else {
 		b.WriteString("new install\n")
 	}
-	c := m.Capabilities
-	b.WriteString("capabilities:")
+	added := c.Added
+	newMark := i18n.Pick(lang, "新增", "new")
+	riskMark := i18n.Pick(lang, "高风险", "HIGH RISK")
+	b.WriteString("permissions:")
 	lines := 0
-	capLine := func(label, value string) {
-		fmt.Fprintf(&b, "\n  %s: %s", label, value)
-		lines++
-	}
-	if len(c.FS.Read) > 0 {
-		capLine("fs.read", strings.Join(c.FS.Read, ", "))
-	}
-	if len(c.FS.Write) > 0 {
-		capLine("fs.write", strings.Join(c.FS.Write, ", "))
-	}
-	if len(c.HTTP.Allowlist) > 0 {
-		capLine("http", strings.Join(c.HTTP.Allowlist, ", "))
-	}
-	if c.Credentials != "" {
-		capLine("credentials", c.Credentials)
-	}
-	if c.Tunnel {
-		capLine("tunnel", "true")
-	}
-	if c.Network.AssetEndpoint {
-		capLine("network.assetEndpoint", "true")
-	}
-	if c.Network.DatabaseRedirects {
-		v := "true"
-		if overwrites && !installed.Network.DatabaseRedirects {
-			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
-		}
-		v += i18n.Pick(lang,
-			" —— 驱动可以连到数据库重定向到的其他地址，经资产的到达途径",
-			" — the driver may connect to other addresses the database redirects to, through the asset's route")
-		capLine("network.databaseRedirects", v)
-	}
-	if c.DatabaseKerberos {
-		v := "true"
-		if overwrites && !installed.DatabaseKerberos {
-			v += " (" + i18n.Pick(lang, "新增", "new") + ")"
-		}
-		v += i18n.Pick(lang,
-			" —— 驱动可以用资产里的 Kerberos 凭据为登录数据库取票",
-			" — the driver may fetch Kerberos tickets with the asset's Kerberos credentials to log in to the database")
-		capLine("databaseKerberos", v)
-	}
-	if len(c.DatabaseDrivers) > 0 {
-		mark := i18n.Pick(lang, "新增", "new")
-		ids := make([]string, len(c.DatabaseDrivers))
-		for i, id := range c.DatabaseDrivers {
-			ids[i] = id
-			if overwrites && !slices.Contains(installed.DatabaseDrivers, id) {
-				ids[i] += " (" + mark + ")"
+	// One line per kind, in the order CapabilityGrants lists them (the desktop
+	// dialog's order); a kind's values share the line.
+	for i := 0; i < len(grants); {
+		kind := grants[i].Kind
+		var values []string
+		highRisk := false
+		for ; i < len(grants) && grants[i].Kind == kind; i++ {
+			g := grants[i]
+			v := g.Value
+			if v == "" {
+				v = "true"
 			}
+			if slices.Contains(added, g) {
+				v += " (" + newMark + ")"
+			}
+			values = append(values, v)
+			highRisk = highRisk || g.HighRisk
 		}
-		capLine("databaseDrivers", strings.Join(ids, ", "))
+		line := strings.Join(values, ", ")
+		if highRisk {
+			line += " [" + riskMark + "]"
+		}
+		line += extDevGrantExplanation(kind, lang)
+		fmt.Fprintf(&b, "\n  %s: %s", extDevGrantLabel(kind), line)
+		lines++
 	}
 	if lines == 0 {
 		b.WriteString(" none")
@@ -220,16 +207,40 @@ func extDevApprovalDetail(m *extension.Manifest, installedVersion string, instal
 	return b.String()
 }
 
-// extDevApprovalKey 是一次 ext dev 确认覆盖的范围。能力也在键里：重建后能力变宽是
-// 一个新的决定，不是一次重载。
-type extDevApprovalKey struct {
-	dir          string
-	name         string
-	capabilities string
+// extDevGrantLabel 是授权类别在 manifest 里的写法，ext dev 文案按它列出。授权类别本身就按
+// manifest 的写法命名，只有驱动 id 一项一个授权、键名是复数。
+func extDevGrantLabel(kind string) string {
+	if kind == extension_svc.CapDatabaseDriver {
+		return "databaseDrivers"
+	}
+	return kind
 }
 
-func capabilitiesFingerprint(c extension.Capabilities) string {
-	return fmt.Sprintf("%+v", c)
+// extDevGrantExplanation 说明那些光看键名不懂含义的高风险权限。
+func extDevGrantExplanation(kind, lang string) string {
+	switch kind {
+	case extension_svc.CapAssetRoute:
+		return i18n.Pick(lang,
+			" —— 带资产的调用可以经该资产的连接路径连到任意地址，不只是资产里填写的地址",
+			" — a call on an asset may dial any address along that asset's connection path, not just the address typed into the asset")
+	case extension_svc.CapKerberos:
+		return i18n.Pick(lang,
+			" —— 可以用资产里保存的 Kerberos 凭据申请票据",
+			" — may fetch Kerberos tickets with the Kerberos credentials stored in the asset")
+	}
+	return ""
+}
+
+// extDevApprovalKey 是一次 ext dev 确认覆盖的范围。权限与驱动 id 也在键里：重建后
+// 要的更多是一个新的决定，不是一次重载。
+type extDevApprovalKey struct {
+	dir    string
+	name   string
+	grants string
+}
+
+func grantsFingerprint(grants []extension_svc.CapabilityGrant) string {
+	return fmt.Sprintf("%+v", grants)
 }
 
 // extDevApprovalMemory 只活在内存里：桌面进程退出即失效，下一次运行重新询问。

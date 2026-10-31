@@ -2,69 +2,69 @@
 import type { ComponentType } from "react";
 import type { ExtManifest, LoadedExtension } from "./types";
 
+type PageComponent = ComponentType<{ assetId?: number }>;
+
+// Extension names and the entry/styles paths are checked when the extension loads
+// (internal/extreg pages point and manifest parsing), so they are trusted here.
 const cache = new Map<string, LoadedExtension>();
 
-const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-
-function validateName(name: string): void {
-  if (!NAME_RE.test(name)) {
-    throw new Error(`Invalid extension name: ${JSON.stringify(name)} (must match ${NAME_RE})`);
-  }
+// Each extension's current load and the stylesheet <link> it injected. A newer load or a
+// cache clear supersedes it: its link is removed, and its module, should it still arrive,
+// is not cached — that would be the extension without its stylesheet.
+interface Load {
+  link?: HTMLLinkElement;
 }
+const loads = new Map<string, Load>();
 
-function validateEntryPath(entry: string, kind: string): void {
-  if (!entry) return;
-  if (entry.includes("..")) {
-    throw new Error(`Extension ${kind} path contains traversal: ${JSON.stringify(entry)}`);
-  }
-  if (entry.startsWith("/") || entry.startsWith("\\")) {
-    throw new Error(`Extension ${kind} path must be relative: ${JSON.stringify(entry)}`);
-  }
-  // Reject URL-like values
-  if (/^[a-z]+:\/\//i.test(entry)) {
-    throw new Error(`Extension ${kind} path must not be a URL: ${JSON.stringify(entry)}`);
-  }
+function dropLoad(name: string): void {
+  loads.get(name)?.link?.remove();
+  loads.delete(name);
 }
 
 export async function loadExtension(name: string, manifest: ExtManifest): Promise<LoadedExtension> {
-  validateName(name);
-
   const cached = cache.get(name);
   if (cached) return cached;
 
   const frontend = manifest.frontend;
   if (!frontend) throw new Error(`Extension "${name}" has no frontend definition`);
 
-  validateEntryPath(frontend.entry, "entry");
-  if (frontend.styles) {
-    validateEntryPath(frontend.styles, "styles");
-  }
-
   // Inject CSS
+  dropLoad(name);
+  const load: Load = {};
+  loads.set(name, load);
   if (frontend.styles) {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = `/extensions/${name}/${frontend.styles}`;
     document.head.appendChild(link);
+    load.link = link;
   }
 
-  // Load ESM module
-  const mod = await import(/* @vite-ignore */ `/extensions/${name}/${frontend.entry}`);
+  // Load ESM module; one that fails to import takes its stylesheet with it
+  let mod: Record<string, PageComponent | undefined>;
+  try {
+    mod = await import(/* @vite-ignore */ `/extensions/${name}/${frontend.entry}`);
+  } catch (err) {
+    if (loads.get(name) === load) dropLoad(name);
+    throw err;
+  }
 
   // Extract page components
-  const components: Record<string, ComponentType<{ assetId?: number }>> = {};
+  const components: Record<string, PageComponent> = {};
   for (const page of frontend.pages ?? []) {
-    if (mod[page.component]) {
-      components[page.component] = mod[page.component];
+    const component = mod[page.component];
+    if (component) {
+      components[page.component] = component;
     }
   }
 
   const loaded: LoadedExtension = { name, manifest, components };
-  cache.set(name, loaded);
+  if (loads.get(name) === load) cache.set(name, loaded);
   return loaded;
 }
 
 export function clearExtensionCache(name?: string): void {
+  for (const n of name ? [name] : [...loads.keys()]) dropLoad(n);
   if (name) cache.delete(name);
   else cache.clear();
 }

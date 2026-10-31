@@ -358,15 +358,15 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		o.window.ActivateWindow()
 	}
 
+	ch := make(chan permission.ApprovalResponse, 1)
+	// 先登记再发事件：响应一到就要找得到这条待决审批。
+	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, ch: ch})
+	defer o.pendingOpsctlApprovals.Delete(sessionID)
 	o.emit("opsctl:grant-approval", map[string]any{
 		"session_id":  sessionID,
 		"description": description,
 		"items":       eventItems,
 	})
-
-	ch := make(chan permission.ApprovalResponse, 1)
-	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, ch: ch})
-	defer o.pendingOpsctlApprovals.Delete(sessionID)
 
 	select {
 	case resp := <-ch:

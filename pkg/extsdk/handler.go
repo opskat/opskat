@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/opskat/opskat/pkg/extension/driverwire"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // dispatch routes a function call to the registered handler.
@@ -14,19 +14,123 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 		return dispatchDescribe()
 	case "execute_tool":
 		return dispatchTool(input)
-	case "execute_action":
-		return dispatchAction(input)
 	case "check_policy":
 		return dispatchPolicy(input)
 	case "validate_config":
 		return dispatchConfigValidator(input)
 	case "test_connection":
 		return dispatchTestConnection(input)
-	case driverwire.Function:
+	case extwire.DriverFunction:
 		return dispatchDatabaseDriver(input)
 	default:
 		return nil, fmt.Errorf("unknown function: %s", fnName)
 	}
+}
+
+// dispatchDescribe answers describe(): what the extension can do, generated from
+// the same registries dispatch serves calls from, so the host's view of the
+// extension and the code that runs cannot disagree — a tool the guest can
+// execute is a tool describe reports, with the schema its handler actually
+// decodes. The answer is encoded with the wire types the host decodes it with
+// (pkg/extwire); a contribution point the extension registered nothing for is
+// left out.
+func dispatchDescribe() (json.RawMessage, error) {
+	d := extwire.Describe{
+		Icon: meta.Icon,
+		I18n: extwire.I18n{DisplayName: meta.DisplayName, Description: meta.Description},
+	}
+
+	assetTypeWire := make([]extwire.AssetType, 0, len(assetTypes))
+	for _, at := range assetTypes {
+		assetTypeWire = append(assetTypeWire, extwire.AssetType{
+			Type:           at.typ,
+			I18n:           extwire.I18nName{Name: at.name},
+			ConfigSchema:   at.schema,
+			Connection:     at.connection,
+			Auth:           at.auth,
+			TestConnection: at.testConnection != nil,
+		})
+	}
+
+	toolWire := make([]extwire.Tool, 0, len(toolOrder))
+	for _, name := range toolOrder {
+		t := tools[name]
+		if err := t.check(); err != nil {
+			return nil, err
+		}
+		toolWire = append(toolWire, extwire.Tool{
+			Name:          t.name,
+			I18n:          extwire.I18nDesc{Description: t.doc},
+			Parameters:    t.schema,
+			PolicyAction:  t.action,
+			PolicyActions: t.actions,
+			PageOnly:      t.pageOnly,
+			TimeoutMs:     t.timeout.Milliseconds(),
+			NoTimeout:     t.noTimeout,
+			Large:         t.large,
+		})
+	}
+
+	policy := extwire.Policy{Type: meta.PolicyType}
+	for _, g := range policyGroups {
+		rules := map[string]any{}
+		if len(g.allow) > 0 {
+			rules["allow_list"] = g.allow
+		}
+		if len(g.deny) > 0 {
+			rules["deny_list"] = g.deny
+		}
+		policy.Groups = append(policy.Groups, extwire.PolicyGroup{
+			ID:     g.id,
+			I18n:   extwire.I18nNameDesc{Name: g.name, Description: g.description},
+			Policy: rules,
+		})
+		if g.isDefault {
+			policy.Default = append(policy.Default, g.id)
+		}
+	}
+
+	var snippets extwire.Snippets
+	for _, c := range snippetCats {
+		snippets.Categories = append(snippets.Categories, extwire.SnippetCategory{
+			ID: c.id, AssetType: c.assetType, I18n: extwire.I18nName{Name: c.name},
+		})
+	}
+	for _, s := range snippetSeeds {
+		snippets.Seed = append(snippets.Seed, extwire.SeedSnippet(s))
+	}
+
+	pages := extwire.Pages{Entry: frontendSpec.Entry, Styles: frontendSpec.Styles}
+	for _, p := range frontendSpec.Pages {
+		pages.Pages = append(pages.Pages, extwire.Page{
+			ID:        p.ID,
+			Slot:      p.Slot,
+			I18n:      extwire.I18nName{Name: p.Name},
+			Component: p.Component,
+		})
+	}
+
+	contributions := []struct {
+		key     string
+		present bool
+		value   any
+	}{
+		{extwire.KeyAssetTypes, len(assetTypeWire) > 0, assetTypeWire},
+		{extwire.KeyTools, len(toolWire) > 0, toolWire},
+		{extwire.KeyPolicy, policy.Type != "" || len(policy.Groups) > 0, policy},
+		{extwire.KeySnippets, len(snippets.Categories) > 0 || len(snippets.Seed) > 0, snippets},
+		{extwire.KeyPages, frontendSpec.Entry != "", pages},
+		{extwire.KeyDatabaseDrivers, len(databaseDrivers) > 0, databaseDrivers},
+	}
+	for _, c := range contributions {
+		if !c.present {
+			continue
+		}
+		if err := d.Put(c.key, c.value); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(d)
 }
 
 // toolCall is the shape of both execute_tool and check_policy input: the host
@@ -65,32 +169,7 @@ func dispatchTool(input []byte) (json.RawMessage, error) {
 	if rejected != nil {
 		return nil, rejected
 	}
-	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args, Asset: req.Asset})
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
-}
-
-func dispatchAction(input []byte) (json.RawMessage, error) {
-	var req struct {
-		Action string          `json:"action"`
-		Args   json.RawMessage `json:"args"`
-		Asset  Asset           `json:"asset"`
-	}
-	if err := json.Unmarshal(input, &req); err != nil {
-		return nil, fmt.Errorf("parse action request: %w", err)
-	}
-	handler, ok := actions[req.Action]
-	if !ok {
-		return nil, fmt.Errorf("unknown action: %s", req.Action)
-	}
-	result, err := handler(&ActionContext{
-		Action: req.Action,
-		Args:   req.Args,
-		Asset:  req.Asset,
-		Events: newEventWriter(),
-	})
+	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args, Asset: req.Asset, Events: newEventWriter()})
 	if err != nil {
 		return nil, err
 	}
@@ -101,14 +180,13 @@ func dispatchAction(input []byte) (json.RawMessage, error) {
 // requests is part of declaring the tool, so there is no per-tool switch here to
 // fall out of step with the handler table.
 //
-// The reply has two shapes. {"action","resource"} is the 2.0/2.1 wire: one literal
-// resource, what Policy/Resource and PolicyFunc answer. {"action","resources"} is
-// the 2.2 wire PolicyResources answers — a list (never null) whose '*' / '?' are
-// wildcards. Which shape a tool answers is fixed by how it registered, so a
-// single-resource extension's reply is byte-for-byte what it always was.
+// The reply has two shapes. {"action","resource"} is one literal resource, what
+// Policy/Resource and PolicyFunc answer. {"action","resources"} is what
+// PolicyResources answers — a list (never null) whose '*' / '?' are wildcards.
+// Which shape a tool answers is fixed by how it registered.
 //
-// A tool declaring RejectArgs may answer a third shape first, {"reject":"<reason>"}
-// (2.2 too): no classification, the tool refusing the arguments themselves.
+// A tool declaring RejectArgs may answer a third shape first, {"reject":"<reason>"}:
+// no classification, the tool refusing the arguments themselves.
 func dispatchPolicy(input []byte) (json.RawMessage, error) {
 	entry, req, err := parseToolCall(input)
 	if err != nil {

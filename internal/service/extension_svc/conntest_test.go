@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -22,18 +25,17 @@ var connectionPasswordSchema = map[string]any{
 	},
 }
 
-func acmeManifest() *extension.Manifest {
-	return &extension.Manifest{
-		Name:         "acme",
-		AssetTypes:   []extension.AssetTypeDef{{Type: "acme-store", ConfigSchema: connectionPasswordSchema}},
-		Capabilities: extension.Capabilities{Credentials: extension.CredentialAccessRead},
-	}
+func acmeManifest(t testing.TB) *extreg.Manifest {
+	return viewOf(t, withAssetTypes(extmanifest.Manifest{
+		Name:        "acme",
+		Permissions: extmanifest.Permissions{Credentials: extmanifest.CredentialAccessRead},
+	}, extwire.AssetType{Type: "acme-store", ConfigSchema: connectionPasswordSchema}))
 }
 
 func TestBuildAdHocTestConfig(t *testing.T) {
 	Convey("Given the acme extension (credentials:read) with a password field", t, func() {
 		svc, assets := newHostTestService(t)
-		manifest := acmeManifest()
+		manifest := acmeManifest(t)
 
 		Convey("a new asset (no asset id) sends the submitted password as-is", func() {
 			cfg := `{"host":"h","password":"typed"}`
@@ -122,11 +124,8 @@ func TestBuildAdHocTestConfig(t *testing.T) {
 
 	Convey("Given an extension without credentials:read", t, func() {
 		svc, assets := newHostTestService(t)
-		manifest := &extension.Manifest{
-			Name:         "other",
-			AssetTypes:   []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema}},
-			Capabilities: extension.Capabilities{},
-		}
+		manifest := viewOf(t, withAssetTypes(extmanifest.Manifest{Name: "other", Permissions: extmanifest.Permissions{}},
+			extwire.AssetType{Type: "other-store", ConfigSchema: connectionPasswordSchema}))
 
 		Convey("the password field never reaches the guest, merged or not", func() {
 			assets.EXPECT().Find(gomock.Any(), int64(5)).
@@ -165,7 +164,7 @@ func (f *fakeTestConnCaller) TestConnection(_ context.Context, assetType string,
 func TestConnTestRegistrarBuild(t *testing.T) {
 	Convey("Build's tester parses the asset id out of plainPassword and dispatches to the plugin", t, func() {
 		svc, assets := newHostTestService(t)
-		manifest := acmeManifest()
+		manifest := acmeManifest(t)
 		reg := svc.ConnTestRegistrar()
 
 		Convey("a new asset: empty plainPassword means asset id 0, no merge attempted", func() {

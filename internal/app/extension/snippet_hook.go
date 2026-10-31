@@ -3,11 +3,15 @@ package extension
 import (
 	"context"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
-// CollectExtensionCategories 遍历扩展管理器当前已加载扩展，收集其 manifest 声明的 snippet 分类。
+// CollectExtensionCategories 遍历扩展管理器当前已加载扩展，收集其 describe() 贡献的 snippet 分类。
 // 返回结果喂给 CategoryRegistry 的 provider。
 func CollectExtensionCategories(mgr *extension.Manager) []snippet_svc.ExtensionCategory {
 	if mgr == nil {
@@ -18,7 +22,13 @@ func CollectExtensionCategories(mgr *extension.Manager) []snippet_svc.ExtensionC
 		if ext == nil || ext.Manifest == nil {
 			continue
 		}
-		for _, c := range ext.Manifest.Snippets.Categories {
+		view, err := extreg.ManifestOf(ext.Manifest)
+		if err != nil {
+			// 加载时贡献点已按同样的线格式判过它；解不开说明它没被接入，不能为它登记分类。
+			logger.Default().Error("read extension snippet categories", zap.String("extension", ext.Name), zap.Error(err))
+			continue
+		}
+		for _, c := range view.Snippets.Categories {
 			label := c.ID
 			if c.I18n.Name != "" {
 				label = c.I18n.Name

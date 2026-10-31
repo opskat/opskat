@@ -15,7 +15,7 @@ import (
 // ConnTestRegistrar returns the extreg.ConnTestRegistrar a process that runs
 // extensions wires in once (extreg.SetConnTestRegistrar), before any extension
 // loads: internal/extreg cannot build this itself (import cycle — this package
-// already calls extreg.Register), so it asks for one through this seam, exactly
+// already imports extreg), so it asks for one through this seam, exactly
 // like HostConfig's providers are asked for theirs.
 func (s *Service) ConnTestRegistrar() extreg.ConnTestRegistrar {
 	return &connTestRegistrar{svc: s}
@@ -35,7 +35,7 @@ type connTestRegistrar struct{ svc *Service }
 // the connection settings — see buildAdHocTestConfig), so this reuses
 // conntest's one free-form parameter instead of widening every registrant's
 // signature for a need only extension types have.
-func (r *connTestRegistrar) Build(extName string, manifest *extension.Manifest, assetType string, plugin extreg.TestConnectionCaller) conntest.TestFunc {
+func (r *connTestRegistrar) Build(extName string, manifest *extreg.Manifest, assetType string, plugin extreg.TestConnectionCaller) conntest.TestFunc {
 	return func(ctx context.Context, configJSON, plainPassword string) error {
 		var assetID int64
 		if plainPassword != "" {
@@ -61,8 +61,8 @@ func (r *connTestRegistrar) Build(extName string, manifest *extension.Manifest, 
 // its own fields, and the guest-visible remainder with any password field
 // the form left out merged from the edited asset's stored value, then gated
 // behind the extension's credentials capability.
-func (s *Service) buildAdHocTestConfig(ctx context.Context, extName string, manifest *extension.Manifest, assetType string, assetID int64, configJSON string) (*extension.AdHocAssetConfig, error) {
-	def := manifest.AssetTypeDef(assetType)
+func (s *Service) buildAdHocTestConfig(ctx context.Context, extName string, manifest *extreg.Manifest, assetType string, assetID int64, configJSON string) (*extension.AdHocAssetConfig, error) {
+	def := manifest.AssetType(assetType)
 	if def == nil {
 		return nil, fmt.Errorf("extension %q does not register asset type %q", extName, assetType)
 	}
@@ -77,7 +77,7 @@ func (s *Service) buildAdHocTestConfig(ctx context.Context, extName string, mani
 	}
 
 	credentials := guestConfig
-	if passwordFields := extension.PasswordFieldsFromSchema(def.ConfigSchema); len(passwordFields) > 0 {
+	if passwordFields := extreg.PasswordFieldsFromSchema(def.ConfigSchema); len(passwordFields) > 0 {
 		guestConfig, credentials, err = s.mergeAndGateTestPasswords(ctx, extName, assetType, assetID, manifest, passwordFields, guestConfig)
 		if err != nil {
 			return nil, err
@@ -110,7 +110,7 @@ func (s *Service) buildAdHocTestConfig(ctx context.Context, extName string, mani
 // must not receive through a test call the plaintext the normal door withholds
 // — it authenticates via host-injected Auth (describe()'s auth bindings)
 // instead, which still needs that plaintext.
-func (s *Service) mergeAndGateTestPasswords(ctx context.Context, extName, assetType string, assetID int64, manifest *extension.Manifest, passwordFields []string, guestConfig json.RawMessage) (guest, credentials json.RawMessage, err error) {
+func (s *Service) mergeAndGateTestPasswords(ctx context.Context, extName, assetType string, assetID int64, manifest *extreg.Manifest, passwordFields []string, guestConfig json.RawMessage) (guest, credentials json.RawMessage, err error) {
 	var cfg map[string]json.RawMessage
 	if err := json.Unmarshal(guestConfig, &cfg); err != nil {
 		return nil, nil, fmt.Errorf("test connection: parse config: %w", err)

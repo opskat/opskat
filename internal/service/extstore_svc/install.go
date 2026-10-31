@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/ociclient"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -142,13 +143,14 @@ func (s *Service) InstallFromStore(ctx context.Context, name string, opts Instal
 	lang := aictx.GetPolicyLang(ctx)
 	displayName, _ := display(ext, lang)
 	approved := opts.Installer.NewInstallConfirm(extension_svc.InstallCandidate{
-		Name:         ext.Name,
-		DisplayName:  displayName,
-		Icon:         ext.Icon,
-		Version:      v.Version,
-		Capabilities: v.Capabilities,
-		Source:       extension_svc.InstallSourceStore,
-		Size:         v.Size,
+		Name:        ext.Name,
+		DisplayName: displayName,
+		Icon:        ext.Icon,
+		Version:     v.Version,
+		Permissions: v.Permissions,
+		Contributes: v.Contributes,
+		Source:      extension_svc.InstallSourceStore,
+		Size:        v.Size,
 	})
 	if err := opts.Confirm(ctx, approved); err != nil {
 		return "", "", err
@@ -227,7 +229,7 @@ func (s *Service) offer(ctx context.Context, name string) (extstore.Extension, e
 
 // incompatible localizes SelectInstallable's reason where the app has copy for it.
 func incompatible(ctx context.Context, reason error) error {
-	var ie *extension.IncompatibleError
+	var ie *extmanifest.IncompatibleError
 	if errors.As(reason, &ie) {
 		return extension_svc.LocalizeIncompatible(ctx, ie)
 	}
@@ -303,7 +305,7 @@ func pullError(err error) error {
 
 func installError(err error) error {
 	var ie *InstallError
-	var inc *extension.IncompatibleError
+	var inc *extmanifest.IncompatibleError
 	switch {
 	case errors.As(err, &ie), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
@@ -315,7 +317,7 @@ func installError(err error) error {
 }
 
 // sameChange refuses a staged package that is not the change the user approved
-// from the index: another extension or version, other capabilities, or an
+// from the index: another extension or version, other grants, or an
 // installed version that changed while it downloaded.
 func sameChange(approved, staged extension_svc.InstallConfirm) error {
 	if staged.Name == approved.Name && staged.To == approved.To && staged.From == approved.From &&
@@ -323,7 +325,7 @@ func sameChange(approved, staged extension_svc.InstallConfirm) error {
 		return nil
 	}
 	return installErr(InstallErrMismatch, fmt.Errorf(
-		"the downloaded package (%s %s, replacing %q) is not what was confirmed (%s %s, replacing %q, same capabilities)",
+		"the downloaded package (%s %s, replacing %q) is not what was confirmed (%s %s, replacing %q, same grants)",
 		staged.Name, staged.To, staged.From, approved.Name, approved.To, approved.From))
 }
 

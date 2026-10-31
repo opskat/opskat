@@ -7,7 +7,7 @@
 //
 // At startup it builds fixtures/store-ext for wasip1, packs it the way the
 // extensions repo's publisher does (manifest.json + main.wasm + locales in a zip,
-// capabilities copied from the manifest into the index), signs index.json with
+// permissions and driver ids copied from the manifest into the index), signs index.json with
 // the ed25519 seed it is given, and only then listens — so "port open" means the
 // store is ready.
 //
@@ -37,7 +37,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -66,8 +66,8 @@ func main() {
 	if err != nil {
 		fail("read manifest: %v", err)
 	}
-	var m extension.Manifest
-	if err := json.Unmarshal(manifestJSON, &m); err != nil {
+	m, err := extmanifest.Parse(manifestJSON)
+	if err != nil {
 		fail("parse manifest: %v", err)
 	}
 	pkg := buildPackage(manifestJSON)
@@ -89,11 +89,12 @@ func main() {
 			Icon:    "package",
 			Display: display,
 			Versions: []extstore.Version{{
-				Version:      m.Version,
-				HostABI:      m.HostABI,
-				Capabilities: m.Capabilities,
-				Size:         int64(len(pkg)),
-				PublishedAt:  time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC),
+				Version:     m.Version,
+				HostABI:     m.HostABI,
+				Permissions: m.Permissions,
+				Contributes: m.Contributes,
+				Size:        int64(len(pkg)),
+				PublishedAt: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC),
 				Source: extstore.Source{
 					Type:   extstore.SourceOCI,
 					Ref:    "ghcr.io/" + repoBase + e.name + ":" + m.Version,

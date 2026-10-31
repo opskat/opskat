@@ -733,12 +733,12 @@ const (
 	// 校验（tls_insecure）、服务器名（tls_server_name），CA 证书 / 客户端证书 / 客户端私钥各填
 	// 文件路径或粘贴内容（tls_{ca,cert,key}_{file,pem}），与 Redis 资产同名同义。只能声明在
 	// TLS Tab，且自带启用开关，不再与 FieldTLS 同时声明。声明了的驱动在资产启用 TLS 时，打开
-	// 会话就收到 OpenRequest.TLS。要求扩展的 hostABI 2.4 及以上。
+	// 会话就收到 OpenRequest.TLS。
 	FieldTLSCert FormField = "tls_cert"
 	// FieldKerberos 是 Kerberos 字段组，也不是单个配置键：认证方式（口令或 Kerberos）与选了
 	// Kerberos 时的主体、凭据、KDC 地址、服务主体。只能声明在连接 Tab。声明了的驱动在资产的认证
-	// 方式为 Kerberos 时，打开会话就收到 OpenRequest.Kerberos。要求扩展在契约里声明
-	// capabilities.databaseKerberos（hostABI 2.5 及以上）。
+	// 方式为 Kerberos 时，打开会话就收到 OpenRequest.Kerberos。扩展驱动声明它要求 manifest 里有
+	// permissions.kerberos。
 	FieldKerberos     FormField = "kerberos"
 	FieldParams       FormField = "params"
 	FieldReadOnly     FormField = "read_only"
@@ -788,8 +788,7 @@ const (
 	// CapReadOnly：连接级只读。
 	CapReadOnly Capability = "read_only"
 	// CapClassifyStatements：驱动自己切分并分类 SQL（StatementClassifier，经 ClassifyStatements
-	// 取用），AI / opsctl 的权限判断与查询面板按它的结果，而不是宿主通用的 SQL 解析。扩展驱动
-	// 声明它要求扩展的 hostABI 2.5 及以上。
+	// 取用），AI / opsctl 的权限判断与查询面板按它的结果，而不是宿主通用的 SQL 解析。
 	CapClassifyStatements Capability = "classify_statements"
 )
 

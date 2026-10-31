@@ -1,13 +1,19 @@
 {
   "name": "fixture-dbdriver",
   "version": "1.0.0",
-  "hostABI": "2.5",
+  "hostABI": "1.0",
   "backend": {
     "runtime": "wasm",
     "binary": "main.wasm"
   },
-  "capabilities": {
-    "databaseDrivers": ["fixturedb"],
-    "databaseKerberos": true
+  "permissions": {
+    "kerberos": true,
+    "network": {
+      "assetEndpoint": true,
+      "assetRoute": true
+    }
+  },
+  "contributes": {
+    "databaseDrivers": ["fixturedb"]
   }
 }

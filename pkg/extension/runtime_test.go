@@ -2,31 +2,19 @@
 package extension
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	cagologger "github.com/cago-frame/cago/pkg/logger"
-	. "github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"github.com/tetratelabs/wazero"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
-	"github.com/opskat/opskat/pkg/dbdriver"
-	"github.com/opskat/opskat/pkg/extension/driverwire"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
 func TestLoadPlugin(t *testing.T) {
@@ -35,7 +23,7 @@ func TestLoadPlugin(t *testing.T) {
 		host := newRecordedHost()
 
 		Convey("should reject invalid WASM bytes", func() {
-			manifest := &Manifest{Name: "test", Version: "1.0.0"}
+			manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "test", Version: "1.0.0"}}
 			_, err := LoadPlugin(ctx, manifest, []byte("not wasm"), host, nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "compile wasm")
@@ -44,12 +32,12 @@ func TestLoadPlugin(t *testing.T) {
 		Convey("a module without the reactor exports fails loudly on first call", func() {
 			// Minimal valid WASM module (magic + version, empty)
 			minimalWasm := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
-			manifest := &Manifest{Name: "test", Version: "1.0.0"}
+			manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "test", Version: "1.0.0"}}
 			p, err := LoadPlugin(ctx, manifest, minimalWasm, host, nil)
 			So(err, ShouldBeNil)
 			So(p.Manifest().Name, ShouldEqual, "test")
 
-			_, err = p.CallTool(ctx, "anything", json.RawMessage(`{}`), nil)
+			_, err = p.CallTool(ctx, ToolCall{Name: "anything", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "does not export opskat_call")
 
@@ -85,7 +73,7 @@ func callTool(t *testing.T, p *Plugin, tool string, args any) map[string]any {
 // every exec-driven call is.
 func callToolOn(t *testing.T, p *Plugin, asset *AssetRef, tool string, args any) map[string]any {
 	t.Helper()
-	raw, err := p.CallTool(context.Background(), tool, mustJSON(t, args), asset)
+	raw, err := p.CallTool(context.Background(), ToolCall{Name: tool, Args: mustJSON(t, args), Asset: asset})
 	if err != nil {
 		t.Fatalf("call tool %s: %v", tool, err)
 	}
@@ -118,7 +106,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a handler error surfaces as a Go error", func() {
-			_, err := p.CallTool(ctx, "fail", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "fail", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "deliberate failure")
 		})
@@ -129,7 +117,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a guest panic fails one call without killing the instance", func() {
-			_, err := p.CallTool(ctx, "panic", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "panic", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "boom")
 
@@ -138,7 +126,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("an unknown tool is reported by name", func() {
-			_, err := p.CallTool(ctx, "nope", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "nope", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "unknown tool: nope")
 		})
@@ -159,7 +147,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a call the host did not scope to an asset says so", func() {
-			_, err := p.CallTool(ctx, "asset_config", json.RawMessage(`{}`), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "asset_config", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "not scoped to an asset")
 		})
@@ -222,7 +210,7 @@ func TestPluginCallsFixture(t *testing.T) {
 			So(errors.As(err, &rejected), ShouldBeFalse)
 
 			// execute_tool holds the same line without any policy check before it.
-			_, err = p.CallTool(ctx, "reject_host", json.RawMessage(`{"resource":"http://evil/x"}`), nil)
+			_, err = p.CallTool(ctx, ToolCall{Name: "reject_host", Args: json.RawMessage(`{"resource":"http://evil/x"}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "must not name a host")
 		})
@@ -278,8 +266,8 @@ func TestPluginConcurrentCallsAreIsolated(t *testing.T) {
 				wg.Add(1)
 				go func(i int) {
 					defer wg.Done()
-					raw, err := p.CallTool(context.Background(), "read_file", mustJSON(t,
-						map[string]any{"path": filepath.Join(extDir, fmt.Sprintf("f%d.txt", i))}), nil)
+					raw, err := p.CallTool(context.Background(), ToolCall{Name: "read_file", Args: mustJSON(t,
+						map[string]any{"path": filepath.Join(extDir, fmt.Sprintf("f%d.txt", i))})})
 					if err != nil {
 						errs[i] = err
 						return
@@ -313,8 +301,8 @@ func TestPluginCallsRunConcurrently(t *testing.T) {
 		done := make(chan error, n)
 		for i := 0; i < n; i++ {
 			go func(i int) {
-				_, err := p.CallTool(context.Background(), "kv_roundtrip", mustJSON(t,
-					map[string]any{"key": fmt.Sprintf("k%d", i), "value": "v"}), nil)
+				_, err := p.CallTool(context.Background(), ToolCall{Name: "kv_roundtrip", Args: mustJSON(t,
+					map[string]any{"key": fmt.Sprintf("k%d", i), "value": "v"})})
 				done <- err
 			}(i)
 		}
@@ -364,9 +352,9 @@ func TestPluginWriteErrorReachesGuest(t *testing.T) {
 		p := newFixturePlugin(t, newRecordedHost(), extDir)
 
 		Convey("the guest sees the error instead of a short write", func() {
-			_, err := p.CallTool(context.Background(), "write_file", mustJSON(t, map[string]any{
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "write_file", Args: mustJSON(t, map[string]any{
 				"path": filepath.Join(extDir, "broken.fail"), "content": "payload",
-			}), nil)
+			})})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "simulated write failure")
 		})
@@ -403,7 +391,7 @@ func TestPluginCapabilityEnforcement(t *testing.T) {
 		})
 
 		Convey("a read outside it is rejected before the host opens anything", func() {
-			_, err := p.CallTool(context.Background(), "read_file", mustJSON(t, map[string]any{"path": outside}), nil)
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "read_file", Args: mustJSON(t, map[string]any{"path": outside})})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "fs read denied")
 			So(host.resources, ShouldBeEmpty)
@@ -411,59 +399,57 @@ func TestPluginCapabilityEnforcement(t *testing.T) {
 	})
 }
 
-// TestPluginActionCancellation covers the cooperative stop path and, just as
-// importantly, that a canceled run leaves no residue for the next one.
-func TestPluginActionCancellation(t *testing.T) {
-	Convey("Given a long-running action streaming events", t, func() {
+// TestPluginToolCancellation covers the cooperative stop path of a page-only
+// tool canceled by invocation id and, just as importantly, that a canceled run
+// leaves no residue for the next one.
+func TestPluginToolCancellation(t *testing.T) {
+	Convey("Given a long-running page tool streaming events", t, func() {
 		host := newRecordedHost()
-		p := newFixturePlugin(t, host, t.TempDir())
+		p := newFixturePlugin(t, host, t.TempDir(), WithCancelGrace(time.Minute))
 
-		results := make(chan actionResult, 1)
+		results := make(chan error, 1)
 		go func() { results <- runStream(t, p, "upload-1", 100000, 1) }()
 
-		Convey("canceling it makes the guest return early", func() {
+		Convey("canceling it makes the guest see ShouldStop and the call end as canceled", func() {
 			waitForEvents(t, host, "upload-1", 1)
-			So(p.CancelAction("upload-1"), ShouldBeTrue)
+			So(p.CancelTool("upload-1"), ShouldBeTrue)
 
-			var got actionResult
+			// The grace period is a minute, so a return within the wait below is
+			// the guest stopping on its own, not the host cutting it off.
+			var err error
 			select {
-			case got = <-results:
+			case err = <-results:
 			case <-time.After(30 * time.Second):
-				t.Fatal("action did not stop after cancellation")
+				t.Fatal("tool did not stop after cancellation")
 			}
-			So(got.err, ShouldBeNil)
-			So(got.out["stopped"], ShouldEqual, true)
-			So(got.out["sent"], ShouldBeLessThan, float64(100000))
-			So(len(host.eventsFor("upload-1")), ShouldBeGreaterThan, 0)
+			So(errors.Is(err, context.Canceled), ShouldBeTrue)
+			So(lastEvent(host, "upload-1").Type, ShouldEqual, "stopped")
 
-			Convey("and the next action starts with a clean cancellation flag", func() {
-				raw, err := p.CallAction(context.Background(), "upload-2", "should_stop", json.RawMessage(`{}`), nil)
-				So(err, ShouldBeNil)
-				var out map[string]any
-				So(json.Unmarshal(raw, &out), ShouldBeNil)
+			Convey("and the next call starts with a clean cancellation flag", func() {
+				out := callTool(t, p, "should_stop", map[string]any{})
 				So(out["stopped"], ShouldEqual, false)
 			})
 
 			Convey("and canceling an invocation that is not running says so", func() {
-				So(p.CancelAction("upload-1"), ShouldBeFalse)
+				So(p.CancelTool("upload-1"), ShouldBeFalse)
 			})
 		})
 	})
 }
 
-// TestPluginCancelsOnlyTheNamedAction is the regression guard for the bug the
+// TestPluginCancelsOnlyTheNamedCall is the regression guard for the bug the
 // reactor instance pool introduced. While Plugin.mu serialized calls, "cancel
-// this extension" could only ever mean the single action in flight; once several
+// this extension" could only ever mean the single call in flight; once several
 // run at once the same request stopped every one of them — cancel one file in an
 // OSS multi-file upload and the whole queue died. The same root cause showed up
 // a second way in the event stream, so both are asserted here.
-func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
-	Convey("Given two actions of one extension running at the same time", t, func() {
+func TestPluginCancelsOnlyTheNamedCall(t *testing.T) {
+	Convey("Given two page tool calls of one extension running at the same time", t, func() {
 		host := newRecordedHost()
-		p := newFixturePlugin(t, host, t.TempDir())
+		p := newFixturePlugin(t, host, t.TempDir(), WithCancelGrace(time.Minute))
 
-		doomed := make(chan actionResult, 1)
-		survivor := make(chan actionResult, 1)
+		doomed := make(chan error, 1)
+		survivor := make(chan error, 1)
 		go func() { doomed <- runStream(t, p, "upload-doomed", 100000, 1) }()
 		go func() { survivor <- runStream(t, p, "upload-survivor", 100000, 1) }()
 
@@ -471,23 +457,22 @@ func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
 		waitForEvents(t, host, "upload-survivor", 1)
 
 		Convey("canceling one stops it and leaves the other running", func() {
-			So(p.CancelAction("upload-doomed"), ShouldBeTrue)
+			So(p.CancelTool("upload-doomed"), ShouldBeTrue)
 
-			var stopped actionResult
 			select {
-			case stopped = <-doomed:
+			case err := <-doomed:
+				So(errors.Is(err, context.Canceled), ShouldBeTrue)
 			case <-time.After(30 * time.Second):
-				t.Fatal("the canceled action never returned")
+				t.Fatal("the canceled call never returned")
 			}
-			So(stopped.err, ShouldBeNil)
-			So(stopped.out["stopped"], ShouldEqual, true)
+			So(lastEvent(host, "upload-doomed").Type, ShouldEqual, "stopped")
 
 			// The survivor is still making progress after the other one is gone.
 			before := len(host.eventsFor("upload-survivor"))
 			waitForEvents(t, host, "upload-survivor", before+3)
 			select {
-			case r := <-survivor:
-				t.Fatalf("the untouched action stopped too: %+v (err=%v)", r.out, r.err)
+			case err := <-survivor:
+				t.Fatalf("the untouched call stopped too (err=%v)", err)
 			default:
 			}
 
@@ -497,34 +482,100 @@ func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
 				waitForEvents(t, host, "upload-survivor", len(host.eventsFor("upload-survivor"))+3)
 				So(len(host.eventsFor("upload-doomed")), ShouldEqual, doomedCount)
 
-				So(p.CancelAction("upload-survivor"), ShouldBeTrue)
+				So(p.CancelTool("upload-survivor"), ShouldBeTrue)
 				select {
-				case r := <-survivor:
-					So(r.err, ShouldBeNil)
-					So(r.out["stopped"], ShouldEqual, true)
+				case err := <-survivor:
+					So(errors.Is(err, context.Canceled), ShouldBeTrue)
 				case <-time.After(30 * time.Second):
-					t.Fatal("the second action did not stop after cancellation")
+					t.Fatal("the second call did not stop after cancellation")
 				}
+				So(lastEvent(host, "upload-survivor").Type, ShouldEqual, "stopped")
 			})
 		})
 	})
 }
 
-type actionResult struct {
-	out map[string]any
-	err error
+// TestPluginCancelEndsANonCooperativeCall: a guest that never polls ShouldStop
+// and is not blocked in host IO is still ended by a cancel, once the grace
+// period it had to stop on its own has run out.
+func TestPluginCancelEndsANonCooperativeCall(t *testing.T) {
+	Convey("Given a page tool with no timeout that never polls ShouldStop", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithCancelGrace(100*time.Millisecond))
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := p.CallTool(context.Background(), ToolCall{InvocationID: "spin-1", Name: "spin_page",
+				Args: mustJSON(t, map[string]any{"ms": 60000}), Timeout: -1})
+			done <- err
+		}()
+
+		Convey("canceling it ends the call as canceled after the grace period", func() {
+			So(eventually(func() bool { return p.CancelTool("spin-1") }), ShouldBeTrue)
+			select {
+			case err := <-done:
+				So(errors.Is(err, context.Canceled), ShouldBeTrue)
+			case <-time.After(10 * time.Second):
+				t.Fatal("a canceled call that ignores ShouldStop was never ended")
+			}
+		})
+	})
 }
 
-// runStream drives the fixture's "stream" action under an explicit invocation id.
-func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) actionResult {
+// TestPluginRejectsADuplicateInvocationID: two runs under one id would make both
+// cancellation and event routing ambiguous.
+func TestPluginRejectsADuplicateInvocationID(t *testing.T) {
+	Convey("Given a call running under an invocation id", t, func() {
+		host := newRecordedHost()
+		p := newFixturePlugin(t, host, t.TempDir(), WithCancelGrace(time.Minute))
+		done := make(chan error, 1)
+		go func() { done <- runStream(t, p, "dup-1", 100000, 1) }()
+		waitForEvents(t, host, "dup-1", 1)
+
+		Convey("a second call under the same id is refused", func() {
+			err := runStream(t, p, "dup-1", 1, 0)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "already running")
+			So(p.CancelTool("dup-1"), ShouldBeTrue)
+			So(errors.Is(<-done, context.Canceled), ShouldBeTrue)
+		})
+	})
+}
+
+// TestRuntimeNamedInvocationIDsAreRecognized: a caller that takes ids it does not
+// mint (an extension page) keeps them apart from the runtime's by
+// IsRuntimeInvocationID, so the ids the runtime really names its calls by must
+// be recognized — and an id of the frontend's kind must not be.
+func TestRuntimeNamedInvocationIDsAreRecognized(t *testing.T) {
+	Convey("Given a tool call whose caller supplies no invocation id", t, func() {
+		host := newRecordedHost()
+		p := newFixturePlugin(t, host, t.TempDir())
+		_, err := p.CallTool(context.Background(), ToolCall{Name: "stream",
+			Args: mustJSON(t, map[string]any{"count": 1, "delay_ms": 0}), Timeout: -1})
+		So(err, ShouldBeNil)
+
+		Convey("the id the runtime named it by has the runtime's reserved shape", func() {
+			host.mu.Lock()
+			events := append([]recordedEvent(nil), host.events...)
+			host.mu.Unlock()
+			So(events, ShouldHaveLength, 1)
+			So(IsRuntimeInvocationID(events[0].Invocation), ShouldBeTrue)
+		})
+
+		Convey("ids of other shapes are not the runtime's", func() {
+			for _, id := range []string{"", "inv-1", "#1", "ext#", "ext#1a", "0b5d7c1e-9a4f-4f7e-8c33-2f1d6a1b9e10"} {
+				So(IsRuntimeInvocationID(id), ShouldBeFalse)
+			}
+		})
+	})
+}
+
+// runStream drives the fixture's page-only "stream" tool under an explicit
+// invocation id, with no timeout — as a page calls it.
+func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) error {
 	t.Helper()
-	raw, err := p.CallAction(context.Background(), invocationID, "stream",
-		mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}), nil)
-	var out map[string]any
-	if err == nil {
-		err = json.Unmarshal(raw, &out)
-	}
-	return actionResult{out: out, err: err}
+	_, err := p.CallTool(context.Background(), ToolCall{InvocationID: invocationID, Name: "stream",
+		Args: mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}), Timeout: -1})
+	return err
 }
 
 // waitForEvents blocks until one invocation has emitted at least n events.
@@ -542,29 +593,59 @@ func waitForEvents(t *testing.T, host *recordedHost, invocationID string, n int)
 	}
 }
 
-// TestToolTimeoutDoesNotBindActions is the reason tool and action calls stopped
-// sharing one hard-coded deadline: an action is expected to outlive it.
-func TestToolTimeoutDoesNotBindActions(t *testing.T) {
-	Convey("Given a plugin whose tool timeout is 150ms", t, func() {
+func lastEvent(host *recordedHost, invocationID string) recordedEvent {
+	events := host.eventsFor(invocationID)
+	if len(events) == 0 {
+		return recordedEvent{}
+	}
+	return events[len(events)-1]
+}
+
+// eventually polls cond for up to 10s.
+func eventually(cond func() bool) bool {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
+// TestToolCallTimeout pins what ToolCall.Timeout means: 0 is the plugin's
+// default, a positive value replaces it, and a negative one — a page-only tool
+// declaring NoTimeout — leaves only the caller's context to end the call.
+func TestToolCallTimeout(t *testing.T) {
+	Convey("Given a plugin whose default tool timeout is 150ms", t, func() {
 		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithToolTimeout(150*time.Millisecond))
+		spinFor := func(ms int) json.RawMessage { return mustJSON(t, map[string]any{"ms": ms}) }
 
-		Convey("a tool that runs longer is interrupted", func() {
-			_, err := p.CallTool(context.Background(), "spin", mustJSON(t, map[string]any{"ms": 3000}), nil)
-			So(err, ShouldNotBeNil)
+		Convey("a call with no timeout of its own gets the default", func() {
+			_, err := p.CallTool(context.Background(), ToolCall{Name: "spin", Args: spinFor(3000)})
+			So(errors.Is(err, context.DeadlineExceeded), ShouldBeTrue)
 		})
 
-		Convey("the same work as an action is allowed to finish", func() {
-			raw, err := p.CallAction(context.Background(), "slow-1", "spin", mustJSON(t, map[string]any{"ms": 400}), nil)
+		Convey("a call's own timeout replaces the default, longer or shorter", func() {
+			raw, err := p.CallTool(context.Background(), ToolCall{Name: "spin", Args: spinFor(400), Timeout: 20 * time.Second})
 			So(err, ShouldBeNil)
-			var out map[string]any
-			So(json.Unmarshal(raw, &out), ShouldBeNil)
-			So(out["iterations"], ShouldBeGreaterThan, float64(0))
+			So(string(raw), ShouldContainSubstring, "iterations")
+
+			long := newFixturePlugin(t, newRecordedHost(), t.TempDir())
+			_, err = long.CallTool(context.Background(), ToolCall{Name: "spin", Args: spinFor(3000), Timeout: 150 * time.Millisecond})
+			So(errors.Is(err, context.DeadlineExceeded), ShouldBeTrue)
 		})
 
-		Convey("an action still obeys the deadline its caller set", func() {
+		Convey("a call with no timeout outlives the default", func() {
+			raw, err := p.CallTool(context.Background(), ToolCall{Name: "spin_page", Args: spinFor(400), Timeout: -1})
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldContainSubstring, "iterations")
+		})
+
+		Convey("a call with no timeout still obeys the deadline its caller set", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
-			_, err := p.CallAction(ctx, "slow-2", "spin", mustJSON(t, map[string]any{"ms": 3000}), nil)
+			_, err := p.CallTool(ctx, ToolCall{Name: "spin_page", Args: spinFor(3000), Timeout: -1})
 			So(err, ShouldNotBeNil)
 		})
 	})
@@ -590,7 +671,7 @@ func benchmarkFixtureTool(b *testing.B, opts ...PluginOption) {
 	if t.Failed() {
 		b.Fatal("fixture build failed")
 	}
-	manifest := &Manifest{Name: "fixture-ext", Version: "1.0.0"}
+	manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "fixture-ext", Version: "1.0.0"}}
 	p, err := LoadPlugin(context.Background(), manifest, wasm, newRecordedHost(), nil, opts...)
 	if err != nil {
 		b.Fatal(err)
@@ -601,530 +682,33 @@ func benchmarkFixtureTool(b *testing.B, opts ...PluginOption) {
 	args := json.RawMessage(`{}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := p.CallTool(ctx, "seq", args, nil); err != nil {
+		if _, err := p.CallTool(ctx, ToolCall{Name: "seq", Args: args}); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
-// --- database driver sessions ---------------------------------------------
-//
-// The database driver fixture (testdata/fixture-dbdriver) logs in to, and
-// announces every statement to, whatever its reach path leads to. FixtureDBServer
-// is that far end. It is exported so the external driver tests
-// (driver_session_test.go) use the same one.
-
-var (
-	dbDriverFixtureOnce sync.Once
-	dbDriverFixtureWASM []byte
-	dbDriverFixtureErr  error
-	// dbDriverCompiled spares each test compiling the module again, which takes
-	// tens of seconds under -race.
-	dbDriverCompiled = wazero.NewCompilationCache()
-)
-
-// dbDriverFixtureWasm compiles testdata/fixture-dbdriver, once per test binary.
-func dbDriverFixtureWasm(t *testing.T) []byte {
-	t.Helper()
-	dbDriverFixtureOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "opskat-fixture-dbdriver-*")
-		if err != nil {
-			dbDriverFixtureErr = err
-			return
-		}
-		defer func() { _ = os.RemoveAll(dir) }()
-		out := filepath.Join(dir, "main.wasm")
-		cmd := exec.Command("go", "build", "-buildmode=c-shared", "-o", out, "./testdata/fixture-dbdriver") //nolint:gosec // fixed argv, only the temp output path varies
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			dbDriverFixtureErr = fmt.Errorf("build database driver fixture: %w\n%s", err, output)
-			return
-		}
-		dbDriverFixtureWASM, dbDriverFixtureErr = os.ReadFile(out) //nolint:gosec // path built above
-	})
-	if dbDriverFixtureErr != nil {
-		t.Fatal(dbDriverFixtureErr)
-	}
-	return dbDriverFixtureWASM
-}
-
-// newDBDriverPlugin loads the database driver fixture the way Manager.LoadExtension does.
-func newDBDriverPlugin(t *testing.T, opts ...PluginOption) *Plugin {
-	t.Helper()
-	data, err := os.ReadFile("testdata/fixture-dbdriver/manifest.json")
-	require.NoError(t, err)
-	manifest, err := ParseManifest(data)
-	require.NoError(t, err)
-	host := NewCapabilityHost(NewDefaultHostProvider(DefaultHostConfig{}), manifest, t.TempDir())
-	p, err := LoadPlugin(context.Background(), manifest, dbDriverFixtureWasm(t), host, dbDriverCompiled, opts...)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, p.Close(context.Background())) })
-	return p
-}
-
-// openFixtureSession opens a fixturedb session whose reach path leads to srv.
-func openFixtureSession(t *testing.T, p *Plugin, srv *FixtureDBServer) dbdriver.Session {
-	t.Helper()
-	s, err := p.OpenDriverSession(context.Background(), "fixturedb", dbdriver.OpenRequest{
-		Config:    &dbdriver.Config{Driver: "fixturedb", Host: "db.internal", Port: 7357, Username: "alice", Database: "app"},
-		Password:  "s3cret",
-		Transport: dbdriver.Transport{Dial: srv.Dial},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	return s
-}
-
-// FixtureStatement is one line the fixture sent after logging in, and the
-// connection (numbered from 1 in dial order) it came on.
-type FixtureStatement struct {
-	Conn int
-	Line string
-}
-
-// HeldStatement is a statement whose answer the server holds back until the test
-// releases it, keeping the driver call blocked in a host read.
-type HeldStatement struct {
-	FixtureStatement
-	release chan struct{}
-	once    sync.Once
-}
-
-// Release lets the server answer the statement.
-func (h *HeldStatement) Release() { h.once.Do(func() { close(h.release) }) }
-
-// FixtureDBServer answers the fixture driver's logins and statement announcements
-// and records them.
-type FixtureDBServer struct {
-	// Refuse, when set, is the error every login gets.
-	Refuse string
-	// Hold, when set, is a line (e.g. "QUERY SHOW DATABASES") whose answer is
-	// held: each one is handed to the test (WaitHeld) and answered once released.
-	Hold string
-
-	mu         sync.Mutex
-	addrs      []string
-	passwords  []string
-	statements []FixtureStatement
-	conns      int
-	open       int
-	held       chan *HeldStatement
-	done       chan struct{}
-}
-
-// NewFixtureDBServer starts a server; whatever it still holds is dropped when the
-// test ends.
-func NewFixtureDBServer(t testing.TB) *FixtureDBServer {
-	s := &FixtureDBServer{held: make(chan *HeldStatement, 16), done: make(chan struct{})}
-	t.Cleanup(func() { close(s.done) })
-	return s
-}
-
-// Dial is the reach path's dial.
-func (s *FixtureDBServer) Dial(_ context.Context, _, addr string) (net.Conn, error) {
-	s.mu.Lock()
-	s.addrs = append(s.addrs, addr)
-	s.conns++
-	s.open++
-	id := s.conns
-	s.mu.Unlock()
-	client, server := net.Pipe()
-	go s.serve(id, server)
-	return client, nil
-}
-
-func (s *FixtureDBServer) serve(id int, c net.Conn) {
-	defer func() {
-		_ = c.Close()
-		s.mu.Lock()
-		s.open--
-		s.mu.Unlock()
-	}()
-	r := bufio.NewReader(c)
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return
-		}
-		line = strings.TrimSpace(line)
-		reply := "OK\n"
-		s.mu.Lock()
-		if login, ok := strings.CutPrefix(line, "LOGIN "); ok {
-			if s.Refuse != "" {
-				reply = "ERR " + s.Refuse + "\n"
-			} else {
-				_, password, _ := strings.Cut(login, " ")
-				s.passwords = append(s.passwords, password)
-			}
-		} else {
-			s.statements = append(s.statements, FixtureStatement{Conn: id, Line: line})
-		}
-		hold := s.Hold != "" && line == s.Hold
-		s.mu.Unlock()
-		if hold {
-			h := &HeldStatement{FixtureStatement: FixtureStatement{Conn: id, Line: line}, release: make(chan struct{})}
-			s.held <- h
-			select {
-			case <-h.release:
-			case <-s.done:
-				return
-			}
-		}
-		if _, err := c.Write([]byte(reply)); err != nil {
-			return
-		}
-	}
-}
-
-// WaitHeld returns the next held statement.
-func (s *FixtureDBServer) WaitHeld(t testing.TB) *HeldStatement {
-	t.Helper()
-	select {
-	case h := <-s.held:
-		return h
-	case <-time.After(callBound):
-		t.Fatalf("no held statement reached the database within %s", callBound)
-		return nil
-	}
-}
-
-// Logins are the passwords of the successful logins, in order.
-func (s *FixtureDBServer) Logins() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.passwords...)
-}
-
-// Dialed are the addresses dialed, in order.
-func (s *FixtureDBServer) Dialed() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.addrs...)
-}
-
-// Seen are the statement lines received, in order.
-func (s *FixtureDBServer) Seen() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	lines := make([]string, len(s.statements))
-	for i, st := range s.statements {
-		lines[i] = st.Line
-	}
-	return lines
-}
-
-// SeenOn are the statements received, with the connection each came on.
-func (s *FixtureDBServer) SeenOn() []FixtureStatement {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]FixtureStatement(nil), s.statements...)
-}
-
-// OpenConns is how many connections are open. One whose statement is held counts
-// until the test ends: the server is not reading it.
-func (s *FixtureDBServer) OpenConns() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.open
-}
-
-// driverOp runs op in the background; the channel yields its error.
-func driverOp(op func() error) <-chan error {
-	done := make(chan error, 1)
-	go func() { done <- op() }()
-	return done
-}
-
-// waitOp waits for an operation to come back, within bound.
-func waitOp(t *testing.T, done <-chan error, bound time.Duration) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(bound):
-		t.Fatalf("the driver call did not come back within %s", bound)
-		return nil
-	}
-}
-
-// assertPending checks an operation has not come back.
-func assertPending(t *testing.T, done <-chan error, what string) {
-	t.Helper()
-	select {
-	case err := <-done:
-		t.Fatalf("%s came back (err=%v) while it should still be running", what, err)
-	default:
-	}
-}
-
-func listDatabases(ctx context.Context, s dbdriver.Session) func() error {
-	return func() error {
-		_, err := s.ListDatabases(ctx)
-		return err
-	}
-}
-
-func execute(ctx context.Context, s dbdriver.Session, statement string) func() error {
-	return func() error {
-		_, err := s.Execute(ctx, statement)
-		return err
-	}
-}
-
-func TestDriverSessionRunsUpToThreeInstances(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "QUERY SHOW DATABASES"
-	s := openFixtureSession(t, p, srv)
-	require.Equal(t, []string{"s3cret"}, srv.Logins(), "opening logs in once")
-
+// TestPluginCallsAfterCloseFailWithErrPluginClosed: every kind of call on a
+// closed plugin — pooled (Invoke, CallTool) or leased — is told apart from the
+// guest's own failures by ErrPluginClosed.
+func TestPluginCallsAfterCloseFailWithErrPluginClosed(t *testing.T) {
 	ctx := context.Background()
-	var ops []<-chan error
-	var held []*HeldStatement
-	for i := 0; i < 3; i++ {
-		ops = append(ops, driverOp(listDatabases(ctx, s)))
-		held = append(held, srv.WaitHeld(t))
+	manifest := fixtureManifest(t)
+	p, err := LoadPlugin(ctx, manifest, fixtureWasm(t), NewCapabilityHost(newRecordedHost(), manifest, t.TempDir()), nil)
+	if err != nil {
+		t.Fatalf("load fixture plugin: %v", err)
 	}
-	conns := map[int]bool{}
-	for _, h := range held {
-		conns[h.Conn] = true
-	}
-	assert.Len(t, conns, 3, "three operations run at once, each on a connection of its own")
-	assert.Len(t, srv.Logins(), 3, "the two extra instances are created on demand, each one login")
-
-	for i, h := range held {
-		h.Release()
-		require.NoError(t, waitOp(t, ops[i], callBound))
-	}
-	for i := 0; i < 5; i++ {
-		_, err := s.Execute(ctx, "SELECT 1")
-		require.NoError(t, err)
-	}
-	assert.Len(t, srv.Logins(), 3, "later operations reuse the instances already logged in")
-}
-
-func TestDriverCursorIsPinnedToOneInstance(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "QUERY SHOW DATABASES"
-	s := openFixtureSession(t, p, srv)
-	ctx := context.Background()
-
-	stream, err := s.StreamTableRows(ctx, "app", "series", dbdriver.TableQuery{})
-	require.NoError(t, err)
-	require.True(t, stream.Next())
-	read := 1
-
-	_, err = s.Execute(ctx, "SELECT 1")
-	require.NoError(t, err)
-	assert.Len(t, srv.Logins(), 2, "the open cursor keeps its instance: another operation needs one of its own")
-
-	// Bring up the third instance and leave the other two idle, then go on
-	// reading: every read must land on the instance holding the cursor.
-	a := driverOp(listDatabases(ctx, s))
-	ha := srv.WaitHeld(t)
-	b := driverOp(listDatabases(ctx, s))
-	hb := srv.WaitHeld(t)
-	ha.Release()
-	hb.Release()
-	require.NoError(t, waitOp(t, a, callBound))
-	require.NoError(t, waitOp(t, b, callBound))
-	require.Len(t, srv.Logins(), 3)
-
-	batch, err := s.ExecuteBatch(ctx, dbdriver.BatchRequest{Statements: []string{"DELETE 1", "DELETE 2", "DELETE 3"}, ContinueOnError: true})
-	require.NoError(t, err, "a batch that goes on after errors reports them per statement")
-	require.Len(t, batch.Executed, 3)
-	batchConns := map[int]bool{}
-	for _, st := range srv.SeenOn() {
-		if strings.HasPrefix(st.Line, "EXEC DELETE") {
-			batchConns[st.Conn] = true
-		}
-	}
-	assert.Len(t, batchConns, 1, "a batch runs from start to end on one instance")
-
-	for stream.Next() {
-		read++
-		require.Equal(t, fmt.Sprint(read), fmt.Sprint(stream.Row()[0]))
-	}
-	require.NoError(t, stream.Err())
-	require.NoError(t, stream.Close())
-	assert.Equal(t, 1000, read)
-}
-
-func TestDriverFaultFailsOnlyTheOperation(t *testing.T) {
-	for _, trigger := range []string{"SELECT PANIC", "SELECT TRAP", "SELECT OOM"} {
-		t.Run(trigger, func(t *testing.T) {
-			core, logs := observer.New(zap.ErrorLevel)
-			prev := cagologger.Default()
-			cagologger.SetLogger(zap.New(core))
-			defer cagologger.SetLogger(prev)
-
-			p := newDBDriverPlugin(t)
-			srv := NewFixtureDBServer(t)
-			s := openFixtureSession(t, p, srv)
-			ctx := context.Background()
-
-			_, err := s.Execute(ctx, trigger)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "extension database driver fault", "the error says the extension's driver failed")
-			assert.NotEmpty(t, logs.FilterMessage("extension database driver fault").All(), "the fault is in the app log")
-
-			res, err := s.Execute(ctx, "SELECT 1")
-			require.NoError(t, err, "the session stays usable")
-			assert.Equal(t, "1", fmt.Sprint(res.Rows.Rows[0][0]))
-			assert.Len(t, srv.Logins(), 2, "the failed instance is discarded; the next operation logs in again")
-		})
-	}
-}
-
-// waitQueued waits until n operations wait for an instance of s: the point a test
-// can act on knowing they arrived in that order.
-func waitQueued(t *testing.T, s dbdriver.Session, n int) {
-	t.Helper()
-	ds := s.(*driverSession)
-	require.Eventually(t, func() bool {
-		ds.mu.Lock()
-		defer ds.mu.Unlock()
-		return len(ds.queue) == n
-	}, callBound, time.Millisecond, "waiting for %d queued operation(s)", n)
-}
-
-// holdAll starts n held operations and waits until each reaches the database.
-func holdAll(t *testing.T, s dbdriver.Session, srv *FixtureDBServer, n int) ([]<-chan error, []*HeldStatement) {
-	t.Helper()
-	var ops []<-chan error
-	var held []*HeldStatement
-	for i := 0; i < n; i++ {
-		ops = append(ops, driverOp(listDatabases(context.Background(), s)))
-		held = append(held, srv.WaitHeld(t))
-	}
-	return ops, held
-}
-
-func TestDriverSessionQueuesInArrivalOrder(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "QUERY SHOW DATABASES"
-	s := openFixtureSession(t, p, srv)
-	ops, held := holdAll(t, s, srv, 3)
-
-	ctx := context.Background()
-	statements := []string{"SELECT 1", "SHOW STREAM PROGRESS", "SHOW OPEN CONFIG"}
-	queued := make([]<-chan error, 0, len(statements))
-	for i, statement := range statements {
-		queued = append(queued, driverOp(execute(ctx, s, statement)))
-		waitQueued(t, s, i+1)
-	}
-	assert.Len(t, srv.Logins(), 3, "a fourth operation waits instead of logging in a fourth instance")
-
-	held[0].Release()
-	require.NoError(t, waitOp(t, ops[0], callBound))
-	for _, op := range queued {
-		require.NoError(t, waitOp(t, op, callBound))
-	}
-	var order []string
-	for _, st := range srv.SeenOn() {
-		for _, statement := range statements {
-			if st.Line == "QUERY "+statement {
-				order = append(order, statement)
-				assert.Equal(t, held[0].Conn, st.Conn, "the waiting operations run on the instance that was released")
-			}
-		}
-	}
-	assert.Equal(t, statements, order, "waiting operations run in arrival order")
-	assert.Len(t, srv.Logins(), 3)
-
-	for i := 1; i < 3; i++ {
-		held[i].Release()
-		require.NoError(t, waitOp(t, ops[i], callBound))
-	}
-}
-
-func TestDriverCancelingAQueuedOperationOnlyDequeuesIt(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "QUERY SHOW DATABASES"
-	s := openFixtureSession(t, p, srv)
-	ops, held := holdAll(t, s, srv, 3)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	canceled := driverOp(execute(ctx, s, "SHOW OPEN CONFIG"))
-	waitQueued(t, s, 1)
-	next := driverOp(execute(context.Background(), s, "SELECT 1"))
-	waitQueued(t, s, 2)
-
-	cancel()
-	require.ErrorIs(t, waitOp(t, canceled, driverInterruptBound), context.Canceled)
-	assert.Equal(t, 3, srv.OpenConns(), "no instance was touched")
-	for _, op := range ops {
-		assertPending(t, op, "a running operation")
+	if err := p.Close(ctx); err != nil {
+		t.Fatalf("close plugin: %v", err)
 	}
 
-	held[0].Release()
-	require.NoError(t, waitOp(t, ops[0], callBound))
-	require.NoError(t, waitOp(t, next, callBound), "the operation behind it gets the released instance")
-	assert.NotContains(t, srv.Seen(), "QUERY SHOW OPEN CONFIG", "the canceled operation never ran")
-	assert.Len(t, srv.Logins(), 3)
-
-	for i := 1; i < 3; i++ {
-		held[i].Release()
-		require.NoError(t, waitOp(t, ops[i], callBound))
+	if _, err := p.Invoke(ctx, "describe", []byte(`{}`)); !errors.Is(err, ErrPluginClosed) {
+		t.Errorf("Invoke after Close: got %v, want ErrPluginClosed", err)
 	}
-}
-
-func TestDriverIdleExtraInstancesClose(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	p.opts.driverIdleTimeout = 50 * time.Millisecond
-	srv := NewFixtureDBServer(t)
-	srv.Hold = "QUERY SHOW DATABASES"
-	s := openFixtureSession(t, p, srv)
-	ops, held := holdAll(t, s, srv, 3)
-	for i, h := range held {
-		h.Release()
-		require.NoError(t, waitOp(t, ops[i], callBound))
+	if _, err := p.CallTool(ctx, ToolCall{Name: "seq", Args: json.RawMessage(`{}`)}); !errors.Is(err, ErrPluginClosed) {
+		t.Errorf("CallTool after Close: got %v, want ErrPluginClosed", err)
 	}
-
-	require.Eventually(t, func() bool { return srv.OpenConns() == 1 }, callBound, 5*time.Millisecond,
-		"the extra instances close once idle, and with them their connections")
-	assert.Never(t, func() bool { return srv.OpenConns() == 0 }, 10*p.opts.driverIdleTimeout, 5*time.Millisecond,
-		"the session keeps its last instance")
-
-	_, err := s.Execute(context.Background(), "SELECT 1")
-	require.NoError(t, err)
-	assert.Len(t, srv.Logins(), 3, "the instance kept is still logged in")
-}
-
-// A row statement writer the host no longer holds is forgotten in the guest too,
-// with the next call on its instance: one writer per "copy as SQL" does not grow
-// the memory of an instance that lives as long as its session.
-func TestDriverRowWriterIsReleasedInTheGuest(t *testing.T) {
-	p := newDBDriverPlugin(t)
-	srv := NewFixtureDBServer(t)
-	s := openFixtureSession(t, p, srv)
-	ctx := context.Background()
-
-	inst, id := prepareAndDropWriter(t, s)
-	forgotten := func() bool {
-		raw, _ := json.Marshal(dbdriver.RowStatementsRequest{})
-		err := inst.call(ctx, driverwire.Call{Op: driverwire.OpRowStatements, Args: driverwire.Args{Writer: id, Request: raw}}, nil)
-		return err != nil && strings.Contains(err.Error(), "no database driver row statement writer")
+	if _, err := p.Lease(ctx, &Scope{}); !errors.Is(err, ErrPluginClosed) {
+		t.Errorf("Lease after Close: got %v, want ErrPluginClosed", err)
 	}
-	require.Eventually(t, func() bool {
-		runtime.GC()
-		if _, err := s.Execute(ctx, "SELECT 1"); err != nil {
-			return false
-		}
-		return forgotten()
-	}, callBound, 10*time.Millisecond, "the writer is gone from the guest once the host let go of it")
-}
-
-// prepareAndDropWriter prepares a writer on s and lets go of it, returning the
-// instance it lives on and its id in the guest.
-func prepareAndDropWriter(t *testing.T, s dbdriver.Session) (*driverInstance, uint64) {
-	t.Helper()
-	w, err := s.PrepareRowStatements(context.Background(), "app", "users")
-	require.NoError(t, err)
-	dw := w.(*driverRowWriter)
-	return dw.inst, dw.id
 }

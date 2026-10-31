@@ -9,10 +9,12 @@ import {
   FilePen,
   FileText,
   Globe,
+  KeyRound,
   Loader2,
   Network,
   Puzzle,
   RefreshCw,
+  Route,
   Router,
   Search,
   SearchX,
@@ -27,13 +29,13 @@ import { pinyinMatch } from "@/lib/pinyin";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { useExtensionUpdates } from "./extensionUpdates";
 import { ListStore, RefreshStore } from "../../../wailsjs/go/extension/Extension";
-import type { extension, extstore_svc } from "../../../wailsjs/go/models";
+import type { extmanifest, extstore_svc } from "../../../wailsjs/go/models";
 import { useStoreInstalls } from "./useStoreInstalls";
 import { revealDownloadMirrorSetting } from "./downloadMirror";
 
 export type StoreCard = extstore_svc.Card;
 
-interface CapabilityTag {
+interface PermissionTag {
   key: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
@@ -42,26 +44,36 @@ interface CapabilityTag {
   warning?: boolean;
 }
 
-/** One tag per kind of grant the version asks for (the kinds the install confirm lists). */
-function capabilityTags(c: extension.Capabilities): CapabilityTag[] {
-  const tags: CapabilityTag[] = [];
-  if (c.network.assetEndpoint) {
+/**
+ * One tag per kind of permission the version asks for (the kinds the install confirm
+ * lists); the ones the confirm marks high risk — credentials "read", assetRoute and
+ * kerberos (extension_svc.CapabilityGrants) — are warnings.
+ */
+function permissionTags(p: extmanifest.Permissions): PermissionTag[] {
+  const tags: PermissionTag[] = [];
+  if (p.network.assetEndpoint) {
     tags.push({ key: "assetEndpoint", label: "extension.capability.assetEndpoint", icon: Network });
   }
-  if (c.credentials === "read") {
+  if (p.network.assetRoute) {
+    tags.push({ key: "assetRoute", label: "extension.capability.assetRoute", icon: Route, warning: true });
+  }
+  if (p.credentials === "read") {
     tags.push({ key: "credentials", label: "extension.capability.credentials", icon: ShieldAlert, warning: true });
   }
-  if (c.fs.read?.length) {
-    tags.push({ key: "fsRead", label: "extension.capability.fsRead", icon: FileText, detail: c.fs.read.join("\n") });
+  if (p.kerberos) {
+    tags.push({ key: "kerberos", label: "extension.capability.kerberos", icon: KeyRound, warning: true });
   }
-  if (c.fs.write?.length) {
-    tags.push({ key: "fsWrite", label: "extension.capability.fsWrite", icon: FilePen, detail: c.fs.write.join("\n") });
+  if (p.fs.read?.length) {
+    tags.push({ key: "fsRead", label: "extension.capability.fsRead", icon: FileText, detail: p.fs.read.join("\n") });
   }
-  if (c.http.allowlist?.length) {
-    tags.push({ key: "http", label: "extension.capability.http", icon: Globe, detail: c.http.allowlist.join("\n") });
+  if (p.fs.write?.length) {
+    tags.push({ key: "fsWrite", label: "extension.capability.fsWrite", icon: FilePen, detail: p.fs.write.join("\n") });
   }
-  if (c.tunnel) {
-    tags.push({ key: "tunnel", label: "extension.capability.tunnel", icon: Router });
+  if (p.network.http?.length) {
+    tags.push({ key: "http", label: "extension.capability.http", icon: Globe, detail: p.network.http.join("\n") });
+  }
+  if (p.network.allowPrivate) {
+    tags.push({ key: "allowPrivate", label: "extension.capability.allowPrivate", icon: Router });
   }
   return tags;
 }
@@ -247,7 +259,7 @@ function StoreCardView({
         </div>
       </div>
 
-      <CapabilityTags capabilities={card.capabilities} dim={unavailable} />
+      <PermissionTags permissions={card.permissions} dim={unavailable} />
 
       <div className="mt-auto flex items-center justify-between gap-2">
         {running ? (
@@ -258,6 +270,7 @@ function StoreCardView({
             <span className="truncate">
               {t(REASON_LABEL[reason.reason], {
                 hostABI: reason.hostABI,
+                supported: reason.supportedHostABIs?.join(", "),
                 version: reason.minAppVersion,
                 type: reason.sourceType,
               })}
@@ -431,9 +444,9 @@ function StatusButton({ card, busy, onInstall }: { card: StoreCard; busy: boolea
   }
 }
 
-function CapabilityTags({ capabilities, dim }: { capabilities: extension.Capabilities; dim: boolean }) {
+function PermissionTags({ permissions, dim }: { permissions: extmanifest.Permissions; dim: boolean }) {
   const { t } = useTranslation();
-  const tags = capabilityTags(capabilities);
+  const tags = permissionTags(permissions);
   if (tags.length === 0) return null;
   return (
     <div className={cn("flex flex-wrap gap-1.5", dim && "opacity-60")}>

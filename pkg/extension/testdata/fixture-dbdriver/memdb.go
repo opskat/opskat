@@ -515,7 +515,7 @@ func hostProbe(what, target string) driver.Rows {
 	case "FILE_DIALOG":
 		_, err = opskat.FileDialog("open", opskat.DialogOptions{})
 	case "ASSET_CONFIG":
-		_, err = (&opskat.ActionContext{Asset: opskat.Asset{ID: 1}}).AssetConfig()
+		_, err = (&opskat.ToolContext{Asset: opskat.Asset{ID: 1}}).AssetConfig()
 	case "HTTP":
 		var resp *http.Response
 		if resp, err = (&http.Client{Transport: opskat.NewHTTPTransport()}).Get(target); err == nil {
