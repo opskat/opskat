@@ -33,7 +33,10 @@ func TestCommandReviewTimeoutDefaultsWhenUnset(t *testing.T) {
 // 默认模式和以前一样，绝不因审核器缺失而放行。
 func TestNoReviewerFailsClosedPerPermissionMode(t *testing.T) {
 	origService := command_review_svc.Default()
-	t.Cleanup(func() { command_review_svc.Register(origService) })
+	t.Cleanup(func() {
+		command_review_svc.Register(origService)
+		permission.SetReviewer(nil)
+	})
 	registerCommandReview()
 
 	ctrl := gomock.NewController(t)
@@ -67,11 +70,13 @@ func TestNoReviewerFailsClosedPerPermissionMode(t *testing.T) {
 	assert.Equal(t, aictx.NeedConfirm, assisted.Decision)
 	require.NotNil(t, assisted.Review)
 	assert.Equal(t, aictx.ReviewFail, assisted.Review.Outcome)
-	assert.Equal(t, command_review_svc.ReasonNoReviewer, assisted.Review.Reason)
+	assert.Equal(t, aictx.ReviewReasonNoReviewer, assisted.Review.Reason)
+	// 权限检查经注入的审核服务审核（而不是端口没注入时的兜底失败）：失败记进了服务的状态。
+	assert.Equal(t, aictx.ReviewReasonNoReviewer, command_review_svc.Default().Status().LastFailReason)
 
 	autopilot := permission.CheckPermission(ctx, asset_entity.AssetTypeSSH, 3, cmd)
 	assert.Equal(t, aictx.Deny, autopilot.Decision)
 	assert.Equal(t, aictx.SourceAutopilotDeny, autopilot.DecisionSource)
 	require.NotNil(t, autopilot.Review)
-	assert.Equal(t, command_review_svc.ReasonNoReviewer, autopilot.Review.Reason)
+	assert.Equal(t, aictx.ReviewReasonNoReviewer, autopilot.Review.Reason)
 }

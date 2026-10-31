@@ -56,7 +56,7 @@ func (e *Extension) TestCommandReviewer(name string) (*aictx.ReviewInfo, error) 
 	rev, err := bootstrap.CommandReviewer(e.ctx, name)
 	if err != nil {
 		logger.Ctx(e.ctx).Warn("test command reviewer: unavailable", zap.String("extension", name), zap.Error(err))
-		return command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: command_review_svc.ReasonReviewerUnavailable, Extension: name}.Info(""), nil
+		return command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: aictx.ReviewReasonReviewerUnavailable, Extension: name}.Info(""), nil
 	}
 	r := command_review_svc.Default().TestReviewer(e.ctx, rev)
 	logger.Ctx(e.ctx).Info("test command reviewer", zap.String("extension", name),

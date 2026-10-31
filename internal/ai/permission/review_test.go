@@ -11,49 +11,38 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
-// fakeReviewer 返回预设结果，并记录收到的输入和批量调用次数。
+// fakeReviewer 是审核端口的替身：每条命令回同一个预设结果，并记录收到的请求和调用次数。
 type fakeReviewer struct {
-	result  command_review_svc.Result
-	calls   []command_review_svc.Input
+	result  aictx.ReviewInfo
+	calls   []ReviewRequest
 	batches int
 }
 
-func (f *fakeReviewer) Review(ctx context.Context, in command_review_svc.Input) command_review_svc.Result {
-	return f.ReviewBatch(ctx, []command_review_svc.Input{in})[0]
-}
-
-func (f *fakeReviewer) ReviewBatch(_ context.Context, ins []command_review_svc.Input) []command_review_svc.Result {
+func (f *fakeReviewer) ReviewCommands(_ context.Context, reqs []ReviewRequest) []aictx.ReviewInfo {
 	f.batches++
-	out := make([]command_review_svc.Result, len(ins))
-	for i, in := range ins {
-		f.calls = append(f.calls, in)
+	out := make([]aictx.ReviewInfo, len(reqs))
+	for i, req := range reqs {
+		f.calls = append(f.calls, req)
 		out[i] = f.result
 	}
 	return out
 }
 
-func (f *fakeReviewer) TestReviewer(context.Context, command_review_svc.ExtensionReviewer) command_review_svc.Result {
-	return command_review_svc.Result{}
-}
-func (f *fakeReviewer) Status() command_review_svc.Status          { return command_review_svc.Status{} }
-func (f *fakeReviewer) SetConfigErrorListener(func(reason string)) {}
-
-func registerFakeReviewer(t *testing.T, r command_review_svc.Result) *fakeReviewer {
+func registerFakeReviewer(t *testing.T, r aictx.ReviewInfo) *fakeReviewer {
 	f := &fakeReviewer{result: r}
-	orig := command_review_svc.Default()
-	command_review_svc.Register(f)
-	t.Cleanup(func() { command_review_svc.Register(orig) })
+	orig := reviewer
+	SetReviewer(f)
+	t.Cleanup(func() { SetReviewer(orig) })
 	return f
 }
 
 var (
-	reviewPass   = command_review_svc.Result{Outcome: command_review_svc.OutcomePass, Extension: "jev-command-review", Version: "1.0.0"}
-	reviewReject = command_review_svc.Result{Outcome: command_review_svc.OutcomeReject, Failed: []string{"disruptive"}, Extension: "jev-command-review", Version: "1.0.0",
+	reviewPass   = aictx.ReviewInfo{Outcome: aictx.ReviewPass, Extension: "jev-command-review", Version: "1.0.0"}
+	reviewReject = aictx.ReviewInfo{Outcome: aictx.ReviewReject, Failed: []string{"disruptive"}, Extension: "jev-command-review", Version: "1.0.0",
 		FailedNames: map[string]map[string]string{"disruptive": {"en": "may interrupt services", "zh-CN": "可能中断服务"}}}
-	reviewFail = command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: command_review_svc.ReasonTimeout}
+	reviewFail = aictx.ReviewInfo{Outcome: aictx.ReviewFail, Reason: aictx.ReviewReasonTimeout}
 )
 
 // sshAsset 的策略只放行 ls，所以 "systemctl restart nginx" 会落到"需要人确认"。
@@ -102,14 +91,14 @@ func TestApplyReview(t *testing.T) {
 				So(r.DecisionSource, ShouldEqual, aictx.SourceAssistedAllow)
 				So(r.Review.Outcome, ShouldEqual, aictx.ReviewPass)
 				// 按资产类型注册时声明的写法替换敏感信息
-				So(f.calls, ShouldResemble, []command_review_svc.Input{{AssetType: asset_entity.AssetTypeSSH, Command: cmd, Syntax: command_review_svc.SyntaxShell}})
+				So(f.calls, ShouldResemble, []ReviewRequest{{AssetType: asset_entity.AssetTypeSSH, Command: cmd, Syntax: SyntaxShell}})
 			})
 
 			Convey("按别名检查（opsctl exec 传审批类型 exec）时，交给模型和缓存的是规范资产类型", func() {
 				f := registerFakeReviewer(t, reviewPass)
 				r := CheckPermission(ctx, "exec", 1, cmd)
 				So(r.DecisionSource, ShouldEqual, aictx.SourceAssistedAllow)
-				So(f.calls, ShouldResemble, []command_review_svc.Input{{AssetType: asset_entity.AssetTypeSSH, Command: cmd, Syntax: command_review_svc.SyntaxShell}})
+				So(f.calls, ShouldResemble, []ReviewRequest{{AssetType: asset_entity.AssetTypeSSH, Command: cmd, Syntax: SyntaxShell}})
 			})
 
 			Convey("还会从管道读入内容：模型看不到那部分，不送审，照常问人", func() {
@@ -135,7 +124,7 @@ func TestApplyReview(t *testing.T) {
 				r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, cmd)
 				So(r.Decision, ShouldEqual, aictx.NeedConfirm)
 				So(r.Review.Outcome, ShouldEqual, aictx.ReviewFail)
-				So(r.Review.Reason, ShouldEqual, command_review_svc.ReasonTimeout)
+				So(r.Review.Reason, ShouldEqual, aictx.ReviewReasonTimeout)
 			})
 		})
 
@@ -179,8 +168,8 @@ func TestApplyReview(t *testing.T) {
 			})
 
 			Convey("审核扩展未通过：拒绝原因用扩展声明的题目名称，并记下是哪个扩展审的", func() {
-				registerFakeReviewer(t, command_review_svc.Result{
-					Outcome: command_review_svc.OutcomeReject, Failed: []string{"data_loss"},
+				registerFakeReviewer(t, aictx.ReviewInfo{
+					Outcome: aictx.ReviewReject, Failed: []string{"data_loss"},
 					Extension: "jev-command-review", Version: "1.2.0",
 					FailedNames: map[string]map[string]string{"data_loss": {"en": "Loses data", "zh-CN": "丢失数据"}},
 				})
@@ -200,22 +189,22 @@ func TestApplyReview(t *testing.T) {
 					reason, want string
 					retryLater   bool
 				}{
-					{command_review_svc.ReasonTimeout, "超时", true},
-					{command_review_svc.ReasonUnavailable, "服务不可用", true},
+					{aictx.ReviewReasonTimeout, "超时", true},
+					{aictx.ReviewReasonUnavailable, "服务不可用", true},
 					// 原样重试结果一样，告诉调用方该怎么改
-					{command_review_svc.ReasonTooLong, "缩短或拆成几条", false},
-					{command_review_svc.ReasonUnparseable, "修正命令语法", false},
-					{command_review_svc.ReasonUndecodable, "直接写出来", false},
+					{aictx.ReviewReasonTooLong, "缩短或拆成几条", false},
+					{aictx.ReviewReasonUnparseable, "修正命令语法", false},
+					{aictx.ReviewReasonUndecodable, "直接写出来", false},
 					// 配置问题只有用户能修
-					{command_review_svc.ReasonNotConfigured, "留给用户", false},
-					{command_review_svc.ReasonNoReviewer, "没有可用的命令审核扩展", false},
-					{command_review_svc.ReasonInvalidAPIKey, "留给用户", false},
+					{aictx.ReviewReasonNotConfigured, "留给用户", false},
+					{aictx.ReviewReasonNoReviewer, "没有可用的命令审核扩展", false},
+					{aictx.ReviewReasonInvalidAPIKey, "留给用户", false},
 					// 审核扩展的问题：选中的扩展不可用要用户处理，扩展答得不合规重试也一样
-					{command_review_svc.ReasonReviewerUnavailable, "留给用户", false},
-					{command_review_svc.ReasonInvalidResult, "审核扩展返回了无效的结果", false},
+					{aictx.ReviewReasonReviewerUnavailable, "留给用户", false},
+					{aictx.ReviewReasonInvalidResult, "审核扩展返回了无效的结果", false},
 				}
 				for _, c := range cases {
-					registerFakeReviewer(t, command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: c.reason})
+					registerFakeReviewer(t, aictx.ReviewInfo{Outcome: aictx.ReviewFail, Reason: c.reason})
 					r := CheckPermission(aictx.WithPolicyLang(ctx, "zh-CN"), asset_entity.AssetTypeSSH, 1, cmd)
 					So(r.Decision, ShouldEqual, aictx.Deny)
 					So(r.DecisionSource, ShouldEqual, aictx.SourceAutopilotDeny)
@@ -300,7 +289,7 @@ func TestApplyReview(t *testing.T) {
 			So(r.Review.Mode, ShouldEqual, policyent.PermissionModeAssisted)
 		})
 
-		Convey("批量检查：规则放行的原样返回，需要审核的一次交给 ReviewBatch，结果顺序不变", func() {
+		Convey("批量检查：规则放行的原样返回，需要审核的一次交给审核端口，结果顺序不变", func() {
 			f := registerFakeReviewer(t, reviewPass)
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(sshAsset(policyent.PermissionModeAssisted, 0), nil).AnyTimes()
 

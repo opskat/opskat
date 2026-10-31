@@ -9,6 +9,25 @@ const (
 	ReviewFail   ReviewOutcome = "fail"   // 审核失败：没能得到判断
 )
 
+// 审核失败的原因（ReviewInfo.Reason）。not_configured / invalid_api_key / timeout / unavailable
+// 也是审核器回答 error 时用的原因名，宿主按同一套说明显示；不认识的原因按 unavailable 显示。
+const (
+	ReviewReasonNotConfigured = "not_configured"
+	ReviewReasonInvalidAPIKey = "invalid_api_key"
+	ReviewReasonTimeout       = "timeout"
+	ReviewReasonUnavailable   = "unavailable"
+	ReviewReasonTooLong       = "too_long"
+	ReviewReasonUnparseable   = "unparseable" // 命令解析不了，没法替换敏感信息，不发送
+	ReviewReasonUndecodable   = "undecodable" // 认得出解码后执行，但解不开要执行的内容，不发送
+	// ReviewReasonInvalidResult 是审核器的回答不合规，或调用审核器出错。
+	ReviewReasonInvalidResult = "invalid_result"
+	// ReviewReasonNoReviewer 是没有可用的审核器：一个都没有，或有多个却没选用哪个；
+	// 没有注入审核端口时也按它处理。
+	ReviewReasonNoReviewer = "no_reviewer"
+	// ReviewReasonReviewerUnavailable 是要用的审核器这次不可用：没加载、不是审核器，或资格检查没过。
+	ReviewReasonReviewerUnavailable = "reviewer_unavailable"
+)
+
 // ReviewInfo 是一次模型审核的结果，随 CheckResult 传到审批界面和审计。
 type ReviewInfo struct {
 	Mode       string             `json:"mode"` // 触发审核的权限模式：assisted / autopilot

@@ -7,35 +7,32 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-// rejectReviewer 让每条命令都审核未通过（可能破坏数据）。
+// rejectReviewer 是审核端口的替身：每条命令都审核未通过（可能破坏数据）。
 type rejectReviewer struct{}
 
-func (r rejectReviewer) Review(ctx context.Context, in command_review_svc.Input) command_review_svc.Result {
-	return r.ReviewBatch(ctx, []command_review_svc.Input{in})[0]
-}
-
-func (rejectReviewer) ReviewBatch(_ context.Context, ins []command_review_svc.Input) []command_review_svc.Result {
-	out := make([]command_review_svc.Result, len(ins))
+func (rejectReviewer) ReviewCommands(_ context.Context, reqs []permission.ReviewRequest) []aictx.ReviewInfo {
+	out := make([]aictx.ReviewInfo, len(reqs))
 	for i := range out {
-		out[i] = command_review_svc.Result{Outcome: command_review_svc.OutcomeReject, Failed: []string{"destructive"}}
+		out[i] = aictx.ReviewInfo{Outcome: aictx.ReviewReject, Failed: []string{"destructive"}}
 	}
 	return out
 }
 
-func (rejectReviewer) TestReviewer(context.Context, command_review_svc.ExtensionReviewer) command_review_svc.Result {
-	return command_review_svc.Result{}
+// useReviewer 把审核端口换成 r，测试结束后撤掉。
+func useReviewer(t *testing.T, r permission.Reviewer) {
+	t.Helper()
+	permission.SetReviewer(r)
+	t.Cleanup(func() { permission.SetReviewer(nil) })
 }
-func (rejectReviewer) Status() command_review_svc.Status   { return command_review_svc.Status{} }
-func (rejectReviewer) SetConfigErrorListener(func(string)) {}
 
 // useAssistedSink 把 sink-01 设成辅助审批，审核一律不通过：它的每条传输主体都会带着审核结果
 // 交给人确认。在 setupCp 之后调用，覆盖它注册的资产。
@@ -54,9 +51,7 @@ func useAssistedSink(t *testing.T) {
 	asset_repo.RegisterAsset(m)
 	t.Cleanup(func() { asset_repo.RegisterAsset(orig) })
 
-	origReviewer := command_review_svc.Default()
-	command_review_svc.Register(rejectReviewer{})
-	t.Cleanup(func() { command_review_svc.Register(origReviewer) })
+	useReviewer(t, rejectReviewer{})
 }
 
 // 多条主体合进同一个批量确认时，审计只有一行：人确认之后，这一行也要带上审核结果，
@@ -86,20 +81,16 @@ func TestCpBatchConfirmationKeepsReviewForAudit(t *testing.T) {
 	}
 }
 
-// countingReviewer 同 rejectReviewer，另外数 ReviewBatch 被调用了几次、共审了几条。
+// countingReviewer 同 rejectReviewer，另外数审核端口被调用了几次、共审了几条。
 type countingReviewer struct {
 	rejectReviewer
 	batches, reviewed int
 }
 
-func (r *countingReviewer) ReviewBatch(ctx context.Context, ins []command_review_svc.Input) []command_review_svc.Result {
+func (r *countingReviewer) ReviewCommands(ctx context.Context, reqs []permission.ReviewRequest) []aictx.ReviewInfo {
 	r.batches++
-	r.reviewed += len(ins)
-	return r.rejectReviewer.ReviewBatch(ctx, ins)
-}
-
-func (r *countingReviewer) Review(ctx context.Context, in command_review_svc.Input) command_review_svc.Result {
-	return r.ReviewBatch(ctx, []command_review_svc.Input{in})[0]
+	r.reviewed += len(reqs)
+	return r.rejectReviewer.ReviewCommands(ctx, reqs)
 }
 
 // 一次传输的各条主体一次送审：审核是并行的，逐条送就成了串行，每条最多要等两倍超时。
@@ -108,7 +99,7 @@ func TestCpReviewsAllSubjectsInOneBatch(t *testing.T) {
 		ctx, _ := setupCpDialogs(t, "allow", "allow")
 		useAssistedSink(t)
 		reviewer := &countingReviewer{}
-		command_review_svc.Register(reviewer)
+		useReviewer(t, reviewer)
 		seedCpSource("a.log", "b.log")
 
 		_, _ = handleCp(ctx, map[string]any{"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true})

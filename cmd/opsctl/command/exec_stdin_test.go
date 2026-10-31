@@ -11,10 +11,11 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 func mustPipe(t *testing.T) (*os.File, *os.File) {
@@ -117,32 +118,29 @@ func TestInspectStdin(t *testing.T) {
 	})
 }
 
-// fakeReviewer 给每条命令同一个审核结果，并记下送审了几条。
+// fakeReviewer 是审核端口的替身：给每条命令同一个审核结果，并记下送审了几条。
 type fakeReviewer struct {
-	result   command_review_svc.Result
+	result   aictx.ReviewInfo
 	reviewed int
-	batches  int // ReviewBatch 被调用的次数
+	batches  int // 审核端口被调用的次数
 }
 
-func (r *fakeReviewer) Review(ctx context.Context, in command_review_svc.Input) command_review_svc.Result {
-	return r.ReviewBatch(ctx, []command_review_svc.Input{in})[0]
-}
-
-func (r *fakeReviewer) ReviewBatch(_ context.Context, ins []command_review_svc.Input) []command_review_svc.Result {
-	r.reviewed += len(ins)
+func (r *fakeReviewer) ReviewCommands(_ context.Context, reqs []permission.ReviewRequest) []aictx.ReviewInfo {
+	r.reviewed += len(reqs)
 	r.batches++
-	out := make([]command_review_svc.Result, len(ins))
+	out := make([]aictx.ReviewInfo, len(reqs))
 	for i := range out {
 		out[i] = r.result
 	}
 	return out
 }
 
-func (r *fakeReviewer) TestReviewer(context.Context, command_review_svc.ExtensionReviewer) command_review_svc.Result {
-	return command_review_svc.Result{}
+// useReviewer 把审核端口换成 r，测试结束后撤掉。
+func useReviewer(t *testing.T, r permission.Reviewer) {
+	t.Helper()
+	permission.SetReviewer(r)
+	t.Cleanup(func() { permission.SetReviewer(nil) })
 }
-func (r *fakeReviewer) Status() command_review_svc.Status   { return command_review_svc.Status{} }
-func (r *fakeReviewer) SetConfigErrorListener(func(string)) {}
 
 func setAssetPermissionMode(t *testing.T, env *opsctlExecTestEnv, name, mode string) {
 	t.Helper()
@@ -170,13 +168,11 @@ type pipedExec struct {
 func setupPipedExec(t *testing.T, mode string, stdin io.Reader, piped bool) *pipedExec {
 	t.Helper()
 	restoreAssetRepoAfter(t)
-	p := &pipedExec{env: setupOpsctlExecAssets(t), reviewer: &fakeReviewer{result: command_review_svc.Result{Outcome: command_review_svc.OutcomePass}}}
+	p := &pipedExec{env: setupOpsctlExecAssets(t), reviewer: &fakeReviewer{result: aictx.ReviewInfo{Outcome: aictx.ReviewPass}}}
 	isolateApprovers(t)
 	setAssetPermissionMode(t, p.env, "web-1", mode)
 
-	origReviewer := command_review_svc.Default()
-	command_review_svc.Register(p.reviewer)
-	t.Cleanup(func() { command_review_svc.Register(origReviewer) })
+	useReviewer(t, p.reviewer)
 
 	origStdin := execStdinFn
 	execStdinFn = func(wait time.Duration) (io.Reader, bool) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,60 +12,55 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 )
 
-// fakeReviewer 是一个审核扩展：记下每次收到的命令，按 reply 回答（默认全部通过）。
+// call 是审核器收到的一次调用。
+type call struct {
+	AssetType, Command, Syntax string
+}
+
+// fakeReviewer 是一个审核器：记下每次收到的命令，按 reply 回答（默认通过）。
 type fakeReviewer struct {
 	name, version, settingsHash string
-	maxItems, maxCommandLen     int
+	maxCommandLen               int
 	questions                   []Question
-	reply                       func(items []Item) ([]ItemResult, error)
+	reply                       func(c call) (Answer, error)
 
 	mu    sync.Mutex
-	calls [][]Item
+	calls []call
 }
 
 func (f *fakeReviewer) Identity() (string, string, string) {
 	return f.name, f.version, f.settingsHash
 }
-func (f *fakeReviewer) Limits() (int, int)    { return f.maxItems, f.maxCommandLen }
+func (f *fakeReviewer) MaxCommandLen() int    { return f.maxCommandLen }
 func (f *fakeReviewer) Questions() []Question { return f.questions }
-func (f *fakeReviewer) Review(_ context.Context, items []Item) ([]ItemResult, error) {
+func (f *fakeReviewer) Review(_ context.Context, assetType, command, syntax string) (Answer, error) {
+	c := call{AssetType: assetType, Command: command, Syntax: syntax}
 	f.mu.Lock()
-	f.calls = append(f.calls, append([]Item(nil), items...))
+	f.calls = append(f.calls, c)
 	f.mu.Unlock()
 	if f.reply == nil {
-		return passAll(items)
+		return Answer{Outcome: AnswerPass}, nil
 	}
-	return f.reply(items)
+	return f.reply(c)
 }
 
-// sent 是扩展收到的全部命令，按收到的先后排列。
-func (f *fakeReviewer) sent() []string {
+func (f *fakeReviewer) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []string
-	for _, c := range f.calls {
-		for _, it := range c {
-			out = append(out, it.Command)
-		}
-	}
-	return out
+	return len(f.calls)
 }
 
 func (f *fakeReviewer) lastSent(t *testing.T) string {
 	t.Helper()
-	sent := f.sent()
-	require.NotEmpty(t, sent, "审核扩展没收到命令")
-	return sent[len(sent)-1]
-}
-
-func passAll(items []Item) ([]ItemResult, error) {
-	out := make([]ItemResult, len(items))
-	for i := range out {
-		out[i] = ItemResult{Outcome: ItemPass}
-	}
-	return out, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.NotEmpty(t, f.calls, "审核器没收到命令")
+	return f.calls[len(f.calls)-1].Command
 }
 
 var destructiveQuestion = []Question{{
@@ -75,7 +69,7 @@ var destructiveQuestion = []Question{{
 }}
 
 func newReviewer() *fakeReviewer {
-	return &fakeReviewer{name: "rev", version: "1.0.0", settingsHash: "h1", maxItems: 8, maxCommandLen: 4000, questions: destructiveQuestion}
+	return &fakeReviewer{name: "rev", version: "1.0.0", settingsHash: "h1", maxCommandLen: 4000, questions: destructiveQuestion}
 }
 
 type memCache struct {
@@ -100,123 +94,166 @@ func (c *memCache) Put(_ context.Context, key string, r Result, _ time.Duration)
 	return nil
 }
 
-func newService(rev *fakeReviewer) (*service, *memCache) {
-	cache := &memCache{m: map[string]Result{}}
-	s := New(func() time.Duration { return DefaultTimeout }, cache, func(context.Context) (ExtensionReviewer, error) {
-		return rev, nil
-	}).(*service)
-	return s, cache
+// source 是审核器来源的替身。
+type source struct {
+	rev Reviewer
+	err error
 }
 
-// ---- 用哪个审核扩展 ----
+func (s source) Current(context.Context) (Reviewer, error) { return s.rev, s.err }
+
+func newService(rev *fakeReviewer) (Service, *memCache) {
+	cache := &memCache{m: map[string]Result{}}
+	return New(func() time.Duration { return DefaultTimeout }, cache, source{rev: rev}), cache
+}
+
+// review 经审核端口审一条命令。
+func review(s Service, req permission.ReviewRequest) aictx.ReviewInfo {
+	return s.ReviewCommands(context.Background(), []permission.ReviewRequest{req})[0]
+}
+
+func ssh(cmd string) permission.ReviewRequest {
+	return permission.ReviewRequest{AssetType: "ssh", Command: cmd, Syntax: permission.SyntaxShell}
+}
+
+func text(cmd string) permission.ReviewRequest {
+	return permission.ReviewRequest{AssetType: "ssh", Command: cmd, Syntax: permission.SyntaxText}
+}
+
+// ---- 用哪个审核器 ----
 
 func TestNoReviewerFailsAsAConfigError(t *testing.T) {
-	s := New(func() time.Duration { return DefaultTimeout }, &memCache{m: map[string]Result{}},
-		func(context.Context) (ExtensionReviewer, error) { return nil, ErrNoReviewer })
+	s := New(func() time.Duration { return DefaultTimeout }, &memCache{m: map[string]Result{}}, source{err: ErrNoReviewer})
 	var notified []string
 	s.SetConfigErrorListener(func(reason string) { notified = append(notified, reason) })
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Equal(t, OutcomeFail, r.Outcome)
-	assert.Equal(t, ReasonNoReviewer, r.Reason)
-	assert.Equal(t, []string{ReasonNoReviewer}, notified)
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewFail, r.Outcome)
+	assert.Equal(t, aictx.ReviewReasonNoReviewer, r.Reason)
+	assert.Equal(t, []string{aictx.ReviewReasonNoReviewer}, notified)
 }
 
 func TestUnavailableReviewerFails(t *testing.T) {
-	s := New(func() time.Duration { return DefaultTimeout }, &memCache{m: map[string]Result{}},
-		func(context.Context) (ExtensionReviewer, error) { return nil, ErrReviewerUnavailable })
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Equal(t, OutcomeFail, r.Outcome)
-	assert.Equal(t, ReasonReviewerUnavailable, r.Reason)
+	s := New(func() time.Duration { return DefaultTimeout }, &memCache{m: map[string]Result{}}, source{err: ErrReviewerUnavailable})
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewFail, r.Outcome)
+	assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, r.Reason)
 }
 
-// ---- 审核扩展的回答 ----
+// 每次审核都向来源要当前的审核器：换了审核器之后不再用旧的。
+func TestAsksTheSourceForTheCurrentReviewerEachTime(t *testing.T) {
+	first, second := newReviewer(), newReviewer()
+	second.name = "second"
+	src := &switchingSource{rev: first}
+	s := New(func() time.Duration { return DefaultTimeout }, &memCache{m: map[string]Result{}}, src)
+
+	assert.Equal(t, "rev", review(s, text("ls")).Extension)
+	src.rev = second
+	assert.Equal(t, "second", review(s, text("pwd")).Extension)
+	assert.Equal(t, 1, first.callCount())
+	assert.Equal(t, 1, second.callCount())
+}
+
+type switchingSource struct{ rev Reviewer }
+
+func (s *switchingSource) Current(context.Context) (Reviewer, error) { return s.rev, nil }
+
+// ---- 审核器的回答 ----
 
 func TestRejectCarriesQuestionNamesAndScore(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]Item) ([]ItemResult, error) {
-		return []ItemResult{{Outcome: ItemReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 0.93}}}, nil
+	rev.reply = func(call) (Answer, error) {
+		return Answer{Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 0.93}}, nil
 	}
 	s, _ := newService(rev)
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Command: "rm -rf /data"})
-	assert.Equal(t, OutcomeReject, r.Outcome)
+	r := review(s, text("rm -rf /data"))
+	assert.Equal(t, aictx.ReviewReject, r.Outcome)
 	assert.Equal(t, map[string]map[string]string{"destructive": {"en": "Destroys data", "zh-CN": "破坏数据"}}, r.FailedNames)
 	assert.Equal(t, map[string]float64{"destructive": 0.93}, r.Scores)
 	assert.Equal(t, "rev", r.Extension)
 	assert.Equal(t, "1.0.0", r.Version)
+	assert.Empty(t, r.Mode, "模式由权限检查填写")
 }
 
-// 审核扩展的 error 是"没能得到判断"，按审核失败处理，也不能缓存——否则一次限流会让同一条命令
+// 审核器的 error 是"没能得到判断"，按审核失败处理，也不能缓存——否则一次限流会让同一条命令
 // 在缓存有效期内都审核失败。
 func TestReviewerErrorIsFailureAndNotCached(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]Item) ([]ItemResult, error) {
-		return []ItemResult{{Outcome: ItemError, Reason: "rate_limited"}}, nil
+	rev.reply = func(call) (Answer, error) {
+		return Answer{Outcome: AnswerError, Reason: "rate_limited"}, nil
 	}
 	s, cache := newService(rev)
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Equal(t, OutcomeFail, r.Outcome)
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewFail, r.Outcome)
 	assert.Equal(t, "rate_limited", r.Reason)
 	assert.Empty(t, cache.m)
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Len(t, rev.calls, 2)
+	review(s, text("ls"))
+	assert.Equal(t, 2, rev.callCount())
 }
 
-func TestInvalidResultFailsTheBatch(t *testing.T) {
+// 调用出错（不是超时）：按无效结果失败，不重试，不缓存。
+func TestCallErrorIsInvalidResultWithoutRetry(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]Item) ([]ItemResult, error) {
-		return nil, errors.New("review invalid_result: got 1 results for 2 commands")
-	}
-	s, _ := newService(rev)
+	rev.reply = func(call) (Answer, error) { return Answer{}, errors.New("tool call failed") }
+	s, cache := newService(rev)
 
-	got := s.ReviewBatch(context.Background(), []Input{{AssetType: "ssh", Command: "ls"}, {AssetType: "ssh", Command: "pwd"}})
-	for _, r := range got {
-		assert.Equal(t, OutcomeFail, r.Outcome)
-		assert.Equal(t, ReasonInvalidResult, r.Reason)
-	}
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewFail, r.Outcome)
+	assert.Equal(t, aictx.ReviewReasonInvalidResult, r.Reason)
+	assert.Equal(t, 1, rev.callCount())
+	assert.Equal(t, 1, r.Attempts)
+	assert.Empty(t, cache.m)
 }
 
-// 回答不合规（条数对、内容不对）时整批按无效结果失败，不缓存，绝不当成通过或未通过。
-func TestMalformedAnswerFailsTheBatchAndIsNotCached(t *testing.T) {
-	for name, bad := range map[string]ItemResult{
+// 回答不合规时这条命令按无效结果失败，不缓存，绝不当成通过或未通过；同时送审的其他命令不受影响。
+func TestMalformedAnswerFailsThatCommandAndIsNotCached(t *testing.T) {
+	for name, bad := range map[string]Answer{
 		"unknown outcome":     {Outcome: "allow"},
-		"undeclared question": {Outcome: ItemReject, Failed: []string{"not_declared"}},
-		"reject without ids":  {Outcome: ItemReject},
-		"error without cause": {Outcome: ItemError},
-		"pass with failure":   {Outcome: ItemPass, Failed: []string{"destructive"}},
-		"score out of range":  {Outcome: ItemReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 2}},
+		"undeclared question": {Outcome: AnswerReject, Failed: []string{"not_declared"}},
+		"reject without ids":  {Outcome: AnswerReject},
+		"error without cause": {Outcome: AnswerError},
+		"pass with failure":   {Outcome: AnswerPass, Failed: []string{"destructive"}},
+		"score out of range":  {Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 2}},
+		"negative score":      {Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": -0.1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rev := newReviewer()
-			rev.reply = func([]Item) ([]ItemResult, error) {
-				return []ItemResult{{Outcome: ItemPass}, bad}, nil
+			rev.reply = func(c call) (Answer, error) {
+				if c.Command == "pwd" {
+					return bad, nil
+				}
+				return Answer{Outcome: AnswerPass}, nil
 			}
 			s, cache := newService(rev)
 
-			got := s.ReviewBatch(context.Background(), []Input{{AssetType: "ssh", Command: "ls"}, {AssetType: "ssh", Command: "pwd"}})
-			for _, r := range got {
-				assert.Equal(t, OutcomeFail, r.Outcome)
-				assert.Equal(t, ReasonInvalidResult, r.Reason)
-			}
-			assert.Empty(t, cache.m)
+			got := s.ReviewCommands(context.Background(), []permission.ReviewRequest{text("ls"), text("pwd")})
+			assert.Equal(t, aictx.ReviewPass, got[0].Outcome)
+			assert.Equal(t, aictx.ReviewFail, got[1].Outcome)
+			assert.Equal(t, aictx.ReviewReasonInvalidResult, got[1].Reason)
+			assert.Len(t, cache.m, 1, "只缓存合规的那条")
 		})
 	}
 }
 
 // ---- 送审前的准备 ----
 
-// 只换密码本身，要执行的命令和资产类型原样交给审核扩展。
-func TestSendsRedactedCommandWithAssetType(t *testing.T) {
+// 只换密码本身，要执行的命令、资产类型和写法原样交给审核器。
+func TestSendsRedactedCommandWithAssetTypeAndSyntax(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: "AUTH x; mysql -uroot -pS3cret -e 'DROP DATABASE shop'"})
+	review(s, ssh("AUTH x; mysql -uroot -pS3cret -e 'DROP DATABASE shop'"))
+	review(s, permission.ReviewRequest{AssetType: "redis", Command: "AUTH S3cret", Syntax: permission.SyntaxRedis})
+	review(s, permission.ReviewRequest{AssetType: "database", Command: "SELECT 1", Syntax: permission.SyntaxText})
 
-	require.Len(t, rev.calls, 1)
-	assert.Equal(t, Item{AssetType: "ssh", Command: "AUTH x; mysql -uroot -p*** -e 'DROP DATABASE shop'", Syntax: "shell"}, rev.calls[0][0])
+	require.Len(t, rev.calls, 3)
+	assert.Equal(t, call{AssetType: "ssh", Command: "AUTH x; mysql -uroot -p*** -e 'DROP DATABASE shop'", Syntax: "shell"}, rev.calls[0])
+	assert.Equal(t, "redis", rev.calls[1].Syntax)
+	assert.NotContains(t, rev.calls[1].Command, "S3cret")
+	assert.Equal(t, call{AssetType: "database", Command: "SELECT 1", Syntax: "text"}, rev.calls[2])
 }
 
 func TestFailsWithoutCallingTheReviewer(t *testing.T) {
@@ -224,46 +261,38 @@ func TestFailsWithoutCallingTheReviewer(t *testing.T) {
 		cmd    string
 		reason string
 	}{
-		"too long":    {strings.Repeat("a", 4001), ReasonTooLong},
-		"unparseable": {"echo 'unterminated", ReasonUnparseable},
+		"too long":    {strings.Repeat("a", 4001), aictx.ReviewReasonTooLong},
+		"unparseable": {"echo 'unterminated", aictx.ReviewReasonUnparseable},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			rev := newReviewer()
 			s, _ := newService(rev)
-			r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: c.cmd})
-			assert.Equal(t, OutcomeFail, r.Outcome)
+			r := review(s, ssh(c.cmd))
+			assert.Equal(t, aictx.ReviewFail, r.Outcome)
 			assert.Equal(t, c.reason, r.Reason)
 			assert.Empty(t, rev.calls)
 		})
 	}
 }
 
-// 按审核扩展声明的单批条数拆批，超过它声明的长度的命令不送审。
-func TestSplitsBatchesAndRejectsOverlongByTheReviewersLimits(t *testing.T) {
+// 一条命令调用一次审核器；超过它声明的长度的命令不送审。
+func TestOneCallPerCommandAndOverlongNotSent(t *testing.T) {
 	rev := newReviewer()
-	rev.maxItems, rev.maxCommandLen = 2, 4
+	rev.maxCommandLen = 4
 	s, _ := newService(rev)
 
-	got := s.ReviewBatch(context.Background(), []Input{
-		{AssetType: "ssh", Command: "ls", Syntax: SyntaxText},
-		{AssetType: "ssh", Command: "pwd", Syntax: SyntaxText},
-		{AssetType: "ssh", Command: "who", Syntax: SyntaxText},
-		{AssetType: "ssh", Command: "too-long", Syntax: SyntaxText},
-	})
+	got := s.ReviewCommands(context.Background(), []permission.ReviewRequest{text("ls"), text("pwd"), text("who"), text("too-long")})
 
-	require.Len(t, rev.calls, 2, "maxItems=2，三条可审命令要拆成两次调用")
-	// 批次并发调用，先后不定：按批的大小排好再比。
-	sort.Slice(rev.calls, func(i, j int) bool { return len(rev.calls[i]) > len(rev.calls[j]) })
-	assert.Equal(t, []string{"ls", "pwd"}, []string{rev.calls[0][0].Command, rev.calls[0][1].Command})
-	assert.Equal(t, "who", rev.calls[1][0].Command)
-	assert.Equal(t, OutcomePass, got[0].Outcome)
-	assert.Equal(t, OutcomePass, got[2].Outcome)
-	assert.Equal(t, OutcomeFail, got[3].Outcome)
-	assert.Equal(t, ReasonTooLong, got[3].Reason)
+	assert.Equal(t, 3, rev.callCount())
+	for i := range 3 {
+		assert.Equal(t, aictx.ReviewPass, got[i].Outcome)
+	}
+	assert.Equal(t, aictx.ReviewFail, got[3].Outcome)
+	assert.Equal(t, aictx.ReviewReasonTooLong, got[3].Reason)
 }
 
-// pipeDecodeExec 是「把脚本 base64 之后交给 shell 执行」的写法。审核扩展必须看到脚本本身，
+// pipeDecodeExec 是「把脚本 base64 之后交给 shell 执行」的写法。审核器必须看到脚本本身，
 // 不能只看到编码后的外壳。
 func pipeDecodeExec(script, shell string) string {
 	return "echo '" + base64.StdEncoding.EncodeToString([]byte(script)) + "' | base64 -d | " + shell
@@ -274,9 +303,9 @@ func TestSendsDecodedScriptInsteadOfBase64(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: pipeDecodeExec(script, "bash")})
+	r := review(s, ssh(pipeDecodeExec(script, "bash")))
 
-	assert.Equal(t, OutcomePass, r.Outcome)
+	assert.Equal(t, aictx.ReviewPass, r.Outcome)
 	assert.Equal(t, script, rev.lastSent(t))
 }
 
@@ -284,7 +313,7 @@ func TestRedactsSecretsInsideDecodedScript(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: pipeDecodeExec("mysql -uroot -pS3cret -e 'DROP DATABASE shop'", "bash")})
+	review(s, ssh(pipeDecodeExec("mysql -uroot -pS3cret -e 'DROP DATABASE shop'", "bash")))
 
 	got := rev.lastSent(t)
 	assert.Contains(t, got, "DROP DATABASE shop")
@@ -301,9 +330,9 @@ func TestUndecodableExecIsNotSent(t *testing.T) {
 		t.Run(cmd, func(t *testing.T) {
 			rev := newReviewer()
 			s, _ := newService(rev)
-			r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: cmd})
-			assert.Equal(t, OutcomeFail, r.Outcome)
-			assert.Equal(t, ReasonUndecodable, r.Reason)
+			r := review(s, ssh(cmd))
+			assert.Equal(t, aictx.ReviewFail, r.Outcome)
+			assert.Equal(t, aictx.ReviewReasonUndecodable, r.Reason)
 			assert.Empty(t, rev.calls)
 		})
 	}
@@ -313,7 +342,7 @@ func TestNonShellCommandIsNotDecoded(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
 
-	s.Review(context.Background(), Input{AssetType: "mysql", Syntax: SyntaxText, Command: pipeDecodeExec("docker compose up -d", "bash")})
+	review(s, permission.ReviewRequest{AssetType: "mysql", Syntax: permission.SyntaxText, Command: pipeDecodeExec("docker compose up -d", "bash")})
 
 	assert.Contains(t, rev.lastSent(t), "base64")
 }
@@ -324,16 +353,17 @@ func TestCachesTheSameCommandButNotFailures(t *testing.T) {
 	rev := newReviewer()
 	s, cache := newService(rev)
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	second := s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Len(t, rev.calls, 1)
+	review(s, text("ls"))
+	second := review(s, text("ls"))
+	assert.Equal(t, 1, rev.callCount())
 	assert.True(t, second.Cached)
+	assert.Equal(t, "rev", second.Extension)
 	assert.Len(t, cache.m, 1)
 
 	failing := newReviewer()
-	failing.reply = func([]Item) ([]ItemResult, error) { return nil, errors.New("boom") }
+	failing.reply = func(call) (Answer, error) { return Answer{}, errors.New("boom") }
 	s2, cache2 := newService(failing)
-	s2.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
+	review(s2, text("ls"))
 	assert.Empty(t, cache2.m)
 }
 
@@ -342,10 +372,10 @@ func TestCacheDoesNotMixCommandsThatOnlyDifferInSecrets(t *testing.T) {
 	rev := newReviewer()
 	s, cache := newService(rev)
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: "mysql -pA -e 'select 1'"})
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: "mysql -pB -e 'select 1'"})
+	review(s, ssh("mysql -pA -e 'select 1'"))
+	r := review(s, ssh("mysql -pB -e 'select 1'"))
 
-	assert.Len(t, rev.calls, 2)
+	assert.Equal(t, 2, rev.callCount())
 	assert.False(t, r.Cached)
 	assert.Len(t, cache.m, 2)
 }
@@ -355,14 +385,14 @@ func TestCacheKeyIncludesTheReviewersIdentity(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.True(t, s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"}).Cached)
+	review(s, text("ls"))
+	assert.True(t, review(s, text("ls")).Cached)
 
 	rev.settingsHash = "h2"
-	assert.False(t, s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"}).Cached)
+	assert.False(t, review(s, text("ls")).Cached)
 	rev.version = "1.0.1"
-	assert.False(t, s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"}).Cached)
-	assert.Len(t, rev.calls, 3)
+	assert.False(t, review(s, text("ls")).Cached)
+	assert.Equal(t, 3, rev.callCount())
 }
 
 // 展开过的命令不能命中只按外壳算的旧缓存。
@@ -372,66 +402,102 @@ func TestExpandedCommandDoesNotReuseWrapperCache(t *testing.T) {
 	s, cache := newService(rev)
 	cache.m[extensionCacheKey("rev", "1.0.0", "h1", "ssh", cmd)] = Result{Outcome: OutcomePass}
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: cmd})
+	r := review(s, ssh(cmd))
 
 	assert.False(t, r.Cached)
-	assert.Len(t, rev.calls, 1)
+	assert.Equal(t, 1, rev.callCount())
 }
 
 // ---- 调用：并发、超时 ----
 
-// 单批只收一条的审核器也不能让一批命令排队：多个批次并发调用（扩展的实例池最多 4 个）。
-func TestBatchesRunConcurrently(t *testing.T) {
-	var waiting sync.WaitGroup
-	waiting.Add(2)
+// 多条命令并发调用审核器，同时最多 4 路（扩展的实例池大小）。
+func TestCommandsRunConcurrentlyAtMostFourAtATime(t *testing.T) {
+	var inflight, peak atomic.Int32
+	release := make(chan struct{})
 	rev := newReviewer()
-	rev.maxItems = 1
-	rev.reply = func(items []Item) ([]ItemResult, error) {
-		waiting.Done()
-		done := make(chan struct{})
-		go func() { waiting.Wait(); close(done) }()
-		select {
-		case <-done:
-			return passAll(items)
-		case <-time.After(2 * time.Second):
-			return nil, errors.New("the other batch never ran alongside this one")
+	rev.reply = func(call) (Answer, error) {
+		n := inflight.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
 		}
+		<-release
+		inflight.Add(-1)
+		return Answer{Outcome: AnswerPass}, nil
 	}
 	s, _ := newService(rev)
 
-	got := s.ReviewBatch(context.Background(), []Input{{AssetType: "ssh", Command: "ls"}, {AssetType: "ssh", Command: "pwd"}})
-	assert.Equal(t, OutcomePass, got[0].Outcome)
-	assert.Equal(t, OutcomePass, got[1].Outcome)
+	done := make(chan []aictx.ReviewInfo)
+	go func() {
+		done <- s.ReviewCommands(context.Background(), []permission.ReviewRequest{
+			text("c1"), text("c2"), text("c3"), text("c4"), text("c5"), text("c6"),
+		})
+	}()
+	require.Eventually(t, func() bool { return inflight.Load() == 4 }, 2*time.Second, time.Millisecond,
+		"四条命令应同时在审")
+	time.Sleep(50 * time.Millisecond) // 给第五路一个越界的机会
+	close(release)
+	got := <-done
+
+	assert.Equal(t, int32(4), peak.Load())
+	assert.Equal(t, 6, rev.callCount())
+	for _, r := range got {
+		assert.Equal(t, aictx.ReviewPass, r.Outcome)
+	}
 }
 
 func TestTimeoutIsRetriedOnceThenFails(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]Item) ([]ItemResult, error) {
-		return nil, context.DeadlineExceeded
-	}
-	s, _ := newService(rev)
+	rev.reply = func(call) (Answer, error) { return Answer{}, context.DeadlineExceeded }
+	s, cache := newService(rev)
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Equal(t, OutcomeFail, r.Outcome)
-	assert.Equal(t, ReasonTimeout, r.Reason)
-	assert.Len(t, rev.calls, 2)
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewFail, r.Outcome)
+	assert.Equal(t, aictx.ReviewReasonTimeout, r.Reason)
+	assert.Equal(t, 2, rev.callCount())
 	assert.Equal(t, 2, r.Attempts)
+	assert.Empty(t, cache.m)
+}
+
+// 每次调用单独计时：审核器拖过超时，按超时重试一次。
+func TestPerCallTimeoutIsApplied(t *testing.T) {
+	slow := &blockingReviewer{fakeReviewer: newReviewer()}
+	cache := &memCache{m: map[string]Result{}}
+	s := New(func() time.Duration { return 20 * time.Millisecond }, cache, source{rev: slow})
+
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewReasonTimeout, r.Reason)
+	assert.Equal(t, int32(2), slow.calls.Load())
+}
+
+// blockingReviewer 一直等到调用被取消。
+type blockingReviewer struct {
+	*fakeReviewer
+	calls atomic.Int32
+}
+
+func (b *blockingReviewer) Review(ctx context.Context, _, _, _ string) (Answer, error) {
+	b.calls.Add(1)
+	<-ctx.Done()
+	return Answer{}, ctx.Err()
 }
 
 // 第一次超时（如 opsctl 新进程里第一次建连接）、第二次成功：照常得出结果。
 func TestSecondAttemptAfterTimeoutSucceeds(t *testing.T) {
 	var n atomic.Int32
 	rev := newReviewer()
-	rev.reply = func(items []Item) ([]ItemResult, error) {
+	rev.reply = func(call) (Answer, error) {
 		if n.Add(1) == 1 {
-			return nil, context.DeadlineExceeded
+			return Answer{}, context.DeadlineExceeded
 		}
-		return passAll(items)
+		return Answer{Outcome: AnswerPass}, nil
 	}
 	s, _ := newService(rev)
 
-	r := s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Equal(t, OutcomePass, r.Outcome)
+	r := review(s, text("ls"))
+	assert.Equal(t, aictx.ReviewPass, r.Outcome)
 	assert.Equal(t, 2, r.Attempts)
 }
 
@@ -439,82 +505,80 @@ func TestSecondAttemptAfterTimeoutSucceeds(t *testing.T) {
 
 func TestConfigErrorsNotifyOnceAndShowInStatus(t *testing.T) {
 	rev := newReviewer()
-	invalidKey := func([]Item) ([]ItemResult, error) {
-		return []ItemResult{{Outcome: ItemError, Reason: ReasonInvalidAPIKey}}, nil
+	invalidKey := func(call) (Answer, error) {
+		return Answer{Outcome: AnswerError, Reason: aictx.ReviewReasonInvalidAPIKey}, nil
 	}
 	rev.reply = invalidKey
 	s, _ := newService(rev)
 	var notified []string
 	s.SetConfigErrorListener(func(reason string) { notified = append(notified, reason) })
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "pwd"})
-	assert.Equal(t, []string{ReasonInvalidAPIKey}, notified, "同一种设置问题只提醒一次")
-	assert.Equal(t, ReasonInvalidAPIKey, s.Status().LastFailReason)
+	review(s, text("ls"))
+	review(s, text("pwd"))
+	assert.Equal(t, []string{aictx.ReviewReasonInvalidAPIKey}, notified, "同一种设置问题只提醒一次")
+	assert.Equal(t, aictx.ReviewReasonInvalidAPIKey, s.Status().LastFailReason)
 
 	rev.reply = nil
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "uptime"})
+	review(s, text("uptime"))
 	assert.Equal(t, Status{}, s.Status(), "之后审核成功，设置页不再显示已经恢复的失败")
 
 	rev.reply = invalidKey
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "df -h"})
-	assert.Equal(t, []string{ReasonInvalidAPIKey, ReasonInvalidAPIKey}, notified, "恢复之后再出错会重新提醒")
+	review(s, text("df -h"))
+	assert.Equal(t, []string{aictx.ReviewReasonInvalidAPIKey, aictx.ReviewReasonInvalidAPIKey}, notified, "恢复之后再出错会重新提醒")
 }
 
 func TestTransientFailuresShowInStatusWithoutNotifying(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]Item) ([]ItemResult, error) {
-		return nil, context.DeadlineExceeded
-	}
+	rev.reply = func(call) (Answer, error) { return Answer{}, context.DeadlineExceeded }
 	s, _ := newService(rev)
 	var notified []string
 	s.SetConfigErrorListener(func(reason string) { notified = append(notified, reason) })
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
+	review(s, text("ls"))
 	assert.Empty(t, notified)
-	assert.Equal(t, ReasonTimeout, s.Status().LastFailReason)
+	assert.Equal(t, aictx.ReviewReasonTimeout, s.Status().LastFailReason)
 }
 
-// ---- 测试审核服务 ----
+// ---- 测试审核器 ----
 
-// 测试要的是这一刻审核扩展的真实回答：不命中、也不写入缓存。
+// 测试要的是这一刻审核器的真实回答：不命中、也不写入缓存。
 func TestTestReviewerBypassesTheCache(t *testing.T) {
 	rev := newReviewer()
 	s, cache := newService(newReviewer())
 
 	assert.Equal(t, OutcomePass, s.TestReviewer(context.Background(), rev).Outcome)
 	assert.Equal(t, OutcomePass, s.TestReviewer(context.Background(), rev).Outcome)
-	assert.Len(t, rev.calls, 2, "测的是传进来的那个扩展，不是在用的那个")
+	assert.Equal(t, 2, rev.callCount(), "测的是传进来的那个审核器，不是在用的那个")
 	assert.Empty(t, cache.m)
 }
 
-// 测试审核扩展（扩展设置页的"保存并测试"）测的未必是在用的那个，结果只回给测试的人：
+// 测试审核器（扩展设置页的"保存并测试"）测的未必是在用的那个，结果只回给测试的人：
 // 不改设置页显示的最近失败，也不触发设置问题的提醒。
 func TestTestReviewerLeavesTheReviewStatusAlone(t *testing.T) {
 	broken := newReviewer()
-	broken.reply = func([]Item) ([]ItemResult, error) {
-		return []ItemResult{{Outcome: ItemError, Reason: ReasonNotConfigured}}, nil
+	broken.reply = func(call) (Answer, error) {
+		return Answer{Outcome: AnswerError, Reason: aictx.ReviewReasonNotConfigured}, nil
 	}
 	s, _ := newService(broken)
 	var notified []string
 	s.SetConfigErrorListener(func(reason string) { notified = append(notified, reason) })
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	require.Equal(t, ReasonNotConfigured, s.Status().LastFailReason)
-	require.Equal(t, []string{ReasonNotConfigured}, notified)
+	review(s, text("ls"))
+	require.Equal(t, aictx.ReviewReasonNotConfigured, s.Status().LastFailReason)
+	require.Equal(t, []string{aictx.ReviewReasonNotConfigured}, notified)
 
 	other := newReviewer()
 	other.name = "other"
 	assert.Equal(t, OutcomePass, s.TestReviewer(context.Background(), other).Outcome)
-	assert.Equal(t, ReasonNotConfigured, s.Status().LastFailReason, "测试别的扩展通过，不能清掉在用扩展的失败")
+	assert.Equal(t, aictx.ReviewReasonNotConfigured, s.Status().LastFailReason, "测试别的审核器通过，不能清掉在用审核器的失败")
 
-	s.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
-	assert.Equal(t, []string{ReasonNotConfigured}, notified, "在用的扩展还没恢复过，同一种问题不再提醒")
+	review(s, text("ls"))
+	assert.Equal(t, []string{aictx.ReviewReasonNotConfigured}, notified, "在用的审核器还没恢复过，同一种问题不再提醒")
 
 	fresh, _ := newService(newReviewer())
 	var freshNotified []string
 	fresh.SetConfigErrorListener(func(reason string) { freshNotified = append(freshNotified, reason) })
 	assert.Equal(t, OutcomeFail, fresh.TestReviewer(context.Background(), broken).Outcome)
-	assert.Equal(t, Status{}, fresh.Status(), "测试一个没配置好的扩展，不记成全局最近失败")
+	assert.Equal(t, Status{}, fresh.Status(), "测试一个没配置好的审核器，不记成全局最近失败")
 	assert.Empty(t, freshNotified, "也不弹设置问题的提醒")
 }

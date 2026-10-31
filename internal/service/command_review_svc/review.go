@@ -16,7 +16,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/pkg/cmdredact"
+	"github.com/opskat/opskat/internal/pkg/shelldecode"
 )
 
 // DefaultTimeout 是每次调用审核扩展的默认超时。
@@ -41,45 +43,20 @@ const (
 	OutcomeFail   = aictx.ReviewFail   // 审核失败：没能得到判断
 )
 
-// 审核失败的原因。not_configured / invalid_api_key / timeout / unavailable 也是审核扩展
-// 回答 error 时用的原因名，宿主按同一套说明显示。
-const (
-	ReasonNotConfigured = "not_configured"
-	ReasonInvalidAPIKey = "invalid_api_key"
-	ReasonTimeout       = "timeout"
-	ReasonUnavailable   = "unavailable"
-	ReasonTooLong       = "too_long"
-	ReasonUnparseable   = "unparseable" // 命令解析不了，没法替换敏感信息，不发送
-	ReasonUndecodable   = "undecodable" // 认得出解码后执行，但解不开要执行的内容，不发送
-	// ReasonInvalidResult 是审核扩展返回了不合规的整批结果。
-	ReasonInvalidResult = "invalid_result"
-	// ReasonNoReviewer 是没有可用的审核扩展：一个都没装（或都停用了），或装了多个却没选用哪个。
-	ReasonNoReviewer = "no_reviewer"
-	// ReasonReviewerUnavailable 是要用的审核扩展这次不可用：没加载、不是审核器，或来源/摘要检查没过。
-	ReasonReviewerUnavailable = "reviewer_unavailable"
-)
-
 var (
-	// ErrNoReviewer 见 ReasonNoReviewer。
+	// ErrNoReviewer 见 aictx.ReviewReasonNoReviewer。
 	ErrNoReviewer = errors.New("no command reviewer extension is available")
-	// ErrReviewerUnavailable 见 ReasonReviewerUnavailable。
+	// ErrReviewerUnavailable 见 aictx.ReviewReasonReviewerUnavailable。
 	ErrReviewerUnavailable = errors.New("command reviewer is unavailable")
 )
 
 // isConfigError 判断审核失败是不是设置有问题：只有用户改设置才能恢复，要提醒用户。
 func isConfigError(reason string) bool {
 	switch reason {
-	case ReasonNotConfigured, ReasonInvalidAPIKey, ReasonNoReviewer, ReasonReviewerUnavailable:
+	case aictx.ReviewReasonNotConfigured, aictx.ReviewReasonInvalidAPIKey, aictx.ReviewReasonNoReviewer, aictx.ReviewReasonReviewerUnavailable:
 		return true
 	}
 	return false
-}
-
-// Input 是一次审核的输入。Syntax 决定怎样找出命令里的敏感信息（见 RedactSensitive）。
-type Input struct {
-	AssetType string
-	Command   string
-	Syntax    Syntax
 }
 
 // Result 是一次审核的结果。
@@ -121,16 +98,14 @@ type Cache interface {
 	Put(ctx context.Context, key string, r Result, ttl time.Duration) error
 }
 
-// Service 审核命令。
+// Service 审核命令：实现权限检查的审核端口（permission.Reviewer），结果与请求一一对应。
 type Service interface {
-	Review(ctx context.Context, in Input) Result
-	// ReviewBatch 审核多条命令，结果与输入一一对应；调用审核扩展这一步并行。
-	ReviewBatch(ctx context.Context, ins []Input) []Result
-	// TestReviewer 用 rev 审一条无害的命令，不读写缓存：扩展设置页据此确认这个审核扩展能不能用。
-	TestReviewer(ctx context.Context, rev ExtensionReviewer) Result
+	permission.Reviewer
+	// TestReviewer 用 rev 审一条无害的命令，不读写缓存：扩展设置页据此确认这个审核器能不能用。
+	TestReviewer(ctx context.Context, rev Reviewer) Result
 	// Status 返回本进程启动以来最近一次还没恢复的审核失败，没失败过或之后已有一次成功则为空。
 	Status() Status
-	// SetConfigErrorListener 注册设置问题（没有审核扩展、扩展没配置好等）的通知，
+	// SetConfigErrorListener 注册设置问题（没有审核器、审核器没配置好等）的通知，
 	// 同一种问题只通知一次，审核恢复成功后再出错会重新通知。
 	SetConfigErrorListener(fn func(reason string))
 }
@@ -142,9 +117,9 @@ type Status struct {
 }
 
 type service struct {
-	timeout  func() time.Duration
-	cache    Cache
-	reviewer ReviewerFunc
+	timeout func() time.Duration
+	cache   Cache
+	source  ReviewerSource
 
 	mu       sync.Mutex
 	status   Status
@@ -152,9 +127,10 @@ type service struct {
 	notified map[string]bool
 }
 
-// New 创建审核服务。timeout 是每次调用审核扩展的超时，每次审核时读取，设置修改后立即生效。
-func New(timeout func() time.Duration, cache Cache, reviewer ReviewerFunc) Service {
-	return &service{timeout: timeout, cache: cache, reviewer: reviewer, notified: map[string]bool{}}
+// New 创建审核服务。timeout 是每次调用审核器的超时，每次审核时读取，设置修改后立即生效；
+// source 给出每次审核时要用的审核器。
+func New(timeout func() time.Duration, cache Cache, source ReviewerSource) Service {
+	return &service{timeout: timeout, cache: cache, source: source, notified: map[string]bool{}}
 }
 
 func (s *service) Status() Status {
@@ -169,7 +145,7 @@ func (s *service) SetConfigErrorListener(fn func(reason string)) {
 	s.listener = fn
 }
 
-// record 按一批正式审核的结果更新状态：失败记下（设置问题通知一次）；扩展真的给出了
+// record 按一次正式审核的结果更新状态：失败记下（设置问题通知一次）；扩展真的给出了
 // 判断就算恢复——只是调用成功、回答却是"API key 无效"之类不算，命中缓存也不算。
 // 测试审核扩展不走这里：测的未必是在用的那个。
 func (s *service) record(results []Result) {
@@ -215,37 +191,36 @@ func Register(s Service) { defaultService = s }
 // Default 返回默认审核服务，没有注册时为 nil。
 func Default() Service { return defaultService }
 
-func (s *service) Review(ctx context.Context, in Input) Result {
-	return s.ReviewBatch(ctx, []Input{in})[0]
-}
-
-// ReviewBatch 审核多条命令，结果与输入一一对应。读写缓存按顺序做（SQLite 不适合并发写），
-// 只有调用审核扩展这一步并行，最多 maxParallelReviews 路同时进行。
-func (s *service) ReviewBatch(ctx context.Context, ins []Input) []Result {
-	rev, results := s.resolve(ctx, len(ins))
+// ReviewCommands 审核多条命令，结果与请求一一对应（见 permission.Reviewer）。
+func (s *service) ReviewCommands(ctx context.Context, reqs []permission.ReviewRequest) []aictx.ReviewInfo {
+	rev, results := s.resolve(ctx, len(reqs))
 	if results == nil {
-		results = s.reviewWith(ctx, rev, ins, true)
+		results = s.reviewWith(ctx, rev, reqs, true)
 	}
 	s.record(results)
-	return results
+	out := make([]aictx.ReviewInfo, len(results))
+	for i, r := range results {
+		out[i] = *r.Info("")
+	}
+	return out
 }
 
-// testCommand 是测试审核服务时送审的命令：只读、无害，正常的审核服务应当判它通过。
-var testCommand = Input{AssetType: "ssh", Command: "ls -la /tmp", Syntax: SyntaxShell}
+// testCommand 是测试审核器时送审的命令：只读、无害，正常的审核器应当判它通过。
+var testCommand = permission.ReviewRequest{AssetType: "ssh", Command: "ls -la /tmp", Syntax: permission.SyntaxShell}
 
-func (s *service) TestReviewer(ctx context.Context, rev ExtensionReviewer) Result {
-	return s.reviewWith(ctx, rev, []Input{testCommand}, false)[0]
+func (s *service) TestReviewer(ctx context.Context, rev Reviewer) Result {
+	return s.reviewWith(ctx, rev, []permission.ReviewRequest{testCommand}, false)[0]
 }
 
-// resolve 找出要用的审核扩展；找不到时返回 n 条同样的失败结果。
-func (s *service) resolve(ctx context.Context, n int) (ExtensionReviewer, []Result) {
-	rev, err := s.reviewer(ctx)
+// resolve 向审核器来源要这次用的审核器；拿不到时返回 n 条同样的失败结果。
+func (s *service) resolve(ctx context.Context, n int) (Reviewer, []Result) {
+	rev, err := s.source.Current(ctx)
 	if err == nil {
 		return rev, nil
 	}
-	reason := ReasonReviewerUnavailable
+	reason := aictx.ReviewReasonReviewerUnavailable
 	if errors.Is(err, ErrNoReviewer) {
-		reason = ReasonNoReviewer
+		reason = aictx.ReviewReasonNoReviewer
 	}
 	logger.Ctx(ctx).Warn("command reviewer unavailable", zap.String("reason", reason), zap.Error(err))
 	results := make([]Result, n)
@@ -255,43 +230,47 @@ func (s *service) resolve(ctx context.Context, n int) (ExtensionReviewer, []Resu
 	return nil, results
 }
 
-// reviewWith 用审核扩展审核一批命令。先展开解码后执行的命令、再替换敏感信息；超长命令不送审，
-// 按该条失败；其余按 maxItems 拆成多次 review_commands。一次调用失败则该批全部失败。
-// useCache 为假时不读也不写缓存（测试审核服务用）。
-func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []Input, useCache bool) []Result {
-	timeout := s.timeout()
+// pendingReview 是一条要调用审核器的命令。
+type pendingReview struct {
+	idx       int
+	assetType string
+	command   string // 已展开、已替换敏感信息
+	syntax    string
+	key       string
+}
+
+// reviewWith 用 rev 审核 reqs。先展开解码后执行的命令、再替换敏感信息；超长命令不送审，
+// 按该条失败；其余每条调用一次审核器。读写缓存按顺序做（SQLite 不适合并发写），
+// 只有调用审核器这一步并行，最多 maxParallelReviews 路同时进行。
+// useCache 为假时不读也不写缓存（测试审核器用）。
+func (s *service) reviewWith(ctx context.Context, rev Reviewer, reqs []permission.ReviewRequest, useCache bool) []Result {
 	name, version, settingsHash := rev.Identity()
-	maxItems, maxLen := rev.Limits()
+	maxLen := rev.MaxCommandLen()
 	questions := rev.Questions()
-	results := make([]Result, len(ins))
-	type pendingExt struct {
-		idx  int
-		item Item
-		key  string
-	}
-	var pending []pendingExt
-	for i, in := range ins {
-		reviewed, err := commandForReview(in)
+	results := make([]Result, len(reqs))
+	var pending []pendingReview
+	for i, req := range reqs {
+		reviewed, err := commandForReview(req)
 		if err != nil {
-			reason := ReasonUnparseable
-			if errors.Is(err, ErrUndecodable) {
-				reason = ReasonUndecodable
+			reason := aictx.ReviewReasonUnparseable
+			if errors.Is(err, shelldecode.ErrUndecodable) {
+				reason = aictx.ReviewReasonUndecodable
 			}
-			logger.Ctx(ctx).Warn("prepare command for review", zap.String("assetType", in.AssetType), zap.String("reason", reason), zap.Error(err))
+			logger.Ctx(ctx).Warn("prepare command for review", zap.String("assetType", req.AssetType), zap.String("reason", reason), zap.Error(err))
 			results[i] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version}
 			continue
 		}
-		command, err := cmdredact.RedactSensitive(in.Syntax, reviewed)
+		command, err := cmdredact.RedactSensitive(redactSyntax(req.Syntax), reviewed)
 		if err != nil {
-			logger.Ctx(ctx).Warn("redact command for review", zap.String("assetType", in.AssetType), zap.Error(err))
-			results[i] = Result{Outcome: OutcomeFail, Reason: ReasonUnparseable, Extension: name, Version: version}
+			logger.Ctx(ctx).Warn("redact command for review", zap.String("assetType", req.AssetType), zap.Error(err))
+			results[i] = Result{Outcome: OutcomeFail, Reason: aictx.ReviewReasonUnparseable, Extension: name, Version: version}
 			continue
 		}
 		if len(command) > maxLen {
-			results[i] = Result{Outcome: OutcomeFail, Reason: ReasonTooLong, Extension: name, Version: version}
+			results[i] = Result{Outcome: OutcomeFail, Reason: aictx.ReviewReasonTooLong, Extension: name, Version: version}
 			continue
 		}
-		key := extensionCacheKey(name, version, settingsHash, in.AssetType, cacheKeyCommand(in.Command, reviewed))
+		key := extensionCacheKey(name, version, settingsHash, req.AssetType, cacheKeyCommand(req.Command, reviewed))
 		if useCache {
 			if cached, err := s.cache.Get(ctx, key); err != nil {
 				logger.Ctx(ctx).Warn("read command review cache", zap.String("extension", name), zap.Error(err))
@@ -303,84 +282,79 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 				continue
 			}
 		}
-		pending = append(pending, pendingExt{idx: i, key: key, item: Item{AssetType: in.AssetType, Command: command, Syntax: string(in.Syntax)}})
+		pending = append(pending, pendingReview{idx: i, assetType: req.AssetType, command: command, syntax: string(req.Syntax), key: key})
 	}
 
-	var batches [][]pendingExt
-	for start := 0; start < len(pending); start += maxItems {
-		batches = append(batches, pending[start:min(start+maxItems, len(pending))])
-	}
+	calls := s.callAll(ctx, rev, name, pending)
 
-	// 只有调用这一步并行（扩展的实例池最多 maxParallelReviews 个），
-	// 每次调用单独计时，超时重试一次；读写缓存按顺序做。
-	type call struct {
-		out      []ItemResult
-		err      error
-		elapsed  time.Duration
-		attempts int
-	}
-	calls := make([]call, len(batches))
-	sem := make(chan struct{}, maxParallelReviews)
-	var wg sync.WaitGroup
-	for j, batch := range batches {
-		wg.Add(1)
-		go func(j int, batch []pendingExt) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			items := make([]Item, len(batch))
-			for i, p := range batch {
-				items[i] = p.item
-			}
-			startAt := time.Now()
-			for attempt := 1; ; attempt++ {
-				reqCtx, cancel := context.WithTimeout(ctx, timeout)
-				out, err := rev.Review(reqCtx, items)
-				cancel()
-				timedOut := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
-				if !timedOut || attempt == maxAttempts {
-					calls[j] = call{out: out, err: err, elapsed: time.Since(startAt), attempts: attempt}
-					return
-				}
-				logger.Ctx(ctx).Warn("extension command review timed out, retrying", zap.String("extension", name), zap.Int("attempt", attempt))
-			}
-		}(j, batch)
-	}
-	wg.Wait()
-
-	for j, batch := range batches {
+	for j, p := range pending {
 		c := calls[j]
 		err := c.err
 		if err == nil {
-			err = validateAnswer(len(batch), questions, c.out)
+			err = validateAnswer(questions, c.answer)
 		}
 		if err != nil {
-			reason := ReasonInvalidResult
+			reason := aictx.ReviewReasonInvalidResult
 			if errors.Is(err, context.DeadlineExceeded) {
-				reason = ReasonTimeout
+				reason = aictx.ReviewReasonTimeout
 			}
-			logger.Ctx(ctx).Warn("extension command review failed", zap.String("extension", name), zap.String("reason", reason), zap.Error(err))
-			for _, p := range batch {
-				results[p.idx] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version, Duration: c.elapsed, Attempts: c.attempts}
-			}
+			logger.Ctx(ctx).Warn("command review failed", zap.String("extension", name), zap.String("reason", reason), zap.Error(err))
+			results[p.idx] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version, Duration: c.elapsed, Attempts: c.attempts}
 			continue
 		}
-		for i, p := range batch {
-			r := extensionResult(name, version, questions, c.out[i], c.elapsed, c.attempts)
-			results[p.idx] = r
-			if r.Outcome == OutcomeFail || !useCache {
-				continue
-			}
-			if err := s.cache.Put(ctx, p.key, r, cacheTTL); err != nil {
-				logger.Ctx(ctx).Warn("write command review cache", zap.String("extension", name), zap.Error(err))
-			}
+		r := extensionResult(name, version, questions, c.answer, c.elapsed, c.attempts)
+		results[p.idx] = r
+		if r.Outcome == OutcomeFail || !useCache {
+			continue
+		}
+		if err := s.cache.Put(ctx, p.key, r, cacheTTL); err != nil {
+			logger.Ctx(ctx).Warn("write command review cache", zap.String("extension", name), zap.Error(err))
 		}
 	}
 	return results
 }
 
+// reviewCall 是对一条命令调用审核器的结果。
+type reviewCall struct {
+	answer   Answer
+	err      error
+	elapsed  time.Duration
+	attempts int
+}
+
+// callAll 对 pending 里每条命令调用一次审核器，最多 maxParallelReviews 路同时进行（扩展的
+// 实例池大小）；每次调用单独计时，超时重试一次。结果与 pending 一一对应。
+func (s *service) callAll(ctx context.Context, rev Reviewer, name string, pending []pendingReview) []reviewCall {
+	timeout := s.timeout()
+	calls := make([]reviewCall, len(pending))
+	sem := make(chan struct{}, maxParallelReviews)
+	var wg sync.WaitGroup
+	for j, p := range pending {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			startAt := time.Now()
+			for attempt := 1; ; attempt++ {
+				reqCtx, cancel := context.WithTimeout(ctx, timeout)
+				answer, err := rev.Review(reqCtx, p.assetType, p.command, p.syntax)
+				cancel()
+				timedOut := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+				if !timedOut || attempt == maxAttempts {
+					calls[j] = reviewCall{answer: answer, err: err, elapsed: time.Since(startAt), attempts: attempt}
+					return
+				}
+				logger.Ctx(ctx).Warn("command review timed out, retrying", zap.String("extension", name), zap.Int("attempt", attempt))
+			}
+		}()
+	}
+	wg.Wait()
+	return calls
+}
+
 // extensionResult 把审核扩展的回答落成宿主的结果：error 是"没能得到判断"，按审核失败处理。
-func extensionResult(name, version string, questions []Question, r ItemResult, elapsed time.Duration, attempts int) Result {
+func extensionResult(name, version string, questions []Question, r Answer, elapsed time.Duration, attempts int) Result {
 	out := Result{
 		Outcome:   Outcome(r.Outcome),
 		Reason:    r.Reason,
@@ -390,7 +364,7 @@ func extensionResult(name, version string, questions []Question, r ItemResult, e
 		Duration:  elapsed,
 		Attempts:  attempts,
 	}
-	if r.Outcome == ItemError {
+	if r.Outcome == AnswerError {
 		out.Outcome = OutcomeFail
 	}
 	if len(r.Failed) > 0 {

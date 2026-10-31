@@ -11,43 +11,40 @@ type Question struct {
 	Names map[string]string
 }
 
-// Item 是交给审核器的一条命令：已展开、已替换敏感信息，不含资产 ID、名称和配置。
-type Item struct {
-	AssetType string `json:"assetType"`
-	Command   string `json:"command"`
-	Syntax    string `json:"syntax"`
-}
-
 // 审核器对一条命令的回答。error 是"没能得到判断"，按审核失败处理。
 const (
-	ItemPass   = "pass"
-	ItemReject = "reject"
-	ItemError  = "error"
+	AnswerPass   = "pass"
+	AnswerReject = "reject"
+	AnswerError  = "error"
 )
 
-// ItemResult 是审核器对一条命令的回答。Failed 是 reject 时没满足的题目 id，Scores 是它们的
-// 评分（题目 id → 0~1）；Reason 是 error 时的原因。
-type ItemResult struct {
+// Answer 是审核器对一条命令的回答。Failed 是 reject 时没满足的题目 id，Scores 是它们的
+// 评分（题目 id → 0~1）；Reason 是 error 时的原因 id。
+type Answer struct {
 	Outcome string             `json:"outcome"`
 	Failed  []string           `json:"failed,omitempty"`
 	Scores  map[string]float64 `json:"scores,omitempty"`
 	Reason  string             `json:"reason,omitempty"`
 }
 
-// ExtensionReviewer 是要用的审核器。
-type ExtensionReviewer interface {
-	// Identity 是扩展名、版本和设置哈希。设置哈希参与缓存键。
+// Reviewer 是要用的审核器。审核服务对每条要审的命令调用一次 Review。
+type Reviewer interface {
+	// Identity 是扩展名、版本和设置哈希，都参与缓存键。
 	Identity() (name, version, settingsHash string)
-	// Limits 是审核器声明的单批条数和单条命令最大长度。
-	Limits() (maxItems, maxCommandLen int)
-	// Questions 是审核器声明的题目，结果里只回题目 id，宿主按这里的名称显示。
+	// Questions 是审核器声明的题目，回答里只回题目 id，宿主按这里的名称显示。
 	Questions() []Question
-	Review(ctx context.Context, items []Item) ([]ItemResult, error)
+	// MaxCommandLen 是审核器声明的单条命令最大长度，更长的命令不送审。
+	MaxCommandLen() int
+	// Review 审一条命令：assetType 是规范资产类型，command 已展开、已替换敏感信息，
+	// syntax 是命令写法（shell / redis / text）。ctx 带着这一次调用的超时。
+	Review(ctx context.Context, assetType, command, syntax string) (Answer, error)
 }
 
-// ReviewerFunc 找出这次要用的审核器。没有可用的返回 ErrNoReviewer，
+// ReviewerSource 给出这次要用的审核器。没有可用的返回 ErrNoReviewer，
 // 要用的这次不可用返回 ErrReviewerUnavailable。
-type ReviewerFunc func(ctx context.Context) (ExtensionReviewer, error)
+type ReviewerSource interface {
+	Current(ctx context.Context) (Reviewer, error)
+}
 
 // ReviewerInfo 是设置页列出的一个审核器。Usable 为假时 Reason 说明原因；
 // Signed 表示从官方商店安装、签名已校验。
@@ -70,38 +67,26 @@ type State struct {
 	Problem   string         `json:"problem,omitempty"`
 }
 
-// validateAnswer 校验审核器对一批命令的回答：条数与命令一一对应，每条的结果合规、
-// 题目 id 都已声明。任何一条不合规，整批按无效结果失败。
-func validateAnswer(n int, questions []Question, out []ItemResult) error {
-	if len(out) != n {
-		return fmt.Errorf("got %d results for %d commands", len(out), n)
-	}
+// validateAnswer 校验审核器对一条命令的回答：结果合规、题目 id 都已声明、分数在 0~1。
+// 不合规的回答按无效结果失败。
+func validateAnswer(questions []Question, r Answer) error {
 	known := make(map[string]struct{}, len(questions))
 	for _, q := range questions {
 		known[q.ID] = struct{}{}
 	}
-	for i, r := range out {
-		if err := validateItemResult(r, known); err != nil {
-			return fmt.Errorf("results[%d]: %w", i, err)
-		}
-	}
-	return nil
-}
-
-func validateItemResult(r ItemResult, known map[string]struct{}) error {
 	switch r.Outcome {
-	case ItemPass:
+	case AnswerPass:
 		if len(r.Failed) > 0 || r.Reason != "" || len(r.Scores) > 0 {
 			return fmt.Errorf("pass carries a failure")
 		}
-	case ItemReject:
+	case AnswerReject:
 		if len(r.Failed) == 0 {
 			return fmt.Errorf("reject requires failed question ids")
 		}
 		if r.Reason != "" {
 			return fmt.Errorf("reject carries a reason; reasons belong on error")
 		}
-	case ItemError:
+	case AnswerError:
 		if r.Reason == "" {
 			return fmt.Errorf("error requires a reason")
 		}

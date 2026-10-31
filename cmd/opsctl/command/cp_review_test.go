@@ -8,7 +8,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/approval"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 // 多源 cp 的多条主体合进同一个批量确认，审计只有一行：人确认之后，这一行也要带上审核结果，
@@ -26,12 +25,10 @@ func TestRequireCpBatchApprovalKeepsReviewForAudit(t *testing.T) {
 			env := setupOpsctlExecAssets(t)
 			setAssetPermissionMode(t, env, "web-1", policyent.PermissionModeAssisted)
 
-			reviewer := &fakeReviewer{result: command_review_svc.Result{
-				Outcome: command_review_svc.OutcomeReject, Failed: []string{"destructive"},
+			reviewer := &fakeReviewer{result: aictx.ReviewInfo{
+				Outcome: aictx.ReviewReject, Failed: []string{"destructive"},
 			}}
-			origReviewer := command_review_svc.Default()
-			command_review_svc.Register(reviewer)
-			t.Cleanup(func() { command_review_svc.Register(origReviewer) })
+			useReviewer(t, reviewer)
 
 			origSend := cpBatchSendFn
 			cpBatchSendFn = func(items []approval.BatchItem, session string) (ApprovalResult, error) {
@@ -63,12 +60,10 @@ func TestRequireCpBatchApprovalReviewsAllSubjectsInOneBatch(t *testing.T) {
 	env := setupOpsctlExecAssets(t)
 	setAssetPermissionMode(t, env, "web-1", policyent.PermissionModeAssisted)
 
-	reviewer := &fakeReviewer{result: command_review_svc.Result{
-		Outcome: command_review_svc.OutcomeReject, Failed: []string{"destructive"},
+	reviewer := &fakeReviewer{result: aictx.ReviewInfo{
+		Outcome: aictx.ReviewReject, Failed: []string{"destructive"},
 	}}
-	origReviewer := command_review_svc.Default()
-	command_review_svc.Register(reviewer)
-	t.Cleanup(func() { command_review_svc.Register(origReviewer) })
+	useReviewer(t, reviewer)
 
 	origSend := cpBatchSendFn
 	cpBatchSendFn = func(items []approval.BatchItem, session string) (ApprovalResult, error) {

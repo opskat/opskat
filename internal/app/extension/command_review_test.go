@@ -33,13 +33,13 @@ func TestCommandReviewBindingsWithNoReviewer(t *testing.T) {
 	assert.NotNil(t, st.Reviewers, "an empty list must reach the frontend as [], not null")
 	assert.Empty(t, st.Reviewers)
 	assert.Empty(t, st.Active)
-	assert.Equal(t, command_review_svc.ReasonNoReviewer, st.Problem)
+	assert.Equal(t, aictx.ReviewReasonNoReviewer, st.Problem)
 
 	assert.ErrorContains(t, e.SetCommandReviewer("jev-command-review"), "jev-command-review")
 
 	r, err := e.TestCommandReviewer("jev-command-review")
 	require.NoError(t, err)
 	assert.Equal(t, aictx.ReviewFail, r.Outcome)
-	assert.Equal(t, command_review_svc.ReasonReviewerUnavailable, r.Reason)
+	assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, r.Reason)
 	assert.Equal(t, "jev-command-review", r.Extension)
 }

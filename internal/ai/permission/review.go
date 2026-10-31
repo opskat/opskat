@@ -12,7 +12,6 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/asset_svc"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 // applyReviews 按权限模式就地处理 results 里"需要人确认"的结果，不区分资产类型：
@@ -20,18 +19,14 @@ import (
 //   - 辅助审批：模型审核通过就放行，否则仍然问人；
 //   - Autopilot：模型审核通过就放行，否则直接拒绝，不等人。
 //
-// 规则已经放行或拒绝的结果原样保留。需要审核的命令一次交给 ReviewBatch。
+// 规则已经放行或拒绝的结果原样保留。需要审核的命令一次交给审核端口（见 Reviewer）。
 // 标为 Unreviewable 的结果和还会从管道读入内容（PipedInput）的命令只能由人判断，不交给
 // 模型：辅助审批照常问人，Autopilot 直接拒绝。
-// 审核服务没有注册时（未经 bootstrap 的进程）不审核。
+// 没有注入审核端口时，需要审核的命令按审核失败处理（见 SetReviewer）。
 func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx.CheckResult) {
-	reviewer := command_review_svc.Default()
-	if reviewer == nil {
-		return
-	}
 	var idx []int
 	var modes []string
-	var inputs []command_review_svc.Input
+	var pending []ReviewRequest
 	for i, r := range results {
 		if r.Decision != aictx.NeedConfirm {
 			continue
@@ -55,25 +50,26 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 		idx = append(idx, i)
 		modes = append(modes, mode)
 		assetType, syntax := reviewTypeFor(reqs[i].AssetType)
-		inputs = append(inputs, command_review_svc.Input{AssetType: assetType, Command: reqs[i].Command, Syntax: syntax})
+		pending = append(pending, ReviewRequest{AssetType: assetType, Command: reqs[i].Command, Syntax: syntax})
 	}
-	if len(inputs) == 0 {
+	if len(pending) == 0 {
 		return
 	}
-	for k, r := range reviewer.ReviewBatch(ctx, inputs) {
+	for k, info := range reviewCommands(ctx, pending) {
 		i := idx[k]
-		results[i] = applyReview(ctx, reqs[i], modes[k], results[i], r)
+		info.Mode = modes[k]
+		results[i] = applyReview(ctx, reqs[i], results[i], &info)
 	}
 }
 
-// applyReview 把一条审核结果按模式落成权限结果。
-func applyReview(ctx context.Context, req PermissionRequest, mode string, result aictx.CheckResult, r command_review_svc.Result) aictx.CheckResult {
-	info := r.Info(mode)
+// applyReview 把一条审核结果按模式（info.Mode）落成权限结果。
+func applyReview(ctx context.Context, req PermissionRequest, result aictx.CheckResult, info *aictx.ReviewInfo) aictx.CheckResult {
+	mode := info.Mode
 	logger.Ctx(ctx).Info("permission review applied",
 		zap.Int64("assetID", req.AssetID), zap.String("assetType", req.AssetType),
-		zap.String("mode", mode), zap.String("outcome", string(info.Outcome)))
+		zap.String("mode", mode), zap.String("outcome", string(info.Outcome)), zap.String("reason", info.Reason))
 
-	if r.Outcome == command_review_svc.OutcomePass {
+	if info.Outcome == aictx.ReviewPass {
 		source := aictx.SourceAssistedAllow
 		if mode == policyent.PermissionModeAutopilot {
 			source = aictx.SourceAutopilotAllow
@@ -97,10 +93,10 @@ func reviewedMode(mode string) bool {
 	return mode == policyent.PermissionModeAssisted || mode == policyent.PermissionModeAutopilot
 }
 
-// ReviewsCommands 判断这台资产上原本要问人的命令会不会交给模型审核：生效的权限模式需要审核，
-// 并且审核服务已注册。opsctl exec 据此决定要不要先看一眼管道里有没有内容（见 PipedInput）。
+// ReviewsCommands 判断这台资产上原本要问人的命令会不会交给模型审核：生效的权限模式需要审核。
+// opsctl exec 据此决定要不要先看一眼管道里有没有内容（见 PipedInput）。
 func ReviewsCommands(ctx context.Context, assetID int64) bool {
-	return command_review_svc.Default() != nil && reviewedMode(resolvePermissionMode(ctx, assetID))
+	return reviewedMode(resolvePermissionMode(ctx, assetID))
 }
 
 // resolvePermissionMode 取生效的权限模式：资产自己的设置优先，没设置时沿分组链向上找
@@ -188,11 +184,11 @@ func pipedInputDenyMessage(ctx context.Context) string {
 // reviewTypeFor 返回交给模型审核的资产类型和命令写法。调用方可能传别名（opsctl exec 传的是
 // 审批类型 exec、sql），这里统一换成注册时的规范类型：模型看到的是真实的资产类型，缓存键也
 // 不会因入口不同而分成几份。没有注册的类型（扩展类型）原样使用，按纯文本处理。
-func reviewTypeFor(assetType string) (string, command_review_svc.Syntax) {
+func reviewTypeFor(assetType string) (string, Syntax) {
 	if handler, ok := permissionTypeFor(assetType); ok {
 		return handler.canonical, handler.reviewSyntax
 	}
-	return assetType, command_review_svc.SyntaxText
+	return assetType, SyntaxText
 }
 
 // ReviewSummary 把审核结果写成一句话，给审批提示和拒绝信息用，例如"模型审核未通过（可能中断服务）"。
@@ -249,25 +245,25 @@ var (
 // failReasons 是各种审核失败原因的说明和下一步。只有临时性的原因（超时、服务不可用）才让
 // 调用方稍后重试；命令过长、无法解析和设置问题原样重试结果一样，要告诉它该怎么改，或者留给用户。
 var failReasons = map[string]failReasonText{
-	command_review_svc.ReasonNoReviewer:    {bilingual{"no command review extension is available", "没有可用的命令审核扩展"}, fixSettings},
-	command_review_svc.ReasonNotConfigured: {bilingual{"the command review extension is not configured", "命令审核扩展还没配置好"}, fixSettings},
-	command_review_svc.ReasonInvalidAPIKey: {bilingual{"the command review API key is invalid", "命令审核的 API key 无效"}, fixSettings},
-	command_review_svc.ReasonTimeout:       {bilingual{"timed out", "超时"}, retryLater},
-	command_review_svc.ReasonUnavailable:   {bilingual{"service unavailable", "服务不可用"}, retryLater},
-	command_review_svc.ReasonTooLong: {bilingual{"command too long", "命令过长"}, bilingual{
+	aictx.ReviewReasonNoReviewer:    {bilingual{"no command review extension is available", "没有可用的命令审核扩展"}, fixSettings},
+	aictx.ReviewReasonNotConfigured: {bilingual{"the command review extension is not configured", "命令审核扩展还没配置好"}, fixSettings},
+	aictx.ReviewReasonInvalidAPIKey: {bilingual{"the command review API key is invalid", "命令审核的 API key 无效"}, fixSettings},
+	aictx.ReviewReasonTimeout:       {bilingual{"timed out", "超时"}, retryLater},
+	aictx.ReviewReasonUnavailable:   {bilingual{"service unavailable", "服务不可用"}, retryLater},
+	aictx.ReviewReasonTooLong: {bilingual{"command too long", "命令过长"}, bilingual{
 		"Retrying it as-is gives the same result: shorten it or split it into several commands.",
 		"原样重试结果一样，把命令缩短或拆成几条再执行。",
 	}},
-	command_review_svc.ReasonUnparseable: {bilingual{"the command cannot be parsed", "命令无法解析"}, bilingual{
+	aictx.ReviewReasonUnparseable: {bilingual{"the command cannot be parsed", "命令无法解析"}, bilingual{
 		"Retrying it as-is gives the same result: fix the command syntax first.",
 		"原样重试结果一样，先修正命令语法。",
 	}},
-	command_review_svc.ReasonUndecodable: {bilingual{"the command hides the code it runs behind decoding", "命令把要执行的内容藏在解码后面"}, bilingual{
+	aictx.ReviewReasonUndecodable: {bilingual{"the command hides the code it runs behind decoding", "命令把要执行的内容藏在解码后面"}, bilingual{
 		"Retrying it as-is gives the same result: send the script itself instead of wrapping it so it can be reviewed, or leave the command to the user.",
 		"原样重试结果一样，把要执行的脚本直接写出来再送审，或者把命令留给用户处理。",
 	}},
-	command_review_svc.ReasonReviewerUnavailable: {bilingual{"the selected review extension is unavailable", "选中的审核扩展不可用"}, fixSettings},
-	command_review_svc.ReasonInvalidResult: {bilingual{"the review extension returned an invalid result", "审核扩展返回了无效的结果"}, bilingual{
+	aictx.ReviewReasonReviewerUnavailable: {bilingual{"the selected review extension is unavailable", "选中的审核扩展不可用"}, fixSettings},
+	aictx.ReviewReasonInvalidResult: {bilingual{"the review extension returned an invalid result", "审核扩展返回了无效的结果"}, bilingual{
 		"Retrying will not help until the review extension is fixed or replaced; leave the command to the user.",
 		"审核扩展修好或换掉之前重试也不会成功，把命令留给用户处理。",
 	}},
@@ -278,5 +274,5 @@ func failReasonOf(reason string) failReasonText {
 	if t, ok := failReasons[reason]; ok {
 		return t
 	}
-	return failReasons[command_review_svc.ReasonUnavailable]
+	return failReasons[aictx.ReviewReasonUnavailable]
 }

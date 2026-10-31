@@ -11,7 +11,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 type permissionCheckFunc func(context.Context, int64, string) aictx.CheckResult
@@ -31,10 +30,9 @@ type permissionTypeHandler struct {
 	canonical     string
 	approvalType  string
 	grantPatterns GrantPatternsFunc
-	// reviewSyntax 是命令的写法，模型审核前据此找出命令里的敏感信息（见
-	// command_review_svc.RedactSensitive）。零值 SyntaxText 按纯文本处理，适合 SQL、路径和
-	// 不经过 shell 执行的命令 DSL。
-	reviewSyntax command_review_svc.Syntax
+	// reviewSyntax 是命令的写法，随命令交给审核端口（见 Syntax）。SyntaxText 按纯文本处理，
+	// 适合 SQL、路径和不经过 shell 执行的命令 DSL；扩展类型都按纯文本。
+	reviewSyntax Syntax
 	check        permissionCheckFunc
 	// classify is set only for types registered through RegisterPolicyCheck that
 	// opted in (extension types): it lets HandleConfirm show the check_policy
@@ -54,7 +52,7 @@ var permissionTypes = make(map[string]*permissionTypeHandler)
 // genericRuleLanding（组通用层）也读这一列。
 var commandShape *shapeLanding
 
-func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, reviewSyntax command_review_svc.Syntax, check permissionCheckFunc, aliases ...string) {
+func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, reviewSyntax Syntax, check permissionCheckFunc, aliases ...string) {
 	handler := &permissionTypeHandler{
 		canonical:     canonical,
 		approvalType:  approvalType,
@@ -139,6 +137,7 @@ func RegisterPolicyCheck(canonical string, check PolicyCheckFunc, classify Class
 	return addPermissionType(&permissionTypeHandler{
 		canonical:    canonical,
 		approvalType: canonical,
+		reviewSyntax: SyntaxText,
 		check:        permissionCheckFunc(check),
 		classify:     classify,
 	})
@@ -187,21 +186,21 @@ func SupportsGrantApproval(approvalType string) bool {
 }
 
 func init() {
-	registerPermissionType(asset_entity.AssetTypeSSH, "exec", shellGrantPatterns, command_review_svc.SyntaxShell, checkCommandPolicyPermission, "exec")
-	registerPermissionType(asset_entity.AssetTypeSerial, "serial", nil, command_review_svc.SyntaxShell, checkCommandPolicyPermission)
-	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, command_review_svc.SyntaxText, checkDatabasePermission, "sql", "db")
-	registerPermissionType(asset_entity.AssetTypeRedis, "redis", nil, command_review_svc.SyntaxRedis, checkRedisPermission)
-	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", nil, command_review_svc.SyntaxText, checkEtcdPermission)
-	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", nil, command_review_svc.SyntaxText, checkMongoDBPermission, "mongo")
-	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, command_review_svc.SyntaxText, checkKafkaPermission)
-	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, command_review_svc.SyntaxShell, checkK8sPermission, "kubernetes", "kube")
-	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, command_review_svc.SyntaxText, checkOSSPermission)
+	registerPermissionType(asset_entity.AssetTypeSSH, "exec", shellGrantPatterns, SyntaxShell, checkCommandPolicyPermission, "exec")
+	registerPermissionType(asset_entity.AssetTypeSerial, "serial", nil, SyntaxShell, checkCommandPolicyPermission)
+	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, SyntaxText, checkDatabasePermission, "sql", "db")
+	registerPermissionType(asset_entity.AssetTypeRedis, "redis", nil, SyntaxRedis, checkRedisPermission)
+	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", nil, SyntaxText, checkEtcdPermission)
+	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", nil, SyntaxText, checkMongoDBPermission, "mongo")
+	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, SyntaxText, checkKafkaPermission)
+	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, SyntaxShell, checkK8sPermission, "kubernetes", "kube")
+	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, SyntaxText, checkOSSPermission)
 	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，主体是远端路径
 	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
 	// 主体转义成"只匹配它自己"的规则（决策 D21），因为路径里的 `* ? [` 可以是字面文件名。
-	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, command_review_svc.SyntaxText, checkFileTransferPermission)
-	registerPermissionType(GrantToolCpRead, "cp", cpGrantPatterns, command_review_svc.SyntaxText, checkFileTransferReadPermission)
-	registerPermissionType(GrantToolCpWrite, "cp", cpGrantPatterns, command_review_svc.SyntaxText, checkFileTransferWritePermission)
+	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, SyntaxText, checkFileTransferPermission)
+	registerPermissionType(GrantToolCpRead, "cp", cpGrantPatterns, SyntaxText, checkFileTransferReadPermission)
+	registerPermissionType(GrantToolCpWrite, "cp", cpGrantPatterns, SyntaxText, checkFileTransferWritePermission)
 
 	// 永久规则落点与上面的 grantPatterns 并列注册（spec 决策 11、15）：一个类型一次
 	// 注册、同时覆盖 allow 与 deny 两侧、按 holder 取 Get/SetXxxPolicy 对。
