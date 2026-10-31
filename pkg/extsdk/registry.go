@@ -284,7 +284,7 @@ func (r *ToolReg[T]) Large(name string) *ToolReg[T] {
 // PageOnly declares the tool is called only by the extension's pages: it has no
 // policy action, is left out of help and exec refuses it. Every tool declares
 // exactly one of this and a policy action (Policy, PolicyFunc, PolicyResources);
-// declaring both fails describe, as does declaring neither,, naming the tool.
+// declaring both fails describe, as does declaring neither, naming the tool.
 func (r *ToolReg[T]) PageOnly() *ToolReg[T] {
 	if r.e.declaresPolicy() {
 		failRegistration("opskat: tool %q already declares a policy action; PageOnly is exclusive with it", r.e.name)
