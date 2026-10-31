@@ -56,13 +56,35 @@ var extensionHost struct {
 }
 
 func activateExtension(ctx context.Context, extName string) error {
+	return extensionService().Activate(ctx, extName)
+}
+
+// extensionService 是本进程的扩展宿主，第一次用到时才建。建它不加载任何扩展。
+func extensionService() *extension_svc.Service {
 	extensionHost.mu.Lock()
+	defer extensionHost.mu.Unlock()
 	if extensionHost.svc == nil {
 		extensionHost.svc = newExtensionHost()
 	}
-	svc := extensionHost.svc
-	extensionHost.mu.Unlock()
-	return svc.Activate(ctx, extName)
+	return extensionHost.svc
+}
+
+// reviewerEligibilityFn 判断审核器扩展能不能用（安装来源与包摘要，不运行扩展代码）。
+// 变量化同上一套路。
+var reviewerEligibilityFn = func(ctx context.Context, extName string) (bool, error) {
+	return extensionService().ReviewerEligibility(ctx, extName)
+}
+
+// 命令审核器：opsctl 启动时只仅描述接入审核器扩展，审核器注册表在某条命令真要送审时
+// 才做资格检查，通过后经与 opsctl exec 执行扩展工具同一条激活路径（activateExtensionFn）
+// 激活那一个扩展，命令结束由 releaseExtensions 释放；不需要审核的命令不会走到这里。
+func init() {
+	reviewerreg.Default().SetEligibility(func(ctx context.Context, extName string) (bool, error) {
+		return reviewerEligibilityFn(ctx, extName)
+	})
+	reviewerreg.Default().SetActivator(func(ctx context.Context, extName string) error {
+		return activateExtensionFn(ctx, extName)
+	})
 }
 
 // newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：

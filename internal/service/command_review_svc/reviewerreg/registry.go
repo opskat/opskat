@@ -12,6 +12,7 @@ package reviewerreg
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -32,6 +33,16 @@ type HostToolCaller func(ctx context.Context, extName, tool string, args json.Ra
 // the review cache: changed settings never hit the old verdicts.
 type SettingsHasher func(ctx context.Context, extName string) (string, error)
 
+// Eligibility judges whether extName may act as the command reviewer — recorded
+// install source, package digest recomputed against what is installed, release or
+// not — without running its code (extension_svc.Service.ReviewerEligibility).
+// signed reports an official-store install; an error is the reason it may not.
+type Eligibility func(ctx context.Context, extName string) (signed bool, err error)
+
+// Activator brings a describe-only candidate up as a running extension in this
+// process (opsctl: the existing activation path, released at command end).
+type Activator func(ctx context.Context, extName string) error
+
 // Registry is the reviewer candidates the commandReviewer contribution point
 // attaches.
 type Registry struct {
@@ -39,6 +50,8 @@ type Registry struct {
 
 	mu         sync.Mutex
 	hash       SettingsHasher
+	eligible   Eligibility
+	activate   Activator
 	candidates map[string]*candidate
 }
 
@@ -62,6 +75,22 @@ func (r *Registry) SetSettingsHasher(h SettingsHasher) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.hash = h
+}
+
+// SetEligibility wires the eligibility check in. Without one nothing is eligible:
+// a reviewer is never used unchecked.
+func (r *Registry) SetEligibility(e Eligibility) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.eligible = e
+}
+
+// SetActivator wires in the way a describe-only candidate is brought up. A process
+// that runs every enabled extension itself (the desktop app) sets none.
+func (r *Registry) SetActivator(a Activator) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.activate = a
 }
 
 // candidate is one extension contributing a reviewer.
@@ -150,7 +179,7 @@ func (s *Source) Current(ctx context.Context) (command_review_svc.Reviewer, erro
 	if err != nil {
 		return nil, err
 	}
-	return s.reg.reviewer(ctx, c)
+	return s.reg.ready(ctx, c)
 }
 
 // Reviewer is the candidate named name, selected or not (Settings › Extensions
@@ -158,7 +187,7 @@ func (s *Source) Current(ctx context.Context) (command_review_svc.Reviewer, erro
 func (s *Source) Reviewer(ctx context.Context, name string) (command_review_svc.Reviewer, error) {
 	for _, c := range s.reg.snapshot() {
 		if c.name == name {
-			return s.reg.reviewer(ctx, c)
+			return s.reg.ready(ctx, c)
 		}
 	}
 	return nil, fmt.Errorf("%w: %q contributes no command reviewer", command_review_svc.ErrReviewerUnavailable, name)
@@ -168,28 +197,34 @@ func (s *Source) Reviewer(ctx context.Context, name string) (command_review_svc.
 // candidate (display names in lang), the selection if it is a candidate, and the
 // reviewer the rules pick when it can review here — else the problem, named as
 // the review failure it causes.
-func (s *Source) State(_ context.Context, lang string) command_review_svc.State {
+func (s *Source) State(ctx context.Context, lang string) command_review_svc.State {
 	cands := s.reg.snapshot()
 	// It crosses IPC to the frontend: an empty list must be [] there, not null.
 	st := command_review_svc.State{Reviewers: make([]command_review_svc.ReviewerInfo, 0, len(cands))}
 	sel := s.selected()
+	usable := make(map[string]bool, len(cands))
 	for _, c := range cands {
 		info := command_review_svc.ReviewerInfo{
 			Name: c.name, DisplayName: c.translate(lang, c.displayName), Version: c.version, Usable: c.running,
 		}
 		if !c.running {
 			info.Reason = errNotRunning(c).Error()
+		} else if signed, err := s.reg.checkEligible(ctx, c.name); err != nil {
+			info.Usable, info.Reason = false, err.Error()
+		} else {
+			info.Signed = signed
 		}
 		if c.name == sel {
 			st.Selected = sel
 		}
+		usable[c.name] = info.Usable
 		st.Reviewers = append(st.Reviewers, info)
 	}
 	c, err := s.pick(cands)
 	switch {
 	case err != nil:
 		st.Problem = aictx.ReviewReasonNoReviewer
-	case !c.running:
+	case !c.running || !usable[c.name]:
 		st.Problem = aictx.ReviewReasonReviewerUnavailable
 	default:
 		st.Active = c.name
@@ -199,6 +234,59 @@ func (s *Source) State(_ context.Context, lang string) command_review_svc.State 
 
 func errNotRunning(c *candidate) error {
 	return fmt.Errorf("%w: extension %s is not running in this process", command_review_svc.ErrReviewerUnavailable, c.name)
+}
+
+// checkEligible runs the eligibility check; no check wired in means not eligible.
+func (r *Registry) checkEligible(ctx context.Context, name string) (bool, error) {
+	r.mu.Lock()
+	check := r.eligible
+	r.mu.Unlock()
+	if check == nil {
+		return false, fmt.Errorf("command reviewer %q cannot be checked: no eligibility check is wired in", name)
+	}
+	return check(ctx, name)
+}
+
+// ready is c eligible and running here, ready to review. An ineligible candidate is
+// refused before anything of it runs; a describe-only one is activated first when
+// this process can (opsctl) and checked again once activated, so the package that
+// runs is the one that was checked.
+func (r *Registry) ready(ctx context.Context, c *candidate) (command_review_svc.Reviewer, error) {
+	refuse := func(err error) error {
+		return fmt.Errorf("%w: %s: %w", command_review_svc.ErrReviewerUnavailable, c.name, err)
+	}
+	if _, err := r.checkEligible(ctx, c.name); err != nil {
+		return nil, refuse(err)
+	}
+	if !c.running {
+		r.mu.Lock()
+		activate := r.activate
+		r.mu.Unlock()
+		if activate == nil {
+			return nil, errNotRunning(c)
+		}
+		if err := activate(ctx, c.name); err != nil {
+			return nil, refuse(err)
+		}
+		c = r.running(c.name)
+		if c == nil {
+			return nil, refuse(errors.New("activation did not bring the reviewer up"))
+		}
+		if _, err := r.checkEligible(ctx, c.name); err != nil {
+			return nil, refuse(err)
+		}
+	}
+	return r.reviewer(ctx, c)
+}
+
+// running is the candidate named name if it is attached with a running guest.
+func (r *Registry) running(name string) *candidate {
+	for _, c := range r.snapshot() {
+		if c.name == name && c.running {
+			return c
+		}
+	}
+	return nil
 }
 
 // reviewer is c ready to review: running here, with its settings hash read now.

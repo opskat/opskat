@@ -4,6 +4,7 @@ package extension
 import (
 	"context"
 
+	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/extstore_svc"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -47,8 +48,13 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Extensi
 	return e
 }
 
-// SetService main.go 在创建 extension_svc.Service 后注入。
-func (e *Extension) SetService(svc *extension_svc.Service) { e.service = svc }
+// SetService main.go 在创建 extension_svc.Service 后注入。桌面端运行所有已启用的扩展，
+// 审核器注册表据此用同一个服务判断审核器的安装来源与包摘要（opsctl 在 cmd/opsctl/command
+// 里接同一个判断，另加按需激活）。
+func (e *Extension) SetService(svc *extension_svc.Service) {
+	e.service = svc
+	reviewerreg.Default().SetEligibility(svc.ReviewerEligibility)
+}
 
 // Service 返回当前持有的 extension_svc.Service（main.go 需要它去做附加配置）。
 func (e *Extension) Service() *extension_svc.Service { return e.service }

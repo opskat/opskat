@@ -340,6 +340,7 @@ func TestService(t *testing.T) {
 
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-upgrade").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stateRepo.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // a refused install restores the missing record
 
 			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), approveInstall)
 			So(err, ShouldBeNil)
@@ -363,6 +364,7 @@ func TestService(t *testing.T) {
 			So(svc.Init(ctx), ShouldBeNil)
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stateRepo.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // a refused install restores the missing record
 
 			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)
@@ -383,6 +385,7 @@ func TestService(t *testing.T) {
 			So(svc.Init(ctx), ShouldBeNil)
 			stateRepo.EXPECT().Find(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stateRepo.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // a refused install restores the missing record
 
 			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)
@@ -414,6 +417,7 @@ func TestService(t *testing.T) {
 			So(svc.Init(ctx), ShouldBeNil)
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stateRepo.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // a refused install restores the missing record
 
 			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)

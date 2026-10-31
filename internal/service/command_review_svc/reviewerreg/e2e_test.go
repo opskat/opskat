@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -25,10 +26,12 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_data_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_settings_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
+	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
 	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -71,6 +74,7 @@ type reviewHost struct {
 	reg     *reviewerreg.Registry
 	reviews command_review_svc.Service
 	source  *reviewerreg.Source
+	wasm    string // the installed fixture's module on disk
 }
 
 const (
@@ -83,7 +87,7 @@ func newReviewHost(t *testing.T, timeout time.Duration) *reviewHost {
 	ctx := context.Background()
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "opskat.db")), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, gdb.AutoMigrate(&extension_settings_entity.ExtensionSettings{}, &extension_data_entity.ExtensionData{}))
+	require.NoError(t, gdb.AutoMigrate(&extension_settings_entity.ExtensionSettings{}, &extension_data_entity.ExtensionData{}, &extension_state_entity.ExtensionState{}))
 	db.SetDefault(gdb)
 	prevCred := credential_svc.Default()
 	credential_svc.SetDefault(credential_svc.New("reviewer-host-test", []byte("0123456789abcdef")))
@@ -109,8 +113,16 @@ func newReviewHost(t *testing.T, timeout time.Duration) *reviewHost {
 		return extension.NewDefaultHostProvider(h.svc.HostConfig(name))
 	}, extension.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint(), h.reg.Point())...), zap.NewNop())
 	t.Cleanup(func() { h.mgr.Close(ctx) })
-	h.svc = extension_svc.New(h.mgr, nil, nil, extension_settings_repo.NewExtensionSettings(), nil, zap.NewNop(), nil, nil)
+	h.svc = extension_svc.New(h.mgr, extension_state_repo.NewExtensionState(), nil, extension_settings_repo.NewExtensionSettings(), nil, zap.NewNop(), nil, nil)
 	h.reg.SetSettingsHasher(h.svc.SettingsHash)
+	h.reg.SetEligibility(h.svc.ReviewerEligibility)
+	// The fixture counts as a store install of exactly the files on disk.
+	digest, err := extension_svc.PackageSHA256(dir, "main.wasm")
+	require.NoError(t, err)
+	require.NoError(t, extension_state_repo.NewExtensionState().Create(ctx, &extension_state_entity.ExtensionState{
+		Name: extensiontest.ReviewerFixtureName, Enabled: true, Source: extension_svc.InstallOriginStore, PackageSHA256: digest,
+	}))
+	h.wasm = filepath.Join(dir, "main.wasm")
 
 	_, err = h.mgr.LoadExtension(ctx, dir)
 	require.NoError(t, err)
@@ -140,7 +152,7 @@ func TestReviewThroughTheFixtureReviewer(t *testing.T) {
 	t.Run("the fixture is the only candidate and in use", func(t *testing.T) {
 		st := h.source.State(context.Background(), "en")
 		require.Len(t, st.Reviewers, 1)
-		assert.Equal(t, command_review_svc.ReviewerInfo{Name: "fixture-reviewer", DisplayName: "Reviewer Fixture", Version: "1.0.0", Usable: true}, st.Reviewers[0])
+		assert.Equal(t, command_review_svc.ReviewerInfo{Name: "fixture-reviewer", DisplayName: "Reviewer Fixture", Version: "1.0.0", Usable: true, Signed: true}, st.Reviewers[0])
 		assert.Equal(t, "fixture-reviewer", st.Active)
 	})
 
@@ -203,6 +215,24 @@ func TestReviewThroughTheFixtureReviewer(t *testing.T) {
 		assert.Equal(t, aictx.Deny, autopilot.Decision)
 		assert.Equal(t, aictx.ReviewReasonNoReviewer, autopilot.Review.Reason)
 	})
+}
+
+// The package digest is recomputed before the reviewer is used: a module swapped on
+// disk after install fails the review (Autopilot denies) without its tool running.
+func TestSwappedPackageFailsTheReviewWithoutRunningIt(t *testing.T) {
+	h := newReviewHost(t, 3*time.Second)
+	require.NoError(t, os.WriteFile(h.wasm, []byte("swapped"), 0o600))
+
+	autopilot := h.check(autopilotAsset, "systemctl status sshd")
+
+	assert.Equal(t, aictx.Deny, autopilot.Decision)
+	require.NotNil(t, autopilot.Review)
+	assert.Equal(t, aictx.ReviewFail, autopilot.Review.Outcome)
+	assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, autopilot.Review.Reason)
+	st := h.source.State(context.Background(), "en")
+	require.Len(t, st.Reviewers, 1)
+	assert.False(t, st.Reviewers[0].Usable)
+	assert.Contains(t, st.Reviewers[0].Reason, "digest")
 }
 
 // A reviewer call that runs past the review timeout fails the review as a

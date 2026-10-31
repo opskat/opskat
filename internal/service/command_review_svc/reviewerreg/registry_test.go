@@ -215,6 +215,7 @@ func newRegistry(t *testing.T, host *fakeHost) (*Registry, *extension.Contributi
 	t.Helper()
 	reg := New(host.call)
 	reg.SetSettingsHasher(func(_ context.Context, ext string) (string, error) { return "hash-of-" + ext, nil })
+	reg.SetEligibility(func(context.Context, string) (bool, error) { return false, nil }) // eligible, unsigned
 	return reg, extension.NewContributionRegistry(reg.Point(), passPoint(extwire.KeyTools))
 }
 

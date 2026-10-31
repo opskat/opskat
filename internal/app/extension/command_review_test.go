@@ -44,6 +44,9 @@ func newReviewBindings(t *testing.T) *Extension {
 		_, err = bootstrap.LoadConfig(dir)
 		require.NoError(t, err)
 	})
+	// The eligibility check is the service's; these tests stand in an eligible, unsigned one.
+	reviewerreg.Default().SetEligibility(func(context.Context, string) (bool, error) { return false, nil })
+	t.Cleanup(func() { reviewerreg.Default().SetEligibility(nil) })
 	cfg := bootstrap.GetConfig()
 	cfg.CommandReviewExtension = ""
 	require.NoError(t, bootstrap.SaveConfig(cfg))

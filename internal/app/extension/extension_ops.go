@@ -307,14 +307,15 @@ func (e *Extension) ReloadExtensions() error {
 //
 // The path itself is deliberately the same one the "install from directory"
 // button takes — one install implementation, so a dev build cannot load through
-// a laxer route than a shipped one. Only where the confirm is shown differs:
+// a laxer route than a shipped one. Only the recorded install source (dev) and
+// where the confirm is shown differ:
 // confirm is `opsctl ext dev`'s approval dialog instead of the app-wide install
 // confirm, and the commit re-checks the installed version it approved.
 func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
 	if e.service == nil {
 		return "", "", fmt.Errorf("extension system not initialized")
 	}
-	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, confirm)
+	manifest, err := e.service.InstallDev(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, confirm)
 	if err != nil {
 		return "", "", err
 	}
