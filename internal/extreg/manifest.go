@@ -92,7 +92,7 @@ func ManifestOf(m *extension.Manifest) (*Manifest, error) {
 			I18n:           at.I18n,
 			ConfigSchema:   at.ConfigSchema,
 			Connection:     at.Connection,
-			Auth:           authDef(at.Auth),
+			Auth:           AuthDefOf(at.Auth),
 			TestConnection: at.TestConnection,
 		})
 	}
@@ -169,7 +169,7 @@ func (m *Manifest) Localized(tr func(key string) string) *Manifest {
 		out.AssetTypes = make([]AssetTypeDef, len(m.AssetTypes))
 		for i, at := range m.AssetTypes {
 			at.I18n = extwire.I18nName{Name: tr(at.I18n.Name)}
-			at.ConfigSchema = localizeConfigSchema(at.ConfigSchema, tr)
+			at.ConfigSchema = LocalizeConfigSchema(at.ConfigSchema, tr)
 			out.AssetTypes[i] = at
 		}
 	}
@@ -212,8 +212,8 @@ func (m *Manifest) Localized(tr func(key string) string) *Manifest {
 	return &out
 }
 
-// localizeConfigSchema translates title, placeholder, description and enumLabels fields in a JSON Schema.
-func localizeConfigSchema(schema map[string]any, tr func(string) string) map[string]any {
+// LocalizeConfigSchema translates title, placeholder, description and enumLabels fields in a JSON Schema.
+func LocalizeConfigSchema(schema map[string]any, tr func(string) string) map[string]any {
 	if schema == nil {
 		return nil
 	}
@@ -244,7 +244,7 @@ func localizeConfigSchema(schema map[string]any, tr func(string) string) map[str
 		newProps := make(map[string]any, len(props))
 		for name, propVal := range props {
 			if propMap, ok := propVal.(map[string]any); ok {
-				newProps[name] = localizeConfigSchema(propMap, tr)
+				newProps[name] = LocalizeConfigSchema(propMap, tr)
 			} else {
 				newProps[name] = propVal
 			}

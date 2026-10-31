@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo/mock_extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo/mock_extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
@@ -257,12 +258,13 @@ func TestService(t *testing.T) {
 
 		stateRepo := mock_extension_state_repo.NewMockExtensionStateRepo(ctrl)
 		dataRepo := mock_extension_data_repo.NewMockExtensionDataRepo(ctrl)
+		settingsRepo := mock_extension_settings_repo.NewMockExtensionSettingsRepo(ctrl)
 		logger := zap.NewNop()
 
 		var reloadCalled int
 		svc := New(
 			newTestManager(dir),
-			stateRepo, dataRepo, nil, logger,
+			stateRepo, dataRepo, settingsRepo, nil, logger,
 			func() { reloadCalled++ },
 			nil, // snippetHook=nil: existing tests don't exercise snippet integration
 		)
@@ -484,6 +486,7 @@ func TestService(t *testing.T) {
 
 			stateRepo.EXPECT().Delete(gomock.Any(), "ext-f").Return(nil)
 			dataRepo.EXPECT().DeleteAll(gomock.Any(), "ext-f").Return(nil)
+			settingsRepo.EXPECT().Delete(gomock.Any(), "ext-f").Return(nil)
 
 			err = svc.Uninstall(ctx, "ext-f", true, false)
 			So(err, ShouldBeNil)
@@ -544,7 +547,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			writeTestExtensionWithSnippets(stub, sourceDir, "kafka-ext", "kafka-ext", "list-topics")
 
 			mgr := newTestManager(targetDir)
-			svc := New(mgr, stateRepo, dataRepo, nil, logger,
+			svc := New(mgr, stateRepo, dataRepo, nil, nil, logger,
 				func() {}, hook)
 			defer closeService(ctx, svc)
 
@@ -570,7 +573,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			writeTestExtensionWithSnippets(stub, targetDir, "kafka-a", "kafka-a", "k1")
 
 			mgr := newTestManager(targetDir)
-			svc := New(mgr, stateRepo, dataRepo, nil, logger,
+			svc := New(mgr, stateRepo, dataRepo, nil, nil, logger,
 				func() {}, hook)
 			defer closeService(ctx, svc)
 
@@ -604,7 +607,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			writeTestExtensionWithSnippets(stub, targetDir, "kafka-x", "kafka-x", "k1")
 
 			mgr := newTestManager(targetDir)
-			svc := New(mgr, stateRepo, dataRepo, nil, logger,
+			svc := New(mgr, stateRepo, dataRepo, nil, nil, logger,
 				func() {}, hook)
 			defer closeService(ctx, svc)
 
@@ -630,7 +633,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			writeTestExtension(stub, sourceDir, "simple")
 
 			mgr := newTestManager(targetDir)
-			svc := New(mgr, stateRepo, dataRepo, nil, logger,
+			svc := New(mgr, stateRepo, dataRepo, nil, nil, logger,
 				func() {}, nil)
 			defer closeService(ctx, svc)
 

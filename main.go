@@ -40,6 +40,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
@@ -424,12 +425,13 @@ func initExtensionSystem(
 		// is gone, the cache must be dropped instead of reused on the next open.
 		extension.RegisterHTTPCacheInvalidator(extName, provider)
 		return provider
-	}, extpkg.NewContributionRegistry(extreg.Points()...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
+	}, extpkg.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint())...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
 
 	extSvc = extension_svc.New(
 		mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
+		extension_settings_repo.ExtensionSettings(),
 		asset_repo.Asset(),
 		logger.Default(),
 		func() { wailsRuntime.EventsEmit(wctx, "ext:reload", nil) },

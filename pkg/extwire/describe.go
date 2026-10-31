@@ -20,8 +20,8 @@ import (
 // extension contributes nothing to is absent.
 //
 // Contributes stays raw here because each contribution point decodes its own
-// entry: the typed shapes are AssetType, Tool, Policy, Snippets, Pages and
-// dbdriver.Descriptor, under the Key* constants.
+// entry: the typed shapes are AssetType, Tool, Policy, Snippets, Pages,
+// dbdriver.Descriptor and Settings, under the Key* constants.
 type Describe struct {
 	Icon        string                     `json:"icon,omitempty"`
 	I18n        I18n                       `json:"i18n"`
@@ -42,6 +42,8 @@ const (
 	KeyPages = "pages"
 	// KeyDatabaseDrivers holds []dbdriver.Descriptor.
 	KeyDatabaseDrivers = "databaseDrivers"
+	// KeySettings holds Settings.
+	KeySettings = "settings"
 )
 
 // I18n is the extension's display name and description, as i18n keys resolved

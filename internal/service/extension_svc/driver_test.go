@@ -85,7 +85,7 @@ func newDriverFixture(t *testing.T) *driverFixture {
 	f.state.EXPECT().Find(gomock.Any(), gomock.Any()).Return(nil, gorm.ErrRecordNotFound).AnyTimes()
 	f.state.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	f.state.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	f.svc = New(newTestManager(f.dir), f.state, mock_extension_data_repo.NewMockExtensionDataRepo(ctrl), f.assets,
+	f.svc = New(newTestManager(f.dir), f.state, mock_extension_data_repo.NewMockExtensionDataRepo(ctrl), nil, f.assets,
 		zap.NewNop(), func() { f.reloads++ }, nil)
 	t.Cleanup(func() {
 		for _, name := range f.svc.Bridge().ListNames() {

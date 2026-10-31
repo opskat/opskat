@@ -3251,6 +3251,17 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
+    "settings": {
+      "title": "Settings",
+      "saved": "Settings saved",
+      "invalid": "Some settings need fixing. Nothing was saved.",
+      "error": {
+        "required": "Required",
+        "type": "Wrong type of value",
+        "enum": "Pick one of the listed options",
+        "unknown": "Not a setting of this extension"
+      }
+    },
     "assetRouteWarning": "This extension can dial any address along an asset's connection path — database redirects, cluster nodes, hosts behind its tunnel — not just the address you typed. Keep it only if you trust its author.",
     "kerberosWarning": "This extension can fetch Kerberos tickets with the Kerberos credentials stored in an asset. Keep it only if you trust its author.",
     "commandReviewerWarning": "This extension acts as the command reviewer. Under assisted approval and Autopilot, its verdict can let commands run without anyone confirming them. Keep it only if you trust its author.",

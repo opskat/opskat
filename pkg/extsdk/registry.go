@@ -152,6 +152,7 @@ var (
 	snippetSeeds    []Seed
 	configValidator ConfigValidator
 	databaseDrivers []dbdriver.Descriptor
+	settings        *extwire.Settings
 )
 
 // Extension declares the extension's presentation metadata and policy face.
@@ -567,6 +568,35 @@ func (r *AssetTypeReg[C]) TestConnection(fn func(cfg C) error) *AssetTypeReg[C] 
 	return r
 }
 
+// SettingsReg is the registration handle returned by Settings.
+type SettingsReg[C any] struct{ s *extwire.Settings }
+
+// Settings declares the extension's own settings, a form reflected from C with
+// the same tags as an asset type's config (see AssetType): the user fills it in
+// under Settings › Extensions, and the host stores it — format:"password"
+// fields encrypted — outside the extension's KV store. A format:"endpoint"
+// field (or Auth) needs the manifest's permissions.network.settingsEndpoint,
+// and that permission needs such a field: the host refuses the extension at
+// load otherwise. Declare a secret as a string tagged format:"password"; the
+// host never hands the extension its plaintext. An extension has one settings
+// form: a second call panics.
+func Settings[C any]() *SettingsReg[C] {
+	if settings != nil {
+		panic("opskat: settings are already declared")
+	}
+	settings = &extwire.Settings{ConfigSchema: reflectSchema(reflect.TypeFor[C](), "settings", schemaModeConfig)}
+	return &SettingsReg[C]{s: settings}
+}
+
+// Auth declares the credentials the host renders from the settings — format:
+// "password" fields decrypted host-side — and injects into the extension's HTTP
+// requests to the addresses in the settings' format:"endpoint" fields, the same
+// declaration an asset type's Auth is.
+func (r *SettingsReg[C]) Auth(a Auth) *SettingsReg[C] {
+	r.s.Auth = &a
+	return r
+}
+
 // PolicyGroupReg is the registration handle returned by PolicyGroup.
 type PolicyGroupReg struct{ e *policyGroupEntry }
 
@@ -636,5 +666,6 @@ func resetRegistries() {
 	snippetSeeds = nil
 	databaseDrivers = nil
 	databaseDriverServe = nil
+	settings = nil
 	configValidator = nil
 }

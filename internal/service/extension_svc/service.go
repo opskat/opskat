@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
@@ -70,13 +71,14 @@ func NewExtensionInfo(m *extension.Manifest, tr func(key string) string, enabled
 
 // Service manages the extension lifecycle: init, reload, enable/disable, install/uninstall.
 type Service struct {
-	manager     *extension.Manager
-	bridge      *extension.Bridge
-	stateRepo   extension_state_repo.ExtensionStateRepo
-	dataRepo    extension_data_repo.ExtensionDataRepo
-	assetRepo   asset_repo.AssetRepo
-	snippetHook SnippetExtensionHook
-	logger      *zap.Logger
+	manager      *extension.Manager
+	bridge       *extension.Bridge
+	stateRepo    extension_state_repo.ExtensionStateRepo
+	dataRepo     extension_data_repo.ExtensionDataRepo
+	settingsRepo extension_settings_repo.ExtensionSettingsRepo
+	assetRepo    asset_repo.AssetRepo
+	snippetHook  SnippetExtensionHook
+	logger       *zap.Logger
 
 	onReload func()
 
@@ -95,20 +97,22 @@ func New(
 	manager *extension.Manager,
 	stateRepo extension_state_repo.ExtensionStateRepo,
 	dataRepo extension_data_repo.ExtensionDataRepo,
+	settingsRepo extension_settings_repo.ExtensionSettingsRepo,
 	assetRepo asset_repo.AssetRepo,
 	logger *zap.Logger,
 	onReload func(),
 	snippetHook SnippetExtensionHook,
 ) *Service {
 	return &Service{
-		manager:     manager,
-		bridge:      extension.NewBridge(),
-		stateRepo:   stateRepo,
-		dataRepo:    dataRepo,
-		assetRepo:   assetRepo,
-		snippetHook: snippetHook,
-		logger:      logger,
-		onReload:    onReload,
+		manager:      manager,
+		bridge:       extension.NewBridge(),
+		stateRepo:    stateRepo,
+		dataRepo:     dataRepo,
+		settingsRepo: settingsRepo,
+		assetRepo:    assetRepo,
+		snippetHook:  snippetHook,
+		logger:       logger,
+		onReload:     onReload,
 	}
 }
 
@@ -516,6 +520,9 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 	if cleanData {
 		if err := s.dataRepo.DeleteAll(ctx, name); err != nil {
 			s.logger.Warn("delete extension data", zap.String("name", name), zap.Error(err))
+		}
+		if err := s.settingsRepo.Delete(ctx, name); err != nil {
+			s.logger.Warn("delete extension settings", zap.String("name", name), zap.Error(err))
 		}
 	}
 

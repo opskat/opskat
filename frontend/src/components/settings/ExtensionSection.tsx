@@ -56,6 +56,7 @@ import {
 import type { extstore_svc } from "../../../wailsjs/go/models";
 import { EXTENSION_MIRROR_SETTING_ID, revealSettingRow } from "./downloadMirror";
 import { ExtensionMirrorSettings } from "./ExtensionMirrorSettings";
+import { ExtensionSettingsForm } from "./ExtensionSettingsForm";
 import { ExtensionStore, InstallFailed, InstallProgress, type CardInstall, type StoreCard } from "./ExtensionStore";
 import { useStoreInstalls } from "./useStoreInstalls";
 import { syncExtensionUpdates, useExtensionUpdates } from "./extensionUpdates";
@@ -456,6 +457,8 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
         </p>
         {ext.description && <p className="text-muted-foreground">{ext.description}</p>}
       </div>
+
+      <ExtensionSettingsForm extName={ext.name} />
 
       <Separator />
 

@@ -33,7 +33,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 		asset_repo.RegisterAsset(assets)
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
-		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc := New(nil, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{SSHTunnel: true, ProxyChain: true, TLS: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
 		ctx := context.Background()

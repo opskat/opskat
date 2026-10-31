@@ -19,6 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -32,9 +33,9 @@ import (
 var devInstallFn = requestExtDevInstall
 
 // extensionContributions 是本进程的贡献点注册表：与桌面端（main.go）同一组贡献点
-// （extreg.Points）。启动时的仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，
-// 一个扩展在本进程里只有一次接入。
-var extensionContributions = extension.NewContributionRegistry(extreg.Points()...)
+// （extreg.Points，加上扩展管理拥有的设置贡献点）。启动时的仅描述接入、读缓存的扫描、
+// 激活扩展的完整接入都经它，一个扩展在本进程里只有一次接入。
+var extensionContributions = extension.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint())...)
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
@@ -78,6 +79,7 @@ func newExtensionHost() *extension_svc.Service {
 	svc = extension_svc.New(mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
+		extension_settings_repo.ExtensionSettings(),
 		asset_repo.Asset(),
 		logger.Default(), nil, nil)
 	// 完整注册遇到声明了测试连接的类型就要 registrar，激活前接好。

@@ -59,7 +59,7 @@ func viewOf(t testing.TB, m *extension.Manifest) *extreg.Manifest {
 func newHostTestService(t *testing.T) (*Service, *mock_asset_repo.MockAssetRepo) {
 	ctrl := gomock.NewController(t)
 	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
-	svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+	svc := New(nil, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 	svc.Bridge().Register(registeredExt("acme", "acme-store", extmanifest.CredentialAccessRead))
 	svc.Bridge().Register(registeredExt("other", "other-store", ""))
 	credential_svc.SetDefault(credential_svc.New("host-test-key", []byte("0123456789abcdef")))

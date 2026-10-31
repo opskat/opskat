@@ -113,7 +113,7 @@ func newConfirmTestService(t *testing.T, extDir string) *Service {
 	stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil).AnyTimes()
 	stateRepo.EXPECT().Find(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("not found")).AnyTimes()
 	stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	svc := New(newTestManager(extDir), stateRepo, nil, nil, zap.NewNop(), nil, nil)
+	svc := New(newTestManager(extDir), stateRepo, nil, nil, nil, zap.NewNop(), nil, nil)
 	require.NoError(t, svc.Init(context.Background()))
 	t.Cleanup(func() {
 		for _, name := range svc.Bridge().ListNames() {
@@ -312,7 +312,7 @@ func TestInstallConfirm_InstalledChangedWhileWaiting(t *testing.T) {
 // reaches the dialog.
 func TestInstallConfirm_IncompatibleNeverAsks(t *testing.T) {
 	useApp(t, appversion.Info{Version: "1.5.0", Kind: appversion.KindRelease})
-	svc := New(newTestManager(t.TempDir()), nil, nil, nil, nil, nil, nil)
+	svc := New(newTestManager(t.TempDir()), nil, nil, nil, nil, nil, nil, nil)
 	src := sourceWithManifest(t, `{"name":"x","version":"1.0.0","hostABI":"9.0"}`)
 	_, err := svc.Install(langCtx, src, func(context.Context, InstallConfirm) error {
 		t.Error("an incompatible package must not reach the confirm")

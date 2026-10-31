@@ -64,6 +64,18 @@ func (c *Connection) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Settings is the extension's own settings (KeySettings): one form the user
+// fills in under Settings › Extensions, declared the way an asset type declares
+// its config. ConfigSchema's format:"password" fields are stored encrypted, and
+// format:"endpoint" fields name addresses the extension may reach when its
+// manifest declares permissions.network.settingsEndpoint; Auth binds the
+// settings' fields into requests to those addresses, as an asset type's Auth
+// does for its asset's endpoint.
+type Settings struct {
+	ConfigSchema map[string]any `json:"configSchema"`
+	Auth         *Auth          `json:"auth,omitempty"`
+}
+
 // Auth is the credential injection an asset type declares: the host renders its
 // bindings from the asset's config — password fields decrypted host-side — and
 // injects them into every HTTP request the extension sends to that asset's

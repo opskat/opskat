@@ -122,6 +122,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 		{extwire.KeySnippets, len(snippets.Categories) > 0 || len(snippets.Seed) > 0, snippets},
 		{extwire.KeyPages, frontendSpec.Entry != "", pages},
 		{extwire.KeyDatabaseDrivers, len(databaseDrivers) > 0, databaseDrivers},
+		{extwire.KeySettings, settings != nil, settings},
 	}
 	for _, c := range contributions {
 		if !c.present {

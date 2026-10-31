@@ -50,7 +50,7 @@ func pageCallFixtureWithEvents(t *testing.T) (*Extension, *mock_asset_repo.MockA
 	t.Cleanup(func() { mgr.Close(context.Background()) })
 
 	assets := mock_asset_repo.NewMockAssetRepo(gomock.NewController(t))
-	svc = extension_svc.New(mgr, nil, nil, assets, zap.NewNop(), nil, nil)
+	svc = extension_svc.New(mgr, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 	_, err := mgr.LoadExtension(context.Background(), dir)
 	require.NoError(t, err)
 	svc.Bridge().Register(mgr.GetExtension(extensiontest.FixtureName))

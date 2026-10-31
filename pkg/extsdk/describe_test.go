@@ -671,6 +671,41 @@ func TestToolDeclaresPolicyOrPageOnly(t *testing.T) {
 	})
 }
 
+type reviewerSettings struct {
+	BaseURL string `json:"baseURL" title:"settings.baseURL" format:"endpoint"`
+	APIKey  string `json:"apiKey" title:"settings.apiKey" format:"password"`
+	Mode    string `json:"mode,omitempty" enum:"fast,safe"`
+}
+
+func TestDescribeReportsSettingsDeclaration(t *testing.T) {
+	Convey("the extension's settings are reported only when declared", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		So(decodeContributes(t), ShouldNotContainKey, "settings")
+
+		Settings[reviewerSettings]().Auth(Auth{Groups: []AuthGroup{{
+			Bindings: []AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{apiKey}}"}},
+		}}})
+		settings, ok := decodeContributes(t)["settings"].(map[string]any)
+		So(ok, ShouldBeTrue)
+		schema := settings["configSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		So(props["baseURL"], ShouldResemble, map[string]any{"type": "string", "format": "endpoint", "title": "settings.baseURL"})
+		So(props["apiKey"].(map[string]any)["format"], ShouldEqual, "password")
+		So(schema["required"], ShouldResemble, []any{"baseURL", "apiKey"})
+		So(schema["propertyOrder"], ShouldResemble, []any{"baseURL", "apiKey", "mode"})
+		So(settings["auth"], ShouldResemble, map[string]any{"groups": []any{map[string]any{"bindings": []any{
+			map[string]any{"in": "header", "name": "Authorization", "value": "Bearer {{apiKey}}"},
+		}}}})
+	})
+
+	Convey("an extension has one settings form", t, func() {
+		resetRegistries()
+		Settings[reviewerSettings]()
+		So(func() { Settings[reviewerSettings]() }, ShouldPanic)
+	})
+}
+
 func TestConfigSchemaEnumTagsAreChecked(t *testing.T) {
 	Convey("enumLabels and default that the host could not render fail at registration", t, func() {
 		refl := func(v any) func() { return func() { reflectSchema(reflect.TypeOf(v), "cfg", schemaModeConfig) } }

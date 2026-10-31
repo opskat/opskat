@@ -12,8 +12,11 @@ interface ExtensionConfigFormProps {
   auth?: ExtAuth;
   value: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
-  /** 有已存值、但宿主没把明文交给表单的密码字段（按字段名取）：呈现为"已设置，留空则不修改"。 */
-  withheldSecrets?: Record<string, string>;
+  /**
+   * 有已存值、但宿主没把明文交给表单的密码字段（按字段名取，值为真即已设置——资产表单给的是
+   * 已存密文，扩展设置给的是"已设置"标记）：呈现为"已设置，留空则不修改"。
+   */
+  withheldSecrets?: Record<string, unknown>;
   /** 保存校验返回的逐字段错误（按字段名）：显示在对应字段下方。 */
   fieldErrors?: Record<string, string>;
 }

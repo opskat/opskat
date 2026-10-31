@@ -206,7 +206,7 @@ func TestManifestOf(t *testing.T) {
 }
 
 func TestLocalizeConfigSchemaEnumLabels(t *testing.T) {
-	out := localizeConfigSchema(map[string]any{"properties": map[string]any{
+	out := LocalizeConfigSchema(map[string]any{"properties": map[string]any{
 		"auth": map[string]any{"enum": []any{"a"}, "enumLabels": []any{"k.a"}, "default": "a"},
 	}}, func(k string) string { return "T:" + k })
 	auth := out["properties"].(map[string]any)["auth"].(map[string]any)

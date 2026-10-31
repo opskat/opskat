@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_describe_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
@@ -172,6 +173,7 @@ func registerRepositories() {
 	ai_provider_repo.RegisterAIProvider(ai_provider_repo.NewAIProvider())
 	extension_data_repo.RegisterExtensionData(extension_data_repo.NewExtensionData())
 	extension_state_repo.RegisterExtensionState(extension_state_repo.NewExtensionState())
+	extension_settings_repo.RegisterExtensionSettings(extension_settings_repo.NewExtensionSettings())
 	extension_describe_repo.RegisterExtensionDescribe(extension_describe_repo.NewExtensionDescribe())
 	// Extensions are described by running them; the cache is what keeps listing them
 	// (and resolving their asset types from opsctl) off that path.

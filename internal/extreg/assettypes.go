@@ -59,37 +59,48 @@ func (assetTypesPoint) Check(v extension.ExtensionView) error {
 }
 
 func checkAssetType(at extwire.AssetType, assetEndpoint bool) error {
-	props := ConfigSchemaProperties(at.ConfigSchema)
-	if len(props) == 0 {
-		return fmt.Errorf("configSchema must declare properties")
+	if err := CheckConfigSchema(at.ConfigSchema, at.Auth); err != nil {
+		return err
 	}
-	if err := checkEnumPresentation(at.ConfigSchema); err != nil {
-		return fmt.Errorf("configSchema.%w", err)
-	}
-	if err := assettype.CheckExtensionConfigFields(props, connectionSpec(at.Connection)); err != nil {
+	if err := assettype.CheckExtensionConfigFields(ConfigSchemaProperties(at.ConfigSchema), connectionSpec(at.Connection)); err != nil {
 		return err
 	}
 	binds := bindsEndpoint(at)
 	if binds && len(EndpointFieldsFromSchema(at.ConfigSchema)) == 0 {
 		return fmt.Errorf(`declares auth or connection, which apply only to the asset's endpoint, but its configSchema marks no field format:"endpoint"`)
 	}
-	if at.Auth != nil {
-		declared := make(map[string]bool, len(props))
-		for _, p := range props {
-			declared[p] = true
-		}
-		secrets := make(map[string]bool)
-		for _, p := range PasswordFieldsFromSchema(at.ConfigSchema) {
-			secrets[p] = true
-		}
-		if err := checkAuth(at.Auth, declared, secrets); err != nil {
-			return err
-		}
-	}
 	if binds && !assetEndpoint {
 		return fmt.Errorf("declares auth or connection, which apply only to the asset's endpoint, but the manifest does not declare permissions.network.assetEndpoint")
 	}
 	return nil
+}
+
+// CheckConfigSchema checks a configSchema and the auth declared on it (nil for
+// none) by the rules every form the host renders from a schema shares — an
+// asset type's config and an extension's settings: the schema declares
+// properties, its enum presentation is consistent, and auth references only
+// declared fields and selects its group by no password field. The error names
+// the offending part (configSchema.… or auth.…); the caller adds the item.
+func CheckConfigSchema(schema map[string]any, auth *extwire.Auth) error {
+	props := ConfigSchemaProperties(schema)
+	if len(props) == 0 {
+		return fmt.Errorf("configSchema must declare properties")
+	}
+	if err := checkEnumPresentation(schema); err != nil {
+		return fmt.Errorf("configSchema.%w", err)
+	}
+	if auth == nil {
+		return nil
+	}
+	declared := make(map[string]bool, len(props))
+	for _, p := range props {
+		declared[p] = true
+	}
+	secrets := make(map[string]bool)
+	for _, p := range PasswordFieldsFromSchema(schema) {
+		secrets[p] = true
+	}
+	return checkAuth(auth, declared, secrets)
 }
 
 // bindsEndpoint reports whether the type declares anything the host applies only
