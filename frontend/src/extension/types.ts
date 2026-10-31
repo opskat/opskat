@@ -68,7 +68,7 @@ export interface ExtToolDef {
   /**
    * The fixed policy action this tool requests; declared at the tool's registration in
    * the guest. Absent for a tool that classifies each call from its arguments, and for
-   * a page-only tool, which requests none.
+   * a page-only or host-only tool, which request none (a page cannot call a host-only tool).
    */
   policyAction?: string;
 }

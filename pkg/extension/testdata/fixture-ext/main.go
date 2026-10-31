@@ -309,6 +309,15 @@ func init() {
 		return map[string]any{"data": strings.Repeat("x", args.Bytes)}, nil
 	}).Policy("read")
 
+	// The host-only tools are called by host subsystems (extreg.CallHostTool), never
+	// through exec nor from a page. host_spin has a 3s limit a caller may only shorten.
+	opskat.Tool("host_echo", func(ctx *opskat.ToolContext, args echoArgs) (any, error) {
+		return map[string]any{"tool": ctx.Tool, "args": args}, nil
+	}).HostOnly()
+	opskat.Tool("host_spin", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).HostOnly().Timeout(3 * time.Second)
+
 	// The page-only tools below are what used to be actions: called only by the
 	// extension's own page, with no timeout of their own — the caller decides how
 	// long is too long, or cancels them by invocation id.

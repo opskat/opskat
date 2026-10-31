@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extwire"
@@ -318,4 +321,32 @@ func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A host-only tool is for host subsystems: exec refuses it before anything is
+// approved or run, and a page call is refused naming the tool.
+func TestHostOnlyToolsAreRefusedToExecAndPages(t *testing.T) {
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "rev"}},
+		Tools: []extwire.Tool{
+			{Name: "review", HostOnly: true, Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
+			{Name: "list", PolicyAction: "read", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
+		},
+	}
+	_, _, err := parseCommand(m, `review`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "该工具只供宿主调用")
+	_, err = canonicalCommand(m, `review`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "该工具只供宿主调用")
+
+	_, err = ValidateToolArgs(m, "review", []byte(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rev.review")
+	assert.Contains(t, err.Error(), "该工具只供宿主调用")
+
+	_, _, err = parseCommand(m, `nope`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "available: list")
+	assert.NotContains(t, err.Error(), "review")
 }

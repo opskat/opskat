@@ -94,12 +94,12 @@ func checkTool(t extwire.Tool, hasAssetType bool) error {
 	if err := checkToolActions(t); err != nil {
 		return err
 	}
-	if !t.PageOnly && !hasAssetType {
+	if !t.PageOnly && !t.HostOnly && !hasAssetType {
 		return fmt.Errorf("declares a policy action, checked on an asset of one of this extension's asset types, but the extension contributes no asset type")
 	}
 	if t.NoTimeout {
 		if !t.PageOnly {
-			return fmt.Errorf("noTimeout is only for a pageOnly tool — a tool reached through exec keeps a timeout")
+			return fmt.Errorf("noTimeout is only for a pageOnly tool — a tool reached through exec or called by the host keeps a timeout")
 		}
 		if t.TimeoutMs != 0 {
 			return fmt.Errorf("declares both noTimeout and timeoutMs")
@@ -178,6 +178,12 @@ func checkTool(t extwire.Tool, hasAssetType bool) error {
 // trimmed of) could not be told apart from an action plus a resource, so it is
 // refused here rather than silently never matching.
 func checkToolActions(t extwire.Tool) error {
+	if t.HostOnly {
+		if t.PageOnly || len(t.Actions()) > 0 {
+			return fmt.Errorf("declares hostOnly together with pageOnly or a policy action — a tool is exactly one of: checked against the asset's permission groups, only for the extension's pages, only for host subsystems")
+		}
+		return nil
+	}
 	if t.PageOnly {
 		if len(t.Actions()) > 0 {
 			return fmt.Errorf("declares both pageOnly and a policy action — a tool is either checked against the asset's permission groups or only for the extension's pages")
@@ -189,7 +195,7 @@ func checkToolActions(t extwire.Tool) error {
 	}
 	actions := t.Actions()
 	if len(actions) == 0 {
-		return fmt.Errorf("declares neither a policy action nor pageOnly — a tool is checked against the asset's permission groups or is only for the extension's pages")
+		return fmt.Errorf("declares neither a policy action, pageOnly nor hostOnly — a tool is checked against the asset's permission groups, or is only for the extension's pages, or only for host subsystems")
 	}
 	seen := make(map[string]struct{}, len(actions))
 	for _, a := range actions {
@@ -234,10 +240,14 @@ func (p toolsPoint) Attach(v extension.ExtensionView) (func(), error) {
 	}
 	mu.Lock()
 	manifests[l.name] = l.manifest
+	if l.plugin != nil {
+		hostCallable[l.name] = l
+	}
 	mu.Unlock()
 	done = append(done, func() {
 		mu.Lock()
 		delete(manifests, l.name)
+		delete(hostCallable, l.name)
 		mu.Unlock()
 	})
 	return done.run, nil

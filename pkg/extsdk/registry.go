@@ -91,17 +91,20 @@ type toolEntry struct {
 	// pageOnly and noTimeout are the page-only declaration (PageOnly, NoTimeout).
 	pageOnly  bool
 	noTimeout bool
+	// hostOnly is the host-only declaration (HostOnly).
+	hostOnly bool
 }
 
 // declaresPolicy reports whether a policy action was declared.
 func (e *toolEntry) declaresPolicy() bool { return e.action != "" || e.classify != nil }
 
-// check is the registration rule that every tool is exactly a policy tool or a
-// page-only tool; describe runs it once the whole declaration chain has run.
+// check is the registration rule that every tool is exactly a policy tool, a
+// page-only tool or a host-only tool; describe runs it once the whole declaration
+// chain has run.
 func (e *toolEntry) check() error {
 	switch {
-	case !e.pageOnly && !e.declaresPolicy():
-		return fmt.Errorf("opskat: tool %q declares neither a policy action (Policy / PolicyFunc / PolicyResources) nor PageOnly", e.name)
+	case !e.pageOnly && !e.hostOnly && !e.declaresPolicy():
+		return fmt.Errorf("opskat: tool %q declares neither a policy action (Policy / PolicyFunc / PolicyResources) nor PageOnly nor HostOnly", e.name)
 	case e.noTimeout && !e.pageOnly:
 		return fmt.Errorf("opskat: tool %q: only a PageOnly tool may declare NoTimeout", e.name)
 	}
@@ -247,7 +250,27 @@ func (r *ToolReg[T]) PageOnly() *ToolReg[T] {
 	if r.e.declaresPolicy() {
 		panic(fmt.Sprintf("opskat: tool %q already declares a policy action; PageOnly is exclusive with it", r.e.name))
 	}
+	if r.e.hostOnly {
+		panic(fmt.Sprintf("opskat: tool %q is HostOnly; PageOnly is exclusive with it", r.e.name))
+	}
 	r.e.pageOnly = true
+	return r
+}
+
+// HostOnly declares the tool is called only by host subsystems (a contribution
+// point's tool, such as the command reviewer): it has no policy action, is left
+// out of help, and exec and pages refuse it. It needs no asset type and keeps a
+// policy tool's timeout rules (Timeout up to 10 minutes, never NoTimeout). Every
+// tool declares exactly one of this, PageOnly and a policy action; declaring two
+// panics, and declaring none fails describe, naming the tool.
+func (r *ToolReg[T]) HostOnly() *ToolReg[T] {
+	if r.e.declaresPolicy() {
+		panic(fmt.Sprintf("opskat: tool %q already declares a policy action; HostOnly is exclusive with it", r.e.name))
+	}
+	if r.e.pageOnly {
+		panic(fmt.Sprintf("opskat: tool %q is PageOnly; HostOnly is exclusive with it", r.e.name))
+	}
+	r.e.hostOnly = true
 	return r
 }
 
@@ -269,6 +292,9 @@ func (r *ToolReg[T]) NoTimeout() *ToolReg[T] {
 func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
 	if r.e.pageOnly {
 		panic(fmt.Sprintf("opskat: tool %q is PageOnly; Policy is exclusive with it", r.e.name))
+	}
+	if r.e.hostOnly {
+		panic(fmt.Sprintf("opskat: tool %q is HostOnly; Policy is exclusive with it", r.e.name))
 	}
 	if r.e.classify != nil {
 		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources; Policy is exclusive with both", r.e.name))
@@ -325,6 +351,9 @@ func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource 
 	}
 	if r.e.pageOnly {
 		panic(fmt.Sprintf("opskat: tool %q is PageOnly; %s is exclusive with it", r.e.name, method))
+	}
+	if r.e.hostOnly {
+		panic(fmt.Sprintf("opskat: tool %q is HostOnly; %s is exclusive with it", r.e.name, method))
 	}
 	if r.e.action != "" || r.e.resource != nil || r.e.classify != nil {
 		panic(fmt.Sprintf("opskat: tool %q already declares its policy; %s replaces Policy/Resource and excludes the other classifier", r.e.name, method))

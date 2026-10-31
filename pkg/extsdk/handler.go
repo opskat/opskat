@@ -65,6 +65,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 			PolicyAction:  t.action,
 			PolicyActions: t.actions,
 			PageOnly:      t.pageOnly,
+			HostOnly:      t.hostOnly,
 			TimeoutMs:     t.timeout.Milliseconds(),
 			NoTimeout:     t.noTimeout,
 			Large:         t.large,

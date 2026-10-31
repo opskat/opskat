@@ -4,10 +4,11 @@ import "time"
 
 // Tool is one tool the extension contributes (KeyTools).
 //
-// A tool is exactly one of two things: a policy tool, reached through exec (and
+// A tool is exactly one of three things: a policy tool, reached through exec (and
 // opsctl) on an asset and checked against the asset's permission groups — it
-// declares PolicyAction or PolicyActions — or a page-only tool, called only by
-// the extension's own pages — PageOnly. Neither, or both, is a registration error.
+// declares PolicyAction or PolicyActions — a page-only tool, called only by
+// the extension's own pages — PageOnly — or a host-only tool, called only by host
+// subsystems — HostOnly. None, or more than one, is a registration error.
 type Tool struct {
 	Name       string         `json:"name"`
 	I18n       I18nDesc       `json:"i18n"`
@@ -22,6 +23,10 @@ type Tool struct {
 	// PageOnly marks a tool only the extension's pages call: it has no policy
 	// action, is left out of the help tool reference and exec refuses it.
 	PageOnly bool `json:"pageOnly,omitempty"`
+	// HostOnly marks a tool only host subsystems call (a contribution point's
+	// tool, e.g. the command reviewer): it has no policy action, is left out of
+	// help, and exec and pages refuse it. It keeps a policy tool's timeout rules.
+	HostOnly bool `json:"hostOnly,omitempty"`
 	// TimeoutMs is how long one call of this tool may run, in milliseconds; 0
 	// means the host default. It holds for every caller alike.
 	TimeoutMs int64 `json:"timeoutMs,omitempty"`

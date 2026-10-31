@@ -18,6 +18,10 @@ import (
 // policy action to check, so the only entry to it is the extension's own pages.
 const pageOnlyRefusal = "该工具只供扩展页面使用"
 
+// hostOnlyRefusal is what exec and a page call answer for a tool declared hostOnly:
+// only host subsystems call it (CallHostTool).
+const hostOnlyRefusal = "该工具只供宿主调用"
+
 // parseCommand 把 `<tool> --flag=value`（或 `<tool> --flag value`，见下）解析成工具名
 // 与按 manifest 声明类型转换过的 JSON 参数。扩展名不在命令里：资产类型 → 扩展是一对一的
 // （注册时强制），命令面上再写一次扩展名只是让模型多一个能写错的位置。
@@ -43,6 +47,9 @@ func parseCommand(m *Manifest, command string) (string, []byte, error) {
 	}
 	if def.PageOnly {
 		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, pageOnlyRefusal)
+	}
+	if def.HostOnly {
+		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, hostOnlyRefusal)
 	}
 	if len(c.Args) > 0 {
 		// 位置参数无处可去：manifest 的 parameters 只有具名属性。静默丢弃会让模型
@@ -173,7 +180,7 @@ func toolDef(m *Manifest, name string) (extwire.Tool, bool) {
 func toolNames(m *Manifest, includePageOnly bool) []string {
 	names := make([]string, 0, len(m.Tools))
 	for _, t := range m.Tools {
-		if t.PageOnly && !includePageOnly {
+		if t.HostOnly || (t.PageOnly && !includePageOnly) {
 			continue
 		}
 		names = append(names, t.Name)
@@ -192,6 +199,9 @@ func ValidateToolArgs(m *Manifest, tool string, raw []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
 			m.Name, tool, strings.Join(toolNames(m, true), ", "))
+	}
+	if def.HostOnly {
+		return nil, fmt.Errorf("%s.%s: %s", m.Name, tool, hostOnlyRefusal)
 	}
 	return validateToolArgs(m.Name, def, raw)
 }
