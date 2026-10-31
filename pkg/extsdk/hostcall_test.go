@@ -71,6 +71,10 @@ func (m *mockHostCaller) AssetGetConfig(assetID int64) (json.RawMessage, error) 
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *mockHostCaller) ConfigGet() (json.RawMessage, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *mockHostCaller) FileDialog(params []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }

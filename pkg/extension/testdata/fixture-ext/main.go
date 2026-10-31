@@ -231,6 +231,13 @@ func init() {
 		return map[string]any{"config": json.RawMessage(cfg), "asset": ctx.Asset}, nil
 	}).Policy("read")
 
+	// scope_config reads the config of the call's scope (host call config.get):
+	// in a call without an asset, what the host lets the extension read of its
+	// settings.
+	opskat.Tool("scope_config", func(ctx *opskat.ToolContext, _ noArgs) (any, error) {
+		return ctx.Settings()
+	}).Policy("read")
+
 	// typed_config decodes the asset config into the same struct AssetType
 	// reflected the form from, the way an extension actually consumes it, and
 	// reports what the password field carried.

@@ -3,22 +3,33 @@ package extension_svc
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_data_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_settings_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extwire"
 
+	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/glebarez/sqlite"
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	"gorm.io/gorm"
 )
 
 var passwordSchema = map[string]any{
@@ -221,6 +232,223 @@ func TestFormConfigFollowsTheCredentialsDecision(t *testing.T) {
 			var cfg map[string]any
 			So(json.Unmarshal([]byte(raw), &cfg), ShouldBeNil)
 			So(cfg, ShouldResemble, map[string]any{"host": "h"})
+		})
+	})
+}
+
+// A call without an asset (a host-only tool, a page's call made without one) has
+// the scope of the extension's settings: the addresses its format:"endpoint"
+// fields name, admitted by permissions.network.settingsEndpoint, its auth
+// rendered from the decrypted settings on each request, and the read view as the
+// scope's config — non-secret values, a secret only as set or unset.
+func TestResolveNoAssetScopeIsTheSettingsScope(t *testing.T) {
+	Convey("Given extension jev declaring settings", t, func() {
+		f := newSettingsFixture(t)
+
+		Convey("with settings saved, the scope names the endpoint, injects the key and reads the view", func() {
+			So(f.save(t, map[string]any{"baseURL": "https://jev.example:8443/v1", "apiKey": "s3cret", "mode": "fast"}), ShouldBeEmpty)
+
+			scope, err := f.svc.ResolveNoAssetScope(f.ctx, "jev")
+			So(err, ShouldBeNil)
+			So(scope.Asset, ShouldBeNil)
+			So(scope.Ops, ShouldBeNil)
+			So(scope.Route, ShouldBeNil)
+			So(scope.Connect, ShouldBeNil)
+			So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Scheme: "https", Host: "jev.example", Port: "8443"}})
+			So(scope.EndpointPermission, ShouldEqual, "settingsEndpoint")
+			So(string(scope.Config), ShouldEqual, `{"values":{"baseURL":"https://jev.example:8443/v1","mode":"fast"},"secrets":{"apiKey":true}}`)
+			values, err := scope.Auth(f.ctx)
+			So(err, ShouldBeNil)
+			So(values, ShouldResemble, []extension.AuthValue{{In: "header", Name: "Authorization", Value: "Bearer s3cret"}})
+
+			Convey("a key saved later is what the next request carries", func() {
+				So(f.save(t, map[string]any{"baseURL": "https://jev.example:8443/v1", "apiKey": "rotated"}), ShouldBeEmpty)
+				values, err := scope.Auth(f.ctx)
+				So(err, ShouldBeNil)
+				So(values, ShouldResemble, []extension.AuthValue{{In: "header", Name: "Authorization", Value: "Bearer rotated"}})
+			})
+		})
+
+		Convey("with nothing saved, there is no endpoint and the view shows the key unset", func() {
+			scope, err := f.svc.ResolveNoAssetScope(f.ctx, "jev")
+			So(err, ShouldBeNil)
+			So(scope.Endpoints, ShouldBeEmpty)
+			So(string(scope.Config), ShouldEqual, `{"values":{},"secrets":{"apiKey":false}}`)
+		})
+
+		Convey("an extension declaring no settings gets an empty config and nothing to reach", func() {
+			writeSettingsExtensionWithout(t, f, "plain")
+			scope, err := f.svc.ResolveNoAssetScope(f.ctx, "plain")
+			So(err, ShouldBeNil)
+			So(scope.Endpoints, ShouldBeEmpty)
+			So(scope.Auth, ShouldBeNil)
+			So(string(scope.Config), ShouldEqual, `{"values":{},"secrets":{}}`)
+		})
+
+		Convey("the hosts the service builds resolve it for calls without an asset", func() {
+			So(f.save(t, map[string]any{"baseURL": "https://jev.example", "apiKey": "s3cret"}), ShouldBeEmpty)
+			resolve := f.svc.HostConfig("jev").NoAssetScopes
+			So(resolve, ShouldNotBeNil)
+			scope, err := resolve(f.ctx, "jev")
+			So(err, ShouldBeNil)
+			So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Scheme: "https", Host: "jev.example", Port: "443"}})
+		})
+	})
+}
+
+// A call on an asset keeps the asset's scope: settings neither widen its reach
+// nor become its config.
+func TestResolveScopeOfAnAssetCarriesNoSettings(t *testing.T) {
+	Convey("an asset's scope has no config and needs network.assetEndpoint", t, func() {
+		svc, assets := newHostTestService(t)
+		svc.Bridge().Register(authedExt())
+		assets.EXPECT().Find(gomock.Any(), int64(6)).Return(&asset_entity.Asset{
+			ID: 6, Type: "authed-store", Config: `{"url":"https://es.internal:9200"}`,
+		}, nil)
+
+		scope, err := svc.ResolveScope(context.Background(), "authed", extension.AssetRef{ID: 6, Type: "authed-store"})
+		So(err, ShouldBeNil)
+		So(scope.Config, ShouldBeNil)
+		So(scope.EndpointPermission, ShouldBeEmpty)
+	})
+}
+
+// settingsService is the service a settings endpoint names: it records the
+// Authorization each request carried, redirects /redirect-out to elsewhere and
+// answers anything else with "service".
+type settingsService struct {
+	*httptest.Server
+	mu   sync.Mutex
+	seen []string
+}
+
+func newSettingsService(t *testing.T, elsewhere string) *settingsService {
+	t.Helper()
+	s := &settingsService{}
+	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.seen = append(s.seen, r.URL.Path+" "+r.Header.Get("Authorization"))
+		s.mu.Unlock()
+		if r.URL.Path == "/redirect-out" {
+			http.Redirect(w, r, elsewhere+"/landed", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte("service"))
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func (s *settingsService) requests() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.seen...)
+}
+
+// newSettingsHost loads the settings fixture (extensiontest.InstallSettingsFixture)
+// through the real manager over the hosts the service builds for it (HostConfig),
+// its settings stored in a real database; allowlisted is in its
+// permissions.network.http (with allowPrivate, as the test servers are loopback).
+func newSettingsHost(t *testing.T, allowlisted string) (*Service, *extension.Extension) {
+	t.Helper()
+	ctx := context.Background()
+	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "opskat.db")), &gorm.Config{})
+	So(err, ShouldBeNil)
+	So(gdb.AutoMigrate(&extension_settings_entity.ExtensionSettings{}, &extension_data_entity.ExtensionData{}), ShouldBeNil)
+	db.SetDefault(gdb)
+	prevCred := credential_svc.Default()
+	credential_svc.SetDefault(credential_svc.New("settings-host-test", []byte("0123456789abcdef")))
+	t.Cleanup(func() { credential_svc.SetDefault(prevCred) })
+
+	root := t.TempDir()
+	dir := extensiontest.InstallSettingsFixture(t, root)
+	manifestPath := filepath.Join(dir, "manifest.json")
+	data, err := os.ReadFile(manifestPath) //nolint:gosec // the test's own temp dir
+	So(err, ShouldBeNil)
+	var manifest map[string]any
+	So(json.Unmarshal(data, &manifest), ShouldBeNil)
+	network := manifest["permissions"].(map[string]any)["network"].(map[string]any)
+	network["http"] = []string{allowlisted + "/"}
+	network["allowPrivate"] = true
+	data, err = json.Marshal(manifest)
+	So(err, ShouldBeNil)
+	So(os.WriteFile(manifestPath, data, 0o600), ShouldBeNil)
+
+	var svc *Service
+	mgr := extension.NewManager(root, func(name string) extension.HostProvider {
+		return extension.NewDefaultHostProvider(svc.HostConfig(name))
+	}, extension.NewContributionRegistry(append(extreg.Points(), SettingsPoint())...), zap.NewNop())
+	t.Cleanup(func() { mgr.Close(ctx) })
+	svc = New(mgr, nil, nil, extension_settings_repo.NewExtensionSettings(), nil, zap.NewNop(), nil, nil)
+	_, err = mgr.LoadExtension(ctx, dir)
+	So(err, ShouldBeNil)
+	ext := mgr.GetExtension(extensiontest.SettingsFixtureName)
+	svc.Bridge().Register(ext)
+	return svc, ext
+}
+
+// callHostTool calls one of the fixture's host-only tools as a call without an
+// asset, answering its result as JSON.
+func callHostTool(ext *extension.Extension, tool string, args map[string]any) (string, error) {
+	raw, err := json.Marshal(args)
+	So(err, ShouldBeNil)
+	out, err := ext.Plugin.CallTool(context.Background(), extension.ToolCall{Name: tool, Args: raw})
+	return string(out), err
+}
+
+// End to end: the settings fixture's host-only tools, through the hosts the
+// service builds, against loopback services.
+func TestSettingsReachAndReadEndToEnd(t *testing.T) {
+	Convey("Given the settings fixture loaded over the service's hosts", t, func() {
+		ctx := context.Background()
+		elsewhere := newSettingsService(t, "http://127.0.0.1:1") // allowlisted
+		service := newSettingsService(t, elsewhere.URL)
+		svc, ext := newSettingsHost(t, elsewhere.URL)
+		name := extensiontest.SettingsFixtureName
+
+		Convey("before any settings are saved, the extension reads them unset and reaches no service", func() {
+			out, err := callHostTool(ext, "settings", map[string]any{})
+			So(err, ShouldBeNil)
+			So(out, ShouldEqual, `{"values":{},"secrets":{"apiKey":false}}`)
+
+			_, err = callHostTool(ext, "call_service", map[string]any{"url": service.URL + "/ok"})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not in permissions.network.http")
+			So(service.requests(), ShouldBeEmpty)
+		})
+
+		Convey("once saved", func() {
+			errs, err := svc.SaveSettings(ctx, name, map[string]any{"baseURL": service.URL, "apiKey": "s3cret", "model": "fast"})
+			So(err, ShouldBeNil)
+			So(errs, ShouldBeEmpty)
+
+			Convey("the extension reads the non-secret values and that the key is set, never the key", func() {
+				out, err := callHostTool(ext, "settings", map[string]any{})
+				So(err, ShouldBeNil)
+				So(out, ShouldEqual, `{"values":{"baseURL":"`+service.URL+`","model":"fast"},"secrets":{"apiKey":true}}`)
+				So(out, ShouldNotContainSubstring, "s3cret")
+			})
+
+			Convey("a request to the service carries the key the host injects, which the guest never sees", func() {
+				out, err := callHostTool(ext, "call_service", map[string]any{"url": service.URL + "/ok"})
+				So(err, ShouldBeNil)
+				So(out, ShouldEqual, `{"body":"service","status":200}`)
+				So(service.requests(), ShouldResemble, []string{"/ok Bearer s3cret"})
+			})
+
+			Convey("a redirect off the service fails before reaching where it points", func() {
+				_, err := callHostTool(ext, "call_service", map[string]any{"url": service.URL + "/redirect-out"})
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "is not an endpoint of this call's scope")
+				So(err.Error(), ShouldNotContainSubstring, "s3cret")
+				So(elsewhere.requests(), ShouldBeEmpty)
+			})
+
+			Convey("an allowlisted address is reached with nothing injected", func() {
+				_, err := callHostTool(ext, "call_service", map[string]any{"url": elsewhere.URL + "/x"})
+				So(err, ShouldBeNil)
+				So(elsewhere.requests(), ShouldResemble, []string{"/x "})
+			})
 		})
 	})
 }

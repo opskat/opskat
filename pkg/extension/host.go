@@ -18,8 +18,10 @@ type HostProvider interface {
 	// targets — nil when the call has no asset, or when the target is not one of
 	// its endpoints (the capability layer decides which against the call's
 	// Scope, see capHost.OpenIO) — and only then does the stream use the asset's
-	// cached client and carry its credentials. The way to dial (params.Dial,
-	// params.TLS) is the capability layer's to set. The runtime registers the
+	// cached client. The credentials a stream carries (params.Auth) and the way
+	// to dial (params.Dial, params.TLS) are the capability layer's to set: an
+	// endpoint of a call with no asset carries its scope's credentials with asset
+	// nil. The runtime registers the
 	// returned resource in the calling invocation's handle table and closes it
 	// when that call ends.
 	OpenIO(ctx context.Context, asset *AssetRef, params IOOpenParams) (*IOResource, error)
@@ -55,7 +57,7 @@ type IOOpenParams struct {
 	// it — it never crosses the WASM boundary.
 	RedirectGuard func(target *url.URL) error `json:"-"`
 	// Auth, when set, is the scope's credential injection, applied to every hop
-	// of an http handle that targets one of the asset's endpoints. Only the host
+	// of an http handle that targets one of the scope's endpoints. Only the host
 	// sets it — it never crosses the WASM boundary.
 	Auth *HTTPAuth `json:"-"`
 	// Dial is the connection path the stream takes (nil = a direct dial), TLS

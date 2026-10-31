@@ -53,6 +53,33 @@ func assetConfig(a Asset, what string) (json.RawMessage, error) {
 	return hostAssetGetConfig(a.ID)
 }
 
+// SettingsView is the extension's own settings (see Settings) as the extension
+// reads them: every non-secret value the user saved, and for each
+// format:"password" field only whether it is set. The secret itself never
+// reaches the extension — the host injects it, per the settings' Auth, into
+// requests to the addresses in their format:"endpoint" fields.
+type SettingsView struct {
+	Values  map[string]any  `json:"values"`
+	Secrets map[string]bool `json:"secrets"`
+}
+
+// Settings returns the extension's settings as a call without an asset reads
+// them (host call config.get) — a host-only tool's, or a page's call made
+// without one; empty when the extension saved or declares none. A call scoped to
+// an asset reads no settings: the host refuses, and the asset's own config is
+// AssetConfig.
+func (ctx *ToolContext) Settings() (*SettingsView, error) {
+	raw, err := hostConfigGet()
+	if err != nil {
+		return nil, err
+	}
+	var view SettingsView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return nil, fmt.Errorf("parse settings: %w", err)
+	}
+	return &view, nil
+}
+
 // ShouldStop reports whether the caller has canceled this call. A long-running
 // tool polls it and returns early, cleaning up first if it must (abort an
 // upload); host IO it is blocked in fails as soon as the call is canceled.

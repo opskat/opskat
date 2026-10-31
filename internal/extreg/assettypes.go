@@ -320,7 +320,7 @@ type AssetConnection struct {
 // 经 assetRoute）时才由运行时调 connect 构建（Scope.Connect）：白名单请求照旧直连，路径建不起来
 // （CA 文件没了、代理链解析失败）也不影响它。
 func AssetScope(a extension.AssetRef, at *AssetTypeDef, config json.RawMessage, connect func(context.Context) (AssetConnection, error), creds CredentialValues) (*extension.Scope, error) {
-	endpoints, err := assetEndpoints(at, config)
+	endpoints, err := ConfigEndpoints(at.ConfigSchema, config)
 	if err != nil {
 		return nil, fmt.Errorf("asset type %s: %w", at.Type, err)
 	}
@@ -346,9 +346,10 @@ func AssetScope(a extension.AssetRef, at *AssetTypeDef, config json.RawMessage, 
 	return scope, nil
 }
 
-// assetEndpoints 读出 config 里端点字段写的地址；字段缺失、不是字符串或写不出端口的不算端点。
-func assetEndpoints(at *AssetTypeDef, config json.RawMessage) ([]extension.Endpoint, error) {
-	fields := EndpointFieldsFromSchema(at.ConfigSchema)
+// ConfigEndpoints 读出 config 里 schema 的 format:"endpoint" 字段写的地址；字段缺失、不是
+// 字符串或写不出端口的不算端点。资产类型的配置与扩展设置用同一套解析规则。
+func ConfigEndpoints(schema map[string]any, config json.RawMessage) ([]extension.Endpoint, error) {
+	fields := EndpointFieldsFromSchema(schema)
 	if len(fields) == 0 || len(config) == 0 {
 		return nil, nil
 	}

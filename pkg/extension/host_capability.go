@@ -3,11 +3,13 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -15,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/pkg/netdial"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // capHost decorates a HostProvider with per-call permission enforcement: every
@@ -42,9 +45,10 @@ func NewCapabilityHost(inner HostProvider, manifest *Manifest, extDir string) Ho
 	return &capHost{HostProvider: inner, manifest: manifest, extDir: extDir, localIPs: interfaceIPs}
 }
 
-// scopeSource is an inner provider that resolves the scope of a call on an
-// asset (DefaultHostProvider, through its ScopeResolver). An inner provider
-// without one gives every asset an empty scope.
+// scopeSource is an inner provider that resolves the scope of a call — on an
+// asset, or with none (asset nil) — (DefaultHostProvider, through its
+// ScopeResolver and NoAssetScopeResolver). An inner provider without one gives
+// every call an empty scope.
 type scopeSource interface {
 	resolveScope(ctx context.Context, asset *AssetRef) (*Scope, error)
 }
@@ -97,7 +101,7 @@ func (c *capHost) OpenIO(ctx context.Context, _ *AssetRef, params IOOpenParams) 
 			return c.HostProvider.OpenIO(ctx, scope.Asset, params)
 		}
 		if scope.Route == nil {
-			err := fmt.Errorf("%s denied: the asset %s has no connection path to dial along", params.Type, assetLabel(scope.Asset))
+			err := fmt.Errorf("%s denied: %s has no connection path to dial along", params.Type, callLabel(scope.Asset))
 			c.logDenied(ctx, inv, scope, params, err)
 			return nil, err
 		}
@@ -113,10 +117,8 @@ func (c *capHost) OpenIO(ctx context.Context, _ *AssetRef, params IOOpenParams) 
 // take the path — never falling back to a direct or unverified connection.
 func (c *capHost) connect(ctx context.Context, inv *invocation, scope *Scope) error {
 	if err := inv.connectScope(ctx, scope); err != nil {
-		logger.Ctx(ctx).Error("extension asset connection path failed",
-			zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
-			zap.Int64("assetID", scope.Asset.ID), zap.String("assetType", scope.Asset.Type), zap.Error(err))
-		return fmt.Errorf("connection path of asset %s: %w", assetLabel(scope.Asset), err)
+		logger.Ctx(ctx).Error("extension asset connection path failed", append(c.callFields(inv, scope.Asset), zap.Error(err))...)
+		return fmt.Errorf("connection path of %s: %w", scopeOwner(scope.Asset), err)
 	}
 	return nil
 }
@@ -136,7 +138,7 @@ const (
 
 // scopeOf returns the call's scope, resolving it through the inner provider the
 // first time the call needs it. A resolution failure fails this and every later
-// network or ticket host call of the call, never anything else.
+// network, ticket or config host call of the call, never anything else.
 func (c *capHost) scopeOf(ctx context.Context, inv *invocation) (*Scope, error) {
 	return inv.scopeOf(func(asset *AssetRef) (*Scope, error) {
 		src, ok := c.HostProvider.(scopeSource)
@@ -146,34 +148,90 @@ func (c *capHost) scopeOf(ctx context.Context, inv *invocation) (*Scope, error) 
 		scope, err := src.resolveScope(ctx, asset)
 		if err != nil {
 			logger.Ctx(ctx).Error("extension call scope resolution failed",
-				zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
-				zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))
-			return nil, fmt.Errorf("scope of asset %s: %w", assetLabel(asset), err)
+				append(c.callFields(inv, asset), zap.Error(err))...)
+			return nil, fmt.Errorf("scope of %s: %w", scopeOwner(asset), err)
 		}
 		logger.Ctx(ctx).Debug("extension call scope resolved",
-			zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
-			zap.Int64("assetID", asset.ID), zap.Int("endpoints", len(scope.Endpoints)),
-			zap.Bool("route", scope.Route != nil || scope.Connect != nil), zap.Bool("auth", scope.Auth != nil))
+			append(c.callFields(inv, asset), zap.Int("endpoints", len(scope.Endpoints)),
+				zap.Bool("route", scope.Route != nil || scope.Connect != nil), zap.Bool("auth", scope.Auth != nil),
+				zap.Bool("config", scope.Config != nil))...)
 		return scope, nil
 	})
 }
 
+// callFields are the log fields naming a call: the extension, the invocation and,
+// when the call has one, its asset.
+func (c *capHost) callFields(inv *invocation, asset *AssetRef) []zap.Field {
+	fields := []zap.Field{zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id)}
+	if asset != nil {
+		fields = append(fields, zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type))
+	}
+	return fields
+}
+
+// endpointPermission is the permissions.network key that admits the scope's
+// Endpoints (Scope.EndpointPermission), and whether the manifest declares it.
+func (c *capHost) endpointPermission(scope *Scope) (string, bool) {
+	name := scope.EndpointPermission
+	if name == "" {
+		name = "assetEndpoint"
+	}
+	return name, declaresNetworkFlag(c.manifest.Permissions.Network, name)
+}
+
+// declaresNetworkFlag reports whether perms sets the boolean permission whose
+// manifest key is name; a key naming no boolean permission is never declared.
+// The scope names the permission, so the runtime admits any scope's endpoints
+// without knowing what their addresses are.
+func declaresNetworkFlag(perms extmanifest.NetworkPermission, name string) bool {
+	v := reflect.ValueOf(perms)
+	for i := range v.NumField() {
+		f := v.Type().Field(i)
+		if key, _, _ := strings.Cut(f.Tag.Get("json"), ","); key == name && f.Type.Kind() == reflect.Bool {
+			return v.Field(i).Bool()
+		}
+	}
+	return false
+}
+
+// scopeConfig answers config.get: the config of the call's scope (Scope.Config),
+// resolved now if this is the call's first host call that needs the scope. A
+// scope carrying none — an asset's, or a call's the host gives nothing to read —
+// is refused rather than answered empty, so a guest reading the wrong thing
+// learns why.
+func (c *capHost) scopeConfig(ctx context.Context, inv *invocation) (json.RawMessage, error) {
+	scope, err := c.scopeOf(ctx, inv)
+	if err != nil {
+		return nil, err
+	}
+	if scope.Config == nil {
+		if scope.Asset != nil {
+			return nil, fmt.Errorf("config.get: the scope of the asset %s carries no config; read the asset's own with asset.get_config", assetLabel(scope.Asset))
+		}
+		return nil, errors.New("config.get: this call's scope carries no config")
+	}
+	return scope.Config, nil
+}
+
 // gateNetwork decides how a stream may go (streamWay) from the scope's endpoints
 // and the manifest's permissions alone — the asset's connection path is not
-// needed, and not built, to decide: to one of the scope's endpoints (with
-// network.assetEndpoint); to an allowlisted URL directly; or, with
-// network.assetRoute, to any other address along the asset's route. Anything else
-// is refused, naming why. It sets on params what the decision alone implies.
+// needed, and not built, to decide: to one of the scope's endpoints (with the
+// permission the scope names, Scope.EndpointPermission); to an allowlisted URL
+// directly; or, with network.assetRoute, to any other address along the asset's
+// route. Anything else is refused, naming why. It sets on params what the
+// decision alone implies.
 func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParams) (streamWay, error) {
 	perms := c.manifest.Permissions.Network
 	eps := endpointSet(scope.Endpoints)
-	toEndpoint := perms.AssetEndpoint && scope.Asset != nil
+	endpointPerm, toEndpoint := c.endpointPermission(scope)
 	alongRoute := perms.AssetRoute && (scope.Route != nil || scope.Connect != nil)
+	label := callLabel(scope.Asset)
 	switch params.Type {
 	case "http":
 		u, parseErr := url.Parse(params.URL)
-		if toEndpoint && parseErr == nil && eps.allowURL(u) {
-			// The asset's endpoints are the user's own addresses, private ones
+		isEndpoint := parseErr == nil && eps.allowURL(u)
+		if toEndpoint && isEndpoint {
+			// The scope's endpoints are the user's own addresses, private ones
 			// included; redirects are held to them.
 			params.AllowPrivate = true
 			if scope.Auth != nil {
@@ -183,7 +241,7 @@ func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParam
 				if eps.allowURL(target) {
 					return nil
 				}
-				return fmt.Errorf("http redirect denied: %s://%s is not an endpoint of the asset %s", target.Scheme, target.Host, assetLabel(scope.Asset))
+				return fmt.Errorf("http redirect denied: %s://%s is not an endpoint of %s", target.Scheme, target.Host, label)
 			}
 			return wayEndpoint, nil
 		}
@@ -200,13 +258,17 @@ func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParam
 			params.AllowPrivate = true
 			return wayRoute, nil
 		}
+		if isEndpoint {
+			return wayDirect, fmt.Errorf("http denied: target is an endpoint of %s, but extension %q does not declare permissions.network.%s, and %w",
+				label, c.manifest.Name, endpointPerm, allowErr)
+		}
 		if toEndpoint {
-			return wayDirect, fmt.Errorf("http denied: target is not an endpoint of the asset %s, and %w", assetLabel(scope.Asset), allowErr)
+			return wayDirect, fmt.Errorf("http denied: target is not an endpoint of %s, and %w", label, allowErr)
 		}
 		return wayDirect, allowErr
 	case "tcp":
 		if scope.Asset == nil {
-			return wayDirect, fmt.Errorf("tcp denied: this call is not scoped to an asset, so it has no endpoint to connect to %q and no connection path to dial it along", params.Addr)
+			return wayDirect, fmt.Errorf("tcp denied: this call is not scoped to an asset, and TCP reaches only an asset's endpoints and connection path, not %q", params.Addr)
 		}
 		isEndpoint := eps.allowAddr(params.Addr)
 		if toEndpoint && isEndpoint {
@@ -216,8 +278,8 @@ func (c *capHost) gateNetwork(inv *invocation, scope *Scope, params *IOOpenParam
 			return wayRoute, nil
 		}
 		if isEndpoint {
-			return wayDirect, fmt.Errorf("tcp denied: %q is an endpoint of the asset %s, but extension %q does not declare permissions.network.assetEndpoint",
-				params.Addr, assetLabel(scope.Asset), c.manifest.Name)
+			return wayDirect, fmt.Errorf("tcp denied: %q is an endpoint of the asset %s, but extension %q does not declare permissions.network.%s",
+				params.Addr, assetLabel(scope.Asset), c.manifest.Name, endpointPerm)
 		}
 		if !perms.AssetRoute {
 			return wayDirect, fmt.Errorf("tcp denied: %q is not an endpoint of the asset %s, and extension %q does not declare permissions.network.assetRoute",
@@ -265,8 +327,7 @@ func (c *capHost) routeDial(inv *invocation, scope *Scope) DialContextFunc {
 		}
 		if scope.Route.firstDial(addr) {
 			logger.Ctx(ctx).Info("extension dials along the asset's connection path",
-				zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
-				zap.Int64("assetID", scope.Asset.ID), zap.String("addr", addr))
+				append(c.callFields(inv, scope.Asset), zap.String("addr", addr))...)
 		}
 		var errs []error
 		for _, target := range targets {
@@ -319,8 +380,8 @@ func (c *capHost) directTargets(ctx context.Context, inv *invocation, scope *Sco
 			return (ip.IsUnspecified() || onInterface(ip)) && !slices.ContainsFunc(assetIPs, ip.Equal)
 		}
 		if slices.ContainsFunc(ips, refused) {
-			err = fmt.Errorf("dial denied: extension %q may not reach %q along the direct connection path of the asset %s: it is an address of this machine or its link (loopback, link-local, unspecified or one of this machine's network interfaces) other than the asset's own",
-				c.manifest.Name, addr, assetLabel(scope.Asset))
+			err = fmt.Errorf("dial denied: extension %q may not reach %q along the direct connection path of %s: it is an address of this machine or its link (loopback, link-local, unspecified or one of this machine's network interfaces) other than the asset's own",
+				c.manifest.Name, addr, callLabel(scope.Asset))
 			c.logDenied(ctx, inv, scope, IOOpenParams{Type: network, Addr: addr}, err)
 			return nil, err
 		}
@@ -423,10 +484,6 @@ func (c *capHost) logDenied(ctx context.Context, inv *invocation, scope *Scope, 
 			target = strings.ToLower(u.Scheme) + "://" + u.Host
 		}
 	}
-	fields := []zap.Field{zap.String("extension", c.manifest.Name), zap.String("invocation", inv.id),
-		zap.String("type", params.Type), zap.String("target", target), zap.Error(err)}
-	if scope.Asset != nil {
-		fields = append(fields, zap.Int64("assetID", scope.Asset.ID), zap.String("assetType", scope.Asset.Type))
-	}
-	logger.Ctx(ctx).Warn("extension network target denied", fields...)
+	logger.Ctx(ctx).Warn("extension network target denied",
+		append(c.callFields(inv, scope.Asset), zap.String("type", params.Type), zap.String("target", target), zap.Error(err))...)
 }

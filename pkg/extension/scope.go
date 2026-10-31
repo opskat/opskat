@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"net"
 	"net/url"
 	"slices"
@@ -13,27 +14,37 @@ import (
 // Scope is what one call may reach, as the subsystem that owns the type of its
 // asset resolved it: an extension asset type's by the asset-type side
 // (internal/extreg, internal/service/extension_svc), a database asset's by the
-// database side. The runtime decides nothing about assets itself; it admits each
-// host call against the scope and the manifest's permissions (capHost):
+// database side — or, for a tool call with no asset, as the host resolves it
+// (NoAssetScopeResolver). The runtime decides nothing about assets or what a
+// scope's addresses are itself; it admits each host call against the scope and
+// the manifest's permissions (capHost):
 //
 //   - a network.http allowlist target is dialed directly, as without a scope;
-//   - one of Endpoints is reachable with network.assetEndpoint, along Route with
-//     TLS and Auth;
+//   - one of Endpoints is reachable over HTTP with the permission
+//     EndpointPermission names (network.assetEndpoint for an asset's), along
+//     Route with TLS and Auth, its redirects held to Endpoints; over TCP only in
+//     a call on an asset;
 //   - any other address is reachable with network.assetRoute when the scope has
 //     a Route, along it by address (a direct route refuses loopback and
 //     link-local targets);
 //   - auth.kerberos_ticket answers from Tickets with permissions.kerberos;
+//   - config.get answers Config;
 //   - with Ops set, no other host call runs at all.
 //
 // A call either has its scope bound when it starts (an instance leased with
 // Plugin.Lease, such as a database driver session's: complete, Ops included,
-// never failing) or resolves it through the host's ScopeResolver on its first
-// network or ticket host call, and keeps it for the rest of the call.
+// never failing) or resolves it through the host's resolver on its first
+// network, ticket or config host call, and keeps it for the rest of the call.
 type Scope struct {
 	// Asset is the asset the call runs against; nil when it has none.
 	Asset *AssetRef
-	// Endpoints are the asset's own addresses.
+	// Endpoints are the addresses the call reaches as endpoints: an asset's own,
+	// or those the host gives a call without one.
 	Endpoints []Endpoint
+	// EndpointPermission names, by its manifest key under permissions.network,
+	// the permission that admits Endpoints; empty = "assetEndpoint", what an
+	// asset's own addresses need.
+	EndpointPermission string
 	// Route is the asset's connection path; nil when the call has none.
 	Route *Route
 	// TLS is the asset's TLS settings, applied to a connection to one of
@@ -54,6 +65,10 @@ type Scope struct {
 	Auth RequestAuth
 	// Tickets issues the asset's Kerberos tickets; nil = the asset has none.
 	Tickets TicketSource
+	// Config is what config.get answers the guest — the scope's config as its
+	// resolver lets the guest read it (never a secret's plaintext); nil = the
+	// scope has none, and config.get is refused.
+	Config json.RawMessage
 	// Ops lists the host calls the call may make (op names, io.open narrowed
 	// per stream type as IOOpenOp gives them); nil = every host call. Only a
 	// scope bound when the call starts restricts ops: a ScopeResolver's scope
@@ -68,6 +83,7 @@ const (
 	OpKVGet          = "kv.get"
 	OpKVSet          = "kv.set"
 	OpAssetGetConfig = "asset.get_config" //nolint:gosec // G101: a host call name, not a credential
+	OpConfigGet      = "config.get"
 	OpFileDialog     = "file_dialog"
 	OpIOOpen         = "io.open"
 	OpIOSetDeadline  = "io.set_deadline"
@@ -191,6 +207,13 @@ type TicketSource interface {
 // a stored asset, or an ad-hoc one (a.AdHoc, test connection). It must refuse an
 // asset whose type ext does not provide. Ops of the scope it returns must be nil.
 type ScopeResolver func(ctx context.Context, ext string, a AssetRef) (*Scope, error)
+
+// NoAssetScopeResolver resolves the scope of a call extension ext makes with no
+// asset — a host-only tool's, a page's call made without one: the addresses it
+// may reach beyond the allowlist, the credentials injected into requests to
+// them, and its Config. The scope it returns has no Asset, and its Ops must be
+// nil.
+type NoAssetScopeResolver func(ctx context.Context, ext string) (*Scope, error)
 
 // endpointSet is a scope's endpoints as the gate matches them.
 type endpointSet []Endpoint

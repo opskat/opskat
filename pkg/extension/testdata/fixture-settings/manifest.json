@@ -1,0 +1,14 @@
+{
+  "name": "fixture-settings",
+  "version": "1.0.0",
+  "hostABI": "1.0",
+  "backend": {
+    "runtime": "wasm",
+    "binary": "main.wasm"
+  },
+  "permissions": {
+    "network": {
+      "settingsEndpoint": true
+    }
+  }
+}
