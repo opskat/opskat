@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { TableDataTab } from "@/components/query/TableDataTab";
@@ -273,6 +273,29 @@ describe("TableDataTab grid edits go through the driver", () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('column "name" is not in table users'));
     expect(screen.queryByText("query.confirmExecute")).toBeNull();
     expect(executed()).toEqual([]);
+  });
+
+  it("opens no confirmation for statements generated from edits that changed meanwhile", async () => {
+    const user = await renderLoaded();
+    editCell("0:name", "ally");
+    await waitFor(() =>
+      expect(screen.getByTitle('UPDATE users SET {"name":"ally"} WHERE {"id":1}')).toBeInTheDocument()
+    );
+
+    let finishGeneration!: () => void;
+    const generate = vi.mocked(GetGridEditStatements).getMockImplementation()!;
+    vi.mocked(GetGridEditStatements).mockImplementationOnce(
+      (...args) => new Promise((resolve) => (finishGeneration = () => resolve(generate(...args))))
+    );
+    await user.click(screen.getByTitle("query.applyChanges"));
+    editCell("0:name", "anna");
+    await act(async () => finishGeneration());
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    await user.click(screen.getByTitle("query.applyChanges"));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(previewed(dialog)).toEqual(['UPDATE users SET {"name":"anna"} WHERE {"id":1}']);
   });
 
   it("previews and executes the driver's DELETE statements for the selected rows", async () => {
