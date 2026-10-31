@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extsdk/internal/registration"
 	"github.com/opskat/opskat/pkg/extwire"
 )
 
@@ -197,7 +198,7 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 	}
 	schema, err := reflectSchema(reflect.TypeFor[T](), fmt.Sprintf("tool %q arguments", name), schemaModeParams)
 	if err != nil {
-		reportRegistrationError(err)
+		registration.Fail(err)
 		return detachedTool[T](name)
 	}
 	if _, declared := schema["properties"].(map[string]any)[injectedAssetParam]; declared {
@@ -227,24 +228,10 @@ func detachedTool[T any](name string) *ToolReg[T] {
 	return &ToolReg[T]{e: &toolEntry{name: name, schema: map[string]any{"type": "object", "properties": map[string]any{}}}}
 }
 
-// registrationErrors are the invalid registrations seen so far, in order. They
-// are recorded rather than panicked on: a panic in the guest's init surfaces at
-// the host only as "wasm error: unreachable" plus a stack trace, while describe
-// can return the message — tool or contribution and reason — as the load error.
-var registrationErrors []error
-
-// failRegistration records an invalid registration; describe returns the first.
+// failRegistration records an invalid registration (see package registration):
+// every call, describe first, fails with the first one.
 func failRegistration(format string, args ...any) {
-	reportRegistrationError(fmt.Errorf(format, args...))
-}
-
-// ReportRegistrationError records an invalid registration made through a
-// sub-package of the SDK (sdkdbdriver): describe fails with err, like every
-// registration error here. Extensions do not call it.
-func ReportRegistrationError(err error) { reportRegistrationError(err) }
-
-func reportRegistrationError(err error) {
-	registrationErrors = append(registrationErrors, err)
+	registration.Fail(fmt.Errorf(format, args...))
 }
 
 // Large marks the string parameter name (its JSON field name) as carrying large
@@ -540,7 +527,7 @@ func AssetType[C any](typ string) *AssetTypeReg[C] {
 	}
 	schema, err := reflectSchema(reflect.TypeFor[C](), fmt.Sprintf("asset type %q config", typ), schemaModeConfig)
 	if err != nil {
-		reportRegistrationError(err)
+		registration.Fail(err)
 		return &AssetTypeReg[C]{e: &assetTypeEntry{typ: typ, name: typ}}
 	}
 	entry := &assetTypeEntry{typ: typ, name: typ, schema: schema}
@@ -643,7 +630,7 @@ func Settings[C any]() *SettingsReg[C] {
 	}
 	schema, err := reflectSchema(reflect.TypeFor[C](), "settings", schemaModeConfig)
 	if err != nil {
-		reportRegistrationError(err)
+		registration.Fail(err)
 		return &SettingsReg[C]{s: &extwire.Settings{}}
 	}
 	settings = &extwire.Settings{ConfigSchema: schema}
@@ -721,7 +708,7 @@ func resetRegistries() {
 	meta = Meta{}
 	tools = map[string]*toolEntry{}
 	toolOrder = nil
-	registrationErrors = nil
+	registration.Reset()
 	assetTypes = nil
 	policyGroups = nil
 	frontendSpec = FrontendSpec{}

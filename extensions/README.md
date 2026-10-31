@@ -956,6 +956,9 @@ result, err := host.CallTool(asset, "note_put", putArgs{Key: "k", Content: "v"})
 other host capabilities; `CallTool` also records the events the tool sends through
 `ctx.Events`, which `Events` returns afterwards, and `CheckPolicy` returns the action
 and the resources a call requests (a single-resource tool's as a one-element list).
+A registration error fails every `CallTool` and `CheckPolicy` with the same message
+`describe()` returns, so a declaration the host would refuse fails the extension's own
+tests too.
 
 ## Frontend pages (optional)
 

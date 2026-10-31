@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
+	"github.com/opskat/opskat/pkg/extsdk/internal/registration"
 )
 
 var demoDriver = dbdriver.Descriptor{
@@ -43,26 +44,33 @@ func callDriver(t *testing.T, input string) driverReply {
 	return reply
 }
 
-// resetDrivers clears this package's registrations and handles (the SDK's own
-// registry keeps the descriptors, which these tests do not read).
+// resetDrivers clears this package's registrations and handles, and the SDK's
+// record of invalid registrations (the SDK's own registry keeps the descriptors,
+// which these tests do not read).
 func resetDrivers() {
 	drivers = nil
 	driverHandles = newDriverHandleTable()
+	registration.Reset()
 }
 
 func TestDatabaseDriverRegistrationRejectsBrokenDeclarations(t *testing.T) {
-	Convey("a driver without an opener, or registered twice, fails at init", t, func() {
+	open := func(context.Context, dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) { return nil, nil, nil }
+
+	// registration.Err is what the SDK answers describe (and every other call) with.
+	Convey("a driver without an opener fails describe, naming the driver", t, func() {
 		resetDrivers()
 		DatabaseDriver(demoDriver, nil)
 		So(drivers, ShouldBeEmpty)
-		So(checkDriver(&driverEntry{desc: demoDriver}), ShouldBeError, `opskat: database driver "demodb" has no open function`)
+		So(registration.Err(), ShouldBeError, `opskat: database driver "demodb" has no open function`)
+	})
 
-		open := func(context.Context, dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) { return nil, nil, nil }
+	Convey("a driver registered twice fails describe, naming the driver", t, func() {
+		resetDrivers()
+		DatabaseDriver(demoDriver, open)
+		So(registration.Err(), ShouldBeNil)
 		DatabaseDriver(demoDriver, open)
 		So(drivers, ShouldHaveLength, 1)
-		DatabaseDriver(demoDriver, open)
-		So(drivers, ShouldHaveLength, 1)
-		So(checkDriver(&driverEntry{desc: demoDriver, open: open}), ShouldBeError, `opskat: database driver "demodb" is already registered`)
+		So(registration.Err(), ShouldBeError, `opskat: database driver "demodb" is already registered`)
 	})
 }
 
@@ -74,14 +82,18 @@ func TestDatabaseDriverStatementClassifierMatchesItsDeclaration(t *testing.T) {
 	splitting := demoDriver
 	splitting.Capabilities = []dbdriver.Capability{dbdriver.CapClassifyStatements}
 
-	Convey("a classifier and the capability declaring it come together, or registration fails at init", t, func() {
-		resetDrivers()
-		DatabaseDriver(splitting, open)
-		DatabaseDriver(demoDriver, open, WithStatementClassifier(classify))
-		DatabaseDriver(splitting, open, WithStatementClassifier(nil))
-		So(drivers, ShouldBeEmpty)
-		So(checkDriver(&driverEntry{desc: splitting, open: open}), ShouldNotBeNil)
-		So(checkDriver(&driverEntry{desc: demoDriver, open: open, classify: classify}), ShouldNotBeNil)
+	Convey("a classifier and the capability declaring it come together, or describe fails naming the driver", t, func() {
+		mismatch := `opskat: database driver "demodb" must declare capability "classify_statements" exactly when it is given WithStatementClassifier`
+		for _, register := range []func(){
+			func() { DatabaseDriver(splitting, open) },
+			func() { DatabaseDriver(demoDriver, open, WithStatementClassifier(classify)) },
+			func() { DatabaseDriver(splitting, open, WithStatementClassifier(nil)) },
+		} {
+			resetDrivers()
+			register()
+			So(drivers, ShouldBeEmpty)
+			So(registration.Err(), ShouldBeError, mismatch)
+		}
 	})
 
 	Convey("the host asks the driver to split SQL without a session", t, func() {

@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
+	"github.com/opskat/opskat/pkg/extsdk/internal/registration"
 	"github.com/opskat/opskat/pkg/extwire"
 )
 
@@ -84,7 +85,7 @@ func DatabaseDriver(d dbdriver.Descriptor, open DriverOpen, opts ...DriverOption
 	if err := checkDriver(entry); err != nil {
 		// A registration mistake fails describe, naming the driver — not a panic
 		// in init, which the host sees only as a wasm trap.
-		opskat.ReportRegistrationError(err)
+		registration.Fail(err)
 		return
 	}
 	drivers = append(drivers, entry)

@@ -198,7 +198,7 @@ func TestTypedToolDispatch(t *testing.T) {
 // registrationError is what describe answers once a registration was invalid: the
 // error the host shows as the extension's load failure.
 func registrationError() error {
-	_, err := dispatchDescribe()
+	_, err := dispatch("describe", nil)
 	return err
 }
 
