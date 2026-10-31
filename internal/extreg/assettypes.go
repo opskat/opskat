@@ -89,6 +89,9 @@ func CheckConfigSchema(schema map[string]any, auth *extwire.Auth) error {
 	if err := checkEnumPresentation(schema); err != nil {
 		return fmt.Errorf("configSchema.%w", err)
 	}
+	if err := checkStringFormats(schema); err != nil {
+		return fmt.Errorf("configSchema.%w", err)
+	}
 	if auth == nil {
 		return nil
 	}
@@ -101,6 +104,25 @@ func CheckConfigSchema(schema map[string]any, auth *extwire.Auth) error {
 		secrets[p] = true
 	}
 	return checkAuth(auth, declared, secrets)
+}
+
+// checkStringFormats checks that a format:"password" or format:"endpoint" field is
+// a string (or declares no type, which the form renders as a text input): a
+// secret is encrypted as a string and an endpoint parsed from one, so the host
+// could store or reach neither from another type.
+func checkStringFormats(schema map[string]any) error {
+	props, _ := schema["properties"].(map[string]any)
+	for _, name := range ConfigSchemaProperties(schema) {
+		prop, _ := props[name].(map[string]any)
+		format, _ := prop["format"].(string)
+		if format != "password" && format != "endpoint" {
+			continue
+		}
+		if typ, ok := prop["type"]; ok && typ != "string" {
+			return fmt.Errorf("properties.%s: format %q is only for a string field, not %q", name, format, fmt.Sprint(typ))
+		}
+	}
+	return nil
 }
 
 // bindsEndpoint reports whether the type declares anything the host applies only

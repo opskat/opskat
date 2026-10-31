@@ -120,7 +120,8 @@ func TestCommandReviewBindingsOverTheRegistry(t *testing.T) {
 
 	st, err := e.GetCommandReviewState()
 	require.NoError(t, err)
-	assert.Equal(t, []command_review_svc.ReviewerInfo{{Name: "alpha", DisplayName: "alpha 审核", Version: "0.3.0", Usable: true}}, st.Reviewers)
+	assert.Equal(t, []command_review_svc.ReviewerInfo{{Name: "alpha", DisplayName: "alpha 审核", Version: "0.3.0", Usable: true,
+		Questions: []command_review_svc.Question{{ID: "destructive", Names: map[string]string{"en": "destructive"}}}}}, st.Reviewers)
 	assert.Equal(t, "alpha", st.Active)
 	assert.Empty(t, st.Problem)
 

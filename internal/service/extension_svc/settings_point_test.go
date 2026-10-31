@@ -78,6 +78,12 @@ func TestSettingsPointCheck(t *testing.T) {
 		{name: "auth selected by a password field", settingsEndpoint: true, settings: apiSettings(&extwire.Auth{Selector: "apiKey", Groups: []extwire.AuthGroup{{
 			When: "x", Bindings: []extwire.AuthBinding{{In: "header", Name: "X-Key", Value: "{{apiKey}}"}},
 		}}}), wantErr: `settings: auth.selector "apiKey" is a password field; a secret cannot select an auth group`},
+		{name: "password field that is not a string", settings: extwire.Settings{ConfigSchema: map[string]any{
+			"properties": map[string]any{"pin": map[string]any{"type": "integer", "format": "password"}},
+		}}, wantErr: `settings: configSchema.properties.pin: format "password" is only for a string field, not "integer"`},
+		{name: "endpoint field that is not a string", settingsEndpoint: true, settings: extwire.Settings{ConfigSchema: map[string]any{
+			"properties": map[string]any{"hosts": map[string]any{"type": "array", "format": "endpoint"}},
+		}}, wantErr: `settings: configSchema.properties.hosts: format "endpoint" is only for a string field, not "array"`},
 		{name: "settings in another shape", settings: []string{"x"}, wantErr: "settings: json: cannot unmarshal array"},
 	}
 	for _, c := range cases {

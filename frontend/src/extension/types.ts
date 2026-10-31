@@ -128,7 +128,7 @@ export interface ExtCallOptions {
 }
 
 // The page API: calling a tool is the one entry point, canceling is its signal.
-// A page may call any tool of its own extension, page-only or not.
+// A page may call any tool of its own extension, page-only or not, except a host-only one.
 export interface ExtAPI {
   callTool(extName: string, tool: string, args: unknown, assetId?: number, options?: ExtCallOptions): Promise<unknown>;
 }

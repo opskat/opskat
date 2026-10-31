@@ -3252,6 +3252,7 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
+    "commandReviewWarning": "This extension can let commands run without asking: under Assisted approval and Autopilot, a command it passes is executed directly. Only install review extensions you trust.",
     "settings": {
       "title": "Settings",
       "saved": "Settings saved",
@@ -3306,6 +3307,7 @@
     "noTools": "No tools",
     "noPolicies": "No policy groups",
     "noPages": "No pages",
+    "reviewQuestions": "What it reviews",
     "loadError": "Failed to load extensions",
     "pageDisabled": "Extension \"{{name}}\" is disabled. Re-enable it in Settings → Extensions to use this page.",
     "hostUi": {
@@ -3693,6 +3695,7 @@
       "timeoutRange": "Timeout must be between {{min}} and {{max}} ms",
       "reviewer": "Command reviewer",
       "unsigned": "unsigned",
+      "configureReviewer": "Configure in extension details",
       "reviewerUnusable": "{{name}} can't be used right now: {{reason}}",
       "reviewerSaved": "Command reviewer switched",
       "save": "Save",

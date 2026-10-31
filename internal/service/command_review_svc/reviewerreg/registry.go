@@ -206,6 +206,7 @@ func (s *Source) State(ctx context.Context, lang string) command_review_svc.Stat
 	for _, c := range cands {
 		info := command_review_svc.ReviewerInfo{
 			Name: c.name, DisplayName: c.translate(lang, c.displayName), Version: c.version, Usable: c.running,
+			Questions: c.questions,
 		}
 		if !c.running {
 			info.Reason = errNotRunning(c).Error()

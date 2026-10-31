@@ -55,8 +55,9 @@ func (e *Extension) GetExtensionManifest(name string) (*extreg.Manifest, error) 
 // is still scoped to its asset (ctx.AssetConfig, endpoint gating, connection
 // settings and credential injection all follow the AssetRef) and its arguments are
 // held to the tool's declared schema, as Plugin.CallTool does not check them. A
-// page may call any tool of its extension, page-only or not; it runs under the
-// tool's declared timeout, or none for a page-only tool declaring NoTimeout.
+// page may call any tool of its extension, page-only or not, except a host-only
+// one (refused, naming it); it runs under the tool's declared timeout, or none
+// for a page-only tool declaring NoTimeout.
 //
 // invocationID is the frontend's per-call correlation token, minted there because
 // the page needs it before the call returns: every event the tool emits reaches

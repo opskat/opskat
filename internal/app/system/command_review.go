@@ -2,6 +2,7 @@ package system
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // commandReviewConfigErrorEvent 在审核遇到设置问题（没有审核扩展、扩展没配置好等）时发给前端，
@@ -16,9 +18,10 @@ import (
 const commandReviewConfigErrorEvent = "command-review:config-error"
 
 // 超时的取值范围，与设置页的校验一致（frontend/src/components/settings/CommandReviewSection.tsx）。
+// 上限就是审核器工具声明的时限（extwire.MaxReviewTimeout）：再长的设置会被工具时限截断。
 const (
 	commandReviewTimeoutMin = 1000
-	commandReviewTimeoutMax = 60000
+	commandReviewTimeoutMax = int(extwire.MaxReviewTimeout / time.Millisecond)
 )
 
 // CommandReviewSettings 是设置页读到的、宿主侧的审核设置。具体审核服务的设置（API key、模型等）

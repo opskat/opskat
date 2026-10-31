@@ -35,8 +35,9 @@ var commandReviewer *extwire.CommandReviewer
 // CommandReviewer declares the extension's command reviewer: under assisted
 // approval and Autopilot the host calls review once per command the rules would
 // ask the user about, concurrently, each call bounded by the host's review
-// timeout (a timed-out call is retried once, so review needs no retry of its
-// own). questions are what a command can fail; a command longer than
+// timeout setting — the tool's own limit is the longest that setting allows
+// (extwire.MaxReviewTimeout) — and a timed-out call is retried once, so review
+// needs no retry of its own. questions are what a command can fail; a command longer than
 // maxCommandLen fails the review without a call.
 //
 // It registers the host-only tool ReviewToolName — exec, pages and help never see
@@ -52,7 +53,7 @@ func CommandReviewer(questions []ReviewQuestion, maxCommandLen int, review func(
 	}
 	Tool(ReviewToolName, func(ctx *ToolContext, item ReviewItem) (any, error) {
 		return review(ctx, item), nil
-	}).HostOnly()
+	}).HostOnly().Timeout(extwire.MaxReviewTimeout)
 	commandReviewer = &extwire.CommandReviewer{
 		Tool:          ReviewToolName,
 		Questions:     append([]ReviewQuestion(nil), questions...),

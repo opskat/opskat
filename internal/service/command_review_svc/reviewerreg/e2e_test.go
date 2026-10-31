@@ -152,7 +152,10 @@ func TestReviewThroughTheFixtureReviewer(t *testing.T) {
 	t.Run("the fixture is the only candidate and in use", func(t *testing.T) {
 		st := h.source.State(context.Background(), "en")
 		require.Len(t, st.Reviewers, 1)
-		assert.Equal(t, command_review_svc.ReviewerInfo{Name: "fixture-reviewer", DisplayName: "Reviewer Fixture", Version: "1.0.0", Usable: true, Signed: true}, st.Reviewers[0])
+		info := st.Reviewers[0]
+		assert.Equal(t, []string{"destructive", "disruptive", "remote_code"}, questionIDs(info.Questions))
+		info.Questions = nil
+		assert.Equal(t, command_review_svc.ReviewerInfo{Name: "fixture-reviewer", DisplayName: "Reviewer Fixture", Version: "1.0.0", Usable: true, Signed: true}, info)
 		assert.Equal(t, "fixture-reviewer", st.Active)
 	})
 
@@ -286,4 +289,12 @@ func TestReviewThroughTheReviewService(t *testing.T) {
 	require.Len(t, requests, 1)
 	assert.Equal(t, "Bearer s3cret", requests[0].auth)
 	assert.JSONEq(t, `{"assetType":"ssh","command":"systemctl restart nginx"}`, requests[0].body)
+}
+
+func questionIDs(qs []command_review_svc.Question) []string {
+	ids := make([]string, len(qs))
+	for i, q := range qs {
+		ids[i] = q.ID
+	}
+	return ids
 }

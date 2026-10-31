@@ -7,8 +7,8 @@ import (
 
 // Question 是审核器声明的一道题。结果里只回 id，宿主按 Names（语言 → 名称）显示。
 type Question struct {
-	ID    string
-	Names map[string]string
+	ID    string            `json:"id"`
+	Names map[string]string `json:"names"`
 }
 
 // 审核器对一条命令的回答。error 是"没能得到判断"，按审核失败处理。
@@ -47,14 +47,15 @@ type ReviewerSource interface {
 }
 
 // ReviewerInfo 是设置页列出的一个审核器。Usable 为假时 Reason 说明原因；
-// Signed 表示从官方商店安装、签名已校验。
+// Signed 表示从官方商店安装、签名已校验；Questions 是它声明的题目，扩展详情据此列出审核项。
 type ReviewerInfo struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName"`
-	Version     string `json:"version"`
-	Usable      bool   `json:"usable"`
-	Reason      string `json:"reason,omitempty"`
-	Signed      bool   `json:"signed"`
+	Name        string     `json:"name"`
+	DisplayName string     `json:"displayName"`
+	Version     string     `json:"version"`
+	Usable      bool       `json:"usable"`
+	Reason      string     `json:"reason,omitempty"`
+	Signed      bool       `json:"signed"`
+	Questions   []Question `json:"questions"`
 }
 
 // State 是设置页和权限模式卡片看到的审核状态。Selected 是设置里选的、仍可选的审核器；

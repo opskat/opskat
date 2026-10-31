@@ -1,6 +1,15 @@
 package extwire
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+// MaxReviewTimeout is the longest per-call review timeout the host lets the user
+// set (Settings › AI › command review). A call of the reviewer's tool runs under
+// the shorter of that setting and the tool's own limit, so the tool declares
+// this as its limit and the user's setting is what bounds the call.
+const MaxReviewTimeout = 60 * time.Second
 
 // CommandReviewer is the extension's command reviewer (KeyCommandReviewer): under
 // assisted approval and Autopilot the host asks it about each command the rules

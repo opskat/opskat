@@ -684,7 +684,8 @@ user, Autopilot refuses it.
 The review function runs as a call without an asset: it reads its settings with
 `ctx.Settings()` and reaches the service in them under
 `permissions.network.settingsEndpoint` (above). Do not retry inside it — the host's
-timeout cuts the call and retries once. The manifest flag and `describe()` must agree,
+timeout (the user's setting, up to 60 seconds; the tool declares that limit) cuts
+the call and retries once. The manifest flag and `describe()` must agree,
 and the tool must exist, be host-only and take exactly those parameters, or the load
 fails naming the rule. Enabled reviewers are the candidates; with several, the user
 picks one under Settings › AI › Command review, and the extension's settings form

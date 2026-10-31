@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { CommandReviewSection } from "../components/settings/CommandReviewSection";
+import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { GetCommandReviewSettings, SaveCommandReviewTimeout } from "../../wailsjs/go/system/System";
 import { GetCommandReviewState, SetCommandReviewer } from "../../wailsjs/go/extension/Extension";
 
@@ -39,10 +40,14 @@ describe("CommandReviewSection", () => {
     vi.mocked(SetCommandReviewer).mockReset().mockResolvedValue(undefined);
   });
 
-  it("显示在用的审核扩展", async () => {
+  it("显示在用的审核扩展；它的设置（含保存并测试）在扩展详情里，这里给入口", async () => {
     await renderSection();
     expect(screen.getByTestId("command-reviewer-active")).toHaveTextContent("JEV");
     expect(screen.queryByTestId("command-review-problem")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "commandReview.settings.configureReviewer" }));
+    expect(useSettingsUiStore.getState().activeTab).toBe("extensions");
+    expect(useSettingsUiStore.getState().extensionDetail).toBe("jev");
   });
 
   it("没有审核扩展时提示去安装，并说明辅助审批和 Autopilot 会转到默认", async () => {

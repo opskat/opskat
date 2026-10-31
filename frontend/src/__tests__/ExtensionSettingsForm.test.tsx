@@ -52,6 +52,14 @@ describe("ExtensionSettingsForm", () => {
     expect(screen.getByLabelText(/API key/)).not.toHaveAttribute("placeholder", "asset.passwordUnchanged");
   });
 
+  it("starts a field nothing was saved for from its declared default, as the asset config form does", async () => {
+    const base = form() as unknown as { configSchema: { properties: Record<string, Record<string, unknown>> } };
+    base.configSchema.properties.baseURL.default = "https://api.example";
+    vi.mocked(GetExtensionSettings).mockResolvedValue({ ...base, values: {}, secrets: { apiKey: false } } as never);
+    await renderForm();
+    expect(screen.getByLabelText(/Service URL/)).toHaveValue("https://api.example");
+  });
+
   it("renders nothing for an extension declaring no settings", async () => {
     vi.mocked(GetExtensionSettings).mockResolvedValue(null as never);
     await renderForm();

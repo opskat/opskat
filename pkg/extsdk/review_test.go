@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 func TestCommandReviewer(t *testing.T) {
@@ -41,6 +43,14 @@ func TestCommandReviewer(t *testing.T) {
 		for _, name := range []string{"assetType", "command", "syntax"} {
 			So(props[name].(map[string]any)["type"], ShouldEqual, "string")
 		}
+	})
+
+	Convey("the review tool's limit admits the longest review timeout the host lets the user set", t, func() {
+		resetRegistries()
+		CommandReviewer(questions, 4000, review)
+
+		tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
+		So(tool["timeoutMs"], ShouldEqual, float64(extwire.MaxReviewTimeout.Milliseconds()))
 	})
 
 	Convey("the review tool answers one command with the function's verdict", t, func() {

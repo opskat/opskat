@@ -155,6 +155,11 @@ func TestPointChecksTheDeclaration(t *testing.T) {
 				r.Questions = []extwire.ReviewQuestion{{ID: "destructive", Names: map[string]string{"en": " "}}}
 			})},
 			wantErr: `commandReviewer: questions[destructive]: names["en"] is empty`},
+		{name: "name without a language", spec: viewSpec{name: "x", declared: true, tools: []extwire.Tool{reviewTool("review")},
+			reviewer: withReviewer(func(r *extwire.CommandReviewer) {
+				r.Questions = []extwire.ReviewQuestion{{ID: "destructive", Names: map[string]string{"": "may destroy data"}}}
+			})},
+			wantErr: `commandReviewer: questions[destructive]: names: a name's language is empty`},
 		{name: "no max length", spec: viewSpec{name: "x", declared: true, tools: []extwire.Tool{reviewTool("review")},
 			reviewer: withReviewer(func(r *extwire.CommandReviewer) { r.MaxCommandLen = 0 })},
 			wantErr: "commandReviewer: maxCommandLen must be positive"},
@@ -227,7 +232,12 @@ func TestAttachAndRevokeCandidates(t *testing.T) {
 	require.NoError(t, contributions.Attach(view(viewSpec{name: "plain"}))) // contributes no reviewer
 	require.NoError(t, contributions.Attach(reviewerView("jev", true)))
 	st := src.State(ctx, "zh-CN")
-	assert.Equal(t, []command_review_svc.ReviewerInfo{{Name: "jev", DisplayName: "jev 审核器", Version: "1.2.0", Usable: true}}, st.Reviewers)
+	// The extension's detail page lists what it reviews: its questions, named per language.
+	assert.Equal(t, []command_review_svc.ReviewerInfo{{Name: "jev", DisplayName: "jev 审核器", Version: "1.2.0", Usable: true,
+		Questions: []command_review_svc.Question{
+			{ID: "destructive", Names: map[string]string{"en": "destructive (en)", "zh-CN": "destructive（中文）"}},
+			{ID: "remote_code", Names: map[string]string{"en": "remote_code (en)", "zh-CN": "remote_code（中文）"}},
+		}}}, st.Reviewers)
 	assert.Equal(t, "jev", st.Active)
 	assert.Empty(t, st.Problem)
 

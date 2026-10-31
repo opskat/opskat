@@ -122,6 +122,9 @@ func checkQuestions(questions []extwire.ReviewQuestion) error {
 			return fmt.Errorf("questions[%s]: names: at least one language's name is required", q.ID)
 		}
 		for lang, name := range q.Names {
+			if lang == "" {
+				return fmt.Errorf("questions[%s]: names: a name's language is empty", q.ID)
+			}
 			if strings.TrimSpace(name) == "" {
 				return fmt.Errorf("questions[%s]: names[%q] is empty", q.ID, lang)
 			}

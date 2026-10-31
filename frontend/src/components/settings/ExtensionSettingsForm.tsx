@@ -8,7 +8,7 @@ import { notifySuccess } from "@/lib/notify";
 import type { ReviewInfo } from "@/lib/commandReview";
 import { ReviewNotice } from "@/components/approval/ReviewNotice";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
-import { visibleFields, type ExtensionConfigSchema } from "@/extension/configSchema";
+import { defaultValues, visibleFields, type ExtensionConfigSchema } from "@/extension/configSchema";
 import type { ExtAuth } from "@/extension/types";
 import {
   GetExtensionSettings,
@@ -46,7 +46,8 @@ export function ExtensionSettingsForm({ extName, reviewer = false }: { extName: 
     try {
       const data = (await GetExtensionSettings(extName, i18n.language)) as SettingsFormData | null;
       setForm(data);
-      setValue(data ? { ...data.values } : {});
+      // 与资产配置表单一致：没存过的字段以声明的默认值起步。
+      setValue(data ? { ...defaultValues(data.configSchema), ...data.values } : {});
     } catch (e) {
       toast.error(String((e as Error)?.message ?? e));
     }
