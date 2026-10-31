@@ -195,30 +195,49 @@ func TestTypedToolDispatch(t *testing.T) {
 	})
 }
 
+// registrationError is what describe answers once a registration was invalid: the
+// error the host shows as the extension's load failure.
+func registrationError() error {
+	_, err := dispatchDescribe()
+	return err
+}
+
+// shouldFailDescribe asserts describe fails with an error containing every part.
+func shouldFailDescribe(parts ...string) {
+	err := registrationError()
+	So(err, ShouldNotBeNil)
+	for _, p := range parts {
+		So(err.Error(), ShouldContainSubstring, p)
+	}
+}
+
 func TestRegistrationRejectsBrokenDeclarations(t *testing.T) {
 	Convey("a registration that cannot produce a schema fails at init, not at call time", t, func() {
 		resetRegistries()
 
 		Convey("duplicate tool name", func() {
 			Tool("dup", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
-			So(func() {
-				Tool("dup", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
-			}, ShouldPanic)
+			So(registrationError(), ShouldBeNil)
+			Tool("dup", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe(`tool "dup" is already registered`)
+		})
+
+		Convey("a tool without a name", func() {
+			Tool("", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe("tool name is required")
 		})
 
 		Convey("args type the flag DSL cannot express", func() {
 			type nested struct {
 				Inner map[string]string `json:"inner"`
 			}
-			So(func() {
-				Tool("bad", func(_ *ToolContext, _ nested) (any, error) { return nil, nil })
-			}, ShouldPanic)
+			Tool("bad", func(_ *ToolContext, _ nested) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe(`tool "bad" arguments`)
 		})
 
 		Convey("args type that is not a struct", func() {
-			So(func() {
-				Tool("bad", func(_ *ToolContext, _ string) (any, error) { return nil, nil })
-			}, ShouldPanic)
+			Tool("bad", func(_ *ToolContext, _ string) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe(`tool "bad" arguments must be a struct`)
 		})
 	})
 }
@@ -339,17 +358,20 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 		noop := func(_ *ToolContext, _ searchArgs) (any, error) { return nil, nil }
 
 		Convey("no declared actions", func() {
-			So(func() { Tool("a", noop).PolicyFunc(nil, classifySearch) }, ShouldPanic)
+			Tool("a", noop).PolicyFunc(nil, classifySearch)
+			shouldFailDescribe(`tool "a"`, "PolicyFunc needs the set of actions")
 		})
 		Convey("combined with a fixed action", func() {
-			So(func() { Tool("b", noop).Policy("index.read").PolicyFunc([]string{"index.read"}, classifySearch) }, ShouldPanic)
-			So(func() { Tool("c", noop).PolicyFunc([]string{"index.read"}, classifySearch).Policy("index.read") }, ShouldPanic)
+			Tool("b", noop).Policy("index.read").PolicyFunc([]string{"index.read"}, classifySearch)
+			shouldFailDescribe(`tool "b" already declares its policy`)
+			resetRegistries()
+			Tool("c", noop).PolicyFunc([]string{"index.read"}, classifySearch).Policy("index.read")
+			shouldFailDescribe(`tool "c" already classifies`)
 		})
 		Convey("combined with Resource, which PolicyFunc already answers", func() {
-			So(func() {
-				Tool("d", noop).PolicyFunc([]string{"index.read"}, classifySearch).
-					Resource(func(a searchArgs) string { return a.Index })
-			}, ShouldPanic)
+			Tool("d", noop).PolicyFunc([]string{"index.read"}, classifySearch).
+				Resource(func(a searchArgs) string { return a.Index })
+			shouldFailDescribe(`tool "d" already classifies`)
 		})
 	})
 }
@@ -429,21 +451,26 @@ func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
 		noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
 		classifyOne := func(a bulkArgs) (string, string) { return "index.read", "" }
 
-		So(func() { Tool("a", noop).PolicyResources(nil, classifyBulk) }, ShouldPanic)
-		So(func() { Tool("b", noop).Policy("index.read").PolicyResources([]string{"index.read"}, classifyBulk) }, ShouldPanic)
-		So(func() { Tool("c", noop).PolicyResources([]string{"index.read"}, classifyBulk).Policy("index.read") }, ShouldPanic)
-		So(func() {
-			Tool("d", noop).PolicyResources([]string{"index.read"}, classifyBulk).
-				Resource(func(bulkArgs) string { return "" })
-		}, ShouldPanic)
-		So(func() {
-			Tool("e", noop).PolicyFunc([]string{"index.read"}, classifyOne).
-				PolicyResources([]string{"index.read"}, classifyBulk)
-		}, ShouldPanic)
-		So(func() {
-			Tool("f", noop).PolicyResources([]string{"index.read"}, classifyBulk).
-				PolicyFunc([]string{"index.read"}, classifyOne)
-		}, ShouldPanic)
+		Tool("a", noop).PolicyResources(nil, classifyBulk)
+		shouldFailDescribe(`tool "a"`, "PolicyResources needs the set of actions")
+		resetRegistries()
+		Tool("b", noop).Policy("index.read").PolicyResources([]string{"index.read"}, classifyBulk)
+		shouldFailDescribe(`tool "b"`)
+		resetRegistries()
+		Tool("c", noop).PolicyResources([]string{"index.read"}, classifyBulk).Policy("index.read")
+		shouldFailDescribe(`tool "c"`)
+		resetRegistries()
+		Tool("d", noop).PolicyResources([]string{"index.read"}, classifyBulk).
+			Resource(func(bulkArgs) string { return "" })
+		shouldFailDescribe(`tool "d"`)
+		resetRegistries()
+		Tool("e", noop).PolicyFunc([]string{"index.read"}, classifyOne).
+			PolicyResources([]string{"index.read"}, classifyBulk)
+		shouldFailDescribe(`tool "e"`)
+		resetRegistries()
+		Tool("f", noop).PolicyResources([]string{"index.read"}, classifyBulk).
+			PolicyFunc([]string{"index.read"}, classifyOne)
+		shouldFailDescribe(`tool "f"`)
 	})
 }
 
@@ -549,7 +576,8 @@ func TestRejectArgsRefusesTheCallWithTheToolsReason(t *testing.T) {
 		resetRegistries()
 		reg := Tool("request", func(_ *ToolContext, _ pathArgs) (any, error) { return nil, nil }).
 			Policy("index.read").RejectArgs(rejectHostPath)
-		So(func() { reg.RejectArgs(rejectHostPath) }, ShouldPanic)
+		reg.RejectArgs(rejectHostPath)
+		shouldFailDescribe(`tool "request" already declares RejectArgs`)
 	})
 }
 
@@ -569,10 +597,18 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 		So(byName["plain"], ShouldNotContainKey, "timeoutMs")
 
 		Convey("a timeout outside (0, 10m] fails at registration", func() {
-			reg := Tool("bad", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
-			So(func() { reg.Timeout(10*time.Minute + time.Millisecond) }, ShouldPanic)
-			So(func() { reg.Timeout(0) }, ShouldPanic)
-			So(func() { reg.Timeout(10 * time.Minute) }, ShouldNotPanic)
+			newBad := func() *ToolReg[struct{}] {
+				return Tool("bad", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
+			}
+			resetRegistries()
+			newBad().Timeout(10*time.Minute + time.Millisecond)
+			shouldFailDescribe(`tool "bad"`, "outside [1ms, 10m0s]")
+			resetRegistries()
+			newBad().Timeout(0)
+			shouldFailDescribe(`tool "bad"`, "outside [1ms, 10m0s]")
+			resetRegistries()
+			newBad().Timeout(10 * time.Minute)
+			So(registrationError(), ShouldBeNil)
 		})
 	})
 }
@@ -600,12 +636,21 @@ func TestDescribeReportsLargeParams(t *testing.T) {
 		So(byName["plain"], ShouldNotContainKey, "large")
 
 		Convey("a non-string, unknown or repeated parameter fails at registration", func() {
-			reg := Tool("bad", noop).Policy("read")
-			So(func() { reg.Large("size") }, ShouldPanic)
-			So(func() { reg.Large("missing") }, ShouldPanic)
-			So(func() { reg.Large("body") }, ShouldNotPanic)
-			So(func() { reg.Large("body") }, ShouldPanic)
-			So(func() { reg.Large("index") }, ShouldPanic) // its -file spelling is the index-file parameter
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("size")
+			shouldFailDescribe(`tool "bad" Large("size")`, "only a string parameter")
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("missing")
+			shouldFailDescribe(`tool "bad" Large("missing")`, "no such parameter")
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("body").Large("body")
+			shouldFailDescribe(`tool "bad" Large("body") is already declared`)
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("body")
+			So(registrationError(), ShouldBeNil)
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("index") // its -file spelling is the index-file parameter
+			shouldFailDescribe(`tool "bad" Large("index")`, "index-file")
 		})
 	})
 }
@@ -649,14 +694,17 @@ func TestToolDeclaresPolicyOrPageOnly(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, `"bare"`)
 		})
 		Convey("a tool declaring both fails at registration, in either order", func() {
-			So(func() { Tool("a", noop).Policy("read").PageOnly() }, ShouldPanic)
-			So(func() { Tool("b", noop).PageOnly().Policy("read") }, ShouldPanic)
-			So(func() {
-				Tool("c", noop).PageOnly().PolicyFunc([]string{"read"}, func(args) (string, string) { return "read", "" })
-			}, ShouldPanic)
-			So(func() {
-				Tool("d", noop).PolicyResources([]string{"read"}, func(args) (string, []string) { return "read", nil }).PageOnly()
-			}, ShouldPanic)
+			Tool("a", noop).Policy("read").PageOnly()
+			shouldFailDescribe(`tool "a"`, "PageOnly is exclusive")
+			resetRegistries()
+			Tool("b", noop).PageOnly().Policy("read")
+			shouldFailDescribe(`tool "b"`, "Policy is exclusive")
+			resetRegistries()
+			Tool("c", noop).PageOnly().PolicyFunc([]string{"read"}, func(args) (string, string) { return "read", "" })
+			shouldFailDescribe(`tool "c"`, "PolicyFunc is exclusive")
+			resetRegistries()
+			Tool("d", noop).PolicyResources([]string{"read"}, func(args) (string, []string) { return "read", nil }).PageOnly()
+			shouldFailDescribe(`tool "d"`, "PageOnly is exclusive")
 		})
 		Convey("a policy tool cannot declare no timeout", func() {
 			Tool("p", noop).Policy("read").NoTimeout()
@@ -665,8 +713,11 @@ func TestToolDeclaresPolicyOrPageOnly(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, `"p"`)
 		})
 		Convey("Timeout and NoTimeout exclude each other", func() {
-			So(func() { Tool("e", noop).PageOnly().Timeout(time.Second).NoTimeout() }, ShouldPanic)
-			So(func() { Tool("f", noop).PageOnly().NoTimeout().Timeout(time.Second) }, ShouldPanic)
+			Tool("e", noop).PageOnly().Timeout(time.Second).NoTimeout()
+			shouldFailDescribe(`tool "e" declares both Timeout and NoTimeout`)
+			resetRegistries()
+			Tool("f", noop).PageOnly().NoTimeout().Timeout(time.Second)
+			shouldFailDescribe(`tool "f" declares both Timeout and NoTimeout`)
 		})
 	})
 }
@@ -702,36 +753,40 @@ func TestDescribeReportsSettingsDeclaration(t *testing.T) {
 	Convey("an extension has one settings form", t, func() {
 		resetRegistries()
 		Settings[reviewerSettings]()
-		So(func() { Settings[reviewerSettings]() }, ShouldPanic)
+		Settings[reviewerSettings]()
+		shouldFailDescribe("settings are already declared")
 	})
 }
 
 func TestConfigSchemaEnumTagsAreChecked(t *testing.T) {
 	Convey("enumLabels and default that the host could not render fail at registration", t, func() {
-		refl := func(v any) func() { return func() { reflectSchema(reflect.TypeOf(v), "cfg", schemaModeConfig) } }
+		refl := func(v any) error {
+			_, err := reflectSchema(reflect.TypeOf(v), "cfg", schemaModeConfig)
+			return err
+		}
 		Convey("labels without an enum", func() {
 			type c struct {
 				A string `json:"a" enumLabels:"x"`
 			}
-			So(refl(c{}), ShouldPanicWith, "opskat: cfg: field A declares enumLabels without enum")
+			So(refl(c{}), ShouldBeError, "opskat: cfg: field A declares enumLabels without enum")
 		})
 		Convey("labels of a different length than the enum", func() {
 			type c struct {
 				A string `json:"a" enum:"x,y" enumLabels:"x"`
 			}
-			So(refl(c{}), ShouldPanic)
+			So(refl(c{}), ShouldNotBeNil)
 		})
 		Convey("a default that is not one of the options", func() {
 			type c struct {
 				A string `json:"a" enum:"x,y" default:"z"`
 			}
-			So(refl(c{}), ShouldPanic)
+			So(refl(c{}), ShouldNotBeNil)
 		})
 		Convey("a default on a non-string field", func() {
 			type c struct {
 				A int `json:"a" default:"1"`
 			}
-			So(refl(c{}), ShouldPanic)
+			So(refl(c{}), ShouldNotBeNil)
 		})
 	})
 }

@@ -37,6 +37,8 @@ func TestDatabaseDriverCallsWithoutADriver(t *testing.T) {
 		_, err := dispatch("database_driver", []byte(`{"op":"open"}`))
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "no database driver")
-		So(func() { RegisterDatabaseDriver(dbdriver.Descriptor{ID: "demodb"}, nil) }, ShouldPanic)
+		RegisterDatabaseDriver(dbdriver.Descriptor{ID: "demodb"}, nil)
+		shouldFailDescribe(`database driver "demodb" has nothing to serve its calls`)
+		So(databaseDrivers, ShouldBeEmpty)
 	})
 }

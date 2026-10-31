@@ -25,13 +25,13 @@ const (
 )
 
 // reflectSchema turns a struct type into a JSON Schema object.
-// It panics on anything it cannot express — see Tool.
-func reflectSchema(t reflect.Type, what string, mode schemaMode) map[string]any {
+// It returns an error for anything it cannot express — see Tool.
+func reflectSchema(t reflect.Type, what string, mode schemaMode) (map[string]any, error) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("opskat: %s must be a struct, got %s", what, t.Kind()))
+		return nil, fmt.Errorf("opskat: %s must be a struct, got %s", what, t.Kind())
 	}
 
 	props := map[string]any{}
@@ -53,12 +53,18 @@ func reflectSchema(t reflect.Type, what string, mode schemaMode) map[string]any 
 		}
 		fieldWhat := fmt.Sprintf("%s: field %s", what, f.Name)
 		var prop map[string]any
+		var err error
 		if fieldType == credentialType {
-			prop = credentialSchema(f, fieldWhat, mode)
+			prop, err = credentialSchema(f, fieldWhat, mode)
 		} else {
-			prop = propertySchema(fieldType, fieldWhat)
+			prop, err = propertySchema(fieldType, fieldWhat)
 		}
-		applyTags(prop, f, mode, fieldWhat)
+		if err != nil {
+			return nil, err
+		}
+		if err := applyTags(prop, f, mode, fieldWhat); err != nil {
+			return nil, err
+		}
 		props[name] = prop
 		order = append(order, name)
 		if !optional {
@@ -74,7 +80,7 @@ func reflectSchema(t reflect.Type, what string, mode schemaMode) map[string]any 
 		// The form renders fields in declaration order rather than map order.
 		schema["propertyOrder"] = order
 	}
-	return schema
+	return schema, nil
 }
 
 // jsonFieldName resolves the field's wire name and whether it is optional.
@@ -97,47 +103,47 @@ func jsonFieldName(f reflect.StructField) (name string, optional bool) {
 	return name, optional
 }
 
-func propertySchema(t reflect.Type, what string) map[string]any {
+func propertySchema(t reflect.Type, what string) (map[string]any, error) {
 	switch t.Kind() {
 	case reflect.String:
-		return map[string]any{"type": "string"}
+		return map[string]any{"type": "string"}, nil
 	case reflect.Bool:
-		return map[string]any{"type": "boolean"}
+		return map[string]any{"type": "boolean"}, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return map[string]any{"type": "integer"}
+		return map[string]any{"type": "integer"}, nil
 	case reflect.Float32, reflect.Float64:
-		return map[string]any{"type": "number"}
+		return map[string]any{"type": "number"}, nil
 	case reflect.Slice:
 		if t.Elem().Kind() != reflect.String {
-			panic(fmt.Sprintf("opskat: %s is []%s; only []string is supported", what, t.Elem().Kind()))
+			return nil, fmt.Errorf("opskat: %s is []%s; only []string is supported", what, t.Elem().Kind())
 		}
-		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, nil
 	default:
-		panic(fmt.Sprintf("opskat: %s has unsupported type %s — nested values go through the --json escape hatch, not a flag", what, t))
+		return nil, fmt.Errorf("opskat: %s has unsupported type %s — nested values go through the --json escape hatch, not a flag", what, t)
 	}
 }
 
 // credentialSchema describes a Credential field: always a format:"password"
 // string, and only in an asset config — a secret is stored on the asset, never
 // passed as a tool argument.
-func credentialSchema(f reflect.StructField, what string, mode schemaMode) map[string]any {
+func credentialSchema(f reflect.StructField, what string, mode schemaMode) (map[string]any, error) {
 	if mode != schemaModeConfig {
-		panic(fmt.Sprintf("opskat: %s is a Credential, which is only an asset config field", what))
+		return nil, fmt.Errorf("opskat: %s is a Credential, which is only an asset config field", what)
 	}
 	if v := f.Tag.Get("format"); v != "" && v != "password" {
-		panic(fmt.Sprintf("opskat: %s is a Credential, which is always format \"password\", but is tagged format %q", what, v))
+		return nil, fmt.Errorf("opskat: %s is a Credential, which is always format \"password\", but is tagged format %q", what, v)
 	}
-	return map[string]any{"type": "string", "format": "password"}
+	return map[string]any{"type": "string", "format": "password"}, nil
 }
 
 // applyTags copies the declaration's presentation tags onto the property.
-func applyTags(prop map[string]any, f reflect.StructField, mode schemaMode, what string) {
+func applyTags(prop map[string]any, f reflect.StructField, mode schemaMode, what string) error {
 	if v := f.Tag.Get("desc"); v != "" {
 		prop["description"] = v
 	}
 	if mode != schemaModeConfig {
-		return
+		return nil
 	}
 	if v := f.Tag.Get("title"); v != "" {
 		prop["title"] = v
@@ -154,21 +160,22 @@ func applyTags(prop map[string]any, f reflect.StructField, mode schemaMode, what
 	}
 	if v := f.Tag.Get("enumLabels"); v != "" {
 		if f.Tag.Get("enum") == "" {
-			panic(fmt.Sprintf("opskat: %s declares enumLabels without enum", what))
+			return fmt.Errorf("opskat: %s declares enumLabels without enum", what)
 		}
 		labels := strings.Split(v, ",")
 		if len(labels) != len(options) {
-			panic(fmt.Sprintf("opskat: %s declares %d enumLabels for %d enum options", what, len(labels), len(options)))
+			return fmt.Errorf("opskat: %s declares %d enumLabels for %d enum options", what, len(labels), len(options))
 		}
 		prop["enumLabels"] = labels
 	}
 	if v, ok := f.Tag.Lookup("default"); ok {
 		if prop["type"] != "string" {
-			panic(fmt.Sprintf("opskat: %s declares a default, which is only supported on string fields", what))
+			return fmt.Errorf("opskat: %s declares a default, which is only supported on string fields", what)
 		}
 		if f.Tag.Get("enum") != "" && !slices.Contains(options, v) {
-			panic(fmt.Sprintf("opskat: %s declares default %q, which is not one of its enum options", what, v))
+			return fmt.Errorf("opskat: %s declares default %q, which is not one of its enum options", what, v)
 		}
 		prop["default"] = v
 	}
+	return nil
 }

@@ -77,21 +77,34 @@ type driverEntry struct {
 // capabilities the dialect implements. Parts that are not session operations
 // come as options (WithStatementClassifier), each matching a capability of its own.
 func DatabaseDriver(d dbdriver.Descriptor, open DriverOpen, opts ...DriverOption) {
-	if open == nil {
-		panic(fmt.Sprintf("opskat: database driver %q has no open function", d.ID))
-	}
-	if slices.ContainsFunc(drivers, func(e *driverEntry) bool { return e.desc.ID == d.ID }) {
-		panic(fmt.Sprintf("opskat: database driver %q is already registered", d.ID))
-	}
 	entry := &driverEntry{desc: d, open: open}
 	for _, opt := range opts {
 		opt(entry)
 	}
-	if declared := d.Supports(dbdriver.CapClassifyStatements); declared != (entry.classify != nil) {
-		panic(fmt.Sprintf("opskat: database driver %q must declare capability %q exactly when it is given WithStatementClassifier", d.ID, dbdriver.CapClassifyStatements))
+	if err := checkDriver(entry); err != nil {
+		// A registration mistake fails describe, naming the driver — not a panic
+		// in init, which the host sees only as a wasm trap.
+		opskat.ReportRegistrationError(err)
+		return
 	}
 	drivers = append(drivers, entry)
 	opskat.RegisterDatabaseDriver(d, serve)
+}
+
+// checkDriver is the registration rule for one driver against those already
+// registered.
+func checkDriver(entry *driverEntry) error {
+	d := entry.desc
+	if entry.open == nil {
+		return fmt.Errorf("opskat: database driver %q has no open function", d.ID)
+	}
+	if slices.ContainsFunc(drivers, func(e *driverEntry) bool { return e.desc.ID == d.ID }) {
+		return fmt.Errorf("opskat: database driver %q is already registered", d.ID)
+	}
+	if declared := d.Supports(dbdriver.CapClassifyStatements); declared != (entry.classify != nil) {
+		return fmt.Errorf("opskat: database driver %q must declare capability %q exactly when it is given WithStatementClassifier", d.ID, dbdriver.CapClassifyStatements)
+	}
+	return nil
 }
 
 // drivers are the drivers this extension registered.

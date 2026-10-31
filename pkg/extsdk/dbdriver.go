@@ -26,7 +26,8 @@ var databaseDriverServe DatabaseDriverServe
 // sdkdbdriver.DatabaseDriver instead.
 func RegisterDatabaseDriver(d dbdriver.Descriptor, serve DatabaseDriverServe) {
 	if serve == nil {
-		panic(fmt.Sprintf("opskat: database driver %q has nothing to serve its calls", d.ID))
+		failRegistration("opskat: database driver %q has nothing to serve its calls", d.ID)
+		return
 	}
 	databaseDrivers = append(databaseDrivers, d)
 	databaseDriverServe = serve

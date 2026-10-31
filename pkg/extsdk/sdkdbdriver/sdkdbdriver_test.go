@@ -53,11 +53,16 @@ func resetDrivers() {
 func TestDatabaseDriverRegistrationRejectsBrokenDeclarations(t *testing.T) {
 	Convey("a driver without an opener, or registered twice, fails at init", t, func() {
 		resetDrivers()
-		So(func() { DatabaseDriver(demoDriver, nil) }, ShouldPanic)
+		DatabaseDriver(demoDriver, nil)
+		So(drivers, ShouldBeEmpty)
+		So(checkDriver(&driverEntry{desc: demoDriver}), ShouldBeError, `opskat: database driver "demodb" has no open function`)
 
 		open := func(context.Context, dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) { return nil, nil, nil }
 		DatabaseDriver(demoDriver, open)
-		So(func() { DatabaseDriver(demoDriver, open) }, ShouldPanic)
+		So(drivers, ShouldHaveLength, 1)
+		DatabaseDriver(demoDriver, open)
+		So(drivers, ShouldHaveLength, 1)
+		So(checkDriver(&driverEntry{desc: demoDriver, open: open}), ShouldBeError, `opskat: database driver "demodb" is already registered`)
 	})
 }
 
@@ -71,9 +76,12 @@ func TestDatabaseDriverStatementClassifierMatchesItsDeclaration(t *testing.T) {
 
 	Convey("a classifier and the capability declaring it come together, or registration fails at init", t, func() {
 		resetDrivers()
-		So(func() { DatabaseDriver(splitting, open) }, ShouldPanic)
-		So(func() { DatabaseDriver(demoDriver, open, WithStatementClassifier(classify)) }, ShouldPanic)
-		So(func() { DatabaseDriver(splitting, open, WithStatementClassifier(nil)) }, ShouldPanic)
+		DatabaseDriver(splitting, open)
+		DatabaseDriver(demoDriver, open, WithStatementClassifier(classify))
+		DatabaseDriver(splitting, open, WithStatementClassifier(nil))
+		So(drivers, ShouldBeEmpty)
+		So(checkDriver(&driverEntry{desc: splitting, open: open}), ShouldNotBeNil)
+		So(checkDriver(&driverEntry{desc: demoDriver, open: open, classify: classify}), ShouldNotBeNil)
 	})
 
 	Convey("the host asks the driver to split SQL without a session", t, func() {

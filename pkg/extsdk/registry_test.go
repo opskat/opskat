@@ -14,13 +14,12 @@ func TestToolRejectsInjectedAssetParameter(t *testing.T) {
 		// A second, argument-supplied asset id would let a call reach an asset the
 		// user never granted, so it is refused where it is written rather than
 		// silently ignored at call time.
-		So(func() {
-			Tool("note_list", func(_ *ToolContext, _ struct {
-				AssetID int64 `json:"asset_id"`
-			}) (any, error) {
-				return nil, nil
-			})
-		}, ShouldPanicWith, `opskat: tool "note_list" declares parameter "asset_id" — the asset a tool runs against is the exec target, injected by the host; read ctx.Asset instead`)
+		Tool("note_list", func(_ *ToolContext, _ struct {
+			AssetID int64 `json:"asset_id"`
+		}) (any, error) {
+			return nil, nil
+		}).Policy("read")
+		shouldFailDescribe(`opskat: tool "note_list" declares parameter "asset_id" — the asset a tool runs against is the exec target, injected by the host; read ctx.Asset instead`)
 	})
 }
 
@@ -48,13 +47,24 @@ func TestToolHostOnly(t *testing.T) {
 		So(byName["review"]["timeoutMs"], ShouldEqual, 60000)
 		So(byName["run"], ShouldNotContainKey, "hostOnly")
 
-		So(func() { Tool("a", noop).Policy("read").HostOnly() }, ShouldPanic)
-		So(func() { Tool("b", noop).HostOnly().Policy("read") }, ShouldPanic)
-		So(func() { Tool("c", noop).PageOnly().HostOnly() }, ShouldPanic)
-		So(func() { Tool("d", noop).HostOnly().PageOnly() }, ShouldPanic)
-		So(func() {
-			Tool("f", noop).HostOnly().PolicyFunc([]string{"read"}, func(args) (string, string) { return "read", "" })
-		}, ShouldPanic)
+		resetRegistries()
+		Tool("a", noop).Policy("read").HostOnly()
+		shouldFailDescribe(`tool "a"`, "HostOnly is exclusive")
+		resetRegistries()
+		Tool("b", noop).HostOnly().Policy("read")
+		shouldFailDescribe(`tool "b"`, "Policy is exclusive")
+		resetRegistries()
+		Tool("c", noop).PageOnly().HostOnly()
+		shouldFailDescribe(`tool "c"`, "HostOnly is exclusive")
+		resetRegistries()
+		Tool("d", noop).HostOnly().PageOnly()
+		shouldFailDescribe(`tool "d"`, "PageOnly is exclusive")
+		resetRegistries()
+		Tool("f", noop).HostOnly().PolicyFunc([]string{"read"}, func(args) (string, string) { return "read", "" })
+		shouldFailDescribe(`tool "f"`, "PolicyFunc is exclusive")
+		resetRegistries()
+		Tool("g", noop).HostOnly().Timeout(11 * time.Minute)
+		shouldFailDescribe(`tool "g"`, "outside [1ms, 10m0s]")
 	})
 	Convey("a host-only tool cannot declare no timeout, and a tool of no kind fails describe", t, func() {
 		resetRegistries()

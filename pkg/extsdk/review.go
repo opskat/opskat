@@ -46,10 +46,11 @@ var commandReviewer *extwire.CommandReviewer
 // load. review runs as a call without an asset: it reads the extension's settings
 // with ctx.Settings(), and reaches their format:"endpoint" addresses, with the
 // settings' auth injected, under permissions.network.settingsEndpoint. An
-// extension has one reviewer: a second call panics.
+// extension has one reviewer: a second call fails describe.
 func CommandReviewer(questions []ReviewQuestion, maxCommandLen int, review func(ctx *ToolContext, item ReviewItem) ReviewResult) {
 	if commandReviewer != nil {
-		panic("opskat: a command reviewer is already declared")
+		failRegistration("opskat: a command reviewer is already declared")
+		return
 	}
 	Tool(ReviewToolName, func(ctx *ToolContext, item ReviewItem) (any, error) {
 		return review(ctx, item), nil

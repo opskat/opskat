@@ -210,8 +210,8 @@ type putArgs struct {
 ```
 
 - `string`, `bool`, integer, float and `[]string` are expressible; anything else
-  panics at registration — that is `init()`, so a schema the host could not use fails
-  the whole extension at load rather than on the first call.
+  is a registration error: `describe()` returns it, naming the tool, so a schema the host
+  could not use fails the whole extension at load rather than on the first call.
 - `,omitempty` (or a pointer field) makes a parameter optional; everything else is
   required.
 - `desc` on a **tool** argument is shown to the model as written — plain text, not an
@@ -241,8 +241,7 @@ A tool is exactly one of three things, and declares which:
   — as a call without an asset, under the caller's timeout when that is shorter than
   the tool's own. It needs no asset type and keeps a policy tool's timeout rules.
 
-Declaring two is a registration panic; declaring none fails `describe()`, naming the
-tool. A policy tool needs the extension to register an asset type (above).
+Declaring two, or none, fails `describe()` with an error naming the tool. A policy tool needs the extension to register an asset type (above).
 
 Every tool, whoever calls it, can emit events and can be cancelled:
 
@@ -284,7 +283,7 @@ argument — there is nothing to implement. `describe()` reports the marker as
 `tools[].large`, and `opsctl help <asset>` lists the `--body-file` form marked
 "opsctl only".
 
-- `Large` panics at registration unless the name is a declared **string**
+- `Large` is a registration error unless the name is a declared **string**
   parameter whose `<name>-file` spelling is not itself a parameter, and on a repeat;
   the tools contribution point refuses such an entry in `describe()` as well.
 - opsctl refuses, sending nothing and exiting non-zero: both `--body` and
@@ -308,7 +307,7 @@ func listNotes(ctx *opskat.ToolContext, args listArgs) (any, error) {
 }
 ```
 
-A tool **may not declare an `asset_id` parameter**: registration panics and the host
+A tool **may not declare an `asset_id` parameter**: `describe()` returns an error naming the tool and the host
 refuses the `describe()` answer. Policy, approval and grant are all keyed on the exec
 target, so a second asset id supplied in the arguments would reach an asset the user
 never granted — there is no "the flag wins" case to reason about.
@@ -802,7 +801,7 @@ sdkdbdriver.DatabaseDriver(dbdriver.Descriptor{
 - **The driver can split and classify SQL itself.** Declare
   `dbdriver.CapClassifyStatements` and pass
   `sdkdbdriver.WithStatementClassifier(classify)` to `DatabaseDriver` — one without the
-  other panics at init. `classify(ctx, sql)` returns each statement of the text as a
+  other is a registration error. `classify(ctx, sql)` returns each statement of the text as a
   `dbdriver.Statement`: byte offsets `Start` / `End` into the input, `Text`, an
   uppercase `Type`, and `Dangerous` with a `Reason` from `dbdriver.DangerReasons()`. It
   must not touch the database: the host calls it outside any session, on an instance of

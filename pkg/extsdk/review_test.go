@@ -75,7 +75,8 @@ func TestCommandReviewer(t *testing.T) {
 	Convey("an extension has one command reviewer", t, func() {
 		resetRegistries()
 		CommandReviewer(questions, 4000, review)
-		So(func() { CommandReviewer(questions, 4000, review) }, ShouldPanicWith, "opskat: a command reviewer is already declared")
+		CommandReviewer(questions, 4000, review)
+		shouldFailDescribe("opskat: a command reviewer is already declared")
 	})
 
 	Convey("no reviewer is reported when none is declared", t, func() {

@@ -35,6 +35,11 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 // (pkg/extwire); a contribution point the extension registered nothing for is
 // left out.
 func dispatchDescribe() (json.RawMessage, error) {
+	// An invalid registration fails the extension at load, with the first
+	// mistake's message (tool or contribution, and reason).
+	if len(registrationErrors) > 0 {
+		return nil, registrationErrors[0]
+	}
 	d := extwire.Describe{
 		Icon: meta.Icon,
 		I18n: extwire.I18n{DisplayName: meta.DisplayName, Description: meta.Description},
