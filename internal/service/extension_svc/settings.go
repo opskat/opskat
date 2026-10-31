@@ -111,16 +111,37 @@ func (s *Service) storedSettings(ctx context.Context, extName string) (string, e
 	return row.Value, nil
 }
 
-func (s *Service) storedSettingsMap(ctx context.Context, extName string) (map[string]any, error) {
+// storedSettingsRow is the stored settings: plain values and the ciphertext of
+// format:"password" ones, kept apart so a value is only ever read as the kind it
+// was saved as — an upgrade that makes a plain field secret (or the reverse)
+// leaves it unset rather than decrypting plaintext or showing ciphertext.
+type storedSettingsRow struct {
+	Values  map[string]any    `json:"values"`
+	Secrets map[string]string `json:"secrets"`
+}
+
+func (s *Service) storedSettingsRow(ctx context.Context, extName string) (*storedSettingsRow, error) {
 	raw, err := s.storedSettings(ctx, extName)
 	if err != nil {
 		return nil, err
 	}
-	var out map[string]any
+	var out storedSettingsRow
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil, fmt.Errorf("parse extension %q settings: %w", extName, err)
 	}
-	return out, nil
+	return &out, nil
+}
+
+// plainValues is the row's values for def's declared non-secret fields.
+func (r *storedSettingsRow) plainValues(def *SettingsDef) map[string]any {
+	secrets := def.SecretFields()
+	out := map[string]any{}
+	for _, f := range extreg.ConfigSchemaProperties(def.ConfigSchema) {
+		if v, ok := r.Values[f]; ok && !slices.Contains(secrets, f) {
+			out[f] = v
+		}
+	}
+	return out
 }
 
 // SettingsView returns the read view of extName's stored settings.
@@ -133,20 +154,15 @@ func (s *Service) SettingsView(ctx context.Context, extName string) (*SettingsVi
 }
 
 func (s *Service) settingsView(ctx context.Context, extName string, def *SettingsDef) (*SettingsView, error) {
-	stored, err := s.storedSettingsMap(ctx, extName)
+	stored, err := s.storedSettingsRow(ctx, extName)
 	if err != nil {
 		return nil, err
 	}
 	secrets := def.SecretFields()
-	view := &SettingsView{Values: map[string]any{}, Secrets: make(map[string]bool, len(secrets))}
+	view := &SettingsView{Values: stored.plainValues(def), Secrets: make(map[string]bool, len(secrets))}
 	for _, f := range secrets {
-		_, set := stored[f]
+		_, set := stored.Secrets[f]
 		view.Secrets[f] = set
-	}
-	for _, f := range extreg.ConfigSchemaProperties(def.ConfigSchema) {
-		if v, ok := stored[f]; ok && !slices.Contains(secrets, f) {
-			view.Values[f] = v
-		}
 	}
 	return view, nil
 }
@@ -180,7 +196,7 @@ func (s *Service) SaveSettings(ctx context.Context, extName string, values map[s
 	if err != nil {
 		return nil, err
 	}
-	stored, err := s.storedSettingsMap(ctx, extName)
+	stored, err := s.storedSettingsRow(ctx, extName)
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +206,14 @@ func (s *Service) SaveSettings(ctx context.Context, extName string, values map[s
 			next[k] = v
 		}
 	}
+	row := storedSettingsRow{Values: map[string]any{}, Secrets: map[string]string{}}
 	var typed []string // secrets given a new value, encrypted once they validate
 	for _, f := range def.SecretFields() {
 		if _, given := next[f]; given {
 			typed = append(typed, f)
-		} else if old, ok := stored[f]; ok {
-			next[f] = old // already ciphertext
+		} else if old, ok := stored.Secrets[f]; ok {
+			next[f] = old // stands in for validation; kept as the ciphertext it is
+			row.Secrets[f] = old
 		}
 	}
 	if errs := validateSettings(def.ConfigSchema, next); len(errs) > 0 {
@@ -206,9 +224,14 @@ func (s *Service) SaveSettings(ctx context.Context, extName string, values map[s
 		if err != nil {
 			return nil, fmt.Errorf("encrypt extension %q setting %q: %w", extName, f, err)
 		}
-		next[f] = encrypted
+		row.Secrets[f] = encrypted
 	}
-	data, err := json.Marshal(next)
+	for k, v := range next {
+		if !slices.Contains(def.SecretFields(), k) {
+			row.Values[k] = v
+		}
+	}
+	data, err := json.Marshal(row)
 	if err != nil {
 		return nil, fmt.Errorf("encode extension %q settings: %w", extName, err)
 	}
@@ -276,26 +299,23 @@ func (s *Service) DecryptedSettings(ctx context.Context, extName string) (json.R
 	if err != nil {
 		return nil, err
 	}
-	stored, err := s.storedSettingsMap(ctx, extName)
+	stored, err := s.storedSettingsRow(ctx, extName)
 	if err != nil {
 		return nil, err
 	}
+	out := stored.plainValues(def)
 	for _, f := range def.SecretFields() {
-		v, ok := stored[f]
+		ciphertext, ok := stored.Secrets[f]
 		if !ok {
 			continue
-		}
-		ciphertext, isString := v.(string)
-		if !isString {
-			return nil, fmt.Errorf("extension %q setting %q: stored secret is not a string", extName, f)
 		}
 		plain, err := credential_svc.Default().Decrypt(ciphertext)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt extension %q setting %q: %w", extName, f, err)
 		}
-		stored[f] = plain
+		out[f] = plain
 	}
-	return json.Marshal(stored)
+	return json.Marshal(out)
 }
 
 // SettingsHash is a digest of extName's stored settings, ciphertext included:

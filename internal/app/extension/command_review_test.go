@@ -23,12 +23,11 @@ func TestCheckSelectableReviewer(t *testing.T) {
 	reviewers := []command_review_svc.ReviewerInfo{
 		{Name: "ok", Usable: true, Signed: true},
 		{Name: "unsigned", Usable: true},
-		{Name: "tampered", Reason: "command reviewer package digest does not match the installed wasm"},
+		{Name: "tampered", Reason: command_review_svc.UnusableDigestMismatch},
 	}
 	assert.NoError(t, checkSelectableReviewer(reviewers, "ok"))
 	assert.NoError(t, checkSelectableReviewer(reviewers, "unsigned"))
-	err := checkSelectableReviewer(reviewers, "tampered")
-	assert.ErrorContains(t, err, "digest")
+	assert.Error(t, checkSelectableReviewer(reviewers, "tampered"))
 	assert.Error(t, checkSelectableReviewer(reviewers, "missing"))
 }
 

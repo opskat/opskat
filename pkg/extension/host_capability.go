@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -176,20 +175,19 @@ func (c *capHost) endpointPermission(scope *Scope) (string, bool) {
 	if name == "" {
 		name = "assetEndpoint"
 	}
-	return name, declaresNetworkFlag(c.manifest.Permissions.Network, name)
+	return name, declaresEndpointPermission(c.manifest.Permissions.Network, name)
 }
 
-// declaresNetworkFlag reports whether perms sets the boolean permission whose
-// manifest key is name; a key naming no boolean permission is never declared.
-// The scope names the permission, so the runtime admits any scope's endpoints
-// without knowing what their addresses are.
-func declaresNetworkFlag(perms extmanifest.NetworkPermission, name string) bool {
-	v := reflect.ValueOf(perms)
-	for i := range v.NumField() {
-		f := v.Type().Field(i)
-		if key, _, _ := strings.Cut(f.Tag.Get("json"), ","); key == name && f.Type.Kind() == reflect.Bool {
-			return v.Field(i).Bool()
-		}
+// declaresEndpointPermission reports whether perms declares the endpoint
+// permission whose manifest key is name. Only the endpoint permissions admit a
+// scope's endpoints; any other key — assetRoute included, which grants a route,
+// not endpoints — is never declared.
+func declaresEndpointPermission(perms extmanifest.NetworkPermission, name string) bool {
+	switch name {
+	case "assetEndpoint":
+		return perms.AssetEndpoint
+	case "settingsEndpoint":
+		return perms.SettingsEndpoint
 	}
 	return false
 }

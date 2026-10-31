@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
-import { parseReviewInfo, resolveInheritedPermissionMode, reviewSummary, reviewWithMode } from "../commandReview";
+import {
+  parseReviewInfo,
+  resolveInheritedPermissionMode,
+  reviewSummary,
+  reviewWithMode,
+  unusableReasonLabel,
+} from "../commandReview";
 
 // 把插值参数一起输出，才能看出拼出来的是哪几段文案。
 const t = ((key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}(${Object.values(opts).join("|")})` : key) as unknown as TFunction;
+
+describe("unusableReasonLabel", () => {
+  it("后端给的原因编码换成文案；不认识的（比如一段错误原文）按检查失败显示，不把原文塞进句子", () => {
+    expect(unusableReasonLabel(t, "store_required")).toBe("commandReview.settings.unusableReason.store_required");
+    expect(unusableReasonLabel(t, "command reviewer package digest does not match")).toBe(
+      "commandReview.settings.unusableReason.check_failed"
+    );
+  });
+});
 
 describe("reviewWithMode", () => {
   it("在审核结果前写上触发审核的权限模式", () => {

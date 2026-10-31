@@ -296,7 +296,7 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	if err != nil {
 		return nil, InstallConfirm{}, "", fmt.Errorf("install extension: %w", err)
 	}
-	digest, err := sourceDigest(sourcePath)
+	digest, err := PackageSHA256(staged.Dir()) // the files Commit moves into place
 	if err != nil {
 		staged.Abort(ctx)
 		return nil, InstallConfirm{}, "", fmt.Errorf("install extension: %w", err)

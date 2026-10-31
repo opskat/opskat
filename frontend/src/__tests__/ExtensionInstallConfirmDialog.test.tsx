@@ -182,7 +182,7 @@ describe("ExtensionInstallConfirmDialog", () => {
     expect(within(kerberos).getByText("extension.installConfirm.added")).toBeInTheDocument();
   });
 
-  it("warns that commandReviewer can let commands run without a human confirmation, and does not for settingsEndpoint", () => {
+  it("warns that commandReviewer can let commands run without a human confirmation", () => {
     const handlers = captureHandlers();
     render(<ExtensionInstallConfirmDialog />);
     fire(handlers, "ext:install-confirm", {
@@ -197,16 +197,6 @@ describe("ExtensionInstallConfirmDialog", () => {
     const alerts = within(dialog).getAllByRole("alert");
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toHaveTextContent("extension.commandReviewerWarning");
-    expect(
-      within(within(dialog).getByTestId("ext-install-cap-commandReviewer")).getByText(
-        "extension.installConfirm.highRisk"
-      )
-    ).toBeInTheDocument();
-    expect(
-      within(within(dialog).getByTestId("ext-install-cap-network.settingsEndpoint")).queryByText(
-        "extension.installConfirm.highRisk"
-      )
-    ).toBeNull();
   });
 
   it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {

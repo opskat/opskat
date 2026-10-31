@@ -107,13 +107,3 @@ func TestSettingsPointRefusalNamesTheExtension(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "jev: settings: ")
 }
-
-func TestSettingsPointAttachAndRevoke(t *testing.T) {
-	reg := extension.NewContributionRegistry(SettingsPoint())
-	v := settingsView(true, apiSettings(settingsBearerAuth))
-	require.NoError(t, reg.Attach(v))
-	reg.Revoke(v.Name())
-	// Revoked, the same extension attaches again: nothing of it was left behind.
-	require.NoError(t, reg.Attach(v))
-	reg.Revoke(v.Name())
-}

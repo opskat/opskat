@@ -3697,6 +3697,13 @@
       "unsigned": "unsigned",
       "configureReviewer": "Configure in extension details",
       "reviewerUnusable": "{{name}} can't be used right now: {{reason}}",
+      "unusableReason": {
+        "not_running": "the extension isn't running",
+        "digest_mismatch": "its files no longer match the installed package",
+        "store_required": "release builds only accept reviewers installed from the store",
+        "no_install_record": "there's no record of where it was installed from; reinstall it",
+        "check_failed": "its eligibility couldn't be checked; see the logs"
+      },
       "reviewerSaved": "Command reviewer switched",
       "save": "Save",
       "saved": "Command review settings saved",

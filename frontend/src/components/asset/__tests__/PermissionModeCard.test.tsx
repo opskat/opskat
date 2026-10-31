@@ -4,10 +4,12 @@ import { PermissionModeCard } from "../PermissionModeCard";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore } from "@/stores/tabStore";
 import { toast } from "sonner";
+import { notifySuccess } from "@/lib/notify";
 import { GetCommandReviewState } from "../../../../wailsjs/go/extension/Extension";
 import { group_entity } from "../../../../wailsjs/go/models";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock("@/lib/notify", () => ({ notifySuccess: vi.fn(), notifyCopied: vi.fn() }));
 
 const group = (ID: number, Name: string, ParentID: number, permissionMode = "") =>
   new group_entity.Group({ ID, Name, ParentID, Icon: "", SortOrder: ID, Status: 1, permissionMode });
@@ -34,6 +36,7 @@ const option = (key: string) => screen.getByRole("radio", { name: `commandReview
 
 describe("PermissionModeCard", () => {
   beforeEach(() => {
+    vi.mocked(notifySuccess).mockClear();
     mockReviewer(true);
     // 生产（autopilot）> 数据库（沿用）；测试（没设置）
     useAssetStore.setState({
@@ -53,7 +56,7 @@ describe("PermissionModeCard", () => {
 
     expect(onChange).toHaveBeenCalledWith("default");
     expect(screen.getByText("action.saving")).toBeInTheDocument();
-    expect(screen.queryByText(/settings\.saved/)).toBeNull();
+    expect(notifySuccess).not.toHaveBeenCalled();
     expect(option("assisted")).toBeDisabled();
   });
 

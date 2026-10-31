@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/opskat/opskat/internal/ai/cmdline"
 )
 
 // Syntax 是命令的写法，决定怎样在里面找敏感信息。资产类型在注册权限检查时声明自己的写法。
@@ -56,7 +59,8 @@ type valueRule struct {
 
 // 名字里带这些词的变量、字段、参数，它的值当作敏感值。
 const (
-	sensitiveName = `(?:password|passwd|passphrase|pwd|token|secret|credentials?|(?:api|access|account|private|auth|secret)[-_]?key)`
+	// sshpass、rediscli_auth 是 sshpass -e 与 redis-cli 读密码的环境变量（SSHPASS、REDISCLI_AUTH）。
+	sensitiveName = `(?:password|passwd|passphrase|pwd|token|secret|credentials?|sshpass|rediscli_auth|(?:api|access|account|private|auth|secret)[-_]?key)`
 	sensitiveFlag = `(?:password|passwd|pass|pwd|passphrase|token|secret|credentials?|(?:api|access|private|auth|secret)[-_]?key|keys?)`
 	// keyName 是名字最后一段叫 key 的变量、参数（ENCRYPTION_KEY、--encryption-key）：
 	// 按整段认，monkey、keyboard、KEYCLOAK_URL 不算；KEY_ID、KEY_DIR 这类后面还有一段的也不算。
@@ -84,18 +88,28 @@ func textRules(redirect string) []valueRule {
 	return append([]valueRule{
 		// 私钥：只换 BEGIN / END 之间的内容。
 		{re: regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(.+?)-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----`), group: 1},
-		// 网址里的 用户名:密码@。
-		{re: regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@'"]*:([^\s@/'"]+)@`), group: 1},
+		// 网址里的 用户名:密码@：密码里可以有 @，到主机前最后一个 @ 为止。
+		{re: regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@'"]*:([^\s/'"]+)@`), group: 1},
 		// 请求头。
 		{re: regexp.MustCompile(`(?i)\bauthorization:\s*(?:(?:bearer|basic|token|digest)\s+)?([^\s'"` + redirect + `]+)`), group: 1, skip: isAuthScheme},
 		{re: regexp.MustCompile(`(?i)\b(?:x-api-key|x-auth-token|api-key|private-token):\s*([^\s'"` + redirect + `]+)`), group: 1},
+		// Cookie 整个值都是会话凭据。
+		{re: regexp.MustCompile(`(?i)\b(?:set-)?cookie:\s*([^'"\r\n` + redirect + `]+)`), group: 1},
+		// openssl 等的口令参数 pass:口令（-passin / -passout / -pass）。
+		{re: regexp.MustCompile(`(?:^|[\s=])pass:([^\s;&|'"` + redirect + `]+)`), group: 1},
 		// JSON / JS 对象 / YAML 里的字段："password": "…"、pwd: '…'。
 		{re: regexp.MustCompile(`(?i)\b[a-z0-9_-]*` + sensitiveName + `[a-z0-9_-]*["']?\s*:\s*"([^"]*)"`), group: 1, skip: skipLocationName},
 		{re: regexp.MustCompile(`(?i)\b[a-z0-9_-]*` + sensitiveName + `[a-z0-9_-]*["']?\s*:\s*'([^']*)'`), group: 1, skip: skipLocationName},
-		// SQL 里设置密码。
-		{re: regexp.MustCompile(`(?i)\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?BY\s+'([^']*)'`), group: 1},
-		{re: regexp.MustCompile(`(?i)\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?BY\s+"([^"]*)"`), group: 1},
+		// SQL 里设置密码。Oracle 的 IDENTIFIED BY 后面可以是不带引号的密码，VALUES 带的是哈希。
+		{re: regexp.MustCompile(`(?i)\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?BY\s+(?:VALUES\s+)?'([^']*)'`), group: 1},
+		{re: regexp.MustCompile(`(?i)\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?BY\s+(?:VALUES\s+)?"([^"]*)"`), group: 1},
+		{re: regexp.MustCompile(`(?i)\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?BY\s+([^\s'";` + redirect + `]+)`), group: 1, skip: isPasswordKeyword},
 		{re: regexp.MustCompile(`(?i)\bPASSWORD\s+'([^']*)'`), group: 1},
+		{re: regexp.MustCompile(`(?i)\bSET\s+PASSWORD\b(?:[^;='"]|'[^']*'|"[^"]*")*=\s*(?:PASSWORD\s*\(\s*)?'([^']*)'`), group: 1},
+		{re: regexp.MustCompile(`(?i)\bSET\s+PASSWORD\b(?:[^;='"]|'[^']*'|"[^"]*")*=\s*(?:PASSWORD\s*\(\s*)?"([^"]*)"`), group: 1},
+		// Mongo 改密码：db.changeUserPassword("用户", "密码")。
+		{re: regexp.MustCompile(`\bchangeUserPassword\s*\(\s*(?:"[^"]*"|'[^']*')\s*,\s*"([^"]*)"`), group: 1},
+		{re: regexp.MustCompile(`\bchangeUserPassword\s*\(\s*(?:"[^"]*"|'[^']*')\s*,\s*'([^']*)'`), group: 1},
 		// 命令行参数。shell 命令本身按解析结果处理（见 argEdits），这几条管的是引号里的远端命令等
 		// 解析器看不进去的地方。
 		{re: regexp.MustCompile(`(?i)\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^;&|\n]*?\s-p` + attachedValue), group: 1},
@@ -162,6 +176,15 @@ func isAuthScheme(_, value string) bool {
 	return false
 }
 
+// isPasswordKeyword 排除 IDENTIFIED BY 后面的关键字（VALUES、PASSWORD、RANDOM）：后面的才是值。
+func isPasswordKeyword(_, value string) bool {
+	switch strings.ToUpper(value) {
+	case "VALUES", "PASSWORD", "RANDOM":
+		return true
+	}
+	return false
+}
+
 // isNegatedFlag 排除 --no-password 这类不带值的开关：它后面的词不是密码。
 func isNegatedFlag(match, _ string) bool {
 	flag := strings.ToLower(strings.TrimSpace(match))
@@ -210,7 +233,7 @@ func redactWith(rules []valueRule, s string) string {
 // 让 `sshpass -p pw ssh -p 22 host` 里 ssh 的 -p 不再按 sshpass 的规则处理。
 var programs = map[string]bool{
 	"mysql": true, "mysqldump": true, "mysqladmin": true, "mariadb": true, "mariadb-dump": true,
-	"sshpass": true, "redis-cli": true, "curl": true,
+	"sshpass": true, "redis-cli": true, "curl": true, "htpasswd": true, "docker": true,
 	"ssh": true, "scp": true, "rsync": true,
 }
 
@@ -251,12 +274,14 @@ func redactShell(command string) (string, error) {
 		switch x := n.(type) {
 		case *syntax.Assign:
 			if x.Name != nil && x.Value != nil && isSensitiveName(x.Name.Value) {
-				if _, ok := literalValue(x.Value); ok {
+				if _, ok := cmdline.ShellValue(x.Value); ok {
 					edits = append(edits, maskNode(x.Value))
 				}
 			}
 		case *syntax.CallExpr:
 			edits = append(edits, argEdits(x.Args)...)
+		case *syntax.BinaryCmd:
+			edits = append(edits, pipedPasswordEdits(x)...)
 		}
 		return true
 	})
@@ -287,11 +312,12 @@ func argEdits(args []*syntax.Word) []edit {
 		if i >= len(args) {
 			return "", false
 		}
-		v, ok := literalValue(args[i])
+		v, ok := cmdline.ShellValue(args[i])
 		return v, ok && v != "" && !strings.HasPrefix(v, "-")
 	}
+	dockerLogin, htpasswdBatch := false, false
 	for i, w := range args {
-		word, ok := literalValue(w)
+		word, ok := cmdline.ShellValue(w)
 		if !ok {
 			continue
 		}
@@ -299,10 +325,18 @@ func argEdits(args []*syntax.Word) []edit {
 			prog = path.Base(word)
 			continue
 		}
+		if name, _, found := strings.Cut(word, "="); found && strings.HasPrefix(name, "-") && isSensitiveFlag(name) {
+			// --password="a b"：= 后面整个值都换，引号一起。
+			if e, ok := maskAfter(w, "="); ok {
+				edits = append(edits, e)
+			}
+			continue
+		}
 		switch {
 		case isSensitiveFlag(word), isSensitiveSetting(word),
 			prog == "redis-cli" && word == "-a",
-			prog == "sshpass" && word == "-p":
+			prog == "sshpass" && word == "-p",
+			dockerLogin && word == "-p":
 			if _, ok := valueAt(i + 1); ok {
 				edits = append(edits, maskNode(args[i+1]))
 			}
@@ -313,35 +347,140 @@ func argEdits(args []*syntax.Word) []edit {
 					edits = append(edits, edit{start: int(args[i+1].Pos().Offset()), end: int(args[i+1].End().Offset()), text: user + ":" + mask})
 				}
 			}
+		case prog == "curl" && (strings.HasPrefix(word, "--user=") || (strings.HasPrefix(word, "-u") && len(word) > 2 && !strings.HasPrefix(word, "--"))):
+			if e, ok := maskAfter(w, ":"); ok {
+				edits = append(edits, e)
+			}
 		case (mysqlPrograms[prog] || prog == "sshpass") && strings.HasPrefix(word, "-p") && len(word) > 2:
 			edits = append(edits, edit{start: int(w.Pos().Offset()) + 2, end: int(w.End().Offset()), text: mask})
+		case prog == "docker" && word == "login":
+			dockerLogin = true
+		case prog == "htpasswd" && strings.HasPrefix(word, "-") && !strings.HasPrefix(word, "--") && strings.Contains(word, "b"):
+			htpasswdBatch = true
+		}
+	}
+	// htpasswd -b 文件 用户名 密码：密码是最后一个参数。
+	if htpasswdBatch {
+		if v, ok := cmdline.ShellValue(args[len(args)-1]); ok && v != "" && !strings.HasPrefix(v, "-") {
+			edits = append(edits, maskNode(args[len(args)-1]))
 		}
 	}
 	return edits
 }
 
-// literalValue 返回词去掉引号后的值；词里有变量、命令替换等展开时 ok 为 false。
-func literalValue(w *syntax.Word) (string, bool) {
-	var b strings.Builder
-	for _, part := range w.Parts {
-		switch p := part.(type) {
-		case *syntax.Lit:
-			b.WriteString(p.Value)
-		case *syntax.SglQuoted:
-			b.WriteString(p.Value)
-		case *syntax.DblQuoted:
-			for _, q := range p.Parts {
-				lit, ok := q.(*syntax.Lit)
-				if !ok {
-					return "", false
+// maskAfter 换掉词里第一个 sep 之后的部分：sep 必须落在词开头的字面量里，之后的内容（可以带
+// 引号）整段换成 ***。
+func maskAfter(w *syntax.Word, sep string) (edit, bool) {
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	if !ok {
+		return edit{}, false
+	}
+	i := strings.Index(lit.Value, sep)
+	if i < 0 {
+		return edit{}, false
+	}
+	start := int(lit.Pos().Offset()) + i + len(sep)
+	if start >= int(w.End().Offset()) {
+		return edit{}, false
+	}
+	return edit{start: start, end: int(w.End().Offset()), text: mask}, true
+}
+
+// pipedPasswordEdits 找出经管道交给改密码命令的密码：echo 'user:密码' | chpasswd、
+// echo 密码 | passwd --stdin user。
+func pipedPasswordEdits(bin *syntax.BinaryCmd) []edit {
+	if bin.Op != syntax.Pipe {
+		return nil
+	}
+	consumer, cargs := pipeProgram(bin.Y)
+	userColonPass := consumer == "chpasswd"
+	if !userColonPass && (consumer != "passwd" || !slices.ContainsFunc(cargs, func(w *syntax.Word) bool {
+		v, ok := cmdline.ShellValue(w)
+		return ok && v == "--stdin"
+	})) {
+		return nil
+	}
+	producer, pargs := pipeProgram(bin.X)
+	if producer != "echo" && producer != "printf" {
+		return nil
+	}
+	var edits []edit
+	for _, w := range pargs {
+		v, ok := cmdline.ShellValue(w)
+		if !ok || strings.HasPrefix(v, "-") {
+			continue
+		}
+		start, end, ok := wordContent(w)
+		if !ok {
+			continue
+		}
+		if userColonPass {
+			e, ok := maskAfter(w, ":")
+			if !ok {
+				// 'user:密码'：冒号在引号里。
+				if i := strings.Index(v, ":"); i >= 0 && start+i+1 < end {
+					e, ok = edit{start: start + i + 1, end: end, text: mask}, true
 				}
-				b.WriteString(lit.Value)
 			}
+			if ok {
+				edits = append(edits, e)
+			}
+			continue
+		}
+		edits = append(edits, edit{start: start, end: end, text: mask})
+	}
+	return edits
+}
+
+// pipeProgram 是一段管道的程序名（去掉 sudo）和它的参数。
+func pipeProgram(stmt *syntax.Stmt) (string, []*syntax.Word) {
+	if stmt == nil {
+		return "", nil
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return "", nil
+	}
+	elevated := false // 已跳过 sudo / doas：其后以 - 开头的是它们的选项
+	for i, w := range call.Args {
+		v, ok := cmdline.ShellValue(w)
+		switch {
+		case !ok:
+			return "", nil
+		case v == "sudo" || v == "doas":
+			elevated = true
+		case elevated && strings.HasPrefix(v, "-"):
 		default:
-			return "", false
+			return path.Base(v), call.Args[i+1:]
 		}
 	}
-	return b.String(), true
+	return "", nil
+}
+
+// wordContent 是只由一个字面量、单引号或双引号字面量组成的词里，值在原文中的位置（不含引号）。
+func wordContent(w *syntax.Word) (start, end int, ok bool) {
+	if len(w.Parts) != 1 {
+		return 0, 0, false
+	}
+	switch p := w.Parts[0].(type) {
+	case *syntax.Lit:
+		return int(p.Pos().Offset()), int(p.End().Offset()), true
+	case *syntax.SglQuoted:
+		if p.Dollar {
+			return 0, 0, false
+		}
+		return int(p.Pos().Offset()) + 1, int(p.End().Offset()) - 1, true
+	case *syntax.DblQuoted:
+		if len(p.Parts) != 1 {
+			return 0, 0, false
+		}
+		lit, isLit := p.Parts[0].(*syntax.Lit)
+		if !isLit {
+			return 0, 0, false
+		}
+		return int(lit.Pos().Offset()), int(lit.End().Offset()), true
+	}
+	return 0, 0, false
 }
 
 func maskNode(n syntax.Node) edit {

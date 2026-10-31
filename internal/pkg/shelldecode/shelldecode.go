@@ -1,5 +1,5 @@
 // Package shelldecode 把 shell 命令里「base64 解码后交给 shell 执行」的写法展开成解码出来的脚本，
-// 让审核看到真正会执行的内容。纯算法，只依赖 shell 解析器。
+// 让审核看到真正会执行的内容。纯算法，只依赖 shell 解析器（取词的值用 cmdline.ShellValue）。
 package shelldecode
 
 import (
@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/opskat/opskat/internal/ai/cmdline"
 )
 
 // ErrUndecodable 表示命令会执行解码后的内容，但这部分解不开，不能当作已经看清。
@@ -68,13 +71,12 @@ func rewriteStmt(src string, stmt *syntax.Stmt, writes map[string]string, depth 
 			return rewritePipeline(src, stmt, writes)
 		}
 		if cmd.Op == syntax.AndStmt {
-			if path, script, ok := decodeWrite(cmd.X); ok {
-				writes[path] = script
+			if paths := decodeWrites(cmd.X, writes); len(paths) > 0 {
 				right, changed, err := rewriteStmt(src, cmd.Y, writes, depth)
 				if err != nil {
 					return "", false, err
 				}
-				if consumesWrite(cmd.Y, path) {
+				if consumesWrite(cmd.Y, paths) {
 					return right, true, nil
 				}
 				return joinNonEmpty(sliceStmt(src, cmd.X), right), changed, nil
@@ -94,6 +96,9 @@ func rewriteStmt(src string, stmt *syntax.Stmt, writes map[string]string, depth 
 	case *syntax.Block:
 		return rewriteNested(src, stmt, cmd.Stmts, writes, depth)
 	case *syntax.CallExpr:
+		if base64Stage([]*syntax.Stmt{stmt}) == 0 {
+			recordWrites(stmt, []*syntax.Stmt{stmt}, 0, writes)
+		}
 		return rewriteCall(src, stmt, cmd, writes, depth)
 	default:
 		if hasDecodedExecution(stmt) {
@@ -130,7 +135,15 @@ func rewriteCall(src string, stmt *syntax.Stmt, call *syntax.CallExpr, writes ma
 		return script, ok, err
 	}
 	if script, ok := writtenScript(call, writes); ok {
+		if script == "" {
+			return "", false, ErrUndecodable
+		}
 		return script, true, nil
+	}
+	// 能执行代码的程序（shell、eval、解释器、代为执行命令的程序，或命令名本身是替换）
+	// 带着上面展不开的解码：经重定向、进程替换或参数里的替换把解码结果交给它执行，看不清。
+	if runsCode(call) && hasDecodedExecution(stmt) {
+		return "", false, ErrUndecodable
 	}
 	return sliceStmt(src, stmt), false, nil
 }
@@ -141,22 +154,149 @@ func rewritePipeline(src string, stmt *syntax.Stmt, writes map[string]string) (s
 	if dec < 0 {
 		return sliceStmt(src, stmt), false, nil
 	}
+	reads, err := decodedSink(stages, dec)
+	if err != nil {
+		return "", false, err
+	}
+	if reads {
+		script, err := decodeStage(stages, dec)
+		if err != nil {
+			return "", false, err
+		}
+		return script, true, nil
+	}
+	recordWrites(stmt, stages, dec, writes)
+	return sliceStmt(src, stmt), false, nil
+}
+
+// decodedSink 判断第 dec 段解码出来的内容流向哪里：交给从标准输入读脚本的 shell（reads），
+// 或者只经过只处理数据的程序（dataConsumers）。其余去向——不认识的程序、代为执行命令的
+// 程序、子 shell 等复合命令——都可能执行它又看不清，返回 ErrUndecodable。
+func decodedSink(stages []*syntax.Stmt, dec int) (reads bool, err error) {
 	for _, later := range stages[dec+1:] {
-		switch reads, unknown := readsDecodedStdin(later); {
-		case unknown:
-			return "", false, ErrUndecodable
+		reads, unknown := readsDecodedStdin(later)
+		switch {
 		case reads:
-			script, err := decodeStage(stages, dec)
-			if err != nil {
-				return "", false, err
-			}
-			return script, true, nil
+			return true, nil
+		case unknown || !consumesDataOnly(later):
+			return false, ErrUndecodable
 		}
 	}
-	if path, script, ok := writeTarget(stmt, stages, dec); ok {
-		writes[path] = script
+	return false, nil
+}
+
+// dataConsumers 只读、转换或保存数据，不把输入当代码执行。
+var dataConsumers = map[string]bool{
+	"cat": true, "tee": true, "jq": true, "yq": true, "grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"head": true, "tail": true, "less": true, "more": true, "wc": true, "sort": true, "uniq": true,
+	"cut": true, "tr": true, "column": true, "fold": true, "xxd": true, "hexdump": true, "od": true,
+	"strings": true, "file": true, "openssl": true, "base64": true, "base32": true, "iconv": true,
+	"gzip": true, "gunzip": true, "zcat": true, "xz": true, "unxz": true, "zstd": true,
+	"md5sum": true, "sha1sum": true, "sha256sum": true, "sha512sum": true, "cksum": true,
+}
+
+func consumesDataOnly(stmt *syntax.Stmt) bool {
+	_, args, ok := callOf(stmt)
+	if !ok || len(args) == 0 {
+		return false
 	}
-	return sliceStmt(src, stmt), false, nil
+	prog, lit := cmdline.ShellValue(args[0])
+	return lit && dataConsumers[path.Base(prog)]
+}
+
+// executors 是会把参数、输入或文件当命令执行的程序（shell 之外）。
+var executors = map[string]bool{
+	"eval": true, "source": true, ".": true, "exec": true, "xargs": true, "timeout": true, "stdbuf": true,
+	"setsid": true, "doas": true, "su": true, "busybox": true, "watch": true, "flock": true, "chroot": true,
+	"python": true, "python3": true, "perl": true, "ruby": true, "node": true, "php": true,
+}
+
+// runsCode 判断这条命令会不会执行代码：命令名是替换、shell、executors 里的程序，或是没法
+// 跳过的 wrapper。
+func runsCode(call *syntax.CallExpr) bool {
+	_, args, ok := callOf(&syntax.Stmt{Cmd: call})
+	if !ok || len(args) == 0 {
+		return false
+	}
+	prog, lit := cmdline.ShellValue(args[0])
+	base := path.Base(prog)
+	return !lit || shells[base] || executors[base] || wrappers[base]
+}
+
+// recordWrites 记下第 dec 段解码出来、写进了哪些文件，以及写进去的脚本；解不开的记为空，
+// 之后执行这些文件时按看不清处理。
+func recordWrites(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int, writes map[string]string) []string {
+	paths := decodedWritePaths(stmt, stages, dec)
+	if len(paths) == 0 {
+		return nil
+	}
+	script, err := decodeStage(stages, dec)
+	if err != nil {
+		script = ""
+	}
+	for _, p := range paths {
+		writes[p] = script
+	}
+	return paths
+}
+
+// decodedWritePaths 是解码结果写进的文件：解码那一段及其后各段的输出重定向、base64 -o、
+// tee 的文件参数。路径按 path.Clean 规范化，与执行时的写法对得上。
+func decodedWritePaths(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int) []string {
+	var paths []string
+	add := func(p string, ok bool) {
+		if ok {
+			paths = append(paths, path.Clean(p))
+		}
+	}
+	add(base64OutputPath(stages[dec]))
+	for _, stage := range stages[dec:] {
+		add(outputPath(stage))
+		paths = append(paths, teeFiles(stage)...)
+	}
+	if dec == len(stages)-1 {
+		add(outputPath(stmt))
+	}
+	return paths
+}
+
+// base64OutputPath 是 base64 -o / --output 写入的文件。
+func base64OutputPath(stmt *syntax.Stmt) (string, bool) {
+	_, args, ok := callOf(stmt)
+	if !ok {
+		return "", false
+	}
+	for i := 1; i < len(args); i++ {
+		word, lit := cmdline.ShellValue(args[i])
+		if !lit {
+			continue
+		}
+		if (word == "-o" || word == "--output") && i+1 < len(args) {
+			return cmdline.ShellValue(args[i+1])
+		}
+		if v, found := strings.CutPrefix(word, "--output="); found {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// teeFiles 是 tee 写入的文件。
+func teeFiles(stmt *syntax.Stmt) []string {
+	_, args, ok := callOf(stmt)
+	if !ok || len(args) == 0 {
+		return nil
+	}
+	if prog, lit := cmdline.ShellValue(args[0]); !lit || path.Base(prog) != "tee" {
+		return nil
+	}
+	var files []string
+	for _, arg := range args[1:] {
+		if word, lit := cmdline.ShellValue(arg); lit && word != "" && !strings.HasPrefix(word, "-") {
+			files = append(files, path.Clean(word))
+		}
+	}
+	return files
 }
 
 func pipelineStages(stmt *syntax.Stmt) []*syntax.Stmt {
@@ -193,13 +333,13 @@ func base64Decode(stmt *syntax.Stmt) (inputFile, ambiguous bool, ok bool) {
 	if !ok || len(args) == 0 {
 		return false, false, false
 	}
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if !lit || path.Base(prog) != "base64" {
 		return false, false, false
 	}
 	decode := false
 	for i := 1; i < len(args); i++ {
-		word, lit := literalValue(args[i])
+		word, lit := cmdline.ShellValue(args[i])
 		if !lit {
 			return false, true, true
 		}
@@ -243,7 +383,7 @@ func readsDecodedStdin(stmt *syntax.Stmt) (reads, unknown bool) {
 	if !ok || len(args) == 0 {
 		return false, false
 	}
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if !lit {
 		return false, false
 	}
@@ -253,7 +393,7 @@ func readsDecodedStdin(stmt *syntax.Stmt) (reads, unknown bool) {
 		if !ok || len(rest) == 0 {
 			return false, true
 		}
-		prog, lit = literalValue(rest[0])
+		prog, lit = cmdline.ShellValue(rest[0])
 		if !lit || !shells[path.Base(prog)] {
 			return false, false
 		}
@@ -293,7 +433,7 @@ func producerPayload(stmt *syntax.Stmt) (string, bool) {
 	if !ok || len(args) == 0 {
 		return "", false
 	}
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if !lit {
 		return "", false
 	}
@@ -310,7 +450,7 @@ func producerPayload(stmt *syntax.Stmt) (string, bool) {
 func echoPayload(args []*syntax.Word) (string, bool) {
 	var parts []string
 	for _, arg := range args {
-		word, ok := literalValue(arg)
+		word, ok := cmdline.ShellValue(arg)
 		if !ok {
 			return "", false
 		}
@@ -332,11 +472,11 @@ func printfPayload(args []*syntax.Word) (string, bool) {
 	if len(args) != 2 {
 		return "", false
 	}
-	format, ok := literalValue(args[0])
+	format, ok := cmdline.ShellValue(args[0])
 	if !ok || (format != "%s" && format != "%s\\n" && format != "%s\n") {
 		return "", false
 	}
-	return literalValue(args[1])
+	return cmdline.ShellValue(args[1])
 }
 
 func redirectPayload(stmt *syntax.Stmt) (string, bool, bool) {
@@ -346,47 +486,30 @@ func redirectPayload(stmt *syntax.Stmt) (string, bool, bool) {
 			if r.Word == nil {
 				return "", true, true
 			}
-			v, ok := literalValue(r.Word)
+			v, ok := cmdline.ShellValue(r.Word)
 			return v, true, !ok
 		case syntax.Hdoc, syntax.DashHdoc:
 			if r.Hdoc == nil {
 				return "", true, true
 			}
-			v, ok := literalValue(r.Hdoc)
+			v, ok := cmdline.ShellValue(r.Hdoc)
 			return v, true, !ok
 		}
 	}
 	return "", false, false
 }
 
-func decodeWrite(stmt *syntax.Stmt) (string, string, bool) {
+// decodeWrites 在 stmt 是「解码后只写进文件」的管道时，记下写了哪些文件并返回它们。
+func decodeWrites(stmt *syntax.Stmt, writes map[string]string) []string {
 	stages := pipelineStages(stmt)
 	dec := base64Stage(stages)
 	if dec < 0 {
-		return "", "", false
+		return nil
 	}
-	for _, later := range stages[dec+1:] {
-		if reads, unknown := readsDecodedStdin(later); reads || unknown {
-			return "", "", false
-		}
+	if reads, err := decodedSink(stages, dec); reads || err != nil {
+		return nil
 	}
-	path, script, ok := writeTarget(stmt, stages, dec)
-	return path, script, ok
-}
-
-func writeTarget(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int) (string, string, bool) {
-	path, ok := outputPath(stages[dec])
-	if !ok && dec == len(stages)-1 {
-		path, ok = outputPath(stmt)
-	}
-	if !ok {
-		return "", "", false
-	}
-	script, err := decodeStage(stages, dec)
-	if err != nil {
-		return "", "", false
-	}
-	return path, script, true
+	return recordWrites(stmt, stages, dec, writes)
 }
 
 func outputPath(stmt *syntax.Stmt) (string, bool) {
@@ -399,7 +522,7 @@ func outputPath(stmt *syntax.Stmt) (string, bool) {
 			if r.Word == nil {
 				return "", false
 			}
-			v, ok := literalValue(r.Word)
+			v, ok := cmdline.ShellValue(r.Word)
 			if !ok || v == "" {
 				return "", false
 			}
@@ -409,32 +532,26 @@ func outputPath(stmt *syntax.Stmt) (string, bool) {
 	return "", false
 }
 
-func consumesWrite(stmt *syntax.Stmt, path string) bool {
+// consumesWrite 判断 stmt 里有没有执行 paths 里的某个文件。
+func consumesWrite(stmt *syntax.Stmt, paths []string) bool {
 	if stmt == nil || stmt.Cmd == nil {
 		return false
 	}
 	switch cmd := stmt.Cmd.(type) {
 	case *syntax.CallExpr:
-		got, ok := writtenScript(cmd, map[string]string{path: ""})
-		return ok && got == ""
+		file, ok := executedFile(cmd)
+		return ok && slices.Contains(paths, file)
 	case *syntax.BinaryCmd:
-		return consumesWrite(cmd.X, path) || consumesWrite(cmd.Y, path)
+		return consumesWrite(cmd.X, paths) || consumesWrite(cmd.Y, paths)
 	case *syntax.Subshell:
-		for _, inner := range cmd.Stmts {
-			if consumesWrite(inner, path) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(cmd.Stmts, func(inner *syntax.Stmt) bool { return consumesWrite(inner, paths) })
 	case *syntax.Block:
-		for _, inner := range cmd.Stmts {
-			if consumesWrite(inner, path) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(cmd.Stmts, func(inner *syntax.Stmt) bool { return consumesWrite(inner, paths) })
 	}
 	return false
 }
 
+// writtenScript 是 call 执行的、之前由解码写出来的文件里的脚本；解不开时脚本为空。
 func writtenScript(call *syntax.CallExpr, writes map[string]string) (string, bool) {
 	file, ok := executedFile(call)
 	if !ok {
@@ -444,42 +561,35 @@ func writtenScript(call *syntax.CallExpr, writes map[string]string) (string, boo
 	return script, ok
 }
 
+// executedFile 是 call 当脚本执行的文件（source / . / shell 的脚本参数），或直接按路径执行的
+// 程序本身；路径按 path.Clean 规范化。
 func executedFile(call *syntax.CallExpr) (string, bool) {
 	_, args, ok := callOf(&syntax.Stmt{Cmd: call})
 	if !ok || len(args) == 0 {
 		return "", false
 	}
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if !lit {
 		return "", false
 	}
 	base := path.Base(prog)
-	if wrappers[base] {
-		rest, ok := skipWrapper(base, args[1:])
-		if !ok || len(rest) == 0 {
-			return "", false
-		}
-		args = rest
-		prog, lit = literalValue(args[0])
-		if !lit {
-			return "", false
-		}
-		base = path.Base(prog)
-	}
-	if base == "source" || base == "." {
+	switch {
+	case base == "source" || base == ".":
 		if len(args) < 2 {
 			return "", false
 		}
-		return literalValue(args[1])
+		file, ok := cmdline.ShellValue(args[1])
+		return path.Clean(file), ok
+	case shells[base]:
+		kind, file, _ := shellInvocation(args[1:])
+		if kind != invokeFile {
+			return "", false
+		}
+		return path.Clean(file), true
+	case strings.Contains(prog, "/"):
+		return path.Clean(prog), true
 	}
-	if !shells[base] {
-		return "", false
-	}
-	kind, file, _ := shellInvocation(args[1:])
-	if kind != invokeFile {
-		return "", false
-	}
-	return file, true
+	return "", false
 }
 
 const (
@@ -489,13 +599,16 @@ const (
 	invokeNone  = "none"
 )
 
+// shellOptionsWithValue 是后面跟一个值的 shell 选项：值不是脚本文件。
+var shellOptionsWithValue = map[string]bool{"-o": true, "+o": true, "-O": true, "+O": true, "--rcfile": true, "--init-file": true}
+
 func shellInvocation(args []*syntax.Word) (kind, file string, unknown bool) {
 	var positionals []*syntax.Word
 	for i := 0; i < len(args); i++ {
-		word, ok := literalValue(args[i])
+		word, ok := cmdline.ShellValue(args[i])
 		if !ok {
 			if _, isSubst := pureSubst(args[i]); isSubst && i > 0 {
-				prev, _ := literalValue(args[i-1])
+				prev, _ := cmdline.ShellValue(args[i-1])
 				if prev == "-c" || strings.HasSuffix(prev, "c") {
 					return invokeC, "", false
 				}
@@ -511,13 +624,15 @@ func shellInvocation(args []*syntax.Word) (kind, file string, unknown bool) {
 				return invokeNone, "", true
 			}
 			return invokeC, "", false
+		case shellOptionsWithValue[word]:
+			i++
 		case word == "-s":
 		case strings.HasPrefix(word, "-") && strings.Contains(word, "c") && !strings.HasPrefix(word, "--"):
 			if i+1 >= len(args) {
 				return invokeNone, "", true
 			}
 			return invokeC, "", false
-		case strings.HasPrefix(word, "-"):
+		case strings.HasPrefix(word, "-"), strings.HasPrefix(word, "+"):
 		default:
 			positionals = append(positionals, args[i])
 		}
@@ -525,9 +640,12 @@ func shellInvocation(args []*syntax.Word) (kind, file string, unknown bool) {
 	if len(positionals) == 0 {
 		return invokeStdin, "", false
 	}
-	file, ok := literalValue(positionals[0])
+	file, ok := cmdline.ShellValue(positionals[0])
 	if !ok {
 		return invokeNone, "", true
+	}
+	if file == "/dev/stdin" || file == "-" {
+		return invokeStdin, "", false
 	}
 	return invokeFile, file, false
 }
@@ -537,7 +655,7 @@ func shellCommandArg(call *syntax.CallExpr, depth int) (string, bool, error) {
 	if !ok || len(args) == 0 {
 		return "", false, nil
 	}
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if !lit {
 		return "", false, nil
 	}
@@ -548,7 +666,7 @@ func shellCommandArg(call *syntax.CallExpr, depth int) (string, bool, error) {
 			return "", false, nil
 		}
 		args = rest
-		prog, lit = literalValue(args[0])
+		prog, lit = cmdline.ShellValue(args[0])
 		if !lit {
 			return "", false, nil
 		}
@@ -580,7 +698,7 @@ func revealShellC(args []*syntax.Word, depth int) (string, bool, error) {
 
 func revealEval(args []*syntax.Word, depth int) (string, bool, error) {
 	if len(args) == 1 {
-		if text, ok := literalValue(args[0]); ok {
+		if text, ok := cmdline.ShellValue(args[0]); ok {
 			return finishReveal(text, false, depth)
 		}
 		if inner, ok := pureSubst(args[0]); ok {
@@ -594,7 +712,7 @@ func revealEval(args []*syntax.Word, depth int) (string, bool, error) {
 	}
 	var b strings.Builder
 	for i, arg := range args {
-		text, ok := literalValue(arg)
+		text, ok := cmdline.ShellValue(arg)
 		if !ok {
 			return "", false, nil
 		}
@@ -608,7 +726,7 @@ func revealEval(args []*syntax.Word, depth int) (string, bool, error) {
 
 func cArgScript(args []*syntax.Word) (script string, decoded, ok bool, err error) {
 	for i := 0; i < len(args); i++ {
-		word, lit := literalValue(args[i])
+		word, lit := cmdline.ShellValue(args[i])
 		if !lit || !isCommandFlag(word) {
 			continue
 		}
@@ -616,7 +734,7 @@ func cArgScript(args []*syntax.Word) (script string, decoded, ok bool, err error
 			return "", false, false, nil
 		}
 		next := args[i+1]
-		if text, ok := literalValue(next); ok {
+		if text, ok := cmdline.ShellValue(next); ok {
 			return text, false, true, nil
 		}
 		if inner, ok := pureSubst(next); ok {
@@ -662,7 +780,7 @@ func procSubstExec(call *syntax.CallExpr) (string, bool, error) {
 	if !ok || len(args) == 0 {
 		return "", false, nil
 	}
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if !lit || !shells[path.Base(prog)] {
 		return "", false, nil
 	}
@@ -746,7 +864,7 @@ func callOf(stmt *syntax.Stmt) (*syntax.CallExpr, []*syntax.Word, bool) {
 		return nil, nil, false
 	}
 	args := call.Args
-	prog, lit := literalValue(args[0])
+	prog, lit := cmdline.ShellValue(args[0])
 	if lit && wrappers[path.Base(prog)] {
 		rest, ok := skipWrapper(path.Base(prog), args[1:])
 		if !ok || len(rest) == 0 {
@@ -759,7 +877,7 @@ func callOf(stmt *syntax.Stmt) (*syntax.CallExpr, []*syntax.Word, bool) {
 
 func skipWrapper(wrapper string, args []*syntax.Word) ([]*syntax.Word, bool) {
 	for len(args) > 0 {
-		word, ok := literalValue(args[0])
+		word, ok := cmdline.ShellValue(args[0])
 		if !ok {
 			return nil, false
 		}
@@ -852,28 +970,4 @@ func joinNonEmpty(parts ...string) string {
 		}
 	}
 	return strings.Join(out, "\n")
-}
-
-// literalValue 返回词去掉引号后的值；词里有变量、命令替换等展开时 ok 为 false。
-func literalValue(w *syntax.Word) (string, bool) {
-	var b strings.Builder
-	for _, part := range w.Parts {
-		switch p := part.(type) {
-		case *syntax.Lit:
-			b.WriteString(p.Value)
-		case *syntax.SglQuoted:
-			b.WriteString(p.Value)
-		case *syntax.DblQuoted:
-			for _, q := range p.Parts {
-				lit, ok := q.(*syntax.Lit)
-				if !ok {
-					return "", false
-				}
-				b.WriteString(lit.Value)
-			}
-		default:
-			return "", false
-		}
-	}
-	return b.String(), true
 }

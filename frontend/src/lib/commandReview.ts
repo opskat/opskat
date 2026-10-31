@@ -88,6 +88,21 @@ export function failReasonLabel(t: TFunction, reason: string | undefined): strin
   return t(`commandReview.reason.${known}`);
 }
 
+// 审核器在这里用不了的原因，与后端 command_review_svc.Unusable* 一致。
+const REVIEWER_UNUSABLE_REASONS: readonly string[] = [
+  "not_running",
+  "digest_mismatch",
+  "store_required",
+  "no_install_record",
+  "check_failed",
+];
+
+/** 审核器用不了的原因的文案；未知原因按资格检查失败显示。 */
+export function unusableReasonLabel(t: TFunction, reason: string | undefined): string {
+  const known = reason && REVIEWER_UNUSABLE_REASONS.includes(reason) ? reason : "check_failed";
+  return t(`commandReview.settings.unusableReason.${known}`);
+}
+
 // 与后端 policy.ResolveGroupChain 一致：最多向上找 5 层。
 const MAX_GROUP_DEPTH = 5;
 

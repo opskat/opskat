@@ -3697,6 +3697,13 @@
       "unsigned": "未经签名",
       "configureReviewer": "在扩展详情里设置",
       "reviewerUnusable": "{{name}} 现在不能使用：{{reason}}",
+      "unusableReason": {
+        "not_running": "扩展没有在运行",
+        "digest_mismatch": "扩展文件与安装时的包不一致",
+        "store_required": "正式版只能使用从商店安装的审核器",
+        "no_install_record": "没有安装来源记录，请重新安装",
+        "check_failed": "无法检查它能否使用，详见日志"
+      },
       "reviewerSaved": "已切换命令审核器",
       "save": "保存",
       "saved": "命令审核设置已保存",

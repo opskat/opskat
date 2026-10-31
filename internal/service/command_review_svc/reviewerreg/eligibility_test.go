@@ -29,7 +29,7 @@ func TestIneligibleReviewerIsNeverCalled(t *testing.T) {
 	host := &fakeHost{answer: `{"outcome":"pass"}`}
 	reg, contributions := newRegistry(t, host)
 	reg.SetEligibility(func(context.Context, string) (bool, error) {
-		return false, errors.New("package digest does not match")
+		return false, &command_review_svc.IneligibleError{Code: command_review_svc.UnusableDigestMismatch, Err: errors.New("package digest does not match")}
 	})
 	require.NoError(t, contributions.Attach(reviewerView("jev", true)))
 	src := reg.Selecting(func() string { return "" })
@@ -44,7 +44,7 @@ func TestIneligibleReviewerIsNeverCalled(t *testing.T) {
 	require.Len(t, st.Reviewers, 1)
 	assert.False(t, st.Reviewers[0].Usable)
 	assert.False(t, st.Reviewers[0].Signed)
-	assert.Contains(t, st.Reviewers[0].Reason, "package digest does not match")
+	assert.Equal(t, command_review_svc.UnusableDigestMismatch, st.Reviewers[0].Reason)
 	assert.Empty(t, st.Active)
 	assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, st.Problem)
 	assert.Empty(t, host.calls)

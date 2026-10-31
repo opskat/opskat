@@ -166,6 +166,38 @@ func TestRedactTextReplacesSensitiveValues(t *testing.T) {
 	}
 }
 
+// 运维命令里另一些常见的密码写法：= 后带引号的参数值、curl 紧贴的 -u、工具读密码的环境变量、
+// openssl 的 pass:、改密码的管道、Cookie 头，以及 SQL / Mongo 里改密码的语句。
+func TestRedactOtherCommonPasswordForms(t *testing.T) {
+	runRedactCases(t, Shell, []redactCase{
+		{"--password= quoted", `mysql --password="a b" shop`, `mysql --password=*** shop`},
+		{"--password= single quoted", `psql --password='a b' -h db`, `psql --password=*** -h db`},
+		{"curl attached -u", "curl -uadmin:s3cret http://x", "curl -uadmin:*** http://x"},
+		{"curl --user=", "curl --user=admin:s3cret http://x", "curl --user=admin:*** http://x"},
+		{"REDISCLI_AUTH", "REDISCLI_AUTH=s3cret redis-cli -h r info", "REDISCLI_AUTH=*** redis-cli -h r info"},
+		{"SSHPASS", "SSHPASS=s3cret sshpass -e ssh root@h", "SSHPASS=*** sshpass -e ssh root@h"},
+		{"openssl pass:", "openssl rsa -in k.pem -passin pass:S3cret -out k2.pem", "openssl rsa -in k.pem -passin pass:*** -out k2.pem"},
+		{"chpasswd", "echo 'root:N3wPass' | chpasswd", "echo 'root:***' | chpasswd"},
+		{"passwd --stdin", "echo N3wPass | passwd --stdin root", "echo *** | passwd --stdin root"},
+		{"htpasswd -b", "htpasswd -b /etc/nginx/.htpasswd bob S3cret", "htpasswd -b /etc/nginx/.htpasswd bob ***"},
+		{"docker login -p", "docker login -u bob -p s3cret registry.example.com", "docker login -u bob -p *** registry.example.com"},
+		{"cookie header", `curl -H 'Cookie: session=abc123; theme=dark' https://x`, `curl -H 'Cookie: ***' https://x`},
+		{"url password with @", "git clone https://bob:p@ss@git.example.com/r.git", "git clone https://bob:***@git.example.com/r.git"},
+	})
+	runRedactCases(t, Text, []redactCase{
+		{"set password for", "SET PASSWORD FOR 'app'@'%' = 'N3wPass'", "SET PASSWORD FOR 'app'@'%' = '***'"},
+		{"oracle identified by unquoted", "ALTER USER app IDENTIFIED BY N3wPass", "ALTER USER app IDENTIFIED BY ***"},
+		{"mongo changeUserPassword", `db.changeUserPassword("app", "N3wPass")`, `db.changeUserPassword("app", "***")`},
+	})
+	// docker run 的 -p 是端口，不是密码。
+	got, err := RedactSensitive(Shell, "docker run -p 8080:80 nginx")
+	require.NoError(t, err)
+	assert.Equal(t, "docker run -p 8080:80 nginx", got)
+	got, err = RedactSensitive(Text, "ALTER USER app IDENTIFIED BY VALUES 'S:ABC'")
+	require.NoError(t, err)
+	assert.Equal(t, "ALTER USER app IDENTIFIED BY VALUES '***'", got)
+}
+
 // 常见的密钥格式（取自 betterleaks 的规则）不管出现在哪里都换掉，只换密钥本身。
 // 测试值拆成前缀和主体两段拼接，免得仓库的密钥扫描把它们当成真的密钥。
 func TestRedactKnownSecretFormats(t *testing.T) {

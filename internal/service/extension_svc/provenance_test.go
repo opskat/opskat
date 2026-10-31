@@ -15,6 +15,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/pkg/appversion"
+	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 // memStateRepo is an in-memory extension_state table.
@@ -83,19 +84,19 @@ func TestReviewerEligible(t *testing.T) {
 		name    string
 		state   *extension_state_entity.ExtensionState
 		kind    appversion.Kind
-		wantErr string // "" = eligible
+		wantErr string // the Unusable* code; "" = eligible
 		signed  bool
 	}{
 		{"store on release", state(InstallOriginStore, sum), appversion.KindRelease, "", true},
 		{"store on nightly", state(InstallOriginStore, sum), appversion.KindNightly, "", true},
-		{"local on release", state(InstallOriginLocal, sum), appversion.KindRelease, "store", false},
-		{"dev on release", state(InstallOriginDev, sum), appversion.KindRelease, "store", false},
+		{"local on release", state(InstallOriginLocal, sum), appversion.KindRelease, command_review_svc.UnusableStoreRequired, false},
+		{"dev on release", state(InstallOriginDev, sum), appversion.KindRelease, command_review_svc.UnusableStoreRequired, false},
 		{"local on nightly is unsigned", state(InstallOriginLocal, sum), appversion.KindNightly, "", false},
 		{"dev on dev build is unsigned", state(InstallOriginDev, sum), appversion.KindDev, "", false},
-		{"digest mismatch", state(InstallOriginStore, "other"), appversion.KindDev, "digest", false},
-		{"no recorded digest", state(InstallOriginStore, ""), appversion.KindDev, "digest", false},
-		{"no recorded source", state("", sum), appversion.KindDev, "source", false},
-		{"no record", nil, appversion.KindDev, "digest", false},
+		{"digest mismatch", state(InstallOriginStore, "other"), appversion.KindDev, command_review_svc.UnusableDigestMismatch, false},
+		{"no recorded digest", state(InstallOriginStore, ""), appversion.KindDev, command_review_svc.UnusableDigestMismatch, false},
+		{"no recorded source", state("", sum), appversion.KindDev, command_review_svc.UnusableNoInstallRecord, false},
+		{"no record", nil, appversion.KindDev, command_review_svc.UnusableDigestMismatch, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,8 +104,7 @@ func TestReviewerEligible(t *testing.T) {
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 			} else {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Equal(t, tc.wantErr, command_review_svc.UnusableReason(err))
 			}
 			assert.Equal(t, tc.signed, signed)
 		})
@@ -115,22 +115,48 @@ func TestPackageSHA256CoversWasmAndManifest(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"a":1}`), 0o600))
-	base, err := PackageSHA256(dir, "main.wasm")
+	base, err := PackageSHA256(dir)
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"a":2}`), 0o600))
-	changedManifest, err := PackageSHA256(dir, "main.wasm")
+	changedManifest, err := PackageSHA256(dir)
 	require.NoError(t, err)
 	assert.NotEqual(t, base, changedManifest, "a manifest change (permissions) must change the digest")
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"a":1}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm2"), 0o600))
-	changedWasm, err := PackageSHA256(dir, "main.wasm")
+	changedWasm, err := PackageSHA256(dir)
 	require.NoError(t, err)
 	assert.NotEqual(t, base, changedWasm)
 
-	_, err = PackageSHA256(dir, "missing.wasm")
+	// Installs copy only regular files; anything else in the directory cannot be vouched for.
+	require.NoError(t, os.Symlink(filepath.Join(dir, "main.wasm"), filepath.Join(dir, "link.wasm")))
+	_, err = PackageSHA256(dir)
 	assert.Error(t, err)
+}
+
+// The guest can read any file of its own package (permissions.fs.read ${EXT_DIR}/**),
+// and locales / SKILL.md change what the host shows: editing any of them after an
+// install must change the digest, or a tampered reviewer would still read as signed.
+func TestPackageSHA256CoversEveryPackageFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"a":1}`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "rules"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "rules", "review.yaml"), []byte("block: rm"), 0o600))
+	base, err := PackageSHA256(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "rules", "review.yaml"), []byte("block: none"), 0o600))
+	edited, err := PackageSHA256(dir)
+	require.NoError(t, err)
+	assert.NotEqual(t, base, edited, "a data file the guest reads changed")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "rules", "review.yaml"), []byte("block: rm"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("x"), 0o600))
+	added, err := PackageSHA256(dir)
+	require.NoError(t, err)
+	assert.NotEqual(t, base, added, "a file added to the package")
 }
 
 type provenanceEnv struct {
@@ -173,7 +199,7 @@ func TestInstallRecordsProvenancePerPath(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, origin, row.Source)
 			assert.True(t, row.Enabled)
-			want, err := PackageSHA256(filepath.Join(e.extDir, "ext-prov"), "main.wasm")
+			want, err := PackageSHA256(filepath.Join(e.extDir, "ext-prov"))
 			require.NoError(t, err)
 			assert.Equal(t, want, row.PackageSHA256)
 		})

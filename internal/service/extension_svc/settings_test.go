@@ -34,6 +34,8 @@ type settingsFixture struct {
 	ctx  context.Context
 	svc  *Service
 	repo extension_settings_repo.ExtensionSettingsRepo
+	stub *describeCacheStub
+	dir  string
 }
 
 func newSettingsFixture(t *testing.T) *settingsFixture {
@@ -75,7 +77,7 @@ func newSettingsFixture(t *testing.T) *settingsFixture {
 	repo := extension_settings_repo.NewExtensionSettings()
 	svc := New(mgr, extension_state_repo.NewExtensionState(), extension_data_repo.NewExtensionData(), repo,
 		nil, zap.NewNop(), nil, nil)
-	return &settingsFixture{ctx: context.Background(), svc: svc, repo: repo}
+	return &settingsFixture{ctx: context.Background(), svc: svc, repo: repo, stub: stub, dir: dir}
 }
 
 func writeSettingsExtension(t *testing.T, stub *describeCacheStub, dir, name string, settings map[string]any) {
@@ -99,14 +101,22 @@ func writeSettingsExtension(t *testing.T, stub *describeCacheStub, dir, name str
 	})
 }
 
-// stored is the settings row as written to the database.
+// stored is the settings row as written to the database, plain values and
+// secrets' ciphertext in one map.
 func (f *settingsFixture) stored(t *testing.T) map[string]any {
 	t.Helper()
 	row, err := f.repo.Find(f.ctx, "jev")
 	require.NoError(t, err)
 	require.NotNil(t, row)
-	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(row.Value), &out))
+	var parsed storedSettingsRow
+	require.NoError(t, json.Unmarshal([]byte(row.Value), &parsed))
+	out := map[string]any{}
+	for k, v := range parsed.Values {
+		out[k] = v
+	}
+	for k, v := range parsed.Secrets {
+		out[k] = v
+	}
 	return out
 }
 
@@ -176,6 +186,35 @@ func TestSaveSettingsBlankSecretKeepsTheStoredOne(t *testing.T) {
 
 	require.Empty(t, f.save(t, map[string]any{"baseURL": "https://c.example", "apiKey": "rotated"}))
 	assert.Equal(t, "rotated", f.decrypted(t)["apiKey"])
+}
+
+// An upgrade can change whether a field is secret. The value stored as the other
+// kind is never read as this one — ciphertext never shows (to the form, to the
+// guest's config.get) as a plain value, a plaintext value is never "decrypted" —
+// the field reads as not set until the user saves it again.
+func TestSettingsFieldChangingSecretnessReadsAsUnset(t *testing.T) {
+	f := newSettingsFixture(t)
+	require.Empty(t, f.save(t, map[string]any{"baseURL": "https://a.example", "apiKey": "s3cret", "mode": "fast"}))
+
+	writeSettingsExtension(t, f.stub, f.dir, "jev", map[string]any{"configSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"baseURL": map[string]any{"type": "string", "format": "endpoint"},
+			"apiKey":  map[string]any{"type": "string"},
+			"mode":    map[string]any{"type": "string", "format": "password"},
+		},
+		"required": []any{"baseURL"},
+	}})
+
+	view, err := f.svc.SettingsView(f.ctx, "jev")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"baseURL": "https://a.example"}, view.Values, "the old ciphertext is no plain value")
+	assert.Equal(t, map[string]bool{"mode": false}, view.Secrets, "a plaintext value is no stored secret")
+	assert.Equal(t, map[string]any{"baseURL": "https://a.example"}, f.decrypted(t))
+
+	require.Empty(t, f.save(t, map[string]any{"baseURL": "https://a.example", "apiKey": "plain-now"}))
+	assert.Equal(t, map[string]any{"baseURL": "https://a.example", "apiKey": "plain-now"}, f.decrypted(t),
+		"a blank secret keeps only a value stored as a secret")
 }
 
 func TestSaveSettingsRefusesInvalidValuesAndSavesNothing(t *testing.T) {

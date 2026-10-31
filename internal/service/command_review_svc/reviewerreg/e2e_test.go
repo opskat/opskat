@@ -117,7 +117,7 @@ func newReviewHost(t *testing.T, timeout time.Duration) *reviewHost {
 	h.reg.SetSettingsHasher(h.svc.SettingsHash)
 	h.reg.SetEligibility(h.svc.ReviewerEligibility)
 	// The fixture counts as a store install of exactly the files on disk.
-	digest, err := extension_svc.PackageSHA256(dir, "main.wasm")
+	digest, err := extension_svc.PackageSHA256(dir)
 	require.NoError(t, err)
 	require.NoError(t, extension_state_repo.NewExtensionState().Create(ctx, &extension_state_entity.ExtensionState{
 		Name: extensiontest.ReviewerFixtureName, Enabled: true, Source: extension_svc.InstallOriginStore, PackageSHA256: digest,
@@ -235,7 +235,7 @@ func TestSwappedPackageFailsTheReviewWithoutRunningIt(t *testing.T) {
 	st := h.source.State(context.Background(), "en")
 	require.Len(t, st.Reviewers, 1)
 	assert.False(t, st.Reviewers[0].Usable)
-	assert.Contains(t, st.Reviewers[0].Reason, "digest")
+	assert.Equal(t, command_review_svc.UnusableDigestMismatch, st.Reviewers[0].Reason)
 }
 
 // A reviewer call that runs past the review timeout fails the review as a

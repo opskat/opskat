@@ -209,9 +209,9 @@ func (s *Source) State(ctx context.Context, lang string) command_review_svc.Stat
 			Questions: c.questions,
 		}
 		if !c.running {
-			info.Reason = errNotRunning(c).Error()
+			info.Reason = command_review_svc.UnusableNotRunning
 		} else if signed, err := s.reg.checkEligible(ctx, c.name); err != nil {
-			info.Usable, info.Reason = false, err.Error()
+			info.Usable, info.Reason = false, command_review_svc.UnusableReason(err)
 		} else {
 			info.Signed = signed
 		}

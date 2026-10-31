@@ -4,7 +4,7 @@ import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Inpu
 import { AlertTriangle, Loader2, Save, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { failReasonLabel } from "@/lib/commandReview";
+import { failReasonLabel, unusableReasonLabel } from "@/lib/commandReview";
 import { Segmented } from "@/components/asset/fields";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { GetCommandReviewSettings, SaveCommandReviewTimeout } from "../../../wailsjs/go/system/System";
@@ -132,7 +132,10 @@ export function CommandReviewSection() {
             .filter((r) => !r.usable)
             .map((r) => (
               <p key={r.name} data-testid="command-reviewer-unusable" className="text-xs text-warning">
-                {t("commandReview.settings.reviewerUnusable", { name: r.displayName, reason: r.reason })}
+                {t("commandReview.settings.reviewerUnusable", {
+                  name: r.displayName,
+                  reason: unusableReasonLabel(t, r.reason),
+                })}
               </p>
             ))}
           {state.problem && (

@@ -62,7 +62,7 @@ describe("CommandReviewSection", () => {
         reviewers: [
           reviewer("a"),
           reviewer("b", { signed: false }),
-          reviewer("bad", { usable: false, reason: "digest" }),
+          reviewer("bad", { usable: false, reason: "digest_mismatch" }),
         ],
         active: "",
         problem: "no_reviewer",

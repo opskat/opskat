@@ -137,6 +137,59 @@ func unescapeDblQuotedLit(s string) string {
 	return b.String()
 }
 
+// ShellValue returns the value a shell gives w, or ok false when w expands
+// anything (a parameter, a command or process substitution, arithmetic, ANSI-C
+// $'…' quoting). Unlike Words — a DSL no shell ever runs — it resolves backslash
+// escapes the way the shell does: outside quotes a backslash quotes the next
+// character and a backslash-newline disappears; inside double quotes only the
+// POSIX escapes apply (unescapeDblQuotedLit).
+func ShellValue(w *syntax.Word) (string, bool) {
+	var b strings.Builder
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(unescapeUnquotedLit(p.Value))
+		case *syntax.SglQuoted:
+			if p.Dollar {
+				return "", false
+			}
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			for _, q := range p.Parts {
+				lit, ok := q.(*syntax.Lit)
+				if !ok {
+					return "", false
+				}
+				b.WriteString(unescapeDblQuotedLit(lit.Value))
+			}
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+// unescapeUnquotedLit resolves backslash escapes outside quotes: a backslash
+// quotes the character after it, and a backslash-newline is a line continuation.
+func unescapeUnquotedLit(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			if s[i] != '\n' {
+				b.WriteByte(s[i])
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // Command 是切词后的结构：第一个词是 Verb，其余非 flag 词按序进 Args，
 // `--k=v` 与裸 `--k`（值为 "true"）进 Flags。
 type Command struct {
