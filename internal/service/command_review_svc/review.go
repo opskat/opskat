@@ -16,7 +16,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/pkg/extension"
 )
 
 // DefaultTimeout 是每次调用审核扩展的默认超时。
@@ -114,21 +113,6 @@ func (r Result) Info(mode string) *aictx.ReviewInfo {
 		FailedNames: r.FailedNames,
 	}
 }
-
-// ExtensionReviewer 是要用的审核扩展。
-type ExtensionReviewer interface {
-	// Identity 是扩展名、版本和设置哈希。设置哈希参与缓存键。
-	Identity() (name, version, settingsHash string)
-	// Limits 是 describe() 声明的单批条数和单条命令最大长度。
-	Limits() (maxItems, maxCommandLen int)
-	// Questions 是 describe() 声明的题目，结果里只回题目 id，宿主按这里的名称显示。
-	Questions() []extension.ReviewQuestion
-	Review(ctx context.Context, items []extension.ReviewItem) ([]extension.ReviewCommandResult, error)
-}
-
-// ReviewerFunc 找出这次要用的审核扩展。没有可用的返回 ErrNoReviewer，
-// 要用的这次不可用返回 ErrReviewerUnavailable。
-type ReviewerFunc func(ctx context.Context) (ExtensionReviewer, error)
 
 // Cache 保存审核结果。Get 找不到时返回 (nil, nil)。
 type Cache interface {
@@ -281,7 +265,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 	results := make([]Result, len(ins))
 	type pendingExt struct {
 		idx  int
-		item extension.ReviewItem
+		item Item
 		key  string
 	}
 	var pending []pendingExt
@@ -318,7 +302,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 				continue
 			}
 		}
-		pending = append(pending, pendingExt{idx: i, key: key, item: extension.ReviewItem{AssetType: in.AssetType, Command: command, Syntax: string(in.Syntax)}})
+		pending = append(pending, pendingExt{idx: i, key: key, item: Item{AssetType: in.AssetType, Command: command, Syntax: string(in.Syntax)}})
 	}
 
 	var batches [][]pendingExt
@@ -329,7 +313,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 	// 只有调用这一步并行（扩展的实例池最多 maxParallelReviews 个），
 	// 每次调用单独计时，超时重试一次；读写缓存按顺序做。
 	type call struct {
-		out      []extension.ReviewCommandResult
+		out      []ItemResult
 		err      error
 		elapsed  time.Duration
 		attempts int
@@ -343,7 +327,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			items := make([]extension.ReviewItem, len(batch))
+			items := make([]Item, len(batch))
 			for i, p := range batch {
 				items[i] = p.item
 			}
@@ -365,12 +349,16 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 
 	for j, batch := range batches {
 		c := calls[j]
-		if c.err != nil || len(c.out) != len(batch) {
+		err := c.err
+		if err == nil {
+			err = validateAnswer(len(batch), questions, c.out)
+		}
+		if err != nil {
 			reason := ReasonInvalidResult
-			if errors.Is(c.err, context.DeadlineExceeded) {
+			if errors.Is(err, context.DeadlineExceeded) {
 				reason = ReasonTimeout
 			}
-			logger.Ctx(ctx).Warn("extension command review failed", zap.String("extension", name), zap.String("reason", reason), zap.Error(c.err))
+			logger.Ctx(ctx).Warn("extension command review failed", zap.String("extension", name), zap.String("reason", reason), zap.Error(err))
 			for _, p := range batch {
 				results[p.idx] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version, Duration: c.elapsed, Attempts: c.attempts}
 			}
@@ -391,7 +379,7 @@ func (s *service) reviewWith(ctx context.Context, rev ExtensionReviewer, ins []I
 }
 
 // extensionResult 把审核扩展的回答落成宿主的结果：error 是"没能得到判断"，按审核失败处理。
-func extensionResult(name, version string, questions []extension.ReviewQuestion, r extension.ReviewCommandResult, elapsed time.Duration, attempts int) Result {
+func extensionResult(name, version string, questions []Question, r ItemResult, elapsed time.Duration, attempts int) Result {
 	out := Result{
 		Outcome:   Outcome(r.Outcome),
 		Reason:    r.Reason,
@@ -401,13 +389,13 @@ func extensionResult(name, version string, questions []extension.ReviewQuestion,
 		Duration:  elapsed,
 		Attempts:  attempts,
 	}
-	if r.Outcome == extension.ReviewOutcomeError {
+	if r.Outcome == ItemError {
 		out.Outcome = OutcomeFail
 	}
 	if len(r.Failed) > 0 {
 		names := make(map[string]map[string]string, len(questions))
 		for _, q := range questions {
-			names[q.ID] = q.I18n.Name
+			names[q.ID] = q.Names
 		}
 		out.FailedNames = make(map[string]map[string]string, len(r.Failed))
 		for _, id := range r.Failed {

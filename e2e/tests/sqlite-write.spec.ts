@@ -73,6 +73,73 @@ async function confirmPreview(page: Page): Promise<void> {
   await expect(dialog).toBeHidden({ timeout: 30_000 });
 }
 
+/** 界面文案随语言:同时认英文与中文。 */
+function text(en: string, zh: string): RegExp {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^(${escape(en)}|${escape(zh)})$`);
+}
+
+const FIELD_NAME = text("Name", "名称");
+
+/** 字段表的数据行(表头没有名称输入框,不算在内),按表格次序。 */
+const fieldRows = (page: Page) =>
+  page
+    .getByRole("row")
+    .filter({ has: page.getByRole("textbox", { name: FIELD_NAME }) });
+
+/** 「添加字段」:新行在最后,填上名称与类型。 */
+async function addField(page: Page, name: string, type: string): Promise<void> {
+  const before = await fieldRows(page).count();
+  await page
+    .getByRole("button", { name: text("Add column", "添加字段") })
+    .click();
+  await expect(fieldRows(page)).toHaveCount(before + 1);
+  const row = fieldRows(page).nth(before);
+  await row.getByRole("textbox", { name: FIELD_NAME }).fill(name);
+  await row.getByRole("textbox", { name: text("Type", "类型") }).fill(type);
+}
+
+/** 切到索引子页、点「新建索引」,按次序加列;返回编辑区。 */
+async function addIndex(page: Page, columns: string[]): Promise<Locator> {
+  await page.getByRole("tab", { name: /^(Indexes|索引)/ }).click();
+  await page
+    .getByRole("button", { name: text("New index", "新建索引") })
+    .click();
+  const editor = page.getByTestId("designer-index-editor");
+  await expect(editor).toBeVisible();
+  for (const column of columns) {
+    await editor
+      .getByRole("button", { name: text("Add column", "添加列") })
+      .click();
+    await page
+      .getByTestId("designer-index-column-list")
+      .getByRole("option", { name: new RegExp(`^${column}\\b`) })
+      .click();
+  }
+  await expect(editor.getByTestId("index-editor-column-name")).toHaveText(
+    columns,
+  );
+  return editor;
+}
+
+/** 点设计器的保存(新建表是「创建」),在确认对话框里执行全部语句并等它关上。 */
+async function saveDesign(
+  page: Page,
+  check?: (dialog: Locator) => Promise<void>,
+): Promise<void> {
+  const save = page.getByTestId("designer-save");
+  // 语句由驱动按草稿生成,生成好之前保存不可用。
+  await expect(save).toBeEnabled({ timeout: 30_000 });
+  await save.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByTestId("save-statement").first()).toBeVisible();
+  if (check) await check(dialog);
+  await dialog
+    .getByRole("button", { name: /^(Run statements \(\d+\)|执行 \d+ 条语句)$/ })
+    .click();
+  await expect(dialog).toBeHidden({ timeout: 30_000 });
+}
+
 test("edit a cell, add a row and delete a row in a SQLite table, then read the file back", async ({
   page,
 }) => {
@@ -124,7 +191,7 @@ test("edit a cell, add a row and delete a row in a SQLite table, then read the f
   ]);
 });
 
-test("alter a SQLite table: rename it, rename a column and add one, reading the schema back from the file", async ({
+test("design a SQLite table: rename it, rename and add columns, add an index, drop a column with its index, reading the schema back from the file", async ({
   page,
 }) => {
   const targetPath = join(
@@ -132,49 +199,116 @@ test("alter a SQLite table: rename it, rename a column and add one, reading the 
     `alter-target-${Date.now()}.db`,
   );
   seed(targetPath, [
-    "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-    "INSERT INTO people(name) VALUES ('alpha')",
+    "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)",
+    "CREATE INDEX idx_people_email ON people(email)",
+    "INSERT INTO people(name, email) VALUES ('alpha', 'a@example.com')",
   ]);
   const panel = await openPanel(page, targetPath);
 
-  // 打开改表对话框:列由驱动读出;SQLite 的已有列只能改名或删除。
+  // 「设计表」打开设计器:列与索引由驱动读出。
   await panel
     .locator('[data-table-node="main.people"]')
     .click({ button: "right" });
-  await page.getByRole("menuitem", { name: /^(Alter Table|修改表)$/ }).click();
-  const names = page.getByTestId("alter-column-name");
-  await expect(names).toHaveCount(2, { timeout: 30_000 });
-  await expect(names.nth(1)).toHaveValue("name");
-  await expect(page.getByTestId("alter-column-type").nth(1)).toBeDisabled();
+  await page
+    .getByRole("menuitem", { name: text("Design Table", "设计表") })
+    .click();
+  const tableName = page.getByTestId("designer-table-name-input");
+  await expect(tableName).toHaveValue("people", { timeout: 30_000 });
+  const nameOf = (i: number) =>
+    fieldRows(page).nth(i).getByRole("textbox", { name: FIELD_NAME });
+  await expect(nameOf(2)).toHaveValue("email");
 
-  await page.getByTestId("alter-table-name").fill("persons");
-  await names.nth(1).fill("full_name");
-  await page.getByTestId("alter-add-column").click();
-  await names.nth(2).fill("age");
-  await page.getByTestId("alter-column-type").nth(2).fill("INTEGER");
-  await page.getByTestId("alter-column-default").nth(2).fill("18");
-  await page.getByTestId("alter-preview").click();
-  await confirmPreview(page);
+  // 改表名、给列改名、加一列(默认值按「值」写)。
+  await tableName.fill("persons");
+  await nameOf(1).fill("full_name");
+  await addField(page, "age", "INTEGER");
+  const props = page.getByTestId("designer-column-props");
+  await expect(props).toContainText("age");
+  await props.getByRole("radio", { name: text("Value", "值") }).click();
+  await props
+    .getByRole("textbox", { name: text("Default value", "默认值内容") })
+    .fill("18");
 
+  // 删 email:它上面的索引随之删除。
+  await fieldRows(page)
+    .nth(2)
+    .getByRole("button", { name: text("Delete column", "删除列") })
+    .click();
+  await expect(
+    page.getByRole("row").filter({ hasText: "email" }),
+  ).toHaveAttribute("data-status", "deleted");
+
+  // 新索引:改名后的列加上新列(降序),名字按 idx_表_列 自动生成。
+  const editor = await addIndex(page, ["full_name", "age"]);
+  await editor
+    .getByTestId("index-editor-column")
+    .nth(1)
+    .getByRole("button", { name: text("Descending", "降序") })
+    .click();
+  await expect(
+    editor.getByRole("textbox", { name: text("Index name", "索引名") }),
+  ).toHaveValue("idx_persons_full_name_age");
+  await expect(
+    page
+      .getByTestId("designer-index-list")
+      .getByRole("row")
+      .filter({ hasText: "idx_people_email" }),
+  ).toHaveAttribute("data-status", "deleted");
+
+  // 确认对话框列出语句,并警告删除的列与随列删除的索引。
+  await saveDesign(page, async (dialog) => {
+    const warning = dialog.getByTestId("save-drop-warning");
+    await expect(warning).toContainText("email");
+    await expect(warning).toContainText("idx_people_email");
+  });
+
+  // 保存后重读:设计器跟随改名后的表,树上是新表名,没有剩余改动。
   await expect(panel.locator('[data-table-node="main.persons"]')).toBeVisible({
     timeout: 30_000,
   });
+  await expect(tableName).toHaveValue("persons", { timeout: 30_000 });
+  await expect(page.getByTestId("designer-changes")).toHaveText(
+    text("No changes", "无改动"),
+  );
+
   expect(
     readBack(
       targetPath,
-      "SELECT name, type, dflt_value FROM pragma_table_info('persons')",
+      `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info('persons')`,
     ),
   ).toEqual([
-    { name: "id", type: "INTEGER", dflt_value: null },
-    { name: "full_name", type: "TEXT", dflt_value: null },
-    { name: "age", type: "INTEGER", dflt_value: "18" },
+    { name: "id", type: "INTEGER", notnull: 0, dflt_value: null, pk: 1 },
+    { name: "full_name", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+    { name: "age", type: "INTEGER", notnull: 0, dflt_value: "'18'", pk: 0 },
   ]);
   expect(readBack(targetPath, "SELECT full_name, age FROM persons")).toEqual([
     { full_name: "alpha", age: 18 },
   ]);
+  // email 上的索引没了,只剩新索引;列按次序,age 降序。
+  expect(
+    readBack(
+      targetPath,
+      "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name",
+    ),
+  ).toEqual([{ name: "idx_persons_full_name_age", tbl_name: "persons" }]);
+  expect(
+    readBack(
+      targetPath,
+      `SELECT name, "unique" FROM pragma_index_list('persons')`,
+    ),
+  ).toEqual([{ name: "idx_persons_full_name_age", unique: 0 }]);
+  expect(
+    readBack(
+      targetPath,
+      `SELECT name, "desc" FROM pragma_index_xinfo('idx_persons_full_name_age') WHERE key = 1 ORDER BY seqno`,
+    ),
+  ).toEqual([
+    { name: "full_name", desc: 0 },
+    { name: "age", desc: 1 },
+  ]);
 });
 
-test("create a table, then truncate and drop it, in a SQLite database, reading the schema back from the file", async ({
+test("create a table with an index, then truncate and drop it, in a SQLite database, reading the schema back from the file", async ({
   page,
 }) => {
   const targetPath = join(
@@ -184,25 +318,58 @@ test("create a table, then truncate and drop it, in a SQLite database, reading t
   seed(targetPath, ["CREATE TABLE anchor (id INTEGER PRIMARY KEY)"]);
   const panel = await openPanel(page, targetPath);
 
-  // 建表:语句由驱动生成,预览后执行。
+  // 新建表:设计器从预置的自增主键 id 开始;加一列与其上的唯一索引,语句由驱动生成,确认后执行。
   await panel.getByText("main", { exact: true }).click({ button: "right" });
   await page.getByTestId("database-add-table").click();
-  await page.getByTestId("create-table-name").fill("made");
-  await page.getByTestId("create-table-column-name").fill("id");
-  await page
-    .getByTestId("create-table-column-type")
-    .fill("INTEGER PRIMARY KEY");
-  await page.getByTestId("create-table-preview").click();
-  await confirmPreview(page);
+  await expect(
+    fieldRows(page).first().getByRole("textbox", { name: FIELD_NAME }),
+  ).toHaveValue("id", { timeout: 30_000 });
+  await page.getByTestId("designer-table-name-input").fill("made");
+  await addField(page, "code", "TEXT");
+  const editor = await addIndex(page, ["code"]);
+  await editor.getByRole("radio", { name: text("Unique", "唯一") }).click();
+  await expect(
+    editor.getByRole("textbox", { name: text("Index name", "索引名") }),
+  ).toHaveValue("idx_made_code");
+  await saveDesign(page);
+
+  // 建好后标签转为这张表的设计标签,读出刚建的索引。
   await expect(panel.locator('[data-table-node="main.made"]')).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByTestId("designer-table-name-input")).toHaveValue(
+    "made",
+    { timeout: 30_000 },
+  );
+  // 只有设计标签才有外键子页、才显示改动计数(新建表显示的是字段与索引的概要)。
+  await expect(
+    page.getByRole("tab", { name: /^(Foreign keys|外键)/ }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("designer-changes")).toHaveText(
+    text("No changes", "无改动"),
+  );
+  await page.getByRole("tab", { name: /^(Indexes|索引)/ }).click();
+  await expect(page.getByTestId("designer-index-list")).toContainText(
+    "idx_made_code",
+  );
   expect(
     readBack(
       targetPath,
       "SELECT name, type, pk FROM pragma_table_info('made')",
     ),
-  ).toEqual([{ name: "id", type: "INTEGER", pk: 1 }]);
+  ).toEqual([
+    { name: "id", type: "INTEGER", pk: 1 },
+    { name: "code", type: "TEXT", pk: 0 },
+  ]);
+  expect(
+    readBack(
+      targetPath,
+      `SELECT name, "unique" FROM pragma_index_list('made')`,
+    ),
+  ).toEqual([{ name: "idx_made_code", unique: 1 }]);
+  expect(
+    readBack(targetPath, "SELECT name FROM pragma_index_info('idx_made_code')"),
+  ).toEqual([{ name: "code" }]);
 
   // 清空:SQLite 没有 TRUNCATE,驱动发 DELETE FROM;表还在,行没了。
   seed(targetPath, ["INSERT INTO made(id) VALUES (1), (2)"]);

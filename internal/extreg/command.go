@@ -11,8 +11,12 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/cmdline"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
+
+// pageOnlyRefusal is what exec answers for a tool declared pageOnly: such a tool has no
+// policy action to check, so the only entry to it is the extension's own pages.
+const pageOnlyRefusal = "该工具只供扩展页面使用"
 
 // parseCommand 把 `<tool> --flag=value`（或 `<tool> --flag value`，见下）解析成工具名
 // 与按 manifest 声明类型转换过的 JSON 参数。扩展名不在命令里：资产类型 → 扩展是一对一的
@@ -26,7 +30,7 @@ import (
 //
 // --json 是逃生口：flag DSL 表达不了嵌套结构，而 manifest 允许声明它们；没有逃生口
 // 就会出现"注册了却调不动"的工具。它与其它 flag 互斥——两者混用时哪个赢都是猜。
-func parseCommand(m *extension.Manifest, command string) (string, []byte, error) {
+func parseCommand(m *Manifest, command string) (string, []byte, error) {
 	c, err := cmdline.Parse(command, flagGrammar(m))
 	if err != nil {
 		return "", nil, err
@@ -35,7 +39,10 @@ func parseCommand(m *extension.Manifest, command string) (string, []byte, error)
 	def, ok := toolDef(m, toolName)
 	if !ok {
 		return "", nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
-			m.Name, toolName, strings.Join(toolNames(m), ", "))
+			m.Name, toolName, strings.Join(toolNames(m, false), ", "))
+	}
+	if def.PageOnly {
+		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, pageOnlyRefusal)
 	}
 	if len(c.Args) > 0 {
 		// 位置参数无处可去：manifest 的 parameters 只有具名属性。静默丢弃会让模型
@@ -84,12 +91,12 @@ func parseCommand(m *extension.Manifest, command string) (string, []byte, error)
 // flagGrammar 是扩展工具 DSL 的 flag 语法：按 manifest 声明，非 boolean 参数（以及
 // --json 逃生口）是取值 flag。parseCommand 读、canonicalCommand 写都用它，规范串才能
 // 被原样解析回同一组参数。
-func flagGrammar(m *extension.Manifest) cmdline.Option {
+func flagGrammar(m *Manifest) cmdline.Option {
 	return cmdline.WithValueFlags(func(verb, name string) bool { return flagTakesValue(m, verb, name) })
 }
 
 // flagTakesValue reports whether a bare `--name` of verb consumes the next word.
-func flagTakesValue(m *extension.Manifest, verb, name string) bool {
+func flagTakesValue(m *Manifest, verb, name string) bool {
 	if name == "json" {
 		// 逃生口永远带一个值，空格分隔式与其它取值 flag 一致。
 		return true
@@ -109,7 +116,7 @@ func flagTakesValue(m *extension.Manifest, verb, name string) bool {
 
 // canonicalCommand 把一条命令还原为规范形式：工具名 + 按名称排序的 flag。策略匹配、
 // 审批弹窗、审计与 grant 都用它，所以同一次调用无论模型怎么排列 flag 都得到同一个串。
-func canonicalCommand(m *extension.Manifest, command string) (string, error) {
+func canonicalCommand(m *Manifest, command string) (string, error) {
 	toolName, argsJSON, err := parseCommand(m, command)
 	if err != nil {
 		return "", err
@@ -151,18 +158,24 @@ func flagLiteral(raw json.RawMessage) (string, bool) {
 	return strings.TrimSpace(string(raw)), true
 }
 
-func toolDef(m *extension.Manifest, name string) (extension.ToolDef, bool) {
+func toolDef(m *Manifest, name string) (extwire.Tool, bool) {
 	for _, t := range m.Tools {
 		if t.Name == name {
 			return t, true
 		}
 	}
-	return extension.ToolDef{}, false
+	return extwire.Tool{}, false
 }
 
-func toolNames(m *extension.Manifest) []string {
+// toolNames lists the tools a caller may name: every tool for a page, only the
+// ones that declare a policy action for exec (page-only tools stay out of it, as
+// they stay out of help).
+func toolNames(m *Manifest, includePageOnly bool) []string {
 	names := make([]string, 0, len(m.Tools))
 	for _, t := range m.Tools {
+		if t.PageOnly && !includePageOnly {
+			continue
+		}
 		names = append(names, t.Name)
 	}
 	sort.Strings(names)
@@ -174,11 +187,11 @@ func toolNames(m *extension.Manifest) []string {
 // its canonical form. A page has no command line, so it never goes through
 // parseCommand — but it must be held to the same declaration, which is what keeps
 // unknown keys (and the opsctl-only `<flag>-file` spelling) out of the guest.
-func ValidateToolArgs(m *extension.Manifest, tool string, raw []byte) ([]byte, error) {
+func ValidateToolArgs(m *Manifest, tool string, raw []byte) ([]byte, error) {
 	def, ok := toolDef(m, tool)
 	if !ok {
 		return nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
-			m.Name, tool, strings.Join(toolNames(m), ", "))
+			m.Name, tool, strings.Join(toolNames(m, true), ", "))
 	}
 	return validateToolArgs(m.Name, def, raw)
 }
@@ -189,7 +202,7 @@ func ValidateToolArgs(m *extension.Manifest, tool string, raw []byte) ([]byte, e
 // and supplies the declared scalar/array<string> types. It returns deterministic
 // canonical JSON (encoding/json sorts object keys), shared by policy, approval summary,
 // audit, and plugin.
-func validateToolArgs(extName string, def extension.ToolDef, raw []byte) ([]byte, error) {
+func validateToolArgs(extName string, def extwire.Tool, raw []byte) ([]byte, error) {
 	values, err := decodeStrictJSONObject(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s.%s arguments must be an object: %w", extName, def.Name, err)

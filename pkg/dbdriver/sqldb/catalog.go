@@ -148,47 +148,74 @@ func CollectObjects(ctx context.Context, conn *sql.Conn, query, typ string, dst 
 	return rows.Err()
 }
 
-// QueryForeignKeys 执行一条返回四列（约束名、列、被引用表、被引用列）的外键查询。
+// QueryForeignKeys 执行一条返回四列（约束名、列、被引用表、被引用列）的外键查询；查询多给两列时把它们
+// 当作 ON UPDATE / ON DELETE 的动作原文填上（读得出动作的方言在最后排这两列）。
 func QueryForeignKeys(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]dbdriver.ForeignKeyMeta, error) {
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]dbdriver.ForeignKeyMeta, 0)
 	for rows.Next() {
-		var name, col, refTable, refCol sql.NullString
-		if err := rows.Scan(&name, &col, &refTable, &refCol); err != nil {
+		nulls := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(nulls))
+		for i := range nulls {
+			ptrs[i] = &nulls[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
 			return nil, err
 		}
-		out = append(out, dbdriver.ForeignKeyMeta{
-			Name:             name.String,
-			Column:           col.String,
-			ReferencedTable:  refTable.String,
-			ReferencedColumn: refCol.String,
-		})
+		meta := dbdriver.ForeignKeyMeta{
+			Name:             nulls[0].String,
+			Column:           nulls[1].String,
+			ReferencedTable:  nulls[2].String,
+			ReferencedColumn: nulls[3].String,
+		}
+		if len(nulls) > 5 {
+			meta.OnUpdate, meta.OnDelete = nulls[4].String, nulls[5].String
+		}
+		out = append(out, meta)
 	}
 	return out, rows.Err()
 }
 
 // IndexBuilder 把按（索引名、列位置）排好序的行归并成索引，保持首次出现的顺序。
+//
+// 键列与 INCLUDE 列（覆盖索引的非键列）分开放：Include 进来的列进 IndexMeta.Include，不占键的位置。
 type IndexBuilder struct {
 	order  []string
 	byName map[string]*dbdriver.IndexMeta
 }
 
-// Add 把索引 name 的下一列并进去；unique 取该索引第一次出现时的值。
+// Add 把索引 name 的下一列键列并进去；unique 取该索引第一次出现时的值。
 func (b *IndexBuilder) Add(name string, unique bool, column string) {
+	b.index(name, unique).Columns = append(b.index(name).Columns, column)
+}
+
+// AddInclude 把索引 name 的下一列 INCLUDE 列并进去（不占键的位置）；unique 取该索引第一次出现时的值。
+func (b *IndexBuilder) AddInclude(name string, unique bool, column string) {
+	b.index(name, unique).Include = append(b.index(name).Include, column)
+}
+
+func (b *IndexBuilder) index(name string, unique ...bool) *dbdriver.IndexMeta {
 	if b.byName == nil {
 		b.byName = map[string]*dbdriver.IndexMeta{}
 	}
 	m, ok := b.byName[name]
 	if !ok {
-		m = &dbdriver.IndexMeta{Name: name, Unique: unique}
+		m = &dbdriver.IndexMeta{Name: name}
+		if len(unique) > 0 {
+			m.Unique = unique[0]
+		}
 		b.byName[name] = m
 		b.order = append(b.order, name)
 	}
-	m.Columns = append(m.Columns, column)
+	return m
 }
 
 // Indexes 返回归并后的索引；没有索引时是空切片（序列化成 []）。

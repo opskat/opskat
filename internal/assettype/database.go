@@ -239,10 +239,9 @@ func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args ma
 	if _, ok := args["driver"]; ok {
 		return args, nil
 	}
-	if _, hasPassword := args["password"]; !hasPassword {
-		if _, hasReference := args["credential_id"]; !hasReference {
-			return args, nil
-		}
+	// 口令 / 引用 / driver_options 的处理都取决于驱动：入参没带就补上资产现有的。
+	if !slices.ContainsFunc([]string{"password", "credential_id", argDriverOptions}, func(key string) bool { _, ok := args[key]; return ok }) {
+		return args, nil
 	}
 	current, err := a.GetDatabaseConfig()
 	if err != nil {

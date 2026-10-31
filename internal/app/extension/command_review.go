@@ -9,29 +9,21 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
-	"github.com/opskat/opskat/internal/service/credential_svc"
-	"github.com/opskat/opskat/internal/service/extension_svc"
 )
 
-// GetCommandReviewState 返回审核状态：已加载的审核扩展、设置里选的，以及实际在用的
-// （没选时启用中的只有一个就用它），没有可用的时说明原因。
-func (e *Extension) GetCommandReviewState() (*extension_svc.CommandReviewState, error) {
-	if e.service == nil {
-		return nil, fmt.Errorf("extension system not initialized")
-	}
-	st := e.service.CommandReviewState(e.ctx, e.lang.Lang(), bootstrap.GetConfig().CommandReviewExtension)
+// GetCommandReviewState 返回审核状态：可选的审核器、设置里选的，以及实际在用的，
+// 没有可用的时说明原因。
+func (e *Extension) GetCommandReviewState() (*command_review_svc.State, error) {
+	st := bootstrap.CommandReviewState(e.ctx)
 	return &st, nil
 }
 
-// SetCommandReviewer 选用审核扩展；name 为空表示不指定（启用中的只有一个时用它）。
-// 只能选现在能用的审核扩展：选一个用不了的，之后每次审核都会失败。
+// SetCommandReviewer 选用审核器；name 为空表示不指定（可用的只有一个时用它）。
+// 只能选现在能用的审核器：选一个用不了的，之后每次审核都会失败。
 func (e *Extension) SetCommandReviewer(name string) error {
 	if name != "" {
-		if e.service == nil {
-			return fmt.Errorf("extension system not initialized")
-		}
-		reviewers := e.service.ListCommandReviewers(e.ctx, e.lang.Lang())
-		if err := checkSelectableReviewer(reviewers, name); err != nil {
+		if err := checkSelectableReviewer(bootstrap.CommandReviewState(e.ctx).Reviewers, name); err != nil {
+			logger.Ctx(e.ctx).Warn("select command reviewer refused", zap.String("extension", name), zap.Error(err))
 			return err
 		}
 	}
@@ -45,7 +37,7 @@ func (e *Extension) SetCommandReviewer(name string) error {
 	return nil
 }
 
-func checkSelectableReviewer(reviewers []extension_svc.CommandReviewerInfo, name string) error {
+func checkSelectableReviewer(reviewers []command_review_svc.ReviewerInfo, name string) error {
 	for _, r := range reviewers {
 		if r.Name != name {
 			continue
@@ -55,16 +47,13 @@ func checkSelectableReviewer(reviewers []extension_svc.CommandReviewerInfo, name
 		}
 		return nil
 	}
-	return fmt.Errorf("%s 不是已加载的审核扩展", name)
+	return fmt.Errorf("%s 不是可用的审核扩展", name)
 }
 
-// TestCommandReviewer 用名为 name 的审核扩展审一条无害的命令（不读写缓存），返回审核结果：
-// 扩展设置页据此确认这个审核扩展现在能不能用。扩展不可用时返回的结果说明原因。
+// TestCommandReviewer 用名为 name 的审核器审一条无害的命令（不读写缓存），返回审核结果：
+// 设置页据此确认这个审核器现在能不能用。审核器不可用时返回的结果说明原因。
 func (e *Extension) TestCommandReviewer(name string) (*aictx.ReviewInfo, error) {
-	if e.service == nil {
-		return nil, fmt.Errorf("extension system not initialized")
-	}
-	rev, err := e.service.ActiveCommandReviewer(e.ctx, name)
+	rev, err := bootstrap.CommandReviewer(e.ctx, name)
 	if err != nil {
 		logger.Ctx(e.ctx).Warn("test command reviewer: unavailable", zap.String("extension", name), zap.Error(err))
 		return command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: command_review_svc.ReasonReviewerUnavailable, Extension: name}.Info(""), nil
@@ -73,25 +62,4 @@ func (e *Extension) TestCommandReviewer(name string) (*aictx.ReviewInfo, error) 
 	logger.Ctx(e.ctx).Info("test command reviewer", zap.String("extension", name),
 		zap.String("outcome", string(r.Outcome)), zap.String("reason", r.Reason))
 	return r.Info(""), nil
-}
-
-// GetExtensionSettings 返回扩展设置表单：schema、非密钥字段的值和已设置的密钥字段。
-func (e *Extension) GetExtensionSettings(name string) (*extension_svc.ExtensionSettingsView, error) {
-	if e.service == nil {
-		return nil, fmt.Errorf("extension system not initialized")
-	}
-	return e.service.SettingsView(e.ctx, name, e.lang.Lang())
-}
-
-// SaveExtensionSettings 保存扩展设置，密钥字段加密后入库；密钥字段留空表示不修改。
-func (e *Extension) SaveExtensionSettings(name string, values map[string]string) error {
-	if e.service == nil {
-		return fmt.Errorf("extension system not initialized")
-	}
-	if err := e.service.SaveExtensionSettings(e.ctx, name, values, credential_svc.Default().Encrypt); err != nil {
-		logger.Ctx(e.ctx).Warn("save extension settings failed", zap.String("extension", name), zap.Error(err))
-		return err
-	}
-	logger.Ctx(e.ctx).Info("extension settings saved", zap.String("extension", name))
-	return nil
 }

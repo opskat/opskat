@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@opskat/ui";
-import { AlertTriangle, Loader2, Save, Settings2 } from "lucide-react";
+import { AlertTriangle, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { failReasonLabel } from "@/lib/commandReview";
 import { Segmented } from "@/components/asset/fields";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { GetCommandReviewSettings, SaveCommandReviewTimeout } from "../../../wailsjs/go/system/System";
 import { GetCommandReviewState, SetCommandReviewer } from "../../../wailsjs/go/extension/Extension";
-import type { extension_svc, system } from "../../../wailsjs/go/models";
+import type { command_review_svc, system } from "../../../wailsjs/go/models";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -18,13 +17,13 @@ const TIMEOUT_MIN = 1000;
 const TIMEOUT_MAX = 60000;
 
 /**
- * 命令审核的设置（设置 › AI）。审核由审核扩展来做：这里显示实际在用的审核扩展，装了多个时选用
- * 哪个，没有可用的时说明原因；扩展自己的设置（API key、模型等）只在扩展详情里，这里给个入口。
- * 宿主侧只有调用超时，另有本次启动以来最近一次还没恢复的审核失败（之后审核成功就不再显示）。测试在扩展设置里（保存并测试）。
+ * 命令审核的设置（设置 › AI）。审核由审核器来做：这里显示实际在用的审核器，有多个时选用
+ * 哪个，没有可用的时说明原因。宿主侧只有调用超时，另有本次启动以来最近一次还没恢复的审核失败
+ * （之后审核成功就不再显示）。
  */
 export function CommandReviewSection() {
   const { t } = useTranslation();
-  const [state, setState] = useState<extension_svc.CommandReviewState | null>(null);
+  const [state, setState] = useState<command_review_svc.State | null>(null);
   const [settings, setSettings] = useState<system.CommandReviewSettings | null>(null);
   const [timeoutMs, setTimeoutMs] = useState("");
   const [saving, setSaving] = useState(false);
@@ -83,7 +82,7 @@ export function CommandReviewSection() {
   }
 
   const active = state.reviewers.find((r) => r.name === state.active);
-  const label = (r: extension_svc.CommandReviewerInfo) =>
+  const label = (r: command_review_svc.ReviewerInfo) =>
     r.usable && !r.signed ? `${r.displayName} · ${t("commandReview.settings.unsigned")}` : r.displayName;
 
   return (
@@ -113,19 +112,6 @@ export function CommandReviewSection() {
                 {label(active)}
               </p>
             )
-          )}
-          {active && (
-            <div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={() => useSettingsUiStore.getState().openExtensionDetail(active.name)}
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                {t("commandReview.settings.configureReviewer")}
-              </Button>
-            </div>
           )}
           {state.reviewers
             .filter((r) => !r.usable)

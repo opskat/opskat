@@ -770,14 +770,14 @@ func setupLocalExtExec(t *testing.T, states ...*extension_state_entity.Extension
 	// describe() answer in the cache opsctl's boot registration reads.
 	mgr := extension.NewManager(root, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, zap.NewNop())
+	}, extensionContributions, zap.NewNop())
 	_, err = mgr.LoadExtension(ctx, extDir)
 	require.NoError(t, err)
 	mgr.Close(ctx)
 
 	t.Cleanup(func() {
 		releaseExtensions(ctx)
-		extreg.Unregister(extensiontest.FixtureName)
+		extensionContributions.Revoke(extensiontest.FixtureName)
 		extreg.SetConnTestRegistrar(nil)
 	})
 	registerExtensionAssetTypes()

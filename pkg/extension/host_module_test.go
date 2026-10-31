@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/opskat/opskat/pkg/extmanifest"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -45,19 +47,92 @@ func TestHostOpAssetGetConfig(t *testing.T) {
 	})
 }
 
-// A Kerberos ticket is a driver session's alone: a call of anything else — a
-// tool, an action, scoped to an asset or not — is refused saying why.
-func TestHostOpKerberosTicketOutsideDriverSession(t *testing.T) {
-	Convey("dbdriver.kerberos_ticket outside a database driver session is refused", t, func() {
-		host := newRecordedHost()
-		for _, inv := range []*invocation{
-			newInvocation("t#1", nil),
-			newInvocation("t#2", nil).scopedTo(&AssetRef{ID: 7, Type: "fixture"}),
-		} {
-			_, err := hostCall(withInvocation(context.Background(), inv), host,
-				[]byte(`{"op":"dbdriver.kerberos_ticket","params":{"spn":"oracle/db.internal"}}`))
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "not inside a database driver session")
+// staticTickets answers "ticket:<spn>" for every SPN.
+type staticTickets struct{ asked []string }
+
+func (s *staticTickets) Ticket(_ context.Context, spn string) ([]byte, error) {
+	s.asked = append(s.asked, spn)
+	return []byte("ticket:" + spn), nil
+}
+
+// A Kerberos ticket needs both halves: a scope that carries a ticket source (a
+// database asset that logs in with Kerberos) and the manifest's kerberos
+// permission. Missing either is refused saying which.
+func TestHostOpKerberosTicket(t *testing.T) {
+	Convey("Given the capability layer over a recorded host", t, func() {
+		manifest := &Manifest{Manifest: extmanifest.Manifest{Name: "krb", Version: "1.0.0"}}
+		host := NewCapabilityHost(newRecordedHost(), manifest, "/tmp/ext")
+		ask := func(inv *invocation) ([]byte, error) {
+			return hostCall(withInvocation(context.Background(), inv), host,
+				[]byte(`{"op":"auth.kerberos_ticket","params":{"spn":"oracle/db.internal"}}`))
 		}
+
+		Convey("a call whose scope has no ticket source is refused saying so, whatever the manifest", func() {
+			for _, declared := range []bool{false, true} {
+				manifest.Permissions.Kerberos = declared
+				for _, inv := range []*invocation{
+					newInvocation("t#1", nil),
+					newInvocation("t#2", nil).scopedTo(&AssetRef{ID: 7, Type: "fixture"}),
+					newInvocation("t#3", nil).bindScope(&Scope{Asset: &AssetRef{ID: 8}}),
+				} {
+					_, err := ask(inv)
+					So(err, ShouldNotBeNil)
+					So(err.Error(), ShouldContainSubstring, "no Kerberos ticket source")
+				}
+			}
+		})
+
+		Convey("a ticket scope without the kerberos permission is refused naming the permission", func() {
+			tickets := &staticTickets{}
+			_, err := ask(newInvocation("t#4", nil).bindScope(&Scope{Asset: &AssetRef{ID: 8}, Tickets: tickets}))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "permissions.kerberos")
+			So(tickets.asked, ShouldBeEmpty)
+		})
+
+		Convey("a ticket scope with the kerberos permission gets the source's ticket", func() {
+			manifest.Permissions.Kerberos = true
+			tickets := &staticTickets{}
+			out, err := ask(newInvocation("t#5", nil).bindScope(&Scope{Asset: &AssetRef{ID: 8}, Tickets: tickets}))
+			So(err, ShouldBeNil)
+			So(string(out), ShouldEqual, "ticket:oracle/db.internal")
+			So(tickets.asked, ShouldResemble, []string{"oracle/db.internal"})
+		})
+	})
+}
+
+// A scope bound with Ops makes every other host call fail before it reaches the
+// host; io.open is narrowed per stream type.
+func TestHostCallScopeOps(t *testing.T) {
+	Convey("Given a call whose scope allows only logging and TCP streams", t, func() {
+		host := newRecordedHost()
+		inv := newInvocation("t#1", nil).bindScope(&Scope{Asset: &AssetRef{ID: 8}, Ops: []string{OpLog, IOOpenOp("tcp")}})
+		call := func(req string) error {
+			_, err := hostCall(withInvocation(context.Background(), inv), host, []byte(req))
+			return err
+		}
+
+		Convey("an allowed op runs", func() {
+			So(call(`{"op":"log","params":{"level":"info","msg":"hi"}}`), ShouldBeNil)
+			So(host.logs, ShouldResemble, []string{"info:hi"})
+		})
+
+		Convey("any other op is refused by name and never reaches the host", func() {
+			err := call(`{"op":"kv.get","params":{"key":"k"}}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"kv.get" is not allowed in this call's scope`)
+
+			err = call(`{"op":"io.open","params":{"type":"file","path":"/etc/passwd","mode":"read"}}`)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"io.open:file" is not allowed in this call's scope`)
+			So(host.closedCount(), ShouldEqual, 0)
+			So(host.resources, ShouldBeEmpty)
+		})
+
+		Convey("a call with no Ops is not restricted", func() {
+			free := newInvocation("t#2", nil).scopedTo(&AssetRef{ID: 8})
+			_, err := hostCall(withInvocation(context.Background(), free), host, []byte(`{"op":"kv.get","params":{"key":"k"}}`))
+			So(err, ShouldBeNil)
+		})
 	})
 }

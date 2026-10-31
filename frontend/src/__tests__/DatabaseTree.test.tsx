@@ -217,7 +217,8 @@ describe("DatabaseTree", () => {
     mockSchemaStatements();
     await renderTree();
 
-    fireEvent.click(screen.getByLabelText("query.createDatabase"));
+    fireEvent.pointerDown(screen.getByTestId("database-new-menu"), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByTestId("database-new-menu-database"));
     expect(screen.getByText("query.createDatabaseDialogTitle")).toBeInTheDocument();
 
     // The fields and their defaults come from the descriptor.
@@ -367,7 +368,7 @@ describe("DatabaseTree — table multi-selection", () => {
 
     expect(selectedTables()).toEqual(["appdb.orders"]);
     expect(screen.queryByText("query.openTables")).not.toBeInTheDocument();
-    expect(screen.getByText("query.viewStructure")).toBeInTheDocument();
+    expect(screen.getByText("query.alterTable")).toBeInTheDocument();
   });
 
   it("disables single-table actions while several tables are selected", async () => {
@@ -377,7 +378,6 @@ describe("DatabaseTree — table multi-selection", () => {
 
     fireEvent.contextMenu(node("orders"));
 
-    expect(screen.getByText("query.viewStructure").closest('[role="menuitem"]')).toHaveAttribute("data-disabled");
     expect(screen.getByText("query.alterTable").closest('[role="menuitem"]')).toHaveAttribute("data-disabled");
   });
 

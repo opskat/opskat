@@ -3,10 +3,14 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	cagologger "github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
@@ -20,10 +24,10 @@ import (
 var stubWasm = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 
 // cannedDescriptor is the describe() answer the fake cache serves for stubWasm.
-const cannedDescriptor = `{"i18n":{"displayName":"d","description":"x"},` +
+const cannedDescriptor = `{"i18n":{"displayName":"d","description":"x"},"contributes":{` +
 	`"assetTypes":[{"type":"stub","i18n":{"name":"n"},` +
 	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
-	`"policies":{"type":"stub"}}`
+	`"policy":{"type":"stub"}}}`
 
 // fakeDescribeCache answers for every extension with the same canned descriptor,
 // keyed to the hash of whatever wasm bytes it was built with.
@@ -72,7 +76,7 @@ func writeMinimalExtension(t *testing.T, extDir, extName string) {
 	manifest := map[string]any{
 		"name":    extName,
 		"version": "1.0.0",
-		"hostABI": HostABIVersion,
+		"hostABI": extmanifest.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 	}
 	data, err := json.Marshal(manifest)
@@ -98,35 +102,39 @@ func TestManager(t *testing.T) {
 		}
 
 		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
-		mgr := NewManager(dir, newHost, logger)
+		mgr := NewManager(dir, newHost, acceptingContributions(), logger)
 
 		Convey("Scan with no extensions", func() {
-			exts, err := mgr.Scan(ctx)
+			exts, failures, err := mgr.Scan(ctx)
 			So(err, ShouldBeNil)
 			So(exts, ShouldBeEmpty)
+			So(failures, ShouldBeEmpty)
 		})
 
 		Convey("Scan discovers valid extension", func() {
 			writeMinimalExtension(t, filepath.Join(dir, "test-ext"), "test-ext")
 
-			exts, err := mgr.Scan(ctx)
+			exts, failures, err := mgr.Scan(ctx)
 			So(err, ShouldBeNil)
+			So(failures, ShouldBeEmpty)
 			So(len(exts), ShouldEqual, 1)
 			So(exts[0].Name, ShouldEqual, "test-ext")
 
 			Convey("and its functional face is merged in from describe()", func() {
-				So(exts[0].AssetTypes, ShouldHaveLength, 1)
-				So(exts[0].AssetTypes[0].Type, ShouldEqual, "stub")
-				So(exts[0].Policies.Type, ShouldEqual, "stub")
+				f := faceOf(t, exts[0])
+				So(f.AssetTypes, ShouldHaveLength, 1)
+				So(f.AssetTypes[0].Type, ShouldEqual, "stub")
+				So(f.Policy.Type, ShouldEqual, "stub")
 			})
 		})
 
 		Convey("Scan skips directories without manifest", func() {
 			_ = os.MkdirAll(filepath.Join(dir, "no-manifest"), 0755)
 
-			exts, err := mgr.Scan(ctx)
+			exts, failures, err := mgr.Scan(ctx)
 			So(err, ShouldBeNil)
 			So(exts, ShouldBeEmpty)
+			So(failures, ShouldBeEmpty)
 		})
 
 		Convey("GetExtension returns nil for unknown", func() {
@@ -231,7 +239,7 @@ func TestManager(t *testing.T) {
 			So(os.MkdirAll(filepath.Join(extDir, "locales"), 0755), ShouldBeNil)
 			So(os.WriteFile(filepath.Join(extDir, "locales", "zh-CN.json"), []byte(`{"a":`), 0644), ShouldBeNil)
 
-			_, err := LoadManifestInfo(extDir)
+			_, err := LoadManifestInfo(extDir, acceptingContributions())
 			So(err, ShouldBeNil)
 			entries := logs.All()
 			So(len(entries), ShouldEqual, 1)
@@ -275,7 +283,7 @@ func TestManagerInstall(t *testing.T) {
 			return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
 		}
 		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
-		mgr := NewManager(dir, newHost, logger)
+		mgr := NewManager(dir, newHost, acceptingContributions(), logger)
 		Reset(func() { mgr.Close(ctx) })
 
 		src := t.TempDir()
@@ -320,7 +328,7 @@ func TestManagerInstall(t *testing.T) {
 			So(cur.Dir, ShouldEqual, filepath.Join(dir, "hot"))
 			So(old.Plugin.closed.Load(), ShouldBeTrue)
 			So(cur.Plugin.closed.Load(), ShouldBeFalse)
-			info, err := LoadManifestInfo(filepath.Join(dir, "hot"))
+			info, err := LoadManifestInfo(filepath.Join(dir, "hot"), acceptingContributions())
 			So(err, ShouldBeNil)
 			So(info.Manifest.Version, ShouldEqual, "2.0.0")
 			So(extensionsDirEntries(t, dir), ShouldResemble, []string{"hot"})
@@ -339,61 +347,6 @@ func TestManagerInstall(t *testing.T) {
 	})
 }
 
-// An asset type's auth and connection declarations only ever take effect on a
-// request to one of the asset's endpoints — which exist only for an extension
-// declaring network.assetEndpoint (the type-level half, a format:"endpoint"
-// field, is describe() validation: TestParseDescriptorConnection). Declared
-// without it they would load, be shown in the asset form, and never apply, so
-// the extension is refused at load instead.
-func TestManagerRefusesEndpointBindingsWithoutAnEndpoint(t *testing.T) {
-	const endpointSchema = `{"type":"object","properties":{"endpoint":{"type":"string","format":"endpoint"},"token":{"type":"string","format":"password"}}}`
-	const auth = `"auth":{"groups":[{"bindings":[{"in":"header","name":"Authorization","value":"Bearer {{token}}"}]}]}`
-	const connection = `"connection":{"sshTunnel":true}`
-	descriptor := func(schema, binding string) string {
-		return `{"i18n":{"displayName":"d","description":"x"},` +
-			`"assetTypes":[{"type":"stub","i18n":{"name":"n"},"configSchema":` + schema + `,` + binding + `}],` +
-			`"policies":{"type":"stub"}}`
-	}
-	load := func(t *testing.T, payload string, assetEndpoint bool) error {
-		t.Helper()
-		useDescribeCache(t, newFakeDescribeCache(stubWasm, payload))
-		dir := t.TempDir()
-		extDir := filepath.Join(dir, "bound")
-		writeMinimalExtension(t, extDir, "bound")
-		if assetEndpoint {
-			manifest := map[string]any{
-				"name": "bound", "version": "1.0.0", "hostABI": HostABIVersion,
-				"backend":      map[string]any{"runtime": "wasm", "binary": "main.wasm"},
-				"capabilities": map[string]any{"network": map[string]any{"assetEndpoint": true}},
-			}
-			data, err := json.Marshal(manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		mgr := NewManager(dir, func(string) HostProvider { return NewDefaultHostProvider(DefaultHostConfig{}) }, zap.NewNop())
-		_, err := mgr.LoadExtension(context.Background(), extDir)
-		return err
-	}
-
-	for _, binding := range []string{auth, connection} {
-		t.Run("without network.assetEndpoint: "+binding[1:5], func(t *testing.T) {
-			err := load(t, descriptor(endpointSchema, binding), false)
-			if err == nil || !strings.Contains(err.Error(), "network.assetEndpoint") {
-				t.Fatalf("load error = %v, want a refusal naming network.assetEndpoint", err)
-			}
-		})
-		t.Run("with both: "+binding[1:5], func(t *testing.T) {
-			if err := load(t, descriptor(endpointSchema, binding), true); err != nil {
-				t.Fatalf("load: %v", err)
-			}
-		})
-	}
-}
-
 // The frontend names the language the way i18next does ("zh-CN") while locale
 // files are keyed lowercase on load; a lookup must match regardless of case
 // instead of silently falling back to English.
@@ -410,5 +363,80 @@ func TestTranslateMatchesLanguageCaseInsensitively(t *testing.T) {
 		So(ext.Translate("zh-CN", "field.address"), ShouldEqual, "地址")
 		So(ext.Translate("zh-cn", "field.address"), ShouldEqual, "地址")
 		So(ext.Translate("en", "field.address"), ShouldEqual, "Address")
+	})
+}
+
+// writeManifestOnly writes a raw manifest.json (and the stub wasm) under dir/name.
+func writeManifestOnly(t *testing.T, dir, name, manifest string) {
+	t.Helper()
+	extDir := filepath.Join(dir, name)
+	So(os.MkdirAll(extDir, 0755), ShouldBeNil)
+	So(os.WriteFile(filepath.Join(extDir, "manifest.json"), []byte(manifest), 0644), ShouldBeNil)
+	So(os.WriteFile(filepath.Join(extDir, "main.wasm"), stubWasm, 0644), ShouldBeNil)
+}
+
+// TestInstalledExtensionsTheHostRefuses: an extension on a retired hostABI, one
+// in the predecessor shape, and one whose cached describe is refused are reported
+// as load failures (not dropped), and none of them is loaded.
+func TestInstalledExtensionsTheHostRefuses(t *testing.T) {
+	Convey("Installed extensions the host refuses", t, func() {
+		ctx := context.Background()
+		dir := t.TempDir()
+		writeMinimalExtension(t, filepath.Join(dir, "good"), "good")
+		writeManifestOnly(t, dir, "legacy-abi",
+			`{"name":"legacy-abi","version":"1.2.0","hostABI":"2.3","backend":{"runtime":"wasm","binary":"main.wasm"}}`)
+		writeManifestOnly(t, dir, "old-shape",
+			`{"name":"old-shape","version":"0.9.0","hostABI":"`+extmanifest.HostABIVersion+`","capabilities":["x"],"assetTypes":[{"type":"t"}],"backend":{"runtime":"wasm","binary":"main.wasm"}}`)
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
+		newHost := func(string) HostProvider { return NewDefaultHostProvider(DefaultHostConfig{}) }
+		mgr := NewManager(dir, newHost, acceptingContributions(), zap.NewNop())
+
+		byDir := func(fs []LoadFailure) map[string]LoadFailure {
+			out := map[string]LoadFailure{}
+			for _, f := range fs {
+				out[filepath.Base(f.Dir)] = f
+			}
+			return out
+		}
+
+		Convey("ScanInstalled lists them as failures carrying name, version and the error", func() {
+			infos, failures, err := mgr.ScanInstalled()
+			So(err, ShouldBeNil)
+			So(infos, ShouldHaveLength, 1)
+			So(infos[0].Name, ShouldEqual, "good")
+			f := byDir(failures)
+			So(f, ShouldHaveLength, 2)
+			var inc *extmanifest.IncompatibleError
+			So(errors.As(f["legacy-abi"].Err, &inc), ShouldBeTrue)
+			So(inc.HostABI, ShouldEqual, "2.3")
+			So(f["legacy-abi"].Name, ShouldEqual, "legacy-abi")
+			So(f["legacy-abi"].Version, ShouldEqual, "1.2.0")
+			So(errors.As(f["old-shape"].Err, &inc), ShouldBeFalse)
+			So(f["old-shape"].Err.Error(), ShouldContainSubstring, "capabilities")
+			So(f["old-shape"].Name, ShouldEqual, "old-shape")
+		})
+
+		Convey("Scan loads only the good one and reports the same failures", func() {
+			exts, failures, err := mgr.Scan(ctx)
+			So(err, ShouldBeNil)
+			So(exts, ShouldHaveLength, 1)
+			So(byDir(failures), ShouldHaveLength, 2)
+			So(mgr.GetExtension("legacy-abi"), ShouldBeNil)
+			So(mgr.GetExtension("old-shape"), ShouldBeNil)
+		})
+
+		Convey("a cached describe a contribution point refuses is a failure too", func() {
+			reg := NewContributionRegistry(refusingPoint(extwire.KeyAssetTypes),
+				passPoint(extwire.KeyTools), passPoint(extwire.KeyPolicy), passPoint(extwire.KeySnippets),
+				passPoint(extwire.KeyPages), passPoint(extwire.KeyDatabaseDrivers))
+			m2 := NewManager(dir, newHost, reg, zap.NewNop())
+			infos, failures, err := m2.ScanInstalled()
+			So(err, ShouldBeNil)
+			So(infos, ShouldBeEmpty)
+			f := byDir(failures)
+			So(f, ShouldHaveLength, 3)
+			So(f["good"].Err.Error(), ShouldContainSubstring, "refused by the test's point")
+			So(f["good"].Name, ShouldEqual, "good")
+		})
 	})
 }

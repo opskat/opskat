@@ -9,6 +9,7 @@ export {
   findDatabaseDriver,
   loadDatabaseDrivers,
   refreshDatabaseDrivers,
+  useDatabaseDriverOwner,
   useDatabaseDrivers,
   type DatabaseDriversState,
   type DriverDescriptor,

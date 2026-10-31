@@ -70,23 +70,9 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 		"ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "+
 		"WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position").
 		WithArgs("reporting", "events").WillReturnRows(names("column_name", "id"))
-	mock.ExpectQuery("SELECT i.relname, ix.indisunique, pg_get_indexdef(ix.indexrelid, s.pos::int, true) "+
-		"FROM pg_class t "+
-		"JOIN pg_namespace n ON n.oid = t.relnamespace "+
-		"JOIN pg_index ix ON ix.indrelid = t.oid "+
-		"JOIN pg_class i ON i.oid = ix.indexrelid "+
-		"CROSS JOIN LATERAL generate_series(1, ix.indnatts) AS s(pos) "+
-		"WHERE n.nspname = $1 AND t.relname = $2 "+
-		"ORDER BY i.relname, s.pos").
-		WithArgs("reporting", "events").WillReturnRows(
-		sqlmock.NewRows([]string{"relname", "indisunique", "def"}).AddRow("events_pkey", true, "id"))
-	mock.ExpectQuery("SELECT tc.constraint_name, kcu.column_name, ccu.table_name, ccu.column_name "+
-		"FROM information_schema.table_constraints tc "+
-		"JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "+
-		"JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema "+
-		"WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1 AND tc.table_name = $2 "+
-		"ORDER BY tc.constraint_name").
-		WithArgs("reporting", "events").WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c", "d"}))
+	expectIndexes(mock, "reporting", "events", primaryKeyRow("events_pkey", "id"))
+	mock.ExpectQuery(foreignKeysSQL).
+		WithArgs("reporting", "events").WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c", "d", "u", "d"}))
 
 	meta, err := session.TableMetadata(context.Background(), "admdb", "reporting.events")
 	require.NoError(t, err)
@@ -97,6 +83,64 @@ func TestTableMetadataSplitsTheQualifiedName(t *testing.T) {
 	assert.Equal(t, []dbdriver.IndexMeta{{Name: "events_pkey", Columns: []string{"id"}, Unique: true}}, meta.Indexes)
 	assert.NotNil(t, meta.ForeignKeys)
 	assert.Empty(t, meta.ForeignKeys)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// expectTableMetadataColumns 是 TableMetadata 先读的列定义与主键（这里不关心，返回空）。
+func expectTableMetadataColumns(mock sqlmock.Sqlmock, schema, table string) {
+	mock.ExpectQuery(columnsQuery).WithArgs(schema, table).WillReturnRows(
+		sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default", "column_comment"}).
+			AddRow("code", "text", "text", "YES", nil, nil))
+	mock.ExpectQuery("SELECT kcu.column_name FROM information_schema.table_constraints tc "+
+		"JOIN information_schema.key_column_usage kcu "+
+		"ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "+
+		"WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position").
+		WithArgs(schema, table).WillReturnRows(names("column_name"))
+}
+
+// 覆盖索引（INCLUDE）的非键列不是键列：IndexMeta.Columns 只有键列（按键的次序），INCLUDE 列在 Include 里
+// （改动前按 indnatts 取全部列，INCLUDE 列被当成了键列）；表达式键按次序显示表达式原文，列名不加引号。
+func TestTableMetadataSeparatesIncludeColumns(t *testing.T) {
+	session, mock := newMock(t)
+	expectTableMetadataColumns(mock, "public", "events")
+	// CREATE INDEX idx_cover ON events (code DESC, "UserId") INCLUDE (email)；CREATE INDEX idx_expr ON events (lower(email))。
+	expectIndexes(mock, "public", "events",
+		indexRow{name: "idx_cover", method: "btree", column: "code", text: "code", option: 3},
+		keyRow("idx_cover", "UserId"),
+		indexRow{name: "idx_cover", method: "btree", include: true, column: "email", text: "email"},
+		indexRow{name: "idx_expr", method: "btree", text: "lower(email)"},
+	)
+	mock.ExpectQuery(foreignKeysSQL).WithArgs("public", "events").
+		WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c", "d", "u", "d"}))
+
+	meta, err := session.TableMetadata(context.Background(), "admdb", "events")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.IndexMeta{
+		{Name: "idx_cover", Columns: []string{"code", "UserId"}, Include: []string{"email"}},
+		{Name: "idx_expr", Columns: []string{"lower(email)"}},
+	}, meta.Indexes)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 外键按 pg_constraint 读：多列外键按列的次序一一对应（不再与被引用列交叉相乘），带上 ON UPDATE / ON DELETE
+// 的动作（confupdtype / confdeltype 在查询里换成 CASCADE、SET NULL…）。
+func TestTableMetadataReadsForeignKeyActions(t *testing.T) {
+	session, mock := newMock(t)
+	expectTableMetadataColumns(mock, "public", "orders")
+	expectIndexes(mock, "public", "orders")
+	mock.ExpectQuery(foreignKeysSQL).WithArgs("public", "orders").WillReturnRows(
+		sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table", "referenced_column", "on_update", "on_delete"}).
+			AddRow("fk_user", "user_id", "users", "id", "NO ACTION", "CASCADE").
+			AddRow("fk_item", "item_tenant", "items", "tenant", "SET NULL", "RESTRICT").
+			AddRow("fk_item", "item_id", "items", "id", "SET NULL", "RESTRICT"))
+
+	meta, err := session.TableMetadata(context.Background(), "admdb", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.ForeignKeyMeta{
+		{Name: "fk_user", Column: "user_id", ReferencedTable: "users", ReferencedColumn: "id", OnUpdate: "NO ACTION", OnDelete: "CASCADE"},
+		{Name: "fk_item", Column: "item_tenant", ReferencedTable: "items", ReferencedColumn: "tenant", OnUpdate: "SET NULL", OnDelete: "RESTRICT"},
+		{Name: "fk_item", Column: "item_id", ReferencedTable: "items", ReferencedColumn: "id", OnUpdate: "SET NULL", OnDelete: "RESTRICT"},
+	}, meta.ForeignKeys)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

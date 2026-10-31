@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/ociclient"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -27,7 +28,7 @@ const progressInterval = 100 * time.Millisecond
 // *extension_svc.Service.
 type Installer interface {
 	NewInstallConfirm(c extension_svc.InstallCandidate) extension_svc.InstallConfirm
-	InstallStorePackage(ctx context.Context, sourcePath string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error)
+	Install(ctx context.Context, sourcePath string, confirm extension_svc.ConfirmInstallFunc) (*extension.Manifest, error)
 }
 
 // InstallOptions are what InstallFromStore needs from its caller.
@@ -121,7 +122,7 @@ func installErr(kind InstallErrorKind, err error) *InstallError {
 //  2. The package is pulled from PullRegistry() — the ref's repository, not the
 //     host in the ref — bounded by the index size and checked against the
 //     index sha256 (the signed index is the trust root).
-//  3. opts.Installer.InstallStorePackage stages it (compatibility check included) and,
+//  3. opts.Installer.Install stages it (compatibility check included) and,
 //     without asking again, refuses it unless it is exactly the change the user
 //     confirmed; then commits.
 //
@@ -142,13 +143,14 @@ func (s *Service) InstallFromStore(ctx context.Context, name string, opts Instal
 	lang := aictx.GetPolicyLang(ctx)
 	displayName, _ := display(ext, lang)
 	approved := opts.Installer.NewInstallConfirm(extension_svc.InstallCandidate{
-		Name:         ext.Name,
-		DisplayName:  displayName,
-		Icon:         ext.Icon,
-		Version:      v.Version,
-		Capabilities: v.Capabilities,
-		Source:       extension_svc.InstallSourceStore,
-		Size:         v.Size,
+		Name:        ext.Name,
+		DisplayName: displayName,
+		Icon:        ext.Icon,
+		Version:     v.Version,
+		Permissions: v.Permissions,
+		Contributes: v.Contributes,
+		Source:      extension_svc.InstallSourceStore,
+		Size:        v.Size,
 	})
 	if err := opts.Confirm(ctx, approved); err != nil {
 		return "", "", err
@@ -159,7 +161,7 @@ func (s *Service) InstallFromStore(ctx context.Context, name string, opts Instal
 		zap.String("registry", reg.Host), zap.String("prefix", reg.Prefix), zap.Bool("plainHTTP", reg.PlainHTTP), zap.String("ref", v.Source.Ref))
 	log.Info("extension store install started")
 	manifest, err := s.download(ctx, reg, name, v, opts, func(path string) (*extension.Manifest, error) {
-		return opts.Installer.InstallStorePackage(ctx, path, func(_ context.Context, staged extension_svc.InstallConfirm) error {
+		return opts.Installer.Install(ctx, path, func(_ context.Context, staged extension_svc.InstallConfirm) error {
 			if err := sameChange(approved, staged); err != nil {
 				return err
 			}
@@ -227,7 +229,7 @@ func (s *Service) offer(ctx context.Context, name string) (extstore.Extension, e
 
 // incompatible localizes SelectInstallable's reason where the app has copy for it.
 func incompatible(ctx context.Context, reason error) error {
-	var ie *extension.IncompatibleError
+	var ie *extmanifest.IncompatibleError
 	if errors.As(reason, &ie) {
 		return extension_svc.LocalizeIncompatible(ctx, ie)
 	}
@@ -303,7 +305,7 @@ func pullError(err error) error {
 
 func installError(err error) error {
 	var ie *InstallError
-	var inc *extension.IncompatibleError
+	var inc *extmanifest.IncompatibleError
 	switch {
 	case errors.As(err, &ie), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
@@ -315,7 +317,7 @@ func installError(err error) error {
 }
 
 // sameChange refuses a staged package that is not the change the user approved
-// from the index: another extension or version, other capabilities, or an
+// from the index: another extension or version, other grants, or an
 // installed version that changed while it downloaded.
 func sameChange(approved, staged extension_svc.InstallConfirm) error {
 	if staged.Name == approved.Name && staged.To == approved.To && staged.From == approved.From &&
@@ -323,7 +325,7 @@ func sameChange(approved, staged extension_svc.InstallConfirm) error {
 		return nil
 	}
 	return installErr(InstallErrMismatch, fmt.Errorf(
-		"the downloaded package (%s %s, replacing %q) is not what was confirmed (%s %s, replacing %q, same capabilities)",
+		"the downloaded package (%s %s, replacing %q) is not what was confirmed (%s %s, replacing %q, same grants)",
 		staged.Name, staged.To, staged.From, approved.Name, approved.To, approved.From))
 }
 

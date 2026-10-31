@@ -42,7 +42,7 @@ func ExpandFileFlags(extName, command string, stdin io.Reader) (string, error) {
 			return "", false
 		}
 		def, found := toolDef(m, verb)
-		return flag, found && slices.Contains(def.FileParams, flag)
+		return flag, found && slices.Contains(def.Large, flag)
 	}
 	c, err := cmdline.Parse(command, cmdline.WithValueFlags(func(verb, name string) bool {
 		if _, ok := fileFlagOf(verb, name); ok {

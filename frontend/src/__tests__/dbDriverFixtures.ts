@@ -91,6 +91,14 @@ export function fakeDriverWith(capabilities: string[], id = FAKE_DRIVER.id): dbd
 }
 
 /**
+ * 能改表(alter_table)的测试驱动,表设计器相关的声明(可改属性、常用类型、默认值写法、自增、名称折叠……)
+ * 由测试给出,用来证明设计器只按声明渲染。
+ */
+export function fakeAlterDriver(declared: Partial<dbdriver.Descriptor>): dbdriver.Descriptor {
+  return new dbdriver.Descriptor({ ...fakeDriverWith(["alter_table"]), alterTableAttributes: [], ...declared });
+}
+
+/**
  * 让 Query.GetGridEditStatements 像驱动一样给出表格编辑的语句:每个新增 / 改动 / 删除的行各一条,
  * 内容是请求本身(值按 JSON 写),一眼能与任何真实方言区分,测试据此断言前端发出的意图与执行的语句。
  * 定位条件按主键取值,没有主键时是整行。

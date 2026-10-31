@@ -27,7 +27,8 @@ type Extension struct {
 	// store is the official extension store (SetStoreService).
 	store *extstore_svc.Service
 
-	// toolCalls are the page tool calls in flight, for CancelExtensionTool.
+	// toolCalls are the page tool calls in flight, for CancelExtensionTool and
+	// for routing their events to the page.
 	toolCalls toolCalls
 
 	// emit sends an event to the frontend; New wires it to Wails events, tests
@@ -65,16 +66,17 @@ func (e *Extension) NewHostProvider(extName string) interface{} {
 	return nil
 }
 
-// FileDialogOpener / ActionEventHandler 暴露给 main.go：它们是只有桌面窗口才能提供的
+// FileDialogOpener / ToolEventHandler（工具事件）暴露给 main.go：它们是只有桌面窗口才能提供的
 // 宿主能力，main.go 把它们补进 extension_svc.Service.HostConfig 给出的其余能力（资产配置、
 // KV、连接路径——与 opsctl 共用）再交给 extension.NewDefaultHostProvider。
 
 // NewFileDialogOpener 返回 fileDialogOpener 实例。
 func (e *Extension) NewFileDialogOpener() *fileDialogOpener { return &fileDialogOpener{ctx: e.ctx} }
 
-// NewActionEventHandler 为指定扩展返回 actionEventHandler 实例。
-func (e *Extension) NewActionEventHandler(extName string) *actionEventHandler {
-	return &actionEventHandler{ctx: e.ctx, extName: extName}
+// NewToolEventHandler 为指定扩展返回工具事件转发器：只把页面调用的事件以
+// ext:tool:event 发给前端，AI exec / opsctl 调用的事件丢弃。
+func (e *Extension) NewToolEventHandler(extName string) *toolEventHandler {
+	return &toolEventHandler{ext: e, extName: extName}
 }
 
 // Startup 异步初始化扩展系统（WASM 编译较慢，单独协程跑）。

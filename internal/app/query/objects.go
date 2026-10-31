@@ -42,12 +42,14 @@ func (q *Query) withPanelSession(assetID int64, database string, timeout func(*a
 }
 
 // panelSession 是一次占用中的面板会话：解析好的资产、带时限的 ctx，以及用完要调的 finish。
-// 一次调用内用完的操作经 withPanelSession；要跨多次调用持有会话的（导出游标）自己调
-// acquirePanelSession，并负责 finish。
+// 一次调用内用完的操作经 withPanelSession；要跨多次调用持有会话的（导出游标）或要按会话的驱动
+// 描述行事的（表结构整批执行）自己调 acquirePanelSession，并负责 finish。
 type panelSession struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	session  dbdriver.Session
+	ctx     context.Context
+	cancel  context.CancelFunc
+	session dbdriver.Session
+	// driver 是打开 session 的资产配置里的驱动。
+	driver   dbdriver.DriverID
 	database string
 	cleanup  func() error
 }
@@ -87,7 +89,7 @@ func (q *Query) acquirePanelSession(assetID int64, database string, timeout func
 		cancel()
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
-	return &panelSession{ctx: ctx, cancel: cancel, session: session, database: cfg.Database, cleanup: cleanup}, nil
+	return &panelSession{ctx: ctx, cancel: cancel, session: session, driver: cfg.Driver, database: cfg.Database, cleanup: cleanup}, nil
 }
 
 // nameList 是交给前端的名字列表：驱动一个名字也没给时是空列表（序列化成 []，不是 null），

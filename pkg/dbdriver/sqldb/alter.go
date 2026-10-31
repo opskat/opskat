@@ -33,9 +33,16 @@ type AlterableTable struct {
 	Comment string
 	// Columns 按列在表里的次序。
 	Columns []AlterableColumn
+	// Indexes 是现有的索引（主键是类型为 primary 的一项），按方言给出的次序；开启了索引编辑的方言
+	// （TableIndexer）给出，设计器无法完整表示的带 ReadOnlyReason、不能删除的带 Undroppable。
+	Indexes []dbdriver.IndexDefinition
+	// TakenIndexNames 是索引名唯一范围（TableIndexer 的 IndexEditing.NameScope）内其他表已有的索引
+	// 名，供重名校验；范围为表时为空。
+	TakenIndexNames []string
 }
 
-// AlterableColumn 是改表对话框里的一列。
+// AlterableColumn 是改表对话框里的一列。开启了自增的方言（AutoIncrementer）在 AutoIncrement 里给出现状；
+// 开启了默认值写法的方言（DefaultClassifier）在这里给目录里的默认值原文，写法由 Session 经它判定后填上。
 type AlterableColumn struct {
 	dbdriver.ColumnDefinition
 	// Row 是方言读这一列时取到的原始一行（按结果列名）：改列时方言据此保留对话框里不显示、用户也
@@ -61,6 +68,10 @@ type TableChange struct {
 	Columns []ColumnChange
 	// Drops 是要删除的已有列，按请求的次序。
 	Drops []string
+	// Indexes 是要改动的与新增的索引，按请求的次序；每个改动的现有索引由方言写成删除后重建。
+	Indexes []IndexChange
+	// IndexDrops 是要删除的现有索引（含引用被删列而随列删除的），排在删列之前。
+	IndexDrops []dbdriver.IndexDefinition
 }
 
 // ColumnChange 是一列的改动。
@@ -81,7 +92,8 @@ type ColumnChange struct {
 func (c ColumnChange) IsNew() bool { return c.Current == nil }
 
 func (c TableChange) empty() bool {
-	return c.Rename == "" && c.Comment == nil && len(c.Columns) == 0 && len(c.Drops) == 0
+	return c.Rename == "" && c.Comment == nil && len(c.Columns) == 0 && len(c.Drops) == 0 &&
+		len(c.Indexes) == 0 && len(c.IndexDrops) == 0
 }
 
 func (s *Session) alterer() (Tables, TableAlterer, error) {
@@ -115,6 +127,10 @@ func (s *Session) AlterTableModel(ctx context.Context, database, table string) (
 		for _, column := range current.Columns {
 			model.Columns = append(model.Columns, column.ColumnDefinition)
 		}
+		if IndexesTables(alterer) {
+			model.Indexes = current.Indexes
+			model.TakenIndexNames = current.TakenIndexNames
+		}
 		return model, nil
 	})
 }
@@ -126,12 +142,18 @@ func (s *Session) AlterTableStatements(ctx context.Context, database, table stri
 	if err != nil {
 		return nil, err
 	}
+	if err := columnFeatures(s.dialect).CheckAlter(req); err != nil {
+		return nil, err
+	}
+	if err := IndexEditing(s.dialect).CheckAlterIndexes(req.Indexes, req.IndexDrops); err != nil {
+		return nil, err
+	}
 	return onConn(ctx, s, func(conn *sql.Conn) (*dbdriver.AlterTableStatements, error) {
 		current, err := loadAlterableTable(ctx, conn, alterer, database, table)
 		if err != nil {
 			return nil, err
 		}
-		change, err := planTableChange(tables, alterer.AlterAttributes(), database, table, current, req)
+		change, err := planTableChange(tables, s.dialect, alterer.AlterAttributes(), database, table, current, req)
 		if err != nil {
 			return nil, err
 		}
@@ -157,11 +179,16 @@ func loadAlterableTable(ctx context.Context, conn *sql.Conn, alterer TableAltere
 	if !strings.HasSuffix(table, current.Name) {
 		return nil, fmt.Errorf("the dialect names table %s %q, which is not the end of its name", table, current.Name)
 	}
+	if classifier, ok := alterer.(DefaultClassifier); ok {
+		for i := range current.Columns {
+			current.Columns[i].DefaultKind, current.Columns[i].DefaultValue = classifier.ClassifyDefault(current.Columns[i])
+		}
+	}
 	return current, nil
 }
 
 // planTableChange 比较请求与表现在的定义，得出改动；要改方言不能改的属性、说到不在表里的列时失败。
-func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, database, table string, current *AlterableTable, req dbdriver.AlterTableRequest) (*TableChange, error) {
+func planTableChange(tables Tables, dialect Dialect, attributes []dbdriver.AlterAttribute, database, table string, current *AlterableTable, req dbdriver.AlterTableRequest) (*TableChange, error) {
 	mustAllow := func(attribute dbdriver.AlterAttribute, format string, args ...any) error {
 		if slices.Contains(attributes, attribute) {
 			return nil
@@ -213,13 +240,19 @@ func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, databa
 			return nil, fmt.Errorf("column %q of table %s is given more than once", existing.Name, table)
 		}
 		kept[existing.Name] = true
+		// 已有列的自增不能开启；请求不带自增（旧的改表对话框、扩展、设计器里已有列都不勾选）表示照旧，
+		// 交给方言的列定义带上现状，重写列定义时才不会丢掉它。
+		if column.AutoIncrement && !existing.AutoIncrement {
+			return nil, fmt.Errorf("%w: existing column %q cannot become auto-increment", dbdriver.ErrUnsupported, existing.Name)
+		}
+		column.AutoIncrement = existing.AutoIncrement
 		c := ColumnChange{
 			Current:         existing,
 			Column:          column,
 			Renamed:         column.Name != existing.Name,
 			TypeChanged:     !strings.EqualFold(strings.TrimSpace(column.Type), strings.TrimSpace(existing.Type)),
 			NullableChanged: column.Nullable != existing.Nullable,
-			DefaultChanged:  strings.TrimSpace(column.DefaultValue) != strings.TrimSpace(existing.DefaultValue),
+			DefaultChanged:  defaultChanged(column, existing.ColumnDefinition),
 			CommentChanged:  strings.TrimSpace(column.Comment) != strings.TrimSpace(existing.Comment),
 		}
 		for _, attribute := range []struct {
@@ -254,5 +287,50 @@ func planTableChange(tables Tables, attributes []dbdriver.AlterAttribute, databa
 		dropped[name] = true
 		change.Drops = append(change.Drops, name)
 	}
+	// 要建 / 要改的索引的列名按改动之后的表解析，删掉的列也一并算出：引用被删列的索引随列一起删。
+	after := tableColumnsAfter{
+		renames: make(map[string]string, len(req.Columns)),
+		present: make(map[string]bool, len(current.Columns)),
+		dropped: make(map[string]bool, len(req.Drops)),
+	}
+	// 先去掉删除与改名之前的名字、再加上改名之后与新增的名字：两列互换名字、或改成被删列的名字时，改动之后的
+	// 名字才不会被旧名字顶掉。
+	for i := range current.Columns {
+		after.present[current.Columns[i].Name] = true
+	}
+	for _, name := range change.Drops {
+		after.dropped[name] = true
+		delete(after.present, name)
+	}
+	for _, column := range change.Columns {
+		if column.Current != nil && column.Column.Name != column.Current.Name {
+			after.renames[column.Current.Name] = column.Column.Name
+			delete(after.present, column.Current.Name)
+		}
+	}
+	for _, column := range change.Columns {
+		after.present[column.Column.Name] = true
+	}
+	if err := planIndexes(IndexEditing(dialect), current, change, req, after); err != nil {
+		return nil, err
+	}
 	return change, nil
+}
+
+// defaultChanged 比较默认值（见 dbdriver.AlterTableRequest）：请求没给写法时照旧比较去掉首尾空白的文本；
+// 给了写法时写法不同即改动，同为「值」时比较原文，同为表达式时比较去掉首尾空白的文本。
+func defaultChanged(requested, current dbdriver.ColumnDefinition) bool {
+	if requested.DefaultKind == "" {
+		return strings.TrimSpace(requested.DefaultValue) != strings.TrimSpace(current.DefaultValue)
+	}
+	if requested.DefaultKind != current.DefaultKind {
+		return true
+	}
+	switch requested.DefaultKind {
+	case dbdriver.DefaultKindValue:
+		return requested.DefaultValue != current.DefaultValue
+	case dbdriver.DefaultKindExpression:
+		return strings.TrimSpace(requested.DefaultValue) != strings.TrimSpace(current.DefaultValue)
+	}
+	return false
 }

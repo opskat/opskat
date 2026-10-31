@@ -38,7 +38,10 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
 //     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（PrepareRowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
 //     必须给出语句），以及
-//     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
+//     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。
+//     表设计器的列能力（ExplicitDefaults、AutoIncrement）与索引编辑（IndexEditing）同样按声明检查：建表时
+//     声明了的必须给出语句、没声明的以 ErrUnsupported 拒绝，改表时没声明的在读表之前拒绝（见
+//     columnFeatureProblems / indexFeatureProblems）。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
 func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
 	t.Helper()
@@ -90,6 +93,8 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	// 拒绝要在任何语句之前：基于桩连接的会话在见到未预期的语句时会失败。
 	problems = append(problems, undeclaredObjectProblems(ctx, desc, s)...)
 	problems = append(problems, schemaWriteProblems(ctx, desc, s)...)
+	problems = append(problems, columnFeatureProblems(ctx, desc, s)...)
+	problems = append(problems, indexFeatureProblems(ctx, desc, s)...)
 
 	res, err := s.Execute(ctx, ConformanceStatement)
 	problems = append(problems, resultProblems("Execute", res, err)...)
@@ -160,6 +165,137 @@ func schemaWriteProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriv
 		if _, err := s.CreateDatabaseStatements(ctx, dbdriver.CreateDatabaseRequest{Name: "x", Options: map[string]string{"undeclared_option": "v"}}); err == nil {
 			problems = append(problems, "CreateDatabaseStatements: an option the driver did not declare must be refused")
 		}
+	}
+	return problems
+}
+
+// defaultKindColumns 是四种默认值写法各一列；类型取驱动声明的新列类型（没声明时 INT）。
+func defaultKindColumns(desc dbdriver.Descriptor) []dbdriver.NewColumn {
+	columnType := "INT"
+	if desc.ColumnTypes != nil && desc.ColumnTypes.NewColumn != "" {
+		columnType = desc.ColumnTypes.NewColumn
+	}
+	return []dbdriver.NewColumn{
+		{Name: "conformance_none", Type: columnType, Nullable: true, DefaultKind: dbdriver.DefaultKindNone},
+		{Name: "conformance_null", Type: columnType, Nullable: true, DefaultKind: dbdriver.DefaultKindNull},
+		{Name: "conformance_value", Type: columnType, Nullable: true, DefaultKind: dbdriver.DefaultKindValue, DefaultValue: "1"},
+		{Name: "conformance_expression", Type: columnType, Nullable: true, DefaultKind: dbdriver.DefaultKindExpression, DefaultValue: "1"},
+	}
+}
+
+// autoIncrementColumn 是一个自增列；类型取驱动声明的主键类型（没声明时 INT）。
+func autoIncrementColumn(desc dbdriver.Descriptor) dbdriver.NewColumn {
+	columnType := "INT"
+	if desc.ColumnTypes != nil && desc.ColumnTypes.PrimaryKey != "" {
+		columnType = desc.ColumnTypes.PrimaryKey
+	}
+	return dbdriver.NewColumn{Name: "conformance_id", Type: columnType, AutoIncrement: true}
+}
+
+// asAlterColumns 把新列写成改表请求里新增的列。
+func asAlterColumns(columns ...dbdriver.NewColumn) []dbdriver.AlterColumn {
+	out := make([]dbdriver.AlterColumn, len(columns))
+	for i, column := range columns {
+		out[i] = dbdriver.AlterColumn{
+			Name: column.Name, Type: column.Type, Nullable: column.Nullable,
+			DefaultKind: column.DefaultKind, DefaultValue: column.DefaultValue, AutoIncrement: column.AutoIncrement,
+		}
+	}
+	return out
+}
+
+// columnFeatureProblems 检查表设计器的列能力与声明一致（只生成、不执行，所以不需要数据）：声明了
+// 建表的驱动，四种默认值写法、自增列与建表注释在声明了时必须给出语句、没声明时必须以 ErrUnsupported 拒绝；声明了
+// 改表的驱动，没声明的列能力在读表之前就以 ErrUnsupported 拒绝（声明了的由 alterProblems 在有数据的
+// 会话上检查）。
+func columnFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	var problems []string
+	check := func(name, declaration string, declared bool, statements []string, err error) {
+		switch {
+		case !declared && !errors.Is(err, dbdriver.ErrUnsupported):
+			problems = append(problems, fmt.Sprintf("%s: the driver does not declare %s, so it must be refused with ErrUnsupported, got: %v", name, declaration, err))
+		case !declared:
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("%s: declared %s but refused: %v", name, declaration, err))
+		case len(statements) == 0:
+			problems = append(problems, fmt.Sprintf("%s: returned no statements and no error", name))
+		}
+	}
+	if desc.Supports(dbdriver.CapCreateTable) {
+		statements, err := s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{Name: "x", Columns: defaultKindColumns(desc)})
+		check("CreateTableStatements with default kinds", "explicitDefaults", desc.ExplicitDefaults, statements, err)
+		statements, err = s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{Name: "x", Columns: []dbdriver.NewColumn{autoIncrementColumn(desc)}})
+		check("CreateTableStatements with an auto-increment column", "autoIncrement", desc.AutoIncrement, statements, err)
+		statements, err = s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{Name: "x", Comment: "conformance",
+			Columns: []dbdriver.NewColumn{{Name: "conformance_c", Type: "INT", Nullable: true, Comment: "conformance"}}})
+		check("CreateTableStatements with comments", "createTableComments", desc.CreateTableComments, statements, err)
+	}
+	if desc.Supports(dbdriver.CapAlterTable) {
+		for _, undeclared := range []struct {
+			name, declaration string
+			declared          bool
+			columns           []dbdriver.AlterColumn
+		}{
+			{"AlterTableStatements with default kinds", "explicitDefaults", desc.ExplicitDefaults, asAlterColumns(defaultKindColumns(desc)...)},
+			{"AlterTableStatements with an auto-increment column", "autoIncrement", desc.AutoIncrement, asAlterColumns(autoIncrementColumn(desc))},
+		} {
+			if undeclared.declared {
+				continue
+			}
+			_, err := s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{Columns: undeclared.columns})
+			check(undeclared.name, undeclared.declaration, false, nil, err)
+		}
+	}
+	return problems
+}
+
+// conformanceIndex 是索引能力检查用的一个索引：类型取驱动声明的第一个非主键类型（没声明时普通），一列，
+// 名字一眼能与真表区分。
+func conformanceIndex(desc dbdriver.Descriptor) dbdriver.IndexDefinition {
+	indexType := dbdriver.IndexTypeNormal
+	if editing := desc.IndexEditing; editing != nil {
+		if i := slices.IndexFunc(editing.Types, func(declared dbdriver.IndexTypeDecl) bool {
+			return declared.ID != dbdriver.IndexTypePrimary
+		}); i >= 0 {
+			indexType = editing.Types[i].ID
+		}
+	}
+	return dbdriver.IndexDefinition{
+		Name: "conformance_ix", Type: indexType, Columns: []dbdriver.IndexColumn{{Name: "conformance_col"}},
+	}
+}
+
+// indexFeatureProblems 检查表设计器的索引编辑与声明一致（只生成、不执行，所以不需要数据）：声明了建表的
+// 驱动，带索引的建表请求在声明了索引编辑时必须给出语句、没声明时必须以 ErrUnsupported 拒绝；声明了改表的
+// 驱动，没声明索引编辑时任何索引改动与索引删除在读表之前就以 ErrUnsupported 拒绝（声明了的由
+// alterProblems 在有数据的会话上检查）。
+func indexFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	var problems []string
+	check := func(name string, statements []string, err error) {
+		switch {
+		case desc.IndexEditing == nil && !errors.Is(err, dbdriver.ErrUnsupported):
+			problems = append(problems, fmt.Sprintf("%s: the driver does not declare index editing, so it must be refused with ErrUnsupported, got: %v", name, err))
+		case desc.IndexEditing == nil:
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("%s: declared index editing but refused: %v", name, err))
+		case len(statements) == 0:
+			problems = append(problems, fmt.Sprintf("%s: returned no statements and no error", name))
+		}
+	}
+	if desc.Supports(dbdriver.CapCreateTable) {
+		statements, err := s.CreateTableStatements(ctx, "", dbdriver.CreateTableRequest{
+			Name: "x", Columns: []dbdriver.NewColumn{{Name: "conformance_col", Type: "INT", Nullable: true}},
+			Indexes: []dbdriver.IndexDefinition{conformanceIndex(desc)},
+		})
+		check("CreateTableStatements with a declared index", statements, err)
+	}
+	if desc.Supports(dbdriver.CapAlterTable) && desc.IndexEditing == nil {
+		_, err := s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{
+			Indexes: []dbdriver.AlterIndex{{IndexDefinition: conformanceIndex(desc)}},
+		})
+		check("AlterTableStatements with an index", nil, err)
+		_, err = s.AlterTableStatements(ctx, "", "x", dbdriver.AlterTableRequest{IndexDrops: []string{"conformance_ix"}})
+		check("AlterTableStatements dropping an index", nil, err)
 	}
 	return problems
 }
@@ -483,7 +619,7 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 		problems = append(problems, importProblems(ctx, s, database, table, opened.FirstPage)...)
 	}
 	if desc.Supports(dbdriver.CapAlterTable) && opened != nil && opened.FirstPage != nil {
-		problems = append(problems, alterProblems(ctx, s, database, table, opened.FirstPage.Columns)...)
+		problems = append(problems, alterProblems(ctx, desc, s, database, table, opened.FirstPage.Columns)...)
 	}
 
 	problems = append(problems, batchProblems(ctx, desc, s, database, table)...)
@@ -655,9 +791,12 @@ func gridEditProblems(ctx context.Context, s dbdriver.Session, database, table s
 	return problems
 }
 
-// alterProblems 检查改表：读出的表名是列表名去掉 schema 的那部分，列都是表格里有的列；把读出的样子
-// 原样交回去，不能生成任何语句（序列化成 []，不是 null），表名不变。语句只生成，这里不执行。
-func alterProblems(ctx context.Context, s dbdriver.Session, database, table string, columns []string) []string {
+// alterProblems 检查改表：读出的表名是列表名去掉 schema 的那部分，列都是表格里有的列，默认值写法与
+// 自增只在声明了时出现（声明了默认值写法时每一列都有已知的写法）；索引只在声明了索引编辑时出现、类型都在
+// 声明里；把读出的样子（列与索引）原样交回去，不能生成任何语句（序列化成 []，不是 null），表名不变；
+// 改已有列的自增、改动只读的索引、删除不可删除的索引必须以 ErrUnsupported 拒绝；声明了的列能力用在新增
+// 的列上必须给出语句。语句只生成，这里不执行。
+func alterProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session, database, table string, columns []string) []string {
 	var problems []string
 	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	model, err := s.AlterTableModel(ctx, database, table)
@@ -680,10 +819,32 @@ func alterProblems(ctx context.Context, s dbdriver.Session, database, table stri
 		if !slices.Contains(columns, column.Name) {
 			report("AlterTableModel: column %q is not a column of the first page", column.Name)
 		}
+		switch {
+		case !desc.ExplicitDefaults && column.DefaultKind != "":
+			report("AlterTableModel: column %q has default kind %q, but the driver does not declare explicitDefaults", column.Name, column.DefaultKind)
+		case desc.ExplicitDefaults && !slices.Contains(dbdriver.DefaultKinds(), column.DefaultKind):
+			report("AlterTableModel: column %q has default kind %q; a driver that declares explicitDefaults gives one of %v", column.Name, column.DefaultKind, dbdriver.DefaultKinds())
+		}
+		if !desc.AutoIncrement && column.AutoIncrement {
+			report("AlterTableModel: column %q is auto-increment, but the driver does not declare autoIncrement", column.Name)
+		}
 		req.Columns = append(req.Columns, dbdriver.AlterColumn{
 			OriginalName: column.Name, Name: column.Name, Type: column.Type, Nullable: column.Nullable,
 			DefaultValue: column.DefaultValue, Comment: column.Comment,
+			DefaultKind: column.DefaultKind, AutoIncrement: column.AutoIncrement,
 		})
+	}
+	if len(model.Indexes) > 0 && desc.IndexEditing == nil {
+		report("AlterTableModel: the driver does not declare index editing, yet the model has %d index(es)", len(model.Indexes))
+	}
+	if len(model.TakenIndexNames) > 0 && desc.IndexEditing == nil {
+		report("AlterTableModel: the driver does not declare index editing, yet the model names %d taken index name(s)", len(model.TakenIndexNames))
+	}
+	for _, index := range model.Indexes {
+		if desc.IndexEditing != nil && !desc.IndexEditing.DeclaresType(index.Type) {
+			report("AlterTableModel: index %q has type %q, which the driver does not declare in indexEditing", index.Name, index.Type)
+		}
+		req.Indexes = append(req.Indexes, dbdriver.AlterIndex{OriginalName: index.Name, IndexDefinition: index})
 	}
 	result, err := s.AlterTableStatements(ctx, database, table, req)
 	switch {
@@ -695,6 +856,77 @@ func alterProblems(ctx context.Context, s dbdriver.Session, database, table stri
 		report("AlterTableStatements with the table as it is: generated %q; nothing changed, so there must be no statements", result.Statements)
 	case result.Table != table:
 		report("AlterTableStatements with the table as it is: the table is now named %q, not %q", result.Table, table)
+	}
+
+	// 已有列不能开启自增；不带自增表示照旧（旧的改表对话框就这样提交），交回不产生语句。
+	if i := slices.IndexFunc(req.Columns, func(c dbdriver.AlterColumn) bool { return !c.AutoIncrement }); i >= 0 {
+		turnedOn := req
+		turnedOn.Columns = slices.Clone(req.Columns)
+		turnedOn.Columns[i].AutoIncrement = true
+		if _, err := s.AlterTableStatements(ctx, database, table, turnedOn); !errors.Is(err, dbdriver.ErrUnsupported) {
+			report("AlterTableStatements: an existing column (%q) cannot become auto-increment, so it must be refused with ErrUnsupported, got: %v", turnedOn.Columns[i].Name, err)
+		}
+	}
+	if slices.ContainsFunc(req.Columns, func(c dbdriver.AlterColumn) bool { return c.AutoIncrement }) {
+		omitted := req
+		omitted.Columns = slices.Clone(req.Columns)
+		for i := range omitted.Columns {
+			omitted.Columns[i].AutoIncrement = false
+		}
+		result, err := s.AlterTableStatements(ctx, database, table, omitted)
+		switch {
+		case err != nil:
+			report("AlterTableStatements without autoIncrement on the existing columns (it means keep): %v", err)
+		case result != nil && len(result.Statements) > 0:
+			report("AlterTableStatements without autoIncrement on the existing columns (it means keep): generated %q; there must be no statements", result.Statements)
+		}
+	}
+
+	var added []dbdriver.NewColumn
+	if desc.ExplicitDefaults {
+		added = append(added, defaultKindColumns(desc)...)
+	}
+	if desc.AutoIncrement && !desc.AutoIncrementNewTablesOnly {
+		added = append(added, autoIncrementColumn(desc))
+	}
+	if desc.AutoIncrementNewTablesOnly {
+		// 自增只能在新表上设：已有表上新增的自增列要以 ErrUnsupported 拒绝，而不是写出一条执行必败的语句。
+		extended := req
+		extended.Columns = append(slices.Clone(req.Columns), asAlterColumns(autoIncrementColumn(desc))...)
+		if _, err := s.AlterTableStatements(ctx, database, table, extended); !errors.Is(err, dbdriver.ErrUnsupported) {
+			report("AlterTableStatements adding an auto-increment column: auto-increment is declared only on new tables, so it must be refused with ErrUnsupported, got: %v", err)
+		}
+	}
+	if len(added) > 0 {
+		extended := req
+		extended.Columns = append(slices.Clone(req.Columns), asAlterColumns(added...)...)
+		result, err := s.AlterTableStatements(ctx, database, table, extended)
+		switch {
+		case err != nil:
+			report("AlterTableStatements adding columns with the declared column features: %v", err)
+		case result == nil || len(result.Statements) == 0:
+			report("AlterTableStatements adding columns with the declared column features: generated no statements")
+		}
+	}
+
+	// 只读的索引只能删除、不可删除的连删除也不行：改它 / 删它都要以 ErrUnsupported 拒绝。
+	for i, index := range model.Indexes {
+		switch {
+		case index.ReadOnlyReason != "":
+			changed := req
+			changed.Indexes = slices.Clone(req.Indexes)
+			changed.Indexes[i].Comment = index.Comment + "conformance"
+			if _, err := s.AlterTableStatements(ctx, database, table, changed); !errors.Is(err, dbdriver.ErrUnsupported) {
+				report("AlterTableStatements: index %q is read-only (%s), so changing it must be refused with ErrUnsupported, got: %v", index.Name, index.ReadOnlyReason, err)
+			}
+		case index.Undroppable:
+			dropped := req
+			dropped.Indexes = slices.Delete(slices.Clone(req.Indexes), i, i+1)
+			dropped.IndexDrops = []string{index.Name}
+			if _, err := s.AlterTableStatements(ctx, database, table, dropped); !errors.Is(err, dbdriver.ErrUnsupported) {
+				report("AlterTableStatements: index %q cannot be dropped, so dropping it must be refused with ErrUnsupported, got: %v", index.Name, err)
+			}
+		}
 	}
 	return problems
 }
@@ -904,6 +1136,27 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	}
 	if len(desc.AlterTableAttributes) > 0 && !desc.Supports(dbdriver.CapAlterTable) {
 		report("alterTableAttributes are declared without capability %q, the only feature that uses them", dbdriver.CapAlterTable)
+	}
+	if desc.CreateTableComments && !desc.Supports(dbdriver.CapCreateTable) {
+		report("createTableComments is declared without capability %q, the only feature that uses it", dbdriver.CapCreateTable)
+	}
+	if !desc.Supports(dbdriver.CapCreateTable) && !desc.Supports(dbdriver.CapAlterTable) {
+		for _, detail := range []struct {
+			name     string
+			declared bool
+		}{
+			{"columnTypes", desc.ColumnTypes != nil},
+			{"explicitDefaults", desc.ExplicitDefaults},
+			{"autoIncrement", desc.AutoIncrement},
+			{"nameFolding", desc.NameFolding != ""},
+			{"emptyStringIsNull", desc.EmptyStringIsNull},
+			{"indexEditing", desc.IndexEditing != nil},
+			{"transactionalDDL", desc.TransactionalDDL},
+		} {
+			if detail.declared {
+				report("%s is declared without capability %q or %q, the features that use it", detail.name, dbdriver.CapCreateTable, dbdriver.CapAlterTable)
+			}
+		}
 	}
 	return problems
 }

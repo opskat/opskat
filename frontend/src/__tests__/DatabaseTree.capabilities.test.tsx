@@ -4,8 +4,9 @@ import { DatabaseTree } from "../components/query/DatabaseTree";
 import { DatabasePanel } from "../components/query/DatabasePanel";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
+import { useAssetStore } from "../stores/assetStore";
 import { ListDatabaseDrivers, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
-import { query_svc } from "../../wailsjs/go/models";
+import { asset_entity, query_svc } from "../../wailsjs/go/models";
 import { BUILTIN_DRIVERS, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
@@ -20,7 +21,15 @@ vi.mock("react-i18next", () => {
 });
 
 const ALL_OBJECT_GROUPS = ["query.objViews", "query.objProcedures", "query.objFunctions", "query.objTriggers"];
-const ALL_TABLE_MENU = ["query.openTable", "query.alterTable", "query.truncateTable", "query.dropTable"];
+const ALL_TABLE_MENU = [
+  "query.openTable",
+  "query.viewStructure",
+  "query.alterTable",
+  "query.truncateTable",
+  "query.dropTable",
+];
+// 能改表的驱动:「查看结构」换成「修改表」。
+const ALTER_TABLE_MENU = ALL_TABLE_MENU.filter((label) => label !== "query.viewStructure");
 
 function openTab(driver: string) {
   useTabStore.setState({
@@ -83,7 +92,12 @@ async function renderTree(driver: string, objects = objectsOf(...EVERY_GROUP)) {
   await screen.findByText(/^query\.objTables/);
 }
 
-const hasToolbarCreateDatabase = () => screen.queryByLabelText("query.createDatabase") !== null;
+/** 侧栏工具栏的新建下拉里有没有「新建数据库…」(打开下拉,之后要重新渲染再看别的菜单)。 */
+async function hasToolbarCreateDatabase(): Promise<boolean> {
+  fireEvent.pointerDown(screen.getByTestId("database-new-menu"), { button: 0, ctrlKey: false });
+  await screen.findByTestId("database-new-menu-sql");
+  return screen.queryByTestId("database-new-menu-database") !== null;
+}
 const hasSchemaGroup = () => screen.queryByText("public") !== null;
 
 function tableMenuLabels(): string[] {
@@ -93,7 +107,7 @@ function tableMenuLabels(): string[] {
 
 function databaseMenuHasAddTable(): boolean {
   fireEvent.contextMenu(screen.getByText("appdb"));
-  return screen.queryByText("query.addTable") !== null;
+  return screen.queryByText("query.newTable") !== null;
 }
 
 async function objectGroupsShown(): Promise<string[]> {
@@ -102,7 +116,13 @@ async function objectGroupsShown(): Promise<string[]> {
   return ALL_OBJECT_GROUPS.filter((label) => screen.queryByText(new RegExp(`^${label}`)) !== null);
 }
 
+/** 开启了只读连接的数据库资产。 */
+function readOnlyAsset(id: number): asset_entity.Asset {
+  return new asset_entity.Asset({ ID: id, Name: "db", Type: "database", Config: JSON.stringify({ read_only: true }) });
+}
+
 beforeEach(() => {
+  useAssetStore.setState({ assets: [] });
   vi.mocked(ListDatabaseObjects).mockReset();
   vi.mocked(ListDatabases).mockReset();
   vi.mocked(ListTables).mockReset();
@@ -130,13 +150,15 @@ describe("DatabaseTree 内置驱动的入口与改动前一致", () => {
       provideDrivers(BUILTIN_DRIVERS);
       await renderTree(driver, objectsOf(...want.backend));
 
-      expect(hasToolbarCreateDatabase()).toBe(want.createDatabase);
       expect(hasSchemaGroup()).toBe(want.schemaGroup);
       expect(await objectGroupsShown()).toEqual(want.objects);
-      expect(tableMenuLabels()).toEqual(ALL_TABLE_MENU);
+      expect(tableMenuLabels()).toEqual(ALTER_TABLE_MENU);
       cleanup();
       await renderTree(driver, objectsOf(...want.backend));
       expect(databaseMenuHasAddTable()).toBe(true);
+      cleanup();
+      await renderTree(driver, objectsOf(...want.backend));
+      expect(await hasToolbarCreateDatabase()).toBe(want.createDatabase);
     });
   }
 });
@@ -146,14 +168,16 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     provideDrivers([fakeDriverWith([])]);
     await renderTree("fakedb");
 
-    expect(hasToolbarCreateDatabase()).toBe(false);
     expect(hasSchemaGroup()).toBe(false);
     expect(screen.getByText("public.users")).toBeInTheDocument();
     expect(await objectGroupsShown()).toEqual([]);
-    expect(tableMenuLabels()).toEqual(["query.openTable"]);
+    expect(tableMenuLabels()).toEqual(["query.openTable", "query.viewStructure"]);
     cleanup();
     await renderTree("fakedb");
     expect(databaseMenuHasAddTable()).toBe(false);
+    cleanup();
+    await renderTree("fakedb");
+    expect(await hasToolbarCreateDatabase()).toBe(false);
   });
 
   it("声明 schemas:表按 schema 分组", async () => {
@@ -168,7 +192,7 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
   it("声明 create_database:出现「新建数据库」", async () => {
     provideDrivers([fakeDriverWith(["create_database"])]);
     await renderTree("fakedb");
-    expect(hasToolbarCreateDatabase()).toBe(true);
+    expect(await hasToolbarCreateDatabase()).toBe(true);
   });
 
   it("声明 create_table:数据库右键菜单出现「新建表」", async () => {
@@ -177,17 +201,65 @@ describe("DatabaseTree 的入口跟随一个前端一无所知的驱动所声明
     expect(databaseMenuHasAddTable()).toBe(true);
   });
 
+  it("声明 alter_table:「查看结构」换成「修改表」", async () => {
+    provideDrivers([fakeDriverWith(["alter_table"])]);
+    await renderTree("fakedb");
+    expect(tableMenuLabels()).toEqual(["query.openTable", "query.alterTable"]);
+  });
+
   for (const [cap, label] of [
-    ["alter_table", "query.alterTable"],
     ["truncate_table", "query.truncateTable"],
     ["drop_table", "query.dropTable"],
   ]) {
     it(`声明 ${cap}:表的右键菜单只多出对应一项`, async () => {
       provideDrivers([fakeDriverWith([cap])]);
       await renderTree("fakedb");
-      expect(tableMenuLabels()).toEqual(["query.openTable", label]);
+      expect(tableMenuLabels()).toEqual(["query.openTable", "query.viewStructure", label]);
     });
   }
+
+  it("能改表时「设计表」打开设计器标签(每张表一个,再点切到已有的)", async () => {
+    provideDrivers([fakeDriverWith(["alter_table"])]);
+    await renderTree("fakedb");
+    fireEvent.contextMenu(screen.getByText("public.users"));
+    fireEvent.click(screen.getByText("query.alterTable"));
+    fireEvent.contextMenu(screen.getByText("public.users"));
+    fireEvent.click(screen.getByText("query.alterTable"));
+
+    const state = useQueryStore.getState().dbStates["query-1"];
+    expect(state.innerTabs).toEqual([
+      { id: "designer:appdb.public.users", type: "designer", mode: "design", database: "appdb", table: "public.users" },
+    ]);
+    expect(state.activeInnerTabId).toBe("designer:appdb.public.users");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("驱动不能改表时「查看结构」打开只读设计器标签", async () => {
+    provideDrivers([fakeDriverWith([])]);
+    await renderTree("fakedb");
+    fireEvent.contextMenu(screen.getByText("public.users"));
+    fireEvent.click(screen.getByText("query.viewStructure"));
+
+    const state = useQueryStore.getState().dbStates["query-1"];
+    expect(state.innerTabs).toEqual([
+      { id: "designer:appdb.public.users", type: "designer", mode: "view", database: "appdb", table: "public.users" },
+    ]);
+    expect(state.activeInnerTabId).toBe("designer:appdb.public.users");
+  });
+});
+
+describe("DatabaseTree 在资产开启只读连接时", () => {
+  it("能改表的驱动也只给「查看结构」,打开只读设计器", async () => {
+    provideDrivers([fakeDriverWith(["alter_table"])]);
+    useAssetStore.setState({ assets: [readOnlyAsset(1)] });
+    await renderTree("fakedb");
+    expect(tableMenuLabels()).toEqual(["query.openTable", "query.viewStructure"]);
+
+    fireEvent.click(screen.getByText("query.viewStructure"));
+    expect(useQueryStore.getState().dbStates["query-1"].innerTabs.map((t) => t.id)).toEqual([
+      "designer:appdb.public.users",
+    ]);
+  });
 
   it("对象浏览按四类对象各自的声明显示", async () => {
     provideDrivers([fakeDriverWith(["procedures", "triggers"])]);
@@ -227,7 +299,8 @@ describe("DatabaseTree 在资产的驱动没有注册时", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(ListDatabases).not.toHaveBeenCalled();
     expect(ListTables).not.toHaveBeenCalled();
-    expect(hasToolbarCreateDatabase()).toBe(false);
+    // 驱动不可用时工具栏的新建下拉整个不出现。
+    expect(screen.queryByTestId("database-new-menu")).not.toBeInTheDocument();
   });
 
   it("描述还在加载时不闪出「驱动不可用」", async () => {
@@ -241,12 +314,12 @@ describe("DatabaseTree 在资产的驱动没有注册时", () => {
     resolve(BUILTIN_DRIVERS);
     await screen.findByText(/^query\.objTables/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await waitFor(() => expect(hasToolbarCreateDatabase()).toBe(true));
+    expect(await hasToolbarCreateDatabase()).toBe(true);
   });
 });
 
 describe("DatabasePanel 在资产的驱动没有注册时", () => {
-  it("右侧区域显示指明驱动名的「驱动不可用」,而不是「打开表」的占位", async () => {
+  it("右侧区域显示指明驱动名的「驱动不可用」,而不是空白区的新建按钮", async () => {
     provideDrivers(BUILTIN_DRIVERS);
     openTab("ghostdb");
     render(<DatabasePanel tabId="query-1" />);
@@ -255,10 +328,10 @@ describe("DatabasePanel 在资产的驱动没有注册时", () => {
     // 侧栏与右侧各一份。
     await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
     for (const notice of notices) expect(notice).toHaveTextContent("ghostdb");
-    expect(screen.queryByText("query.openTable")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("empty-new-sql")).not.toBeInTheDocument();
   });
 
-  it("描述加载期间不显示「驱动不可用」,已注册时仍是「打开表」的占位", async () => {
+  it("描述加载期间不显示「驱动不可用」,已注册时仍是空白区的新建按钮", async () => {
     let resolve!: (v: typeof BUILTIN_DRIVERS) => void;
     provideDrivers([]);
     vi.mocked(ListDatabaseDrivers).mockReturnValue(new Promise((r) => (resolve = r)));
@@ -267,7 +340,7 @@ describe("DatabasePanel 在资产的驱动没有注册时", () => {
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     resolve(BUILTIN_DRIVERS);
-    expect(await screen.findByText("query.openTable")).toBeInTheDocument();
+    expect(await screen.findByTestId("empty-new-sql")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

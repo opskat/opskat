@@ -26,8 +26,8 @@ var release = appversion.Info{Version: "1.14.0", Kind: appversion.KindRelease}
 func version(v, hostABI string) map[string]any {
 	return map[string]any{
 		"version": v, "hostABI": hostABI, "size": 2048,
-		"capabilities": map[string]any{"credentials": "read", "network": map[string]any{"assetEndpoint": true}},
-		"source":       map[string]any{"ref": "ghcr.io/opskat/extensions/x:" + v, "sha256": "abc"},
+		"permissions": map[string]any{"credentials": "read", "network": map[string]any{"assetEndpoint": true}},
+		"source":      map[string]any{"ref": "ghcr.io/opskat/extensions/x:" + v, "sha256": "abc"},
 	}
 }
 
@@ -41,7 +41,7 @@ func indexJSON(t *testing.T, format int, exts ...map[string]any) []byte {
 // sampleIndex has one extension per store state for an app on release 1.14.0
 // with "notebook" 1.0.0 and "kafka" 0.1.0 installed.
 func sampleIndex(t *testing.T) []byte {
-	ipfs := version("2.0.0", "2.2")
+	ipfs := version("2.0.0", "1.0")
 	ipfs["source"] = map[string]any{"type": "ipfs", "ref": "x"}
 	return indexJSON(t, extstore.FormatVersion,
 		map[string]any{
@@ -51,11 +51,11 @@ func sampleIndex(t *testing.T) []byte {
 				"zh-CN": map[string]any{"name": "Elasticsearch 工具", "description": ""},
 			},
 			"icon":     "search",
-			"versions": []any{version("0.1.0", "2.2"), version("0.2.0", "2.2")},
+			"versions": []any{version("0.1.0", "1.0"), version("0.2.0", "1.0")},
 		},
-		map[string]any{"name": "notebook", "versions": []any{version("1.0.0", "2.2")}},
-		map[string]any{"name": "kafka", "versions": []any{version("0.1.0", "2.2"), version("0.4.1", "2.2")}},
-		map[string]any{"name": "pgdoctor", "versions": []any{version("0.5.0", "9.0"), version("0.6.0", "9.1")}},
+		map[string]any{"name": "notebook", "versions": []any{version("1.0.0", "1.0")}},
+		map[string]any{"name": "kafka", "versions": []any{version("0.1.0", "1.0"), version("0.4.1", "1.0")}},
+		map[string]any{"name": "pgdoctor", "versions": []any{version("0.5.0", "2.3"), version("0.6.0", "2.5")}},
 		map[string]any{"name": "future", "versions": []any{ipfs}},
 	)
 }
@@ -167,8 +167,8 @@ func TestRefreshVerifiedIndex(t *testing.T) {
 		assert.Equal(t, "", c.InstalledVersion)
 		assert.Equal(t, "search", c.Icon)
 		assert.Equal(t, int64(2048), c.Size)
-		assert.Equal(t, "read", c.Capabilities.Credentials)
-		assert.True(t, c.Capabilities.Network.AssetEndpoint)
+		assert.Equal(t, "read", c.Permissions.Credentials)
+		assert.True(t, c.Permissions.Network.AssetEndpoint)
 		assert.Nil(t, c.Unavailable)
 	})
 
@@ -209,7 +209,8 @@ func TestRefreshVerifiedIndex(t *testing.T) {
 		assert.Equal(t, "0.6.0", c.Version)
 		require.NotNil(t, c.Unavailable)
 		assert.Equal(t, ReasonHostABI, c.Unavailable.Reason)
-		assert.Equal(t, "9.1", c.Unavailable.HostABI)
+		assert.Equal(t, "2.5", c.Unavailable.HostABI)
+		assert.Equal(t, []string{"1.0"}, c.Unavailable.SupportedHostABIs)
 	})
 
 	t.Run("unknown source type: unavailable, update OpsKat", func(t *testing.T) {

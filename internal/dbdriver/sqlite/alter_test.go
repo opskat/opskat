@@ -19,10 +19,14 @@ func TestAlterTableModelForSQLite(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableModel{
 		Name: "users",
 		Columns: []dbdriver.ColumnDefinition{
-			{Name: "id", Type: "INTEGER", Nullable: true},
-			{Name: "name", Type: "TEXT", Nullable: false, DefaultValue: "'anon'"},
-			{Name: "n", Type: "REAL", Nullable: true},
+			{Name: "id", Type: "INTEGER", Nullable: true, DefaultKind: dbdriver.DefaultKindNone, AutoIncrement: true},
+			{Name: "name", Type: "TEXT", Nullable: false, DefaultValue: "anon", DefaultKind: dbdriver.DefaultKindValue},
+			{Name: "n", Type: "REAL", Nullable: true, DefaultKind: dbdriver.DefaultKindNone},
 		},
+		Indexes: []dbdriver.IndexDefinition{
+			{Name: rowidPrimaryKeyName, Type: dbdriver.IndexTypePrimary, Columns: []dbdriver.IndexColumn{{Name: "id"}}, Undroppable: true},
+		},
+		TakenIndexNames: []string{"users"},
 	}, model)
 
 	_, err = session.AlterTableModel(context.Background(), "main", "missing")
@@ -49,10 +53,10 @@ func TestAlterTableStatementsRunOnARealSQLiteDatabase(t *testing.T) {
 	assert.Equal(t, &dbdriver.AlterTableStatements{
 		Statements: []string{
 			`ALTER TABLE "main"."users" RENAME TO "users_v2"`,
+			`ALTER TABLE "main"."users_v2" DROP COLUMN "gone"`,
+			`ALTER TABLE "main"."users_v2" RENAME COLUMN "name" TO "full_name"`,
 			`ALTER TABLE "main"."users_v2" ADD COLUMN "age" INTEGER DEFAULT 18`,
 			`ALTER TABLE "main"."users_v2" ADD COLUMN "tag" BLOB DEFAULT 'ab'`,
-			`ALTER TABLE "main"."users_v2" RENAME COLUMN "name" TO "full_name"`,
-			`ALTER TABLE "main"."users_v2" DROP COLUMN "gone"`,
 		},
 		Table: "users_v2",
 	}, result)

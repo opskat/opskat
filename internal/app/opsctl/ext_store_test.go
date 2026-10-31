@@ -63,7 +63,7 @@ func TestExtStoreSearch(t *testing.T) {
 		{Card: extstore_svc.Card{Name: "notebook", DisplayName: "Notebook", InstalledVersion: "1.0.0",
 			Action: extstore.ActionInstalled}, Latest: "1.0.0"},
 		{Card: extstore_svc.Card{Name: "pgdoctor", DisplayName: "PG Doctor", Action: extstore.ActionUnavailable,
-			Unavailable: &extstore_svc.Unavailable{Reason: extstore_svc.ReasonHostABI, HostABI: "9.1"}}},
+			Unavailable: &extstore_svc.Unavailable{Reason: extstore_svc.ReasonHostABI, HostABI: "2.5", SupportedHostABIs: []string{"1.0"}}}},
 		{Card: extstore_svc.Card{Name: "newer", Action: extstore.ActionUnavailable,
 			Unavailable: &extstore_svc.Unavailable{Reason: extstore_svc.ReasonMinAppVersion, MinAppVersion: "9.0.0"}}},
 		{Card: extstore_svc.Card{Name: "future", Action: extstore.ActionUnavailable,
@@ -84,16 +84,18 @@ func TestExtStoreSearch(t *testing.T) {
 	assert.Equal(t, approval.ExtStoreStatusUpdate, resp.StoreExtensions[1].Status)
 	assert.Equal(t, "0.1.0", resp.StoreExtensions[1].Installed)
 	assert.Equal(t, approval.ExtStoreStatusInstalled, resp.StoreExtensions[2].Status)
-	for i, want := range []string{"9.1", "9.0.0", "ipfs"} {
+	for i, want := range [][]string{{"hostABI 2.5", "1.0"}, {"9.0.0"}, {"ipfs"}} {
 		e := resp.StoreExtensions[3+i]
 		assert.Equal(t, approval.ExtStoreStatusUnavailable, e.Status)
-		assert.Contains(t, e.Reason, want, "the reason names what this OpsKat lacks")
-		assert.Contains(t, e.Reason, "OpsKat", "and that updating OpsKat is the remedy")
+		for _, w := range want {
+			assert.Contains(t, e.Reason, w, "the reason names what the version needs and this OpsKat runs")
+		}
+		assert.Contains(t, e.Reason, "OpsKat")
 	}
-	assert.Contains(t, resp.StoreExtensions[3].Reason, "需要", "the reason is in the requested language")
+	assert.Contains(t, resp.StoreExtensions[3].Reason, "声明", "the reason is in the requested language")
 
 	enResp := o.handleRequest(context.Background(), approval.ApprovalRequest{Type: approval.TypeExtStoreSearch, Lang: "en"})
-	assert.NotContains(t, enResp.StoreExtensions[3].Reason, "需要")
+	assert.Contains(t, enResp.StoreExtensions[3].Reason, "declares hostABI 2.5")
 }
 
 func TestExtStoreSearchFailure(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 // the seam that package registers through — describe() reports the descriptors,
 // and dispatch hands the driver calls to the one serve function.
 
-// DatabaseDriverServe serves one call of the guest function driverwire.Function.
+// DatabaseDriverServe serves one call of the guest function extwire.DriverFunction.
 type DatabaseDriverServe func(input []byte) (json.RawMessage, error)
 
 // databaseDriverServe answers the driver calls; the descriptors are in

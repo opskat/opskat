@@ -13,29 +13,27 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/opskat/opskat/pkg/extension"
 )
 
 // fakeReviewer 是一个审核扩展：记下每次收到的命令，按 reply 回答（默认全部通过）。
 type fakeReviewer struct {
 	name, version, settingsHash string
 	maxItems, maxCommandLen     int
-	questions                   []extension.ReviewQuestion
-	reply                       func(items []extension.ReviewItem) ([]extension.ReviewCommandResult, error)
+	questions                   []Question
+	reply                       func(items []Item) ([]ItemResult, error)
 
 	mu    sync.Mutex
-	calls [][]extension.ReviewItem
+	calls [][]Item
 }
 
 func (f *fakeReviewer) Identity() (string, string, string) {
 	return f.name, f.version, f.settingsHash
 }
-func (f *fakeReviewer) Limits() (int, int)                    { return f.maxItems, f.maxCommandLen }
-func (f *fakeReviewer) Questions() []extension.ReviewQuestion { return f.questions }
-func (f *fakeReviewer) Review(_ context.Context, items []extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+func (f *fakeReviewer) Limits() (int, int)    { return f.maxItems, f.maxCommandLen }
+func (f *fakeReviewer) Questions() []Question { return f.questions }
+func (f *fakeReviewer) Review(_ context.Context, items []Item) ([]ItemResult, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, append([]extension.ReviewItem(nil), items...))
+	f.calls = append(f.calls, append([]Item(nil), items...))
 	f.mu.Unlock()
 	if f.reply == nil {
 		return passAll(items)
@@ -63,17 +61,17 @@ func (f *fakeReviewer) lastSent(t *testing.T) string {
 	return sent[len(sent)-1]
 }
 
-func passAll(items []extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
-	out := make([]extension.ReviewCommandResult, len(items))
+func passAll(items []Item) ([]ItemResult, error) {
+	out := make([]ItemResult, len(items))
 	for i := range out {
-		out[i] = extension.ReviewCommandResult{Outcome: extension.ReviewOutcomePass}
+		out[i] = ItemResult{Outcome: ItemPass}
 	}
 	return out, nil
 }
 
-var destructiveQuestion = []extension.ReviewQuestion{{
-	ID:   "destructive",
-	I18n: extension.I18nNames{Name: map[string]string{"en": "Destroys data", "zh-CN": "破坏数据"}},
+var destructiveQuestion = []Question{{
+	ID:    "destructive",
+	Names: map[string]string{"en": "Destroys data", "zh-CN": "破坏数据"},
 }}
 
 func newReviewer() *fakeReviewer {
@@ -136,8 +134,8 @@ func TestUnavailableReviewerFails(t *testing.T) {
 
 func TestRejectCarriesQuestionNamesAndScore(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
-		return []extension.ReviewCommandResult{{Outcome: extension.ReviewOutcomeReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 0.93}}}, nil
+	rev.reply = func([]Item) ([]ItemResult, error) {
+		return []ItemResult{{Outcome: ItemReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 0.93}}}, nil
 	}
 	s, _ := newService(rev)
 
@@ -153,8 +151,8 @@ func TestRejectCarriesQuestionNamesAndScore(t *testing.T) {
 // 在缓存有效期内都审核失败。
 func TestReviewerErrorIsFailureAndNotCached(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
-		return []extension.ReviewCommandResult{{Outcome: extension.ReviewOutcomeError, Reason: "rate_limited"}}, nil
+	rev.reply = func([]Item) ([]ItemResult, error) {
+		return []ItemResult{{Outcome: ItemError, Reason: "rate_limited"}}, nil
 	}
 	s, cache := newService(rev)
 
@@ -169,7 +167,7 @@ func TestReviewerErrorIsFailureAndNotCached(t *testing.T) {
 
 func TestInvalidResultFailsTheBatch(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+	rev.reply = func([]Item) ([]ItemResult, error) {
 		return nil, errors.New("review invalid_result: got 1 results for 2 commands")
 	}
 	s, _ := newService(rev)
@@ -178,6 +176,33 @@ func TestInvalidResultFailsTheBatch(t *testing.T) {
 	for _, r := range got {
 		assert.Equal(t, OutcomeFail, r.Outcome)
 		assert.Equal(t, ReasonInvalidResult, r.Reason)
+	}
+}
+
+// 回答不合规（条数对、内容不对）时整批按无效结果失败，不缓存，绝不当成通过或未通过。
+func TestMalformedAnswerFailsTheBatchAndIsNotCached(t *testing.T) {
+	for name, bad := range map[string]ItemResult{
+		"unknown outcome":     {Outcome: "allow"},
+		"undeclared question": {Outcome: ItemReject, Failed: []string{"not_declared"}},
+		"reject without ids":  {Outcome: ItemReject},
+		"error without cause": {Outcome: ItemError},
+		"pass with failure":   {Outcome: ItemPass, Failed: []string{"destructive"}},
+		"score out of range":  {Outcome: ItemReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 2}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rev := newReviewer()
+			rev.reply = func([]Item) ([]ItemResult, error) {
+				return []ItemResult{{Outcome: ItemPass}, bad}, nil
+			}
+			s, cache := newService(rev)
+
+			got := s.ReviewBatch(context.Background(), []Input{{AssetType: "ssh", Command: "ls"}, {AssetType: "ssh", Command: "pwd"}})
+			for _, r := range got {
+				assert.Equal(t, OutcomeFail, r.Outcome)
+				assert.Equal(t, ReasonInvalidResult, r.Reason)
+			}
+			assert.Empty(t, cache.m)
+		})
 	}
 }
 
@@ -191,7 +216,7 @@ func TestSendsRedactedCommandWithAssetType(t *testing.T) {
 	s.Review(context.Background(), Input{AssetType: "ssh", Syntax: SyntaxShell, Command: "AUTH x; mysql -uroot -pS3cret -e 'DROP DATABASE shop'"})
 
 	require.Len(t, rev.calls, 1)
-	assert.Equal(t, extension.ReviewItem{AssetType: "ssh", Command: "AUTH x; mysql -uroot -p*** -e 'DROP DATABASE shop'", Syntax: "shell"}, rev.calls[0][0])
+	assert.Equal(t, Item{AssetType: "ssh", Command: "AUTH x; mysql -uroot -p*** -e 'DROP DATABASE shop'", Syntax: "shell"}, rev.calls[0][0])
 }
 
 func TestFailsWithoutCallingTheReviewer(t *testing.T) {
@@ -369,7 +394,7 @@ func TestCachesTheSameCommandButNotFailures(t *testing.T) {
 	assert.Len(t, cache.m, 1)
 
 	failing := newReviewer()
-	failing.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) { return nil, errors.New("boom") }
+	failing.reply = func([]Item) ([]ItemResult, error) { return nil, errors.New("boom") }
 	s2, cache2 := newService(failing)
 	s2.Review(context.Background(), Input{AssetType: "ssh", Command: "ls"})
 	assert.Empty(t, cache2.m)
@@ -424,7 +449,7 @@ func TestBatchesRunConcurrently(t *testing.T) {
 	waiting.Add(2)
 	rev := newReviewer()
 	rev.maxItems = 1
-	rev.reply = func(items []extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+	rev.reply = func(items []Item) ([]ItemResult, error) {
 		waiting.Done()
 		done := make(chan struct{})
 		go func() { waiting.Wait(); close(done) }()
@@ -444,7 +469,7 @@ func TestBatchesRunConcurrently(t *testing.T) {
 
 func TestTimeoutIsRetriedOnceThenFails(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+	rev.reply = func([]Item) ([]ItemResult, error) {
 		return nil, context.DeadlineExceeded
 	}
 	s, _ := newService(rev)
@@ -460,7 +485,7 @@ func TestTimeoutIsRetriedOnceThenFails(t *testing.T) {
 func TestSecondAttemptAfterTimeoutSucceeds(t *testing.T) {
 	var n atomic.Int32
 	rev := newReviewer()
-	rev.reply = func(items []extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+	rev.reply = func(items []Item) ([]ItemResult, error) {
 		if n.Add(1) == 1 {
 			return nil, context.DeadlineExceeded
 		}
@@ -477,8 +502,8 @@ func TestSecondAttemptAfterTimeoutSucceeds(t *testing.T) {
 
 func TestConfigErrorsNotifyOnceAndShowInStatus(t *testing.T) {
 	rev := newReviewer()
-	invalidKey := func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
-		return []extension.ReviewCommandResult{{Outcome: extension.ReviewOutcomeError, Reason: ReasonInvalidAPIKey}}, nil
+	invalidKey := func([]Item) ([]ItemResult, error) {
+		return []ItemResult{{Outcome: ItemError, Reason: ReasonInvalidAPIKey}}, nil
 	}
 	rev.reply = invalidKey
 	s, _ := newService(rev)
@@ -501,7 +526,7 @@ func TestConfigErrorsNotifyOnceAndShowInStatus(t *testing.T) {
 
 func TestTransientFailuresShowInStatusWithoutNotifying(t *testing.T) {
 	rev := newReviewer()
-	rev.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
+	rev.reply = func([]Item) ([]ItemResult, error) {
 		return nil, context.DeadlineExceeded
 	}
 	s, _ := newService(rev)
@@ -530,8 +555,8 @@ func TestTestReviewerBypassesTheCache(t *testing.T) {
 // 不改设置页显示的最近失败，也不触发设置问题的提醒。
 func TestTestReviewerLeavesTheReviewStatusAlone(t *testing.T) {
 	broken := newReviewer()
-	broken.reply = func([]extension.ReviewItem) ([]extension.ReviewCommandResult, error) {
-		return []extension.ReviewCommandResult{{Outcome: extension.ReviewOutcomeError, Reason: ReasonNotConfigured}}, nil
+	broken.reply = func([]Item) ([]ItemResult, error) {
+		return []ItemResult{{Outcome: ItemError, Reason: ReasonNotConfigured}}, nil
 	}
 	s, _ := newService(broken)
 	var notified []string

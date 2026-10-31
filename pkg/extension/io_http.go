@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,10 +83,9 @@ type httpHandle struct {
 	headers map[string]string
 	ctx     context.Context
 	cancel  context.CancelFunc
-	bodyBuf *bytes.Buffer // buffered request body (for POST/PUT/PATCH)
+	bodyBuf *bytes.Buffer // request body the extension wrote; sent as-is whatever the method
 	resp    *http.Response
 	phase   httpPhase
-	hasBody bool         // true for POST/PUT/PATCH
 	auth    *requestAuth // credentials injected into endpoint hops; nil = none
 	// redirectGuard vets where this request may be redirected; nil = anywhere.
 	// Like auth it rides on the request, not the client: a cached client is
@@ -93,10 +93,11 @@ type httpHandle struct {
 	redirectGuard func(*url.URL) error
 }
 
-// newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
-// or immediate flushing (GET/HEAD/DELETE/OPTIONS) to a target that is not an
-// asset's endpoint. Its client is single-use: no later call reads its pool, so
-// it keeps no connection alive past the call. For an asset's endpoint, see
+// newHTTPHandle creates an HTTP handle to a target that is not an asset's
+// endpoint. Whatever the method, the extension may write a request body before
+// Flush; it is sent as written, and a request with nothing written has none.
+// Its client is single-use: no later call reads its pool, so it keeps no
+// connection alive past the call. For an asset's endpoint, see
 // buildCachedHTTPClient / buildSingleUseEndpointClient.
 func newHTTPHandle(params IOOpenParams) (*httpHandle, error) {
 	transport := newHTTPTransport(nil, nil, params.AllowPrivate)
@@ -127,7 +128,7 @@ func buildSingleUseEndpointClient(dial DialContextFunc, tlsConfig *tls.Config, a
 }
 
 // newEndpointTransport is the transport to an asset's endpoint. The host owns
-// that connection path (direct, SSH tunnel, proxy chain — see AssetDialer), so
+// that connection path (direct, SSH tunnel, proxy chain — see Scope.Route), so
 // the process's HTTP(S)_PROXY environment does not apply: through a tunnel the
 // transport would dial the proxy's address instead of the endpoint, and without
 // one it would hand the proxy the credentials injected for the endpoint.
@@ -198,7 +199,6 @@ func newHandleFromClient(params IOOpenParams, client *http.Client, auth *request
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	hasBody := method == "POST" || method == "PUT" || method == "PATCH"
 
 	return &httpHandle{
 		client:  client,
@@ -209,7 +209,6 @@ func newHandleFromClient(params IOOpenParams, client *http.Client, auth *request
 		cancel:  cancel,
 		bodyBuf: &bytes.Buffer{},
 		phase:   httpPhaseWriting,
-		hasBody: hasBody,
 		auth:    auth,
 
 		redirectGuard: params.RedirectGuard,
@@ -237,9 +236,10 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	}
 	h.phase = httpPhaseFlushed
 
-	// Build request body.
-	var body *bytes.Reader
-	if h.hasBody {
+	// The body is what the extension wrote, whatever the method; nothing
+	// written means no body.
+	var body io.Reader
+	if h.bodyBuf.Len() > 0 {
 		body = bytes.NewReader(h.bodyBuf.Bytes())
 	}
 
@@ -250,13 +250,7 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	if h.redirectGuard != nil {
 		reqCtx = withRedirectGuard(reqCtx, h.redirectGuard)
 	}
-	var req *http.Request
-	var err error
-	if body != nil {
-		req, err = http.NewRequestWithContext(reqCtx, h.method, h.url, body)
-	} else {
-		req, err = http.NewRequestWithContext(reqCtx, h.method, h.url, nil)
-	}
+	req, err := http.NewRequestWithContext(reqCtx, h.method, h.url, body)
 	if err != nil {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("create HTTP request: %w", err)

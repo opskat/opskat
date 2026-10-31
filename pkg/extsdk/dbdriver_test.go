@@ -19,7 +19,7 @@ func TestDescribeReportsDatabaseDrivers(t *testing.T) {
 			return json.RawMessage(`{"result":{"session":1}}`), nil
 		})
 
-		drivers := decodeDescribe(t)["databaseDrivers"].([]any)
+		drivers := decodeContributes(t)["databaseDrivers"].([]any)
 		So(len(drivers), ShouldEqual, 1)
 		reported := drivers[0].(map[string]any)
 		So(reported["id"], ShouldEqual, "demodb")

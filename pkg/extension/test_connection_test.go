@@ -11,13 +11,12 @@ import (
 
 // newTestConnectionFixture loads the fixture extension (which declares a
 // test-connection handler on its "fixture" asset type) with assetEndpoint
-// gating and an optional ad-hoc dialer.
-func newTestConnectionFixture(t *testing.T, dialer AssetDialer) *Plugin {
+// gating and an optional connection path for the ad-hoc scope.
+func newTestConnectionFixture(t *testing.T, dialer *fakeAssetDialer) *Plugin {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = true
-	inner := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: dialer})
-	return loadDescribedFixture(t, manifest, inner)
+	manifest.Permissions.Network.AssetEndpoint = true
+	return loadDescribedFixture(t, manifest, fixtureHost(manifest, assetConfigs{}, dialer))
 }
 
 func TestPluginTestConnection(t *testing.T) {
@@ -26,7 +25,7 @@ func TestPluginTestConnection(t *testing.T) {
 
 		Convey("describe() reports the declaration", func() {
 			p := newTestConnectionFixture(t, nil)
-			So(p.manifest.AssetTypeDef("fixture").TestConnection, ShouldBeTrue)
+			So(faceOf(t, p.manifest).assetType("fixture").TestConnection, ShouldBeTrue)
 		})
 
 		Convey("a reachable endpoint succeeds", func() {

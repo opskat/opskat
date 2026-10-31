@@ -24,6 +24,13 @@ type EmptyStringNull interface {
 	EmptyStringIsNull() bool
 }
 
+// StoresEmptyStringAsNull 报告方言里空串就是 NULL（实现了 EmptyStringNull 且为真），即驱动描述的
+// EmptyStringIsNull：声明与筛选的写法出自同一处。
+func StoresEmptyStringAsNull(dialect any) bool {
+	empty, ok := dialect.(EmptyStringNull)
+	return ok && empty.EmptyStringIsNull()
+}
+
 // TypedFilterValues 是筛选的值也要按列的类型写字面量的方言（Oracle：带本地时区的时间戳列按会话的
 // 时间戳格式转换字符串，不认表格显示的时区）。TypedFilterValues 为真时，表数据的筛选、计数与整表
 // 读取在有要写值的条件时先查表的列与 RowWriter 的字面量规则，比较、区间与列表的值按列的类型写

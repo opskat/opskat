@@ -239,9 +239,9 @@ test("a page call that would need confirmation for AI/opsctl runs with no approv
   await expect(page.getByTestId("opsctl-approval-dialog")).not.toBeVisible();
   await expect(page.getByTestId(`notebook-note-${key}`)).toBeVisible();
 
-  // The page also renders the note list through window.__OPSKAT_EXT__.hostUI.QueryResultTable
-  // (@opskat/host-ui, hostABI 2.1) — proving the host's own result-table
-  // component, not a copy, is what the injected module actually hands to the page.
+  // The page also renders the note list through window.__OPSKAT_EXT__.hostUI.DataTable
+  // (@opskat/host-ui, hostABI 1.0) — proving the injected module hands the page a
+  // working table component.
   await expect(page.getByTestId("notebook-table").getByText(key)).toBeVisible();
 
   expect(auditRowsForAsset(name)).toEqual([]);

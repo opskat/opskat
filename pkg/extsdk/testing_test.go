@@ -111,24 +111,27 @@ func TestTestHost(t *testing.T) {
 			So(out["val"], ShouldEqual, "42")
 		})
 
-		Convey("CallAction captures events", func() {
+		Convey("CallTool captures the events the call emits", func() {
 			resetRegistries()
-			RegisterAction("upload", func(ctx *ActionContext) (any, error) {
+			Tool("upload", func(ctx *ToolContext, _ struct{}) (any, error) {
 				_ = ctx.Events.Send("progress", map[string]int{"done": 50, "total": 100})
 				_ = ctx.Events.Send("progress", map[string]int{"done": 100, "total": 100})
 				return map[string]string{"status": "done"}, nil
-			})
+			}).PageOnly().NoTimeout()
 
 			th := NewTestHost()
 			defer th.Close()
 
-			var events []TestEvent
-			result, err := th.CallAction(Asset{}, "upload", map[string]any{}, func(e TestEvent) {
-				events = append(events, e)
-			})
+			result, err := th.CallTool(Asset{}, "upload", map[string]any{})
 			So(err, ShouldBeNil)
+			events := th.Events()
 			So(len(events), ShouldEqual, 2)
 			So(events[0].Type, ShouldEqual, "progress")
+			So(string(events[1].Data), ShouldEqual, `{"done":100,"total":100}`)
+
+			_, err = th.CallTool(Asset{}, "upload", map[string]any{})
+			So(err, ShouldBeNil)
+			So(len(th.Events()), ShouldEqual, 2) // each call starts a fresh capture
 
 			b, _ := json.Marshal(result)
 			var out map[string]string

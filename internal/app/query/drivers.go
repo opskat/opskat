@@ -2,6 +2,7 @@ package query
 
 import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
@@ -17,4 +18,11 @@ func (q *Query) ListDatabaseDrivers(lang string) []dbdriver.Descriptor {
 		out = append(out, dbregistry.LocalizedDescriptor(d, lang))
 	}
 	return out
+}
+
+// DatabaseDriverOwner 返回提供驱动 id 的扩展名；内置驱动与未注册的 id 为空串。驱动没声明某项新能力时，
+// 前端据此只对扩展驱动给出「去更新」入口（内置驱动随宿主更新，没有可更新的扩展）。
+func (q *Query) DatabaseDriverOwner(id string) string {
+	ext, _ := extreg.DriverOwnerOf(dbdriver.DriverID(id))
+	return ext
 }

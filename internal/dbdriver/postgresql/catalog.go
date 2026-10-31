@@ -56,46 +56,44 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, ta
 	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
+// indexes 读表的索引（同改表模型，见 readIndexes）：键列按它在索引键里的位置，表达式键是表达式原文，INCLUDE
+// 列单列在 Include 里。
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, schema, table string) ([]dbdriver.IndexMeta, error) {
-	// 列按它在索引键里的位置（pos）排序而不是表里的属性号，并用 pg_get_indexdef 取每个位置，
-	// 这样多列索引的顺序才对，表达式索引也不会丢。
-	rows, err := conn.QueryContext(ctx,
-		"SELECT i.relname, ix.indisunique, pg_get_indexdef(ix.indexrelid, s.pos::int, true) "+
-			"FROM pg_class t "+
-			"JOIN pg_namespace n ON n.oid = t.relnamespace "+
-			"JOIN pg_index ix ON ix.indrelid = t.oid "+
-			"JOIN pg_class i ON i.oid = ix.indexrelid "+
-			"CROSS JOIN LATERAL generate_series(1, ix.indnatts) AS s(pos) "+
-			"WHERE n.nspname = $1 AND t.relname = $2 "+
-			"ORDER BY i.relname, s.pos", schema, table)
+	read, err := readIndexes(ctx, conn, schema, table)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var indexes sqldb.IndexBuilder
-	for rows.Next() {
-		var name, col string
-		var unique bool
-		if err := rows.Scan(&name, &unique, &col); err != nil {
-			return nil, err
-		}
-		indexes.Add(name, unique, col)
+	indexes := make([]dbdriver.IndexMeta, len(read))
+	for i, index := range read {
+		indexes[i] = index.meta()
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return indexes.Indexes(), nil
+	return indexes, nil
 }
 
+// foreignKeysSQL 读外键的列映射：按 pg_constraint 的 conkey / confkey 逐位对应（多列外键一列一行），带上 ON UPDATE /
+// ON DELETE 的动作（最后两列，见 sqldb.QueryForeignKeys）。被引用表只给表名，同改动前。
+const foreignKeysSQL = "SELECT con.conname AS constraint_name, a.attname AS column_name, rt.relname AS referenced_table, " +
+	"ra.attname AS referenced_column, " + foreignKeyActionUpdate + " AS on_update, " + foreignKeyActionDelete + " AS on_delete " +
+	"FROM pg_constraint con " +
+	"JOIN pg_class t ON t.oid = con.conrelid " +
+	"JOIN pg_namespace n ON n.oid = t.relnamespace " +
+	"JOIN pg_class rt ON rt.oid = con.confrelid " +
+	"CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, refattnum, pos) " +
+	"JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum " +
+	"JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refattnum " +
+	"WHERE con.contype = 'f' AND n.nspname = $1 AND t.relname = $2 " +
+	"ORDER BY con.conname, k.pos"
+
+// confupdtype / confdeltype 的动作码换成动作名（a 是 NO ACTION）。
+const (
+	foreignKeyActionUpdate = "CASE con.confupdtype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' " +
+		"WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END"
+	foreignKeyActionDelete = "CASE con.confdeltype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' " +
+		"WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END"
+)
+
 func (dialect) foreignKeys(ctx context.Context, conn *sql.Conn, schema, table string) ([]dbdriver.ForeignKeyMeta, error) {
-	return sqldb.QueryForeignKeys(ctx, conn,
-		"SELECT tc.constraint_name, kcu.column_name, ccu.table_name, ccu.column_name "+
-			"FROM information_schema.table_constraints tc "+
-			"JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "+
-			"JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema "+
-			"WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1 AND tc.table_name = $2 "+
-			"ORDER BY tc.constraint_name", schema, table)
+	return sqldb.QueryForeignKeys(ctx, conn, foreignKeysSQL, schema, table)
 }
 
 func (dialect) ListObjects(ctx context.Context, conn *sql.Conn, _ string) (*dbdriver.DatabaseObjects, error) {

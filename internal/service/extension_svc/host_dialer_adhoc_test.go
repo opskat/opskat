@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -33,7 +34,7 @@ func TestAssetDialerForConfig(t *testing.T) {
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
 		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
-		svc.Bridge().Register(connectionExt("es", "es-cluster", &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true, TLS: true}))
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{SSHTunnel: true, ProxyChain: true, TLS: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
 		ctx := context.Background()
 

@@ -61,7 +61,69 @@
       { "key": "charset", "default": "utf8mb4" },
       { "key": "collation", "default": "utf8mb4_0900_ai_ci" }
     ],
-    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
+    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["TINYINT", "SMALLINT", "INT", "BIGINT", "DECIMAL(10,2)", "FLOAT", "DOUBLE", "BOOLEAN", "BIT(1)"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["CHAR(36)", "VARCHAR(255)", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["DATE", "TIME", "DATETIME", "TIMESTAMP", "YEAR"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["BINARY(16)", "VARBINARY(255)", "BLOB", "MEDIUMBLOB", "LONGBLOB"]
+        },
+        {
+          "label": "query.designer.typeGroup.json",
+          "types": ["JSON"]
+        }
+      ],
+      "newColumn": "VARCHAR(255)",
+      "primaryKey": "BIGINT"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "createTableComments": true,
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "fulltext",
+          "label": "query.designer.indexType.fulltext"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "alterPrimaryKey": true,
+      "descending": true,
+      "prefixLength": true,
+      "comments": true,
+      "nameScope": "table",
+      "options": [
+        {
+          "key": "method",
+          "label": "query.designer.indexOption.method",
+          "type": "enum",
+          "enum": ["BTREE", "HASH"]
+        }
+      ]
+    }
   },
   {
     "id": "postgresql",
@@ -128,7 +190,70 @@
       { "key": "charset", "default": "UTF8" },
       { "key": "collation", "default": "" }
     ],
-    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"]
+    "alterTableAttributes": ["table_comment", "column_type", "column_nullable", "column_default", "column_comment"],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["smallint", "integer", "bigint", "numeric(10,2)", "real", "double precision"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["varchar(255)", "char(36)", "text", "uuid"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["date", "time", "timestamp", "timestamptz", "interval"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["bytea"]
+        },
+        {
+          "label": "query.designer.typeGroup.json",
+          "types": ["json", "jsonb"]
+        },
+        {
+          "label": "query.designer.typeGroup.other",
+          "types": ["boolean", "inet", "cidr", "macaddr", "text[]", "integer[]", "tsvector", "xml"]
+        }
+      ],
+      "newColumn": "varchar(255)",
+      "primaryKey": "bigint"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "createTableComments": true,
+    "nameFolding": "lower",
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "alterPrimaryKey": true,
+      "descending": true,
+      "comments": true,
+      "nameScope": "schema",
+      "options": [
+        {
+          "key": "method",
+          "label": "query.designer.indexOption.method",
+          "type": "enum",
+          "enum": ["btree", "hash", "gin", "gist", "brin", "spgist"]
+        }
+      ]
+    },
+    "transactionalDDL": true
   },
   {
     "id": "mssql",
@@ -192,7 +317,63 @@
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
     "createDatabaseOptions": [{ "key": "collation", "default": "" }],
-    "alterTableAttributes": ["column_type", "column_nullable"]
+    "alterTableAttributes": ["column_type", "column_nullable"],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["tinyint", "smallint", "int", "bigint", "decimal(18,2)", "float", "real", "money"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["nvarchar(255)", "nvarchar(max)", "varchar(255)", "varchar(max)", "nchar(10)", "char(10)", "uniqueidentifier"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["date", "time", "datetime2", "datetimeoffset", "datetime", "smalldatetime"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["varbinary(max)", "varbinary(255)", "binary(16)"]
+        },
+        {
+          "label": "query.designer.typeGroup.other",
+          "types": ["bit", "xml", "sql_variant", "hierarchyid", "geography", "geometry", "rowversion"]
+        }
+      ],
+      "newColumn": "nvarchar(255)",
+      "primaryKey": "bigint"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "alterPrimaryKey": true,
+      "descending": true,
+      "nameScope": "table",
+      "options": [
+        {
+          "key": "clustered",
+          "label": "query.designer.indexOption.clustered",
+          "type": "switch",
+          "exclusive": true
+        }
+      ]
+    },
+    "transactionalDDL": true
   },
   {
     "id": "sqlite",
@@ -244,6 +425,58 @@
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": true,
     "createDatabaseOptions": null,
-    "alterTableAttributes": []
+    "alterTableAttributes": [],
+    "columnTypes": {
+      "groups": [
+        {
+          "label": "query.designer.typeGroup.numeric",
+          "types": ["INTEGER", "REAL", "NUMERIC"]
+        },
+        {
+          "label": "query.designer.typeGroup.string",
+          "types": ["TEXT", "VARCHAR(255)"]
+        },
+        {
+          "label": "query.designer.typeGroup.datetime",
+          "types": ["DATETIME", "DATE"]
+        },
+        {
+          "label": "query.designer.typeGroup.binary",
+          "types": ["BLOB"]
+        },
+        {
+          "label": "query.designer.typeGroup.json",
+          "types": ["JSON"]
+        },
+        {
+          "label": "query.designer.typeGroup.other",
+          "types": ["BOOLEAN"]
+        }
+      ],
+      "newColumn": "TEXT",
+      "primaryKey": "INTEGER"
+    },
+    "explicitDefaults": true,
+    "autoIncrement": true,
+    "autoIncrementNewTablesOnly": true,
+    "indexEditing": {
+      "types": [
+        {
+          "id": "normal",
+          "label": "query.designer.indexType.normal"
+        },
+        {
+          "id": "unique",
+          "label": "query.designer.indexType.unique"
+        },
+        {
+          "id": "primary",
+          "label": "query.designer.indexType.primary"
+        }
+      ],
+      "descending": true,
+      "nameScope": "database"
+    },
+    "transactionalDDL": true
   }
 ]

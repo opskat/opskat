@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 )
 
 const (
@@ -30,7 +32,8 @@ const (
 // webDAVHTTPClient 不跟随重定向：3xx 会把 PUT/PROPFIND/MKCOL/DELETE 改写成 GET，导致难以排查的失败；
 // 由 webDAVRequest 显式处理 3xx 并要求用户修正 URL。
 var webDAVHTTPClient = &http.Client{
-	Timeout: 30 * time.Second,
+	Timeout:   30 * time.Second,
+	Transport: netproxy.Transport(),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	},

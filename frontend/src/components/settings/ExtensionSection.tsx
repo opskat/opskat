@@ -60,10 +60,7 @@ import { ExtensionStore, InstallFailed, InstallProgress, type CardInstall, type 
 import { useStoreInstalls } from "./useStoreInstalls";
 import { syncExtensionUpdates, useExtensionUpdates } from "./extensionUpdates";
 import { Segmented } from "@/components/asset/fields";
-import { ExtensionSettingsForm } from "@/components/settings/ExtensionSettingsForm";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
-import { localizedName } from "@/lib/commandReview";
-import type { ExtCapabilities } from "@/extension/types";
+import type { ExtPermissions } from "@/extension/types";
 
 interface ExtInfo {
   name: string;
@@ -72,8 +69,10 @@ interface ExtInfo {
   displayName: string;
   description: string;
   enabled: boolean;
+  /** Set when the host refused the extension: it is listed but neither loaded nor toggleable. */
+  loadError?: { kind: string; message: string };
   manifest?: {
-    capabilities?: ExtCapabilities;
+    permissions?: ExtPermissions;
     tools?: { name: string; i18n?: { description?: string } }[];
     policies?: {
       groups?: {
@@ -85,7 +84,6 @@ interface ExtInfo {
     frontend?: {
       pages?: { id: string; i18n?: { name?: string }; slot?: string }[];
     };
-    settingsSchema?: Record<string, unknown>;
   };
 }
 
@@ -209,17 +207,6 @@ export function ExtensionSection() {
     }
   };
 
-  // 别的设置页（命令审核的"去扩展里设置"）要求打开某个扩展的详情。
-  const requestedDetail = useSettingsUiStore((st) => st.extensionDetail);
-  useEffect(() => {
-    if (!requestedDetail) return;
-    useSettingsUiStore.getState().clearExtensionDetail();
-    // 与挂载时拉取同一写法：setState 都在 await 之后
-    void (async () => {
-      await openDetail(requestedDetail);
-    })();
-  }, [requestedDetail]);
-
   return (
     <div className="space-y-4">
       <Segmented<ExtensionView>
@@ -293,16 +280,29 @@ export function ExtensionSection() {
                             <div>
                               <div className="flex items-center gap-2">
                                 <p className="font-medium text-sm">{ext.displayName || ext.name}</p>
-                                {!ext.enabled && (
-                                  <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                                    {t("extension.disabled")}
+                                {ext.loadError ? (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">
+                                    {t(
+                                      ext.loadError.kind === "incompatible"
+                                        ? "extension.incompatible"
+                                        : "extension.loadFailed"
+                                    )}
                                   </span>
+                                ) : (
+                                  !ext.enabled && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                      {t("extension.disabled")}
+                                    </span>
+                                  )
                                 )}
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 {ext.description && <span>{ext.description} · </span>}
                                 {t("extension.version")} {ext.version}
                               </p>
+                              {ext.loadError && (
+                                <p className="text-xs text-destructive mt-0.5">{ext.loadError.message}</p>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -313,11 +313,13 @@ export function ExtensionSection() {
                                 onUpdate={() => void updateFromStore(update)}
                               />
                             )}
-                            <Switch
-                              checked={ext.enabled}
-                              onCheckedChange={() => handleToggle(ext)}
-                              data-testid={`extension-toggle-${ext.name}`}
-                            />
+                            {!ext.loadError && (
+                              <Switch
+                                checked={ext.enabled}
+                                onCheckedChange={() => handleToggle(ext)}
+                                data-testid={`extension-toggle-${ext.name}`}
+                              />
+                            )}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
@@ -325,10 +327,12 @@ export function ExtensionSection() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => openDetail(ext.name)}>
-                                  <Info className="h-4 w-4 mr-2" />
-                                  {t("extension.detail")}
-                                </DropdownMenuItem>
+                                {!ext.loadError && (
+                                  <DropdownMenuItem onClick={() => openDetail(ext.name)}>
+                                    <Info className="h-4 w-4 mr-2" />
+                                    {t("extension.detail")}
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem onClick={() => setUninstallTarget(ext)} className="text-destructive">
                                   <Trash2 className="h-4 w-4 mr-2" />
                                   {t("extension.uninstall")}
@@ -424,19 +428,14 @@ function UpdateAction({ card, install, onUpdate }: { card: StoreCard; install?: 
 }
 
 function ExtensionDetail({ ext }: { ext: ExtInfo }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const manifest = ext.manifest as Record<string, any> | undefined;
   const tools: { name: string; i18n?: { description?: string } }[] = manifest?.tools || [];
   const policyGroups: { id: string; i18n?: { name?: string }; policy?: Record<string, string[]> }[] =
     manifest?.policies?.groups || [];
   const pages: { id: string; i18n?: { name?: string }; slot?: string }[] = manifest?.frontend?.pages || [];
-  const credentialsRead = ext.manifest?.capabilities?.credentials === "read";
-  const commandReview = ext.manifest?.capabilities?.commandReview === true;
-  const reviewQuestions: { id: string; i18n?: { name?: Record<string, string> } }[] =
-    manifest?.reviewer?.questions || [];
-  // 扩展在 describe() 里声明的设置项；停用的扩展没有加载，读不到设置。
-  const hasSettings = ext.enabled && !!manifest?.settingsSchema;
+  const credentialsRead = ext.manifest?.permissions?.credentials === "read";
 
   return (
     <div className="space-y-4">
@@ -449,15 +448,6 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
           <span>{t("extension.credentialsReadWarning")}</span>
         </div>
       )}
-      {commandReview && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-sm text-warning"
-        >
-          <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-          <span>{t("extension.commandReviewWarning")}</span>
-        </div>
-      )}
 
       {/* Basic Info */}
       <div className="space-y-1 text-sm">
@@ -467,88 +457,67 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
         {ext.description && <p className="text-muted-foreground">{ext.description}</p>}
       </div>
 
-      {hasSettings && (
-        <>
-          <Separator />
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("extension.settings.title")}</h4>
-            <ExtensionSettingsForm key={ext.name} extensionName={ext.name} reviewer={commandReview} />
-          </div>
-        </>
-      )}
+      <Separator />
 
-      {/* 只显示这个扩展真有的东西：纯审核扩展没有工具、策略组和页面，只有它审核的几类危险。 */}
-      {reviewQuestions.length > 0 && (
-        <>
-          <Separator />
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("extension.reviewQuestions")}</h4>
-            <ul data-testid="extension-review-questions" className="space-y-1">
-              {reviewQuestions.map((q) => (
-                <li key={q.id} className="text-xs p-2 rounded bg-muted/50">
-                  {localizedName(q.i18n?.name, i18n.language) ?? q.id}
-                </li>
-              ))}
-            </ul>
+      {/* Tools */}
+      <div>
+        <h4 className="text-sm font-medium mb-2">{t("extension.tools")}</h4>
+        {tools.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t("extension.noTools")}</p>
+        ) : (
+          <div className="space-y-1">
+            {tools.map((tool) => (
+              <div key={tool.name} className="flex justify-between text-xs p-2 rounded bg-muted/50">
+                <span className="font-mono">{tool.name}</span>
+                <span className="text-muted-foreground ml-2 text-right">{tool.i18n?.description || ""}</span>
+              </div>
+            ))}
           </div>
-        </>
-      )}
+        )}
+      </div>
 
-      {tools.length > 0 && (
-        <>
-          <Separator />
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("extension.tools")}</h4>
-            <div className="space-y-1">
-              {tools.map((tool) => (
-                <div key={tool.name} className="flex justify-between text-xs p-2 rounded bg-muted/50">
-                  <span className="font-mono">{tool.name}</span>
-                  <span className="text-muted-foreground ml-2 text-right">{tool.i18n?.description || ""}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
+      <Separator />
 
-      {policyGroups.length > 0 && (
-        <>
-          <Separator />
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("extension.policies")}</h4>
-            <div className="space-y-1">
-              {policyGroups.map((pg) => (
-                <div key={pg.id} className="text-xs p-2 rounded bg-muted/50">
-                  <span className="font-medium">{pg.i18n?.name || pg.id}</span>
-                  {pg.policy && (
-                    <div className="mt-1 text-muted-foreground">
-                      {pg.policy.allow_list && <span>Allow: {pg.policy.allow_list.join(", ")}</span>}
-                      {pg.policy.deny_list && <span className="ml-2">Deny: {pg.policy.deny_list.join(", ")}</span>}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+      {/* Policy Groups */}
+      <div>
+        <h4 className="text-sm font-medium mb-2">{t("extension.policies")}</h4>
+        {policyGroups.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t("extension.noPolicies")}</p>
+        ) : (
+          <div className="space-y-1">
+            {policyGroups.map((pg) => (
+              <div key={pg.id} className="text-xs p-2 rounded bg-muted/50">
+                <span className="font-medium">{pg.i18n?.name || pg.id}</span>
+                {pg.policy && (
+                  <div className="mt-1 text-muted-foreground">
+                    {pg.policy.allow_list && <span>Allow: {pg.policy.allow_list.join(", ")}</span>}
+                    {pg.policy.deny_list && <span className="ml-2">Deny: {pg.policy.deny_list.join(", ")}</span>}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-        </>
-      )}
+        )}
+      </div>
 
-      {pages.length > 0 && (
-        <>
-          <Separator />
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("extension.pages")}</h4>
-            <div className="space-y-1">
-              {pages.map((page) => (
-                <div key={page.id} className="flex justify-between text-xs p-2 rounded bg-muted/50">
-                  <span>{page.i18n?.name || page.id}</span>
-                  <span className="text-muted-foreground font-mono">{page.slot || "-"}</span>
-                </div>
-              ))}
-            </div>
+      <Separator />
+
+      {/* Pages */}
+      <div>
+        <h4 className="text-sm font-medium mb-2">{t("extension.pages")}</h4>
+        {pages.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t("extension.noPages")}</p>
+        ) : (
+          <div className="space-y-1">
+            {pages.map((page) => (
+              <div key={page.id} className="flex justify-between text-xs p-2 rounded bg-muted/50">
+                <span>{page.i18n?.name || page.id}</span>
+                <span className="text-muted-foreground font-mono">{page.slot}</span>
+              </div>
+            ))}
           </div>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }

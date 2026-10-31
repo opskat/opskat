@@ -50,49 +50,35 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, ta
 	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
+// indexes 读表的索引（同改表模型，见 readIndexes）：键列按键序，INCLUDE 列单列在 Include 里（改动前只按 key_ordinal
+// 排序，key_ordinal 为 0 的 INCLUDE 列排在键列前面、被当成了键列）。
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, schema, table string) ([]dbdriver.IndexMeta, error) {
-	rows, err := conn.QueryContext(ctx,
-		"SELECT i.name, i.is_unique, c.name "+
-			"FROM sys.indexes i "+
-			"JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id "+
-			"JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id "+
-			"JOIN sys.objects o ON o.object_id = i.object_id "+
-			"JOIN sys.schemas s ON s.schema_id = o.schema_id "+
-			"WHERE s.name = @p1 AND o.name = @p2 AND i.name IS NOT NULL "+
-			"ORDER BY i.name, ic.key_ordinal",
-		sql.Named("p1", schema), sql.Named("p2", table))
+	read, err := readIndexes(ctx, conn, schema, table)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var indexes sqldb.IndexBuilder
-	for rows.Next() {
-		var name, col string
-		var unique bool
-		if err := rows.Scan(&name, &unique, &col); err != nil {
-			return nil, err
-		}
-		indexes.Add(name, unique, col)
+	indexes := make([]dbdriver.IndexMeta, len(read))
+	for i, index := range read {
+		indexes[i] = index.meta()
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return indexes.Indexes(), nil
+	return indexes, nil
 }
 
+// foreignKeysSQL 读外键的列映射（多列外键按列的次序），带上 ON UPDATE / ON DELETE 的动作（最后两列，见
+// sqldb.QueryForeignKeys）：*_referential_action_desc 是 NO_ACTION、CASCADE、SET_NULL、SET_DEFAULT，下划线换成空格。
+const foreignKeysSQL = "SELECT fk.name, pc.name, rt.name, rc.name, " +
+	"REPLACE(fk.update_referential_action_desc, '_', ' ') AS on_update, REPLACE(fk.delete_referential_action_desc, '_', ' ') AS on_delete " +
+	"FROM sys.foreign_keys fk " +
+	"JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id " +
+	"JOIN sys.tables pt ON pt.object_id = fk.parent_object_id " +
+	"JOIN sys.schemas s ON s.schema_id = pt.schema_id " +
+	"JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id " +
+	"JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id " +
+	"JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id " +
+	"WHERE s.name = @p1 AND pt.name = @p2 ORDER BY fk.name, fkc.constraint_column_id"
+
 func (dialect) foreignKeys(ctx context.Context, conn *sql.Conn, schema, table string) ([]dbdriver.ForeignKeyMeta, error) {
-	return sqldb.QueryForeignKeys(ctx, conn,
-		"SELECT fk.name, pc.name, rt.name, rc.name "+
-			"FROM sys.foreign_keys fk "+
-			"JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id "+
-			"JOIN sys.tables pt ON pt.object_id = fk.parent_object_id "+
-			"JOIN sys.schemas s ON s.schema_id = pt.schema_id "+
-			"JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id "+
-			"JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id "+
-			"JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id "+
-			"WHERE s.name = @p1 AND pt.name = @p2 ORDER BY fk.name",
-		sql.Named("p1", schema), sql.Named("p2", table))
+	return sqldb.QueryForeignKeys(ctx, conn, foreignKeysSQL, sql.Named("p1", schema), sql.Named("p2", table))
 }
 
 func (dialect) ListObjects(ctx context.Context, conn *sql.Conn, _ string) (*dbdriver.DatabaseObjects, error) {

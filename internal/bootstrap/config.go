@@ -40,6 +40,9 @@ type AppConfig struct {
 	// 连接池）。<=0 = 采用内置默认（30s）。单个资产可在其 SSH 配置里覆盖此值。
 	SSHKeepAliveIntervalSeconds int `json:"ssh_keepalive_interval_seconds,omitempty"`
 
+	// 网络代理设置；nil 表示默认（使用环境变量）。
+	NetworkProxy *NetworkProxyConfig `json:"network_proxy,omitempty"`
+
 	// 外部编辑配置。仅持久化用户自定义编辑器；内置候选由运行时探测生成。
 	ExternalEditDefaultEditorID      string                 `json:"external_edit_default_editor_id,omitempty"`
 	ExternalEditWorkspaceRoot        string                 `json:"external_edit_workspace_root,omitempty"`
@@ -52,6 +55,17 @@ type AppConfig struct {
 	CommandReviewTimeoutMs int `json:"command_review_timeout_ms,omitempty"`
 	// CommandReviewExtension 是选用的审核扩展名。空表示启用中的审核扩展只有一个时用它。
 	CommandReviewExtension string `json:"command_review_extension,omitempty"`
+}
+
+// NetworkProxyConfig 是持久化的网络代理设置。非「自定义」模式下自定义字段也保留，便于切回。
+type NetworkProxyConfig struct {
+	Mode     string `json:"mode"`               // env | direct | custom
+	Type     string `json:"type"`               // http | socks5
+	Host     string `json:"host,omitempty"`     // 代理主机
+	Port     int    `json:"port,omitempty"`     // 代理端口
+	Username string `json:"username,omitempty"` // 代理用户名（非敏感）
+	Password string `json:"password,omitempty"` // 加密后的代理密码
+	NoProxy  string `json:"no_proxy"`           // 不走代理的地址，每行一项；用户可有意清空，故不 omitempty
 }
 
 // ExternalEditorConfig 是用户自定义外部编辑器配置。

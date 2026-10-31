@@ -185,6 +185,6 @@ describe("驱动注册或移除后不重启即反映", () => {
     await emit("ext:reload");
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByText("app")).toBeInTheDocument();
-    expect(screen.getByText("query.openTable")).toBeInTheDocument();
+    expect(screen.getByTestId("empty-new-sql")).toBeInTheDocument();
   });
 });

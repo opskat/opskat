@@ -56,6 +56,9 @@ type IndexMeta struct {
 	Name    string   `json:"name"`
 	Columns []string `json:"columns"`
 	Unique  bool     `json:"unique"`
+	// Include 是 INCLUDE 列（覆盖索引的非键列），按次序；驱动区分不出键列与非键列时不给。新增字段，
+	// 为空时序列化省略。
+	Include []string `json:"include,omitempty"`
 }
 
 // ForeignKeyMeta 是外键的一列映射。
@@ -64,6 +67,10 @@ type ForeignKeyMeta struct {
 	Column           string `json:"column"`
 	ReferencedTable  string `json:"referencedTable"`
 	ReferencedColumn string `json:"referencedColumn"`
+	// OnUpdate / OnDelete 是引用行改动 / 删除时这一外键的动作（CASCADE、SET NULL……，驱动给出的
+	// 原文）；没有动作或驱动读不出时为空串。新增字段，为空时序列化省略。
+	OnUpdate string `json:"onUpdate,omitempty"`
+	OnDelete string `json:"onDelete,omitempty"`
 }
 
 // TableMetadata 是一张表在对象浏览里的全部细节。三个切片序列化成数组（不是 null）：前端

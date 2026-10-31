@@ -70,73 +70,23 @@ func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, ta
 	return sqldb.AssembleMetadata(sqldb.ColumnMetas(columns), primaryKeys, indexes, foreignKeys), nil
 }
 
+// indexes 是对象浏览里的索引，按 pragma_index_list 的次序（含约束自动建的）；表达式键以表达式原文作列。
 func (dialect) indexes(ctx context.Context, conn *sql.Conn, database, table string) ([]dbdriver.IndexMeta, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT name, "unique" FROM `+qualify(database, "pragma_index_list(?)"), table) //nolint:gosec // schema is identifier-quoted by qualify.
+	indexes, err := readIndexes(ctx, conn, database, table)
 	if err != nil {
 		return nil, err
 	}
-	type idx struct {
-		name   string
-		unique bool
-	}
-	var list []idx
-	for rows.Next() {
-		var name string
-		var uniq int
-		if err := rows.Scan(&name, &uniq); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		list = append(list, idx{name: name, unique: uniq == 1})
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	_ = rows.Close()
-
-	out := make([]dbdriver.IndexMeta, 0, len(list))
-	for _, it := range list {
-		colRows, err := conn.QueryContext(ctx, "SELECT name FROM pragma_index_info(?)", it.name)
-		if err != nil {
-			return nil, err
-		}
-		var cols []string
-		for colRows.Next() {
-			var c sql.NullString
-			if err := colRows.Scan(&c); err != nil {
-				_ = colRows.Close()
-				return nil, err
-			}
-			if c.Valid {
-				cols = append(cols, c.String)
-			}
-		}
-		if err := colRows.Err(); err != nil {
-			_ = colRows.Close()
-			return nil, err
-		}
-		_ = colRows.Close()
-		out = append(out, dbdriver.IndexMeta{Name: it.name, Columns: cols, Unique: it.unique})
+	out := make([]dbdriver.IndexMeta, len(indexes))
+	for i, index := range indexes {
+		out[i] = index.meta()
 	}
 	return out, nil
 }
 
+// foreignKeys 读外键与 ON UPDATE / ON DELETE 的动作。SQLite 不保存外键约束的名字（pragma 里没有），名字为空。
 func (dialect) foreignKeys(ctx context.Context, conn *sql.Conn, database, table string) ([]dbdriver.ForeignKeyMeta, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT "table", "from", "to" FROM `+qualify(database, "pragma_foreign_key_list(?)"), table) //nolint:gosec // schema is identifier-quoted by qualify.
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := make([]dbdriver.ForeignKeyMeta, 0)
-	for rows.Next() {
-		var refTable, from, to string
-		if err := rows.Scan(&refTable, &from, &to); err != nil {
-			return nil, err
-		}
-		out = append(out, dbdriver.ForeignKeyMeta{Column: from, ReferencedTable: refTable, ReferencedColumn: to})
-	}
-	return out, rows.Err()
+	return sqldb.QueryForeignKeys(ctx, conn,
+		`SELECT '' AS name, "from", "table", "to", on_update, on_delete FROM `+qualify(database, "pragma_foreign_key_list(?)"), table)
 }
 
 // ListObjects：SQLite 只有视图与触发器，没有存储过程和函数。

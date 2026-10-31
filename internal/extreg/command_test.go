@@ -6,23 +6,28 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 func TestParseCommand(t *testing.T) {
 	// 扩展名不再出现在命令里：资产类型 → 扩展是一对一的，工具名就是第一个词。
-	m := &extension.Manifest{Name: "oss", Tools: []extension.ToolDef{{
-		Name: "list_objects", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"bucket":  map[string]any{"type": "string"},
-				"maxKeys": map[string]any{"type": "integer"},
-				"keys":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"force":   map[string]any{"type": "boolean"},
-				"ratio":   map[string]any{"type": "number"},
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "oss"}},
+		Tools: []extwire.Tool{{
+			Name: "list_objects", Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"bucket":  map[string]any{"type": "string"},
+					"maxKeys": map[string]any{"type": "integer"},
+					"keys":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"force":   map[string]any{"type": "boolean"},
+					"ratio":   map[string]any{"type": "number"},
+				},
+				"required": []any{"bucket"},
 			},
-			"required": []any{"bucket"},
-		},
-	}}}
+		}},
+	}
 
 	t.Run("按声明类型转换", func(t *testing.T) {
 		// cmdline 的默认 flag 语法是 --k=v 或裸 --k（见 internal/ai/cmdline 文档注释），
@@ -240,18 +245,51 @@ func TestParseCommand(t *testing.T) {
 // including a string or array value that happens to be the literal "true", which
 // must not come out as a bare flag that the space-separated form then reads as
 // "take the next word".
+// A page-only tool is for the extension's pages: exec — the AI's and opsctl's —
+// refuses it before anything is approved or run, and says why. The page path
+// validates arguments by tool name and still reaches it.
+func TestParseCommandRefusesPageOnlyTools(t *testing.T) {
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "notebook"}},
+		Tools: []extwire.Tool{{
+			Name: "notes", PageOnly: true,
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}
+	_, _, err := parseCommand(m, `notes`)
+	if err == nil || !strings.Contains(err.Error(), "该工具只供扩展页面使用") {
+		t.Fatalf("exec on a page-only tool: err = %v, want the page-only refusal", err)
+	}
+	if _, err := canonicalCommand(m, `notes`); err == nil || !strings.Contains(err.Error(), "该工具只供扩展页面使用") {
+		t.Fatalf("canonicalize must refuse before approval: err = %v", err)
+	}
+	if _, err := ValidateToolArgs(m, "notes", []byte(`{}`)); err != nil {
+		t.Fatalf("a page call to a page-only tool must pass validation: %v", err)
+	}
+	// Like help, the tools exec offers when a name is wrong are the ones exec can run.
+	m.Tools = append(m.Tools, extwire.Tool{Name: "list", PolicyAction: "read",
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{}}})
+	_, _, err = parseCommand(m, `nope`)
+	if err == nil || !strings.Contains(err.Error(), "available: list") || strings.Contains(err.Error(), "notes") {
+		t.Fatalf("exec on an unknown tool must offer only the tools exec can run: err = %v", err)
+	}
+}
+
 func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
-	m := &extension.Manifest{Name: "notes", Tools: []extension.ToolDef{{
-		Name: "put", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"a":     map[string]any{"type": "string"},
-				"b":     map[string]any{"type": "string"},
-				"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"force": map[string]any{"type": "boolean"},
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "notes"}},
+		Tools: []extwire.Tool{{
+			Name: "put", Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"a":     map[string]any{"type": "string"},
+					"b":     map[string]any{"type": "string"},
+					"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"force": map[string]any{"type": "boolean"},
+				},
 			},
-		},
-	}}}
+		}},
+	}
 	for _, command := range []string{
 		`put --a=true --b=x`,
 		`put --b=true`,

@@ -50,19 +50,3 @@ func (b *Bridge) Get(name string) *Extension {
 	defer b.mu.RUnlock()
 	return b.extensions[name]
 }
-
-// GetExtensionByAssetType returns the Extension that owns the given asset type, or nil.
-// The mapping is one-to-one by construction: registering an asset type a built-in type
-// or another extension already owns is refused at load time (internal/extreg).
-func (b *Bridge) GetExtensionByAssetType(assetType string) *Extension {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	for _, ext := range b.extensions {
-		for _, at := range ext.Manifest.AssetTypes {
-			if at.Type == assetType {
-				return ext
-			}
-		}
-	}
-	return nil
-}

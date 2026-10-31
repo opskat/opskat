@@ -17,7 +17,6 @@ import (
 
 	"github.com/opskat/opskat/internal/assetconn"
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
-	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -27,6 +26,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 const (
@@ -89,7 +89,7 @@ func newDriverFixture(t *testing.T) *driverFixture {
 		zap.NewNop(), func() { f.reloads++ }, nil)
 	t.Cleanup(func() {
 		for _, name := range f.svc.Bridge().ListNames() {
-			extreg.Unregister(name)
+			f.svc.Manager().Contributions().Revoke(name)
 		}
 		f.svc.Close(context.Background())
 	})
@@ -189,7 +189,7 @@ func TestUpgradingADriverExtensionClosesTheOldVersionsSessions(t *testing.T) {
 
 	old := f.open(t)
 	newVersion := extensiontest.InstallDBDriverFixture(t, t.TempDir())
-	_, err := f.svc.Install(context.Background(), newVersion, nil)
+	_, err := f.svc.Install(context.Background(), newVersion, approveInstall)
 	require.NoError(t, err)
 
 	_, err = old.ListDatabases(context.Background())
@@ -240,7 +240,7 @@ func TestUninstallGoesAheadWhenNoAssetUsesItsDriver(t *testing.T) {
 func TestDatabaseAssetReachesItsDriverExtensionOnlyThroughTheSession(t *testing.T) {
 	svc, assets := newHostTestService(t)
 	svc.Bridge().Register(&extension.Extension{Name: "mydb", Manifest: &extension.Manifest{
-		Name: "mydb", Capabilities: extension.Capabilities{DatabaseDrivers: []string{"mydb"}},
+		Manifest: extmanifest.Manifest{Name: "mydb", Contributes: extmanifest.Contributes{DatabaseDrivers: []string{"mydb"}}},
 	}})
 	assets.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{
 		ID: 1, Name: "db", Type: asset_entity.AssetTypeDatabase,

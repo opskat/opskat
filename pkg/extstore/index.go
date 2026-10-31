@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // FormatVersion is the only index format this build understands. A publisher
@@ -54,9 +54,12 @@ type Version struct {
 	Version       string `json:"version"`
 	HostABI       string `json:"hostABI"`
 	MinAppVersion string `json:"minAppVersion,omitempty"`
-	// Capabilities are the grants the version's manifest.json asks for, in the
+	// Permissions are the grants the version's manifest.json asks for, in the
 	// host's own shape, so the store shows exactly what an install will ask.
-	Capabilities extension.Capabilities `json:"capabilities"`
+	Permissions extmanifest.Permissions `json:"permissions"`
+	// Contributes are the database driver ids the version's manifest.json
+	// declares, which an install asks the user to approve along with Permissions.
+	Contributes extmanifest.Contributes `json:"contributes"`
 	// Size is the package size in bytes.
 	Size        int64     `json:"size"`
 	PublishedAt time.Time `json:"publishedAt"`

@@ -30,6 +30,8 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
       }
       if (!action || action === "asset.copyRef") return;
       if (action.startsWith("terminal.")) return;
+      // 表设计器的保存由设计器自己监听;这里不能 preventDefault,否则别的视图(如远程文件编辑器的 ⌘S)收不到。
+      if (action === "designer.save") return;
 
       // command.quickopen 早期处理：在输入框内也应该能触发
       if (action === "command.quickopen") {

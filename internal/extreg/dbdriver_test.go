@@ -2,6 +2,7 @@ package extreg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // driverDescriptor is a driver an extension provides in these tests.
@@ -37,19 +39,19 @@ func driverDescriptor(id string, aliases ...string) dbdriver.Descriptor {
 
 // driverOnlyManifest is the merged manifest of an extension that provides drivers
 // and nothing else: no asset type, no policy type.
-func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *extension.Manifest {
-	m := &extension.Manifest{Name: name, Version: "1.0.0", DatabaseDrivers: drivers}
+func driverOnlyManifest(name string, drivers ...dbdriver.Descriptor) *Manifest {
+	m := &Manifest{Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: name, Version: "1.0.0"}}, DatabaseDrivers: drivers}
 	for _, d := range drivers {
-		m.Capabilities.DatabaseDrivers = append(m.Capabilities.DatabaseDrivers, string(d.ID))
+		m.Contributes.DatabaseDrivers = append(m.Contributes.DatabaseDrivers, string(d.ID))
 	}
 	return m
 }
 
-func registerManifest(t *testing.T, m *extension.Manifest, plugin pluginCaller) error {
+func registerManifest(t *testing.T, m *Manifest, plugin pluginCaller) error {
 	t.Helper()
-	err := register(loaded{name: m.Name, manifest: m, plugin: plugin, translate: (&extension.Extension{}).Translate}, "help", "desc")
+	err := attachLoaded(loaded{name: m.Name, manifest: m, plugin: plugin, translate: (&extension.Extension{}).Translate}, "help", "desc")
 	if err == nil {
-		t.Cleanup(func() { Unregister(m.Name) })
+		t.Cleanup(func() { detach(m.Name) })
 	}
 	return err
 }
@@ -118,7 +120,7 @@ func TestDriverOnlyExtensionRegistersItsDrivers(t *testing.T) {
 	_, err = dbregistry.Lookup("betadb")
 	require.NoError(t, err)
 
-	Unregister("acme-db")
+	detach("acme-db")
 	_, err = dbregistry.Lookup("acmedb")
 	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	_, ok = dbregistry.ByName("acme")
@@ -136,11 +138,11 @@ func TestExtensionDriverFieldsAreLocalizedThroughItsLocales(t *testing.T) {
 		Key: "sid", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection, Label: "field.sid", Description: "field.sid.help",
 	}}
 	m := driverOnlyManifest("acme-db", desc)
-	require.NoError(t, Register(&extension.Extension{Name: m.Name, Manifest: m, Locales: map[string]map[string]string{
+	require.NoError(t, attachExtension(&extension.Extension{Name: m.Name, Manifest: runtimeManifest(m), Locales: map[string]map[string]string{
 		"zh-cn": {"field.sid": "实例 SID", "field.sid.help": "数据库实例标识"},
 		"en":    {"field.sid": "Instance SID"},
 	}}))
-	t.Cleanup(func() { Unregister(m.Name) })
+	t.Cleanup(func() { detach(m.Name) })
 
 	d, err := dbregistry.Lookup("acmedb")
 	require.NoError(t, err)
@@ -158,12 +160,12 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 		dbdrivertest.Register(t, dbdrivertest.NewFake()) // stands in for a built-in: fakedb, alias fake
 		m := testManifest()
 		m.DatabaseDrivers = []dbdriver.Descriptor{driverDescriptor("acmedb", "fake")}
-		m.Capabilities.DatabaseDrivers = []string{"acmedb"}
+		m.Contributes.DatabaseDrivers = []string{"acmedb"}
 
 		var err error
 		require.NotPanics(t, func() { err = registerManifest(t, m, newFakeDriverPlugin()) })
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `"acme"`, "names the refused extension")
+		assert.Contains(t, err.Error(), "acme: databaseDrivers[acmedb]", "names the refused extension and its driver")
 		assert.Contains(t, err.Error(), `"fake"`, "names the clashing name")
 		assert.Contains(t, err.Error(), `built-in driver "fakedb"`, "names the owner")
 
@@ -187,7 +189,7 @@ func TestDriverNameClashRefusesTheWholeExtension(t *testing.T) {
 		var err error
 		require.NotPanics(t, func() { err = registerManifest(t, second, newFakeDriverPlugin()) })
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `"second"`)
+		assert.Contains(t, err.Error(), "second: databaseDrivers[seconddb]")
 		assert.Contains(t, err.Error(), `"shared"`)
 		assert.Contains(t, err.Error(), `extension "first"`)
 
@@ -275,7 +277,7 @@ func TestUnregisteringAnExtensionClosesItsDriverSessions(t *testing.T) {
 		<-inner[0].started
 	}
 
-	Unregister("acme-db")
+	detach("acme-db")
 
 	for range 2 {
 		select {
@@ -378,7 +380,7 @@ func TestExtensionDriverFormMustFitTheNetworkRules(t *testing.T) {
 		desc.Form = []dbdriver.FormTabFields{{Tab: dbdriver.TabConnection, Fields: fields}}
 		err := registerManifest(t, driverOnlyManifest("form-db", desc), newFakeDriverPlugin())
 		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), `"formdb"`, name)
+		assert.Contains(t, err.Error(), "databaseDrivers[formdb]", name)
 		_, err = dbregistry.Lookup("formdb")
 		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable, name)
 	}
@@ -425,6 +427,141 @@ func TestRemovingADriverClosesItsSessionsSideBySide(t *testing.T) {
 	}
 	close(release)
 	<-removed
+}
+
+// CloseDrivers: the fake's drivers prepare no row statement writers, so there is
+// nothing to end.
+func (p *fakePlugin) CloseDrivers() {}
+
+// stuckWriterPlugin stands in for an extension with a row statement writer's call
+// still running in it: its sessions' Close waits for that call, which only closing
+// the drivers ends.
+type stuckWriterPlugin struct {
+	*fakePlugin
+	driversClosed chan struct{}
+	once          sync.Once
+}
+
+func (p *stuckWriterPlugin) CloseDrivers() { p.once.Do(func() { close(p.driversClosed) }) }
+
+type stuckWriterSession struct {
+	*dbdrivertest.FakeSession
+	driversClosed <-chan struct{}
+}
+
+func (s *stuckWriterSession) Close() error {
+	<-s.driversClosed
+	return s.FakeSession.Close()
+}
+
+// Revoking an extension's drivers closes them before closing their sessions: a
+// row statement writer's call stuck in the extension ends, instead of holding the
+// session's close — and disabling, upgrading or removing the extension — forever.
+func TestRevokingDriversEndsAStuckRowStatementsCall(t *testing.T) {
+	p := &stuckWriterPlugin{fakePlugin: &fakePlugin{}, driversClosed: make(chan struct{})}
+	t.Cleanup(p.CloseDrivers) // a failed run must not leave the revoke blocked
+	var sessions []*stuckWriterSession
+	p.openDriver = func(ctx context.Context, _ string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+		inner, err := dbdrivertest.NewFake().Open(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		s := &stuckWriterSession{FakeSession: inner.(*dbdrivertest.FakeSession), driversClosed: p.driversClosed}
+		sessions = append(sessions, s)
+		return s, nil
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("acme-db", driverDescriptor("acmedb")), p))
+	d, err := dbregistry.Lookup("acmedb")
+	require.NoError(t, err)
+	_, err = d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "acmedb", Host: "h", Port: 1, Username: "u"}})
+	require.NoError(t, err)
+
+	revoked := make(chan struct{})
+	go func() {
+		detach("acme-db")
+		close(revoked)
+	}()
+	select {
+	case <-revoked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revoking the drivers waited for a row statement writer's call stuck in the extension")
+	}
+	require.Len(t, sessions, 1)
+	assert.True(t, sessions[0].Closed(), "the session is closed once the drivers are")
+}
+
+// endingWriterPlugin's CloseDrivers ends the one row statement writer call stuck
+// in the extension, the way closing real drivers does, and returns once the
+// caller has its answer: the removal has gone no further by then.
+type endingWriterPlugin struct {
+	*fakePlugin
+	driversClosed chan struct{}
+	answered      chan struct{}
+	once          sync.Once
+}
+
+func (p *endingWriterPlugin) CloseDrivers() {
+	p.once.Do(func() {
+		close(p.driversClosed)
+		select {
+		case <-p.answered:
+		case <-time.After(5 * time.Second):
+		}
+	})
+}
+
+type endingWriterSession struct {
+	*dbdrivertest.FakeSession
+	driversClosed <-chan struct{}
+}
+
+func (s *endingWriterSession) PrepareRowStatements(context.Context, string, string) (dbdriver.RowStatementWriter, error) {
+	return endingWriter{driversClosed: s.driversClosed}, nil
+}
+
+type endingWriter struct{ driversClosed <-chan struct{} }
+
+func (w endingWriter) RowStatements(dbdriver.RowStatementsRequest) ([]string, error) {
+	<-w.driversClosed
+	return nil, errors.New("extension database drivers are closed")
+}
+
+// The call a revoke ends answers like every other operation on a removed driver:
+// the driver is unavailable, naming it and its extension — not whatever the
+// extension's closing drivers said.
+func TestRevokingDriversAnswersTheEndedRowStatementsCallUnavailable(t *testing.T) {
+	p := &endingWriterPlugin{fakePlugin: &fakePlugin{}, driversClosed: make(chan struct{}), answered: make(chan struct{})}
+	p.openDriver = func(ctx context.Context, _ string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+		inner, err := dbdrivertest.NewFake().Open(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return &endingWriterSession{FakeSession: inner.(*dbdrivertest.FakeSession), driversClosed: p.driversClosed}, nil
+	}
+	require.NoError(t, registerManifest(t, driverOnlyManifest("acme-db", driverDescriptor("acmedb")), p))
+	d, err := dbregistry.Lookup("acmedb")
+	require.NoError(t, err)
+	s, err := d.Open(context.Background(), dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "acmedb", Host: "h", Port: 1, Username: "u"}})
+	require.NoError(t, err)
+	w, err := s.PrepareRowStatements(context.Background(), "app", "users")
+	require.NoError(t, err)
+
+	stuck := make(chan error, 1)
+	go func() {
+		_, err := w.RowStatements(dbdriver.RowStatementsRequest{Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: []map[string]any{{"id": 1}}})
+		stuck <- err
+		close(p.answered)
+	}()
+	detach("acme-db")
+
+	select {
+	case err := <-stuck:
+		require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+		assert.ErrorContains(t, err, `"acmedb"`)
+		assert.ErrorContains(t, err, `"acme-db"`)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the row statement writer's call was not ended by the revoke")
+	}
 }
 
 // splittingDescriptor is a driver that declares statement splitting.
@@ -493,7 +630,7 @@ func TestRemovedExtensionDriverCannotClassify(t *testing.T) {
 		t.Fatalf("the split ended before it reached the extension: %v", err)
 	}
 
-	Unregister("split-db")
+	detach("split-db")
 
 	select {
 	case err := <-inFlight:
@@ -511,8 +648,8 @@ func TestRemovedExtensionDriverCannotClassify(t *testing.T) {
 // A driver only described in this process (its extension not loaded) cannot split.
 func TestDescribeOnlyDriverCannotClassify(t *testing.T) {
 	m := driverOnlyManifest("describe-only-split", splittingDescriptor("describesplit"))
-	require.NoError(t, RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)}))
+	t.Cleanup(func() { detach(m.Name) })
 	d, err := dbregistry.Lookup("describesplit")
 	require.NoError(t, err)
 
@@ -533,7 +670,7 @@ func kerberosDescriptor(id string) dbdriver.Descriptor {
 // Password authentication still needs it.
 func TestExtensionDriverKerberosAssetMayLeaveTheUsernameEmpty(t *testing.T) {
 	m := driverOnlyManifest("krb-db", kerberosDescriptor("krbdb"))
-	m.Capabilities.DatabaseKerberos = true
+	m.Permissions.Kerberos = true
 	require.NoError(t, registerManifest(t, m, newFakeDriverPlugin()))
 
 	asset := func(cfg *asset_entity.DatabaseConfig) *asset_entity.Asset {

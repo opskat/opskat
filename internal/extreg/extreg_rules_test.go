@@ -55,8 +55,8 @@ func registerBeta(t *testing.T) {
 	other.Policies.Type = "beta"
 	other.Policies.Groups[0].ID = "ext:beta:readonly"
 	other.Policies.Default = []string{"ext:beta:readonly"}
-	require.NoError(t, register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}}, "help", "desc"))
-	t.Cleanup(func() { Unregister("beta") })
+	require.NoError(t, attachLoaded(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}}, "help", "desc"))
+	t.Cleanup(func() { detach("beta") })
 }
 
 // 一个资产组可以同时挂着 ssh 资产和两个扩展的资产：扩展规则不能进 shell 那一列
@@ -151,7 +151,7 @@ func TestUnregisterRemovesTheRuleLandingWithoutLeaking(t *testing.T) {
 	registerFake(t, &fakePlugin{})
 	require.True(t, permission.TypeRulesSupported("acme-store"))
 
-	Unregister("acme")
+	detach("acme")
 
 	assert.False(t, permission.TypeRulesSupported("acme-store"),
 		"a disabled extension must take its rule landing with it")
@@ -171,7 +171,7 @@ func TestExtensionRuleWithAResourceGlobMatchesOnlyThatResource(t *testing.T) {
 	assert.Equal(t, aictx.Allow, got.Decision, "the resource the guest classified must be matched against the rule's glob")
 	assert.Equal(t, "object.write:prod/*", got.MatchedPattern)
 
-	Unregister("acme")
+	detach("acme")
 	registerFake(t, &fakePlugin{action: "object.write", resource: "dev/a.txt"})
 	got = permission.CheckPermission(withGrantFixturePolicy(t, 2, "acme-store", cp), "acme-store", 2, "list_objects --bucket=prod")
 	assert.Equal(t, aictx.NeedConfirm, got.Decision, "a resource outside the glob must still ask")
@@ -195,7 +195,7 @@ func TestExtensionResourceDenyBeatsAWiderAllow(t *testing.T) {
 	got := permission.CheckPermission(withGrantFixturePolicy(t, 1, "acme-store", cp), "acme-store", 1, "list_objects --bucket=prod")
 	assert.Equal(t, aictx.Deny, got.Decision)
 
-	Unregister("acme")
+	detach("acme")
 	registerFake(t, &fakePlugin{action: "object.write", resource: "prod/readme"})
 	got = permission.CheckPermission(withGrantFixturePolicy(t, 2, "acme-store", cp), "acme-store", 2, "list_objects --bucket=prod")
 	assert.Equal(t, aictx.Allow, got.Decision)
@@ -215,7 +215,7 @@ func TestExtensionDecisionOrderIsDenyAllowGrantConfirm(t *testing.T) {
 	got := permission.CheckPermission(ctx, "acme-store", 1, command)
 	assert.Equal(t, aictx.Deny, got.Decision, "a grant must not lift a deny")
 
-	Unregister("acme")
+	detach("acme")
 	registerFake(t, &fakePlugin{action: "object.write", resource: "pub/a"})
 	ctx = withGrantFixturePolicy(t, 2, "acme-store", cp)
 	permission.SaveGrantPattern(ctx, "sess-ext", 2, "acme-1", "acme-store", "ext:acme:object.write:pub/a")
@@ -223,7 +223,7 @@ func TestExtensionDecisionOrderIsDenyAllowGrantConfirm(t *testing.T) {
 	assert.Equal(t, aictx.Allow, got.Decision)
 	assert.Equal(t, aictx.SourcePolicyAllow, got.DecisionSource, "allow is judged before the grant")
 
-	Unregister("acme")
+	detach("acme")
 	registerFake(t, &fakePlugin{action: "object.write", resource: "tmp/a"})
 	ctx = withGrantFixturePolicy(t, 3, "acme-store", cp)
 	permission.SaveGrantPattern(ctx, "sess-ext", 3, "acme-1", "acme-store", "ext:acme:object.write:tmp/a")
@@ -274,7 +274,7 @@ func TestExtensionWildcardResourceIsJudgedByTheNamesItStandsFor(t *testing.T) {
 		DenyList:  []string{"object.write:prod-*"},
 	}
 	judge := func(assetID int64, resources ...string) aictx.CheckResult {
-		Unregister("acme")
+		detach("acme")
 		registerFake(t, &fakePlugin{action: "object.write", resources: resources})
 		return permission.CheckPermission(withGrantFixturePolicy(t, assetID, "acme-store", cp), "acme-store", assetID, command)
 	}
@@ -322,8 +322,8 @@ func TestExtensionPolicyGroupRulesMatchResourceGlobs(t *testing.T) {
 	m := testManifest()
 	m.Policies.Groups[0].Policy = map[string]any{"allow_list": []any{"object.write:pub/*"}}
 	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{action: "object.write", resource: "pub/x"}}
-	require.NoError(t, register(l, "help", "desc"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachLoaded(l, "help", "desc"))
+	t.Cleanup(func() { detach(m.Name) })
 
 	got := permission.CheckPermission(withGrantFixture(t, 1, "acme-store"), "acme-store", 1, "list_objects --bucket=prod")
 	assert.Equal(t, aictx.Allow, got.Decision)
@@ -380,12 +380,12 @@ func TestExtensionResourceWithColonsCannotEscapeTheRule(t *testing.T) {
 	got := permission.CheckPermission(withGrantFixturePolicy(t, 1, "acme-store", cp), "acme-store", 1, "list_objects --bucket=prod")
 	assert.Equal(t, aictx.NeedConfirm, got.Decision, "a resource is matched whole against the glob, not split on ':'")
 
-	Unregister("acme")
+	detach("acme")
 	registerFake(t, &fakePlugin{action: "object.write:prod"})
 	got = permission.CheckPermission(withGrantFixturePolicy(t, 2, "acme-store", cp), "acme-store", 2, "list_objects --bucket=prod")
 	assert.Equal(t, aictx.NeedConfirm, got.Decision, "an action carrying ':' is undeclared, never an action plus a resource")
 
-	Unregister("acme")
+	detach("acme")
 	registerFake(t, &fakePlugin{action: "object.write", resource: "a:b"})
 	got = permission.CheckPermission(withGrantFixturePolicy(t, 3, "acme-store", &asset_entity.CommandPolicy{
 		AllowList: []string{"object.write:a:*"},

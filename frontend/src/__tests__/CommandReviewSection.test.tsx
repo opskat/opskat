@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { CommandReviewSection } from "../components/settings/CommandReviewSection";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { GetCommandReviewSettings, SaveCommandReviewTimeout } from "../../wailsjs/go/system/System";
-import { GetCommandReviewState, GetExtensionSettings, SetCommandReviewer } from "../../wailsjs/go/extension/Extension";
+import { GetCommandReviewState, SetCommandReviewer } from "../../wailsjs/go/extension/Extension";
 
 const toastError = vi.hoisted(() => vi.fn());
 const notifySuccess = vi.hoisted(() => vi.fn());
@@ -16,7 +15,6 @@ const reviewer = (name: string, over: Record<string, unknown> = {}) => ({
   version: "1.0.0",
   usable: true,
   signed: true,
-  hasSettings: true,
   ...over,
 });
 
@@ -39,27 +37,18 @@ describe("CommandReviewSection", () => {
       .mockResolvedValue({ timeoutMs: 5000, lastFailReason: "", lastFailAt: 0 } as never);
     vi.mocked(SaveCommandReviewTimeout).mockReset().mockResolvedValue(undefined);
     vi.mocked(SetCommandReviewer).mockReset().mockResolvedValue(undefined);
-    vi.mocked(GetExtensionSettings)
-      .mockReset()
-      .mockResolvedValue({ schema: { type: "object", properties: {} }, values: {}, secretsSet: [] } as never);
   });
 
-  it("显示在用的审核扩展；它的设置在扩展详情里，这里只给入口", async () => {
+  it("显示在用的审核扩展", async () => {
     await renderSection();
     expect(screen.getByTestId("command-reviewer-active")).toHaveTextContent("JEV");
-    expect(GetExtensionSettings).not.toHaveBeenCalled();
     expect(screen.queryByTestId("command-review-problem")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "commandReview.settings.configureReviewer" }));
-    expect(useSettingsUiStore.getState().activeTab).toBe("extensions");
-    expect(useSettingsUiStore.getState().extensionDetail).toBe("jev");
   });
 
   it("没有审核扩展时提示去安装，并说明辅助审批和 Autopilot 会转到默认", async () => {
     vi.mocked(GetCommandReviewState).mockResolvedValue(state({ reviewers: [], active: "", problem: "no_reviewer" }));
     await renderSection();
     expect(screen.getByTestId("command-review-problem")).toHaveTextContent("commandReview.settings.noReviewer");
-    expect(GetExtensionSettings).not.toHaveBeenCalled();
   });
 
   it("启用了多个审核扩展时让用户选一个；用不了的不能选并写明原因", async () => {

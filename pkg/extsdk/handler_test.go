@@ -12,16 +12,12 @@ func TestDispatch(t *testing.T) {
 	Convey("dispatch", t, func() {
 		resetRegistries()
 
-		Convey("execute_action dispatches to registered action handler", func() {
-			RegisterAction("ping", func(ctx *ActionContext) (any, error) {
+		Convey("execute_tool runs a page-only tool like any other", func() {
+			Tool("ping", func(ctx *ToolContext, _ struct{}) (any, error) {
 				return map[string]string{"pong": "ok"}, nil
-			})
+			}).PageOnly()
 
-			input, _ := json.Marshal(map[string]any{
-				"action": "ping",
-				"args":   json.RawMessage(`{}`),
-			})
-			result, err := dispatch("execute_action", input)
+			result, err := dispatch("execute_tool", []byte(`{"tool":"ping","args":{}}`))
 			So(err, ShouldBeNil)
 
 			var out map[string]string
@@ -39,18 +35,6 @@ func TestDispatch(t *testing.T) {
 			_, err := dispatch("execute_tool", []byte(`{"tool":"who","args":{},"asset":{"id":12,"name":"prod notes","type":"notebook"}}`))
 			So(err, ShouldBeNil)
 			So(seen, ShouldResemble, Asset{ID: 12, Name: "prod notes", Type: "notebook"})
-		})
-
-		Convey("execute_action hands the handler the asset the host named", func() {
-			var seen Asset
-			RegisterAction("who", func(ctx *ActionContext) (any, error) {
-				seen = ctx.Asset
-				return nil, nil
-			})
-
-			_, err := dispatch("execute_action", []byte(`{"action":"who","args":{},"asset":{"id":3,"name":"n","type":"notebook"}}`))
-			So(err, ShouldBeNil)
-			So(seen, ShouldResemble, Asset{ID: 3, Name: "n", Type: "notebook"})
 		})
 
 		Convey("a call the host did not scope to an asset cannot read a config", func() {
@@ -71,11 +55,6 @@ func TestDispatch(t *testing.T) {
 
 		Convey("unknown function returns error", func() {
 			_, err := dispatch("unknown_fn", nil)
-			So(err, ShouldNotBeNil)
-		})
-
-		Convey("unknown action returns error", func() {
-			_, err := dispatch("execute_action", []byte(`{"action":"nonexistent","args":{}}`))
 			So(err, ShouldNotBeNil)
 		})
 
@@ -121,20 +100,29 @@ func TestDispatch(t *testing.T) {
 	})
 }
 
-func TestActionContextShouldStop(t *testing.T) {
-	Convey("When action cancel is triggered", t, func() {
-		th := NewTestHost(WithActionCancel())
-		defer th.Close()
-
-		var captured bool
+func TestToolContextShouldStop(t *testing.T) {
+	Convey("A tool sees the caller's cancellation through ShouldStop", t, func() {
 		resetRegistries()
-		RegisterAction("cancel_test", func(ctx *ActionContext) (any, error) {
+		var captured bool
+		Tool("cancel_test", func(ctx *ToolContext, _ struct{}) (any, error) {
 			captured = ctx.ShouldStop()
 			return nil, nil
+		}).PageOnly().NoTimeout()
+
+		Convey("false while the call is not canceled", func() {
+			th := NewTestHost()
+			defer th.Close()
+			_, err := th.CallTool(Asset{}, "cancel_test", map[string]any{})
+			So(err, ShouldBeNil)
+			So(captured, ShouldBeFalse)
 		})
 
-		_, err := th.CallAction(Asset{}, "cancel_test", json.RawMessage("{}"), func(TestEvent) {})
-		So(err, ShouldBeNil)
-		So(captured, ShouldBeTrue)
+		Convey("true once it is", func() {
+			th := NewTestHost(WithToolCancel())
+			defer th.Close()
+			_, err := th.CallTool(Asset{}, "cancel_test", map[string]any{})
+			So(err, ShouldBeNil)
+			So(captured, ShouldBeTrue)
+		})
 	})
 }

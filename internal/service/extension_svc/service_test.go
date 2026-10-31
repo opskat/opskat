@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -45,7 +45,11 @@ func registeredAssetTypes(svc *Service) []string {
 		if ext == nil {
 			continue
 		}
-		for _, at := range ext.Manifest.AssetTypes {
+		view, err := extreg.ManifestOf(ext.Manifest)
+		if err != nil {
+			panic(err) // a loaded extension's contributions were judged with the same wire types
+		}
+		for _, at := range view.AssetTypes {
 			if _, ok := assettype.Get(at.Type); ok {
 				out = append(out, at.Type)
 			}
@@ -59,7 +63,7 @@ func registeredAssetTypes(svc *Service) []string {
 // 留着会让下一个用例撞上"同名资产类型已注册"。
 func closeService(ctx context.Context, svc *Service) {
 	for _, name := range svc.Bridge().ListNames() {
-		extreg.Unregister(name)
+		svc.Manager().Contributions().Revoke(name)
 	}
 	svc.Close(ctx)
 }
@@ -122,7 +126,7 @@ func writeSlimManifest(dir, name string) {
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
-		"hostABI": extension.HostABIVersion,
+		"hostABI": extmanifest.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 	}
 	data, _ := json.Marshal(manifest)
@@ -134,16 +138,18 @@ func writeTestExtension(stub *describeCacheStub, dir, name string) {
 	writeSlimManifest(dir, name)
 	stub.put(name, map[string]any{
 		"i18n": map[string]any{"displayName": name, "description": name},
-		"assetTypes": []map[string]any{
-			{"type": name, "i18n": map[string]any{"name": name + ".name"},
-				"configSchema": testConfigSchema()},
-		},
-		"policies": map[string]any{"type": name},
-		"tools": []map[string]any{
-			{
-				"name": "test_tool", "policyAction": "read",
-				"i18n":       map[string]any{"description": "a tool"},
-				"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{
+				{"type": name, "i18n": map[string]any{"name": name + ".name"},
+					"configSchema": testConfigSchema()},
+			},
+			"policy": map[string]any{"type": name},
+			"tools": []map[string]any{
+				{
+					"name": "test_tool", "policyAction": "read",
+					"i18n":       map[string]any{"description": "a tool"},
+					"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+				},
 			},
 		},
 	})
@@ -156,16 +162,18 @@ func writeTestExtensionWithSnippets(stub *describeCacheStub, dir, name, assetTyp
 	writeSlimManifest(dir, name)
 	stub.put(name, map[string]any{
 		"i18n": map[string]any{"displayName": name, "description": name},
-		"assetTypes": []map[string]any{
-			{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
-		},
-		"policies": map[string]any{"type": name},
-		"snippets": map[string]any{
-			"categories": []map[string]any{
-				{"id": catID, "assetType": assetType, "i18n": map[string]any{"name": catID}},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{
+				{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
 			},
-			"seed": []map[string]any{
-				{"key": seedKey, "name": seedKey, "category": catID, "content": "echo " + seedKey},
+			"policy": map[string]any{"type": name},
+			"snippets": map[string]any{
+				"categories": []map[string]any{
+					{"id": catID, "assetType": assetType, "i18n": map[string]any{"name": catID}},
+				},
+				"seed": []map[string]any{
+					{"key": seedKey, "name": seedKey, "category": catID, "content": "echo " + seedKey},
+				},
 			},
 		},
 	})
@@ -220,7 +228,7 @@ func assertOldVersionIntact(svc *Service, stub *describeCacheStub, dir, name str
 	_, registered := assettype.Get(name)
 	So(registered, ShouldBeTrue)
 	// Still callable: a closed module answers every call with "plugin closed".
-	_, err := old.Plugin.CallTool(context.Background(), "test_tool", json.RawMessage(`{}`), nil)
+	_, err := old.Plugin.CallTool(context.Background(), extension.ToolCall{Name: "test_tool", Args: json.RawMessage(`{}`)})
 	So(err, ShouldNotBeNil)
 	So(err.Error(), ShouldNotContainSubstring, "plugin closed")
 	onDisk, err := os.ReadFile(filepath.Join(dir, name, "main.wasm")) //nolint:gosec // test TempDir
@@ -237,7 +245,7 @@ func assertOldVersionIntact(svc *Service, stub *describeCacheStub, dir, name str
 func newTestManager(dir string) *extension.Manager {
 	return extension.NewManager(dir, func(extName string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{Logger: zap.NewNop()})
-	}, zap.NewNop())
+	}, extension.NewContributionRegistry(extreg.Points()...), zap.NewNop())
 }
 
 func TestService(t *testing.T) {
@@ -262,7 +270,7 @@ func TestService(t *testing.T) {
 		// 否则下一个叶子会撞上"同名资产类型已注册"。
 		Reset(func() {
 			for _, name := range svc.Bridge().ListNames() {
-				extreg.Unregister(name)
+				svc.Manager().Contributions().Revoke(name)
 			}
 		})
 
@@ -331,73 +339,16 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-upgrade").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), nil)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), approveInstall)
 			So(err, ShouldBeNil)
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-upgrade"})
 
-			m, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), nil)
+			m, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"), approveInstall)
 			So(err, ShouldBeNil)
 			So(m.Name, ShouldEqual, "ext-upgrade")
 			// Still registered exactly once, and still reachable.
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-upgrade"})
 			So(svc.Manager().GetExtension("ext-upgrade"), ShouldNotBeNil)
-		})
-
-		// 来源决定扩展能否当命令审核器（正式版只认商店安装），所以要按安装入口落库，
-		// 不能从安装包路径推断：商店安装同样是先下载到本地再装。
-		Convey("Install records where the package came from", func() {
-			sourceDir := t.TempDir()
-			writeTestExtension(stub, sourceDir, "ext-origin")
-			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
-			So(svc.Init(ctx), ShouldBeNil)
-
-			var recorded []string
-			stateRepo.EXPECT().Find(gomock.Any(), "ext-origin").Return(nil, fmt.Errorf("not found")).AnyTimes()
-			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, state *extension_state_entity.ExtensionState) error {
-					recorded = append(recorded, state.Source)
-					return nil
-				}).AnyTimes()
-
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-origin"), nil)
-			So(err, ShouldBeNil)
-			_, err = svc.InstallStorePackage(ctx, filepath.Join(sourceDir, "ext-origin"), nil)
-			So(err, ShouldBeNil)
-			_, err = svc.InstallDev(ctx, filepath.Join(sourceDir, "ext-origin"))
-			So(err, ShouldBeNil)
-			So(recorded, ShouldResemble, []string{InstallOriginLocal, InstallOriginStore, InstallOriginDev})
-		})
-
-		// 安装记录写不进去时安装要整个失败：旧版本留在原处照常运行，而不是新版本已经换上、
-		// 却报安装失败、又没有来源记录（审核器因此永远不合格）。
-		Convey("Install that cannot record its provenance leaves the previous version in place", func() {
-			sourceDir := t.TempDir()
-			writeTestExtension(stub, sourceDir, "ext-prov")
-			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
-			So(svc.Init(ctx), ShouldBeNil)
-
-			stateRepo.EXPECT().Find(gomock.Any(), "ext-prov").Return(nil, fmt.Errorf("not found")).Times(1)
-			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-prov"), nil)
-			So(err, ShouldBeNil)
-
-			manifestPath := filepath.Join(sourceDir, "ext-prov", "manifest.json")
-			data, err := os.ReadFile(manifestPath) //nolint:gosec // test temp dir
-			So(err, ShouldBeNil)
-			So(os.WriteFile(manifestPath, []byte(strings.Replace(string(data), `"1.0.0"`, `"2.0.0"`, 1)), 0o600), ShouldBeNil) //nolint:gosec // test temp dir
-
-			stateRepo.EXPECT().Find(gomock.Any(), "ext-prov").Return(
-				&extension_state_entity.ExtensionState{Name: "ext-prov", Enabled: true, Source: InstallOriginLocal}, nil).AnyTimes()
-			stateRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(fmt.Errorf("database is locked")).AnyTimes()
-			reloadCalled = 0
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-prov"), nil)
-			So(err, ShouldNotBeNil)
-			So(svc.Manager().GetExtension("ext-prov").Manifest.Version, ShouldEqual, "1.0.0")
-			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-prov"})
-			installed, err := os.ReadFile(filepath.Join(dir, "ext-prov", "manifest.json")) //nolint:gosec // test temp dir
-			So(err, ShouldBeNil)
-			So(string(installed), ShouldContainSubstring, `"1.0.0"`)
-			So(reloadCalled, ShouldEqual, 0)
 		})
 
 		// `opsctl ext dev` reinstalls on every rebuild, so a broken build is routine.
@@ -411,12 +362,12 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)
 			old := svc.Manager().GetExtension("ext-hot")
 
 			So(os.WriteFile(filepath.Join(sourceDir, "ext-hot", "main.wasm"), []byte("not wasm"), 0644), ShouldBeNil)
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldNotBeNil)
 
 			assertOldVersionIntact(svc, stub, dir, "ext-hot", old)
@@ -431,23 +382,23 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-other"), nil)
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-other"), approveInstall)
 			So(err, ShouldBeNil)
 			old := svc.Manager().GetExtension("ext-hot")
 
 			// The new build claims an asset type another extension already owns.
 			stub.put("ext-hot", map[string]any{
 				"i18n": map[string]any{"displayName": "ext-hot", "description": "ext-hot"},
-				"assetTypes": []map[string]any{
-					{"type": "ext-other", "i18n": map[string]any{"name": "clash"}, "configSchema": testConfigSchema()},
+				"contributes": map[string]any{
+					"assetTypes": []map[string]any{
+						{"type": "ext-other", "i18n": map[string]any{"name": "clash"}, "configSchema": testConfigSchema()},
+					},
+					"policy": map[string]any{"type": "ext-hot"},
 				},
-				"policies": map[string]any{"type": "ext-hot"},
 			})
-			// 这次安装写下的记录要撤掉（这里的仓库假装之前没有记录）。
-			stateRepo.EXPECT().Delete(gomock.Any(), "ext-hot").Return(nil).Times(1)
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldNotBeNil)
 
 			assertOldVersionIntact(svc, stub, dir, "ext-hot", old)
@@ -462,18 +413,20 @@ func TestService(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-hot").Return(nil, fmt.Errorf("not found")).AnyTimes()
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)
 			old := svc.Manager().GetExtension("ext-hot")
 
 			stub.put("ext-hot", map[string]any{
 				"i18n": map[string]any{"displayName": "ext-hot", "description": "ext-hot"},
-				"assetTypes": []map[string]any{
-					{"type": "ext-hot-v2", "i18n": map[string]any{"name": "v2"}, "configSchema": testConfigSchema()},
+				"contributes": map[string]any{
+					"assetTypes": []map[string]any{
+						{"type": "ext-hot-v2", "i18n": map[string]any{"name": "v2"}, "configSchema": testConfigSchema()},
+					},
+					"policy": map[string]any{"type": "ext-hot"},
 				},
-				"policies": map[string]any{"type": "ext-hot"},
 			})
-			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), nil)
+			_, err = svc.Install(ctx, filepath.Join(sourceDir, "ext-hot"), approveInstall)
 			So(err, ShouldBeNil)
 
 			cur := svc.Manager().GetExtension("ext-hot")
@@ -482,7 +435,7 @@ func TestService(t *testing.T) {
 			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-hot-v2"})
 			_, stillOld := assettype.Get("ext-hot")
 			So(stillOld, ShouldBeFalse)
-			_, err = old.Plugin.CallTool(ctx, "test_tool", json.RawMessage(`{}`), nil)
+			_, err = old.Plugin.CallTool(ctx, extension.ToolCall{Name: "test_tool", Args: json.RawMessage(`{}`)})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "plugin closed")
 		})
@@ -598,7 +551,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "kafka-ext").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
-			m, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-ext"), nil)
+			m, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-ext"), approveInstall)
 			So(err, ShouldBeNil)
 			So(m.Name, ShouldEqual, "kafka-ext")
 			So(len(hook.syncCalls), ShouldEqual, 1)
@@ -630,7 +583,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			sourceDir := t.TempDir()
 			writeTestExtensionWithSnippets(stub, sourceDir, "kafka-b", "kafka-b", "k2")
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-b"), nil)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-b"), approveInstall)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "already registered")
 
@@ -684,7 +637,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			stateRepo.EXPECT().Find(gomock.Any(), "simple").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
-			_, err := svc.Install(ctx, filepath.Join(sourceDir, "simple"), nil)
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "simple"), approveInstall)
 			So(err, ShouldBeNil)
 		})
 	})

@@ -2,6 +2,7 @@ package extension_svc
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,16 +10,119 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 )
 
 // bearerAuth injects the asset's password field as a bearer token.
-var bearerAuth = &extension.AuthDef{Groups: []extension.AuthGroup{{
-	Bindings: []extension.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}},
+var bearerAuth = &extwire.Auth{Groups: []extwire.AuthGroup{{
+	Bindings: []extwire.AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{password}}"}},
 }}}
+
+// authedExt is extension "authed": its type authed-store names its endpoint in
+// "url" and injects the password as a bearer token.
+func authedExt() *extension.Extension {
+	return &extension.Extension{
+		Name: "authed",
+		Manifest: withAssetTypes(extmanifest.Manifest{Name: "authed"},
+			extwire.AssetType{Type: "authed-store", Auth: bearerAuth, ConfigSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"host":     map[string]any{"type": "string"},
+					"url":      map[string]any{"type": "string", "format": "endpoint"},
+					"password": map[string]any{"type": "string", "format": "password"},
+				},
+			}}),
+	}
+}
+
+// ResolveScope is the asset-type side of a call's scope: the endpoints the type's
+// endpoint fields name, the connection path, and the credential injection its
+// auth groups render — for a stored asset of the extension's own type, or an
+// ad-hoc one read from the call's own config.
+func TestResolveScopeOfAnExtensionAsset(t *testing.T) {
+	Convey("Given extension authed and its asset 6", t, func() {
+		svc, assets := newHostTestService(t)
+		svc.Bridge().Register(authedExt())
+		enc, err := credential_svc.Default().Encrypt("theirs")
+		So(err, ShouldBeNil)
+		assets.EXPECT().Find(gomock.Any(), int64(6)).Return(&asset_entity.Asset{
+			ID: 6, Type: "authed-store", Config: `{"host":"h","url":"https://ES.internal:9200/base","password":"` + enc + `"}`,
+		}, nil).AnyTimes()
+		ctx := context.Background()
+
+		Convey("a stored asset's scope names its endpoints, a direct route and its rendered credentials", func() {
+			scope, err := svc.ResolveScope(ctx, "authed", extension.AssetRef{ID: 6, Type: "authed-store"})
+			So(err, ShouldBeNil)
+			So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Scheme: "https", Host: "ES.internal", Port: "9200"}})
+			So(scope.Route, ShouldBeNil) // built only when a stream takes it
+			conn, err := scope.Connect(ctx)
+			So(err, ShouldBeNil)
+			So(conn.Route, ShouldNotBeNil)
+			So(conn.Route.Direct, ShouldBeTrue)
+			So(conn.TLS, ShouldBeNil)
+			So(scope.Ops, ShouldBeNil)
+			So(scope.Tickets, ShouldBeNil)
+			values, err := scope.Auth(ctx)
+			So(err, ShouldBeNil)
+			So(values, ShouldResemble, []extension.AuthValue{{In: "header", Name: "Authorization", Value: "Bearer theirs"}})
+		})
+
+		Convey("an asset of another extension's type is refused", func() {
+			_, err := svc.ResolveScope(ctx, "other", extension.AssetRef{ID: 6, Type: "authed-store"})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "does not belong to extension")
+		})
+
+		Convey("an ad-hoc call reads endpoints and credentials from its own config", func() {
+			scope, err := svc.ResolveScope(ctx, "authed", extension.AssetRef{Type: "authed-store", AdHoc: &extension.AdHocAssetConfig{
+				Config:      []byte(`{"url":"10.0.0.5:9200"}`),
+				Credentials: []byte(`{"url":"10.0.0.5:9200","password":"typed"}`),
+			}})
+			So(err, ShouldBeNil)
+			So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Host: "10.0.0.5", Port: "9200"}})
+			values, err := scope.Auth(ctx)
+			So(err, ShouldBeNil)
+			So(values, ShouldResemble, []extension.AuthValue{{In: "header", Name: "Authorization", Value: "Bearer typed"}})
+		})
+
+		Convey("an ad-hoc call of a type the extension does not register is refused", func() {
+			_, err := svc.ResolveScope(ctx, "authed", extension.AssetRef{Type: "other-store", AdHoc: &extension.AdHocAssetConfig{}})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "does not register asset type")
+		})
+	})
+}
+
+// A connection path that cannot be built (a CA file that is gone) is the asset
+// endpoint's problem only: the scope still resolves, naming its endpoints, so a
+// request that is not to an endpoint is decided — and dialed — without it.
+func TestResolveScopeDefersABrokenConnectionPath(t *testing.T) {
+	Convey("Given an asset whose declared TLS names a missing CA file", t, func() {
+		svc, assets := newHostTestService(t)
+		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{TLS: true}))
+		config, err := json.Marshal(map[string]any{
+			"endpoint":                        "es.internal:9200",
+			extension.HostConnectionConfigKey: map[string]any{"tls": map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}},
+		})
+		So(err, ShouldBeNil)
+		assets.EXPECT().Find(gomock.Any(), int64(30)).
+			Return(&asset_entity.Asset{ID: 30, Type: "es-cluster", Config: string(config)}, nil).AnyTimes()
+
+		scope, err := svc.ResolveScope(context.Background(), "es", extension.AssetRef{ID: 30, Type: "es-cluster"})
+		So(err, ShouldBeNil)
+		So(scope.Endpoints, ShouldResemble, []extension.Endpoint{{Host: "es.internal", Port: "9200"}})
+		So(scope.Connect, ShouldNotBeNil)
+		_, err = scope.Connect(context.Background())
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "ca.pem")
+	})
+}
 
 func TestAssetCredentialValuesServeInjectionOnly(t *testing.T) {
 	Convey("credential injection reads decrypted fields host-side, whatever the extension may read itself", t, func() {
@@ -58,13 +162,18 @@ func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 			hits.Add(1)
 		}))
 		defer srv.Close()
+		svc.Bridge().Register(authedExt())
 		assets.EXPECT().Find(gomock.Any(), int64(5)).
-			Return(&asset_entity.Asset{ID: 5, Type: "other-store", Config: `{"host":"h","password":"not-a-ciphertext"}`}, nil).AnyTimes()
+			Return(&asset_entity.Asset{ID: 5, Type: "authed-store", Config: `{"host":"h","password":"not-a-ciphertext"}`}, nil).AnyTimes()
 
-		provider := extension.NewDefaultHostProvider(extension.DefaultHostConfig{AssetConfigs: configGetterOf(svc, "other")})
-		res, err := provider.OpenIO(context.Background(), &extension.AssetRef{ID: 5, Name: "store", Type: "other-store"}, extension.IOOpenParams{
+		asset := extension.AssetRef{ID: 5, Name: "store", Type: "authed-store"}
+		scope, err := svc.ResolveScope(context.Background(), "authed", asset)
+		So(err, ShouldBeNil)
+		So(scope.Auth, ShouldNotBeNil)
+		provider := extension.NewDefaultHostProvider(svc.HostConfig("authed"))
+		res, err := provider.OpenIO(context.Background(), &asset, extension.IOOpenParams{
 			Type: "http", Method: "GET", URL: srv.URL + "/",
-			Auth: &extension.HTTPAuth{Def: bearerAuth, IsEndpoint: func(*url.URL) bool { return true }},
+			Auth: &extension.HTTPAuth{Credentials: scope.Auth, IsEndpoint: func(*url.URL) bool { return true }},
 		})
 
 		So(err, ShouldNotBeNil)
@@ -81,10 +190,8 @@ func TestCredentialInjectionDecryptFailureSendsNothing(t *testing.T) {
 func TestTestConnectionKeepsCredentialsForInjectionWithoutCredentialsRead(t *testing.T) {
 	Convey("given an extension without credentials:read", t, func() {
 		svc, assets := newHostTestService(t)
-		manifest := &extension.Manifest{
-			Name:       "other",
-			AssetTypes: []extension.AssetTypeDef{{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}},
-		}
+		manifest := viewOf(t, withAssetTypes(extmanifest.Manifest{Name: "other"},
+			extwire.AssetType{Type: "other-store", ConfigSchema: connectionPasswordSchema, Auth: bearerAuth}))
 
 		Convey("a password typed into the new-asset form is kept for injection, withheld from the guest", func() {
 			adhoc, err := svc.buildAdHocTestConfig(context.Background(), "other", manifest, "other-store", 0, `{"host":"h","password":"typed"}`)

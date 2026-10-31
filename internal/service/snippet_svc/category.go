@@ -127,6 +127,18 @@ func (r *CategoryRegistry) rebuildLocked() {
 	r.index = idx
 }
 
+// IsBuiltin 报告 id 是否为宿主内置分类。内置分类只由本注册表决定，扩展不能声明同名分类。
+func (r *CategoryRegistry) IsBuiltin(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, b := range r.builtins {
+		if b.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // List 返回所有已注册分类（顺序稳定）。
 func (r *CategoryRegistry) List() []Category {
 	r.mu.RLock()

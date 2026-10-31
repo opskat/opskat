@@ -1,7 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 // 应用的 i18n（src/i18n）初始化的就是 i18next 的默认实例；这里只读当前语言，不引入它的初始化副作用。
 import i18n from "i18next";
-import { ListDatabaseDrivers } from "../../../wailsjs/go/query/Query";
+import { toast } from "sonner";
+import { DatabaseDriverOwner, ListDatabaseDrivers } from "../../../wailsjs/go/query/Query";
 import type { dbdriver } from "../../../wailsjs/go/models";
 
 /** 后端驱动注册表里一个驱动的自我描述(原样来自 Query.ListDatabaseDrivers,专属字段的文案已按当前语言翻译)。 */
@@ -87,6 +88,30 @@ export function driverHasCapability(driver: DriverDescriptor | undefined, capabi
  */
 export function driverCanAlter(driver: DriverDescriptor | undefined, attribute: string): boolean {
   return !!driver?.alterTableAttributes?.includes(attribute);
+}
+
+/**
+ * 提供驱动 id 的扩展名(Query.DatabaseDriverOwner):内置驱动与未注册的 id 为空串,还没取到或 id 为空时为
+ * null。驱动没声明某项新能力时,据此只对扩展驱动给出「去更新」入口。
+ */
+export function useDatabaseDriverOwner(id: string | undefined): string | null {
+  const [answer, setAnswer] = useState<{ id: string; owner: string } | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    let alive = true;
+    (async () => {
+      try {
+        const owner = await DatabaseDriverOwner(id);
+        if (alive) setAnswer({ id, owner });
+      } catch (err) {
+        if (alive) toast.error(err instanceof Error ? err.message : String(err));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [id]);
+  return answer && answer.id === id ? answer.owner : null;
 }
 
 /** 驱动是否在资产表单的任一 Tab 里使用该字段(Go 侧 dbdriver.FormField 的取值,如 "host")。 */
