@@ -2,7 +2,6 @@ package command_review_repo
 
 import (
 	"context"
-	"errors"
 
 	"github.com/cago-frame/cago/database/db"
 	"gorm.io/gorm"
@@ -41,12 +40,13 @@ func NewCommandReview() CommandReviewRepo { return &commandReviewRepo{} }
 
 func (r *commandReviewRepo) Get(ctx context.Context, cacheKey string, now int64) (*command_review_entity.CommandReview, error) {
 	var e command_review_entity.CommandReview
-	err := db.Ctx(ctx).Where("cache_key = ? AND expiretime > ?", cacheKey, now).First(&e).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	// Limit(1).Find rather than First: a cache miss is ordinary and First would log it as an error.
+	res := db.Ctx(ctx).Where("cache_key = ? AND expiretime > ?", cacheKey, now).Limit(1).Find(&e)
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	if err != nil {
-		return nil, err
+	if res.RowsAffected == 0 {
+		return nil, nil
 	}
 	return &e, nil
 }

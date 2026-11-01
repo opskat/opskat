@@ -2,11 +2,9 @@ package extension_settings_repo
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/cago-frame/cago/database/db"
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/opskat/opskat/internal/model/entity/extension_settings_entity"
@@ -44,12 +42,13 @@ func NewExtensionSettings() ExtensionSettingsRepo { return &extensionSettingsRep
 
 func (r *extensionSettingsRepo) Find(ctx context.Context, extName string) (*extension_settings_entity.ExtensionSettings, error) {
 	var row extension_settings_entity.ExtensionSettings
-	err := db.Ctx(ctx).Where("extension_name = ?", extName).First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	// Limit(1).Find rather than First: a miss is ordinary and First would log it as an error.
+	res := db.Ctx(ctx).Where("extension_name = ?", extName).Limit(1).Find(&row)
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	if err != nil {
-		return nil, err
+	if res.RowsAffected == 0 {
+		return nil, nil
 	}
 	return &row, nil
 }
