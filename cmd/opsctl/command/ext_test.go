@@ -164,6 +164,38 @@ func TestScanInstalledExtensionsUsesTheRealManifestParser(t *testing.T) {
 	assert.True(t, got[0].Enabled)
 }
 
+// A host-only tool cannot be reached through exec or opsctl, so the list leaves it
+// out; policy tools and page-only tools stay listed.
+func TestScanInstalledExtensionsLeavesHostOnlyToolsOut(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "acme", "acme-store")
+	params := map[string]any{"type": "object", "properties": map[string]any{}}
+	descriptor, err := json.Marshal(map[string]any{
+		"i18n": map[string]any{"displayName": "acme", "description": "acme"},
+		"contributes": map[string]any{
+			"assetTypes": []map[string]any{{
+				"type":         "acme-store",
+				"i18n":         map[string]any{"name": "acme-store"},
+				"configSchema": map[string]any{"type": "object", "properties": map[string]any{"endpoint": map[string]any{"type": "string"}}},
+			}},
+			"tools": []map[string]any{
+				{"name": "list_objects", "policyAction": "list", "parameters": params},
+				{"name": "page_helper", "pageOnly": true, "parameters": params},
+				{"name": "review_command", "hostOnly": true, "parameters": params},
+			},
+			"policy": map[string]any{"type": "acme"},
+		},
+	})
+	require.NoError(t, err)
+	stub.payloads["acme"] = string(descriptor)
+
+	got, err := scanInstalledExtensions()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, []string{"list_objects", "page_helper"}, got[0].Tools)
+}
+
 // The scan lists the accepted extensions by name and, apart from them, the ones the
 // host refuses with their reason (a retired hostABI, an unparsable manifest), in
 // directory order; a directory without a manifest.json is in neither.

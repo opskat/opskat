@@ -280,6 +280,10 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 			item.AssetTypes = append(item.AssetTypes, at.Type)
 		}
 		for _, t := range m.Tools {
+			// A host-only tool is for host subsystems; exec / opsctl cannot call it.
+			if t.HostOnly {
+				continue
+			}
 			item.Tools = append(item.Tools, t.Name)
 		}
 		results = append(results, item)
