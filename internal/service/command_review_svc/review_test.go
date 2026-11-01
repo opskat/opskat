@@ -552,6 +552,47 @@ func TestStatusListenerNotifiesOnFailureAndRecoveryOnly(t *testing.T) {
 	assert.Len(t, seen, 2, "再成功一次状态没变，不通知")
 }
 
+// 几批审核同时结束时，设置页最后收到的必须是当前状态：否则恢复之后仍显示失败（或反过来），
+// 直到下一次状态变化。
+func TestStatusListenerLastNotificationIsCurrentStatusUnderConcurrentReviews(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		rev := newReviewer()
+		rev.reply = func(c call) (Answer, error) {
+			if strings.HasPrefix(c.Command, "fail") {
+				return Answer{}, errors.New("boom")
+			}
+			return Answer{Outcome: AnswerPass}, nil
+		}
+		s, _ := newService(rev)
+		var mu sync.Mutex
+		var last *Status
+		s.SetStatusListener(func(st Status) {
+			mu.Lock()
+			last = &st
+			mu.Unlock()
+		})
+
+		var wg sync.WaitGroup
+		for i := 0; i < 64; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				cmd := "pass"
+				if i%2 == 0 {
+					cmd = "fail"
+				}
+				review(s, text(cmd+strings.Repeat("x", i)+"-"+string(rune('a'+round%26))))
+			}(i)
+		}
+		wg.Wait()
+
+		mu.Lock()
+		require.NotNil(t, last, "有过失败就有通知")
+		assert.Equal(t, s.Status(), *last, "round %d: 最后一次通知必须是当前状态", round)
+		mu.Unlock()
+	}
+}
+
 func TestTransientFailuresShowInStatusWithoutNotifying(t *testing.T) {
 	rev := newReviewer()
 	rev.reply = func(call) (Answer, error) { return Answer{}, context.DeadlineExceeded }

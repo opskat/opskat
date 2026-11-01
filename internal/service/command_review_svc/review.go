@@ -129,6 +129,10 @@ type service struct {
 	listener func(reason string)
 	onStatus func(Status)
 	notified map[string]bool
+
+	// statusMu 让状态通知串行：每次在锁内读当前状态再发，几批结果同时结束时最后发出的就是当前状态。
+	statusMu sync.Mutex
+	sent     Status // 上一次发给 onStatus 的状态
 }
 
 // New 创建审核服务。timeout 是每次调用审核器的超时，每次审核时读取，设置修改后立即生效；
@@ -159,15 +163,6 @@ func (s *service) SetStatusListener(fn func(Status)) {
 // 判断就算恢复——只是调用成功、回答却是"API key 无效"之类不算，命中缓存也不算。
 // 测试审核扩展不走这里：测的未必是在用的那个。
 func (s *service) record(results []Result) {
-	before := s.Status()
-	defer func() {
-		s.mu.Lock()
-		after, notify := s.status, s.onStatus
-		s.mu.Unlock()
-		if notify != nil && after != before {
-			notify(after)
-		}
-	}()
 	for _, r := range results {
 		switch {
 		case r.Outcome == OutcomeFail:
@@ -176,6 +171,21 @@ func (s *service) record(results []Result) {
 			s.recordSuccess()
 		}
 	}
+	s.notifyStatus()
+}
+
+// notifyStatus 把当前状态发给 onStatus，与上一次发出的相同则不发。
+func (s *service) notifyStatus() {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.mu.Lock()
+	cur, notify := s.status, s.onStatus
+	s.mu.Unlock()
+	if notify == nil || cur == s.sent {
+		return
+	}
+	s.sent = cur
+	notify(cur)
 }
 
 // recordFailure 记下审核失败；设置问题通知一次。
