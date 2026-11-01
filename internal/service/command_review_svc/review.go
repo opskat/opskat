@@ -108,6 +108,9 @@ type Service interface {
 	// SetConfigErrorListener 注册设置问题（没有审核器、审核器没配置好等）的通知，
 	// 同一种问题只通知一次，审核恢复成功后再出错会重新通知。
 	SetConfigErrorListener(fn func(reason string))
+	// SetStatusListener 注册 Status 变化（出现失败或失败已恢复）的通知，设置页打开着时据此实时更新。
+	// 一批审核结果最多通知一次，状态没变不通知。
+	SetStatusListener(fn func(Status))
 }
 
 // Status 是最近一次还没恢复的审核失败，设置页据此提示；之后有一次审核成功就为空。
@@ -124,6 +127,7 @@ type service struct {
 	mu       sync.Mutex
 	status   Status
 	listener func(reason string)
+	onStatus func(Status)
 	notified map[string]bool
 }
 
@@ -145,10 +149,25 @@ func (s *service) SetConfigErrorListener(fn func(reason string)) {
 	s.listener = fn
 }
 
+func (s *service) SetStatusListener(fn func(Status)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onStatus = fn
+}
+
 // record 按一次正式审核的结果更新状态：失败记下（设置问题通知一次）；扩展真的给出了
 // 判断就算恢复——只是调用成功、回答却是"API key 无效"之类不算，命中缓存也不算。
 // 测试审核扩展不走这里：测的未必是在用的那个。
 func (s *service) record(results []Result) {
+	before := s.Status()
+	defer func() {
+		s.mu.Lock()
+		after, notify := s.status, s.onStatus
+		s.mu.Unlock()
+		if notify != nil && after != before {
+			notify(after)
+		}
+	}()
 	for _, r := range results {
 		switch {
 		case r.Outcome == OutcomeFail:

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { CommandReviewSection } from "../components/settings/CommandReviewSection";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
+import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
 import { GetCommandReviewSettings, SaveCommandReviewTimeout } from "../../wailsjs/go/system/System";
 import { GetCommandReviewState, SetCommandReviewer } from "../../wailsjs/go/extension/Extension";
 
@@ -110,5 +111,26 @@ describe("CommandReviewSection", () => {
     } as never);
     await renderSection();
     expect(screen.getByTestId("command-review-last-fail")).toHaveTextContent("commandReview.settings.lastFail");
+  });
+
+  it("打开着时随审核状态事件实时出现失败、恢复后消失，不重新挂载", async () => {
+    const handlers = new Map<string, (data: unknown) => void>();
+    vi.mocked(EventsOn).mockImplementation(((event: string, handler: (data: unknown) => void) => {
+      handlers.set(event, handler);
+      return vi.fn();
+    }) as never);
+    const { unmount } = await act(async () => render(<CommandReviewSection />));
+    expect(screen.queryByTestId("command-review-last-fail")).toBeNull();
+    const fetches = vi.mocked(GetCommandReviewSettings).mock.calls.length;
+
+    act(() => handlers.get("command-review:status")?.({ lastFailReason: "timeout", lastFailAt: 1700000000000 }));
+    expect(screen.getByTestId("command-review-last-fail")).toHaveTextContent("commandReview.settings.lastFail");
+
+    act(() => handlers.get("command-review:status")?.({ lastFailReason: "", lastFailAt: 0 }));
+    expect(screen.queryByTestId("command-review-last-fail")).toBeNull();
+    expect(GetCommandReviewSettings).toHaveBeenCalledTimes(fetches);
+
+    unmount();
+    expect(EventsOff).toHaveBeenCalledWith("command-review:status");
   });
 });

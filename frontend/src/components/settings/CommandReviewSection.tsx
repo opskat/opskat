@@ -4,6 +4,7 @@ import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Inpu
 import { AlertTriangle, Loader2, Save, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
+import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { failReasonLabel, unusableReasonLabel } from "@/lib/commandReview";
 import { Segmented } from "@/components/asset/fields";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
@@ -44,6 +45,14 @@ export function CommandReviewSection() {
       .then(applySettings)
       .catch((e: unknown) => toast.error(errMsg(e)));
   }, [applySettings]);
+
+  // 后端在失败出现或恢复时推送最新状态：打开着也能实时更新，不动正在编辑的超时。
+  useWailsEvent(
+    "command-review:status",
+    useCallback((st: Pick<system.CommandReviewSettings, "lastFailReason" | "lastFailAt">) => {
+      setSettings((prev) => prev && { ...prev, lastFailReason: st.lastFailReason, lastFailAt: st.lastFailAt });
+    }, [])
+  );
 
   const selectReviewer = async (name: string) => {
     try {

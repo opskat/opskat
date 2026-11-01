@@ -527,6 +527,31 @@ func TestConfigErrorsNotifyOnceAndShowInStatus(t *testing.T) {
 	assert.Equal(t, []string{aictx.ReviewReasonInvalidAPIKey, aictx.ReviewReasonInvalidAPIKey}, notified, "恢复之后再出错会重新提醒")
 }
 
+// 设置页打开着时要实时看到失败和恢复：状态变了才通知，一批结果只通知一次；状态没变不通知。
+func TestStatusListenerNotifiesOnFailureAndRecoveryOnly(t *testing.T) {
+	rev := newReviewer()
+	s, _ := newService(rev)
+	var seen []Status
+	s.SetStatusListener(func(st Status) { seen = append(seen, st) })
+
+	review(s, text("ls"))
+	assert.Empty(t, seen, "成功且本来就没有失败，状态没变")
+
+	rev.reply = func(call) (Answer, error) { return Answer{}, context.DeadlineExceeded }
+	s.ReviewCommands(context.Background(), []permission.ReviewRequest{text("pwd"), text("uptime")})
+	require.Len(t, seen, 1, "一批里多条失败只通知一次")
+	assert.Equal(t, aictx.ReviewReasonTimeout, seen[0].LastFailReason)
+	assert.False(t, seen[0].LastFailAt.IsZero())
+
+	rev.reply = nil
+	review(s, text("df -h"))
+	require.Len(t, seen, 2)
+	assert.Equal(t, Status{}, seen[1], "之后审核成功，通知已恢复")
+
+	review(s, text("free"))
+	assert.Len(t, seen, 2, "再成功一次状态没变，不通知")
+}
+
 func TestTransientFailuresShowInStatusWithoutNotifying(t *testing.T) {
 	rev := newReviewer()
 	rev.reply = func(call) (Answer, error) { return Answer{}, context.DeadlineExceeded }
