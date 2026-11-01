@@ -1,9 +1,10 @@
 package extension_settings_repo
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/glebarez/sqlite"
@@ -15,25 +16,18 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/extension_settings_entity"
 )
 
-// errorRecorder is a GORM logger that records every statement GORM would log as an error.
-type errorRecorder struct{ errs []error }
+// errLog collects what GORM's stock logger reports at error level; like the app's
+// database logger it reports ErrRecordNotFound, which a First miss returns.
+var errLog logBuffer
 
-func (l *errorRecorder) LogMode(logger.LogLevel) logger.Interface { return l }
-func (l *errorRecorder) Info(context.Context, string, ...any)     {}
-func (l *errorRecorder) Warn(context.Context, string, ...any)     {}
-func (l *errorRecorder) Error(context.Context, string, ...any)    {}
-func (l *errorRecorder) Trace(_ context.Context, _ time.Time, fc func() (string, int64), err error) {
-	if err != nil {
-		l.errs = append(l.errs, err)
-	}
-}
+type logBuffer struct{ bytes.Buffer }
 
-var errLog = &errorRecorder{}
+func (b *logBuffer) Printf(format string, args ...any) { fmt.Fprintf(&b.Buffer, format, args...) }
 
 func setupRepo(t *testing.T) (context.Context, ExtensionSettingsRepo) {
 	t.Helper()
-	errLog.errs = nil
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: errLog})
+	errLog.Reset()
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.New(&errLog, logger.Config{LogLevel: logger.Error})})
 	require.NoError(t, err)
 	require.NoError(t, gdb.AutoMigrate(&extension_settings_entity.ExtensionSettings{}))
 	return db.WithContextDB(context.Background(), gdb), NewExtensionSettings()
@@ -44,7 +38,7 @@ func TestFindReturnsNilWhenNothingIsStored(t *testing.T) {
 	got, err := r.Find(ctx, "jev")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	assert.Empty(t, errLog.errs, "a miss is an ordinary result and must not be logged as an error")
+	assert.Empty(t, errLog.String(), "a miss is an ordinary result and must not be logged as an error")
 }
 
 func TestSaveReplacesTheExtensionsOneRow(t *testing.T) {

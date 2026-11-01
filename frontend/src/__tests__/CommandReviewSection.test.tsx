@@ -133,4 +133,31 @@ describe("CommandReviewSection", () => {
     unmount();
     expect(EventsOff).toHaveBeenCalledWith("command-review:status");
   });
+
+  it("状态事件早于设置读取的回包到达时，不被回包里读取时的旧状态盖掉", async () => {
+    const handlers = new Map<string, (data: unknown) => void>();
+    vi.mocked(EventsOn).mockImplementation(((event: string, handler: (data: unknown) => void) => {
+      handlers.set(event, handler);
+      return vi.fn();
+    }) as never);
+    let answer: (v: unknown) => void = () => {};
+    vi.mocked(GetCommandReviewSettings).mockReturnValue(new Promise((r) => (answer = r)) as never);
+    await renderSection();
+
+    // 后端读完状态（还没失败）之后才出现失败：事件先到，回包后到。
+    act(() => handlers.get("command-review:status")?.({ lastFailReason: "timeout", lastFailAt: 1700000000000 }));
+    await act(async () => answer({ timeoutMs: 5000, lastFailReason: "", lastFailAt: 0 }));
+    expect(screen.getByTestId("command-review-last-fail")).toHaveTextContent("commandReview.settings.lastFail");
+
+    // 保存超时后重新读取同样不能盖掉已推送的状态。
+    vi.mocked(GetCommandReviewSettings).mockResolvedValue({
+      timeoutMs: 8000,
+      lastFailReason: "",
+      lastFailAt: 0,
+    } as never);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "commandReview.settings.save" }));
+    });
+    expect(screen.getByTestId("command-review-last-fail")).toHaveTextContent("commandReview.settings.lastFail");
+  });
 });

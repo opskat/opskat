@@ -14,6 +14,8 @@ import type { command_review_svc, system } from "../../../wailsjs/go/models";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+type FailStatus = Pick<system.CommandReviewSettings, "lastFailReason" | "lastFailAt">;
+
 // 与 internal/app/system/command_review.go 的校验一致。
 const TIMEOUT_MIN = 1000;
 const TIMEOUT_MAX = 60000;
@@ -47,12 +49,10 @@ export function CommandReviewSection() {
   }, [applySettings]);
 
   // 后端在失败出现或恢复时推送最新状态：打开着也能实时更新，不动正在编辑的超时。
-  useWailsEvent(
-    "command-review:status",
-    useCallback((st: Pick<system.CommandReviewSettings, "lastFailReason" | "lastFailAt">) => {
-      setSettings((prev) => prev && { ...prev, lastFailReason: st.lastFailReason, lastFailAt: st.lastFailAt });
-    }, [])
-  );
+  // 订阅之后的每次变化都有事件，所以收到过事件就以最近一次为准——读取设置的回包可能是
+  // 事件之前读的旧状态，不能盖掉它。
+  const [liveStatus, setLiveStatus] = useState<FailStatus | null>(null);
+  useWailsEvent("command-review:status", setLiveStatus);
 
   const selectReviewer = async (name: string) => {
     try {
@@ -92,6 +92,7 @@ export function CommandReviewSection() {
     );
   }
 
+  const lastFail: FailStatus = liveStatus ?? settings;
   const active = state.reviewers.find((r) => r.name === state.active);
   const label = (r: command_review_svc.ReviewerInfo) =>
     r.usable && !r.signed ? `${r.displayName} · ${t("commandReview.settings.unsigned")}` : r.displayName;
@@ -184,7 +185,7 @@ export function CommandReviewSection() {
           <p className="text-xs text-muted-foreground">{t("commandReview.settings.timeoutHint")}</p>
         </div>
 
-        {settings.lastFailReason && (
+        {lastFail.lastFailReason && (
           <div
             data-testid="command-review-last-fail"
             className="flex items-start gap-1.5 rounded-md bg-warning/15 px-2.5 py-2 text-xs text-foreground"
@@ -192,8 +193,8 @@ export function CommandReviewSection() {
             <AlertTriangle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
             <span>
               {t("commandReview.settings.lastFail", {
-                reason: failReasonLabel(t, settings.lastFailReason),
-                time: new Date(settings.lastFailAt).toLocaleString(),
+                reason: failReasonLabel(t, lastFail.lastFailReason),
+                time: new Date(lastFail.lastFailAt).toLocaleString(),
               })}
             </span>
           </div>
