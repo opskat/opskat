@@ -2,7 +2,9 @@ package extreg
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -11,16 +13,26 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/cmdline"
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // pageOnlyRefusal is what exec answers for a tool declared pageOnly: such a tool has no
-// policy action to check, so the only entry to it is the extension's own pages.
-const pageOnlyRefusal = "该工具只供扩展页面使用"
+// policy action to check, so the only entry to it is the extension's own pages. Worded
+// in the caller's language, like the policy messages (aictx policy language on ctx).
+func pageOnlyRefusal(ctx context.Context, ext, tool string) error {
+	return errors.New(policy.PolicyFmt(ctx,
+		"%s.%s: this tool is only for the extension's own pages",
+		"%s.%s: 该工具只供扩展页面使用", ext, tool))
+}
 
 // hostOnlyRefusal is what exec and a page call answer for a tool declared hostOnly:
-// only host subsystems call it (CallHostTool).
-const hostOnlyRefusal = "该工具只供宿主调用"
+// only host subsystems call it (CallHostTool). Worded like pageOnlyRefusal.
+func hostOnlyRefusal(ctx context.Context, ext, tool string) error {
+	return errors.New(policy.PolicyFmt(ctx,
+		"%s.%s: this tool can only be called by the host",
+		"%s.%s: 该工具只供宿主调用", ext, tool))
+}
 
 // parseCommand 把 `<tool> --flag=value`（或 `<tool> --flag value`，见下）解析成工具名
 // 与按 manifest 声明类型转换过的 JSON 参数。扩展名不在命令里：资产类型 → 扩展是一对一的
@@ -34,7 +46,7 @@ const hostOnlyRefusal = "该工具只供宿主调用"
 //
 // --json 是逃生口：flag DSL 表达不了嵌套结构，而 manifest 允许声明它们；没有逃生口
 // 就会出现"注册了却调不动"的工具。它与其它 flag 互斥——两者混用时哪个赢都是猜。
-func parseCommand(m *Manifest, command string) (string, []byte, error) {
+func parseCommand(ctx context.Context, m *Manifest, command string) (string, []byte, error) {
 	c, err := cmdline.Parse(command, flagGrammar(m))
 	if err != nil {
 		return "", nil, err
@@ -46,10 +58,10 @@ func parseCommand(m *Manifest, command string) (string, []byte, error) {
 			m.Name, toolName, strings.Join(toolNames(m, false), ", "))
 	}
 	if def.PageOnly {
-		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, pageOnlyRefusal)
+		return "", nil, pageOnlyRefusal(ctx, m.Name, toolName)
 	}
 	if def.HostOnly {
-		return "", nil, fmt.Errorf("%s.%s: %s", m.Name, toolName, hostOnlyRefusal)
+		return "", nil, hostOnlyRefusal(ctx, m.Name, toolName)
 	}
 	if len(c.Args) > 0 {
 		// 位置参数无处可去：manifest 的 parameters 只有具名属性。静默丢弃会让模型
@@ -123,8 +135,8 @@ func flagTakesValue(m *Manifest, verb, name string) bool {
 
 // canonicalCommand 把一条命令还原为规范形式：工具名 + 按名称排序的 flag。策略匹配、
 // 审批弹窗、审计与 grant 都用它，所以同一次调用无论模型怎么排列 flag 都得到同一个串。
-func canonicalCommand(m *Manifest, command string) (string, error) {
-	toolName, argsJSON, err := parseCommand(m, command)
+func canonicalCommand(ctx context.Context, m *Manifest, command string) (string, error) {
+	toolName, argsJSON, err := parseCommand(ctx, m, command)
 	if err != nil {
 		return "", err
 	}
@@ -194,14 +206,14 @@ func toolNames(m *Manifest, includePageOnly bool) []string {
 // its canonical form. A page has no command line, so it never goes through
 // parseCommand — but it must be held to the same declaration, which is what keeps
 // unknown keys (and the opsctl-only `<flag>-file` spelling) out of the guest.
-func ValidateToolArgs(m *Manifest, tool string, raw []byte) ([]byte, error) {
+func ValidateToolArgs(ctx context.Context, m *Manifest, tool string, raw []byte) ([]byte, error) {
 	def, ok := toolDef(m, tool)
 	if !ok {
 		return nil, fmt.Errorf("extension %s has no tool %q (available: %s)",
 			m.Name, tool, strings.Join(toolNames(m, true), ", "))
 	}
 	if def.HostOnly {
-		return nil, fmt.Errorf("%s.%s: %s", m.Name, tool, hostOnlyRefusal)
+		return nil, hostOnlyRefusal(ctx, m.Name, tool)
 	}
 	return validateToolArgs(m.Name, def, raw)
 }

@@ -340,15 +340,15 @@ func TestCanonicalizeIsStableAndRejectsBadCommandsBeforeApproval(t *testing.T) {
 	require.True(t, ok)
 
 	asset := &asset_entity.Asset{ID: 1, Type: "acme-store"}
-	a, err := canon(asset, "list_objects --maxKeys=10 --bucket=prod")
+	a, err := canon(context.Background(), asset, "list_objects --maxKeys=10 --bucket=prod")
 	require.NoError(t, err)
-	b, err := canon(asset, "list_objects --bucket=prod --maxKeys=10")
+	b, err := canon(context.Background(), asset, "list_objects --bucket=prod --maxKeys=10")
 	require.NoError(t, err)
 	assert.Equal(t, a, b, "flag order must not change the policy/grant subject")
 
-	_, err = canon(asset, "list_objects --nope=1")
+	_, err = canon(context.Background(), asset, "list_objects --nope=1")
 	require.Error(t, err, "an undeclared flag must fail before the approval dialog")
-	_, err = canon(asset, "no_such_tool")
+	_, err = canon(context.Background(), asset, "no_such_tool")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list_objects")
 }

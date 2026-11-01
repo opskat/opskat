@@ -165,7 +165,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		// 与 handleExec 的第 8 步同一理由（kafka 的双 token 串就是靠这条才对得上）。
 		checkCommand := cmd.Command
 		if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-			canonical, cerr := canonicalize(asset, cmd.Command)
+			canonical, cerr := canonicalize(ctx, asset, cmd.Command)
 			if cerr != nil {
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,

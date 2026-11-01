@@ -81,7 +81,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	checkCommand := command
 	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-		canonicalCommand, err := canonicalize(asset, command)
+		canonicalCommand, err := canonicalize(ctx, asset, command)
 		if err != nil {
 			// 与其他三条短路路径同样记一条 decision=deny 的审计行：规范化失败的命令
 			// 从不执行，但模型尝试过什么本身有审计价值——尤其是那些**永远**过不了

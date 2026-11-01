@@ -1,6 +1,7 @@
 package execimpl
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,7 +175,7 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 
 		asset := skillExampleAsset(t, assetType)
 		for _, ex := range examples {
-			if _, err := canonicalize(asset, localizeFileFlag(ex.command)); err != nil {
+			if _, err := canonicalize(context.Background(), asset, localizeFileFlag(ex.command)); err != nil {
 				t.Errorf("%s/SKILL.md (body line %d) documents %q, but the registered canonicalizer rejects it: %v",
 					assetType, ex.line, ex.command, err)
 			}

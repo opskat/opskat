@@ -81,11 +81,12 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
+	langCtx := i18n.Ctx(e.ctx, e.lang.Lang())
 	args := []byte(argsJSON)
 	if argsJSON == "" {
 		args = []byte("{}")
 	}
-	args, err = extreg.ValidateToolArgs(view, tool, args)
+	args, err = extreg.ValidateToolArgs(langCtx, view, tool, args)
 	if err != nil {
 		return "", err
 	}
@@ -94,7 +95,7 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
-	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), extName, invocationID, ext.Plugin.CancelTool)
+	ctx, end, err := e.toolCalls.begin(langCtx, extName, invocationID, ext.Plugin.CancelTool)
 	if err != nil {
 		return "", err
 	}

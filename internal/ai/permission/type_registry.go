@@ -318,7 +318,15 @@ type ExecFunc func(ctx context.Context, asset *asset_entity.Asset, command, scop
 // CanonicalizeFunc 把模型给的原始命令规范化为"真正会被执行、也应被策略匹配"的形式。
 // 仅当某类型执行前会改写命令时才需要注册（k8s 注入 --context/--namespace；etcd 走
 // ParseCommand+FormatCommand 的 round trip，规范化大小写/复合命令拼写/flag 顺序）。
-type CanonicalizeFunc func(asset *asset_entity.Asset, command string) (string, error)
+// ctx 携带调用方语言（aictx.PolicyLang），规范化阶段的拒绝文案据此选中英文。
+type CanonicalizeFunc func(ctx context.Context, asset *asset_entity.Asset, command string) (string, error)
+
+// CanonicalizeWithoutContext 把不产生本地化文案的规范化函数适配成 CanonicalizeFunc。
+func CanonicalizeWithoutContext(f func(asset *asset_entity.Asset, command string) (string, error)) CanonicalizeFunc {
+	return func(_ context.Context, asset *asset_entity.Asset, command string) (string, error) {
+		return f(asset, command)
+	}
+}
 
 // PolicyStringsFunc 把一条命令展开为它实际请求的权限串（`<action> <resource>`）。
 //

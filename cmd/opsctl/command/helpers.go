@@ -162,7 +162,7 @@ func prepareExecCommand(ctx context.Context, asset *asset_entity.Asset, command 
 
 	checkCommand := command
 	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-		canonical, err := canonicalize(asset, command)
+		canonical, err := canonicalize(ctx, asset, command)
 		if err != nil {
 			return "", err
 		}

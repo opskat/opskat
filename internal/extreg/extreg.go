@@ -272,8 +272,8 @@ func tableCell(s string) string {
 // 一条 flag 写错、工具名不存在的命令会在弹出审批框之前失败，而不是让用户先点头、
 // 批准之后才发现命令根本调不动。返回的规范串同时是策略匹配、审批展示与 grant 的主体。
 func canonicalize(l loaded) permission.CanonicalizeFunc {
-	return func(_ *asset_entity.Asset, command string) (string, error) {
-		return canonicalCommand(l.manifest, command)
+	return func(ctx context.Context, _ *asset_entity.Asset, command string) (string, error) {
+		return canonicalCommand(ctx, l.manifest, command)
 	}
 }
 
@@ -281,7 +281,7 @@ func canonicalize(l loaded) permission.CanonicalizeFunc {
 // 顺序契约），因此这里不再做任何策略判断——那是 policyCheck 的事。
 func execTool(l loaded) permission.ExecFunc {
 	return func(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
-		toolName, argsJSON, err := parseCommand(l.manifest, command)
+		toolName, argsJSON, err := parseCommand(ctx, l.manifest, command)
 		if err != nil {
 			return "", err
 		}
@@ -388,7 +388,7 @@ var errClassifyFailed = errors.New("extension policy classification failed")
 // The error is either the tool refusing the arguments — an
 // *extension.ArgsRejectedError, with call.tool set — or errClassifyFailed.
 func classifyCommand(ctx context.Context, l loaded, command string) (classifiedCall, error) {
-	toolName, argsJSON, err := parseCommand(l.manifest, command)
+	toolName, argsJSON, err := parseCommand(ctx, l.manifest, command)
 	if err != nil {
 		// 到不了这里：canonicalize 已经用同一个解析器跑过一遍。真发生了就是
 		// fail-closed 的"分类失败"，而不是放行或落 grant。
