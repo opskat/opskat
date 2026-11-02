@@ -53,7 +53,6 @@ func TestDecodeAndExecuteForms(t *testing.T) {
 		". <(echo aWQ= | base64 -d)",
 		`python3 -c "$(echo aWQ= | base64 -d)"`,
 		"echo aWQ= | base64 -d | xargs -I{} sh -c {}",
-		"echo aWQ= | base64 -d | xargs",
 		"echo aWQ= | base64 -d | /bin/sh",
 		"echo aWQ= | ba''se64 -d | s\\h",
 		"ssh h \"bash -c \\\"echo aWQ= | base64 -d | sh\\\"\"",
@@ -185,6 +184,117 @@ func TestDynamicCommandNameWithoutExecution(t *testing.T) {
 			got, err := DecodesAndRuns(cmd)
 			require.NoError(t, err)
 			assert.False(t, got)
+		})
+	}
+}
+
+// 修正轮 5 代码评审列出的误判（修正轮 6）：包装启动的选项与参数不是命令名，作为参数出现的名字
+// 不是在运行该程序，同一命令里定义的函数按内容判断，路径命令名只有目录动态时按最后一段判断，
+// find -exec 运行的是解码器时只算解码。这些命令照常送审。
+func TestRevision6FalsePositivesAreReviewed(t *testing.T) {
+	cases := []string{
+		`log(){ echo "$@"; }; log start; ls; log done`,
+		`env FOO=$BAR python3 app.py`,
+		`timeout $T bash -c 'ls'`,
+		`ssh host '$HOME/bin/tool --restart'`,
+		`systemctl restart ssh && $EDITOR /etc/ssh/sshd_config`,
+		`find . -name '*.b64' -exec base64 -d {} \;`,
+		`sudo -u $U systemctl restart nginx`,
+		`nice -n $N tar czf a.tgz dir`,
+		`chroot $ROOT ls /etc`,
+		`run(){ "$@"; }; run ls; run df -h`,
+		`command -v sh >/dev/null && echo aGk= | base64 -d`,
+		// xargs 不带程序时运行的是 echo
+		"echo aWQ= | base64 -d | xargs",
+		// 解释器代码里只有编码、没有解码
+		`python3 -c 'import base64;print(base64.b64encode(b"x"))'`,
+		`node -e "console.log(Buffer.from('hi').toString('base64'))"`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
+		})
+	}
+}
+
+// 包装启动按它实际运行的程序判断（修正轮 6）：运行 shell、解释器或无法静态确定的程序算执行代码，
+// 运行解码器算解码；watch、parallel 把参数拼成脚本交给 shell。修正轮 5 代码评审列出的缺口都不送审。
+func TestWrappersAreJudgedByTheProgramTheyRun(t *testing.T) {
+	cases := []string{
+		`exec "$SHELL" -l`,
+		`watch -n1 'echo aWQ= | base64 -d | sh'`,
+		`watch -n1 echo aWQ= '|' base64 -d '|' sh`,
+		`echo aWQ= | watch -n 1 $b -d | sh`,
+		`parallel ::: 'echo aWQ= | base64 -d | sh'`,
+		`parallel ::: 'echo aWQ= > f' 'base64 -d f > a' 'sh a'`,
+		`parallel echo aWQ= '|' base64 -d '|' sh ::: x`,
+		`parallel -j 2 $b -d ::: f | sh`,
+		`echo 'echo aWQ= | base64 -d | sh' | parallel`,
+		`runuser -u x -- sh -c 'echo aWQ= | base64 -d | sh'`,
+		`echo aWQ= | runuser -u x -- $b -d | sh`,
+		`echo aWQ= | base64 -d | runuser -l x`,
+		`systemd-run --wait sh -c 'echo aWQ= | base64 -d | sh'`,
+		`echo aWQ= | systemd-run --wait -p User=x --unit u $b -d | sh`,
+		`echo aWQ= | base64 -d | sudo -s`,
+		`echo aWQ= | base64 -d | sudo -u $U bash`,
+		`echo aWQ= | base64 -d | timeout $T nice -n $N sh`,
+		`echo aWQ= | base64 -d > a; chroot $ROOT sh a`,
+		`echo aWQ= | base64 -d | /usr/bin/env -u X sh`,
+		`find . -name f -exec base64 -d {} \; -exec sh {} \;`,
+		`echo aWQ= | busybox base64 -d | busybox sh`,
+		`echo aWQ= | base64 -d | kubectl exec -i p -c c -- python3`,
+		// 同一命令里定义的函数、别名按内容判断：内容是解码时就是解码
+		`f(){ base64 -d; }; echo aWQ= | f | sh`,
+		`alias d='base64 -d'; echo aWQ= | d | sh`,
+		`alias s=sh; echo aWQ= | base64 -d | s`,
+		`r(){ command bash "$@"; }; echo aWQ= | base64 -d | r`,
+		// 子 shell 里定义的同名函数不影响外层运行的 sh
+		`bash -c 'sh(){ :; }'; echo aWQ= | base64 -d | sh`,
+		// 路径命令名只有目录动态时按最后一段的字面名判断
+		`$DIR/base64 -d | sh`,
+		`"$DIR"/base64 -d | sh`,
+		`echo aWQ= | ${D}/bin/base64 -d | sh`,
+		`echo aWQ= | base64 -d | $BIN/sh`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+}
+
+// 交给脚本解释器的代码（-c / -e 参数、heredoc、管道送入）里出现 base64 解码也算解码（修正轮 6）；
+// 解释器本身执行代码，所以这样的命令不送审。
+func TestBase64DecodingInInterpreterCode(t *testing.T) {
+	cases := []string{
+		`python3 -c 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+		`node -e "require('child_process').execSync(Buffer.from('aWQ=','base64').toString())"`,
+		`node -e "require('child_process').execSync(Buffer.from(s.trim(), 'base64').toString())"`,
+		`perl -MMIME::Base64 -e 'system(decode_base64("aWQ="))'`,
+		`ruby -rbase64 -e 'system(Base64.decode64("aWQ="))'`,
+		`ruby -e 'system("aWQ=".unpack1("m"))'`,
+		`php -r 'system(base64_decode("aWQ="));'`,
+		`deno eval 'import { decodeBase64 } from "jsr:@std/encoding"; base64.decode("aWQ=")'`,
+		`pwsh -Command '[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("aWQ="))'`,
+		`pwsh -EncodedCommand aQBkAA==`,
+		`node -e 'eval(atob("aWQ="))'`,
+		"python3 <<'EOF'\nimport base64,os\nos.system(base64.b64decode('aWQ=').decode())\nEOF",
+		`python3 <<< 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+		`echo 'import base64,os;os.system(base64.b64decode("aWQ=").decode())' | python3`,
+		`sudo -u x python3 -c 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+		`bash -c "python3 -c 'import base64,os;os.system(base64.b64decode(\"aWQ=\").decode())'"`,
+		`ssh h "python3 -c 'import base64,os;os.system(base64.b64decode(\"aWQ=\").decode())'"`,
+		`docker exec c python3 -c 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
 		})
 	}
 }
