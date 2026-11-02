@@ -671,6 +671,7 @@ func TestHandleExtDevInstallCommandReviewerAndSettingsEndpoint(t *testing.T) {
 			require.Contains(t, detail, "commandReviewer: true")
 			require.Contains(t, detail, "[HIGH RISK]")
 			require.Contains(t, detail, "without a human confirmation")
+			require.Contains(t, detail, "as-is")
 			require.NotContains(t, detail, "network.settingsEndpoint: true [HIGH RISK]")
 			if tc.marked {
 				require.Contains(t, detail, "network.settingsEndpoint: true (new)")

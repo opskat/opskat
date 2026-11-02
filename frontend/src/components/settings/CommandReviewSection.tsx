@@ -107,6 +107,9 @@ export function CommandReviewSection() {
         <CardDescription>{t("commandReview.settings.desc")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <p data-testid="command-review-disclosure" className="text-sm text-warning">
+          {t("commandReview.settings.disclosure")}
+        </p>
         <div className="grid gap-1.5">
           <Label>{t("commandReview.settings.reviewer")}</Label>
           {state.reviewers.length > 1 ? (

@@ -195,8 +195,20 @@ describe("ExtensionInstallConfirmDialog", () => {
     });
     const dialog = screen.getByRole("dialog");
     const alerts = within(dialog).getAllByRole("alert");
-    expect(alerts).toHaveLength(1);
+    expect(alerts).toHaveLength(2);
     expect(alerts[0]).toHaveTextContent("extension.commandReviewerWarning");
+  });
+
+  it("tells the user commands reach the commandReviewer as-is, secrets included", () => {
+    const handlers = captureHandlers();
+    render(<ExtensionInstallConfirmDialog />);
+    fire(handlers, "ext:install-confirm", {
+      ...upgrade,
+      capabilities: [{ kind: "commandReviewer", value: "", highRisk: true }],
+      added: [{ kind: "commandReviewer", value: "", highRisk: true }],
+    });
+    const alerts = within(screen.getByRole("dialog")).getAllByRole("alert");
+    expect(alerts.some((a) => a.textContent === "extension.commandReviewerDisclosure")).toBe(true);
   });
 
   it("lists each database driver, flags the plaintext-password risk and marks newly added drivers", () => {

@@ -233,8 +233,8 @@ func extDevGrantExplanation(kind, lang string) string {
 			" — may reach the addresses typed into the extension's own settings")
 	case extension_svc.CapCommandReviewer:
 		return i18n.Pick(lang,
-			" —— 在辅助审批与 Autopilot 下，它的审核结论可以让命令不经人工确认就执行",
-			" — under assisted approval and Autopilot its verdict can let commands run without a human confirmation")
+			" —— 在辅助审批与 Autopilot 下，它的审核结论可以让命令不经人工确认就执行；送审的命令原样发给它，命令里的密码、密钥也不例外",
+			" — under assisted approval and Autopilot its verdict can let commands run without a human confirmation; commands are sent to it as-is, including any passwords or keys in them")
 	}
 	return ""
 }

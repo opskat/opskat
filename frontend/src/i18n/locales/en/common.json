@@ -3252,6 +3252,7 @@
     "disableSuccess": "Extension disabled",
     "detail": "Details",
     "credentialsReadWarning": "This extension can read every password stored in its assets in plaintext (credentials: read). Keep it only if you trust its author.",
+    "commandReviewerDisclosure": "Commands are sent to this reviewer as they are, including any passwords or keys in them.",
     "commandReviewWarning": "This extension can let commands run without asking: under Assisted approval and Autopilot, a command it passes is executed directly. Only install review extensions you trust.",
     "settings": {
       "title": "Settings",
@@ -3690,7 +3691,8 @@
     },
     "settings": {
       "title": "Command review",
-      "desc": "For assets using Assisted approval or Autopilot, a command the rules cannot decide is first judged by the command reviewer an extension provides, which stops only clearly dangerous operations. Before review, decoded scripts are expanded and passwords and other secrets are masked.",
+      "desc": "For assets using Assisted approval or Autopilot, a command the rules cannot decide is first judged by the command reviewer an extension provides, which stops only clearly dangerous operations. Before review, decoded scripts are expanded.",
+      "disclosure": "Commands are sent to the reviewer exactly as written, including any passwords or keys in them.",
       "timeout": "Review timeout (ms)",
       "timeoutHint": "Timeout for each call to the command reviewer; a timed-out call is retried once",
       "timeoutRange": "Timeout must be between {{min}} and {{max}} ms",
@@ -3739,8 +3741,8 @@
       "assistedDesc": "Run automatically when model review passes; otherwise ask you",
       "autopilotDesc": "Run automatically when model review passes; otherwise reject and tell the caller why, without waiting",
       "confirmTitle": "Turn on {{mode}}?",
-      "confirmAssisted": "Commands that no rule decides will first be reviewed by the review model and run without asking you when the review passes. If the review does not pass or fails, you are still asked. Commands (with sensitive values replaced) are sent to the review service in Settings.",
-      "confirmAutopilot": "Commands that no rule decides will first be reviewed by the review model. They run when the review passes and are rejected without waiting for you when judged clearly dangerous or when the review fails. Meant for unattended use. Commands (with sensitive values replaced) are sent to the review service in Settings.",
+      "confirmAssisted": "Commands that no rule decides will first be reviewed by the review model and run without asking you when the review passes. If the review does not pass or fails, you are still asked. Commands are sent as-is, passwords and keys included, to the review service in Settings.",
+      "confirmAutopilot": "Commands that no rule decides will first be reviewed by the review model. They run when the review passes and are rejected without waiting for you when judged clearly dangerous or when the review fails. Meant for unattended use. Commands are sent as-is, passwords and keys included, to the review service in Settings.",
       "confirm": "Turn on",
       "saved": "Permission mode saved",
       "noReviewer": "No command reviewer is available: Assisted approval asks you about these commands and Autopilot refuses them.",

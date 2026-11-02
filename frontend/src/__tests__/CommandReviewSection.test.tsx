@@ -51,6 +51,11 @@ describe("CommandReviewSection", () => {
     expect(useSettingsUiStore.getState().extensionDetail).toBe("jev");
   });
 
+  it("写明命令原样发给审核器，含其中的密码与密钥", async () => {
+    await renderSection();
+    expect(screen.getByTestId("command-review-disclosure")).toHaveTextContent("commandReview.settings.disclosure");
+  });
+
   it("在用的审核器设置没填完时提示未配置，并能打开它的设置", async () => {
     vi.mocked(GetCommandReviewState).mockResolvedValue(state({ problem: "not_configured" }));
     useSettingsUiStore.setState({ activeTab: "ai", extensionDetail: null });

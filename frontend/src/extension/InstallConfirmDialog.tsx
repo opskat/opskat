@@ -138,6 +138,9 @@ export function ExtensionInstallConfirmDialog() {
         ...Object.entries(HIGH_RISK_WARNING_KEYS)
           .filter(([kind]) => current.capabilities.some((c) => c.kind === kind && c.highRisk))
           .map(([, key]) => key),
+        ...(current.capabilities.some((c) => c.kind === COMMAND_REVIEWER_KIND)
+          ? ["extension.commandReviewerDisclosure"]
+          : []),
         ...(current.capabilities.some((c) => c.kind === DATABASE_DRIVER_KIND)
           ? ["extension.databaseDriversWarning"]
           : []),
