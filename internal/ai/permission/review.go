@@ -210,8 +210,8 @@ func autopilotDenyMessage(ctx context.Context, info *aictx.ReviewInfo) string {
 // reason 是规则层给出的说明（如"策略无法逐条校验其中的子命令，请修正命令语法后重试"）。
 func unreviewableDenyMessage(ctx context.Context, reason string) string {
 	return policy.PolicyFmt(ctx,
-		"%s. Autopilot does not send a command the policy cannot check one sub-command at a time to the model review; the command was not executed.",
-		"%s。Autopilot 不会把无法逐条检查的命令交给模型审核，命令没有执行。",
+		"%s. Autopilot does not send a command the policy cannot check to the model review; the command was not executed.",
+		"%s。Autopilot 不会把规则无法检查的命令交给模型审核，命令没有执行。",
 		reason)
 }
 

@@ -339,10 +339,11 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 		}
 		if err != nil {
 			// 没有 action / resources，规则和审核器都无从判断：只能由人决定，不送审。
+			// 原因与权限模式无关（默认模式下照样随 NeedConfirm 给出），由各模式自己说明后果。
 			return aictx.CheckResult{
 				Decision: aictx.NeedConfirm,
-				Message: aipolicy.PolicyMsg(ctx, "the extension could not classify this command, so it needs manual confirmation and is not sent for review",
-					"扩展没能对这条命令分类，需要人工确认，不会送去审核"),
+				Message: aipolicy.PolicyMsg(ctx, "the extension could not classify this command (its policy check failed or named an action the tool does not declare), so no rule can match it",
+					"扩展没能对这条命令分类（策略检查出错或给出了工具未声明的动作），没有规则能匹配它"),
 				Unreviewable: true,
 			}
 		}

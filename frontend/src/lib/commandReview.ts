@@ -88,7 +88,7 @@ export function failReasonLabel(t: TFunction, reason: string | undefined): strin
   return t(`commandReview.reason.${known}`);
 }
 
-// 审核器在这里用不了的原因，与后端 command_review_svc.Unusable* 一致。
+// 审核器在这里用不了的原因，与后端 reviewerreg.Unusable* 一致。
 const REVIEWER_UNUSABLE_REASONS: readonly string[] = [
   "not_running",
   "digest_mismatch",

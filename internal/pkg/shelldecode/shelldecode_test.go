@@ -101,6 +101,31 @@ func TestDecodeExpandsWriteThenRunOnlyWhenAdjacent(t *testing.T) {
 	}
 }
 
+// 解码结果追加进文件时，文件里还有原来的内容，执行的不只是解出来的脚本；写出的文件经
+// 重定向、管道、命令替换或 exec / timeout 这类代为执行的程序交给 shell 时，也是在执行它，
+// 只是不是能展开的那种写法。两者都按解不开处理，不能只把编码后的外壳送审。
+func TestDecodeFailsClosedOnWrittenFilesItCannotExpand(t *testing.T) {
+	for _, cmd := range []string{
+		"echo aWQ= | base64 -d >> a.sh; sh a.sh",
+		"echo aWQ= | base64 -d | tee -a a.sh >/dev/null && sh a.sh",
+		"echo aWQ= | base64 -d > /tmp/a.sh; sh < /tmp/a.sh",
+		"echo aWQ= | base64 -d > /tmp/a.sh; cat /tmp/a.sh | sh",
+		"echo aWQ= | base64 -d > a.sh; exec sh a.sh",
+		"echo aWQ= | base64 -d > a.sh && timeout 5 sh a.sh",
+		`echo aWQ= | base64 -d > a.sh; bash -c "$(cat a.sh)"`,
+		"bash -c 'echo aWQ= | base64 -d > /tmp/a.sh'; bash /tmp/a.sh",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			_, err := Decode(cmd)
+			assert.ErrorIs(t, err, ErrUndecodable)
+		})
+	}
+	// 只是查看写出的文件，没有执行它：没有要追加的脚本。
+	got, err := Decode("echo aWQ= | base64 -d > a.sh; cat a.sh")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
 func TestDecodeRefusesWhatItCannotRead(t *testing.T) {
 	payload := base64.StdEncoding.EncodeToString([]byte("docker compose up -d"))
 	twice := base64.StdEncoding.EncodeToString([]byte(payload))

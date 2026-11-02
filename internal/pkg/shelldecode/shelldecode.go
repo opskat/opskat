@@ -30,7 +30,9 @@ const maxDecodeDepth = 3
 // 写法时，再解出的脚本跟在它后面。没有这种写法时返回 nil。
 //
 // 「写入文件再执行该文件」只在写入与执行相邻（中间至多隔着 chmod）时展开；中间切换了目录、
-// 别的命令可能改写了这个文件，或执行处在另一个分支、后台、子 shell 里，都按解不开处理。
+// 别的命令可能改写了这个文件，或执行处在另一个分支、后台、子 shell 里，都按解不开处理；
+// 解码结果是追加进文件的，或写出的文件经重定向、管道、替换、代为执行的程序交给能执行代码
+// 的命令，也按解不开处理。
 // 解不开时返回 ErrUndecodable，命令或解码出的脚本解析不了时返回 ErrUnparseable。
 func Decode(command string) ([]string, error) {
 	return decodeText(command, 0)
@@ -76,17 +78,31 @@ func (d *decoder) decoded(script string) error {
 
 // literal 在原命令里字面写出的脚本（bash -c '…'、eval '…'）里找解码执行。脚本本身已经在
 // 原命令里，不追加；解析不了的字面脚本也不是这种写法（shell 执行它同样报语法错），原样送审。
+// 它里面把解码结果写进的文件记为解不开：之后在外面执行这些文件时看不清执行的是什么
+// （它可能在里面切换过目录）。
 func (d *decoder) literal(script string) error {
 	if !strings.Contains(script, "base64") {
 		return nil
 	}
 	file, parseErr := syntax.NewParser().Parse(strings.NewReader(script), "")
 	if parseErr == nil {
-		nested, err := decodeFile(file, d.depth+1)
-		if err != nil {
-			return err
-		}
-		d.scripts = append(d.scripts, nested...)
+		return d.literalFile(file)
+	}
+	return nil
+}
+
+// literalFile 是 literal 解析出的字面脚本里的解码执行与解码写出的文件。
+func (d *decoder) literalFile(file *syntax.File) error {
+	if d.depth+1 > maxDecodeDepth {
+		return ErrUndecodable
+	}
+	nested := &decoder{depth: d.depth + 1, writes: map[string]string{}}
+	if err := nested.list(file.Stmts); err != nil {
+		return err
+	}
+	d.scripts = append(d.scripts, nested.scripts...)
+	for p := range nested.writes {
+		d.writes[p] = ""
 	}
 	return nil
 }
@@ -200,11 +216,42 @@ func (d *decoder) call(stmt *syntax.Stmt, call *syntax.CallExpr, fresh []string)
 		}
 	}
 	// 能执行代码的程序（shell、eval、解释器、代为执行命令的程序，或命令名本身是替换）
-	// 带着上面展不开的解码：经重定向、进程替换或参数里的替换把解码结果交给它执行，看不清。
-	if runsCode(call) && hasDecodedExecution(stmt) {
+	// 带着上面展不开的解码，或提到解码写出的文件：经重定向、进程替换、参数里的替换或代为
+	// 执行把解码结果交给它执行，看不清。
+	if runsCode(call) && (hasDecodedExecution(stmt) || d.namesWritten(stmt)) {
 		return ErrUndecodable
 	}
 	return nil
+}
+
+// namesWritten 判断 node 里有没有哪个词（参数、重定向目标、替换里的词）是解码写出的文件
+// （或可能是它的文件）。
+func (d *decoder) namesWritten(node syntax.Node) bool {
+	if len(d.writes) == 0 {
+		return false
+	}
+	found := false
+	syntax.Walk(node, func(n syntax.Node) bool {
+		if found {
+			return false
+		}
+		if w, ok := n.(*syntax.Word); ok {
+			if v, lit := cmdline.ShellValue(w); lit && v != "" {
+				file := path.Clean(v)
+				_, written := d.writes[file]
+				found = written || d.mayBeWritten(file)
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// mayRunCode 判断管道里的这一段会不会把读到的内容当代码执行：能执行代码的简单命令，
+// 或任何复合命令（里面可能有）。
+func mayRunCode(stmt *syntax.Stmt) bool {
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	return !ok || runsCode(call)
 }
 
 // mayBeWritten 判断 file 会不会是解码写出的某个文件换了一种写法：文件名相同、又有一边是
@@ -218,21 +265,23 @@ func (d *decoder) mayBeWritten(file string) bool {
 	return false
 }
 
-// runsWrittenFile 判断 stmt 里有没有哪条命令执行了解码写出的文件（或可能是它的文件）。
+// runsWrittenFile 判断 stmt 里有没有哪条命令执行了解码写出的文件（或可能是它的文件）：
+// 直接执行它，或者提到它、里面又有能执行代码的命令。
 func (d *decoder) runsWrittenFile(stmt *syntax.Stmt) bool {
-	found := false
+	found, runner := false, false
 	syntax.Walk(stmt, func(n syntax.Node) bool {
 		call, ok := n.(*syntax.CallExpr)
 		if !ok || found {
 			return !found
 		}
+		runner = runner || runsCode(call)
 		if file, ok := executedFile(call); ok {
 			_, written := d.writes[file]
 			found = written || d.mayBeWritten(file)
 		}
 		return !found
 	})
-	return found
+	return found || (runner && d.namesWritten(stmt))
 }
 
 // pipeline 处理管道：解码结果交给读标准输入的 shell 时追加脚本；只写进文件时记下这些文件
@@ -261,6 +310,10 @@ func (d *decoder) pipeline(stmt *syntax.Stmt, fresh []string) ([]string, error) 
 	for i, stage := range stages {
 		if i == dec {
 			continue
+		}
+		// 读出解码写出的文件、再经管道交给能执行代码的一段（cat a.sh | sh）：看不清。
+		if d.namesWritten(stage) && slices.ContainsFunc(stages[i+1:], mayRunCode) {
+			return nil, ErrUndecodable
 		}
 		if _, err := d.stmt(stage, fresh); err != nil {
 			return nil, err
@@ -348,23 +401,27 @@ func runsCode(call *syntax.CallExpr) bool {
 }
 
 // decodedWritePaths 是解码结果写进的文件：解码那一段及其后各段的输出重定向、base64 -o、
-// tee 的文件参数。路径按 path.Clean 规范化，与执行时的写法对得上。
-func decodedWritePaths(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int) []string {
-	var paths []string
-	add := func(p string, ok bool) {
+// tee 的文件参数。路径按 path.Clean 规范化，与执行时的写法对得上。appends 表示其中有追加
+// 写入（>>、tee -a）：文件里还有原来的内容，不只是解出来的脚本。
+func decodedWritePaths(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int) (paths []string, appends bool) {
+	add := func(p string, appended, ok bool) {
 		if ok {
 			paths = append(paths, path.Clean(p))
+			appends = appends || appended
 		}
 	}
-	add(base64OutputPath(stages[dec]))
+	p, ok := base64OutputPath(stages[dec])
+	add(p, false, ok)
 	for _, stage := range stages[dec:] {
 		add(outputPath(stage))
-		paths = append(paths, teeFiles(stage)...)
+		files, appended := teeFiles(stage)
+		paths = append(paths, files...)
+		appends = appends || (appended && len(files) > 0)
 	}
 	if dec == len(stages)-1 {
 		add(outputPath(stmt))
 	}
-	return paths
+	return paths, appends
 }
 
 // base64OutputPath 是 base64 -o / --output 写入的文件。
@@ -388,22 +445,29 @@ func base64OutputPath(stmt *syntax.Stmt) (string, bool) {
 	return "", false
 }
 
-// teeFiles 是 tee 写入的文件。
-func teeFiles(stmt *syntax.Stmt) []string {
+// teeFiles 是 tee 写入的文件，appends 表示 tee 是追加写入（-a / --append）。
+func teeFiles(stmt *syntax.Stmt) (files []string, appends bool) {
 	_, args, ok := callOf(stmt)
 	if !ok || len(args) == 0 {
-		return nil
+		return nil, false
 	}
 	if prog, lit := cmdline.ShellValue(args[0]); !lit || path.Base(prog) != "tee" {
-		return nil
+		return nil, false
 	}
-	var files []string
 	for _, arg := range args[1:] {
-		if word, lit := cmdline.ShellValue(arg); lit && word != "" && !strings.HasPrefix(word, "-") {
+		word, lit := cmdline.ShellValue(arg)
+		switch {
+		case !lit || word == "":
+		case word == "--append":
+			appends = true
+		case strings.HasPrefix(word, "--"):
+		case strings.HasPrefix(word, "-"):
+			appends = appends || strings.Contains(word, "a")
+		default:
 			files = append(files, path.Clean(word))
 		}
 	}
-	return files
+	return files, appends
 }
 
 func pipelineStages(stmt *syntax.Stmt) []*syntax.Stmt {
@@ -606,24 +670,25 @@ func redirectPayload(stmt *syntax.Stmt) (string, bool, bool) {
 	return "", false, false
 }
 
-func outputPath(stmt *syntax.Stmt) (string, bool) {
+// outputPath 是 stmt 的输出重定向写入的文件，appends 表示是追加写入（>>、&>>）。
+func outputPath(stmt *syntax.Stmt) (file string, appends, ok bool) {
 	if stmt == nil {
-		return "", false
+		return "", false, false
 	}
 	for _, r := range stmt.Redirs {
 		switch r.Op {
-		case syntax.RdrOut, syntax.RdrClob, syntax.RdrAll:
+		case syntax.RdrOut, syntax.RdrClob, syntax.RdrAll, syntax.AppOut, syntax.AppAll:
 			if r.Word == nil {
-				return "", false
+				return "", false, false
 			}
 			v, ok := cmdline.ShellValue(r.Word)
 			if !ok || v == "" {
-				return "", false
+				return "", false, false
 			}
-			return v, true
+			return v, r.Op == syntax.AppOut || r.Op == syntax.AppAll, true
 		}
 	}
-	return "", false
+	return "", false, false
 }
 
 // executedFile 是 call 当脚本执行的文件（source / . / shell 的脚本参数），或直接按路径执行的
@@ -715,15 +780,15 @@ func shellInvocation(args []*syntax.Word) (kind, file string, unknown bool) {
 	return invokeFile, file, false
 }
 
-// recordWrites 记下第 dec 段解码出来、写进了哪些文件，以及写进去的脚本；解不开的记为空，
-// 之后执行这些文件时按看不清处理。返回这些文件。
+// recordWrites 记下第 dec 段解码出来、写进了哪些文件，以及写进去的脚本；解不开或追加写入
+// （文件里还有原来的内容）的记为空，之后执行这些文件时按看不清处理。返回这些文件。
 func (d *decoder) recordWrites(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int) []string {
-	paths := decodedWritePaths(stmt, stages, dec)
+	paths, appends := decodedWritePaths(stmt, stages, dec)
 	if len(paths) == 0 {
 		return nil
 	}
 	script, err := decodeStage(stages, dec)
-	if err != nil {
+	if err != nil || appends {
 		script = ""
 	}
 	for _, p := range paths {

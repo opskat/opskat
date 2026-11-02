@@ -235,7 +235,7 @@ func TestApplyReview(t *testing.T) {
 					So(f.calls, ShouldBeEmpty)
 					So(r.Decision, ShouldEqual, aictx.Deny)
 					So(r.DecisionSource, ShouldEqual, aictx.SourceAutopilotDeny)
-					So(r.Message, ShouldContainSubstring, "不会把无法逐条检查的命令交给模型审核")
+					So(r.Message, ShouldContainSubstring, "不会把规则无法检查的命令交给模型审核")
 					So(r.Review, ShouldBeNil)
 				})
 				Convey("辅助审批仍然问人："+unenumerable, func() {
