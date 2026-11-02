@@ -13,13 +13,10 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
-	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 // Where an installed package came from, as recorded in extension_state.source.
@@ -91,55 +88,39 @@ func hashPackageFile(h io.Writer, dir, rel string) error {
 	return nil
 }
 
-// reviewerEligible 判断这条安装记录能不能当审核器：记录的摘要必须与现算的 sum 一致；
-// 商店安装一律合格且 signed；本地与开发安装在正式版不合格，其他构建合格但 signed 为假
-// （未经签名）。来源为空（迁移前的旧记录）一律不合格。
-func reviewerEligible(state *extension_state_entity.ExtensionState, sum string, app appversion.Info) (signed bool, err error) {
-	if state == nil || state.PackageSHA256 == "" || state.PackageSHA256 != sum {
-		return false, ineligible(command_review_svc.UnusableDigestMismatch,
-			errors.New("command reviewer package digest does not match the installed package"))
-	}
-	switch state.Source {
-	case InstallOriginStore:
-		return true, nil
-	case InstallOriginLocal, InstallOriginDev:
-		if app.Kind == appversion.KindRelease {
-			return false, ineligible(command_review_svc.UnusableStoreRequired,
-				fmt.Errorf("command reviewer must be installed from the store on a release build (installed from %s)", state.Source))
-		}
-		return false, nil
-	default:
-		return false, ineligible(command_review_svc.UnusableNoInstallRecord, errors.New("command reviewer has no recorded install source"))
-	}
+// Provenance 是一个已安装扩展的安装事实，只陈述不评判：哪些来源可以做什么由使用方决定
+// （例如命令审核器注册表）。
+type Provenance struct {
+	// Recorded 表示有安装记录；没有时其余字段为零值。
+	Recorded bool
+	// Source 是记录的安装来源（InstallOrigin*）；迁移前的旧记录可能为空。
+	Source string
+	// PackageSHA256 是此刻从磁盘现算的包摘要（PackageSHA256）。
+	PackageSHA256 string
+	// DigestMatches 表示现算的包摘要与安装时记录的一致（记录里没有摘要时为假）。
+	DigestMatches bool
 }
 
-func ineligible(code string, err error) error {
-	return &command_review_svc.IneligibleError{Code: code, Err: err}
-}
-
-// ReviewerEligibility 回答 name 这个扩展此刻能不能当命令审核器，以及它是否经官方商店
-// 签名。包摘要每次从磁盘现算再与安装记录比对，不运行扩展代码；不合格时的错误说明原因，
-// 调用方按审核失败处理。
-func (s *Service) ReviewerEligibility(ctx context.Context, name string) (signed bool, err error) {
+// Provenance 回答 name 这个扩展的安装事实。包摘要每次从磁盘现算再与安装记录比对，
+// 不运行扩展代码；没有安装记录不是错误（Recorded 为假），读不了记录或算不出摘要才是。
+func (s *Service) Provenance(ctx context.Context, name string) (Provenance, error) {
 	state, err := s.stateRepo.Find(ctx, name)
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		return false, fmt.Errorf("command reviewer %q: %w", name,
-			ineligible(command_review_svc.UnusableNoInstallRecord, errors.New("no install record")))
+		return Provenance{}, nil
 	case err != nil:
-		return false, fmt.Errorf("command reviewer %q: read install record: %w", name, err)
+		return Provenance{}, fmt.Errorf("extension %q: read install record: %w", name, err)
 	}
 	sum, err := PackageSHA256(s.manager.ExtDir(name))
 	if err != nil {
-		return false, fmt.Errorf("command reviewer %q: %w", name, err)
+		return Provenance{}, fmt.Errorf("extension %q: %w", name, err)
 	}
-	signed, err = reviewerEligible(state, sum, currentApp())
-	if err != nil {
-		logger.Ctx(ctx).Warn("command reviewer not eligible",
-			zap.String("extension", name), zap.String("source", state.Source), zap.Error(err))
-		return false, fmt.Errorf("command reviewer %q: %w", name, err)
-	}
-	return signed, nil
+	return Provenance{
+		Recorded:      true,
+		Source:        state.Source,
+		PackageSHA256: sum,
+		DigestMatches: state.PackageSHA256 != "" && state.PackageSHA256 == sum,
+	}, nil
 }
 
 // recordProvenance 写入或覆盖安装来源与包摘要，同时设置启用状态，返回被覆盖的旧记录

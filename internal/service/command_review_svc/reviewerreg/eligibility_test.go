@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,56 +19,80 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
-// A reviewer the eligibility check refuses is never used: the review fails with the
-// reason, the settings list shows it unusable with that reason, and its tool is
-// never called.
-func TestIneligibleReviewerIsNeverCalled(t *testing.T) {
-	ctx := context.Background()
-	host := &fakeHost{answer: `{"outcome":"pass"}`}
-	reg, contributions := newRegistry(t, host)
-	reg.SetEligibility(func(context.Context, string) (bool, error) {
-		return false, &command_review_svc.IneligibleError{Code: command_review_svc.UnusableDigestMismatch, Err: errors.New("package digest does not match")}
-	})
-	require.NoError(t, contributions.Attach(reviewerView("jev", true)))
-	src := reg.Selecting(func() string { return "" })
-
-	_, err := src.Current(ctx)
-	require.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
-	assert.ErrorContains(t, err, "package digest does not match")
-	_, err = src.Reviewer(ctx, "jev")
-	assert.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
-
-	st := src.State(ctx, "en")
-	require.Len(t, st.Reviewers, 1)
-	assert.False(t, st.Reviewers[0].Usable)
-	assert.False(t, st.Reviewers[0].Signed)
-	assert.Equal(t, command_review_svc.UnusableDigestMismatch, st.Reviewers[0].Reason)
-	assert.Empty(t, st.Active)
-	assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, st.Problem)
-	assert.Empty(t, host.calls)
+// installed is the install facts of a package recorded as installed from source,
+// whose files on disk do or do not still match the recorded digest.
+func installed(source string, matches bool) extension_svc.Provenance {
+	return extension_svc.Provenance{Recorded: true, Source: source, PackageSHA256: "sum-of-" + source, DigestMatches: matches}
 }
 
-func TestEligibleReviewerSignedFlagFollowsEligibility(t *testing.T) {
-	ctx := context.Background()
-	for _, signed := range []bool{true, false} {
-		reg, contributions := newRegistry(t, &fakeHost{})
-		reg.SetEligibility(func(context.Context, string) (bool, error) { return signed, nil })
-		require.NoError(t, contributions.Attach(reviewerView("jev", true)))
+// The registry decides from extension management's install facts whether a reviewer
+// may be used: a release build takes only store installs, any other build also takes
+// local and dev installs (unsigned); a package that no longer matches its recorded
+// digest, or without an install record, is never used. An unusable reviewer fails
+// the review with the reason, is listed unusable with it, and its tool never runs.
+func TestRegistryJudgesTheInstallFacts(t *testing.T) {
+	cases := []struct {
+		name    string
+		facts   extension_svc.Provenance
+		err     error
+		release bool
+		reason  string // "" = usable
+		signed  bool
+		msg     string // in the review failure
+	}{
+		{name: "store on a release build", facts: installed(extension_svc.InstallOriginStore, true), release: true, signed: true},
+		{name: "store on another build", facts: installed(extension_svc.InstallOriginStore, true), signed: true},
+		{name: "local on a release build", facts: installed(extension_svc.InstallOriginLocal, true), release: true, reason: UnusableStoreRequired, msg: "release build"},
+		{name: "dev on a release build", facts: installed(extension_svc.InstallOriginDev, true), release: true, reason: UnusableStoreRequired, msg: "installed from dev"},
+		{name: "local on another build is unsigned", facts: installed(extension_svc.InstallOriginLocal, true)},
+		{name: "dev on another build is unsigned", facts: installed(extension_svc.InstallOriginDev, true)},
+		{name: "digest mismatch", facts: installed(extension_svc.InstallOriginStore, false), reason: UnusableDigestMismatch, msg: "digest does not match"},
+		{name: "no install record", facts: extension_svc.Provenance{}, reason: UnusableNoInstallRecord, msg: "no install record"},
+		{name: "a record without a source", facts: installed("", true), reason: UnusableNoInstallRecord, msg: "no recorded install source"},
+		{name: "facts unreadable", err: errors.New("db closed"), reason: UnusableCheckFailed, msg: "db closed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			host := &fakeHost{answer: `{"outcome":"pass"}`}
+			reg, contributions := newRegistry(t, host)
+			reg.release = func() bool { return tc.release }
+			reg.SetProvenance(func(context.Context, string) (extension_svc.Provenance, error) { return tc.facts, tc.err })
+			require.NoError(t, contributions.Attach(reviewerView("jev", true)))
+			src := reg.Selecting(func() string { return "" })
 
-		st := reg.Selecting(func() string { return "" }).State(ctx, "en")
-		require.Len(t, st.Reviewers, 1)
-		assert.True(t, st.Reviewers[0].Usable, "unsigned local installs stay usable on non-release builds")
-		assert.Equal(t, signed, st.Reviewers[0].Signed)
-		assert.Equal(t, "jev", st.Active)
+			st := src.State(ctx, "en")
+			require.Len(t, st.Reviewers, 1)
+			info := st.Reviewers[0]
+			assert.Equal(t, tc.reason, info.Reason)
+			assert.Equal(t, tc.reason == "", info.Usable)
+			assert.Equal(t, tc.signed, info.Signed)
+
+			rev, err := src.Current(ctx)
+			if tc.reason == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "jev", st.Active)
+				assert.Equal(t, tc.facts.PackageSHA256, rev.Identity().PackageDigest, "the digest just checked keys the cache")
+				return
+			}
+			require.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
+			assert.ErrorContains(t, err, tc.msg)
+			_, err = src.Reviewer(ctx, "jev")
+			assert.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
+			assert.Empty(t, st.Active)
+			assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, st.Problem)
+			assert.Empty(t, host.calls)
+		})
 	}
 }
 
-// Without an eligibility check wired in, nothing is eligible: a missing wiring must
-// not let an unchecked reviewer pass commands.
-func TestNoEligibilityCheckFailsClosed(t *testing.T) {
+// Without the install facts wired in, nothing is usable: a missing wiring must not
+// let an unchecked reviewer pass commands.
+func TestNoProvenanceFailsClosed(t *testing.T) {
 	reg := New((&fakeHost{answer: `{"outcome":"pass"}`}).call)
 	reg.SetSettingsHasher(func(context.Context, string) (string, error) { return "h", nil })
 	require.NoError(t, extension.NewContributionRegistry(reg.Point(), passPoint("tools")).Attach(reviewerView("jev", true)))
@@ -99,9 +124,11 @@ func describeOnlyRegistry(t *testing.T, host *fakeHost) (*Registry, *activation,
 	reg, contributions := newRegistry(t, host)
 	var checks []string
 	act := &activation{contributions: contributions}
-	reg.SetEligibility(func(_ context.Context, name string) (bool, error) {
+	reg.SetProvenance(func(_ context.Context, name string) (extension_svc.Provenance, error) {
 		checks = append(checks, name)
-		return false, nil
+		facts := installed(extension_svc.InstallOriginLocal, true)
+		facts.PackageSHA256 = fmt.Sprintf("sum-at-check-%d", len(checks))
+		return facts, nil
 	})
 	reg.SetActivator(act.activate)
 	require.NoError(t, contributions.Attach(reviewerView("jev", false)))
@@ -118,10 +145,10 @@ func TestCurrentActivatesTheDescribeOnlyReviewerAfterTheEligibilityCheck(t *test
 	rev, err := reg.Selecting(func() string { return "" }).Current(ctx)
 
 	require.NoError(t, err)
-	name, _, _ := rev.Identity()
-	assert.Equal(t, "jev", name)
+	assert.Equal(t, "jev", rev.Identity().Name)
 	assert.Equal(t, []string{"jev"}, act.calls)
 	assert.Equal(t, []string{"jev", "jev"}, *checks)
+	assert.Equal(t, "sum-at-check-2", rev.Identity().PackageDigest, "the digest of the package that was activated")
 
 	// Already running now: the next review activates nothing again.
 	_, err = reg.Selecting(func() string { return "" }).Current(ctx)
@@ -131,14 +158,12 @@ func TestCurrentActivatesTheDescribeOnlyReviewerAfterTheEligibilityCheck(t *test
 
 func TestIneligibleDescribeOnlyReviewerIsNotActivated(t *testing.T) {
 	reg, act, _ := describeOnlyRegistry(t, &fakeHost{})
-	reg.SetEligibility(func(context.Context, string) (bool, error) {
-		return false, errors.New("installed from local on a release build")
-	})
+	reg.release = func() bool { return true }
 
 	_, err := reg.Selecting(func() string { return "" }).Current(context.Background())
 
 	require.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
-	assert.ErrorContains(t, err, "installed from local on a release build")
+	assert.ErrorContains(t, err, "release build")
 	assert.Empty(t, act.calls, "an ineligible extension's code never runs")
 }
 

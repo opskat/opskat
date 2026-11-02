@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/opskat/opskat/internal/service/command_review_svc"
 	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 	"github.com/opskat/opskat/pkg/extmanifest"
@@ -44,11 +44,11 @@ func reviewerExtView(name string, running bool) extension.ExtensionView {
 	return v
 }
 
-// restoreReviewerHooks puts back the activation and eligibility hooks after the test.
+// restoreReviewerHooks puts back the activation and install-facts hooks after the test.
 func restoreReviewerHooks(t *testing.T) {
 	t.Helper()
-	activate, eligible := activateExtensionFn, reviewerEligibilityFn
-	t.Cleanup(func() { activateExtensionFn, reviewerEligibilityFn = activate, eligible })
+	activate, provenance := activateExtensionFn, reviewerProvenanceFn
+	t.Cleanup(func() { activateExtensionFn, reviewerProvenanceFn = activate, provenance })
 }
 
 // opsctl attaches the reviewer describe-only at startup; when a review is needed the
@@ -60,9 +60,9 @@ func TestReviewerIsCheckedThenActivatedThroughTheExecActivationPath(t *testing.T
 	t.Cleanup(func() { reviewerreg.Default().SetSettingsHasher(nil) })
 
 	var events []string
-	reviewerEligibilityFn = func(_ context.Context, name string) (bool, error) {
+	reviewerProvenanceFn = func(_ context.Context, name string) (extension_svc.Provenance, error) {
 		events = append(events, "eligible:"+name)
-		return false, nil
+		return extension_svc.Provenance{Recorded: true, Source: extension_svc.InstallOriginStore, PackageSHA256: "sum", DigestMatches: true}, nil
 	}
 	activateExtensionFn = func(_ context.Context, name string) error {
 		events = append(events, "activate:"+name)
@@ -77,8 +77,7 @@ func TestReviewerIsCheckedThenActivatedThroughTheExecActivationPath(t *testing.T
 	rev, err := src.Current(context.Background())
 
 	require.NoError(t, err)
-	name, _, _ := rev.Identity()
-	assert.Equal(t, "rv", name)
+	assert.Equal(t, "rv", rev.Identity().Name)
 	assert.Equal(t, []string{"eligible:rv", "activate:rv", "eligible:rv"}, events)
 }
 
@@ -86,8 +85,9 @@ func TestIneligibleReviewerIsNotActivatedByOpsctl(t *testing.T) {
 	restoreReviewerHooks(t)
 	activated := false
 	activateExtensionFn = func(context.Context, string) error { activated = true; return nil }
-	reviewerEligibilityFn = func(context.Context, string) (bool, error) {
-		return false, errors.New("must be installed from the store on a release build")
+	reviewerProvenanceFn = func(context.Context, string) (extension_svc.Provenance, error) {
+		// The package on disk no longer matches what was installed.
+		return extension_svc.Provenance{Recorded: true, Source: extension_svc.InstallOriginStore, PackageSHA256: "swapped"}, nil
 	}
 	require.NoError(t, extensionContributions.Attach(reviewerExtView("rv", false)))
 	t.Cleanup(func() { extensionContributions.Revoke("rv") })
@@ -95,6 +95,6 @@ func TestIneligibleReviewerIsNotActivatedByOpsctl(t *testing.T) {
 	_, err := reviewerreg.Default().Selecting(func() string { return "" }).Current(context.Background())
 
 	require.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
-	assert.ErrorContains(t, err, "release build")
+	assert.ErrorContains(t, err, "digest does not match")
 	assert.False(t, activated)
 }

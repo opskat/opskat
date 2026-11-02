@@ -2,7 +2,6 @@ package command_review_svc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -30,10 +29,21 @@ type Answer struct {
 	Reason  string             `json:"reason,omitempty"`
 }
 
+// Identity 是审核器是谁、跑的是哪份代码与设置。Name 与 Version 随审核结果显示并进审计；
+// 缓存键用 Name、PackageDigest 与 SettingsHash。
+type Identity struct {
+	Name    string
+	Version string
+	// PackageDigest 是扩展安装目录的包摘要（资格检查时从磁盘现算）。
+	PackageDigest string
+	// SettingsHash 是审核器扩展已保存设置的哈希。
+	SettingsHash string
+}
+
 // Reviewer 是要用的审核器。审核服务对每条要审的命令调用一次 Review。
 type Reviewer interface {
-	// Identity 是扩展名、版本和设置哈希，都参与缓存键。
-	Identity() (name, version, settingsHash string)
+	// Identity 是审核器的身份，参与缓存键。
+	Identity() Identity
 	// Questions 是审核器声明的题目，回答里只回题目 id，宿主按这里的名称显示。
 	Questions() []Question
 	// MaxCommandLen 是审核器声明的单条送审文本（原命令加追加的解码脚本）最大长度，更长的不送审。
@@ -50,34 +60,8 @@ type ReviewerSource interface {
 	Current(ctx context.Context) (Reviewer, error)
 }
 
-// 审核器在这里用不了的原因（ReviewerInfo.Reason），设置页按它们显示；详细的错误只进日志。
-const (
-	UnusableNotRunning      = "not_running"       // 扩展没在这个进程里运行
-	UnusableDigestMismatch  = "digest_mismatch"   // 包与安装时记录的摘要不一致
-	UnusableStoreRequired   = "store_required"    // 正式版只认商店安装的审核器
-	UnusableNoInstallRecord = "no_install_record" // 没有安装来源记录
-	UnusableCheckFailed     = "check_failed"      // 资格检查本身没能完成（读不了记录或包等）
-)
-
-// IneligibleError 是审核器资格检查没过的原因：Code 是 Unusable* 之一。
-type IneligibleError struct {
-	Code string
-	Err  error
-}
-
-func (e *IneligibleError) Error() string { return e.Err.Error() }
-func (e *IneligibleError) Unwrap() error { return e.Err }
-
-// UnusableReason 是资格检查错误 err 对应的 Unusable* 原因；不是 IneligibleError 的按检查失败。
-func UnusableReason(err error) string {
-	var ie *IneligibleError
-	if errors.As(err, &ie) {
-		return ie.Code
-	}
-	return UnusableCheckFailed
-}
-
-// ReviewerInfo 是设置页列出的一个审核器。Usable 为假时 Reason 是 Unusable* 之一；
+// ReviewerInfo 是设置页列出的一个审核器。Usable 为假时 Reason 是用不了的原因（由审核器
+// 来源给出，如 reviewerreg.Unusable*）；
 // Signed 表示从官方商店安装、签名已校验；Questions 是它声明的题目，扩展详情据此列出审核项。
 type ReviewerInfo struct {
 	Name        string     `json:"name"`

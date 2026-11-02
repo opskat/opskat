@@ -69,18 +69,18 @@ func extensionService() *extension_svc.Service {
 	return extensionHost.svc
 }
 
-// reviewerEligibilityFn 判断审核器扩展能不能用（安装来源与包摘要，不运行扩展代码）。
-// 变量化同上一套路。
-var reviewerEligibilityFn = func(ctx context.Context, extName string) (bool, error) {
-	return extensionService().ReviewerEligibility(ctx, extName)
+// reviewerProvenanceFn 给出审核器扩展的安装事实（来源、现算的包摘要与是否一致，不运行
+// 扩展代码），由审核器注册表判断能不能用。变量化同上一套路。
+var reviewerProvenanceFn = func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
+	return extensionService().Provenance(ctx, extName)
 }
 
 // 命令审核器：opsctl 启动时只仅描述接入审核器扩展，审核器注册表在某条命令真要送审时
 // 才做资格检查，通过后经与 opsctl exec 执行扩展工具同一条激活路径（activateExtensionFn）
 // 激活那一个扩展，命令结束由 releaseExtensions 释放；不需要审核的命令不会走到这里。
 func init() {
-	reviewerreg.Default().SetEligibility(func(ctx context.Context, extName string) (bool, error) {
-		return reviewerEligibilityFn(ctx, extName)
+	reviewerreg.Default().SetProvenance(func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
+		return reviewerProvenanceFn(ctx, extName)
 	})
 	reviewerreg.Default().SetActivator(func(ctx context.Context, extName string) error {
 		return activateExtensionFn(ctx, extName)

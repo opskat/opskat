@@ -443,8 +443,11 @@ func initExtensionSystem(
 	// opsctl 在激活扩展时）。必须在任何扩展加载之前接好——extreg 加载期一遇到声明了
 	// 处理器的类型就要拿它建 tester。
 	extreg.SetConnTestRegistrar(extSvc.ConnTestRegistrar())
-	// 审核缓存按审核器扩展的设置哈希区分：同样在任何扩展加载之前接好。
+	// 审核缓存按审核器扩展的设置哈希区分：同样在任何扩展加载之前接好。审核器注册表按
+	// 扩展管理给出的安装来源与包摘要判断审核器能不能用（opsctl 在 cmd/opsctl/command
+	// 里接同样两项，另加按需激活）。
 	reviewerreg.Default().SetSettingsHasher(extSvc.SettingsHash)
+	reviewerreg.Default().SetProvenance(extSvc.Provenance)
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)

@@ -33,12 +33,6 @@ type HostToolCaller func(ctx context.Context, extName, tool string, args json.Ra
 // the review cache: changed settings never hit the old verdicts.
 type SettingsHasher func(ctx context.Context, extName string) (string, error)
 
-// Eligibility judges whether extName may act as the command reviewer — recorded
-// install source, package digest recomputed against what is installed, release or
-// not — without running its code (extension_svc.Service.ReviewerEligibility).
-// signed reports an official-store install; an error is the reason it may not.
-type Eligibility func(ctx context.Context, extName string) (signed bool, err error)
-
 // Activator brings a describe-only candidate up as a running extension in this
 // process (opsctl: the existing activation path, released at command end).
 type Activator func(ctx context.Context, extName string) error
@@ -50,14 +44,15 @@ type Registry struct {
 
 	mu         sync.Mutex
 	hash       SettingsHasher
-	eligible   Eligibility
+	provenance ProvenanceFacts
+	release    func() bool // whether this is a release build (isReleaseBuild)
 	activate   Activator
 	candidates map[string]*candidate
 }
 
 // New builds a registry whose candidates review through call.
 func New(call HostToolCaller) *Registry {
-	return &Registry{call: call, candidates: make(map[string]*candidate)}
+	return &Registry{call: call, release: isReleaseBuild, candidates: make(map[string]*candidate)}
 }
 
 var defaultRegistry = New(extreg.CallHostTool)
@@ -77,12 +72,13 @@ func (r *Registry) SetSettingsHasher(h SettingsHasher) {
 	r.hash = h
 }
 
-// SetEligibility wires the eligibility check in. Without one nothing is eligible:
-// a reviewer is never used unchecked.
-func (r *Registry) SetEligibility(e Eligibility) {
+// SetProvenance wires in the install facts the registry judges a candidate by
+// (extension_svc.Service.Provenance). Without them nothing is eligible: a reviewer
+// is never used unchecked.
+func (r *Registry) SetProvenance(p ProvenanceFacts) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.eligible = e
+	r.provenance = p
 }
 
 // SetActivator wires in the way a describe-only candidate is brought up. A process
@@ -210,11 +206,11 @@ func (s *Source) State(ctx context.Context, lang string) command_review_svc.Stat
 			Questions: c.questions,
 		}
 		if !c.running {
-			info.Reason = command_review_svc.UnusableNotRunning
-		} else if signed, err := s.reg.checkEligible(ctx, c.name); err != nil {
-			info.Usable, info.Reason = false, command_review_svc.UnusableReason(err)
+			info.Reason = UnusableNotRunning
+		} else if e, err := s.reg.checkEligible(ctx, c.name); err != nil {
+			info.Usable, info.Reason = false, unusableReason(err)
 		} else {
-			info.Signed = signed
+			info.Signed = e.signed
 		}
 		if c.name == sel {
 			st.Selected = sel
@@ -238,26 +234,16 @@ func errNotRunning(c *candidate) error {
 	return fmt.Errorf("%w: extension %s is not running in this process", command_review_svc.ErrReviewerUnavailable, c.name)
 }
 
-// checkEligible runs the eligibility check; no check wired in means not eligible.
-func (r *Registry) checkEligible(ctx context.Context, name string) (bool, error) {
-	r.mu.Lock()
-	check := r.eligible
-	r.mu.Unlock()
-	if check == nil {
-		return false, fmt.Errorf("command reviewer %q cannot be checked: no eligibility check is wired in", name)
-	}
-	return check(ctx, name)
-}
-
 // ready is c eligible and running here, ready to review. An ineligible candidate is
 // refused before anything of it runs; a describe-only one is activated first when
 // this process can (opsctl) and checked again once activated, so the package that
-// runs is the one that was checked.
+// runs — and whose digest keys the review cache — is the one that was checked.
 func (r *Registry) ready(ctx context.Context, c *candidate) (command_review_svc.Reviewer, error) {
 	refuse := func(err error) error {
 		return fmt.Errorf("%w: %s: %w", command_review_svc.ErrReviewerUnavailable, c.name, err)
 	}
-	if _, err := r.checkEligible(ctx, c.name); err != nil {
+	checked, err := r.checkEligible(ctx, c.name)
+	if err != nil {
 		return nil, refuse(err)
 	}
 	if !c.running {
@@ -274,11 +260,11 @@ func (r *Registry) ready(ctx context.Context, c *candidate) (command_review_svc.
 		if c == nil {
 			return nil, refuse(errors.New("activation did not bring the reviewer up"))
 		}
-		if _, err := r.checkEligible(ctx, c.name); err != nil {
+		if checked, err = r.checkEligible(ctx, c.name); err != nil {
 			return nil, refuse(err)
 		}
 	}
-	return r.reviewer(ctx, c)
+	return r.reviewer(ctx, c, checked.digest)
 }
 
 // running is the candidate named name if it is attached with a running guest.
@@ -291,8 +277,9 @@ func (r *Registry) running(name string) *candidate {
 	return nil
 }
 
-// reviewer is c ready to review: running here, with its settings hash read now.
-func (r *Registry) reviewer(ctx context.Context, c *candidate) (command_review_svc.Reviewer, error) {
+// reviewer is c ready to review: running here, its package digest the one just
+// checked, its settings hash read now.
+func (r *Registry) reviewer(ctx context.Context, c *candidate, digest string) (command_review_svc.Reviewer, error) {
 	if !c.running {
 		return nil, errNotRunning(c)
 	}
@@ -303,17 +290,20 @@ func (r *Registry) reviewer(ctx context.Context, c *candidate) (command_review_s
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: %w", command_review_svc.ErrReviewerUnavailable, c.name, err)
 	}
-	return &reviewer{c: c, settingsHash: settingsHash, call: r.call}, nil
+	return &reviewer{c: c, digest: digest, settingsHash: settingsHash, call: r.call}, nil
 }
 
 // reviewer is a candidate's command_review_svc.Reviewer.
 type reviewer struct {
 	c            *candidate
+	digest       string
 	settingsHash string
 	call         HostToolCaller
 }
 
-func (v *reviewer) Identity() (string, string, string) { return v.c.name, v.c.version, v.settingsHash }
+func (v *reviewer) Identity() command_review_svc.Identity {
+	return command_review_svc.Identity{Name: v.c.name, Version: v.c.version, PackageDigest: v.digest, SettingsHash: v.settingsHash}
+}
 
 func (v *reviewer) Questions() []command_review_svc.Question { return v.c.questions }
 

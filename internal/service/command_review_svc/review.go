@@ -272,7 +272,8 @@ type pendingReview struct {
 // 只有调用审核器这一步并行，最多 maxParallelReviews 路同时进行。
 // useCache 为假时不读也不写缓存（测试审核器用）。
 func (s *service) reviewWith(ctx context.Context, rev Reviewer, reqs []permission.ReviewRequest, useCache bool) []Result {
-	name, version, settingsHash := rev.Identity()
+	id := rev.Identity()
+	name, version := id.Name, id.Version
 	maxLen := rev.MaxCommandLen()
 	questions := rev.Questions()
 	results := make([]Result, len(reqs))
@@ -283,7 +284,7 @@ func (s *service) reviewWith(ctx context.Context, rev Reviewer, reqs []permissio
 			results[i] = Result{Outcome: OutcomeFail, Reason: aictx.ReviewReasonTooLong, Extension: name, Version: version}
 			continue
 		}
-		key := extensionCacheKey(name, version, settingsHash, req.AssetType, command)
+		key := extensionCacheKey(id, req.AssetType, command)
 		if useCache {
 			if cached, err := s.cache.Get(ctx, key); err != nil {
 				logger.Ctx(ctx).Warn("read command review cache", zap.String("extension", name), zap.Error(err))
@@ -396,9 +397,10 @@ func extensionResult(name, version string, questions []Question, r Answer, elaps
 	return out
 }
 
-// extensionCacheKey 由扩展名、版本、设置哈希、资产类型和送审文本算出：换了扩展、版本或设置都
-// 不命中旧结果，审核器看到的文本不同也不命中。表里只存哈希，不存命令。
-func extensionCacheKey(name, version, settingsHash, assetType, command string) string {
-	h := sha256.Sum256([]byte(strings.Join([]string{name, version, settingsHash, assetType, command}, "\x00")))
+// extensionCacheKey 由扩展名、包摘要、设置哈希、资产类型和送审文本算出：换了扩展、代码或设置
+// 都不命中旧结果——版本号不变而重装了不同的包（opsctl ext dev、本地安装）也不命中——审核器
+// 看到的文本不同也不命中。表里只存哈希，不存命令。
+func extensionCacheKey(id Identity, assetType, command string) string {
+	h := sha256.Sum256([]byte(strings.Join([]string{id.Name, id.PackageDigest, id.SettingsHash, assetType, command}, "\x00")))
 	return hex.EncodeToString(h[:])
 }

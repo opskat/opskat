@@ -23,17 +23,17 @@ type call struct {
 
 // fakeReviewer 是一个审核器：记下每次收到的命令，按 reply 回答（默认通过）。
 type fakeReviewer struct {
-	name, version, settingsHash string
-	maxCommandLen               int
-	questions                   []Question
-	reply                       func(c call) (Answer, error)
+	name, version, digest, settingsHash string
+	maxCommandLen                       int
+	questions                           []Question
+	reply                               func(c call) (Answer, error)
 
 	mu    sync.Mutex
 	calls []call
 }
 
-func (f *fakeReviewer) Identity() (string, string, string) {
-	return f.name, f.version, f.settingsHash
+func (f *fakeReviewer) Identity() Identity {
+	return Identity{Name: f.name, Version: f.version, PackageDigest: f.digest, SettingsHash: f.settingsHash}
 }
 func (f *fakeReviewer) MaxCommandLen() int    { return f.maxCommandLen }
 func (f *fakeReviewer) Questions() []Question { return f.questions }
@@ -68,7 +68,7 @@ var destructiveQuestion = []Question{{
 }}
 
 func newReviewer() *fakeReviewer {
-	return &fakeReviewer{name: "rev", version: "1.0.0", settingsHash: "h1", maxCommandLen: 4000, questions: destructiveQuestion}
+	return &fakeReviewer{name: "rev", version: "1.0.0", digest: "d1", settingsHash: "h1", maxCommandLen: 4000, questions: destructiveQuestion}
 }
 
 type memCache struct {
@@ -341,7 +341,8 @@ func TestCachesTheSameCommandButNotFailures(t *testing.T) {
 	assert.Empty(t, cache2.m)
 }
 
-// 换了扩展版本或设置都不命中旧结果。
+// 换了设置或包摘要都不命中旧结果：版本号不变而重装了不同代码（opsctl ext dev、本地安装）
+// 也不沿用旧代码的判断。
 func TestCacheKeyIncludesTheReviewersIdentity(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
@@ -351,8 +352,10 @@ func TestCacheKeyIncludesTheReviewersIdentity(t *testing.T) {
 
 	rev.settingsHash = "h2"
 	assert.False(t, review(s, text("ls")).Cached)
-	rev.version = "1.0.1"
-	assert.False(t, review(s, text("ls")).Cached)
+	assert.True(t, review(s, text("ls")).Cached)
+
+	rev.digest = "d2" // 同一版本 1.0.0，代码换了
+	assert.False(t, review(s, text("ls")).Cached, "a same-version reinstall with a different package misses the old verdict")
 	assert.Equal(t, 3, rev.callCount())
 }
 
@@ -363,14 +366,14 @@ func TestCacheKeyIsTheReviewText(t *testing.T) {
 
 	rev := newReviewer()
 	s, cache := newService(rev)
-	cache.m[extensionCacheKey("rev", "1.0.0", "h1", "ssh", cmd)] = Result{Outcome: OutcomeReject, Failed: []string{"destructive"}}
+	cache.m[extensionCacheKey(rev.Identity(), "ssh", cmd)] = Result{Outcome: OutcomeReject, Failed: []string{"destructive"}}
 	r := review(s, req)
 	assert.False(t, r.Cached)
 	assert.Equal(t, 1, rev.callCount())
 
 	rev2 := newReviewer()
 	s2, cache2 := newService(rev2)
-	cache2.m[extensionCacheKey("rev", "1.0.0", "h1", "ssh", req.Text())] = Result{Outcome: OutcomeReject, Failed: []string{"destructive"}}
+	cache2.m[extensionCacheKey(rev2.Identity(), "ssh", req.Text())] = Result{Outcome: OutcomeReject, Failed: []string{"destructive"}}
 	r2 := review(s2, req)
 	assert.True(t, r2.Cached)
 	assert.Equal(t, aictx.ReviewReject, r2.Outcome)

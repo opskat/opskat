@@ -13,6 +13,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 	"github.com/opskat/opskat/pkg/extmanifest"
@@ -223,7 +224,11 @@ func newRegistry(t *testing.T, host *fakeHost) (*Registry, *extension.Contributi
 	t.Helper()
 	reg := New(host.call)
 	reg.SetSettingsHasher(func(_ context.Context, ext string) (string, error) { return "hash-of-" + ext, nil })
-	reg.SetEligibility(func(context.Context, string) (bool, error) { return false, nil }) // eligible, unsigned
+	// A local install on a non-release build: usable, unsigned.
+	reg.release = func() bool { return false }
+	reg.SetProvenance(func(context.Context, string) (extension_svc.Provenance, error) {
+		return extension_svc.Provenance{Recorded: true, Source: extension_svc.InstallOriginLocal, PackageSHA256: "sum", DigestMatches: true}, nil
+	})
 	return reg, extension.NewContributionRegistry(reg.Point(), passPoint(extwire.KeyTools))
 }
 
@@ -273,8 +278,7 @@ func TestSelectionRules(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		name, _, _ := rev.Identity()
-		return name, nil
+		return rev.Identity().Name, nil
 	}
 
 	t.Run("no candidate is no reviewer, selected or not", func(t *testing.T) {
@@ -335,8 +339,7 @@ func TestSelectionRules(t *testing.T) {
 		src := reg.Selecting(func() string { return "a" })
 		rev, err := src.Reviewer(ctx, "b")
 		require.NoError(t, err)
-		name, _, _ := rev.Identity()
-		assert.Equal(t, "b", name)
+		assert.Equal(t, "b", rev.Identity().Name)
 		_, err = src.Reviewer(ctx, "missing")
 		assert.ErrorIs(t, err, command_review_svc.ErrReviewerUnavailable)
 	})
@@ -352,8 +355,8 @@ func TestReviewerCallsTheHostOnlyTool(t *testing.T) {
 	rev, err := reg.Selecting(func() string { return "" }).Current(ctx)
 	require.NoError(t, err)
 
-	name, version, hash := rev.Identity()
-	assert.Equal(t, []string{"jev", "1.2.0", "hash-of-jev"}, []string{name, version, hash})
+	id := rev.Identity()
+	assert.Equal(t, []string{"jev", "1.2.0", "hash-of-jev"}, []string{id.Name, id.Version, id.SettingsHash})
 	assert.Equal(t, 4000, rev.MaxCommandLen())
 	assert.Equal(t, []command_review_svc.Question{
 		{ID: "destructive", Names: map[string]string{"en": "destructive (en)", "zh-CN": "destructive（中文）"}},

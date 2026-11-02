@@ -13,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
 	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extension/extensiontest"
 	"github.com/opskat/opskat/pkg/extmanifest"
@@ -23,7 +24,7 @@ func TestCheckSelectableReviewer(t *testing.T) {
 	reviewers := []command_review_svc.ReviewerInfo{
 		{Name: "ok", Usable: true, Signed: true},
 		{Name: "unsigned", Usable: true},
-		{Name: "tampered", Reason: command_review_svc.UnusableDigestMismatch},
+		{Name: "tampered", Reason: reviewerreg.UnusableDigestMismatch},
 	}
 	assert.NoError(t, checkSelectableReviewer(reviewers, "ok"))
 	assert.NoError(t, checkSelectableReviewer(reviewers, "unsigned"))
@@ -43,9 +44,12 @@ func newReviewBindings(t *testing.T) *Extension {
 		_, err = bootstrap.LoadConfig(dir)
 		require.NoError(t, err)
 	})
-	// The eligibility check is the service's; these tests stand in an eligible, unsigned one.
-	reviewerreg.Default().SetEligibility(func(context.Context, string) (bool, error) { return false, nil })
-	t.Cleanup(func() { reviewerreg.Default().SetEligibility(nil) })
+	// The install facts are extension management's; these tests stand in a local
+	// install whose package still matches — usable, unsigned, on this (non-release) build.
+	reviewerreg.Default().SetProvenance(func(context.Context, string) (extension_svc.Provenance, error) {
+		return extension_svc.Provenance{Recorded: true, Source: extension_svc.InstallOriginLocal, PackageSHA256: "sum", DigestMatches: true}, nil
+	})
+	t.Cleanup(func() { reviewerreg.Default().SetProvenance(nil) })
 	cfg := bootstrap.GetConfig()
 	cfg.CommandReviewExtension = ""
 	require.NoError(t, bootstrap.SaveConfig(cfg))

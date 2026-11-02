@@ -14,8 +14,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
-	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/internal/service/command_review_svc"
 )
 
 // memStateRepo is an in-memory extension_state table.
@@ -73,42 +71,6 @@ func (r *memStateRepo) get(name string) (extension_state_entity.ExtensionState, 
 	defer r.mu.Unlock()
 	row, ok := r.rows[name]
 	return row, ok
-}
-
-func TestReviewerEligible(t *testing.T) {
-	const sum = "abc"
-	state := func(source, digest string) *extension_state_entity.ExtensionState {
-		return &extension_state_entity.ExtensionState{Name: "jev", Source: source, PackageSHA256: digest}
-	}
-	cases := []struct {
-		name    string
-		state   *extension_state_entity.ExtensionState
-		kind    appversion.Kind
-		wantErr string // the Unusable* code; "" = eligible
-		signed  bool
-	}{
-		{"store on release", state(InstallOriginStore, sum), appversion.KindRelease, "", true},
-		{"store on nightly", state(InstallOriginStore, sum), appversion.KindNightly, "", true},
-		{"local on release", state(InstallOriginLocal, sum), appversion.KindRelease, command_review_svc.UnusableStoreRequired, false},
-		{"dev on release", state(InstallOriginDev, sum), appversion.KindRelease, command_review_svc.UnusableStoreRequired, false},
-		{"local on nightly is unsigned", state(InstallOriginLocal, sum), appversion.KindNightly, "", false},
-		{"dev on dev build is unsigned", state(InstallOriginDev, sum), appversion.KindDev, "", false},
-		{"digest mismatch", state(InstallOriginStore, "other"), appversion.KindDev, command_review_svc.UnusableDigestMismatch, false},
-		{"no recorded digest", state(InstallOriginStore, ""), appversion.KindDev, command_review_svc.UnusableDigestMismatch, false},
-		{"no recorded source", state("", sum), appversion.KindDev, command_review_svc.UnusableNoInstallRecord, false},
-		{"no record", nil, appversion.KindDev, command_review_svc.UnusableDigestMismatch, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			signed, err := reviewerEligible(tc.state, sum, appversion.Info{Kind: tc.kind})
-			if tc.wantErr == "" {
-				require.NoError(t, err)
-			} else {
-				assert.Equal(t, tc.wantErr, command_review_svc.UnusableReason(err))
-			}
-			assert.Equal(t, tc.signed, signed)
-		})
-	}
 }
 
 func TestPackageSHA256CoversWasmAndManifest(t *testing.T) {
@@ -235,43 +197,30 @@ func TestInstallFailsWhenProvenanceCannotBeRecorded(t *testing.T) {
 	assert.Nil(t, e.svc.Manager().GetExtension("ext-prov"), "no install record means no install")
 }
 
-// The digest is recomputed from the files on disk each time a reviewer is about to
-// be used: swapping the wasm after install makes it ineligible.
-func TestReviewerEligibilityRecomputesDigest(t *testing.T) {
+// The digest is recomputed from the files on disk each time the facts are asked
+// for: swapping the wasm after install no longer matches the recorded digest.
+func TestProvenanceRecomputesDigest(t *testing.T) {
 	ctx := context.Background()
-	useApp(t, appversion.Info{Kind: appversion.KindRelease})
 	e := newProvenanceEnv(t, "ext-prov")
 	_, err := e.svc.InstallStorePackage(ctx, e.src, approveInstall)
 	require.NoError(t, err)
-
-	signed, err := e.svc.ReviewerEligibility(ctx, "ext-prov")
+	installed, err := PackageSHA256(filepath.Join(e.extDir, "ext-prov"))
 	require.NoError(t, err)
-	assert.True(t, signed)
+
+	p, err := e.svc.Provenance(ctx, "ext-prov")
+	require.NoError(t, err)
+	assert.Equal(t, Provenance{Recorded: true, Source: InstallOriginStore, PackageSHA256: installed, DigestMatches: true}, p)
 
 	require.NoError(t, os.WriteFile(filepath.Join(e.extDir, "ext-prov", "main.wasm"), []byte("swapped"), 0o600))
-	_, err = e.svc.ReviewerEligibility(ctx, "ext-prov")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "digest")
+	p, err = e.svc.Provenance(ctx, "ext-prov")
+	require.NoError(t, err)
+	assert.False(t, p.DigestMatches)
+	assert.NotEqual(t, installed, p.PackageSHA256, "the digest of what is on disk now")
 }
 
-func TestReviewerEligibilityByBuildKind(t *testing.T) {
-	ctx := context.Background()
+func TestProvenanceWithoutRecord(t *testing.T) {
 	e := newProvenanceEnv(t, "ext-prov")
-	_, err := e.svc.Install(ctx, e.src, approveInstall)
+	p, err := e.svc.Provenance(context.Background(), "unknown")
 	require.NoError(t, err)
-
-	useApp(t, appversion.Info{Kind: appversion.KindRelease})
-	_, err = e.svc.ReviewerEligibility(ctx, "ext-prov")
-	require.Error(t, err, "a local install is no reviewer on a release build")
-
-	useApp(t, appversion.Info{Kind: appversion.KindNightly})
-	signed, err := e.svc.ReviewerEligibility(ctx, "ext-prov")
-	require.NoError(t, err)
-	assert.False(t, signed, "usable on a non-release build, but unsigned")
-}
-
-func TestReviewerEligibilityWithoutRecord(t *testing.T) {
-	e := newProvenanceEnv(t, "ext-prov")
-	_, err := e.svc.ReviewerEligibility(context.Background(), "unknown")
-	require.Error(t, err)
+	assert.False(t, p.Recorded)
 }

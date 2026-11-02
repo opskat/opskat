@@ -115,7 +115,7 @@ func newReviewHost(t *testing.T, timeout time.Duration) *reviewHost {
 	t.Cleanup(func() { h.mgr.Close(ctx) })
 	h.svc = extension_svc.New(h.mgr, extension_state_repo.NewExtensionState(), nil, extension_settings_repo.NewExtensionSettings(), nil, zap.NewNop(), nil, nil)
 	h.reg.SetSettingsHasher(h.svc.SettingsHash)
-	h.reg.SetEligibility(h.svc.ReviewerEligibility)
+	h.reg.SetProvenance(h.svc.Provenance)
 	// The fixture counts as a store install of exactly the files on disk.
 	digest, err := extension_svc.PackageSHA256(dir)
 	require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestSwappedPackageFailsTheReviewWithoutRunningIt(t *testing.T) {
 	st := h.source.State(context.Background(), "en")
 	require.Len(t, st.Reviewers, 1)
 	assert.False(t, st.Reviewers[0].Usable)
-	assert.Equal(t, command_review_svc.UnusableDigestMismatch, st.Reviewers[0].Reason)
+	assert.Equal(t, reviewerreg.UnusableDigestMismatch, st.Reviewers[0].Reason)
 }
 
 // A reviewer call that runs past the review timeout fails the review as a
@@ -270,14 +270,14 @@ func TestReviewThroughTheReviewService(t *testing.T) {
 	ctx := context.Background()
 	before, err := h.source.Current(ctx)
 	require.NoError(t, err)
-	_, _, hashBefore := before.Identity()
+	hashBefore := before.Identity().SettingsHash
 
 	errs, err := h.svc.SaveSettings(ctx, extensiontest.ReviewerFixtureName, map[string]any{"endpoint": service.URL, "apiKey": "s3cret"})
 	require.NoError(t, err)
 	require.Empty(t, errs)
 	after, err := h.source.Current(ctx)
 	require.NoError(t, err)
-	_, _, hashAfter := after.Identity()
+	hashAfter := after.Identity().SettingsHash
 	assert.NotEqual(t, hashBefore, hashAfter, "saved settings key the review cache anew")
 
 	assisted := h.check(assistedAsset, "systemctl restart nginx")
