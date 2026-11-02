@@ -222,6 +222,14 @@ func TestRevision6FalsePositivesAreReviewed(t *testing.T) {
 		// 解释器代码里只有编码、没有解码
 		`python3 -c 'import base64;print(base64.b64encode(b"x"))'`,
 		`node -e "console.log(Buffer.from('hi').toString('base64'))"`,
+		// 合在一起的短选项（-Eu、-nu）里带值的选项同样跳过它的值
+		`sudo -Eu $U systemctl restart nginx`,
+		`sudo -nu $U systemctl restart nginx`,
+		// 调用时带上的词接在别名、函数的内容之后，照内容运行的程序判断
+		`alias s=sudo; s systemctl restart nginx; $EDITOR /etc/nginx/nginx.conf`,
+		`py(){ python3 "$@"; }; py app.py`,
+		// 内容里无法静态确定的命令名在内容所在的地方算过一次，调用时不再算
+		`alias e='$EDITOR'; e a.conf; e b.conf`,
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -258,6 +266,8 @@ func TestWrappersAreJudgedByTheProgramTheyRun(t *testing.T) {
 		`find . -name f -exec base64 -d {} \; -exec sh {} \;`,
 		`echo aWQ= | busybox base64 -d | busybox sh`,
 		`echo aWQ= | base64 -d | kubectl exec -i p -c c -- python3`,
+		// kubectl exec 的 -- 之后是要运行的程序，无法静态确定时同样算（修正轮 6 代码评审）
+		`echo aWQ= | kubectl exec -i p -- $b | sh`,
 		`echo aWQ= | base64 -d | env -S sh`,
 		// 不认识的程序带着 shell、解释器的名字作参数时，可能就是在运行它（包装启动的表不是封闭的）
 		`echo aWQ= | base64 -d | tmux new sh`,
@@ -285,6 +295,72 @@ func TestWrappersAreJudgedByTheProgramTheyRun(t *testing.T) {
 	}
 }
 
+// 别名、函数按内容判断时，调用时带上的词与标准输入会流进内容（修正轮 6 代码评审）：别名的内容是
+// 包装时它们是包装运行的命令，内容是 eval、shell、ssh 时它们是脚本，函数体把 "$@" 交给 eval、
+// sh -c 时同样是脚本，内容从标准输入读脚本时送进调用的输入是脚本。这些都不送审。
+func TestDefinitionsRunWhatTheCallerPasses(t *testing.T) {
+	cases := []string{
+		"alias s=sudo; echo aWQ= | s $b -d | sh",
+		"alias s=sudo; echo aWQ= | s $b | sh",
+		"alias x=xargs; echo aWQ= | x $b | sh",
+		"alias a=s; alias s=sudo; echo aWQ= | a $b | sh",
+		"alias k=kubectl; echo aWQ= | k exec -i p -- $b | sh",
+		"alias n=; echo aWQ= | n $b | sh",
+		"alias n='true;'; echo aWQ= | n $b | sh",
+		"alias e=eval; echo aWQ= | e '$b' | sh",
+		`f(){ eval "$@"; }; echo aWQ= | f '$b' | sh`,
+		`f(){ sh -c "$1"; }; f 'echo aWQ= | $b | sh'`,
+		`f(){ sh; }; echo 'echo aWQ= | $b | sh' | f`,
+		`g(){ f; }; f(){ sh; }; echo 'echo aWQ= | $b | sh' | g`,
+		"alias s=sh; echo 'echo aWQ= | $b | sh' | s",
+		`alias py=python3; py -c 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+		`py(){ python3 "$@"; }; py -c 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+		`alias py=python3; echo 'import base64,os;os.system(base64.b64decode("aWQ=").decode())' | py`,
+		`run(){ "$@"; }; echo aWQ= | run eval '$b'`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+}
+
+// env -S 的字符串由 env 拆开运行，合在选项里（-Ssh、--split-string=sh）同样认得出；合在一起的短选项
+// 里让包装运行 shell 的选项（flock -nc）同样认得出（修正轮 6 代码评审）。
+func TestSplitStringsAndGroupedOptions(t *testing.T) {
+	cases := []string{
+		"echo aWQ= | base64 -d | env -Ssh",
+		"echo aWQ= | base64 -d | env --split-string=sh",
+		"echo aWQ= | base64 -d | env -S'sh -s'",
+		"echo aWQ= | base64 -d | env -iS sh",
+		"echo aWQ= | env -S '${b}' | sh",
+		"echo 'echo aWQ= | $b | sh' | env -Ssh",
+		`echo 'import base64,os;os.system(base64.b64decode("aWQ=").decode())' | env -S 'python3 -u'`,
+		"echo aWQ= | base64 -d > a.sh; env -S './a.sh x'",
+		"flock -n /tmp/l -nc 'echo aWQ= | $b | sh'",
+		// 运行 shell 或不运行程序的包装之后，find 的下一个 -exec 里同样有命令名
+		`find . -exec sudo -s \; -exec $b -d {} \;`,
+		`find . -exec env -Ssh \; -exec $b -d {} \;`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+	// -S 之后没有字符串时不运行程序
+	for _, cmd := range []string{"env -S", "echo aGk= | base64 -d | env -i -S", "env -S 'ls -l'"} {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
+		})
+	}
+}
+
 // 交给脚本解释器的代码（-c / -e 参数、heredoc、管道送入）里出现 base64 解码也算解码（修正轮 6）；
 // 解释器本身执行代码，所以这样的命令不送审。
 func TestBase64DecodingInInterpreterCode(t *testing.T) {
@@ -307,6 +383,9 @@ func TestBase64DecodingInInterpreterCode(t *testing.T) {
 		`bash -c "python3 -c 'import base64,os;os.system(base64.b64decode(\"aWQ=\").decode())'"`,
 		`ssh h "python3 -c 'import base64,os;os.system(base64.b64decode(\"aWQ=\").decode())'"`,
 		`docker exec c python3 -c 'import base64,os;os.system(base64.b64decode("aWQ=").decode())'`,
+		`python3 -c 'import binascii,os;os.system(binascii.a2b_base64("aWQ=").decode())'`,
+		`python3 -c 'from base64 import decodebytes as d;import os;os.system(d(b"aWQ=").decode())'`,
+		`node -e "require('child_process').execSync(Buffer.from(String(f(x)), 'base64').toString())"`,
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -405,6 +484,17 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 	deepest := func(opening, closing string) string {
 		return nested((MaxCommandBytes-1)/len(opening+closing), opening, closing)
 	}
+	// doubling 定义一串函数，每个调用前一个两次，最后调用最外层的：按调用展开会随个数指数增长。
+	doubling := func(first, def, call string) string {
+		var b strings.Builder
+		b.WriteString(first)
+		i := 1
+		for ; b.Len()+len(def)+len(call)+12 < MaxCommandBytes; i++ {
+			fmt.Fprintf(&b, def, i, i-1, i-1)
+		}
+		fmt.Fprintf(&b, call, i-1)
+		return b.String()
+	}
 	cases := map[string]struct {
 		cmd     string
 		wantErr error
@@ -437,6 +527,11 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 			cmd:  strings.Repeat("f(){ $1 -d; }; f base64; ", (MaxCommandBytes-len("sh"))/len("f(){ $1 -d; }; f base64; ")) + "sh",
 			want: true,
 		},
+		"find -exec of a function near the cap": {
+			cmd: "f(){ base64; }; find ." + strings.Repeat(` -exec f \;`, (MaxCommandBytes-len("f(){ base64; }; find ."))/len(` -exec f \;`)),
+		},
+		"doubling function chain near the cap": {cmd: doubling(`f0(){ "$@"; }; `, "f%d(){ f%d \"$@\"; f%d \"$@\"; }; ", "f%d $b"), want: true},
+		"alias loop near the cap":              {cmd: "alias a=b; alias b=a; " + strings.Repeat("a x; ", (MaxCommandBytes-len("alias a=b; alias b=a; "))/len("a x; "))},
 		"nested quoted dynamic scripts near the cap": {
 			cmd:  strings.Repeat(`sh -c 'echo aWQ= | $b -d'; `, MaxCommandBytes/len(`sh -c 'echo aWQ= | $b -d'; `)),
 			want: true,
