@@ -50,14 +50,13 @@ type ReviewQuestion struct {
 
 // ReviewItem is the arguments of one call of the reviewer's tool: the command's
 // canonical asset type, the command and its syntax ("shell", "redis" or "text").
-// Command starts with the command exactly as it will run, secrets included; when
-// a shell command decodes a script and runs it, the host appends each decoded
-// script after it, labeled as decoded. A field added later is optional
-// (omitempty) and sent only to a tool that declares it, so older reviewers and
-// hosts keep working with newer ones.
+// Command is the command exactly as it will run, secrets included, with nothing
+// appended; a shell command that both decodes and executes code is never sent.
+// A field added later is optional (omitempty) and sent only to a tool that
+// declares it, so older reviewers and hosts keep working with newer ones.
 type ReviewItem struct {
 	AssetType string `json:"assetType" desc:"canonical asset type the command runs on"`
-	Command   string `json:"command" desc:"command to review, unchanged, followed by any decoded scripts it runs"`
+	Command   string `json:"command" desc:"command to review, exactly as it will run"`
 	Syntax    string `json:"syntax" desc:"command syntax: shell, redis or text"`
 }
 

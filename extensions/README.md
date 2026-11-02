@@ -645,13 +645,12 @@ sets what `ctx.Settings()` reads.
 Under assisted approval and Autopilot, a command the rules would ask the user about
 is first judged by the **command reviewer** an extension provides; a pass lets it run
 unasked, so the user approves a reviewer at install. The host does everything that is
-not the judgement — which commands are reviewed, expanding decode-then-execute
-scripts, the length limit, caching (per extension version and settings),
-concurrency, the timeout and its one retry — and asks the reviewer about **one
-command per call**. The reviewer gets the command exactly as it will run, passwords
-and keys included; when a shell command
-decodes a script and runs it, each decoded script is appended after the command,
-labeled as decoded, and the length limit counts the whole text:
+not the judgement — which commands are reviewed, the length limit, caching (per
+extension version and settings), concurrency, the timeout and its one retry — and
+asks the reviewer about **one command per call**. The reviewer gets the command
+exactly as it will run, passwords and keys included, with nothing appended. A shell
+command that both decodes (`base64 -d` and the like) and executes code is never
+sent: the host does not decode it, and the reviewer could not see what runs:
 
 ```go
 var questions = []opskat.ReviewQuestion{
@@ -659,7 +658,7 @@ var questions = []opskat.ReviewQuestion{
 }
 
 opskat.CommandReviewer(questions, 4000, func(ctx *opskat.ToolContext, item opskat.ReviewItem) opskat.ReviewResult {
-    // item.AssetType, item.Command (unchanged, plus any decoded scripts), item.Syntax ("shell" / "redis" / "text")
+    // item.AssetType, item.Command (unchanged), item.Syntax ("shell" / "redis" / "text")
     return opskat.ReviewResult{Outcome: opskat.ReviewReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 0.9}}
 })
 ```

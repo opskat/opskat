@@ -54,14 +54,6 @@ func (f *fakeReviewer) callCount() int {
 	return len(f.calls)
 }
 
-func (f *fakeReviewer) lastSent(t *testing.T) string {
-	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.NotEmpty(t, f.calls, "审核器没收到命令")
-	return f.calls[len(f.calls)-1].Command
-}
-
 var destructiveQuestion = []Question{{
 	ID:    "destructive",
 	Names: map[string]string{"en": "Destroys data", "zh-CN": "破坏数据"},
@@ -245,8 +237,7 @@ func TestMalformedAnswerFailsThatCommandAndIsNotCached(t *testing.T) {
 
 // ---- 送审文本 ----
 
-// 命令原样交给审核器，一个字符都不改（包括其中的密码、密钥），带上资产类型和写法。服务本身
-// 不解码：解码展开由权限检查做，随请求的 Decoded 传进来。
+// 命令原样交给审核器，一个字符都不改（包括其中的密码、密钥），带上资产类型和写法。
 func TestSendsTheCommandUnchangedWithAssetTypeAndSyntax(t *testing.T) {
 	rev := newReviewer()
 	s, _ := newService(rev)
@@ -269,40 +260,6 @@ func TestSendsTheCommandUnchangedWithAssetTypeAndSyntax(t *testing.T) {
 	}
 	assert.Equal(t, call{AssetType: "redis", Command: "AUTH S3cret", Syntax: "redis"}, rev.calls[len(shell)])
 	assert.Equal(t, call{AssetType: "database", Command: "SELECT 1", Syntax: "text"}, rev.calls[len(shell)+1])
-}
-
-// 解码出的脚本追加在原命令之后送审：审核器收到的就是 ReviewRequest.Text。
-func TestSendsDecodedScriptsAfterTheCommand(t *testing.T) {
-	const cmd = "rm -rf /important | echo ZWNobyBoaQ== | base64 -d | sh"
-	req := permission.ReviewRequest{AssetType: "ssh", Command: cmd, Syntax: permission.SyntaxShell, Decoded: []string{"echo hi"}}
-	rev := newReviewer()
-	s, _ := newService(rev)
-
-	r := review(s, req)
-
-	assert.Equal(t, aictx.ReviewPass, r.Outcome)
-	sent := rev.lastSent(t)
-	assert.Equal(t, req.Text(), sent)
-	assert.True(t, strings.HasPrefix(sent, cmd), "sent %q", sent)
-	assert.True(t, strings.HasSuffix(sent, "\necho hi"), "sent %q", sent)
-}
-
-// 长度按原命令加追加的脚本算：原命令本身不超长，加上解码出的脚本超长时同样不送审。
-func TestTooLongCountsTheAppendedScripts(t *testing.T) {
-	cases := map[string]permission.ReviewRequest{
-		"command":         ssh(strings.Repeat("a", 4001)),
-		"appended script": {AssetType: "ssh", Command: "echo x | base64 -d | sh", Syntax: permission.SyntaxShell, Decoded: []string{strings.Repeat("a", 4000)}},
-	}
-	for name, req := range cases {
-		t.Run(name, func(t *testing.T) {
-			rev := newReviewer()
-			s, _ := newService(rev)
-			r := review(s, req)
-			assert.Equal(t, aictx.ReviewFail, r.Outcome)
-			assert.Equal(t, aictx.ReviewReasonTooLong, r.Reason)
-			assert.Empty(t, rev.calls)
-		})
-	}
 }
 
 // 一条命令调用一次审核器；超过它声明的长度的命令不送审。
@@ -357,27 +314,6 @@ func TestCacheKeyIncludesTheReviewersIdentity(t *testing.T) {
 	rev.digest = "d2" // 同一版本 1.0.0，代码换了
 	assert.False(t, review(s, text("ls")).Cached, "a same-version reinstall with a different package misses the old verdict")
 	assert.Equal(t, 3, rev.callCount())
-}
-
-// 缓存键按送审文本算：追加了解码脚本的命令不命中只按原命令算的旧结果，命中按送审文本存的结果。
-func TestCacheKeyIsTheReviewText(t *testing.T) {
-	const cmd = "echo ZWNobyBoaQ== | base64 -d | sh"
-	req := permission.ReviewRequest{AssetType: "ssh", Command: cmd, Syntax: permission.SyntaxShell, Decoded: []string{"echo hi"}}
-
-	rev := newReviewer()
-	s, cache := newService(rev)
-	cache.m[extensionCacheKey(rev.Identity(), "ssh", cmd)] = Result{Outcome: OutcomeReject, Failed: []string{"destructive"}}
-	r := review(s, req)
-	assert.False(t, r.Cached)
-	assert.Equal(t, 1, rev.callCount())
-
-	rev2 := newReviewer()
-	s2, cache2 := newService(rev2)
-	cache2.m[extensionCacheKey(rev2.Identity(), "ssh", req.Text())] = Result{Outcome: OutcomeReject, Failed: []string{"destructive"}}
-	r2 := review(s2, req)
-	assert.True(t, r2.Cached)
-	assert.Equal(t, aictx.ReviewReject, r2.Outcome)
-	assert.Empty(t, rev2.calls)
 }
 
 // ---- 调用：并发、超时 ----

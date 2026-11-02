@@ -1,7 +1,7 @@
 // Package command_review_svc 是命令的模型审核：命令没被规则放行、原本要问人时，交给审核扩展
 // 判断能不能自动执行。宿主只负责和具体审核服务无关的部分——用哪个审核扩展、长度限制、缓存、
-// 并发、超时重试和失败记录；判断本身由扩展做。送审的文本由权限检查给出（permission.ReviewRequest.Text：
-// 原命令原样开头，解码出的脚本追加在后），这里不改写。
+// 并发、超时重试和失败记录；判断本身由扩展做。送审的就是原命令（permission.ReviewRequest.Command），
+// 这里不改写。
 package command_review_svc
 
 import (
@@ -274,12 +274,12 @@ func (s *service) resolve(ctx context.Context, n int) (Reviewer, []Result) {
 type pendingReview struct {
 	idx       int
 	assetType string
-	command   string // 送审文本（permission.ReviewRequest.Text）
+	command   string // 原命令（permission.ReviewRequest.Command）
 	syntax    string
 	key       string
 }
 
-// reviewWith 用 rev 审核 reqs。送审文本（原命令加追加的解码脚本）超过审核器声明的长度时
+// reviewWith 用 rev 审核 reqs。命令超过审核器声明的长度时
 // 不送审，按该条失败；其余每条调用一次审核器。读写缓存按顺序做（SQLite 不适合并发写），
 // 只有调用审核器这一步并行，最多 maxParallelReviews 路同时进行。
 // useCache 为假时不读也不写缓存（测试审核器用）。
@@ -291,7 +291,7 @@ func (s *service) reviewWith(ctx context.Context, rev Reviewer, reqs []permissio
 	results := make([]Result, len(reqs))
 	var pending []pendingReview
 	for i, req := range reqs {
-		command := req.Text()
+		command := req.Command
 		if len(command) > maxLen {
 			results[i] = Result{Outcome: OutcomeFail, Reason: aictx.ReviewReasonTooLong, Extension: name, Version: version}
 			continue

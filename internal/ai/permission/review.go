@@ -22,7 +22,7 @@ import (
 //   - Autopilot：模型审核通过就放行，否则直接拒绝，不等人。
 //
 // 规则已经放行或拒绝的结果原样保留。需要审核的命令一次交给审核端口（见 Reviewer）；shell
-// 命令送审前先解出解码后执行的脚本并按禁止规则检查（见 reviewRequestFor）。
+// 命令送审前先限长，并判断是否既解码又执行代码，是就不送审（见 reviewRequestFor）。
 // 标为 Unreviewable 的结果和还会从管道读入内容（PipedInput）的命令只能由人判断，不交给
 // 模型：辅助审批照常问人，Autopilot 直接拒绝。
 // 没有注入审核端口时，需要审核的命令按审核失败处理（见 SetReviewer）。
@@ -69,38 +69,32 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 	}
 }
 
-// reviewRequestFor 是 req 交给审核端口的请求。shell 写法的命令先解出解码后执行的脚本
-// （shelldecode.Decode，追加在原命令之后送审），每段脚本按这台资产的规则再检查一遍，只采纳
-// 拒绝：命中禁止规则就和原命令命中一样拒绝，不送审；放行规则与授权记录不作用于解出的脚本——
-// 原命令已经判为需要确认，靠它们放行就绕过了审核。解不开或解析不了时按审核失败落成结果
-// （辅助审批问人、Autopilot 拒绝），同样不送审。send 为假时 final 就是这条命令的结果。
+// reviewRequestFor 是 req 交给审核端口的请求：原命令原样送审，不改写也不追加。shell 写法的
+// 命令先限长再判断：超过 shelldecode.MaxCommandBytes 的不解析，按过长失败；既解码又执行代码的
+// （shelldecode.DecodesAndRuns）把要执行的内容藏在解码后面，审核器看不到，按 undecodable 失败；
+// 解析不了的按 unparseable 失败。失败时按模式落成结果（辅助审批问人、Autopilot 拒绝），不送审。
+// send 为假时 final 就是这条命令的结果。
 func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.CheckResult, mode string) (review ReviewRequest, final aictx.CheckResult, send bool) {
 	assetType, syntax := reviewTypeFor(req.AssetType)
 	review = ReviewRequest{AssetType: assetType, Command: req.Command, Syntax: syntax}
 	if syntax != SyntaxShell {
 		return review, result, true
 	}
-	scripts, err := shelldecode.Decode(req.Command)
-	if err != nil {
-		reason := aictx.ReviewReasonUnparseable
-		if errors.Is(err, shelldecode.ErrUndecodable) {
-			reason = aictx.ReviewReasonUndecodable
-		}
-		logger.Ctx(ctx).Warn("decode command for review", zap.Int64("assetID", req.AssetID), zap.String("assetType", assetType),
-			zap.String("reason", reason), zap.Error(err))
-		return review, applyReview(ctx, req, result, &aictx.ReviewInfo{Mode: mode, Outcome: aictx.ReviewFail, Reason: reason}), false
+	hidden, err := shelldecode.DecodesAndRuns(req.Command)
+	var reason string
+	switch {
+	case errors.Is(err, shelldecode.ErrTooLong):
+		reason = aictx.ReviewReasonTooLong
+	case err != nil:
+		reason = aictx.ReviewReasonUnparseable
+	case hidden:
+		reason = aictx.ReviewReasonUndecodable
+	default:
+		return review, result, true
 	}
-	// 只有注册时声明了 shell 写法的内置类型会走到这里，handler 一定在。
-	handler, _ := permissionTypeFor(req.AssetType)
-	for _, script := range scripts {
-		if r := handler.check(ctx, req.AssetID, script); r.Decision == aictx.Deny {
-			logger.Ctx(ctx).Info("decoded command denied by policy", zap.Int64("assetID", req.AssetID), zap.String("assetType", assetType),
-				zap.String("matched", r.MatchedPattern))
-			return review, r, false
-		}
-	}
-	review.Decoded = scripts
-	return review, result, true
+	logger.Ctx(ctx).Warn("command not sent for review", zap.Int64("assetID", req.AssetID), zap.String("assetType", assetType),
+		zap.String("reason", reason), zap.Int("length", len(req.Command)), zap.Error(err))
+	return review, applyReview(ctx, req, result, &aictx.ReviewInfo{Mode: mode, Outcome: aictx.ReviewFail, Reason: reason}), false
 }
 
 // applyReview 把一条审核结果按模式（info.Mode）落成权限结果。
