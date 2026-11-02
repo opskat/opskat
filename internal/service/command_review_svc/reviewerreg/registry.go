@@ -99,6 +99,7 @@ type candidate struct {
 	displayName   string // i18n key
 	translate     func(lang, key string) string
 	tool          string
+	params        []string // the parameter names tool declares
 	questions     []command_review_svc.Question
 	maxCommandLen int
 	running       bool
@@ -321,7 +322,7 @@ func (v *reviewer) MaxCommandLen() int { return v.c.maxCommandLen }
 // Review is one call of the candidate's host-only tool, bounded by ctx's deadline
 // (the review service's per-call timeout).
 func (v *reviewer) Review(ctx context.Context, assetType, command, syntax string) (command_review_svc.Answer, error) {
-	args, err := json.Marshal(extwire.ReviewItem{AssetType: assetType, Command: command, Syntax: syntax})
+	args, err := v.args(extwire.ReviewItem{AssetType: assetType, Command: command, Syntax: syntax})
 	if err != nil {
 		return command_review_svc.Answer{}, err
 	}
@@ -338,4 +339,26 @@ func (v *reviewer) Review(ctx context.Context, assetType, command, syntax string
 		return command_review_svc.Answer{}, fmt.Errorf("%s.%s: %w", v.c.name, v.c.tool, err)
 	}
 	return command_review_svc.Answer{Outcome: a.Outcome, Failed: a.Failed, Scores: a.Scores, Reason: a.Reason}, nil
+}
+
+// args is item's fields the tool declares: the host refuses an argument the tool
+// does not declare, so a field the host adds later reaches only tools that
+// declare it, and a tool's own optional parameters the host does not know are
+// never sent.
+func (v *reviewer) args(item extwire.ReviewItem) (json.RawMessage, error) {
+	data, err := json.Marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	var known map[string]json.RawMessage
+	if err := json.Unmarshal(data, &known); err != nil {
+		return nil, err
+	}
+	args := make(map[string]json.RawMessage, len(known))
+	for name, value := range known {
+		if slices.Contains(v.c.params, name) {
+			args[name] = value
+		}
+	}
+	return json.Marshal(args)
 }

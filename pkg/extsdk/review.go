@@ -16,9 +16,10 @@ type ReviewItem = extwire.ReviewItem
 
 // ReviewResult is the verdict on one command: ReviewPass; ReviewReject with the
 // failed question ids in Failed and, optionally, their 0..1 Scores; or
-// ReviewError with a Reason id when the reviewer could not judge it (e.g.
-// "not_configured", "invalid_api_key", "unavailable"). The host fails the review
-// for any other shape, an undeclared question id or a score out of range.
+// ReviewError with a Reason when the reviewer could not judge it — one of
+// "not_configured", "invalid_api_key", "timeout", "unavailable"
+// (extwire.ReviewReason*). The host fails the review for any other shape or
+// reason, an undeclared question id or a score out of range.
 type ReviewResult = extwire.ReviewAnswer
 
 // Review outcomes.

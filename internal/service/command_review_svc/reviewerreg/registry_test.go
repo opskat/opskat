@@ -121,18 +121,20 @@ func TestPointChecksTheDeclaration(t *testing.T) {
 		{name: "tool not host-only", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
 			tools: []extwire.Tool{func() extwire.Tool { t := reviewTool("review"); t.HostOnly, t.PageOnly = false, true; return t }()}},
 			wantErr: `commandReviewer: tool "review" must be a host-only tool`},
-		{name: "extra parameter", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
-			tools: []extwire.Tool{paramsTool(map[string]any{"assetType": str, "command": str, "syntax": str, "asset": str}, "assetType", "command", "syntax")}},
-			wantErr: `commandReviewer: tool "review" parameters must be exactly the required strings assetType, command, syntax`},
+		{name: "extra optional parameters", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
+			tools: []extwire.Tool{paramsTool(map[string]any{"assetType": str, "command": str, "syntax": str, "assetName": str, "depth": map[string]any{"type": "integer"}}, "assetType", "command", "syntax")}}},
+		{name: "extra required parameter", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
+			tools: []extwire.Tool{paramsTool(map[string]any{"assetType": str, "command": str, "syntax": str, "asset": str}, "assetType", "command", "syntax", "asset")}},
+			wantErr: `commandReviewer: tool "review" parameter "asset" must be optional: only assetType, command, syntax may be required`},
 		{name: "missing parameter", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
 			tools: []extwire.Tool{paramsTool(map[string]any{"assetType": str, "command": str}, "assetType", "command")}},
-			wantErr: `commandReviewer: tool "review" parameters must be exactly the required strings assetType, command, syntax`},
+			wantErr: `commandReviewer: tool "review" parameters must include the required strings assetType, command, syntax`},
 		{name: "parameter not a string", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
 			tools: []extwire.Tool{paramsTool(map[string]any{"assetType": str, "command": str, "syntax": map[string]any{"type": "integer"}}, "assetType", "command", "syntax")}},
-			wantErr: `commandReviewer: tool "review" parameters must be exactly the required strings assetType, command, syntax`},
+			wantErr: `commandReviewer: tool "review" parameters must include the required strings assetType, command, syntax`},
 		{name: "parameter optional", spec: viewSpec{name: "x", declared: true, reviewer: validReviewer(),
 			tools: []extwire.Tool{paramsTool(map[string]any{"assetType": str, "command": str, "syntax": str}, "assetType", "command")}},
-			wantErr: `commandReviewer: tool "review" parameters must be exactly the required strings assetType, command, syntax`},
+			wantErr: `commandReviewer: tool "review" parameters must include the required strings assetType, command, syntax`},
 		{name: "no questions", spec: viewSpec{name: "x", declared: true, tools: []extwire.Tool{reviewTool("review")},
 			reviewer: withReviewer(func(r *extwire.CommandReviewer) { r.Questions = nil })},
 			wantErr: "commandReviewer: questions: at least one question is required"},
@@ -198,6 +200,7 @@ func (passPoint) Attach(extension.ExtensionView) (func(), error) { return func()
 type call struct {
 	ext, tool string
 	args      extwire.ReviewItem
+	raw       json.RawMessage
 	timeout   time.Duration
 }
 
@@ -212,7 +215,7 @@ func (h *fakeHost) call(_ context.Context, ext, tool string, args json.RawMessag
 	if err := json.Unmarshal(args, &item); err != nil {
 		return nil, err
 	}
-	h.calls = append(h.calls, call{ext: ext, tool: tool, args: item, timeout: timeout})
+	h.calls = append(h.calls, call{ext: ext, tool: tool, args: item, raw: args, timeout: timeout})
 	return json.RawMessage(h.answer), h.err
 }
 
@@ -379,4 +382,23 @@ func TestReviewerCallsTheHostOnlyTool(t *testing.T) {
 		_, err := rev.Review(ctx, "ssh", "ls", "shell")
 		assert.ErrorContains(t, err, "guest trapped")
 	})
+}
+
+// A reviewer tool may declare optional parameters the host does not know (a newer
+// SDK's, say). It still loads, and a call carries only the parameters the host
+// knows and the tool declares — never one the tool would refuse.
+func TestReviewCallCarriesOnlyDeclaredParamsTheHostKnows(t *testing.T) {
+	ctx := context.Background()
+	host := &fakeHost{answer: `{"outcome":"pass"}`}
+	reg, contributions := newRegistry(t, host)
+	tool := reviewTool("review")
+	tool.Parameters["properties"].(map[string]any)["assetName"] = map[string]any{"type": "string"}
+	require.NoError(t, contributions.Attach(view(viewSpec{name: "jev", declared: true, tools: []extwire.Tool{tool}, reviewer: validReviewer(), running: true})))
+	rev, err := reg.Selecting(func() string { return "" }).Current(ctx)
+	require.NoError(t, err)
+
+	_, err = rev.Review(ctx, "ssh", "ls", "shell")
+	require.NoError(t, err)
+	require.Len(t, host.calls, 1)
+	assert.JSONEq(t, `{"assetType":"ssh","command":"ls","syntax":"shell"}`, string(host.calls[0].raw))
 }

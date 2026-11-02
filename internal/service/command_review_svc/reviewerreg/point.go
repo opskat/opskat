@@ -17,8 +17,8 @@ import (
 // digits and underscores, 64 at most.
 var questionIDRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
-// reviewParams are the reviewer tool's parameters: exactly these required strings
-// (extwire.ReviewItem).
+// reviewParams are the reviewer tool's required parameters, all strings
+// (extwire.ReviewItem's required fields). The tool may declare optional ones too.
 var reviewParams = []string{"assetType", "command", "syntax"}
 
 // point is the commandReviewer contribution point over one registry.
@@ -29,25 +29,33 @@ func (point) Key() string { return extwire.KeyCommandReviewer }
 // Check judges the declaration: the manifest's contributes.commandReviewer and
 // describe()'s reviewer come together or not at all (the manifest is what the
 // user approved before the code ran); the tool is one of the extension's own
-// host-only tools whose parameters are exactly the required strings assetType,
-// command, syntax; at least one question, ids well-formed and unique, each named
-// in some language; and a positive maxCommandLen. It runs for every extension, so
-// a manifest declaring a reviewer that describe() lacks is refused too.
+// host-only tools whose parameters include the required strings assetType,
+// command, syntax and require nothing else (other parameters are optional); at
+// least one question, ids well-formed and unique, each named in some language;
+// and a positive maxCommandLen. It runs for every extension, so a manifest
+// declaring a reviewer that describe() lacks is refused too.
 func (point) Check(v extension.ExtensionView) error {
 	_, err := declaration(v)
 	return err
 }
 
+// declared is a checked reviewer declaration and the parameter names its tool
+// declares.
+type declared struct {
+	extwire.CommandReviewer
+	params []string
+}
+
 // declaration is v's checked reviewer declaration, nil when it declares none.
-func declaration(v extension.ExtensionView) (*extwire.CommandReviewer, error) {
-	declared := v.Manifest().Contributes.CommandReviewer
+func declaration(v extension.ExtensionView) (*declared, error) {
+	inManifest := v.Manifest().Contributes.CommandReviewer
 	raw := v.Contribution(extwire.KeyCommandReviewer)
 	switch {
-	case raw == nil && declared:
+	case raw == nil && inManifest:
 		return nil, errors.New("commandReviewer: manifest declares contributes.commandReviewer but describe() provides no command reviewer")
 	case raw == nil:
 		return nil, nil
-	case !declared:
+	case !inManifest:
 		return nil, errors.New("commandReviewer: describe() provides a command reviewer that manifest contributes.commandReviewer does not declare")
 	}
 	var r extwire.CommandReviewer
@@ -60,7 +68,8 @@ func declaration(v extension.ExtensionView) (*extwire.CommandReviewer, error) {
 			return nil, fmt.Errorf("tools: %w", err)
 		}
 	}
-	if err := checkTool(r.Tool, tools); err != nil {
+	params, err := checkTool(r.Tool, tools)
+	if err != nil {
 		return nil, fmt.Errorf("commandReviewer: %w", err)
 	}
 	if err := checkQuestions(r.Questions); err != nil {
@@ -69,40 +78,41 @@ func declaration(v extension.ExtensionView) (*extwire.CommandReviewer, error) {
 	if r.MaxCommandLen <= 0 {
 		return nil, fmt.Errorf("commandReviewer: maxCommandLen must be positive, got %d", r.MaxCommandLen)
 	}
-	return &r, nil
+	return &declared{CommandReviewer: r, params: params}, nil
 }
 
-func checkTool(name string, tools []extwire.Tool) error {
+// checkTool checks the reviewer's tool and returns the parameter names it declares.
+func checkTool(name string, tools []extwire.Tool) ([]string, error) {
 	if name == "" {
-		return errors.New("tool is required")
+		return nil, errors.New("tool is required")
 	}
 	i := slices.IndexFunc(tools, func(t extwire.Tool) bool { return t.Name == name })
 	if i < 0 {
-		return fmt.Errorf("tool %q is not one of this extension's tools", name)
+		return nil, fmt.Errorf("tool %q is not one of this extension's tools", name)
 	}
 	tool := tools[i]
 	if !tool.HostOnly {
-		return fmt.Errorf("tool %q must be a host-only tool: exec and pages may not call the reviewer", name)
+		return nil, fmt.Errorf("tool %q must be a host-only tool: exec and pages may not call the reviewer", name)
 	}
-	if !exactReviewParams(tool.Parameters) {
-		return fmt.Errorf("tool %q parameters must be exactly the required strings %s", name, strings.Join(reviewParams, ", "))
-	}
-	return nil
-}
-
-func exactReviewParams(schema map[string]any) bool {
-	props, _ := schema["properties"].(map[string]any)
-	if len(props) != len(reviewParams) {
-		return false
-	}
-	required, _ := schema["required"].([]any)
-	for _, name := range reviewParams {
-		prop, _ := props[name].(map[string]any)
-		if typ, _ := prop["type"].(string); typ != "string" || !slices.Contains(required, any(name)) {
-			return false
+	props, _ := tool.Parameters["properties"].(map[string]any)
+	required, _ := tool.Parameters["required"].([]any)
+	for _, p := range reviewParams {
+		prop, _ := props[p].(map[string]any)
+		if typ, _ := prop["type"].(string); typ != "string" || !slices.Contains(required, any(p)) {
+			return nil, fmt.Errorf("tool %q parameters must include the required strings %s", name, strings.Join(reviewParams, ", "))
 		}
 	}
-	return true
+	// A required parameter the host does not send would fail every call.
+	for _, p := range required {
+		if s, _ := p.(string); !slices.Contains(reviewParams, s) {
+			return nil, fmt.Errorf("tool %q parameter %q must be optional: only %s may be required", name, p, strings.Join(reviewParams, ", "))
+		}
+	}
+	params := make([]string, 0, len(props))
+	for p := range props {
+		params = append(params, p)
+	}
+	return params, nil
 }
 
 func checkQuestions(questions []extwire.ReviewQuestion) error {
@@ -156,6 +166,7 @@ func (p point) Attach(v extension.ExtensionView) (func(), error) {
 		displayName:   m.I18n.DisplayName,
 		translate:     v.Translate,
 		tool:          r.Tool,
+		params:        r.params,
 		questions:     questions,
 		maxCommandLen: r.MaxCommandLen,
 		running:       v.Plugin() != nil,

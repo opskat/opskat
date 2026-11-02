@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
 )
 
 // Question 是审核器声明的一道题。结果里只回 id，宿主按 Names（语言 → 名称）显示。
@@ -97,7 +99,8 @@ type State struct {
 	Problem   string         `json:"problem,omitempty"`
 }
 
-// validateAnswer 校验审核器对一条命令的回答：结果合规、题目 id 都已声明、分数在 0~1。
+// validateAnswer 校验审核器对一条命令的回答：结果合规、error 的原因是审核器能用的四个之一、
+// 题目 id 都已声明、分数在 0~1。
 // 不合规的回答按无效结果失败。
 func validateAnswer(questions []Question, r Answer) error {
 	known := make(map[string]struct{}, len(questions))
@@ -117,8 +120,10 @@ func validateAnswer(questions []Question, r Answer) error {
 			return fmt.Errorf("reject carries a reason; reasons belong on error")
 		}
 	case AnswerError:
-		if r.Reason == "" {
-			return fmt.Errorf("error requires a reason")
+		switch r.Reason {
+		case aictx.ReviewReasonNotConfigured, aictx.ReviewReasonInvalidAPIKey, aictx.ReviewReasonTimeout, aictx.ReviewReasonUnavailable:
+		default:
+			return fmt.Errorf("error reason %q is not not_configured, invalid_api_key, timeout or unavailable", r.Reason)
 		}
 		if len(r.Failed) > 0 || len(r.Scores) > 0 {
 			return fmt.Errorf("error carries question ids or scores; those belong on reject")

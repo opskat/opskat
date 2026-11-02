@@ -14,8 +14,10 @@ const MaxReviewTimeout = 60 * time.Second
 // CommandReviewer is the extension's command reviewer (KeyCommandReviewer): under
 // assisted approval and Autopilot the host asks it about each command the rules
 // would ask the user about, one call of Tool per command. Tool is one of the
-// extension's own host-only tools whose parameters are exactly ReviewItem's
-// (required strings assetType, command, syntax); it answers a ReviewAnswer.
+// extension's own host-only tools whose parameters include ReviewItem's required
+// strings assetType, command, syntax and require nothing else — it may declare
+// optional ones; a call carries only the ReviewItem fields the tool declares. It
+// answers a ReviewAnswer.
 // Questions are what a command can fail, and MaxCommandLen is the longest command
 // the reviewer takes — a longer one fails the review without a call. The
 // manifest must declare contributes.commandReviewer too: a reviewer can let
@@ -50,7 +52,9 @@ type ReviewQuestion struct {
 // canonical asset type, the command and its syntax ("shell", "redis" or "text").
 // Command starts with the command exactly as it will run, secrets included; when
 // a shell command decodes a script and runs it, the host appends each decoded
-// script after it, labeled as decoded.
+// script after it, labeled as decoded. A field added later is optional
+// (omitempty) and sent only to a tool that declares it, so older reviewers and
+// hosts keep working with newer ones.
 type ReviewItem struct {
 	AssetType string `json:"assetType" desc:"canonical asset type the command runs on"`
 	Command   string `json:"command" desc:"command to review, unchanged, followed by any decoded scripts it runs"`
@@ -67,10 +71,23 @@ const (
 	ReviewError = "error"
 )
 
+// Reasons a reviewer's error answer may give; the host shows each with its own
+// explanation.
+const (
+	// ReviewReasonNotConfigured: the reviewer's settings are incomplete.
+	ReviewReasonNotConfigured = "not_configured"
+	// ReviewReasonInvalidAPIKey: the service the reviewer asks refused its key.
+	ReviewReasonInvalidAPIKey = "invalid_api_key"
+	// ReviewReasonTimeout: the service the reviewer asks did not answer in time.
+	ReviewReasonTimeout = "timeout"
+	// ReviewReasonUnavailable: the reviewer could not judge for another reason.
+	ReviewReasonUnavailable = "unavailable"
+)
+
 // ReviewAnswer is the reviewer tool's answer for one command. A reject names the
 // failed question ids and may score them (question id → 0..1); an error names its
-// reason id (e.g. "not_configured", "invalid_api_key", "unavailable"). The host
-// fails the review as an invalid result for any other shape.
+// reason, one of the ReviewReason* constants. The host fails the review as an
+// invalid result for any other shape or reason.
 type ReviewAnswer struct {
 	Outcome string             `json:"outcome"`
 	Failed  []string           `json:"failed,omitempty"`

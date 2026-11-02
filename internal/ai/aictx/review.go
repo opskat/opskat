@@ -1,5 +1,7 @@
 package aictx
 
+import "github.com/opskat/opskat/pkg/extwire"
+
 // ReviewOutcome 是一次模型审核的结果。
 type ReviewOutcome string
 
@@ -9,13 +11,13 @@ const (
 	ReviewFail   ReviewOutcome = "fail"   // 审核失败：没能得到判断
 )
 
-// 审核失败的原因（ReviewInfo.Reason）。not_configured / invalid_api_key / timeout / unavailable
-// 也是审核器回答 error 时用的原因名，宿主按同一套说明显示；不认识的原因按 unavailable 显示。
+// 审核失败的原因（ReviewInfo.Reason）。前四个就是审核器回答 error 时能用的原因（由线上格式
+// extwire 定义），宿主按同一套说明显示；审核器回答其余原因按 invalid_result 失败。
 const (
-	ReviewReasonNotConfigured = "not_configured"
-	ReviewReasonInvalidAPIKey = "invalid_api_key"
-	ReviewReasonTimeout       = "timeout"
-	ReviewReasonUnavailable   = "unavailable"
+	ReviewReasonNotConfigured = extwire.ReviewReasonNotConfigured
+	ReviewReasonInvalidAPIKey = extwire.ReviewReasonInvalidAPIKey
+	ReviewReasonTimeout       = extwire.ReviewReasonTimeout
+	ReviewReasonUnavailable   = extwire.ReviewReasonUnavailable
 	ReviewReasonTooLong       = "too_long"
 	ReviewReasonUnparseable   = "unparseable" // 命令或解码出的脚本解析不了，禁止规则没法逐条检查，不发送
 	ReviewReasonUndecodable   = "undecodable" // 认得出解码后执行，但解不开要执行的内容（或写入后可能被改过），不发送

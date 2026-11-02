@@ -176,21 +176,25 @@ func TestRejectCarriesQuestionNamesAndScore(t *testing.T) {
 }
 
 // 审核器的 error 是"没能得到判断"，按审核失败处理，也不能缓存——否则一次限流会让同一条命令
-// 在缓存有效期内都审核失败。
+// 在缓存有效期内都审核失败。原因只能是这四个之一，原样记为审核失败的原因。
 func TestReviewerErrorIsFailureAndNotCached(t *testing.T) {
-	rev := newReviewer()
-	rev.reply = func(call) (Answer, error) {
-		return Answer{Outcome: AnswerError, Reason: "rate_limited"}, nil
+	for _, reason := range []string{aictx.ReviewReasonNotConfigured, aictx.ReviewReasonInvalidAPIKey, aictx.ReviewReasonTimeout, aictx.ReviewReasonUnavailable} {
+		t.Run(reason, func(t *testing.T) {
+			rev := newReviewer()
+			rev.reply = func(call) (Answer, error) {
+				return Answer{Outcome: AnswerError, Reason: reason}, nil
+			}
+			s, cache := newService(rev)
+
+			r := review(s, text("ls"))
+			assert.Equal(t, aictx.ReviewFail, r.Outcome)
+			assert.Equal(t, reason, r.Reason)
+			assert.Empty(t, cache.m)
+
+			review(s, text("ls"))
+			assert.Equal(t, 2, rev.callCount())
+		})
 	}
-	s, cache := newService(rev)
-
-	r := review(s, text("ls"))
-	assert.Equal(t, aictx.ReviewFail, r.Outcome)
-	assert.Equal(t, "rate_limited", r.Reason)
-	assert.Empty(t, cache.m)
-
-	review(s, text("ls"))
-	assert.Equal(t, 2, rev.callCount())
 }
 
 // 调用出错（不是超时）：按无效结果失败，不重试，不缓存。
@@ -210,13 +214,15 @@ func TestCallErrorIsInvalidResultWithoutRetry(t *testing.T) {
 // 回答不合规时这条命令按无效结果失败，不缓存，绝不当成通过或未通过；同时送审的其他命令不受影响。
 func TestMalformedAnswerFailsThatCommandAndIsNotCached(t *testing.T) {
 	for name, bad := range map[string]Answer{
-		"unknown outcome":     {Outcome: "allow"},
-		"undeclared question": {Outcome: AnswerReject, Failed: []string{"not_declared"}},
-		"reject without ids":  {Outcome: AnswerReject},
-		"error without cause": {Outcome: AnswerError},
-		"pass with failure":   {Outcome: AnswerPass, Failed: []string{"destructive"}},
-		"score out of range":  {Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 2}},
-		"negative score":      {Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": -0.1}},
+		"unknown outcome":      {Outcome: "allow"},
+		"undeclared question":  {Outcome: AnswerReject, Failed: []string{"not_declared"}},
+		"reject without ids":   {Outcome: AnswerReject},
+		"error without cause":  {Outcome: AnswerError},
+		"error, unknown cause": {Outcome: AnswerError, Reason: "rate_limited"},
+		"error, host's cause":  {Outcome: AnswerError, Reason: aictx.ReviewReasonNoReviewer},
+		"pass with failure":    {Outcome: AnswerPass, Failed: []string{"destructive"}},
+		"score out of range":   {Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": 2}},
+		"negative score":       {Outcome: AnswerReject, Failed: []string{"destructive"}, Scores: map[string]float64{"destructive": -0.1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rev := newReviewer()

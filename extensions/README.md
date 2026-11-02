@@ -670,17 +670,17 @@ and in `manifest.json`:
 "contributes": { "commandReviewer": true }
 ```
 
-`CommandReviewer` registers the host-only tool `review_command` (parameters exactly the
-required strings `assetType`, `command`, `syntax`) and the `commandReviewer`
-contribution naming it, its questions and the longest command it takes (a longer one
+`CommandReviewer` registers the host-only tool `review_command` (its parameters are
+`ReviewItem`'s: the required strings `assetType`, `command`, `syntax`) and the
+`commandReviewer` contribution naming it, its questions and the longest command it takes (a longer one
 fails the review without a call). A question id starts with a lowercase letter and
 holds lowercase letters, digits and underscores, at most 64; ids are unique, there is
 at least one question, and each has a name in at least one language. The answer is
 `ReviewPass`; `ReviewReject` with the failed question ids and optional 0–1 scores; or
-`ReviewError` with a reason id (`not_configured`, `invalid_api_key`, `unavailable`, …)
-when it could not judge. Anything else — an undeclared question id, a reject without
-one, a score out of range — and a failed or timed-out call fail the review; an `error`
-is never cached. A failed review never lets a command run: assisted approval asks the
+`ReviewError` with a reason that is one of `not_configured`, `invalid_api_key`,
+`timeout`, `unavailable` when it could not judge. Anything else — an undeclared
+question id, a reject without one, a score out of range, any other `error` reason —
+and a failed or timed-out call fail the review; an `error` is never cached. A failed review never lets a command run: assisted approval asks the
 user, Autopilot refuses it.
 
 The review function runs as a call without an asset: it reads its settings with
@@ -688,8 +688,10 @@ The review function runs as a call without an asset: it reads its settings with
 `permissions.network.settingsEndpoint` (above). Do not retry inside it — the host's
 timeout (the user's setting, up to 60 seconds; the tool declares that limit) cuts
 the call and retries once. The manifest flag and `describe()` must agree,
-and the tool must exist, be host-only and take exactly those parameters, or the load
-fails naming the rule. Enabled reviewers are the candidates; with several, the user
+and the tool must exist, be host-only and take those three as required strings, any
+other parameter optional, or the load fails naming the rule. A call carries only the
+parameters the host knows and the tool declares, so a field added to `ReviewItem`
+later is optional and reaches only reviewers built with an SDK that has it. Enabled reviewers are the candidates; with several, the user
 picks one under Settings › AI › Command review, and the extension's settings form
 gains "Save and test", which reviews a harmless command with the saved settings.
 
