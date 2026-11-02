@@ -321,7 +321,8 @@ func execTool(l loaded) permission.ExecFunc {
 // guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（extwire.Tool.Actions，
 // 不是整个扩展的 policies.actions 并集）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
-// 这次调用本身。
+// 这次调用本身。check_policy 报错同理。这类结果标为 Unreviewable：没有 action / 资源，
+// 审核器无从判断，辅助审批问人，Autopilot 拒绝。
 //
 // 工具拒绝这次调用的参数（SDK 的 RejectArgs，guest 答 {"reject"}）则不是缺陷而是结论：
 // 这条调用在任何规则 / grant 下都不会执行，问用户只会让他批准一条随后必然失败的调用。
@@ -337,7 +338,13 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 			return argsRejected(ctx, call.tool, rejected)
 		}
 		if err != nil {
-			return aictx.CheckResult{Decision: aictx.NeedConfirm}
+			// 没有 action / resources，规则和审核器都无从判断：只能由人决定，不送审。
+			return aictx.CheckResult{
+				Decision: aictx.NeedConfirm,
+				Message: aipolicy.PolicyMsg(ctx, "the extension could not classify this command, so it needs manual confirmation and is not sent for review",
+					"扩展没能对这条命令分类，需要人工确认，不会送去审核"),
+				Unreviewable: true,
+			}
 		}
 		action, resources := call.action, call.resources
 		policyType := l.manifest.Policies.Type

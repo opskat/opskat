@@ -569,6 +569,13 @@ func withGrantFixturePolicyInGroup(t *testing.T, assetID int64, assetType string
 	t.Helper()
 	asset := &asset_entity.Asset{ID: assetID, Name: "acme-1", Type: assetType}
 	require.NoError(t, asset.SetCommandPolicy(cp))
+	return withGrantFixtureAsset(t, asset, group)
+}
+
+// withGrantFixtureAsset registers asset (and its group, if any) behind the repo mocks.
+func withGrantFixtureAsset(t *testing.T, asset *asset_entity.Asset, group *group_entity.Group) context.Context {
+	t.Helper()
+	assetID := asset.ID
 	if group != nil {
 		asset.GroupID = group.ID
 		ctrl := gomock.NewController(t)
