@@ -104,6 +104,19 @@ func TestDynamicCommandNameWithExecution(t *testing.T) {
 		`eval "$(echo aWQ= | bas?64 -d)"`,
 		`x=$(echo aWQ= | ${b} -d); sh -c "$x"`,
 		`f(){ $1 -d; }; sh -c "$(echo aWQ= | f base64)"`,
+		// 交给 shell 执行的脚本文本里，命令名的位置上的变量同样无法静态确定，不论带不带解码选项
+		"bash -c 'echo aWQ= | $b | sh'",
+		"ssh h 'echo aWQ= | ${b} | sh'",
+		"docker exec c sh -c 'echo aWQ= | $b | sh'",
+		"sh <<'E'\necho aWQ= | $b | sh\nE",
+		"bash <<< 'echo aWQ= | $b | sh'",
+		"echo 'echo aWQ= | $b | sh' | sh",
+		// 同一命令里定义的别名和函数一样，命令名指向的是别名的内容
+		"alias b=base64\necho aWQ= | b -d | sh",
+		"alias b='base64 -d'; echo aWQ= | b | sh",
+		"bash -c 'alias b=base64; echo aWQ= | b -d | sh'",
+		// 解码出的文本落在命令名的位置上同样会被执行
+		"$(echo aWQ= | base64 -d)",
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -125,6 +138,10 @@ func TestDynamicCommandNameWithoutExecution(t *testing.T) {
 		"kubectl get pods -o json | jq -r '.items[] | .metadata.name' | xargs -n1 echo",
 		"echo '*/5 * * * * /usr/local/bin/backup' | crontab -",
 		"[ -f a.sh ] && sh a.sh",
+		// 交给 shell 的脚本里，awk 程序仍是数据
+		`bash -c "awk '\$3 > 100 {print \$1}' data.txt"`,
+		`ssh h "ps aux | awk '\$3 > 50 {print \$2}'"`,
+		"alias ll='ls -l'; ll",
 		`find . -name '*.log' -exec rm {} \;`,
 	}
 	for _, cmd := range cases {
