@@ -92,6 +92,49 @@ describe("ExtensionSettingsForm", () => {
     expect(notifySuccess).not.toHaveBeenCalled();
   });
 
+  it("lists the errors of fields not shown in the form at its top, by their titles", async () => {
+    const base = form() as unknown as { configSchema: { properties: Record<string, unknown> } };
+    base.configSchema.properties.token = { type: "string", format: "password", title: "Token" };
+    vi.mocked(GetExtensionSettings).mockResolvedValue({
+      ...base,
+      auth: {
+        selector: "mode",
+        groups: [
+          { when: "key", fields: ["apiKey"] },
+          { when: "token", fields: ["token"] },
+        ],
+      },
+      values: { baseURL: "https://jev.example", mode: "key" },
+      secrets: { apiKey: true, token: false },
+    } as never);
+    vi.mocked(SaveExtensionSettings).mockResolvedValue([
+      { field: "token", code: "required" },
+      { field: "extra", code: "unknown" },
+    ] as never);
+    await renderForm();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("extension-settings-save"));
+    });
+    const hidden = screen.getByTestId("extension-settings-hidden-errors");
+    expect(hidden).toHaveTextContent("Token");
+    expect(hidden).toHaveTextContent("extension.settings.error.required");
+    expect(hidden).toHaveTextContent("extra");
+    expect(hidden).toHaveTextContent("extension.settings.error.unknown");
+  });
+
+  it("clears the listed errors once the save succeeds", async () => {
+    vi.mocked(SaveExtensionSettings).mockResolvedValueOnce([{ field: "extra", code: "unknown" }] as never);
+    await renderForm();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("extension-settings-save"));
+    });
+    expect(screen.getByTestId("extension-settings-hidden-errors")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("extension-settings-save"));
+    });
+    expect(screen.queryByTestId("extension-settings-hidden-errors")).toBeNull();
+  });
+
   it("reports a failed save", async () => {
     vi.mocked(SaveExtensionSettings).mockRejectedValue(new Error("disk full"));
     await renderForm();

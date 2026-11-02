@@ -39,6 +39,8 @@ export function ExtensionSettingsForm({ extName, reviewer = false }: { extName: 
   const [form, setForm] = useState<SettingsFormData | null>(null);
   const [value, setValue] = useState<Record<string, unknown>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // 保存失败但落不到当前所见字段上的错误（如属于没选中的认证方式），列在表单顶部
+  const [hiddenErrors, setHiddenErrors] = useState<{ field: string; title: string; message: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<ReviewInfo | null>(null);
 
@@ -68,14 +70,20 @@ export function ExtensionSettingsForm({ extName, reviewer = false }: { extName: 
     if (errors.length > 0) {
       const shown = new Set(visibleFields(form.configSchema, form.auth, value).map(([key]) => key));
       const placed: Record<string, string> = {};
+      const unplaced: { field: string; title: string; message: string }[] = [];
       for (const e of errors) {
-        if (shown.has(e.field)) placed[e.field] = t(`extension.settings.error.${e.code}`);
+        const message = t(`extension.settings.error.${e.code}`);
+        if (shown.has(e.field)) placed[e.field] = message;
+        else
+          unplaced.push({ field: e.field, title: form.configSchema.properties?.[e.field]?.title ?? e.field, message });
       }
       setFieldErrors(placed);
+      setHiddenErrors(unplaced);
       toast.error(t("extension.settings.invalid"));
       return false;
     }
     setFieldErrors({});
+    setHiddenErrors([]);
     notifySuccess(t("extension.settings.saved"));
     await load();
     return true;
@@ -98,6 +106,22 @@ export function ExtensionSettingsForm({ extName, reviewer = false }: { extName: 
   return (
     <div data-testid="extension-settings" className="space-y-3">
       <h4 className="text-sm font-medium">{t("extension.settings.title")}</h4>
+      {hiddenErrors.length > 0 && (
+        <div
+          role="alert"
+          data-testid="extension-settings-hidden-errors"
+          className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+        >
+          <p className="font-medium">{t("extension.settings.hiddenErrors")}</p>
+          <ul className="mt-1 list-disc pl-4">
+            {hiddenErrors.map((e) => (
+              <li key={e.field}>
+                {e.title}: {e.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="flex flex-col gap-3">
         <ExtensionConfigForm
           configSchema={form.configSchema}

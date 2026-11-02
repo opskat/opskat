@@ -3257,6 +3257,7 @@
       "title": "Settings",
       "saved": "Settings saved",
       "invalid": "Some settings need fixing. Nothing was saved.",
+      "hiddenErrors": "These settings aren't shown in the form but failed validation:",
       "error": {
         "required": "Required",
         "type": "Wrong type of value",
