@@ -40,7 +40,9 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //     /tmp/a.sh）、脚本文件名（a.sh）、带 PATH= 赋值的命令；
 //   - 包装启动（sudo、env、timeout、exec、xargs、find -exec、watch、parallel、runuser、
 //     systemd-run、chroot、busybox 等）按它实际运行的程序判断：它的选项与参数不是命令名，运行
-//     无法静态确定的程序也算执行代码；作为参数出现的名字（systemctl restart ssh）不是在运行它；
+//     无法静态确定的程序也算执行代码；作为参数出现的名字（systemctl restart ssh）不是在运行它，
+//     但包装的表不是封闭的：表外的程序带着 shell、解释器的名字作参数（tmux new sh）按在运行它算；
+//     运行 shell 的包装（sudo -s、flock -c、sg、script）的命令与标准输入是交给 shell 的脚本；
 //   - 命令名无法静态确定（变量、命令替换、花括号展开、通配）：可能是解码，也可能是执行，所以和
 //     解码或执行之一同时出现、或出现两次就算两者都有；只有一个这样的命令名（$EDITOR file）
 //     不算。路径命令名只有目录动态时（$HOME/bin/tool）按最后一段的字面名判断；同一命令里定义
@@ -314,7 +316,12 @@ func readsScript(stmt *syntax.Stmt) bool {
 	for {
 		i, name := scriptRunnerAt(args)
 		switch name {
-		case "", "eval", "watch":
+		case "":
+			if k := shellLaunchAt(parseCommand(call.Args)); !split && k >= 0 {
+				return !hasCommandOption(args[k+1:])
+			}
+			return false
+		case "eval", "watch":
 			return false
 		case "ssh":
 			rest := args[i+1:]
@@ -349,6 +356,17 @@ func runsInterpreter(stmt *syntax.Stmt) bool {
 	return false
 }
 
+// shellLaunchAt 是 cmd 里第一个运行 shell 的包装或程序（sudo -s、flock -c、sg、script）的下标；
+// 没有时为 -1。
+func shellLaunchAt(cmd command) int {
+	for _, l := range cmd.launches {
+		if l.shell {
+			return l.at
+		}
+	}
+	return -1
+}
+
 // hasCommandOption 判断 shell、su 的参数里有没有 -c（-lc 等）或 --command。
 func hasCommandOption(args []string) bool {
 	for _, v := range args {
@@ -367,6 +385,9 @@ func markScriptArgs(call *syntax.CallExpr, cmd command, scripts map[*syntax.Word
 	}
 	if i < 0 {
 		i, _ = scriptRunnerAt(argValues(call.Args))
+	}
+	if i < 0 {
+		i = shellLaunchAt(cmd)
 	}
 	if i < 0 {
 		return
@@ -511,6 +532,11 @@ func (f *findings) call(call *syntax.CallExpr, topLevel, script bool) {
 	}
 	counted := topLevel || script || hasDecodeOption(words)
 	for k, l := range cmd.launches {
+		end := len(call.Args)
+		if k+1 < len(cmd.launches) {
+			end = cmd.launches[k+1].at
+		}
+		args := call.Args[min(l.at+1, end):end]
 		if l.dynamic {
 			if counted {
 				f.dynamic++
@@ -529,16 +555,25 @@ func (f *findings) call(call *syntax.CallExpr, topLevel, script bool) {
 		if f.decodesThrough(l.name, words) {
 			f.decodes = true
 		}
-		if name := matchName(interpreters, l.name); name != "" {
-			end := len(call.Args)
-			if k+1 < len(cmd.launches) {
-				end = cmd.launches[k+1].at
-			}
-			if interpreterDecodes(name, call.Args[min(l.at+1, end):end]) {
-				f.decodes = true
-			}
+		if name := matchName(interpreters, l.name); name != "" && interpreterDecodes(name, args) {
+			f.decodes = true
+		}
+		if !f.function(l.name) && mayRunArgument(l.name, args) {
+			f.runs = true
 		}
 	}
+}
+
+// function 判断 name 是不是同一命令里定义的函数（不是别名）：函数体按内容判断，参数经 "$@" 落在
+// 函数体里；别名的内容与调用时的参数连在一起，看不到参数会不会被运行。
+func (f *findings) function(name string) bool {
+	defs := f.defs[name]
+	for _, d := range defs {
+		if _, isAlias := d.(*syntax.File); isAlias {
+			return false
+		}
+	}
+	return len(defs) > 0
 }
 
 // decodesThrough 判断调用同一命令里定义的函数、别名 name 时，带上的词（words）里有没有它内容里
@@ -557,6 +592,26 @@ func (f *findings) decodesThrough(name string, words []string) bool {
 	}
 	return false
 }
+
+// mayRunArgument 判断程序 name 是不是可能在运行参数里的 shell 或解释器：包装启动的表不是封闭的
+// （tmux new sh、screen -dm python3、alias s=sudo 后的 s sh），表外的程序带着 shell、解释器的
+// 名字作参数时按可能在运行它处理。表里的包装与容器工具已按实际运行的程序判断；只打印、查找名字
+// 的程序（echo bash、which python3）与别的名字（systemctl restart ssh 的服务名）不算。
+func mayRunArgument(name string, args []*syntax.Word) bool {
+	base := path.Base(name)
+	if wrappers[base].known || containerTools[base] || namesOnly[base] {
+		return false
+	}
+	for _, arg := range args {
+		if v, ok := value(arg); ok && (matchName(shells, v) != "" || matchName(interpreters, v) != "") {
+			return true
+		}
+	}
+	return false
+}
+
+// namesOnly 是只打印或查找参数里的名字、不运行它们的程序。
+var namesOnly = map[string]bool{"echo": true, "printf": true, "print": true, "which": true, "type": true, "whereis": true, "hash": true}
 
 // executes 判断运行 name 这个程序是不是执行代码：shell 与脚本解释器、eval、source、ssh、su 等。
 func executes(name string) bool {
@@ -597,6 +652,7 @@ type launch struct {
 	path    bool   // 程序名是路径
 	tail    bool   // name 是只有目录动态的路径的最后一段
 	wrapped bool   // 由包装启动或 find -exec 运行
+	shell   bool   // 运行 shell，之后的参数与标准输入是交给它的脚本（sudo -s、flock -c、sg、script）
 }
 
 // command 是一条简单命令运行的程序，以及 watch、parallel 连成脚本交给 shell 的参数。
@@ -632,6 +688,7 @@ func parseCommand(args []*syntax.Word) command {
 			if c.joinAt == i && strings.ContainsAny(name, " \t\n;|&<>()") {
 				break // watch 'a | b' 的命令是一段脚本，在连成的脚本里看
 			}
+			l.shell = shellLaunchers[base]
 			c.launches = append(c.launches, l)
 			// 容器里运行的程序只在下一个 find -exec 之前找，每个词只扫一遍
 			next := afterFindExec(args, i+1)
@@ -647,10 +704,12 @@ func parseCommand(args []*syntax.Word) command {
 		if stop {
 			break
 		}
+		// 选项让它运行 shell 时（sudo -s cmd、flock f -c cmd），之后的词都是交给这个 shell 的
+		if shell && (j == len(args) || !spec.shellIfNone) {
+			c.launches = append(c.launches, launch{at: i, name: "sh", wrapped: true, shell: true})
+			break
+		}
 		if j == len(args) {
-			if shell {
-				c.launches = append(c.launches, launch{at: i, name: "sh", wrapped: true})
-			}
 			break
 		}
 		if spec.joins && c.joinAt < 0 {
@@ -783,7 +842,7 @@ var wrappers = map[string]wrapper{
 		}},
 	"doas":    {known: true, values: set("-u", "-C"), shell: func(o string) bool { return o == "-s" }},
 	"pkexec":  {known: true, values: set("--user")},
-	"env":     {known: true, values: set("-u", "-C", "-S", "--unset", "--chdir", "--split-string")},
+	"env":     {known: true, values: set("-u", "-C", "--unset", "--chdir")},
 	"timeout": {known: true, values: set("-s", "-k", "--signal", "--kill-after"), operands: 1},
 	"nice":    {known: true, values: set("-n", "--adjustment")},
 	"ionice":  {known: true, values: set("-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid")},
@@ -1151,6 +1210,10 @@ var executors = map[string]bool{
 	"eval": true, "source": true, ".": true, "ssh": true, "su": true, "sg": true, "script": true,
 	"at": true, "batch": true, "crontab": true,
 }
+
+// shellLaunchers 是运行 shell 的程序：sg 经 sh -c 运行它的命令，script 在记录的终端里运行 shell
+// （-c 给出命令）。之后的参数与标准输入是脚本文本。
+var shellLaunchers = map[string]bool{"sg": true, "script": true}
 
 // findExecs 是 find 执行命令的选项：之后的词是命令名。
 var findExecs = map[string]bool{"-exec": true, "-execdir": true, "-ok": true, "-okdir": true}

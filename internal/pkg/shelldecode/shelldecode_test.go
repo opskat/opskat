@@ -142,6 +142,13 @@ func TestDynamicCommandNameWithExecution(t *testing.T) {
 		// trap 的参数在当前 shell 里执行
 		"trap 'echo aWQ= | $b | sh' EXIT",
 		"echo aWQ= | {a,{ba,}se64} -d | sh",
+		// sg、script 与 sudo -s、flock -c 运行 shell：交给它们的命令与标准输入是脚本文本
+		"sg wheel -c 'echo aWQ= | $b | sh'",
+		"script -qc 'echo aWQ= | $b | sh' /dev/null",
+		"echo 'echo aWQ= | $b | sh' | script -q /dev/null",
+		"sudo -s 'echo aWQ= | $b | sh'",
+		"flock /tmp/l -c 'echo aWQ= | $b | sh'",
+		"echo 'echo aWQ= | $b | sh' | sudo -s",
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -204,6 +211,12 @@ func TestRevision6FalsePositivesAreReviewed(t *testing.T) {
 		`chroot $ROOT ls /etc`,
 		`run(){ "$@"; }; run ls; run df -h`,
 		`command -v sh >/dev/null && echo aGk= | base64 -d`,
+		`which python3 >/dev/null && echo aGk= | base64 -d`,
+		// 服务名不是 shell 或解释器的名字，不当作可能在运行
+		`echo aGk= | base64 -d; systemctl restart ssh`,
+		`echo aGk= | base64 -d; echo bash`,
+		// 同一命令里定义的函数按内容判断：它只打印参数
+		`log(){ echo "$@"; }; log bash; echo aGk= | base64 -d`,
 		// xargs 不带程序时运行的是 echo
 		"echo aWQ= | base64 -d | xargs",
 		// 解释器代码里只有编码、没有解码
@@ -245,6 +258,11 @@ func TestWrappersAreJudgedByTheProgramTheyRun(t *testing.T) {
 		`find . -name f -exec base64 -d {} \; -exec sh {} \;`,
 		`echo aWQ= | busybox base64 -d | busybox sh`,
 		`echo aWQ= | base64 -d | kubectl exec -i p -c c -- python3`,
+		`echo aWQ= | base64 -d | env -S sh`,
+		// 不认识的程序带着 shell、解释器的名字作参数时，可能就是在运行它（包装启动的表不是封闭的）
+		`echo aWQ= | base64 -d | tmux new sh`,
+		`echo aWQ= | base64 -d | screen -dm python3`,
+		`alias s=sudo; echo aWQ= | base64 -d | s sh`,
 		// 同一命令里定义的函数、别名按内容判断：内容是解码时就是解码
 		`f(){ base64 -d; }; echo aWQ= | f | sh`,
 		`alias d='base64 -d'; echo aWQ= | d | sh`,
