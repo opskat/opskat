@@ -25,6 +25,7 @@ import (
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -75,12 +76,22 @@ var reviewerProvenanceFn = func(ctx context.Context, extName string) (extension_
 	return extensionService().Provenance(ctx, extName)
 }
 
+// reviewerSettingsFn 给出审核器扩展已保存设置的读取视图（不运行扩展代码），审核器注册表
+// 据此判断它的必填设置填没填完。变量化同上一套路。
+var reviewerSettingsFn = func(ctx context.Context, extName string) (*extwire.SettingsView, error) {
+	return extensionService().SettingsView(ctx, extName)
+}
+
 // 命令审核器：opsctl 启动时只仅描述接入审核器扩展，审核器注册表在某条命令真要送审时
-// 才做资格检查，通过后经与 opsctl exec 执行扩展工具同一条激活路径（activateExtensionFn）
-// 激活那一个扩展，命令结束由 releaseExtensions 释放；不需要审核的命令不会走到这里。
+// 才做资格检查与设置是否填完的检查，通过后经与 opsctl exec 执行扩展工具同一条激活路径
+// （activateExtensionFn）激活那一个扩展，命令结束由 releaseExtensions 释放；不需要审核的
+// 命令不会走到这里。
 func init() {
 	reviewerreg.Default().SetProvenance(func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
 		return reviewerProvenanceFn(ctx, extName)
+	})
+	reviewerreg.Default().SetSettingsReader(func(ctx context.Context, extName string) (*extwire.SettingsView, error) {
+		return reviewerSettingsFn(ctx, extName)
 	})
 	reviewerreg.Default().SetActivator(func(ctx context.Context, extName string) error {
 		return activateExtensionFn(ctx, extName)

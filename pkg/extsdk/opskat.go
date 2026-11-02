@@ -4,6 +4,8 @@ package opskat
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // Asset is the asset a call runs against, named by the host rather than by the
@@ -55,13 +57,9 @@ func assetConfig(a Asset, what string) (json.RawMessage, error) {
 
 // SettingsView is the extension's own settings (see Settings) as the extension
 // reads them: every non-secret value the user saved, and for each
-// format:"password" field only whether it is set. The secret itself never
-// reaches the extension — the host injects it, per the settings' Auth, into
-// requests to the addresses in their format:"endpoint" fields.
-type SettingsView struct {
-	Values  map[string]any  `json:"values"`
-	Secrets map[string]bool `json:"secrets"`
-}
+// format:"password" field only whether it is set. It is the host's wire format
+// (extwire.SettingsView), so the two cannot drift apart.
+type SettingsView = extwire.SettingsView
 
 // Settings returns the extension's settings as a call without an asset reads
 // them (host call config.get) — a host-only tool's, or a page's call made

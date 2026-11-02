@@ -55,7 +55,7 @@ type Reviewer interface {
 }
 
 // ReviewerSource 给出这次要用的审核器。没有可用的返回 ErrNoReviewer，
-// 要用的这次不可用返回 ErrReviewerUnavailable。
+// 要用的设置没填完返回 ErrNotConfigured（不调用它），这次不可用返回 ErrReviewerUnavailable。
 type ReviewerSource interface {
 	Current(ctx context.Context) (Reviewer, error)
 }
@@ -75,7 +75,8 @@ type ReviewerInfo struct {
 
 // State 是设置页和权限模式卡片看到的审核状态。Selected 是设置里选的、仍可选的审核器；
 // Active 是实际在用的，没有可用的时为空，Problem 说明原因（与审核失败原因同名：
-// no_reviewer / reviewer_unavailable）。
+// no_reviewer / reviewer_unavailable）；在用的审核器设置没填完时 Active 仍是它，
+// Problem 为 not_configured，页面据此引导去填它的设置。
 type State struct {
 	Reviewers []ReviewerInfo `json:"reviewers"`
 	Selected  string         `json:"selected"`

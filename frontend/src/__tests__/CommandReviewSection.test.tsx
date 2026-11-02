@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { CommandReviewSection } from "../components/settings/CommandReviewSection";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
@@ -47,6 +47,18 @@ describe("CommandReviewSection", () => {
     expect(screen.queryByTestId("command-review-problem")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "commandReview.settings.configureReviewer" }));
+    expect(useSettingsUiStore.getState().activeTab).toBe("extensions");
+    expect(useSettingsUiStore.getState().extensionDetail).toBe("jev");
+  });
+
+  it("在用的审核器设置没填完时提示未配置，并能打开它的设置", async () => {
+    vi.mocked(GetCommandReviewState).mockResolvedValue(state({ problem: "not_configured" }));
+    useSettingsUiStore.setState({ activeTab: "ai", extensionDetail: null });
+    await renderSection();
+    const notice = screen.getByTestId("command-review-not-configured");
+    expect(notice).toHaveTextContent("commandReview.settings.notConfigured");
+
+    fireEvent.click(within(notice).getByRole("button", { name: "commandReview.settings.openReviewerSettings" }));
     expect(useSettingsUiStore.getState().activeTab).toBe("extensions");
     expect(useSettingsUiStore.getState().extensionDetail).toBe("jev");
   });

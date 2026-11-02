@@ -33,6 +33,11 @@ type HostToolCaller func(ctx context.Context, extName, tool string, args json.Ra
 // the review cache: changed settings never hit the old verdicts.
 type SettingsHasher func(ctx context.Context, extName string) (string, error)
 
+// SettingsReader answers the read view of an extension's saved settings
+// (extension_svc.Service.SettingsView): non-secret values, and whether each
+// secret is set. The registry judges a reviewer configured by it.
+type SettingsReader func(ctx context.Context, extName string) (*extwire.SettingsView, error)
+
 // Activator brings a describe-only candidate up as a running extension in this
 // process (opsctl: the existing activation path, released at command end).
 type Activator func(ctx context.Context, extName string) error
@@ -44,6 +49,7 @@ type Registry struct {
 
 	mu         sync.Mutex
 	hash       SettingsHasher
+	settings   SettingsReader
 	provenance ProvenanceFacts
 	release    func() bool // whether this is a release build (isReleaseBuild)
 	activate   Activator
@@ -72,6 +78,15 @@ func (r *Registry) SetSettingsHasher(h SettingsHasher) {
 	r.hash = h
 }
 
+// SetSettingsReader wires in the settings read view a reviewer is judged
+// configured by (extension_svc.Service.SettingsView). Without it a reviewer that
+// declares required settings is unavailable: it is never called unchecked.
+func (r *Registry) SetSettingsReader(read SettingsReader) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.settings = read
+}
+
 // SetProvenance wires in the install facts the registry judges a candidate by
 // (extension_svc.Service.Provenance). Without them nothing is eligible: a reviewer
 // is never used unchecked.
@@ -96,6 +111,7 @@ type candidate struct {
 	translate     func(lang, key string) string
 	tool          string
 	params        []string // the parameter names tool declares
+	required      []string // the settings fields configSchema requires, secrets included
 	questions     []command_review_svc.Question
 	maxCommandLen int
 	running       bool
@@ -193,7 +209,9 @@ func (s *Source) Reviewer(ctx context.Context, name string) (command_review_svc.
 // State is what the settings page and the permission mode card show: every
 // candidate (display names in lang), the selection if it is a candidate, and the
 // reviewer the rules pick when it can review here — else the problem, named as
-// the review failure it causes.
+// the review failure it causes. A picked reviewer whose settings are not filled
+// in stays the active one, with problem not_configured, so the page can point
+// at its settings.
 func (s *Source) State(ctx context.Context, lang string) command_review_svc.State {
 	cands := s.reg.snapshot()
 	// It crosses IPC to the frontend: an empty list must be [] there, not null.
@@ -225,7 +243,14 @@ func (s *Source) State(ctx context.Context, lang string) command_review_svc.Stat
 	case !c.running || !usable[c.name]:
 		st.Problem = aictx.ReviewReasonReviewerUnavailable
 	default:
-		st.Active = c.name
+		switch err := s.reg.checkConfigured(ctx, c); {
+		case errors.Is(err, command_review_svc.ErrNotConfigured):
+			st.Active, st.Problem = c.name, aictx.ReviewReasonNotConfigured
+		case err != nil:
+			st.Problem = aictx.ReviewReasonReviewerUnavailable
+		default:
+			st.Active = c.name
+		}
 	}
 	return st
 }
@@ -246,6 +271,9 @@ func (r *Registry) ready(ctx context.Context, c *candidate) (command_review_svc.
 	if err != nil {
 		return nil, refuse(err)
 	}
+	if err := r.checkConfigured(ctx, c); err != nil {
+		return nil, err
+	}
 	if !c.running {
 		r.mu.Lock()
 		activate := r.activate
@@ -265,6 +293,40 @@ func (r *Registry) ready(ctx context.Context, c *candidate) (command_review_svc.
 		}
 	}
 	return r.reviewer(ctx, c, checked.digest)
+}
+
+// checkConfigured is nil when c's saved settings give every field its settings
+// require (secrets included) a value, and command_review_svc.ErrNotConfigured
+// naming the empty ones when not — checked before anything of c runs. Settings
+// that cannot be read leave c unavailable.
+func (r *Registry) checkConfigured(ctx context.Context, c *candidate) error {
+	if len(c.required) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	read := r.settings
+	r.mu.Unlock()
+	if read == nil {
+		return fmt.Errorf("%w: %s: no settings reader is wired to check its required settings", command_review_svc.ErrReviewerUnavailable, c.name)
+	}
+	view, err := read(ctx, c.name)
+	if err != nil {
+		return fmt.Errorf("%w: %s: read settings: %w", command_review_svc.ErrReviewerUnavailable, c.name, err)
+	}
+	var missing []string
+	for _, f := range c.required {
+		if set, secret := view.Secrets[f]; secret {
+			if !set {
+				missing = append(missing, f)
+			}
+		} else if _, ok := view.Values[f]; !ok {
+			missing = append(missing, f)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s: required settings %s have no value", command_review_svc.ErrNotConfigured, c.name, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // running is the candidate named name if it is attached with a running guest.

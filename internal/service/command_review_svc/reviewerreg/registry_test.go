@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
@@ -404,4 +405,83 @@ func TestReviewCallCarriesOnlyDeclaredParamsTheHostKnows(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, host.calls, 1)
 	assert.JSONEq(t, `{"assetType":"ssh","command":"ls","syntax":"shell"}`, string(host.calls[0].raw))
+}
+
+// settingsReviewerView is a running reviewer whose settings require a model and
+// a format:"password" apiKey, and leave a note optional.
+func settingsReviewerView(name string) extension.ExtensionView {
+	contract := extmanifest.Manifest{Name: name, Version: "1.2.0"}
+	contract.Contributes.CommandReviewer = true
+	m := extensiontest.Described(contract, extensiontest.Describe{Contributes: map[string]any{
+		extwire.KeyTools:           []extwire.Tool{reviewTool("review")},
+		extwire.KeyCommandReviewer: validReviewer(),
+		extwire.KeySettings: extwire.Settings{ConfigSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"model":  map[string]any{"type": "string"},
+				"apiKey": map[string]any{"type": "string", "format": "password"},
+				"note":   map[string]any{"type": "string"},
+			},
+			"required": []any{"model", "apiKey"},
+		}},
+	}})
+	return runningView{(&extension.ManifestInfo{Name: name, Manifest: m}).View()}
+}
+
+// A reviewer whose settings leave a required field — a secret too — without a
+// value is not configured: the review fails as not_configured without calling
+// its tool, the settings page's test reviewer is refused the same way, and the
+// state still names it as the reviewer in use while reporting the problem.
+func TestUnconfiguredReviewerIsNeverCalled(t *testing.T) {
+	ctx := context.Background()
+	host := &fakeHost{answer: `{"outcome":"pass"}`}
+	reg := New(host.call)
+	reg.SetSettingsHasher(func(context.Context, string) (string, error) { return "h", nil })
+	reg.release = func() bool { return false }
+	reg.SetProvenance(func(context.Context, string) (extension_svc.Provenance, error) {
+		return extension_svc.Provenance{Recorded: true, Source: extension_svc.InstallOriginLocal, PackageSHA256: "sum", DigestMatches: true}, nil
+	})
+	stored := &extwire.SettingsView{Values: map[string]any{"model": "m"}, Secrets: map[string]bool{"apiKey": false}}
+	reg.SetSettingsReader(func(context.Context, string) (*extwire.SettingsView, error) { return stored, nil })
+	contributions := extension.NewContributionRegistry(reg.Point(), passPoint(extwire.KeyTools), extension_svc.SettingsPoint())
+	require.NoError(t, contributions.Attach(settingsReviewerView("jev")))
+	src := reg.Selecting(func() string { return "" })
+	svc := command_review_svc.New(func() time.Duration { return time.Second }, nopCache{}, src)
+	review := func() aictx.ReviewInfo {
+		return svc.ReviewCommands(ctx, []permission.ReviewRequest{{AssetType: "ssh", Command: "ls", Syntax: permission.SyntaxShell}})[0]
+	}
+
+	for _, unset := range []struct {
+		name  string
+		apply func()
+	}{
+		{"the secret is not set", func() {}},
+		{"a plain field has no value", func() { stored.Secrets["apiKey"] = true; delete(stored.Values, "model") }},
+	} {
+		unset.apply()
+		r := review()
+		assert.Equal(t, aictx.ReviewFail, r.Outcome, unset.name)
+		assert.Equal(t, aictx.ReviewReasonNotConfigured, r.Reason, unset.name)
+		_, err := src.Reviewer(ctx, "jev")
+		assert.ErrorIs(t, err, command_review_svc.ErrNotConfigured, unset.name)
+		st := src.State(ctx, "en")
+		assert.Equal(t, "jev", st.Active, unset.name)
+		assert.Equal(t, aictx.ReviewReasonNotConfigured, st.Problem, unset.name)
+	}
+	assert.Empty(t, host.calls, "a reviewer that is not configured is never called")
+
+	// Every required field set (the optional note still empty): it reviews.
+	stored.Values["model"] = "m"
+	assert.Equal(t, aictx.ReviewPass, review().Outcome)
+	assert.Len(t, host.calls, 1)
+	st := src.State(ctx, "en")
+	assert.Equal(t, "jev", st.Active)
+	assert.Empty(t, st.Problem)
+
+	t.Run("settings that cannot be read leave it unavailable", func(t *testing.T) {
+		reg.SetSettingsReader(func(context.Context, string) (*extwire.SettingsView, error) { return nil, errors.New("db closed") })
+		assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, review().Reason)
+		assert.Equal(t, aictx.ReviewReasonReviewerUnavailable, src.State(ctx, "en").Problem)
+		assert.Len(t, host.calls, 1)
+	})
 }

@@ -444,10 +444,11 @@ func initExtensionSystem(
 	// 处理器的类型就要拿它建 tester。
 	extreg.SetConnTestRegistrar(extSvc.ConnTestRegistrar())
 	// 审核缓存按审核器扩展的设置哈希区分：同样在任何扩展加载之前接好。审核器注册表按
-	// 扩展管理给出的安装来源与包摘要判断审核器能不能用（opsctl 在 cmd/opsctl/command
-	// 里接同样两项，另加按需激活）。
+	// 扩展管理给出的安装来源与包摘要判断审核器能不能用，按设置读取视图判断它的必填设置
+	// 填没填完（opsctl 在 cmd/opsctl/command 里接同样三项，另加按需激活）。
 	reviewerreg.Default().SetSettingsHasher(extSvc.SettingsHash)
 	reviewerreg.Default().SetProvenance(extSvc.Provenance)
+	reviewerreg.Default().SetSettingsReader(extSvc.SettingsView)
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)

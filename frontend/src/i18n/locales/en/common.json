@@ -3711,7 +3711,9 @@
       "lastFail": "Last review failure: {{reason}} ({{time}})",
       "notice": "This saves effort; it is not a security boundary. Misleading text written into a command can sway the model. Deny rules remain the real safeguard.",
       "noReviewer": "No command reviewer is available. Install and enable an extension that provides one under Settings › Extensions (for example \"Jev Command Review\"). Until then, Assisted approval asks you about every such command and Autopilot refuses them.",
-      "selectReviewer": "Several enabled extensions provide a command reviewer; select one."
+      "selectReviewer": "Several enabled extensions provide a command reviewer; select one.",
+      "notConfigured": "{{name}} isn't set up yet: a required setting, such as its API key, is empty. Until it's filled in, every review fails, so Assisted approval asks you about these commands and Autopilot refuses them.",
+      "openReviewerSettings": "Open its settings"
     },
     "mode": {
       "title": "Permission mode",
@@ -3741,7 +3743,8 @@
       "confirmAutopilot": "Commands that no rule decides will first be reviewed by the review model. They run when the review passes and are rejected without waiting for you when judged clearly dangerous or when the review fails. Meant for unattended use. Commands (with sensitive values replaced) are sent to the review service in Settings.",
       "confirm": "Turn on",
       "saved": "Permission mode saved",
-      "noReviewer": "No command reviewer is available: Assisted approval asks you about these commands and Autopilot refuses them."
+      "noReviewer": "No command reviewer is available: Assisted approval asks you about these commands and Autopilot refuses them.",
+      "notConfigured": "The command reviewer {{name}} isn't set up yet: Assisted approval asks you about these commands and Autopilot refuses them."
     },
     "configError": {
       "not_configured": "The command reviewer is not configured yet (for example, no API key in its extension's settings), so every review fails.",

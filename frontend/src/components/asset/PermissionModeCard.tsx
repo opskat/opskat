@@ -11,6 +11,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 import { GetCommandReviewState } from "../../../wailsjs/go/extension/Extension";
+import type { command_review_svc } from "../../../wailsjs/go/models";
 
 const MODES: PermissionMode[] = ["", "default", "assisted", "autopilot"];
 const needsReview = (mode: EffectivePermissionMode) => mode === "assisted" || mode === "autopilot";
@@ -35,8 +36,11 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
   const { t } = useTranslation();
   const groups = useAssetStore((s) => s.groups);
   const { mode: inherited, from } = resolveInheritedPermissionMode(parentGroupId, groups);
-  // 没有可用的审核扩展：这时辅助审批全部转人工、Autopilot 全部拒绝，要让用户知道。
-  const [noReviewer, setNoReviewer] = useState(false);
+  // 没有可用的审核器，或在用的审核器设置没填完：这时辅助审批全部转人工、Autopilot 全部拒绝，要让用户知道。
+  const [review, setReview] = useState<command_review_svc.State | null>(null);
+  const noReviewer = review !== null && !review.active;
+  const notConfigured =
+    review?.problem === "not_configured" ? review.reviewers.find((r) => r.name === review.active) : undefined;
   const [pending, setPending] = useState<PermissionMode | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -54,7 +58,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
 
   useEffect(() => {
     GetCommandReviewState()
-      .then((st) => setNoReviewer(!st.active))
+      .then(setReview)
       .catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)));
   }, []);
 
@@ -141,6 +145,27 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
             </span>
           </div>
         )}
+        {needsReview(effective) && notConfigured && (
+          <div
+            data-testid="permission-mode-reviewer-not-configured"
+            className="flex items-start gap-1.5 rounded-md bg-warning/15 px-2.5 py-2 text-foreground"
+          >
+            <AlertTriangle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              {t("commandReview.mode.notConfigured", { name: notConfigured.displayName })}
+              <button
+                type="button"
+                onClick={() => {
+                  useSettingsUiStore.getState().openExtensionDetail(notConfigured.name);
+                  openSettingsTab(t("nav.settings"));
+                }}
+                className="ml-1 font-medium underline-offset-2 hover:underline"
+              >
+                {t("commandReview.settings.openReviewerSettings")}
+              </button>
+            </span>
+          </div>
+        )}
       </div>
 
       <ConfirmDialog
@@ -156,6 +181,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
                 : t("commandReview.mode.confirmAssisted")}
             </p>
             {noReviewer && <p>{t("commandReview.mode.noReviewer")}</p>}
+            {notConfigured && <p>{t("commandReview.mode.notConfigured", { name: notConfigured.displayName })}</p>}
           </div>
         }
         cancelText={t("action.cancel")}

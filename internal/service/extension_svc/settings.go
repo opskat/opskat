@@ -13,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // Extension settings: the one form an extension declares (SettingsPoint), filled
@@ -41,12 +42,10 @@ const (
 	SettingsErrUnknown = "unknown"
 )
 
-// SettingsView is the stored settings as the form may see them: every
-// non-secret value, and for each format:"password" field only whether it is set.
-type SettingsView struct {
-	Values  map[string]any  `json:"values"`
-	Secrets map[string]bool `json:"secrets"`
-}
+// SettingsView is the stored settings as the form and config.get see them:
+// every non-secret value, and for each format:"password" field only whether it
+// is set. It is the wire format the SDK decodes (extwire.SettingsView).
+type SettingsView = extwire.SettingsView
 
 // SettingsForm is what the settings form renders: the declaration, its i18n keys
 // resolved, and the read view of the stored values.

@@ -94,6 +94,9 @@ export function CommandReviewSection() {
 
   const lastFail: FailStatus = liveStatus ?? settings;
   const active = state.reviewers.find((r) => r.name === state.active);
+  // 在用的审核器设置没填完（必填项含 API key 有空的）：审核都会失败，直接引导去填它的设置。
+  const notConfigured = state.problem === "not_configured" ? active : undefined;
+  const openReviewerSettings = (name: string) => useSettingsUiStore.getState().openExtensionDetail(name);
   const label = (r: command_review_svc.ReviewerInfo) =>
     r.usable && !r.signed ? `${r.displayName} · ${t("commandReview.settings.unsigned")}` : r.displayName;
 
@@ -125,14 +128,9 @@ export function CommandReviewSection() {
               </p>
             )
           )}
-          {active && (
+          {active && !notConfigured && (
             <div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={() => useSettingsUiStore.getState().openExtensionDetail(active.name)}
-              >
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => openReviewerSettings(active.name)}>
                 <Settings2 className="h-3.5 w-3.5" />
                 {t("commandReview.settings.configureReviewer")}
               </Button>
@@ -148,20 +146,39 @@ export function CommandReviewSection() {
                 })}
               </p>
             ))}
-          {state.problem && (
+          {notConfigured ? (
             <div
-              data-testid="command-review-problem"
+              data-testid="command-review-not-configured"
               className="flex items-start gap-1.5 rounded-md bg-warning/15 px-2.5 py-2 text-xs text-foreground"
             >
               <AlertTriangle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <span>
-                {state.reviewers.length === 0
-                  ? t("commandReview.settings.noReviewer")
-                  : state.reviewers.length > 1 && !state.selected
-                    ? t("commandReview.settings.selectReviewer")
-                    : failReasonLabel(t, state.problem)}
+                {t("commandReview.settings.notConfigured", { name: notConfigured.displayName })}
+                <button
+                  type="button"
+                  onClick={() => openReviewerSettings(notConfigured.name)}
+                  className="ml-1 font-medium underline-offset-2 hover:underline"
+                >
+                  {t("commandReview.settings.openReviewerSettings")}
+                </button>
               </span>
             </div>
+          ) : (
+            state.problem && (
+              <div
+                data-testid="command-review-problem"
+                className="flex items-start gap-1.5 rounded-md bg-warning/15 px-2.5 py-2 text-xs text-foreground"
+              >
+                <AlertTriangle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                <span>
+                  {state.reviewers.length === 0
+                    ? t("commandReview.settings.noReviewer")
+                    : state.reviewers.length > 1 && !state.selected
+                      ? t("commandReview.settings.selectReviewer")
+                      : failReasonLabel(t, state.problem)}
+                </span>
+              </div>
+            )
           )}
         </div>
 

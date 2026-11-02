@@ -76,6 +76,17 @@ type Settings struct {
 	Auth         *Auth          `json:"auth,omitempty"`
 }
 
+// SettingsView is the read view of an extension's stored Settings — what
+// config.get answers a call without an asset, and what the settings form shows:
+// every non-secret value the user saved, and for each format:"password" field
+// only whether it is set. The secret itself never reaches the extension; the
+// host injects it, per the settings' Auth, into requests to the addresses in
+// their format:"endpoint" fields.
+type SettingsView struct {
+	Values  map[string]any  `json:"values"`
+	Secrets map[string]bool `json:"secrets"`
+}
+
 // Auth is the credential injection an asset type declares: the host renders its
 // bindings from the asset's config — password fields decrypted host-side — and
 // injects them into every HTTP request the extension sends to that asset's

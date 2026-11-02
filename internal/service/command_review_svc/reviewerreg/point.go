@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/service/command_review_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extwire"
@@ -159,6 +160,10 @@ func (p point) Attach(v extension.ExtensionView) (func(), error) {
 	for i, q := range r.Questions {
 		questions[i] = command_review_svc.Question{ID: q.ID, Names: q.Names}
 	}
+	required, err := requiredSettings(v)
+	if err != nil {
+		return nil, err
+	}
 	m := v.Manifest()
 	c := &candidate{
 		name:          v.Name(),
@@ -167,6 +172,7 @@ func (p point) Attach(v extension.ExtensionView) (func(), error) {
 		translate:     v.Translate,
 		tool:          r.Tool,
 		params:        r.params,
+		required:      required,
 		questions:     questions,
 		maxCommandLen: r.MaxCommandLen,
 		running:       v.Plugin() != nil,
@@ -175,4 +181,19 @@ func (p point) Attach(v extension.ExtensionView) (func(), error) {
 		return nil, err
 	}
 	return func() { p.reg.remove(c) }, nil
+}
+
+// requiredSettings are the fields v's settings configSchema requires, secrets
+// included; none when it declares no settings. The settings point has already
+// checked the declaration.
+func requiredSettings(v extension.ExtensionView) ([]string, error) {
+	raw := v.Contribution(extwire.KeySettings)
+	if raw == nil {
+		return nil, nil
+	}
+	var w extwire.Settings
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return nil, fmt.Errorf("settings: %w", err)
+	}
+	return extreg.ConfigSchemaRequired(w.ConfigSchema), nil
 }

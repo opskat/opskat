@@ -116,6 +116,7 @@ func newReviewHost(t *testing.T, timeout time.Duration) *reviewHost {
 	h.svc = extension_svc.New(h.mgr, extension_state_repo.NewExtensionState(), nil, extension_settings_repo.NewExtensionSettings(), nil, zap.NewNop(), nil, nil)
 	h.reg.SetSettingsHasher(h.svc.SettingsHash)
 	h.reg.SetProvenance(h.svc.Provenance)
+	h.reg.SetSettingsReader(h.svc.SettingsView)
 	// The fixture counts as a store install of exactly the files on disk.
 	digest, err := extension_svc.PackageSHA256(dir)
 	require.NoError(t, err)

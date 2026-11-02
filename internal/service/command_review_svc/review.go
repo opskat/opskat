@@ -47,7 +47,22 @@ var (
 	ErrNoReviewer = errors.New("no command reviewer extension is available")
 	// ErrReviewerUnavailable 见 aictx.ReviewReasonReviewerUnavailable。
 	ErrReviewerUnavailable = errors.New("command reviewer is unavailable")
+	// ErrNotConfigured 是要用的审核器设置没填完：有必填字段（含密钥）没有值，不调用它。
+	// 见 aictx.ReviewReasonNotConfigured。
+	ErrNotConfigured = errors.New("command reviewer is not configured")
 )
+
+// FailReason 是拿不到审核器（ReviewerSource 返回的错误）时审核失败的原因：
+// no_reviewer、not_configured，其余都是 reviewer_unavailable。
+func FailReason(err error) string {
+	switch {
+	case errors.Is(err, ErrNoReviewer):
+		return aictx.ReviewReasonNoReviewer
+	case errors.Is(err, ErrNotConfigured):
+		return aictx.ReviewReasonNotConfigured
+	}
+	return aictx.ReviewReasonReviewerUnavailable
+}
 
 // isConfigError 判断审核失败是不是设置有问题：只有用户改设置才能恢复，要提醒用户。
 func isConfigError(reason string) bool {
@@ -246,10 +261,7 @@ func (s *service) resolve(ctx context.Context, n int) (Reviewer, []Result) {
 	if err == nil {
 		return rev, nil
 	}
-	reason := aictx.ReviewReasonReviewerUnavailable
-	if errors.Is(err, ErrNoReviewer) {
-		reason = aictx.ReviewReasonNoReviewer
-	}
+	reason := FailReason(err)
 	logger.Ctx(ctx).Warn("command reviewer unavailable", zap.String("reason", reason), zap.Error(err))
 	results := make([]Result, n)
 	for i := range results {

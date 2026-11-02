@@ -51,12 +51,14 @@ func checkSelectableReviewer(reviewers []command_review_svc.ReviewerInfo, name s
 }
 
 // TestCommandReviewer 用名为 name 的扩展的审核器审一条无害的命令（不读写缓存），返回审核结果：
-// 扩展设置页"保存并测试"据此确认这个审核器现在能不能用。审核器不可用时返回的结果说明原因。
+// 扩展设置页"保存并测试"据此确认这个审核器现在能不能用。审核器不可用或设置没填完时
+// 不调用它，返回的结果说明原因。
 func (e *Extension) TestCommandReviewer(name string) (*aictx.ReviewInfo, error) {
 	rev, err := bootstrap.CommandReviewer(e.ctx, name)
 	if err != nil {
-		logger.Ctx(e.ctx).Warn("test command reviewer: unavailable", zap.String("extension", name), zap.Error(err))
-		return command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: aictx.ReviewReasonReviewerUnavailable, Extension: name}.Info(""), nil
+		reason := command_review_svc.FailReason(err)
+		logger.Ctx(e.ctx).Warn("test command reviewer: unavailable", zap.String("extension", name), zap.String("reason", reason), zap.Error(err))
+		return command_review_svc.Result{Outcome: command_review_svc.OutcomeFail, Reason: reason, Extension: name}.Info(""), nil
 	}
 	r := command_review_svc.Default().TestReviewer(e.ctx, rev)
 	logger.Ctx(e.ctx).Info("test command reviewer", zap.String("extension", name),

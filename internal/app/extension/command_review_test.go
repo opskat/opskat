@@ -84,26 +84,36 @@ func (runningView) Plugin() *extension.Plugin { return &extension.Plugin{} }
 // process's reviewer registry — what loading it does — until the test ends.
 func attachReviewer(t *testing.T, name string) {
 	t.Helper()
+	attachReviewerWith(t, name, nil)
+}
+
+// attachReviewerWith is attachReviewer for a reviewer declaring settings (nil: none).
+func attachReviewerWith(t *testing.T, name string, settings *extwire.Settings) {
+	t.Helper()
 	contract := extmanifest.Manifest{Name: name, Version: "0.3.0"}
 	contract.Contributes.CommandReviewer = true
+	contributes := map[string]any{
+		extwire.KeyTools: []extwire.Tool{{Name: "review", HostOnly: true, Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"assetType": map[string]any{"type": "string"}, "command": map[string]any{"type": "string"}, "syntax": map[string]any{"type": "string"},
+			},
+			"required": []any{"assetType", "command", "syntax"},
+		}}},
+		extwire.KeyCommandReviewer: extwire.CommandReviewer{Tool: "review", MaxCommandLen: 100,
+			Questions: []extwire.ReviewQuestion{{ID: "destructive", Names: map[string]string{"en": "destructive"}}}},
+	}
+	if settings != nil {
+		contributes[extwire.KeySettings] = settings
+	}
 	m := extensiontest.Described(contract, extensiontest.Describe{
-		I18n: extension.ManifestI18n{DisplayName: "displayName"},
-		Contributes: map[string]any{
-			extwire.KeyTools: []extwire.Tool{{Name: "review", HostOnly: true, Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"assetType": map[string]any{"type": "string"}, "command": map[string]any{"type": "string"}, "syntax": map[string]any{"type": "string"},
-				},
-				"required": []any{"assetType", "command", "syntax"},
-			}}},
-			extwire.KeyCommandReviewer: extwire.CommandReviewer{Tool: "review", MaxCommandLen: 100,
-				Questions: []extwire.ReviewQuestion{{ID: "destructive", Names: map[string]string{"en": "destructive"}}}},
-		},
+		I18n:        extension.ManifestI18n{DisplayName: "displayName"},
+		Contributes: contributes,
 	})
 	v := (&extension.ManifestInfo{Name: name, Manifest: m, Locales: map[string]map[string]string{
 		"zh-cn": {"displayName": name + " 审核"},
 	}}).View()
-	registry := extension.NewContributionRegistry(reviewerreg.Default().Point(), extensiontestPass(extwire.KeyTools))
+	registry := extension.NewContributionRegistry(reviewerreg.Default().Point(), extensiontestPass(extwire.KeyTools), extension_svc.SettingsPoint())
 	require.NoError(t, registry.Attach(runningView{v}))
 	t.Cleanup(func() { registry.Revoke(name) })
 }
@@ -143,4 +153,33 @@ func TestCommandReviewBindingsOverTheRegistry(t *testing.T) {
 
 	assert.ErrorContains(t, e.SetCommandReviewer("gamma"), "gamma")
 	assert.Equal(t, "beta", bootstrap.GetConfig().CommandReviewExtension, "a refused selection keeps the old one")
+}
+
+// A reviewer whose required settings are not all filled in is still the one in
+// use, reported as not configured; the settings page's test answers
+// not_configured instead of calling it.
+func TestCommandReviewBindingsWithAnUnconfiguredReviewer(t *testing.T) {
+	e := newReviewBindings(t)
+	reviewerreg.Default().SetSettingsHasher(func(context.Context, string) (string, error) { return "h", nil })
+	t.Cleanup(func() { reviewerreg.Default().SetSettingsHasher(nil) })
+	reviewerreg.Default().SetSettingsReader(func(context.Context, string) (*extwire.SettingsView, error) {
+		return &extwire.SettingsView{Values: map[string]any{}, Secrets: map[string]bool{"apiKey": false}}, nil
+	})
+	t.Cleanup(func() { reviewerreg.Default().SetSettingsReader(nil) })
+	attachReviewerWith(t, "alpha", &extwire.Settings{ConfigSchema: map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"apiKey": map[string]any{"type": "string", "format": "password"}},
+		"required":   []any{"apiKey"},
+	}})
+
+	st, err := e.GetCommandReviewState()
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", st.Active)
+	assert.Equal(t, aictx.ReviewReasonNotConfigured, st.Problem)
+
+	r, err := e.TestCommandReviewer("alpha")
+	require.NoError(t, err)
+	assert.Equal(t, aictx.ReviewFail, r.Outcome)
+	assert.Equal(t, aictx.ReviewReasonNotConfigured, r.Reason)
+	assert.Equal(t, "alpha", r.Extension)
 }
