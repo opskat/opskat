@@ -90,7 +90,7 @@ func TestApplyReview(t *testing.T) {
 				So(r.Decision, ShouldEqual, aictx.Allow)
 				So(r.DecisionSource, ShouldEqual, aictx.SourceAssistedAllow)
 				So(r.Review.Outcome, ShouldEqual, aictx.ReviewPass)
-				// 按资产类型注册时声明的写法替换敏感信息
+				// 原命令原样送审，带上资产类型注册时声明的写法
 				So(f.calls, ShouldResemble, []ReviewRequest{{AssetType: asset_entity.AssetTypeSSH, Command: cmd, Syntax: SyntaxShell}})
 			})
 

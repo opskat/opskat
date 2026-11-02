@@ -1,6 +1,7 @@
 // Package command_review_svc 是命令的模型审核：命令没被规则放行、原本要问人时，交给审核扩展
-// 判断能不能自动执行。宿主只负责和具体审核服务无关的部分——用哪个审核扩展、送审前的准备
-// （展开解码后执行的命令、替换敏感信息）、缓存、并发、超时重试和失败记录；判断本身由扩展做。
+// 判断能不能自动执行。宿主只负责和具体审核服务无关的部分——用哪个审核扩展、长度限制、缓存、
+// 并发、超时重试和失败记录；判断本身由扩展做。送审的文本由权限检查给出（permission.ReviewRequest.Text：
+// 原命令原样开头，解码出的脚本追加在后），这里不改写。
 package command_review_svc
 
 import (
@@ -17,8 +18,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
-	"github.com/opskat/opskat/internal/pkg/cmdredact"
-	"github.com/opskat/opskat/internal/pkg/shelldecode"
 )
 
 // DefaultTimeout 是每次调用审核扩展的默认超时。
@@ -263,13 +262,13 @@ func (s *service) resolve(ctx context.Context, n int) (Reviewer, []Result) {
 type pendingReview struct {
 	idx       int
 	assetType string
-	command   string // 已展开、已替换敏感信息
+	command   string // 送审文本（permission.ReviewRequest.Text）
 	syntax    string
 	key       string
 }
 
-// reviewWith 用 rev 审核 reqs。先展开解码后执行的命令、再替换敏感信息；超长命令不送审，
-// 按该条失败；其余每条调用一次审核器。读写缓存按顺序做（SQLite 不适合并发写），
+// reviewWith 用 rev 审核 reqs。送审文本（原命令加追加的解码脚本）超过审核器声明的长度时
+// 不送审，按该条失败；其余每条调用一次审核器。读写缓存按顺序做（SQLite 不适合并发写），
 // 只有调用审核器这一步并行，最多 maxParallelReviews 路同时进行。
 // useCache 为假时不读也不写缓存（测试审核器用）。
 func (s *service) reviewWith(ctx context.Context, rev Reviewer, reqs []permission.ReviewRequest, useCache bool) []Result {
@@ -279,27 +278,12 @@ func (s *service) reviewWith(ctx context.Context, rev Reviewer, reqs []permissio
 	results := make([]Result, len(reqs))
 	var pending []pendingReview
 	for i, req := range reqs {
-		reviewed, err := commandForReview(req)
-		if err != nil {
-			reason := aictx.ReviewReasonUnparseable
-			if errors.Is(err, shelldecode.ErrUndecodable) {
-				reason = aictx.ReviewReasonUndecodable
-			}
-			logger.Ctx(ctx).Warn("prepare command for review", zap.String("assetType", req.AssetType), zap.String("reason", reason), zap.Error(err))
-			results[i] = Result{Outcome: OutcomeFail, Reason: reason, Extension: name, Version: version}
-			continue
-		}
-		command, err := cmdredact.RedactSensitive(redactSyntax(req.Syntax), reviewed)
-		if err != nil {
-			logger.Ctx(ctx).Warn("redact command for review", zap.String("assetType", req.AssetType), zap.Error(err))
-			results[i] = Result{Outcome: OutcomeFail, Reason: aictx.ReviewReasonUnparseable, Extension: name, Version: version}
-			continue
-		}
+		command := req.Text()
 		if len(command) > maxLen {
 			results[i] = Result{Outcome: OutcomeFail, Reason: aictx.ReviewReasonTooLong, Extension: name, Version: version}
 			continue
 		}
-		key := extensionCacheKey(name, version, settingsHash, req.AssetType, cacheKeyCommand(req.Command, reviewed))
+		key := extensionCacheKey(name, version, settingsHash, req.AssetType, command)
 		if useCache {
 			if cached, err := s.cache.Get(ctx, key); err != nil {
 				logger.Ctx(ctx).Warn("read command review cache", zap.String("extension", name), zap.Error(err))
@@ -412,9 +396,8 @@ func extensionResult(name, version string, questions []Question, r Answer, elaps
 	return out
 }
 
-// extensionCacheKey 由扩展名、版本、设置哈希、资产类型和命令算出：换了扩展、版本或设置都不命中
-// 旧结果。命令用原始命令而不是替换敏感信息后的——替换后长得一样的两条命令（比如只有密码不同）
-// 各自审核；解码展开过的再带上展开后的文本（cacheKeyCommand）。表里只存哈希，不存命令。
+// extensionCacheKey 由扩展名、版本、设置哈希、资产类型和送审文本算出：换了扩展、版本或设置都
+// 不命中旧结果，审核器看到的文本不同也不命中。表里只存哈希，不存命令。
 func extensionCacheKey(name, version, settingsHash, assetType, command string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{name, version, settingsHash, assetType, command}, "\x00")))
 	return hex.EncodeToString(h[:])

@@ -7,10 +7,11 @@ import "github.com/opskat/opskat/pkg/extwire"
 // Names its name per language ("en", "zh-CN", …), which the host shows.
 type ReviewQuestion = extwire.ReviewQuestion
 
-// ReviewItem is one command to review: its canonical asset type, the command —
-// secrets already replaced by the host, decode-then-execute scripts expanded —
-// and its syntax ("shell", "redis" or "text"). It never carries the asset's id,
-// name or config.
+// ReviewItem is one command to review: its canonical asset type, the command and
+// its syntax ("shell", "redis" or "text"). Command starts with the command exactly
+// as it will run, passwords and keys included; for a shell command that decodes a
+// script and runs it, the host appends each decoded script after it, labeled as
+// decoded. It never carries the asset's id, name or config.
 type ReviewItem = extwire.ReviewItem
 
 // ReviewResult is the verdict on one command: ReviewPass; ReviewReject with the

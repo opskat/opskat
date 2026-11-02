@@ -17,8 +17,8 @@ const (
 	ReviewReasonTimeout       = "timeout"
 	ReviewReasonUnavailable   = "unavailable"
 	ReviewReasonTooLong       = "too_long"
-	ReviewReasonUnparseable   = "unparseable" // 命令解析不了，没法替换敏感信息，不发送
-	ReviewReasonUndecodable   = "undecodable" // 认得出解码后执行，但解不开要执行的内容，不发送
+	ReviewReasonUnparseable   = "unparseable" // 命令或解码出的脚本解析不了，禁止规则没法逐条检查，不发送
+	ReviewReasonUndecodable   = "undecodable" // 认得出解码后执行，但解不开要执行的内容（或写入后可能被改过），不发送
 	// ReviewReasonInvalidResult 是审核器的回答不合规，或调用审核器出错。
 	ReviewReasonInvalidResult = "invalid_result"
 	// ReviewReasonNoReviewer 是没有可用的审核器：一个都没有，或有多个却没选用哪个；

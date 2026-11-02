@@ -34,10 +34,11 @@ type Reviewer interface {
 	Identity() (name, version, settingsHash string)
 	// Questions 是审核器声明的题目，回答里只回题目 id，宿主按这里的名称显示。
 	Questions() []Question
-	// MaxCommandLen 是审核器声明的单条命令最大长度，更长的命令不送审。
+	// MaxCommandLen 是审核器声明的单条送审文本（原命令加追加的解码脚本）最大长度，更长的不送审。
 	MaxCommandLen() int
-	// Review 审一条命令：assetType 是规范资产类型，command 已展开、已替换敏感信息，
-	// syntax 是命令写法（shell / redis / text）。ctx 带着这一次调用的超时。
+	// Review 审一条命令：assetType 是规范资产类型，command 是送审文本（原命令原样开头，
+	// 解码出的脚本追加在后，见 permission.ReviewRequest.Text），syntax 是命令写法
+	// （shell / redis / text）。ctx 带着这一次调用的超时。
 	Review(ctx context.Context, assetType, command, syntax string) (Answer, error)
 }
 

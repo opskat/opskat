@@ -1,5 +1,6 @@
-// Package shelldecode 把 shell 命令里「base64 解码后交给 shell 执行」的写法展开成解码出来的脚本，
-// 让审核看到真正会执行的内容。纯算法，只依赖 shell 解析器（取词的值用 cmdline.ShellValue）。
+// Package shelldecode 找出 shell 命令里「base64 解码后交给 shell 执行」的写法，解出要执行的
+// 脚本，让审核看到真正会执行的内容。命令本身不改写：调用方把解出的脚本追加在原命令之后。
+// 纯算法，只依赖 shell 解析器（取词的值用 cmdline.ShellValue）。
 package shelldecode
 
 import (
@@ -20,169 +21,292 @@ import (
 // ErrUndecodable 表示命令会执行解码后的内容，但这部分解不开，不能当作已经看清。
 var ErrUndecodable = errors.New("decoded execution cannot be read")
 
-// ErrUnparseable 表示命令解析不了，分不清哪些是解码执行、哪些是命令结构。
+// ErrUnparseable 表示命令（或解码出的脚本）解析不了，分不清哪些是解码执行、哪些是命令结构。
 var ErrUnparseable = errors.New("command cannot be parsed")
 
-const maxRevealDepth = 3
+const maxDecodeDepth = 3
 
-// Reveal 把 shell 里「解码后交给 shell 执行」的写法换成解码出来的脚本，其余部分原样保留；
-// 没有这种写法时原样返回。解不开时返回 ErrUndecodable，命令解析不了时返回 ErrUnparseable。
-func Reveal(command string) (string, error) {
-	return revealDepth(command, 0)
+// Decode 返回 command 里解码后会交给 shell 执行的脚本，按出现顺序；解码出的脚本里还有这种
+// 写法时，再解出的脚本跟在它后面。没有这种写法时返回 nil。
+//
+// 「写入文件再执行该文件」只在写入与执行相邻（中间至多隔着 chmod）时展开；中间切换了目录、
+// 别的命令可能改写了这个文件，或执行处在另一个分支、后台、子 shell 里，都按解不开处理。
+// 解不开时返回 ErrUndecodable，命令或解码出的脚本解析不了时返回 ErrUnparseable。
+func Decode(command string) ([]string, error) {
+	return decodeText(command, 0)
 }
 
-func revealDepth(command string, depth int) (string, error) {
-	if strings.TrimSpace(command) == "" {
-		return command, nil
-	}
-	if depth > maxRevealDepth {
-		return "", ErrUndecodable
-	}
+func decodeText(command string, depth int) ([]string, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrUnparseable, err)
+		return nil, fmt.Errorf("%w: %v", ErrUnparseable, err)
 	}
-	writes := map[string]string{}
-	var parts []string
-	changed := false
-	for _, stmt := range file.Stmts {
-		text, c, err := rewriteStmt(command, stmt, writes, depth)
-		if err != nil {
-			return "", err
-		}
-		changed = changed || c
-		if strings.TrimSpace(text) != "" {
-			parts = append(parts, strings.TrimSpace(text))
-		}
-	}
-	if !changed {
-		return command, nil
-	}
-	return revealDepth(strings.Join(parts, "\n"), depth+1)
+	return decodeFile(file, depth)
 }
 
-func rewriteStmt(src string, stmt *syntax.Stmt, writes map[string]string, depth int) (string, bool, error) {
-	if stmt == nil || stmt.Cmd == nil {
-		return "", false, nil
+func decodeFile(file *syntax.File, depth int) ([]string, error) {
+	if depth > maxDecodeDepth {
+		return nil, ErrUndecodable
 	}
+	d := &decoder{depth: depth, writes: map[string]string{}}
+	if err := d.list(file.Stmts); err != nil {
+		return nil, err
+	}
+	return d.scripts, nil
+}
+
+// decoder 走一遍命令的语法树，收集解码后执行的脚本。
+type decoder struct {
+	depth int
+	// writes 是解码结果写进的文件（path.Clean 后）→ 写进去的脚本；解不开的记为空。
+	writes  map[string]string
+	scripts []string
+}
+
+// decoded 记下一段解码出来、会被执行的脚本，再找它里面的解码执行。
+func (d *decoder) decoded(script string) error {
+	d.scripts = append(d.scripts, script)
+	nested, err := decodeText(script, d.depth+1)
+	if err != nil {
+		return err
+	}
+	d.scripts = append(d.scripts, nested...)
+	return nil
+}
+
+// literal 在原命令里字面写出的脚本（bash -c '…'、eval '…'）里找解码执行。脚本本身已经在
+// 原命令里，不追加；解析不了的字面脚本也不是这种写法（shell 执行它同样报语法错），原样送审。
+func (d *decoder) literal(script string) error {
+	if !strings.Contains(script, "base64") {
+		return nil
+	}
+	file, parseErr := syntax.NewParser().Parse(strings.NewReader(script), "")
+	if parseErr == nil {
+		nested, err := decodeFile(file, d.depth+1)
+		if err != nil {
+			return err
+		}
+		d.scripts = append(d.scripts, nested...)
+	}
+	return nil
+}
+
+// list 依次处理一串按顺序执行的语句。
+func (d *decoder) list(stmts []*syntax.Stmt) error {
+	var fresh []string
+	for _, stmt := range stmts {
+		var err error
+		if fresh, err = d.stmt(stmt, fresh); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isPlainChmod 判断 stmt 是不是一条参数都是字面值、没有重定向的 chmod。
+func isPlainChmod(stmt *syntax.Stmt) bool {
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 || len(call.Assigns) > 0 || len(stmt.Redirs) > 0 {
+		return false
+	}
+	for _, arg := range call.Args {
+		if _, lit := cmdline.ShellValue(arg); !lit {
+			return false
+		}
+	}
+	prog, _ := cmdline.ShellValue(call.Args[0])
+	return prog == "chmod"
+}
+
+// stmt 处理一条语句。fresh 是紧挨着它之前、刚由解码写好的文件；返回的是紧挨着它之后的语句
+// 能当作刚写好执行的文件：它自己把解码结果写进的文件，它是 chmod 时沿用 fresh（改权限不改
+// 内容、不切换目录），其余都没有。放到后台或协程的语句不算写好：下一条开始时它可能还没写完。
+func (d *decoder) stmt(stmt *syntax.Stmt, fresh []string) ([]string, error) {
+	if stmt == nil || stmt.Cmd == nil {
+		return nil, nil
+	}
+	after, err := d.cmd(stmt, fresh)
+	if err != nil || stmt.Background || stmt.Coprocess {
+		return nil, err
+	}
+	return after, nil
+}
+
+func (d *decoder) cmd(stmt *syntax.Stmt, fresh []string) ([]string, error) {
 	switch cmd := stmt.Cmd.(type) {
 	case *syntax.BinaryCmd:
-		if cmd.Op == syntax.Pipe || cmd.Op == syntax.PipeAll {
-			return rewritePipeline(src, stmt, writes)
-		}
-		if cmd.Op == syntax.AndStmt {
-			if paths := decodeWrites(cmd.X, writes); len(paths) > 0 {
-				right, changed, err := rewriteStmt(src, cmd.Y, writes, depth)
-				if err != nil {
-					return "", false, err
-				}
-				if consumesWrite(cmd.Y, paths) {
-					return right, true, nil
-				}
-				return joinNonEmpty(sliceStmt(src, cmd.X), right), changed, nil
+		switch cmd.Op {
+		case syntax.Pipe, syntax.PipeAll:
+			return d.pipeline(stmt, fresh)
+		case syntax.AndStmt:
+			between, err := d.stmt(cmd.X, fresh)
+			if err != nil {
+				return nil, err
 			}
+			return d.stmt(cmd.Y, between)
+		default:
+			// a || b：b 只在 a 失败时执行，a 写没写好说不清，两边都不算紧挨着的写入。
+			if _, err := d.stmt(cmd.X, nil); err != nil {
+				return nil, err
+			}
+			_, err := d.stmt(cmd.Y, nil)
+			return nil, err
 		}
-		left, c1, err := rewriteStmt(src, cmd.X, writes, depth)
-		if err != nil {
-			return "", false, err
-		}
-		right, c2, err := rewriteStmt(src, cmd.Y, writes, depth)
-		if err != nil {
-			return "", false, err
-		}
-		return joinNonEmpty(left, right), c1 || c2, nil
 	case *syntax.Subshell:
-		return rewriteNested(src, stmt, cmd.Stmts, writes, depth)
+		return nil, d.list(cmd.Stmts)
 	case *syntax.Block:
-		return rewriteNested(src, stmt, cmd.Stmts, writes, depth)
+		return nil, d.list(cmd.Stmts)
 	case *syntax.CallExpr:
+		var written []string
 		if base64Stage([]*syntax.Stmt{stmt}) == 0 {
-			recordWrites(stmt, []*syntax.Stmt{stmt}, 0, writes)
+			written = d.recordWrites(stmt, []*syntax.Stmt{stmt}, 0)
 		}
-		return rewriteCall(src, stmt, cmd, writes, depth)
+		if err := d.call(stmt, cmd, fresh); err != nil {
+			return nil, err
+		}
+		switch {
+		case len(written) > 0:
+			return written, nil
+		case isPlainChmod(stmt):
+			return fresh, nil
+		}
+		return nil, nil
 	default:
-		if hasDecodedExecution(stmt) {
-			return "", false, ErrUndecodable
+		// if / while / for 等没展开的语法：里面有解码，或执行了解码写出的文件，都看不清。
+		if hasDecodedExecution(stmt) || d.runsWrittenFile(stmt) {
+			return nil, ErrUndecodable
 		}
-		return sliceStmt(src, stmt), false, nil
+		return nil, nil
 	}
 }
 
-func rewriteNested(src string, stmt *syntax.Stmt, stmts []*syntax.Stmt, writes map[string]string, depth int) (string, bool, error) {
-	var parts []string
-	changed := false
-	for _, inner := range stmts {
-		text, c, err := rewriteStmt(src, inner, writes, depth)
-		if err != nil {
-			return "", false, err
+// call 处理一条简单命令：bash -c / eval 的脚本、进程替换、执行解码写出的文件。
+func (d *decoder) call(stmt *syntax.Stmt, call *syntax.CallExpr, fresh []string) error {
+	if handled, err := d.shellCommandArg(call); err != nil || handled {
+		return err
+	}
+	if handled, err := d.procSubstExec(call); err != nil || handled {
+		return err
+	}
+	if file, ok := executedFile(call); ok {
+		if script, written := d.writes[file]; written {
+			if script == "" || !slices.Contains(fresh, file) {
+				return ErrUndecodable
+			}
+			return d.decoded(script)
 		}
-		changed = changed || c
-		if strings.TrimSpace(text) != "" {
-			parts = append(parts, strings.TrimSpace(text))
+		if d.mayBeWritten(file) {
+			return ErrUndecodable
 		}
-	}
-	if !changed {
-		return sliceStmt(src, stmt), false, nil
-	}
-	return strings.Join(parts, "\n"), true, nil
-}
-
-func rewriteCall(src string, stmt *syntax.Stmt, call *syntax.CallExpr, writes map[string]string, depth int) (string, bool, error) {
-	if script, ok, err := shellCommandArg(call, depth); err != nil || ok {
-		return script, ok, err
-	}
-	if script, ok, err := procSubstExec(call); err != nil || ok {
-		return script, ok, err
-	}
-	if script, ok := writtenScript(call, writes); ok {
-		if script == "" {
-			return "", false, ErrUndecodable
-		}
-		return script, true, nil
 	}
 	// 能执行代码的程序（shell、eval、解释器、代为执行命令的程序，或命令名本身是替换）
 	// 带着上面展不开的解码：经重定向、进程替换或参数里的替换把解码结果交给它执行，看不清。
 	if runsCode(call) && hasDecodedExecution(stmt) {
-		return "", false, ErrUndecodable
+		return ErrUndecodable
 	}
-	return sliceStmt(src, stmt), false, nil
+	return nil
 }
 
-func rewritePipeline(src string, stmt *syntax.Stmt, writes map[string]string) (string, bool, error) {
+// mayBeWritten 判断 file 会不会是解码写出的某个文件换了一种写法：文件名相同、又有一边是
+// 相对路径（切换目录后可能是同一个文件）。
+func (d *decoder) mayBeWritten(file string) bool {
+	for written := range d.writes {
+		if path.Base(written) == path.Base(file) && (!path.IsAbs(written) || !path.IsAbs(file)) {
+			return true
+		}
+	}
+	return false
+}
+
+// runsWrittenFile 判断 stmt 里有没有哪条命令执行了解码写出的文件（或可能是它的文件）。
+func (d *decoder) runsWrittenFile(stmt *syntax.Stmt) bool {
+	found := false
+	syntax.Walk(stmt, func(n syntax.Node) bool {
+		call, ok := n.(*syntax.CallExpr)
+		if !ok || found {
+			return !found
+		}
+		if file, ok := executedFile(call); ok {
+			_, written := d.writes[file]
+			found = written || d.mayBeWritten(file)
+		}
+		return !found
+	})
+	return found
+}
+
+// pipeline 处理管道：解码结果交给读标准输入的 shell 时追加脚本；只写进文件时记下这些文件
+// 并返回它们。其余各段照常检查（解码那一段除外）。
+func (d *decoder) pipeline(stmt *syntax.Stmt, fresh []string) ([]string, error) {
 	stages := pipelineStages(stmt)
 	dec := base64Stage(stages)
-	if dec < 0 {
-		return sliceStmt(src, stmt), false, nil
-	}
-	reads, err := decodedSink(stages, dec)
-	if err != nil {
-		return "", false, err
-	}
-	if reads {
-		script, err := decodeStage(stages, dec)
+	var written []string
+	if dec >= 0 {
+		reads, err := decodedSink(stages, dec)
 		if err != nil {
-			return "", false, err
+			return nil, err
 		}
-		return script, true, nil
+		if reads {
+			script, err := decodeStage(stages, dec)
+			if err != nil {
+				return nil, err
+			}
+			if err := d.decoded(script); err != nil {
+				return nil, err
+			}
+		} else {
+			written = d.recordWrites(stmt, stages, dec)
+		}
 	}
-	recordWrites(stmt, stages, dec, writes)
-	return sliceStmt(src, stmt), false, nil
+	for i, stage := range stages {
+		if i == dec {
+			continue
+		}
+		if _, err := d.stmt(stage, fresh); err != nil {
+			return nil, err
+		}
+	}
+	return written, nil
 }
 
 // decodedSink 判断第 dec 段解码出来的内容流向哪里：交给从标准输入读脚本的 shell（reads），
 // 或者只经过只处理数据的程序（dataConsumers）。其余去向——不认识的程序、代为执行命令的
-// 程序、子 shell 等复合命令——都可能执行它又看不清，返回 ErrUndecodable。
+// 程序、子 shell 等复合命令——都可能执行它又看不清，返回 ErrUndecodable。交给 shell 之前
+// 经过了会改写内容的程序（再解一次码、tr、解压等）时，shell 执行的不是解出来的脚本，同样看不清。
 func decodedSink(stages []*syntax.Stmt, dec int) (reads bool, err error) {
+	unchanged := true
 	for _, later := range stages[dec+1:] {
 		reads, unknown := readsDecodedStdin(later)
 		switch {
-		case reads:
+		case reads && unchanged:
 			return true, nil
-		case unknown || !consumesDataOnly(later):
+		case reads, unknown || !consumesDataOnly(later):
 			return false, ErrUndecodable
 		}
+		unchanged = unchanged && passesThrough(later)
 	}
 	return false, nil
+}
+
+// passesThrough 判断这一段把标准输入原样传下去：tee，或只读标准输入（不带参数或只有 - / -u）的 cat。
+func passesThrough(stmt *syntax.Stmt) bool {
+	_, args, ok := callOf(stmt)
+	if !ok || len(args) == 0 {
+		return false
+	}
+	prog, _ := cmdline.ShellValue(args[0])
+	switch path.Base(prog) {
+	case "tee":
+		return true
+	case "cat":
+		for _, arg := range args[1:] {
+			if word, lit := cmdline.ShellValue(arg); !lit || (word != "-" && word != "-u") {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // dataConsumers 只读、转换或保存数据，不把输入当代码执行。
@@ -221,23 +345,6 @@ func runsCode(call *syntax.CallExpr) bool {
 	prog, lit := cmdline.ShellValue(args[0])
 	base := path.Base(prog)
 	return !lit || shells[base] || executors[base] || wrappers[base]
-}
-
-// recordWrites 记下第 dec 段解码出来、写进了哪些文件，以及写进去的脚本；解不开的记为空，
-// 之后执行这些文件时按看不清处理。
-func recordWrites(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int, writes map[string]string) []string {
-	paths := decodedWritePaths(stmt, stages, dec)
-	if len(paths) == 0 {
-		return nil
-	}
-	script, err := decodeStage(stages, dec)
-	if err != nil {
-		script = ""
-	}
-	for _, p := range paths {
-		writes[p] = script
-	}
-	return paths
 }
 
 // decodedWritePaths 是解码结果写进的文件：解码那一段及其后各段的输出重定向、base64 -o、
@@ -499,19 +606,6 @@ func redirectPayload(stmt *syntax.Stmt) (string, bool, bool) {
 	return "", false, false
 }
 
-// decodeWrites 在 stmt 是「解码后只写进文件」的管道时，记下写了哪些文件并返回它们。
-func decodeWrites(stmt *syntax.Stmt, writes map[string]string) []string {
-	stages := pipelineStages(stmt)
-	dec := base64Stage(stages)
-	if dec < 0 {
-		return nil
-	}
-	if reads, err := decodedSink(stages, dec); reads || err != nil {
-		return nil
-	}
-	return recordWrites(stmt, stages, dec, writes)
-}
-
 func outputPath(stmt *syntax.Stmt) (string, bool) {
 	if stmt == nil {
 		return "", false
@@ -530,35 +624,6 @@ func outputPath(stmt *syntax.Stmt) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// consumesWrite 判断 stmt 里有没有执行 paths 里的某个文件。
-func consumesWrite(stmt *syntax.Stmt, paths []string) bool {
-	if stmt == nil || stmt.Cmd == nil {
-		return false
-	}
-	switch cmd := stmt.Cmd.(type) {
-	case *syntax.CallExpr:
-		file, ok := executedFile(cmd)
-		return ok && slices.Contains(paths, file)
-	case *syntax.BinaryCmd:
-		return consumesWrite(cmd.X, paths) || consumesWrite(cmd.Y, paths)
-	case *syntax.Subshell:
-		return slices.ContainsFunc(cmd.Stmts, func(inner *syntax.Stmt) bool { return consumesWrite(inner, paths) })
-	case *syntax.Block:
-		return slices.ContainsFunc(cmd.Stmts, func(inner *syntax.Stmt) bool { return consumesWrite(inner, paths) })
-	}
-	return false
-}
-
-// writtenScript 是 call 执行的、之前由解码写出来的文件里的脚本；解不开时脚本为空。
-func writtenScript(call *syntax.CallExpr, writes map[string]string) (string, bool) {
-	file, ok := executedFile(call)
-	if !ok {
-		return "", false
-	}
-	script, ok := writes[file]
-	return script, ok
 }
 
 // executedFile 是 call 当脚本执行的文件（source / . / shell 的脚本参数），或直接按路径执行的
@@ -650,78 +715,124 @@ func shellInvocation(args []*syntax.Word) (kind, file string, unknown bool) {
 	return invokeFile, file, false
 }
 
-func shellCommandArg(call *syntax.CallExpr, depth int) (string, bool, error) {
+// recordWrites 记下第 dec 段解码出来、写进了哪些文件，以及写进去的脚本；解不开的记为空，
+// 之后执行这些文件时按看不清处理。返回这些文件。
+func (d *decoder) recordWrites(stmt *syntax.Stmt, stages []*syntax.Stmt, dec int) []string {
+	paths := decodedWritePaths(stmt, stages, dec)
+	if len(paths) == 0 {
+		return nil
+	}
+	script, err := decodeStage(stages, dec)
+	if err != nil {
+		script = ""
+	}
+	for _, p := range paths {
+		d.writes[p] = script
+	}
+	return paths
+}
+
+// shellCommandArg 处理 eval 与 shell -c 的脚本（可以裹着 sudo / env 等）。handled 为真表示
+// 脚本本身就是解码出来的，已经追加；字面写出的脚本只在里面找解码执行，留给 call 照常检查。
+func (d *decoder) shellCommandArg(call *syntax.CallExpr) (handled bool, err error) {
 	_, args, ok := callOf(&syntax.Stmt{Cmd: call})
 	if !ok || len(args) == 0 {
-		return "", false, nil
+		return false, nil
 	}
 	prog, lit := cmdline.ShellValue(args[0])
 	if !lit {
-		return "", false, nil
+		return false, nil
 	}
 	base := path.Base(prog)
 	if wrappers[base] {
 		rest, ok := skipWrapper(base, args[1:])
 		if !ok || len(rest) == 0 {
-			return "", false, nil
+			return false, nil
 		}
 		args = rest
 		prog, lit = cmdline.ShellValue(args[0])
 		if !lit {
-			return "", false, nil
+			return false, nil
 		}
 		base = path.Base(prog)
 	}
 	switch {
 	case base == "eval":
-		return revealEval(args[1:], depth)
+		return d.eval(args[1:])
 	case shells[base]:
-		return revealShellC(args, depth)
+		return d.shellC(args)
 	default:
-		return "", false, nil
+		return false, nil
 	}
 }
 
-// revealShellC 只展开 bash -c 里解码后执行的脚本。-c 的参数本身看不清、又不是这种写法时，
+// shellC 只处理 bash -c 里解码后执行的脚本。-c 的参数本身看不清、又不是这种写法时，
 // 保持原命令，不把普通的 bash -c "$cmd" 当成审核失败。
-func revealShellC(args []*syntax.Word, depth int) (string, bool, error) {
+func (d *decoder) shellC(args []*syntax.Word) (bool, error) {
 	kind, _, _ := shellInvocation(args[1:])
 	if kind != invokeC {
-		return "", false, nil
+		return false, nil
 	}
 	script, decoded, ok, err := cArgScript(args)
 	if err != nil || !ok {
-		return "", false, err
+		return false, err
 	}
-	return finishReveal(script, decoded, depth)
+	if decoded {
+		return true, d.decoded(script)
+	}
+	return false, d.literal(script)
 }
 
-func revealEval(args []*syntax.Word, depth int) (string, bool, error) {
+func (d *decoder) eval(args []*syntax.Word) (bool, error) {
 	if len(args) == 1 {
 		if text, ok := cmdline.ShellValue(args[0]); ok {
-			return finishReveal(text, false, depth)
+			return false, d.literal(text)
 		}
 		if inner, ok := pureSubst(args[0]); ok {
 			script, err := decodedSubst(inner)
 			if err != nil || script == "" {
-				return "", false, err
+				return false, err
 			}
-			return finishReveal(script, true, depth)
+			return true, d.decoded(script)
 		}
-		return "", false, nil
+		return false, nil
 	}
 	var b strings.Builder
 	for i, arg := range args {
 		text, ok := cmdline.ShellValue(arg)
 		if !ok {
-			return "", false, nil
+			return false, nil
 		}
 		if i > 0 {
 			b.WriteByte(' ')
 		}
 		b.WriteString(text)
 	}
-	return finishReveal(b.String(), false, depth)
+	return false, d.literal(b.String())
+}
+
+// procSubstExec 处理 bash <(… | base64 -d)：shell 执行进程替换里解码出的脚本。
+func (d *decoder) procSubstExec(call *syntax.CallExpr) (bool, error) {
+	_, args, ok := callOf(&syntax.Stmt{Cmd: call})
+	if !ok || len(args) == 0 {
+		return false, nil
+	}
+	prog, lit := cmdline.ShellValue(args[0])
+	if !lit || !shells[path.Base(prog)] {
+		return false, nil
+	}
+	for _, arg := range args[1:] {
+		subst, ok := pureProcSubst(arg)
+		if !ok {
+			continue
+		}
+		script, err := decodeProducer(subst)
+		if err != nil {
+			return false, err
+		}
+		return true, d.decoded(script)
+	}
+	return false, nil
 }
 
 func cArgScript(args []*syntax.Word) (script string, decoded, ok bool, err error) {
@@ -754,48 +865,8 @@ func decodedSubst(stmt *syntax.Stmt) (string, error) {
 	return decodeProducer(stmt)
 }
 
-func finishReveal(script string, alreadyDecoded bool, depth int) (string, bool, error) {
-	if !alreadyDecoded && !strings.Contains(script, "base64") {
-		return "", false, nil
-	}
-	revealed, err := revealDepth(script, depth+1)
-	if err != nil {
-		if !alreadyDecoded && errors.Is(err, ErrUnparseable) {
-			return "", false, nil
-		}
-		return "", false, err
-	}
-	if !alreadyDecoded && revealed == script {
-		return "", false, nil
-	}
-	return revealed, true, nil
-}
-
 func isCommandFlag(word string) bool {
 	return word == "-c" || (strings.HasPrefix(word, "-") && strings.Contains(word, "c") && !strings.HasPrefix(word, "--"))
-}
-
-func procSubstExec(call *syntax.CallExpr) (string, bool, error) {
-	_, args, ok := callOf(&syntax.Stmt{Cmd: call})
-	if !ok || len(args) == 0 {
-		return "", false, nil
-	}
-	prog, lit := cmdline.ShellValue(args[0])
-	if !lit || !shells[path.Base(prog)] {
-		return "", false, nil
-	}
-	for _, arg := range args[1:] {
-		subst, ok := pureProcSubst(arg)
-		if !ok {
-			continue
-		}
-		script, err := decodeProducer(subst)
-		if err != nil {
-			return "", false, err
-		}
-		return script, true, nil
-	}
-	return "", false, nil
 }
 
 func decodeProducer(stmt *syntax.Stmt) (string, error) {
@@ -948,26 +1019,4 @@ func decodePayload(raw string) (string, error) {
 		return "", ErrUndecodable
 	}
 	return strings.TrimRight(string(decoded), "\n"), nil
-}
-
-func sliceStmt(src string, stmt *syntax.Stmt) string {
-	if stmt == nil {
-		return ""
-	}
-	start, end := int(stmt.Pos().Offset()), int(stmt.End().Offset())
-	if start < 0 || end > len(src) || start > end {
-		return ""
-	}
-	return src[start:end]
-}
-
-func joinNonEmpty(parts ...string) string {
-	var out []string
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return strings.Join(out, "\n")
 }
