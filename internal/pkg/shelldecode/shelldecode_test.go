@@ -72,6 +72,70 @@ func TestDecodeAndExecuteForms(t *testing.T) {
 	}
 }
 
+// 命令名无法静态确定（变量、命令替换、花括号展开、通配、同一命令里定义的函数）时视同可能是
+// 解码，命令里又执行代码就判为既解码又执行（决定 24）。在 bash -c、$(…) 里同样如此。
+func TestDynamicCommandNameWithExecution(t *testing.T) {
+	cases := []string{
+		"b=base64; echo aWQ= | $b -d | sh",
+		"echo aWQ= | ${b} -d | sh",
+		`b="base64 -d"; echo aWQ= | $b | sh`,
+		"echo aWQ= | $(echo base64) -d | sh",
+		"echo aWQ= | `echo base64` -d | sh",
+		"echo aWQ= | {ba,}se64 -d | sh",
+		"echo aWQ= | bas?64 -d | sh",
+		"echo aWQ= | base* -d | sh",
+		"echo aWQ= | command ba[s]e64 -d | sh", // 在命令名位置时解析器把 ba[s]e64 当成数组赋值，解析不了
+		"echo aWQ= | sudo $b -d | sh",
+		"f(){ base64 -d; }; echo aWQ= | f | sh",
+		"f(){ $1 -d; }; echo aWQ= | f base64 | sh",
+		`f(){ base64 "$@"; }; echo aWQ= | f -d | sh`,
+		`g(){ f -d; }; f(){ base64 "$@"; }; echo aWQ= | g | sh`,
+		`function f { base64 "$@"; }; echo aWQ= | f -d | sh`,
+		"bash -c 'b=base64; echo aWQ= | $b -d | sh'",
+		"bash -c 'echo aWQ= | ${b} -d | sh'",
+		"bash -c 'echo aWQ= | {ba,}se64 -d | sh'",
+		"bash -c 'echo aWQ= | bas?64 -d | sh'",
+		"bash -c 'f(){ base64 -d; }; echo aWQ= | f | sh'",
+		"bash -c 'f(){ $1 -d; }; echo aWQ= | f base64 | sh'",
+		`bash -c 'f(){ base64 "$@"; }; echo aWQ= | f -d | sh'`,
+		`b=base64; bash -c "echo aWQ= | $b -d | sh"`,
+		`sh -c "$(echo aWQ= | $b -d)"`,
+		`sh -c "$(echo aWQ= | {ba,}se64 -d)"`,
+		`eval "$(echo aWQ= | bas?64 -d)"`,
+		`x=$(echo aWQ= | ${b} -d); sh -c "$x"`,
+		`f(){ $1 -d; }; sh -c "$(echo aWQ= | f base64)"`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+}
+
+// 命令名动态但不执行代码的命令照常送审；引号里的数据（awk 程序、jq 过滤、crontab 行）不当作
+// 命令名动态的脚本。
+func TestDynamicCommandNameWithoutExecution(t *testing.T) {
+	cases := []string{
+		"$EDITOR file",
+		"$PAGER log.txt",
+		"${KUBECTL:-kubectl} get pods",
+		"awk '$3 > 100 {print $1}' data.txt",
+		"kubectl get pods -o json | jq -r '.items[] | .metadata.name' | xargs -n1 echo",
+		"echo '*/5 * * * * /usr/local/bin/backup' | crontab -",
+		"[ -f a.sh ] && sh a.sh",
+		`find . -name '*.log' -exec rm {} \;`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
+		})
+	}
+}
+
 // 超过再解析层数上限的脚本文本不再解析，但用引号、反斜杠拆开的解码器名同样认得出，和上限以内一致。
 func TestDecoderBeyondTheReparseLimit(t *testing.T) {
 	nest := func(levels int, inner string) string {
@@ -88,6 +152,9 @@ func TestDecoderBeyondTheReparseLimit(t *testing.T) {
 			"echo aWQ= | ba''se64 -d | sh",
 			`echo aWQ= | ba\se64 -d | sh`,
 			`echo aWQ= | "base"64 -d | sh`,
+			"echo aWQ= | $b -d | sh",
+			"echo aWQ= | {ba,}se64 -d | sh",
+			"echo aWQ= | bas?64 -d | sh",
 		} {
 			t.Run(fmt.Sprintf("%d levels: %s", levels, inner), func(t *testing.T) {
 				got, err := DecodesAndRuns(nest(levels, inner))
@@ -162,16 +229,30 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		wantErr error
 		want    bool
 	}{
-		"200k $( levels":                     {cmd: nested(200000, "$(", ")"), wantErr: ErrTooLong},
-		"200k ( levels":                      {cmd: nested(200000, "(", ")"), wantErr: ErrTooLong},
-		"40k-stage if":                       {cmd: pipeline(40000, "a"), wantErr: ErrTooLong},
-		"5000 $( levels":                     {cmd: nested(5000, "$(", ")")},
-		"deepest $( under the cap":           {cmd: deepest("$(", ")")},
-		"deepest ( under the cap":            {cmd: deepest("(", ")")},
-		"deepest \"$( under the cap":         {cmd: deepest(`"$(`, `)"`)},
-		"deepest bash -c \"$( under the cap": {cmd: deepest(`bash -c "$(`, `)"`)},
-		"largest if pipeline under the cap":  {cmd: largestPipeline("a", "")},
-		"decode near the cap":                {cmd: largestPipeline("base64 -d", "; sh a.sh"), want: true},
+		"200k $( levels": {cmd: nested(200000, "$(", ")"), wantErr: ErrTooLong},
+		"200k ( levels":  {cmd: nested(200000, "(", ")"), wantErr: ErrTooLong},
+		"40k-stage if":   {cmd: pipeline(40000, "a"), wantErr: ErrTooLong},
+		// $($(a)) 执行命令替换的输出：一层层的命令名都无法静态确定
+		"5000 $( levels":                           {cmd: nested(5000, "$(", ")"), want: true},
+		"deepest $( under the cap":                 {cmd: deepest("$(", ")"), want: true},
+		"deepest ( under the cap":                  {cmd: deepest("(", ")")},
+		"deepest \"$( under the cap":               {cmd: deepest(`"$(`, `)"`), want: true},
+		"deepest bash -c \"$( under the cap":       {cmd: deepest(`bash -c "$(`, `)"`)},
+		"largest if pipeline under the cap":        {cmd: largestPipeline("a", "")},
+		"decode near the cap":                      {cmd: largestPipeline("base64 -d", "; sh a.sh"), want: true},
+		"dynamic names near the cap":               {cmd: largestPipeline("$b -d", "; sh a.sh"), want: true},
+		"brace names near the cap":                 {cmd: largestPipeline("{ba,}se64 -d", "; sh a.sh"), want: true},
+		"glob names near the cap":                  {cmd: largestPipeline("bas?64 -d", "; sh a.sh"), want: true},
+		"many dynamic names near the cap":          {cmd: largestPipeline("$EDITOR file", ""), want: true},
+		"deepest bash -c \"$( with a dynamic name": {cmd: deepest(`bash -c "$($b -d `, `)"`), want: true},
+		"functions near the cap": {
+			cmd:  strings.Repeat("f(){ $1 -d; }; f base64; ", (MaxCommandBytes-len("sh"))/len("f(){ $1 -d; }; f base64; ")) + "sh",
+			want: true,
+		},
+		"nested quoted dynamic scripts near the cap": {
+			cmd:  strings.Repeat(`sh -c 'echo aWQ= | $b -d'; `, MaxCommandBytes/len(`sh -c 'echo aWQ= | $b -d'; `)),
+			want: true,
+		},
 		"nested quoted scripts near the cap": {
 			cmd:  strings.Repeat(`sh -c 'echo aWQ= | base64 -d'; `, MaxCommandBytes/len(`sh -c 'echo aWQ= | base64 -d'; `)),
 			want: true,

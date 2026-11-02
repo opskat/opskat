@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/opskat/opskat/internal/ai/cmdline"
@@ -33,12 +34,16 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //   - 解码：base64 / base32 / basenc 的 -d / --decode / -D，openssl 的 -d，xxd -r，uudecode；
 //     busybox base64、python -m base64 这类写法里同样认得出；
 //   - 执行代码：shell 与脚本解释器、eval、source / .、exec、xargs、find -exec、ssh、su、
-//     kubectl / docker exec，以及命令名是变量、路径（./x、/tmp/a.sh）、脚本文件名（a.sh）、
-//     带 PATH= 赋值的命令；sudo、env、timeout 等包装后的命令名同样算。
+//     kubectl / docker exec，以及命令名是路径（./x、/tmp/a.sh）、脚本文件名（a.sh）、
+//     带 PATH= 赋值的命令；sudo、env、timeout 等包装后的命令名同样算；
+//   - 命令名无法静态确定（变量、命令替换、花括号展开、通配、同一命令里定义的函数）：可能是
+//     解码，也可能是执行，所以和解码或执行之一同时出现、或出现两次就算两者都有；只有一个这样
+//     的命令名（$EDITOR file）不算（决定 24）。
 //
 // 命令替换、子 shell、if / for 等结构里的命令都会看到；引号、heredoc、here-string 里的
 // 脚本文本（bash -c '…'、ssh host '…'、echo '…' | sh）再解析一遍，在里面认解码与按名字认
-// 执行。
+// 执行；这些文本多半是数据（awk '$3 > 1 {print}'），其中的动态命令名带着解码选项（-d 等）
+// 或是定义过的函数才算。
 func DecodesAndRuns(command string) (bool, error) {
 	if len(command) > MaxCommandBytes {
 		return false, ErrTooLong
@@ -56,7 +61,7 @@ func DecodesAndRuns(command string) (bool, error) {
 		for _, file := range level {
 			for _, text := range f.scan(file, depth) {
 				if depth+1 > maxScriptDepth {
-					if mentionsDecoder(text) {
+					if mentionsDecoder(text) || strings.ContainsAny(text, dynamicMarks) {
 						f.decodes, f.runs = true, true
 					}
 					continue
@@ -76,17 +81,32 @@ func parse(text string) (*syntax.File, error) {
 	return syntax.NewParser().Parse(strings.NewReader(text), "")
 }
 
-// findings 是目前看到的解码与执行。
+// findings 是目前看到的解码、执行，以及无法静态确定的命令名个数。
 type findings struct {
 	decodes, runs bool
+	dynamic       int
+	// funcs 是各层脚本里定义的函数名：调用它们时命令名指向的是函数体，同样无法静态确定。
+	funcs map[string]bool
 }
 
-func (f *findings) both() bool { return f.decodes && f.runs }
+func (f *findings) both() bool {
+	return f.decodes && f.runs || f.dynamic > 0 && (f.decodes || f.runs) || f.dynamic > 1
+}
 
 // scan 走一遍 file 的语法树（深度受 MaxCommandBytes 限制），记下解码与执行，返回其中可能是
-// 脚本的词的文本。depth 为 0 是原命令本身：命令名是变量、路径或脚本文件名，或带 PATH= 赋值，
-// 才算执行；引号里的文本多半是数据（sed 's/a b/c/'），只按名字认执行。
+// 脚本的词的文本。depth 为 0 是原命令本身：命令名是路径或脚本文件名，或带 PATH= 赋值，才算
+// 执行；引号里的文本多半是数据（sed 's/a b/c/'），只按名字认执行。先记下定义的函数，函数
+// 在调用之后才定义时同样认得出。
 func (f *findings) scan(file *syntax.File, depth int) []string {
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if fn, ok := node.(*syntax.FuncDecl); ok && fn.Name != nil {
+			if f.funcs == nil {
+				f.funcs = map[string]bool{}
+			}
+			f.funcs[fn.Name.Value] = true
+		}
+		return true
+	})
 	var texts []string
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
@@ -125,22 +145,33 @@ func (f *findings) call(call *syntax.CallExpr, topLevel bool) {
 			f.runs = true
 		}
 	}
-	if topLevel && runsProgram(call.Args) {
+	if name, ok := value(call.Args[0]); ok && commandOnlyRunners[name] {
 		f.runs = true
 	}
-	if name, ok := value(call.Args[0]); ok && commandOnlyRunners[name] {
+	word := commandWord(call.Args)
+	if word == nil {
+		return
+	}
+	name, static := value(word)
+	switch {
+	case !static || expands(word) || f.funcs[name]:
+		if topLevel || f.funcs[name] || hasDecodeOption(words) {
+			f.dynamic++
+		}
+	case topLevel && (strings.Contains(name, "/") || hasScriptExt(name)):
 		f.runs = true
 	}
 }
 
-// runsProgram 判断命令名（跳过 sudo、env、timeout 等包装）是不是变量、路径或脚本文件名。
-func runsProgram(args []*syntax.Word) bool {
+// commandWord 是 args 里真正被执行的命令名（跳过 sudo、env、timeout 等包装）；只有包装时为 nil。
+// 值在运行时才知道的词就是命令名：它可能是包装的选项，也可能就是命令。
+func commandWord(args []*syntax.Word) *syntax.Word {
 	wrapper := ""
 	positional := 0
 	for i := 0; i < len(args); i++ {
 		name, ok := value(args[i])
 		if !ok {
-			return true
+			return args[i]
 		}
 		if wrapper != "" {
 			switch {
@@ -158,16 +189,47 @@ func runsProgram(args []*syntax.Word) bool {
 				continue
 			}
 		}
-		if strings.Contains(name, "/") || hasScriptExt(name) {
-			return true
-		}
 		if _, ok := wrappers[name]; !ok {
-			return false
+			return args[i]
 		}
 		wrapper, positional = name, 0
 	}
+	return nil
+}
+
+// expands 判断命令名在 shell 里会不会展开成别的名字：不在引号里的通配（bas?64、base*、
+// ba[s]e64）或花括号展开（{ba,}se64）。
+func expands(w *syntax.Word) bool {
+	for _, part := range w.Parts {
+		if lit, ok := part.(*syntax.Lit); ok && pattern.HasMeta(lit.Value, 0) {
+			return true
+		}
+	}
+	// SplitBraces 改写传入的词，所以给它一份拷贝；它对任何带 { 的词都返回真，要看结果里有没有展开。
+	split := &syntax.Word{Parts: w.Parts}
+	if !syntax.SplitBraces(split) {
+		return false
+	}
+	for _, part := range split.Parts {
+		if _, ok := part.(*syntax.BraceExp); ok {
+			return true
+		}
+	}
 	return false
 }
+
+// hasDecodeOption 判断词里有没有某个解码器的解码选项（-d、--decode、-r 等）。
+func hasDecodeOption(words []string) bool {
+	for _, w := range words {
+		if baseDecodeFlag(w) || decoders["openssl"](w) || decoders["xxd"](w) {
+			return true
+		}
+	}
+	return false
+}
+
+// dynamicMarks 是不再解析的脚本文本里可能让命令名无法静态确定的字符。
+const dynamicMarks = "$`{*?["
 
 func isAssignment(word string) bool {
 	eq := strings.IndexByte(word, '=')
@@ -222,8 +284,9 @@ func mentionsDecoder(text string) bool {
 var quoting = strings.NewReplacer(`'`, "", `"`, "", `\`, "", "$", "")
 
 // scriptText 是一个词里可能是脚本的文本：字面部分取 shell 去掉引号、转义后的值（同 value），
-// 变量、命令替换等换成占位的 _（命令替换里的命令已在语法树里直接看到）。每段字面值只属于一个
-// 词、取值不会变长，所以各个词的文本互不重叠，总长不超过原文。
+// 变量、命令替换等换成占位的 $_（命令替换里的命令已在语法树里直接看到）：它的值运行时才知道，
+// 落在命令名的位置时同样无法静态确定（bash -c "… $b -d …"）。每段字面值只属于一个词、取值
+// 不会变长，被占位的部分至少两个字符，所以各个词的文本互不重叠，总长不超过原文。
 func scriptText(w *syntax.Word) string {
 	var b strings.Builder
 	for _, part := range w.Parts {
@@ -233,19 +296,21 @@ func scriptText(w *syntax.Word) string {
 		}
 		dq, ok := part.(*syntax.DblQuoted)
 		if !ok {
-			b.WriteString("_")
+			b.WriteString(placeholder)
 			continue
 		}
 		for _, q := range dq.Parts {
 			if v, ok := partValue(&syntax.DblQuoted{Parts: []syntax.WordPart{q}}); ok {
 				b.WriteString(v)
 			} else {
-				b.WriteString("_")
+				b.WriteString(placeholder)
 			}
 		}
 	}
 	return b.String()
 }
+
+const placeholder = "$_"
 
 // value 是一个词在 shell 里的值：去掉引号、解开转义，$'…' 按 bash 解开（\x62 是 b）。含变量、
 // 命令替换等运行时才知道的部分时 ok 为假。
