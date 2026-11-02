@@ -646,7 +646,7 @@ Under assisted approval and Autopilot, a command the rules would ask the user ab
 is first judged by the **command reviewer** an extension provides; a pass lets it run
 unasked, so the user approves a reviewer at install. The host does everything that is
 not the judgement — which commands are reviewed, the length limit, caching (per
-extension version and settings), concurrency, the timeout and its one retry — and
+extension package digest and settings), concurrency, the timeout and its one retry — and
 asks the reviewer about **one command per call**. The reviewer gets the command
 exactly as it will run, passwords and keys included, with nothing appended. A shell
 command that both decodes (`base64 -d` and the like) and executes code is never
