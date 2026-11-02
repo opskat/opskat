@@ -35,15 +35,17 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //     busybox base64、python -m base64 这类写法里同样认得出；
 //   - 执行代码：shell 与脚本解释器、eval、source / .、exec、xargs、find -exec、ssh、su、
 //     kubectl / docker exec，以及命令名是路径（./x、/tmp/a.sh）、脚本文件名（a.sh）、
-//     带 PATH= 赋值的命令；sudo、env、timeout 等包装后的命令名同样算；
+//     带 PATH= 赋值的命令；sudo、env、timeout、exec、xargs 等包装后的命令名与 find -exec
+//     之后的命令名同样算；
 //   - 命令名无法静态确定（变量、命令替换、花括号展开、通配、同一命令里定义的函数或别名）：
 //     可能是解码，也可能是执行，所以和解码或执行之一同时出现、或出现两次就算两者都有；只有
 //     一个这样的命令名（$EDITOR file）不算（决定 24）。
 //
 // 命令替换、子 shell、if / for 等结构里的命令都会看到；引号、heredoc、here-string 里的
 // 文本再解析一遍，在里面认解码与按名字认执行。交给 shell 执行的文本（bash -c '…'、
-// ssh host '…'、sh <<EOF、echo '…' | sh）里命令名的位置就是命令名；别的引号文本多半是数据
-// （awk '$3 > 1 {print}'），其中的动态命令名带着解码选项（-d 等）或是定义过的函数、别名才算。
+// ssh host '…'、eval 与 ssh 用空格连起来的参数、trap 的参数、sh <<EOF、echo '…' | sh）里
+// 命令名的位置就是命令名；别的引号文本多半是数据（awk '$3 > 1 {print}'，送进 sh 的 awk 程序
+// 也是），其中的动态命令名带着解码选项（-d 等）或是定义过的函数、别名才算。
 func DecodesAndRuns(command string) (bool, error) {
 	if len(command) > MaxCommandBytes {
 		return false, ErrTooLong
@@ -53,32 +55,43 @@ func DecodesAndRuns(command string) (bool, error) {
 		return false, fmt.Errorf("%w: %v", ErrUnparseable, err)
 	}
 	var f findings
-	// 按层处理脚本文本，不递归：每一层的文本是上一层各个词里互不重叠的字面部分，总长不超过
-	// 原命令，所以每层的工作量都和原命令长度成正比。
-	level := []layer{{file: file}}
-	for depth := 0; len(level) > 0 && !f.both(); depth++ {
+	// 先按层解析出全部脚本文本，不递归：每一层的文本是上一层各个词里互不重叠的字面部分，总长
+	// 不超过原命令，所以每层的工作量都和原命令长度成正比。同时记下各层定义的函数与别名：eval、
+	// source 的文本里定义、在外层调用的同样认得出。
+	levels := [][]layer{{{file: file}}}
+	for depth := 0; depth < len(levels); depth++ {
 		var next []layer
-		for _, l := range level {
-			for _, text := range f.scan(l, depth) {
+		for _, l := range levels[depth] {
+			for _, t := range f.collect(l) {
 				if depth+1 > maxScriptDepth {
-					if mentionsDecoder(text.text) || strings.ContainsAny(text.text, dynamicMarks) {
+					if mentionsDecoder(t.text) || strings.ContainsAny(t.text, dynamicMarks) {
 						f.decodes, f.runs = true, true
 					}
 					continue
 				}
 				// 解析不了的文本不是脚本（shell 执行它同样报语法错），只当作数据。
-				if nested, err := parse(text.text); err == nil {
-					next = append(next, layer{file: nested, script: text.script})
+				if nested, err := parse(t.text); err == nil {
+					next = append(next, layer{file: nested, script: t.script})
 				}
 			}
 		}
-		level = next
+		if len(next) > 0 {
+			levels = append(levels, next)
+		}
+	}
+	for depth, level := range levels {
+		for _, l := range level {
+			if f.both() {
+				return true, nil
+			}
+			f.check(l, depth == 0)
+		}
 	}
 	return f.both(), nil
 }
 
 // layer 是一段要看的语法树；script 表示它来自交给 shell 执行的文本（bash -c '…'、
-// ssh host '…'、sh <<EOF、echo '…' | sh），其中命令名的位置就是命令名。
+// ssh host '…'、eval $b -d、sh <<EOF、echo '…' | sh），其中命令名的位置就是命令名。
 type layer struct {
 	file   *syntax.File
 	script bool
@@ -114,12 +127,13 @@ func (f *findings) both() bool {
 	return f.decodes && f.runs || f.dynamic > 0 && (f.decodes || f.runs) || f.dynamic > 1
 }
 
-// scan 走一遍 l 的语法树（深度受 MaxCommandBytes 限制），记下解码与执行，返回其中可能是
-// 脚本的词的文本。depth 为 0 是原命令本身：命令名是路径或脚本文件名，或带 PATH= 赋值，才算
-// 执行；引号里的文本多半是数据（sed 's/a b/c/'），只按名字认执行。先记下定义的函数与别名，
-// 它们在调用之后才定义时同样认得出；同时记下哪些词是交给 shell 执行的脚本文本。
-func (f *findings) scan(l layer, depth int) []text {
+// collect 走一遍 l 的语法树（深度受 MaxCommandBytes 限制），记下定义的函数与别名，返回其中
+// 可能是脚本的词的文本，并标出哪些是交给 shell 执行的。
+func (f *findings) collect(l layer) []text {
 	scripts := map[*syntax.Word]bool{}
+	joined := map[*syntax.Word]bool{}
+	walked := map[*syntax.Stmt]bool{}
+	var texts []text
 	syntax.Walk(l.file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.FuncDecl:
@@ -129,29 +143,26 @@ func (f *findings) scan(l layer, depth int) []text {
 		case *syntax.CallExpr:
 			f.aliases(n)
 			markScriptArgs(n, scripts)
+			if args := joinedArgs(n.Args); len(args) > 0 {
+				if t := joinScript(args, joined); scriptLike(t) {
+					texts = append(texts, text{text: t, script: true})
+				}
+			}
 		case *syntax.Stmt:
-			if runsScript(n) {
+			if readsScript(n) {
 				markRedirs(n, scripts)
 			}
 		case *syntax.BinaryCmd:
-			if (n.Op == syntax.Pipe || n.Op == syntax.PipeAll) && runsScript(n.Y) {
-				markStage(lastStage(n.X), scripts)
+			if (n.Op == syntax.Pipe || n.Op == syntax.PipeAll) && readsScript(n.Y) {
+				markOutput(n.X, scripts, walked)
 			}
 		}
 		return true
 	})
-	var texts []text
 	syntax.Walk(l.file, func(node syntax.Node) bool {
-		switch n := node.(type) {
-		case *syntax.CallExpr:
-			f.call(n, depth == 0, l.script)
-		case *syntax.Assign:
-			if depth == 0 && n.Name != nil && pathVars[n.Name.Value] {
-				f.runs = true
-			}
-		case *syntax.Word:
-			if t := scriptText(n); strings.ContainsAny(t, " \t\n;|&<>()`") {
-				texts = append(texts, text{text: t, script: scripts[n]})
+		if w, ok := node.(*syntax.Word); ok && !joined[w] {
+			if t := scriptText(w); scriptLike(t) {
+				texts = append(texts, text{text: t, script: scripts[w]})
 			}
 		}
 		return true
@@ -159,15 +170,37 @@ func (f *findings) scan(l layer, depth int) []text {
 	return texts
 }
 
-// aliases 记下 alias name=value 定义的别名。
+// scriptLike 判断一段文本里有没有分隔命令或参数的字符，没有的不会是脚本。
+func scriptLike(t string) bool {
+	return strings.ContainsAny(t, " \t\n;|&<>()`")
+}
+
+// check 记下 l 里的解码与执行。topLevel 为真时 l 是原命令本身：命令名是路径或脚本文件名，
+// 或带 PATH= 赋值，才算执行；引号里的文本多半是数据（sed 's/a b/c/'），只按名字认执行。
+func (f *findings) check(l layer, topLevel bool) {
+	syntax.Walk(l.file, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.CallExpr:
+			f.call(n, topLevel, l.script)
+		case *syntax.Assign:
+			if topLevel && n.Name != nil && pathVars[n.Name.Value] {
+				f.runs = true
+			}
+		}
+		return true
+	})
+}
+
+// aliases 记下 alias name=value 定义的别名（command alias、builtin alias 也算）。
 func (f *findings) aliases(call *syntax.CallExpr) {
-	if len(call.Args) == 0 {
+	i := commandIndex(call.Args)
+	if i < 0 {
 		return
 	}
-	if name, ok := value(call.Args[0]); !ok || name != "alias" {
+	if name, ok := value(call.Args[i]); !ok || name != "alias" {
 		return
 	}
-	for _, arg := range call.Args[1:] {
+	for _, arg := range call.Args[i+1:] {
 		if v, ok := value(arg); ok {
 			if name, _, found := strings.Cut(v, "="); found && name != "" {
 				f.define(name)
@@ -176,31 +209,144 @@ func (f *findings) aliases(call *syntax.CallExpr) {
 	}
 }
 
-// runsScript 判断一条语句是不是把脚本文本交给 shell 执行（sh、sudo bash、ssh host、
-// docker exec c sh 等）。
-func runsScript(stmt *syntax.Stmt) bool {
+// argValues 是各个词的值；值在运行时才知道的词是占位的 $_。
+func argValues(args []*syntax.Word) []string {
+	values := make([]string, len(args))
+	for i, arg := range args {
+		if v, ok := value(arg); ok {
+			values[i] = v
+		} else {
+			values[i] = placeholder
+		}
+	}
+	return values
+}
+
+// scriptRunnerAt 是 args 里第一个把参数或标准输入当作 shell 脚本执行的程序（sh、sudo bash、
+// docker exec c sh、ssh host 等）的下标与名字；没有时为 -1 与空串。
+func scriptRunnerAt(args []string) (int, string) {
+	for i, arg := range args {
+		if name := matchName(scriptRunners, arg); name != "" {
+			return i, name
+		}
+	}
+	return -1, ""
+}
+
+// readsScript 判断一条语句是不是从标准输入读脚本执行（sh、sudo bash -s、docker exec -i c sh、
+// 不带命令的 ssh host、ssh host 'sudo bash -s'）：交给它的 heredoc、here-string 与管道输入
+// 是脚本文本。带着命令时（sh -c '…'、ssh host 'cat > f'）标准输入是给命令的数据。
+func readsScript(stmt *syntax.Stmt) bool {
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok {
 		return false
 	}
-	for _, arg := range call.Args {
-		if v, ok := value(arg); ok && scriptRunnerName(v) {
+	args := argValues(call.Args)
+	split := false
+	for {
+		i, name := scriptRunnerAt(args)
+		switch name {
+		case "", "eval", "watch":
+			return false
+		case "ssh":
+			rest := args[i+1:]
+			cmd := rest[sshCommandAt(rest):]
+			if len(cmd) == 0 {
+				return true
+			}
+			// 远端命令是这些参数用空格连成、再由远端 shell 拆开的一段。拆开后的词里没有空白，
+			// 只拆一次，耗时随长度线性增长。
+			if !split {
+				cmd, split = strings.Fields(strings.Join(cmd, " ")), true
+			}
+			args = cmd
+			continue
+		}
+		return !hasCommandOption(args[i+1:])
+	}
+}
+
+// hasCommandOption 判断 shell、su 的参数里有没有 -c（-lc 等）或 --command。
+func hasCommandOption(args []string) bool {
+	for _, v := range args {
+		if shortFlagWith(v, 'c') || v == "--command" || strings.HasPrefix(v, "--command=") {
 			return true
 		}
 	}
 	return false
 }
 
-// markScriptArgs 把 shell 之后的参数（bash -c '…'、ssh host '…'）记为脚本文本。
+// markScriptArgs 把 shell 之后的参数（bash -c '…'、ssh host '…'）与 trap 的参数记为脚本文本。
 func markScriptArgs(call *syntax.CallExpr, scripts map[*syntax.Word]bool) {
-	for i, arg := range call.Args {
-		if v, ok := value(arg); ok && scriptRunnerName(v) {
-			for _, script := range call.Args[i+1:] {
-				scripts[script] = true
-			}
-			return
+	i := commandIndex(call.Args)
+	if i >= 0 {
+		if name, ok := value(call.Args[i]); !ok || name != "trap" {
+			i = -1
 		}
 	}
+	if i < 0 {
+		i, _ = scriptRunnerAt(argValues(call.Args))
+	}
+	if i < 0 {
+		return
+	}
+	for _, script := range call.Args[i+1:] {
+		scripts[script] = true
+	}
+}
+
+// joinedArgs 是 eval、ssh 用空格连成一段脚本再执行的参数（eval $b -d、ssh host $b -d）。
+func joinedArgs(args []*syntax.Word) []*syntax.Word {
+	values := argValues(args)
+	i, name := scriptRunnerAt(values)
+	switch name {
+	case "eval":
+		return args[i+1:]
+	case "ssh":
+		return args[i+1+sshCommandAt(values[i+1:]):]
+	}
+	return nil
+}
+
+// joinScript 把 args 的脚本文本用空格连起来，并把它们记进 joined，不再各自作为文本。词之间
+// 在原文里至少隔着一个空白，所以连起来的文本不比原文长。
+func joinScript(args []*syntax.Word, joined map[*syntax.Word]bool) string {
+	var b strings.Builder
+	for i, arg := range args {
+		joined[arg] = true
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(scriptText(arg))
+	}
+	return b.String()
+}
+
+// sshValueOptions 是 ssh 带值的短选项。
+const sshValueOptions = "BbcDEeFIiJLlmOoPpQRSWw"
+
+// sshCommandAt 是 ssh 的参数里远端命令开始的下标（跳过选项与主机名；占位的 $_ 当作主机名）；
+// 没有远端命令时为 len(args)。
+func sshCommandAt(args []string) int {
+	for i := 0; i < len(args); i++ {
+		v := args[i]
+		switch {
+		case v == "--":
+			return min(i+2, len(args))
+		case len(v) > 1 && v[0] == '-':
+			for j := 1; j < len(v); j++ {
+				if strings.IndexByte(sshValueOptions, v[j]) >= 0 {
+					if j == len(v)-1 {
+						i++ // 值是下一个词
+					}
+					break
+				}
+			}
+		default:
+			return i + 1
+		}
+	}
+	return len(args)
 }
 
 // markRedirs 把交给 shell 的 heredoc 与 here-string 记为脚本文本。
@@ -215,23 +361,34 @@ func markRedirs(stmt *syntax.Stmt, scripts map[*syntax.Word]bool) {
 	}
 }
 
-// markStage 把管道里送进 shell 的那一段的参数与 heredoc 记为脚本文本（echo '…' | sh）。
-func markStage(stmt *syntax.Stmt, scripts map[*syntax.Word]bool) {
-	if call, ok := stmt.Cmd.(*syntax.CallExpr); ok {
-		for _, arg := range call.Args {
-			scripts[arg] = true
+// markOutput 把管道左边输出会送进 shell 的文本记为脚本：echo、printf 的参数与 heredoc、
+// here-string，在子 shell、花括号块与中间的过滤命令里同样算（{ echo '…'; } | sh、
+// cat <<EOF | tee x | sh）。awk、jq 等的程序不是脚本，它们的输出才是。walked 记下已经
+// 走过的语句，嵌套的管道不重复走，耗时随长度线性增长。
+func markOutput(stmt *syntax.Stmt, scripts map[*syntax.Word]bool, walked map[*syntax.Stmt]bool) {
+	syntax.Walk(stmt, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Stmt:
+			if walked[n] {
+				return false
+			}
+			walked[n] = true
+			markRedirs(n, scripts)
+		case *syntax.CallExpr:
+			if i := commandIndex(n.Args); i >= 0 {
+				if v, ok := value(n.Args[i]); ok && printers[v] {
+					for _, arg := range n.Args[i+1:] {
+						scripts[arg] = true
+					}
+				}
+			}
 		}
-	}
-	markRedirs(stmt, scripts)
+		return true
+	})
 }
 
-// lastStage 是管道左边的最后一段：a | b | c 解析成 (a | b) | c。
-func lastStage(stmt *syntax.Stmt) *syntax.Stmt {
-	if b, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.Pipe || b.Op == syntax.PipeAll) {
-		return b.Y
-	}
-	return stmt
-}
+// printers 是把参数原样输出的命令。
+var printers = map[string]bool{"echo": true, "printf": true, "print": true}
 
 // call 认一条简单命令里的解码与执行。script 为真时它在交给 shell 执行的文本里，命令名的
 // 位置就是命令名；否则在别的引号文本（awk、jq 程序）里，动态的「命令名」多半是数据，带着
@@ -257,30 +414,51 @@ func (f *findings) call(call *syntax.CallExpr, topLevel, script bool) {
 	if name, ok := value(call.Args[0]); ok && commandOnlyRunners[name] {
 		f.runs = true
 	}
-	word := commandWord(call.Args)
-	if word == nil {
-		return
-	}
-	name, static := value(word)
-	switch {
-	case !static || expands(word) || f.funcs[name]:
-		if topLevel || script || f.funcs[name] || hasDecodeOption(words) {
-			f.dynamic++
+	decodeOption := hasDecodeOption(words)
+	for _, word := range commandWords(call.Args) {
+		name, static := value(word)
+		switch {
+		case !static || expands(word) || f.funcs[name]:
+			if topLevel || script || f.funcs[name] || decodeOption {
+				f.dynamic++
+			}
+		case topLevel && (strings.Contains(name, "/") || hasScriptExt(name)):
+			f.runs = true
 		}
-	case topLevel && (strings.Contains(name, "/") || hasScriptExt(name)):
-		f.runs = true
 	}
 }
 
-// commandWord 是 args 里真正被执行的命令名（跳过 sudo、env、timeout 等包装）；只有包装时为 nil。
-// 值在运行时才知道的词就是命令名：它可能是包装的选项，也可能就是命令。
-func commandWord(args []*syntax.Word) *syntax.Word {
+// commandWords 是 args 里会被当作命令执行的词：命令名，以及 find 的 -exec、-execdir、-ok、
+// -okdir 之后的命令名。每个词只看一遍。
+func commandWords(args []*syntax.Word) []*syntax.Word {
+	var words []*syntax.Word
+	for len(args) > 0 {
+		i := commandIndex(args)
+		if i < 0 {
+			break
+		}
+		words = append(words, args[i])
+		args = args[i+1:]
+		for len(args) > 0 {
+			v, ok := value(args[0])
+			args = args[1:]
+			if ok && findExecs[v] {
+				break
+			}
+		}
+	}
+	return words
+}
+
+// commandIndex 是 args 里真正被执行的命令名的下标（跳过 sudo、env、timeout、exec、xargs 等
+// 包装）；只有包装时为 -1。值在运行时才知道的词就是命令名：它可能是包装的选项，也可能就是命令。
+func commandIndex(args []*syntax.Word) int {
 	wrapper := ""
 	positional := 0
 	for i := 0; i < len(args); i++ {
 		name, ok := value(args[i])
 		if !ok {
-			return args[i]
+			return i
 		}
 		if wrapper != "" {
 			switch {
@@ -293,35 +471,57 @@ func commandWord(args []*syntax.Word) *syntax.Word {
 				continue
 			case isAssignment(name):
 				continue
-			case wrapper == "timeout" && positional == 0:
-				positional++ // 时长
+			case positional < wrapperOperands[wrapper]:
+				positional++ // timeout 的时长、chroot 的新根目录
 				continue
 			}
 		}
 		if _, ok := wrappers[name]; !ok {
-			return args[i]
+			return i
 		}
 		wrapper, positional = name, 0
 	}
-	return nil
+	return -1
 }
 
 // expands 判断命令名在 shell 里会不会展开成别的名字：不在引号里的通配（bas?64、base*、
-// ba[s]e64）或花括号展开（{ba,}se64）。
+// ba[s]e64）或花括号展开（{ba,}se64）。花括号只看有没有一对 { } 里直接含 , 或 ..，比 shell
+// 宽一点（{1..a} 不展开也算），但一遍扫完；syntax.SplitBraces 在层层嵌套的 { 上耗时随长度
+// 平方增长。
 func expands(w *syntax.Word) bool {
+	var open []bool // 每层还没闭合的 { 里有没有 , 或 ..
 	for _, part := range w.Parts {
-		if lit, ok := part.(*syntax.Lit); ok && pattern.HasMeta(lit.Value, 0) {
+		lit, ok := part.(*syntax.Lit)
+		if !ok {
+			continue
+		}
+		if pattern.HasMeta(lit.Value, 0) {
 			return true
 		}
-	}
-	// SplitBraces 改写传入的词，所以给它一份拷贝；它对任何带 { 的词都返回真，要看结果里有没有展开。
-	split := &syntax.Word{Parts: w.Parts}
-	if !syntax.SplitBraces(split) {
-		return false
-	}
-	for _, part := range split.Parts {
-		if _, ok := part.(*syntax.BraceExp); ok {
-			return true
+		s := lit.Value
+		for i := 0; i < len(s); i++ {
+			switch s[i] {
+			case '\\':
+				i++
+			case '{':
+				open = append(open, false)
+			case ',':
+				if len(open) > 0 {
+					open[len(open)-1] = true
+				}
+			case '.':
+				if len(open) > 0 && i+1 < len(s) && s[i+1] == '.' {
+					open[len(open)-1] = true
+					i++
+				}
+			case '}':
+				if len(open) > 0 {
+					if open[len(open)-1] {
+						return true
+					}
+					open = open[:len(open)-1]
+				}
+			}
 		}
 	}
 	return false
@@ -351,17 +551,19 @@ func hasScriptExt(name string) bool {
 
 // runnerName 判断一个词是不是执行代码的程序名（/bin/sh、python3.11 也算）或 find -exec。
 func runnerName(word string) bool {
-	return inNames(runners, word) || scriptRunnerName(word)
+	return matchName(runners, word) != "" || matchName(scriptRunners, word) != "" || findExecs[word]
 }
 
-// scriptRunnerName 判断一个词是不是把参数或标准输入当作 shell 脚本执行的程序名。
-func scriptRunnerName(word string) bool {
-	return inNames(scriptRunners, word)
-}
-
-func inNames(names map[string]bool, word string) bool {
+// matchName 是 word 在 names 里对应的程序名（/bin/sh 是 sh，python3.11 是 python）；不在时为空串。
+func matchName(names map[string]bool, word string) string {
 	base := path.Base(word)
-	return names[base] || names[strings.TrimRight(base, "0123456789.")]
+	if names[base] {
+		return base
+	}
+	if trimmed := strings.TrimRight(base, "0123456789."); names[trimmed] {
+		return trimmed
+	}
+	return ""
 }
 
 // decodes 判断一条命令的词里是否有解码器及其解码选项。先找出出现了哪几种解码器（至多
@@ -487,7 +689,7 @@ var decoders = map[string]func(string) bool{
 }
 
 // runners 是执行代码的程序名：出现在命令的任何位置都算（sudo bash、docker exec、find -exec）。
-// scriptRunners 里的同样算。
+// scriptRunners 与 findExecs 里的同样算。
 var runners = map[string]bool{
 	"python": true, "pypy": true, "perl": true, "ruby": true, "irb": true, "node": true, "nodejs": true,
 	"deno": true, "bun": true, "php": true, "lua": true, "luajit": true, "tclsh": true, "wish": true,
@@ -495,8 +697,10 @@ var runners = map[string]bool{
 	"osascript": true, "expect": true,
 	"exec": true, "xargs": true,
 	"nsenter": true, "chroot": true, "crontab": true, "systemd-run": true,
-	"-exec": true, "-execdir": true, "-ok": true, "-okdir": true,
 }
+
+// findExecs 是 find 执行命令的选项：之后的词是命令名。
+var findExecs = map[string]bool{"-exec": true, "-execdir": true, "-ok": true, "-okdir": true}
 
 // scriptRunners 是把参数或标准输入当作 shell 脚本执行的程序名：它们之后的参数、交给它们的
 // heredoc 与管道输入是脚本文本。
@@ -523,7 +727,19 @@ var wrappers = map[string]map[string]bool{
 	"setsid":  {},
 	"command": {},
 	"builtin": {},
+	"exec":    {"-a": true},
+	"xargs": {
+		"-a": true, "-d": true, "-E": true, "-I": true, "-L": true, "-n": true, "-P": true, "-s": true,
+		"--arg-file": true, "--delimiter": true, "--max-lines": true, "--max-args": true, "--max-procs": true,
+		"--max-chars": true, "--process-slot-var": true,
+	},
+	"busybox": {},
+	"chroot":  {"--userspec": true, "--groups": true},
+	"nsenter": {"-t": true, "--target": true, "-S": true, "--setuid": true, "-G": true, "--setgid": true},
 }
+
+// wrapperOperands 是包装在命令名之前要跳过的参数个数：timeout 的时长、chroot 的新根目录。
+var wrapperOperands = map[string]int{"timeout": 1, "chroot": 1}
 
 // scriptExts 是脚本文件的扩展名：PATH=.:$PATH a.sh 这样不带路径执行的脚本。
 var scriptExts = map[string]bool{".sh": true, ".bash": true, ".zsh": true, ".py": true, ".pl": true, ".rb": true, ".php": true, ".js": true, ".ps1": true}

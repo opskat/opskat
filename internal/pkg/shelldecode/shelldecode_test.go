@@ -117,6 +117,32 @@ func TestDynamicCommandNameWithExecution(t *testing.T) {
 		"bash -c 'alias b=base64; echo aWQ= | b -d | sh'",
 		// 解码出的文本落在命令名的位置上同样会被执行
 		"$(echo aWQ= | base64 -d)",
+		// eval、source 在当前 shell 里执行，其中定义的函数、别名在外层调用
+		`eval 'f(){ base64 "$@"; }'; echo aWQ= | f -d | sh`,
+		`source <(echo 'f(){ base64 "$@"; }'); echo aWQ= | f -d | sh`,
+		"eval 'alias b=base64'; echo aWQ= | b -d | sh",
+		"command alias b=base64; echo aWQ= | b -d | sh",
+		// exec、xargs、busybox、chroot、find -exec 之后的词同样是命令名
+		"echo aWQ= | exec $b -d | sh",
+		"echo f | xargs -n 1 $b -d | sh",
+		`find . -name f -exec $b -d {} \; | sh`,
+		"echo aWQ= | busybox $b -d | sh",
+		"echo aWQ= | chroot / $b -d | sh",
+		// eval 与 ssh 把参数用空格连成一段脚本再执行
+		"echo aWQ= | eval $b -d | sh",
+		"echo aWQ= | ssh -p 22 h $b -d | sh",
+		// 管道送进 shell 的输出来自子 shell、花括号块或中间的过滤命令
+		"(echo 'echo aWQ= | $b | sh') | sh",
+		"{ echo 'echo aWQ= | $b | sh'; } | sh",
+		"echo 'echo aWQ= | $b | sh' | cat | sh",
+		"cat <<'E' | tee /dev/null | sh\necho aWQ= | $b | sh\nE",
+		// ssh 的远端命令是从标准输入读脚本的 shell
+		"ssh h 'bash -s' <<'E'\necho aWQ= | $b | sh\nE",
+		"cat <<'E' | ssh -p 22 h sudo sh\necho aWQ= | $b | sh\nE",
+		"echo 'echo aWQ= | $b | sh' | ssh h",
+		// trap 的参数在当前 shell 里执行
+		"trap 'echo aWQ= | $b | sh' EXIT",
+		"echo aWQ= | {a,{ba,}se64} -d | sh",
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -143,6 +169,16 @@ func TestDynamicCommandNameWithoutExecution(t *testing.T) {
 		`ssh h "ps aux | awk '\$3 > 50 {print \$2}'"`,
 		"alias ll='ls -l'; ll",
 		`find . -name '*.log' -exec rm {} \;`,
+		// 管道送进 shell 的是 awk、jq 的输出，不是它们的程序
+		`kubectl get pods --no-headers | awk '$3=="Evicted" {print "kubectl delete pod " $1}' | sh`,
+		`kubectl get pods -o json | jq -r '.items[] | "kubectl delete pod \(.metadata.name)"' | sh`,
+		// ssh、sh -c 带着命令时，标准输入是给命令的数据，不是脚本
+		`echo "$(hostname) $(uptime)" | ssh log@h 'cat >> /tmp/up'`,
+		"ssh h 'cat > /tmp/run.sh' <<'EOF'\n$PY -m http.server\nEOF",
+		"sh -c 'cat > /tmp/env' <<EOF\n$KEY=$VALUE\nEOF",
+		// eval 整段脚本都在一个变量里时，没有可以单独看的命令名
+		`eval "$(ssh-agent -s)"; ssh-add ~/.ssh/id_rsa`,
+		`docker ps --format '{{.Names}},{{.Status}}' | xargs -n1 echo`,
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -262,6 +298,13 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		"glob names near the cap":                  {cmd: largestPipeline("bas?64 -d", "; sh a.sh"), want: true},
 		"many dynamic names near the cap":          {cmd: largestPipeline("$EDITOR file", ""), want: true},
 		"deepest bash -c \"$( with a dynamic name": {cmd: deepest(`bash -c "$($b -d `, `)"`), want: true},
+		// 命令名里层层嵌套、没有展开的花括号
+		"deepest unclosed { command name":   {cmd: strings.Repeat("{", MaxCommandBytes-1) + "a"},
+		"deepest {…} command name":          {cmd: deepest("{", "}")},
+		"deepest { command name in sh -c":   {cmd: "sh -c '" + strings.Repeat("{", MaxCommandBytes-len("sh -c 'a b'")) + "a b'"},
+		"many -exec after wrappers":         {cmd: "find ." + strings.Repeat(" -exec sudo", (MaxCommandBytes-len("find ."))/len(" -exec sudo"))},
+		"eval of many words near the cap":   {cmd: "eval" + strings.Repeat(" $b -d", (MaxCommandBytes-len("eval"))/len(" $b -d")), want: true},
+		"pipes into sh nested near the cap": {cmd: deepest("(echo 'a b' | ", " | sh)")},
 		"functions near the cap": {
 			cmd:  strings.Repeat("f(){ $1 -d; }; f base64; ", (MaxCommandBytes-len("sh"))/len("f(){ $1 -d; }; f base64; ")) + "sh",
 			want: true,
