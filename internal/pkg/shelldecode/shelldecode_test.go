@@ -1,6 +1,7 @@
 package shelldecode
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,11 @@ func TestDecodeAndExecuteForms(t *testing.T) {
 		"echo aWQ= | base64 -d | /bin/sh",
 		"echo aWQ= | ba''se64 -d | s\\h",
 		"ssh h \"bash -c \\\"echo aWQ= | base64 -d | sh\\\"\"",
+		// 双引号里的 \\ 由外层 shell 去掉一层，里层 shell 再把 base\64 读成 base64；词里有变量时也一样
+		`sh -c "$x echo aWQ= | base\\64 -d | sh"`,
+		// $'…' 里的转义按 bash 解开：\x62 是 b
+		`sh -c $'echo aWQ= | \x62ase64 -d | sh'`,
+		`echo aWQ= | $'\x62ase64' -d | sh`,
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -63,6 +69,32 @@ func TestDecodeAndExecuteForms(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, got)
 		})
+	}
+}
+
+// 超过再解析层数上限的脚本文本不再解析，但用引号、反斜杠拆开的解码器名同样认得出，和上限以内一致。
+func TestDecoderBeyondTheReparseLimit(t *testing.T) {
+	nest := func(levels int, inner string) string {
+		var open, closing strings.Builder
+		for i := 0; i < levels; i++ {
+			fmt.Fprintf(&open, "sh <<E%d\n", i)
+			fmt.Fprintf(&closing, "E%d\n", levels-1-i)
+		}
+		return open.String() + inner + "\n" + closing.String()
+	}
+	for _, levels := range []int{maxScriptDepth, maxScriptDepth + 1, maxScriptDepth + 2} {
+		for _, inner := range []string{
+			"echo aWQ= | base64 -d | sh",
+			"echo aWQ= | ba''se64 -d | sh",
+			`echo aWQ= | ba\se64 -d | sh`,
+			`echo aWQ= | "base"64 -d | sh`,
+		} {
+			t.Run(fmt.Sprintf("%d levels: %s", levels, inner), func(t *testing.T) {
+				got, err := DecodesAndRuns(nest(levels, inner))
+				require.NoError(t, err)
+				assert.True(t, got)
+			})
+		}
 	}
 }
 

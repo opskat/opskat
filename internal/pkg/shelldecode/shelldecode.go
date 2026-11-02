@@ -1,6 +1,6 @@
 // Package shelldecode 判断一条 shell 命令是否既解码（base64 等）又执行代码。这样的命令把要执行
 // 的内容藏在解码后面，审核器只看得到编码后的外壳，所以不送审（决定 22）。判断只看两者是否都
-// 出现，不认两者之间怎样连接，也不解码。纯算法，只依赖 shell 解析器（取词的值用 cmdline.ShellValue）。
+// 出现，不认两者之间怎样连接，也不解码。纯算法，只依赖 shell 解析器（取词的值用 cmdline.ShellValue，另认 $'…'）。
 package shelldecode
 
 import (
@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/opskat/opskat/internal/ai/cmdline"
@@ -112,7 +113,7 @@ func (f *findings) call(call *syntax.CallExpr, topLevel bool) {
 	}
 	words := make([]string, 0, len(call.Args))
 	for _, arg := range call.Args {
-		if v, ok := cmdline.ShellValue(arg); ok {
+		if v, ok := value(arg); ok {
 			words = append(words, v)
 		}
 	}
@@ -127,7 +128,7 @@ func (f *findings) call(call *syntax.CallExpr, topLevel bool) {
 	if topLevel && runsProgram(call.Args) {
 		f.runs = true
 	}
-	if name, ok := cmdline.ShellValue(call.Args[0]); ok && commandOnlyRunners[name] {
+	if name, ok := value(call.Args[0]); ok && commandOnlyRunners[name] {
 		f.runs = true
 	}
 }
@@ -137,7 +138,7 @@ func runsProgram(args []*syntax.Word) bool {
 	wrapper := ""
 	positional := 0
 	for i := 0; i < len(args); i++ {
-		name, ok := cmdline.ShellValue(args[i])
+		name, ok := value(args[i])
 		if !ok {
 			return true
 		}
@@ -183,13 +184,20 @@ func runnerName(word string) bool {
 	return runners[base] || runners[strings.TrimRight(base, "0123456789.")]
 }
 
-// decodes 判断一条命令的词里是否有解码器及其解码选项。
+// decodes 判断一条命令的词里是否有解码器及其解码选项。先找出出现了哪几种解码器（至多
+// len(decoders) 种），再各扫一遍词，耗时随词数线性增长。
 func decodes(words []string) bool {
+	var found map[string]bool
 	for _, w := range words {
-		match, ok := decoders[path.Base(w)]
-		if !ok {
-			continue
+		if name := path.Base(w); decoders[name] != nil {
+			if found == nil {
+				found = map[string]bool{}
+			}
+			found[name] = true
 		}
+	}
+	for name := range found {
+		match := decoders[name]
 		for _, flag := range words {
 			if match(flag) {
 				return true
@@ -199,7 +207,10 @@ func decodes(words []string) bool {
 	return false
 }
 
+// mentionsDecoder 判断不再解析的脚本文本里有没有解码器的名字。先去掉引号、反斜杠与 $：
+// ba""se64、"base"64、ba\se64 这样拆开的名字在层数上限以内认得出，这里同样认得出。
 func mentionsDecoder(text string) bool {
+	text = quoting.Replace(text)
 	for name := range decoders {
 		if strings.Contains(text, name) {
 			return true
@@ -208,32 +219,57 @@ func mentionsDecoder(text string) bool {
 	return false
 }
 
-// scriptText 是一个词里可能是脚本的文本：字面部分原样拼起来，变量、命令替换等换成占位的 _
-// （命令替换里的命令已在语法树里直接看到）。每段字面值只属于一个词，所以各个词的文本互不重叠。
+var quoting = strings.NewReplacer(`'`, "", `"`, "", `\`, "", "$", "")
+
+// scriptText 是一个词里可能是脚本的文本：字面部分取 shell 去掉引号、转义后的值（同 value），
+// 变量、命令替换等换成占位的 _（命令替换里的命令已在语法树里直接看到）。每段字面值只属于一个
+// 词、取值不会变长，所以各个词的文本互不重叠，总长不超过原文。
 func scriptText(w *syntax.Word) string {
-	if v, ok := cmdline.ShellValue(w); ok {
-		return v
-	}
 	var b strings.Builder
 	for _, part := range w.Parts {
-		switch p := part.(type) {
-		case *syntax.Lit:
-			b.WriteString(p.Value)
-		case *syntax.SglQuoted:
-			b.WriteString(p.Value)
-		case *syntax.DblQuoted:
-			for _, q := range p.Parts {
-				if lit, ok := q.(*syntax.Lit); ok {
-					b.WriteString(lit.Value)
-				} else {
-					b.WriteString("_")
-				}
-			}
-		default:
+		if v, ok := partValue(part); ok {
+			b.WriteString(v)
+			continue
+		}
+		dq, ok := part.(*syntax.DblQuoted)
+		if !ok {
 			b.WriteString("_")
+			continue
+		}
+		for _, q := range dq.Parts {
+			if v, ok := partValue(&syntax.DblQuoted{Parts: []syntax.WordPart{q}}); ok {
+				b.WriteString(v)
+			} else {
+				b.WriteString("_")
+			}
 		}
 	}
 	return b.String()
+}
+
+// value 是一个词在 shell 里的值：去掉引号、解开转义，$'…' 按 bash 解开（\x62 是 b）。含变量、
+// 命令替换等运行时才知道的部分时 ok 为假。
+func value(w *syntax.Word) (string, bool) {
+	var b strings.Builder
+	for _, part := range w.Parts {
+		v, ok := partValue(part)
+		if !ok {
+			return "", false
+		}
+		b.WriteString(v)
+	}
+	return b.String(), true
+}
+
+// partValue 是一个词里一段的值。cmdline.ShellValue 不认 $'…'，这里补上。
+func partValue(part syntax.WordPart) (string, bool) {
+	if q, ok := part.(*syntax.SglQuoted); ok && q.Dollar {
+		// args 为 nil 时 Format 只解转义、不认 % 格式，不会出错。和 bash 一样截在 \x00。
+		s, _, _ := expand.Format(nil, q.Value, nil)
+		s, _, _ = strings.Cut(s, "\x00")
+		return s, true
+	}
+	return cmdline.ShellValue(&syntax.Word{Parts: []syntax.WordPart{part}})
 }
 
 // shortFlagWith 判断 flag 是不是含字母 c 的一组短选项（-d、-di）。
