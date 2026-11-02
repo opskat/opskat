@@ -3691,7 +3691,7 @@
     },
     "settings": {
       "title": "Command review",
-      "desc": "For assets using Assisted approval or Autopilot, a command the rules cannot decide is first judged by the command reviewer an extension provides, which stops only clearly dangerous operations. Before review, decoded scripts are expanded.",
+      "desc": "For assets using Assisted approval or Autopilot, a command the rules cannot decide is first judged by the command reviewer an extension provides, which stops only clearly dangerous operations. A command that both decodes something (base64, for instance) and runs code is not sent for review.",
       "disclosure": "Commands are sent to the reviewer exactly as written, including any passwords or keys in them.",
       "timeout": "Review timeout (ms)",
       "timeoutHint": "Timeout for each call to the command reviewer; a timed-out call is retried once",
