@@ -426,6 +426,49 @@ func TestRevision7FalsePositivesAreReviewed(t *testing.T) {
 	}
 }
 
+// 修正轮 7 代码评审留下的缺口：函数体里命令替换中的位置参数不让别处的位置参数被当作已代入；函数、
+// 别名的输出送进 shell、解释器时，落在 echo 等参数上的调用处的词是脚本、代码；docker 的 -- 之后是
+// 容器名；包管理安装本地的包文件会运行包里的脚本。这些都不送审。
+func TestRevision7CodeReviewGapsAreRefused(t *testing.T) {
+	cases := []string{
+		`f(){ echo "$(cat "$1")"; tmux new "$1 x"; }; f 'bash now'; echo aGk= | base64 -d`,
+		`f(){ echo "$1"; }; f 'echo aWQ= | $b | sh' | sh`,
+		`f(){ printf '%s\n' "$@"; }; f 'echo aWQ= | $b | sh' | bash`,
+		`alias p=echo; p 'echo aWQ= | $b | sh' | sh`,
+		`f(){ echo "$1"; }; f 'exec(__import__("base64").b64decode("aWQ="))' | python3`,
+		`echo aWQ= | docker exec -i -- c $b | sh`,
+		`echo aWQ= | docker run --rm -- img $b | sh`,
+		`echo aWQ= | docker exec -i -u root -- c $b | sh`,
+		`echo aGk= | base64 -d > a.deb; apt install -y ./a.deb`,
+		`echo aGk= | base64 -d > a.rpm; yum install -y ./a.rpm`,
+		`echo aGk= | base64 -d > a.apk; apk add --allow-untrusted a.apk`,
+		`echo aGk= | base64 -d > a.tar.gz; pip install a.tar.gz`,
+		`echo aGk= | base64 -d > a.rb; brew install ./a.rb`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+	reviewed := []string{
+		`f(){ echo "$1"; }; f 'ls -l' | sh`,
+		`alias p=echo; p 'use bash now'; echo aGk= | base64 -d`,
+		`f(){ echo "$(cat "$1")"; }; f 'bash now'; echo aGk= | base64 -d`,
+		`docker exec -i -- c ls`,
+		`echo aGk= | base64 -d; yum install -y /tmp/x.rpm`,
+		`echo aGk= | base64 -d; apt install -y python3.11`,
+	}
+	for _, cmd := range reviewed {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
+		})
+	}
+}
+
 // env -S 的字符串由 env 拆开运行，合在选项里（-Ssh、--split-string=sh）同样认得出；合在一起的短选项
 // 里让包装运行 shell 的选项（flock -nc）同样认得出（修正轮 6 代码评审）。
 func TestSplitStringsAndGroupedOptions(t *testing.T) {
@@ -649,12 +692,12 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 			cmd:  strings.Repeat(`sh -c 'echo aWQ= | base64 -d'; `, MaxCommandBytes/len(`sh -c 'echo aWQ= | base64 -d'; `)),
 			want: true,
 		},
-		// 位置参数按调用处代入（修正轮 7）：函数体里很多 "$@"、调用时带很多词，代入的词数受预算限制
+		// 位置参数按调用处代入（修正轮 7）：函数体里很多 "$@"、调用时带很多词，代入的字节数受预算限制
 		"positional words near the cap": {
 			cmd: `f(){ x` + strings.Repeat(` "$@"`, MaxCommandBytes/2/len(` "$@"`)) + `; }; f` +
 				strings.Repeat(" a", (MaxCommandBytes/2-len(`f(){ x; }; f`))/len(" a")),
 		},
-		// here-string 里的位置参数按调用处代入：很多 here-string、调用时带很多词，代入的词数受预算限制，
+		// here-string 里的位置参数按调用处代入：很多 here-string、调用时带很多词，代入的字节数受预算限制，
 		// 用完后按命令名无法静态确定处理
 		"here-string positionals near the cap": {
 			cmd: `f(){ :` + strings.Repeat(`; sh <<< "$@"`, MaxCommandBytes/2/len(`; sh <<< "$@"`)) + `; }; f` +
@@ -667,6 +710,17 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		},
 		"script positionals near the cap": {
 			cmd: `f(){ sh -c "$1"; }; ` + strings.Repeat(`f 'ls -l'; `, (MaxCommandBytes-len(`f(){ sh -c "$1"; }; `))/len(`f 'ls -l'; `)),
+		},
+		// 一个长的词展开很多次（修正轮 7 代码评审）：预算按复制的字节扣，用完后按命令名无法静态确定处理
+		"long word substituted many times near the cap": {
+			cmd: `f(){ sh -c` + strings.Repeat(` "$1"`, MaxCommandBytes/2/len(` "$1"`)) + `; }; f '` +
+				strings.Repeat("a ", (MaxCommandBytes/2-len(`f(){ sh -c; }; f ''`))/2) + `'`,
+			want: true,
+		},
+		"alias with a long word called many times near the cap": {
+			cmd: `alias a='x ` + strings.Repeat("a", MaxCommandBytes/2) + `'` +
+				strings.Repeat(`; a`, (MaxCommandBytes/2-len(`alias a='x '`))/len(`; a`)),
+			want: true,
 		},
 		// 同一命令里写入的文件（修正轮 7）：很多写入、很多参数
 		"written files near the cap":      {cmd: writtenFiles("tmux new"), want: true},

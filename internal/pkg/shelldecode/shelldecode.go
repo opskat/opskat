@@ -44,8 +44,9 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //     systemd-run、chroot、busybox 等）按它实际运行的程序判断：它的选项与参数不是命令名，运行
 //     无法静态确定的程序也算执行代码；作为参数出现的名字（systemctl restart ssh）不是在运行它；
 //     运行 shell 的包装（sudo -s、flock -c、sg、script）的命令与标准输入是交给 shell 的脚本；
-//   - 不运行参数的程序（决定 26）：表里的程序（echo、grep、ps、cat、chmod、apt、git commit 等）的
-//     参数与其中的引号文本不算在运行什么（其中的解码照样算）；表外的程序带着 shell、解释器的名字
+//   - 不运行参数的程序（决定 26）：表里的程序（echo、grep、ps、cat、chmod、apt、git commit 等，
+//     git -c、装本地的包文件这类会运行命令的用法除外）的参数与其中的引号文本不算在运行什么（其中的
+//     解码照样算）；表外的程序带着 shell、解释器的名字
 //     （tmux new sh）或同一命令里写入的文件（> a.sh、tee、-o 之后 tmux new ./a.sh）作参数，按在运行
 //     它算；
 //   - 命令名无法静态确定（变量、命令替换、花括号展开、通配）：可能是解码，也可能是执行，所以和
@@ -53,11 +54,13 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //     不算。路径命令名只有目录动态、且动态部分都在双引号里时（"$DIR"/base64）按最后一段的字面名
 //     判断，没有引号的（$X/dev/stdin）会按空白拆开，无法静态确定（决定 25）；字面的路径（./ls、
 //     /usr/bin/base64）是在执行那个文件，不按名字判断；容器 exec / run 没有 -- 时子命令之后的动态词
-//     （docker exec -i c $b）也是。同一命令里定义的函数与别名按内容判断，
+//     （docker exec -i c $b）也是，docker、podman、nerdctl 的 -- 不分开程序（docker exec -i -- c $b
+//     同样算）。同一命令里定义的函数与别名按内容判断，
 //     像在调用处展开：别名的内容接上调用时带上的词（alias s=sudo; s $b 是 sudo $b），函数体里的
 //     位置参数换成带上的词（f(){ base64 "$@"; }; f -d 是 base64 -d），落在交给 shell 的位置上、或被
 //     送进 shell、解释器标准输入的词按脚本、代码看（f(){ sh -c "$1"; }; f '…'、alias s=sudo; s -s '…'、
-//     f(){ echo "$1" | sh; }、f(){ python3 <<< "$1"; }），只落在表里程序的参数上的词不算在运行什么
+//     f(){ echo "$1" | sh; }、f(){ python3 <<< "$1"; }，以及调用的输出送进 shell、解释器时 echo 等的
+//     参数：f(){ echo "$1"; }; f '…' | sh），只落在表里程序的参数上的词不算在运行什么
 //     （log(){ echo "$@"; }; log "use bash now"）；看不清的（eval "x $1"、shift 之后的位置参数、
 //     送进来又被当作脚本读的标准输入）按命令名无法静态确定处理。
 //
@@ -86,7 +89,8 @@ func DecodesAndRuns(command string) (bool, error) {
 		rechecked:  map[*syntax.Word]feed{},
 		feeds:      map[*syntax.Word]feed{},
 		landed:     map[*syntax.Word]landing{},
-		budget:     maxScriptDepth * MaxCommandBytes, // 每层展开都能把全部的词复制一遍
+		outputs:    map[*syntax.CallExpr]feed{},
+		budget:     maxScriptDepth * MaxCommandBytes, // 每层展开都能把整条命令复制一遍
 	}
 	// 先按层解析出全部脚本文本，不递归：每一层的文本是上一层各个词里互不重叠的字面部分，总长
 	// 不超过原命令，所以每层的工作量都和原命令长度成正比。同时记下各层定义的函数与别名：eval、
@@ -173,8 +177,9 @@ type findings struct {
 	masks map[string]uint16
 	// expansions 是调用各个函数、别名时，带上的词与标准输入流进内容的方式。
 	expansions map[string]*expansion
-	// budget 是展开函数、别名的调用还能复制的词数。用完后的调用按命令名无法静态确定处理，展开的
-	// 总工作量因此随长度线性增长，层层调用两次的函数链（f2(){ f1; f1; }）也不会指数增长。
+	// budget 是展开函数、别名的调用还能复制的字节数（每个词至少算 1，见 wordCost）。用完后的调用按命令名
+	// 无法静态确定处理，展开的总工作量因此随长度线性增长：层层调用两次的函数链（f2(){ f1; f1; }）不会
+	// 指数增长，一个长的词代入很多次（f(){ x "$1" "$1" …; }; f '<长文本>'）也不随长度平方增长。
 	budget int
 	// code 是交给脚本解释器的代码：解释器的 heredoc、here-string 与管道送入的文本。
 	code map[*syntax.Word]bool
@@ -194,6 +199,9 @@ type findings struct {
 	// landed 是调用处的词在函数、别名展开后落在哪里：只落在「不运行参数的程序」的参数上的，它的
 	// 文本不算在运行什么（log(){ echo "$@"; }; log "use bash now"）。
 	landed map[*syntax.Word]landing
+	// outputs 是输出送进 shell 或解释器标准输入的简单命令（管道左边，见 markOutput）：调用的函数、别名
+	// 展开后，落在 echo 等参数上的调用处的词是脚本或代码（f(){ echo "$1"; }; f '…' | sh）。
+	outputs map[*syntax.CallExpr]feed
 }
 
 // feed 是一个词被送进的地方：shell 的脚本或解释器的代码。
@@ -320,10 +328,10 @@ func (f *findings) collect(l layer) []text {
 		case *syntax.BinaryCmd:
 			if n.Op == syntax.Pipe || n.Op == syntax.PipeAll {
 				if readsScript(n.Y) {
-					markOutput(n.X, f.scripts, walkedScripts)
+					markOutput(n.X, f.scripts, walkedScripts, f.outputs, feedScript)
 				}
 				if runsInterpreter(n.Y) {
-					markOutput(n.X, f.code, walkedCode)
+					markOutput(n.X, f.code, walkedCode, f.outputs, feedCode)
 				}
 				f.feed(n.Y, walkedFed)
 			}
@@ -477,7 +485,7 @@ func (f *findings) profile() {
 					for k, l := range cmd.launches {
 						if rest := cmd.rest(n.Args, k); !l.dynamic && nonRunner(l.name, argValues(rest)) {
 							for _, arg := range rest {
-								if c := countPositional(arg); c > 0 && !isPositional(arg) && !f.scripts[arg] && !f.code[arg] {
+								if c := countPositional(arg, false); c > 0 && !isPositional(arg) && !f.scripts[arg] && !f.code[arg] {
 									substituted += c
 									e.inert = true
 								}
@@ -592,15 +600,21 @@ func positionalParam(p *syntax.ParamExp) bool {
 
 // mentionsPositional 判断词里有没有用到位置参数（"x $1"、$(cat "$1")）。
 func mentionsPositional(w *syntax.Word) bool {
-	return countPositional(w) > 0
+	return countPositional(w, true) > 0
 }
 
-// countPositional 是词里用到位置参数的次数。
-func countPositional(w *syntax.Word) int {
+// countPositional 是词里用到位置参数的次数。intoCommands 为假时不数命令替换、进程替换里的：那里的
+// 命令在 profile 里另作命令看过，再数一遍会让别处没代入的位置参数显得已代入。
+func countPositional(w *syntax.Word, intoCommands bool) int {
 	n := 0
 	syntax.Walk(w, func(node syntax.Node) bool {
-		if p, ok := node.(*syntax.ParamExp); ok && positionalParam(p) {
-			n++
+		switch x := node.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			return intoCommands
+		case *syntax.ParamExp:
+			if positionalParam(x) {
+				n++
+			}
 		}
 		return true
 	})
@@ -626,18 +640,19 @@ func setsPositionals(name string, args []*syntax.Word) bool {
 // substitute 把函数体里一条命令的位置参数换成调用时带上的词 rest（caller 标出其中哪些是调用处的词）。
 // 不在双引号里的位置参数按空白拆开（$1 是 'sudo -s' 时是两个词）；"$*" 与 "$@" 一样按各个词代入，
 // 宁可多看。返回展开后的词、它们是不是调用处的词，以及代入的词被送进的地方（feeds 里函数体的词，
-// 见 findings.feeds）；复制的词数超过 budget 时 ok 为假。
+// 见 findings.feeds）；复制的字节数（见 wordCost）超过 budget 时 ok 为假。
 func substitute(words, rest []*syntax.Word, caller []bool, feeds map[*syntax.Word]feed, budget *int) (args []*syntax.Word, from []bool, fed []feed, ok bool) {
 	add := func(w *syntax.Word, c, quoted bool, to feed) {
+		if *budget -= wordCost(w); *budget < 0 {
+			return
+		}
 		if v, static := value(w); static && !quoted && strings.ContainsAny(v, " \t\n") {
 			for _, field := range strings.Fields(v) {
 				args, from, fed = append(args, &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: field}}}), append(from, c), append(fed, to)
-				*budget--
 			}
 			return
 		}
 		args, from, fed = append(args, w), append(from, c), append(fed, to)
-		*budget--
 	}
 	for _, w := range words {
 		switch p, quoted := positional(w); p {
@@ -645,7 +660,9 @@ func substitute(words, rest []*syntax.Word, caller []bool, feeds map[*syntax.Wor
 			add(w, false, true, 0)
 		case "@", "*":
 			for i, r := range rest {
-				add(r, counts(caller, i), quoted, feeds[w])
+				if add(r, counts(caller, i), quoted, feeds[w]); *budget < 0 {
+					break
+				}
 			}
 		default:
 			if n, _ := strconv.Atoi(p); n >= 1 && n <= len(rest) { // ${00}、过大的编号没有对应的词
@@ -657,6 +674,21 @@ func substitute(words, rest []*syntax.Word, caller []bool, feeds map[*syntax.Wor
 		}
 	}
 	return args, from, fed, true
+}
+
+// wordCost 是展开时复制词 w 的代价：它的长度（至少 1）。语法树里的词按原文的位置算，substitute 拆出的
+// 词只有一段字面值。认这个词的各处都随它的长度线性增长，所以按字节扣预算。
+func wordCost(w *syntax.Word) int {
+	if w.Pos().IsValid() {
+		return max(int(w.End().Offset()-w.Pos().Offset()), 1)
+	}
+	n := 1
+	for _, part := range w.Parts {
+		if lit, ok := part.(*syntax.Lit); ok {
+			n += len(lit.Value)
+		}
+	}
+	return n
 }
 
 // counts 判断 args[i] 是不是调用处的词（caller 为 nil 时都是）：只有调用处的词里无法静态确定的命令名
@@ -681,7 +713,7 @@ func (f *findings) check(l layer, topLevel bool) {
 					return false
 				}
 			case *syntax.CallExpr:
-				f.call(n, use{topLevel: topLevel, script: l.script, inert: inert, fed: f.fed[n]}, inFunc)
+				f.call(n, use{topLevel: topLevel, script: l.script, inert: inert, fed: f.fed[n], out: f.outputs[n]}, inFunc)
 			case *syntax.Assign:
 				if topLevel && n.Name != nil && pathVars[n.Name.Value] {
 					f.runs = true
@@ -926,9 +958,10 @@ func markRedirs(stmt *syntax.Stmt, marks map[*syntax.Word]bool) {
 
 // markOutput 把管道左边会原样输出的文本记进 marks：echo、printf 的参数与 heredoc、
 // here-string，在子 shell、花括号块与中间的过滤命令里同样算（{ echo '…'; } | sh、
-// cat <<EOF | tee x | sh）。awk、jq 等的程序不是脚本，它们的输出才是。walked 记下已经
-// 走过的语句，嵌套的管道不重复走，耗时随长度线性增长。
-func markOutput(stmt *syntax.Stmt, marks map[*syntax.Word]bool, walked map[*syntax.Stmt]bool) {
+// cat <<EOF | tee x | sh）。awk、jq 等的程序不是脚本，它们的输出才是。其中的简单命令记进 outputs
+// （送进 to）：调用函数、别名时按展开后的 echo 等再认。walked 记下已经走过的语句，嵌套的管道不重复走，
+// 耗时随长度线性增长。
+func markOutput(stmt *syntax.Stmt, marks map[*syntax.Word]bool, walked map[*syntax.Stmt]bool, outputs map[*syntax.CallExpr]feed, to feed) {
 	syntax.Walk(stmt, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.Stmt:
@@ -938,6 +971,7 @@ func markOutput(stmt *syntax.Stmt, marks map[*syntax.Word]bool, walked map[*synt
 			walked[n] = true
 			markRedirs(n, marks)
 		case *syntax.CallExpr:
+			outputs[n] |= to
 			if ls := parseCommand(n.Args).launches; len(ls) > 0 && printers[ls[0].name] {
 				for _, arg := range n.Args[ls[0].at+1:] {
 					marks[arg] = true
@@ -971,7 +1005,7 @@ var nonRunners = map[string]func(args []string) bool{
 	// 服务与日志
 	"systemctl": nil, "journalctl": nil,
 	// 包管理
-	"yum": nil, "dnf": nil, "apk": nil, "pip": nil, "pip3": nil,
+	"yum": packageNonRunner, "dnf": packageNonRunner, "apk": packageNonRunner, "pip": packageNonRunner, "pip3": packageNonRunner,
 	"apt": aptNonRunner, "apt-get": aptNonRunner, "brew": brewNonRunner, "dpkg": dpkgNonRunner, "rpm": rpmNonRunner,
 	"git": gitNonRunner,
 }
@@ -991,9 +1025,22 @@ func hasOptionPrefix(args []string, prefixes ...string) bool {
 	return false
 }
 
+// packageNonRunner：包管理装本地的包文件（./a.deb、a.rpm、a.tar.gz、a.rb）会运行包里的脚本（同 dpkg -i），
+// 只有装、查仓库里的包才不运行参数。
+func packageNonRunner(args []string) bool {
+	for _, v := range args {
+		if packageFiles[path.Ext(v)] {
+			return false
+		}
+	}
+	return true
+}
+
+var packageFiles = set(".deb", ".rpm", ".apk", ".whl", ".egg", ".gz", ".tgz", ".bz2", ".xz", ".zip", ".rb")
+
 // aptNonRunner：-o Dpkg::Pre-Invoke=… 与 -c 配置文件能让 apt 运行命令。
 func aptNonRunner(args []string) bool {
-	return !hasOptionPrefix(args, "-o", "--option", "-c", "--config-file")
+	return packageNonRunner(args) && !hasOptionPrefix(args, "-o", "--option", "-c", "--config-file")
 }
 
 // brewNonRunner：brew sh、brew ruby 等运行 shell 或代码，只认常见的安装、查询子命令。
@@ -1005,7 +1052,7 @@ func brewNonRunner(args []string) bool {
 			break
 		}
 	}
-	return brewSubcommands[sub]
+	return brewSubcommands[sub] && packageNonRunner(args)
 }
 
 var brewSubcommands = set("install", "uninstall", "reinstall", "upgrade", "update", "list", "ls", "info", "search",
@@ -1120,9 +1167,11 @@ func (f *findings) call(call *syntax.CallExpr, u use, inFunc bool) {
 }
 
 // use 是判断一条简单命令时的上下文：它在哪一层、有没有标准输入送进来，以及其中无法静态确定的
-// 命令名算不算数（counted，见 call）。inert 同 layer：其中的命令不算在运行什么。
+// 命令名算不算数（counted，见 call）。inert 同 layer：其中的命令不算在运行什么。out 是它的输出被送进的
+// 地方（见 findings.outputs）。
 type use struct {
 	topLevel, script, inert, fed, counted bool
+	out                                   feed
 }
 
 // launches 认 args 运行的各个程序里的解码与执行。args 是一条简单命令的词，或者函数、别名展开后
@@ -1246,7 +1295,7 @@ func (c command) rest(args []*syntax.Word, k int) []*syntax.Word {
 // expand 按内容展开对函数、别名 name 的调用（rest 是调用时带上的词，restCaller 同 launches 的
 // caller）：别名的内容与带上的词连成一条命令，函数体里的位置参数换成带上的词，再认一遍。和 bash
 // 展开别名一样，正在展开的名字不再展开（alias a=b; alias b=a、f(){ f; }）；流进内容后看不清的（带上的
-// 词成为看不清的脚本文本，或送进来的标准输入被当作脚本读），以及展开层数或词数超过上限的，按命令名
+// 词成为看不清的脚本文本，或送进来的标准输入被当作脚本读），以及展开层数或复制的字节数超过上限的，按命令名
 // 无法静态确定处理。
 func (f *findings) expand(name string, rest []*syntax.Word, restCaller []bool, u use, expanding []string) {
 	if slices.Contains(expanding, name) {
@@ -1276,7 +1325,7 @@ func (f *findings) expand(name string, rest []*syntax.Word, restCaller []bool, u
 			f.launches(args, caller, fed, u, expanding)
 		}
 	}
-	// here-string 里的位置参数换成调用处的词：每个代入的词扣一次预算，耗时随长度线性增长
+	// here-string 里的位置参数换成调用处的词：每个代入的词按长度扣预算，耗时随长度线性增长
 	for _, h := range e.here {
 		from, to := 0, len(rest)
 		if h.param != "@" && h.param != "*" {
@@ -1284,7 +1333,7 @@ func (f *findings) expand(name string, rest []*syntax.Word, restCaller []bool, u
 			from, to = min(max(n-1, 0), len(rest)), min(max(n, 0), len(rest))
 		}
 		for i := from; i < to; i++ {
-			if f.budget--; f.budget < 0 {
+			if f.budget -= wordCost(rest[i]); f.budget < 0 {
 				f.unknown(u)
 				f.landedActiveRest(rest)
 				return
@@ -1308,13 +1357,19 @@ func (f *findings) expand(name string, rest []*syntax.Word, restCaller []bool, u
 }
 
 // expandForm 是一次调用按 form 展开后的词、它们是不是调用处的词，以及被送进的地方（见 substitute）；
-// 复制的词数超过预算时 ok 为假，先扣预算再复制。
+// 复制的字节数超过预算时 ok 为假，先扣预算再复制。
 func (f *findings) expandForm(form form, rest []*syntax.Word, restCaller []bool) (args []*syntax.Word, caller []bool, fed []feed, ok bool) {
 	f.budget--
 	if form.positional {
 		return substitute(form.words, rest, restCaller, f.feeds, &f.budget)
 	}
-	if f.budget -= len(form.words) + len(rest); f.budget < 0 {
+	for _, w := range form.words {
+		f.budget -= wordCost(w)
+	}
+	for _, w := range rest {
+		f.budget -= wordCost(w)
+	}
+	if f.budget < 0 {
 		return nil, nil, nil, false
 	}
 	args = append(form.words[:len(form.words):len(form.words)], rest...)
@@ -1326,7 +1381,8 @@ func (f *findings) expandForm(form form, rest []*syntax.Word, restCaller []bool)
 // '…'，f(){ sh -c "$1"; } 后 f '…' 的 '…'）：它们在调用处只是参数，这里按脚本再看一遍。展开后的命令
 // 从标准输入读脚本、代码，而调用处有输入送进来时（echo '…' | s -s），送进来的没当作脚本看过，按命令名
 // 无法静态确定处理。函数体把位置参数送进 shell、解释器的标准输入时（echo "$1" | sh、echo "$1" | python3，
-// 见 fed），代入的词同样是脚本、代码。
+// 见 fed），或调用的输出送进 shell、解释器而词落在 echo 等的参数上时（f '…' | sh，见 use.out），代入的
+// 词同样是脚本、代码。
 func (f *findings) scriptsIn(args []*syntax.Word, caller []bool, fed []feed, cmd command, u use) {
 	if u.inert {
 		return
@@ -1342,6 +1398,16 @@ func (f *findings) scriptsIn(args []*syntax.Word, caller []bool, fed []feed, cmd
 			marks[arg] = true
 		}
 	}
+	printed := map[*syntax.Word]bool{} // 输出送进 shell、解释器时 echo 等原样输出的参数
+	if u.out != 0 {
+		for k, l := range cmd.launches {
+			if !l.dynamic && printers[l.name] {
+				for _, arg := range cmd.rest(args, k) {
+					printed[arg] = true
+				}
+			}
+		}
+	}
 	for i, arg := range args {
 		if !counts(caller, i) {
 			continue
@@ -1351,6 +1417,13 @@ func (f *findings) scriptsIn(args []*syntax.Word, caller []bool, fed []feed, cmd
 			f.feedWord(arg, feedScript, u)
 		case i < len(fed) && fed[i] != 0:
 			f.feedWord(arg, fed[i], u)
+		}
+		if printed[arg] {
+			for _, to := range []feed{feedScript, feedCode} {
+				if u.out&to != 0 {
+					f.feedWord(arg, to, u)
+				}
+			}
 		}
 	}
 }
@@ -1576,7 +1649,9 @@ func afterFindExec(args []*syntax.Word, from int) int {
 // containerCommandAt 是 kubectl / docker exec、run 等之后在容器里运行的程序（-- 之后的词，或
 // shell、解释器、包装）的下标 at；没有时为 -1。docker / podman / nerdctl 的 exec、run 与 kubectl 的
 // exec、run、debug 没有用 -- 隔开程序时，子命令之后的第一个动态词（不算 -e FOO=$X、--image=$I 这类
-// 选项与赋值）分不清是容器名还是程序，guess 是它的下标；没有时为 -1（修正轮 7）。
+// 选项与赋值）分不清是容器名还是程序，guess 是它的下标；没有时为 -1（修正轮 7）。docker / podman /
+// nerdctl 的 -- 只结束它们自己的选项，之后还是容器名、镜像名（docker exec -i -- c $b）；容器名之后的 --
+// 原样交给容器当作程序名，也不分开程序。
 func containerCommandAt(tool string, args []*syntax.Word, from int) (at, guess int) {
 	at, guess = -1, -1
 	k := from
@@ -1589,13 +1664,17 @@ func containerCommandAt(tool string, args []*syntax.Word, from int) (at, guess i
 		return at, guess
 	}
 	sub, _ := value(args[k])
-	guessing := containerProgramSubcommands[tool][sub] && dashDashAt(args, k+1) < 0
+	optionsEnd := optionsEndingDash[tool]
+	guessing := containerProgramSubcommands[tool][sub] && (optionsEnd || dashDashAt(args, k+1) < 0)
 	for k++; k < len(args); k++ {
 		v, ok := value(args[k])
 		if !ok {
 			if prefix := literalPrefix(args[k]); guessing && guess < 0 && !strings.HasPrefix(prefix, "-") && !isAssignment(prefix) {
 				guess = k
 			}
+			continue
+		}
+		if v == "--" && optionsEnd {
 			continue
 		}
 		if v == "--" && k+1 < len(args) {
@@ -1623,6 +1702,9 @@ var containerProgramSubcommands = map[string]map[string]bool{
 	"docker": set("exec", "run"), "podman": set("exec", "run"), "nerdctl": set("exec", "run"),
 	"kubectl": set("exec", "run", "debug"), "oc": set("exec", "run", "debug"),
 }
+
+// optionsEndingDash 是 -- 不分开程序的容器工具：子命令、选项之后先是容器名或镜像名，再是程序。
+var optionsEndingDash = set("docker", "podman", "nerdctl")
 
 // hasUserOption 判断 runuser 开头的选项里有没有 -u / --user：有时它像 sudo 一样直接运行后面的
 // 程序。只看到第一个不是选项的词，这一段之后 programAt 还会再走一遍，每个词至多看两遍。
