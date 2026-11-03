@@ -203,7 +203,6 @@ func TestRevision6FalsePositivesAreReviewed(t *testing.T) {
 		`log(){ echo "$@"; }; log start; ls; log done`,
 		`env FOO=$BAR python3 app.py`,
 		`timeout $T bash -c 'ls'`,
-		`ssh host '$HOME/bin/tool --restart'`,
 		`systemctl restart ssh && $EDITOR /etc/ssh/sshd_config`,
 		`find . -name '*.b64' -exec base64 -d {} \;`,
 		`sudo -u $U systemctl restart nginx`,
@@ -323,6 +322,81 @@ func TestDefinitionsRunWhatTheCallerPasses(t *testing.T) {
 			got, err := DecodesAndRuns(cmd)
 			require.NoError(t, err)
 			assert.True(t, got)
+		})
+	}
+}
+
+// 修正轮 6 代码评审留下的缺口（修正轮 7，决定 25、26）：路径命令名的动态部分没有引号时 shell 会按空白
+// 拆开它，按命令名无法静态确定处理；不在「不运行参数的程序」表里的程序带着同一命令里写入的文件作参数
+// 算在运行它；容器 exec / run 没有 -- 时子命令之后的动态词按命令名无法静态确定处理；别名展开成包装、
+// 函数体的位置参数按调用处代入后，交给 shell 的参数同样是脚本。这些都不送审。
+func TestRevision7GapsAreRefused(t *testing.T) {
+	cases := []string{
+		"echo aWQ= | $X/dev/stdin | sh",
+		`ssh host '$HOME/bin/tool --restart'`,
+		"echo aWQ= | base64 -d > a.sh; tmux new ./a.sh",
+		"echo aWQ= | base64 -d | tee a.sh; tmux new ./a.sh",
+		"echo aWQ= | base64 -d -o a.sh; screen -dm a.sh",
+		"echo aWQ= | docker exec -i c $b | sh",
+		"echo aWQ= | podman exec c $b | sh",
+		"echo aWQ= | nerdctl run --rm img $b | sh",
+		"echo aWQ= | kubectl exec -i p $b | sh",
+		"echo aWQ= | docker exec -i $c sh",
+		"alias s=sudo; s -s 'echo aWQ= | $b | sh'",
+		// 展开后从标准输入读脚本，送进来的输入在调用处没当作脚本看过
+		"alias s=sudo; echo 'echo aWQ= | $b | sh' | s -s",
+		`f(){ $1; }; f 'sudo -s' <<< 'echo aWQ= | $b | sh'`,
+		`f(){ sudo "$@"; }; echo aWQ= | f $b | sh`,
+		`f(){ "$@"; }; f sudo -s 'echo aWQ= | $b | sh'`,
+		`f(){ $1; }; echo aWQ= | f '$b -d' | sh`,
+		`f(){ sudo "$@" -d; }; echo aWQ= | f base64 | sh`,
+		`f(){ shift; sh -c "$1"; }; f x 'echo aWQ= | $b | sh'`,
+		// 带有会运行命令的选项时，表里的程序也不算不运行参数
+		"echo aGk= | base64 -d; git -c core.pager=sh log",
+		"echo aGk= | base64 -d; git rebase --exec sh main",
+		"echo aGk= | base64 -d; apt-get -o APT::Update::Pre-Invoke::=sh update",
+		// 表里的程序的参数里的解码照样算：写进脚本再运行
+		"echo 'echo aWQ= | base64 -d' > a.sh; sh a.sh",
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+}
+
+// 修正轮 6 代码评审列出的误判（修正轮 7，决定 25、26）：「不运行参数的程序」表里的程序的参数与其中的
+// 引号文本不当作在运行 shell、解释器或路径；函数体的位置参数按调用处代入；动态部分在双引号里或是 ~ 的
+// 路径命令名仍按最后一段判断；容器 exec 没有 -- 时的动态词只是动态命令名。这些照常送审。
+func TestRevision7FalsePositivesAreReviewed(t *testing.T) {
+	cases := []string{
+		`kubectl get secret s -o jsonpath='{.data.p}' | base64 -d; echo "use bash now"`,
+		`kubectl get secret s -o jsonpath='{.data.p}' | base64 -d; ps aux | grep python`,
+		`$EDITOR f; ps aux | grep python`,
+		`$EDITOR f; git commit -m "bump python"`,
+		`echo aGk= | base64 -d; apt install -y python3`,
+		`echo aGk= | base64 -d > a.sh; chmod +x a.sh`,
+		`echo aGk= | base64 -d > out.bin; sha256sum out.bin; rm out.bin`,
+		`echo aGk= > a.b64; base64 -d a.b64`,
+		`echo aGk= | base64 -d; git log --oneline | grep python`,
+		`f(){ sudo "$@"; }; f ls`,
+		`f(){ sh -c "$1"; }; f 'ls -l'`,
+		`"$DIR"/base64 -d > out.bin`,
+		`ssh host '~/bin/tool --restart'`,
+		`ssh host '"$HOME"/bin/tool --restart'`,
+		`/usr/bin/base64 -d f > out.bin`,
+		`docker exec $c ls`,
+		`echo aGk= | base64 -d; docker run -e FOO=$BAR --name=$N img ls`,
+		`echo aGk= | base64 -d; kubectl exec $p -- ls`,
+		`echo aGk= | base64 -d; dpkg -l | grep python`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
 		})
 	}
 }
@@ -469,6 +543,16 @@ func TestTooLongIsNotParsed(t *testing.T) {
 	assert.False(t, got)
 }
 
+// writtenFiles 是一条接近长度上限的命令：先解码，再用重定向写入很多文件，最后 program 带着这些文件作参数。
+func writtenFiles(program string) string {
+	var writes, uses strings.Builder
+	for k := 0; len("echo aGk= | base64 -d; ")+writes.Len()+len(program)+uses.Len()+30 < MaxCommandBytes; k++ {
+		fmt.Fprintf(&writes, ": > a%d; ", k)
+		fmt.Fprintf(&uses, " a%d", k)
+	}
+	return "echo aGk= | base64 -d; " + writes.String() + program + uses.String()
+}
+
 // 修正轮 4 评审复现的崩溃与卡死：任何输入都不让进程栈溢出，耗时随长度线性增长。
 func TestStressInputsFinishQuickly(t *testing.T) {
 	pipeline := func(n int, stage string) string {
@@ -540,6 +624,17 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 			cmd:  strings.Repeat(`sh -c 'echo aWQ= | base64 -d'; `, MaxCommandBytes/len(`sh -c 'echo aWQ= | base64 -d'; `)),
 			want: true,
 		},
+		// 位置参数按调用处代入（修正轮 7）：函数体里很多 "$@"、调用时带很多词，代入的词数受预算限制
+		"positional words near the cap": {
+			cmd: `f(){ x` + strings.Repeat(` "$@"`, MaxCommandBytes/2/len(` "$@"`)) + `; }; f` +
+				strings.Repeat(" a", (MaxCommandBytes/2-len(`f(){ x; }; f`))/len(" a")),
+		},
+		"script positionals near the cap": {
+			cmd: `f(){ sh -c "$1"; }; ` + strings.Repeat(`f 'ls -l'; `, (MaxCommandBytes-len(`f(){ sh -c "$1"; }; `))/len(`f 'ls -l'; `)),
+		},
+		// 同一命令里写入的文件（修正轮 7）：很多写入、很多参数
+		"written files near the cap":      {cmd: writtenFiles("tmux new"), want: true},
+		"written files read near the cap": {cmd: writtenFiles("cat")},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
