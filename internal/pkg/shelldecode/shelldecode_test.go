@@ -537,6 +537,53 @@ func TestRevision8OutputLandsWhereItIsUsed(t *testing.T) {
 	}
 }
 
+// 修正轮 8 代码评审：串起来的 xargs 链里各段的输出到紧接着的接收处；只把参数交给表里程序的函数、别名
+// 自己的输出又成为别的命令的参数时，接收处是那个命令；printf、echo 解开的各种转义（\012、\x0a、
+// echo 的 \0NNN、dash 的 echo 不带 -e 也解）与 NUL 同样分开参数；输出所在的词有动态部分时字面部分照样
+// 按接收处判断；heredoc、here-string 经表里程序输出同样算；安装命令合在短选项里的值（-rreq.txt、-e.）
+// 同样认得出。
+func TestRevision8CodeReviewGapsAreRefused(t *testing.T) {
+	cases := []string{
+		`echo bash | xargs tmux new | xargs base64 -d`,
+		`echo bash | xargs tmux new | xargs docker exec -i c; echo aGk= | base64 -d`,
+		`log(){ echo "$@"; }; tmux new "$(log "$(echo bash)")"; echo aGk= | base64 -d`,
+		`alias l=echo; tmux new "$(l "$(echo bash)")"; echo aGk= | base64 -d`,
+		`printf 'x\012bash' | xargs tmux new; echo aGk= | base64 -d`,
+		`printf 'x\x0abash' | xargs tmux new; echo aGk= | base64 -d`,
+		`echo -e 'x\0012bash' | xargs tmux new; echo aGk= | base64 -d`,
+		`echo 'x\nbash' | xargs tmux new; echo aGk= | base64 -d`,
+		`printf 'x\0bash' | xargs -0 tmux new; echo aGk= | base64 -d`,
+		`tmux new "$(echo "bash $y")"; echo aGk= | base64 -d`,
+		`echo "bash $y" | xargs tmux new; echo aGk= | base64 -d`,
+		`tmux new "$(cat <<< bash)"; echo aGk= | base64 -d`,
+		"cat <<EOF | xargs tmux new; echo aGk= | base64 -d\nbash\nEOF",
+		`echo aWQ= | base64 -d > req.txt; pip install -rreq.txt`,
+		`echo aWQ= | base64 -d > setup.py; pip install -e.`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+	reviewed := []string{
+		// 上一级目录里写入的文件不在当前目录里
+		`echo aGk= | base64 -d > ../log; pip install .`,
+		`echo aGk= | base64 -d > ../../log; pip install ..`,
+		// 包装自己的选项不是程序的参数
+		`sudo -u "$(echo bash)" tmux new x; echo aGk= | base64 -d`,
+		`echo python | xargs grep -l | xargs cat; echo aGk= | base64 -d`,
+	}
+	for _, cmd := range reviewed {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
+		})
+	}
+}
+
 // env -S 的字符串由 env 拆开运行，合在选项里（-Ssh、--split-string=sh）同样认得出；合在一起的短选项
 // 里让包装运行 shell 的选项（flock -nc）同样认得出（修正轮 6 代码评审）。
 func TestSplitStringsAndGroupedOptions(t *testing.T) {
@@ -749,6 +796,20 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		},
 		// 输出经 xargs 成为参数（决定 28）：串起来的 xargs 链每段只按最近的接收处记一次
 		"xargs chain near the cap": {cmd: "echo 'bash now'" + strings.Repeat(" | xargs tmux new", (MaxCommandBytes-len("echo 'bash now'")-len("; echo aGk= | base64 -d"))/len(" | xargs tmux new")) + "; echo aGk= | base64 -d", want: true},
+		// 写入很深的路径、再装包含它的目录（决定 28）：按段记路径，不随深度平方增长
+		"deep written path near the cap": {
+			cmd:  "echo aGk= | base64 -d > " + strings.Repeat("a/", (MaxCommandBytes-len("echo aGk= | base64 -d > x; pip install a"))/len("a/")) + "x; pip install a",
+			want: true,
+		},
+		// 一条命令里很多个运行的程序各带命令替换：替换的输出只到它所在参数的程序
+		"many distinct -exec with substitutions near the cap": {cmd: func() string {
+			var b strings.Builder
+			b.WriteString("find .")
+			for i := 0; b.Len() < MaxCommandBytes-len(` -exec t99999 "$(echo x)" \;`); i++ {
+				fmt.Fprintf(&b, ` -exec t%d "$(echo x)" \;`, i)
+			}
+			return b.String()
+		}()},
 		"functions near the cap": {
 			cmd:  strings.Repeat("f(){ $1 -d; }; f base64; ", (MaxCommandBytes-len("sh"))/len("f(){ $1 -d; }; f base64; ")) + "sh",
 			want: true,

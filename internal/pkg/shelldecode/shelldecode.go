@@ -51,8 +51,10 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //     它算；
 //   - 输出被当作参数或脚本（决定 28）：表里程序的输出经命令替换成为另一个命令的词
 //     （tmux new "$(echo 'bash now')"，层层经表里程序的同样算）、或经管道交给把标准输入当参数的包装启动
-//     （| xargs …、| sudo xargs …、| parallel …）时，这些参数按出现在接收处判断（按空白拆开后的每段），
-//     接收的是表里的程序（grep "$(echo python)"）、或只把它交给表里程序的函数、别名时仍不算在运行；
+//     （| xargs …、| sudo xargs …、| parallel …）时，这些参数按出现在接收处判断（按空白拆开后的每段，
+//     echo、printf 解开的转义同样拆开；heredoc、here-string 经 cat 等输出同样算；xargs 链里每段到紧接着的
+//     接收处），接收的是表里的程序（grep "$(echo python)"）、或只把它交给表里程序的函数、别名时仍不算在
+//     运行，那个函数、别名的输出又成为别的命令的参数时按那里判断（tmux new "$(log "$(echo bash)")"）；
 //     函数、别名调用的输出经管道交给 shell、解释器（f '…' | sh）时，调用处的词一律按脚本、代码判断，
 //     不看内容怎样打印；安装命令（apt、dpkg、pip、npm 等）的参数是同一命令里写入的文件、或包含它的目录
 //     （pip install ./d、pip install .、pip install -r req.txt）时，算在运行它，不看扩展名；
@@ -87,22 +89,23 @@ func DecodesAndRuns(command string) (bool, error) {
 		return false, fmt.Errorf("%w: %v", ErrUnparseable, err)
 	}
 	f := findings{
-		defs:         map[string][]def{},
-		code:         map[*syntax.Word]bool{},
-		scripts:      map[*syntax.Word]bool{},
-		fed:          map[*syntax.CallExpr]bool{},
-		written:      map[string]bool{},
-		wordLayers:   map[*syntax.Word]layer{},
-		rechecked:    map[*syntax.Word]feed{},
-		feeds:        map[*syntax.Word]feed{},
-		landed:       map[*syntax.Word]landing{},
-		outputs:      map[*syntax.CallExpr]feed{},
-		argfed:       map[*syntax.CallExpr][]receiver{},
-		argOwner:     map[*syntax.Word]*syntax.CallExpr{},
-		writtenPaths: map[string]bool{},
-		writtenDirs:  map[string]bool{},
-		dirNames:     map[string]bool{},
-		budget:       maxScriptDepth * MaxCommandBytes, // 每层展开都能把整条命令复制一遍
+		defs:        map[string][]def{},
+		code:        map[*syntax.Word]bool{},
+		scripts:     map[*syntax.Word]bool{},
+		fed:         map[*syntax.CallExpr]bool{},
+		written:     map[string]bool{},
+		wordLayers:  map[*syntax.Word]layer{},
+		rechecked:   map[*syntax.Word]feed{},
+		feeds:       map[*syntax.Word]feed{},
+		landed:      map[*syntax.Word]landing{},
+		outputs:     map[*syntax.CallExpr]feed{},
+		argfed:      map[*syntax.CallExpr][]receiver{},
+		resolved:    map[*syntax.CallExpr][]receiver{},
+		argOwner:    map[*syntax.Word]*syntax.CallExpr{},
+		inputs:      map[*syntax.CallExpr][]*syntax.Word{},
+		writtenTree: pathTree{},
+		dirNames:    map[string]bool{},
+		budget:      maxScriptDepth * MaxCommandBytes, // 每层展开都能把整条命令复制一遍
 	}
 	// 先按层解析出全部脚本文本，不递归：每一层的文本是上一层各个词里互不重叠的字面部分，总长
 	// 不超过原命令，所以每层的工作量都和原命令长度成正比。同时记下各层定义的函数与别名：eval、
@@ -217,11 +220,16 @@ type findings struct {
 	// argfed 是输出会成为别的命令参数的简单命令（命令替换里的、管道左边的，见 collect 与 argReceivers）
 	// → 接收处：它的参数按出现在接收处判断（决定 28）。
 	argfed map[*syntax.CallExpr][]receiver
+	// resolved 是各条简单命令实际的接收处（见 receiversOf），算过一次就记下。
+	resolved map[*syntax.CallExpr][]receiver
 	// argOwner 是各个词所属的简单命令：launches 里由程序名的词找到它，再查 argfed。
 	argOwner map[*syntax.Word]*syntax.CallExpr
-	// writtenPaths 是同一命令里写入的文件的全路径，writtenDirs 是包含它们的目录（写的是相对路径时含
-	// 当前目录 .），dirNames 是这些目录的最后一段：安装命令装它、或装包含它的目录算在运行它（决定 28）。
-	writtenPaths, writtenDirs, dirNames map[string]bool
+	// inputs 是各条简单命令的 heredoc 与 here-string：表里的程序（cat <<< bash）把它们原样输出。
+	inputs map[*syntax.CallExpr][]*syntax.Word
+	// writtenTree 是同一命令里写入的文件按 / 分段的路径（见 pathTree），dirNames 是包含它们的各级目录的
+	// 名字：安装命令装它、或装包含它的目录算在运行它（决定 28）。
+	writtenTree pathTree
+	dirNames    map[string]bool
 }
 
 // receiver 是输出会成为参数的接收处：实际运行的程序名，以及经命令替换时输出所在的词（经管道交给
@@ -229,6 +237,29 @@ type findings struct {
 type receiver struct {
 	name string
 	word *syntax.Word
+}
+
+// pipeArgs 是管道左边 from 的输出经 xargs、parallel 成为参数的接收处。
+type pipeArgs struct {
+	from *syntax.Stmt
+	recv []receiver
+}
+
+// pathTree 是按 / 分段的路径树：第一段是 /（绝对路径）或 .（相对路径），之后是 path.Clean 后的各段，
+// 写入的文件是叶子。存每一级目录的全路径会让很深的路径随长度平方增长，按段存只随长度线性增长。
+type pathTree map[string]pathTree
+
+// pathSegments 是 file 在 pathTree 里的各段。
+func pathSegments(file string) []string {
+	file = path.Clean(file)
+	root := "."
+	if strings.HasPrefix(file, "/") {
+		root, file = "/", strings.TrimLeft(file, "/")
+	}
+	if file == "" || file == "." {
+		return []string{root}
+	}
+	return append([]string{root}, strings.Split(file, "/")...)
 }
 
 // feed 是一个词被送进的地方：shell 的脚本或解释器的代码。
@@ -306,6 +337,7 @@ func (f *findings) collect(l layer) []text {
 	walkedCode := map[*syntax.Stmt]bool{}
 	walkedFed := map[*syntax.Stmt]bool{}
 	walkedArgs := map[*syntax.Stmt]bool{}
+	var pipes []pipeArgs
 	var texts []text
 	syntax.Walk(l.file, func(node syntax.Node) bool {
 		switch n := node.(type) {
@@ -320,51 +352,21 @@ func (f *findings) collect(l layer) []text {
 			}
 			texts = aliases(n, cmd, joined, texts)
 			markScriptArgs(n, cmd, f.scripts)
-			var names []string
-			var inherited []receiver
 			for k, run := range cmd.launches {
 				if run.dynamic {
 					continue
 				}
 				rest := cmd.rest(n.Args, k)
 				values := argValues(rest)
-				if nonRunner(run.name, values) {
+				printer := nonRunner(run.name, values)
+				if printer {
 					for _, arg := range rest {
 						inert[arg] = true
 					}
-					// 表里程序的输出自己也成为别的命令的参数时（tmux new "$(echo "$(echo bash)")"），
-					// 它参数里命令替换的输出同样到那个接收处
-					inherited = f.argfed[n]
-				} else {
-					names = append(names, run.name)
 				}
 				f.recordWrites(run.name, values)
-			}
-			// 输出经命令替换成为这条命令的词时（决定 28），替换里直接执行的命令按接收处的程序判断；
-			// 词里面更深的命令替换按它所属的命令再判断，不在这里重复走
-			if !l.inert && len(names)+len(inherited) > 0 {
-				for _, arg := range n.Args {
-					substs := cmdSubsts(arg)
-					if len(substs) == 0 {
-						continue
-					}
-					recv := inherited[:len(inherited):len(inherited)]
-					for _, name := range names {
-						recv = append(recv, receiver{name: name, word: arg})
-					}
-					for _, cs := range substs {
-						for _, stmt := range cs.Stmts {
-							syntax.Walk(stmt, func(node syntax.Node) bool {
-								if _, ok := node.(*syntax.Word); ok {
-									return false
-								}
-								if c, ok := node.(*syntax.CallExpr); ok {
-									f.argfed[c] = addReceivers(f.argfed[c], recv)
-								}
-								return true
-							})
-						}
-					}
+				if !l.inert {
+					f.substsReceived(rest, run.name, printer, f.argfed[n])
 				}
 			}
 			for _, j := range joins(n.Args, cmd) {
@@ -381,6 +383,7 @@ func (f *findings) collect(l layer) []text {
 			}
 		case *syntax.Stmt:
 			f.recordRedirWrites(n)
+			f.recordInputs(n)
 			if readsScript(n) {
 				markRedirs(n, f.scripts)
 			}
@@ -399,27 +402,33 @@ func (f *findings) collect(l layer) []text {
 					markOutput(n.X, f.code, walkedCode, f.outputs, feedCode)
 				}
 				// 管道右边把标准输入当参数运行（xargs、parallel 启动程序）时（决定 28），
-				// 左边命令的输出按接收处的程序判断；已按更近的接收处记过的语句不再重复走，
-				// 串起来的 xargs 链耗时随长度线性增长
+				// 左边命令的输出按接收处的程序判断（走完语法树后再记，见下）
 				if recv := argReceivers(n.Y); len(recv) > 0 {
-					syntax.Walk(n.X, func(node syntax.Node) bool {
-						if s, ok := node.(*syntax.Stmt); ok {
-							if walkedArgs[s] {
-								return false
-							}
-							walkedArgs[s] = true
-						}
-						if c, ok := node.(*syntax.CallExpr); ok {
-							f.argfed[c] = addReceivers(f.argfed[c], recv)
-						}
-						return true
-					})
+					pipes = append(pipes, pipeArgs{from: n.X, recv: recv})
 				}
 				f.feed(n.Y, walkedFed)
 			}
 		}
 		return true
 	})
+	// 由内到外记管道的接收处（先序的倒序）：串起来的 xargs 链里每段的输出到紧接着的接收处
+	// （echo bash | xargs tmux new | xargs base64 -d 的 echo 到 tmux），已按更近的接收处记过的语句
+	// 不再重复走，耗时随长度线性增长
+	for i := len(pipes) - 1; i >= 0; i-- {
+		p := pipes[i]
+		syntax.Walk(p.from, func(node syntax.Node) bool {
+			if s, ok := node.(*syntax.Stmt); ok {
+				if walkedArgs[s] {
+					return false
+				}
+				walkedArgs[s] = true
+			}
+			if c, ok := node.(*syntax.CallExpr); ok {
+				f.argfed[c] = addReceivers(f.argfed[c], p.recv)
+			}
+			return true
+		})
+	}
 	syntax.Walk(l.file, func(node syntax.Node) bool {
 		if w, ok := node.(*syntax.Word); ok && !joined[w] {
 			// 交给 shell 的单个词也是一条命令：sh -c '$b' 的 $b 是命令名
@@ -1111,37 +1120,72 @@ func addReceivers(to, add []receiver) []receiver {
 	return to
 }
 
-// cmdSubsts 是词里直接出现的命令替换（不在更深的命令替换里）：每层词只走到第一个命令替换为止，
-// 层层嵌套时耗时随长度线性增长。
-func cmdSubsts(w *syntax.Word) []*syntax.CmdSubst {
-	var out []*syntax.CmdSubst
-	syntax.Walk(w, func(node syntax.Node) bool {
-		if cs, ok := node.(*syntax.CmdSubst); ok {
-			out = append(out, cs)
-			return false
+// substsReceived 记下程序 name 的参数 rest 里命令替换的输出到哪里（决定 28）：替换里直接执行的命令的
+// 参数按 name 判断；name 是表里的程序时（printer），它的输出到它自己的接收处 inherited，替换的输出同样
+// 到那里（tmux new "$(echo "$(echo bash)")"）。只看这个程序自己的参数，包装的选项（sudo -u "$(…)"）
+// 不是；词里面更深的命令替换按它所属的命令再判断，不在这里重复走，耗时随长度线性增长。
+func (f *findings) substsReceived(rest []*syntax.Word, name string, printer bool, inherited []receiver) {
+	if printer && len(inherited) == 0 {
+		return
+	}
+	for _, arg := range rest {
+		recv := inherited
+		if !printer {
+			recv = []receiver{{name: name, word: arg}}
 		}
-		return true
-	})
+		syntax.Walk(arg, func(node syntax.Node) bool {
+			cs, ok := node.(*syntax.CmdSubst)
+			if !ok {
+				return true
+			}
+			for _, stmt := range cs.Stmts {
+				syntax.Walk(stmt, func(node syntax.Node) bool {
+					if _, ok := node.(*syntax.Word); ok {
+						return false
+					}
+					if c, ok := node.(*syntax.CallExpr); ok {
+						f.argfed[c] = addReceivers(f.argfed[c], recv)
+					}
+					return true
+				})
+			}
+			return false
+		})
+	}
+}
+
+// receiversOf 是简单命令 c 的输出实际到的接收处：接收处是同一命令里的函数、别名，而输出所在的词展开后
+// 只落在表里程序的参数上时（log(){ echo "$@"; }; log "$(echo python)"），和 log python 一样不在那里
+// 运行，但函数、别名的输出就是这些参数，所以按那次调用自己的接收处再看（tmux new "$(log "$(echo bash)")"
+// 与 tmux new "$(log bash)" 一样）。每条命令只算一次，层层嵌套时耗时随长度线性增长。
+func (f *findings) receiversOf(c *syntax.CallExpr) []receiver {
+	if out, ok := f.resolved[c]; ok {
+		return out
+	}
+	var out []receiver
+	for _, r := range f.argfed[c] {
+		if _, defined := f.defs[r.name]; defined && r.word != nil && f.landed[r.word] == landedInert {
+			out = addReceivers(out, f.receiversOf(f.argOwner[r.word]))
+			continue
+		}
+		out = addReceivers(out, []receiver{r})
+	}
+	f.resolved[c] = out
 	return out
 }
 
-// received 按决定 28 判断一个输出会成为别的命令参数的词 w：它的值按接收处的各个程序判断
-// （mayRunArgument）。unescape 为真时先解开 printf、echo -e 会解的反斜杠转义，让 \n 分开成为参数。
-// 值按空白与命令分隔符拆开，每段都按接收处的参数看：xargs、没加引号的命令替换会拆开它，加了引号的
-// 在接收处也会被拆开运行（tmux new "x bash" 与字面写法一样）。接收处是同一命令里的函数、别名，而
-// 输出所在的词展开后只落在表里程序的参数上时（log(){ echo "$@"; }; log "$(echo python)"），和
-// log python 一样不算在运行。
+// received 按决定 28 判断一个输出会成为别的命令参数的词 w：它的文本按接收处的各个程序判断
+// （mayRunArgument），动态部分按占位的 $_ 看，字面部分照样算（echo "bash $y"）。unescape 为真时
+// （echo、printf 等打印的）同时按 printf 与 echo 的反斜杠转义解开（\n、\012、\x0a、echo 的 \0012；
+// dash、zsh 的 echo 不带 -e 也解），让转义出的分隔符分开参数。文本按空白、NUL（xargs -0）与命令分隔符
+// 拆开，每段都按接收处的参数看：xargs、没加引号的命令替换会拆开它，加了引号的在接收处也会被拆开运行
+// （tmux new "x bash" 与字面写法一样）。
 func (f *findings) received(w *syntax.Word, unescape bool, receivers []receiver) {
-	v, ok := value(w)
-	if !ok {
-		if v = literalTail(w); v == "" {
-			return
-		}
-	}
+	v := scriptText(w)
 	if unescape {
-		v = escapeSeqs.Replace(v)
+		v = printedText(v)
 	}
-	fields := strings.FieldsFunc(v, func(r rune) bool { return strings.ContainsRune(" \t\n\r\f\v;|&()<>`", r) })
+	fields := strings.FieldsFunc(v, func(r rune) bool { return strings.ContainsRune(" \t\n\r\f\v\x00;|&()<>`", r) })
 	if len(fields) == 0 {
 		return
 	}
@@ -1150,9 +1194,6 @@ func (f *findings) received(w *syntax.Word, unescape bool, receivers []receiver)
 		words[i] = &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: field}}}
 	}
 	for _, r := range receivers {
-		if _, defined := f.defs[r.name]; defined && r.word != nil && f.landed[r.word] == landedInert {
-			continue
-		}
 		if f.mayRunArgument(r.name, words, fields) {
 			f.runs = true
 			return
@@ -1160,26 +1201,28 @@ func (f *findings) received(w *syntax.Word, unescape bool, receivers []receiver)
 	}
 }
 
-// escapeSeqs 是 printf、echo -e 解开的会把输出分开成参数的反斜杠转义。
-var escapeSeqs = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r", `\f`, "\f", `\v`, "\v", `\\`, `\`)
+// printedText 是打印 v 时可能的输出：按 printf 解开转义（\012 是换行），再按 echo 解开（\0012 是换行），
+// 两者用换行连起来，拆开后的参数是两者的并集。args 为 nil 时 Format 只解转义、不认 % 格式，不会出错。
+func printedText(v string) string {
+	asPrintf, _, _ := expand.Format(nil, v, nil)
+	asEcho, _, _ := expand.Format(nil, strings.ReplaceAll(v, `\0`, `\`), nil)
+	return asPrintf + "\n" + asEcho
+}
 
-// printerUnescapes 判断 name args 的输出会不会解开参数里的反斜杠转义：printf 的格式串、
-// echo / print 带 -e。
-func printerUnescapes(name string, values []string) bool {
-	switch name {
-	case "printf":
-		return true
-	case "echo", "print":
-		for _, v := range values {
-			if !strings.HasPrefix(v, "-") {
-				break
-			}
-			if shortFlagWith(v, 'e') {
-				return true
-			}
+// recordInputs 记下简单命令 stmt 的 heredoc 与 here-string（见 findings.inputs）。
+func (f *findings) recordInputs(stmt *syntax.Stmt) {
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok {
+		return
+	}
+	for _, r := range stmt.Redirs {
+		switch {
+		case r.Op == syntax.WordHdoc && r.Word != nil:
+			f.inputs[call] = append(f.inputs[call], r.Word)
+		case (r.Op == syntax.Hdoc || r.Op == syntax.DashHdoc) && r.Hdoc != nil:
+			f.inputs[call] = append(f.inputs[call], r.Hdoc)
 		}
 	}
-	return false
 }
 
 // nonRunner 判断运行 name args 时，参数不会被当作程序或脚本运行（决定 26）：表里的程序，多用途的
@@ -1336,24 +1379,27 @@ func (f *findings) recordWrites(name string, args []string) {
 
 var outputOptions = set("-o", "-O", "--output", "--output-document", "-out")
 
-// addWritten 记下写入的文件 file 的文件名；运行时才知道的、/dev 下的不算。包含它的各个目录也记下
-// （pip install ./d 装着写入的 d/setup.py；相对路径还有当前目录，pip install . 装着写入的 setup.py），
-// 已记过的目录不再往上走，耗时随命令长度线性增长。
+// addWritten 记下写入的文件 file 的文件名；运行时才知道的、/dev 下的不算。它的路径按段记进
+// writtenTree，包含它的各级目录的名字记进 dirNames（pip install ./d、pip install "$PWD"/d 装着写入的
+// d/setup.py；相对路径还在当前目录里，pip install . 装着写入的 setup.py）。
 func (f *findings) addWritten(file string) {
 	if file == placeholder || file == "" || strings.HasPrefix(file, "/dev/") {
 		return
 	}
 	if base := path.Base(file); base != "." && base != "/" {
 		f.written[base] = true
-		file = path.Clean(file)
-		f.writtenPaths[file] = true
-		dir := path.Dir(file)
-		for ; dir != "." && dir != "/" && !f.writtenDirs[dir]; dir = path.Dir(dir) {
-			f.writtenDirs[dir] = true
-			f.dirNames[path.Base(dir)] = true
-		}
-		if dir == "." {
-			f.writtenDirs["."] = true
+		segs := pathSegments(file)
+		t := f.writtenTree
+		for i, s := range segs {
+			if i > 0 && i < len(segs)-1 {
+				f.dirNames[s] = true
+			}
+			next, ok := t[s]
+			if !ok {
+				next = pathTree{}
+				t[s] = next
+			}
+			t = next
 		}
 	}
 }
@@ -1376,8 +1422,11 @@ func (f *findings) installsWritten(name string, args []*syntax.Word, values []st
 			}
 			continue
 		}
+		// 选项的值：--requirement=req.txt、合在短选项里的 -rreq.txt、-e.
 		if k := strings.IndexByte(v, '='); k >= 0 && strings.HasPrefix(v, "-") {
 			v = v[k+1:]
+		} else if len(v) > 2 && v[0] == '-' && v[1] != '-' {
+			v = v[2:]
 		}
 		if v != "" && f.writtenUnder(v) {
 			return true
@@ -1386,10 +1435,24 @@ func (f *findings) installsWritten(name string, args []*syntax.Word, values []st
 	return false
 }
 
-// writtenUnder 判断 file 是不是同一命令里写入的文件，或是包含写入文件的目录。
+// writtenUnder 判断 file 是不是同一命令里写入的文件，或是包含写入文件的目录。路径段只有 .. 往上走的
+// 不在目录里（写入 ../log 时 . 不包含它，写入 ../../log 时 .. 也不包含它）。
 func (f *findings) writtenUnder(file string) bool {
-	file = path.Clean(file)
-	return f.writtenPaths[file] || f.writtenDirs[file]
+	t := f.writtenTree
+	for _, s := range pathSegments(file) {
+		if t = t[s]; t == nil {
+			return false
+		}
+	}
+	if len(t) == 0 {
+		return true // 写入的文件本身
+	}
+	for s := range t {
+		if s != ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // call 认一条简单命令里的解码与执行。u.script 为真时它在交给 shell 执行的文本里，命令名的
@@ -1407,6 +1470,12 @@ func (f *findings) call(call *syntax.CallExpr, u use, inFunc bool) {
 		}
 	}
 	f.launches(call.Args, caller, nil, u, nil)
+	// 输出成为别的命令的参数时（决定 28），heredoc、here-string 由表里的程序原样输出（cat <<< bash）
+	if recv := f.receiversOf(call); len(recv) > 0 && !u.inert {
+		for _, w := range f.inputs[call] {
+			f.received(w, false, recv)
+		}
+	}
 }
 
 // use 是判断一条简单命令时的上下文：它在哪一层、有没有标准输入送进来，以及其中无法静态确定的
@@ -1451,10 +1520,9 @@ func (f *findings) launches(args []*syntax.Word, caller []bool, fed []feed, u us
 		}
 		values := argValues(rest)
 		// 输出成为别的命令的参数时（决定 28），这条命令的参数按接收处的程序判断
-		if recv := f.argfed[f.argOwner[args[l.at]]]; len(recv) > 0 && !u.inert {
-			unescapes := printerUnescapes(l.name, values)
+		if recv := f.receiversOf(f.argOwner[args[l.at]]); len(recv) > 0 && !u.inert {
 			for _, w := range rest {
-				f.received(w, unescapes, recv)
+				f.received(w, printers[l.name], recv)
 			}
 		}
 		if !u.inert {
