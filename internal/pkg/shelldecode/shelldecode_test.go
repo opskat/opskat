@@ -357,6 +357,21 @@ func TestRevision7GapsAreRefused(t *testing.T) {
 		"echo aGk= | base64 -d; apt-get -o APT::Update::Pre-Invoke::=sh update",
 		// 表里的程序的参数里的解码照样算：写进脚本再运行
 		"echo 'echo aWQ= | base64 -d' > a.sh; sh a.sh",
+		// 字面的路径是在执行那个文件，不看它叫什么：按最后一段判断只给动态部分在双引号里或是 ~ 的路径
+		"echo aWQ= | base64 -d > ls; chmod +x ls; ./ls",
+		"echo aWQ= | base64 -d > /tmp/cat; chmod +x /tmp/cat; /tmp/cat",
+		"echo aWQ= | base64 -d > base64; chmod +x base64; echo aGk= | ./base64 -d",
+		`/usr/bin/base64 -d f > out.bin`,
+		// 函数体把位置参数送进 shell、解释器的标准输入：代入后调用处的词是脚本、代码
+		`f(){ echo "$1" | sh; }; f '$b aWQ= | $c'`,
+		`f(){ echo "$@" | sudo bash; }; f '$b aWQ= | $c'`,
+		`f(){ { printf '%s\n' "$1"; } | sh; }; f '$b aWQ= | $c'`,
+		`f(){ echo "$1" | python3; }; f 'exec(__import__("base64").b64decode("aWQ="))'`,
+		`f(){ python3 <<< "$1"; }; f 'exec(__import__("base64").b64decode("aWQ="))'`,
+		`f(){ sh <<< "$2"; }; f x '$b aWQ= | $c'`,
+		// 展开后同一个词既落在表里的程序上、又落在别处时按别处算
+		`f(){ echo "$1"; tmux new "$1"; }; f 'bash now'; echo aGk= | base64 -d`,
+		`f(){ for x in "$@"; do tmux new "$x"; done; echo "$@"; }; f 'bash now'; echo aGk= | base64 -d`,
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -386,7 +401,17 @@ func TestRevision7FalsePositivesAreReviewed(t *testing.T) {
 		`"$DIR"/base64 -d > out.bin`,
 		`ssh host '~/bin/tool --restart'`,
 		`ssh host '"$HOME"/bin/tool --restart'`,
-		`/usr/bin/base64 -d f > out.bin`,
+		`~/bin/base64 -d f > out.bin`,
+		`echo aGk= | base64 -d; "$DIR"/ls`,
+		// 调用同一命令里的函数、别名按展开后判断：落在表里程序的参数上的引号文本同样不算在运行
+		`log(){ echo "$@"; }; log "installing python"; echo aGk= | base64 -d`,
+		`alias g='git commit -m'; g "bump python"; echo aGk= | base64 -d`,
+		`f(){ echo "$1" | sh; }; f 'ls -l'`,
+		`f(){ echo "$1" | python3; }; f 'print(1)'`,
+		`f(){ python3 <<< "$1"; }; f 'print(1)'`,
+		`f(){ sh <<< "$1"; }; f 'ls -l'`,
+		`log(){ echo "[$(date)] $*"; }; log "installing python"; echo aGk= | base64 -d`,
+		`g(){ log "$@"; }; log(){ echo "$@"; }; g "use bash"; echo aGk= | base64 -d`,
 		`docker exec $c ls`,
 		`echo aGk= | base64 -d; docker run -e FOO=$BAR --name=$N img ls`,
 		`echo aGk= | base64 -d; kubectl exec $p -- ls`,
@@ -628,6 +653,17 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		"positional words near the cap": {
 			cmd: `f(){ x` + strings.Repeat(` "$@"`, MaxCommandBytes/2/len(` "$@"`)) + `; }; f` +
 				strings.Repeat(" a", (MaxCommandBytes/2-len(`f(){ x; }; f`))/len(" a")),
+		},
+		// here-string 里的位置参数按调用处代入：很多 here-string、调用时带很多词，代入的词数受预算限制，
+		// 用完后按命令名无法静态确定处理
+		"here-string positionals near the cap": {
+			cmd: `f(){ :` + strings.Repeat(`; sh <<< "$@"`, MaxCommandBytes/2/len(`; sh <<< "$@"`)) + `; }; f` +
+				strings.Repeat(" a", (MaxCommandBytes/2-len(`f(){ :; }; f`))/len(" a")),
+			want: true,
+		},
+		"inert positionals near the cap": {
+			cmd: `f(){ echo` + strings.Repeat(` "x$*"`, MaxCommandBytes/2/len(` "x$*"`)) + `; }; f` +
+				strings.Repeat(" a", (MaxCommandBytes/2-len(`f(){ echo; }; f`))/len(" a")),
 		},
 		"script positionals near the cap": {
 			cmd: `f(){ sh -c "$1"; }; ` + strings.Repeat(`f 'ls -l'; `, (MaxCommandBytes-len(`f(){ sh -c "$1"; }; `))/len(`f 'ls -l'; `)),
