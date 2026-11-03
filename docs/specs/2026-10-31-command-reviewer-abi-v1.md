@@ -1,6 +1,6 @@
 # 命令审核器与扩展设置迁到 hostABI 1.0：贡献点、宿主专用工具与依赖倒置
 
-> Status: Approved (revision 7, 2026-11-03)
+> Status: Approved (revision 8, 2026-11-03)
 > Owner: OpsKat 维护者
 > Last updated: 2026-11-03
 
@@ -69,6 +69,7 @@ PR #330 自己的两份规格：[辅助审批与 Autopilot](2026-09-29-assisted-
 | 25 | **[修正轮 7]** 路径命令名的动态部分没有引号时按无法静态确定处理；只有在双引号里或是 `~` 时才按最后一段判断 | [已核实] 修正轮 6 代码评审：`echo aWQ= \| $X/dev/stdin \| sh`（`X='base64 -d '`）不被认出，因为未加引号的 `$X` 会按空白拆开，第一段成了程序。代价：`ssh host '$HOME/bin/tool --restart'` 改为不送审（辅助审批问人），`~/bin/tool` 与 `"$HOME"/bin/tool` 照常送审。Rejected: 对 `$HOME` 开例外——同一命令里能给它赋值，要再认出所有赋值写法 |
 | 26 | **[修正轮 7]** 「不运行参数的程序」用一张允许表：表里程序的参数不算在运行；不在表里的程序带 shell / 解释器名或本命令写入的文件作参数算在运行；函数体里的位置参数按调用处代入 | [已核实] 修正轮 6 代码评审的误判：`… base64 -d; echo "use bash now"`、`ps aux \| grep python`、`git commit -m "bump python"`、`f(){ sudo "$@"; }; f ls`、`f(){ sh -c "$1"; }; f 'ls -l'` 都不送审；缺口：`tmux new ./a.sh`。列出「不运行」的程序，漏列只会多问一次；列出「会运行」的程序（修正轮 6 的包装表），漏列就放过。Rejected: 按参数是否像路径判断——`chmod +x a.sh` 也会不送审 |
 | 27 | **[修正轮 7]** 解释器代码里自行实现或拼接的解码列为已知限制，该判断不是安全边界 | [已核实] 修正轮 4～6 每轮代码评审都找到新写法；解释器代码能任意计算，静态认出其中的解码没有边界。审核器收到原命令、禁止规则照常生效。Rejected: 解释器代码一律不送审——Autopilot 下所有 `python3 -c` 都被拒 |
+| 28 | **[修正轮 8]** 表里程序的输出成为别的程序的参数（命令替换、`xargs` / `parallel`）时，它的参数按接收处判断；函数、别名的输出送进 shell 或解释器时调用处的词一律按脚本判断；安装命令的参数是本命令写入的文件或其所在目录时算在运行 | [已核实] 修正轮 7 代码评审：`tmux new "$(echo 'bash now')"`、`echo 'bash now' \| xargs tmux new` 与解码同在时送审（修正轮 6 不送审）；`f(){ cat <<< "$1"; }; f '…' \| sh`、heredoc 打印、`pip install ./dir`（写入的 `setup.py` 在目录里）、没有包扩展名的写入文件也送审。Rejected: 表里程序的输出一律不看——留下用 `echo` 中转的绕过口；函数体逐种打印方式认——下一种打印方式还会漏 |
 
 ## 安全契约（manifest）
 
@@ -135,6 +136,7 @@ manifest 与 describe 必须同时有或同时没有审核器；工具不存在�
    - 包装启动（`exec`、`xargs`、`find -exec`、`env`、`sudo`、`timeout`、`nice`、`watch`、`parallel`、`runuser`、`systemd-run`、`chroot`、`busybox` 等）按它实际要运行的程序判断：运行的是 shell、脚本解释器或无法静态确定的程序才算执行代码，运行的是解码器则算解码（如 `find … -exec base64 -d {} \;` 只解码、照常送审）；包装启动的选项与参数（如 `timeout $T`、`env FOO=$BAR`）不是命令名；作为参数出现的名字（如 `systemctl restart ssh` 里的服务名）不是在运行该程序（修正轮 6）。
    命令名无法静态确定时（变量如 `$b`、花括号展开如 `{ba,}se64`、通配如 `bas?64`）视同可能是解码，也可能是执行代码；它与解码、执行代码或另一个无法静态确定的命令名同时出现时不送审（修正轮 5、6，决定 24）。路径形式的命令名只有目录部分是动态的、且动态部分都在双引号里（如 `"$DIR"/base64`、`"$HOME"/bin/tool`）或是 `~` 时，按最后一段的字面名判断；动态部分没有引号时（如 `$X/dev/stdin`、`$HOME/bin/tool`）shell 会按空白拆开它，按命令名无法静态确定处理（修正轮 7，决定 25）。同一命令里定义的函数与别名按其内容判断：调用处视同把函数体或别名展开在那里（修正轮 6）；函数体里的位置参数（`$1`…、`"$@"`、`"$*"`）按调用处的词代入后判断，别名展开成包装启动时同样认出它交给 shell 的参数（修正轮 7）。
    **不运行参数的程序**（修正轮 7，决定 26）：宿主列出一张「不会把参数当作程序或脚本运行」的程序表（如 `grep`、`ps`、`echo`、`printf`、`cat`、`chmod`、`ls`、`apt`、`yum`、`pip`；多用途的程序按子命令列，如 `git commit`、`git log`，带有会运行命令的选项时不算）。表里程序的参数与其中的引号文本不当作在运行 shell、解释器或路径（如 `echo "use bash now"`、`ps aux | grep python`、`git commit -m "bump python"` 照常送审）。不在表里的程序，参数是 shell 或解释器的名字、或是同一命令里写入的文件（重定向、`tee`、`-o` 等）时算在运行它（如 `… base64 -d > a.sh; tmux new ./a.sh` 不送审，`chmod +x a.sh` 照常送审）。表只会让漏列的程序多问一次，不会放过。
+   **输出被当作参数或脚本**（修正轮 8，决定 28）：表里程序的参数只在它的输出不会成为别的程序的参数或脚本时才不算在运行。输出经命令替换成为另一个命令的词（`tmux new "$(echo 'bash now')"`），或经管道交给把标准输入当参数的包装启动（`| xargs …`、`| parallel …`）时，这些参数按出现在接收处判断；接收的是表里的程序（如 `grep "$(echo python)"`）仍不算在运行。同一命令里定义的函数与别名，调用处的输出经管道交给 shell 或解释器（如 `f '…' | sh`）时，调用处的词一律按脚本或代码判断，不看函数体怎样打印。安装命令（`apt` / `dpkg` / `pip` 等）的参数是同一命令里写入的文件、或包含它的目录时，算在运行它，不看扩展名。
    **容器里运行的程序**（修正轮 7）：`docker` / `podman` / `nerdctl` 的 `exec` / `run`、`kubectl exec` / `run` / `debug` 没有用 `--` 隔开程序时，子命令之后出现的动态词按命令名无法静态确定处理（如 `docker exec -i c $b`）。
    **已知限制**（修正轮 7，决定 27）：脚本解释器代码里自己实现或用字符串拼出的解码（如 `'b6'+'4decode'`、`getattr`、手写解码表）认不出。该判断用来挡住常见写法，不是安全边界：审核器收到的仍是原命令，禁止规则照常生效，判断不出时由审核器自己判断。
    命令解析不了时仍按 `Unreviewable` 处理（不变）。只解码不执行的命令（如 `kubectl get secret … | base64 -d`）照常送审；命令名动态但不执行代码的命令也照常送审。
@@ -197,7 +199,7 @@ manifest 与 describe 必须同时有或同时没有审核器；工具不存在�
 | manifest 与安装确认 | 两项新字段的解析、高风险与新增标注（Go 与前端） | `pkg/extmanifest`、`install_confirm` 与 `InstallConfirmDialog` 测试 |
 | 权限检查 × 审核端口 | 三种模式 × 通过 / 未通过 / 失败的结果矩阵、不送审的几类命令、端口未注入时按失败处理 | PR 的 `permission/review_test.go`（保留并改用端口替身） |
 | 审核服务 | 缓存、并发、重试、无效结果、`error` 不进缓存、经审核器来源取审核器 | PR 的 `command_review_svc/review_test.go` |
-| 「解码又执行」判断（修正轮 4～7） | 评审列出的各种解码又执行写法都判为不可审核；命令名动态（变量、花括号展开、通配）且解码或执行代码的也判为不可审核；修正轮 5、6 代码评审列出的缺口判为不可审核、列出的误判照常送审（`exec "$SHELL" -l` 仍不送审；`$X/dev/stdin`、`tmux new ./a.sh`、`docker exec -i c $b`、经别名的 `sudo -s` 不送审；`echo "use bash now"`、`ps aux \| grep python`、`git commit -m`、`f(){ sudo "$@"; }; f ls`、`chmod +x a.sh` 照常送审）；只解码不执行、命令名动态但不执行的常见命令照常送审；超长与深嵌套输入不崩溃、不卡住 | `shelldecode`（或改名后的包）测试、`permission/review_test.go` |
+| 「解码又执行」判断（修正轮 4～8） | 评审列出的各种解码又执行写法都判为不可审核；命令名动态（变量、花括号展开、通配）且解码或执行代码的也判为不可审核；修正轮 5、6 代码评审列出的缺口判为不可审核、列出的误判照常送审（`exec "$SHELL" -l` 仍不送审；`$X/dev/stdin`、`tmux new ./a.sh`、`docker exec -i c $b`、经别名的 `sudo -s` 不送审；`echo "use bash now"`、`ps aux \| grep python`、`git commit -m`、`f(){ sudo "$@"; }; f ls`、`chmod +x a.sh` 照常送审；修正轮 8：`tmux new "$(echo 'bash now')"`、`echo 'bash now' \| xargs tmux new`、`f '…' \| sh`（函数体用 `cat <<<` 或 heredoc 打印）、`pip install ./dir` 与解码同在时不送审，`grep "$(echo python)"` 照常送审）；只解码不执行、命令名动态但不执行的常见命令照常送审；超长与深嵌套输入不崩溃、不卡住 | `shelldecode`（或改名后的包）测试、`permission/review_test.go` |
 | 扩展设置服务 | 加密保存、留空保留、读回只显示已设置、扩展读不到明文、清除数据时删除 | PR 的 `extension_svc/settings_test.go` |
 | 资格与选择 | 来源与摘要、正式版 / 非正式版、自动选择唯一候选 | PR 的 `active_reviewer_test.go`、`provenance_test.go` |
 | 迁移 | 每个迁移可重复执行，开发库已跑过旧 ID 时仍补齐 | PR 的 `migration2026*_test.go` |
@@ -214,7 +216,7 @@ manifest 与 describe 必须同时有或同时没有审核器；工具不存在�
 - 密钥只发往设置里的服务地址（本机 mock 服务观察请求头）。
 - 真实 Jev：只读命令通过、危险命令未通过、错误 API key 按配置错误提示。
 - 修正轮 3、4：评审复现的命令在 Autopilot 下经 AI 与 opsctl 执行时，审核器（本机 mock 记录请求）收到的文本就是原命令；解码又执行的命令（含修正轮 4 评审列出的写法）不送审、Autopilot 拒绝；只解码不执行的命令照常送审；超长命令不卡住；安装确认与设置页的原样发送告知；Jev 未填 API key 时设置页与权限模式卡片提示未配置。
-- 修正轮 4～7：Autopilot 下经 opsctl 执行修正轮 4～7 评审列出的解码又执行写法被拒且审核器没收到请求；只解码不执行与 `echo "use bash now"` 一类误判照常送审；超过 16 KiB 的命令按过长不送审且不卡住。
+- 修正轮 4～8：Autopilot 下经 opsctl 执行修正轮 4～8 评审列出的解码又执行写法被拒且审核器没收到请求；只解码不执行与 `echo "use bash now"` 一类误判照常送审；超过 16 KiB 的命令按过长不送审且不卡住。
 
 ## Open questions
 
