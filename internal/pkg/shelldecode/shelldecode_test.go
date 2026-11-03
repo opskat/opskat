@@ -469,6 +469,51 @@ func TestRevision7CodeReviewGapsAreRefused(t *testing.T) {
 	}
 }
 
+// 修正轮 8（决定 28）：表里程序的输出经命令替换成为别的命令的词、或经管道交给 xargs、parallel 时，它的
+// 参数按接收处判断；函数、别名的调用输出送进 shell、解释器时，调用处的词按脚本、代码判断，不看函数体
+// 怎样打印；安装命令装同一命令里写入的文件或包含它的目录算在运行它。这些都不送审。
+func TestRevision8OutputLandsWhereItIsUsed(t *testing.T) {
+	cases := []string{
+		`tmux new "$(echo 'bash now')"; echo aGk= | base64 -d`,
+		"tmux new `echo bash`; echo aGk= | base64 -d",
+		`echo 'bash now' | xargs tmux new; echo aGk= | base64 -d`,
+		`printf 'bash\n' | parallel tmux new; echo aGk= | base64 -d`,
+		`f(){ tmux new "$(echo "$1")"; }; f 'bash now'; echo aGk= | base64 -d`,
+		`f(){ echo "$1" | xargs tmux new; }; f 'bash now'; echo aGk= | base64 -d`,
+		`f(){ echo "$1"; }; f 'bash now' | xargs tmux new; echo aGk= | base64 -d`,
+		`f(){ cat <<< "$1"; }; f 'echo aWQ= | $b | sh' | sh`,
+		"f(){ cat <<EOF\n$1\nEOF\n}; f 'echo aWQ= | $b | sh' | sh",
+		`alias p='cat <<<'; p 'exec(__import__("base64").b64decode("aWQ="))' | python3`,
+		`f(){ cat <<< "$1"; }; f 'exec(__import__("base64").b64decode("aWQ="))' | python3`,
+		`f(){ printf '%s' "$1"; }; f 'exec(__import__("base64").b64decode("aWQ="))' | python3`,
+		`echo aWQ= | base64 -d > d/setup.py; pip install ./d`,
+		`echo aWQ= | base64 -d > pkg; dpkg -i pkg`,
+		`echo aWQ= | base64 -d > pkg.bin; apt install ./pkg.bin`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
+	reviewed := []string{
+		`grep "$(echo python)" f; echo aGk= | base64 -d`,
+		`echo python | xargs grep -l; echo aGk= | base64 -d`,
+		`f(){ cat <<< "$1"; }; f 'ls -l' | sh`,
+		`pip install requests; echo aGk= | base64 -d`,
+		`apt install -y python3; echo aGk= | base64 -d`,
+		`echo aGk= | base64 -d > out.txt; cat out.txt`,
+	}
+	for _, cmd := range reviewed {
+		t.Run(cmd, func(t *testing.T) {
+			got, err := DecodesAndRuns(cmd)
+			require.NoError(t, err)
+			assert.False(t, got)
+		})
+	}
+}
+
 // env -S 的字符串由 env 拆开运行，合在选项里（-Ssh、--split-string=sh）同样认得出；合在一起的短选项
 // 里让包装运行 shell 的选项（flock -nc）同样认得出（修正轮 6 代码评审）。
 func TestSplitStringsAndGroupedOptions(t *testing.T) {
@@ -675,6 +720,8 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		"many -exec after wrappers":         {cmd: "find ." + strings.Repeat(" -exec sudo", (MaxCommandBytes-len("find ."))/len(" -exec sudo"))},
 		"eval of many words near the cap":   {cmd: "eval" + strings.Repeat(" $b -d", (MaxCommandBytes-len("eval"))/len(" $b -d")), want: true},
 		"pipes into sh nested near the cap": {cmd: deepest("(echo 'a b' | ", " | sh)")},
+		// 输出经 xargs 成为参数（决定 28）：串起来的 xargs 链每段只按最近的接收处记一次
+		"xargs chain near the cap": {cmd: "echo 'bash now'" + strings.Repeat(" | xargs tmux new", (MaxCommandBytes-len("echo 'bash now'")-len("; echo aGk= | base64 -d"))/len(" | xargs tmux new")) + "; echo aGk= | base64 -d", want: true},
 		"functions near the cap": {
 			cmd:  strings.Repeat("f(){ $1 -d; }; f base64; ", (MaxCommandBytes-len("sh"))/len("f(){ $1 -d; }; f base64; ")) + "sh",
 			want: true,
