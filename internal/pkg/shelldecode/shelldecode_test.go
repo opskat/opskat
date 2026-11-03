@@ -489,6 +489,23 @@ func TestRevision8OutputLandsWhereItIsUsed(t *testing.T) {
 		`echo aWQ= | base64 -d > d/setup.py; pip install ./d`,
 		`echo aWQ= | base64 -d > pkg; dpkg -i pkg`,
 		`echo aWQ= | base64 -d > pkg.bin; apt install ./pkg.bin`,
+		// 接收处按拆开后的参数判断：xargs 按空白拆开输出，tmux new "x bash" 本身也不送审
+		`tmux new "$(echo 'x bash')"; echo aGk= | base64 -d`,
+		`echo 'x bash' | xargs tmux new; echo aGk= | base64 -d`,
+		`printf 'x\nbash\n' | xargs tmux new; echo aGk= | base64 -d`,
+		// 表里程序的输出又成为表里程序的词、再到接收处
+		`tmux new "$(echo "$(echo bash)")"; echo aGk= | base64 -d`,
+		// 包装链里的 xargs 同样把标准输入当参数
+		`echo bash | sudo xargs tmux new; echo aGk= | base64 -d`,
+		`echo bash | timeout 5 xargs tmux new; echo aGk= | base64 -d`,
+		// 当前目录、不带 / 的目录与文件同样是写入的文件或包含它的目录
+		`echo aWQ= | base64 -d > setup.py; pip install .`,
+		`echo aWQ= | base64 -d > setup.py; pip install -e .`,
+		`echo aWQ= | base64 -d > d/setup.py; pip install d`,
+		`echo aWQ= | base64 -d > req.txt; pip install -r req.txt`,
+		`echo aWQ= | base64 -d > d/setup.py; pip install "$PWD"/d`,
+		`echo aWQ= | base64 -d > d/package.json; npm install ./d`,
+		`f(){ tmux new "$1"; }; f "$(echo bash)"; echo aGk= | base64 -d`,
 	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
@@ -504,6 +521,12 @@ func TestRevision8OutputLandsWhereItIsUsed(t *testing.T) {
 		`pip install requests; echo aGk= | base64 -d`,
 		`apt install -y python3; echo aGk= | base64 -d`,
 		`echo aGk= | base64 -d > out.txt; cat out.txt`,
+		// 接收处是只把参数交给表里程序的函数、别名：和 log python 一样不算在运行
+		`log(){ echo "$@"; }; log "$(echo python)"; echo aGk= | base64 -d`,
+		`alias l='echo'; l "$(echo python)"; echo aGk= | base64 -d`,
+		// 输出里的字面 $_ 不是占位
+		`tmux new "$(echo '$_')"; echo aGk= | base64 -d`,
+		`echo '$_' | xargs tmux new; echo aGk= | base64 -d`,
 	}
 	for _, cmd := range reviewed {
 		t.Run(cmd, func(t *testing.T) {
@@ -720,6 +743,10 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		"many -exec after wrappers":         {cmd: "find ." + strings.Repeat(" -exec sudo", (MaxCommandBytes-len("find ."))/len(" -exec sudo"))},
 		"eval of many words near the cap":   {cmd: "eval" + strings.Repeat(" $b -d", (MaxCommandBytes-len("eval"))/len(" $b -d")), want: true},
 		"pipes into sh nested near the cap": {cmd: deepest("(echo 'a b' | ", " | sh)")},
+		// 表里程序的输出层层成为表里程序的词、最后到接收处（决定 28）：每层只加上外层的接收处一次
+		"printers nested in a receiver near the cap": {
+			cmd: `tmux new ` + nested((MaxCommandBytes-len(`tmux new ; echo aGk= | base64 -d`)-1)/len(`"$(echo )"`), `"$(echo `, `)"`) + "; echo aGk= | base64 -d",
+		},
 		// 输出经 xargs 成为参数（决定 28）：串起来的 xargs 链每段只按最近的接收处记一次
 		"xargs chain near the cap": {cmd: "echo 'bash now'" + strings.Repeat(" | xargs tmux new", (MaxCommandBytes-len("echo 'bash now'")-len("; echo aGk= | base64 -d"))/len(" | xargs tmux new")) + "; echo aGk= | base64 -d", want: true},
 		"functions near the cap": {
