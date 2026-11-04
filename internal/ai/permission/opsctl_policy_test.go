@@ -107,7 +107,7 @@ func TestSSHCheckPermissionHintRules(t *testing.T) {
 					AllowList: []string{"ls *", "cat *", "systemctl status *"},
 				}),
 			}
-			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil)
+			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes() // 需要确认时还要读一次权限模式
 
 			result := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, "systemctl restart nginx")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
@@ -137,7 +137,7 @@ func TestSSHCheckPermissionHintRules(t *testing.T) {
 				ID:   1,
 				Type: asset_entity.AssetTypeSSH,
 			}
-			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil)
+			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes() // 需要确认时还要读一次权限模式
 
 			result := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, "ls -la")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)

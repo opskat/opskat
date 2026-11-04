@@ -516,6 +516,7 @@ export function AssetTree({
       group={group}
       t={t}
       onAddAsset={onAddAsset}
+      onGroupDetail={onGroupDetail}
       onEditGroup={onEditGroup}
       onMoveGroup={handleMoveGroup}
       onDeleteGroup={handleDeleteGroup}
@@ -789,6 +790,7 @@ function GroupContextMenuContent({
   group,
   t,
   onAddAsset,
+  onGroupDetail,
   onEditGroup,
   onMoveGroup,
   onDeleteGroup,
@@ -797,6 +799,7 @@ function GroupContextMenuContent({
   group: group_entity.Group;
   t: (key: string) => string;
   onAddAsset: (groupId: number) => void;
+  onGroupDetail: (group: group_entity.Group) => void;
   onEditGroup: (group: group_entity.Group) => void;
   onMoveGroup: (id: number, direction: string) => void;
   onDeleteGroup: (id: number) => void;
@@ -815,6 +818,10 @@ function GroupContextMenuContent({
         {t("asset.addAsset")}
       </ContextMenuItem>
       <ContextMenuSeparator />
+      <ContextMenuItem disabled={isUngrouped} onClick={() => run(() => onGroupDetail(group))}>
+        <Eye className="h-3.5 w-3.5 mr-1.5" />
+        {t("asset.groupDetailTitle")}
+      </ContextMenuItem>
       <ContextMenuItem disabled={isUngrouped} onClick={() => run(() => onEditGroup(group))}>
         <Settings2 className="h-3.5 w-3.5 mr-1.5" />
         {t("asset.editGroupSettings")}

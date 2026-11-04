@@ -69,7 +69,7 @@ func TestAssetDialerAppliesDeclaredSSHTunnel(t *testing.T) {
 		asset_repo.RegisterAsset(assets)
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
-		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc := New(nil, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{SSHTunnel: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
 		ctx := context.Background()
@@ -141,7 +141,7 @@ func TestAssetDialerAppliesDeclaredProxyChain(t *testing.T) {
 		asset_repo.RegisterAsset(assets)
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
-		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc := New(nil, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{ProxyChain: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", &extwire.Connection{SSHTunnel: true}))
 		ctx := context.Background()
@@ -218,7 +218,7 @@ func TestAssetDialerAppliesDeclaredTLS(t *testing.T) {
 		asset_repo.RegisterAsset(assets)
 		Reset(func() { asset_repo.RegisterAsset(prev) })
 
-		svc := New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+		svc := New(nil, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 		svc.Bridge().Register(connectionExt("es", "es-cluster", &extwire.Connection{TLS: true}))
 		svc.Bridge().Register(connectionExt("plain", "plain-store", nil))
 		ctx := context.Background()

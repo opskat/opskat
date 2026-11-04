@@ -17,6 +17,10 @@ const (
 	SourceUserDeny    = "user_deny"    // 用户手动拒绝
 	SourceGrantAllow  = "grant_allow"  // Grant 预批准匹配放行
 	SourceGrantDeny   = "grant_deny"   // Grant 权限申请被拒绝
+
+	SourceAssistedAllow  = "assisted_allow"  // 辅助审批：模型审核通过，自动放行
+	SourceAutopilotAllow = "autopilot_allow" // Autopilot：模型审核通过，自动放行
+	SourceAutopilotDeny  = "autopilot_deny"  // Autopilot：模型审核未通过或审核失败，直接拒绝
 )
 
 // 统一 exec 的短路来源：命令在触达权限检查之前就已经确定不会执行。
@@ -44,10 +48,14 @@ const (
 // CheckResult 权限检查结果
 type CheckResult struct {
 	Decision       Decision
-	Message        string   // 返回给 AI 的消息
-	HintRules      []string // 拒绝时的允许规则提示
-	DecisionSource string   // 决策来源（SourcePolicyAllow 等常量）
-	MatchedPattern string   // 匹配的命令模式
+	Message        string      // 返回给 AI 的消息
+	HintRules      []string    // 拒绝时的允许规则提示
+	DecisionSource string      // 决策来源（SourcePolicyAllow 等常量）
+	MatchedPattern string      // 匹配的命令模式
+	Review         *ReviewInfo // 模型审核结果；没有审核时为 nil
+	// Unreviewable 表示这条"需要人确认"只能由人判断，不交给模型审核：规则没法逐条检查它
+	// （如拆不出执行单元的 shell 命令），模型放行它就等于绕过了禁止规则。
+	Unreviewable bool
 }
 
 // DecisionString 返回决策的字符串表示（用于审计日志存储）

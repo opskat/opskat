@@ -59,9 +59,9 @@ type AuthBinding struct {
 	Value string `json:"value"`
 }
 
-// authDef reads a wire auth declaration (extwire.Auth, decoded strictly) into the
+// AuthDefOf reads a wire auth declaration (extwire.Auth, decoded strictly) into the
 // host's AuthDef; nil stays nil.
-func authDef(a *extwire.Auth) *AuthDef {
+func AuthDefOf(a *extwire.Auth) *AuthDef {
 	if a == nil {
 		return nil
 	}

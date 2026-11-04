@@ -231,6 +231,13 @@ func init() {
 		return map[string]any{"config": json.RawMessage(cfg), "asset": ctx.Asset}, nil
 	}).Policy("read")
 
+	// scope_config reads the config of the call's scope (host call config.get):
+	// in a call without an asset, what the host lets the extension read of its
+	// settings.
+	opskat.Tool("scope_config", func(ctx *opskat.ToolContext, _ noArgs) (any, error) {
+		return ctx.Settings()
+	}).Policy("read")
+
 	// typed_config decodes the asset config into the same struct AssetType
 	// reflected the form from, the way an extension actually consumes it, and
 	// reports what the password field carried.
@@ -308,6 +315,15 @@ func init() {
 	opskat.Tool("blob", func(_ *opskat.ToolContext, args blobArgs) (any, error) {
 		return map[string]any{"data": strings.Repeat("x", args.Bytes)}, nil
 	}).Policy("read")
+
+	// The host-only tools are called by host subsystems (extreg.CallHostTool), never
+	// through exec nor from a page. host_spin has a 3s limit a caller may only shorten.
+	opskat.Tool("host_echo", func(ctx *opskat.ToolContext, args echoArgs) (any, error) {
+		return map[string]any{"tool": ctx.Tool, "args": args}, nil
+	}).HostOnly()
+	opskat.Tool("host_spin", func(_ *opskat.ToolContext, args spinArgs) (any, error) {
+		return spin(args.MS), nil
+	}).HostOnly().Timeout(3 * time.Second)
 
 	// The page-only tools below are what used to be actions: called only by the
 	// extension's own page, with no timeout of their own — the caller decides how

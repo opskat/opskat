@@ -55,8 +55,9 @@ func (e *Extension) GetExtensionManifest(name string) (*extreg.Manifest, error) 
 // is still scoped to its asset (ctx.AssetConfig, endpoint gating, connection
 // settings and credential injection all follow the AssetRef) and its arguments are
 // held to the tool's declared schema, as Plugin.CallTool does not check them. A
-// page may call any tool of its extension, page-only or not; it runs under the
-// tool's declared timeout, or none for a page-only tool declaring NoTimeout.
+// page may call any tool of its extension, page-only or not, except a host-only
+// one (refused, naming it); it runs under the tool's declared timeout, or none
+// for a page-only tool declaring NoTimeout.
 //
 // invocationID is the frontend's per-call correlation token, minted there because
 // the page needs it before the call returns: every event the tool emits reaches
@@ -80,11 +81,12 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
+	langCtx := i18n.Ctx(e.ctx, e.lang.Lang())
 	args := []byte(argsJSON)
 	if argsJSON == "" {
 		args = []byte("{}")
 	}
-	args, err = extreg.ValidateToolArgs(view, tool, args)
+	args, err = extreg.ValidateToolArgs(langCtx, view, tool, args)
 	if err != nil {
 		return "", err
 	}
@@ -93,7 +95,7 @@ func (e *Extension) CallExtensionTool(extName, tool, argsJSON, invocationID stri
 	if err != nil {
 		return "", err
 	}
-	ctx, end, err := e.toolCalls.begin(i18n.Ctx(e.ctx, e.lang.Lang()), extName, invocationID, ext.Plugin.CancelTool)
+	ctx, end, err := e.toolCalls.begin(langCtx, extName, invocationID, ext.Plugin.CancelTool)
 	if err != nil {
 		return "", err
 	}
@@ -307,14 +309,15 @@ func (e *Extension) ReloadExtensions() error {
 //
 // The path itself is deliberately the same one the "install from directory"
 // button takes — one install implementation, so a dev build cannot load through
-// a laxer route than a shipped one. Only where the confirm is shown differs:
+// a laxer route than a shipped one. Only the recorded install source (dev) and
+// where the confirm is shown differ:
 // confirm is `opsctl ext dev`'s approval dialog instead of the app-wide install
 // confirm, and the commit re-checks the installed version it approved.
 func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string, confirm extension_svc.ConfirmInstallFunc) (string, string, error) {
 	if e.service == nil {
 		return "", "", fmt.Errorf("extension system not initialized")
 	}
-	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, confirm)
+	manifest, err := e.service.InstallDev(i18n.Ctx(ctx, e.lang.Lang()), sourceDir, confirm)
 	if err != nil {
 		return "", "", err
 	}

@@ -68,7 +68,7 @@ export interface ExtToolDef {
   /**
    * The fixed policy action this tool requests; declared at the tool's registration in
    * the guest. Absent for a tool that classifies each call from its arguments, and for
-   * a page-only tool, which requests none.
+   * a page-only or host-only tool, which request none (a page cannot call a host-only tool).
    */
   policyAction?: string;
 }
@@ -128,7 +128,7 @@ export interface ExtCallOptions {
 }
 
 // The page API: calling a tool is the one entry point, canceling is its signal.
-// A page may call any tool of its own extension, page-only or not.
+// A page may call any tool of its own extension, page-only or not, except a host-only one.
 export interface ExtAPI {
   callTool(extName: string, tool: string, args: unknown, assetId?: number, options?: ExtCallOptions): Promise<unknown>;
 }

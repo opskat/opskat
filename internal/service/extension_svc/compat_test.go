@@ -39,7 +39,7 @@ func sourceWithManifest(t *testing.T, manifest string) string {
 func TestInstallRejectsIncompatibleExtension(t *testing.T) {
 	useApp(t, appversion.Info{Version: "1.5.0", Kind: appversion.KindRelease})
 	extDir := t.TempDir()
-	svc := New(newTestManager(extDir), nil, nil, nil, nil, nil, nil)
+	svc := New(newTestManager(extDir), nil, nil, nil, nil, nil, nil, nil)
 
 	cases := []struct {
 		name, manifest string
@@ -103,7 +103,7 @@ func TestListInstalledShowsExtensionsTheHostRefuses(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	stateRepo := mock_extension_state_repo.NewMockExtensionStateRepo(ctrl)
 	stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
-	svc := New(newTestManager(dir), stateRepo, nil, nil, zap.NewNop(), nil, nil)
+	svc := New(newTestManager(dir), stateRepo, nil, nil, nil, zap.NewNop(), nil, nil)
 	t.Cleanup(func() { closeService(context.Background(), svc) })
 	require.NoError(t, svc.Init(context.Background()))
 
@@ -162,7 +162,7 @@ func TestUninstallRemovesAnExtensionTheHostRefuses(t *testing.T) {
 	stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 	stateRepo.EXPECT().Delete(gomock.Any(), "ext-legacy").Return(nil)
 	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
-	svc := New(newTestManager(dir), stateRepo, nil, assets, zap.NewNop(), nil, nil)
+	svc := New(newTestManager(dir), stateRepo, nil, nil, assets, zap.NewNop(), nil, nil)
 	t.Cleanup(func() { closeService(context.Background(), svc) })
 	require.NoError(t, svc.Init(context.Background()))
 
@@ -183,7 +183,7 @@ func TestUninstallIsRefusedWhenItsAssetsCannotBeCounted(t *testing.T) {
 	stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
 	assets.EXPECT().CountByTypes(gomock.Any(), []string{"ext-a"}).Return(int64(0), errors.New("database is locked"))
-	svc := New(newTestManager(dir), stateRepo, nil, assets, zap.NewNop(), nil, nil)
+	svc := New(newTestManager(dir), stateRepo, nil, nil, assets, zap.NewNop(), nil, nil)
 	t.Cleanup(func() { closeService(context.Background(), svc) })
 	require.NoError(t, svc.Init(context.Background()))
 

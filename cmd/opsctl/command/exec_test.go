@@ -209,7 +209,7 @@ func setupOpsctlExecAssets(t *testing.T) *opsctlExecTestEnv {
 	}
 
 	origStream := execSSHStreamFn
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ io.Reader, _ ApprovalResult) int {
 		env.sshStreamCalls++
 		env.sshAuditSources = append(env.sshAuditSources, aictx.GetAuditSource(auditCtx))
 		return 0
@@ -300,7 +300,7 @@ func TestCmdExec_DeniedApprovalAuditSourceIsOpsctl(t *testing.T) {
 func TestCmdExec_SSHRemoteFailureAuditSourceIsOpsctl(t *testing.T) {
 	env := setupOpsctlExec(t)
 	env.approvalDecision = "allow"
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, _ io.Reader, result ApprovalResult) int {
 		writeOpsctlAudit(auditCtx, "exec", `{"asset_id":2,"command":"review"}`, "", errors.New("remote failure"), result.ToCheckResult())
 		return 1
 	}
@@ -572,7 +572,7 @@ func TestCmdExec_OSSDeniedAuditCommandIsCanonical(t *testing.T) {
 func TestCmdExec_SSHAuditCommandStaysRaw(t *testing.T) {
 	env := setupOpsctlExec(t)
 	env.approvalDecision = "allow"
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, _ io.Reader, result ApprovalResult) int {
 		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, command)
 		writeOpsctlAudit(auditCtx, "exec", argsJSON, `{"exit_code":0}`, nil, result.ToCheckResult())
 		return 0
@@ -1057,7 +1057,7 @@ func TestExecSSHStreaming_ThroughMFAHopAnswersEachHostInDialOrder(t *testing.T) 
 	ctx := withMFACode(context.Background(), "123456")
 	var code int
 	stdout := captureStdout(t, func() {
-		code = execSSHStreaming(ctx, ctx, targetAsset, "uptime", ApprovalResult{})
+		code = execSSHStreaming(ctx, ctx, targetAsset, "uptime", nil, ApprovalResult{})
 	})
 
 	require.Equal(t, 0, code)

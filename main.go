@@ -40,7 +40,9 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
 	"github.com/opskat/opskat/internal/service/extstore_svc"
@@ -424,12 +426,13 @@ func initExtensionSystem(
 		// is gone, the cache must be dropped instead of reused on the next open.
 		extension.RegisterHTTPCacheInvalidator(extName, provider)
 		return provider
-	}, extpkg.NewContributionRegistry(extreg.Points()...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
+	}, extpkg.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint(), reviewerreg.Default().Point())...), logger.Default()) // opsctl 注册同一组贡献点（cmd/opsctl/command/ext.go）
 
 	extSvc = extension_svc.New(
 		mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
+		extension_settings_repo.ExtensionSettings(),
 		asset_repo.Asset(),
 		logger.Default(),
 		func() { wailsRuntime.EventsEmit(wctx, "ext:reload", nil) },
@@ -440,6 +443,12 @@ func initExtensionSystem(
 	// opsctl 在激活扩展时）。必须在任何扩展加载之前接好——extreg 加载期一遇到声明了
 	// 处理器的类型就要拿它建 tester。
 	extreg.SetConnTestRegistrar(extSvc.ConnTestRegistrar())
+	// 审核缓存按审核器扩展的设置哈希区分：同样在任何扩展加载之前接好。审核器注册表按
+	// 扩展管理给出的安装来源与包摘要判断审核器能不能用，按设置读取视图判断它的必填设置
+	// 填没填完（opsctl 在 cmd/opsctl/command 里接同样三项，另加按需激活）。
+	reviewerreg.Default().SetSettingsHasher(extSvc.SettingsHash)
+	reviewerreg.Default().SetProvenance(extSvc.Provenance)
+	reviewerreg.Default().SetSettingsReader(extSvc.SettingsView)
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)

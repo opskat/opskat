@@ -189,6 +189,9 @@ type scopedHost struct {
 }
 
 func (h *scopedHost) resolveScope(ctx context.Context, a *AssetRef) (*Scope, error) {
+	if a == nil {
+		return &Scope{}, nil
+	}
 	return h.scopes(ctx, "fixture-ext", *a)
 }
 

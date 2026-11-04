@@ -27,9 +27,13 @@ type invocation struct {
 	// the only asset whose config the guest may read: the id is the host's, never
 	// the guest's.
 	asset *AssetRef
+	// scoped marks a call the host scopes (scopedTo: a tool call, a test
+	// connection), whose scope is resolved even when it has no asset. Any other
+	// call (describe, check_policy, validate_config, Invoke) has the empty scope.
+	scoped bool
 
 	// scope is what the call may reach (see Scope): bound when the call starts
-	// (bindScope) or resolved on its first network or ticket host call
+	// (bindScope) or resolved on its first network, ticket or config host call
 	// (scopeOf), and kept for the rest of the call — a resolution error too.
 	scopeMu  sync.Mutex
 	scope    *Scope
@@ -70,10 +74,11 @@ func newInvocation(id string, cancel *toolCancellation) *invocation {
 	return &invocation{id: id, io: NewIOHandleManager(), cancel: cancel}
 }
 
-// scopedTo records the asset the host scoped this call to. Its scope is
-// resolved when the call first needs it.
+// scopedTo records the asset the host scoped this call to — nil for a call it
+// scopes without one. Its scope is resolved when the call first needs it.
 func (inv *invocation) scopedTo(asset *AssetRef) *invocation {
 	inv.asset = asset
+	inv.scoped = true
 	return inv
 }
 
@@ -96,8 +101,9 @@ func (inv *invocation) boundScope() *Scope {
 }
 
 // scopeOf returns the call's scope, resolving it with resolve the first time it
-// is needed. A call with no asset has an empty scope: nothing to reach but the
-// allowlist. A resolver's scope may not restrict ops (Scope.Ops).
+// is needed — for a call the host scoped without an asset too (asset nil). A call
+// the host never scoped has an empty scope: nothing to reach but the allowlist,
+// no config. A resolver's scope may not restrict ops (Scope.Ops).
 func (inv *invocation) scopeOf(resolve func(*AssetRef) (*Scope, error)) (*Scope, error) {
 	inv.scopeMu.Lock()
 	defer inv.scopeMu.Unlock()
@@ -105,7 +111,7 @@ func (inv *invocation) scopeOf(resolve func(*AssetRef) (*Scope, error)) (*Scope,
 		return inv.scope, inv.scopeErr
 	}
 	inv.resolved = true
-	if inv.asset == nil {
+	if !inv.scoped {
 		inv.scope = &Scope{}
 		return inv.scope, nil
 	}
@@ -114,7 +120,7 @@ func (inv *invocation) scopeOf(resolve func(*AssetRef) (*Scope, error)) (*Scope,
 	case err != nil:
 		inv.scopeErr = err
 	case scope.Ops != nil:
-		inv.scopeErr = fmt.Errorf("scope of asset %s: a resolved scope may not restrict host calls", assetLabel(inv.asset))
+		inv.scopeErr = fmt.Errorf("scope of %s: a resolved scope may not restrict host calls", scopeOwner(inv.asset))
 	default:
 		// The call is the host's to scope: whatever the resolver echoed, its
 		// asset is the one the call was scoped to (an ad-hoc config included).
@@ -192,4 +198,22 @@ func assetLabel(a *AssetRef) string {
 		return fmt.Sprintf("%q", a.Name)
 	}
 	return fmt.Sprintf("#%d", a.ID)
+}
+
+// callLabel names whose scope a call has in an error: its asset's ("the asset
+// \"es-1\""), or, for a call with no asset, the call's own.
+func callLabel(a *AssetRef) string {
+	if a == nil {
+		return "this call's scope"
+	}
+	return "the asset " + assetLabel(a)
+}
+
+// scopeOwner names what a call's scope belongs to after "scope of",
+// "credentials of": its asset ("asset \"es-1\""), or the call itself.
+func scopeOwner(a *AssetRef) string {
+	if a == nil {
+		return "this call"
+	}
+	return "asset " + assetLabel(a)
 }

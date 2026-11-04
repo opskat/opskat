@@ -340,15 +340,15 @@ func TestCanonicalizeIsStableAndRejectsBadCommandsBeforeApproval(t *testing.T) {
 	require.True(t, ok)
 
 	asset := &asset_entity.Asset{ID: 1, Type: "acme-store"}
-	a, err := canon(asset, "list_objects --maxKeys=10 --bucket=prod")
+	a, err := canon(context.Background(), asset, "list_objects --maxKeys=10 --bucket=prod")
 	require.NoError(t, err)
-	b, err := canon(asset, "list_objects --bucket=prod --maxKeys=10")
+	b, err := canon(context.Background(), asset, "list_objects --bucket=prod --maxKeys=10")
 	require.NoError(t, err)
 	assert.Equal(t, a, b, "flag order must not change the policy/grant subject")
 
-	_, err = canon(asset, "list_objects --nope=1")
+	_, err = canon(context.Background(), asset, "list_objects --nope=1")
 	require.Error(t, err, "an undeclared flag must fail before the approval dialog")
-	_, err = canon(asset, "no_such_tool")
+	_, err = canon(context.Background(), asset, "no_such_tool")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list_objects")
 }
@@ -569,6 +569,13 @@ func withGrantFixturePolicyInGroup(t *testing.T, assetID int64, assetType string
 	t.Helper()
 	asset := &asset_entity.Asset{ID: assetID, Name: "acme-1", Type: assetType}
 	require.NoError(t, asset.SetCommandPolicy(cp))
+	return withGrantFixtureAsset(t, asset, group)
+}
+
+// withGrantFixtureAsset registers asset (and its group, if any) behind the repo mocks.
+func withGrantFixtureAsset(t *testing.T, asset *asset_entity.Asset, group *group_entity.Group) context.Context {
+	t.Helper()
+	assetID := asset.ID
 	if group != nil {
 		asset.GroupID = group.ID
 		ctrl := gomock.NewController(t)

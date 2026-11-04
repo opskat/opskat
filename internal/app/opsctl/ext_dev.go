@@ -227,6 +227,14 @@ func extDevGrantExplanation(kind, lang string) string {
 		return i18n.Pick(lang,
 			" —— 可以用资产里保存的 Kerberos 凭据申请票据",
 			" — may fetch Kerberos tickets with the Kerberos credentials stored in the asset")
+	case extension_svc.CapSettingsEndpoint:
+		return i18n.Pick(lang,
+			" —— 可以访问本扩展设置里填写的地址",
+			" — may reach the addresses typed into the extension's own settings")
+	case extension_svc.CapCommandReviewer:
+		return i18n.Pick(lang,
+			" —— 在辅助审批与 Autopilot 下，它的审核结论可以让命令不经人工确认就执行；送审的命令原样发给它，命令里的密码、密钥也不例外",
+			" — under assisted approval and Autopilot its verdict can let commands run without a human confirmation; commands are sent to it as-is, including any passwords or keys in them")
 	}
 	return ""
 }

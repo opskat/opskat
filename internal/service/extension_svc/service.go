@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/appversion"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
@@ -70,13 +71,14 @@ func NewExtensionInfo(m *extension.Manifest, tr func(key string) string, enabled
 
 // Service manages the extension lifecycle: init, reload, enable/disable, install/uninstall.
 type Service struct {
-	manager     *extension.Manager
-	bridge      *extension.Bridge
-	stateRepo   extension_state_repo.ExtensionStateRepo
-	dataRepo    extension_data_repo.ExtensionDataRepo
-	assetRepo   asset_repo.AssetRepo
-	snippetHook SnippetExtensionHook
-	logger      *zap.Logger
+	manager      *extension.Manager
+	bridge       *extension.Bridge
+	stateRepo    extension_state_repo.ExtensionStateRepo
+	dataRepo     extension_data_repo.ExtensionDataRepo
+	settingsRepo extension_settings_repo.ExtensionSettingsRepo
+	assetRepo    asset_repo.AssetRepo
+	snippetHook  SnippetExtensionHook
+	logger       *zap.Logger
 
 	onReload func()
 
@@ -95,20 +97,22 @@ func New(
 	manager *extension.Manager,
 	stateRepo extension_state_repo.ExtensionStateRepo,
 	dataRepo extension_data_repo.ExtensionDataRepo,
+	settingsRepo extension_settings_repo.ExtensionSettingsRepo,
 	assetRepo asset_repo.AssetRepo,
 	logger *zap.Logger,
 	onReload func(),
 	snippetHook SnippetExtensionHook,
 ) *Service {
 	return &Service{
-		manager:     manager,
-		bridge:      extension.NewBridge(),
-		stateRepo:   stateRepo,
-		dataRepo:    dataRepo,
-		assetRepo:   assetRepo,
-		snippetHook: snippetHook,
-		logger:      logger,
-		onReload:    onReload,
+		manager:      manager,
+		bridge:       extension.NewBridge(),
+		stateRepo:    stateRepo,
+		dataRepo:     dataRepo,
+		settingsRepo: settingsRepo,
+		assetRepo:    assetRepo,
+		snippetHook:  snippetHook,
+		logger:       logger,
+		onReload:     onReload,
 	}
 }
 
@@ -237,8 +241,27 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 //
 // Every install is confirmed — by the app-wide install dialog, the store, or
 // `opsctl ext dev`'s approval dialog; there is no unconfirmed install.
+//
+// The install record (where the package came from and its digest) is written before
+// the swap and restored if anything after it refuses. Install records a local
+// install; InstallStorePackage and InstallDev record the other two sources.
 func (s *Service) Install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
-	staged, ask, err := s.stage(ctx, sourcePath)
+	return s.install(ctx, sourcePath, confirm, InstallOriginLocal)
+}
+
+// InstallStorePackage is Install for a package the store downloaded: a store package
+// is installed from a local file too, so its origin cannot be read off the path.
+func (s *Service) InstallStorePackage(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, confirm, InstallOriginStore)
+}
+
+// InstallDev is Install for `opsctl ext dev`.
+func (s *Service) InstallDev(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc) (*extension.Manifest, error) {
+	return s.install(ctx, sourcePath, confirm, InstallOriginDev)
+}
+
+func (s *Service) install(ctx context.Context, sourcePath string, confirm ConfirmInstallFunc, origin string) (*extension.Manifest, error) {
+	staged, ask, digest, err := s.stage(ctx, sourcePath)
 	if err != nil {
 		return nil, err
 	}
@@ -246,11 +269,12 @@ func (s *Service) Install(ctx context.Context, sourcePath string, confirm Confir
 		staged.Abort(ctx)
 		return nil, err
 	}
-	return s.commit(ctx, staged, ask)
+	return s.commit(ctx, staged, ask, origin, digest)
 }
 
-// stage runs step 1 of Install and describes the staged version for the confirm.
-func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.StagedInstall, InstallConfirm, error) {
+// stage runs step 1 of Install and describes the staged version for the confirm. It
+// also returns the package digest to record with the install.
+func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.StagedInstall, InstallConfirm, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -259,18 +283,23 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 	if err := extmanifest.CheckSourceCompatible(sourcePath, currentApp()); err != nil {
 		var inc *extmanifest.IncompatibleError
 		if errors.As(err, &inc) {
-			return nil, InstallConfirm{}, LocalizeIncompatible(ctx, inc)
+			return nil, InstallConfirm{}, "", LocalizeIncompatible(ctx, inc)
 		}
-		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
+		return nil, InstallConfirm{}, "", fmt.Errorf("install extension: %w", err)
 	}
 	source, size, err := localPackage(sourcePath)
 	if err != nil {
-		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
+		return nil, InstallConfirm{}, "", fmt.Errorf("install extension: %w", err)
 	}
 
 	staged, err := s.manager.Stage(ctx, sourcePath)
 	if err != nil {
-		return nil, InstallConfirm{}, fmt.Errorf("install extension: %w", err)
+		return nil, InstallConfirm{}, "", fmt.Errorf("install extension: %w", err)
+	}
+	digest, err := PackageSHA256(staged.Dir()) // the files Commit moves into place
+	if err != nil {
+		staged.Abort(ctx)
+		return nil, InstallConfirm{}, "", fmt.Errorf("install extension: %w", err)
 	}
 	ext := staged.Extension()
 	manifest := staged.Manifest()
@@ -284,11 +313,12 @@ func (s *Service) stage(ctx context.Context, sourcePath string) (*extension.Stag
 		Source:      source,
 		Size:        size,
 	})
-	return staged, ask, nil
+	return staged, ask, digest, nil
 }
 
-// commit runs steps 3–6 of Install. approved is what the user confirmed.
-func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved InstallConfirm) (*extension.Manifest, error) {
+// commit runs steps 3–6 of Install. approved is what the user confirmed; origin and
+// digest are the install record to write.
+func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, approved InstallConfirm, origin, digest string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	manifest := staged.Manifest()
@@ -322,6 +352,15 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 		}
 	}
 
+	// The install record (source, package digest) is written before anything is
+	// swapped: once the new version is in place a failed write could not be undone,
+	// leaving it running without a record — never eligible as a reviewer.
+	prevState, err := s.recordProvenance(ctx, manifest.Name, origin, digest)
+	if err != nil {
+		staged.Abort(ctx)
+		return nil, fmt.Errorf("install extension: %w", err)
+	}
+
 	// Registration is keyed by name and refuses a name it already holds, so the
 	// running version's entry has to go before the new one can be registered.
 	previous := s.bridge.Get(manifest.Name)
@@ -331,11 +370,13 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	if err := s.register(staged.Extension()); err != nil {
 		staged.Abort(ctx)
 		s.restoreRegistration(previous)
+		s.restoreState(ctx, manifest.Name, prevState)
 		return nil, err
 	}
 	if err := staged.Commit(ctx); err != nil {
 		s.unregister(ctx, manifest.Name)
 		s.restoreRegistration(previous)
+		s.restoreState(ctx, manifest.Name, prevState)
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
 
@@ -352,7 +393,6 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	}
 
 	s.clearLoadFailure(manifest.Name)
-	s.ensureState(ctx, manifest.Name, true)
 	s.notifyReload()
 	return manifest, nil
 }
@@ -516,6 +556,9 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 	if cleanData {
 		if err := s.dataRepo.DeleteAll(ctx, name); err != nil {
 			s.logger.Warn("delete extension data", zap.String("name", name), zap.Error(err))
+		}
+		if err := s.settingsRepo.Delete(ctx, name); err != nil {
+			s.logger.Warn("delete extension settings", zap.String("name", name), zap.Error(err))
 		}
 	}
 

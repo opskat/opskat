@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
 )
@@ -55,7 +56,7 @@ func TestHandleBatchApprovalShowsTheExtensionItems(t *testing.T) {
 	require.Equal(t, extSingleCommand, ext["command"])
 	require.Equal(t, map[string]any{
 		"type": "exec", "asset_id": int64(7), "asset_name": "web-01", "command": "uptime", "detail": "",
-		"action": "", "resource": "", "resources": []string(nil),
+		"action": "", "resource": "", "resources": []string(nil), "review": (*aictx.ReviewInfo)(nil),
 	}, builtin)
 }
 

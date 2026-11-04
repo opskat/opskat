@@ -21,5 +21,6 @@ func AcceptingContributions() *extension.ContributionRegistry {
 	return extension.NewContributionRegistry(
 		passPoint(extwire.KeyAssetTypes), passPoint(extwire.KeyTools), passPoint(extwire.KeyPolicy),
 		passPoint(extwire.KeySnippets), passPoint(extwire.KeyPages), passPoint(extwire.KeyDatabaseDrivers),
+		passPoint(extwire.KeySettings), passPoint(extwire.KeyCommandReviewer),
 	)
 }

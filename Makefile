@@ -86,7 +86,8 @@ build-ext:
 	@rm -rf extensions/$(EXT)/dist
 	@mkdir -p extensions/$(EXT)/dist
 	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o extensions/$(EXT)/dist/main.wasm ./extensions/$(EXT)
-	@cp extensions/$(EXT)/manifest.json extensions/$(EXT)/SKILL.md extensions/$(EXT)/dist/
+	@cp extensions/$(EXT)/manifest.json extensions/$(EXT)/dist/
+	@[ -f extensions/$(EXT)/SKILL.md ] && cp extensions/$(EXT)/SKILL.md extensions/$(EXT)/dist/ || true
 	@cp -R extensions/$(EXT)/locales extensions/$(EXT)/dist/
 	@[ -d extensions/$(EXT)/frontend ] && cp -R extensions/$(EXT)/frontend/. extensions/$(EXT)/dist/ || true
 	@echo "Built extensions/$(EXT)/dist — install it with: opsctl ext dev $(CURDIR)/extensions/$(EXT)/dist"

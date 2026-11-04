@@ -3225,7 +3225,8 @@
       "http": "访问网络",
       "allowPrivate": "访问内网",
       "assetRoute": "经资产连接路径访问",
-      "kerberos": "申请 Kerberos 票据"
+      "kerberos": "申请 Kerberos 票据",
+      "settingsEndpoint": "访问设置里的地址"
     },
     "installed": "已安装扩展",
     "noExtensions": "未安装扩展",
@@ -3251,8 +3252,24 @@
     "disableSuccess": "扩展已禁用",
     "detail": "详情",
     "credentialsReadWarning": "此扩展可以明文读取其资产中保存的全部密码（credentials: read），请确认你信任它的作者后再使用。",
+    "commandReviewerDisclosure": "送审的命令会原样发给这个审核器，命令里的密码、密钥也一并发出。",
+    "commandReviewWarning": "此扩展可以自动放行命令：它判定“通过”的命令，在辅助审批和 Autopilot 下会直接执行，不再询问你。只安装你信任的审核扩展。",
+    "settings": {
+      "title": "扩展设置",
+      "saved": "设置已保存",
+      "invalid": "部分设置有误，未保存",
+      "hiddenErrors": "以下设置当前未在表单中显示，但校验未通过：",
+      "error": {
+        "required": "必填",
+        "type": "值的类型不对",
+        "enum": "请从选项中选择",
+        "unknown": "不是此扩展的设置项"
+      },
+      "saveAndTest": "保存并测试"
+    },
     "assetRouteWarning": "此扩展可以沿资产的连接路径连到你没有填写的地址，例如数据库重定向的目标、集群节点、隧道后面的主机。请确认你信任它的作者后再使用。",
     "kerberosWarning": "此扩展可以用资产里保存的 Kerberos 凭据去申请票据，请确认你信任它的作者后再使用。",
+    "commandReviewerWarning": "此扩展充当命令审核器：在辅助审批和 Autopilot 下，它的审核结论可以让命令不经人工确认直接执行。请确认你信任它的作者后再使用。",
     "databaseDriversWarning": "此扩展提供数据库驱动：使用这些驱动的数据库资产，其连接口令与 TLS 客户端私钥会以明文交给扩展，请确认你信任它的作者后再使用。",
     "installConfirm": {
       "title": "安装扩展？",
@@ -3273,6 +3290,8 @@
       "databaseDriver": "提供数据库驱动",
       "assetRoute": "可经资产的连接路径连到任意地址",
       "kerberos": "可用资产里的 Kerberos 凭据申请票据",
+      "settingsEndpoint": "可访问你在它的设置里填写的地址",
+      "commandReviewer": "负责审核命令，辅助审批和 Autopilot 下可让命令不经人工确认就执行",
       "downgrade": "降级",
       "install": "安装",
       "update": "更新",
@@ -3290,6 +3309,7 @@
     "noTools": "无工具",
     "noPolicies": "无策略组",
     "noPages": "无页面",
+    "reviewQuestions": "审核项",
     "loadError": "加载扩展列表失败",
     "pageDisabled": "扩展 \"{{name}}\" 已禁用，在 设置 → 扩展 中重新启用后可继续使用此页面",
     "hostUi": {
@@ -3647,5 +3667,96 @@
       "error": "错误",
       "closed": "已断开"
     }
+  },
+  "commandReview": {
+    "withMode": "{{mode}} · {{summary}}",
+    "auditLabel": "模型审核",
+    "listSeparator": "、",
+    "summary": {
+      "pass": "模型审核通过",
+      "reject": "模型审核未通过（{{detail}}）",
+      "fail": "模型审核失败（{{detail}}）"
+    },
+    "reason": {
+      "not_configured": "命令审核器还没配置好",
+      "invalid_api_key": "命令审核器的 API key 无效",
+      "timeout": "超时",
+      "too_long": "命令过长",
+      "unparseable": "命令无法解析",
+      "undecodable": "命令把要执行的内容藏在解码后面",
+      "unavailable": "服务不可用",
+      "invalid_result": "命令审核器返回了无效结果",
+      "reviewer_unavailable": "要用的命令审核器不可用",
+      "no_reviewer": "没有可用的命令审核器"
+    },
+    "settings": {
+      "title": "命令审核",
+      "desc": "权限模式为辅助审批或 Autopilot 的资产，规则判断不了、原本要问人的命令会先交给扩展提供的命令审核器判断，只拦明确危险的操作。既要解码（如 base64）又要执行代码的命令，不会送去审核。",
+      "disclosure": "命令原样发给审核器，其中的密码、密钥也不例外。",
+      "timeout": "审核超时（毫秒）",
+      "timeoutHint": "每次调用命令审核器的超时；超时会自动重试一次",
+      "timeoutRange": "超时需在 {{min}}~{{max}} 毫秒之间",
+      "reviewer": "命令审核器",
+      "unsigned": "未经签名",
+      "configureReviewer": "在扩展详情里设置",
+      "reviewerUnusable": "{{name}} 现在不能使用：{{reason}}",
+      "unusableReason": {
+        "not_running": "扩展没有在运行",
+        "digest_mismatch": "扩展文件与安装时的包不一致",
+        "store_required": "正式版只能使用从商店安装的审核器",
+        "no_install_record": "没有安装来源记录，请重新安装",
+        "check_failed": "无法检查它能否使用，详见日志"
+      },
+      "reviewerSaved": "已切换命令审核器",
+      "save": "保存",
+      "saved": "命令审核设置已保存",
+      "lastFail": "最近一次审核失败：{{reason}}（{{time}}）",
+      "notice": "这是省事功能，不是安全防线：命令里故意写的误导文字可能影响判断，真正的底线仍然是禁止规则。",
+      "noReviewer": "还没有可用的命令审核器。到 设置 › 扩展 安装并启用一个提供审核器的扩展（例如「Jev 命令审核」）。在那之前，辅助审批会把这些命令全部转人工，Autopilot 会全部拒绝。",
+      "selectReviewer": "启用的扩展里有多个提供命令审核器，请选用其中一个。",
+      "notConfigured": "{{name}} 还没设置完：有必填项（比如 API key）没填。填好之前审核都会失败，辅助审批会把这些命令转人工，Autopilot 会直接拒绝。",
+      "openReviewerSettings": "去填写设置"
+    },
+    "mode": {
+      "title": "权限模式",
+      "desc": "规则判断不了、原本要问人的命令怎么处理",
+      "inheritOption": {
+        "asset": "沿用分组",
+        "group": "沿用上级分组"
+      },
+      "inheritFrom": {
+        "asset": "当前沿用「{{mode}}」，来自分组",
+        "group": "当前沿用「{{mode}}」，来自上级分组"
+      },
+      "inheritNone": {
+        "ungrouped": "资产未分组，按默认处理",
+        "asset": "所在分组及上级分组都没有设置，按默认处理。所在分组",
+        "top": "顶层分组没有上级可沿用，按默认处理",
+        "group": "上级分组都没有设置，按默认处理。上级分组"
+      },
+      "default": "默认",
+      "assisted": "辅助审批",
+      "autopilot": "Autopilot",
+      "defaultDesc": "问人，和原来一样",
+      "assistedDesc": "模型审核通过就自动执行，否则转人工确认",
+      "autopilotDesc": "模型审核通过就自动执行，否则直接拒绝并告诉调用方原因，不等人",
+      "confirmTitle": "开启{{mode}}？",
+      "confirmAssisted": "规则判断不了的命令会先交给审核模型，审核通过就自动执行，不再问你。审核未通过或审核失败时仍然问你。命令会原样发给设置里的审核服务，其中的密码、密钥也不例外。",
+      "confirmAutopilot": "规则判断不了的命令会先交给审核模型，审核通过就自动执行；判断为明确危险或审核失败时直接拒绝，不会等你确认。适合无人值守的场景。命令会原样发给设置里的审核服务，其中的密码、密钥也不例外。",
+      "confirm": "开启",
+      "saved": "权限模式已保存",
+      "noReviewer": "当前没有可用的命令审核器：辅助审批会把这些命令转人工，Autopilot 会直接拒绝。",
+      "notConfigured": "命令审核器 {{name}} 还没设置完：辅助审批会把这些命令转人工，Autopilot 会直接拒绝。"
+    },
+    "configError": {
+      "not_configured": "命令审核器还没配置好（比如扩展设置里没填 API key），要审核的命令都会审核失败。",
+      "invalid_api_key": "命令审核器的 API key 无效，要审核的命令都会审核失败。",
+      "openSettings": "打开设置",
+      "no_reviewer": "有资产开启了辅助审批或 Autopilot，但没有可用的命令审核器，要审核的命令都会审核失败。",
+      "reviewer_unavailable": "要用的命令审核器现在不可用（它的扩展可能被停用，或安装包被改动过），要审核的命令都会审核失败。"
+    },
+    "scores": "评分",
+    "retried": "自动重试过：共请求 {{attempts}} 次",
+    "reviewedBy": "由 {{name}} {{version}} 的命令审核器判断"
   }
 }

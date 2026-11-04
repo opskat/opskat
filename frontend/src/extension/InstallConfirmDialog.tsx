@@ -30,7 +30,7 @@ const INSTALL_MODE_KEYS = {
 interface CapabilityGrant {
   kind: string;
   value: string;
-  /** Hands over secrets or widens the network path: credentials read, assetRoute, kerberos. */
+  /** Hands over secrets or widens the network path: credentials read, assetRoute, kerberos, commandReviewer. */
   highRisk: boolean;
 }
 
@@ -66,11 +66,18 @@ const ASSET_ROUTE_KIND = "network.assetRoute";
 /** extension_svc.CapKerberos: a call whose scope carries a ticket source may fetch Kerberos tickets. */
 const KERBEROS_KIND = "kerberos";
 
+/** extension_svc.CapSettingsEndpoint: the extension may reach the addresses typed into its own settings. */
+const SETTINGS_ENDPOINT_KIND = "network.settingsEndpoint";
+
+/** extension_svc.CapCommandReviewer: the extension provides the command reviewer. */
+const COMMAND_REVIEWER_KIND = "commandReviewer";
+
 /** Why a high-risk grant matters, by kind; databaseDriver warns on its own, not through highRisk. */
 const HIGH_RISK_WARNING_KEYS: Record<string, string> = {
   credentials: "extension.credentialsReadWarning",
   [ASSET_ROUTE_KIND]: "extension.assetRouteWarning",
   [KERBEROS_KIND]: "extension.kerberosWarning",
+  [COMMAND_REVIEWER_KIND]: "extension.commandReviewerWarning",
 };
 
 /** The manifest.json name a grant is labelled with (opsctl ext dev uses the same): the kind, except databaseDriver is declared as databaseDrivers. */
@@ -81,6 +88,8 @@ const GRANT_EXPLANATION_KEYS: Record<string, string> = {
   [DATABASE_DRIVER_KIND]: "extension.installConfirm.databaseDriver",
   [ASSET_ROUTE_KIND]: "extension.installConfirm.assetRoute",
   [KERBEROS_KIND]: "extension.installConfirm.kerberos",
+  [SETTINGS_ENDPOINT_KIND]: "extension.installConfirm.settingsEndpoint",
+  [COMMAND_REVIEWER_KIND]: "extension.installConfirm.commandReviewer",
 };
 
 const sameGrant = (a: CapabilityGrant, b: CapabilityGrant) => a.kind === b.kind && a.value === b.value;
@@ -129,6 +138,9 @@ export function ExtensionInstallConfirmDialog() {
         ...Object.entries(HIGH_RISK_WARNING_KEYS)
           .filter(([kind]) => current.capabilities.some((c) => c.kind === kind && c.highRisk))
           .map(([, key]) => key),
+        ...(current.capabilities.some((c) => c.kind === COMMAND_REVIEWER_KIND)
+          ? ["extension.commandReviewerDisclosure"]
+          : []),
         ...(current.capabilities.some((c) => c.kind === DATABASE_DRIVER_KIND)
           ? ["extension.databaseDriversWarning"]
           : []),

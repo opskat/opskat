@@ -88,3 +88,19 @@ func TestToolReferenceLeavesOutPageOnlyTools(t *testing.T) {
 	onlyPages := &Manifest{Manifest: &extension.Manifest{}, Tools: []extwire.Tool{{Name: "ui_notes", PageOnly: true}}}
 	assert.Empty(t, toolReference(onlyPages))
 }
+
+// A host-only tool cannot be called through exec, so help does not list it.
+func TestToolReferenceLeavesOutHostOnlyTools(t *testing.T) {
+	m := &Manifest{
+		Manifest: &extension.Manifest{},
+		Tools: []extwire.Tool{
+			{Name: "ping", PolicyAction: "read"},
+			{Name: "review_cmds", HostOnly: true},
+		},
+		Policies: PoliciesDef{Type: "x", Actions: []string{"read"}},
+	}
+	ref := toolReference(m)
+	assert.Contains(t, ref, "### ping")
+	assert.NotContains(t, ref, "review_cmds")
+	assert.Empty(t, toolReference(&Manifest{Manifest: &extension.Manifest{}, Tools: []extwire.Tool{{Name: "review_cmds", HostOnly: true}}}))
+}

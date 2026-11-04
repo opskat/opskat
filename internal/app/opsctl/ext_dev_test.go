@@ -643,3 +643,42 @@ func TestHandleExtDevInstallOutcomeLogsCarryTheOverwrite(t *testing.T) {
 		require.Equal(t, "1.0.0", fields["installedVersion"], tc.message)
 	}
 }
+
+func TestHandleExtDevInstallCommandReviewerAndSettingsEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"rev","version":"1.1.0","hostABI":"1.0",
+  "backend": {"runtime": "wasm", "binary": "main.wasm"},
+  "permissions": {"network": {"settingsEndpoint": true}}, "contributes": {"commandReviewer": true}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
+	cases := []struct {
+		name   string
+		inst   map[string]string
+		added  map[string][]extension_svc.CapabilityGrant
+		marked bool
+	}{
+		{"added by overwrite", map[string]string{"rev": "1.0.0"}, map[string][]extension_svc.CapabilityGrant{"rev": {
+			{Kind: extension_svc.CapSettingsEndpoint}, {Kind: extension_svc.CapCommandReviewer, HighRisk: true}}}, true},
+		{"already declared", map[string]string{"rev": "1.0.0"}, nil, false},
+		{"fresh install", nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			approver := &recordingApprover{approve: true}
+			o := newDevOpsctl(&recordingDevInstaller{installed: tc.inst, added: tc.added}, approver)
+			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+			detail := approver.prompts[0].Detail
+			require.Contains(t, detail, "network.settingsEndpoint: true")
+			require.Contains(t, detail, "commandReviewer: true")
+			require.Contains(t, detail, "[HIGH RISK]")
+			require.Contains(t, detail, "without a human confirmation")
+			require.Contains(t, detail, "as-is")
+			require.NotContains(t, detail, "network.settingsEndpoint: true [HIGH RISK]")
+			if tc.marked {
+				require.Contains(t, detail, "network.settingsEndpoint: true (new)")
+				require.Contains(t, detail, "commandReviewer: true (new) [HIGH RISK]")
+			} else {
+				require.NotContains(t, detail, "(new)")
+			}
+		})
+	}
+}

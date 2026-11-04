@@ -35,6 +35,7 @@ func (n *nopHost) IOSetDeadline(handleID uint32, kind string, unixNanos int64) e
 func (n *nopHost) AssetGetConfig(assetID int64) (json.RawMessage, error) {
 	return nil, errNotConfigured
 }
+func (n *nopHost) ConfigGet() (json.RawMessage, error)      { return nil, errNotConfigured }
 func (n *nopHost) FileDialog(params []byte) (string, error) { return "", errNotConfigured }
 func (n *nopHost) KVGet(key string) ([]byte, error)         { return nil, errNotConfigured }
 func (n *nopHost) KVSet(key string, value []byte) error     { return errNotConfigured }

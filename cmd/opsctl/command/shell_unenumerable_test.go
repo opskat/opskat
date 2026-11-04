@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -64,9 +65,9 @@ func TestCmdExec_SSHWildcardAllowsUnparseableCommand(t *testing.T) {
 	var gotResult ApprovalResult
 	var gotCommand string
 	stub := execSSHStreamFn
-	execSSHStreamFn = func(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, stdin io.Reader, result ApprovalResult) int {
 		gotResult, gotCommand = result, command
-		return stub(ctx, auditCtx, asset, command, result)
+		return stub(ctx, auditCtx, asset, command, stdin, result)
 	}
 	t.Cleanup(func() { execSSHStreamFn = stub })
 

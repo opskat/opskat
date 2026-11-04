@@ -62,6 +62,10 @@ type Contributes struct {
 	// DatabaseDrivers lists the SQL database driver ids the extension provides;
 	// describe() must answer with exactly this set of drivers.
 	DatabaseDrivers []string `json:"databaseDrivers"`
+	// CommandReviewer says the extension provides the command reviewer. Under
+	// assisted approval and Autopilot its verdict can let a command run without a
+	// human confirmation, so the user approves it at install.
+	CommandReviewer bool `json:"commandReviewer"`
 }
 
 // Permissions declares which host resources an extension may use. The zero value
@@ -107,6 +111,10 @@ type NetworkPermission struct {
 	// node, a read replica, a routed listener), a tool reaching a node behind the
 	// asset's tunnel. A direct path still refuses loopback and link-local targets.
 	AssetRoute bool `json:"assetRoute"`
+	// SettingsEndpoint lets the extension reach the addresses the user typed into
+	// the format:"endpoint" fields of its own settings — private addresses
+	// included, since the user configured them.
+	SettingsEndpoint bool `json:"settingsEndpoint"`
 }
 
 // Parse reads manifest.json strictly. The hostABI is judged first, from a lenient

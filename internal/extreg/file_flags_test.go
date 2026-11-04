@@ -1,6 +1,7 @@
 package extreg
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -59,7 +60,7 @@ func writeTemp(t *testing.T, content []byte) string {
 // judged on what the tool would receive.
 func argsOf(t *testing.T, m *Manifest, command string) map[string]any {
 	t.Helper()
-	_, raw, err := parseCommand(m, command)
+	_, raw, err := parseCommand(context.Background(), m, command)
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
@@ -134,7 +135,7 @@ func TestExpandFileFlagsRefusals(t *testing.T) {
 // treating `-file` as an unknown flag even for a file-readable parameter.
 func TestParseCommandRejectsFileFlag(t *testing.T) {
 	m := registerBulkExtension(t)
-	_, _, err := parseCommand(m, "bulk --body-file=/etc/passwd")
+	_, _, err := parseCommand(context.Background(), m, "bulk --body-file=/etc/passwd")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `no parameter "body-file"`)
 }

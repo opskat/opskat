@@ -37,8 +37,14 @@ const (
 	CapAssetRoute = "network.assetRoute" //nolint:gosec // G101: a permission name, not a credential
 	// CapKerberos: a call whose scope carries a ticket source may ask the host for
 	// Kerberos tickets fetched with that asset's Kerberos credentials.
-	CapKerberos       = "kerberos"
-	CapDatabaseDriver = "databaseDriver"
+	CapKerberos = "kerberos"
+	// CapSettingsEndpoint: the extension may reach the addresses typed into the
+	// format:"endpoint" fields of its own settings.
+	CapSettingsEndpoint = "network.settingsEndpoint"
+	CapDatabaseDriver   = "databaseDriver"
+	// CapCommandReviewer: the extension provides the command reviewer, whose verdict
+	// lets commands run without a human confirmation under assisted approval and Autopilot.
+	CapCommandReviewer = "commandReviewer"
 )
 
 // CapabilityGrant is one grant an extension asks for. Value is the path / URL
@@ -152,7 +158,7 @@ func (s *Service) installedVersion(name string) string {
 }
 
 // CapabilityGrants flattens p and c into one entry per independently granted
-// thing. credentials "read", assetRoute and kerberos are high risk.
+// thing. credentials "read", assetRoute, kerberos and commandReviewer are high risk.
 func CapabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []CapabilityGrant {
 	out := []CapabilityGrant{}
 	for _, path := range p.FS.Read {
@@ -176,8 +182,14 @@ func CapabilityGrants(p extmanifest.Permissions, c extmanifest.Contributes) []Ca
 	if p.Network.AssetRoute {
 		out = append(out, CapabilityGrant{Kind: CapAssetRoute, HighRisk: true})
 	}
+	if p.Network.SettingsEndpoint {
+		out = append(out, CapabilityGrant{Kind: CapSettingsEndpoint})
+	}
 	if p.Kerberos {
 		out = append(out, CapabilityGrant{Kind: CapKerberos, HighRisk: true})
+	}
+	if c.CommandReviewer {
+		out = append(out, CapabilityGrant{Kind: CapCommandReviewer, HighRisk: true})
 	}
 	// Only the ids are known here (manifest / signed store index); describe() has
 	// not run before an install is confirmed.

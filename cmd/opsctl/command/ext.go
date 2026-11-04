@@ -19,10 +19,13 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -32,9 +35,11 @@ import (
 var devInstallFn = requestExtDevInstall
 
 // extensionContributions 是本进程的贡献点注册表：与桌面端（main.go）同一组贡献点
-// （extreg.Points）。启动时的仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，
-// 一个扩展在本进程里只有一次接入。
-var extensionContributions = extension.NewContributionRegistry(extreg.Points()...)
+// （extreg.Points，加上扩展管理拥有的设置贡献点与命令审核拥有的审核器贡献点）。启动时的
+// 仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，一个扩展在本进程里只有一次接入。
+// 仅描述接入的审核器扩展也是候选（设置页与选用规则看得到它），但没有运行中的插件，
+// 审核时按审核器不可用失败。
+var extensionContributions = extension.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint(), reviewerreg.Default().Point())...)
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
@@ -52,13 +57,45 @@ var extensionHost struct {
 }
 
 func activateExtension(ctx context.Context, extName string) error {
+	return extensionService().Activate(ctx, extName)
+}
+
+// extensionService 是本进程的扩展宿主，第一次用到时才建。建它不加载任何扩展。
+func extensionService() *extension_svc.Service {
 	extensionHost.mu.Lock()
+	defer extensionHost.mu.Unlock()
 	if extensionHost.svc == nil {
 		extensionHost.svc = newExtensionHost()
 	}
-	svc := extensionHost.svc
-	extensionHost.mu.Unlock()
-	return svc.Activate(ctx, extName)
+	return extensionHost.svc
+}
+
+// reviewerProvenanceFn 给出审核器扩展的安装事实（来源、现算的包摘要与是否一致，不运行
+// 扩展代码），由审核器注册表判断能不能用。变量化同上一套路。
+var reviewerProvenanceFn = func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
+	return extensionService().Provenance(ctx, extName)
+}
+
+// reviewerSettingsFn 给出审核器扩展已保存设置的读取视图（不运行扩展代码），审核器注册表
+// 据此判断它的必填设置填没填完。变量化同上一套路。
+var reviewerSettingsFn = func(ctx context.Context, extName string) (*extwire.SettingsView, error) {
+	return extensionService().SettingsView(ctx, extName)
+}
+
+// 命令审核器：opsctl 启动时只仅描述接入审核器扩展，审核器注册表在某条命令真要送审时
+// 才做资格检查与设置是否填完的检查，通过后经与 opsctl exec 执行扩展工具同一条激活路径
+// （activateExtensionFn）激活那一个扩展，命令结束由 releaseExtensions 释放；不需要审核的
+// 命令不会走到这里。
+func init() {
+	reviewerreg.Default().SetProvenance(func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
+		return reviewerProvenanceFn(ctx, extName)
+	})
+	reviewerreg.Default().SetSettingsReader(func(ctx context.Context, extName string) (*extwire.SettingsView, error) {
+		return reviewerSettingsFn(ctx, extName)
+	})
+	reviewerreg.Default().SetActivator(func(ctx context.Context, extName string) error {
+		return activateExtensionFn(ctx, extName)
+	})
 }
 
 // newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：
@@ -78,10 +115,13 @@ func newExtensionHost() *extension_svc.Service {
 	svc = extension_svc.New(mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
+		extension_settings_repo.ExtensionSettings(),
 		asset_repo.Asset(),
 		logger.Default(), nil, nil)
 	// 完整注册遇到声明了测试连接的类型就要 registrar，激活前接好。
 	extreg.SetConnTestRegistrar(svc.ConnTestRegistrar())
+	// 激活的审核器扩展审核时要读它的设置哈希（审核缓存键）。
+	reviewerreg.Default().SetSettingsHasher(svc.SettingsHash)
 	return svc
 }
 
@@ -251,6 +291,10 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 			item.AssetTypes = append(item.AssetTypes, at.Type)
 		}
 		for _, t := range m.Tools {
+			// A host-only tool is for host subsystems; exec / opsctl cannot call it.
+			if t.HostOnly {
+				continue
+			}
 			item.Tools = append(item.Tools, t.Name)
 		}
 		results = append(results, item)

@@ -20,8 +20,9 @@ import (
 )
 
 // HostConfig returns the host capabilities of extName that need no user interface:
-// the config of the assets it owns, its KV store and the scope of a call on one of
-// them (ResolveScope). Every process that runs extensions builds its providers from
+// the config of the assets it owns, its KV store, the scope of a call on one of
+// them (ResolveScope) and of a call with none (ResolveNoAssetScope, its
+// settings'). Every process that runs extensions builds its providers from
 // this — the desktop app and opsctl alike — and adds only what it can offer beyond it:
 // the desktop its file dialog and tool events, opsctl a file dialog that explains
 // there is none.
@@ -31,6 +32,7 @@ func (s *Service) HostConfig(extName string) extension.DefaultHostConfig {
 		AssetConfigs:  &assetConfigGetter{svc: s, extName: extName},
 		KV:            &kvStore{svc: s, extName: extName},
 		Scopes:        s.ResolveScope,
+		NoAssetScopes: s.ResolveNoAssetScope,
 		ExtensionName: extName,
 	}
 }
@@ -74,6 +76,56 @@ func (s *Service) ResolveScope(ctx context.Context, extName string, a extension.
 		return getter.AssetCredentialValues(ctx, a.ID, fields)
 	}
 	return extreg.AssetScope(a, def, json.RawMessage(asset.Config), connect, creds)
+}
+
+// settingsEndpointPermission is the manifest permission (under
+// permissions.network) that admits the addresses of an extension's settings.
+const settingsEndpointPermission = "settingsEndpoint"
+
+// ResolveNoAssetScope resolves the scope of a call extName makes with no asset (a
+// host-only tool, a page's call made without one) from its settings: the addresses
+// its format:"endpoint" fields name — the same parsing as an asset's endpoint
+// fields — admitted by permissions.network.settingsEndpoint; the settings' auth,
+// rendered on each request from the decrypted settings, so a key saved meanwhile
+// takes effect on the next request; and the settings' read view as the scope's
+// config (config.get), a secret only as set or unset. An extension declaring no
+// settings gets an empty view and nothing to reach beyond its allowlist.
+func (s *Service) ResolveNoAssetScope(ctx context.Context, extName string) (*extension.Scope, error) {
+	def, err := s.SettingsDefinition(extName)
+	if err != nil {
+		return nil, err
+	}
+	view := &SettingsView{Values: map[string]any{}, Secrets: map[string]bool{}}
+	scope := &extension.Scope{EndpointPermission: settingsEndpointPermission}
+	if def != nil {
+		if view, err = s.settingsView(ctx, extName, def); err != nil {
+			return nil, err
+		}
+		// Endpoint fields are never secrets: the view holds them as saved.
+		values, err := json.Marshal(view.Values)
+		if err != nil {
+			return nil, fmt.Errorf("encode extension %q settings: %w", extName, err)
+		}
+		if scope.Endpoints, err = extreg.ConfigEndpoints(def.ConfigSchema, values); err != nil {
+			return nil, fmt.Errorf("extension %q settings: %w", extName, err)
+		}
+		if def.Auth != nil {
+			scope.Auth = def.Auth.Inject(func(ctx context.Context, fields []string) (map[string]string, error) {
+				decrypted, err := s.DecryptedSettings(ctx, extName)
+				if err != nil {
+					return nil, err
+				}
+				return extreg.ConfigFieldValues(decrypted, fields)
+			})
+		}
+	}
+	if scope.Config, err = json.Marshal(view); err != nil {
+		return nil, fmt.Errorf("encode extension %q settings view: %w", extName, err)
+	}
+	logger.Ctx(ctx).Debug("extension call without asset scoped to its settings",
+		zap.String("extension", extName), zap.Bool("declared", def != nil),
+		zap.Int("endpoints", len(scope.Endpoints)), zap.Bool("auth", scope.Auth != nil))
+	return scope, nil
 }
 
 // ownedType returns the declaration of assetType when extName registers it.

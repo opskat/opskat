@@ -150,6 +150,7 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 		"resource":         item.Resource,
 		"resources":        item.Resources,
 		"remember_pattern": item.RememberPattern,
+		"review":           item.Review,
 		"session_id":       sessionID,
 	})
 
@@ -219,6 +220,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 			"action":     expectedItems[i].Action,
 			"resource":   expectedItems[i].Resource,
 			"resources":  expectedItems[i].Resources,
+			"review":     expectedItems[i].Review,
 		})
 	}
 

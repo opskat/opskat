@@ -36,7 +36,7 @@ func registeredExt(name, assetType string) *extension.Extension {
 func newHostTestBinder(t *testing.T) (*Extension, *mock_asset_repo.MockAssetRepo) {
 	ctrl := gomock.NewController(t)
 	assets := mock_asset_repo.NewMockAssetRepo(ctrl)
-	svc := extension_svc.New(nil, nil, nil, assets, zap.NewNop(), nil, nil)
+	svc := extension_svc.New(nil, nil, nil, nil, assets, zap.NewNop(), nil, nil)
 	svc.Bridge().Register(registeredExt("acme", "acme-store"))
 	svc.Bridge().Register(registeredExt("other", "other-store"))
 	e := &Extension{ctx: context.Background(), lang: fixedLang("en")}

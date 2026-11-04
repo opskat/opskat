@@ -435,8 +435,14 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 	session := aictx.GetSessionID(ctx)
 	items := make([]approval.BatchItem, 0, len(subjects))
 	var allowed aictx.CheckResult
-	for _, subject := range subjects {
-		result := permission.CheckPermission(ctx, subject.approvalType, subject.assetID, subject.command)
+	// 全部主体一次查完：辅助审批 / Autopilot 下要送模型审核，一次送审才能并行。
+	reqs := make([]permission.PermissionRequest, len(subjects))
+	for i, subject := range subjects {
+		reqs[i] = permission.PermissionRequest{AssetType: subject.approvalType, AssetID: subject.assetID, Command: subject.command}
+	}
+	results := permission.CheckPermissions(ctx, reqs)
+	for i, subject := range subjects {
+		result := results[i]
 		switch result.Decision {
 		case aictx.Deny:
 			return ApprovalResult{
@@ -444,6 +450,7 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 				DecisionSource: result.DecisionSource,
 				MatchedPattern: result.MatchedPattern,
 				SessionID:      session,
+				Review:         result.Review,
 			}, fmt.Errorf("transfer denied by policy: %s", result.Message)
 		case aictx.Allow:
 			allowed = result
@@ -457,6 +464,7 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 				AssetName: subject.assetName,
 				Command:   subject.command,
 				Detail:    detail,
+				Review:    result.Review,
 			})
 		}
 	}
@@ -466,9 +474,17 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 			DecisionSource: allowed.DecisionSource,
 			MatchedPattern: allowed.MatchedPattern,
 			SessionID:      session,
+			Review:         allowed.Review,
 		}, nil
 	}
-	return cpBatchSendFn(items, session)
+	result, err := cpBatchSendFn(items, session)
+	// 这次确认只落一行审计：带上说明为什么问人的那个审核结果。
+	reviews := make([]*aictx.ReviewInfo, len(items))
+	for i, item := range items {
+		reviews[i] = item.Review
+	}
+	result.Review = aictx.BatchReview(reviews)
+	return result, err
 }
 
 // cpToolParams 是交给 cp 工具的参数，同时也是这次调用落进 audit_logs.request 的原文

@@ -14,6 +14,8 @@ type hostCaller interface {
 	IOClose(handleID uint32) error
 	IOSetDeadline(handleID uint32, kind string, unixNanos int64) error
 	AssetGetConfig(assetID int64) (json.RawMessage, error)
+	// ConfigGet returns the config of the call's scope (host call config.get).
+	ConfigGet() (json.RawMessage, error)
 	FileDialog(params []byte) (string, error)
 	KVGet(key string) ([]byte, error)
 	KVSet(key string, value []byte) error
@@ -37,6 +39,7 @@ func hostIOSetDeadline(handleID uint32, kind string, unixNanos int64) error {
 func hostAssetGetConfig(assetID int64) (json.RawMessage, error) {
 	return currentHost.AssetGetConfig(assetID)
 }
+func hostConfigGet() (json.RawMessage, error)       { return currentHost.ConfigGet() }
 func hostFileDialog(params []byte) (string, error)  { return currentHost.FileDialog(params) }
 func hostKVGet(key string) ([]byte, error)          { return currentHost.KVGet(key) }
 func hostKVSet(key string, value []byte) error      { return currentHost.KVSet(key, value) }

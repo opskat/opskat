@@ -52,14 +52,18 @@ import {
   DisableExtension,
   GetExtensionDetail,
   InstallStoreExtension,
+  GetCommandReviewState,
 } from "../../../wailsjs/go/extension/Extension";
 import type { extstore_svc } from "../../../wailsjs/go/models";
 import { EXTENSION_MIRROR_SETTING_ID, revealSettingRow } from "./downloadMirror";
 import { ExtensionMirrorSettings } from "./ExtensionMirrorSettings";
+import { ExtensionSettingsForm } from "./ExtensionSettingsForm";
 import { ExtensionStore, InstallFailed, InstallProgress, type CardInstall, type StoreCard } from "./ExtensionStore";
 import { useStoreInstalls } from "./useStoreInstalls";
 import { syncExtensionUpdates, useExtensionUpdates } from "./extensionUpdates";
 import { Segmented } from "@/components/asset/fields";
+import { useSettingsUiStore } from "@/stores/settingsUiStore";
+import { localizedName } from "@/lib/commandReview";
 import type { ExtPermissions } from "@/extension/types";
 
 interface ExtInfo {
@@ -73,7 +77,9 @@ interface ExtInfo {
   loadError?: { kind: string; message: string };
   manifest?: {
     permissions?: ExtPermissions;
-    tools?: { name: string; i18n?: { description?: string } }[];
+    /** What the user approved at install: commandReviewer marks the extension providing the command reviewer. */
+    contributes?: { commandReviewer?: boolean };
+    tools?: { name: string; hostOnly?: boolean; i18n?: { description?: string } }[];
     policies?: {
       groups?: {
         id: string;
@@ -206,6 +212,17 @@ export function ExtensionSection() {
       toast.error(String(e));
     }
   };
+
+  // 别的设置页（命令审核的"在扩展详情里设置"）要求打开某个扩展的详情。
+  const requestedDetail = useSettingsUiStore((st) => st.extensionDetail);
+  useEffect(() => {
+    if (!requestedDetail) return;
+    useSettingsUiStore.getState().clearExtensionDetail();
+    // setState 都在 await 之后，经 async 边界调用避免 effect 内同步 setState
+    void (async () => {
+      await openDetail(requestedDetail);
+    })();
+  }, [requestedDetail]);
 
   return (
     <div className="space-y-4">
@@ -427,15 +444,50 @@ function UpdateAction({ card, install, onUpdate }: { card: StoreCard; install?: 
   );
 }
 
+/** 审核器声明的一道题：id 与各语言名称（command_review_svc.Question）。 */
+interface ReviewQuestion {
+  id: string;
+  names?: Record<string, string>;
+}
+
+/** 扩展提供的命令审核器的题目，取自审核器注册表（只有接入了的审核器才有）。 */
+function useReviewQuestions(extName: string, isReviewer: boolean): ReviewQuestion[] {
+  const [questions, setQuestions] = useState<ReviewQuestion[]>([]);
+  useEffect(() => {
+    if (!isReviewer) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const st = await GetCommandReviewState();
+        const found = st?.reviewers?.find((r) => r.name === extName);
+        if (!cancelled) setQuestions((found?.questions as ReviewQuestion[] | undefined) ?? []);
+      } catch (e) {
+        toast.error(String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [extName, isReviewer]);
+  return questions;
+}
+
 function ExtensionDetail({ ext }: { ext: ExtInfo }) {
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const manifest = ext.manifest as Record<string, any> | undefined;
-  const tools: { name: string; i18n?: { description?: string } }[] = manifest?.tools || [];
+  // 只给宿主用的工具（如审核器的审核工具）不是给人或 AI 用的，不列出。
+  const tools: { name: string; hostOnly?: boolean; i18n?: { description?: string } }[] = (
+    (manifest?.tools as { name: string; hostOnly?: boolean; i18n?: { description?: string } }[] | undefined) || []
+  ).filter((tool) => !tool.hostOnly);
   const policyGroups: { id: string; i18n?: { name?: string }; policy?: Record<string, string[]> }[] =
     manifest?.policies?.groups || [];
   const pages: { id: string; i18n?: { name?: string }; slot?: string }[] = manifest?.frontend?.pages || [];
   const credentialsRead = ext.manifest?.permissions?.credentials === "read";
+  const commandReviewer = ext.manifest?.contributes?.commandReviewer === true;
+  const reviewQuestions = useReviewQuestions(ext.name, commandReviewer);
+  // 纯审核扩展没有对外的工具、策略组和页面：只显示这个扩展真有的东西。
+  const pureReviewer = commandReviewer && tools.length === 0 && policyGroups.length === 0 && pages.length === 0;
 
   return (
     <div className="space-y-4">
@@ -448,6 +500,15 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
           <span>{t("extension.credentialsReadWarning")}</span>
         </div>
       )}
+      {commandReviewer && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-sm text-warning"
+        >
+          <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>{t("extension.commandReviewWarning")}</span>
+        </div>
+      )}
 
       {/* Basic Info */}
       <div className="space-y-1 text-sm">
@@ -457,67 +518,89 @@ function ExtensionDetail({ ext }: { ext: ExtInfo }) {
         {ext.description && <p className="text-muted-foreground">{ext.description}</p>}
       </div>
 
-      <Separator />
+      <ExtensionSettingsForm extName={ext.name} reviewer={commandReviewer} />
 
-      {/* Tools */}
-      <div>
-        <h4 className="text-sm font-medium mb-2">{t("extension.tools")}</h4>
-        {tools.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("extension.noTools")}</p>
-        ) : (
-          <div className="space-y-1">
-            {tools.map((tool) => (
-              <div key={tool.name} className="flex justify-between text-xs p-2 rounded bg-muted/50">
-                <span className="font-mono">{tool.name}</span>
-                <span className="text-muted-foreground ml-2 text-right">{tool.i18n?.description || ""}</span>
-              </div>
-            ))}
+      {reviewQuestions.length > 0 && (
+        <>
+          <Separator />
+          <div>
+            <h4 className="text-sm font-medium mb-2">{t("extension.reviewQuestions")}</h4>
+            <ul data-testid="extension-review-questions" className="space-y-1">
+              {reviewQuestions.map((q) => (
+                <li key={q.id} className="text-xs p-2 rounded bg-muted/50">
+                  {localizedName(q.names, i18nInstance.language) ?? q.id}
+                </li>
+              ))}
+            </ul>
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      <Separator />
+      {!pureReviewer && (
+        <>
+          <Separator />
 
-      {/* Policy Groups */}
-      <div>
-        <h4 className="text-sm font-medium mb-2">{t("extension.policies")}</h4>
-        {policyGroups.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("extension.noPolicies")}</p>
-        ) : (
-          <div className="space-y-1">
-            {policyGroups.map((pg) => (
-              <div key={pg.id} className="text-xs p-2 rounded bg-muted/50">
-                <span className="font-medium">{pg.i18n?.name || pg.id}</span>
-                {pg.policy && (
-                  <div className="mt-1 text-muted-foreground">
-                    {pg.policy.allow_list && <span>Allow: {pg.policy.allow_list.join(", ")}</span>}
-                    {pg.policy.deny_list && <span className="ml-2">Deny: {pg.policy.deny_list.join(", ")}</span>}
+          {/* Tools */}
+          <div>
+            <h4 className="text-sm font-medium mb-2">{t("extension.tools")}</h4>
+            {tools.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("extension.noTools")}</p>
+            ) : (
+              <div className="space-y-1">
+                {tools.map((tool) => (
+                  <div key={tool.name} className="flex justify-between text-xs p-2 rounded bg-muted/50">
+                    <span className="font-mono">{tool.name}</span>
+                    <span className="text-muted-foreground ml-2 text-right">{tool.i18n?.description || ""}</span>
                   </div>
-                )}
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
 
-      <Separator />
+          <Separator />
 
-      {/* Pages */}
-      <div>
-        <h4 className="text-sm font-medium mb-2">{t("extension.pages")}</h4>
-        {pages.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("extension.noPages")}</p>
-        ) : (
-          <div className="space-y-1">
-            {pages.map((page) => (
-              <div key={page.id} className="flex justify-between text-xs p-2 rounded bg-muted/50">
-                <span>{page.i18n?.name || page.id}</span>
-                <span className="text-muted-foreground font-mono">{page.slot}</span>
+          {/* Policy Groups */}
+          <div>
+            <h4 className="text-sm font-medium mb-2">{t("extension.policies")}</h4>
+            {policyGroups.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("extension.noPolicies")}</p>
+            ) : (
+              <div className="space-y-1">
+                {policyGroups.map((pg) => (
+                  <div key={pg.id} className="text-xs p-2 rounded bg-muted/50">
+                    <span className="font-medium">{pg.i18n?.name || pg.id}</span>
+                    {pg.policy && (
+                      <div className="mt-1 text-muted-foreground">
+                        {pg.policy.allow_list && <span>Allow: {pg.policy.allow_list.join(", ")}</span>}
+                        {pg.policy.deny_list && <span className="ml-2">Deny: {pg.policy.deny_list.join(", ")}</span>}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
+
+          <Separator />
+
+          {/* Pages */}
+          <div>
+            <h4 className="text-sm font-medium mb-2">{t("extension.pages")}</h4>
+            {pages.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("extension.noPages")}</p>
+            ) : (
+              <div className="space-y-1">
+                {pages.map((page) => (
+                  <div key={page.id} className="flex justify-between text-xs p-2 rounded bg-muted/50">
+                    <span>{page.i18n?.name || page.id}</span>
+                    <span className="text-muted-foreground font-mono">{page.slot}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

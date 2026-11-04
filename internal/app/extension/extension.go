@@ -48,7 +48,9 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Extensi
 }
 
 // SetService main.go 在创建 extension_svc.Service 后注入。
-func (e *Extension) SetService(svc *extension_svc.Service) { e.service = svc }
+func (e *Extension) SetService(svc *extension_svc.Service) {
+	e.service = svc
+}
 
 // Service 返回当前持有的 extension_svc.Service（main.go 需要它去做附加配置）。
 func (e *Extension) Service() *extension_svc.Service { return e.service }

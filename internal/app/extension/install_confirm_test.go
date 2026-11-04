@@ -230,7 +230,7 @@ func TestInstallFromPath_AsksFirst(t *testing.T) {
 	manager := extension.NewManager(extDir, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{Logger: zap.NewNop()})
 	}, extension.NewContributionRegistry(extreg.Points()...), zap.NewNop())
-	svc := extension_svc.New(manager, stateRepo, nil, nil, zap.NewNop(), nil, nil)
+	svc := extension_svc.New(manager, stateRepo, nil, nil, nil, zap.NewNop(), nil, nil)
 	t.Cleanup(func() {
 		manager.Contributions().Revoke("ext-ask")
 		svc.Close(context.Background())

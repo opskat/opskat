@@ -1,10 +1,15 @@
 package extreg
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extwire"
@@ -33,7 +38,7 @@ func TestParseCommand(t *testing.T) {
 		// cmdline 的默认 flag 语法是 --k=v 或裸 --k（见 internal/ai/cmdline 文档注释），
 		// mongo/kafka DSL 就是这个默认语义；扩展工具 DSL 在此基础上另按参数声明类型
 		// 接受 --k v 空格分隔式（见下面的 "按声明类型接受 --flag value" 用例）。
-		tool, argsJSON, err := parseCommand(m, `list_objects --bucket=my-bucket --maxKeys=100 --force`)
+		tool, argsJSON, err := parseCommand(context.Background(), m, `list_objects --bucket=my-bucket --maxKeys=100 --force`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -57,7 +62,7 @@ func TestParseCommand(t *testing.T) {
 	})
 
 	t.Run("number 按浮点数转换", func(t *testing.T) {
-		_, argsJSON, err := parseCommand(m, `list_objects --bucket=b --ratio=3.14`)
+		_, argsJSON, err := parseCommand(context.Background(), m, `list_objects --bucket=b --ratio=3.14`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -71,7 +76,7 @@ func TestParseCommand(t *testing.T) {
 	})
 
 	t.Run("number 类型不符报错并点名 flag", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --bucket=b --ratio=abc`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --bucket=b --ratio=abc`)
 		if err == nil || !strings.Contains(err.Error(), "ratio") {
 			t.Fatalf("a bad number must name the flag, got %v", err)
 		}
@@ -80,7 +85,7 @@ func TestParseCommand(t *testing.T) {
 	t.Run("按声明类型接受 --flag value 空格分隔式", func(t *testing.T) {
 		// 非 boolean 声明的 flag 消费下一个词作为其值——opsctl 的 flag DSL 因此不必
 		// 强制模型总是写 --k=v，与 ES 查询串这类含 = 的值共存时更不容易写错。
-		_, argsJSON, err := parseCommand(m, `list_objects --bucket my-bucket --maxKeys 100`)
+		_, argsJSON, err := parseCommand(context.Background(), m, `list_objects --bucket my-bucket --maxKeys 100`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -99,14 +104,14 @@ func TestParseCommand(t *testing.T) {
 	t.Run("boolean flag 不吞下一个词", func(t *testing.T) {
 		// --force 是 boolean：空格后的词必须留作独立位置参数（进而被拒），而不是被
 		// --force 当成自己的值吃掉。
-		_, _, err := parseCommand(m, `list_objects --bucket=b --force extra`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --bucket=b --force extra`)
 		if err == nil || !strings.Contains(err.Error(), "unexpected positional argument") {
 			t.Fatalf("a boolean flag must not swallow the next word, got %v", err)
 		}
 	})
 
 	t.Run("boolean flag 仍支持 --flag=false 显式赋值", func(t *testing.T) {
-		_, argsJSON, err := parseCommand(m, `list_objects --bucket=b --force=false`)
+		_, argsJSON, err := parseCommand(context.Background(), m, `list_objects --bucket=b --force=false`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -120,14 +125,14 @@ func TestParseCommand(t *testing.T) {
 	})
 
 	t.Run("非 boolean flag 空格形式缺值报错", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --bucket=b --maxKeys`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --bucket=b --maxKeys`)
 		if err == nil {
 			t.Fatalf("a value-taking flag with nothing following it must be rejected")
 		}
 	})
 
 	t.Run("array<string> 按逗号切分", func(t *testing.T) {
-		_, argsJSON, err := parseCommand(m, `list_objects --bucket=b --keys=a,b,c`)
+		_, argsJSON, err := parseCommand(context.Background(), m, `list_objects --bucket=b --keys=a,b,c`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -140,7 +145,7 @@ func TestParseCommand(t *testing.T) {
 	})
 
 	t.Run("--json 逃生口整体接管", func(t *testing.T) {
-		_, argsJSON, err := parseCommand(m, `list_objects --json='{"bucket":"b","keys":["a,b","c"]}'`)
+		_, argsJSON, err := parseCommand(context.Background(), m, `list_objects --json='{"bucket":"b","keys":["a,b","c"]}'`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -155,7 +160,7 @@ func TestParseCommand(t *testing.T) {
 	t.Run("--json 同样接受空格分隔式", func(t *testing.T) {
 		// 多词 opsctl exec 与 --flag value 写法对 --json 一视同仁：
 		// `opsctl exec <asset> -- list_objects --json '{...}'` 不能掉成"多余位置参数"。
-		_, argsJSON, err := parseCommand(m, `list_objects --json '{"bucket":"b","maxKeys":3}'`)
+		_, argsJSON, err := parseCommand(context.Background(), m, `list_objects --json '{"bucket":"b","maxKeys":3}'`)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -169,41 +174,41 @@ func TestParseCommand(t *testing.T) {
 	})
 
 	t.Run("--json 与其它 flag 混用报错", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --json='{"bucket":"b"}' --force`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --json='{"bucket":"b"}' --force`)
 		if err == nil || !strings.Contains(err.Error(), "json") {
 			t.Fatalf("--json combined with other flags must be rejected and name --json, got %v", err)
 		}
 	})
 
 	t.Run("未声明的 flag 报错并点名", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --nope=1`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --nope=1`)
 		if err == nil || !strings.Contains(err.Error(), "nope") {
 			t.Fatalf("an undeclared flag must be named in the error, got %v", err)
 		}
 	})
 
 	t.Run("类型不符报错并点名类型", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --maxKeys=abc`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --maxKeys=abc`)
 		if err == nil || !strings.Contains(err.Error(), "integer") {
 			t.Fatalf("a bad integer must say so, got %v", err)
 		}
 	})
 
 	t.Run("未知工具名报错", func(t *testing.T) {
-		if _, _, err := parseCommand(m, `nope`); err == nil {
+		if _, _, err := parseCommand(context.Background(), m, `nope`); err == nil {
 			t.Fatal("an unknown tool name must fail")
 		}
 	})
 
 	t.Run("多余的位置参数报错", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects extra --bucket=b`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects extra --bucket=b`)
 		if err == nil || !strings.Contains(err.Error(), "extra") {
 			t.Fatalf("an unexpected positional argument must be named in the error, got %v", err)
 		}
 	})
 
 	t.Run("缺少 required 参数在调用期拒绝", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --force`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --force`)
 		if err == nil || !strings.Contains(err.Error(), "bucket") || !strings.Contains(err.Error(), "required") {
 			t.Fatalf("missing required bucket = %v, want an explicit required-parameter error", err)
 		}
@@ -211,7 +216,7 @@ func TestParseCommand(t *testing.T) {
 
 	t.Run("--json 必须是 object", func(t *testing.T) {
 		for _, raw := range []string{`[]`, `7`, `null`, `"text"`} {
-			_, _, err := parseCommand(m, `list_objects --json='`+raw+`'`)
+			_, _, err := parseCommand(context.Background(), m, `list_objects --json='`+raw+`'`)
 			if err == nil || !strings.Contains(err.Error(), "object") {
 				t.Fatalf("--json=%s error = %v, want object-shape rejection", raw, err)
 			}
@@ -219,21 +224,21 @@ func TestParseCommand(t *testing.T) {
 	})
 
 	t.Run("--json 拒绝未知参数", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --json='{"bucket":"b","ghost":1}'`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --json='{"bucket":"b","ghost":1}'`)
 		if err == nil || !strings.Contains(err.Error(), "ghost") {
 			t.Fatalf("unknown JSON parameter = %v, want rejection naming ghost", err)
 		}
 	})
 
 	t.Run("--json 拒绝重复参数", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --json='{"bucket":"a","bucket":"b"}'`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --json='{"bucket":"a","bucket":"b"}'`)
 		if err == nil || !strings.Contains(err.Error(), "duplicate") {
 			t.Fatalf("duplicate JSON parameter = %v, want rejection", err)
 		}
 	})
 
 	t.Run("--json 校验声明类型", func(t *testing.T) {
-		_, _, err := parseCommand(m, `list_objects --json='{"bucket":"b","maxKeys":"100"}'`)
+		_, _, err := parseCommand(context.Background(), m, `list_objects --json='{"bucket":"b","maxKeys":"100"}'`)
 		if err == nil || !strings.Contains(err.Error(), "maxKeys") || !strings.Contains(err.Error(), "integer") {
 			t.Fatalf("wrong JSON parameter type = %v, want rejection", err)
 		}
@@ -256,20 +261,20 @@ func TestParseCommandRefusesPageOnlyTools(t *testing.T) {
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 		}},
 	}
-	_, _, err := parseCommand(m, `notes`)
-	if err == nil || !strings.Contains(err.Error(), "该工具只供扩展页面使用") {
+	_, _, err := parseCommand(context.Background(), m, `notes`)
+	if err == nil || !strings.Contains(err.Error(), "notebook.notes") {
 		t.Fatalf("exec on a page-only tool: err = %v, want the page-only refusal", err)
 	}
-	if _, err := canonicalCommand(m, `notes`); err == nil || !strings.Contains(err.Error(), "该工具只供扩展页面使用") {
+	if _, err := canonicalCommand(context.Background(), m, `notes`); err == nil || !strings.Contains(err.Error(), "notebook.notes") {
 		t.Fatalf("canonicalize must refuse before approval: err = %v", err)
 	}
-	if _, err := ValidateToolArgs(m, "notes", []byte(`{}`)); err != nil {
+	if _, err := ValidateToolArgs(context.Background(), m, "notes", []byte(`{}`)); err != nil {
 		t.Fatalf("a page call to a page-only tool must pass validation: %v", err)
 	}
 	// Like help, the tools exec offers when a name is wrong are the ones exec can run.
 	m.Tools = append(m.Tools, extwire.Tool{Name: "list", PolicyAction: "read",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{}}})
-	_, _, err = parseCommand(m, `nope`)
+	_, _, err = parseCommand(context.Background(), m, `nope`)
 	if err == nil || !strings.Contains(err.Error(), "available: list") || strings.Contains(err.Error(), "notes") {
 		t.Fatalf("exec on an unknown tool must offer only the tools exec can run: err = %v", err)
 	}
@@ -301,21 +306,90 @@ func TestCanonicalCommandParsesBackToTheSameArguments(t *testing.T) {
 		`put --json='{"tags":[]}'`,
 	} {
 		t.Run(command, func(t *testing.T) {
-			_, want, err := parseCommand(m, command)
+			_, want, err := parseCommand(context.Background(), m, command)
 			if err != nil {
 				t.Fatalf("parse %q: %v", command, err)
 			}
-			canonical, err := canonicalCommand(m, command)
+			canonical, err := canonicalCommand(context.Background(), m, command)
 			if err != nil {
 				t.Fatalf("canonicalize %q: %v", command, err)
 			}
-			_, got, err := parseCommand(m, canonical)
+			_, got, err := parseCommand(context.Background(), m, canonical)
 			if err != nil {
 				t.Fatalf("canonical %q does not parse back: %v", canonical, err)
 			}
 			if string(got) != string(want) {
 				t.Fatalf("canonical %q parses to %s, want %s", canonical, got, want)
 			}
+		})
+	}
+}
+
+// A host-only tool is for host subsystems: exec refuses it before anything is
+// approved or run, and a page call is refused naming the tool.
+func TestHostOnlyToolsAreRefusedToExecAndPages(t *testing.T) {
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "rev"}},
+		Tools: []extwire.Tool{
+			{Name: "review", HostOnly: true, Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
+			{Name: "list", PolicyAction: "read", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
+		},
+	}
+	_, _, err := parseCommand(context.Background(), m, `review`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rev.review")
+	_, err = canonicalCommand(context.Background(), m, `review`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rev.review")
+
+	_, err = ValidateToolArgs(context.Background(), m, "review", []byte(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rev.review")
+
+	_, _, err = parseCommand(context.Background(), m, `nope`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "available: list")
+	assert.NotContains(t, err.Error(), "review")
+}
+
+// The refusals reach a person (the model's transcript, the exec error, the page's
+// toast), so they are worded in the caller's language — the one every policy message
+// already follows (aictx policy language on ctx) — and read as a sentence in each, not
+// as a translation of the other.
+func TestToolEntryRefusalsFollowCallerLanguage(t *testing.T) {
+	m := &Manifest{
+		Manifest: &extension.Manifest{Manifest: extmanifest.Manifest{Name: "rev"}},
+		Tools: []extwire.Tool{
+			{Name: "notes", PageOnly: true, Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
+			{Name: "review", HostOnly: true, Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
+		},
+	}
+	cases := []struct {
+		lang, tool, want string
+		page             bool // a page call is refused too (a page-only tool is the page's own)
+	}{
+		{"en", "notes", "rev.notes: this tool is only for the extension's own pages", false},
+		{"zh-CN", "notes", "rev.notes: 该工具只供扩展页面使用", false},
+		{"en", "review", "rev.review: this tool can only be called by the host", true},
+		{"zh-CN", "review", "rev.review: 该工具只供宿主调用", true},
+	}
+	for _, c := range cases {
+		ctx := aictx.WithPolicyLang(context.Background(), c.lang)
+		t.Run("exec/"+c.lang+"/"+c.tool, func(t *testing.T) {
+			_, _, err := parseCommand(ctx, m, c.tool)
+			require.Error(t, err)
+			assert.Equal(t, c.want, err.Error())
+			_, err = canonicalCommand(ctx, m, c.tool)
+			require.Error(t, err)
+			assert.Equal(t, c.want, err.Error())
+		})
+		if !c.page {
+			continue
+		}
+		t.Run("page/"+c.lang+"/"+c.tool, func(t *testing.T) {
+			_, err := ValidateToolArgs(ctx, m, c.tool, []byte(`{}`))
+			require.Error(t, err)
+			assert.Equal(t, c.want, err.Error())
 		})
 	}
 }

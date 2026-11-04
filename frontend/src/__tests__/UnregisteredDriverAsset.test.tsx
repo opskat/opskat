@@ -8,6 +8,7 @@ import { AssetForm } from "@/components/asset/AssetForm";
 import { notifySuccess } from "@/lib/notify";
 import { asset_entity } from "../../wailsjs/go/models";
 import { TestAssetConnection, UpdateAsset } from "../../wailsjs/go/system/System";
+import { GetCommandReviewState } from "../../wailsjs/go/extension/Extension";
 import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -26,6 +27,13 @@ const ghostAsset = new asset_entity.Asset({
 beforeEach(() => {
   vi.clearAllMocks();
   provideDrivers(BUILTIN_DRIVERS);
+  // 详情页里的权限模式卡片读审核状态：真实绑定总会返回一个 State。
+  vi.mocked(GetCommandReviewState).mockResolvedValue({
+    reviewers: [],
+    selected: "",
+    active: "",
+    problem: "no_reviewer",
+  } as never);
 });
 
 describe("驱动未注册的数据库资产", () => {

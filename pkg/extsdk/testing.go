@@ -29,6 +29,14 @@ func WithAssetConfig(assetID int64, config any) TestOption {
 	}
 }
 
+// WithSettings sets the extension's settings as ctx.Settings reads them in a
+// call without an asset: values are the non-secret fields, secrets whether each
+// format:"password" field is set. Without it the view is empty, as for an
+// extension that saved none.
+func WithSettings(values map[string]any, secrets map[string]bool) TestOption {
+	return func(h *TestHost) { h.settings = SettingsView{Values: values, Secrets: secrets} }
+}
+
 // WithMockHTTP sets an HTTP mock handler for all HTTP requests.
 func WithMockHTTP(handler http.HandlerFunc) TestOption {
 	return func(h *TestHost) { h.httpHandler = handler }
@@ -56,6 +64,8 @@ func WithKerberosTickets(source func(spn string) ([]byte, error)) TestOption {
 // TestHost simulates the host environment for extension unit testing.
 type TestHost struct {
 	assetConfigs map[int64]json.RawMessage
+	settings     SettingsView
+	callAsset    Asset // the asset of the call in progress (CallTool)
 	kv           map[string][]byte
 	httpHandler  http.HandlerFunc
 	mockTCP      func(addr string) (net.Conn, error)
@@ -94,6 +104,7 @@ func (h *TestHost) Close() {
 func (h *TestHost) CallTool(asset Asset, name string, args any) (any, error) {
 	h.mu.Lock()
 	h.events = nil
+	h.callAsset = asset
 	h.mu.Unlock()
 
 	argsJSON, _ := json.Marshal(args)
@@ -167,6 +178,25 @@ func (h *TestHost) AssetGetConfig(assetID int64) (json.RawMessage, error) {
 		return nil, fmt.Errorf("config not found for asset %d", assetID)
 	}
 	return v, nil
+}
+
+// ConfigGet answers config.get as the host does: in a call without an asset the
+// settings set via WithSettings (an empty view without it); a call scoped to an
+// asset is refused.
+func (h *TestHost) ConfigGet() (json.RawMessage, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.callAsset != (Asset{}) {
+		return nil, fmt.Errorf("config.get: this call is scoped to the asset %q, whose scope carries no config; read the asset's own with AssetConfig", h.callAsset.Name)
+	}
+	view := h.settings
+	if view.Values == nil {
+		view.Values = map[string]any{}
+	}
+	if view.Secrets == nil {
+		view.Secrets = map[string]bool{}
+	}
+	return json.Marshal(view)
 }
 
 func (h *TestHost) FileDialog(params []byte) (string, error) {

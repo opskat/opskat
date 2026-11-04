@@ -17,7 +17,7 @@ import (
 // never disagree — and since that declaration is reflected from the handler's own
 // argument type, neither can drift from the code that runs.
 //
-// Page-only tools are left out: exec refuses them, so telling the model they exist
+// Page-only and host-only tools are left out: exec refuses them, so telling the model they exist
 // would only invite calls that cannot succeed.
 //
 // Call it on a Localized manifest so the i18n keys in tools[].i18n.description are
@@ -26,7 +26,7 @@ import (
 func toolReference(m *Manifest) string {
 	tools := make([]extwire.Tool, 0, len(m.Tools))
 	for _, t := range m.Tools {
-		if !t.PageOnly {
+		if !t.PageOnly && !t.HostOnly {
 			tools = append(tools, t)
 		}
 	}

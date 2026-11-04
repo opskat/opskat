@@ -89,21 +89,19 @@ func TestCredentialFieldSchema(t *testing.T) {
 		})
 
 		Convey("with a contradicting format tag panics at registration", func() {
-			So(func() {
-				AssetType[struct {
-					Key Credential `json:"key" format:"endpoint"`
-				}]("demo")
-			}, ShouldPanicWith, `opskat: asset type "demo" config: field Key is a Credential, which is always format "password", but is tagged format "endpoint"`)
+			AssetType[struct {
+				Key Credential `json:"key" format:"endpoint"`
+			}]("demo")
+			shouldFailDescribe(`opskat: asset type "demo" config: field Key is a Credential, which is always format "password", but is tagged format "endpoint"`)
 		})
 
 		Convey("is refused as a tool argument", func() {
-			So(func() {
-				Tool("login", func(_ *ToolContext, _ struct {
-					Key Credential `json:"key"`
-				}) (any, error) {
-					return nil, nil
-				})
-			}, ShouldPanicWith, `opskat: tool "login" arguments: field Key is a Credential, which is only an asset config field`)
+			Tool("login", func(_ *ToolContext, _ struct {
+				Key Credential `json:"key"`
+			}) (any, error) {
+				return nil, nil
+			}).Policy("read")
+			shouldFailDescribe(`opskat: tool "login" arguments: field Key is a Credential, which is only an asset config field`)
 		})
 	})
 }

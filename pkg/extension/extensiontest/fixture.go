@@ -2,8 +2,9 @@
 // pkg/extension that need a real WASM guest on the other side of the host — the
 // only way to observe describe(), check_policy, execute_tool and a database
 // driver's session as the app sees them. testdata/fixture-ext exercises the host
-// capabilities; testdata/fixture-dbdriver provides a database driver. It is for
-// tests only.
+// capabilities; testdata/fixture-dbdriver provides a database driver;
+// testdata/fixture-settings declares extension settings; testdata/fixture-reviewer
+// contributes a command reviewer. It is for tests only.
 package extensiontest
 
 import (
@@ -31,6 +32,30 @@ const DBDriverFixtureName = "fixture-dbdriver"
 // DBDriverFixtureDriver is the id of the driver the database driver fixture provides.
 const DBDriverFixtureDriver = "fixturedb"
 
+// SettingsFixtureName is the settings fixture's name: an extension declaring
+// settings (baseURL format:"endpoint", apiKey format:"password" injected as
+// "Authorization: Bearer <apiKey>", model) and permissions.network.settingsEndpoint,
+// with host-only tools call_service (GET args.url, answering status and body)
+// and settings (what ctx.Settings reads). See testdata/fixture-settings.
+const SettingsFixtureName = "fixture-settings"
+
+// ReviewerFixtureName is the command reviewer fixture's name: an extension
+// contributing a command reviewer (opskat.CommandReviewer, tool
+// opskat.ReviewToolName; questions destructive, disruptive, remote_code) and
+// settings (endpoint format:"endpoint", apiKey format:"password" injected as a
+// bearer token) under permissions.network.settingsEndpoint. With no endpoint
+// saved it judges by keyword — "fixture-error" errors "unavailable",
+// "fixture-slow" runs past the timeout, "rm -rf" rejects destructive (0.9),
+// "curl" with "| sh" rejects remote_code (0.8), anything else passes; with one
+// saved it POSTs {assetType, command} to <endpoint>/review and answers the JSON
+// reply. See testdata/fixture-reviewer.
+const ReviewerFixtureName = "fixture-reviewer"
+
+// BadKindsFixtureName is the registration-mistake fixture's name: an extension
+// whose one tool is both HostOnly and PageOnly, so it never loads. See
+// testdata/fixture-badkinds.
+const BadKindsFixtureName = "fixture-badkinds"
+
 // fixtureSrc is a fixture extension's source directory, found from this file so
 // a test in any package can build it.
 func fixtureSrc(t testing.TB, name string) string {
@@ -56,6 +81,27 @@ func InstallFixture(t testing.TB, root string) string {
 func InstallDBDriverFixture(t testing.TB, root string) string {
 	t.Helper()
 	return install(t, root, DBDriverFixtureName)
+}
+
+// InstallSettingsFixture is InstallFixture for the settings fixture
+// (<root>/fixture-settings).
+func InstallSettingsFixture(t testing.TB, root string) string {
+	t.Helper()
+	return install(t, root, SettingsFixtureName)
+}
+
+// InstallReviewerFixture is InstallFixture for the command reviewer fixture
+// (<root>/fixture-reviewer).
+func InstallReviewerFixture(t testing.TB, root string) string {
+	t.Helper()
+	return install(t, root, ReviewerFixtureName)
+}
+
+// InstallBadKindsFixture is InstallFixture for the registration-mistake fixture
+// (<root>/fixture-badkinds).
+func InstallBadKindsFixture(t testing.TB, root string) string {
+	t.Helper()
+	return install(t, root, BadKindsFixtureName)
 }
 
 func install(t testing.TB, root, name string) string {
@@ -95,7 +141,25 @@ func LoadDBDriverFixture(t testing.TB) *extension.Extension {
 	return load(t, InstallDBDriverFixture)
 }
 
+// LoadBadKindsFixtureError builds the registration-mistake fixture and tries to
+// load it through the real extension.Manager, returning the load error the app
+// would show.
+func LoadBadKindsFixtureError(t testing.TB) error {
+	t.Helper()
+	_, err := loadExtension(t, InstallBadKindsFixture)
+	return err
+}
+
 func load(t testing.TB, install func(testing.TB, string) string) *extension.Extension {
+	t.Helper()
+	ext, err := loadExtension(t, install)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ext
+}
+
+func loadExtension(t testing.TB, install func(testing.TB, string) string) (*extension.Extension, error) {
 	t.Helper()
 	root := t.TempDir()
 	dir := install(t, root)
@@ -106,7 +170,7 @@ func load(t testing.TB, install func(testing.TB, string) string) *extension.Exte
 	t.Cleanup(func() { mgr.Close(context.Background()) })
 	m, err := mgr.LoadExtension(context.Background(), dir)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	return mgr.GetExtension(m.Name)
+	return mgr.GetExtension(m.Name), nil
 }

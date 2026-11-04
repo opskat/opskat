@@ -63,6 +63,7 @@ var hostOps = map[string]hostOpFunc{
 	OpKVGet:          opKVGet,
 	OpKVSet:          opKVSet,
 	OpAssetGetConfig: opAssetGetConfig,
+	OpConfigGet:      opConfigGet,
 	OpFileDialog:     opFileDialog,
 	OpIOOpen:         opIOOpen,
 	OpIOSetDeadline:  opIOSetDeadline,
@@ -203,6 +204,23 @@ func opAssetGetConfig(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, fmt.Errorf("asset.get_config: this call is not scoped to an asset, so it has no config to read")
 	}
 	return env.host.GetAssetConfig(env.inv.asset.ID)
+}
+
+// configGate is the capability layer (capHost) as config.get reaches it: the
+// config is the call's scope's, which it resolves.
+type configGate interface {
+	scopeConfig(ctx context.Context, inv *invocation) (json.RawMessage, error)
+}
+
+// opConfigGet returns the config of the call's scope (Scope.Config), whatever
+// the guest sends: like asset.get_config it names nothing, since the host scopes
+// the call. A scope carrying no config — an asset's — is refused.
+func opConfigGet(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
+	gate, ok := env.host.(configGate)
+	if !ok {
+		return nil, fmt.Errorf("config.get refused: this host resolves no scopes, so it has no config to give")
+	}
+	return gate.scopeConfig(env.ctx, env.inv)
 }
 
 func opFileDialog(env hostCallEnv, params json.RawMessage) ([]byte, error) {

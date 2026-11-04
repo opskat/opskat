@@ -79,7 +79,7 @@ func TestInstalledVersionsLeaveOutRefusedCopies(t *testing.T) {
 	manager := extension.NewManager(extDir, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{Logger: zap.NewNop()})
 	}, extension.NewContributionRegistry(extreg.Points()...), zap.NewNop())
-	svc := extension_svc.New(manager, stateRepo, nil, nil, zap.NewNop(), nil, nil)
+	svc := extension_svc.New(manager, stateRepo, nil, nil, nil, zap.NewNop(), nil, nil)
 	t.Cleanup(func() { svc.Close(context.Background()) })
 	require.NoError(t, svc.Init(context.Background()))
 

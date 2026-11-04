@@ -4,6 +4,8 @@ package opskat
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // Asset is the asset a call runs against, named by the host rather than by the
@@ -51,6 +53,29 @@ func assetConfig(a Asset, what string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("%s is not scoped to an asset, so it has no config to read", what)
 	}
 	return hostAssetGetConfig(a.ID)
+}
+
+// SettingsView is the extension's own settings (see Settings) as the extension
+// reads them: every non-secret value the user saved, and for each
+// format:"password" field only whether it is set. It is the host's wire format
+// (extwire.SettingsView), so the two cannot drift apart.
+type SettingsView = extwire.SettingsView
+
+// Settings returns the extension's settings as a call without an asset reads
+// them (host call config.get) — a host-only tool's, or a page's call made
+// without one; empty when the extension saved or declares none. A call scoped to
+// an asset reads no settings: the host refuses, and the asset's own config is
+// AssetConfig.
+func (ctx *ToolContext) Settings() (*SettingsView, error) {
+	raw, err := hostConfigGet()
+	if err != nil {
+		return nil, err
+	}
+	var view SettingsView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return nil, fmt.Errorf("parse settings: %w", err)
+	}
+	return &view, nil
 }
 
 // ShouldStop reports whether the caller has canceled this call. A long-running

@@ -4,11 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/opskat/opskat/pkg/extsdk/internal/registration"
 	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // dispatch routes a function call to the registered handler.
+//
+// An invalid registration fails every call with the first mistake's message (tool
+// or contribution, and reason): describe, so the host refuses the extension at
+// load, and any other, so an extension's unit tests through TestHost see it too
+// rather than running a tool whose declaration the host would never accept.
 func dispatch(fnName string, input []byte) (json.RawMessage, error) {
+	if err := registration.Err(); err != nil {
+		return nil, err
+	}
 	switch fnName {
 	case "describe":
 		return dispatchDescribe()
@@ -65,6 +74,7 @@ func dispatchDescribe() (json.RawMessage, error) {
 			PolicyAction:  t.action,
 			PolicyActions: t.actions,
 			PageOnly:      t.pageOnly,
+			HostOnly:      t.hostOnly,
 			TimeoutMs:     t.timeout.Milliseconds(),
 			NoTimeout:     t.noTimeout,
 			Large:         t.large,
@@ -121,6 +131,8 @@ func dispatchDescribe() (json.RawMessage, error) {
 		{extwire.KeySnippets, len(snippets.Categories) > 0 || len(snippets.Seed) > 0, snippets},
 		{extwire.KeyPages, frontendSpec.Entry != "", pages},
 		{extwire.KeyDatabaseDrivers, len(databaseDrivers) > 0, databaseDrivers},
+		{extwire.KeySettings, settings != nil, settings},
+		{extwire.KeyCommandReviewer, commandReviewer != nil, commandReviewer},
 	}
 	for _, c := range contributions {
 		if !c.present {

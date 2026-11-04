@@ -272,8 +272,8 @@ func tableCell(s string) string {
 // 一条 flag 写错、工具名不存在的命令会在弹出审批框之前失败，而不是让用户先点头、
 // 批准之后才发现命令根本调不动。返回的规范串同时是策略匹配、审批展示与 grant 的主体。
 func canonicalize(l loaded) permission.CanonicalizeFunc {
-	return func(_ *asset_entity.Asset, command string) (string, error) {
-		return canonicalCommand(l.manifest, command)
+	return func(ctx context.Context, _ *asset_entity.Asset, command string) (string, error) {
+		return canonicalCommand(ctx, l.manifest, command)
 	}
 }
 
@@ -281,7 +281,7 @@ func canonicalize(l loaded) permission.CanonicalizeFunc {
 // 顺序契约），因此这里不再做任何策略判断——那是 policyCheck 的事。
 func execTool(l loaded) permission.ExecFunc {
 	return func(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
-		toolName, argsJSON, err := parseCommand(l.manifest, command)
+		toolName, argsJSON, err := parseCommand(ctx, l.manifest, command)
 		if err != nil {
 			return "", err
 		}
@@ -321,7 +321,8 @@ func execTool(l loaded) permission.ExecFunc {
 // guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（extwire.Tool.Actions，
 // 不是整个扩展的 policies.actions 并集）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
-// 这次调用本身。
+// 这次调用本身。check_policy 报错同理。这类结果标为 Unreviewable：没有 action / 资源，
+// 审核器无从判断，辅助审批问人，Autopilot 拒绝。
 //
 // 工具拒绝这次调用的参数（SDK 的 RejectArgs，guest 答 {"reject"}）则不是缺陷而是结论：
 // 这条调用在任何规则 / grant 下都不会执行，问用户只会让他批准一条随后必然失败的调用。
@@ -337,7 +338,14 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 			return argsRejected(ctx, call.tool, rejected)
 		}
 		if err != nil {
-			return aictx.CheckResult{Decision: aictx.NeedConfirm}
+			// 没有 action / resources，规则和审核器都无从判断：只能由人决定，不送审。
+			// 原因与权限模式无关（默认模式下照样随 NeedConfirm 给出），由各模式自己说明后果。
+			return aictx.CheckResult{
+				Decision: aictx.NeedConfirm,
+				Message: aipolicy.PolicyMsg(ctx, "the extension could not classify this command (its policy check failed or named an action the tool does not declare), so no rule can match it",
+					"扩展没能对这条命令分类（策略检查出错或给出了工具未声明的动作），没有规则能匹配它"),
+				Unreviewable: true,
+			}
 		}
 		action, resources := call.action, call.resources
 		policyType := l.manifest.Policies.Type
@@ -388,7 +396,7 @@ var errClassifyFailed = errors.New("extension policy classification failed")
 // The error is either the tool refusing the arguments — an
 // *extension.ArgsRejectedError, with call.tool set — or errClassifyFailed.
 func classifyCommand(ctx context.Context, l loaded, command string) (classifiedCall, error) {
-	toolName, argsJSON, err := parseCommand(l.manifest, command)
+	toolName, argsJSON, err := parseCommand(ctx, l.manifest, command)
 	if err != nil {
 		// 到不了这里：canonicalize 已经用同一个解析器跑过一遍。真发生了就是
 		// fail-closed 的"分类失败"，而不是放行或落 grant。

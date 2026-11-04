@@ -179,6 +179,12 @@ func (w *wasmHostCaller) AssetGetConfig(_ int64) (json.RawMessage, error) {
 	return call("asset.get_config", map[string]any{})
 }
 
+// ConfigGet sends nothing: the host answers with the config of the scope it gave
+// this call, and refuses a call whose scope has none.
+func (w *wasmHostCaller) ConfigGet() (json.RawMessage, error) {
+	return call("config.get", nil)
+}
+
 func (w *wasmHostCaller) FileDialog(params []byte) (string, error) {
 	payload, err := call("file_dialog", json.RawMessage(params))
 	if err != nil {

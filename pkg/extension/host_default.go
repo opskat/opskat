@@ -52,6 +52,10 @@ type DefaultHostConfig struct {
 	// path, credential injection) the first time the call needs it; nil gives
 	// every asset an empty scope, which reaches nothing beyond the allowlist.
 	Scopes ScopeResolver
+	// NoAssetScopes resolves the scope of a call with no asset, the first time
+	// it needs it; nil gives such a call an empty scope: the allowlist, and no
+	// config.
+	NoAssetScopes NoAssetScopeResolver
 	// ExtensionName scopes this provider's cached HTTP clients (httpClientCache)
 	// in the process-wide registry (registerHTTPClientCache / DiscardHostHTTPCache)
 	// so the extension lifecycle (internal/service/extension_svc) can release them
@@ -81,6 +85,17 @@ func (h *DefaultHostProvider) OpenIO(ctx context.Context, asset *AssetRef, param
 		return OpenFileResource(params.Path, params.Mode)
 	case "http":
 		if asset == nil {
+			if params.Auth != nil {
+				// An endpoint of a call with no asset, carrying its scope's
+				// credentials: no asset to key a cached client on, and the
+				// credentials ride on the request, never through the process's
+				// proxy.
+				auth, err := h.resolveAuth(ctx, nil, params.Auth)
+				if err != nil {
+					return nil, err
+				}
+				return openHTTPResourceWithClient(params, buildSingleUseEndpointClient(params.Dial, params.TLS, params.AllowPrivate), auth)
+			}
 			if params.Dial != nil {
 				// Along an asset's connection path to an address that is not one
 				// of its endpoints (network.assetRoute): single-use, no credentials,
@@ -131,25 +146,34 @@ func (h *DefaultHostProvider) resolveAuth(ctx context.Context, asset *AssetRef, 
 	if auth == nil {
 		return nil, nil
 	}
+	fields := []zap.Field{zap.String("extension", h.cfg.ExtensionName)}
+	if asset != nil {
+		fields = append(fields, zap.Int64("assetID", asset.ID))
+	}
 	values, err := auth.Credentials(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Error("extension credential injection failed",
-			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.Error(err))
-		return nil, fmt.Errorf("credentials of asset %s: %w", assetLabel(asset), err)
+		logger.Ctx(ctx).Error("extension credential injection failed", append(fields, zap.Error(err))...)
+		return nil, fmt.Errorf("credentials of %s: %w", scopeOwner(asset), err)
 	}
 	if values == nil {
-		logger.Ctx(ctx).Debug("extension asset selects no credentials",
-			zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID))
+		logger.Ctx(ctx).Debug("extension scope selects no credentials", fields...)
 		return nil, nil
 	}
-	logger.Ctx(ctx).Debug("extension credentials injected for endpoint request",
-		zap.String("extension", h.cfg.ExtensionName), zap.Int64("assetID", asset.ID), zap.Int("bindings", len(values)))
+	logger.Ctx(ctx).Debug("extension credentials injected for endpoint request", append(fields, zap.Int("bindings", len(values)))...)
 	return &requestAuth{bindings: values, isEndpoint: auth.IsEndpoint}, nil
 }
 
 // resolveScope resolves the scope of a call on asset through the host's
-// ScopeResolver (scopeSource). Without one every asset gets an empty scope.
+// ScopeResolver, or of a call with no asset (asset nil) through its
+// NoAssetScopeResolver (scopeSource). Without the one it needs a call gets an
+// empty scope.
 func (h *DefaultHostProvider) resolveScope(ctx context.Context, asset *AssetRef) (*Scope, error) {
+	if asset == nil {
+		if h.cfg.NoAssetScopes == nil {
+			return &Scope{}, nil
+		}
+		return h.cfg.NoAssetScopes(ctx, h.cfg.ExtensionName)
+	}
 	if h.cfg.Scopes == nil {
 		return &Scope{Asset: asset}, nil
 	}

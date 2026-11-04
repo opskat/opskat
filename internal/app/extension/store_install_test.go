@@ -133,7 +133,7 @@ func newStoreWorld(t *testing.T, name, indexSHA string) *storeWorld {
 	manager := extension.NewManager(extDir, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{Logger: zap.NewNop()})
 	}, extension.NewContributionRegistry(extreg.Points()...), zap.NewNop())
-	svc := extension_svc.New(manager, stateRepo, nil, nil, zap.NewNop(), nil, nil)
+	svc := extension_svc.New(manager, stateRepo, nil, nil, nil, zap.NewNop(), nil, nil)
 	t.Cleanup(func() {
 		manager.Contributions().Revoke(name)
 		svc.Close(context.Background())

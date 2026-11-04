@@ -29,16 +29,36 @@ const (
 	GrantToolCpWrite = "cp:write"
 )
 
-// CheckPermission 统一权限检查（策略 + DB Grant 匹配）。
+// CheckPermission 统一权限检查（策略 + DB Grant 匹配），之后按资产的权限模式做模型审核（见 applyReview）。
 // 不包含用户确认逻辑 — aictx.NeedConfirm 时由调用方处理。
 // assetType: "ssh" | "serial" | "database" | "redis" | "mongodb" | "kafka" | "k8s" |
 // "exec"（exec 等同于 ssh）| "sql"（sql 等同于 database）| "mongo"（mongo 等同于 mongodb）
 func CheckPermission(ctx context.Context, assetType string, assetID int64, command string) aictx.CheckResult {
-	handler, ok := permissionTypeFor(assetType)
-	if !ok {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	return CheckPermissions(ctx, []PermissionRequest{{AssetType: assetType, AssetID: assetID, Command: command}})[0]
+}
+
+// PermissionRequest 是一次权限检查的输入，字段含义同 CheckPermission 的参数。
+type PermissionRequest struct {
+	AssetType string
+	AssetID   int64
+	Command   string
+	// PipedInput 表示命令执行时还会从管道读入内容（opsctl exec 把 stdin 转发给 ssh 命令）。
+	// 模型审核只看得到命令本身，看不到这部分，不能据审核结果放行，见 applyReviews。
+	PipedInput bool
+}
+
+// CheckPermissions 批量检查，结果与输入一一对应。规则判断逐条进行；需要模型审核的命令
+// 一次交给审核服务，调用模型这一步并行（批量执行不必逐条等待）。
+func CheckPermissions(ctx context.Context, reqs []PermissionRequest) []aictx.CheckResult {
+	results := make([]aictx.CheckResult, len(reqs))
+	for i, r := range reqs {
+		results[i] = aictx.CheckResult{Decision: aictx.NeedConfirm}
+		if handler, ok := permissionTypeFor(r.AssetType); ok {
+			results[i] = handler.check(ctx, r.AssetID, r.Command)
+		}
 	}
-	return handler.check(ctx, assetID, command)
+	applyReviews(ctx, reqs, results)
+	return results
 }
 
 // --- SSH / Serial（共用 shell 命令策略） ---

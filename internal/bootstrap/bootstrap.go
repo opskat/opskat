@@ -12,10 +12,12 @@ import (
 	"github.com/opskat/opskat/internal/repository/ai_provider_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/command_review_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_describe_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
@@ -151,6 +153,7 @@ func Init(ctx context.Context, opts Options) error {
 	}
 
 	snippet_svc.Register(snippet_svc.NewSnippetSvc(snippet_svc.NewCategoryRegistry()))
+	registerCommandReview()
 
 	return nil
 }
@@ -170,11 +173,13 @@ func registerRepositories() {
 	ai_provider_repo.RegisterAIProvider(ai_provider_repo.NewAIProvider())
 	extension_data_repo.RegisterExtensionData(extension_data_repo.NewExtensionData())
 	extension_state_repo.RegisterExtensionState(extension_state_repo.NewExtensionState())
+	extension_settings_repo.RegisterExtensionSettings(extension_settings_repo.NewExtensionSettings())
 	extension_describe_repo.RegisterExtensionDescribe(extension_describe_repo.NewExtensionDescribe())
 	// Extensions are described by running them; the cache is what keeps listing them
 	// (and resolving their asset types from opsctl) off that path.
 	extension.SetDescribeCache(extensionDescribeCache{})
 	snippet_repo.RegisterSnippet(snippet_repo.NewSnippet())
+	command_review_repo.RegisterCommandReview(command_review_repo.NewCommandReview())
 }
 
 // resolveKDFSalt 从 config.json 获取 salt，不存在则生成并持久化
