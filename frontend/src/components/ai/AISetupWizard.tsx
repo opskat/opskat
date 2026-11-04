@@ -9,6 +9,7 @@ import { Bot, Zap, Sparkles, ArrowRight, Settings, SquareTerminal } from "lucide
 import { toast } from "sonner";
 import { AIProviderForm, type AIProviderFormValues } from "./AIProviderForm";
 import { useTabStore } from "@/stores/tabStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 export function AISetupWizard() {
   const { t } = useTranslation();
@@ -38,7 +39,7 @@ export function AISetupWizard() {
       await useAIStore.getState().checkConfigured();
       await useAIStore.getState().fetchConversations();
     } catch (e: unknown) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

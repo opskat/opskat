@@ -65,6 +65,7 @@ import { Segmented } from "@/components/asset/fields";
 import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { localizedName } from "@/lib/commandReview";
 import type { ExtPermissions } from "@/extension/types";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ExtInfo {
   name: string;
@@ -128,7 +129,7 @@ export function ExtensionSection() {
       await loadExtensions();
       notifySuccess(t("extension.reloadSuccess"));
     } catch (e) {
-      toast.error(`${t("extension.reloadError")}: ${String(e)}`);
+      toast.error(`${t("extension.reloadError")}: ${errorMessage(e)}`);
     } finally {
       setReloading(false);
     }
@@ -143,7 +144,7 @@ export function ExtensionSection() {
         notifySuccess(t("extension.installSuccess"));
       }
     } catch (e) {
-      toast.error(`${t("extension.installError")}: ${String(e)}`);
+      toast.error(`${t("extension.installError")}: ${errorMessage(e)}`);
     } finally {
       setInstalling(false);
     }
@@ -156,7 +157,7 @@ export function ExtensionSection() {
       await loadExtensions();
       notifySuccess(t("extension.uninstallSuccess"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setUninstallTarget(null);
       setCleanData(false);
@@ -174,7 +175,7 @@ export function ExtensionSection() {
       }
       await loadExtensions();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -209,7 +210,7 @@ export function ExtensionSection() {
         setDetailTarget(detail as ExtInfo);
       }
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -462,7 +463,7 @@ function useReviewQuestions(extName: string, isReviewer: boolean): ReviewQuestio
         const found = st?.reviewers?.find((r) => r.name === extName);
         if (!cancelled) setQuestions((found?.questions as ReviewQuestion[] | undefined) ?? []);
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     })();
     return () => {

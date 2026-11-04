@@ -15,10 +15,10 @@ import { CheckCircle2, Loader2, PlugZap, XCircle } from "lucide-react";
 import { CancelTest, TestNetworkProxy } from "../../../wailsjs/go/system/System";
 import type { system } from "../../../wailsjs/go/models";
 import { isNetworkProxyFormValid, toNetworkProxyInput, type NetworkProxyForm } from "./networkProxyForm";
+import { errorMessage } from "@/lib/errorMessage";
 
 const LAST_URL_KEY = "opskat.networkProxy.lastTestUrl";
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const isHttpUrl = (s: string) => /^https?:\/\/\S+$/i.test(s);
 
 type TestState =
@@ -68,7 +68,7 @@ export function NetworkProxyTestDialog({
     try {
       next = { state: "done", result: await TestNetworkProxy(id, toNetworkProxyInput(form), trimmed) };
     } catch (e: unknown) {
-      next = { state: "rejected", message: errMsg(e) };
+      next = { state: "rejected", message: errorMessage(e) };
     }
     if (activeId.current !== id) return;
     activeId.current = null;

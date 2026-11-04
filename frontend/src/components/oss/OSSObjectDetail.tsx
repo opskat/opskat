@@ -9,6 +9,7 @@ import { notifyCopied } from "@/lib/notify";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { typeIcon, typeIconColor } from "@/lib/objectContentType";
 import { OSSThumbnail } from "./OSSThumbnail";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface OSSObjectDetailProps {
   object: oss_svc.ObjectItem;
@@ -47,7 +48,7 @@ export function OSSObjectDetail({
     void navigator.clipboard
       ?.writeText(object.key)
       .then(() => notifyCopied(t("oss.detail.copyKeyCopied")))
-      .catch((error) => toast.error(String(error)));
+      .catch((error) => toast.error(errorMessage(error)));
   const iconButtonClass =
     "cursor-pointer rounded-sm p-0.5 outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring/45";
 

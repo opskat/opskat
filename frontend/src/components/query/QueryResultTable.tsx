@@ -48,6 +48,7 @@ import {
   type TableFindResult,
 } from "@/lib/tableFind";
 import { TableFindBar, TableFindHighlight, type TableFindStatus } from "./TableFindBar";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface CellEdit {
   rowIdx: number;
@@ -1026,7 +1027,7 @@ function QueryResultTableImpl({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setCtxMenu(null);
     }
@@ -1063,7 +1064,7 @@ function QueryResultTableImpl({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [selectedRowIdxs, selectedColumns, selectedCell, sortedIndices, displayColumns, edits, rows, t]);
 
@@ -1081,7 +1082,7 @@ function QueryResultTableImpl({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setCtxMenu(null);
     }
@@ -1104,7 +1105,7 @@ function QueryResultTableImpl({
       const edit = { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: text };
       pasteCellHandler?.(edit);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setCtxMenu(null);
     }
@@ -1131,7 +1132,7 @@ function QueryResultTableImpl({
     try {
       text = await navigator.clipboard.readText();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
       return;
     }
     if (!text.trim()) return;

@@ -5,6 +5,7 @@ import { Button, Textarea, ScrollArea } from "@opskat/ui";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { RedisSetStringValue } from "../../../wailsjs/go/redis/Redis";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface JsonToken {
   value: string;
@@ -124,7 +125,7 @@ export function RedisStringEditor({ tabId, t }: { tabId: string; t: (key: string
       selectKey(tabId, state.selectedKey!);
       setEditing(false);
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setSaving(false);
   };

@@ -6,6 +6,7 @@ import { notifyCopied } from "@/lib/notify";
 import { formatModKey } from "@/stores/shortcutStore";
 import { cellValueToText } from "@/lib/cellValue";
 import { Segmented } from "@/components/asset/fields";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface CellExpandEditorProps {
   /** 浮层锚点(视口坐标,通常是被编辑单元格的左下角)。 */
@@ -85,7 +86,7 @@ export function CellExpandEditor({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

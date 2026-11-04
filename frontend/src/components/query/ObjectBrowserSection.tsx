@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { GetObjectSource } from "../../../wailsjs/go/query/Query";
 import type { query_svc } from "../../../wailsjs/go/models";
 import { useQueryStore } from "@/stores/queryStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ObjectBrowserSectionProps {
   tabId: string;
@@ -42,7 +43,7 @@ export function ObjectBrowserSection({ tabId, assetId, database }: ObjectBrowser
       const src = await GetObjectSource(assetId, database, type, name, table ?? "");
       openSqlTab(tabId, database, src);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

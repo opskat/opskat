@@ -14,6 +14,7 @@ import { notifyCopied } from "@/lib/notify";
 import { statementsScript } from "./format";
 import { DropWarning, StatementList, type StatementItem, type StatementStatus } from "./StatementList";
 import type { SaveFlowState, SavePlan } from "./useSaveFlow";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface SaveDialogProps {
   state: SaveFlowState<SavePlan>;
@@ -71,7 +72,7 @@ export function SaveDialog({ state, transactional, partialNote, onConfirm, onClo
   const copy = () =>
     navigator.clipboard.writeText(statementsScript(plan.statements)).then(
       () => notifyCopied(t("query.copied")),
-      (err: unknown) => toast.error(String(err))
+      (err: unknown) => toast.error(errorMessage(err))
     );
 
   return (

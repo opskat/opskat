@@ -174,7 +174,7 @@ describe("ExportTableDataDialog", () => {
     await startExport(user, "/tmp/opskat/users.csv");
 
     const log = await screen.findByText(/\[EXP\] Failed - /);
-    expect(log.textContent).toContain('[EXP] Failed - Error: relation "users" does not exist');
+    expect(log.textContent).toContain('[EXP] Failed - relation "users" does not exist');
     expect(log.textContent).toContain("context canceled");
     expect(App.CloseTableExport).toHaveBeenCalledWith("cursor-1");
   });

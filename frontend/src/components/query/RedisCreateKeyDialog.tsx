@@ -27,6 +27,7 @@ import {
   RedisStreamAdd,
   RedisZSetAdd,
 } from "../../../wailsjs/go/redis/Redis";
+import { errorMessage } from "@/lib/errorMessage";
 
 type RedisCreateType = "string" | "hash" | "list" | "set" | "zset" | "stream";
 
@@ -219,7 +220,7 @@ export function RedisCreateKeyDialog({
       await onCreated(key, parsedDb);
       close();
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
       setSubmitting(false);
     }
   }, [

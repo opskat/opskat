@@ -60,6 +60,7 @@ import type {
   ServiceListItem,
 } from "./cluster/types";
 import { ConfigMapDetailView, SecretDetailView, ServiceDetailView } from "./cluster/ResourceDetailViews";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   asset: asset_entity.Asset;
@@ -233,7 +234,7 @@ export function K8sClusterPage({ asset }: Props) {
         }
       })
       .catch((e: unknown) => {
-        setError(String(e));
+        setError(errorMessage(e));
       })
       .finally(() => {
         setLoading(false);
@@ -284,7 +285,7 @@ export function K8sClusterPage({ asset }: Props) {
               });
             })
             .catch((e: unknown) => {
-              setErrors((prev) => ({ ...prev, [ns]: String(e) }));
+              setErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
             })
             .finally(() => {
               setLoadingItems((prev) => {
@@ -323,7 +324,7 @@ export function K8sClusterPage({ asset }: Props) {
           setInfo(data);
         })
         .catch((e: unknown) => {
-          setError(String(e));
+          setError(errorMessage(e));
         })
     );
 
@@ -342,7 +343,7 @@ export function K8sClusterPage({ asset }: Props) {
             });
           })
           .catch((e: unknown) => {
-            setNamespaceErrors((prev) => ({ ...prev, [ns]: String(e) }));
+            setNamespaceErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
           })
           .finally(() => {
             setLoadingNamespaces((prev) => {
@@ -408,7 +409,7 @@ export function K8sClusterPage({ asset }: Props) {
             });
           })
           .catch((e: unknown) => {
-            setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+            setPodDetailErrors((prev) => ({ ...prev, [key]: errorMessage(e) }));
           })
           .finally(() => {
             setLoadingPodDetails((prev) => {
@@ -443,7 +444,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setNamespaceErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          setNamespaceErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
         })
         .finally(() => {
           inflightNamespacesRef.current.delete(ns);
@@ -495,7 +496,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setPodErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        setPodErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
       })
       .finally(() => {
         setLoadingPods((prev) => {
@@ -534,7 +535,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setDeploymentErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        setDeploymentErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
       })
       .finally(() => {
         setLoadingDeployments((prev) => {
@@ -560,7 +561,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setServiceErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        setServiceErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
       })
       .finally(() => {
         setLoadingServices((prev) => {
@@ -586,7 +587,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setConfigMapErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        setConfigMapErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
       })
       .finally(() => {
         setLoadingConfigMaps((prev) => {
@@ -612,7 +613,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setSecretErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        setSecretErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
       })
       .finally(() => {
         setLoadingSecrets((prev) => {
@@ -703,7 +704,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setDeploymentErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          setDeploymentErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
         })
         .finally(() => {
           setRefreshingItems((prev) => {
@@ -744,7 +745,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setPodErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          setPodErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
         })
         .finally(() => {
           setRefreshingItems((prev) => {
@@ -785,7 +786,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setServiceErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          setServiceErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
         })
         .finally(() => {
           setRefreshingItems((prev) => {
@@ -826,7 +827,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setConfigMapErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          setConfigMapErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
         })
         .finally(() => {
           setRefreshingItems((prev) => {
@@ -867,7 +868,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setSecretErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          setSecretErrors((prev) => ({ ...prev, [ns]: errorMessage(e) }));
         })
         .finally(() => {
           setRefreshingItems((prev) => {
@@ -894,7 +895,7 @@ export function K8sClusterPage({ asset }: Props) {
           });
         })
         .catch((e: unknown) => {
-          setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+          setPodDetailErrors((prev) => ({ ...prev, [key]: errorMessage(e) }));
         });
     },
     [asset.ID, setPodDetails, setPodDetailErrors]
@@ -972,7 +973,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+        setPodDetailErrors((prev) => ({ ...prev, [key]: errorMessage(e) }));
       })
       .finally(() => {
         setLoadingPodDetails((prev) => {
@@ -1145,7 +1146,7 @@ export function K8sClusterPage({ asset }: Props) {
         });
       })
       .catch((e: unknown) => {
-        setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+        setPodDetailErrors((prev) => ({ ...prev, [key]: errorMessage(e) }));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefreshingItems, activeTabId]);

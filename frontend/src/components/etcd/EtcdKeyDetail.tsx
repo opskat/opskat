@@ -8,6 +8,7 @@ import { Copy, History, Loader2, Pencil, Save, Trash2, X } from "lucide-react";
 import { useEtcdStore } from "@/stores/etcdStore";
 import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
 import type { etcd_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface EtcdKeyDetailProps {
   assetId: number;
@@ -225,7 +226,7 @@ export function EtcdKeyDetail({
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorMessage(e);
         setErr(msg);
         const key = revision > 0 ? "etcd.detail.historyFailed" : "etcd.error.connFailed";
         toast.error(`${t(key)}: ${msg}`);
@@ -289,7 +290,7 @@ export function EtcdKeyDetail({
       }
       setHistoryItems(collected);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       toast.error(`${t("etcd.detail.historyFailed")}: ${msg}`);
       setHistoryItems(collected.length > 0 ? collected : [detail]);
     } finally {
@@ -363,7 +364,7 @@ export function EtcdKeyDetail({
       setHistoryItems([]);
       onSaved?.(detail.key);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       toast.error(`${t("etcd.detail.saveFailed")}: ${msg}`);
     } finally {
       setSaving(false);
@@ -382,7 +383,7 @@ export function EtcdKeyDetail({
       notifySuccess(t("etcd.detail.deleteSuccess", { key: detail.key }));
       onDeleted?.(detail.key);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       toast.error(`${t("etcd.detail.deleteFailed")}: ${msg}`);
     } finally {
       setDeleting(false);

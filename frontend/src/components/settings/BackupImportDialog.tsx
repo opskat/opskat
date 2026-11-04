@@ -21,6 +21,7 @@ import { SecretInput } from "@/components/SecretInput";
 import { useAssetStore } from "@/stores/assetStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface BackupImportDialogProps {
   open: boolean;
@@ -62,7 +63,7 @@ export function BackupImportDialog({
       const result = await PreviewImportFile(filePath, password);
       setSummary(result);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setDecrypting(false);
     }
@@ -123,7 +124,7 @@ export function BackupImportDialog({
 
       onOpenChange(false);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setImporting(false);
     }

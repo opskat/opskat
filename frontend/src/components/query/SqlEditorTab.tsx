@@ -44,6 +44,7 @@ import {
 import { driverHasCapability, findDatabaseDriver, loadDatabaseDrivers, useDatabaseDrivers } from "@/lib/dbDrivers";
 import { useDriverStatements } from "./useDriverStatements";
 import { formatModKey } from "@/stores/shortcutStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface SqlEditorTabProps {
   tabId: string;
@@ -248,7 +249,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
       } catch (e) {
         if (latestRequest.current !== requestId) return;
         setElapsedMs(null);
-        setError(String(e));
+        setError(errorMessage(e));
         // 失败不再是 DML 结果:底部状态条要显示「加载失败」。列保留:重试拿到同样的列时列宽、冻结等不重置。
         setAffectedRows(null);
         setRows([]);
@@ -321,7 +322,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
       try {
         resolved = await resolveExecution(source);
       } catch (e) {
-        toast.error(t("query.statementSplitFailed"), { description: String(e) });
+        toast.error(t("query.statementSplitFailed"), { description: errorMessage(e) });
         return;
       }
       if (!resolved.sql) return;

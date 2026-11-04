@@ -10,6 +10,7 @@
 // 不支持：use 语句、变量、for/if 等语句、未知函数、calculated keys（[x]: 1）。
 
 import { parseExpressionAt, type Node as AcornNode } from "acorn";
+import { errorMessage } from "@/lib/errorMessage";
 
 export class MongoshParseError extends Error {
   constructor(
@@ -47,7 +48,7 @@ export function parseMongosh(src: string, currentDb: string): ParseResult {
     return { ok: true, value: parseInner(src, currentDb) };
   } catch (e) {
     if (e instanceof MongoshParseError) return { ok: false, error: e };
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     return { ok: false, error: new MongoshParseError(msg) };
   }
 }
@@ -64,7 +65,7 @@ function parseInner(src: string, currentDb: string): ParsedMongosh {
   try {
     root = parseExpressionAt(trimmed, 0, { ecmaVersion: 2022 });
   } catch (e) {
-    throw new MongoshParseError(`语法错误: ${e instanceof Error ? e.message : String(e)}`);
+    throw new MongoshParseError(`语法错误: ${errorMessage(e)}`);
   }
   // parseExpressionAt may stop early; ensure it consumed the whole string (ignoring trailing whitespace).
   const rootWithEnd = root as AcornNode & { end: number };

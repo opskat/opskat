@@ -5,6 +5,7 @@ import { Input, Button } from "@opskat/ui";
 import { Loader2, Play } from "lucide-react";
 import { useEtcdStore } from "@/stores/etcdStore";
 import type { etcd_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface EtcdQueryBarProps {
   assetId: number;
@@ -102,7 +103,7 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
       await exec(req);
       onResult?.();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       setError(msg);
       toast.error(`${t("etcd.query.execFailed")}: ${msg}`);
     } finally {

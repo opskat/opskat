@@ -36,8 +36,8 @@ import {
   type NetworkProxyMode,
   type NetworkProxyType,
 } from "./networkProxyForm";
+import { errorMessage } from "@/lib/errorMessage";
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const invalidCls = "border-destructive focus-visible:ring-destructive/40";
 
 type Field = "host" | "port" | "noProxy";
@@ -61,7 +61,7 @@ export function NetworkSection() {
   useEffect(() => {
     GetNetworkProxySettings()
       .then(apply)
-      .catch((e: unknown) => toast.error(errMsg(e)));
+      .catch((e: unknown) => toast.error(errorMessage(e)));
   }, [apply]);
 
   if (!form) return null;
@@ -83,7 +83,7 @@ export function NetworkSection() {
       notifySuccess(t("network.proxy.saved"));
       apply(await GetNetworkProxySettings());
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

@@ -9,6 +9,7 @@ import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
 import { typeIcon, typeIconColor } from "@/lib/objectContentType";
 import { OSSObjectCollectionFrame } from "./OSSObjectCollectionFrame";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface OSSObjectListProps {
   prefixes: string[];
@@ -59,7 +60,7 @@ export function OSSObjectList({
     void navigator.clipboard
       .writeText(keys.join("\n"))
       .then(() => notifyCopied(t("oss.keyCopied")))
-      .catch((e) => toast.error(String(e)));
+      .catch((e) => toast.error(errorMessage(e)));
     return true;
   };
 

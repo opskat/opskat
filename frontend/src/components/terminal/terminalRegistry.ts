@@ -24,6 +24,7 @@ import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
 import { attachTerminalUrlHighlighter, type TerminalUrlHighlighterController } from "./terminalUrlHighlighter";
 import { attachTerminalClipboardOsc52, type TerminalClipboardOsc52Controller } from "./terminalOsc52";
 import { normalizeHttpUrl } from "./terminalUrlScan";
+import { errorMessage } from "@/lib/errorMessage";
 
 const PENDING_RZ_UPLOAD_TTL_MS = 10_000;
 
@@ -174,7 +175,7 @@ export function getOrCreateTerminal(
       });
     } catch (err) {
       const name = (err as Error)?.name;
-      const message = (err as Error)?.message ?? String(err);
+      const message = (err as Error)?.message ?? errorMessage(err);
       const store = useTerminalThemeStore.getState();
       store.reportWebglFailure({ cause: "init-threw", name, message, at: Date.now() });
       store.setWebglEnabled(false);

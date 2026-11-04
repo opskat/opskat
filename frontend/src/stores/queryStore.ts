@@ -11,6 +11,7 @@ import {
   findDatabaseDriver,
   loadDatabaseDrivers,
 } from "../lib/dbDrivers";
+import { errorMessage } from "@/lib/errorMessage";
 
 // --- Types ---
 
@@ -579,7 +580,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], loadingDbs: false, error: String(err) },
+          [tabId]: { ...s.dbStates[tabId], loadingDbs: false, error: errorMessage(err) },
         },
       }));
     }
@@ -636,7 +637,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             ...s.dbStates[tabId],
             tables: { ...s.dbStates[tabId].tables, [database]: [] },
             loadingTables: { ...s.dbStates[tabId].loadingTables, [database]: false },
-            error: s.dbStates[tabId]?.error || String(err),
+            error: s.dbStates[tabId]?.error || errorMessage(err),
           },
         },
       }));
@@ -995,7 +996,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], error: String(err) },
+          [tabId]: { ...s.dbStates[tabId], error: errorMessage(err) },
         },
       }));
     }
@@ -1025,7 +1026,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], error: String(err) },
+          [tabId]: { ...s.dbStates[tabId], error: errorMessage(err) },
         },
       }));
     }
@@ -1088,7 +1089,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           ...s.redisStates,
           [tabId]:
             s.redisStates[tabId]?.scanRequestId === requestId
-              ? { ...s.redisStates[tabId], loadingKeys: false, error: String(err) }
+              ? { ...s.redisStates[tabId], loadingKeys: false, error: errorMessage(err) }
               : s.redisStates[tabId],
         },
       }));
@@ -1321,7 +1322,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         redisStates: {
           ...s.redisStates,
-          [tabId]: { ...s.redisStates[tabId], error: s.redisStates[tabId]?.error || String(err) },
+          [tabId]: { ...s.redisStates[tabId], error: s.redisStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }
@@ -1475,7 +1476,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         mongoStates: {
           ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || String(err) },
+          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }
@@ -1501,7 +1502,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         mongoStates: {
           ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || String(err) },
+          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }

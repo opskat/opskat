@@ -48,6 +48,7 @@ import {
   type ImportValueConversionOptions,
   type ParsedDelimitedTable,
 } from "@/lib/tableImport";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ImportTableDataDialogProps {
   open: boolean;
@@ -424,7 +425,7 @@ export function ImportTableDataDialog({
       setSources((prev) => [...prev, { id: `${url}-${Date.now()}`, name: url, kind: "url", text }]);
       setUrlDraft("");
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setLoadingUrl(false);
     }
@@ -509,7 +510,7 @@ export function ImportTableDataDialog({
             else added += affected;
           } catch (e) {
             error += 1;
-            const message = e instanceof Error ? e.message : String(e);
+            const message = errorMessage(e);
             nextLogLines.push(`[ERR] ${message}`);
             nextLogLines.push(`[ERR] ${statements[index]}`);
             setLogLines([...nextLogLines]);
@@ -537,7 +538,7 @@ export function ImportTableDataDialog({
         }
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorMessage(e);
       nextLogLines.push(`[ERR] ${message}`);
       nextLogLines.push("[IMP] Finished with error");
       setLogLines([...nextLogLines]);
@@ -594,7 +595,7 @@ export function ImportTableDataDialog({
       setStepIndex((value) => value + 1);
     } catch (e) {
       if (generation !== latestGeneration.current) return;
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errorMessage(e));
     } finally {
       if (generation === latestGeneration.current) setGenerating(false);
     }

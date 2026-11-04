@@ -20,6 +20,7 @@ import {
 import { useSnippetStore } from "@/stores/snippetStore";
 import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
 import { snippet_entity, snippet_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface SnippetFormDialogProps {
   open: boolean;
@@ -124,7 +125,7 @@ function SnippetFormDialogContent({
       }
       onOpenChange(false);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
       setSubmitting(false);
     }

@@ -17,6 +17,7 @@ import { dbdriver } from "../../../wailsjs/go/models";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface CreateDatabaseDialogProps {
   open: boolean;
@@ -87,7 +88,7 @@ export function CreateDatabaseDialog({
       setPendingName(name);
       setShowSqlPreview(true);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [assetId, databaseName, options, valueOf, defaultDatabase, t]);
 
@@ -105,7 +106,7 @@ export function CreateDatabaseDialog({
       onSuccess();
       resetForm();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSubmitting(false);
     }

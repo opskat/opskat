@@ -187,6 +187,6 @@ describe("OSSObjectDetail", () => {
 
     fireEvent.click(screen.getByTestId("oss-detail-copy-key"));
 
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Error: clipboard denied"));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("clipboard denied"));
   });
 });

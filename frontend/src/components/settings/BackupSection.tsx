@@ -66,8 +66,8 @@ import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { SecretInput } from "@/components/SecretInput";
+import { errorMessage } from "@/lib/errorMessage";
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]";
 
 const emptyWebDAVExportDefaults: WebDAVExportDefaults = {
@@ -178,7 +178,7 @@ export function BackupSection() {
               SaveGitHubToken(token, u.login).catch(() => {});
             })
             .catch((e: unknown) => {
-              if (errMsg(e).includes(githubTokenInvalidMarker)) {
+              if (errorMessage(e).includes(githubTokenInvalidMarker)) {
                 setGhToken("");
                 setGhUser("");
                 ClearGitHubToken().catch(() => {});
@@ -311,7 +311,7 @@ export function BackupSection() {
       setBackupImportSummary(info.summary ?? null);
       setBackupImportOpen(true);
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -332,8 +332,8 @@ export function BackupSection() {
       await SaveGitHubToken(token, user.login);
       notifySuccess(t("backup.gistLoggedIn", { user: user.login }));
     } catch (e: unknown) {
-      if (!String(e).includes("\u53D6\u6D88")) {
-        toast.error(errMsg(e));
+      if (!errorMessage(e).includes("\u53D6\u6D88")) {
+        toast.error(errorMessage(e));
       }
     } finally {
       setDeviceFlowOpen(false);
@@ -406,7 +406,7 @@ export function BackupSection() {
       await applyImportResult(result);
       notifySuccess(t("backup.gistPullSuccess"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setGistPulling(false);
     }
@@ -432,7 +432,7 @@ export function BackupSection() {
       setWebDAVConfigured(true);
       notifySuccess(t("backup.webdavSaved"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setWebDAVSaving(false);
     }
@@ -448,7 +448,7 @@ export function BackupSection() {
       await TestWebDAVConfig(buildWebDAVInput());
       notifySuccess(t("backup.webdavTestSuccess"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setWebDAVTesting(false);
     }
@@ -468,7 +468,7 @@ export function BackupSection() {
       setWebDAVExportDefaults(emptyWebDAVExportDefaults);
       notifySuccess(t("backup.webdavCleared"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -536,7 +536,7 @@ export function BackupSection() {
       await applyImportResult(result);
       notifySuccess(t("backup.webdavPullSuccess"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setWebDAVPulling(false);
     }

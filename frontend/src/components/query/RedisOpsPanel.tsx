@@ -28,6 +28,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { ExecuteRedis } from "../../../wailsjs/go/query/Query";
 import { RedisClusterOverview, RedisSentinelOverview } from "../../../wailsjs/go/redis/Redis";
 import { redis_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 const CLUSTER_TOTAL_SLOTS = 16384;
 
@@ -252,7 +253,7 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
         setInfo(parseRedisInfoResult(infoResult || ""));
       }
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setLoading(false);
     }

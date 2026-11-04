@@ -12,6 +12,7 @@ import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 import { GetCommandReviewState } from "../../../wailsjs/go/extension/Extension";
 import type { command_review_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 const MODES: PermissionMode[] = ["", "default", "assisted", "autopilot"];
 const needsReview = (mode: EffectivePermissionMode) => mode === "assisted" || mode === "autopilot";
@@ -50,7 +51,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
       await onChange(mode);
       notifySuccess(t("commandReview.mode.saved"));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -59,7 +60,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
   useEffect(() => {
     GetCommandReviewState()
       .then(setReview)
-      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => toast.error(errorMessage(e)));
   }, []);
 
   const current = value as PermissionMode;

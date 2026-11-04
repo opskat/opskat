@@ -41,6 +41,7 @@ import { useAIStore } from "@/stores/aiStore";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsEmit, EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
 import { ConfirmQuit } from "../wailsjs/go/system/System";
+import { errorMessage } from "@/lib/errorMessage";
 
 function App() {
   const { t } = useTranslation();
@@ -284,7 +285,7 @@ function App() {
       setEditingAsset(copied);
       setAssetFormOpen(true);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -321,7 +322,7 @@ function App() {
     try {
       await connect(asset, "", true);
     } catch (e) {
-      toast.error(`${asset.Name}: ${String(e)}`);
+      toast.error(`${asset.Name}: ${errorMessage(e)}`);
     }
   };
 
@@ -335,7 +336,7 @@ function App() {
         sftp.toggleFileManager(tabId);
       }
     } catch (e) {
-      toast.error(`${asset.Name}: ${String(e)}`);
+      toast.error(`${asset.Name}: ${errorMessage(e)}`);
     }
   };
 

@@ -4,6 +4,7 @@ import i18n from "i18next";
 import { toast } from "sonner";
 import { DatabaseDriverOwner, ListDatabaseDrivers } from "../../../wailsjs/go/query/Query";
 import type { dbdriver } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 后端驱动注册表里一个驱动的自我描述(原样来自 Query.ListDatabaseDrivers,专属字段的文案已按当前语言翻译)。 */
 export type DriverDescriptor = dbdriver.Descriptor;
@@ -60,7 +61,7 @@ export function useDatabaseDrivers(): DatabaseDriversState {
     let alive = true;
     loadDatabaseDrivers().then(
       (drivers) => alive && setState({ status: "ready", drivers }),
-      (err) => alive && setState({ status: "error", error: err instanceof Error ? err.message : String(err) })
+      (err) => alive && setState({ status: "error", error: errorMessage(err) })
     );
     return () => {
       alive = false;
@@ -104,7 +105,7 @@ export function useDatabaseDriverOwner(id: string | undefined): string | null {
         const owner = await DatabaseDriverOwner(id);
         if (alive) setAnswer({ id, owner });
       } catch (err) {
-        if (alive) toast.error(err instanceof Error ? err.message : String(err));
+        if (alive) toast.error(errorMessage(err));
       }
     })();
     return () => {

@@ -84,6 +84,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface AssetTreeProps {
   collapsed: boolean;
@@ -331,7 +332,7 @@ export function AssetTree({
     if (directAssetCount > 0 || childGroupCount > 0) {
       setDeleteConfirm({ id, assetCount: directAssetCount, childGroupCount });
     } else {
-      deleteGroup(id, false).catch((e) => toast.error(String(e)));
+      deleteGroup(id, false).catch((e) => toast.error(errorMessage(e)));
     }
   };
 
@@ -340,7 +341,7 @@ export function AssetTree({
       await MoveAsset(id, direction);
       await refresh();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -349,7 +350,7 @@ export function AssetTree({
       await MoveGroup(id, direction);
       await refresh();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -489,7 +490,7 @@ export function AssetTree({
       await refresh();
     } catch (err) {
       if (appliedOptimistic) void refresh();
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
   };
 
@@ -498,7 +499,7 @@ export function AssetTree({
     try {
       await deleteGroup(deleteConfirm.id, deleteAssets);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
     setDeleteConfirm(null);
   };
@@ -1087,7 +1088,7 @@ function CopyAssetRefMenuItem({ asset, t }: { asset: asset_entity.Asset; t: (key
       onClick={() => {
         void writeAssetMarkdownRef(asset.Name, asset.ID)
           .then(() => notifyCopied(t("asset.copyRefCopied")))
-          .catch((err) => toast.error(String(err)));
+          .catch((err) => toast.error(errorMessage(err)));
       }}
     >
       <Link2 className="h-3.5 w-3.5 mr-1.5" />

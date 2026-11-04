@@ -38,7 +38,7 @@ describe("PasswordSourceField reveal", () => {
 
     await user.click(screen.getByRole("button", { name: "action.showSecret" }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Error: keychain unavailable"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("keychain unavailable"));
     expect(input.type).toBe("password");
     expect(props.onPasswordChange).not.toHaveBeenCalled();
   });

@@ -15,6 +15,7 @@ import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import { parseMongosh, type ParsedMongosh } from "@/lib/mongosh-parser";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface MongoDBPanelProps {
   tabId: string;
@@ -218,7 +219,7 @@ function MongoCollectionContentBody({ tabId, innerTabId, assetId, database, coll
         setData(result);
         setSkip(newSkip);
       } catch (err) {
-        setData(JSON.stringify({ error: String(err) }));
+        setData(JSON.stringify({ error: errorMessage(err) }));
       } finally {
         setLoading(false);
       }
@@ -474,7 +475,7 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
         setSkip(typeof toSend.skip === "number" ? toSend.skip : execSkip);
         if (typeof toSend.limit === "number") setLimit(toSend.limit);
       } catch (err) {
-        setData(JSON.stringify({ error: String(err) }));
+        setData(JSON.stringify({ error: errorMessage(err) }));
       } finally {
         setLoading(false);
       }

@@ -3,6 +3,7 @@ import { CircleAlert, Copy, Filter, RotateCw } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface QueryErrorPanelProps {
   title: string;
@@ -21,7 +22,7 @@ export function QueryErrorPanel({ title, error, onRetry, onEditFilter }: QueryEr
       await navigator.clipboard.writeText(error);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

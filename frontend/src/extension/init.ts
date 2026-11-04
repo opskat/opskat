@@ -9,6 +9,7 @@ import { createExtensionAPI } from "./api";
 import { clearExtensionCache } from "./loader";
 import { refreshDatabaseDrivers } from "../lib/dbDrivers/descriptors";
 import type { ExtManifest } from "./types";
+import { errorMessage } from "@/lib/errorMessage";
 
 let _bootstrapped = false;
 let _subscribed = false;
@@ -140,7 +141,7 @@ async function applyExtensionList(seq: number): Promise<boolean> {
     return list.length > 0;
   } catch (err) {
     if (seq !== _refreshSeq) return _latestRefresh;
-    toast.error(`${i18n.t("extension.loadError")}: ${String(err)}`);
+    toast.error(`${i18n.t("extension.loadError")}: ${errorMessage(err)}`);
     return false;
   }
 }

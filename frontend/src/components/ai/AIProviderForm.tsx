@@ -22,6 +22,7 @@ import { FetchAIModels } from "../../../wailsjs/go/ai/AI";
 import { GetModelDefaults } from "../../../wailsjs/go/ai/AI";
 import { ai } from "../../../wailsjs/go/models";
 import { toast } from "sonner";
+import { errorMessage } from "@/lib/errorMessage";
 
 function getDefaultApiBase(providerType: string): string {
   if (providerType === "anthropic") return "https://api.anthropic.com";
@@ -161,7 +162,7 @@ export function AIProviderForm({
         toast.info(t("settings.noModelsFound"));
       }
     } catch (e) {
-      toast.error(`${t("settings.fetchModelsError")}: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`${t("settings.fetchModelsError")}: ${errorMessage(e)}`);
     } finally {
       setFetchingModels(false);
     }

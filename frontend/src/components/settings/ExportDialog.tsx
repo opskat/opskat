@@ -11,6 +11,7 @@ import { AssetMultiSelect } from "@/components/asset/AssetMultiSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { useShortcutStore, DEFAULT_SHORTCUTS } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ExportDialogProps {
   open: boolean;
@@ -175,7 +176,7 @@ export function ExportDialog({
       );
       onOpenChange(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errorMessage(e));
     } finally {
       setExporting(false);
     }

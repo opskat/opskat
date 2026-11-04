@@ -169,7 +169,7 @@ describe("TableDataTab grid edits go through the driver", () => {
 
     await waitFor(() => expect(executed()).toHaveLength(3));
     await waitFor(() => expect(vi.mocked(QueryTableRows)).toHaveBeenCalled());
-    expect(toast.error).toHaveBeenCalledWith("Error: duplicate key");
+    expect(toast.error).toHaveBeenCalledWith("duplicate key");
     // 成功的那一行改动已清掉,刷新后显示服务端的值;没命中的改动与失败的新增行都还在。
     await waitFor(() => expect(cell("0:name")).toHaveTextContent("ada"));
     expect(cell("1:name")).toHaveTextContent("bea");

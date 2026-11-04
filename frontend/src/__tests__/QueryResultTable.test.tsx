@@ -603,7 +603,7 @@ describe("QueryResultTable — cell context actions", () => {
 
     await waitFor(() => expect(readText).toHaveBeenCalledOnce());
     expect(onPasteCell).not.toHaveBeenCalled();
-    expect(toastError).toHaveBeenCalledWith("Error: clipboard denied");
+    expect(toastError).toHaveBeenCalledWith("clipboard denied");
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });
 
@@ -1333,7 +1333,7 @@ describe("QueryResultTable — keyboard paste", () => {
 
     await waitFor(() => expect(readText).toHaveBeenCalled());
     expect(onPasteBlock).not.toHaveBeenCalled();
-    expect(toastError).toHaveBeenCalledWith("Error: clipboard denied");
+    expect(toastError).toHaveBeenCalledWith("clipboard denied");
   });
 
   it("never reads the clipboard without a cell or row selection", () => {

@@ -1,3 +1,5 @@
+import { errorMessage } from "@/lib/errorMessage";
+
 export const DIRSYNC_ERROR_CODES = {
   MARKER_OVERFLOW: "DIRSYNC_MARKER_OVERFLOW",
   INVALID_TARGET: "DIRSYNC_INVALID_TARGET",
@@ -43,11 +45,11 @@ function hasDirSyncErrorCode(code: string): code is DirSyncErrorCode {
 }
 
 export function getDirSyncErrorMessageKey(error: unknown): DirSyncErrorMessageKey | null {
-  const code = String(error);
+  const code = errorMessage(error);
   return hasDirSyncErrorCode(code) ? DIRSYNC_ERROR_MESSAGE_KEYS[code] : null;
 }
 
 export function formatDirSyncError(t: (key: DirSyncErrorMessageKey) => string, error: unknown): string {
   const key = getDirSyncErrorMessageKey(error);
-  return key ? t(key) : String(error);
+  return key ? t(key) : errorMessage(error);
 }

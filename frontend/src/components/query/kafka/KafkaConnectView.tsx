@@ -26,7 +26,8 @@ import {
   useKafkaStore,
 } from "@/stores/kafkaStore";
 import { EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
-import { formatConnectorConfig, parseConnectorConfigObject, formatConnectorTaskSummary, errorMessage } from "./utils";
+import { formatConnectorConfig, parseConnectorConfigObject, formatConnectorTaskSummary } from "./utils";
+import { errorMessage } from "@/lib/errorMessage";
 
 export function KafkaConnectView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();

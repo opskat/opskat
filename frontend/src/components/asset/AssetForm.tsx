@@ -31,6 +31,7 @@ import type {
   AssetTestResult,
   SectionValidity,
 } from "@/lib/assetTypes/formContract";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface AssetFormProps {
   open: boolean;
@@ -187,7 +188,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     let cancelAttempt = () => {
       cancelled = true;
     };
-    let errorMessage: AssetTestAttempt["errorMessage"];
+    let attemptErrorMessage: AssetTestAttempt["errorMessage"];
     const active = {
       token,
       cancel: () => {
@@ -220,7 +221,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         };
       }
       cancelAttempt = attempt.cancel;
-      errorMessage = attempt.errorMessage;
+      attemptErrorMessage = attempt.errorMessage;
       if (cancelled) attempt.cancel();
       const result = await attempt.result;
       if (activeTestRef.current?.token === token) {
@@ -234,7 +235,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }
     } catch (e) {
       if (activeTestRef.current?.token === token) {
-        toast.error(errorMessage?.(e) ?? `${t("asset.testConnectionFailed")}: ${String(e)}`);
+        toast.error(attemptErrorMessage?.(e) ?? `${t("asset.testConnectionFailed")}: ${errorMessage(e)}`);
       }
     } finally {
       if (activeTestRef.current?.token === token) {
@@ -255,7 +256,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }
       onOpenChange(false);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -272,7 +273,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     try {
       built = await sectionRef.current.buildConfig(ctx);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errorMessage(e));
       return;
     }
     const asset = new asset_entity.Asset({

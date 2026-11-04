@@ -55,6 +55,7 @@ import {
   findDatabaseDriver,
   useDatabaseDrivers,
 } from "@/lib/dbDrivers";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -380,7 +381,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         }
         succeeded.push(target);
       } catch (err) {
-        errorMsg += `${target.database}.${target.table}: ${String(err)}\n`;
+        errorMsg += `${target.database}.${target.table}: ${errorMessage(err)}\n`;
       }
     }
 
@@ -493,7 +494,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               if (!tabMeta?.assetId) return;
               GetStarterQuery(tabMeta.assetId, db, tbl, 100).then(
                 (starter) => openSqlTab(tabId, db, starter),
-                (e) => toast.error(String(e))
+                (e) => toast.error(errorMessage(e))
               );
             }}
           >
