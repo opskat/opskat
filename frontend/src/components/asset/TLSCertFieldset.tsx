@@ -5,6 +5,7 @@ import { Button, Input, Textarea } from "@opskat/ui";
 import { Field, FieldLabel, Segmented } from "@/components/asset/fields";
 import type { TLSCertFormFields, TLSCertSource } from "@/components/asset/tlsCertConfig";
 import { SelectTLSCertFile } from "../../../wailsjs/go/system/System";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface TLSCertFieldsetProps {
   state: TLSCertFormFields;
@@ -46,7 +47,7 @@ export function TLSCertFieldset({ state, patch }: TLSCertFieldsetProps) {
             const selected = await SelectTLSCertFile();
             if (selected) patch({ [key]: selected });
           } catch (e) {
-            toast.error(String(e));
+            toast.error(errorMessage(e));
           }
         }}
       >

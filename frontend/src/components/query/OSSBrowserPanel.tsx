@@ -21,6 +21,7 @@ import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
 import { parseOSSConfig } from "@/components/asset/OSSConfigSection.config";
 import { NameDialog } from "@/components/common/NameDialog";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface OSSBrowserPanelProps {
   tabId: string;
@@ -63,7 +64,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const [detailDeleteOpen, setDetailDeleteOpen] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
 
-  const fail = useCallback((e: unknown) => toast.error(`${t("oss.browser.loadFailed")}: ${String(e)}`), [t]);
+  const fail = useCallback((e: unknown) => toast.error(`${t("oss.browser.loadFailed")}: ${errorMessage(e)}`), [t]);
 
   const assetConfig = useAssetStore((s) => s.assets.find((a) => a.ID === assetId)?.Config);
   const defaultBucket = useMemo(() => parseOSSConfig(assetConfig ?? "").bucket, [assetConfig]);
@@ -124,7 +125,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         else await moveObject(tabId, source, destination);
         notifySuccess(t(`oss.detail.${mode}Success`));
       } catch (error) {
-        toast.error(String(error));
+        toast.error(errorMessage(error));
       }
     },
     [copyObject, moveObject, state, tabId, t]
@@ -137,7 +138,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
       await deleteObject(tabId, state.focusedKey);
       notifySuccess(t("oss.browser.deleteSuccess"));
     } catch (e) {
-      toast.error(`${t("oss.browser.deleteFailed")}: ${String(e)}`);
+      toast.error(`${t("oss.browser.deleteFailed")}: ${errorMessage(e)}`);
     }
   };
 
@@ -184,7 +185,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
       await deleteSelected(tabId);
       notifySuccess(t("oss.browser.deleteSuccess"));
     } catch (e) {
-      toast.error(`${t("oss.browser.deleteFailed")}: ${String(e)}`);
+      toast.error(`${t("oss.browser.deleteFailed")}: ${errorMessage(e)}`);
     }
   };
 

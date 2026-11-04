@@ -64,6 +64,57 @@ describe("splitStatements", () => {
   it("treats an unterminated string as running to the end", () => {
     expect(texts("SELECT 'abc; SELECT 2")).toEqual(["SELECT 'abc; SELECT 2"]);
   });
+
+  describe("routine and trigger bodies", () => {
+    const procedure =
+      "CREATE PROCEDURE p() BEGIN\n  INSERT INTO log VALUES (1);\n  UPDATE accounts SET balance = 0 WHERE id = 1;\nEND";
+
+    it("keeps a BEGIN … END body together with its CREATE", () => {
+      expect(texts(`${procedure};\nSELECT 2`)).toEqual([procedure, "SELECT 2"]);
+    });
+
+    it("keeps MySQL, SQLite and SQL Server style definitions whole", () => {
+      for (const def of [
+        "CREATE DEFINER=`root`@`%` PROCEDURE p() BEGIN SELECT 1; SELECT 2; END",
+        "CREATE TEMP TRIGGER IF NOT EXISTS t AFTER INSERT ON a BEGIN DELETE FROM b; INSERT INTO c VALUES (1); END",
+        "CREATE OR ALTER PROC p AS BEGIN SET NOCOUNT ON; BEGIN TRAN; UPDATE a SET x = 1; COMMIT; END",
+        "CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO BEGIN DELETE FROM t WHERE d < NOW(); END",
+      ]) {
+        expect(texts(`${def};\nSELECT 2`)).toEqual([def, "SELECT 2"]);
+      }
+    });
+
+    it("tracks nested blocks, CASE and END IF / END LOOP / END CASE inside a body", () => {
+      const def =
+        "CREATE FUNCTION f(x INT) RETURNS INT BEGIN\n" +
+        "  IF x > 0 THEN SET x = 1; END IF;\n" +
+        "  lbl: LOOP LEAVE lbl; END LOOP lbl;\n" +
+        "  CASE x WHEN 1 THEN SET x = 2; ELSE SET x = 3; END CASE;\n" +
+        "  BEGIN SELECT CASE WHEN x = 1 THEN 'a' ELSE 'b' END INTO @y; END;\n" +
+        "  RETURN x;\n" +
+        "END";
+      expect(texts(`${def};\nSELECT 2`)).toEqual([def, "SELECT 2"]);
+    });
+
+    it("still splits a transaction opened with a bare BEGIN", () => {
+      expect(texts("BEGIN; UPDATE a SET x = 1 WHERE id = 1; COMMIT")).toEqual([
+        "BEGIN",
+        "UPDATE a SET x = 1 WHERE id = 1",
+        "COMMIT",
+      ]);
+    });
+
+    it("runs the whole definition, not a statement from its body, when the cursor is inside it", () => {
+      const sql = `SELECT 0;\n${procedure};\nSELECT 2`;
+      expect(statementAt(sql, sql.indexOf("UPDATE accounts") + 3)?.text).toBe(procedure);
+      expect(statementAt(sql, sql.indexOf("CREATE") + 2)?.text).toBe(procedure);
+    });
+
+    it("does not report a body statement as a dangerous statement of its own", () => {
+      expect(isDangerousSql("CREATE TRIGGER t AFTER INSERT ON a FOR EACH ROW BEGIN DELETE FROM b; END")).toBe(false);
+      expect(isDangerousSql("CREATE PROCEDURE p() BEGIN SELECT 1; END; DROP TABLE x")).toBe(true);
+    });
+  });
 });
 
 describe("statementAt", () => {

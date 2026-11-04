@@ -6,6 +6,7 @@ import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { ListStore } from "../../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import type { extstore_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** Fired by the backend once its daily background refresh updated the store index. */
 const STORE_REFRESHED_EVENT = "ext:store-refreshed";
@@ -51,7 +52,7 @@ const INSTALLED_CHANGED_EVENTS = ["ext:reload", "ext:ready"];
  */
 export function useExtensionUpdateSync() {
   const sync = useCallback(() => {
-    syncExtensionUpdates().catch((e) => toast.error(String(e)));
+    syncExtensionUpdates().catch((e) => toast.error(errorMessage(e)));
   }, []);
   useEffect(sync, [sync]);
   useWailsEvent(STORE_REFRESHED_EVENT, sync);

@@ -34,8 +34,7 @@ import {
   selectExternalEditorExecutable,
   selectExternalEditWorkspaceRoot,
 } from "@/lib/externalEditApi";
-
-const errMsg = (error: unknown) => (error instanceof Error ? error.message : String(error));
+import { errorMessage } from "@/lib/errorMessage";
 
 function normalizeEditors(editors: ExternalEditEditorConfig[]) {
   // 设置页允许新增空白行，真正持久化前再补齐稳定 id 和 args 数组，
@@ -125,7 +124,7 @@ export function ExternalEditSection() {
         setMaxReadFileSizeMB(String(data.maxReadFileSizeMB || 10));
         setCustomEditors(normalizeEditors(data.customEditors || []));
       })
-      .catch((error) => toast.error(errMsg(error)));
+      .catch((error) => toast.error(errorMessage(error)));
   }, []);
 
   // 内置编辑器的名字是应用自己的能力描述而不是第三方产品名，按界面语言展示。
@@ -177,7 +176,7 @@ export function ExternalEditSection() {
       setCustomEditors(normalizeEditors(next.customEditors || []));
       notifySuccess(t("externalEdit.settings.saved"));
     } catch (error) {
-      toast.error(errMsg(error));
+      toast.error(errorMessage(error));
     } finally {
       setSaving(false);
     }
@@ -271,7 +270,7 @@ export function ExternalEditSection() {
                     const selected = await selectExternalEditWorkspaceRoot();
                     if (selected) setWorkspaceRoot(selected);
                   } catch (error) {
-                    toast.error(errMsg(error));
+                    toast.error(errorMessage(error));
                   }
                 }}
               >
@@ -408,7 +407,7 @@ export function ExternalEditSection() {
                       const selected = await selectExternalEditorExecutable();
                       if (selected) updateEditorDraft({ path: selected });
                     } catch (error) {
-                      toast.error(errMsg(error));
+                      toast.error(errorMessage(error));
                     }
                   }}
                 >

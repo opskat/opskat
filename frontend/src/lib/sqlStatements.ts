@@ -99,11 +99,58 @@ interface Fragment {
   end: number;
 }
 
-/** 按掩码里的分号切片，丢弃只含空白与注释的片段，并把首尾空白收掉。 */
+// 存储过程 / 函数 / 触发器 / 事件的定义：体内的分号不结束语句（MySQL、SQLite、SQL Server
+// 的 BEGIN … END 体；PostgreSQL 的 $$ 体已在掩码里）。只在这类定义里数块层级，所以单独的
+// BEGIN（开启事务）照常按分号切分。
+const ROUTINE_DEFINITION =
+  /\s*(CREATE|ALTER)\s+(OR\s+(REPLACE|ALTER)\s+)?(DEFINER\s*=\s*\S+\s+)?((AGGREGATE|TEMP|TEMPORARY|CONSTRAINT)\s+)?(PROCEDURE|PROC|FUNCTION|TRIGGER|EVENT)\b/iy;
+// 跟在 END 后面、各自配对的结束词：IF / LOOP / WHILE / REPEAT / FOR 的开头没有计入层级，
+// CASE / TRY / CATCH 的开头（CASE、BEGIN TRY、BEGIN CATCH）计入了。
+const END_OF_UNCOUNTED = /\s+(IF|LOOP|WHILE|REPEAT|FOR)\b/iy;
+const END_OF_COUNTED = /\s+(CASE|TRY|CATCH)\b/iy;
+// BEGIN TRAN / TRANSACTION / DISTRIBUTED 是事务语句，没有对应的 END。
+const BEGIN_TRANSACTION = /\s+(TRAN|TRANSACTION|DISTRIBUTED)\b/iy;
+
+function stickyMatch(re: RegExp, s: string, at: number): number {
+  re.lastIndex = at;
+  return re.test(s) ? re.lastIndex : -1;
+}
+
+/** 从 from 开始的语句在哪个分号处结束（没有就到文本末尾）。 */
+function statementEnd(masked: string, from: number): number {
+  if (stickyMatch(ROUTINE_DEFINITION, masked, from) < 0) {
+    const semi = masked.indexOf(";", from);
+    return semi < 0 ? masked.length : semi;
+  }
+  const token = /[\w$]+|;/g;
+  token.lastIndex = from;
+  let depth = 0;
+  for (let m = token.exec(masked); m; m = token.exec(masked)) {
+    const word = m[0].toUpperCase();
+    if (word === ";") {
+      if (depth === 0) return m.index;
+    } else if (word === "CASE") {
+      depth++;
+    } else if (word === "BEGIN") {
+      if (stickyMatch(BEGIN_TRANSACTION, masked, token.lastIndex) < 0) depth++;
+    } else if (word === "END") {
+      const uncounted = stickyMatch(END_OF_UNCOUNTED, masked, token.lastIndex);
+      if (uncounted >= 0) {
+        token.lastIndex = uncounted;
+      } else {
+        const counted = stickyMatch(END_OF_COUNTED, masked, token.lastIndex);
+        if (counted >= 0) token.lastIndex = counted;
+        depth = Math.max(0, depth - 1);
+      }
+    }
+  }
+  return masked.length;
+}
+
+/** 按掩码里结束语句的分号切片，丢弃只含空白与注释的片段，并把首尾空白收掉。 */
 function fragments(masked: string): Fragment[] {
   const out: Fragment[] = [];
-  let from = 0;
-  const push = (to: number) => {
+  const push = (from: number, to: number) => {
     const m = /\S/.exec(masked.slice(from, to));
     if (m) {
       let end = to;
@@ -111,13 +158,11 @@ function fragments(masked: string): Fragment[] {
       out.push({ start: from + m.index, end });
     }
   };
-  for (let i = 0; i < masked.length; i++) {
-    if (masked[i] === ";") {
-      push(i);
-      from = i + 1;
-    }
+  for (let from = 0; from <= masked.length;) {
+    const end = statementEnd(masked, from);
+    push(from, end);
+    from = end + 1;
   }
-  push(masked.length);
   return out;
 }
 

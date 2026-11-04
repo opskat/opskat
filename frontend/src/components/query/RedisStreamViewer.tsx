@@ -8,6 +8,7 @@ import { RedisStreamAdd } from "../../../wailsjs/go/redis/Redis";
 import { RedisStreamDelete } from "../../../wailsjs/go/redis/Redis";
 import { RedisLoadMoreFooter, RedisValueCount } from "./RedisValueList";
 import { useRedisValueVirtualizer } from "./useRedisValueVirtualizer";
+import { errorMessage } from "@/lib/errorMessage";
 
 function formatFields(fields: Record<string, string>): string {
   const entries = Object.entries(fields);
@@ -63,7 +64,7 @@ export function RedisStreamViewer({
       setValue("");
       refreshSelectedKey();
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     } finally {
       setAdding(false);
     }
@@ -77,7 +78,7 @@ export function RedisStreamViewer({
       setSelectedEntryId(null);
       refreshSelectedKey();
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     } finally {
       setDeletingId(null);
     }

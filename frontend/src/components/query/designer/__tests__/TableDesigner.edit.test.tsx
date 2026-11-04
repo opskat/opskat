@@ -439,7 +439,7 @@ describe("设计表:SQL 预览", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "action.copy" }));
     });
-    expect(toastError).toHaveBeenCalledWith("Error: clipboard denied");
+    expect(toastError).toHaveBeenCalledWith("clipboard denied");
     expect(notifyCopied).not.toHaveBeenCalled();
     toastError.mockRestore();
   });

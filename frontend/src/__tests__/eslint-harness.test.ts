@@ -125,3 +125,37 @@ describe("harness: 共享前端代码不得按驱动名分支（驱动属性读�
     expect(ids).not.toContain("no-restricted-syntax");
   });
 });
+
+describe(
+  "harness: 捕获到的错误经 errorMessage 转文本（Wails 2.16 以 Error 对象 reject）",
+  { timeout: eslintTimeout },
+  () => {
+    it("catch 子句里 String(err) / `${err}` 被拦截", async () => {
+      for (const code of [
+        "export async function f(g: () => Promise<void>) {\n  try {\n    await g();\n  } catch (e) {\n    return String(e);\n  }\n}\n",
+        "export async function f(g: () => Promise<void>) {\n  try {\n    await g();\n  } catch (err) {\n    return `失败: ${err}`;\n  }\n}\n",
+      ]) {
+        const ids = await ruleIds("src/components/harness-fixture.tsx", code);
+        expect(ids).toContain("no-restricted-syntax");
+      }
+    });
+
+    it(".catch 回调里 String(err) / `${err}` 被拦截", async () => {
+      for (const code of [
+        "export const f = (p: Promise<void>, set: (s: string) => void) => p.catch((error) => set(String(error)));\n",
+        "export const f = (p: Promise<void>, set: (s: string) => void) => p.catch((closeErr) => set(`x: ${closeErr}`));\n",
+      ]) {
+        const ids = await ruleIds("src/components/harness-fixture.tsx", code);
+        expect(ids).toContain("no-restricted-syntax");
+      }
+    });
+
+    it("errorMessage 写法与 catch 外的 String(x) 不被误报", async () => {
+      const ids = await ruleIds(
+        "src/components/harness-fixture.tsx",
+        'import { errorMessage } from "@/lib/errorMessage";\nexport async function f(g: () => Promise<void>, n: number) {\n  try {\n    await g();\n  } catch (e) {\n    return `失败: ${errorMessage(e)}`;\n  }\n  return String(n);\n}\n'
+      );
+      expect(ids).not.toContain("no-restricted-syntax");
+    });
+  }
+);

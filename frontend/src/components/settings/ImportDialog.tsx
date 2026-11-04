@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, Button,
 import { SecretInput } from "@/components/SecretInput";
 import { import_svc } from "../../../wailsjs/go/models";
 import { useAssetStore } from "@/stores/assetStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface ImportCallOptions {
   passphrase: string;
@@ -135,7 +136,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
         onOpenChange(false);
       }
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setImporting(false);
     }

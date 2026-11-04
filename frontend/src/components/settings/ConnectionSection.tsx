@@ -16,8 +16,7 @@ import { Info } from "lucide-react";
 import { GetSSHConnectionSettings, SetSSHConnectionSettings } from "../../../wailsjs/go/system/System";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorMessage } from "@/lib/errorMessage";
 
 // Keep in sync with internal/app/system/ssh_settings.go validation.
 const KEEPALIVE_MIN = 5;
@@ -65,7 +64,7 @@ export function ConnectionSection() {
     } catch (e: unknown) {
       setSeconds(prev);
       setText(String(prev));
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 

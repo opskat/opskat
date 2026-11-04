@@ -20,6 +20,7 @@ import { snippet_entity } from "../../../wailsjs/go/models";
 import { SnippetFormDialog } from "./SnippetFormDialog";
 import { SnippetAssetDrawer } from "./SnippetAssetDrawer";
 import { isRunnableCategoryId } from "./snippetRun";
+import { errorMessage } from "@/lib/errorMessage";
 
 // Stable per-category badge styling. Order must be deterministic so a given
 // category always renders with the same hue across reloads.
@@ -148,7 +149,7 @@ export function SnippetsPage() {
       await duplicateSnippet(s.ID);
       notifySuccess(t("snippet.toast.duplicated"));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
     }
   };
@@ -159,7 +160,7 @@ export function SnippetsPage() {
       await removeSnippet(confirmTarget.ID);
       notifySuccess(t("snippet.toast.deleted"));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
     } finally {
       setConfirmTarget(null);

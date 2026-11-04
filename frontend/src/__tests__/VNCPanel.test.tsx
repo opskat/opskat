@@ -268,7 +268,7 @@ describe("VNCPanel", () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc", Config: "{}" });
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
-    await waitFor(() => expect(screen.getByText("Error: invalid channel")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("invalid channel")).toBeInTheDocument());
     expect(DisconnectVNC).toHaveBeenCalledWith("vnc-session");
   });
 
@@ -338,7 +338,7 @@ describe("VNCPanel", () => {
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     FakeRFB.latest!.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "hello" } }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Error: clipboard unavailable"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("clipboard unavailable"));
   });
 
   it("sends mixed Chinese and English through one GBK clipboard message", async () => {

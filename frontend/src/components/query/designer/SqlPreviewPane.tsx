@@ -6,6 +6,7 @@ import { notifyCopied } from "@/lib/notify";
 import type { AlterPreview } from "./useAlterPreview";
 import { statementsScript } from "./format";
 import { DropWarning, StatementList } from "./StatementList";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface SqlPreviewPaneProps {
   preview: AlterPreview;
@@ -26,7 +27,7 @@ export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpen
   const copy = () =>
     navigator.clipboard.writeText(script).then(
       () => notifyCopied(t("query.copied")),
-      (err: unknown) => toast.error(String(err))
+      (err: unknown) => toast.error(errorMessage(err))
     );
 
   let body;

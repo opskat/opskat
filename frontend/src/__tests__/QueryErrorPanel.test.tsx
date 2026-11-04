@@ -21,7 +21,7 @@ describe("QueryErrorPanel copy", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "query.copyError" }));
 
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Error: clipboard denied"));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("clipboard denied"));
     expect(notifyCopied).not.toHaveBeenCalled();
   });
 });

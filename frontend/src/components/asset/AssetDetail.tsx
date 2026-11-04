@@ -14,6 +14,7 @@ import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
 import { PermissionModeCard } from "@/components/asset/PermissionModeCard";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { GetDefaultPolicy } from "../../../wailsjs/go/system/System";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface AssetDetailProps {
   asset: asset_entity.Asset;
@@ -71,7 +72,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     } catch (e) {
       // 没存上就丢掉乐观值，回到库里的真实策略
       setDraft(null);
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSavingPolicy(false);
     }
@@ -92,7 +93,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       }
       await savePolicy(fields, groups);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

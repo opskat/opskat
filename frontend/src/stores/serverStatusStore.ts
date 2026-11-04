@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { GetSSHServerStatus } from "../../wailsjs/go/ssh/SSH";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface ServerStatusGPU {
   index: number;
@@ -91,7 +92,7 @@ export const useServerStatusStore = create<ServerStatusStore>((set, get) => {
         return { sessions: { ...st.sessions, [sessionId]: { ...s, buffer, loading: false, error: null } } };
       });
     } catch (err) {
-      const message = String(err);
+      const message = errorMessage(err);
       if (isSessionGone(message)) {
         get().deactivate(sessionId);
         return;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { ClassifySQLStatements } from "../../../wailsjs/go/query/Query";
 import { fromDriverStatements, type ClassifiedSqlStatement } from "@/lib/sqlStatements";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 驱动对一段文本的切分：切出的语句，或驱动给出的错误（切不了、驱动不可用）。 */
 export type DriverSplit =
@@ -49,7 +50,7 @@ export function useDriverStatements(assetId: number, enabled: boolean): DriverSt
         const id = ++seq.current;
         split(text).then(
           (statements) => settle(id, { text, statements }),
-          (e: unknown) => settle(id, { text, error: String(e) })
+          (e: unknown) => settle(id, { text, error: errorMessage(e) })
         );
       },
       split,

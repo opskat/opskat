@@ -67,6 +67,7 @@ import {
 } from "@/lib/tableFilter";
 import { filterOperatorNeedsRange } from "@/lib/tableFilterOperators";
 import { cellValueToDisplayText } from "@/lib/cellValue";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface TableDataTabProps {
   tabId: string;
@@ -309,7 +310,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         openedRef.current = true;
       } catch (e) {
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
-        setError(String(e));
+        setError(errorMessage(e));
       } finally {
         if (!isCancelled(requestId) && latestDataRequest.current === requestId) {
           setPkLoaded(true);
@@ -440,7 +441,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       } catch (e) {
         if (isCancelled(requestId) || latestDataRequest.current !== requestId) return;
         setElapsedMs(null);
-        setError(String(e));
+        setError(errorMessage(e));
         // 列保留:筛选器与列状态在重试 / 改筛选后仍沿用,错误卡片取代的只是表体。
         replaceRows([]);
         setSelectedRowIdx(null);
@@ -624,7 +625,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       try {
         generated = await generateGridEdits(source.intent);
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
         return;
       }
       setSqlDialog({
@@ -661,7 +662,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
             succeeded.add(plan.rowIdxs[index]);
           } else zeroAffected++;
         } catch (e) {
-          errorMsg += String(e) + "\n";
+          errorMsg += errorMessage(e) + "\n";
         }
       }
 
@@ -930,7 +931,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         const generated = await generateGridEdits({ deletes: persisted.map((idx) => rows[idx]) });
         setDeletePreview({ statements: generated.deletes, usesPrimaryKey: primaryKeys.length > 0 });
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     },
     [generateGridEdits, primaryKeys.length, removeNewRow, rows]
@@ -954,7 +955,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         if (affected > 0) affectedTotal += affected;
         else zeroAffected++;
       } catch (e) {
-        errorMsg += String(e) + "\n";
+        errorMsg += errorMessage(e) + "\n";
       }
     }
 
@@ -1031,7 +1032,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         await navigator.clipboard.writeText(await contentByFormat[format]());
         notifyCopied(t("query.copied"));
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     },
     [assetId, columns, database, primaryKeys, rows, table, t]
@@ -1097,7 +1098,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       const ddl = await GetTableDDL(assetId, database, table);
       setDdlSQL(ddl || t("query.ddlEmpty"));
     } catch (e) {
-      setDdlSQL(String(e));
+      setDdlSQL(errorMessage(e));
     } finally {
       setDdlLoading(false);
     }

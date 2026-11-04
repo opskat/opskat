@@ -46,6 +46,7 @@ import {
 import { RedisDeleteKeys } from "../../../wailsjs/go/redis/Redis";
 import { RedisCreateKeyDialog } from "./RedisCreateKeyDialog";
 import { redisKeyDeleted, toastRedisDeleteFailures } from "@/lib/redisDelete";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface RedisKeyBrowserProps {
   tabId: string;
@@ -493,7 +494,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
       void navigator.clipboard
         .writeText(key)
         .then(() => notifyCopied(t("query.copied")))
-        .catch((err) => toast.error(String(err)));
+        .catch((err) => toast.error(errorMessage(err)));
     },
     [t]
   );
@@ -520,7 +521,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
       }
       loadDbKeyCounts(tabId);
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setDeleteTarget(null);
   }, [deleteTarget, tabMeta, state, tabId, removeKey, loadDbKeyCounts, t]);

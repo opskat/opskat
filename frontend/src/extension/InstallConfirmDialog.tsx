@@ -7,6 +7,7 @@ import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { EntityIcon } from "@/components/asset/AssetIcon";
 import { formatBytes } from "@/lib/formatBytes";
 import { RespondExtensionInstallConfirm } from "../../wailsjs/go/extension/Extension";
+import { errorMessage } from "@/lib/errorMessage";
 
 const INSTALL_MODE_KEYS = {
   install: {
@@ -123,7 +124,7 @@ export function ExtensionInstallConfirmDialog() {
   const respond = (ok: boolean) => {
     if (!current) return;
     remove(current.id);
-    RespondExtensionInstallConfirm(current.id, ok).catch((e) => toast.error(String(e)));
+    RespondExtensionInstallConfirm(current.id, ok).catch((e) => toast.error(errorMessage(e)));
   };
 
   // Answering swaps the next queued confirm in under the same buttons, so the rest

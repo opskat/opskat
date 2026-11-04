@@ -32,6 +32,7 @@ import { ListStore, RefreshStore } from "../../../wailsjs/go/extension/Extension
 import type { extmanifest, extstore_svc } from "../../../wailsjs/go/models";
 import { useStoreInstalls } from "./useStoreInstalls";
 import { revealDownloadMirrorSetting } from "./downloadMirror";
+import { errorMessage } from "@/lib/errorMessage";
 
 export type StoreCard = extstore_svc.Card;
 
@@ -139,7 +140,7 @@ export function ExtensionStore({ onInstall, onChangeMirror }: ExtensionStoreProp
     try {
       show(await RefreshStore(lang));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setRefreshing(false);
     }
@@ -150,7 +151,7 @@ export function ExtensionStore({ onInstall, onChangeMirror }: ExtensionStoreProp
       try {
         show(await ListStore(lang));
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
         return;
       }
       await refresh();

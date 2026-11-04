@@ -128,7 +128,7 @@ describe("DatabaseTree — create database options", () => {
     await openDialog("mysql");
     fireEvent.click(screen.getByText("query.designTablePreviewChanges"));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Error: unsupported"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("unsupported"));
     expect(screen.queryByText("query.sqlPreviewTitle")).not.toBeInTheDocument();
     expect(ExecuteSQL).not.toHaveBeenCalled();
   });
@@ -172,9 +172,7 @@ describe("DatabaseTree — drop and truncate", () => {
     fireEvent.click(screen.getByText("query.dropTables"));
     fireEvent.click(screen.getByRole("button", { name: "query.dropTables" }));
 
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("appdb.logs: Error: unsupported"))
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("appdb.logs: unsupported")));
     expect(vi.mocked(ExecuteSQL).mock.calls).toEqual([[1, "DROP appdb.users", "appdb"]]);
   });
 });

@@ -37,6 +37,7 @@ import {
   type VNCNegotiatedSecurity,
   type VNCServerKeyCheck,
 } from "@/lib/vncClient";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface VNCPanelProps {
   tabId: string;
@@ -119,7 +120,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
       setStatus("connecting");
     } catch (e) {
       if (attempt !== connectAttemptRef.current) return;
-      const message = String(e);
+      const message = errorMessage(e);
       errorRef.current = message;
       setError(message);
       setStatus("error");
@@ -204,7 +205,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
         },
         onClipboard: (text) => {
           if (!clipboardEnabledRef.current) return;
-          ClipboardSetText(decodeVNCClipboardText(text)).catch((error) => toast.error(String(error)));
+          ClipboardSetText(decodeVNCClipboardText(text)).catch((error) => toast.error(errorMessage(error)));
         },
       });
       client.rfb.scaleViewport = scaleViewportRef.current;
@@ -217,7 +218,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
     } catch (e) {
       channel.close();
       void DisconnectVNC(session.id);
-      const message = String(e);
+      const message = errorMessage(e);
       errorRef.current = message;
       window.queueMicrotask(() => {
         if (disposed) return;
@@ -275,7 +276,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
       try {
         setFileSessionId(await OpenSFTPSession(session.fileSshAssetId));
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     }
   };
@@ -298,7 +299,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
       const text = await ClipboardGetText();
       await pasteTextToVNC(text);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

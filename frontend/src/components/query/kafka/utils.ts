@@ -48,10 +48,6 @@ export function formatConnectorTaskSummary(connector: KafkaConnectorSummary): st
   return `${total} / ${failed}`;
 }
 
-export function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 export function parseOptionalJsonObject(value: string): Record<string, string> | undefined {
   const text = value.trim();
   if (!text) return undefined;

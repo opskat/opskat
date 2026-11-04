@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ExecuteSchemaStatements } from "../../../../wailsjs/go/query/Query";
 import type { query_svc } from "../../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 一次保存要执行的内容:确认框标题、驱动生成的语句(就是要执行的),与草稿里删除的已有列和索引。 */
 export interface SavePlan {
@@ -54,7 +55,7 @@ export function useSaveFlow<P extends SavePlan>({ assetId, database, initial, on
     try {
       result = await ExecuteSchemaStatements(assetId, database, plan.statements);
     } catch (err) {
-      setState({ phase: "failed", plan, error: String(err) });
+      setState({ phase: "failed", plan, error: errorMessage(err) });
       return;
     }
     if (!result.statements.some((s) => s.status === "failed")) {

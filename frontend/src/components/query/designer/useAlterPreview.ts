@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { GetAlterTableStatements, GetCreateTableStatements } from "../../../../wailsjs/go/query/Query";
 import type { dbdriver } from "../../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 草稿停止变化多久之后再请驱动生成语句。 */
 export const PREVIEW_DEBOUNCE_MS = 300;
@@ -45,7 +46,7 @@ function useStatementPreview(
     const timer = setTimeout(() => {
       run().then(
         (r) => alive && setResult({ key, preview: { status: "ready", statements: r.statements, table: r.table } }),
-        (err: unknown) => alive && setResult({ key, preview: { status: "error", error: String(err) } })
+        (err: unknown) => alive && setResult({ key, preview: { status: "error", error: errorMessage(err) } })
       );
     }, PREVIEW_DEBOUNCE_MS);
     return () => {

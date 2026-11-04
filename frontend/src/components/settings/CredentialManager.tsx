@@ -75,6 +75,7 @@ import { AgentSourceRow } from "@/components/settings/AgentSourceRow";
 import { SecretInput } from "@/components/SecretInput";
 import { AgentSourceDialog, type AgentSourceDraft } from "@/components/settings/AgentSourceDialog";
 import { type AgentEndpointType, type AgentSourceRuntimeStatus } from "@/components/settings/agentSource";
+import { errorMessage } from "@/lib/errorMessage";
 
 function generatePassword(length = 20): string {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -162,7 +163,7 @@ export function CredentialManager() {
       setAgentStatuses((prev) => ({ ...prev, [id]: identities.length > 0 ? "ok" : "empty" }));
       if (identities.length > 0) setAgentCounts((prev) => ({ ...prev, [id]: identities.length }));
     } catch (e) {
-      setAgentIdentityError((prev) => ({ ...prev, [id]: String(e) }));
+      setAgentIdentityError((prev) => ({ ...prev, [id]: errorMessage(e) }));
     } finally {
       setAgentIdentitiesLoading((prev) => ({ ...prev, [id]: false }));
     }
@@ -228,7 +229,7 @@ export function CredentialManager() {
         await navigator.clipboard.writeText(pubKey);
         notifyCopied(t("agentSource.copiedPublicKey"));
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     },
     [t]
@@ -253,7 +254,7 @@ export function CredentialManager() {
         },
       });
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, []);
 
@@ -269,7 +270,7 @@ export function CredentialManager() {
         }
         void loadAgentSources();
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     },
     [agentDialog.mode, agentDialog.sourceId, loadAgentSources, t]
@@ -293,7 +294,7 @@ export function CredentialManager() {
       setDeleteSource(null);
       void loadAgentSources();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [deleteSource, loadAgentSources, t]);
 
@@ -315,7 +316,7 @@ export function CredentialManager() {
       setDeleteCred(null);
       fetchCredentials();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -325,7 +326,7 @@ export function CredentialManager() {
       await navigator.clipboard.writeText(pubKey);
       notifyCopied(t("sshKey.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -334,7 +335,7 @@ export function CredentialManager() {
       const exported = await ExportSSHPrivateKey(id);
       if (exported) notifySuccess(t("sshKey.exportSuccess"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -638,7 +639,7 @@ function GenerateKeyDialog({
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -827,7 +828,7 @@ function ImportKeyDialog({
       if (!info) return;
       selectImportFile(importFileFromLocalKey(info, "dialog"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -844,7 +845,7 @@ function ImportKeyDialog({
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -858,7 +859,7 @@ function ImportKeyDialog({
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -875,7 +876,7 @@ function ImportKeyDialog({
       setPemContent(text);
       setName((current) => current || file.name);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -1153,7 +1154,7 @@ function CreatePasswordDialog({
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -1270,7 +1271,7 @@ function EditCredentialDialog({
       onOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -1380,7 +1381,7 @@ function ChangePasswordDialog({
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -1478,7 +1479,7 @@ function ChangePassphraseDialog({
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

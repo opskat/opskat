@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { EtcdExec, EtcdListPrefix, EtcdTestConnection } from "../../wailsjs/go/etcd/Etcd";
 import type { etcd_svc } from "../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 export type EtcdTreeNode = {
   prefix: string; // 完整 prefix（以 / 结尾代表目录）
@@ -132,7 +133,7 @@ export const useEtcdStore = create<State>((set, get) => ({
       return res;
     } catch (e) {
       const elapsedMs = Math.round(performance.now() - t0);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       set({
         lastResult: null,
         lastMeta: { ok: false, elapsedMs, error: msg, op: req.Op },

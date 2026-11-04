@@ -16,6 +16,7 @@ import { useSnippetStore } from "@/stores/snippetStore";
 import { useTabStore, type Tab, type InfoTabMeta, type PageTabMeta } from "@/stores/tabStore";
 import { resolveTabLabel, getBuiltinPageMeta } from "@/components/layout/pageTabMeta";
 import type { asset_entity, snippet_entity } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 // Max snippets shown in the palette: a small recency list when idle, a wider
 // set while searching.
@@ -303,7 +304,7 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
     if (target.kind === "active") {
       // Land the snippet in the active tool tab (insert only, never executes).
       void runSnippetOnAsset(target.asset, snippet.Content ?? "").catch((e) => {
-        toast.error(e instanceof Error ? e.message : String(e));
+        toast.error(errorMessage(e));
       });
       useSnippetStore.getState().recordUse(snippet.ID);
       void useSnippetStore

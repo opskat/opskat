@@ -15,13 +15,13 @@ import {
 } from "@opskat/ui";
 import { GetExtensionMirror, SetExtensionMirror } from "../../../wailsjs/go/system/System";
 import { EXTENSION_MIRROR_SETTING_ID } from "./downloadMirror";
+import { errorMessage } from "@/lib/errorMessage";
 
 // 预置镜像：保存值就是选项值本身，写法同自定义（主机，可带路径前缀）。
 const PRESETS = ["katch.ggnb.top/ghcr.io"];
 
 // 下拉的取值："direct"、"custom"，或 PRESETS 里的一项。
 const modeOf = (host: string): string => (host === "" ? "direct" : PRESETS.includes(host) ? host : "custom");
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 // 「扩展下载」设置：选择扩展 OCI 包的拉取主机。已保存值为主机名（空 = 直连 ghcr.io）。
 export function ExtensionMirrorSettings() {
@@ -37,7 +37,7 @@ export function ExtensionMirrorSettings() {
         setMode(modeOf(stored));
         if (modeOf(stored) === "custom") setCustomHost(stored);
       })
-      .catch((e: unknown) => setError(errMsg(e)));
+      .catch((e: unknown) => setError(errorMessage(e)));
   }, []);
 
   const save = async (host: string) => {
@@ -45,7 +45,7 @@ export function ExtensionMirrorSettings() {
       await SetExtensionMirror(host);
       setError("");
     } catch (e: unknown) {
-      setError(errMsg(e));
+      setError(errorMessage(e));
     }
   };
 

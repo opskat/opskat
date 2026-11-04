@@ -6,6 +6,7 @@ import { SFTPProperties } from "../../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../../wailsjs/go/models";
 import { formatBytes, formatDate } from "./utils";
 import { type PermissionTarget } from "./types";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface PropertiesDialogProps {
   sessionId: string;
@@ -25,7 +26,7 @@ function PropertiesBody({ sessionId, target }: { sessionId: string; target: Perm
         if (!cancelled) setProps(next);
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setError(errorMessage(e));
       });
     return () => {
       cancelled = true;

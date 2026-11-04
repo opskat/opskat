@@ -11,8 +11,7 @@ import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { GetCommandReviewSettings, SaveCommandReviewTimeout } from "../../../wailsjs/go/system/System";
 import { GetCommandReviewState, SetCommandReviewer } from "../../../wailsjs/go/extension/Extension";
 import type { command_review_svc, system } from "../../../wailsjs/go/models";
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorMessage } from "@/lib/errorMessage";
 
 type FailStatus = Pick<system.CommandReviewSettings, "lastFailReason" | "lastFailAt">;
 
@@ -42,10 +41,10 @@ export function CommandReviewSection() {
   useEffect(() => {
     GetCommandReviewState()
       .then(setState)
-      .catch((e: unknown) => toast.error(errMsg(e)));
+      .catch((e: unknown) => toast.error(errorMessage(e)));
     GetCommandReviewSettings()
       .then(applySettings)
-      .catch((e: unknown) => toast.error(errMsg(e)));
+      .catch((e: unknown) => toast.error(errorMessage(e)));
   }, [applySettings]);
 
   // 后端在失败出现或恢复时推送最新状态：打开着也能实时更新，不动正在编辑的超时。
@@ -60,7 +59,7 @@ export function CommandReviewSection() {
       await reloadState();
       notifySuccess(t("commandReview.settings.reviewerSaved"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -76,7 +75,7 @@ export function CommandReviewSection() {
       applySettings(await GetCommandReviewSettings());
       notifySuccess(t("commandReview.settings.saved"));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

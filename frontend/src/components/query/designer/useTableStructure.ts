@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { GetAlterTableModel, GetTableDDL, GetTableMetadata } from "../../../../wailsjs/go/query/Query";
 import { structureFromAlterModel, structureFromMetadata, type TableStructure } from "./model";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 表结构从哪里读:改表模型(能改表时)或表元数据(只能查看时)。 */
 export type StructureSource = "alterModel" | "metadata";
@@ -28,7 +29,7 @@ function useKeyedLoad<T>(key: string, enabled: boolean, load: () => Promise<T>) 
     let alive = true;
     load().then(
       (value) => alive && setResult({ key: requestKey, state: { status: "ready", value } }),
-      (err: unknown) => alive && setResult({ key: requestKey, state: { status: "error", error: String(err) } })
+      (err: unknown) => alive && setResult({ key: requestKey, state: { status: "error", error: errorMessage(err) } })
     );
     return () => {
       alive = false;

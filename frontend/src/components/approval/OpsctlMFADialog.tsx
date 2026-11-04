@@ -6,6 +6,7 @@ import { ShieldCheck } from "lucide-react";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { AuthChallengeForm } from "@/components/terminal/AuthChallengeForm";
 import { RespondOpsctlMFA, CancelOpsctlMFA } from "../../../wailsjs/go/opsctl/Opsctl";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface MFAChallengeEvent {
   challenge_id: string;
@@ -55,7 +56,7 @@ export function OpsctlMFADialog() {
     try {
       await RespondOpsctlMFA(id, answers);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

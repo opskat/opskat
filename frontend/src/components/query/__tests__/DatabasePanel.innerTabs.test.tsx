@@ -147,7 +147,7 @@ describe("DatabasePanel inner tab bar", () => {
     vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error("clipboard denied"));
     fireEvent.contextMenu(tabEl("app.users"));
     fireEvent.click(await screen.findByText("query.innerTab.copyName"));
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Error: clipboard denied"));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("clipboard denied"));
     expect(notifyCopied).not.toHaveBeenCalled();
   });
 

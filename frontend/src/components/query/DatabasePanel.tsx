@@ -28,6 +28,7 @@ import { TableDesigner } from "./designer/TableDesigner";
 import { TableCreator } from "./designer/TableCreator";
 import { useCanCreateTable, useDesignerAccess } from "./designer/access";
 import { defaultCreateTarget, targetLabel } from "./designer/createTarget";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface DatabasePanelProps {
   tabId: string;
@@ -203,7 +204,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                       onClick={() => {
                         void navigator.clipboard.writeText(fullName).then(
                           () => notifyCopied(t("query.innerTab.copied")),
-                          (e: unknown) => toast.error(String(e))
+                          (e: unknown) => toast.error(errorMessage(e))
                         );
                       }}
                     >

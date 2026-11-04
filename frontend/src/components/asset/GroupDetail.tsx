@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import type { PermissionMode } from "@/lib/commandReview";
 import { PermissionModeCard } from "@/components/asset/PermissionModeCard";
 import { EntityIcon } from "@/components/asset/AssetIcon";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface GroupDetailProps {
   group: group_entity.Group;
@@ -56,7 +57,7 @@ export function GroupDetail({ group }: GroupDetailProps) {
       await UpdateGroup(updated);
       await fetchGroups();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

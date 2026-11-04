@@ -31,6 +31,7 @@ import {
   type HostConnectionConfig,
   type HostTLSConfig,
 } from "@/extension/connectionConfig";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Options {
   extensionName: string;
@@ -374,7 +375,7 @@ export function makeExtensionConfigSection(opts: Options) {
         .catch((err) => {
           if (cancelled) return;
           setState((s) => ({ ...s, status: "error" }));
-          toast.error(`${t("asset.extConfigDecryptFailed")}: ${String(err)}`);
+          toast.error(`${t("asset.extConfigDecryptFailed")}: ${errorMessage(err)}`);
         });
       return () => {
         cancelled = true;

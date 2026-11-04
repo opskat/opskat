@@ -7,6 +7,7 @@ import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { K8sSectionCard } from "./K8sSectionCard";
 import { K8sLogTerminal, type K8sLogTerminalHandle } from "./K8sLogTerminal";
 import { buildLogBufferKey, MAX_LOG_CHUNKS, type LogTabState, type LogTabStateUpdate } from "./k8sLogState";
+import { errorMessage } from "@/lib/errorMessage";
 
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -130,7 +131,7 @@ export function K8sLogsPanel({
         });
       })
       .catch((e: unknown) => {
-        onStateChangeRef.current({ logError: String(e) });
+        onStateChangeRef.current({ logError: errorMessage(e) });
       });
   }, [activeContainer, assetId, namespace, podName, state.logTailLines, stop, offEvents]);
 

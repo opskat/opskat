@@ -44,6 +44,7 @@ import {
   type TableExportOptions,
   type TableExportScope,
 } from "@/lib/tableExport";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ExportTableDataDialogProps {
   open: boolean;
@@ -227,7 +228,7 @@ export function ExportTableDataDialog({
         setLogLines([]);
       }
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [defaultFilename, meta.filterName, meta.pattern]);
 
@@ -362,7 +363,7 @@ export function ExportTableDataDialog({
           try {
             await CloseTableExport(cursor.id);
           } catch (closeErr) {
-            appendLog(`[EXP] Closing the export cursor failed - ${String(closeErr)}`);
+            appendLog(`[EXP] Closing the export cursor failed - ${errorMessage(closeErr)}`);
           }
         }
       } else {
@@ -378,8 +379,8 @@ export function ExportTableDataDialog({
       setCompleted(true);
       notifySuccess(t("query.exportSuccessDetailed", { count: processedRows }));
     } catch (e) {
-      appendLog(`[EXP] Failed - ${String(e)}`);
-      toast.error(String(e));
+      appendLog(`[EXP] Failed - ${errorMessage(e)}`);
+      toast.error(errorMessage(e));
     } finally {
       setExporting(false);
     }
@@ -411,7 +412,7 @@ export function ExportTableDataDialog({
     try {
       await OpenDirectory(filePath);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [filePath]);
 
@@ -420,7 +421,7 @@ export function ExportTableDataDialog({
     try {
       await OpenDirectory(getContainingDirectory(filePath));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [filePath]);
 

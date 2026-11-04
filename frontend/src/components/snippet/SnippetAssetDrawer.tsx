@@ -12,6 +12,7 @@ import { GetSnippetLastAssets } from "../../../wailsjs/go/extension/Extension";
 import { SetSnippetLastAssets, RecordSnippetUse } from "../../../wailsjs/go/extension/Extension";
 import { runSnippetOnAsset } from "./snippetRun";
 import { getSnippetRunnerAssetTypes } from "@/lib/snippetRunners";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface SnippetAssetDrawerProps {
   snippet: snippet_entity.Snippet;
@@ -62,13 +63,13 @@ export function SnippetAssetDrawer({ snippet, onClose }: SnippetAssetDrawerProps
         try {
           await runSnippetOnAsset(asset, snippet.Content ?? "");
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           toast.error(`${asset.Name}: ${msg}`);
         }
       }
       onClose();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
     } finally {
       setSubmitting(false);
