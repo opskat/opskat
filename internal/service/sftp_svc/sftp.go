@@ -74,16 +74,8 @@ func (s *Service) GenerateTransferID() string {
 // getSFTPClient 获取或创建 SFTP 客户端（懒加载，高性能配置）
 func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 	if v, ok := s.clients.Load(sessionID); ok {
-		client := v.(*sftp.Client)
-		// 检查是否仍然可用
-		if _, err := client.Getwd(); err == nil {
-			return client, nil
-		}
-		// 已失效，移除
-		s.clients.Delete(sessionID)
-		if err := client.Close(); err != nil {
-			logger.Default().Warn("close stale client", zap.String("sessionID", sessionID), zap.Error(err))
-		}
+		// 连接断开时由 cacheClient 的监听 goroutine 移出缓存，这里无需再探活（省一次 REALPATH 往返）
+		return v.(*sftp.Client), nil
 	}
 
 	sess, ok := s.sshManager.GetSession(sessionID)
@@ -99,8 +91,22 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		return nil, fmt.Errorf("创建 SFTP 客户端失败: %w", err)
 	}
 
-	s.clients.Store(sessionID, client)
+	s.cacheClient(sessionID, client)
 	return client, nil
+}
+
+// cacheClient 缓存客户端，并在其连接结束时自动移出缓存。
+// 用 CompareAndDelete 保证不会误删同一会话下更新的客户端。
+func (s *Service) cacheClient(sessionID string, client *sftp.Client) {
+	s.clients.Store(sessionID, client)
+	go func() {
+		_ = client.Wait() // 连接结束（含主动 Close）后返回；错误即断开原因，无需处理
+		if s.clients.CompareAndDelete(sessionID, client) {
+			if err := client.Close(); err != nil {
+				logger.Default().Debug("close disconnected sftp client", zap.String("sessionID", sessionID), zap.Error(err))
+			}
+		}
+	}()
 }
 
 // Getwd 获取远程工作目录（用户 home）
@@ -235,6 +241,34 @@ func (c sftpAtomicClient) PosixRename(oldname, newname string) error {
 	return c.client.PosixRename(oldname, newname)
 }
 
+// symlinkStatConcurrency 限制列目录时并发解析符号链接的 Stat 数量。
+const symlinkStatConcurrency = 16
+
+// resolveSymlinkDirs 返回与 infos 等长的 IsDir 结果；符号链接以有界并发 Stat 目标，
+// Stat 失败时保持其自身（非目录）的判断。
+func resolveSymlinkDirs(client *sftp.Client, dirPath string, infos []os.FileInfo) []bool {
+	isDirs := make([]bool, len(infos))
+	sem := make(chan struct{}, symlinkStatConcurrency)
+	var wg sync.WaitGroup
+	for i, info := range infos {
+		isDirs[i] = info.IsDir()
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if target, err := client.Stat(path.Join(dirPath, info.Name())); err == nil {
+				isDirs[i] = target.IsDir()
+			}
+		}()
+	}
+	wg.Wait()
+	return isDirs
+}
+
 // ListDir 列出远程目录内容
 func (s *Service) ListDir(sessionID, dirPath string) ([]FileEntry, error) {
 	sftpClient, err := s.getSFTPClient(sessionID)
@@ -248,14 +282,10 @@ func (s *Service) ListDir(sessionID, dirPath string) ([]FileEntry, error) {
 	}
 
 	// 排序：目录在前，文件在后，各自按名称排序
+	isDirs := resolveSymlinkDirs(sftpClient, dirPath, infos)
 	var dirs, files []FileEntry
-	for _, info := range infos {
-		isDir := info.IsDir()
-		if info.Mode()&os.ModeSymlink != 0 {
-			if targetInfo, statErr := sftpClient.Stat(path.Join(dirPath, info.Name())); statErr == nil {
-				isDir = targetInfo.IsDir()
-			}
-		}
+	for i, info := range infos {
+		isDir := isDirs[i]
 		entry := FileEntry{
 			Name:    info.Name(),
 			Size:    info.Size(),
