@@ -1,8 +1,27 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { pinyinMatch, __ensurePinyinReady } from "../lib/pinyin";
+import { describe, it, expect, beforeAll, vi } from "vitest";
+import { pinyin } from "pinyin-pro";
+import { pinyinMatch } from "../lib/pinyin";
+
+vi.mock("pinyin-pro", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("pinyin-pro")>();
+  return { ...actual, pinyin: vi.fn(actual.pinyin) };
+});
 
 describe("pinyinMatch", () => {
-  beforeAll(() => __ensurePinyinReady());
+  // The dictionary loads asynchronously at module load; wait until pinyin matching is live.
+  beforeAll(() => vi.waitFor(() => expect(pinyinMatch("拼音", "py")).toBe(true)));
+
+  it("computes a string's pinyin once and reuses it for later queries", () => {
+    const text = "缓存测试主机";
+    const calls = () => vi.mocked(pinyin).mock.calls.filter(([s]) => s === text).length;
+    expect(pinyinMatch(text, "hc")).toBe(true);
+    const afterFirst = calls();
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(pinyinMatch(text, "zhuji")).toBe(true);
+    expect(pinyinMatch(text, "hcceshi")).toBe(true);
+    expect(pinyinMatch(text, "xyz")).toBe(false);
+    expect(calls()).toBe(afterFirst);
+  });
 
   it("returns true for empty query", () => {
     expect(pinyinMatch("anything", "")).toBe(true);
