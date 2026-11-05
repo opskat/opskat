@@ -256,13 +256,20 @@ export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
   }, [sessionId, shortcuts]);
 
   useEffect(() => {
+    // 隐藏标签暂停 URL 扫描；激活时对当前视口补扫一次（数据照常写入缓冲）。
+    const inst = getTerminalInstance(sessionId);
+    inst?.urlHighlighter.setActive(active);
+    // visibility:hidden 仍与视口相交，xterm 的 IntersectionObserver 不会暂停渲染；
+    // 非激活时把宿主平移出视口（保留盒尺寸，fit 仍可用），xterm 自身即暂停绘制，
+    // 恢复相交时它会对暂停期间变更的行整屏刷新（RenderService._handleIntersectionChange）。
+    if (inst) inst.container.style.transform = active ? "" : "translateX(-100000px)";
     if (active) {
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit();
         termRef.current?.focus();
       });
     }
-  }, [active]);
+  }, [active, sessionId]);
 
   // drop 不可用时清掉拖拽高亮:渲染期自终止守卫,替代 effect 里的同步 setState
   if (!terminalDropEnabled && isDragOver) {
