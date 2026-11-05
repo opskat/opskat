@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/conversation_entity"
+	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo/mock_conversation_repo"
 
@@ -20,7 +21,10 @@ import (
 func setupTest(t *testing.T) (context.Context, *mock_conversation_repo.MockConversationRepo) {
 	mockCtrl := gomock.NewController(t)
 	t.Cleanup(func() { mockCtrl.Finish() })
-	ctx := context.Background()
+	// 事务边界用直通 runner：mock repo 不需要真实数据库。
+	ctx := dbutil.WithTransactionRunner(context.Background(), func(ctx context.Context, fn func(context.Context) error) error {
+		return fn(ctx)
+	})
 	mockRepo := mock_conversation_repo.NewMockConversationRepo(mockCtrl)
 	conversation_repo.RegisterConversation(mockRepo)
 	return ctx, mockRepo

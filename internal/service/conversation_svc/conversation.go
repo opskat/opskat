@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/model/entity/conversation_entity"
+	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 )
 
@@ -135,10 +136,6 @@ func (s *conversationSvc) SaveMessages(ctx context.Context, conversationID int64
 	lock.Lock()
 	defer lock.Unlock()
 
-	// 先删除旧消息
-	if err := conversation_repo.Conversation().DeleteMessages(ctx, conversationID); err != nil {
-		return err
-	}
 	// 设置排序和时间
 	now := time.Now().Unix()
 	for i, msg := range msgs {
@@ -146,7 +143,13 @@ func (s *conversationSvc) SaveMessages(ctx context.Context, conversationID int64
 		msg.SortOrder = i
 		msg.Createtime = now
 	}
-	return conversation_repo.Conversation().CreateMessages(ctx, msgs)
+	// 删除与插入在同一事务内：插入失败时旧消息随事务回滚保留。
+	return dbutil.WithTransaction(ctx, func(ctx context.Context) error {
+		if err := conversation_repo.Conversation().DeleteMessages(ctx, conversationID); err != nil {
+			return err
+		}
+		return conversation_repo.Conversation().CreateMessages(ctx, msgs)
+	})
 }
 
 func (s *conversationSvc) LoadMessages(ctx context.Context, conversationID int64) ([]*conversation_entity.Message, error) {
