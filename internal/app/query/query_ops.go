@@ -370,8 +370,9 @@ func (q *Query) CountTableRows(assetID int64, database, table string, filters []
 	return total, err
 }
 
-// ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询；怎么分页与计数由资产的驱动决定
-func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, page int, pageSize int) (string, error) {
+// ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询；怎么分页与计数由资产的驱动决定。
+// skipTotal：调用方已有这条语句的总数（翻页、改页大小），不再计数，结果不带 total_count。
+func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, page int, pageSize int, skipTotal bool) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -398,7 +399,7 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
-	result, err := helper.ExecuteSQLPaged(ctx, session, sqlText, page, pageSize)
+	result, err := helper.ExecuteSQLPaged(ctx, session, sqlText, dbdriver.Page{Index: page, Size: pageSize, SkipTotal: skipTotal})
 	if err := finishPanelDBOperation(err, cleanup); err != nil {
 		return "", err
 	}

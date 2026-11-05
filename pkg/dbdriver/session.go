@@ -150,8 +150,8 @@ type Session interface {
 	// Execute 原样执行一条语句。语句返回结果集时 Result.Rows 非 nil，否则给出受影响行数。
 	Execute(ctx context.Context, statement string) (*Result, error)
 	// ExecutePaged 执行一条语句并只取其中一页，同时给出不分页时的总行数
-	// （RowSet.Total）。怎么分页、怎么计数由驱动按自己的方言决定；不能分页的语句照
-	// Execute 执行，此时 RowSet.Total 为 nil。
+	// （RowSet.Total；page.SkipTotal 时可以不计数）。怎么分页、怎么计数由驱动按自己的
+	// 方言决定；不能分页的语句照 Execute 执行，此时 RowSet.Total 为 nil。
 	ExecutePaged(ctx context.Context, statement string, page Page) (*Result, error)
 
 	// 以下是树的浏览：驱动在自己的连接上、按自己的方言完成，返回结构化结果。库名
@@ -786,6 +786,10 @@ type Page struct {
 	Index int
 	// Size 是每页行数。
 	Size int
+	// SkipTotal 让 ExecutePaged 只取这一页、不计数（RowSet.Total 为 nil）：调用方已有
+	// 同一语句的总行数，翻页时不必再统计一遍。零值照常计数；不认识这个字段的驱动照常
+	// 计数也合规。
+	SkipTotal bool
 }
 
 // Result 是一条语句的执行结果。
@@ -803,7 +807,8 @@ type RowSet struct {
 	// Rows 的每一行按 Columns 的顺序给值，长度与 Columns 相同。值必须能直接序列化成
 	// JSON：把数据库的原生类型转成普通值是驱动的事。
 	Rows [][]any
-	// Total 是不分页时的总行数；只有 ExecutePaged 确实对语句分了页才非 nil。
+	// Total 是不分页时的总行数；只有 ExecutePaged 确实对语句分了页、且没有被要求跳过计数
+	// （Page.SkipTotal）时才保证非 nil。
 	Total *int64
 }
 

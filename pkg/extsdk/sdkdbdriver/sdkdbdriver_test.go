@@ -154,6 +154,25 @@ func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
 			So(mock.ExpectationsWereMet(), ShouldBeNil)
 		})
 
+		Convey("a paged execute the host asks to skip the total fetches only the page", func() {
+			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb"}}}`)
+			var session struct {
+				Session uint64 `json:"session"`
+			}
+			So(json.Unmarshal(reply.Result, &session), ShouldBeNil)
+
+			// The regexp matcher only accepts the page statement: a COUNT sent first fails the call.
+			mock.ExpectQuery(`LIMIT 10 OFFSET 10$`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(11))
+			reply = callDriver(t, `{"op":"executePaged","session":`+jsonNumber(session.Session)+
+				`,"args":{"statement":"SELECT id FROM t","page":{"Index":1,"Size":10,"SkipTotal":true}}}`)
+			So(reply.Error, ShouldBeNil)
+			var result dbdriver.Result
+			So(json.Unmarshal(reply.Result, &result), ShouldBeNil)
+			So(len(result.Rows.Rows), ShouldEqual, 1)
+			So(result.Rows.Total, ShouldBeNil)
+			So(mock.ExpectationsWereMet(), ShouldBeNil)
+		})
+
 		Convey("a refusal the session reports as ErrUnsupported crosses as code unsupported", func() {
 			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb"}}}`)
 			var session struct {

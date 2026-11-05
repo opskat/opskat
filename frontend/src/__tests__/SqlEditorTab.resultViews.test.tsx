@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SqlEditorTab } from "@/components/query/SqlEditorTab";
 import { useQueryStore } from "@/stores/queryStore";
@@ -7,6 +7,7 @@ import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../wailsjs/go/query/Query";
 import { isMac } from "@/stores/shortcutStore";
 import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
+import { mounted } from "../components/query/__tests__/fakeSqlEditor";
 
 vi.mock("@/components/CodeEditor", async () => ({
   CodeEditor: (await import("../components/query/__tests__/FakeCodeEditor")).FakeCodeEditor,
@@ -265,6 +266,60 @@ describe("SqlEditorTab result views", () => {
         expect(lastArgs()[3]).toBe(0);
         await waitFor(() => expect(screen.getByTitle("query.nextPage")).toBeEnabled());
       }
+    });
+
+    // 只在执行 / 重新执行时计数：翻页和改页大小让后端跳过 COUNT（第 6 个参数），总数沿用执行时的。
+    it("counts on execute and refresh only, reusing the total when paging or resizing the page", async () => {
+      const user = await executeWith(pageOf(100, 300));
+      expect(lastArgs()[5]).toBe(false);
+      // 跳过计数的回包不带 total_count。
+      vi.mocked(ExecuteSQLPaged).mockResolvedValue(pageOf(100, undefined));
+
+      await user.click(screen.getByTitle("query.nextPage"));
+      await waitFor(() => expect(lastArgs()[3]).toBe(1));
+      expect(lastArgs()[5]).toBe(true);
+      await waitFor(() => expect(screen.getByTitle("query.nextPage")).toBeEnabled());
+      // 总数还在：末页仍按 300 行算出是第 3 页。
+      await user.click(screen.getByTitle("query.lastPage"));
+      await waitFor(() => expect(lastArgs()[3]).toBe(2));
+      expect(lastArgs()[5]).toBe(true);
+      await waitFor(() => expect(screen.getByTitle("query.prevPage")).toBeEnabled());
+
+      await user.click(screen.getByTitle("query.tableFooterSettings"));
+      const input = await screen.findByLabelText("query.pageSize");
+      await user.clear(input);
+      await user.type(input, "50{Enter}");
+      await waitFor(() => expect(lastArgs()[4]).toBe(50));
+      expect(lastArgs()[3]).toBe(0);
+      expect(lastArgs()[5]).toBe(true);
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.getByTitle("query.nextPage")).toBeEnabled());
+      await user.click(screen.getByTitle("query.lastPage"));
+      await waitFor(() => expect(lastArgs()[3]).toBe(5));
+
+      await waitFor(() => expect(screen.getByTitle("query.refreshTable")).toBeEnabled());
+      vi.mocked(ExecuteSQLPaged).mockResolvedValue(pageOf(50, 300));
+      await user.click(screen.getByTitle("query.refreshTable"));
+      await waitFor(() => expect(lastArgs()[5]).toBe(false));
+    });
+
+    // 总数属于算出它的那条语句：新语句的执行被停下后翻页，不能沿用上一条语句的总数。
+    it("counts again when paging a statement whose own count never arrived", async () => {
+      const user = await executeWith(pageOf(100, 300));
+      vi.mocked(ExecuteSQLPaged).mockReturnValue(new Promise<string>(() => {}));
+      act(() => mounted.current!.editor.setValue("SELECT * FROM orders"));
+      await user.click(screen.getByText("query.execute"));
+      await waitFor(() => expect(lastArgs()[1]).toBe("SELECT * FROM orders"));
+      await user.click(screen.getByTitle("query.stopLoading"));
+
+      vi.mocked(ExecuteSQLPaged).mockResolvedValue(pageOf(50, 120));
+      await user.click(screen.getByTitle("query.tableFooterSettings"));
+      const input = await screen.findByLabelText("query.pageSize");
+      await user.clear(input);
+      await user.type(input, "50{Enter}");
+      await waitFor(() => expect(lastArgs()[4]).toBe(50));
+      expect(lastArgs()[1]).toBe("SELECT * FROM orders");
+      expect(lastArgs()[5]).toBe(false);
     });
 
     it("changes the page size from the settings popover within the allowed range and restarts at page 1", async () => {

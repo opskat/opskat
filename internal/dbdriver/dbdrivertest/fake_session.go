@@ -99,7 +99,7 @@ func (s *FakeSession) Execute(_ context.Context, statement string) (*dbdriver.Re
 	return &dbdriver.Result{Rows: &dbdriver.RowSet{Columns: s.fake.Columns, Rows: s.fake.Rows}}, nil
 }
 
-// ExecutePaged：SELECT 返回表里的一页和总行数，其余语句同 Execute。
+// ExecutePaged：SELECT 返回表里的一页和总行数（page.SkipTotal 时不带总行数），其余语句同 Execute。
 func (s *FakeSession) ExecutePaged(_ context.Context, statement string, page dbdriver.Page) (*dbdriver.Result, error) {
 	isQuery, err := s.record(statement)
 	if err != nil {
@@ -108,13 +108,17 @@ func (s *FakeSession) ExecutePaged(_ context.Context, statement string, page dbd
 	if !isQuery {
 		return &dbdriver.Result{AffectedRows: int64(len(s.fake.Rows))}, nil
 	}
-	total := int64(len(s.fake.Rows))
+	var total *int64
+	if !page.SkipTotal {
+		count := int64(len(s.fake.Rows))
+		total = &count
+	}
 	start := min(page.Index*page.Size, len(s.fake.Rows))
 	end := min(start+page.Size, len(s.fake.Rows))
 	return &dbdriver.Result{Rows: &dbdriver.RowSet{
 		Columns: s.fake.Columns,
 		Rows:    s.fake.Rows[start:end],
-		Total:   &total,
+		Total:   total,
 	}}, nil
 }
 

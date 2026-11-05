@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -331,6 +332,33 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		_, err := extdriver.New(ext.Plugin).OpenDriverSession(ctx, "otherdb", dbdriver.OpenRequest{Config: &dbdriver.Config{Driver: "otherdb"}})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "otherdb")
+	})
+
+	t.Run("a paged execute that skips the total reaches the driver, which sends no count", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+		const statement = "SELECT * FROM [app].[users]"
+		counted := func() int {
+			n := 0
+			for _, line := range d.server.Seen() {
+				if strings.Contains(line, "COUNT OF") {
+					n++
+				}
+			}
+			return n
+		}
+
+		res, err := s.ExecutePaged(ctx, statement, dbdriver.Page{Index: 0, Size: 2})
+		require.NoError(t, err)
+		require.NotNil(t, res.Rows.Total)
+		require.Equal(t, 1, counted())
+
+		res, err = s.ExecutePaged(ctx, statement, dbdriver.Page{Index: 1, Size: 2, SkipTotal: true})
+		require.NoError(t, err)
+		assert.Nil(t, res.Rows.Total)
+		assert.Equal(t, 1, counted(), "the page change sends no COUNT")
+		assert.Contains(t, d.server.Seen(), "QUERY PAGE 2 2 OF "+statement)
 	})
 
 	t.Run("a closed session refuses further work", func(t *testing.T) {

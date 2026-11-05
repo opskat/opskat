@@ -98,22 +98,27 @@ func (s *Session) Execute(ctx context.Context, statement string) (*dbdriver.Resu
 	return &dbdriver.Result{Rows: rowSet}, nil
 }
 
-// ExecutePaged 对 SELECT / WITH 先按方言计数、再按方言取一页；其余语句照 Execute 执行。
+// ExecutePaged 对 SELECT / WITH 先按方言计数（page.SkipTotal 时不计数）、再按方言取一页；
+// 其余语句照 Execute 执行。
 func (s *Session) ExecutePaged(ctx context.Context, statement string, page dbdriver.Page) (*dbdriver.Result, error) {
 	if !isPageableQuery(normalize(statement)) {
 		return s.Execute(ctx, statement)
 	}
 	query := stripTrailingSemicolon(statement)
 
-	var total int64
-	if err := s.db.QueryRowContext(ctx, s.dialect.CountSQL(query)).Scan(&total); err != nil {
-		return nil, fmt.Errorf("count query failed: %w", err)
+	var total *int64
+	if !page.SkipTotal {
+		var count int64
+		if err := s.db.QueryRowContext(ctx, s.dialect.CountSQL(query)).Scan(&count); err != nil {
+			return nil, fmt.Errorf("count query failed: %w", err)
+		}
+		total = &count
 	}
 	rowSet, err := s.query(ctx, s.dialect.PagedSQL(query, page.Index*page.Size, page.Size))
 	if err != nil {
 		return nil, err
 	}
-	rowSet.Total = &total
+	rowSet.Total = total
 	return &dbdriver.Result{Rows: rowSet}, nil
 }
 

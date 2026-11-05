@@ -220,17 +220,27 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     return { text: model.getValue(), cursor: model.getOffsetAt(editor.getPosition()!) };
   }, []);
 
+  // totalRows 是哪条语句(库 + SQL)的总数。翻页 / 改页大小只在它就是这条语句的总数时才让后端跳过计数:
+  // 新语句的执行被停下、总数还没到时翻页,得重新计数。与 totalRows 同时更新。
+  const totalOf = useRef<{ sql: string; db: string } | null>(null);
+
+  // 只有执行 / 重新执行计数;reuseTotal(翻页、改页大小)沿用已有的总数,不再让后端跑 COUNT。
   const fetchPage = useCallback(
-    async (execSql: string, pageNum: number, size = pageSize) => {
+    async (execSql: string, pageNum: number, { size = pageSize, reuseTotal = false } = {}) => {
       if (!execSql || !assetId) return;
 
       const requestId = ++latestRequest.current;
       setLoading(true);
       setError(null);
 
+      const skipTotal = reuseTotal && totalOf.current?.sql === execSql && totalOf.current.db === selectedDb;
+      const setTotal = (total: number | null) => {
+        setTotalRows(total);
+        totalOf.current = total == null ? null : { sql: execSql, db: selectedDb };
+      };
       const startedAt = performance.now();
       try {
-        const result = await ExecuteSQLPaged(assetId, execSql, selectedDb, pageNum, size);
+        const result = await ExecuteSQLPaged(assetId, execSql, selectedDb, pageNum, size, skipTotal);
         if (latestRequest.current !== requestId) return;
         const parsed: SQLPagedResult = JSON.parse(result);
         setElapsedMs(Math.round(performance.now() - startedAt));
@@ -239,12 +249,14 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
           setAffectedRows(parsed.affected_rows);
           setColumns([]);
           setRows([]);
-          setTotalRows(null);
+          setTotal(null);
         } else {
           setAffectedRows(null);
           setColumns(parsed.columns || []);
           setRows(parsed.rows || []);
-          setTotalRows(parsed.total_count ?? null);
+          // 不认识跳过计数的扩展驱动照常给总数,用它;跳过了计数就沿用已有的。
+          if (parsed.total_count != null) setTotal(parsed.total_count);
+          else if (!skipTotal) setTotal(null);
         }
       } catch (e) {
         if (latestRequest.current !== requestId) return;
@@ -253,7 +265,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
         // 失败不再是 DML 结果:底部状态条要显示「加载失败」。列保留:重试拿到同样的列时列宽、冻结等不重置。
         setAffectedRows(null);
         setRows([]);
-        setTotalRows(null);
+        setTotal(null);
       } finally {
         if (latestRequest.current === requestId) setLoading(false);
       }
@@ -276,7 +288,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const goToPage = useCallback(
     (target: number) => {
       setPage(target);
-      void fetchPage(lastExecSql, target);
+      void fetchPage(lastExecSql, target, { reuseTotal: true });
     },
     [fetchPage, lastExecSql]
   );
@@ -285,7 +297,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     (size: number) => {
       setPageSize(size);
       setPage(0);
-      void fetchPage(lastExecSql, 0, size);
+      void fetchPage(lastExecSql, 0, { size, reuseTotal: true });
     },
     [fetchPage, lastExecSql]
   );

@@ -63,14 +63,23 @@ func TestExecuteSQLKeepsAnEmptyResultSetAsNullRows(t *testing.T) {
 func TestExecuteSQLPagedReportsThePageAndTheTotal(t *testing.T) {
 	session := openFakeSession(t, dbdrivertest.NewFake())
 
-	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", 1, 2)
+	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1,"total_count":3}`, result)
 
 	// 驱动没有分页的语句：照普通执行的格式返回，不带 total_count。
-	result, err = ExecuteSQLPaged(context.Background(), session, "DELETE FROM t", 0, 2)
+	result, err = ExecuteSQLPaged(context.Background(), session, "DELETE FROM t", dbdriver.Page{Index: 0, Size: 2})
 	require.NoError(t, err)
 	assert.Equal(t, `{"affected_rows":3}`, result)
+}
+
+// 翻页时调用方已有总数：结果只有这一页，不带 total_count。
+func TestExecuteSQLPagedOmitsTheTotalWhenAskedToSkipIt(t *testing.T) {
+	session := openFakeSession(t, dbdrivertest.NewFake())
+
+	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2, SkipTotal: true})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1}`, result)
 }
 
 func TestExecuteSQLReturnsTheDriversError(t *testing.T) {
@@ -79,7 +88,7 @@ func TestExecuteSQLReturnsTheDriversError(t *testing.T) {
 
 	_, err := ExecuteSQL(context.Background(), session, "SELECT * FROM t")
 	require.ErrorIs(t, err, dbdrivertest.ErrFakeSessionClosed)
-	_, err = ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", 0, 10)
+	_, err = ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 0, Size: 10})
 	require.ErrorIs(t, err, dbdrivertest.ErrFakeSessionClosed)
 }
 
