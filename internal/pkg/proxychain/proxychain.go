@@ -188,8 +188,12 @@ type connWithClosers struct {
 	once    sync.Once
 }
 
+// Close closes the SSH client the channel was opened on, which tears the
+// channel down with it. It does not send channel-close first: that waits for
+// any write already stuck on the client's transport (remote stopped draining),
+// so Close would hang until TCP gives up instead of failing the stuck write.
 func (c *connWithClosers) Close() error {
-	err := c.Conn.Close()
+	var err error
 	c.once.Do(func() {
 		for _, closer := range c.closers {
 			if closeErr := closer.Close(); err == nil {

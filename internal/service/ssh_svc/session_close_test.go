@@ -2,13 +2,16 @@ package ssh_svc
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -87,18 +90,32 @@ func startEchoShellServer(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func dialFreezableClient(t *testing.T, addr string) (*ssh.Client, *freezableConn) {
+func dialFreezableConn(t *testing.T, addr string) *freezableConn {
 	t.Helper()
 	raw, err := net.Dial("tcp", addr)
 	require.NoError(t, err)
 	conn := &freezableConn{Conn: raw, blocked: make(chan struct{}, 1), closed: make(chan struct{})}
 	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func newTestClient(conn net.Conn, addr string) (*ssh.Client, error) {
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User:            "u",
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+func dialFreezableClient(t *testing.T, addr string) (*ssh.Client, *freezableConn) {
+	t.Helper()
+	conn := dialFreezableConn(t, addr)
+	client, err := newTestClient(conn, addr)
 	require.NoError(t, err)
-	return ssh.NewClient(c, chans, reqs), conn
+	return client, conn
 }
 
 // outputSink collects terminal output delivered through the session callback.
@@ -273,5 +290,63 @@ func TestSession_CloseWithWriteBlockedOnFrozenJumpHost(t *testing.T) {
 	case <-clientDone(jumpClient):
 	case <-time.After(time.Second):
 		t.Fatal("wedged jump host connection was not closed")
+	}
+}
+
+// The production jump host path: an SSH layer of the proxy chain, whose conn
+// (a channel of the jump client) is the only closer the shared client holds.
+func TestSession_CloseWithWriteBlockedOnFrozenProxyChainHop(t *testing.T) {
+	jump := newJumpForwardServer(t, &ssh.ServerConfig{NoClientAuth: true})
+	jumpHost, jumpPort, err := net.SplitHostPort(jump.addr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(jumpPort)
+	require.NoError(t, err)
+	var conn *freezableConn
+	targetAddr := startEchoShellServer(t)
+	chainConn, err := proxychain.Chain{
+		Layers: []proxychain.Layer{{
+			Type: proxychain.LayerSSH, Host: jumpHost, Port: port,
+			Handshake: func(_ context.Context, c net.Conn, addr string) (*ssh.Client, error) {
+				return newTestClient(c, addr)
+			},
+		}},
+		Direct: func(_ context.Context, addr string) (net.Conn, error) {
+			conn = dialFreezableConn(t, addr)
+			return conn, nil
+		},
+	}.Dial(context.Background(), targetAddr)
+	require.NoError(t, err)
+	client, err := newTestClient(chainConn, targetAddr)
+	require.NoError(t, err)
+	m := NewManager()
+	shared := newSharedClient(client, []io.Closer{chainConn}, 0)
+	sess, err := m.createSession(shared, 1, 80, 24, func(string, []byte) {}, nil, nil, "")
+	require.NoError(t, err)
+
+	conn.frozen.Store(true)
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- sess.Write(bytes.Repeat([]byte("x"), 256<<10)) }()
+	select {
+	case <-conn.blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write never reached the jump host transport")
+	}
+
+	start := time.Now()
+	closed := make(chan struct{})
+	go func() {
+		m.Disconnect(sess.ID)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(sessionCloseTimeout + time.Second):
+		t.Fatalf("Disconnect still blocked after %s while a Write is stuck on the proxy chain hop", time.Since(start))
+	}
+	select {
+	case err := <-writeDone:
+		assert.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("blocked Write was not released by closing the connection")
 	}
 }
