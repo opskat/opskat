@@ -92,14 +92,19 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		return nil, fmt.Errorf("创建 SFTP 客户端失败: %w", err)
 	}
 
-	s.cacheClient(sessionID, client)
-	return client, nil
+	return s.cacheClient(sessionID, client), nil
 }
 
-// cacheClient 缓存客户端，并在其连接结束时自动移出缓存。
+// cacheClient 缓存客户端并返回调用方应使用的那个，在其连接结束时自动移出缓存。
+// 同一会话的并发首用各自建了客户端时，先缓存的胜出，后到的当场关闭。
 // 用 CompareAndDelete 保证不会误删同一会话下更新的客户端。
-func (s *Service) cacheClient(sessionID string, client *sftp.Client) {
-	s.clients.Store(sessionID, client)
+func (s *Service) cacheClient(sessionID string, client *sftp.Client) *sftp.Client {
+	if v, loaded := s.clients.LoadOrStore(sessionID, client); loaded {
+		if err := client.Close(); err != nil {
+			logger.Default().Debug("close redundant sftp client", zap.String("sessionID", sessionID), zap.Error(err))
+		}
+		return v.(*sftp.Client)
+	}
 	go func() {
 		_ = client.Wait() // 连接结束（含主动 Close）后返回；错误即断开原因，无需处理
 		if s.clients.CompareAndDelete(sessionID, client) {
@@ -108,6 +113,7 @@ func (s *Service) cacheClient(sessionID string, client *sftp.Client) {
 			}
 		}
 	}()
+	return client
 }
 
 // Getwd 获取远程工作目录（用户 home）

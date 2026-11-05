@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,10 +90,12 @@ func TestUploadDirTransfersFilesConcurrently(t *testing.T) {
 	require.NoError(t, svc.UploadDir(context.Background(), "t1", "s", localDir, sftpiotest.RemotePath(filepath.Join(root, "dst")), onProgress))
 	elapsed := time.Since(start)
 
-	// 串行时每个新文件至少 5 个往返（Lstat、打开临时文件、写、Close、Stat 复核、Rename）。
+	// 串行时每个新文件至少 5 个往返（Lstat、打开临时文件、写、Close、Stat 复核、Rename），
+	// 每个往返都被延迟桩实打实地等满，所以串行耗时不可能低于这个下限；并发度本身由
+	// TestTransferDirRunsWorkersConcurrently 确定性地断言，这里只用下限，机器再忙也不误报。
 	serialFloor := time.Duration(dirTreeFiles) * 5 * dirTreeRTT
 	t.Logf("UploadDir %d files @%s: %s (serial floor %s)", dirTreeFiles, dirTreeRTT, elapsed, serialFloor)
-	assert.Less(t, elapsed, serialFloor/2, "文件之间的往返必须重叠")
+	assert.Less(t, elapsed, serialFloor, "文件之间的往返必须重叠")
 	assertDirTree(t, filepath.Join(root, "dst"), want)
 	assertProgressInvariants(t, *got, treeBytes(want))
 }
@@ -111,9 +115,45 @@ func TestDownloadDirTransfersFilesConcurrently(t *testing.T) {
 	// 串行时每个文件至少 4 个往返（Open、WriteTo 的 fstat、读、Close）；扫描阶段的 ReadDir 另计。
 	serialFloor := time.Duration(dirTreeFiles) * 4 * dirTreeRTT
 	t.Logf("DownloadDir %d files @%s: %s (serial floor %s, excl. scan)", dirTreeFiles, dirTreeRTT, elapsed, serialFloor)
-	assert.Less(t, elapsed, serialFloor/2, "文件之间的往返必须重叠")
+	assert.Less(t, elapsed, serialFloor, "文件之间的往返必须重叠")
 	assertDirTree(t, localDir, want)
 	assertProgressInvariants(t, *got, treeBytes(want))
+}
+
+// transferDir 同时在传 dirTransferWorkers 个文件，且不超过这个数：每个 send 都要等到这么多个
+// 同时在传才放行，并发度不足时卡到超时失败，与机器快慢无关。
+func TestTransferDirRunsWorkersConcurrently(t *testing.T) {
+	entries := make([]dirEntry, 0, 1+dirTransferWorkers*3)
+	entries = append(entries, dirEntry{src: "d", rel: "d", isDir: true})
+	for i := range dirTransferWorkers * 3 {
+		name := fmt.Sprintf("d/f%02d", i)
+		entries = append(entries, dirEntry{src: name, rel: name, size: 1})
+	}
+	var inFlight, peak, sent atomic.Int32
+	full := make(chan struct{})
+	var fullOnce sync.Once
+	send := func(ctx context.Context, _ dirEntry) error {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		if n == dirTransferWorkers {
+			fullOnce.Do(func() { close(full) })
+		}
+		select {
+		case <-full:
+			sent.Add(1)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, transferDir(ctx, entries, func(dirEntry) error { return nil }, send))
+	assert.EqualValues(t, dirTransferWorkers, peak.Load())
+	assert.EqualValues(t, dirTransferWorkers*3, sent.Load())
 }
 
 func TestDirTransferOfEmptyDirectory(t *testing.T) {

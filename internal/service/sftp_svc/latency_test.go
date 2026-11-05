@@ -118,7 +118,8 @@ func TestListDirResolvesSymlinksConcurrentlyInOrder(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	t.Logf("elapsed=%s for %d symlinks at rtt=%s", elapsed, n+1, rtt)
-	require.Less(t, elapsed, time.Duration(n)*rtt/3, "symlink stats must overlap")
+	// Serial resolution waits a full rtt per symlink, so it can never beat n*rtt however idle the machine is.
+	require.Less(t, elapsed, time.Duration(n)*rtt, "symlink stats must overlap")
 
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -151,17 +152,44 @@ func TestClientEvictedWhenConnectionEnds(t *testing.T) {
 	_ = client.Close()
 }
 
+// 同一会话的两次首用并发建出两个客户端时只缓存一个：后到的那个关掉，调用方拿到缓存里的，
+// 不留下一个没人引用、也没人关闭的 SFTP 通道。
+func TestConcurrentFirstUseKeepsOneClientPerSession(t *testing.T) {
+	first, _, closeFirst := newProbeClient(t, t.TempDir(), 0)
+	t.Cleanup(func() { _ = first.Close(); closeFirst() })
+	second, _, closeSecond := newProbeClient(t, t.TempDir(), 0)
+	t.Cleanup(closeSecond)
+	svc := NewService(nil)
+
+	require.Same(t, first, svc.cacheClient("s", first))
+	require.Same(t, first, svc.cacheClient("s", second), "the client cached first wins")
+
+	done := make(chan error, 1)
+	go func() { done <- second.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the losing client must be closed")
+	}
+	v, ok := svc.clients.Load("s")
+	require.True(t, ok)
+	require.Same(t, first, v.(*sftp.Client))
+}
+
+// 会话清理移除旧客户端后缓存了新客户端，旧客户端的断开监听不得把新客户端移出缓存。
 func TestEvictionDoesNotRemoveNewerClient(t *testing.T) {
 	old, _, closeOld := newProbeClient(t, t.TempDir(), 0)
+	t.Cleanup(closeOld)
 	svc := NewService(nil)
 	svc.cacheClient("s", old)
+	svc.CleanupSession("s")
+	_ = old.Wait()
+
 	newer, _, closeNew := newProbeClient(t, t.TempDir(), 0)
 	t.Cleanup(func() { _ = newer.Close(); closeNew() })
-	svc.cacheClient("s", newer)
+	require.Same(t, newer, svc.cacheClient("s", newer))
 
-	closeOld()
-	_ = old.Close()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) // 给旧客户端的监听 goroutine 留出执行时间
 	v, ok := svc.clients.Load("s")
 	require.True(t, ok)
 	require.Same(t, newer, v.(*sftp.Client))

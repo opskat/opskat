@@ -82,3 +82,59 @@ FROM n`, rows, end, rows, day, rows)).Error)
 		require.NotContains(t, b.String(), "SCAN audit_logs", "sql=%s", stmt)
 	}
 }
+
+func openMigratedDB(t *testing.T) (path string, gdb *gorm.DB) {
+	t.Helper()
+	dataDir := t.TempDir()
+	path = filepath.Join(dataDir, "opskat.db")
+	gdb = openSQLite(t, path)
+	require.NoError(t, migrations.RunMigrations(gdb, dataDir))
+	return path, gdb
+}
+
+func openSQLite(t *testing.T, dsn string) *gorm.DB {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	return gdb
+}
+
+// seedAuditRows 把 audit_logs 补到 upTo 行。
+func seedAuditRows(t *testing.T, gdb *gorm.DB, upTo int) {
+	t.Helper()
+	require.NoError(t, gdb.Exec(fmt.Sprintf(`INSERT INTO audit_logs (source, tool_name, session_id, createtime)
+WITH RECURSIVE n(i) AS (SELECT (SELECT COUNT(*) FROM audit_logs) + 1 UNION ALL SELECT i+1 FROM n WHERE i < %d)
+SELECT 'ai', 'exec', 'sess-' || (i %% 7), i FROM n`, upTo)).Error)
+}
+
+// 统计已跟上数据时启动刷新不取写锁：桌面端与 opsctl 是两个进程，一方正在写库时，
+// 另一方启动不能因为刷新统计卡在 busy_timeout 上。
+func TestRefreshPlannerStatsTakesNoWriteLockWhenStatsAreFresh(t *testing.T) {
+	path, gdb := openMigratedDB(t)
+	seedAuditRows(t, gdb, 50)
+	require.NoError(t, refreshPlannerStats(gdb))
+
+	writer := openSQLite(t, path)
+	require.NoError(t, writer.Exec("BEGIN IMMEDIATE").Error)
+	t.Cleanup(func() { _ = writer.Exec("ROLLBACK").Error })
+
+	starting := openSQLite(t, path+"?_pragma=busy_timeout(0)")
+	require.NoError(t, refreshPlannerStats(starting))
+}
+
+// 审计日志在上次统计之后涨了一个数量级：刷新后规划器看到的行数跟上当前规模。
+func TestRefreshPlannerStatsFollowsAuditGrowth(t *testing.T) {
+	_, gdb := openMigratedDB(t)
+	seedAuditRows(t, gdb, 20)
+	require.NoError(t, refreshPlannerStats(gdb))
+	seedAuditRows(t, gdb, 2000)
+	require.NoError(t, refreshPlannerStats(gdb))
+
+	var stat string
+	require.NoError(t, gdb.Raw(`SELECT stat FROM sqlite_stat1 WHERE tbl = 'audit_logs' LIMIT 1`).Scan(&stat).Error)
+	require.Equal(t, "2000", strings.Fields(stat)[0], "planner row count must follow the table, got stat %q", stat)
+}

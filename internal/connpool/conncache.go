@@ -20,6 +20,10 @@ const (
 	DefaultConnEvictInterval = 30 * time.Second
 )
 
+// ErrConnInvalidated 表示拨号进行中该资产的缓存被失效（改配置 / 删除 / 关闭缓存）：
+// 这次拨出的连接按旧配置建立，已被关闭，重试即按最新配置重拨。
+var ErrConnInvalidated = errors.New("连接配置已变更，请重试")
+
 // AssetConnCache 按资产持久化长连接(查询面板、Redis 浏览器),按 key(如 "<assetID>:<database>")缓存。
 //
 // 与 internal/ai/ConnCache 的差别:
@@ -30,13 +34,17 @@ const (
 // 持有者负责启动 RunEvictor、退出时 Close,并在 assetconn 登记 DropAsset,
 // 让资产改配置 / 删除后下次使用按新配置重拨。
 //
-// 并发模型:mu 保护 map;sf 保证同 key 并发首拨只发生一次。
+// 并发模型:mu 保护 map 与失效代数;sf 保证同 key 并发首拨只发生一次。
+// 拨号期间该资产被失效(DropAsset / Close)时,拨出的连接不进缓存(见 GetOrDial)。
 type AssetConnCache[C io.Closer] struct {
 	mu      sync.Mutex
 	entries map[string]*assetConnEntry[C]
-	sf      singleflight.Group
-	idleTTL time.Duration
-	name    string // 仅用于日志区分,如 "database"、"redis"、"mongodb"
+	// closeGen / dropGen 是 Close 与各资产 DropAsset 的累计次数,两者之和变了即说明拨号期间被失效过。
+	closeGen uint64
+	dropGen  map[int64]uint64
+	sf       singleflight.Group
+	idleTTL  time.Duration
+	name     string // 仅用于日志区分,如 "database"、"redis"、"mongodb"
 }
 
 type assetConnEntry[C io.Closer] struct {
@@ -54,6 +62,7 @@ type assetConnEntry[C io.Closer] struct {
 func NewAssetConnCache[C io.Closer](name string, idleTTL time.Duration) *AssetConnCache[C] {
 	return &AssetConnCache[C]{
 		entries: make(map[string]*assetConnEntry[C]),
+		dropGen: make(map[int64]uint64),
 		idleTTL: idleTTL,
 		name:    name,
 	}
@@ -61,6 +70,8 @@ func NewAssetConnCache[C io.Closer](name string, idleTTL time.Duration) *AssetCo
 
 // GetOrDial 从缓存取连接,不存在则调 dial 并入缓存。
 // assetID 只用于 DropAsset 按资产回收;缓存命中与否仍只看 key。
+// 从进入 GetOrDial 到拨号完成之间该资产被失效时,dial 用的是失效前的配置:拨出的连接被关闭,
+// 返回 ErrConnInvalidated,下次调用按最新配置重拨。
 func (c *AssetConnCache[C]) GetOrDial(assetID int64, key string, dial func() (C, io.Closer, error)) (C, io.Closer, error) {
 	c.mu.Lock()
 	if e, ok := c.entries[key]; ok {
@@ -69,6 +80,7 @@ func (c *AssetConnCache[C]) GetOrDial(assetID int64, key string, dial func() (C,
 		c.mu.Unlock()
 		return client, nil, nil
 	}
+	gen := c.genLocked(assetID)
 	c.mu.Unlock()
 
 	v, err, _ := c.sf.Do(key, func() (any, error) {
@@ -88,6 +100,11 @@ func (c *AssetConnCache[C]) GetOrDial(assetID int64, key string, dial func() (C,
 		e := &assetConnEntry[C]{client: client, tunnel: closer, assetID: assetID}
 		e.lastUsed.Store(time.Now().UnixNano())
 		c.mu.Lock()
+		if c.genLocked(assetID) != gen {
+			c.mu.Unlock()
+			c.closeEntry(key, e)
+			return *new(C), ErrConnInvalidated
+		}
 		c.entries[key] = e
 		c.mu.Unlock()
 		return client, nil
@@ -97,6 +114,10 @@ func (c *AssetConnCache[C]) GetOrDial(assetID int64, key string, dial func() (C,
 		return zero, nil, err
 	}
 	return v.(C), nil, nil
+}
+
+func (c *AssetConnCache[C]) genLocked(assetID int64) uint64 {
+	return c.closeGen + c.dropGen[assetID]
 }
 
 // Hold 标记 key 的连接正被一次操作占用,直到调用返回的 release:占用期间空闲驱逐不收它。
@@ -138,6 +159,7 @@ func (c *AssetConnCache[C]) Drop(key string) {
 // DropAsset 关闭并移除指定资产的全部连接(一个资产可能缓存了多个库/多个 db index)。
 func (c *AssetConnCache[C]) DropAsset(assetID int64) {
 	c.mu.Lock()
+	c.dropGen[assetID]++
 	var dropped map[string]*assetConnEntry[C]
 	for key, e := range c.entries {
 		if e.assetID == assetID {
@@ -157,6 +179,7 @@ func (c *AssetConnCache[C]) DropAsset(assetID int64) {
 // Close 关闭并移除所有连接。可重复调用,二次调用为空操作。
 func (c *AssetConnCache[C]) Close() error {
 	c.mu.Lock()
+	c.closeGen++
 	entries := c.entries
 	c.entries = make(map[string]*assetConnEntry[C])
 	c.mu.Unlock()

@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -44,32 +46,41 @@ func New(masterKey string, salt []byte) *CredentialSvc {
 	return NewLazy(func() (string, error) { return masterKey, nil }, salt)
 }
 
-// aead 返回派生好的 GCM，首次调用时解析 master key 并派生密钥
+// aead 返回派生好的 GCM，首次调用时解析 master key 并派生密钥。
+// 失败会被缓存：之后每次加解密都返回同一个错误，根因只在这里记一次日志。
 func (s *CredentialSvc) aead() (cipher.AEAD, error) {
 	s.once.Do(func() {
-		masterKey, err := s.resolveKey()
-		if err != nil {
-			s.err = fmt.Errorf("获取 master key 失败: %w", err)
-			return
-		}
-		key := argon2.IDKey([]byte(masterKey), s.salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-		defer func() {
-			// 清除密钥材料
-			for i := range key {
-				key[i] = 0
-			}
-		}()
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			s.err = fmt.Errorf("创建 AES cipher 失败: %w", err)
-			return
-		}
-		s.gcm, s.err = cipher.NewGCM(block)
+		s.gcm, s.err = s.derive()
+		// 派生只做一次：放掉解析函数，它的闭包可能持有明文 master key（--master-key / New）
+		s.resolveKey = nil
 		if s.err != nil {
-			s.err = fmt.Errorf("创建 GCM 失败: %w", s.err)
+			logger.Default().Error("init credential cipher", zap.Error(s.err))
 		}
 	})
 	return s.gcm, s.err
+}
+
+func (s *CredentialSvc) derive() (cipher.AEAD, error) {
+	masterKey, err := s.resolveKey()
+	if err != nil {
+		return nil, fmt.Errorf("获取 master key 失败: %w", err)
+	}
+	key := argon2.IDKey([]byte(masterKey), s.salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	defer func() {
+		// 清除密钥材料
+		for i := range key {
+			key[i] = 0
+		}
+	}()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("创建 AES cipher 失败: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("创建 GCM 失败: %w", err)
+	}
+	return gcm, nil
 }
 
 // GenerateSalt 生成随机 salt
