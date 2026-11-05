@@ -22,7 +22,6 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -34,7 +33,7 @@ import (
 // 连接数上限为 1,让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
 //
 // 返回的 cleanup 结束这次占用,操作用完会话后必须调用:在那之前缓存不会把会话当空闲的收走
-// (一次操作可以比空闲时限长,见 panelConnCache.Hold)。
+// (一次操作可以比空闲时限长,见 connpool.AssetConnCache.Hold)。
 func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (dbdriver.Session, func() error, error) {
 	key, err := panelDBCacheKey(asset.ID, cfg)
 	if err != nil {
@@ -75,24 +74,6 @@ func finishPanelDBOperation(opErr error, cleanup func() error) error {
 		return errors.Join(opErr, fmt.Errorf("释放数据库连接失败: %w", cleanupErr))
 	}
 	return opErr
-}
-
-// getOrDialPanelRedis 从面板缓存取 Redis 客户端。
-func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (redis.UniversalClient, error) {
-	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
-	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (redis.UniversalClient, io.Closer, error) {
-		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		var err error
-		cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("解析凭据失败: %w", err)
-		}
-		return connpool.DialRedis(ctx, asset, cfg, password, q.pool)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
 }
 
 // getOrDialPanelMongo 从面板缓存取 mongo 客户端。
@@ -175,7 +156,7 @@ func (q *Query) RedisProbe(testID, configJSON, plainPassword, plainSentinelPassw
 	if err != nil {
 		return redis_svc.RedisProbeResult{}, err
 	}
-	return redis_svc.New(q.pool).Probe(ctx, cfg, password)
+	return q.redis.Probe(ctx, cfg, password)
 }
 
 // redisTestConfig 解析表单提交的未保存 Redis 配置，返回代理密码与哨兵密码已为明文的配置
@@ -441,18 +422,14 @@ func (q *Query) ExecuteRedis(assetID int64, command string, scope string) (strin
 	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
 		return "", err
 	}
-	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return "", fmt.Errorf("解析凭据失败: %w", err)
-	}
-
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	client, err := q.getOrDialPanelRedis(ctx, asset, cfg, password)
+	client, release, err := q.redis.Client(ctx, asset, cfg)
 	if err != nil {
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
+	defer release()
 
 	return helper.ExecuteRedis(ctx, client, command, scope)
 }
@@ -612,18 +589,14 @@ func (q *Query) ExecuteRedisArgs(assetID int64, args []string, scope string) (st
 	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
 		return "", err
 	}
-	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return "", fmt.Errorf("解析凭据失败: %w", err)
-	}
-
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	client, err := q.getOrDialPanelRedis(ctx, asset, cfg, password)
+	client, release, err := q.redis.Client(ctx, asset, cfg)
 	if err != nil {
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
+	defer release()
 
 	return helper.ExecuteRedisRaw(ctx, client, args, scope)
 }

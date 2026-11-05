@@ -26,16 +26,56 @@ type redisExecutor interface {
 	Do(ctx context.Context, args ...any) (any, error)
 }
 
+// Service 是 Redis 浏览器与查询面板共用的 Redis 服务。clients 按「资产:库」缓存客户端，
+// 同一资产同一库的连续操作复用同一个客户端（含其 SSH 隧道）；持有者负责 RunEvictor / Close，
+// 并在资产改配置或删除时调 DropAsset（见 internal/app/redis）。
 type Service struct {
 	sshPool *sshpool.Pool
 	history *CommandHistory
+	clients *connpool.AssetConnCache[redis.UniversalClient]
 }
 
 func New(sshPool *sshpool.Pool) *Service {
 	return &Service{
 		sshPool: sshPool,
 		history: NewCommandHistory(200),
+		clients: connpool.NewAssetConnCache[redis.UniversalClient]("redis", connpool.DefaultConnIdleTTL),
 	}
+}
+
+// RunEvictor 周期关闭空闲超时的缓存客户端，阻塞到 ctx 取消。
+func (s *Service) RunEvictor(ctx context.Context) {
+	s.clients.RunEvictor(ctx, connpool.DefaultConnEvictInterval)
+}
+
+// DropAsset 关闭并丢弃该资产全部库的缓存客户端，下次操作按资产最新配置重新拨号。
+func (s *Service) DropAsset(assetID int64) {
+	s.clients.DropAsset(assetID)
+}
+
+// Close 关闭全部缓存客户端。
+func (s *Service) Close() {
+	_ = s.clients.Close()
+}
+
+// Client 返回资产在 cfg.Database 上的共享客户端，缓存未命中时才解析凭据并拨号。
+// cfg 是资产保存的配置（凭据仍为密文），Database 已指向目标库；本方法不修改它。
+// ctx 只约束这次拨号（含连通性检查），不绑定到客户端的生命周期。
+// 返回的 release 结束这次占用，操作结束后必须调用：在那之前空闲驱逐不会收走它。
+func (s *Service) Client(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig) (redis.UniversalClient, func(), error) {
+	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
+	client, _, err := s.clients.GetOrDial(asset.ID, key, func() (redis.UniversalClient, io.Closer, error) {
+		dialCfg := *cfg
+		password, err := resolveRedisCredentials(ctx, &dialCfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return connpool.DialRedis(ctx, asset, &dialCfg, password, s.sshPool)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, s.clients.Hold(key), nil
 }
 
 func (s *Service) ListDatabases(ctx context.Context, assetID int64) ([]RedisDatabase, error) {
@@ -169,24 +209,24 @@ func (s *Service) StreamDelete(ctx context.Context, assetID int64, db int, key s
 }
 
 func (s *Service) withClient(ctx context.Context, assetID int64, db int, fn func(context.Context, redisExecutor) error) error {
-	target, err := loadRedisTarget(ctx, assetID)
+	asset, cfg, err := loadRedisAsset(ctx, assetID)
 	if err != nil {
 		return err
 	}
-	if err := validateDBForMode(target.cfg.EffectiveMode(), db); err != nil {
+	if err := validateDBForMode(cfg.EffectiveMode(), db); err != nil {
 		return err
 	}
 	if db >= 0 {
-		target.cfg.Database = db
+		cfg.Database = db
 	}
-	opCtx, cancel := target.opContext(ctx)
+	opCtx, cancel := redisOpContext(ctx, cfg)
 	defer cancel()
-	client, closer, err := connpool.DialRedis(opCtx, target.asset, target.cfg, target.password, s.sshPool)
+	client, release, err := s.Client(opCtx, asset, cfg)
 	if err != nil {
 		return fmt.Errorf("连接 Redis 失败: %w", err)
 	}
-	defer closeRedisClient(client, closer)
-	base := &goRedisExecutor{client: client, history: s.history, assetID: assetID, db: target.cfg.Database}
+	defer release()
+	base := &goRedisExecutor{client: client, history: s.history, assetID: assetID, db: cfg.Database}
 	if cluster, ok := client.(*redis.ClusterClient); ok {
 		return fn(opCtx, &goRedisClusterExecutor{goRedisExecutor: base, cluster: cluster})
 	}
@@ -200,34 +240,40 @@ type redisTarget struct {
 	password string
 }
 
-func loadRedisTarget(ctx context.Context, assetID int64) (redisTarget, error) {
+// loadRedisAsset 读取 Redis 资产及其保存的配置（凭据仍为密文）。
+func loadRedisAsset(ctx context.Context, assetID int64) (*asset_entity.Asset, *asset_entity.RedisConfig, error) {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
-		return redisTarget{}, fmt.Errorf("资产不存在: %w", err)
+		return nil, nil, fmt.Errorf("资产不存在: %w", err)
 	}
 	if !asset.IsRedis() {
-		return redisTarget{}, fmt.Errorf("资产不是 Redis 类型")
+		return nil, nil, fmt.Errorf("资产不是 Redis 类型")
 	}
 	cfg, err := asset.GetRedisConfig()
 	if err != nil {
-		return redisTarget{}, fmt.Errorf("获取 Redis 配置失败: %w", err)
+		return nil, nil, fmt.Errorf("获取 Redis 配置失败: %w", err)
 	}
+	return asset, cfg, nil
+}
+
+// resolveRedisCredentials 把 cfg 的代理密码与哨兵密码就地解为明文，返回明文数据节点密码。
+func resolveRedisCredentials(ctx context.Context, cfg *asset_entity.RedisConfig) (string, error) {
 	password, err := credential_resolver.Default().ResolveRedisPassword(ctx, cfg)
 	if err != nil {
-		return redisTarget{}, fmt.Errorf("解析 Redis 凭据失败: %w", err)
+		return "", fmt.Errorf("解析 Redis 凭据失败: %w", err)
 	}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
 	if err != nil {
-		return redisTarget{}, fmt.Errorf("解析 Redis 凭据失败: %w", err)
+		return "", fmt.Errorf("解析 Redis 凭据失败: %w", err)
 	}
-	return redisTarget{asset: asset, cfg: cfg, password: password}, nil
+	return password, nil
 }
 
-// opContext 返回按资产命令超时（默认 30s）限定的操作 context。
-func (t redisTarget) opContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if t.cfg.CommandTimeoutSeconds > 0 {
-		return context.WithTimeout(ctx, time.Duration(t.cfg.CommandTimeoutSeconds)*time.Second)
+// redisOpContext 返回按资产命令超时（默认 30s）限定的操作 context。
+func redisOpContext(ctx context.Context, cfg *asset_entity.RedisConfig) (context.Context, context.CancelFunc) {
+	if cfg.CommandTimeoutSeconds > 0 {
+		return context.WithTimeout(ctx, time.Duration(cfg.CommandTimeoutSeconds)*time.Second)
 	}
 	return context.WithTimeout(ctx, 30*time.Second)
 }

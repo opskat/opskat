@@ -339,16 +339,21 @@ func (s *Service) ClusterOverview(ctx context.Context, assetID int64, infoNode s
 // SentinelOverview 返回哨兵模式概览：依次尝试资产配置的哨兵直到连上一个，
 // 另连当前主节点读取复制延迟（连不上时概览仍返回，MasterError 说明原因）。
 func (s *Service) SentinelOverview(ctx context.Context, assetID int64) (RedisSentinelOverview, error) {
-	target, err := loadRedisTarget(ctx, assetID)
+	asset, cfg, err := loadRedisAsset(ctx, assetID)
 	if err != nil {
 		return RedisSentinelOverview{}, err
 	}
-	if target.cfg.EffectiveMode() != asset_entity.RedisModeSentinel {
+	if cfg.EffectiveMode() != asset_entity.RedisModeSentinel {
 		return RedisSentinelOverview{}, fmt.Errorf("该 Redis 资产不是哨兵模式")
 	}
-	opCtx, cancel := target.opContext(ctx)
+	opCtx, cancel := redisOpContext(ctx, cfg)
 	defer cancel()
 
+	savedCfg := *cfg // 凭据仍为密文：数据节点客户端由 Client 自行解析
+	target := redisTarget{asset: asset, cfg: cfg}
+	if target.password, err = resolveRedisCredentials(ctx, cfg); err != nil {
+		return RedisSentinelOverview{}, err
+	}
 	var source sentinelSource
 	var errs []error
 	for _, addr := range target.cfg.Nodes {
@@ -366,10 +371,11 @@ func (s *Service) SentinelOverview(ctx context.Context, assetID int64) (RedisSen
 		return RedisSentinelOverview{}, fmt.Errorf("连接 Redis 哨兵失败: %w", errors.Join(errs...))
 	}
 
+	// 哨兵节点每次直连（探的是它们此刻的状态）；数据节点走与浏览器共用的客户端缓存。
 	var data redisExecutor
-	client, closer, dataErr := connpool.DialRedis(opCtx, target.asset, target.cfg, target.password, s.sshPool)
+	client, release, dataErr := s.Client(opCtx, asset, &savedCfg)
 	if dataErr == nil {
-		defer closeRedisClient(client, closer)
+		defer release()
 		data = &goRedisExecutor{client: client}
 	}
 	return sentinelOverview(opCtx, source, data, dataErr, target.cfg.MasterName)

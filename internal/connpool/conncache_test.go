@@ -1,4 +1,4 @@
-package query
+package connpool
 
 import (
 	"errors"
@@ -37,9 +37,9 @@ func (f *fakeCloser) Close() error {
 
 // --- 测试 ---
 
-func TestPanelConnCache_GetOrDial_CachesAndReuses(t *testing.T) {
+func TestAssetConnCache_GetOrDial_CachesAndReuses(t *testing.T) {
 	Convey("GetOrDial 命中缓存时不重复 dial", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 		defer func() { _ = c.Close() }()
 
 		var dialCount atomic.Int32
@@ -59,9 +59,9 @@ func TestPanelConnCache_GetOrDial_CachesAndReuses(t *testing.T) {
 		So(dialCount.Load(), ShouldEqual, 1)
 	})
 }
-func TestPanelConnCache_GetOrDial_ConcurrentSameKeyDialsOnce(t *testing.T) {
+func TestAssetConnCache_GetOrDial_ConcurrentSameKeyDialsOnce(t *testing.T) {
 	Convey("同 key 并发首拨经 singleflight 合流为一次", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 		defer func() { _ = c.Close() }()
 
 		var dialCount atomic.Int32
@@ -98,9 +98,9 @@ func TestPanelConnCache_GetOrDial_ConcurrentSameKeyDialsOnce(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_DifferentKeysIndependent(t *testing.T) {
+func TestAssetConnCache_DifferentKeysIndependent(t *testing.T) {
 	Convey("不同 key 独立缓存", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 		defer func() { _ = c.Close() }()
 
 		dialA := func() (*fakeClient, io.Closer, error) {
@@ -118,9 +118,9 @@ func TestPanelConnCache_DifferentKeysIndependent(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_DialError_NotCached(t *testing.T) {
+func TestAssetConnCache_DialError_NotCached(t *testing.T) {
 	Convey("dial 失败时不进缓存,下次重试", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 		defer func() { _ = c.Close() }()
 
 		var attempts atomic.Int32
@@ -142,9 +142,9 @@ func TestPanelConnCache_DialError_NotCached(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_Drop_ClosesAndRemoves(t *testing.T) {
+func TestAssetConnCache_Drop_ClosesAndRemoves(t *testing.T) {
 	Convey("Drop 关闭并移除指定 key", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 		defer func() { _ = c.Close() }()
 
 		client := &fakeClient{id: 1}
@@ -170,9 +170,9 @@ func TestPanelConnCache_Drop_ClosesAndRemoves(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_Close_ReleasesAll(t *testing.T) {
+func TestAssetConnCache_Close_ReleasesAll(t *testing.T) {
 	Convey("Close 释放所有缓存的 client 和 tunnel", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 
 		clientA := &fakeClient{id: 1}
 		clientB := &fakeClient{id: 2}
@@ -195,9 +195,9 @@ func TestPanelConnCache_Close_ReleasesAll(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_Evictor_EvictsIdle(t *testing.T) {
+func TestAssetConnCache_Evictor_EvictsIdle(t *testing.T) {
 	Convey("idle 超过 TTL 后被 evictor 驱逐", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", 50*time.Millisecond)
+		c := NewAssetConnCache[*fakeClient]("test", 50*time.Millisecond)
 		defer func() { _ = c.Close() }()
 
 		client := &fakeClient{id: 1}
@@ -206,7 +206,7 @@ func TestPanelConnCache_Evictor_EvictsIdle(t *testing.T) {
 		})
 
 		// 触发一次驱逐扫描,模拟时间过去
-		c.evictOnce(time.Now().Add(time.Second))
+		c.EvictIdle(time.Now().Add(time.Second))
 
 		So(client.closed.Load(), ShouldBeTrue)
 
@@ -215,9 +215,9 @@ func TestPanelConnCache_Evictor_EvictsIdle(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_Hold_KeepsAnEntryInUseFromIdleEviction(t *testing.T) {
+func TestAssetConnCache_Hold_KeepsAnEntryInUseFromIdleEviction(t *testing.T) {
 	Convey("被占用的连接不算空闲", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", 50*time.Millisecond)
+		c := NewAssetConnCache[*fakeClient]("test", 50*time.Millisecond)
 		defer func() { _ = c.Close() }()
 		client := &fakeClient{id: 1}
 		_, _, _ = c.GetOrDial(1, "1:db", func() (*fakeClient, io.Closer, error) {
@@ -229,16 +229,16 @@ func TestPanelConnCache_Hold_KeepsAnEntryInUseFromIdleEviction(t *testing.T) {
 			releaseFirst := c.Hold("1:db")
 			releaseSecond := c.Hold("1:db")
 
-			c.evictOnce(later())
+			c.EvictIdle(later())
 			So(client.closed.Load(), ShouldBeFalse)
 
 			releaseFirst()
 			releaseFirst()
-			c.evictOnce(later())
+			c.EvictIdle(later())
 			So(client.closed.Load(), ShouldBeFalse)
 
 			releaseSecond()
-			c.evictOnce(later())
+			c.EvictIdle(later())
 			So(client.closed.Load(), ShouldBeTrue)
 			So(c.size(), ShouldEqual, 0)
 		})
@@ -257,9 +257,9 @@ func TestPanelConnCache_Hold_KeepsAnEntryInUseFromIdleEviction(t *testing.T) {
 	})
 }
 
-func TestPanelConnCache_DropAsset(t *testing.T) {
+func TestAssetConnCache_DropAsset(t *testing.T) {
 	Convey("DropAsset 关掉该资产的全部连接,不误伤其它资产", t, func() {
-		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		c := NewAssetConnCache[*fakeClient]("test", time.Minute)
 		defer func() { _ = c.Close() }()
 
 		dial := func(id int64) func() (*fakeClient, io.Closer, error) {

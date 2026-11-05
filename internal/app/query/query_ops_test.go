@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/connpool"
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
@@ -43,7 +44,7 @@ func newPanelQuery(t *testing.T, cfg *asset_entity.DatabaseConfig) *Query {
 	q := &Query{
 		ctx:          context.Background(),
 		lang:         stubLang{},
-		dbPanelCache: newPanelConnCache[dbdriver.Session]("database", time.Minute),
+		dbPanelCache: connpool.NewAssetConnCache[dbdriver.Session]("database", time.Minute),
 	}
 	t.Cleanup(func() { _ = q.dbPanelCache.Close() })
 	return q

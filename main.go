@@ -216,8 +216,8 @@ func main() {
 	// 2. 构造 binder（system 先建，其它持有它做 LangProvider/WindowActivator）
 	sys := system.New(appCtx, skillContent)
 	sshB := ssh.New(appCtx, sys, sshMgr, sftpSvc, pool)
-	queryB := query.New(appCtx, sys, pool)
 	redisB := redis.New(appCtx, sys, pool)
+	queryB := query.New(appCtx, sys, pool, redisB.Service()) // 面板的 Redis 命令与浏览器共用客户端缓存
 	rdpB := rdp.New(sys, pool)
 	etcdB := etcd.New(appCtx, sys, pool)
 	ossB := oss.New(appCtx, sys)
