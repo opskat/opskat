@@ -9,6 +9,7 @@ import {
 } from "@tabler/icons-react";
 import { Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger, cn } from "@opskat/ui";
 import { CommandPalette } from "@/components/command/CommandPalette";
+import { usePaletteFocusReturn } from "@/components/command/usePaletteFocusReturn";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { usePlatform } from "@/hooks/usePlatform";
 import type { asset_entity } from "../../../wailsjs/go/models";
@@ -36,6 +37,7 @@ export function TopBar({
   const isFullscreen = useFullscreen();
 
   const platform = usePlatform();
+  const onPaletteCloseAutoFocus = usePaletteFocusReturn(commandOpen);
 
   // macOS 红绿灯位（非全屏时预留 80px）；Windows 把 WindowControls 区域让出来
   const leftReserve = platform === "darwin" && !isFullscreen ? "pl-20" : "pl-2";
@@ -84,6 +86,7 @@ export function TopBar({
               // 让 CommandPalette 内部的 input 自己取焦
               e.preventDefault();
             }}
+            onCloseAutoFocus={onPaletteCloseAutoFocus}
           >
             <CommandPalette
               open={commandOpen}
