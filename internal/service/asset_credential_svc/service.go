@@ -6,6 +6,7 @@ import (
 
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 )
 
 // Service owns credential-related asset projections used by the IPC layer.
@@ -29,6 +30,23 @@ var defaultService Service = &service{}
 // Default returns the asset credential service.
 func Default() Service {
 	return defaultService
+}
+
+func init() {
+	credential_mgr_svc.SetReferencingAssetsLookup(referencingAssetIDs)
+}
+
+// referencingAssetIDs 供 credential_mgr_svc 在凭证认证内容变更后失效相关连接。
+func referencingAssetIDs(ctx context.Context, credentialID int64) ([]int64, error) {
+	usages, err := Default().UsageAssets(ctx, credentialID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, len(usages))
+	for i, u := range usages {
+		ids[i] = u.ID
+	}
+	return ids, nil
 }
 
 func (s *service) ResolvePassword(ctx context.Context, assetID int64) (string, error) {
