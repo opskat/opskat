@@ -2,6 +2,7 @@ package oss_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // DownloadPrefixRequest 描述一次"文件夹"下载:把 Prefix 之下的全部对象落到
@@ -42,8 +44,14 @@ type downloadEntry struct {
 	isDir bool
 }
 
+// folderDownloadWorkers 是文件夹下载同时在传的对象数上限(与 SFTP 目录传输一致)。
+// 小对象的耗时几乎全是请求往返,多个对象同时在传才能把这些等待叠起来。
+const folderDownloadWorkers = 8
+
 // downloadPrefixWith 分两段:先把整棵前缀扫完(定总量,并把落不进 DestDir 的 key 挡在
-// 动笔之前),再按扫描顺序逐个落盘。任一对象失败即中止,已落盘的文件保留。
+// 动笔之前),再按扫描顺序派发:目录由派发方当场建立,对象交给最多 folderDownloadWorkers
+// 个 worker 并发落盘。第一个失败的对象取消其余对象,其错误作为返回值;ctx 取消时所有
+// worker 随之停止。返回前等待全部 worker 退出,已落盘的文件保留。
 //
 // 写入经 os.Root 限制在 DestDir 之内:对象 key 是任意字符串,而它在这里被当成本地路径。
 func downloadPrefixWith(ctx context.Context, c Client, req *DownloadPrefixRequest) error {
@@ -62,22 +70,46 @@ func downloadPrefixWith(ctx context.Context, c Client, req *DownloadPrefixReques
 	defer func() { _ = root.Close() }()
 
 	tracker := transfer.NewTracker(req.TransferID, filesTotal, bytesTotal, req.OnProgress)
+	dispatchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g, workerCtx := errgroup.WithContext(dispatchCtx)
+	g.SetLimit(folderDownloadWorkers)
+	var mkdirErr error
 	for _, e := range entries {
-		if err := ctx.Err(); err != nil {
-			return err
+		if workerCtx.Err() != nil {
+			break
 		}
 		if e.isDir {
-			if err := root.MkdirAll(e.rel, 0o755); err != nil {
-				return fmt.Errorf("创建本地目录失败: %w", err)
+			if mkdirErr = root.MkdirAll(e.rel, 0o755); mkdirErr != nil {
+				mkdirErr = fmt.Errorf("创建本地目录失败: %w", mkdirErr)
+				cancel()
+				break
 			}
 			continue
 		}
-		if err := downloadEntryTo(ctx, c, root, tracker, req.Bucket, e); err != nil {
+		g.Go(func() error {
+			// g.Go 在 worker 占满时会等空位,等到时传输可能已被取消或有对象失败。
+			if err := workerCtx.Err(); err != nil {
+				return err
+			}
+			err := downloadEntryTo(workerCtx, c, root, tracker.File(e.rel, e.size), req.Bucket, e)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				// 只有第一个错误会被返回,其余对象各自的失败原因记在日志里。
+				logger.Ctx(ctx).Warn("oss folder download object failed", zap.String("transferId", req.TransferID),
+					zap.String("key", e.key), zap.Error(err))
+			}
 			return err
-		}
-		tracker.FileDone(e.size)
+		})
 	}
-	return nil
+	waitErr := g.Wait()
+	if mkdirErr != nil {
+		return mkdirErr
+	}
+	if waitErr != nil {
+		return waitErr
+	}
+	// 取消发生在两个对象之间时可能没有 worker 报错,仍要把取消报给调用方。
+	return ctx.Err()
 }
 
 // scanPrefix 把 prefix 之下的全部内容展开成落盘清单,文件夹自身排在第一项。
@@ -117,7 +149,7 @@ func scanPrefix(ctx context.Context, c Client, bucket, prefix string) ([]downloa
 	return entries, filesTotal, bytesTotal, nil
 }
 
-func downloadEntryTo(ctx context.Context, c Client, root *os.Root, tracker *transfer.Tracker, bucket string, e downloadEntry) error {
+func downloadEntryTo(ctx context.Context, c Client, root *os.Root, file *transfer.TrackedFile, bucket string, e downloadEntry) error {
 	rc, _, err := c.GetObject(ctx, bucket, e.key)
 	if err != nil {
 		return fmt.Errorf("下载 %s 失败: %w", e.key, err)
@@ -131,12 +163,13 @@ func downloadEntryTo(ctx context.Context, c Client, root *os.Root, tracker *tran
 	if err != nil {
 		return fmt.Errorf("创建本地文件失败: %w", err)
 	}
-	if _, err := io.Copy(tracker.Writer(ctx, f, e.rel), rc); err != nil {
+	if _, err := io.Copy(file.Writer(ctx, f), rc); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("下载 %s 失败: %w", e.key, err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("写入本地文件失败: %w", err)
 	}
+	file.Done()
 	return nil
 }

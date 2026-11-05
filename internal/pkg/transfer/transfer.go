@@ -229,8 +229,24 @@ func (f *TrackedFile) advance(n int) {
 	t := f.tracker
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	f.done += int64(n)
-	t.inFlight += int64(n)
+	f.advanceLocked(int64(n))
+}
+
+// advanceWithinSize 同 advance,但该文件的已传字节不超过它的大小:随机读的 sink 重试某段时
+// 会重读已计入的字节。
+func (f *TrackedFile) advanceWithinSize(n int) {
+	t := f.tracker
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if d := min(int64(n), f.size-f.done); d > 0 {
+		f.advanceLocked(d)
+	}
+}
+
+func (f *TrackedFile) advanceLocked(n int64) {
+	t := f.tracker
+	f.done += n
+	t.inFlight += n
 	t.reporter.Report(t.snapshotLocked(f.name))
 }
 
@@ -256,6 +272,36 @@ func (r *TrackedReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// ReaderAtSource 是可顺序读也可随机读的源，例如 *os.File。
+type ReaderAtSource interface {
+	io.Reader
+	io.ReaderAt
+}
+
+// ReaderAt 包裹该文件的源并保留随机读：sink 据此按偏移并发读取各段（minio 的并行分片上传），
+// 每次 ReadAt / Read 读出的字节都计入进度（sink 重试某段时经 ReadAt 重读的字节不会把它推过
+// 文件大小）；ctx 取消即中断读取。
+func (f *TrackedFile) ReaderAt(ctx context.Context, r ReaderAtSource) *TrackedReaderAt {
+	return &TrackedReaderAt{TrackedReader: TrackedReader{ctx: ctx, r: r, file: f}, ra: r}
+}
+
+// TrackedReaderAt 是 TrackedFile 包裹出的可随机读的源，可被并发 ReadAt。
+type TrackedReaderAt struct {
+	TrackedReader
+	ra io.ReaderAt
+}
+
+func (r *TrackedReaderAt) ReadAt(b []byte, off int64) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.ra.ReadAt(b, off)
+	if n > 0 {
+		r.file.advanceWithinSize(n)
+	}
+	return n, err
+}
+
 // TrackedWriter 是 TrackedFile 包裹出的目标 writer。
 type TrackedWriter struct {
 	ctx  context.Context
@@ -272,11 +318,6 @@ func (w *TrackedWriter) Write(b []byte) (int, error) {
 		w.file.advance(n)
 	}
 	return n, err
-}
-
-// NewProgressReader 是单文件传输的快捷方式，等价于一个 filesTotal=1 的 Tracker。
-func NewProgressReader(ctx context.Context, transferID, currentFile string, r io.Reader, total int64, onProgress func(Progress)) *TrackedReader {
-	return NewTracker(transferID, 1, total, onProgress).Reader(ctx, r, currentFile, total)
 }
 
 // Copy 以 32KiB 分片把 src 流式写入 dst,经独立 Reporter(100ms 节流)上报进度,

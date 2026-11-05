@@ -214,32 +214,45 @@ func TestTrackerConcurrentFilesKeepExactTotals(t *testing.T) {
 	assert.Equal(t, "probe", last.CurrentFile)
 }
 
-func TestProgressReaderReportsCumulativeBytes(t *testing.T) {
+// ReaderAt 保留随机读并允许并发读各段;sink 重试某段时重读的字节不得把进度推过文件大小,
+// Done 后的最后一条 progress 是精确总量。
+func TestTrackedReaderAtCountsConcurrentReadsWithoutOvershooting(t *testing.T) {
+	// 时钟每次被读都前进 1s:每次读出字节都越过节流窗口发一条 progress,便于逐条检查。
+	var tick atomic.Int64
+	clock := func() time.Time { return time.Unix(tick.Add(1), 0) }
 	var got []Progress
-	src := bytes.NewReader(bytes.Repeat([]byte("x"), 100))
-	pr := NewProgressReader(context.Background(), "oss-1", "hero.jpg", src, 100, func(p Progress) {
-		got = append(got, p)
-	})
+	tr := newTracker("t", 1, 100, func(p Progress) { got = append(got, p) }, clock)
+	f := tr.File("big.bin", 100)
+	ra := f.ReaderAt(context.Background(), bytes.NewReader(bytes.Repeat([]byte("z"), 100)))
 
-	buf := make([]byte, 40)
-	n, err := pr.Read(buf) // 首条 progress 立即放行（lastEmit 零值）
+	var wg sync.WaitGroup
+	for off := int64(0); off < 100; off += 25 {
+		wg.Go(func() {
+			n, err := ra.ReadAt(make([]byte, 25), off)
+			assert.NoError(t, err)
+			assert.Equal(t, 25, n)
+		})
+	}
+	wg.Wait()
+	_, err := ra.ReadAt(make([]byte, 25), 50) // 重试重读同一段
 	require.NoError(t, err)
-	require.Equal(t, 40, n)
+	f.Done()
+
 	require.NotEmpty(t, got)
+	for i, p := range got {
+		assert.LessOrEqual(t, p.BytesDone, p.BytesTotal, "第 %d 条:重读不得把进度推过总量", i)
+	}
 	last := got[len(got)-1]
-	assert.Equal(t, "oss-1", last.TransferID)
-	assert.Equal(t, StatusProgress, last.Status)
-	assert.Equal(t, "hero.jpg", last.CurrentFile)
-	assert.Equal(t, int64(40), last.BytesDone)
-	assert.Equal(t, int64(100), last.BytesTotal)
+	assert.Equal(t, 1, last.FilesCompleted)
+	assert.EqualValues(t, 100, last.BytesDone)
 }
 
-func TestProgressReaderAbortsOnCancelledContext(t *testing.T) {
+func TestTrackedReaderAtAbortsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	pr := NewProgressReader(ctx, "oss-1", "hero.jpg", bytes.NewReader([]byte("data")), 4, func(Progress) {})
+	ra := NewTracker("t", 1, 4, func(Progress) {}).File("a", 4).ReaderAt(ctx, bytes.NewReader([]byte("data")))
 
-	_, err := pr.Read(make([]byte, 4))
+	_, err := ra.ReadAt(make([]byte, 4), 0)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 

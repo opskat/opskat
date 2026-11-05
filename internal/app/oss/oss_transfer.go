@@ -135,24 +135,14 @@ func (o *OSS) runTransfer(transferID, what string, run func(ctx context.Context)
 	o.emitTerminal(transferID, run(ctx))
 }
 
-// uploadObject 单文件流式上传:打开文件 → 包进度 reader → service.PutObject。
+// uploadObject 单文件流式上传,打开文件、报进度与写对象都在 service.UploadFile 里。
 func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localPath string) {
 	o.runTransfer(transferID, "上传", func(ctx context.Context) error {
-		f, err := os.Open(localPath) //nolint:gosec // path 来自用户文件对话框/拖拽
-		if err != nil {
-			return fmt.Errorf("打开本地文件失败: %w", err)
-		}
-		defer func() { _ = f.Close() }()
-
-		info, err := f.Stat()
-		if err != nil {
-			return fmt.Errorf("获取文件信息失败: %w", err)
-		}
-
-		pr := transfer.NewProgressReader(ctx, transferID, filepath.Base(localPath), f, info.Size(), func(p transfer.Progress) {
-			o.emitProgress(transferID, p)
+		return o.service.UploadFile(ctx, &oss_svc.UploadFileRequest{
+			AssetID: assetID, Bucket: bucket, Key: key, LocalPath: localPath,
+			ContentType: contentTypeFor(localPath), TransferID: transferID,
+			OnProgress: func(p transfer.Progress) { o.emitProgress(transferID, p) },
 		})
-		return o.service.PutObject(ctx, assetID, bucket, key, pr, info.Size(), contentTypeFor(localPath))
 	})
 }
 
