@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,42 @@ func TestExecuteSQLKeepsAnEmptyResultSetAsNullRows(t *testing.T) {
 	result, err := ExecuteSQL(context.Background(), session, "SELECT * FROM t")
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"columns":["id","name"],"rows":null,"count":0}`, result)
+}
+
+func TestExecuteSQLRowLimitTruncatesRowsAndStatesTotal(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"id"}
+	fake.Rows = nil
+	for i := 0; i < 1000; i++ {
+		fake.Rows = append(fake.Rows, []any{i})
+	}
+	session := openFakeSession(t, fake)
+
+	result, err := ExecuteSQL(WithMaxRows(context.Background(), 10), session, "SELECT id FROM t")
+	require.NoError(t, err)
+
+	var got struct {
+		Rows      []map[string]any `json:"rows"`
+		Count     int              `json:"count"`
+		TotalRows int              `json:"total_rows"`
+		Note      string           `json:"note"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(result), &got))
+	assert.Len(t, got.Rows, 10)
+	assert.Equal(t, 10, got.Count)
+	assert.Equal(t, 1000, got.TotalRows)
+	assert.Contains(t, got.Note, "1000")
+
+	// Without the option (opsctl) every row comes back and no note is added.
+	full, err := ExecuteSQL(context.Background(), session, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.NotContains(t, full, "total_rows")
+	assert.Contains(t, full, `"count":1000`)
+
+	// Under the limit: unchanged.
+	small, err := ExecuteSQL(WithMaxRows(context.Background(), 5000), session, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.Equal(t, full, small)
 }
 
 func TestExecuteSQLPagedReportsThePageAndTheTotal(t *testing.T) {
