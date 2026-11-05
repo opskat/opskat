@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cago-frame/agents/agent"
@@ -23,9 +24,22 @@ import (
 // 审批事件（approval_request / approval_result）由 app_ai.go 的 confirmFunc 直接
 // emit，不走 cago event 流，因此不在本适配器范围。
 type EventTranslator struct {
-	ctx        context.Context
+	ctx context.Context
+
+	// mu 串行化同步 emit 与定时器 flush，并保护下面所有字段。
+	mu         sync.Mutex
 	inThinking bool
+	closed     bool
+	// pending 是尚未发出的合并 delta（pendingType 为 "content" / "thinking"）。
+	pending     strings.Builder
+	pendingType string
+	timer       *time.Timer
+	// emit 是最近一次 Translate 的回调，供定时器与 Close flush 使用。
+	emit func(StreamEvent)
 }
+
+// deltaCoalesceWindow 是 content / thinking delta 的合并窗口。
+const deltaCoalesceWindow = 40 * time.Millisecond
 
 // NewStreamTranslator 创建一个不携带调用方 correlation 的事件翻译器（测试和独立使用）。
 func NewStreamTranslator() *EventTranslator {
@@ -44,15 +58,37 @@ func NewStreamTranslatorWithContext(ctx context.Context) *EventTranslator {
 // 不映射的 EventKind（如 EventMessageEnd / EventToolDelta）直接静默——
 // 前者由 EventTextDelta / EventTurnEnd 隐含，后者是 cago 流式工具参数增量，
 // 前端 StreamEvent 契约没有对应字段，可丢弃。
+//
+// content / thinking delta 按 deltaCoalesceWindow 合并后再发；任何其它会发事件的
+// 种类先 flush 已攒的 delta，保证事件顺序不变。结束时调用 Close 冲刷尾部。
 func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	t.emit = emit
+
 	switch ev.Kind {
 	case agent.EventTextDelta:
+		t.flushPending(emit, "content")
 		t.flushThinking(emit)
-		emit(StreamEvent{Type: "content", Content: ev.Delta})
+		t.appendDelta("content", ev.Delta)
+		return
 
 	case agent.EventThinkingDelta:
+		t.flushPending(emit, "thinking")
 		t.inThinking = true
-		emit(StreamEvent{Type: "thinking", Content: ev.Delta})
+		t.appendDelta("thinking", ev.Delta)
+		return
+
+	case agent.EventMessageEnd, agent.EventToolDelta:
+		// 不映射，且不打断正在合并的 delta。
+		return
+	}
+
+	t.flushPending(emit, "")
+	switch ev.Kind {
 
 	case agent.EventPreToolUse:
 		t.flushThinking(emit)
@@ -154,9 +190,56 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		t.flushThinking(emit)
 		emit(StreamEvent{Type: "done"})
 
-	case agent.EventMessageEnd, agent.EventToolDelta:
-		// 见上注释，不映射。
 	}
+}
+
+// Close 冲刷尚未发出的 delta 并停止定时器；之后 Translate 与定时器都不再 emit。
+// 幂等。事件流结束（通道关闭）时调用，覆盖没有 done / error / stopped 收尾的情形。
+func (t *EventTranslator) Close() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	if t.emit != nil {
+		t.flushPending(t.emit, "")
+	}
+	t.closed = true
+}
+
+// appendDelta 把 delta 攒进缓冲，并在需要时启动合并定时器。持有 t.mu。
+func (t *EventTranslator) appendDelta(typ, delta string) {
+	t.pendingType = typ
+	t.pending.WriteString(delta)
+	if t.timer == nil {
+		t.timer = time.AfterFunc(deltaCoalesceWindow, t.onTimer)
+	}
+}
+
+func (t *EventTranslator) onTimer() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.timer = nil
+	if t.closed || t.emit == nil {
+		return
+	}
+	t.flushPending(t.emit, "")
+}
+
+// flushPending 发出已攒的 delta。keepType 非空且等于缓冲类型时不 flush（继续合并同类）。
+// 持有 t.mu。
+func (t *EventTranslator) flushPending(emit func(StreamEvent), keepType string) {
+	if t.pendingType == "" || t.pendingType == keepType {
+		return
+	}
+	if t.timer != nil {
+		t.timer.Stop()
+		t.timer = nil
+	}
+	typ, content := t.pendingType, t.pending.String()
+	t.pendingType = ""
+	t.pending.Reset()
+	emit(StreamEvent{Type: typ, Content: content})
 }
 
 // flushThinking 若之前发了 thinking 现在要发非 thinking 内容，先发 "thinking_done" 收尾。
