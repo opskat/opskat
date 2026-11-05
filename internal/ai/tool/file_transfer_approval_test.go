@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/helper"
@@ -32,6 +33,8 @@ const cpTestAssetType = "cptest"
 var cpMissingLocal = filepath.Join(os.TempDir(), "opskat-cp-does-not-exist")
 
 type cpTestAdapter struct {
+	// mu 守 written 与 validated：多源 cp 会并发调用 Write。
+	mu        sync.Mutex
 	entries   []helper.Entry    // List 交出的展开结果
 	contents  map[string][]byte // OpenRead 的内容
 	written   map[string][]byte // Write 收到的内容，按目的路径
@@ -77,11 +80,15 @@ func (a *cpTestAdapter) Write(
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.written[p] = content
 	return nil
 }
 
 func (a *cpTestAdapter) ValidateDestination(p string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.validated = append(a.validated, p)
 	if p == a.rejectDst {
 		return fmt.Errorf("cptest: %q is not a shape this endpoint can write", p)

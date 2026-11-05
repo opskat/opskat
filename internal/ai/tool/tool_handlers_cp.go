@@ -3,13 +3,16 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path"
 	"path/filepath"
+	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
@@ -183,7 +186,8 @@ func cpSingleSource(
 	if err != nil {
 		return "", err
 	}
-	transferredBytes, err := transferOne(ctx, src, dst, res.Entries[0], dst.path, cpDestinationScope(dst))
+	writeCtx := helper.WithTransferWriteScope(ctx, cpDestinationScope(dst))
+	transferredBytes, err := transferOne(writeCtx, src, dst, res.Entries[0], dst.path)
 	if err != nil {
 		return "", err
 	}
@@ -248,22 +252,88 @@ func cpMultiSource(
 		return "", err
 	}
 
-	// 快速失败：任一条出错立即中止（D19）。不采用 POSIX cp 的"继续并最终非零"——每个已
-	// 传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的
-	// 目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
-	var totalBytes int64
-	for i, entry := range res.Entries {
-		transferredBytes, err := transferOne(ctx, src, dst, entry, dstPaths[i], dst.path)
-		if err != nil {
-			return "", fmt.Errorf("transferred %d/%d entries, then %q → %q failed: %w",
-				i, len(res.Entries), entry.Path, dstPaths[i], err)
-		}
-		totalBytes += transferredBytes
-		ReportCpProgress(ctx, CpProgress{
-			Completed: i + 1, Total: len(res.Entries), Src: entry.Path, Dst: dstPaths[i], Bytes: transferredBytes,
-		})
+	// 目的目录按展开顺序一次建好（端点有这项能力时），之后的写入不再逐文件建目录。它是
+	// 一次有副作用的操作，因此排在全部审批与门禁之后。
+	writeCtx := helper.WithTransferWriteScope(ctx, dst.path)
+	writeCtx, err = helper.PrepareTransferDirs(writeCtx, dst.adapter, dst.asset, dstPaths)
+	if err != nil {
+		return "", fmt.Errorf("transferred 0/%d entries: preparing destination directories under %q failed: %w",
+			len(res.Entries), dst.raw, err)
+	}
+	totalBytes, err := cpTransferEntries(writeCtx, src, dst, res.Entries, dstPaths)
+	if err != nil {
+		return "", err
 	}
 	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
+}
+
+// cpTransferWorkers 是多源 cp 同时在传的条目数上限。小文件的耗时几乎全是往返等待，多条
+// 同时在传才能把这些等待叠起来；设上限是因为每条传输自己还有并发读写窗口（sftpio），
+// 条目数不加限制时在途请求与缓冲会随之成倍增长。与 sftp_svc 的目录传输同一个取值。
+const cpTransferWorkers = 8
+
+// cpEntryError 记下失败的是哪一条，让汇总错误能点名它。
+type cpEntryError struct {
+	src, dst string
+	err      error
+}
+
+func (e *cpEntryError) Error() string { return e.err.Error() }
+func (e *cpEntryError) Unwrap() error { return e.err }
+
+// cpTransferEntries 以有界并发传输全部条目。快速失败（D19）：首个失败的条目取消其余正在
+// 传的条目，尚未开始的不再开始，返回的错误点名那一条。不采用 POSIX cp 的"继续并最终非零"
+// ——每个已传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的
+// 目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
+//
+// 进度按完成顺序上报，Completed 从 1 递增到 N；上报在锁内串行进行，观察者不会被并发调用。
+func cpTransferEntries(
+	ctx context.Context, src, dst *cpEndpoint, entries []helper.Entry, dstPaths []string,
+) (int64, error) {
+	g, workerCtx := errgroup.WithContext(ctx)
+	g.SetLimit(cpTransferWorkers)
+	var (
+		mu         sync.Mutex
+		completed  int
+		totalBytes int64
+	)
+	for i, entry := range entries {
+		if workerCtx.Err() != nil {
+			break
+		}
+		g.Go(func() error {
+			// g.Go 在窗口占满时会等空位，等到时可能已有条目失败或调用方已取消。
+			if err := workerCtx.Err(); err != nil {
+				return err
+			}
+			n, err := transferOne(workerCtx, src, dst, entry, dstPaths[i])
+			if err != nil {
+				return &cpEntryError{src: entry.Path, dst: dstPaths[i], err: err}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			completed++
+			totalBytes += n
+			ReportCpProgress(ctx, CpProgress{
+				Completed: completed, Total: len(entries), Src: entry.Path, Dst: dstPaths[i], Bytes: n,
+			})
+			return nil
+		})
+	}
+	err := g.Wait()
+	if err == nil {
+		// 取消落在两条之间时可能没有条目报错，仍要把取消报给调用方。
+		err = ctx.Err()
+	}
+	if err == nil {
+		return totalBytes, nil
+	}
+	var entryErr *cpEntryError
+	if errors.As(err, &entryErr) {
+		return 0, fmt.Errorf("transferred %d/%d entries, then %q → %q failed: %w",
+			completed, len(entries), entryErr.src, entryErr.dst, entryErr.err)
+	}
+	return 0, fmt.Errorf("transferred %d/%d entries, then the transfer was canceled: %w", completed, len(entries), err)
 }
 
 // relPathStaysUnderBase 报告一条展开出来的 RelPath 拼到目的基点上之后，还落不落在这个
@@ -470,9 +540,10 @@ func checkEndpoint(
 	return result.DecisionSource == aictx.SourceUserAllow, nil
 }
 
-// transferOne 执行一条已获批准的传输：源端开读、目的端流式写入。
+// transferOne 执行一条已获批准的传输：源端开读、目的端流式写入。ctx 带着目的端的写入
+// 范围（helper.WithTransferWriteScope），多源时还带着预建目录的核验结果。
 func transferOne(
-	ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, dstPath, dstScope string,
+	ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, dstPath string,
 ) (int64, error) {
 	logger.Ctx(ctx).Info("cp transfer start",
 		zap.String("src", entry.Path), zap.String("dst", dstPath), zap.Int64("size", entry.Size))
@@ -489,8 +560,7 @@ func transferOne(
 	}()
 
 	counter := &countingReader{r: rc}
-	writeCtx := helper.WithTransferWriteScope(ctx, dstScope)
-	if err := dst.adapter.Write(writeCtx, dst.asset, dstPath, counter, size); err != nil {
+	if err := dst.adapter.Write(ctx, dst.asset, dstPath, counter, size); err != nil {
 		logger.Ctx(ctx).Error("cp write destination", zap.String("dst", dstPath), zap.Error(err))
 		return counter.n, err
 	}
