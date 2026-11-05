@@ -44,6 +44,10 @@ export function K8sLogsPanel({
   const myStreamIDRef = useRef<string | null>(null);
   const eventNamesRef = useRef<{ data: string; err: string; end: string } | null>(null);
   const onStateChangeRef = useRef(onStateChange);
+  // Live buffer of the running stream. Chunks land here first; the React state mirror is
+  // refreshed at most once per animation frame (and on end / stop / unmount).
+  const liveRef = useRef<{ key: string; container: string; tailLines: number; chunks: string[] } | null>(null);
+  const frameRef = useRef<number | null>(null);
   const logBuffersRef = useRef(state.logBuffers);
   const activeContainer = state.logContainer || containers[0]?.name || "";
   // eslint-disable-next-line react-hooks/refs
@@ -60,19 +64,39 @@ export function K8sLogsPanel({
     eventNamesRef.current = null;
   }, []);
 
+  const flushLive = useCallback((final = false) => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    const live = liveRef.current;
+    if (!live) return;
+    if (final) liveRef.current = null;
+    const snapshot = live.chunks.slice();
+    onStateChangeRef.current((prev) => ({
+      ...prev,
+      logBuffers: {
+        ...(prev.logBuffers || {}),
+        [live.key]: { container: live.container, tailLines: live.tailLines, chunks: snapshot },
+      },
+    }));
+  }, []);
+
   const stop = useCallback(() => {
+    flushLive(true);
     if (myStreamIDRef.current) {
       StopK8sPodLogs(myStreamIDRef.current);
       myStreamIDRef.current = null;
     }
     offEvents();
     onStateChangeRef.current({ logStreamID: null });
-  }, [offEvents]);
+  }, [offEvents, flushLive]);
 
   const start = useCallback(() => {
     stop();
     terminalRef.current?.clear();
     const bufferKey = buildLogBufferKey(podName, activeContainer, state.logTailLines);
+    liveRef.current = { key: bufferKey, container: activeContainer, tailLines: state.logTailLines, chunks: [] };
     onStateChangeRef.current((prev) => ({
       ...prev,
       logError: null,
@@ -99,22 +123,16 @@ export function K8sLogsPanel({
         EventsOn(dataEvent, (data: string) => {
           if (myStreamIDRef.current !== streamID) return;
           terminalRef.current?.write(base64ToBytes(data));
-          onStateChangeRef.current((prev) => {
-            const existing = prev.logBuffers?.[bufferKey];
-            const chunks = [...(existing?.chunks || []), data];
-            const nextChunks = chunks.length > MAX_LOG_CHUNKS ? chunks.slice(chunks.length - MAX_LOG_CHUNKS) : chunks;
-            return {
-              ...prev,
-              logBuffers: {
-                ...(prev.logBuffers || {}),
-                [bufferKey]: {
-                  container: activeContainer,
-                  tailLines: state.logTailLines,
-                  chunks: nextChunks,
-                },
-              },
-            };
-          });
+          const live = liveRef.current;
+          if (!live || live.key !== bufferKey) return;
+          live.chunks.push(data);
+          if (live.chunks.length > MAX_LOG_CHUNKS) live.chunks.splice(0, live.chunks.length - MAX_LOG_CHUNKS);
+          if (frameRef.current === null) {
+            frameRef.current = requestAnimationFrame(() => {
+              frameRef.current = null;
+              flushLive();
+            });
+          }
         });
 
         EventsOn(errEvent, (err: string) => {
@@ -126,6 +144,7 @@ export function K8sLogsPanel({
         EventsOn(endEvent, () => {
           if (myStreamIDRef.current !== streamID) return;
           myStreamIDRef.current = null;
+          flushLive(true);
           onStateChangeRef.current({ logStreamID: null });
           offEvents();
         });
@@ -133,19 +152,21 @@ export function K8sLogsPanel({
       .catch((e: unknown) => {
         onStateChangeRef.current({ logError: errorMessage(e) });
       });
-  }, [activeContainer, assetId, namespace, podName, state.logTailLines, stop, offEvents]);
+  }, [activeContainer, assetId, namespace, podName, state.logTailLines, stop, offEvents, flushLive]);
 
   useEffect(() => {
     return () => {
+      flushLive(true);
       if (myStreamIDRef.current) {
         StopK8sPodLogs(myStreamIDRef.current);
         myStreamIDRef.current = null;
       }
       offEvents();
     };
-  }, [offEvents]);
+  }, [offEvents, flushLive]);
 
   useEffect(() => {
+    flushLive(true);
     if (myStreamIDRef.current) {
       StopK8sPodLogs(myStreamIDRef.current);
       myStreamIDRef.current = null;
@@ -157,7 +178,7 @@ export function K8sLogsPanel({
     for (const chunk of chunks) {
       terminalRef.current?.write(base64ToBytes(chunk));
     }
-  }, [activeContainer, podName, state.logTailLines]);
+  }, [activeContainer, podName, state.logTailLines, flushLive]);
 
   return (
     <K8sSectionCard className="flex flex-col h-full">
