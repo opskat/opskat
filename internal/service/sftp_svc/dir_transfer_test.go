@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,42 +116,6 @@ func TestDownloadDirTransfersFilesConcurrently(t *testing.T) {
 	assert.Less(t, elapsed, serialFloor, "文件之间的往返必须重叠")
 	assertDirTree(t, localDir, want)
 	assertProgressInvariants(t, *got, treeBytes(want))
-}
-
-// transferDir 同时在传 dirTransferWorkers 个文件，且不超过这个数：每个 send 都要等到这么多个
-// 同时在传才放行，并发度不足时卡到超时失败，与机器快慢无关。
-func TestTransferDirRunsWorkersConcurrently(t *testing.T) {
-	entries := make([]dirEntry, 0, 1+dirTransferWorkers*3)
-	entries = append(entries, dirEntry{src: "d", rel: "d", isDir: true})
-	for i := range dirTransferWorkers * 3 {
-		name := fmt.Sprintf("d/f%02d", i)
-		entries = append(entries, dirEntry{src: name, rel: name, size: 1})
-	}
-	var inFlight, peak, sent atomic.Int32
-	full := make(chan struct{})
-	var fullOnce sync.Once
-	send := func(ctx context.Context, _ dirEntry) error {
-		n := inFlight.Add(1)
-		defer inFlight.Add(-1)
-		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
-		}
-		if n == dirTransferWorkers {
-			fullOnce.Do(func() { close(full) })
-		}
-		select {
-		case <-full:
-			sent.Add(1)
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	require.NoError(t, transferDir(ctx, entries, func(dirEntry) error { return nil }, send))
-	assert.EqualValues(t, dirTransferWorkers, peak.Load())
-	assert.EqualValues(t, dirTransferWorkers*3, sent.Load())
 }
 
 func TestDirTransferOfEmptyDirectory(t *testing.T) {

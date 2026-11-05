@@ -49,6 +49,7 @@ import {
 import { EntityIcon } from "@/components/asset/AssetIcon";
 import { filterAssets } from "@/lib/assetSearch";
 import {
+  buildTreeIndex,
   flattenTree,
   computeInsertionPoint,
   insertionToReorderArgs,
@@ -213,52 +214,6 @@ function DropIndicator() {
   );
 }
 
-const EMPTY_GROUPS: group_entity.Group[] = [];
-
-interface TreeIndex {
-  /** Filtered assets per GroupID (0 = ungrouped). */
-  assetsByGroup: Map<number, asset_entity.Asset[]>;
-  /** Filtered assets in a group and all its descendants; 0 is the ungrouped header (root assets only). */
-  totalCounts: Map<number, number>;
-  /** Number of descendant groups (unfiltered), used by the delete confirmation. */
-  descendantGroupCounts: Map<number, number>;
-}
-
-/** One O(G+A) pass over groups and filtered assets; the tree renders from lookups only. */
-function buildTreeIndex(groups: group_entity.Group[], assets: asset_entity.Asset[]): TreeIndex {
-  const assetsByGroup = new Map<number, asset_entity.Asset[]>();
-  for (const asset of assets) {
-    const gid = asset.GroupID || 0;
-    const list = assetsByGroup.get(gid);
-    if (list) list.push(asset);
-    else assetsByGroup.set(gid, [asset]);
-  }
-  const rawChildren = new Map<number, group_entity.Group[]>();
-  for (const group of groups) {
-    const pid = group.ParentID || 0;
-    const list = rawChildren.get(pid);
-    if (list) list.push(group);
-    else rawChildren.set(pid, [group]);
-  }
-  const totalCounts = new Map<number, number>();
-  const descendantGroupCounts = new Map<number, number>();
-  const visit = (id: number) => {
-    if (totalCounts.has(id)) return;
-    let total = assetsByGroup.get(id)?.length ?? 0;
-    let descendants = 0;
-    for (const child of rawChildren.get(id) ?? EMPTY_GROUPS) {
-      visit(child.ID);
-      total += totalCounts.get(child.ID)!;
-      descendants += 1 + descendantGroupCounts.get(child.ID)!;
-    }
-    totalCounts.set(id, total);
-    descendantGroupCounts.set(id, descendants);
-  };
-  for (const group of groups) visit(group.ID);
-  totalCounts.set(0, assetsByGroup.get(0)?.length ?? 0);
-  return { assetsByGroup, totalCounts, descendantGroupCounts };
-}
-
 function parseActive(id: string): { kind: "asset" | "group"; id: number } | null {
   const m = /^(asset|group)-(\d+)$/.exec(id);
   if (!m) return null;
@@ -393,12 +348,11 @@ export function AssetTree({
   const rows = useMemo(
     () =>
       flattenTree({
-        groups,
-        assets: filteredAssets,
+        index: treeIndex,
         collapsedGroupIDs: new Set(collapsedGroupIds),
         shouldHideEmpty: shouldHideEmptyGroups,
       }),
-    [groups, filteredAssets, collapsedGroupIds, shouldHideEmptyGroups]
+    [treeIndex, collapsedGroupIds, shouldHideEmptyGroups]
   );
   useEffect(() => {
     rowsRef.current = rows;

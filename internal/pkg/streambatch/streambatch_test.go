@@ -31,6 +31,13 @@ func (r *recorder) snapshot() ([][]byte, []byte) {
 	return append([][]byte(nil), r.batches...), bytes.Join(r.batches, nil)
 }
 
+// timerPending 报告是否有计时器在等待（只有测试关心）。
+func (b *Batcher) timerPending() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.timer != nil
+}
+
 // countTimerArms 包一层 afterFunc，统计计时器被启动的次数——空闲时它是唯一的唤醒来源。
 func countTimerArms(t *testing.T) *atomic.Int64 {
 	t.Helper()

@@ -104,9 +104,3 @@ func (b *Batcher) takeLocked() []byte {
 	b.buf = nil
 	return data
 }
-
-func (b *Batcher) timerPending() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.timer != nil
-}

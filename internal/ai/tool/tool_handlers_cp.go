@@ -12,13 +12,13 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/transfer"
 )
 
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。
@@ -267,11 +267,6 @@ func cpMultiSource(
 	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
 }
 
-// cpTransferWorkers 是多源 cp 同时在传的条目数上限。小文件的耗时几乎全是往返等待，多条
-// 同时在传才能把这些等待叠起来；设上限是因为每条传输自己还有并发读写窗口（sftpio），
-// 条目数不加限制时在途请求与缓冲会随之成倍增长。与 sftp_svc 的目录传输同一个取值。
-const cpTransferWorkers = 8
-
 // cpEntryError 记下失败的是哪一条，让汇总错误能点名它。
 type cpEntryError struct {
 	src, dst string
@@ -281,50 +276,44 @@ type cpEntryError struct {
 func (e *cpEntryError) Error() string { return e.err.Error() }
 func (e *cpEntryError) Unwrap() error { return e.err }
 
-// cpTransferEntries 以有界并发传输全部条目。快速失败（D19）：首个失败的条目取消其余正在
-// 传的条目，尚未开始的不再开始，返回的错误点名那一条。不采用 POSIX cp 的"继续并最终非零"
-// ——每个已传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的
-// 目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
+// cpJob 是一条待传条目和它的目的路径。
+type cpJob struct {
+	entry helper.Entry
+	dst   string
+}
+
+// cpTransferEntries 以有界并发（transfer.Dispatch）传输全部条目。快速失败（D19）：首个失败的
+// 条目取消其余正在传的条目，尚未开始的不再开始，返回的错误点名那一条。不采用 POSIX cp 的
+// "继续并最终非零"——每个已传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来
+// 完整、实际残缺的目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
 //
 // 进度按完成顺序上报，Completed 从 1 递增到 N；上报在锁内串行进行，观察者不会被并发调用。
 func cpTransferEntries(
 	ctx context.Context, src, dst *cpEndpoint, entries []helper.Entry, dstPaths []string,
 ) (int64, error) {
-	g, workerCtx := errgroup.WithContext(ctx)
-	g.SetLimit(cpTransferWorkers)
+	jobs := make([]cpJob, len(entries))
+	for i, entry := range entries {
+		jobs[i] = cpJob{entry: entry, dst: dstPaths[i]}
+	}
 	var (
 		mu         sync.Mutex
 		completed  int
 		totalBytes int64
 	)
-	for i, entry := range entries {
-		if workerCtx.Err() != nil {
-			break
+	err := transfer.Dispatch(ctx, jobs, nil, nil, func(workerCtx context.Context, job cpJob) error {
+		n, err := transferOne(workerCtx, src, dst, job.entry, job.dst)
+		if err != nil {
+			return &cpEntryError{src: job.entry.Path, dst: job.dst, err: err}
 		}
-		g.Go(func() error {
-			// g.Go 在窗口占满时会等空位，等到时可能已有条目失败或调用方已取消。
-			if err := workerCtx.Err(); err != nil {
-				return err
-			}
-			n, err := transferOne(workerCtx, src, dst, entry, dstPaths[i])
-			if err != nil {
-				return &cpEntryError{src: entry.Path, dst: dstPaths[i], err: err}
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			completed++
-			totalBytes += n
-			ReportCpProgress(ctx, CpProgress{
-				Completed: completed, Total: len(entries), Src: entry.Path, Dst: dstPaths[i], Bytes: n,
-			})
-			return nil
+		mu.Lock()
+		defer mu.Unlock()
+		completed++
+		totalBytes += n
+		ReportCpProgress(ctx, CpProgress{
+			Completed: completed, Total: len(entries), Src: job.entry.Path, Dst: job.dst, Bytes: n,
 		})
-	}
-	err := g.Wait()
-	if err == nil {
-		// 取消落在两条之间时可能没有条目报错，仍要把取消报给调用方。
-		err = ctx.Err()
-	}
+		return nil
+	})
 	if err == nil {
 		return totalBytes, nil
 	}

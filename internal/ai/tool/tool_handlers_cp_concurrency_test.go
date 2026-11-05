@@ -25,6 +25,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/sftpio/sftpiotest"
+	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 )
@@ -318,8 +319,8 @@ func TestCpDirectoryToSFTPRunsEntriesConcurrentlyAndCreatesEachDirOnce(t *testin
 		}
 	}
 
-	if peak := log.peakOpen(); peak < 2 || peak > cpTransferWorkers {
-		t.Errorf("max files open at once = %d, want 2..%d (bounded concurrency)", peak, cpTransferWorkers)
+	if peak := log.peakOpen(); peak < 2 || peak > transfer.Workers {
+		t.Errorf("max files open at once = %d, want 2..%d (bounded concurrency)", peak, transfer.Workers)
 	}
 	mkdirs := log.mkdirCounts()
 	for dir, n := range mkdirs {
@@ -397,7 +398,7 @@ func (a *cpGateAdapter) Write(ctx context.Context, _ *asset_entity.Asset, p stri
 	a.started = append(a.started, p)
 	a.inFlight++
 	a.maxFlight = max(a.maxFlight, a.inFlight)
-	if a.inFlight == cpTransferWorkers {
+	if a.inFlight == transfer.Workers {
 		close(a.full)
 	}
 	a.mu.Unlock()
@@ -452,15 +453,15 @@ func TestCpMultiSourceFirstErrorCancelsTheRest(t *testing.T) {
 	}
 	cpGate.mu.Lock()
 	defer cpGate.mu.Unlock()
-	if cpGate.maxFlight != cpTransferWorkers {
-		t.Errorf("max writes in flight = %d, want %d", cpGate.maxFlight, cpTransferWorkers)
+	if cpGate.maxFlight != transfer.Workers {
+		t.Errorf("max writes in flight = %d, want %d", cpGate.maxFlight, transfer.Workers)
 	}
-	if len(cpGate.started) != cpTransferWorkers {
+	if len(cpGate.started) != transfer.Workers {
 		sort.Strings(cpGate.started)
 		t.Errorf("started %d writes %v, want only the %d in flight when the first error hit",
-			len(cpGate.started), cpGate.started, cpTransferWorkers)
+			len(cpGate.started), cpGate.started, transfer.Workers)
 	}
-	if cpGate.canceled != cpTransferWorkers-1 {
-		t.Errorf("canceled writes = %d, want %d", cpGate.canceled, cpTransferWorkers-1)
+	if cpGate.canceled != transfer.Workers-1 {
+		t.Errorf("canceled writes = %d, want %d", cpGate.canceled, transfer.Workers-1)
 	}
 }

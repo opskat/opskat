@@ -34,6 +34,9 @@ type EventTranslator struct {
 	pending     strings.Builder
 	pendingType string
 	timer       *time.Timer
+	// timerGen 每启动一个定时器 +1：已触发、正等 mu 的旧定时器回调据此认出自己已被取代，
+	// 不去清掉新定时器、也不提前冲刷新攒的 delta。
+	timerGen uint64
 	// emit 是最近一次 Translate 的回调，供定时器与 Close flush 使用。
 	emit func(StreamEvent)
 }
@@ -212,13 +215,18 @@ func (t *EventTranslator) appendDelta(typ, delta string) {
 	t.pendingType = typ
 	t.pending.WriteString(delta)
 	if t.timer == nil {
-		t.timer = time.AfterFunc(deltaCoalesceWindow, t.onTimer)
+		t.timerGen++
+		gen := t.timerGen
+		t.timer = time.AfterFunc(deltaCoalesceWindow, func() { t.onTimer(gen) })
 	}
 }
 
-func (t *EventTranslator) onTimer() {
+func (t *EventTranslator) onTimer(gen uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.timer == nil || t.timerGen != gen {
+		return // 触发前已被 flushPending 停掉并取代
+	}
 	t.timer = nil
 	if t.closed || t.emit == nil {
 		return

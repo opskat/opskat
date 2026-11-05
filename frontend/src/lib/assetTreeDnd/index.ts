@@ -1,4 +1,4 @@
-export { flattenTree, type Row, type FlattenInput } from "./flattenTree";
+export { buildTreeIndex, flattenTree, type Row, type FlattenInput, type TreeIndex } from "./flattenTree";
 export {
   computeInsertionPoint,
   rowKey,

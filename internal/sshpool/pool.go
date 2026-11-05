@@ -2,6 +2,7 @@ package sshpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -202,6 +203,11 @@ func (p *Pool) Get(ctx context.Context, assetID int64) (*ssh.Client, error) {
 		}
 
 		entry, err := p.dialShared(ctx, assetID)
+		var abandoned *abandonedDialError
+		if errors.As(err, &abandoned) && ctx.Err() == nil {
+			// 合并拨号被发起方自己的 ctx 中止了，与本调用方无关：重新拨号。
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -236,8 +242,16 @@ func (p *Pool) probe(ctx context.Context, e *poolEntry) (bool, error) {
 	}
 }
 
+// abandonedDialError 标记一次因发起方 ctx 结束而失败的合并拨号。拨号用的是发起方的 ctx，
+// 同时等这次拨号的其它调用方拿到它时若自己的 ctx 仍有效，应当重新拨号而不是跟着失败。
+type abandonedDialError struct{ err error }
+
+func (e *abandonedDialError) Error() string { return e.err.Error() }
+func (e *abandonedDialError) Unwrap() error { return e.err }
+
 // dialShared 拨号并把新连接放进池里；同一资产同时只有一次拨号，其余调用方等它的结果。
-// 返回的条目尚未计引用，由调用方 tryAcquire。
+// 返回的条目尚未计引用，由调用方 tryAcquire。发起方 ctx 结束导致的失败以
+// *abandonedDialError 交回。
 func (p *Pool) dialShared(ctx context.Context, assetID int64) (*poolEntry, error) {
 	ch := p.sf.DoChan(strconv.FormatInt(assetID, 10), func() (any, error) {
 		// 上一轮合并拨号可能刚放进池里。
@@ -250,7 +264,11 @@ func (p *Pool) dialShared(ctx context.Context, assetID int64) (*poolEntry, error
 
 		client, closers, err := p.dialer.DialAsset(ctx, assetID)
 		if err != nil {
-			return nil, fmt.Errorf("dial asset %d: %w", assetID, err)
+			err = fmt.Errorf("dial asset %d: %w", assetID, err)
+			if ctx.Err() != nil {
+				return nil, &abandonedDialError{err: err}
+			}
+			return nil, err
 		}
 		now := time.Now()
 		entry := &poolEntry{

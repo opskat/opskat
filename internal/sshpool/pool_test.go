@@ -290,3 +290,55 @@ func TestConcurrentFirstGetDialsOnce(t *testing.T) {
 		t.Fatalf("pool entries = %+v, want one entry with ref_count %d", infos, n)
 	}
 }
+
+// ctxDialer 的第一次拨号一直等到调用方的 ctx 结束并返回它的错误（像真实拨号那样受 ctx 约束），
+// 之后的拨号立即成功。
+type ctxDialer struct {
+	dials   atomic.Int32
+	entered chan struct{}
+}
+
+func (d *ctxDialer) DialAsset(ctx context.Context, _ int64) (*ssh.Client, []io.Closer, error) {
+	if d.dials.Add(1) == 1 {
+		d.entered <- struct{}{}
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+	return newFakeClient(newFakeConn()), nil, nil
+}
+
+// 合并拨号的发起方取消了自己的 ctx：它拿到取消错误，但同时在等这次拨号、ctx 仍然有效的
+// 调用方不能跟着失败，而是重新拨号拿到连接。
+func TestSharedDialCanceledByLeaderDoesNotFailWaiters(t *testing.T) {
+	d := &ctxDialer{entered: make(chan struct{}, 1)}
+	p := NewPool(d, time.Hour)
+	defer p.Close()
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := p.Get(leaderCtx, assetOther)
+		leaderErr <- err
+	}()
+	<-d.entered
+
+	waiterErr := make(chan error, 1)
+	go func() {
+		c, err := p.Get(context.Background(), assetOther)
+		if err == nil && c == nil {
+			err = errors.New("nil client")
+		}
+		waiterErr <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // 让等待方挂到同一次拨号上
+	cancelLeader()
+
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader err = %v, want context.Canceled", err)
+	}
+	within(t, 3*time.Second, "waiter Get", func() {
+		if err := <-waiterErr; err != nil {
+			t.Errorf("waiter Get failed with the leader's cancellation: %v", err)
+		}
+	})
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { flattenTree } from "../flattenTree";
+import { buildTreeIndex, flattenTree } from "../flattenTree";
 import { asset_entity, group_entity } from "../../../../wailsjs/go/models";
 
 function g(id: number, parentID = 0): group_entity.Group {
@@ -12,8 +12,7 @@ function a(id: number, groupID: number): asset_entity.Asset {
 describe("flattenTree", () => {
   it("根级 group 按顺序 → header 在前、内部 children 先 sub-group 后 asset", () => {
     const rows = flattenTree({
-      groups: [g(1), g(2)],
-      assets: [a(10, 1), a(11, 1), a(20, 2)],
+      index: buildTreeIndex([g(1), g(2)], [a(10, 1), a(11, 1), a(20, 2)]),
       collapsedGroupIDs: new Set(),
       shouldHideEmpty: false,
     });
@@ -28,8 +27,7 @@ describe("flattenTree", () => {
 
   it("嵌套 group: 父 group 的 child group 先 push，再 push 父 group 的直接 asset", () => {
     const rows = flattenTree({
-      groups: [g(1), g(11, 1)],
-      assets: [a(100, 1), a(110, 11)],
+      index: buildTreeIndex([g(1), g(11, 1)], [a(100, 1), a(110, 11)]),
       collapsedGroupIDs: new Set(),
       shouldHideEmpty: false,
     });
@@ -44,8 +42,7 @@ describe("flattenTree", () => {
 
   it("折叠 group → 不展开其子项，但 header 仍然 push", () => {
     const rows = flattenTree({
-      groups: [g(1), g(2)],
-      assets: [a(10, 1), a(20, 2)],
+      index: buildTreeIndex([g(1), g(2)], [a(10, 1), a(20, 2)]),
       collapsedGroupIDs: new Set([1]),
       shouldHideEmpty: false,
     });
@@ -58,8 +55,7 @@ describe("flattenTree", () => {
 
   it("空 group 展开 → 出现 empty-placeholder", () => {
     const rows = flattenTree({
-      groups: [g(1)],
-      assets: [],
+      index: buildTreeIndex([g(1)], []),
       collapsedGroupIDs: new Set(),
       shouldHideEmpty: false,
     });
@@ -71,8 +67,7 @@ describe("flattenTree", () => {
 
   it("shouldHideEmpty=true → 整个空 group 不出现", () => {
     const rows = flattenTree({
-      groups: [g(1), g(2)],
-      assets: [a(20, 2)],
+      index: buildTreeIndex([g(1), g(2)], [a(20, 2)]),
       collapsedGroupIDs: new Set(),
       shouldHideEmpty: true,
     });
@@ -82,8 +77,7 @@ describe("flattenTree", () => {
 
   it("未分组桶: 有 root assets → 末尾追加 group-header(0) + 其 assets", () => {
     const rows = flattenTree({
-      groups: [g(1)],
-      assets: [a(10, 1), a(99, 0)],
+      index: buildTreeIndex([g(1)], [a(10, 1), a(99, 0)]),
       collapsedGroupIDs: new Set(),
       shouldHideEmpty: false,
     });

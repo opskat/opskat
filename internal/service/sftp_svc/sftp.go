@@ -22,7 +22,6 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/pkg/sftp"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 // MaxReadFileSize limits full-file reads used by desktop features such as external edit.
@@ -463,11 +462,6 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 	return s.downloadFile(ctx, file, remoteFile, localPath)
 }
 
-// dirTransferWorkers 是目录上传/下载同时在传的文件数上限。小文件的耗时几乎全是往返等待
-// （每个文件 4–6 个串行往返），多个文件同时在传才能把这些等待叠起来；设上限是因为每个文件
-// 自己还有一个并发读写窗口，文件数不加限制时在途请求与缓冲会随之成倍增长。
-const dirTransferWorkers = 8
-
 // dirEntry 是目录传输清单的一项。清单按遍历顺序排列，目录总在它下面的文件之前。
 type dirEntry struct {
 	src   string // 源端完整路径
@@ -476,50 +470,17 @@ type dirEntry struct {
 	isDir bool
 }
 
-// transferDir 按清单顺序传输一棵目录树：目录由派发方当场逐个建立，因此文件被派发时
-// 它所在的目录已经存在；文件交给最多 dirTransferWorkers 个 worker 并发传输。
-// 第一个失败的文件会取消其余文件，其错误作为返回值；ctx 取消时所有 worker 随之停止。
-// 返回前等待全部 worker 退出。
+// transferDir 按清单顺序传输一棵目录树（transfer.Dispatch）：目录由派发方当场逐个建立，
+// 文件交给 worker 并发传输。只有第一个失败的文件作为返回值，其余文件各自的失败原因记在日志里。
 func transferDir(ctx context.Context, entries []dirEntry, mkdir func(dirEntry) error, send func(context.Context, dirEntry) error) error {
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	g, workerCtx := errgroup.WithContext(dispatchCtx)
-	g.SetLimit(dirTransferWorkers)
-
-	var mkdirErr error
-	for _, e := range entries {
-		if workerCtx.Err() != nil {
-			break
-		}
-		if e.isDir {
-			if mkdirErr = mkdir(e); mkdirErr != nil {
-				cancel()
-				break
-			}
-			continue
-		}
-		g.Go(func() error {
-			// g.Go 在 worker 占满时会等空位，等到时传输可能已被取消或有文件失败。
-			if err := workerCtx.Err(); err != nil {
-				return err
-			}
-			err := send(workerCtx, e)
+	return transfer.Dispatch(ctx, entries, func(e dirEntry) bool { return e.isDir }, mkdir,
+		func(ctx context.Context, e dirEntry) error {
+			err := send(ctx, e)
 			if err != nil && !errors.Is(err, context.Canceled) {
-				// 只有第一个错误会被返回，其余文件各自的失败原因记在日志里。
 				logger.Ctx(ctx).Warn("sftp dir transfer file failed", zap.String("path", e.src), zap.Error(err))
 			}
 			return err
 		})
-	}
-	waitErr := g.Wait()
-	if mkdirErr != nil {
-		return mkdirErr
-	}
-	if waitErr != nil {
-		return waitErr
-	}
-	// 取消发生在两个文件之间时可能没有 worker 报错，仍要把取消报给调用方。
-	return ctx.Err()
 }
 
 // UploadDir 上传目录
