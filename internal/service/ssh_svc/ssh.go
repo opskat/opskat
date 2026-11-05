@@ -61,20 +61,36 @@ func (sc *sharedClient) release() {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.refCount--
-	if sc.refCount <= 0 && !sc.closed {
-		sc.closed = true
-		// Close the client before joining the keepalive goroutine: SendRequest may
-		// be blocked on network I/O, and client.Close is what unblocks it.
-		if err := sc.client.Close(); err != nil {
-			logger.Default().Warn("close client", zap.Error(err))
-		}
-		if sc.stopKeepalive != nil {
-			sc.stopKeepalive()
-		}
-		for _, c := range sc.closers {
-			if err := c.Close(); err != nil {
-				logger.Default().Warn("close jump host resource", zap.Error(err))
-			}
+	if sc.refCount <= 0 {
+		sc.closeLocked()
+	}
+}
+
+// forceClose closes the connection even though other sessions still reference
+// it: used when the transport has stopped draining. Those sessions then end
+// through their read loop and still call release, which only drops the count.
+func (sc *sharedClient) forceClose() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.closeLocked()
+}
+
+func (sc *sharedClient) closeLocked() {
+	if sc.closed {
+		return
+	}
+	sc.closed = true
+	// Close the client before joining the keepalive goroutine: SendRequest may
+	// be blocked on network I/O, and client.Close is what unblocks it.
+	if err := sc.client.Close(); err != nil {
+		logger.Default().Warn("close client", zap.Error(err))
+	}
+	if sc.stopKeepalive != nil {
+		sc.stopKeepalive()
+	}
+	for _, c := range sc.closers {
+		if err := c.Close(); err != nil {
+			logger.Default().Warn("close jump host resource", zap.Error(err))
 		}
 	}
 }
@@ -165,6 +181,12 @@ func (s *Session) Resize(cols, rows int) error {
 	return s.session.WindowChange(rows, cols)
 }
 
+// sessionCloseTimeout bounds the polite channel close. Sending channel-close
+// normally takes microseconds; it only waits this long when the transport has
+// stopped draining (remote frozen, send buffer full), which is when it would
+// otherwise hang until keepalive gives up (measured: ~113 s).
+const sessionCloseTimeout = 2 * time.Second
+
 // Close 关闭会话
 func (s *Session) Close() {
 	s.failPendingDirectoryChange(dirsync.Error(dirSyncErrSessionClosed))
@@ -176,13 +198,34 @@ func (s *Session) Close() {
 	s.closed = true
 	s.mu.Unlock()
 	if s.session != nil {
-		if err := s.session.Close(); err != nil {
-			logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
-		}
+		s.closeChannel()
 	}
 	s.shared.release()
 	if s.onClosed != nil {
 		go s.onClosed(s.ID)
+	}
+}
+
+// closeChannel sends the polite channel close. It queues behind any write
+// already stuck on the transport, so after sessionCloseTimeout the whole
+// connection is force-closed: that fails the stuck write and the pending close,
+// and sibling panes on the same connection end with it.
+func (s *Session) closeChannel() {
+	done := make(chan error, 1)
+	go func() { done <- s.session.Close() }()
+	timer := time.NewTimer(sessionCloseTimeout)
+	defer timer.Stop()
+	var err error
+	select {
+	case err = <-done:
+	case <-timer.C:
+		logger.Default().Warn("ssh channel close timed out: transport not draining, force-closing connection",
+			zap.String("sessionID", s.ID), zap.Int64("assetID", s.AssetID), zap.Duration("timeout", sessionCloseTimeout))
+		s.shared.forceClose()
+		err = <-done
+	}
+	if err != nil {
+		logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
 	}
 }
 
