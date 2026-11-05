@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { ScreenShare } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { VNCDetailInfoCard } from "@/components/asset/detail/VNCDetailInfoCard";
-import { VNCConfigSection } from "@/components/asset/VNCConfigSection";
+
+const VNCDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/VNCDetailInfoCard").then((m) => ({ default: m.VNCDetailInfoCard }))
+);
+const VNCConfigSection = lazy(() =>
+  import("@/components/asset/VNCConfigSection").then((m) => ({ default: m.VNCConfigSection }))
+);
 
 registerAssetType({
   type: "vnc",

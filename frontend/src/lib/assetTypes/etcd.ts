@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { EtcdIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
-import { EtcdDetailInfoCard } from "@/components/asset/detail/EtcdDetailInfoCard";
-import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
+
+const EtcdDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/EtcdDetailInfoCard").then((m) => ({ default: m.EtcdDetailInfoCard }))
+);
+const EtcdConfigSection = lazy(() =>
+  import("@/components/asset/EtcdConfigSection").then((m) => ({ default: m.EtcdConfigSection }))
+);
 
 registerAssetType({
   type: "etcd",

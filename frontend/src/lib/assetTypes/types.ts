@@ -54,8 +54,9 @@ export interface AssetTypeDefinition {
   labelNs?: string;
   /** 是否在右键菜单暴露 SFTP 文件管理动作(替代 AssetTree 的 `asset.Type === "ssh"` 特例);缺省 = 不暴露。 */
   canOpenFileManager?: boolean;
+  /** 内置类型注册的是 `lazy` 组件（不进主包），渲染处要包 `Suspense`（见 AssetTypeSectionSuspense）。 */
   DetailInfoCard: ComponentType<DetailInfoCardProps>;
-  /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。 */
+  /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。同样可能是 `lazy` 组件。 */
   ConfigSection?: ConfigSectionComponent;
   /** 是否支持"测试连接"(替代 isTestableAssetType 链)。 */
   testable?: boolean;

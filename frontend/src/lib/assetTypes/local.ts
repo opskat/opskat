@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { SquareTerminal } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { LocalDetailInfoCard } from "@/components/asset/detail/LocalDetailInfoCard";
-import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
+
+const LocalDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/LocalDetailInfoCard").then((m) => ({ default: m.LocalDetailInfoCard }))
+);
+const LocalConfigSection = lazy(() =>
+  import("@/components/asset/LocalConfigSection").then((m) => ({ default: m.LocalConfigSection }))
+);
 
 registerAssetType({
   type: "local",

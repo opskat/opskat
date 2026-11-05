@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { Monitor } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { SSHDetailInfoCard } from "@/components/asset/detail/SSHDetailInfoCard";
-import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
+
+const SSHDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/SSHDetailInfoCard").then((m) => ({ default: m.SSHDetailInfoCard }))
+);
+const SSHConfigSection = lazy(() =>
+  import("@/components/asset/SSHConfigSection").then((m) => ({ default: m.SSHConfigSection }))
+);
 
 registerAssetType({
   type: "ssh",

@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
 import { useAssetTypeDef } from "@/lib/assetTypes";
 import { AssetIcon } from "@/components/asset/AssetIcon";
+import { AssetTypeSectionSuspense } from "@/components/asset/AssetTypeSectionSuspense";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
 import { PermissionModeCard } from "@/components/asset/PermissionModeCard";
 import { asset_entity } from "../../../wailsjs/go/models";
@@ -160,7 +161,11 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       />
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {/* 类型详情卡：内置类型手写，扩展类型由它的 configSchema 生成（同一个槽位） */}
-        {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} />}
+        {def && (
+          <AssetTypeSectionSuspense>
+            <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} />
+          </AssetTypeSectionSuspense>
+        )}
 
         {/* 权限模式：只对有命令权限策略的类型有意义 */}
         {def?.policy && (

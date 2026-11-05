@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { S3Icon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
-import { OSSDetailInfoCard } from "@/components/asset/detail/OSSDetailInfoCard";
-import { OSSConfigSection } from "@/components/asset/OSSConfigSection";
+
+const OSSDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/OSSDetailInfoCard").then((m) => ({ default: m.OSSDetailInfoCard }))
+);
+const OSSConfigSection = lazy(() =>
+  import("@/components/asset/OSSConfigSection").then((m) => ({ default: m.OSSConfigSection }))
+);
 
 registerAssetType({
   type: "oss",

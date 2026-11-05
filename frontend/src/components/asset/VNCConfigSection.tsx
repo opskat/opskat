@@ -26,14 +26,13 @@ import {
   TrustVNCServerKey,
 } from "../../../wailsjs/go/vnc/VNC";
 import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
+import type { VNCClientHandle } from "@/lib/vncClient";
 import {
-  startVNCClient,
   vncClientFailureMessageKey,
   VNCClientError,
-  type VNCClientHandle,
   type VNCNegotiatedSecurity,
   type VNCServerKeyCheck,
-} from "@/lib/vncClient";
+} from "@/lib/vncClientError";
 import {
   securityPolicyForVNCEncryption,
   VNC_ENCRYPTION_POLICIES,
@@ -123,6 +122,8 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         if (plainPassword) cfg.password = plainPassword;
         const session = (await ConnectVNCTemporary(JSON.stringify(cfg), plainPassword)) as VNCTemporarySession;
         sessionID = session.id;
+        // noVNC 只在真正发起连接时加载，不跟着表单区块进 chunk。
+        const { startVNCClient } = await import("@/lib/vncClient");
         if (!active) {
           teardown();
           throw new VNCClientError("cancelled");
