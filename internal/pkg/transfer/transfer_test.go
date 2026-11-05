@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -162,6 +164,54 @@ func TestTrackerWriterAbortsOnCancelledContext(t *testing.T) {
 
 	_, err := w.Write([]byte("data"))
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestTrackerConcurrentFilesKeepExactTotals(t *testing.T) {
+	// 目录传输由多个 worker 并发传文件：每个文件各自的 Reader/Writer 与 FileDone
+	// 来自不同 goroutine。累计的完成文件数与字节数必须精确，BytesDone 单调且不越过总量。
+	const workers, filesPerWorker, size = 8, 25, 1000
+	const filesTotal, bytesTotal = workers * filesPerWorker, int64(workers * filesPerWorker * size)
+
+	var tick atomic.Int64
+	clock := func() time.Time { return time.Unix(0, 0).Add(time.Duration(tick.Add(1)) * time.Second) }
+	var got []Progress // Tracker 串行调用回调，无需加锁
+	tr := newTracker("sftp-c", filesTotal+1, bytesTotal+1, func(p Progress) { got = append(got, p) }, clock)
+
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Go(func() {
+			for i := range filesPerWorker {
+				name := fmt.Sprintf("w%d/f%d", w, i)
+				src := struct{ io.Reader }{bytes.NewReader(make([]byte, size))} // 去掉 WriterTo，强制分片
+				f := tr.File(name, size)
+				var err error
+				if i%2 == 0 {
+					_, err = io.CopyBuffer(io.Discard, f.Reader(context.Background(), src), make([]byte, 100))
+				} else {
+					_, err = io.CopyBuffer(f.Writer(context.Background(), io.Discard), src, make([]byte, 100))
+				}
+				assert.NoError(t, err)
+				f.Done()
+			}
+		})
+	}
+	wg.Wait()
+
+	// 再传 1 字节，读出此刻的累计量。
+	_, err := tr.Writer(context.Background(), io.Discard, "probe").Write([]byte{1})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, got)
+	var prev int64
+	for i, p := range got {
+		assert.GreaterOrEqual(t, p.BytesDone, prev, "第 %d 条：BytesDone 必须单调递增", i)
+		assert.LessOrEqual(t, p.BytesDone, p.BytesTotal, "第 %d 条：BytesDone 不得越过总量", i)
+		prev = p.BytesDone
+	}
+	last := got[len(got)-1]
+	assert.Equal(t, filesTotal, last.FilesCompleted)
+	assert.Equal(t, bytesTotal+1, last.BytesDone)
+	assert.Equal(t, "probe", last.CurrentFile)
 }
 
 func TestProgressReaderReportsCumulativeBytes(t *testing.T) {

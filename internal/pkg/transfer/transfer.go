@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -95,15 +96,21 @@ func (r *Reporter) Report(p Progress) {
 // 那正是把"当前文件大小"误当成整次总量的来源。
 //
 // 整次传输共用一个 Reporter，因此速率是整次传输的平均值，不会因为换文件而重置计时起点。
-// 同一传输的上报必须串行（拷贝循环天然满足），内部不加锁。
+//
+// 目录传输会让多个文件同时在传，因此 Tracker 可被并发调用：每个文件经 File 各持一个
+// TrackedFile，进度事件的 BytesDone 是"已完成文件 + 所有在传文件已传字节"，
+// CurrentFile 是最近有字节流过的文件。上报回调在锁内调用，因此回调之间天然串行、按序。
 type Tracker struct {
-	reporter   *Reporter
 	transferID string
 	filesTotal int
 	bytesTotal int64
 
+	mu        sync.Mutex
+	reporter  *Reporter
 	filesDone int
-	bytesDone int64 // 已完成文件的累计字节，不含当前文件
+	bytesDone int64        // 已完成文件的累计字节
+	inFlight  int64        // 尚未完成的文件已传字节之和
+	serial    *TrackedFile // 经 Reader/Writer 简写打开、等待 FileDone 结清的文件
 }
 
 // NewTracker 创建传输跟踪器。filesTotal/bytesTotal 是整次传输的总量。
@@ -121,50 +128,104 @@ func newTracker(transferID string, filesTotal int, bytesTotal int64, onProgress 
 	}
 }
 
-// FileDone 把一个已传完文件的字节数计入累计量。
-func (t *Tracker) FileDone(size int64) {
-	t.filesDone++
-	t.bytesDone += size
+// File 开始跟踪一个文件，size 是它的大小。并发传多个文件时每个文件各持一个
+// TrackedFile，传完调用它的 Done。
+func (t *Tracker) File(currentFile string, size int64) *TrackedFile {
+	return &TrackedFile{tracker: t, name: currentFile, size: size}
 }
 
-func (t *Tracker) report(currentFile string, currentFileBytes int64) {
+// Reader 是串行传输的简写：开始跟踪 currentFile 并包裹它的源 reader，传完用 FileDone 结清。
+func (t *Tracker) Reader(ctx context.Context, r io.Reader, currentFile string, size int64) *TrackedReader {
+	return t.serialFile(currentFile, size).Reader(ctx, r)
+}
+
+// Writer 是串行传输的简写：开始跟踪 currentFile 并包裹它的目标 writer，传完用 FileDone 结清。
+func (t *Tracker) Writer(ctx context.Context, w io.Writer, currentFile string) *TrackedWriter {
+	return t.serialFile(currentFile, 0).Writer(ctx, w)
+}
+
+func (t *Tracker) serialFile(currentFile string, size int64) *TrackedFile {
+	f := t.File(currentFile, size)
+	t.mu.Lock()
+	t.serial = f
+	t.mu.Unlock()
+	return f
+}
+
+// FileDone 把一个已传完文件的字节数计入累计量，并结清经 Reader/Writer 简写打开的当前文件。
+// 只适用于串行传输（同一时刻只有一个文件在传）；并发传输用 File(...).Done()。
+func (t *Tracker) FileDone(size int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var streamed int64
+	if t.serial != nil {
+		streamed = t.serial.done
+		t.serial = nil
+	}
+	t.completeLocked(streamed, size)
+}
+
+func (t *Tracker) completeLocked(streamed, size int64) {
+	t.filesDone++
+	t.bytesDone += size
+	t.inFlight -= streamed
+}
+
+// TrackedFile 是一次传输里的一个文件。
+type TrackedFile struct {
+	tracker *Tracker
+	name    string
+	size    int64
+	done    int64 // 已传字节，受 tracker.mu 保护
+}
+
+// Reader 包裹该文件的源 reader：在 sink 拥有读循环（minio PutObject、
+// sftp.File.ReadFrom）的流式上传里，于源侧观测进度；ctx 取消即中断读取。
+func (f *TrackedFile) Reader(ctx context.Context, r io.Reader) *TrackedReader {
+	return &TrackedReader{ctx: ctx, r: r, file: f}
+}
+
+// Writer 包裹该文件的目标 writer，用于 source 拥有写循环的流式下载
+// （sftp.File.WriteTo）；ctx 取消即中断写入。
+func (f *TrackedFile) Writer(ctx context.Context, w io.Writer) *TrackedWriter {
+	return &TrackedWriter{ctx: ctx, w: w, file: f}
+}
+
+// Done 把该文件按其大小计入已完成量，并从在传字节里结清它已传的部分。
+func (f *TrackedFile) Done() {
+	t := f.tracker
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.completeLocked(f.done, f.size)
+}
+
+func (f *TrackedFile) advance(n int) {
+	t := f.tracker
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	f.done += int64(n)
+	t.inFlight += int64(n)
 	t.reporter.Report(Progress{
 		TransferID:     t.transferID,
 		Status:         StatusProgress,
-		CurrentFile:    currentFile,
+		CurrentFile:    f.name,
 		FilesCompleted: t.filesDone,
 		FilesTotal:     t.filesTotal,
-		BytesDone:      t.bytesDone + currentFileBytes,
+		BytesDone:      t.bytesDone + t.inFlight,
 		BytesTotal:     t.bytesTotal,
 	})
 }
 
-// Reader 包裹当前文件的源 reader：在 sink 拥有读循环（minio PutObject、
-// sftp.File.ReadFrom）的流式上传里，于源侧观测进度；ctx 取消即中断读取。
-// size 是当前文件的大小，经 Size() 暴露给 pkg/sftp 的 ReadFrom 以启用并发写。
-func (t *Tracker) Reader(ctx context.Context, r io.Reader, currentFile string, size int64) *TrackedReader {
-	return &TrackedReader{ctx: ctx, r: r, tracker: t, currentFile: currentFile, size: size}
-}
-
-// Writer 包裹当前文件的目标 writer，用于 source 拥有写循环的流式下载
-// （sftp.File.WriteTo）；ctx 取消即中断写入。
-func (t *Tracker) Writer(ctx context.Context, w io.Writer, currentFile string) *TrackedWriter {
-	return &TrackedWriter{ctx: ctx, w: w, tracker: t, currentFile: currentFile}
-}
-
-// TrackedReader 是 Tracker 包裹出的源 reader。
+// TrackedReader 是 TrackedFile 包裹出的源 reader。
 type TrackedReader struct {
-	ctx         context.Context
-	r           io.Reader
-	tracker     *Tracker
-	currentFile string
-	size        int64
-	done        int64
+	ctx  context.Context
+	r    io.Reader
+	file *TrackedFile
 }
 
 // Size 返回当前文件的大小。pkg/sftp 的 ReadFrom 依赖它决定并发写窗口，
 // 返回整次传输总量会让它按错误的长度切分。
-func (r *TrackedReader) Size() int64 { return r.size }
+func (r *TrackedReader) Size() int64 { return r.file.size }
 
 func (r *TrackedReader) Read(b []byte) (int, error) {
 	if err := r.ctx.Err(); err != nil {
@@ -172,19 +233,16 @@ func (r *TrackedReader) Read(b []byte) (int, error) {
 	}
 	n, err := r.r.Read(b)
 	if n > 0 {
-		r.done += int64(n)
-		r.tracker.report(r.currentFile, r.done)
+		r.file.advance(n)
 	}
 	return n, err
 }
 
-// TrackedWriter 是 Tracker 包裹出的目标 writer。
+// TrackedWriter 是 TrackedFile 包裹出的目标 writer。
 type TrackedWriter struct {
-	ctx         context.Context
-	w           io.Writer
-	tracker     *Tracker
-	currentFile string
-	done        int64
+	ctx  context.Context
+	w    io.Writer
+	file *TrackedFile
 }
 
 func (w *TrackedWriter) Write(b []byte) (int, error) {
@@ -193,8 +251,7 @@ func (w *TrackedWriter) Write(b []byte) (int, error) {
 	}
 	n, err := w.w.Write(b)
 	if n > 0 {
-		w.done += int64(n)
-		w.tracker.report(w.currentFile, w.done)
+		w.file.advance(n)
 	}
 	return n, err
 }

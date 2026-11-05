@@ -272,11 +272,11 @@ func (i shortFileInfo) Sys() any          { return nil }
 
 func TestUploadFailsWhenRemoteSizeDoesNotMatch(t *testing.T) {
 	client := &shortWriteClient{actualSize: 3}
-	tracker := transfer.NewTracker("t1", 1, 5, discardProgress)
+	file := transfer.NewTracker("t1", 1, 5, discardProgress).File("app.conf", 5)
 	svc := NewService(nil)
 
-	err := svc.uploadFile(context.Background(), tracker, client,
-		bytes.NewReader([]byte("hello")), "/srv/app.conf", "app.conf", 5)
+	err := svc.uploadFile(context.Background(), file, client,
+		bytes.NewReader([]byte("hello")), "/srv/app.conf", 5)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "大小校验失败")
