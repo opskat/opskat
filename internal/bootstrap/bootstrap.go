@@ -119,12 +119,6 @@ func Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	// 获取 master key：CLI 参数 > Keychain > 文件 > 自动生成
-	masterKey, err := credential_svc.ResolveMasterKey(masterKeyOpts(opts, dataDir))
-	if err != nil {
-		return fmt.Errorf("获取 master key 失败: %w", err)
-	}
-
 	cfg, err := configs.NewConfig("opskat", configs.WithSource(memory.NewSource(map[string]interface{}{
 		"db": map[string]interface{}{
 			"driver": "sqlite",
@@ -144,7 +138,12 @@ func Init(ctx context.Context, opts Options) error {
 		return fmt.Errorf("获取 KDF salt 失败: %w", err)
 	}
 
-	credential_svc.SetDefault(credential_svc.New(masterKey, salt))
+	// master key（CLI 参数 > Keychain > 文件 > 自动生成）与 Argon2id 派生推迟到首次加解密，
+	// 不解密的进程（如 opsctl list）不访问 keychain、不跑 KDF
+	mkOpts := masterKeyOpts(opts, dataDir)
+	credential_svc.SetDefault(credential_svc.NewLazy(func() (string, error) {
+		return credential_svc.ResolveMasterKey(mkOpts)
+	}, salt))
 
 	registerRepositories()
 
