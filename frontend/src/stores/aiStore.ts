@@ -459,11 +459,81 @@ function invalidateConvListenerForReplay(convId: number) {
   cleanupStreamBuffer(convId);
 }
 
+// === 会话落盘：只写变化的尾部 ===
+// 后端契约是「从 from 起替换」：删除 sort_order >= from 的行，再写入尾部。
+// 每个会话记住上次成功落盘的逐条序列化结果，只发送第一个不同位置之后的消息。
+// 同一会话同时只有一次保存在途：在途期间的新快照只保留最新一份，等在途结束后
+// 再和已确认的落盘结果比较，这样尾部的起点永远对应数据库里的真实状态。
+type ConversationPersistState = {
+  // 上次成功落盘的逐条序列化结果；null 表示未知（首次保存从 0 全量覆盖）。
+  persisted: string[] | null;
+  pending: ai.ConversationDisplayMessage[] | null;
+  draining: boolean;
+  idle: Promise<void>;
+};
+const conversationPersistStates = new Map<number, ConversationPersistState>();
+
+function getConversationPersistState(convId: number): ConversationPersistState {
+  let state = conversationPersistStates.get(convId);
+  if (!state) {
+    state = { persisted: null, pending: null, draining: false, idle: Promise.resolve() };
+    conversationPersistStates.set(convId, state);
+  }
+  return state;
+}
+
+function serializeDisplayMessages(msgs: ai.ConversationDisplayMessage[]): string[] {
+  return msgs.map((m) => JSON.stringify(m));
+}
+
+// rememberLoadedConversation 在 store 采用了从数据库加载的消息后，把它记为「上次落盘」，
+// 让加载后的第一次保存也只写尾部。有保存在途时由在途保存完成后更新记录。
+function rememberLoadedConversation(convId: number, messages: ChatMessage[]) {
+  if (useAIStore.getState().conversationMessages[convId] !== messages) return;
+  const state = getConversationPersistState(convId);
+  if (state.draining) return;
+  state.persisted = serializeDisplayMessages(toDisplayMessages(messages));
+}
+
+async function drainConversationPersist(convId: number, state: ConversationPersistState) {
+  while (state.pending) {
+    const snapshot = state.pending;
+    state.pending = null;
+    const next = serializeDisplayMessages(snapshot);
+    const prev = state.persisted;
+    let from = 0;
+    if (prev) {
+      const common = Math.min(prev.length, next.length);
+      while (from < common && prev[from] === next[from]) from++;
+      if (from === next.length && next.length === prev.length) continue;
+    }
+    try {
+      await SaveConversationMessages(convId, from, snapshot.slice(from));
+      state.persisted = next;
+    } catch (e) {
+      // 不更新落盘记录：下次保存仍从这里重发。
+      console.error(`保存会话 ${convId} 消息失败:`, e);
+    }
+  }
+  state.draining = false;
+}
+
+// saveConversationMessages 把序列化好的快照排进该会话的保存队列，返回队列清空时 resolve 的 Promise。
+function saveConversationMessages(convId: number, snapshot: ai.ConversationDisplayMessage[]): Promise<void> {
+  const state = getConversationPersistState(convId);
+  state.pending = snapshot;
+  if (!state.draining) {
+    state.draining = true;
+    state.idle = drainConversationPersist(convId, state);
+  }
+  return state.idle;
+}
+
 // persistConversationSnapshot 将当前 conversation 的消息快照保存到持久化存储。
-function persistConversationSnapshot(convId: number, includeStreaming = false) {
+function persistConversationSnapshot(convId: number, includeStreaming = false): Promise<void> {
   const msgs = useAIStore.getState().conversationMessages[convId];
-  if (!msgs) return;
-  SaveConversationMessages(convId, toDisplayMessages(msgs, includeStreaming)).catch(() => {});
+  if (!msgs) return Promise.resolve();
+  return saveConversationMessages(convId, toDisplayMessages(msgs, includeStreaming));
 }
 
 // persistNow 立即落盘一次。
@@ -704,6 +774,7 @@ async function ensureConversationMessagesLoaded(convId: number) {
         ? s.conversationStreaming
         : { ...s.conversationStreaming, [convId]: { sending: false, pendingQueue: [] } },
     }));
+    rememberLoadedConversation(convId, messages);
   } catch {
     // ignore — 保持原状态；下次再绑定时会重试
   }
@@ -1972,6 +2043,7 @@ export const useAIStore = create<AIState>((set, get) => {
           tabStore.closeTab(tabId);
         }
         cleanupConvListener(id);
+        conversationPersistStates.delete(id);
 
         await get().fetchConversations();
       } catch (e) {
@@ -2269,6 +2341,7 @@ export const useAIStore = create<AIState>((set, get) => {
 
       // 同一 conversation 可能已经在侧边栏 live streaming。
       // 主工作区打开时优先复用内存里的消息/队列状态，避免重新加载后把 pendingQueue 和 sending 状态清空。
+      const loadedFromDB = loadedMessages === undefined;
       if (loadedMessages === undefined) {
         try {
           const displayMsgs = await LoadConversationMessages(conversationId);
@@ -2300,6 +2373,7 @@ export const useAIStore = create<AIState>((set, get) => {
           ? currentState.conversationStreaming
           : { ...currentState.conversationStreaming, [conversationId]: { sending: false, pendingQueue: [] } },
       }));
+      if (loadedFromDB) rememberLoadedConversation(conversationId, loadedMessages);
 
       return tabId;
     },
@@ -2706,6 +2780,7 @@ async function restoreAITabs(tabs: Tab[]) {
               [meta.conversationId!]: { sending: false, pendingQueue: [] },
             },
           }));
+          rememberLoadedConversation(meta.conversationId, messages);
           const conv = conversations.find((c) => c.ID === meta.conversationId);
           if (conv && conv.Title !== tab.label) {
             tabStore.updateTab(tab.id, { label: conv.Title, meta: { ...meta, title: conv.Title } });
@@ -2743,15 +2818,13 @@ function flushAllConversations() {
 // Wails OnBeforeClose 场景用这个：后端在等 ai:flush-done 回执再放行。
 async function flushAllConversationsAsync(): Promise<void> {
   const allMsgs = useAIStore.getState().conversationMessages;
-  const promises: Promise<unknown>[] = [];
+  const promises: Promise<void>[] = [];
   for (const convIdStr of Object.keys(allMsgs)) {
     const convId = Number(convIdStr);
     if (!convId) continue;
-    const msgs = allMsgs[convId];
-    if (!msgs) continue;
-    promises.push(SaveConversationMessages(convId, toDisplayMessages(msgs, true)).catch(() => {}));
+    promises.push(persistConversationSnapshot(convId, true));
   }
-  await Promise.allSettled(promises);
+  await Promise.all(promises);
 }
 
 // beforeunload 在 Wails v2 WebView 里通常不会触发（WebView 被直接销毁，不走 navigation 卸载流程），

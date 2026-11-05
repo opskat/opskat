@@ -33,13 +33,13 @@ func TestConversationSvc_SaveMessages_InsertFailureKeepsPreviousMessages(t *test
 		{Role: "user", Content: "旧问题"},
 		{Role: "assistant", Content: "旧回答"},
 	}
-	require.NoError(t, Conversation().SaveMessages(ctx, 1, old))
+	require.NoError(t, Conversation().SaveMessages(ctx, 1, 0, old))
 
 	// 让插入新消息时失败（触发器拒绝内容为 "boom" 的行）。
 	require.NoError(t, gdb.Exec(`CREATE TRIGGER reject_boom BEFORE INSERT ON conversation_messages
 		WHEN NEW.content = 'boom' BEGIN SELECT RAISE(ABORT, 'insert rejected'); END`).Error)
 
-	err = Conversation().SaveMessages(ctx, 1, []*conversation_entity.Message{
+	err = Conversation().SaveMessages(ctx, 1, 0, []*conversation_entity.Message{
 		{Role: "user", Content: "新问题"},
 		{Role: "assistant", Content: "boom"},
 	})

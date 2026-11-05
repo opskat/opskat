@@ -27,13 +27,14 @@ type ConversationSvc interface {
 	Delete(ctx context.Context, id int64) error
 
 	// 消息持久化
-	SaveMessages(ctx context.Context, conversationID int64, msgs []*conversation_entity.Message) error
+	// SaveMessages 从 from 位置起替换消息（删除 sort_order >= from，再写入 msgs）。
+	SaveMessages(ctx context.Context, conversationID int64, from int, msgs []*conversation_entity.Message) error
 	LoadMessages(ctx context.Context, conversationID int64) ([]*conversation_entity.Message, error)
 }
 
 type conversationSvc struct {
 	// saveLocks 为每个 conversationID 维护一把互斥锁。
-	// SaveMessages 实现为 delete-all + insert-all，两个 IPC 并发调用时，
+	// SaveMessages 实现为 delete-tail + insert-tail，两个 IPC 并发调用时，
 	// 若不加锁，后到的 delete 可能覆盖先到的 insert，导致数据丢失。
 	// 此外，该锁也让 Save 调用按 IPC 到达顺序落盘，前端依赖这个顺序来保证
 	// 「晚调度的快照覆盖早调度的快照」。
@@ -129,7 +130,9 @@ func (s *conversationSvc) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *conversationSvc) SaveMessages(ctx context.Context, conversationID int64, msgs []*conversation_entity.Message) error {
+// SaveMessages 从 from 位置起替换会话消息：删除 sort_order >= from 的旧消息，再把 msgs
+// 依次写到 from, from+1, ...。from = 0 即全量覆盖；新列表比旧列表短时，多出的旧消息随之删除。
+func (s *conversationSvc) SaveMessages(ctx context.Context, conversationID int64, from int, msgs []*conversation_entity.Message) error {
 	// 按 conversationID 加锁，串行化同一会话的 delete+insert，防止并发覆盖丢数据。
 	lockI, _ := s.saveLocks.LoadOrStore(conversationID, &sync.Mutex{})
 	lock := lockI.(*sync.Mutex)
@@ -140,12 +143,12 @@ func (s *conversationSvc) SaveMessages(ctx context.Context, conversationID int64
 	now := time.Now().Unix()
 	for i, msg := range msgs {
 		msg.ConversationID = conversationID
-		msg.SortOrder = i
+		msg.SortOrder = from + i
 		msg.Createtime = now
 	}
 	// 删除与插入在同一事务内：插入失败时旧消息随事务回滚保留。
 	return dbutil.WithTransaction(ctx, func(ctx context.Context) error {
-		if err := conversation_repo.Conversation().DeleteMessages(ctx, conversationID); err != nil {
+		if err := conversation_repo.Conversation().DeleteMessagesFrom(ctx, conversationID, from); err != nil {
 			return err
 		}
 		return conversation_repo.Conversation().CreateMessages(ctx, msgs)

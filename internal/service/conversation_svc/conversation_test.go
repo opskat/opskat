@@ -217,7 +217,7 @@ func TestConversationSvc_SaveMessages(t *testing.T) {
 				{Role: "user", Content: "你好"},
 				{Role: "assistant", Content: "你好！"},
 			}
-			mockRepo.EXPECT().DeleteMessages(gomock.Any(), int64(1)).Return(nil)
+			mockRepo.EXPECT().DeleteMessagesFrom(gomock.Any(), int64(1), 0).Return(nil)
 			mockRepo.EXPECT().CreateMessages(gomock.Any(), msgs).DoAndReturn(
 				func(_ context.Context, msgs []*conversation_entity.Message) error {
 					// 验证排序和时间已设置
@@ -230,7 +230,7 @@ func TestConversationSvc_SaveMessages(t *testing.T) {
 				},
 			)
 
-			err := Conversation().SaveMessages(ctx, 1, msgs)
+			err := Conversation().SaveMessages(ctx, 1, 0, msgs)
 			assert.NoError(t, err)
 		})
 
@@ -238,9 +238,9 @@ func TestConversationSvc_SaveMessages(t *testing.T) {
 			msgs := []*conversation_entity.Message{
 				{Role: "user", Content: "test"},
 			}
-			mockRepo.EXPECT().DeleteMessages(gomock.Any(), int64(1)).Return(errors.New("delete error"))
+			mockRepo.EXPECT().DeleteMessagesFrom(gomock.Any(), int64(1), 0).Return(errors.New("delete error"))
 
-			err := Conversation().SaveMessages(ctx, 1, msgs)
+			err := Conversation().SaveMessages(ctx, 1, 0, msgs)
 			assert.Error(t, err)
 		})
 	})
@@ -255,8 +255,8 @@ func TestConversationSvc_SaveMessages_ConcurrentSameID(t *testing.T) {
 
 	var inFlight atomic.Int32
 	var maxInFlight atomic.Int32
-	mockRepo.EXPECT().DeleteMessages(gomock.Any(), int64(42)).Times(2).DoAndReturn(
-		func(_ context.Context, _ int64) error {
+	mockRepo.EXPECT().DeleteMessagesFrom(gomock.Any(), int64(42), 0).Times(2).DoAndReturn(
+		func(_ context.Context, _ int64, _ int) error {
 			n := inFlight.Add(1)
 			// 记录峰值并发数；若大于 1 说明没锁住。
 			for {
@@ -278,7 +278,7 @@ func TestConversationSvc_SaveMessages_ConcurrentSameID(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = Conversation().SaveMessages(ctx, 42, []*conversation_entity.Message{{Role: "user", Content: "x"}})
+			_ = Conversation().SaveMessages(ctx, 42, 0, []*conversation_entity.Message{{Role: "user", Content: "x"}})
 		}()
 	}
 	wg.Wait()
@@ -294,8 +294,8 @@ func TestConversationSvc_SaveMessages_ConcurrentDifferentID(t *testing.T) {
 	var inFlight atomic.Int32
 	var maxInFlight atomic.Int32
 	for _, id := range []int64{101, 102} {
-		mockRepo.EXPECT().DeleteMessages(gomock.Any(), id).DoAndReturn(
-			func(_ context.Context, _ int64) error {
+		mockRepo.EXPECT().DeleteMessagesFrom(gomock.Any(), id, 0).DoAndReturn(
+			func(_ context.Context, _ int64, _ int) error {
 				n := inFlight.Add(1)
 				for {
 					m := maxInFlight.Load()
@@ -316,7 +316,7 @@ func TestConversationSvc_SaveMessages_ConcurrentDifferentID(t *testing.T) {
 		wg.Add(1)
 		go func(convID int64) {
 			defer wg.Done()
-			_ = Conversation().SaveMessages(ctx, convID, []*conversation_entity.Message{{Role: "user", Content: "x"}})
+			_ = Conversation().SaveMessages(ctx, convID, 0, []*conversation_entity.Message{{Role: "user", Content: "x"}})
 		}(id)
 	}
 	wg.Wait()
