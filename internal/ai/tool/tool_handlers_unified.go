@@ -119,9 +119,14 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		}
 	}
 
-	// 结果上限只在 AI 工具边界施加：执行器本身（opsctl 同样使用）必须返回完整输出。
-	// SQL 结果先按行数截断（注明总行数），再统一按字节/行数截断头尾。
-	out, err := exec(helper.WithMaxRows(ctx, maxSQLRows), asset, command, scope)
+	return exec(ctx, asset, command, scope)
+}
+
+// handleAIExec 是 AI 会话里 exec 工具的入口：在 handleExec 之上给结果加上限——这份结果
+// 会进入模型上下文、tool_result 事件和会话存储。SQL 结果先按行数截断（注明总行数），再统一
+// 按字节/行数截断头尾。opsctl 的 exec / batch 经 AllToolDefs 直接调 handleExec，输出保持完整。
+func handleAIExec(ctx context.Context, args map[string]any) (string, error) {
+	out, err := handleExec(helper.WithMaxRows(ctx, maxSQLRows), args)
 	if err != nil {
 		return out, err
 	}
