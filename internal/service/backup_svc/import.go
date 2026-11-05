@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
@@ -380,9 +381,6 @@ var configSSHRefKeys = []string{
 // collectAssetSSHRefIDs 收集单个资产在 SSHTunnelID 列、Config 顶层单跳字段、
 // proxy_chain 与扩展宿主连接配置（__opskat_connection.proxyChain）中引用的全部 SSH 资产 ID。
 func collectAssetSSHRefIDs(a *asset_entity.Asset) []int64 {
-	if a == nil {
-		return nil
-	}
 	var ids []int64
 	if a.SSHTunnelID > 0 {
 		ids = append(ids, a.SSHTunnelID)
@@ -421,13 +419,7 @@ func collectProxyChainSSHRefIDs(chainRaw json.RawMessage) []int64 {
 	if err := json.Unmarshal(chainRaw, &chain); err != nil {
 		return nil
 	}
-	var ids []int64
-	for _, layer := range chain.Layers {
-		if layer.Type == asset_entity.ProxyChainLayerSSH && layer.SSHAssetID > 0 {
-			ids = append(ids, layer.SSHAssetID)
-		}
-	}
-	return ids
+	return assettype.ProxyChainSSHAssetIDs(&chain)
 }
 
 // remapAssetSSHRefs 将资产的 SSHTunnelID 列及 Config 中的 SSH 资产引用重映射到新 ID；
@@ -487,7 +479,11 @@ func remapConfigSSHRefs(ctx context.Context, assetName, configJSON string, asset
 	}
 	if chainRaw, ok := raw["proxy_chain"]; ok {
 		if newChainRaw, chainChanged := remapProxyChainSSHRefs(ctx, assetName, chainRaw, assetIDMap); chainChanged {
-			raw["proxy_chain"] = newChainRaw
+			if newChainRaw == nil {
+				delete(raw, "proxy_chain")
+			} else {
+				raw["proxy_chain"] = newChainRaw
+			}
 			changed = true
 		}
 	}
@@ -496,8 +492,15 @@ func remapConfigSSHRefs(ctx context.Context, assetName, configJSON string, asset
 		if err := json.Unmarshal(extRaw, &extConn); err == nil {
 			if chainRaw, hasChain := extConn["proxyChain"]; hasChain {
 				if newChainRaw, chainChanged := remapProxyChainSSHRefs(ctx, assetName, chainRaw, assetIDMap); chainChanged {
-					extConn["proxyChain"] = newChainRaw
-					if newExtRaw, err := json.Marshal(extConn); err == nil {
+					if newChainRaw == nil {
+						delete(extConn, "proxyChain")
+					} else {
+						extConn["proxyChain"] = newChainRaw
+					}
+					if len(extConn) == 0 {
+						delete(raw, extension.HostConnectionConfigKey)
+						changed = true
+					} else if newExtRaw, err := json.Marshal(extConn); err == nil {
 						raw[extension.HostConnectionConfigKey] = newExtRaw
 						changed = true
 					}
@@ -529,17 +532,21 @@ func remapProxyChainSSHRefs(ctx context.Context, assetName string, chainRaw json
 		return chainRaw, false
 	}
 	changed := false
+	kept := make([]map[string]json.RawMessage, 0, len(layers))
 	for _, layer := range layers {
 		var layerType string
 		if typeRaw, ok := layer["type"]; !ok || json.Unmarshal(typeRaw, &layerType) != nil || layerType != asset_entity.ProxyChainLayerSSH {
+			kept = append(kept, layer)
 			continue
 		}
 		sshRaw, ok := layer["ssh_asset_id"]
 		if !ok {
+			kept = append(kept, layer)
 			continue
 		}
 		var oldRefID int64
 		if err := json.Unmarshal(sshRaw, &oldRefID); err != nil || oldRefID <= 0 {
+			kept = append(kept, layer)
 			continue
 		}
 		if newRefID, mapped := assetIDMap[oldRefID]; mapped {
@@ -549,23 +556,26 @@ func remapProxyChainSSHRefs(ctx context.Context, assetName string, chainRaw json
 					changed = true
 				}
 				var layerID string
-				if idRaw, hasID := layer["id"]; hasID && json.Unmarshal(idRaw, &layerID) == nil && layerID == fmt.Sprintf("legacy-ssh-%d", oldRefID) {
-					if encodedID, err := json.Marshal(fmt.Sprintf("legacy-ssh-%d", newRefID)); err == nil {
+				if idRaw, hasID := layer["id"]; hasID && json.Unmarshal(idRaw, &layerID) == nil && layerID == asset_entity.LegacySSHProxyLayerID(oldRefID) {
+					if encodedID, err := json.Marshal(asset_entity.LegacySSHProxyLayerID(newRefID)); err == nil {
 						layer["id"] = encodedID
 					}
 				}
 			}
+			kept = append(kept, layer)
 		} else {
-			logger.Ctx(ctx).Warn("unmapped proxy_chain ssh_asset_id cleared on import",
+			logger.Ctx(ctx).Warn("unmapped proxy_chain ssh layer removed on import",
 				zap.String("asset", assetName), zap.Int64("oldRefID", oldRefID))
-			delete(layer, "ssh_asset_id")
 			changed = true
 		}
 	}
 	if !changed {
 		return chainRaw, false
 	}
-	newLayersRaw, err := json.Marshal(layers)
+	if len(kept) == 0 {
+		return nil, true
+	}
+	newLayersRaw, err := json.Marshal(kept)
 	if err != nil {
 		return chainRaw, false
 	}

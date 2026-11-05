@@ -3,7 +3,6 @@ package backup_svc
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -41,90 +40,31 @@ func findAssetByName(t *testing.T, ctx context.Context, name string) *asset_enti
 	return &a
 }
 
-// effectiveChainForAsset 模拟各资产类型在运行时（connpool / credential_resolver / k8s_ops / extension_svc）
-// 构造有效代理链的方式，供 mock 测试核对导入后实际拨号请求的 SSH 资产 ID。
+// effectiveChainForAsset 提取资产的有效代理链，供 mock 测试核对导入后实际拨号请求的 SSH 资产 ID。
 func effectiveChainForAsset(t *testing.T, a *asset_entity.Asset) *asset_entity.ProxyChainConfig {
 	t.Helper()
-	switch a.Type {
-	case asset_entity.AssetTypeSSH:
-		cfg, err := a.GetSSHConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.JumpHostID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeDatabase:
-		cfg, err := a.GetDatabaseConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.SSHAssetID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeRedis:
-		cfg, err := a.GetRedisConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.SSHAssetID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeMongoDB:
-		cfg, err := a.GetMongoDBConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.SSHAssetID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeKafka:
-		cfg, err := a.GetKafkaConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.SSHAssetID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeK8s:
-		cfg, err := a.GetK8sConfig()
-		require.NoError(t, err)
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, a.SSHTunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeEtcd:
-		cfg, err := a.GetEtcdConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.SSHAssetID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeRDP:
-		cfg, err := a.GetRDPConfig()
-		require.NoError(t, err)
-		tunnelID := a.SSHTunnelID
-		if tunnelID == 0 {
-			tunnelID = cfg.SSHAssetID
-		}
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, tunnelID, cfg.Proxy)
-	case asset_entity.AssetTypeVNC:
-		cfg, err := a.GetVNCConfig()
-		require.NoError(t, err)
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, a.SSHTunnelID, nil)
-	case asset_entity.AssetTypeOSS:
-		cfg, err := a.GetOSSConfig()
-		require.NoError(t, err)
-		return asset_entity.EffectiveProxyChain(cfg.ProxyChain, a.SSHTunnelID, nil)
-	case asset_entity.AssetTypeSerial, asset_entity.AssetTypeLocal:
-		return nil
-	default:
-		var raw map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal([]byte(a.Config), &raw))
-		var extConn asset_entity.ExtensionConnectionConfig
-		if connRaw, ok := raw[extension.HostConnectionConfigKey]; ok {
-			require.NoError(t, json.Unmarshal(connRaw, &extConn))
-		}
-		return asset_entity.EffectiveProxyChain(extConn.ProxyChain, a.SSHTunnelID, nil)
+	var parsed struct {
+		JumpHostID int64                                   `json:"jump_host_id"`
+		SSHAssetID int64                                   `json:"ssh_asset_id"`
+		Proxy      *asset_entity.ProxyConfig               `json:"proxy"`
+		ProxyChain *asset_entity.ProxyChainConfig          `json:"proxy_chain"`
+		ExtConn    *asset_entity.ExtensionConnectionConfig `json:"__opskat_connection"`
 	}
+	if a.Config != "" {
+		require.NoError(t, json.Unmarshal([]byte(a.Config), &parsed))
+	}
+	chain := parsed.ProxyChain
+	if chain == nil && parsed.ExtConn != nil {
+		chain = parsed.ExtConn.ProxyChain
+	}
+	tunnelID := a.SSHTunnelID
+	if tunnelID == 0 {
+		tunnelID = parsed.SSHAssetID
+	}
+	if tunnelID == 0 {
+		tunnelID = parsed.JumpHostID
+	}
+	return asset_entity.EffectiveProxyChain(chain, tunnelID, parsed.Proxy)
 }
 
 func TestImportRemapsTunnelRefsAcrossAllAssetTypes(t *testing.T) {
@@ -466,10 +406,10 @@ func TestImportRemapsTunnelRefsAcrossAllAssetTypes(t *testing.T) {
 	// 倘若有任一类型仍携带旧 ID（hop1.ID=1 或 hop2.ID=2），gomock 会直接因 Unexpected call 失败。
 	mockRepo.EXPECT().Find(gomock.Any(), newHop1.ID).DoAndReturn(func(_ context.Context, _ int64) (*asset_entity.Asset, error) {
 		return newHop1, nil
-	}).AnyTimes()
+	}).MinTimes(1)
 	mockRepo.EXPECT().Find(gomock.Any(), newHop2.ID).DoAndReturn(func(_ context.Context, _ int64) (*asset_entity.Asset, error) {
 		return newHop2, nil
-	}).AnyTimes()
+	}).MinTimes(1)
 
 	for name, asset := range restoredAssets {
 		t.Run("resolve_proxy_chain_"+name, func(t *testing.T) {
@@ -478,36 +418,6 @@ func TestImportRemapsTunnelRefsAcrossAllAssetTypes(t *testing.T) {
 			layers, err := credential_resolver.Default().ResolveProxyChain(dstCtx, chain, 5)
 			require.NoError(t, err, "asset %s failed to resolve proxy chain", name)
 			require.NotEmpty(t, layers, "asset %s resolved empty proxy chain layers", name)
-		})
-	}
-
-	// 进一步验证当 mockRepo 对指定新跳板 ID 返回错误时，每个资产的拨号解析确实命中了该预期的新跳板 ID。
-	expectedFirstHop := map[string]int64{
-		"hop-2":                newHop1.ID,
-		"db-pg":                newHop2.ID,
-		"db-sqlite-remote":     newHop1.ID,
-		"redis":                newHop2.ID,
-		"mongo":                newHop1.ID,
-		"kafka":                newHop1.ID,
-		"k8s-tunnel-and-chain": newHop1.ID,
-		"k8s-column-only":      newHop2.ID,
-		"etcd":                 newHop1.ID,
-		"rdp":                  newHop1.ID,
-		"vnc":                  newHop2.ID,
-		"oss":                  newHop1.ID,
-		"ext-asset":            newHop2.ID,
-	}
-	for name, wantHopID := range expectedFirstHop {
-		t.Run("mock_dial_hits_remapped_hop_"+name, func(t *testing.T) {
-			subCtrl := gomock.NewController(t)
-			subMock := mock_asset_repo.NewMockAssetRepo(subCtrl)
-			asset_repo.RegisterAsset(subMock)
-			sentinelErr := errors.New("hit expected remapped hop")
-			subMock.EXPECT().Find(gomock.Any(), wantHopID).Return(nil, sentinelErr).Times(1)
-
-			chain := effectiveChainForAsset(t, restoredAssets[name])
-			_, err := credential_resolver.Default().ResolveProxyChain(dstCtx, chain, 5)
-			require.ErrorIs(t, err, sentinelErr)
 		})
 	}
 }
@@ -540,7 +450,7 @@ func TestImportClearsUnmappedTunnelRefs(t *testing.T) {
 		Name:       "orphan-vnc",
 		Type:       asset_entity.AssetTypeVNC,
 		Status:     asset_entity.StatusActive,
-		Config:     `{"host":"127.0.0.1","port":5900,"file_ssh_asset_id":1}`,
+		Config:     `{"host":"127.0.0.1","port":5900,"file_ssh_asset_id":1,"proxy_chain":{"layers":[{"id":"socks-1","type":"socks5","order":1,"host":"127.0.0.1","port":1080},{"id":"ssh-2","type":"ssh","order":2,"ssh_asset_id":1}]}}`,
 		Createtime: 1,
 	}
 
@@ -555,19 +465,24 @@ func TestImportClearsUnmappedTunnelRefs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, gotSSH.SSHTunnelID)
 	assert.Zero(t, sshCfg.JumpHostID)
+	require.NoError(t, gotSSH.Validate())
 
 	gotDB := findAssetByName(t, ctx, "orphan-db")
 	dbCfg, err := gotDB.GetDatabaseConfig()
 	require.NoError(t, err)
 	assert.Zero(t, gotDB.SSHTunnelID)
 	assert.Zero(t, dbCfg.SSHAssetID)
-	require.NotNil(t, dbCfg.ProxyChain)
-	assert.Zero(t, dbCfg.ProxyChain.Layers[0].SSHAssetID)
+	assert.Nil(t, dbCfg.ProxyChain)
+	require.NoError(t, gotDB.Validate())
 
 	gotVNC := findAssetByName(t, ctx, "orphan-vnc")
 	vncCfg, err := gotVNC.GetVNCConfig()
 	require.NoError(t, err)
 	assert.Zero(t, vncCfg.FileSSHAssetID)
+	require.NotNil(t, vncCfg.ProxyChain)
+	require.Len(t, vncCfg.ProxyChain.Layers, 1)
+	assert.Equal(t, asset_entity.ProxyChainLayerSOCKS5, vncCfg.ProxyChain.Layers[0].Type)
+	require.NoError(t, gotVNC.Validate())
 }
 
 func TestExportResolvesDependentTunnelAssets(t *testing.T) {

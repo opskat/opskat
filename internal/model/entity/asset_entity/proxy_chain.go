@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+// LegacySSHProxyLayerID 返回由单条 SSH 隧道 ID 合成的代理链层 ID。
+func LegacySSHProxyLayerID(tunnelID int64) string {
+	return fmt.Sprintf("legacy-ssh-%d", tunnelID)
+}
+
 func EffectiveProxyChain(chain *ProxyChainConfig, tunnelID int64, proxy *ProxyConfig) *ProxyChainConfig {
 	if chain != nil && len(chain.Layers) > 0 {
 		return NormalizeProxyChain(chain)
@@ -15,7 +20,7 @@ func EffectiveProxyChain(chain *ProxyChainConfig, tunnelID int64, proxy *ProxyCo
 	if tunnelID > 0 {
 		enabled := true
 		layers = append(layers, ProxyChainLayer{
-			ID:         fmt.Sprintf("legacy-ssh-%d", tunnelID),
+			ID:         LegacySSHProxyLayerID(tunnelID),
 			Name:       "SSH Tunnel",
 			Enabled:    &enabled,
 			Type:       ProxyChainLayerSSH,
