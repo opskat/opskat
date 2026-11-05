@@ -30,6 +30,16 @@ type ForwardManager struct {
 	mu      sync.Mutex
 	clients map[int64]*forwardClient  // assetID → SSH 连接
 	running map[int64]*runningForward // ruleID → 运行状态
+	dialing map[int64]*dialCall       // assetID → 进行中的拨号（同资产并发只拨一次）
+	// starting 按配置串行化 StartConfig，避免同一配置并发启动互相覆盖。
+	starting map[int64]*sync.Mutex
+}
+
+// dialCall 一次进行中的 SSH 拨号，等待者共享结果。
+type dialCall struct {
+	done chan struct{}
+	fc   *forwardClient
+	err  error
 }
 
 // forwardClient 每个资产对应的 SSH 连接
@@ -70,9 +80,11 @@ type poolDialer = sshadapt.PoolDialer
 
 func NewForwardManager(dialer SSHDialer) *ForwardManager {
 	return &ForwardManager{
-		dialer:  dialer,
-		clients: make(map[int64]*forwardClient),
-		running: make(map[int64]*runningForward),
+		dialer:   dialer,
+		clients:  make(map[int64]*forwardClient),
+		running:  make(map[int64]*runningForward),
+		dialing:  make(map[int64]*dialCall),
+		starting: make(map[int64]*sync.Mutex),
 	}
 }
 
@@ -90,19 +102,22 @@ func (m *ForwardManager) StartConfig(ctx context.Context, configID int64) error 
 		return fmt.Errorf("配置中没有转发规则")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	startMu := m.configStartLock(configID)
+	startMu.Lock()
+	defer startMu.Unlock()
 
 	// 先停掉已有的（同一配置重新启动）
-	m.stopConfigLocked(configID)
+	m.StopConfig(configID)
 
-	// 获取或创建 SSH 连接
-	fc, err := m.getOrDialLocked(ctx, config.AssetID)
+	// 获取或创建 SSH 连接；拨号期间不持有 m.mu。
+	// 引用计数在拿到连接的同一把锁内一次性加上，避免其它配置的 Stop 在
+	// 我们注册规则前把连接引用归零而关掉。
+	fc, err := m.acquireClient(ctx, config.AssetID, int32(len(rules)))
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
 
-	// 启动每条规则
+	// 启动每条规则（Listen / 远端 listen 在锁外），再注册运行状态
 	for _, rule := range rules {
 		rctx, cancel := context.WithCancel(context.Background())
 		rf := &runningForward{
@@ -116,11 +131,23 @@ func (m *ForwardManager) StartConfig(ctx context.Context, configID int64) error 
 			cancel()
 			logger.Default().Error("rule failed", zap.Int64("ruleID", rule.ID), zap.Error(startErr))
 		}
+		m.mu.Lock()
 		m.running[rule.ID] = rf
-		atomic.AddInt32(&fc.refs, 1)
+		m.mu.Unlock()
 	}
 
 	return nil
+}
+
+func (m *ForwardManager) configStartLock(configID int64) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.starting[configID]
+	if !ok {
+		l = &sync.Mutex{}
+		m.starting[configID] = l
+	}
+	return l
 }
 
 // StopConfig 停止一个转发配置的所有规则
@@ -243,19 +270,47 @@ func (m *ForwardManager) IsConfigRunning(configID int64) bool {
 
 // --- SSH 连接管理 ---
 
-func (m *ForwardManager) getOrDialLocked(ctx context.Context, assetID int64) (*forwardClient, error) {
-	if fc, ok := m.clients[assetID]; ok {
-		return fc, nil
-	}
+// acquireClient 返回资产的 SSH 连接并给它加 refs 个引用。拨号在锁外进行，
+// 同一资产的并发调用共享同一次拨号。
+func (m *ForwardManager) acquireClient(ctx context.Context, assetID int64, refs int32) (*forwardClient, error) {
+	for {
+		m.mu.Lock()
+		if fc, ok := m.clients[assetID]; ok {
+			atomic.AddInt32(&fc.refs, refs)
+			m.mu.Unlock()
+			return fc, nil
+		}
+		if call, ok := m.dialing[assetID]; ok {
+			m.mu.Unlock()
+			select {
+			case <-call.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if call.err != nil {
+				return nil, call.err
+			}
+			continue // 重新取锁，按普通路径拿到连接并加引用
+		}
+		call := &dialCall{done: make(chan struct{})}
+		m.dialing[assetID] = call
+		m.mu.Unlock()
 
-	client, closers, err := m.dialer.DialAsset(ctx, assetID)
-	if err != nil {
-		return nil, fmt.Errorf("SSH 连接失败: %w", err)
-	}
+		client, closers, err := m.dialer.DialAsset(ctx, assetID)
 
-	fc := &forwardClient{client: client, closers: closers}
-	m.clients[assetID] = fc
-	return fc, nil
+		m.mu.Lock()
+		delete(m.dialing, assetID)
+		if err != nil {
+			call.err = err
+		} else {
+			call.fc = &forwardClient{client: client, closers: closers}
+			m.clients[assetID] = call.fc
+			atomic.AddInt32(&call.fc.refs, refs)
+		}
+		m.mu.Unlock()
+		close(call.done)
+		return call.fc, call.err
+	}
 }
 
 func (m *ForwardManager) releaseClientLocked(assetID int64) {

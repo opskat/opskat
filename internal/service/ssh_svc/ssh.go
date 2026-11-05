@@ -87,7 +87,8 @@ type Session struct {
 	session        *ssh.Session
 	stdin          io.WriteCloser
 	stdout         io.Reader
-	mu             sync.Mutex
+	mu             sync.Mutex // guards closed only; never held across network I/O
+	writeMu        sync.Mutex // serializes stdin writes; Close does not take it
 	closed         bool
 	onData         func(data []byte)      // 终端输出回调
 	onClosed       func(sessionID string) // 会话关闭回调
@@ -126,15 +127,15 @@ type Session struct {
 
 // Write 向终端写入数据（用户输入）
 func (s *Session) Write(data []byte) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	s.writeMu.Lock()
+	if s.IsClosed() {
+		s.writeMu.Unlock()
 		return fmt.Errorf("session is closed")
 	}
 	hasNewline := bytes.ContainsAny(data, "\r\n")
 	s.markUserInput(data)
 	_, err := s.stdin.Write(data)
-	s.mu.Unlock()
+	s.writeMu.Unlock()
 	if err == nil && hasNewline {
 		s.ensureSyncProbe()
 	}
@@ -158,9 +159,7 @@ func (s *Session) submitStartupCommand(command string) error {
 
 // Resize 调整终端尺寸
 func (s *Session) Resize(cols, rows int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	if s.IsClosed() {
 		return fmt.Errorf("session is closed")
 	}
 	return s.session.WindowChange(rows, cols)
@@ -170,11 +169,12 @@ func (s *Session) Resize(cols, rows int) error {
 func (s *Session) Close() {
 	s.failPendingDirectoryChange(dirsync.Error(dirSyncErrSessionClosed))
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return
 	}
 	s.closed = true
+	s.mu.Unlock()
 	if s.session != nil {
 		if err := s.session.Close(); err != nil {
 			logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
@@ -214,9 +214,9 @@ func (s *Session) writeInternal(data []byte) error {
 // (EnableSync, so it can drop the pattern on a failed enable) use this plus
 // queueInternalEchoSuppression directly.
 func (s *Session) writeStdin(data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.IsClosed() {
 		return fmt.Errorf("session is closed")
 	}
 	_, err := s.stdin.Write(data)
