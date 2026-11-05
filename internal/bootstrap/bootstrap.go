@@ -35,6 +35,8 @@ import (
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/configs/memory"
 	"github.com/cago-frame/cago/database/db"
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 
 	_ "github.com/opskat/opskat/internal/pkg/code"
 
@@ -150,11 +152,22 @@ func Init(ctx context.Context, opts Options) error {
 	if err := migrations.RunMigrations(db.Default(), dataDir); err != nil {
 		return err
 	}
+	refreshPlannerStats()
 
 	snippet_svc.Register(snippet_svc.NewSnippetSvc(snippet_svc.NewCategoryRegistry()))
 	registerCommandReview()
 
 	return nil
+}
+
+// refreshPlannerStats 让查询规划器的统计跟上数据增长。迁移里的 ANALYZE 只覆盖升级那一刻
+// 已有的数据：新装或升级时表还小的库长大后没有可用统计，审计页的时间窗查询会退回整索引扫描。
+// optimize 只分析统计缺失或明显过期的表并自带 analysis_limit，统计新鲜时是空操作。
+// 失败（如另一进程长时间占着写锁）不影响查询结果，只记日志、沿用旧统计。
+func refreshPlannerStats() {
+	if err := db.Default().Exec("PRAGMA optimize=0x10002").Error; err != nil {
+		logger.Default().Warn("refresh sqlite planner statistics", zap.Error(err))
+	}
 }
 
 // registerRepositories 注册所有 Repository 单例
