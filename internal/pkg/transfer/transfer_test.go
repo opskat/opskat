@@ -90,7 +90,7 @@ func TestTrackerKeepsTransferTotalAcrossFiles(t *testing.T) {
 		tr.FileDone(100)
 	}
 
-	require.Len(t, got, 6)
+	require.Len(t, got, 7, "6 条常规 progress + 最后一个文件完成时补发的 1 条")
 	var prev int64
 	for _, p := range got {
 		assert.Equal(t, int64(300), p.BytesTotal, "BytesTotal 必须是整次传输总量")
@@ -101,7 +101,7 @@ func TestTrackerKeepsTransferTotalAcrossFiles(t *testing.T) {
 	}
 	assert.Equal(t, int64(300), got[len(got)-1].BytesDone)
 	assert.Equal(t, "f2.bin", got[len(got)-1].CurrentFile)
-	assert.Equal(t, 2, got[len(got)-1].FilesCompleted)
+	assert.Equal(t, 3, got[len(got)-1].FilesCompleted, "最后一条是完成时补发的精确总量")
 }
 
 func TestTrackerReaderSizeIsCurrentFileNotTransferTotal(t *testing.T) {

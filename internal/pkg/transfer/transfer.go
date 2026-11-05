@@ -78,10 +78,16 @@ func (r *Reporter) Report(p Progress) {
 		return
 	}
 
-	now := r.now()
-	if !r.lastEmit.IsZero() && now.Sub(r.lastEmit) < r.minInterval {
+	if !r.lastEmit.IsZero() && r.now().Sub(r.lastEmit) < r.minInterval {
 		return
 	}
+	r.Flush(p)
+}
+
+// Flush 立即发出一条 "progress"（补齐平均速率），不受节流约束。传输成功结束时
+// 用它把最终的精确总量送达前端：节流可能丢掉最后一条常规 progress，而终态 done 不带计数。
+func (r *Reporter) Flush(p Progress) {
+	now := r.now()
 	r.lastEmit = now
 
 	if elapsed := now.Sub(r.start).Seconds(); elapsed > 0 {
@@ -158,17 +164,36 @@ func (t *Tracker) FileDone(size int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var streamed int64
+	var name string
 	if t.serial != nil {
 		streamed = t.serial.done
+		name = t.serial.name
 		t.serial = nil
 	}
-	t.completeLocked(streamed, size)
+	t.completeLocked(name, streamed, size)
 }
 
-func (t *Tracker) completeLocked(streamed, size int64) {
+// completeLocked 计入一个已完成的文件。最后一个文件完成即整次传输成功，此时无视节流
+// 补发一条带精确总量的 progress，保证前端在收到 done 前看到最终的 filesCompleted / bytesDone。
+func (t *Tracker) completeLocked(name string, streamed, size int64) {
 	t.filesDone++
 	t.bytesDone += size
 	t.inFlight -= streamed
+	if t.filesDone == t.filesTotal {
+		t.reporter.Flush(t.snapshotLocked(name))
+	}
+}
+
+func (t *Tracker) snapshotLocked(currentFile string) Progress {
+	return Progress{
+		TransferID:     t.transferID,
+		Status:         StatusProgress,
+		CurrentFile:    currentFile,
+		FilesCompleted: t.filesDone,
+		FilesTotal:     t.filesTotal,
+		BytesDone:      t.bytesDone + t.inFlight,
+		BytesTotal:     t.bytesTotal,
+	}
 }
 
 // TrackedFile 是一次传输里的一个文件。
@@ -196,7 +221,7 @@ func (f *TrackedFile) Done() {
 	t := f.tracker
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.completeLocked(f.done, f.size)
+	t.completeLocked(f.name, f.done, f.size)
 }
 
 func (f *TrackedFile) advance(n int) {
@@ -205,15 +230,7 @@ func (f *TrackedFile) advance(n int) {
 	defer t.mu.Unlock()
 	f.done += int64(n)
 	t.inFlight += int64(n)
-	t.reporter.Report(Progress{
-		TransferID:     t.transferID,
-		Status:         StatusProgress,
-		CurrentFile:    f.name,
-		FilesCompleted: t.filesDone,
-		FilesTotal:     t.filesTotal,
-		BytesDone:      t.bytesDone + t.inFlight,
-		BytesTotal:     t.bytesTotal,
-	})
+	t.reporter.Report(t.snapshotLocked(f.name))
 }
 
 // TrackedReader 是 TrackedFile 包裹出的源 reader。
@@ -222,6 +239,9 @@ type TrackedReader struct {
 	r    io.Reader
 	file *TrackedFile
 }
+
+// Done 把源文件按其大小计入已完成量，单文件传输成功后调用。
+func (r *TrackedReader) Done() { r.file.Done() }
 
 // Size 返回当前文件的大小。pkg/sftp 的 ReadFrom 依赖它决定并发写窗口，
 // 返回整次传输总量会让它按错误的长度切分。
@@ -287,6 +307,15 @@ func Copy(ctx context.Context, transferID string, dst io.Writer, src io.Reader, 
 			})
 		}
 		if readErr == io.EOF {
+			reporter.Flush(Progress{
+				TransferID:     transferID,
+				Status:         StatusProgress,
+				CurrentFile:    currentFile,
+				FilesCompleted: 1,
+				FilesTotal:     1,
+				BytesDone:      bytesDone,
+				BytesTotal:     totalBytes,
+			})
 			return nil
 		}
 		if readErr != nil {

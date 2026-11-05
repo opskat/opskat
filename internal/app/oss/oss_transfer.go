@@ -152,7 +152,11 @@ func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localP
 		pr := transfer.NewProgressReader(ctx, transferID, filepath.Base(localPath), f, info.Size(), func(p transfer.Progress) {
 			o.emitProgress(transferID, p)
 		})
-		return o.service.PutObject(ctx, assetID, bucket, key, pr, info.Size(), contentTypeFor(localPath))
+		if err := o.service.PutObject(ctx, assetID, bucket, key, pr, info.Size(), contentTypeFor(localPath)); err != nil {
+			return err
+		}
+		pr.Done()
+		return nil
 	})
 }
 

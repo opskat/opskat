@@ -427,7 +427,11 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 	}
 
 	file := transfer.NewTracker(transferID, 1, stat.Size(), onProgress).File(filepath.Base(remotePath), stat.Size())
-	return s.uploadFile(ctx, file, sftpAtomicClient{client: sftpClient}, localFile, remotePath, stat.Size())
+	if err := s.uploadFile(ctx, file, sftpAtomicClient{client: sftpClient}, localFile, remotePath, stat.Size()); err != nil {
+		return err
+	}
+	file.Done()
+	return nil
 }
 
 // Download 下载单个文件（并发读 + 本地原子替换）
@@ -460,7 +464,11 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 	}
 
 	file := transfer.NewTracker(transferID, 1, stat.Size(), onProgress).File(filepath.Base(remotePath), stat.Size())
-	return s.downloadFile(ctx, file, remoteFile, localPath)
+	if err := s.downloadFile(ctx, file, remoteFile, localPath); err != nil {
+		return err
+	}
+	file.Done()
+	return nil
 }
 
 // dirTransferWorkers 是目录上传/下载同时在传的文件数上限。小文件的耗时几乎全是往返等待
