@@ -2,7 +2,6 @@ package sftp_svc
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -42,18 +41,4 @@ func TestDownloadDirLastProgressCarriesExactTotals(t *testing.T) {
 	onProgress, got := collectProgress()
 	require.NoError(t, service.DownloadDir(context.Background(), "t1", session, sftpiotest.RemotePath(filepath.Join(root, "remote")), filepath.Join(t.TempDir(), "dst"), onProgress))
 	assertLastProgressIsExact(t, *got, len(want), treeBytes(want))
-}
-
-func TestSingleFileTransferLastProgressCarriesExactTotals(t *testing.T) {
-	service, session, root := newTestService(t)
-	local := filepath.Join(t.TempDir(), "a.bin")
-	require.NoError(t, os.WriteFile(local, make([]byte, 200*1024), 0o644))
-
-	onProgress, got := collectProgress()
-	require.NoError(t, service.Upload(context.Background(), "t1", session, local, sftpiotest.RemotePath(filepath.Join(root, "a.bin")), onProgress))
-	assertLastProgressIsExact(t, *got, 1, 200*1024)
-
-	onProgress, got = collectProgress()
-	require.NoError(t, service.Download(context.Background(), "t2", session, sftpiotest.RemotePath(filepath.Join(root, "a.bin")), filepath.Join(t.TempDir(), "b.bin"), onProgress))
-	assertLastProgressIsExact(t, *got, 1, 200*1024)
 }

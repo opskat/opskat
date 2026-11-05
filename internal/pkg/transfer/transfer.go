@@ -240,9 +240,6 @@ type TrackedReader struct {
 	file *TrackedFile
 }
 
-// Done 把源文件按其大小计入已完成量，单文件传输成功后调用。
-func (r *TrackedReader) Done() { r.file.Done() }
-
 // Size 返回当前文件的大小。pkg/sftp 的 ReadFrom 依赖它决定并发写窗口，
 // 返回整次传输总量会让它按错误的长度切分。
 func (r *TrackedReader) Size() int64 { return r.file.size }
@@ -307,15 +304,6 @@ func Copy(ctx context.Context, transferID string, dst io.Writer, src io.Reader, 
 			})
 		}
 		if readErr == io.EOF {
-			reporter.Flush(Progress{
-				TransferID:     transferID,
-				Status:         StatusProgress,
-				CurrentFile:    currentFile,
-				FilesCompleted: 1,
-				FilesTotal:     1,
-				BytesDone:      bytesDone,
-				BytesTotal:     totalBytes,
-			})
 			return nil
 		}
 		if readErr != nil {

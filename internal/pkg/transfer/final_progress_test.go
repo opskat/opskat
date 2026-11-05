@@ -48,22 +48,3 @@ func TestTrackerDoesNotFlushCompleteTotalsBeforeAllFilesDone(t *testing.T) {
 		assert.Less(t, p.FilesCompleted, 2)
 	}
 }
-
-func TestCopyFlushesExactTotalsInsideThrottleWindow(t *testing.T) {
-	var got []Progress
-	// 3 个分片落在首条 progress 的节流窗口内（真实时钟下毫秒级完成）。
-	src := bytes.NewReader(make([]byte, 96*1024))
-	require.NoError(t, Copy(context.Background(), "c", io.Discard, src, 96*1024, "f", func(p Progress) { got = append(got, p) }))
-	require.NotEmpty(t, got)
-	last := got[len(got)-1]
-	assert.EqualValues(t, 96*1024, last.BytesDone)
-	assert.Equal(t, 1, last.FilesCompleted)
-}
-
-func TestCopyErrorDoesNotReportComplete(t *testing.T) {
-	var got []Progress
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.Error(t, Copy(ctx, "c", io.Discard, bytes.NewReader(make([]byte, 10)), 10, "f", func(p Progress) { got = append(got, p) }))
-	assert.Empty(t, got)
-}
