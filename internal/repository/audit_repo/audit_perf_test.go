@@ -45,13 +45,34 @@ func seedLegacyAuditDB(t *testing.T) (gdb *gorm.DB, upgrade func()) {
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(dataDir, "opskat.db")), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, migrations.RunMigrations(gdb, dataDir))
-	require.NoError(t, gdb.Exec(fmt.Sprintf(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < %d)
-INSERT INTO audit_logs (source, tool_name, session_id, createtime)
+	// Bulk-load fast: one connection with relaxed durability, and the
+	// pre-existing secondary indexes built once after the insert instead of
+	// maintained per row.
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, gdb.Exec("PRAGMA synchronous = OFF").Error)
+	require.NoError(t, gdb.Exec("PRAGMA journal_mode = MEMORY").Error)
+	legacyIndexes := map[string]string{
+		"idx_audit_source":          "source",
+		"idx_audit_asset_id":        "asset_id",
+		"idx_audit_conversation_id": "conversation_id",
+		"idx_audit_session_id":      "session_id",
+		"idx_audit_createtime":      "createtime",
+	}
+	for name := range legacyIndexes {
+		require.NoError(t, gdb.Exec("DROP INDEX IF EXISTS "+name).Error)
+	}
+	require.NoError(t, gdb.Exec(fmt.Sprintf(`INSERT INTO audit_logs (source, tool_name, session_id, createtime)
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < %d)
 SELECT CASE i %% 20 WHEN 0 THEN 'opsctl' WHEN 1 THEN 'ui' ELSE 'ai' END,
        'exec',
        CASE WHEN i %% 10 = 0 THEN '' ELSE 'sess-' || (i %% 4000) END,
        %d - (%d - i) * (60 * %d) / %d
 FROM n`, perfRows, perfEnd, perfRows, perfDay, perfRows)).Error)
+	for name, col := range legacyIndexes {
+		require.NoError(t, gdb.Exec("CREATE INDEX "+name+" ON audit_logs ("+col+")").Error)
+	}
 	for _, stmt := range []string{
 		"DROP INDEX IF EXISTS idx_audit_session_createtime",
 		"DROP INDEX IF EXISTS idx_audit_source_createtime",
@@ -62,8 +83,6 @@ FROM n`, perfRows, perfEnd, perfRows, perfDay, perfRows)).Error)
 	if gdb.Migrator().HasTable("sqlite_stat1") {
 		require.NoError(t, gdb.Exec("DELETE FROM sqlite_stat1").Error)
 	}
-	sqlDB, err := gdb.DB()
-	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return gdb, func() { require.NoError(t, migrations.RunMigrations(gdb, dataDir)) }
 }
