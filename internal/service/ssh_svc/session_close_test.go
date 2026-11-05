@@ -223,3 +223,55 @@ func TestSession_HealthyCloseKeepsSharedClientForSibling(t *testing.T) {
 		t.Fatal("last release did not close the shared client")
 	}
 }
+
+// Through a jump host the target connection runs over a channel of the jump
+// client, so the transport that stops draining is the jump host's TCP socket.
+func TestSession_CloseWithWriteBlockedOnFrozenJumpHost(t *testing.T) {
+	jump := newJumpForwardServer(t, &ssh.ServerConfig{NoClientAuth: true})
+	jumpClient, conn := dialFreezableClient(t, jump.addr)
+	targetAddr := startEchoShellServer(t)
+	tunnel, err := jumpClient.Dial("tcp", targetAddr)
+	require.NoError(t, err)
+	c, chans, reqs, err := ssh.NewClientConn(tunnel, targetAddr, &ssh.ClientConfig{
+		User:            "u",
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	require.NoError(t, err)
+	client := ssh.NewClient(c, chans, reqs)
+	m := NewManager()
+	shared := newSharedClient(client, []io.Closer{jumpClient}, 0)
+	sess, err := m.createSession(shared, 1, 80, 24, func(string, []byte) {}, nil, nil, "")
+	require.NoError(t, err)
+
+	conn.frozen.Store(true)
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- sess.Write(bytes.Repeat([]byte("x"), 256<<10)) }()
+	select {
+	case <-conn.blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write never reached the jump host transport")
+	}
+
+	start := time.Now()
+	closed := make(chan struct{})
+	go func() {
+		m.Disconnect(sess.ID)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(sessionCloseTimeout + time.Second):
+		t.Fatalf("Disconnect still blocked after %s while a Write is stuck on the jump host transport", time.Since(start))
+	}
+	select {
+	case err := <-writeDone:
+		assert.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("blocked Write was not released by closing the connection")
+	}
+	select {
+	case <-clientDone(jumpClient):
+	case <-time.After(time.Second):
+		t.Fatal("wedged jump host connection was not closed")
+	}
+}

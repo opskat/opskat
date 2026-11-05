@@ -62,7 +62,7 @@ func (sc *sharedClient) release() {
 	defer sc.mu.Unlock()
 	sc.refCount--
 	if sc.refCount <= 0 {
-		sc.closeLocked()
+		sc.closeLocked(false)
 	}
 }
 
@@ -72,14 +72,21 @@ func (sc *sharedClient) release() {
 func (sc *sharedClient) forceClose() {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	sc.closeLocked()
+	sc.closeLocked(true)
 }
 
-func (sc *sharedClient) closeLocked() {
+// closeLocked closes the client, its keepalive and the jump host chain.
+// outermostFirst closes the chain (proxy socket, then jump clients) before the
+// client: through jump hosts client.Close sends channel-close over the jump
+// transport, which queues behind a write stuck on the wedged outer socket.
+func (sc *sharedClient) closeLocked(outermostFirst bool) {
 	if sc.closed {
 		return
 	}
 	sc.closed = true
+	if outermostFirst {
+		sc.closeChainLocked()
+	}
 	// Close the client before joining the keepalive goroutine: SendRequest may
 	// be blocked on network I/O, and client.Close is what unblocks it.
 	if err := sc.client.Close(); err != nil {
@@ -88,6 +95,12 @@ func (sc *sharedClient) closeLocked() {
 	if sc.stopKeepalive != nil {
 		sc.stopKeepalive()
 	}
+	if !outermostFirst {
+		sc.closeChainLocked()
+	}
+}
+
+func (sc *sharedClient) closeChainLocked() {
 	for _, c := range sc.closers {
 		if err := c.Close(); err != nil {
 			logger.Default().Warn("close jump host resource", zap.Error(err))
