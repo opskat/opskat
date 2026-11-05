@@ -43,6 +43,7 @@ import {
   GetStarterQuery,
   GetTruncateTableStatements,
 } from "../../../wailsjs/go/query/Query";
+import { useShallow } from "zustand/shallow";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
@@ -142,8 +143,8 @@ export function DriverUnavailableNotice({ driver }: { driver: string | undefined
 
 export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const { t } = useTranslation();
+  const dbState = useQueryStore((s) => s.dbStates[tabId]);
   const {
-    dbStates,
     loadDatabases,
     toggleDbExpand,
     toggleSchemaExpand,
@@ -152,7 +153,18 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     openSqlTab,
     openCreateTableTab,
     refreshTables,
-  } = useQueryStore();
+  } = useQueryStore(
+    useShallow((s) => ({
+      loadDatabases: s.loadDatabases,
+      toggleDbExpand: s.toggleDbExpand,
+      toggleSchemaExpand: s.toggleSchemaExpand,
+      openTableTab: s.openTableTab,
+      openDesignerTab: s.openDesignerTab,
+      openSqlTab: s.openSqlTab,
+      openCreateTableTab: s.openCreateTableTab,
+      refreshTables: s.refreshTables,
+    }))
+  );
   const treeRef = useRef<HTMLDivElement>(null);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
@@ -179,7 +191,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
   const openNewTable = (target: CreateTableTarget) => openCreateTableTab(tabId, target.database, target.schema);
 
-  const dbState = dbStates[tabId];
   const [filter, setFilter] = useState("");
   const [showFilter, setShowFilter] = useState(false);
   // 选中集用 "db.table" 作键;顺序即用户可见的树顺序,批量操作照此执行。

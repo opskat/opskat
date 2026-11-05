@@ -32,6 +32,7 @@ import {
   resolveExternalEditorTarget,
   useExternalEditStore,
 } from "@/stores/externalEditStore";
+import { useShallow } from "zustand/shallow";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { findEditorTabId, openRemoteFileEditorTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { ExternalEditCompareWorkbench } from "./external-edit/CompareWorkbench";
@@ -174,7 +175,7 @@ export function FileManagerPanel({
   const startUploadFile = useSFTPStore((s) => s.startUploadFile);
   const startDownload = useSFTPStore((s) => s.startDownload);
   const startDownloadDir = useSFTPStore((s) => s.startDownloadDir);
-  const allTransfers = useSFTPStore((s) => s.transfers);
+  const tabTransfers = useSFTPStore(useShallow((s) => s.getTabTransfers(tabId)));
   const allExternalSessions = useExternalEditStore((s) => s.sessions);
   const pendingConflict = useExternalEditStore((s) => s.pendingConflict);
   const dismissCompare = useExternalEditStore((s) => s.dismissCompare);
@@ -199,10 +200,6 @@ export function FileManagerPanel({
   const safeSelectedError = isExternalEditClipboardResidueSession(selectedError) ? null : selectedError;
 
   const transferTarget = useMemo(() => ({ tabId, sessionId }), [tabId, sessionId]);
-  const tabTransfers = useMemo(
-    () => Object.values(allTransfers).filter((transfer) => transfer.tabId === tabId),
-    [allTransfers, tabId]
-  );
   const attentionItems = useMemo(
     () => buildExternalEditAttentionItems(allExternalSessions).filter((entry) => entry.session.assetId === assetId),
     [allExternalSessions, assetId]

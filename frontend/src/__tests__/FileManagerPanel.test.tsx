@@ -18,6 +18,7 @@ import {
 } from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../wailsjs/go/models";
+import { profiled } from "./renderCount";
 import { formatBytes, formatDate, planChainRender } from "../components/terminal/file-manager/utils";
 import {
   OpenExternalEdit,
@@ -378,6 +379,39 @@ describe("FileManagerPanel", () => {
     expect(onWidthChange).toHaveBeenCalledTimes(1);
     expect(onWidthChange).toHaveBeenCalledWith(330);
     expect(document.body.style.cursor).toBe("");
+  });
+
+  it("does not re-render on another tab's transfer progress", async () => {
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+    const { tree, counter } = profiled(
+      <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />
+    );
+    render(tree);
+    await screen.findByText("demo.txt");
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    const before = counter.commits;
+
+    act(() => {
+      useSFTPStore.setState({
+        transfers: {
+          other: {
+            transferId: "other",
+            tabId: "tab2",
+            sessionId: "s2",
+            direction: "upload",
+            currentFile: "b.bin",
+            filesCompleted: 0,
+            filesTotal: 1,
+            bytesDone: 10,
+            bytesTotal: 100,
+            speed: 1,
+            status: "active",
+          },
+        },
+      });
+    });
+
+    expect(counter.commits).toBe(before);
   });
 
   it("copies a file address from the file context menu", async () => {

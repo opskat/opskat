@@ -260,8 +260,10 @@ function App() {
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<group_entity.Group | null>(null);
 
-  const { selectAsset, deleteAsset, getAsset } = useAssetStore();
-  const { connect } = useTerminalStore();
+  const selectAsset = useAssetStore((s) => s.selectAsset);
+  const deleteAsset = useAssetStore((s) => s.deleteAsset);
+  const getAsset = useAssetStore((s) => s.getAsset);
+  const connect = useTerminalStore((s) => s.connect);
 
   const handleAddAsset = (groupId?: number) => {
     setEditingAsset(null);
