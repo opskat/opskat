@@ -1051,3 +1051,72 @@ func TestBuildAuthMethods(t *testing.T) {
 		})
 	})
 }
+
+// chunkStdout 每次 Read 只吐出一个块，块读完后返回 io.EOF（远端关闭通道）。
+type chunkStdout struct{ chunks [][]byte }
+
+func (r *chunkStdout) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[0])
+	r.chunks = r.chunks[1:]
+	return n, nil
+}
+
+// readOutput 的攒批契约：dirsync 标记在入缓冲前就被过滤掉，其余字节内容与顺序不变；
+// 大量小块被合并成少数几次 onData；EOF 时连同解析器残留的半截前缀一起在 onClosed 之前送达。
+func TestManager_ReadOutputBatchesFilteredOutputAndFlushesTailBeforeClose(t *testing.T) {
+	const n = 500
+	var want strings.Builder
+	stdout := &chunkStdout{}
+	for i := 0; i < n; i++ {
+		line := fmt.Sprintf("row %03d\r\n", i)
+		want.WriteString(line)
+		stdout.chunks = append(stdout.chunks, []byte(line))
+		if i == n/2 {
+			// 合法的 init 标记：必须被 filterOutput 吃掉，不能出现在终端输出里。
+			stdout.chunks = append(stdout.chunks, []byte(syncSequencePrefix+"real-token:init:pid:4242"+syncSequenceTerm))
+		}
+	}
+	// 结尾是一段像 sync 前缀开头的残留：filterOutput 把它留在 parserRemainder，EOF 时要原样补发。
+	partial := syncSequencePrefix[:3]
+	want.WriteString("bye" + partial)
+	stdout.chunks = append(stdout.chunks, []byte("bye"+partial))
+
+	var mu sync.Mutex
+	var calls int
+	var got strings.Builder
+	closed := make(chan string, 1)
+	sess := newTestSyncSession()
+	sess.ID = "ssh-batch"
+	sess.stdout = stdout
+	sess.shared = &sharedClient{refCount: 2} // release 不会触到 nil client
+	sess.syncBootstrapCh = make(chan struct{})
+	sess.onData = func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		got.Write(b)
+	}
+	sess.onClosed = func(string) {
+		mu.Lock()
+		defer mu.Unlock()
+		closed <- got.String()
+	}
+	mgr := NewManager()
+	mgr.sessions.Store(sess.ID, sess)
+	mgr.readOutput(sess)
+
+	select {
+	case atClose := <-closed:
+		assert.Equal(t, want.String(), atClose, "filtered bytes, in order, must be delivered before onClosed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("EOF did not trigger onClosed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("onData calls for %d small reads: %d", n, calls)
+	assert.Less(t, calls, n/10, "small SSH reads must be coalesced")
+	assert.Equal(t, 4242, sess.shellPID, "the init marker must still reach filterOutput")
+}

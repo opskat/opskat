@@ -17,6 +17,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/host_key_svc"
@@ -352,19 +353,22 @@ func (s *Session) start(onData func([]byte), onClose func(), onEnd func()) {
 	})
 }
 
+// vncBatchWindow 比终端的攒批窗口短:RFB 帧更新对延迟更敏感,只合并同一刻到达的小块。
+const vncBatchWindow = 4 * time.Millisecond
+
 func (s *Session) readPump() {
+	batch := streambatch.New(vncBatchWindow, streambatch.DefaultMaxBytes, s.onData)
 	buf := make([]byte, 32768)
 	for {
 		n, err := s.conn.Read(buf)
-		if n > 0 && s.onData != nil {
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			s.onData(chunk)
+		if n > 0 {
+			batch.Add(buf[:n])
 		}
 		if err != nil {
 			break
 		}
 	}
+	batch.Close()
 	s.close()
 	if s.onEnd != nil {
 		s.onEnd()

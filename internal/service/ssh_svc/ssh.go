@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 	"github.com/opskat/opskat/internal/pkg/sshtuning"
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/sshagent"
 
@@ -1055,8 +1056,8 @@ func parsePrivateKey(data []byte, passphrase string) (ssh.Signer, error) {
 	return nil, err
 }
 
-// readOutput 持续读取终端输出并回调
-// 使用 timer 合并输出，减少高频 EventsEmit 调用导致前端事件队列阻塞
+// readOutput 持续读取终端输出，滤掉 dirsync 标记后经 streambatch 攒批回调，
+// 减少高频 EventsEmit 调用导致前端事件队列阻塞。
 func (m *Manager) readOutput(sess *Session) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1068,74 +1069,33 @@ func (m *Manager) readOutput(sess *Session) {
 		m.sessions.Delete(sess.ID)
 	}()
 
-	var pending bytes.Buffer
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
+	batch := streambatch.New(streambatch.DefaultWindow, streambatch.DefaultMaxBytes, sess.onData)
+	// 后注册先执行:尾部数据先于 sess.Close(→ onClosed)送达。
+	defer batch.Close()
 
-	flush := func() {
-		if pending.Len() > 0 && sess.onData != nil {
-			data := make([]byte, pending.Len())
-			copy(data, pending.Bytes())
-			pending.Reset()
-			sess.onData(data)
-		}
-	}
-
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	readCh := make(chan readResult, 4)
-
-	go func() {
-		buf := make([]byte, 32768)
-		for {
-			n, err := sess.stdout.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				readCh <- readResult{data: data}
-			}
-			if err != nil {
-				readCh <- readResult{err: err}
-				return
-			}
-		}
-	}()
-
+	buf := make([]byte, 32768)
 	for {
-		select {
-		case r := <-readCh:
-			if r.err != nil {
-				if len(sess.parserRemainder) > 0 {
-					pending.Write(sess.parserRemainder)
-					sess.parserRemainder = nil
-				}
-				flush()
-				// Log the disconnect reason. io.EOF is the remote closing the
-				// channel cleanly (user `exit`, or a server-side idle logout
-				// such as sshd ClientAlive*/shell TMOUT, which client keepalive
-				// cannot prevent). Anything else (reset/timeout) is an abnormal
-				// transport drop. This is the one place that knows *why* a
-				// session ended — without it diagnosis is blind.
-				if errors.Is(r.err, io.EOF) {
-					logger.Default().Info("ssh session ended: remote closed channel",
-						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
-				} else {
-					logger.Default().Warn("ssh session dropped: transport read error",
-						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(r.err))
-				}
-				return
+		n, err := sess.stdout.Read(buf)
+		if n > 0 {
+			batch.Add(sess.filterOutput(buf[:n]))
+		}
+		if err != nil {
+			batch.Add(sess.parserRemainder)
+			sess.parserRemainder = nil
+			// Log the disconnect reason. io.EOF is the remote closing the
+			// channel cleanly (user `exit`, or a server-side idle logout
+			// such as sshd ClientAlive*/shell TMOUT, which client keepalive
+			// cannot prevent). Anything else (reset/timeout) is an abnormal
+			// transport drop. This is the one place that knows *why* a
+			// session ended — without it diagnosis is blind.
+			if errors.Is(err, io.EOF) {
+				logger.Default().Info("ssh session ended: remote closed channel",
+					zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
+			} else {
+				logger.Default().Warn("ssh session dropped: transport read error",
+					zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(err))
 			}
-			filtered := sess.filterOutput(r.data)
-			if len(filtered) > 0 {
-				pending.Write(filtered)
-			}
-			if pending.Len() >= 32*1024 {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
+			return
 		}
 	}
 }

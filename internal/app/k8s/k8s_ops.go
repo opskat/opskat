@@ -15,6 +15,7 @@ import (
 	k8spkg "github.com/opskat/opskat/internal/pkg/k8s"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -162,24 +163,39 @@ func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 		defer cancel()
 		defer k.logStreams.Delete(streamID)
 
-		buf := make([]byte, 4096)
-		for {
-			n, err := reader.Read(buf)
-			if n > 0 {
-				data := base64.StdEncoding.EncodeToString(buf[:n])
-				wailsRuntime.EventsEmit(k.ctx, "k8s:log:"+streamID, data)
-			}
-			if err != nil {
-				if err != io.EOF {
-					wailsRuntime.EventsEmit(k.ctx, "k8s:logerr:"+streamID, err.Error())
-				}
-				wailsRuntime.EventsEmit(k.ctx, "k8s:logend:"+streamID, streamID)
-				return
-			}
-		}
+		pumpPodLogs(reader, streamID, func(event string, payload any) {
+			wailsRuntime.EventsEmit(k.ctx, event, payload)
+		})
 	}()
 
 	return streamID, nil
+}
+
+// podLogMaxBatchBytes 把单个 k8s:log 事件保持在原先单次 Read 的 4KB 量级：前端按事件块数
+// （MAX_LOG_CHUNKS）保留日志历史，批太大会放大它的内存占用。
+const podLogMaxBatchBytes = 4096
+
+// pumpPodLogs 把日志流读到 EOF/出错为止，攒批后按 k8s:log 事件发给前端；
+// 结束时先交付尾部数据，再发 k8s:logerr（非 EOF）与 k8s:logend。
+func pumpPodLogs(reader io.Reader, streamID string, emit func(event string, payload any)) {
+	batch := streambatch.New(streambatch.DefaultWindow, podLogMaxBatchBytes, func(data []byte) {
+		emit("k8s:log:"+streamID, base64.StdEncoding.EncodeToString(data))
+	})
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			batch.Add(buf[:n])
+		}
+		if err != nil {
+			batch.Close()
+			if err != io.EOF {
+				emit("k8s:logerr:"+streamID, err.Error())
+			}
+			emit("k8s:logend:"+streamID, streamID)
+			return
+		}
+	}
 }
 
 func (k *K8s) StopK8sPodLogs(streamID string) {
