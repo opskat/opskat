@@ -35,6 +35,7 @@ func TestTrackerFlushesExactTotalsWhenLastFileCompletesInsideThrottleWindow(t *t
 }
 
 func TestTrackerDoesNotFlushCompleteTotalsBeforeAllFilesDone(t *testing.T) {
+	// 非最后一个文件完成时仍受节流约束：时钟不动，Done 不得越过 100ms 窗口多发一条 progress。
 	clock := func() time.Time { return time.Unix(0, 0) }
 	var got []Progress
 	tr := newTracker("t", 2, 20, func(p Progress) { got = append(got, p) }, clock)
@@ -42,9 +43,8 @@ func TestTrackerDoesNotFlushCompleteTotalsBeforeAllFilesDone(t *testing.T) {
 	f := tr.File("a", 10)
 	_, err := io.Copy(io.Discard, struct{ io.Reader }{f.Reader(context.Background(), bytes.NewReader(make([]byte, 10)))})
 	require.NoError(t, err)
+	before := len(got)
 	f.Done()
 
-	for _, p := range got {
-		assert.Less(t, p.FilesCompleted, 2)
-	}
+	assert.Len(t, got, before, "未传完全部文件时，Done 不应绕过节流补发 progress")
 }

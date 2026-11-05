@@ -45,8 +45,8 @@ func GenerateID(prefix string) string {
 const defaultMinInterval = 100 * time.Millisecond
 
 // Reporter 把高频的字节进度收敛成"每 100ms 一条 + 整体平均速率"的进度事件。
-// 每个传输持有独立 Reporter；同一传输的 Report 调用必须串行（拷贝循环 / 单链 await
-// 天然满足），因此内部不加锁。"done"/"error" 等终态不受节流影响、立即发出。
+// 每个传输持有独立 Reporter；同一传输的 Report / flush 调用必须串行（拷贝循环 / 单链 await
+// / Tracker 的锁天然满足），因此内部不加锁。"done"/"error" 等终态不受节流影响、立即发出。
 type Reporter struct {
 	emit        func(Progress)
 	now         func() time.Time
@@ -81,12 +81,12 @@ func (r *Reporter) Report(p Progress) {
 	if !r.lastEmit.IsZero() && r.now().Sub(r.lastEmit) < r.minInterval {
 		return
 	}
-	r.Flush(p)
+	r.flush(p)
 }
 
-// Flush 立即发出一条 "progress"（补齐平均速率），不受节流约束。传输成功结束时
-// 用它把最终的精确总量送达前端：节流可能丢掉最后一条常规 progress，而终态 done 不带计数。
-func (r *Reporter) Flush(p Progress) {
+// flush 立即发出一条 "progress"（补齐平均速率），不受节流约束。Tracker 在最后一个文件
+// 完成时用它把精确总量送达前端：节流可能丢掉最后一条常规 progress，而终态 done 不带计数。
+func (r *Reporter) flush(p Progress) {
 	now := r.now()
 	r.lastEmit = now
 
@@ -173,14 +173,15 @@ func (t *Tracker) FileDone(size int64) {
 	t.completeLocked(name, streamed, size)
 }
 
-// completeLocked 计入一个已完成的文件。最后一个文件完成即整次传输成功，此时无视节流
-// 补发一条带精确总量的 progress，保证前端在收到 done 前看到最终的 filesCompleted / bytesDone。
+// completeLocked 计入一个已完成的文件。最后一个文件完成时无视节流补发一条带精确总量的
+// progress，保证前端在收到终态前看到最终的 filesCompleted / bytesDone。调用方随后仍可能
+// 因取消或收尾失败返回错误，所以这条 progress 只表示"文件都传完了"，不代表整次传输成功。
 func (t *Tracker) completeLocked(name string, streamed, size int64) {
 	t.filesDone++
 	t.bytesDone += size
 	t.inFlight -= streamed
 	if t.filesDone == t.filesTotal {
-		t.reporter.Flush(t.snapshotLocked(name))
+		t.reporter.flush(t.snapshotLocked(name))
 	}
 }
 
