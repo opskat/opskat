@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 	"github.com/opskat/opskat/internal/pkg/sshtuning"
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/sshagent"
 
@@ -60,20 +61,49 @@ func (sc *sharedClient) release() {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.refCount--
-	if sc.refCount <= 0 && !sc.closed {
-		sc.closed = true
-		// Close the client before joining the keepalive goroutine: SendRequest may
-		// be blocked on network I/O, and client.Close is what unblocks it.
-		if err := sc.client.Close(); err != nil {
-			logger.Default().Warn("close client", zap.Error(err))
-		}
-		if sc.stopKeepalive != nil {
-			sc.stopKeepalive()
-		}
-		for _, c := range sc.closers {
-			if err := c.Close(); err != nil {
-				logger.Default().Warn("close jump host resource", zap.Error(err))
-			}
+	if sc.refCount <= 0 {
+		sc.closeLocked(false)
+	}
+}
+
+// forceClose closes the connection even though other sessions still reference
+// it: used when the transport has stopped draining. Those sessions then end
+// through their read loop and still call release, which only drops the count.
+func (sc *sharedClient) forceClose() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.closeLocked(true)
+}
+
+// closeLocked closes the client, its keepalive and the jump host chain.
+// outermostFirst closes the chain (proxy socket, then jump clients) before the
+// client: through jump hosts client.Close sends channel-close over the jump
+// transport, which queues behind a write stuck on the wedged outer socket.
+func (sc *sharedClient) closeLocked(outermostFirst bool) {
+	if sc.closed {
+		return
+	}
+	sc.closed = true
+	if outermostFirst {
+		sc.closeChainLocked()
+	}
+	// Close the client before joining the keepalive goroutine: SendRequest may
+	// be blocked on network I/O, and client.Close is what unblocks it.
+	if err := sc.client.Close(); err != nil {
+		logger.Default().Warn("close client", zap.Error(err))
+	}
+	if sc.stopKeepalive != nil {
+		sc.stopKeepalive()
+	}
+	if !outermostFirst {
+		sc.closeChainLocked()
+	}
+}
+
+func (sc *sharedClient) closeChainLocked() {
+	for _, c := range sc.closers {
+		if err := c.Close(); err != nil {
+			logger.Default().Warn("close jump host resource", zap.Error(err))
 		}
 	}
 }
@@ -86,7 +116,8 @@ type Session struct {
 	session        *ssh.Session
 	stdin          io.WriteCloser
 	stdout         io.Reader
-	mu             sync.Mutex
+	mu             sync.Mutex // guards closed only; never held across network I/O
+	writeMu        sync.Mutex // serializes stdin writes; Close does not take it
 	closed         bool
 	onData         func(data []byte)      // 终端输出回调
 	onClosed       func(sessionID string) // 会话关闭回调
@@ -125,15 +156,15 @@ type Session struct {
 
 // Write 向终端写入数据（用户输入）
 func (s *Session) Write(data []byte) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	s.writeMu.Lock()
+	if s.IsClosed() {
+		s.writeMu.Unlock()
 		return fmt.Errorf("session is closed")
 	}
 	hasNewline := bytes.ContainsAny(data, "\r\n")
 	s.markUserInput(data)
 	_, err := s.stdin.Write(data)
-	s.mu.Unlock()
+	s.writeMu.Unlock()
 	if err == nil && hasNewline {
 		s.ensureSyncProbe()
 	}
@@ -157,31 +188,57 @@ func (s *Session) submitStartupCommand(command string) error {
 
 // Resize 调整终端尺寸
 func (s *Session) Resize(cols, rows int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	if s.IsClosed() {
 		return fmt.Errorf("session is closed")
 	}
 	return s.session.WindowChange(rows, cols)
 }
 
+// sessionCloseTimeout bounds the polite channel close. Sending channel-close
+// normally takes microseconds; it only waits this long when the transport has
+// stopped draining (remote frozen, send buffer full), which is when it would
+// otherwise hang until keepalive gives up (measured: ~113 s).
+const sessionCloseTimeout = 2 * time.Second
+
 // Close 关闭会话
 func (s *Session) Close() {
 	s.failPendingDirectoryChange(dirsync.Error(dirSyncErrSessionClosed))
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return
 	}
 	s.closed = true
+	s.mu.Unlock()
 	if s.session != nil {
-		if err := s.session.Close(); err != nil {
-			logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
-		}
+		s.closeChannel()
 	}
 	s.shared.release()
 	if s.onClosed != nil {
 		go s.onClosed(s.ID)
+	}
+}
+
+// closeChannel sends the polite channel close. It queues behind any write
+// already stuck on the transport, so after sessionCloseTimeout the whole
+// connection is force-closed: that fails the stuck write and the pending close,
+// and sibling panes on the same connection end with it.
+func (s *Session) closeChannel() {
+	done := make(chan error, 1)
+	go func() { done <- s.session.Close() }()
+	timer := time.NewTimer(sessionCloseTimeout)
+	defer timer.Stop()
+	var err error
+	select {
+	case err = <-done:
+	case <-timer.C:
+		logger.Default().Warn("ssh channel close timed out: transport not draining, force-closing connection",
+			zap.String("sessionID", s.ID), zap.Int64("assetID", s.AssetID), zap.Duration("timeout", sessionCloseTimeout))
+		s.shared.forceClose()
+		err = <-done
+	}
+	if err != nil {
+		logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
 	}
 }
 
@@ -213,9 +270,9 @@ func (s *Session) writeInternal(data []byte) error {
 // (EnableSync, so it can drop the pattern on a failed enable) use this plus
 // queueInternalEchoSuppression directly.
 func (s *Session) writeStdin(data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.IsClosed() {
 		return fmt.Errorf("session is closed")
 	}
 	_, err := s.stdin.Write(data)
@@ -1055,8 +1112,8 @@ func parsePrivateKey(data []byte, passphrase string) (ssh.Signer, error) {
 	return nil, err
 }
 
-// readOutput 持续读取终端输出并回调
-// 使用 timer 合并输出，减少高频 EventsEmit 调用导致前端事件队列阻塞
+// readOutput 持续读取终端输出，滤掉 dirsync 标记后经 streambatch 攒批回调，
+// 减少高频 EventsEmit 调用导致前端事件队列阻塞。
 func (m *Manager) readOutput(sess *Session) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1068,74 +1125,33 @@ func (m *Manager) readOutput(sess *Session) {
 		m.sessions.Delete(sess.ID)
 	}()
 
-	var pending bytes.Buffer
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
+	batch := streambatch.New(streambatch.DefaultWindow, streambatch.DefaultMaxBytes, sess.onData)
+	// 后注册先执行:尾部数据先于 sess.Close(→ onClosed)送达。
+	defer batch.Close()
 
-	flush := func() {
-		if pending.Len() > 0 && sess.onData != nil {
-			data := make([]byte, pending.Len())
-			copy(data, pending.Bytes())
-			pending.Reset()
-			sess.onData(data)
-		}
-	}
-
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	readCh := make(chan readResult, 4)
-
-	go func() {
-		buf := make([]byte, 32768)
-		for {
-			n, err := sess.stdout.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				readCh <- readResult{data: data}
-			}
-			if err != nil {
-				readCh <- readResult{err: err}
-				return
-			}
-		}
-	}()
-
+	buf := make([]byte, 32768)
 	for {
-		select {
-		case r := <-readCh:
-			if r.err != nil {
-				if len(sess.parserRemainder) > 0 {
-					pending.Write(sess.parserRemainder)
-					sess.parserRemainder = nil
-				}
-				flush()
-				// Log the disconnect reason. io.EOF is the remote closing the
-				// channel cleanly (user `exit`, or a server-side idle logout
-				// such as sshd ClientAlive*/shell TMOUT, which client keepalive
-				// cannot prevent). Anything else (reset/timeout) is an abnormal
-				// transport drop. This is the one place that knows *why* a
-				// session ended — without it diagnosis is blind.
-				if errors.Is(r.err, io.EOF) {
-					logger.Default().Info("ssh session ended: remote closed channel",
-						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
-				} else {
-					logger.Default().Warn("ssh session dropped: transport read error",
-						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(r.err))
-				}
-				return
+		n, err := sess.stdout.Read(buf)
+		if n > 0 {
+			batch.Add(sess.filterOutput(buf[:n]))
+		}
+		if err != nil {
+			batch.Add(sess.parserRemainder)
+			sess.parserRemainder = nil
+			// Log the disconnect reason. io.EOF is the remote closing the
+			// channel cleanly (user `exit`, or a server-side idle logout
+			// such as sshd ClientAlive*/shell TMOUT, which client keepalive
+			// cannot prevent). Anything else (reset/timeout) is an abnormal
+			// transport drop. This is the one place that knows *why* a
+			// session ended — without it diagnosis is blind.
+			if errors.Is(err, io.EOF) {
+				logger.Default().Info("ssh session ended: remote closed channel",
+					zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
+			} else {
+				logger.Default().Warn("ssh session dropped: transport read error",
+					zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(err))
 			}
-			filtered := sess.filterOutput(r.data)
-			if len(filtered) > 0 {
-				pending.Write(filtered)
-			}
-			if pending.Len() >= 32*1024 {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
+			return
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/service/sessionid"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -259,26 +260,31 @@ func (m *Manager) closeSessionWithoutCallbacks(sessionID string) bool {
 	return true
 }
 
-// readOutput 持续读 PTY 输出并回调。一次 Read 最多 32KB,天然合并突发输出。
+// readOutput 持续读 PTY 输出,经 streambatch 攒批后回调:PTY 常一次只吐几十字节,
+// 逐块回调会变成同样多次的 EventsEmit。
 func (m *Manager) readOutput(sess *Session) {
 	defer func() {
 		m.sessions.Delete(sess.ID)
 		sess.Close()
 	}()
 
+	batch := streambatch.New(streambatch.DefaultWindow, streambatch.DefaultMaxBytes, func(data []byte) {
+		sess.mu.Lock()
+		handler := sess.onData
+		sess.mu.Unlock()
+		if handler != nil {
+			handler(data)
+		}
+	})
+	// 后注册先执行:尾部数据先于 sess.Close(→ onClosed)送达。
+	defer batch.Close()
+
 	buf := make([]byte, 32*1024)
 	for {
 		// proc 在构造后不可变,故读取它无需持 mu(阻塞 Read 也不该在锁内)。
 		n, err := sess.proc.Read(buf)
 		if n > 0 {
-			sess.mu.Lock()
-			handler := sess.onData
-			sess.mu.Unlock()
-			if handler != nil {
-				chunk := make([]byte, n)
-				copy(chunk, buf[:n])
-				handler(chunk)
-			}
+			batch.Add(buf[:n])
 		}
 		if err != nil {
 			return // EOF(shell 退出)或读错误 → 关闭会话

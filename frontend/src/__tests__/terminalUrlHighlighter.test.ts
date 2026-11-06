@@ -102,4 +102,61 @@ describe("attachTerminalUrlHighlighter", () => {
     ctl.dispose();
     expect(deco.dispose).toHaveBeenCalled();
   });
+
+  describe("inactive (hidden) terminal", () => {
+    function scanCounter(m: ReturnType<typeof makeTerm>) {
+      const buf = m.term.buffer.active;
+      const orig = buf.getLine;
+      const getLine = vi.fn(orig);
+      buf.getLine = getLine;
+      return getLine;
+    }
+
+    it("writes while inactive trigger no scan; reactivation scans the viewport once", () => {
+      const m = makeTerm({ lines: [asciiLine("go http://a.com")] });
+      const ctl = attachTerminalUrlHighlighter(m.term as never, { enabled: true, color: "#1166ff" });
+      ctl.setActive(false);
+      const scans = scanCounter(m);
+      for (let i = 0; i < 50; i++) m.fire("write");
+      m.fire("scroll");
+      m.fire("resize");
+      expect(scans).not.toHaveBeenCalled();
+      ctl.setActive(true);
+      expect(scans).toHaveBeenCalled();
+      const after = scans.mock.calls.length;
+      ctl.setActive(true);
+      expect(scans.mock.calls.length).toBe(after);
+    });
+
+    it("URLs written while inactive are highlighted after activation", () => {
+      const lines = [asciiLine("nothing")];
+      const m = makeTerm({ lines });
+      const ctl = attachTerminalUrlHighlighter(m.term as never, { enabled: true, color: "#1166ff" });
+      ctl.setActive(false);
+      lines[0] = asciiLine("go http://b.com");
+      m.fire("write");
+      expect(m.registerDecoration).not.toHaveBeenCalled();
+      ctl.setActive(true);
+      expect(m.registerDecoration).toHaveBeenCalledTimes(1);
+    });
+
+    it("reactivation does not scan when nothing changed while hidden", () => {
+      const m = makeTerm({ lines: [asciiLine("go http://a.com")] });
+      const ctl = attachTerminalUrlHighlighter(m.term as never, { enabled: true, color: "#1166ff" });
+      ctl.setActive(false);
+      const scans = scanCounter(m);
+      ctl.setActive(true);
+      expect(scans).not.toHaveBeenCalled();
+    });
+
+    it("setEnabled while inactive defers the scan until activation", () => {
+      const m = makeTerm({ lines: [asciiLine("go http://a.com")] });
+      const ctl = attachTerminalUrlHighlighter(m.term as never, { enabled: false, color: "#1166ff" });
+      ctl.setActive(false);
+      ctl.setEnabled(true);
+      expect(m.registerDecoration).not.toHaveBeenCalled();
+      ctl.setActive(true);
+      expect(m.registerDecoration).toHaveBeenCalledTimes(1);
+    });
+  });
 });

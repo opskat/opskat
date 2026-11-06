@@ -49,6 +49,7 @@ import {
 import { EntityIcon } from "@/components/asset/AssetIcon";
 import { filterAssets } from "@/lib/assetSearch";
 import {
+  buildTreeIndex,
   flattenTree,
   computeInsertionPoint,
   insertionToReorderArgs,
@@ -84,6 +85,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import { errorMessage } from "@/lib/errorMessage";
 
 interface AssetTreeProps {
@@ -236,17 +238,14 @@ export function AssetTree({
 }: AssetTreeProps) {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
-  const {
-    assets,
-    groups,
-    selectedAssetId,
-    collapsedGroupIds,
-    fetchAssets,
-    fetchGroups,
-    deleteAsset,
-    deleteGroup,
-    refresh,
-  } = useAssetStore();
+  const assets = useAssetStore((s) => s.assets);
+  const groups = useAssetStore((s) => s.groups);
+  const collapsedGroupIds = useAssetStore((s) => s.collapsedGroupIds);
+  const fetchAssets = useAssetStore((s) => s.fetchAssets);
+  const fetchGroups = useAssetStore((s) => s.fetchGroups);
+  const deleteAsset = useAssetStore((s) => s.deleteAsset);
+  const deleteGroup = useAssetStore((s) => s.deleteGroup);
+  const refresh = useAssetStore((s) => s.refresh);
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
   const activeAssetIds = useActiveAssetIds();
   const [filter, setFilter] = useState("");
@@ -263,6 +262,8 @@ export function AssetTree({
     position: { x: number; y: number };
   } | null>(null);
   const [dragPreviewAsset, setDragPreviewAsset] = useState<asset_entity.Asset | null>(null);
+  // Row being dragged: kept mounted by the virtualizer even when scrolled out of view.
+  const [draggingRowKey, setDraggingRowKey] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAssets();
@@ -286,73 +287,53 @@ export function AssetTree({
       : typeFilteredAssets;
   }, [assets, selectedTypes, typeOptions, filter, groups]);
 
-  // Group assets by GroupID
-  const groupedAssets = new Map<number, asset_entity.Asset[]>();
-  for (const asset of filteredAssets) {
-    const gid = asset.GroupID || 0;
-    if (!groupedAssets.has(gid)) groupedAssets.set(gid, []);
-    groupedAssets.get(gid)!.push(asset);
-  }
-
-  const rawChildGroups = (parentId: number) => groups.filter((g) => (g.ParentID || 0) === parentId);
-
-  const countAssetsInGroup = (groupId: number): number => {
-    let count = (groupedAssets.get(groupId) || []).length;
-    for (const child of rawChildGroups(groupId)) {
-      count += countAssetsInGroup(child.ID);
-    }
-    return count;
-  };
-
   const hasSearchFilter = filter.trim().length > 0;
   const hasTypeFilter = selectedTypes.length > 0;
   const shouldHideEmptyGroups = hideEmptyGroups || hasSearchFilter || hasTypeFilter;
 
-  const childGroups = (parentId: number) => {
-    const all = rawChildGroups(parentId);
-    return shouldHideEmptyGroups ? all.filter((g) => countAssetsInGroup(g.ID) > 0) : all;
-  };
+  const treeIndex = useMemo(() => buildTreeIndex(groups, filteredAssets), [groups, filteredAssets]);
+  const groupById = useMemo(() => new Map(groups.map((g) => [g.ID, g] as const)), [groups]);
+  const assetById = useMemo(() => new Map(filteredAssets.map((a) => [a.ID, a] as const)), [filteredAssets]);
+  const ungroupedGroup = useMemo(() => new group_entity.Group({ ID: 0, Name: t("asset.ungrouped") }), [t]);
 
-  const visibleRootGroups = childGroups(0);
-  const rootAssets = groupedAssets.get(0) || [];
-  const treeIsEmpty = visibleRootGroups.length === 0 && rootAssets.length === 0;
   const isFilteredEmpty = filteredAssets.length === 0 && (hasSearchFilter || hasTypeFilter);
 
-  const countDescendantGroups = (groupId: number): number => {
-    let count = 0;
-    for (const child of rawChildGroups(groupId)) {
-      count += 1 + countDescendantGroups(child.ID);
-    }
-    return count;
-  };
+  const handleDeleteGroup = useCallback(
+    (id: number) => {
+      const directAssetCount = treeIndex.assetsByGroup.get(id)?.length ?? 0;
+      const childGroupCount = treeIndex.descendantGroupCounts.get(id) ?? 0;
+      if (directAssetCount > 0 || childGroupCount > 0) {
+        setDeleteConfirm({ id, assetCount: directAssetCount, childGroupCount });
+      } else {
+        deleteGroup(id, false).catch((e) => toast.error(errorMessage(e)));
+      }
+    },
+    [treeIndex, deleteGroup]
+  );
 
-  const handleDeleteGroup = (id: number) => {
-    const directAssetCount = (groupedAssets.get(id) || []).length;
-    const childGroupCount = countDescendantGroups(id);
-    if (directAssetCount > 0 || childGroupCount > 0) {
-      setDeleteConfirm({ id, assetCount: directAssetCount, childGroupCount });
-    } else {
-      deleteGroup(id, false).catch((e) => toast.error(errorMessage(e)));
-    }
-  };
+  const handleMoveAsset = useCallback(
+    async (id: number, direction: string) => {
+      try {
+        await MoveAsset(id, direction);
+        await refresh();
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+    },
+    [refresh]
+  );
 
-  const handleMoveAsset = async (id: number, direction: string) => {
-    try {
-      await MoveAsset(id, direction);
-      await refresh();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  };
-
-  const handleMoveGroup = async (id: number, direction: string) => {
-    try {
-      await MoveGroup(id, direction);
-      await refresh();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  };
+  const handleMoveGroup = useCallback(
+    async (id: number, direction: string) => {
+      try {
+        await MoveGroup(id, direction);
+        await refresh();
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+    },
+    [refresh]
+  );
 
   // 5px 移动门槛 → 单击/双击不被误识别成拖动
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -367,16 +348,16 @@ export function AssetTree({
   const rows = useMemo(
     () =>
       flattenTree({
-        groups,
-        assets: filteredAssets,
+        index: treeIndex,
         collapsedGroupIDs: new Set(collapsedGroupIds),
         shouldHideEmpty: shouldHideEmptyGroups,
       }),
-    [groups, filteredAssets, collapsedGroupIds, shouldHideEmptyGroups]
+    [treeIndex, collapsedGroupIds, shouldHideEmptyGroups]
   );
   useEffect(() => {
     rowsRef.current = rows;
   }, [rows]);
+  const treeIsEmpty = rows.length === 0;
 
   const collectRowRects = useCallback((): Map<string, RowRect> => {
     const m = new Map<string, RowRect>();
@@ -400,6 +381,7 @@ export function AssetTree({
   }, []);
 
   const handleDragStart = (e: DragStartEvent) => {
+    setDraggingRowKey(String(e.active.id));
     const active = parseActive(String(e.active.id));
     if (active?.kind === "asset") {
       setDragPreviewAsset(assets.find((asset) => asset.ID === active.id) ?? null);
@@ -458,12 +440,14 @@ export function AssetTree({
 
   const handleDragCancel = (_e: DragCancelEvent) => {
     setDragPreviewAsset(null);
+    setDraggingRowKey(null);
     useAssetTreeDndStore.getState().clear();
     clearHoverExpand();
   };
 
   const handleDragEnd = async (e: DragEndEvent) => {
     setDragPreviewAsset(null);
+    setDraggingRowKey(null);
     clearHoverExpand();
     const point = useAssetTreeDndStore.getState().point;
     useAssetTreeDndStore.getState().clear();
@@ -594,6 +578,7 @@ export function AssetTree({
           <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
             <input
+              data-testid="asset-tree-search"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder={t("asset.search")}
@@ -617,67 +602,29 @@ export function AssetTree({
           onDragCancel={handleDragCancel}
           onDragEnd={handleDragEnd}
         >
-          <div ref={treeContainerRef} className="p-2 space-y-0.5 isolate relative">
-            {visibleRootGroups.map((group) => (
-              <GroupItem
-                key={group.ID}
-                group={group}
-                assets={groupedAssets.get(group.ID) || []}
-                allGroupedAssets={groupedAssets}
-                childGroups={childGroups}
-                countAssetsInGroup={countAssetsInGroup}
-                selectedAssetId={selectedAssetId}
-                activeAssetIds={activeAssetIds}
-                connectingAssetIds={connectingAssetIds}
-                onSelectAsset={onSelectAsset}
-                onAddAsset={onAddAsset}
-                onEditAsset={onEditAsset}
-                onCopyAsset={onCopyAsset}
-                onConnectAsset={onConnectAsset}
-                onConnectAssetInNewTab={onConnectAssetInNewTab}
-                onOpenFileManager={onOpenFileManager}
-                onEditGroup={onEditGroup}
-                onGroupDetail={onGroupDetail}
-                onDeleteAsset={(asset: asset_entity.Asset) => setDeleteAssetConfirm(asset)}
-                onMoveAsset={handleMoveAsset}
-                onOpenInfoTab={onOpenInfoTab}
-                onGroupContextMenu={handleGroupContextMenu}
-                depth={0}
-                t={t}
-              />
-            ))}
-            {rootAssets.length > 0 && (
-              <GroupItem
-                group={
-                  new group_entity.Group({
-                    ID: 0,
-                    Name: t("asset.ungrouped"),
-                  })
-                }
-                assets={rootAssets}
-                allGroupedAssets={groupedAssets}
-                childGroups={() => []}
-                countAssetsInGroup={() => rootAssets.length}
-                selectedAssetId={selectedAssetId}
-                activeAssetIds={activeAssetIds}
-                connectingAssetIds={connectingAssetIds}
-                onSelectAsset={onSelectAsset}
-                onAddAsset={onAddAsset}
-                onEditAsset={onEditAsset}
-                onCopyAsset={onCopyAsset}
-                onConnectAsset={onConnectAsset}
-                onConnectAssetInNewTab={onConnectAssetInNewTab}
-                onOpenFileManager={onOpenFileManager}
-                onEditGroup={onEditGroup}
-                onGroupDetail={onGroupDetail}
-                onDeleteAsset={(asset) => setDeleteAssetConfirm(asset)}
-                onMoveAsset={handleMoveAsset}
-                onOpenInfoTab={onOpenInfoTab}
-                onGroupContextMenu={handleGroupContextMenu}
-                depth={0}
-                t={t}
-              />
-            )}
+          <div ref={treeContainerRef} className="p-2 isolate relative">
+            <VirtualTreeRows
+              rows={rows}
+              groupById={groupById}
+              assetById={assetById}
+              ungroupedGroup={ungroupedGroup}
+              totalCounts={treeIndex.totalCounts}
+              pinnedRowKey={draggingRowKey}
+              activeAssetIds={activeAssetIds}
+              connectingAssetIds={connectingAssetIds}
+              onSelectAsset={onSelectAsset}
+              onAddAsset={onAddAsset}
+              onEditAsset={onEditAsset}
+              onCopyAsset={onCopyAsset}
+              onConnectAsset={onConnectAsset}
+              onConnectAssetInNewTab={onConnectAssetInNewTab}
+              onOpenFileManager={onOpenFileManager}
+              onDeleteAsset={setDeleteAssetConfirm}
+              onMoveAsset={handleMoveAsset}
+              onOpenInfoTab={onOpenInfoTab}
+              onGroupContextMenu={handleGroupContextMenu}
+              t={t}
+            />
             {treeIsEmpty && (
               <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
                 <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
@@ -867,13 +814,53 @@ function AssetDragPreview({ asset, active }: { asset: asset_entity.Asset; active
   );
 }
 
-function GroupItem({
-  group,
-  assets,
-  allGroupedAssets,
-  childGroups,
-  countAssetsInGroup,
-  selectedAssetId,
+// Fixed row heights (Tailwind line-height + vertical padding of each row kind), so the
+// virtualizer positions rows without measuring the DOM.
+const ROW_HEIGHTS: Record<Row["kind"], number> = { "group-header": 28, asset: 32, "empty-placeholder": 24 };
+// Root-level groups keep the 2px gap the container's space-y-0.5 used to give them.
+const ROOT_GROUP_GAP = 2;
+const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
+
+function rowGap(row: Row, index: number): number {
+  return row.kind === "group-header" && row.depth === 0 && index > 0 ? ROOT_GROUP_GAP : 0;
+}
+
+type RowCallbacks = {
+  onSelectAsset: (asset: asset_entity.Asset) => void;
+  onAddAsset: (groupId: number) => void;
+  onEditAsset: (asset: asset_entity.Asset) => void;
+  onCopyAsset: (asset: asset_entity.Asset) => void;
+  onConnectAsset: (asset: asset_entity.Asset) => void;
+  onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
+  onOpenFileManager?: (asset: asset_entity.Asset) => void;
+  onDeleteAsset: (asset: asset_entity.Asset) => void;
+  onMoveAsset: (id: number, direction: string) => void;
+  onOpenInfoTab?: (type: "asset" | "group", id: number, name: string, icon?: string) => void;
+  onGroupContextMenu: (group: group_entity.Group, event: React.MouseEvent) => void;
+  t: (key: string) => string;
+};
+
+type VirtualTreeRowsProps = RowCallbacks & {
+  rows: Row[];
+  groupById: Map<number, group_entity.Group>;
+  assetById: Map<number, asset_entity.Asset>;
+  ungroupedGroup: group_entity.Group;
+  totalCounts: Map<number, number>;
+  pinnedRowKey: string | null;
+  activeAssetIds: Set<number>;
+  connectingAssetIds: Set<number>;
+};
+
+// Renders the flattened tree (the same `rows` the DnD logic uses) through a virtualizer:
+// only rows near the viewport are mounted. Memoized so scrolling re-renders this list
+// alone, and each row is memoized so a re-render here only touches rows whose props changed.
+const VirtualTreeRows = React.memo(function VirtualTreeRows({
+  rows,
+  groupById,
+  assetById,
+  ungroupedGroup,
+  totalCounts,
+  pinnedRowKey,
   activeAssetIds,
   connectingAssetIds,
   onSelectAsset,
@@ -883,45 +870,108 @@ function GroupItem({
   onConnectAsset,
   onConnectAssetInNewTab,
   onOpenFileManager,
-  onEditGroup,
-  onGroupDetail,
   onDeleteAsset,
   onMoveAsset,
   onOpenInfoTab,
   onGroupContextMenu,
-  depth,
   t,
+}: VirtualTreeRowsProps) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const pinnedIndex = useMemo(
+    () => (pinnedRowKey === null ? -1 : rows.findIndex((row) => rowKey(row) === pinnedRowKey)),
+    [rows, pinnedRowKey]
+  );
+  const rangeExtractor = useCallback(
+    (range: Range) => {
+      const indexes = defaultRangeExtractor(range);
+      if (pinnedIndex < 0 || indexes.includes(pinnedIndex)) return indexes;
+      return [...indexes, pinnedIndex].sort((a, b) => a - b);
+    },
+    [pinnedIndex]
+  );
+  // getItemKey changes with rows, which makes the virtualizer recompute row offsets.
+  const getItemKey = useCallback((index: number) => rowKey(rows[index]), [rows]);
+  const estimateSize = useCallback(
+    (index: number) => ROW_HEIGHTS[rows[index].kind] + rowGap(rows[index], index),
+    [rows]
+  );
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => listRef.current?.closest<HTMLElement>(SCROLL_VIEWPORT_SELECTOR) ?? null,
+    estimateSize,
+    getItemKey,
+    rangeExtractor,
+    overscan: 10,
+  });
+
+  return (
+    <div ref={listRef} className="relative" style={{ height: virtualizer.getTotalSize() }}>
+      {virtualizer.getVirtualItems().map((item) => {
+        const row = rows[item.index];
+        let content: React.ReactNode;
+        if (row.kind === "group-header") {
+          content = (
+            <GroupHeaderRow
+              group={row.groupID === 0 ? ungroupedGroup : groupById.get(row.groupID)!}
+              depth={row.depth}
+              collapsed={row.collapsed}
+              totalCount={totalCounts.get(row.groupID)!}
+              onGroupContextMenu={onGroupContextMenu}
+            />
+          );
+        } else if (row.kind === "asset") {
+          content = (
+            <AssetRow
+              asset={assetById.get(row.assetID)!}
+              depth={row.depth}
+              active={activeAssetIds.has(row.assetID)}
+              connecting={connectingAssetIds.has(row.assetID)}
+              onSelectAsset={onSelectAsset}
+              onEditAsset={onEditAsset}
+              onCopyAsset={onCopyAsset}
+              onConnectAsset={onConnectAsset}
+              onConnectAssetInNewTab={onConnectAssetInNewTab}
+              onOpenFileManager={onOpenFileManager}
+              onDeleteAsset={onDeleteAsset}
+              onMoveAsset={onMoveAsset}
+              onOpenInfoTab={onOpenInfoTab}
+              t={t}
+            />
+          );
+        } else {
+          content = <EmptyGroupRow groupID={row.groupID} depth={row.depth} onAddAsset={onAddAsset} t={t} />;
+        }
+        return (
+          <div
+            key={item.key}
+            className="absolute left-0 w-full"
+            style={{ top: item.start, height: item.size, paddingTop: rowGap(row, item.index) }}
+          >
+            {content}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+const GroupHeaderRow = React.memo(function GroupHeaderRow({
+  group,
+  depth,
+  collapsed,
+  totalCount,
+  onGroupContextMenu,
 }: {
   group: group_entity.Group;
-  assets: asset_entity.Asset[];
-  allGroupedAssets: Map<number, asset_entity.Asset[]>;
-  childGroups: (parentId: number) => group_entity.Group[];
-  countAssetsInGroup: (groupId: number) => number;
-  selectedAssetId: number | null;
-  activeAssetIds: Set<number>;
-  connectingAssetIds: Set<number>;
-  onSelectAsset: (asset: asset_entity.Asset) => void;
-  onAddAsset: (groupId: number) => void;
-  onEditAsset: (asset: asset_entity.Asset) => void;
-  onCopyAsset: (asset: asset_entity.Asset) => void;
-  onConnectAsset: (asset: asset_entity.Asset) => void;
-  onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
-  onOpenFileManager?: (asset: asset_entity.Asset) => void;
-  onEditGroup: (group: group_entity.Group) => void;
-  onGroupDetail: (group: group_entity.Group) => void;
-  onDeleteAsset: (asset: asset_entity.Asset) => void;
-  onMoveAsset: (id: number, direction: string) => void;
-  onOpenInfoTab?: (type: "asset" | "group", id: number, name: string, icon?: string) => void;
-  onGroupContextMenu: (group: group_entity.Group, event: React.MouseEvent) => void;
   depth: number;
-  t: (key: string) => string;
+  collapsed: boolean;
+  totalCount: number;
+  onGroupContextMenu: (group: group_entity.Group, event: React.MouseEvent) => void;
 }) {
   /* eslint-disable react-hooks/refs */
-  const expanded = useAssetStore((s) => !s.collapsedGroupIds.includes(group.ID));
   const toggleGroupCollapsed = useAssetStore((s) => s.toggleGroupCollapsed);
   const isDndHighlighted = useAssetTreeDndStore((s) => s.highlightedGroupID === group.ID);
-  const children = group.ID > 0 ? childGroups(group.ID) : [];
-  const totalCount = countAssetsInGroup(group.ID);
   const isUngrouped = group.ID === 0;
 
   const sortable = useSortable({
@@ -942,7 +992,7 @@ function GroupItem({
       }
     : {};
 
-  const groupRowContent = (
+  return (
     <div
       // dnd-kit's setNodeRef is a callback, not a React ref.
       ref={sortable.setNodeRef}
@@ -955,96 +1005,51 @@ function GroupItem({
       onContextMenu={(e) => onGroupContextMenu(group, e)}
       {...groupActivatorProps}
     >
-      {expanded ? (
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-      ) : (
+      {collapsed ? (
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      ) : (
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       )}
       <EntityIcon icon={group.Icon} fallback={Folder} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate text-sidebar-foreground">{group.Name}</span>
       <span className="ml-auto text-xs text-muted-foreground">{totalCount}</span>
     </div>
   );
+});
 
+const EmptyGroupRow = React.memo(function EmptyGroupRow({
+  groupID,
+  depth,
+  onAddAsset,
+  t,
+}: {
+  groupID: number;
+  depth: number;
+  onAddAsset: (groupId: number) => void;
+  t: (key: string) => string;
+}) {
+  const isDndHighlighted = useAssetTreeDndStore((s) => s.highlightedGroupID === groupID);
   return (
-    <div>
-      {groupRowContent}
-      {expanded && (
-        <div className="tree-group-content">
-          {children.map((child) => (
-            <GroupItem
-              key={child.ID}
-              group={child}
-              assets={allGroupedAssets.get(child.ID) || []}
-              allGroupedAssets={allGroupedAssets}
-              childGroups={childGroups}
-              countAssetsInGroup={countAssetsInGroup}
-              selectedAssetId={selectedAssetId}
-              activeAssetIds={activeAssetIds}
-              connectingAssetIds={connectingAssetIds}
-              onSelectAsset={onSelectAsset}
-              onAddAsset={onAddAsset}
-              onEditAsset={onEditAsset}
-              onCopyAsset={onCopyAsset}
-              onConnectAsset={onConnectAsset}
-              onConnectAssetInNewTab={onConnectAssetInNewTab}
-              onOpenFileManager={onOpenFileManager}
-              onEditGroup={onEditGroup}
-              onGroupDetail={onGroupDetail}
-              onDeleteAsset={onDeleteAsset}
-              onMoveAsset={onMoveAsset}
-              onOpenInfoTab={onOpenInfoTab}
-              onGroupContextMenu={onGroupContextMenu}
-              depth={depth + 1}
-              t={t}
-            />
-          ))}
-          {assets.map((asset) => (
-            <AssetRow
-              key={asset.ID}
-              asset={asset}
-              depth={depth}
-              selectedAssetId={selectedAssetId}
-              activeAssetIds={activeAssetIds}
-              connectingAssetIds={connectingAssetIds}
-              onSelectAsset={onSelectAsset}
-              onEditAsset={onEditAsset}
-              onCopyAsset={onCopyAsset}
-              onConnectAsset={onConnectAsset}
-              onConnectAssetInNewTab={onConnectAssetInNewTab}
-              onOpenFileManager={onOpenFileManager}
-              onDeleteAsset={onDeleteAsset}
-              onMoveAsset={onMoveAsset}
-              onOpenInfoTab={onOpenInfoTab}
-              t={t}
-            />
-          ))}
-          {assets.length === 0 && children.length === 0 && (
-            <div
-              data-asset-tree-row={`empty-${group.ID}`}
-              className={`pr-2 py-1 text-xs cursor-pointer rounded-md transition-colors duration-150 ${
-                isDndHighlighted
-                  ? "bg-primary/10 ring-1 ring-primary/40 text-foreground"
-                  : "text-muted-foreground hover:underline"
-              }`}
-              style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
-              onClick={() => onAddAsset(group.ID)}
-            >
-              + {t("asset.addAsset")}
-            </div>
-          )}
-        </div>
-      )}
+    <div
+      data-asset-tree-row={`empty-${groupID}`}
+      className={`pr-2 py-1 text-xs cursor-pointer rounded-md transition-colors duration-150 ${
+        isDndHighlighted
+          ? "bg-primary/10 ring-1 ring-primary/40 text-foreground"
+          : "text-muted-foreground hover:underline"
+      }`}
+      style={{ paddingLeft: `${20 + depth * 12}px` }}
+      onClick={() => onAddAsset(groupID)}
+    >
+      + {t("asset.addAsset")}
     </div>
   );
-}
+});
 
 type AssetRowProps = {
   asset: asset_entity.Asset;
   depth: number;
-  selectedAssetId: number | null;
-  activeAssetIds: Set<number>;
-  connectingAssetIds: Set<number>;
+  active: boolean;
+  connecting: boolean;
   onSelectAsset: (asset: asset_entity.Asset) => void;
   onEditAsset: (asset: asset_entity.Asset) => void;
   onCopyAsset: (asset: asset_entity.Asset) => void;
@@ -1098,20 +1103,19 @@ function CopyAssetRefMenuItem({ asset, t }: { asset: asset_entity.Asset; t: (key
   );
 }
 
-function AssetRow(props: AssetRowProps) {
+const AssetRow = React.memo(function AssetRow(props: AssetRowProps) {
   return (
     <AssetRowDraggable id={`asset-${props.asset.ID}`}>
       <AssetRowContent {...props} />
     </AssetRowDraggable>
   );
-}
+});
 
 const AssetRowContent = React.memo(function AssetRowContent({
   asset,
   depth,
-  selectedAssetId,
-  activeAssetIds,
-  connectingAssetIds,
+  active,
+  connecting: isConnecting,
   onSelectAsset,
   onEditAsset,
   onCopyAsset,
@@ -1123,9 +1127,10 @@ const AssetRowContent = React.memo(function AssetRowContent({
   onOpenInfoTab,
   t,
 }: AssetRowProps) {
-  const isConnecting = connectingAssetIds.has(asset.ID);
+  // Per-row selector: a selection change re-renders only the rows whose state flips.
+  const selected = useAssetStore((s) => s.selectedAssetId === asset.ID);
   const style: React.CSSProperties = {
-    paddingLeft: `${20 + (depth + 1) * 12}px`,
+    paddingLeft: `${20 + depth * 12}px`,
   };
 
   return (
@@ -1133,9 +1138,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
       <ContextMenuTrigger asChild>
         <div
           className={`flex items-center gap-1.5 rounded-md pr-2 py-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring/60 cursor-pointer select-none transition-colors duration-150 ${
-            selectedAssetId === asset.ID
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "hover:bg-sidebar-accent"
+            selected ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent"
           }`}
           style={style}
           onClick={() => onSelectAsset(asset)}
@@ -1156,7 +1159,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
               className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
             />
           )}
-          {activeAssetIds.has(asset.ID) && <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />}
+          {active && <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />}
           <span className="truncate text-sidebar-foreground">{asset.Name}</span>
         </div>
       </ContextMenuTrigger>

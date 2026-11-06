@@ -23,6 +23,8 @@ type ConversationRepo interface {
 	ListMessages(ctx context.Context, conversationID int64) ([]*conversation_entity.Message, error)
 	CreateMessages(ctx context.Context, msgs []*conversation_entity.Message) error
 	DeleteMessages(ctx context.Context, conversationID int64) error
+	// DeleteMessagesFrom 删除该会话 sort_order >= from 的消息（尾部替换前清掉旧尾部）。
+	DeleteMessagesFrom(ctx context.Context, conversationID int64, from int) error
 }
 
 var defaultConversation ConversationRepo
@@ -130,5 +132,10 @@ func (r *conversationRepo) CreateMessages(ctx context.Context, msgs []*conversat
 
 func (r *conversationRepo) DeleteMessages(ctx context.Context, conversationID int64) error {
 	return db.Ctx(ctx).Where("conversation_id = ?", conversationID).
+		Delete(&conversation_entity.Message{}).Error
+}
+
+func (r *conversationRepo) DeleteMessagesFrom(ctx context.Context, conversationID int64, from int) error {
+	return db.Ctx(ctx).Where("conversation_id = ? AND sort_order >= ?", conversationID, from).
 		Delete(&conversation_entity.Message{}).Error
 }

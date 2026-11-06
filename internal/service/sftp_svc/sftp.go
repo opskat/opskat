@@ -74,16 +74,8 @@ func (s *Service) GenerateTransferID() string {
 // getSFTPClient 获取或创建 SFTP 客户端（懒加载，高性能配置）
 func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 	if v, ok := s.clients.Load(sessionID); ok {
-		client := v.(*sftp.Client)
-		// 检查是否仍然可用
-		if _, err := client.Getwd(); err == nil {
-			return client, nil
-		}
-		// 已失效，移除
-		s.clients.Delete(sessionID)
-		if err := client.Close(); err != nil {
-			logger.Default().Warn("close stale client", zap.String("sessionID", sessionID), zap.Error(err))
-		}
+		// 连接断开时由 cacheClient 的监听 goroutine 移出缓存，这里无需再探活（省一次 REALPATH 往返）
+		return v.(*sftp.Client), nil
 	}
 
 	sess, ok := s.sshManager.GetSession(sessionID)
@@ -99,8 +91,28 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		return nil, fmt.Errorf("创建 SFTP 客户端失败: %w", err)
 	}
 
-	s.clients.Store(sessionID, client)
-	return client, nil
+	return s.cacheClient(sessionID, client), nil
+}
+
+// cacheClient 缓存客户端并返回调用方应使用的那个，在其连接结束时自动移出缓存。
+// 同一会话的并发首用各自建了客户端时，先缓存的胜出，后到的当场关闭。
+// 用 CompareAndDelete 保证不会误删同一会话下更新的客户端。
+func (s *Service) cacheClient(sessionID string, client *sftp.Client) *sftp.Client {
+	if v, loaded := s.clients.LoadOrStore(sessionID, client); loaded {
+		if err := client.Close(); err != nil {
+			logger.Default().Debug("close redundant sftp client", zap.String("sessionID", sessionID), zap.Error(err))
+		}
+		return v.(*sftp.Client)
+	}
+	go func() {
+		_ = client.Wait() // 连接结束（含主动 Close）后返回；错误即断开原因，无需处理
+		if s.clients.CompareAndDelete(sessionID, client) {
+			if err := client.Close(); err != nil {
+				logger.Default().Debug("close disconnected sftp client", zap.String("sessionID", sessionID), zap.Error(err))
+			}
+		}
+	}()
+	return client
 }
 
 // Getwd 获取远程工作目录（用户 home）
@@ -235,6 +247,34 @@ func (c sftpAtomicClient) PosixRename(oldname, newname string) error {
 	return c.client.PosixRename(oldname, newname)
 }
 
+// symlinkStatConcurrency 限制列目录时并发解析符号链接的 Stat 数量。
+const symlinkStatConcurrency = 16
+
+// resolveSymlinkDirs 返回与 infos 等长的 IsDir 结果；符号链接以有界并发 Stat 目标，
+// Stat 失败时保持其自身（非目录）的判断。
+func resolveSymlinkDirs(client *sftp.Client, dirPath string, infos []os.FileInfo) []bool {
+	isDirs := make([]bool, len(infos))
+	sem := make(chan struct{}, symlinkStatConcurrency)
+	var wg sync.WaitGroup
+	for i, info := range infos {
+		isDirs[i] = info.IsDir()
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if target, err := client.Stat(path.Join(dirPath, info.Name())); err == nil {
+				isDirs[i] = target.IsDir()
+			}
+		}()
+	}
+	wg.Wait()
+	return isDirs
+}
+
 // ListDir 列出远程目录内容
 func (s *Service) ListDir(sessionID, dirPath string) ([]FileEntry, error) {
 	sftpClient, err := s.getSFTPClient(sessionID)
@@ -248,14 +288,10 @@ func (s *Service) ListDir(sessionID, dirPath string) ([]FileEntry, error) {
 	}
 
 	// 排序：目录在前，文件在后，各自按名称排序
+	isDirs := resolveSymlinkDirs(sftpClient, dirPath, infos)
 	var dirs, files []FileEntry
-	for _, info := range infos {
-		isDir := info.IsDir()
-		if info.Mode()&os.ModeSymlink != 0 {
-			if targetInfo, statErr := sftpClient.Stat(path.Join(dirPath, info.Name())); statErr == nil {
-				isDir = targetInfo.IsDir()
-			}
-		}
+	for i, info := range infos {
+		isDir := isDirs[i]
 		entry := FileEntry{
 			Name:    info.Name(),
 			Size:    info.Size(),
@@ -389,8 +425,8 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 		return fmt.Errorf("获取文件信息失败: %w", err)
 	}
 
-	tracker := transfer.NewTracker(transferID, 1, stat.Size(), onProgress)
-	return s.uploadFile(ctx, tracker, sftpAtomicClient{client: sftpClient}, localFile, remotePath, filepath.Base(remotePath), stat.Size())
+	file := transfer.NewTracker(transferID, 1, stat.Size(), onProgress).File(filepath.Base(remotePath), stat.Size())
+	return s.uploadFile(ctx, file, sftpAtomicClient{client: sftpClient}, localFile, remotePath, stat.Size())
 }
 
 // Download 下载单个文件（并发读 + 本地原子替换）
@@ -422,8 +458,29 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 		return fmt.Errorf("获取远程文件信息失败: %w", err)
 	}
 
-	tracker := transfer.NewTracker(transferID, 1, stat.Size(), onProgress)
-	return s.downloadFile(ctx, tracker, remoteFile, localPath, filepath.Base(remotePath))
+	file := transfer.NewTracker(transferID, 1, stat.Size(), onProgress).File(filepath.Base(remotePath), stat.Size())
+	return s.downloadFile(ctx, file, remoteFile, localPath)
+}
+
+// dirEntry 是目录传输清单的一项。清单按遍历顺序排列，目录总在它下面的文件之前。
+type dirEntry struct {
+	src   string // 源端完整路径
+	rel   string // 相对源目录的路径，也是进度里的 currentFile
+	size  int64
+	isDir bool
+}
+
+// transferDir 按清单顺序传输一棵目录树（transfer.Dispatch）：目录由派发方当场逐个建立，
+// 文件交给 worker 并发传输。只有第一个失败的文件作为返回值，其余文件各自的失败原因记在日志里。
+func transferDir(ctx context.Context, entries []dirEntry, mkdir func(dirEntry) error, send func(context.Context, dirEntry) error) error {
+	return transfer.Dispatch(ctx, entries, func(e dirEntry) bool { return e.isDir }, mkdir,
+		func(ctx context.Context, e dirEntry) error {
+			err := send(ctx, e)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Ctx(ctx).Warn("sftp dir transfer file failed", zap.String("path", e.src), zap.Error(err))
+			}
+			return err
+		})
 }
 
 // UploadDir 上传目录
@@ -440,7 +497,8 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 		return err
 	}
 
-	// 扫描阶段：统计文件数和总大小
+	// 扫描阶段：列出传输清单，统计文件数和总大小
+	var entries []dirEntry
 	var filesTotal int
 	var bytesTotal int64
 	if err := filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
@@ -450,14 +508,22 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !d.IsDir() {
-			filesTotal++
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			bytesTotal += info.Size()
+		relPath, err := filepath.Rel(localDir, path)
+		if err != nil {
+			logger.Default().Warn("compute relative path", zap.String("base", localDir), zap.String("path", path), zap.Error(err))
+			return err
 		}
+		if d.IsDir() {
+			entries = append(entries, dirEntry{src: path, rel: relPath, isDir: true})
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		entries = append(entries, dirEntry{src: path, rel: relPath, size: info.Size()})
+		filesTotal++
+		bytesTotal += info.Size()
 		return nil
 	}); err != nil {
 		return fmt.Errorf("扫描本地目录失败: %w", err)
@@ -465,33 +531,18 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 
 	// 传输阶段
 	tracker := transfer.NewTracker(transferID, filesTotal, bytesTotal, onProgress)
+	remotePath := func(e dirEntry) string { return remoteDir + "/" + filepath.ToSlash(e.rel) }
 
-	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		relPath, err := filepath.Rel(localDir, path)
-		if err != nil {
-			logger.Default().Warn("compute relative path", zap.String("base", localDir), zap.String("path", path), zap.Error(err))
-			return err
-		}
-		remoteFull := remoteDir + "/" + filepath.ToSlash(relPath)
-
-		if d.IsDir() {
-			return sftpClient.MkdirAll(remoteFull)
-		}
-
-		localFile, err := os.Open(path) //nolint:gosec
+	return transferDir(ctx, entries, func(e dirEntry) error {
+		return sftpClient.MkdirAll(remotePath(e))
+	}, func(ctx context.Context, e dirEntry) error {
+		localFile, err := os.Open(e.src)
 		if err != nil {
 			return err
 		}
 		defer func() {
 			if err := localFile.Close(); err != nil {
-				logger.Default().Warn("close local file", zap.String("path", path), zap.Error(err))
+				logger.Default().Warn("close local file", zap.String("path", e.src), zap.Error(err))
 			}
 		}()
 
@@ -500,10 +551,11 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 			return err
 		}
 
-		if err := s.uploadFile(ctx, tracker, sftpAtomicClient{client: sftpClient}, localFile, remoteFull, relPath, stat.Size()); err != nil {
+		file := tracker.File(e.rel, stat.Size())
+		if err := s.uploadFile(ctx, file, sftpAtomicClient{client: sftpClient}, localFile, remotePath(e), stat.Size()); err != nil {
 			return err
 		}
-		tracker.FileDone(stat.Size())
+		file.Done()
 		return nil
 	})
 }
@@ -523,12 +575,7 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 	}
 
 	// 扫描阶段：递归统计远程目录
-	type fileEntry struct {
-		remotePath string
-		size       int64
-		isDir      bool
-	}
-	var entries []fileEntry
+	var entries []dirEntry
 	var bytesTotal int64
 	var filesTotal int
 
@@ -543,13 +590,14 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 		}
 		for _, info := range infos {
 			fullPath := dir + "/" + info.Name()
+			relPath := fullPath[len(remoteDir):]
 			if info.IsDir() {
-				entries = append(entries, fileEntry{remotePath: fullPath, isDir: true})
+				entries = append(entries, dirEntry{src: fullPath, rel: relPath, isDir: true})
 				if err := walk(fullPath); err != nil {
 					return err
 				}
 			} else {
-				entries = append(entries, fileEntry{remotePath: fullPath, size: info.Size()})
+				entries = append(entries, dirEntry{src: fullPath, rel: relPath, size: info.Size()})
 				bytesTotal += info.Size()
 				filesTotal++
 			}
@@ -567,38 +615,26 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 
 	// 传输阶段
 	tracker := transfer.NewTracker(transferID, filesTotal, bytesTotal, onProgress)
+	localPath := func(e dirEntry) string { return filepath.Join(localDir, filepath.FromSlash(e.rel)) }
 
-	for _, entry := range entries {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// 计算相对路径
-		relPath := entry.remotePath[len(remoteDir):]
-		localFull := filepath.Join(localDir, filepath.FromSlash(relPath))
-
-		if entry.isDir {
-			if err := os.MkdirAll(localFull, 0755); err != nil {
-				return err
-			}
-			continue
-		}
-
-		remoteFile, err := sftpClient.Open(entry.remotePath)
+	return transferDir(ctx, entries, func(e dirEntry) error {
+		return os.MkdirAll(localPath(e), 0755)
+	}, func(ctx context.Context, e dirEntry) error {
+		remoteFile, err := sftpClient.Open(e.src)
 		if err != nil {
 			return err
 		}
 
 		// downloadFile 自己会建父目录，这里不重复。
-		err = s.downloadFile(ctx, tracker, remoteFile, localFull, relPath)
+		file := tracker.File(e.rel, e.size)
+		err = s.downloadFile(ctx, file, remoteFile, localPath(e))
 		_ = remoteFile.Close()
 		if err != nil {
 			return err
 		}
-		tracker.FileDone(entry.size)
-	}
-
-	return nil
+		file.Done()
+		return nil
+	})
 }
 
 // Cancel 取消传输
@@ -717,7 +753,7 @@ func inspectRemoteTarget(client remoteAtomicClient, remotePath string) (remoteTa
 // 目标是设备节点（rename 会把节点本身换成普通文件），
 // 以及父目录不可写（建不出临时文件，但目标文件本身仍可写）。
 // 命名管道/套接字则直接报错 —— SFTP 协议就写不了它们。
-func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, client remoteAtomicClient, local io.Reader, remotePath, currentFile string, fileSize int64) error {
+func (s *Service) uploadFile(ctx context.Context, file *transfer.TrackedFile, client remoteAtomicClient, local io.Reader, remotePath string, fileSize int64) error {
 	target, err := inspectRemoteTarget(client, remotePath)
 	if err != nil {
 		return err
@@ -727,7 +763,7 @@ func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, cli
 		if target.streamOnly() {
 			return fmt.Errorf("远程路径是命名管道或套接字，SFTP 按偏移量写入，无法写入该类型: %s", target.path)
 		}
-		return uploadInPlace(ctx, tracker, client, local, target, currentFile, fileSize)
+		return uploadInPlace(ctx, file, client, local, target, fileSize)
 	}
 
 	tempPath := buildRemoteTempPath(target.path, "part")
@@ -737,7 +773,7 @@ func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, cli
 		if os.IsPermission(err) && target.exists {
 			logger.Default().Info("remote dir not writable, uploading in place",
 				zap.String("path", target.path), zap.Error(err))
-			return uploadInPlace(ctx, tracker, client, local, target, currentFile, fileSize)
+			return uploadInPlace(ctx, file, client, local, target, fileSize)
 		}
 		return fmt.Errorf("创建远程临时文件失败: %w", err)
 	}
@@ -749,7 +785,7 @@ func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, cli
 		}
 	}()
 
-	if _, err := remoteFile.ReadFrom(tracker.Reader(ctx, local, currentFile, fileSize)); err != nil {
+	if _, err := remoteFile.ReadFrom(file.Reader(ctx, local)); err != nil {
 		_ = remoteFile.Close()
 		return fmt.Errorf("写入远程临时文件失败: %w", err)
 	}
@@ -778,12 +814,12 @@ func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, cli
 
 // uploadInPlace 直接覆盖目标文件本身，用于无法用 rename 表达的目标。
 // 这条路径没有原子性可言 —— 写到一半失败就是写到一半，只能尽量不留下更糟的状态。
-func uploadInPlace(ctx context.Context, tracker *transfer.Tracker, client remoteAtomicClient, local io.Reader, target remoteTarget, currentFile string, fileSize int64) error {
+func uploadInPlace(ctx context.Context, file *transfer.TrackedFile, client remoteAtomicClient, local io.Reader, target remoteTarget, fileSize int64) error {
 	remoteFile, err := client.OpenFile(target.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
 		return fmt.Errorf("打开远程文件失败: %w", err)
 	}
-	written, err := remoteFile.ReadFrom(tracker.Reader(ctx, local, currentFile, fileSize))
+	written, err := remoteFile.ReadFrom(file.Reader(ctx, local))
 	if err != nil {
 		// 并发写出错时文件长度可能长于成功写入的部分，截回读到的长度至少能去掉尾部垃圾。
 		// 这不保证内容完整（中间仍可能有空洞），所以错误照样往上抛。
@@ -825,7 +861,7 @@ func verifyRemoteSize(client remoteAtomicClient, remotePath string, want int64) 
 }
 
 // downloadFile：远程 → 本地临时文件（并发读）→ 原子 rename。
-func (s *Service) downloadFile(ctx context.Context, tracker *transfer.Tracker, remote io.WriterTo, localPath, currentFile string) error {
+func (s *Service) downloadFile(ctx context.Context, file *transfer.TrackedFile, remote io.WriterTo, localPath string) error {
 	dir := filepath.Dir(localPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("创建本地目录失败: %w", err)
@@ -856,7 +892,7 @@ func (s *Service) downloadFile(ctx context.Context, tracker *transfer.Tracker, r
 		}
 	}()
 
-	if _, err := remote.WriteTo(tracker.Writer(ctx, localFile, currentFile)); err != nil {
+	if _, err := remote.WriteTo(file.Writer(ctx, localFile)); err != nil {
 		return err
 	}
 	if err := localFile.Close(); err != nil {

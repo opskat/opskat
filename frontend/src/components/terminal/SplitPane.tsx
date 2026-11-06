@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from "react";
+import { useRef, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import { Terminal } from "./Terminal";
 import { ConnectionProgress } from "./ConnectionProgress";
@@ -114,6 +114,8 @@ function TerminalPaneView({ tabId, sessionId, isTabActive, isFocused, showFocusR
   );
 }
 
+const SPLIT_TRANSITION = "flex 150ms ease-out";
+
 // Separate component to use hooks
 function SplitContainer({
   node,
@@ -126,27 +128,30 @@ function SplitContainer({
   node: Extract<SplitNode, { type: "split" }>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const firstRef = useRef<HTMLDivElement>(null);
+  const secondRef = useRef<HTMLDivElement>(null);
   const isVertical = node.direction === "vertical";
 
+  // 拖动期间直接改两个窗格的 DOM(不经 store，避免每次 mousemove 重渲染整棵终端树)，
+  // 松开时只提交一次 setSplitRatio。
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       const container = containerRef.current;
-      if (!container) return;
+      const first = firstRef.current;
+      const second = secondRef.current;
+      if (!container || !first || !second) return;
 
-      setIsDragging(true);
       const rect = container.getBoundingClientRect();
+      let lastRatio: number | null = null;
+      first.style.transition = "none";
+      second.style.transition = "none";
 
       const onMouseMove = (e: MouseEvent) => {
-        let ratio: number;
-        if (isVertical) {
-          ratio = (e.clientX - rect.left) / rect.width;
-        } else {
-          ratio = (e.clientY - rect.top) / rect.height;
-        }
-        ratio = Math.max(0.1, Math.min(0.9, ratio));
-        useTerminalStore.getState().setSplitRatio(tabId, path, ratio);
+        const raw = isVertical ? (e.clientX - rect.left) / rect.width : (e.clientY - rect.top) / rect.height;
+        lastRatio = Math.max(0.1, Math.min(0.9, raw));
+        first.style.flex = String(lastRatio);
+        second.style.flex = String(1 - lastRatio);
       };
 
       const onMouseUp = () => {
@@ -154,7 +159,9 @@ function SplitContainer({
         document.removeEventListener("mouseup", onMouseUp);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
-        setIsDragging(false);
+        first.style.transition = SPLIT_TRANSITION;
+        second.style.transition = SPLIT_TRANSITION;
+        if (lastRatio !== null) useTerminalStore.getState().setSplitRatio(tabId, path, lastRatio);
       };
 
       document.addEventListener("mousemove", onMouseMove);
@@ -165,11 +172,13 @@ function SplitContainer({
     [tabId, path, isVertical]
   );
 
-  const transition = isDragging ? "none" : "flex 150ms ease-out";
-
   return (
     <div ref={containerRef} className={`flex h-full w-full ${isVertical ? "flex-row" : "flex-col"}`}>
-      <div className="overflow-hidden min-w-0 min-h-0" style={{ flex: node.ratio, transition }}>
+      <div
+        ref={firstRef}
+        className="overflow-hidden min-w-0 min-h-0"
+        style={{ flex: node.ratio, transition: SPLIT_TRANSITION }}
+      >
         <SplitPane
           node={node.first}
           tabId={tabId}
@@ -185,7 +194,11 @@ function SplitContainer({
         }`}
         onMouseDown={handleDragStart}
       />
-      <div className="overflow-hidden min-w-0 min-h-0" style={{ flex: 1 - node.ratio, transition }}>
+      <div
+        ref={secondRef}
+        className="overflow-hidden min-w-0 min-h-0"
+        style={{ flex: 1 - node.ratio, transition: SPLIT_TRANSITION }}
+      >
         <SplitPane
           node={node.second}
           tabId={tabId}

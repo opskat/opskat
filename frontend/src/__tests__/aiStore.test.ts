@@ -1338,7 +1338,7 @@ describe("AI conversation persistence", () => {
     await useAIStore.getState().sendToTab(tabId, "next");
 
     expect(SaveConversationMessages).toHaveBeenCalled();
-    const [, displayMsgs] = vi.mocked(SaveConversationMessages).mock.calls[0];
+    const [, , displayMsgs] = vi.mocked(SaveConversationMessages).mock.calls[0];
     const assistant = (displayMsgs as any[]).find((m) => m.role === "assistant" && m.content === "partial");
     expect(assistant).toBeTruthy();
     expect(assistant.blocks.map((b: any) => b.status)).toEqual(["cancelled", "cancelled", "completed"]);
@@ -1392,7 +1392,7 @@ describe("AI conversation persistence", () => {
     useTabStore.getState().closeTab(tabId);
 
     expect(SaveConversationMessages).toHaveBeenCalledTimes(1);
-    const [convIdArg, displayMsgs] = vi.mocked(SaveConversationMessages).mock.calls[0];
+    const [convIdArg, , displayMsgs] = vi.mocked(SaveConversationMessages).mock.calls[0];
     expect(convIdArg).toBe(103);
     const assistant = (displayMsgs as any[]).find((m) => m.role === "assistant");
     expect(assistant).toBeTruthy();
@@ -1687,7 +1687,7 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
 
     const savedBlocks = vi
       .mocked(SaveConversationMessages)
-      .mock.calls.flatMap((c) => (c[1] as any[]).flatMap((m) => m.blocks || []));
+      .mock.calls.flatMap((c) => (c[2] as any[]).flatMap((m) => m.blocks || []));
     const savedTool = savedBlocks.find((b) => b.type === "tool");
     expect(savedTool).toBeDefined();
     expect(savedTool.toolCallId).toBe("call_001");
@@ -2139,12 +2139,14 @@ describe("retry/error handling", () => {
   it("error 分类块在 save/load round-trip 中保留 errorKind 和 errorDetail", async () => {
     const cbs = await startStreamingConv(406);
     cbs[0]?.({ type: "error", error: "401 unauthorized: invalid api key" });
+    // error 事件立即落盘（只发变化的尾部）；关 tab 时快照与上次落盘一致，不再发起保存。
+    const saved = vi.mocked(SaveConversationMessages).mock.calls.at(-1)![2] as any[];
 
     vi.mocked(SaveConversationMessages).mockClear();
     useTabStore.getState().closeTab("ai-406");
-    await waitForStoreCondition(() => vi.mocked(SaveConversationMessages).mock.calls.length > 0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SaveConversationMessages).not.toHaveBeenCalled();
 
-    const saved = vi.mocked(SaveConversationMessages).mock.calls.at(-1)![1] as any[];
     const savedErr = saved.at(-1)?.blocks.find((b: any) => b.type === "error");
     expect(savedErr?.errorKind).toBe("auth");
     expect(savedErr?.errorDetail).toContain("401");
@@ -2185,7 +2187,7 @@ describe("retry/error handling", () => {
     useTabStore.getState().closeTab("ai-405");
     await waitForStoreCondition(() => vi.mocked(SaveConversationMessages).mock.calls.length > 0);
     const calls = vi.mocked(SaveConversationMessages).mock.calls;
-    const lastSaved = calls.at(-1)![1] as any[];
+    const lastSaved = calls.at(-1)![2] as any[];
     const lastMsg = lastSaved.at(-1);
     const errBlock = lastMsg.blocks.find((b: any) => b.type === "error");
     expect(errBlock).toBeTruthy();
@@ -2278,7 +2280,7 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
 
     await useAIStore.getState().sendFromSidebarTab("sidebar-redact-1", "继续");
 
-    const savedMsgs = vi.mocked(SaveConversationMessages).mock.calls.flatMap((c) => c[1] as any[]);
+    const savedMsgs = vi.mocked(SaveConversationMessages).mock.calls.flatMap((c) => c[2] as any[]);
     const agentBlock = savedMsgs.flatMap((m) => m.blocks || []).find((b) => b.type === "agent");
     expect(agentBlock).toBeDefined();
     expect(agentBlock.childBlocks).toHaveLength(1);

@@ -8,6 +8,8 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/helper"
+	"github.com/opskat/opskat/internal/ai/outputcap"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -119,6 +121,20 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	return exec(ctx, asset, command, scope)
 }
+
+// handleAIExec 是 AI 会话里 exec 工具的入口：在 handleExec 之上给结果加上限——这份结果
+// 会进入模型上下文、tool_result 事件和会话存储。SQL 结果先按行数截断（注明总行数），再统一
+// 按字节/行数截断头尾。opsctl 的 exec / batch 经 AllToolDefs 直接调 handleExec，输出保持完整。
+func handleAIExec(ctx context.Context, args map[string]any) (string, error) {
+	out, err := handleExec(helper.WithMaxRows(ctx, maxSQLRows), args)
+	if err != nil {
+		return out, err
+	}
+	return outputcap.Cap(out), nil
+}
+
+// maxSQLRows 是 AI exec 工具一次最多返回的 SQL 行数。
+const maxSQLRows = 200
 
 // recordShortCircuit 把"命令在权限检查之前就被挡下"写进审计决策槽。
 //

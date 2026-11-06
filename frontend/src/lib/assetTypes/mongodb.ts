@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { MongodbIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
-import { MongoDBDetailInfoCard } from "@/components/asset/detail/MongoDBDetailInfoCard";
-import { MongoDBConfigSection } from "@/components/asset/MongoDBConfigSection";
+
+const MongoDBDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/MongoDBDetailInfoCard").then((m) => ({ default: m.MongoDBDetailInfoCard }))
+);
+const MongoDBConfigSection = lazy(() =>
+  import("@/components/asset/MongoDBConfigSection").then((m) => ({ default: m.MongoDBConfigSection }))
+);
 
 registerAssetType({
   type: "mongodb",

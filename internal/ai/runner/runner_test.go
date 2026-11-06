@@ -57,6 +57,7 @@ func runOneTurn(t *testing.T, mock provider.Provider, systemPrompt string, messa
 			out = append(out, se)
 		})
 	}
+	translator.Close()
 	return out
 }
 
@@ -272,6 +273,7 @@ func TestRunner_EndToEnd_RealOpenAIProvider_503TriggersRetry(t *testing.T) {
 				}
 			})
 		}
+		translator.Close()
 
 		// 第一次 503 必须命中 cago retry：
 		//   - 后端 emit 一次 EventRetry → 前端 type:"retry" StreamEvent
@@ -507,6 +509,7 @@ func TestRunner_CancelEmitsStopped(t *testing.T) {
 				}
 			})
 		}
+		translator.Close()
 		So(seenStopped, ShouldBeTrue)
 	})
 }
@@ -548,6 +551,7 @@ func TestRunner_CancelDuringRetryBackoffEmitsStopped(t *testing.T) {
 				}
 			})
 		}
+		translator.Close()
 		So(types, ShouldContain, "retry")
 		So(types, ShouldContain, "stopped")
 		So(ctx.Err(), ShouldBeNil) // 由 Cancel 结束，而非测试超时

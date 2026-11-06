@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,17 +61,62 @@ func TestExecuteSQLKeepsAnEmptyResultSetAsNullRows(t *testing.T) {
 	assert.JSONEq(t, `{"columns":["id","name"],"rows":null,"count":0}`, result)
 }
 
+func TestExecuteSQLRowLimitTruncatesRowsAndStatesTotal(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"id"}
+	fake.Rows = nil
+	for i := 0; i < 1000; i++ {
+		fake.Rows = append(fake.Rows, []any{i})
+	}
+	session := openFakeSession(t, fake)
+
+	result, err := ExecuteSQL(WithMaxRows(context.Background(), 10), session, "SELECT id FROM t")
+	require.NoError(t, err)
+
+	var got struct {
+		Rows      []map[string]any `json:"rows"`
+		Count     int              `json:"count"`
+		TotalRows int              `json:"total_rows"`
+		Note      string           `json:"note"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(result), &got))
+	assert.Len(t, got.Rows, 10)
+	assert.Equal(t, 10, got.Count)
+	assert.Equal(t, 1000, got.TotalRows)
+	assert.Contains(t, got.Note, "1000")
+
+	// Without the option (opsctl) every row comes back and no note is added.
+	full, err := ExecuteSQL(context.Background(), session, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.NotContains(t, full, "total_rows")
+	assert.Contains(t, full, `"count":1000`)
+
+	// Under the limit: unchanged.
+	small, err := ExecuteSQL(WithMaxRows(context.Background(), 5000), session, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.Equal(t, full, small)
+}
+
 func TestExecuteSQLPagedReportsThePageAndTheTotal(t *testing.T) {
 	session := openFakeSession(t, dbdrivertest.NewFake())
 
-	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", 1, 2)
+	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1,"total_count":3}`, result)
 
 	// 驱动没有分页的语句：照普通执行的格式返回，不带 total_count。
-	result, err = ExecuteSQLPaged(context.Background(), session, "DELETE FROM t", 0, 2)
+	result, err = ExecuteSQLPaged(context.Background(), session, "DELETE FROM t", dbdriver.Page{Index: 0, Size: 2})
 	require.NoError(t, err)
 	assert.Equal(t, `{"affected_rows":3}`, result)
+}
+
+// 翻页时调用方已有总数：结果只有这一页，不带 total_count。
+func TestExecuteSQLPagedOmitsTheTotalWhenAskedToSkipIt(t *testing.T) {
+	session := openFakeSession(t, dbdrivertest.NewFake())
+
+	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2, SkipTotal: true})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1}`, result)
 }
 
 func TestExecuteSQLReturnsTheDriversError(t *testing.T) {
@@ -79,7 +125,7 @@ func TestExecuteSQLReturnsTheDriversError(t *testing.T) {
 
 	_, err := ExecuteSQL(context.Background(), session, "SELECT * FROM t")
 	require.ErrorIs(t, err, dbdrivertest.ErrFakeSessionClosed)
-	_, err = ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", 0, 10)
+	_, err = ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 0, Size: 10})
 	require.ErrorIs(t, err, dbdrivertest.ErrFakeSessionClosed)
 }
 

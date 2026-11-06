@@ -4,6 +4,7 @@ import { DatabaseTree } from "../components/query/DatabaseTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { ExecuteSQL, GetCreateDatabaseStatements, GetStarterQuery, ListTables } from "../../wailsjs/go/query/Query";
+import { profiled } from "./renderCount";
 import { BUILTIN_DRIVERS, FAKE_DRIVER, mockSchemaStatements, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
@@ -61,6 +62,22 @@ describe("DatabaseTree", () => {
     });
     makeDatabaseTab();
     vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
+  });
+
+  it("does not re-render when another tab's query state changes", async () => {
+    const { tree, counter } = profiled(<DatabaseTree tabId="query-1" />);
+    await act(async () => {
+      render(tree);
+    });
+    const before = counter.commits;
+
+    await act(async () => {
+      useQueryStore.setState((s) => ({
+        dbStates: { ...s.dbStates, "query-2": { ...s.dbStates["query-1"], loadingDbs: true } },
+      }));
+    });
+
+    expect(counter.commits).toBe(before);
   });
 
   it("renders PostgreSQL tables grouped by schema and opens qualified table names", async () => {

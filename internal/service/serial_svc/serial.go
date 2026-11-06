@@ -1,7 +1,6 @@
 package serial_svc
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/service/sessionid"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -501,8 +501,8 @@ func (m *Manager) closeSessionWithoutCallbacks(sessionID string) bool {
 	return true
 }
 
-// readOutput 持续从串口读取数据并回调。
-// 使用 10ms ticker 合并输出，减少高频 EventsEmit 调用导致前端事件队列阻塞。
+// readOutput 持续从串口读取数据，经 streambatch 攒批后回调，减少高频 EventsEmit
+// 调用导致前端事件队列阻塞；批次由计时器按窗口交付，不依赖下一次 Read 返回。
 // AI 命令执行期间通过 cmdCapture 即时收集每个 chunk，确保 ExecCommand 能及时收到数据。
 func (m *Manager) readOutput(sess *Session) {
 	defer func() {
@@ -510,38 +510,27 @@ func (m *Manager) readOutput(sess *Session) {
 		sess.Close()
 	}()
 
-	var pending bytes.Buffer
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	flush := func() {
-		if pending.Len() == 0 {
-			return
-		}
+	batch := streambatch.New(streambatch.DefaultWindow, streambatch.DefaultMaxBytes, func(data []byte) {
 		sess.mu.Lock()
 		handler := sess.onData
 		sess.mu.Unlock()
 		if handler != nil {
-			data := make([]byte, pending.Len())
-			copy(data, pending.Bytes())
-			pending.Reset()
 			handler(data)
-		} else {
-			pending.Reset()
 		}
-	}
+	})
+	// 后注册先执行:尾部数据先于 sess.Close(→ onClosed)送达。
+	defer batch.Close()
 
 	buf := make([]byte, 4096)
 	for {
 		if sess.IsClosed() {
-			flush()
 			return
 		}
 		n, err := sess.port.Read(buf)
 		if n > 0 {
-			// pending.Write 与 capture.Append 内部都会复制一份，所以这里不再额外 copy buf。
+			// batch.Add 与 capture.Append 内部都会复制一份，所以这里不再额外 copy buf。
 			chunk := buf[:n]
-			pending.Write(chunk)
+			batch.Add(chunk)
 			// AI 命令执行：即时收集每个 chunk，避免高峰时丢失输出。
 			sess.mu.Lock()
 			capture := sess.cmdCapture
@@ -549,26 +538,15 @@ func (m *Manager) readOutput(sess *Session) {
 			if capture != nil {
 				capture.Append(chunk)
 			}
-			// 缓冲超过 32KB 时立即刷新，避免延迟过大
-			if pending.Len() >= 32*1024 {
-				flush()
-			}
 		}
 		if err != nil {
 			if err == io.EOF || isPortClosedError(err) || sess.IsClosed() {
-				flush()
 				return
 			}
 			logger.Default().Warn("serial read failed", zap.String("sessionID", sess.ID), zap.Error(err))
-			flush()
 			return
 		}
 		// n == 0: SetReadTimeout 超时，继续轮询
-		select {
-		case <-ticker.C:
-			flush()
-		default:
-		}
 	}
 }
 

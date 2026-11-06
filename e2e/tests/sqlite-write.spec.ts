@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
-import { createSQLiteAssetViaUI } from "../fixtures/assets";
+import { createSQLiteAssetViaUI, assetTreeRow } from "../fixtures/assets";
 
 // SQLite 写路径:界面里的写操作经驱动生成语句、执行后,读回 SQLite 文件确认真实数据。
 
@@ -28,10 +28,7 @@ async function openPanel(page: Page, targetPath: string): Promise<Locator> {
   const name = `e2e-sqlite-write-${Date.now()}`;
   await createSQLiteAssetViaUI(page, { name, path: targetPath });
 
-  await page
-    .getByTestId("asset-tree")
-    .getByText(name, { exact: true })
-    .dblclick();
+  await (await assetTreeRow(page, name)).dblclick();
   const panel = page.getByTestId("database-query-panel");
   await expect(panel).toBeVisible({ timeout: 30_000 });
   await panel.getByText("main", { exact: true }).click();

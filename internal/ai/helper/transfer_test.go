@@ -694,7 +694,7 @@ func TestSFTPWriteCreatesParentsAndReadRoundTrips(t *testing.T) {
 	client := newTestSFTP(t)
 	dst := sftpiotest.RemotePath(filepath.Join(t.TempDir(), "new", "deep", "f.txt"))
 
-	if err := writeSFTP(context.Background(), client, dst, strings.NewReader("payload")); err != nil {
+	if err := writeSFTP(context.Background(), client, dst, strings.NewReader("payload"), nil); err != nil {
 		t.Fatalf("writeSFTP: %v", err)
 	}
 

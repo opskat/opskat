@@ -104,6 +104,27 @@ type TransferPathResolver interface {
 	ResolveTransferPath(ctx context.Context, asset *asset_entity.Asset, path string) (string, error)
 }
 
+// TransferDirPreparer 是目的端的可选能力：多条目写入开始之前，按给定顺序把 paths 的全部
+// 父目录一次建好、逐个做一次路径安全核验，返回的 ctx 下对这些路径的 Write 不再逐文件建目录、
+// 逐级检查。没有这项能力的端点（本地、对象存储）照旧在每次 Write 里按需处理。
+//
+// 核验相对的是 ctx 里 WithTransferWriteScope 注入的已批准范围——与随后 Write 用的是同一个
+// 值；越出它的路径报错。返回的 ctx 可以被并发的 Write 共用。
+type TransferDirPreparer interface {
+	PrepareTransferDirs(ctx context.Context, asset *asset_entity.Asset, paths []string) (context.Context, error)
+}
+
+// PrepareTransferDirs 通过适配器能力预建目的目录；没有该能力的适配器原样交回 ctx。
+func PrepareTransferDirs(
+	ctx context.Context, adapter TransferAdapter, asset *asset_entity.Asset, paths []string,
+) (context.Context, error) {
+	preparer, ok := adapter.(TransferDirPreparer)
+	if !ok {
+		return ctx, nil
+	}
+	return preparer.PrepareTransferDirs(ctx, asset, paths)
+}
+
 // ApprovalTarget 是一个端点操作必须同时满足的单条授权。通常只有一条；SSH 的 `-r path`
 // 在审批前不能探测 path 是文件还是目录，因此同时要求精确路径与子树范围。
 type ApprovalTarget struct {

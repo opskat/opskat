@@ -111,7 +111,7 @@ func (s *Service) Provenance(ctx context.Context, name string) (Provenance, erro
 	case err != nil:
 		return Provenance{}, fmt.Errorf("extension %q: read install record: %w", name, err)
 	}
-	sum, err := PackageSHA256(s.manager.ExtDir(name))
+	sum, err := s.digests.get(name, s.manager.ExtDir(name))
 	if err != nil {
 		return Provenance{}, fmt.Errorf("extension %q: %w", name, err)
 	}

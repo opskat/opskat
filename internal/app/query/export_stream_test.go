@@ -120,14 +120,14 @@ func TestTableExportCursorKeepsItsSessionFromIdleEviction(t *testing.T) {
 	sessions := fake.Sessions()
 	require.Len(t, sessions, 1)
 
-	q.dbPanelCache.evictOnce(time.Now().Add(time.Hour))
+	q.dbPanelCache.EvictIdle(time.Now().Add(time.Hour))
 	assert.False(t, sessions[0].Closed(), "a session an export cursor is reading from is not idle")
 	chunk, err := q.ReadTableExport(cursor.ID, 10)
 	require.NoError(t, err)
 	assert.Len(t, chunk.Rows, len(fake.Rows))
 
 	require.NoError(t, q.CloseTableExport(cursor.ID))
-	q.dbPanelCache.evictOnce(time.Now().Add(time.Hour))
+	q.dbPanelCache.EvictIdle(time.Now().Add(time.Hour))
 	assert.True(t, sessions[0].Closed(), "once the cursor is closed the session idles out as before")
 }
 

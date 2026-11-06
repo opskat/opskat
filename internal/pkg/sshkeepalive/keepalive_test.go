@@ -15,6 +15,12 @@ type fakePinger struct {
 	count    int32
 	called   chan struct{}
 	returnFn func() error
+	closes   atomic.Int32
+}
+
+func (f *fakePinger) Close() error {
+	f.closes.Add(1)
+	return nil
 }
 
 func (f *fakePinger) SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error) {
@@ -37,7 +43,7 @@ func (f *fakePinger) calls() int32 {
 
 func manualStart(fp *fakePinger) (chan<- time.Time, func()) {
 	ticks := make(chan time.Time, 1)
-	return ticks, start(fp, ticks, func() {})
+	return ticks, start(fp, ticks, func() {}, time.Hour)
 }
 
 func waitForCall(t *testing.T, fp *fakePinger) {
@@ -59,8 +65,10 @@ func TestStart(t *testing.T) {
 		waitForCall(t, fp)
 		ticks <- time.Time{}
 		waitForCall(t, fp)
+		stop()
 
 		So(fp.calls(), ShouldEqual, 2)
+		So(fp.closes.Load(), ShouldEqual, 0)
 	})
 
 	Convey("Start does not fire before the first interval", t, func() {
@@ -140,4 +148,48 @@ func TestStart(t *testing.T) {
 			So(fp.calls(), ShouldEqual, 0)
 		}
 	})
+}
+
+// hangingPinger 的 keepalive 永不回复，直到 Close 打断它（与 *ssh.Client 一样：关闭连接后挂起的请求返回错误）。
+type hangingPinger struct {
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (h *hangingPinger) SendRequest(string, bool, []byte) (bool, []byte, error) {
+	<-h.closed
+	return false, nil, errors.New("connection closed")
+}
+
+func (h *hangingPinger) Close() error {
+	h.closeOnce.Do(func() { close(h.closed) })
+	return nil
+}
+
+func TestStartClosesClientWhenReplyTimesOut(t *testing.T) {
+	h := &hangingPinger{closed: make(chan struct{})}
+	stop := Start(h, 20*time.Millisecond)
+	defer stop()
+	defer func() { _ = h.Close() }()
+
+	select {
+	case <-h.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client was not closed after the keepalive reply timed out")
+	}
+}
+
+func TestStartKeepsAnsweredConnectionOpen(t *testing.T) {
+	fp := &fakePinger{}
+	stop := Start(fp, 50*time.Millisecond)
+	// 跑过两个回复时限（3×50ms）：按时回复的连接一次也不能被关。
+	time.Sleep(350 * time.Millisecond)
+	stop()
+
+	if fp.calls() < 2 {
+		t.Fatalf("keepalive calls = %d, want at least 2", fp.calls())
+	}
+	if n := fp.closes.Load(); n != 0 {
+		t.Fatalf("answered connection closed %d times", n)
+	}
 }

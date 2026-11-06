@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { Monitor } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { RDPDetailInfoCard } from "@/components/asset/detail/RDPDetailInfoCard";
-import { RDPConfigSection } from "@/components/asset/RDPConfigSection";
+
+const RDPDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/RDPDetailInfoCard").then((m) => ({ default: m.RDPDetailInfoCard }))
+);
+const RDPConfigSection = lazy(() =>
+  import("@/components/asset/RDPConfigSection").then((m) => ({ default: m.RDPConfigSection }))
+);
 
 registerAssetType({
   type: "rdp",

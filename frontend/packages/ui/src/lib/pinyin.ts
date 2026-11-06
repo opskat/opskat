@@ -15,8 +15,38 @@ function ensurePinyinLoaded(): Promise<void> {
 
 void ensurePinyinLoaded();
 
-/** 测试或显式预热时使用。 */
-export const __ensurePinyinReady = ensurePinyinLoaded;
+interface PinyinEntry {
+  pinyinArr: string[];
+  firstArr: string[];
+  initials: string;
+  fullPinyin: string;
+}
+
+// Search runs pinyinMatch over the same names on every keystroke; converting a string
+// is the expensive part, so its pinyin is computed once and reused. Cleared wholesale
+// when it grows past the cap so long sessions with changing texts stay bounded.
+const PINYIN_CACHE_LIMIT = 10_000;
+const pinyinCache = new Map<string, PinyinEntry>();
+
+function pinyinOf(convert: PinyinFn, text: string): PinyinEntry {
+  const cached = pinyinCache.get(text);
+  if (cached) return cached;
+  const pinyinArr = convert(text, { toneType: "none", type: "array" });
+  const firstArr = convert(text, {
+    pattern: "first",
+    toneType: "none",
+    type: "array",
+  });
+  const entry: PinyinEntry = {
+    pinyinArr,
+    firstArr,
+    initials: firstArr.join("").toLowerCase(),
+    fullPinyin: pinyinArr.join("").toLowerCase(),
+  };
+  if (pinyinCache.size >= PINYIN_CACHE_LIMIT) pinyinCache.clear();
+  pinyinCache.set(text, entry);
+  return entry;
+}
 
 /**
  * Check if `text` matches `query` by original text, full pinyin, initials, or mixed pinyin.
@@ -32,20 +62,13 @@ export function pinyinMatch(text: string, query: string): boolean {
 
   if (!pinyinFn) return false;
 
-  // 2. Get pinyin arrays for each character
-  const pinyinArr = pinyinFn(text, { toneType: "none", type: "array" });
-  const firstArr = pinyinFn(text, {
-    pattern: "first",
-    toneType: "none",
-    type: "array",
-  });
+  // 2. Get pinyin arrays for each character (cached per text)
+  const { pinyinArr, firstArr, initials, fullPinyin } = pinyinOf(pinyinFn, text);
 
   // 3. Initials-only match (e.g. "zzz" matches "中转站")
-  const initials = firstArr.join("").toLowerCase();
   if (initials.includes(lowerQuery)) return true;
 
   // 4. Full pinyin match (e.g. "zhongzhuanzhan" matches "中转站")
-  const fullPinyin = pinyinArr.join("").toLowerCase();
   if (fullPinyin.includes(lowerQuery)) return true;
 
   // 5. Mixed match: query consumed char-by-char against each character's pinyin

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -35,6 +36,9 @@ import (
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/configs/memory"
 	"github.com/cago-frame/cago/database/db"
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	_ "github.com/opskat/opskat/internal/pkg/code"
 
@@ -119,12 +123,6 @@ func Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	// 获取 master key：CLI 参数 > Keychain > 文件 > 自动生成
-	masterKey, err := credential_svc.ResolveMasterKey(masterKeyOpts(opts, dataDir))
-	if err != nil {
-		return fmt.Errorf("获取 master key 失败: %w", err)
-	}
-
 	cfg, err := configs.NewConfig("opskat", configs.WithSource(memory.NewSource(map[string]interface{}{
 		"db": map[string]interface{}{
 			"driver": "sqlite",
@@ -144,18 +142,61 @@ func Init(ctx context.Context, opts Options) error {
 		return fmt.Errorf("获取 KDF salt 失败: %w", err)
 	}
 
-	credential_svc.SetDefault(credential_svc.New(masterKey, salt))
+	// master key（CLI 参数 > Keychain > 文件 > 自动生成）与 Argon2id 派生推迟到首次加解密，
+	// 不解密的进程（如 opsctl list）不访问 keychain、不跑 KDF
+	mkOpts := masterKeyOpts(opts, dataDir)
+	credential_svc.SetDefault(credential_svc.NewLazy(func() (string, error) {
+		return credential_svc.ResolveMasterKey(mkOpts)
+	}, salt))
 
 	registerRepositories()
 
 	if err := migrations.RunMigrations(db.Default(), dataDir); err != nil {
 		return err
 	}
+	if err := refreshPlannerStats(db.Default()); err != nil {
+		logger.Ctx(ctx).Warn("refresh sqlite planner statistics", zap.Error(err))
+	}
 
 	snippet_svc.Register(snippet_svc.NewSnippetSvc(snippet_svc.NewCategoryRegistry()))
 	registerCommandReview()
 
 	return nil
+}
+
+// auditStatsGrowth 是 audit_logs 行数涨到上次统计时的多少倍就重新统计。
+const auditStatsGrowth = 10
+
+// auditAnalysisLimit 限制重新统计时每个索引扫描的行数，让大表上的 ANALYZE 也只花毫秒级时间。
+const auditAnalysisLimit = 1000
+
+// refreshPlannerStats 让审计表的规划器统计跟上数据增长。迁移里的 ANALYZE 只覆盖升级那一刻
+// 已有的数据：新装或升级时表还小的库长大后没有可用统计，审计页的时间窗查询会退回整索引扫描。
+//
+// 每次启动（含每次 opsctl 调用）都会走到这里，所以判断是否需要统计必须只读：PRAGMA optimize
+// 每次都要取写锁（空表 ANALYZE 后仍无统计，永远被当成"缺统计"），另一进程写库时启动就会卡在
+// busy_timeout 上。审计日志只增不删，id 跨度即行数，主键两端各查一次即可得出。
+// 失败不影响查询结果，由调用方记日志、沿用旧统计。
+func refreshPlannerStats(gdb *gorm.DB) error {
+	var st struct {
+		Analyzed sql.NullInt64
+		Rows     int64
+	}
+	if err := gdb.Raw(`SELECT
+	(SELECT MAX(CAST(stat AS INTEGER)) FROM sqlite_stat1 WHERE tbl = 'audit_logs') AS analyzed,
+	COALESCE((SELECT MAX(id) FROM audit_logs) - (SELECT MIN(id) FROM audit_logs) + 1, 0) AS rows`).Scan(&st).Error; err != nil {
+		return err
+	}
+	if st.Rows == 0 || (st.Analyzed.Valid && st.Rows < auditStatsGrowth*st.Analyzed.Int64) {
+		return nil
+	}
+	// analysis_limit 是连接级设置，固定在同一条连接上设置并执行。
+	return gdb.Connection(func(conn *gorm.DB) error {
+		if err := conn.Exec(fmt.Sprintf("PRAGMA analysis_limit = %d", auditAnalysisLimit)).Error; err != nil {
+			return err
+		}
+		return conn.Exec("ANALYZE audit_logs").Error
+	})
 }
 
 // registerRepositories 注册所有 Repository 单例

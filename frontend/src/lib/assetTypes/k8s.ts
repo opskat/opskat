@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { KubernetesIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
-import { K8sDetailInfoCard } from "@/components/asset/detail/K8sDetailInfoCard";
-import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
+
+const K8sDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/K8sDetailInfoCard").then((m) => ({ default: m.K8sDetailInfoCard }))
+);
+const K8sConfigSection = lazy(() =>
+  import("@/components/asset/K8sConfigSection").then((m) => ({ default: m.K8sConfigSection }))
+);
 
 registerAssetType({
   type: "k8s",

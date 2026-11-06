@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { Usb } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { SerialDetailInfoCard } from "@/components/asset/detail/SerialDetailInfoCard";
-import { SerialConfigSection } from "@/components/asset/SerialConfigSection";
+
+const SerialDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/SerialDetailInfoCard").then((m) => ({ default: m.SerialDetailInfoCard }))
+);
+const SerialConfigSection = lazy(() =>
+  import("@/components/asset/SerialConfigSection").then((m) => ({ default: m.SerialConfigSection }))
+);
 
 registerAssetType({
   type: "serial",

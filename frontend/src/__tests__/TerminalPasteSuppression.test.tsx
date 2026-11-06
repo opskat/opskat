@@ -34,6 +34,7 @@ const hoisted = vi.hoisted(() => {
     urlHighlighter: {
       setEnabled: vi.fn(),
       setColor: vi.fn(),
+      setActive: vi.fn(),
     },
     clipboardOsc52: {
       setEnabled: vi.fn(),

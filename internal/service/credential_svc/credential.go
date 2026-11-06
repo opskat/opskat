@@ -7,7 +7,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"sync"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -20,27 +23,64 @@ const (
 	saltLen       = 16
 )
 
-// CredentialSvc 凭证加解密服务（Argon2id + AES-256-GCM）
+// CredentialSvc 凭证加解密服务（Argon2id + AES-256-GCM）。
+// master key 解析与 Argon2id 派生推迟到首次 Encrypt / Decrypt，并发首次调用只执行一次；
+// 解析或派生失败的错误会被缓存并由 Encrypt / Decrypt 返回。
 type CredentialSvc struct {
-	gcm cipher.AEAD
+	resolveKey func() (string, error)
+	salt       []byte
+
+	once sync.Once
+	gcm  cipher.AEAD
+	err  error
 }
 
-// New 创建凭证服务，使用 Argon2id(masterKey, salt) 派生 AES-256 密钥
+// NewLazy 创建凭证服务，master key 由 resolveKey 在首次加解密时解析，
+// 随后使用 Argon2id(masterKey, salt) 派生 AES-256 密钥
+func NewLazy(resolveKey func() (string, error), salt []byte) *CredentialSvc {
+	return &CredentialSvc{resolveKey: resolveKey, salt: salt}
+}
+
+// New 创建凭证服务，使用 Argon2id(masterKey, salt) 派生 AES-256 密钥（首次加解密时才派生）
 func New(masterKey string, salt []byte) *CredentialSvc {
-	key := argon2.IDKey([]byte(masterKey), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	return NewLazy(func() (string, error) { return masterKey, nil }, salt)
+}
+
+// aead 返回派生好的 GCM，首次调用时解析 master key 并派生密钥。
+// 失败会被缓存：之后每次加解密都返回同一个错误，根因只在这里记一次日志。
+func (s *CredentialSvc) aead() (cipher.AEAD, error) {
+	s.once.Do(func() {
+		s.gcm, s.err = s.derive()
+		// 派生只做一次：放掉解析函数，它的闭包可能持有明文 master key（--master-key / New）
+		s.resolveKey = nil
+		if s.err != nil {
+			logger.Default().Error("init credential cipher", zap.Error(s.err))
+		}
+	})
+	return s.gcm, s.err
+}
+
+func (s *CredentialSvc) derive() (cipher.AEAD, error) {
+	masterKey, err := s.resolveKey()
+	if err != nil {
+		return nil, fmt.Errorf("获取 master key 失败: %w", err)
+	}
+	key := argon2.IDKey([]byte(masterKey), s.salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	defer func() {
+		// 清除密钥材料
+		for i := range key {
+			key[i] = 0
+		}
+	}()
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		panic(fmt.Sprintf("创建 AES cipher 失败: %v", err))
-	}
-	// 清除密钥材料
-	for i := range key {
-		key[i] = 0
+		return nil, fmt.Errorf("创建 AES cipher 失败: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		panic(fmt.Sprintf("创建 GCM 失败: %v", err))
+		return nil, fmt.Errorf("创建 GCM 失败: %w", err)
 	}
-	return &CredentialSvc{gcm: gcm}
+	return gcm, nil
 }
 
 // GenerateSalt 生成随机 salt
@@ -54,26 +94,34 @@ func GenerateSalt() ([]byte, error) {
 
 // Encrypt 加密明文，返回 base64 编码的密文
 func (s *CredentialSvc) Encrypt(plaintext string) (string, error) {
-	nonce := make([]byte, s.gcm.NonceSize())
+	gcm, err := s.aead()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("生成 nonce 失败: %w", err)
 	}
-	ciphertext := s.gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 // Decrypt 解密 base64 编码的密文
 func (s *CredentialSvc) Decrypt(ciphertextB64 string) (string, error) {
+	gcm, err := s.aead()
+	if err != nil {
+		return "", err
+	}
 	data, err := base64.StdEncoding.DecodeString(ciphertextB64)
 	if err != nil {
 		return "", fmt.Errorf("base64 解码失败: %w", err)
 	}
-	nonceSize := s.gcm.NonceSize()
+	nonceSize := gcm.NonceSize()
 	if len(data) < nonceSize {
 		return "", fmt.Errorf("密文太短")
 	}
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
-	plaintext, err := s.gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return "", fmt.Errorf("解密失败: %w", err)
 	}

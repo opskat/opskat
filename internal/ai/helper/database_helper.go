@@ -118,27 +118,46 @@ func ExecuteSQL(ctx context.Context, session dbdriver.Session, sqlText string) (
 	return formatSQLResult(ctx, result)
 }
 
-// ExecuteSQLPaged 在会话上分页执行 SQL 并返回 JSON 结果。page 从 0 起。怎么分页、怎么
-// 计数由驱动决定；驱动没有分页的语句（非查询等）结果里不带 total_count。
-func ExecuteSQLPaged(ctx context.Context, session dbdriver.Session, sqlText string, page, pageSize int) (string, error) {
-	result, err := session.ExecutePaged(ctx, sqlText, dbdriver.Page{Index: page, Size: pageSize})
+// ExecuteSQLPaged 在会话上分页执行 SQL 并返回 JSON 结果。page.Index 从 0 起。怎么分页、怎么
+// 计数由驱动决定；驱动没有分页的语句（非查询等）和 page.SkipTotal 时结果里不带 total_count。
+func ExecuteSQLPaged(ctx context.Context, session dbdriver.Session, sqlText string, page dbdriver.Page) (string, error) {
+	result, err := session.ExecutePaged(ctx, sqlText, page)
 	if err != nil {
 		return "", err
 	}
 	return formatSQLResult(ctx, result)
 }
 
+type maxRowsKey struct{}
+
+// WithMaxRows 让该 ctx 下的 SQL 结果最多返回 n 行（超出时注明总行数）。只有 AI 工具边界
+// 会设置它；opsctl 不设，结果保持完整。
+func WithMaxRows(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, maxRowsKey{}, n)
+}
+
+func maxRows(ctx context.Context) (int, bool) {
+	n, ok := ctx.Value(maxRowsKey{}).(int)
+	return n, ok && n > 0
+}
+
 // formatSQLResult 把驱动给的结构化结果排成对外的 JSON：
 //
-//	结果集   {"columns":[...],"rows":[{列名:值,...},...],"count":N}，分页时多一个 "total_count"
+//	结果集   {"columns":[...],"rows":[{列名:值,...},...],"count":N}，驱动给出总行数时多一个 "total_count"
 //	无结果集 {"affected_rows":N}
 func formatSQLResult(ctx context.Context, result *dbdriver.Result) (string, error) {
 	if result.Rows == nil {
 		return fmt.Sprintf(`{"affected_rows":%d}`, result.AffectedRows), nil
 	}
 	rowSet := result.Rows
+	values := rowSet.Rows
+	limit, limited := maxRows(ctx)
+	truncated := limited && len(values) > limit
+	if truncated {
+		values = values[:limit]
+	}
 	var rows []map[string]any
-	for _, values := range rowSet.Rows {
+	for _, values := range values {
 		row := make(map[string]any, len(rowSet.Columns))
 		for i, col := range rowSet.Columns {
 			row[col] = values[i]
@@ -152,6 +171,10 @@ func formatSQLResult(ctx context.Context, result *dbdriver.Result) (string, erro
 	}
 	if rowSet.Total != nil {
 		payload["total_count"] = *rowSet.Total
+	}
+	if truncated {
+		payload["total_rows"] = len(rowSet.Rows)
+		payload["note"] = fmt.Sprintf("showing the first %d of %d rows; narrow the query (WHERE / LIMIT / fewer columns) to see the rest", limit, len(rowSet.Rows))
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

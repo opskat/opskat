@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -22,6 +23,37 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 )
+
+// ReferencingAssetsLookup 返回直接引用某凭证的资产 ID。
+// credential_mgr_svc 不能直接依赖 asset_credential_svc（后者经 assettype 反向依赖本包），
+// 所以由 asset_credential_svc 在 init 时注入。
+type ReferencingAssetsLookup func(ctx context.Context, credentialID int64) ([]int64, error)
+
+var referencingAssets ReferencingAssetsLookup
+
+// SetReferencingAssetsLookup 注入引用查找；传 nil 清除。仅在启动/测试装配时调用。
+func SetReferencingAssetsLookup(fn ReferencingAssetsLookup) {
+	referencingAssets = fn
+}
+
+// invalidateReferencingAssets 凭证的认证内容已落库：丢弃直接引用它的资产的缓存/池化连接，
+// 让下次使用按新凭证重拨。凭证已保存成功，查找失败不回滚、不让保存报错，但必须留下错误日志。
+func invalidateReferencingAssets(ctx context.Context, credentialID int64) {
+	if referencingAssets == nil {
+		return
+	}
+	ids, err := referencingAssets(ctx, credentialID)
+	if err != nil {
+		logger.Ctx(ctx).Error("credential updated but referencing asset lookup failed, cached connections not invalidated",
+			zap.Int64("credentialID", credentialID), zap.Error(err))
+		return
+	}
+	for _, id := range ids {
+		assetconn.InvalidateAsset(ctx, id)
+	}
+	logger.Ctx(ctx).Info("credential auth changed, invalidated referencing assets",
+		zap.Int64("credentialID", credentialID), zap.Int("assets", len(ids)))
+}
 
 // GenerateKeyRequest SSH 密钥生成请求
 type GenerateKeyRequest struct {
@@ -408,6 +440,7 @@ func Update(ctx context.Context, req UpdateRequest) (*credential_entity.Credenti
 		return nil, fmt.Errorf("凭证不存在: %w", err)
 	}
 
+	usernameChanged := cred.Username != req.Username
 	cred.Name = req.Name
 	cred.Username = req.Username
 	cred.Updatetime = time.Now().Unix()
@@ -431,6 +464,10 @@ func Update(ctx context.Context, req UpdateRequest) (*credential_entity.Credenti
 
 	if err := credential_repo.Credential().Update(ctx, cred); err != nil {
 		return nil, fmt.Errorf("更新凭证失败: %w", err)
+	}
+	// 用户名决定登录身份；名称/备注/注释不影响认证结果，不触发失效。
+	if usernameChanged {
+		invalidateReferencingAssets(ctx, cred.ID)
 	}
 	return cred, nil
 }
@@ -457,7 +494,11 @@ func UpdatePassword(ctx context.Context, id int64, password string) error {
 	cred.Password = encryptedPassword
 	cred.Updatetime = time.Now().Unix()
 
-	return credential_repo.Credential().Update(ctx, cred)
+	if err := credential_repo.Credential().Update(ctx, cred); err != nil {
+		return err
+	}
+	invalidateReferencingAssets(ctx, id)
+	return nil
 }
 
 // UpdatePassphrase 更新 SSH 密钥的 passphrase
@@ -524,7 +565,11 @@ func UpdatePassphrase(ctx context.Context, id int64, oldPassphrase, newPassphras
 	cred.Passphrase = encryptedPassphrase
 	cred.Updatetime = time.Now().Unix()
 
-	return credential_repo.Credential().Update(ctx, cred)
+	if err := credential_repo.Credential().Update(ctx, cred); err != nil {
+		return err
+	}
+	invalidateReferencingAssets(ctx, id)
+	return nil
 }
 
 // appendComment 在公钥末尾追加 comment

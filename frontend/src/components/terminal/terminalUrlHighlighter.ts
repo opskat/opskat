@@ -6,6 +6,8 @@ const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 export interface TerminalUrlHighlighterController {
   setEnabled(enabled: boolean): void;
   setColor(color: string | undefined): void;
+  /** Inactive (hidden) terminals skip scans; reactivation catches up once if anything changed. */
+  setActive(active: boolean): void;
   dispose(): void;
 }
 
@@ -32,6 +34,8 @@ export function attachTerminalUrlHighlighter(
   let rafId = 0;
   let rafPending = false;
   let disposed = false;
+  let active = true;
+  let dirtyWhileInactive = false;
 
   const clearAll = () => {
     for (const { marker, decoration } of decorations.values()) {
@@ -92,6 +96,10 @@ export function attachTerminalUrlHighlighter(
 
   const scheduleSync = () => {
     if (disposed || rafPending) return;
+    if (!active) {
+      dirtyWhileInactive = true;
+      return;
+    }
     rafPending = true;
     rafId = requestAnimationFrame(() => {
       rafPending = false;
@@ -121,6 +129,23 @@ export function attachTerminalUrlHighlighter(
       color = v;
       clearAll(); // existing decorations carry the old color; rebuild on next sync
       scheduleSync();
+    },
+    setActive(next) {
+      if (active === next) return;
+      active = next;
+      if (!next) {
+        if (rafPending) {
+          if (rafId) cancelAnimationFrame(rafId);
+          rafPending = false;
+          rafId = 0;
+          dirtyWhileInactive = true; // the cancelled scan is owed on reactivation
+        }
+        return;
+      }
+      if (dirtyWhileInactive) {
+        dirtyWhileInactive = false;
+        scheduleSync();
+      }
     },
     dispose() {
       disposed = true;

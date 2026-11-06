@@ -92,7 +92,7 @@ type fileContentsResponse struct {
 
 type framebufferSource interface {
 	FramebufferDims() (int, int)
-	FramebufferWriteTopDown(dst []byte) (int, int)
+	FramebufferWriteRectTopDown(dst []byte, x, y, w, h int) (int, int)
 }
 
 func New(emit func(Event), pool *sshpool.Pool) *Service {
@@ -394,22 +394,29 @@ func (s *Service) frameLoop(sess *session) {
 			if now.Before(nextAllowed) {
 				continue
 			}
-			rect, ok := sess.streamer.takeDirty()
-			if !ok {
+			rects := sess.streamer.takeDirty()
+			if len(rects) == 0 {
 				continue
 			}
-			ev, ok := sess.streamer.buildFrameEvent(sess.client, rect, sess.id)
-			if !ok {
-				// Framebuffer unavailable (e.g. mid-reconnect): put the rect
-				// back so the region is retried once frames flow again.
-				sess.streamer.markDirty(rect.x, rect.y, rect.w, rect.h)
-				continue
+			sentArea, fbW, fbH := 0, 0, 0
+			for _, rect := range rects {
+				ev, ok := sess.streamer.buildFrameEvent(sess.client, rect, sess.id)
+				if !ok {
+					// Framebuffer unavailable (e.g. mid-reconnect): put the rect
+					// back so the region is retried once frames flow again.
+					sess.streamer.markDirty(rect.x, rect.y, rect.w, rect.h)
+					continue
+				}
+				if s.emit != nil {
+					s.emit(ev)
+				}
+				emitted = true
+				sentArea += ev.RectWidth * ev.RectHeight
+				fbW, fbH = ev.Width, ev.Height
 			}
-			if s.emit != nil {
-				s.emit(ev)
+			if sentArea > 0 {
+				nextAllowed = now.Add(flushInterval(sentArea, fbW, fbH))
 			}
-			emitted = true
-			nextAllowed = now.Add(flushInterval(dirtyRect{x: ev.X, y: ev.Y, w: ev.RectWidth, h: ev.RectHeight}, ev.Width, ev.Height))
 		}
 	}
 }

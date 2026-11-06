@@ -79,6 +79,7 @@ type Service struct {
 	assetRepo    asset_repo.AssetRepo
 	snippetHook  SnippetExtensionHook
 	logger       *zap.Logger
+	digests      *packageDigests
 
 	onReload func()
 
@@ -112,6 +113,7 @@ func New(
 		assetRepo:    assetRepo,
 		snippetHook:  snippetHook,
 		logger:       logger,
+		digests:      newPackageDigests(),
 		onReload:     onReload,
 	}
 }
@@ -136,6 +138,7 @@ func (s *Service) Reload(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.digests.invalidateAll()
 	s.manager.Close(ctx)
 	s.loadAndApplyState(ctx)
 	s.notifyReload()
@@ -322,6 +325,7 @@ func (s *Service) commit(ctx context.Context, staged *extension.StagedInstall, a
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	manifest := staged.Manifest()
+	defer s.digests.invalidate(manifest.Name)
 
 	// The user approved replacing From with To. Another install or an uninstall
 	// may have landed while the dialog was open; that approval then describes a
@@ -499,6 +503,7 @@ func manifestSeedsToSvc(m *extreg.Manifest) []snippet_svc.SeedDef {
 func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.digests.invalidate(name)
 
 	// Orphan check: refuse if active assets reference this extension's asset types.
 	if !force && s.assetRepo != nil {

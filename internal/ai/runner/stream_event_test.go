@@ -22,6 +22,7 @@ func drain(t *EventTranslator, evs ...agent.Event) []StreamEvent {
 	for _, ev := range evs {
 		t.Translate(ev, emit)
 	}
+	t.Close()
 	return out
 }
 

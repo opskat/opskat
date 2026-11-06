@@ -99,6 +99,21 @@ func TestExecutePagedCountsThenFetchesThePageWithTheDialect(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// 翻页时调用方已有总数：只发取页的语句，不发 COUNT，结果不带总数。sqlmock 按序严格匹配，
+// 多发一条 COUNT 即失败。
+func TestExecutePagedSkipsTheCountWhenTheCallerHasTheTotal(t *testing.T) {
+	session, mock := newMockSession(t)
+	mock.ExpectQuery("SELECT * FROM (SELECT * FROM users) AS _t LIMIT 10 OFFSET 20").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(21))
+
+	res, err := session.ExecutePaged(context.Background(), "SELECT * FROM users", dbdriver.Page{Index: 2, Size: 10, SkipTotal: true})
+	require.NoError(t, err)
+	require.NotNil(t, res.Rows)
+	assert.Equal(t, [][]any{{int64(21)}}, res.Rows.Rows)
+	assert.Nil(t, res.Rows.Total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // SHOW / DESCRIBE / EXPLAIN / PRAGMA 不能包成子查询，写语句更不能：照原样执行，不给总数。
 func TestExecutePagedRunsUnpageableStatementsAsIs(t *testing.T) {
 	session, mock := newMockSession(t)

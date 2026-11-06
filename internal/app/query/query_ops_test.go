@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/connpool"
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	_ "github.com/opskat/opskat/internal/dbdriver/builtin"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
@@ -43,7 +44,7 @@ func newPanelQuery(t *testing.T, cfg *asset_entity.DatabaseConfig) *Query {
 	q := &Query{
 		ctx:          context.Background(),
 		lang:         stubLang{},
-		dbPanelCache: newPanelConnCache[dbdriver.Session]("database", time.Minute),
+		dbPanelCache: connpool.NewAssetConnCache[dbdriver.Session]("database", time.Minute),
 	}
 	t.Cleanup(func() { _ = q.dbPanelCache.Close() })
 	return q
@@ -89,15 +90,20 @@ func TestExecuteSQLPagedRunsThroughTheAssetsDriver(t *testing.T) {
 	dbdrivertest.Register(t, fake)
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
 
-	result, err := q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 1, 2)
+	result, err := q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 1, 2, false)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1,"total_count":3}`, result)
 
-	result, err = q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 0, 2)
+	result, err = q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 0, 2, false)
 	require.NoError(t, err)
 	assert.JSONEq(t,
 		`{"columns":["id","name"],"rows":[{"id":1,"name":"alice"},{"id":2,"name":"bob"}],"count":2,"total_count":3}`,
 		result)
+
+	// 翻页：前端已有总数，要求不计数，结果不带 total_count。
+	result, err = q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 1, 2, true)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1}`, result)
 	assert.Len(t, fake.Sessions(), 1)
 }
 
@@ -119,7 +125,7 @@ func TestPanelRejectsUnregisteredDriver(t *testing.T) {
 	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 
-	_, err = q.ExecuteSQLPaged(1, "SELECT 1", "", 0, 10)
+	_, err = q.ExecuteSQLPaged(1, "SELECT 1", "", 0, 10, false)
 	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 }
@@ -437,7 +443,7 @@ func TestPanelSharesOneSessionAcrossDatabasesWhenTheDriverSaysSo(t *testing.T) {
 
 	_, err := q.ExecuteSQL(1, "SELECT * FROM t", "main")
 	require.NoError(t, err)
-	_, err = q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 0, 10)
+	_, err = q.ExecuteSQLPaged(1, "SELECT * FROM t", "", 0, 10, false)
 	require.NoError(t, err)
 
 	sessions := fake.Sessions()

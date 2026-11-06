@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
@@ -22,6 +22,7 @@ import { asset_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
+import { AssetTypeSectionSuspense } from "@/components/asset/AssetTypeSectionSuspense";
 import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import type {
@@ -62,6 +63,8 @@ type AssetType =
   | "rdp"
   | (string & {});
 
+const NO_SECTION_VALIDITY: SectionValidity = { canTest: false, canSave: false };
+
 const DEFAULT_ICONS: Record<string, string> = {
   ssh: "server",
   database: "database",
@@ -101,7 +104,17 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   // 注册化类型走通用 ConfigSection 路径:section 自持 state,经 ref 暴露 build*。
   const sectionRef = useRef<AssetFormHandle>(null);
-  const [validity, setValidity] = useState<SectionValidity>({ canTest: false, canSave: false });
+  // validity 记着是哪个类型的区块报的：区块按需加载，换类型后新区块挂上之前，
+  // 上一个类型的 canSave/canTest 不能沿用。
+  const [sectionValidity, setSectionValidity] = useState<{ type: string; value: SectionValidity }>({
+    type: assetType,
+    value: NO_SECTION_VALIDITY,
+  });
+  const validity = sectionValidity.type === assetType ? sectionValidity.value : NO_SECTION_VALIDITY;
+  const reportValidity = useCallback(
+    (value: SectionValidity) => setSectionValidity({ type: assetType, value }),
+    [assetType]
+  );
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
 
   // 复位测试状态：open 切换时一律清掉上一次表单的 testing 残留（渲染期对比），
@@ -391,14 +404,16 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
             {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
             {sectionDef?.ConfigSection && (
-              <sectionDef.ConfigSection
-                key={assetType}
-                ref={sectionRef}
-                editAsset={editAsset ?? undefined}
-                ctx={ctx}
-                onValidityChange={setValidity}
-                onIconChange={setIcon}
-              />
+              <AssetTypeSectionSuspense>
+                <sectionDef.ConfigSection
+                  key={assetType}
+                  ref={sectionRef}
+                  editAsset={editAsset ?? undefined}
+                  ctx={ctx}
+                  onValidityChange={reportValidity}
+                  onIconChange={setIcon}
+                />
+              </AssetTypeSectionSuspense>
             )}
 
             {/* Description(折叠成一行,贴近 footer) */}
