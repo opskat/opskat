@@ -13,11 +13,11 @@ import (
 )
 
 // 迁移建出的表必须能直接承载实体（列名、JSON 列），并对标识做唯一约束。
-func TestMigration202610040001_CustomTypesTable(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:migration202610040001?mode=memory&cache=shared"), &gorm.Config{})
+func TestMigration202611060001_CustomTypesTable(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:migration202611060001?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 
-	m := migration202610040001()
+	m := migration202611060001()
 	require.NoError(t, m.Migrate(db), "首次执行")
 	require.NoError(t, m.Migrate(db), "重复执行不能报错")
 

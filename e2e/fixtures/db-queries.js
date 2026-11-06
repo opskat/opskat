@@ -106,7 +106,7 @@ function findAIProviderByName(name) {
   );
 }
 
-// custom_types rows (migrations/202610040001_custom_types.go) — the independent
+// custom_types rows (migrations/202611060001_custom_types.go) — the independent
 // persistence check for the type editor / import round trip: the binder's own
 // SaveCustomType response proves the IPC call succeeded, this proves the row is
 // really on disk with the fields/bindings/policy the caller asked for.
