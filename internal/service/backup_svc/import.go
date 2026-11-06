@@ -129,15 +129,15 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 		if opts.ImportAssets && len(data.CustomTypes) > 0 {
 			localAssetsSurvive := !isReplace || len(data.Assets) == 0
 			if isReplace {
-				var clear *gorm.DB
+				var wipe *gorm.DB
 				if localAssetsSurvive {
-					clear = tx.Exec(`DELETE FROM custom_types WHERE slug NOT IN (
+					wipe = tx.Exec(`DELETE FROM custom_types WHERE slug NOT IN (
 						SELECT json_extract(config, '$.custom_type') FROM assets WHERE type = ? AND json_extract(config, '$.custom_type') IS NOT NULL)`,
 						asset_entity.AssetTypeGeneric)
 				} else {
-					clear = tx.Exec("DELETE FROM custom_types")
+					wipe = tx.Exec("DELETE FROM custom_types")
 				}
-				if err := clear.Error; err != nil {
+				if err := wipe.Error; err != nil {
 					return fmt.Errorf("清除自定义类型失败: %w", err)
 				}
 			}
