@@ -505,11 +505,11 @@ func parseAuthBindings(ct *custom_type_entity.CustomType) (httpAuth, error) {
 	return auth, nil
 }
 
-// apply 渲染并注入全部认证绑定。request.path 是实际发出的路径（含 Base URL 的前缀，不含 query）。
+// apply 渲染并注入全部认证绑定。request.path 是实际发出的路径（编码形式，含 Base URL 的前缀，不含 query）。
 func (a httpAuth) apply(req *http.Request, values map[string]string, body []byte, now time.Time) error {
 	rc := authtmpl.NewRenderContext(values,
 		authtmpl.WithClock(func() time.Time { return now }),
-		authtmpl.WithRequest(authtmpl.RequestInfo{Method: req.Method, Path: req.URL.Path, Body: body}))
+		authtmpl.WithRequest(authtmpl.RequestInfo{Method: req.Method, Path: req.URL.EscapedPath(), Body: body}))
 	for i, b := range a {
 		rendered := make([]string, 0, len(b.values))
 		for _, tmpl := range b.values {

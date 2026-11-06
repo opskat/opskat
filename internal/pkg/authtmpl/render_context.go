@@ -3,7 +3,7 @@ package authtmpl
 import "time"
 
 // RequestInfo 是仅在 HTTP 认证渲染时才有意义的请求上下文，对应模板里的
-// request.method / request.path / request.body。Path 不含 query string。
+// request.method / request.path / request.body。Path 是线上发出的编码形式（EscapedPath），不含 query string。
 type RequestInfo struct {
 	Method string
 	Path   string

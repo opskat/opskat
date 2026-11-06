@@ -99,7 +99,7 @@
 
 - **值**：字段引用 `name`（取资产上的值，空的可选字段按空串处理；标识符可以含 `-`，供扩展 configSchema 的属性名使用）；字符串字面量 `"..."`（转义与 Go 的双引号字符串字面量相同：常用的是 `\n`、`\"`、`\\`，也接受 `\t`、`\r`、`\xNN`、`\uNNNN` 等；其余转义报错）；`+` 拼接。
 - **函数**：`base64(x)`、`hex(x)`、`urlencode(x)`、`sha256(x)`、`hmac_sha256(key, msg)`、`uuid()`。哈希与 HMAC 返回原始字节，通常再用 `base64` 或 `hex` 编码。`base64` 也接受多个参数，先按顺序拼接再编码：`base64(user, ":", password)` 等同于 `base64(user + ":" + password)`。
-- **上下文**：`now.unix`、`now.unix_ms`。同一次渲染（一次 HTTP 请求或一次命令启动）里只取一次时间，所以多处引用得到同一个值。仅 HTTP 认证中可用：`request.method`、`request.path`（不含 query）、`request.body`。
+- **上下文**：`now.unix`、`now.unix_ms`。同一次渲染（一次 HTTP 请求或一次命令启动）里只取一次时间，所以多处引用得到同一个值。仅 HTTP 认证中可用：`request.method`、`request.path`（实际发出的编码形式，含 Base URL 的路径前缀，不含 query）、`request.body`。
 - **扩展凭据注入共用这套语言**（决定 18 / 19）：扩展 `auth` 绑定的值模板由同一个包解析与渲染，可引用的标识符是该资产类型 configSchema 的属性；扩展此前能用的写法（`{{field}}`、`{{base64(<parts>)}}`）解析和渲染结果不变，并可使用上面全部函数与 `now.*`。`request.*` 在扩展绑定里不可用。
 - **失败**：语法错误、引用了未知字段或函数，在保存类型时就会报出。运行时如果密钥解密失败，整个请求或命令失败并报错，**不会**退回发送未认证的请求。
 

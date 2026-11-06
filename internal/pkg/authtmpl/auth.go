@@ -3,6 +3,8 @@ package authtmpl
 import (
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // AuthType 是一种认证方式的应用逻辑：把渲染好的模板值写回 *http.Request。
@@ -42,9 +44,7 @@ var builtinAuthTypes = map[string]AuthType{
 	"query": {
 		Kind: "query", ValueCount: 1, HasName: true,
 		apply: func(req *http.Request, name string, values []string) error {
-			q := req.URL.Query()
-			q.Set(name, values[0])
-			req.URL.RawQuery = q.Encode()
+			req.URL.RawQuery = setQueryParam(req.URL.RawQuery, name, values[0])
 			return nil
 		},
 	},
@@ -55,6 +55,27 @@ var builtinAuthTypes = map[string]AuthType{
 			return nil
 		},
 	},
+}
+
+// setQueryParam 把 name=value 写进原始 query：去掉同名的已有参数，再追加在末尾。其余部分
+// 按调用方写的原样保留——url.Values 往返会丢掉 ParseQuery 不认识的写法（`;` 分隔、坏的 %
+// 转义）并把无值参数 `flag` 改写成 `flag=`。
+func setQueryParam(rawQuery, name, value string) string {
+	var kept []string
+	for _, pair := range strings.Split(rawQuery, "&") {
+		if pair == "" {
+			continue
+		}
+		key, _, _ := strings.Cut(pair, "=")
+		if k, err := url.QueryUnescape(key); err == nil {
+			key = k
+		}
+		if key == name {
+			continue
+		}
+		kept = append(kept, pair)
+	}
+	return strings.Join(append(kept, url.QueryEscape(name)+"="+url.QueryEscape(value)), "&")
 }
 
 // AuthTypeFor 按标识查找内置认证类型，ok 为 false 表示未注册（例如类型配置

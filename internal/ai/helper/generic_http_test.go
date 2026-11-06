@@ -611,3 +611,43 @@ func TestDescribeGenericCommand_HTTPShowsCallerHeadersAndBody(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "HTTP request: POST "+srv.URL+"/f\nBody: "+long[:1024]+"… (3000 bytes)", detail)
 }
+
+// request.path 是线上实际发出的路径（编码形式）：服务端按原始路径验签，签解码后的路径
+// 在含 %20、%2F 的路径上必然验签失败。
+func TestGenericHTTP_RequestPathIsTheEscapedPathSent(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "api", "http://{{host}}/base",
+		custom_type_entity.AuthBinding{Type: "header", Name: "X-Sign", Values: []string{"{{request.path}}"}},
+	)
+	asset := genericAsset(t, "api", map[string]string{"host": srv.host(), "token": testSecret})
+
+	for _, p := range []string{"/a%20b", "/group%2Fproject"} {
+		_, stdout, _, err := streamHTTP(t, ctx, asset, nil, "GET", p)
+		require.NoError(t, err)
+		assert.Contains(t, stdout, "X-Sign=/base"+p+"\n")
+	}
+}
+
+// query 认证只替换 / 追加自己那一项，调用方 query 的其余部分原样发出——不能因为
+// url.ParseQuery 不认识 `;`、坏的 % 转义或无值参数，就把它们丢掉或改写。
+func TestGenericHTTP_QueryAuthKeepsTheCallerQueryAsWritten(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "api", "http://{{host}}",
+		custom_type_entity.AuthBinding{Type: "query", Name: "api_key", Values: []string{"{{token}}"}},
+	)
+	asset := genericAsset(t, "api", map[string]string{"host": srv.host(), "token": "k&y"})
+
+	for in, want := range map[string]string{
+		"/x?a=1;b=2&c=3":      "a=1;b=2&c=3&api_key=k%26y",
+		"/x?q=%zz&c=3":        "q=%zz&c=3&api_key=k%26y",
+		"/x?flag":             "flag&api_key=k%26y",
+		"/x?api_key=caller&z": "z&api_key=k%26y",
+		"/x":                  "api_key=k%26y",
+	} {
+		_, stdout, _, err := streamHTTP(t, ctx, asset, nil, "GET", in)
+		require.NoError(t, err, in)
+		assert.Contains(t, stdout, "query="+want+"\n", in)
+	}
+}
