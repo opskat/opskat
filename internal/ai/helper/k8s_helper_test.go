@@ -2,13 +2,17 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"go.uber.org/mock/gomock"
+
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -121,4 +125,78 @@ func firstExistingExecutable(paths ...string) string {
 		}
 	}
 	return ""
+}
+
+func TestExecK8sOnAsset_UsesEffectiveProxyChainSSHHop(t *testing.T) {
+	credential_svc.SetDefault(credential_svc.New("test-master-key", []byte("0123456789abcdef")))
+	encryptedKubeconfig, err := credential_svc.Default().Encrypt("apiVersion: v1\nkind: Config\n")
+	if err != nil {
+		t.Fatalf("encrypt kubeconfig: %v", err)
+	}
+
+	t.Run("routes via proxy_chain SSH layer when SSHTunnelID is 0", func(t *testing.T) {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		dialErr := errors.New("hop 42 dial reached")
+		mockAsset.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, dialErr)
+
+		enabled := true
+		asset := &asset_entity.Asset{
+			ID:          1,
+			Name:        "k8s-chain-only",
+			Type:        asset_entity.AssetTypeK8s,
+			SSHTunnelID: 0,
+		}
+		if err := asset.SetK8sConfig(&asset_entity.K8sConfig{
+			Kubeconfig: encryptedKubeconfig,
+			ProxyChain: &asset_entity.ProxyChainConfig{
+				Layers: []asset_entity.ProxyChainLayer{{
+					ID:         "ssh-layer-1",
+					Type:       asset_entity.ProxyChainLayerSSH,
+					Enabled:    &enabled,
+					Order:      1,
+					SSHAssetID: 42,
+				}},
+			},
+		}); err != nil {
+			t.Fatalf("set k8s config: %v", err)
+		}
+
+		_, err := ExecK8sOnAsset(ctx, asset, "kubectl get pods", "")
+		if !errors.Is(err, dialErr) {
+			t.Fatalf("ExecK8sOnAsset error = %v, want %v", err, dialErr)
+		}
+	})
+
+	t.Run("proxy_chain overrides stale SSHTunnelID column", func(t *testing.T) {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		dialErr := errors.New("hop 77 dial reached")
+		mockAsset.EXPECT().Find(gomock.Any(), int64(77)).Return(nil, dialErr)
+
+		enabled := true
+		asset := &asset_entity.Asset{
+			ID:          2,
+			Name:        "k8s-chain-override",
+			Type:        asset_entity.AssetTypeK8s,
+			SSHTunnelID: 5,
+		}
+		if err := asset.SetK8sConfig(&asset_entity.K8sConfig{
+			Kubeconfig: encryptedKubeconfig,
+			ProxyChain: &asset_entity.ProxyChainConfig{
+				Layers: []asset_entity.ProxyChainLayer{{
+					ID:         "ssh-layer-1",
+					Type:       asset_entity.ProxyChainLayerSSH,
+					Enabled:    &enabled,
+					Order:      1,
+					SSHAssetID: 77,
+				}},
+			},
+		}); err != nil {
+			t.Fatalf("set k8s config: %v", err)
+		}
+
+		_, err := ExecK8sOnAsset(ctx, asset, "kubectl get pods", "")
+		if !errors.Is(err, dialErr) {
+			t.Fatalf("ExecK8sOnAsset error = %v, want %v", err, dialErr)
+		}
+	})
 }

@@ -11,10 +11,12 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/sshagent"
+	"github.com/opskat/opskat/pkg/extension"
 )
 
 // Import 导入备份数据
@@ -147,13 +149,6 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				}
 			}
 
-			type deferredRef struct {
-				newAssetID int64
-				oldRefID   int64
-				refType    string // "jump_host" | "ssh_tunnel"
-			}
-			var deferredRefs []deferredRef
-
 			for _, a := range data.Assets {
 				oldID := a.ID
 				a.ID = 0
@@ -164,16 +159,11 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				}
 				// 回填策略组引用
 				remapAssetPolicyGroupIDs(a, pgIDMap)
-				// 处理 Config 中的引用
-				var oldJumpHostID, oldSSHAssetID int64
+				// 处理 Config 中的凭据、Agent 来源引用与密码重加密
 				switch {
 				case a.IsSSH() && a.Config != "":
 					cfg, err := a.GetSSHConfig()
 					if err == nil {
-						if cfg.JumpHostID > 0 {
-							oldJumpHostID = cfg.JumpHostID
-							cfg.JumpHostID = 0
-						}
 						// 回填 CredentialID
 						if cfg.CredentialID > 0 {
 							if newID, ok := credIDMap[cfg.CredentialID]; ok {
@@ -218,10 +208,6 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				case a.IsDatabase() && a.Config != "":
 					cfg, err := a.GetDatabaseConfig()
 					if err == nil {
-						if cfg.SSHAssetID > 0 {
-							oldSSHAssetID = cfg.SSHAssetID
-							cfg.SSHAssetID = 0
-						}
 						if data.IncludesCredentials && cfg.Password != "" && crypto != nil {
 							encrypted, encErr := crypto.Encrypt(cfg.Password)
 							if encErr != nil {
@@ -237,10 +223,6 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				case a.IsRedis() && a.Config != "":
 					cfg, err := a.GetRedisConfig()
 					if err == nil {
-						if cfg.SSHAssetID > 0 {
-							oldSSHAssetID = cfg.SSHAssetID
-							cfg.SSHAssetID = 0
-						}
 						if data.IncludesCredentials && cfg.Password != "" && crypto != nil {
 							encrypted, encErr := crypto.Encrypt(cfg.Password)
 							if encErr != nil {
@@ -268,58 +250,14 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 				}
 				assetIDMap[oldID] = a.ID
 				result.AssetsImported++
-
-				if oldJumpHostID > 0 {
-					deferredRefs = append(deferredRefs, deferredRef{a.ID, oldJumpHostID, "jump_host"})
-				}
-				if oldSSHAssetID > 0 {
-					deferredRefs = append(deferredRefs, deferredRef{a.ID, oldSSHAssetID, "ssh_tunnel"})
-				}
 			}
 
-			// 回填跳板机和 SSH 隧道引用
-			for _, ref := range deferredRefs {
-				newRefID, ok := assetIDMap[ref.oldRefID]
-				if !ok {
-					continue
-				}
-				var asset asset_entity.Asset
-				if err := tx.Where("id = ?", ref.newAssetID).First(&asset).Error; err != nil {
-					continue
-				}
-				switch ref.refType {
-				case "jump_host":
-					cfg, err := asset.GetSSHConfig()
-					if err != nil {
-						continue
+			// 回填所有资产的跳板机、SSH 隧道与代理链 SSH 引用（映射不到时显式清零）
+			for _, a := range data.Assets {
+				if remapAssetSSHRefs(ctx, a, assetIDMap) {
+					if err := tx.Save(a).Error; err != nil {
+						return fmt.Errorf("更新资产引用失败: %w", err)
 					}
-					cfg.JumpHostID = newRefID
-					if err := asset.SetSSHConfig(cfg); err != nil {
-						continue
-					}
-				case "ssh_tunnel":
-					if asset.IsDatabase() {
-						cfg, err := asset.GetDatabaseConfig()
-						if err != nil {
-							continue
-						}
-						cfg.SSHAssetID = newRefID
-						if err := asset.SetDatabaseConfig(cfg); err != nil {
-							continue
-						}
-					} else if asset.IsRedis() {
-						cfg, err := asset.GetRedisConfig()
-						if err != nil {
-							continue
-						}
-						cfg.SSHAssetID = newRefID
-						if err := asset.SetRedisConfig(cfg); err != nil {
-							continue
-						}
-					}
-				}
-				if err := tx.Save(&asset).Error; err != nil {
-					return fmt.Errorf("更新资产引用失败: %w", err)
 				}
 			}
 		}
@@ -431,6 +369,222 @@ func remapGroupPolicyGroupIDs(g *group_entity.Group, pgIDMap map[int64]int64) {
 // remapAssetPolicyGroupIDs 回填资产中策略的 Groups 引用
 func remapAssetPolicyGroupIDs(a *asset_entity.Asset, pgIDMap map[int64]int64) {
 	a.CmdPolicy = remapPolicyGroupRefs(a.CmdPolicy, pgIDMap)
+}
+
+// configSSHRefKeys 是资产 Config JSON 顶层存放单条 SSH 资产 ID 引用的键。
+var configSSHRefKeys = []string{
+	"jump_host_id",
+	"ssh_asset_id",
+	"file_ssh_asset_id",
+}
+
+// collectAssetSSHRefIDs 收集单个资产在 SSHTunnelID 列、Config 顶层单跳字段、
+// proxy_chain 与扩展宿主连接配置（__opskat_connection.proxyChain）中引用的全部 SSH 资产 ID。
+func collectAssetSSHRefIDs(a *asset_entity.Asset) []int64 {
+	var ids []int64
+	if a.SSHTunnelID > 0 {
+		ids = append(ids, a.SSHTunnelID)
+	}
+	if a.Config == "" {
+		return ids
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(a.Config), &raw); err != nil {
+		return ids
+	}
+	for _, key := range configSSHRefKeys {
+		if valRaw, ok := raw[key]; ok {
+			var refID int64
+			if err := json.Unmarshal(valRaw, &refID); err == nil && refID > 0 {
+				ids = append(ids, refID)
+			}
+		}
+	}
+	if chainRaw, ok := raw["proxy_chain"]; ok {
+		ids = append(ids, collectProxyChainSSHRefIDs(chainRaw)...)
+	}
+	if extRaw, ok := raw[extension.HostConnectionConfigKey]; ok {
+		var extConn map[string]json.RawMessage
+		if err := json.Unmarshal(extRaw, &extConn); err == nil {
+			if chainRaw, hasChain := extConn["proxyChain"]; hasChain {
+				ids = append(ids, collectProxyChainSSHRefIDs(chainRaw)...)
+			}
+		}
+	}
+	return ids
+}
+
+func collectProxyChainSSHRefIDs(chainRaw json.RawMessage) []int64 {
+	var chain asset_entity.ProxyChainConfig
+	if err := json.Unmarshal(chainRaw, &chain); err != nil {
+		return nil
+	}
+	return assettype.ProxyChainSSHAssetIDs(&chain)
+}
+
+// remapAssetSSHRefs 将资产的 SSHTunnelID 列及 Config 中的 SSH 资产引用重映射到新 ID；
+// 无法映射的引用显式清零，避免悬空或串号到目标库中的其它资产。
+func remapAssetSSHRefs(ctx context.Context, a *asset_entity.Asset, assetIDMap map[int64]int64) bool {
+	changed := false
+	if a.SSHTunnelID > 0 {
+		oldRefID := a.SSHTunnelID
+		newRefID, ok := assetIDMap[oldRefID]
+		if !ok {
+			logger.Ctx(ctx).Warn("unmapped ssh_tunnel_id cleared on import",
+				zap.String("asset", a.Name), zap.Int64("oldTunnelID", oldRefID))
+			newRefID = 0
+		}
+		if a.SSHTunnelID != newRefID {
+			a.SSHTunnelID = newRefID
+			changed = true
+		}
+	}
+	if a.Config != "" {
+		if newConfig, cfgChanged := remapConfigSSHRefs(ctx, a.Name, a.Config, assetIDMap); cfgChanged {
+			a.Config = newConfig
+			changed = true
+		}
+	}
+	return changed
+}
+
+func remapConfigSSHRefs(ctx context.Context, assetName, configJSON string, assetIDMap map[int64]int64) (string, bool) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(configJSON), &raw); err != nil {
+		return configJSON, false
+	}
+	changed := false
+	for _, key := range configSSHRefKeys {
+		valRaw, ok := raw[key]
+		if !ok {
+			continue
+		}
+		var oldRefID int64
+		if err := json.Unmarshal(valRaw, &oldRefID); err != nil || oldRefID <= 0 {
+			continue
+		}
+		if newRefID, mapped := assetIDMap[oldRefID]; mapped {
+			if newRefID != oldRefID {
+				if encoded, err := json.Marshal(newRefID); err == nil {
+					raw[key] = encoded
+					changed = true
+				}
+			}
+		} else {
+			logger.Ctx(ctx).Warn("unmapped ssh ref cleared on import",
+				zap.String("asset", assetName), zap.String("field", key), zap.Int64("oldRefID", oldRefID))
+			delete(raw, key)
+			changed = true
+		}
+	}
+	if chainRaw, ok := raw["proxy_chain"]; ok {
+		if newChainRaw, chainChanged := remapProxyChainSSHRefs(ctx, assetName, chainRaw, assetIDMap); chainChanged {
+			if newChainRaw == nil {
+				delete(raw, "proxy_chain")
+			} else {
+				raw["proxy_chain"] = newChainRaw
+			}
+			changed = true
+		}
+	}
+	if extRaw, ok := raw[extension.HostConnectionConfigKey]; ok {
+		var extConn map[string]json.RawMessage
+		if err := json.Unmarshal(extRaw, &extConn); err == nil {
+			if chainRaw, hasChain := extConn["proxyChain"]; hasChain {
+				if newChainRaw, chainChanged := remapProxyChainSSHRefs(ctx, assetName, chainRaw, assetIDMap); chainChanged {
+					if newChainRaw == nil {
+						delete(extConn, "proxyChain")
+					} else {
+						extConn["proxyChain"] = newChainRaw
+					}
+					if len(extConn) == 0 {
+						delete(raw, extension.HostConnectionConfigKey)
+						changed = true
+					} else if newExtRaw, err := json.Marshal(extConn); err == nil {
+						raw[extension.HostConnectionConfigKey] = newExtRaw
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	if !changed {
+		return configJSON, false
+	}
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return configJSON, false
+	}
+	return string(out), true
+}
+
+func remapProxyChainSSHRefs(ctx context.Context, assetName string, chainRaw json.RawMessage, assetIDMap map[int64]int64) (json.RawMessage, bool) {
+	var chainObj map[string]json.RawMessage
+	if err := json.Unmarshal(chainRaw, &chainObj); err != nil {
+		return chainRaw, false
+	}
+	layersRaw, ok := chainObj["layers"]
+	if !ok {
+		return chainRaw, false
+	}
+	var layers []map[string]json.RawMessage
+	if err := json.Unmarshal(layersRaw, &layers); err != nil {
+		return chainRaw, false
+	}
+	changed := false
+	kept := make([]map[string]json.RawMessage, 0, len(layers))
+	for _, layer := range layers {
+		var layerType string
+		if typeRaw, ok := layer["type"]; !ok || json.Unmarshal(typeRaw, &layerType) != nil || layerType != asset_entity.ProxyChainLayerSSH {
+			kept = append(kept, layer)
+			continue
+		}
+		sshRaw, ok := layer["ssh_asset_id"]
+		if !ok {
+			kept = append(kept, layer)
+			continue
+		}
+		var oldRefID int64
+		if err := json.Unmarshal(sshRaw, &oldRefID); err != nil || oldRefID <= 0 {
+			kept = append(kept, layer)
+			continue
+		}
+		if newRefID, mapped := assetIDMap[oldRefID]; mapped {
+			if newRefID != oldRefID {
+				if encoded, err := json.Marshal(newRefID); err == nil {
+					layer["ssh_asset_id"] = encoded
+					changed = true
+				}
+				var layerID string
+				if idRaw, hasID := layer["id"]; hasID && json.Unmarshal(idRaw, &layerID) == nil && layerID == asset_entity.LegacySSHProxyLayerID(oldRefID) {
+					if encodedID, err := json.Marshal(asset_entity.LegacySSHProxyLayerID(newRefID)); err == nil {
+						layer["id"] = encodedID
+					}
+				}
+			}
+			kept = append(kept, layer)
+		} else {
+			logger.Ctx(ctx).Warn("unmapped proxy_chain ssh layer removed on import",
+				zap.String("asset", assetName), zap.Int64("oldRefID", oldRefID))
+			changed = true
+		}
+	}
+	if !changed {
+		return chainRaw, false
+	}
+	if len(kept) == 0 {
+		return nil, true
+	}
+	newLayersRaw, err := json.Marshal(kept)
+	if err != nil {
+		return chainRaw, false
+	}
+	chainObj["layers"] = newLayersRaw
+	newChainRaw, err := json.Marshal(chainObj)
+	if err != nil {
+		return chainRaw, false
+	}
+	return newChainRaw, true
 }
 
 // remapPolicyGroupRefs 替换策略 JSON 中的 groups ID 引用
