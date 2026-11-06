@@ -600,7 +600,8 @@ func streamHTTPMode(ctx context.Context, t *GenericTarget, argv []string, stdio 
 }
 
 // execHTTPForAI 给模型返回状态行加响应体；非文本响应只给摘要，不把二进制塞进模型上下文。
-// 截断沿用 exec 结果的既有规则，这里不另设上限。审计摘要只是状态行（spec「策略、审批与
+// 响应体最多读 aiHTTPMaxBodyBytes 就停：给模型的结果之后还会按 exec 的既有规则截取头尾，
+// 读得再多也用不上，而流式接口（SSE、watch）会一直读下去、一直占内存。审计摘要只是状态行（spec「策略、审批与
 // 审计」：HTTP 记录方法、路径和状态码——方法与路径在审计 command 列）：响应体可能回显注入的
 // 认证头，不得进入审计。
 func execHTTPForAI(ctx context.Context, t *GenericTarget, command string) (string, string, error) {
@@ -625,22 +626,38 @@ func execHTTPForAI(ctx context.Context, t *GenericTarget, command string) (strin
 		b.WriteString("\n")
 	}
 	contentType := resp.Header.Get("Content-Type")
+	// 多读一个字节就知道后面还有没有。
+	limited := io.LimitReader(resp.Body, aiHTTPMaxBodyBytes+1)
 	if isTextContentType(contentType) {
-		if _, err := io.Copy(&b, resp.Body); err != nil {
+		var body bytes.Buffer
+		if _, err := io.Copy(&body, limited); err != nil {
 			return "", "", fmt.Errorf("read response body: %w", err)
 		}
+		if body.Len() > aiHTTPMaxBodyBytes {
+			b.Write(body.Bytes()[:aiHTTPMaxBodyBytes])
+			fmt.Fprintf(&b, "\n(response truncated: only the first %d bytes were read)", aiHTTPMaxBodyBytes)
+			return b.String(), status, nil
+		}
+		b.Write(body.Bytes())
 		return strings.TrimRight(b.String(), "\n"), status, nil
 	}
-	n, err := io.Copy(io.Discard, resp.Body)
+	n, err := io.Copy(io.Discard, limited)
 	if err != nil {
 		return "", "", fmt.Errorf("read response body: %w", err)
 	}
-	if n == 0 {
+	switch {
+	case n == 0:
 		return strings.TrimRight(b.String(), "\n"), status, nil
+	case n > aiHTTPMaxBodyBytes:
+		fmt.Fprintf(&b, "(binary response, more than %d bytes, %s)", aiHTTPMaxBodyBytes, contentType)
+	default:
+		fmt.Fprintf(&b, "(binary response, %d bytes, %s)", n, contentType)
 	}
-	fmt.Fprintf(&b, "(binary response, %d bytes, %s)", n, contentType)
 	return b.String(), status, nil
 }
+
+// aiHTTPMaxBodyBytes 是 AI exec 最多读取的响应体字节数。
+const aiHTTPMaxBodyBytes = 1 << 20
 
 // isTextContentType：text/*、JSON（含 +json）、XML（含 +xml）按文本返回（spec「HTTP 请求」AI 一条）。
 func isTextContentType(contentType string) bool {

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/glebarez/sqlite"
@@ -649,5 +651,53 @@ func TestGenericHTTP_QueryAuthKeepsTheCallerQueryAsWritten(t *testing.T) {
 		_, stdout, _, err := streamHTTP(t, ctx, asset, nil, "GET", in)
 		require.NoError(t, err, in)
 		assert.Contains(t, stdout, "query="+want+"\n", in)
+	}
+}
+
+// AI exec 的结果最后只截取头尾给模型（outputcap），没必要把整个响应读进内存：流式接口
+// （SSE、watch）或巨大的响应会一直读、一直占内存，这一轮对话也停不下来。读到上限就停，
+// 并注明截断；非文本响应同样只数到上限。
+func TestGenericHTTP_AIExecStopsReadingAtTheBodyLimit(t *testing.T) {
+	ctx := setupGenericDB(t)
+	endless := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bin" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+		} else {
+			w.Header().Set("Content-Type", "text/event-stream")
+		}
+		chunk := []byte(strings.Repeat("data: x\n", 4096))
+		for r.Context().Err() == nil {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+		}
+	}))
+	t.Cleanup(endless.Close)
+	// 先于 endless.Close 执行（Cleanup 后进先出）：读不停的请求要先取消，服务端才停得下来。
+	execCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	saveHTTPType(t, ctx, "stream", "http://{{host}}")
+	asset := genericAsset(t, "stream", map[string]string{"host": strings.TrimPrefix(endless.URL, "http://"), "token": testSecret})
+
+	for path, want := range map[string]string{
+		"/events": fmt.Sprintf("(response truncated: only the first %d bytes were read)", aiHTTPMaxBodyBytes),
+		"/bin":    fmt.Sprintf("(binary response, more than %d bytes, application/octet-stream)", aiHTTPMaxBodyBytes),
+	} {
+		done := make(chan struct{})
+		var out string
+		var err error
+		go func() {
+			defer close(done)
+			out, err = ExecGenericOnAsset(execCtx, asset, "GET "+path, "")
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("GET %s: AI exec kept reading an endless response", path)
+		}
+		require.NoError(t, err, path)
+		assert.True(t, strings.HasSuffix(out, want), "GET %s: %q", path, out[max(0, len(out)-200):])
+		assert.Less(t, len(out), aiHTTPMaxBodyBytes+1024, path)
 	}
 }
