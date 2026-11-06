@@ -19,6 +19,7 @@ const (
 	CodeMissingCloseParen      = "missing_close_paren"
 	CodeUnknownFunction        = "unknown_function"
 	CodeWrongArgCount          = "wrong_arg_count"
+	CodeNestingTooDeep         = "nesting_too_deep"
 )
 
 // ParseError 是 Parse 的静态校验错误。Code 是上面的错误码之一，Params 是填进界面

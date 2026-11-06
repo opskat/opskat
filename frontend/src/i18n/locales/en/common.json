@@ -116,7 +116,8 @@
         "request_not_allowed": "request.* is only available in HTTP authentication (in \"{{expr}}\")",
         "missing_close_paren": "The call to {{name}}() is missing a closing \")\"",
         "unknown_function": "Unknown function \"{{name}}\"",
-        "wrong_arg_count": "{{name}}() takes {{want}} argument(s), but got {{got}}"
+        "wrong_arg_count": "{{name}}() takes {{want}} argument(s), but got {{got}}",
+        "nesting_too_deep": "Function calls are nested more than {{max}} levels deep"
       }
     }
   },

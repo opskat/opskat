@@ -63,3 +63,22 @@ func TestParseError_ErrorNamesTheExpression(t *testing.T) {
 		t.Fatalf("Error() = %v, want it to name the unknown field and the expression", err)
 	}
 }
+
+// 模板来自导入的类型文件与第三方扩展的 manifest，是外部输入：嵌套过深的函数调用不能把
+// 递归下降解析器的栈耗尽（Go 的栈溢出是 fatal，recover 接不住，整个应用会退出），
+// 而是像其他语法错误一样报出来。正常写法的嵌套远不到上限。
+func TestParse_DeepNestingIsAParseError(t *testing.T) {
+	nested := func(depth int) string {
+		return "{{" + strings.Repeat("hex(", depth) + `"x"` + strings.Repeat(")", depth) + "}}"
+	}
+	if _, err := authtmpl.Parse(nested(authtmpl.MaxNestingDepth), authtmpl.ParseOptions{}); err != nil {
+		t.Fatalf("nesting at the limit must parse: %v", err)
+	}
+	for _, depth := range []int{authtmpl.MaxNestingDepth + 1, 1 << 20} {
+		_, err := authtmpl.Parse(nested(depth), authtmpl.ParseOptions{})
+		var pe *authtmpl.ParseError
+		if !errors.As(err, &pe) || pe.Code != authtmpl.CodeNestingTooDeep {
+			t.Fatalf("depth %d: want a %q ParseError, got %v", depth, authtmpl.CodeNestingTooDeep, err)
+		}
+	}
+}

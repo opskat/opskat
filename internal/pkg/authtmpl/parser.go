@@ -2,6 +2,9 @@ package authtmpl
 
 import "strconv"
 
+// MaxNestingDepth 是一个表达式里函数调用最多的嵌套层数。
+const MaxNestingDepth = 64
+
 // parser 是一个简单的递归下降解析器，语法见包文档：
 //
 //	expr     := term ('+' term)*
@@ -10,6 +13,9 @@ type parser struct {
 	toks []token
 	pos  int
 	sc   *scope
+	// depth 是当前所在的函数调用层数。模板是外部输入（导入的类型文件、扩展 manifest），
+	// 递归下降的深度必须有上限：Go 的栈溢出是 fatal，recover 接不住。
+	depth int
 }
 
 // scope 是一次 Parse 的静态校验上下文，模板里的各个表达式共用一份；它同时
@@ -158,6 +164,12 @@ func (p *parser) buildContextNode(root, attr string) (exprNode, *ParseError) {
 }
 
 func (p *parser) parseFuncCall(name string) (exprNode, *ParseError) {
+	if p.depth >= MaxNestingDepth {
+		return nil, newParseError(CodeNestingTooDeep, "function calls nested deeper than "+strconv.Itoa(MaxNestingDepth)+" levels",
+			"max", strconv.Itoa(MaxNestingDepth))
+	}
+	p.depth++
+	defer func() { p.depth-- }()
 	var args []exprNode
 	if p.peek().kind != tokRParen {
 		for {

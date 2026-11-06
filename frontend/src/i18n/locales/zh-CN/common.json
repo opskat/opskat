@@ -116,7 +116,8 @@
         "request_not_allowed": "request.* 只能在 HTTP 认证里使用（位于「{{expr}}」）",
         "missing_close_paren": "调用 {{name}}() 时缺少右括号「)」",
         "unknown_function": "未知函数「{{name}}」",
-        "wrong_arg_count": "{{name}}() 需要 {{want}} 个参数，实际传了 {{got}} 个"
+        "wrong_arg_count": "{{name}}() 需要 {{want}} 个参数，实际传了 {{got}} 个",
+        "nesting_too_deep": "函数调用嵌套超过 {{max}} 层"
       }
     }
   },
