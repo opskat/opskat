@@ -184,6 +184,7 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		Detail:     detail,
 		SessionID:  session,
 		PipedInput: pipedInput,
+		RawCommand: command,
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)

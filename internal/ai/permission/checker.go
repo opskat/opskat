@@ -266,11 +266,17 @@ func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command
 // CheckForAsset 按资产类型分发权限检查。
 // detail 可选，透传给审批项供前端展示（cp 用它展示"本地 → 远端"的完整传输方向）。
 func (c *CommandPolicyChecker) CheckForAsset(ctx context.Context, assetID int64, assetType, command string, detail ...string) aictx.CheckResult {
-	result := CheckPermission(ctx, assetType, assetID, command)
+	return c.CheckRequest(ctx, PermissionRequest{AssetType: assetType, AssetID: assetID, Command: command}, detail...)
+}
+
+// CheckRequest 同 CheckForAsset，入参是完整的 PermissionRequest：调用方还有规则匹配之外的
+// 输入（如交给模型审核的原始命令 RawCommand）时用它。
+func (c *CommandPolicyChecker) CheckRequest(ctx context.Context, req PermissionRequest, detail ...string) aictx.CheckResult {
+	result := CheckPermissions(ctx, []PermissionRequest{req})[0]
 	if result.Decision != aictx.NeedConfirm {
 		return result
 	}
-	return c.handleConfirm(ctx, assetID, assetType, command, result.Review, detail...)
+	return c.handleConfirm(ctx, req.AssetID, req.AssetType, req.Command, result.Review, detail...)
 }
 
 // HandleConfirm 处理需要用户确认的情况。

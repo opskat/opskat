@@ -252,7 +252,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			continue
 		}
 		permIndices = append(permIndices, i)
-		permReqs = append(permReqs, permission.PermissionRequest{AssetType: cmd.asset.Type, AssetID: cmd.asset.ID, Command: cmd.checkCommand})
+		permReqs = append(permReqs, permission.PermissionRequest{AssetType: cmd.asset.Type, AssetID: cmd.asset.ID, Command: cmd.checkCommand, RawCommand: cmd.command})
 	}
 	permResults := permission.CheckPermissions(aictx.WithSessionID(ctx, session), permReqs)
 	for k, i := range permIndices {

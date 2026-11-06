@@ -130,7 +130,9 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 	if checker != nil {
-		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, checkCommand, detail...)
+		result := checker.CheckRequest(ctx, permission.PermissionRequest{
+			AssetType: asset.Type, AssetID: asset.ID, Command: checkCommand, RawCommand: command,
+		}, detail...)
 		aictx.RecordDecision(ctx, result)
 		if result.Decision != aictx.Allow {
 			return result.Message, nil

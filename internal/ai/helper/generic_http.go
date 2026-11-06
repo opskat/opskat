@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -326,7 +327,37 @@ func describeHTTPCommand(_ context.Context, t *GenericTarget, command string) (s
 	if err != nil {
 		return "", err
 	}
-	return "HTTP request: " + cmd.Method + " " + display, nil
+	var b strings.Builder
+	b.WriteString("HTTP request: " + cmd.Method + " " + display)
+	// 匹配对象只有 `<方法> <路径>`：调用方写的 header 与请求体只在这里给审批人看。它们是
+	// 调用方的字面内容，不是注入值。
+	for _, h := range cmd.headers {
+		b.WriteString("\nHeader: " + h.name + ": " + h.value)
+	}
+	switch cmd.body {
+	case httpBodyLiteral:
+		b.WriteString("\nBody: " + truncateApprovalBody(cmd.bodyArg))
+	case httpBodyFile:
+		b.WriteString("\nBody: read from local file " + cmd.bodyArg)
+	case httpBodyStdin:
+		b.WriteString("\nBody: read from stdin")
+	}
+	return b.String(), nil
+}
+
+// approvalBodyLimit 是审批详情里请求体最多显示的字节数。
+const approvalBodyLimit = 1024
+
+// truncateApprovalBody 把过长的请求体截到 approvalBodyLimit（不切开 UTF-8 字符）并注明总长。
+func truncateApprovalBody(body string) string {
+	if len(body) <= approvalBodyLimit {
+		return body
+	}
+	cut := approvalBodyLimit
+	for cut > 0 && !utf8.RuneStart(body[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s… (%d bytes)", body[:cut], len(body))
 }
 
 // genericHTTPResponse 是一次已完成请求的响应；调用方读完 Body 后必须 close。

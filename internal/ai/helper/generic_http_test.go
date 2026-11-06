@@ -585,3 +585,29 @@ func TestGenericHTTP_BaseURLWithQueryKeepsPathAndQuerySeparate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "HTTP request: POST "+srv.URL+"/robot/send/x?access_token="+GenericSecretMask+"&y=1", detail)
 }
+
+// 审批详情要让人看到这次请求会写入什么：匹配对象只有 `<方法> <路径>`，调用方的 header 与
+// 请求体只出现在详情里（它们是调用方写的字面内容，不是注入值）。过长的请求体截断并注明总长。
+func TestDescribeGenericCommand_HTTPShowsCallerHeadersAndBody(t *testing.T) {
+	ctx := setupGenericDB(t)
+	srv := newEchoServer(t, false)
+	saveHTTPType(t, ctx, "api", "http://{{host}}")
+	asset := genericAsset(t, "api", map[string]string{"host": srv.host(), "token": testSecret})
+
+	detail, err := DescribeGenericCommand(ctx, asset, `POST /users -H 'X-Org: 1' -d '{"role":"Admin"}'`)
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: POST "+srv.URL+"/users\nHeader: X-Org: 1\nBody: {\"role\":\"Admin\"}", detail)
+
+	detail, err = DescribeGenericCommand(ctx, asset, "PUT /f -d @/tmp/payload.json")
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: PUT "+srv.URL+"/f\nBody: read from local file /tmp/payload.json", detail)
+
+	detail, err = DescribeGenericCommand(ctx, asset, "PUT /f -d @-")
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: PUT "+srv.URL+"/f\nBody: read from stdin", detail)
+
+	long := strings.Repeat("x", 3000)
+	detail, err = DescribeGenericCommand(ctx, asset, "POST /f -d "+long)
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP request: POST "+srv.URL+"/f\nBody: "+long[:1024]+"… (3000 bytes)", detail)
+}

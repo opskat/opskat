@@ -43,6 +43,10 @@ type PermissionRequest struct {
 	AssetType string
 	AssetID   int64
 	Command   string
+	// RawCommand 是调用方写的原始命令（规范化之前）。Command 只用于规则匹配；注册了
+	// RegisterRawCommandReview 的类型，模型审核看的是 RawCommand——它们的规范形状丢掉了
+	// 决定操作危险程度的内容（如通用资产 HTTP 的请求体与 query）。为空时审核看 Command。
+	RawCommand string
 	// PipedInput 表示命令执行时还会从管道读入内容（opsctl exec 把 stdin 转发给 ssh 命令）。
 	// 模型审核只看得到命令本身，看不到这部分，不能据审核结果放行，见 applyReviews。
 	PipedInput bool

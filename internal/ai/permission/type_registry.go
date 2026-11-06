@@ -34,7 +34,10 @@ type permissionTypeHandler struct {
 	// reviewSyntax 是命令的写法，随命令交给审核端口（见 Syntax）。SyntaxText 按纯文本处理，
 	// 适合 SQL、路径和不经过 shell 执行的命令 DSL；扩展类型都按纯文本。
 	reviewSyntax Syntax
-	check        permissionCheckFunc
+	// reviewRawCommand 表示审核端口看调用方写的原始命令（PermissionRequest.RawCommand），
+	// 而不是规则匹配用的规范形状：规范形状丢掉了决定操作危险程度的内容时设置。
+	reviewRawCommand bool
+	check            permissionCheckFunc
 	// classify is set only for types registered through RegisterPolicyCheck that
 	// opted in (extension types): it lets HandleConfirm show the check_policy
 	// classification on the approval item and persist grants by that classification
@@ -199,7 +202,14 @@ func init() {
 	// 通用资产：匹配对象按自定义类型的执行方式决定（HTTP 为 `<METHOD> <path>`），判定见
 	// generic_policy.go。命令写法随自定义类型而变（HTTP 请求行 / 模板参数 / shell 命令），
 	// 注册时只能声明一种，按纯文本送审（与扩展类型一致）。
-	registerPermissionType(asset_entity.AssetTypeGeneric, "generic", genericGrantPatterns, SyntaxText, checkGenericPermission)
+	// HTTP 的匹配对象只有 `<METHOD> <path>`，请求体、query 与 header 都不在里面，所以审核看
+	// 调用方写的整条请求（reviewRawCommand）。
+	if err := addPermissionType(&permissionTypeHandler{
+		canonical: asset_entity.AssetTypeGeneric, approvalType: "generic", grantPatterns: genericGrantPatterns,
+		reviewSyntax: SyntaxText, reviewRawCommand: true, check: checkGenericPermission,
+	}); err != nil {
+		panic(err.Error())
+	}
 	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，主体是远端路径
 	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
 	// 主体转义成"只匹配它自己"的规则（决策 D21），因为路径里的 `* ? [` 可以是字面文件名。

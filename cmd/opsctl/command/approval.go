@@ -113,7 +113,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (result 
 			checkType = req.Type
 		}
 		permResult := permission.CheckPermissions(permCtx, []permission.PermissionRequest{{
-			AssetType: checkType, AssetID: req.AssetID, Command: req.Command, PipedInput: req.PipedInput,
+			AssetType: checkType, AssetID: req.AssetID, Command: req.Command, RawCommand: req.RawCommand, PipedInput: req.PipedInput,
 		}})[0]
 		req.Review = permResult.Review
 

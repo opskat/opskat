@@ -122,7 +122,8 @@ func TestInspectStdin(t *testing.T) {
 type fakeReviewer struct {
 	result   aictx.ReviewInfo
 	reviewed int
-	batches  int // 审核端口被调用的次数
+	batches  int      // 审核端口被调用的次数
+	commands []string // 送审的命令文本，按收到的顺序
 }
 
 func (r *fakeReviewer) ReviewCommands(_ context.Context, reqs []permission.ReviewRequest) []aictx.ReviewInfo {
@@ -131,6 +132,7 @@ func (r *fakeReviewer) ReviewCommands(_ context.Context, reqs []permission.Revie
 	out := make([]aictx.ReviewInfo, len(reqs))
 	for i := range out {
 		out[i] = r.result
+		r.commands = append(r.commands, reqs[i].Command)
 	}
 	return out
 }

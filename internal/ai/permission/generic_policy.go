@@ -62,7 +62,14 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 	// 这样的命令必须照常按执行方式判定，不能借前缀绕开 shell 拆分与 deny 规则。
 	if field, ok := strings.CutPrefix(subject, SecretSubjectPrefix); ok {
 		if _, isField := ct.FieldByName(field); isField {
-			return checkPlainGlobPolicy(ctx, asset, subject)
+			// 取值把明文交给调用方（来自 AI 时进入对话上下文），没有规则放行时只能由人确认
+			// （Design decision 9）：模型审核判断的是操作会不会破坏什么，读一个值在它看来
+			// 无害，不能据审核结果放行。
+			result := checkPlainGlobPolicy(ctx, asset, subject)
+			if result.Decision == aictx.NeedConfirm {
+				result.Unreviewable = true
+			}
+			return result
 		}
 	}
 	check, ok := genericModeChecks[ct.ExecMode]

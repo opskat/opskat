@@ -218,7 +218,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 
 		// 权限检查放到循环之后一次做：需要模型审核的命令并行审核，不逐条等待。
 		permIndices = append(permIndices, len(resolved))
-		permReqs = append(permReqs, permission.PermissionRequest{AssetType: asset.Type, AssetID: asset.ID, Command: checkCommand})
+		permReqs = append(permReqs, permission.PermissionRequest{AssetType: asset.Type, AssetID: asset.ID, Command: checkCommand, RawCommand: cmd.Command})
 		resolved = append(resolved, resolvedCmd{
 			item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 			checkCommand: checkCommand, detail: detail,
